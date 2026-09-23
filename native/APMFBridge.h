@@ -490,12 +490,9 @@ namespace MFO::APMFBridge {
     // a_follower == nullptr and only the slot index. The slot is therefore the only
     // key every release edge actually has.
     //
-    // ABI. kIntent_Travel is ABI v10 and MFO's byte-shared APMF_API.h mirror is
-    // still v9, so this wrapper declares the intent value and the flag bit LOCALLY
-    // (APMFBridge.cpp) and gates on the LIVE api->abiVersion >= 10. v10 adds no
-    // struct field and no function-pointer slot -- it rides the existing
-    // RequestEx/Repoint/Release slots -- so the v9 mirror stays ABI-correct and is
-    // deliberately NOT touched on this branch (a byte-shared header is its own step).
+    // ABI. kIntent_Travel is ABI v10; MFO's byte-shared APMF_API.h mirror is at v10
+    // (byte-identical to APMF's). The wrapper still gates on the LIVE
+    // api->abiVersion >= 10 as defence.
 
     // Worker-safe. CLAIM (or RE-POINT, same handle) the ch.19 travel facet for
     // a_follower with a_destRef as the destination and a_radius as the arrival

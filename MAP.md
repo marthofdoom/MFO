@@ -4088,10 +4088,12 @@ basis, and ends the leg on arrival / the actor entering combat / the destination
   after `kStealGrace` (10 s). Legs needing more than ~10 s of walking therefore fail on road 2
   and succeed on road 1. **A known, reported limitation of the test branch, not a design
   choice** — fixing it needs `Forms.h` + `Logistics.cpp`, outside that branch's file boundary.
-- **ABI:** `kIntent_Travel` is APMF ABI v10 and `native/APMF_API.h` is still the byte-shared v9
-  mirror. `APMFBridge.cpp` declares the intent value and flag bit LOCALLY and gates on the live
-  `api->abiVersion >= 10`; v10 adds no struct field and no function-pointer slot, so the v9
-  mirror stays ABI-correct. Re-mirroring that header is its own step.
+- **ABI:** `native/APMF_API.h` is re-mirrored byte-for-byte at APMF ABI v10 (md5 `c06605105cae`),
+  so `APMF_API::kIntent_Travel` / `kTravel_ReleaseOnTargetDead` come from the header. v10 is
+  append-only (no struct field, no fn-ptr slot), BUT MFO now REQUESTS `APMF_GetInterface(10)`:
+  an APMF older than 0.9.5 (ABI v9) returns null and MFO runs with NO APMF facets at all.
+- **Logs:** every road-1/road-2 DISPATCH / RETARGET / RELEASE line carries the `[loot-road]`
+  prefix and `road=MFOPKG|CH19`; RELEASE lines carry the `why=` from `LootTravelClear/EvictIf`.
 
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
 `LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE

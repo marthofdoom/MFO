@@ -1842,7 +1842,7 @@ namespace MFO::Packages {
         // main-thread re-evaluate that hands the follower back to his framework
         // package -- the same edge the road-1 branch below relies on APMF for.
         if (APMFBridge::ReleaseLootTravelSlot(a_slot)) {
-            spdlog::info("[loot-road] travel released ({}) -- slot {}, road=CH19", a_why, a_slot);
+            spdlog::info("[loot-road] RELEASE road=CH19 slot={} why={}", a_slot, a_why);
             return;
         }
 
@@ -1864,6 +1864,7 @@ namespace MFO::Packages {
             // now forgets the redirect and posts the nudge one hop past Publish, on
             // the main thread, so the framework package resumes cleanly.
             spdlog::info("[loot] APMF travel released ({}) -- slot {}", a_why, a_slot);
+            spdlog::info("[loot-road] RELEASE road=MFOPKG slot={} why={}", a_slot, a_why);   // A/B: log only
             return;
         }
 
@@ -1939,8 +1940,7 @@ namespace MFO::Packages {
         // overlapping claims), so the leg table is scanned by follower. A no-op on the
         // ch.9 control road.
         if (const int n = APMFBridge::ReleaseLootTravelFor(a_id); n > 0)
-            spdlog::info("[loot-road] travel released ({}) -- {} ch.19 leg(s) held by {:08X}",
-                         a_why, n, a_id);
+            spdlog::info("[loot-road] RELEASE road=CH19 legs={} follower={:08X} why={}", n, a_id, a_why);
 
         for (int slot = 0; slot < kMaxLootSlots; ++slot) {
             if (g_apmfSlotActive[slot] && g_apmfSlotFollower[slot] == a_id) {
@@ -1948,6 +1948,7 @@ namespace MFO::Packages {
                 g_apmfSlotFollower[slot] = 0;
                 APMFBridge::ReleaseOfferPackage(a_id);
                 spdlog::info("[loot] APMF travel released ({}) -- slot {} held {:08X}", a_why, slot, a_id);
+                spdlog::info("[loot-road] RELEASE road=MFOPKG slot={} follower={:08X} why={}", slot, a_id, a_why);   // A/B: log only
             }
         }
 

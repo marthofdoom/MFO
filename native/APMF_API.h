@@ -84,7 +84,11 @@ namespace RE {
 
 namespace APMF_API {
 
-    inline constexpr std::uint32_t kABIVersion = 9;
+    // ABI v10 (2026-09-22) adds kIntent_Travel (ch.19) + TravelFlags and NOTHING
+    // else: ch.19 rides the EXISTING Request/RequestEx/Repoint/Release slots, so
+    // there is no APMF_API_v10 struct and no new function pointer. A v9 client is
+    // byte-unaffected and keeps working against this build unchanged.
+    inline constexpr std::uint32_t kABIVersion = 10;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -250,6 +254,118 @@ namespace APMF_API {
                                      //       kDataLoaded) -- a refused claim means KEEP YOUR OWN
                                      //       EQUIPS; APMF_API_v8::IsEquipAuthorityEnforced tells
                                      //       observe from enforce for an accepted claim.
+
+        // 18 is DELIBERATELY SKIPPED, not free. A design that is NOT YET ON MAIN
+        // reserves ch.18 for the NPC attack-selection facet; nothing has been
+        // authored for it. Leaving the number unused costs nothing and keeps intent
+        // numbers and channel numbers aligned for every channel that exists.
+        // (That design's own draft calls itself "ABI v10" -- it will have to become
+        // v11, since ch.19 shipped v10 first.)
+
+        kIntent_Travel        = 19,  // ch.19 WALK this actor to a destination (ABI v10, marth
+                                     //       2026-09-22). Mode: the framework MOVES the actor,
+                                     //       natively, with a package APMF itself ships
+                                     //       (Data/APMF.esl). A STANDING claim: no TTL, ended
+                                     //       only by Release.
+                                     //       Param: form = the DESTINATION's FormID (REQUIRED --
+                                     //       a zero form is refused); fval = the arrival radius in
+                                     //       game units (0 => the 75u default, clamped to
+                                     //       [50, 512] and the clamp logged); ival = a TravelFlags
+                                     //       bitmask.
+                                     //
+                                     //       A DESTINATION IS A REFERENCE OR A CELL, and the
+                                     //       FormID's own record type decides which -- no flag,
+                                     //       no second field, no ambiguity:
+                                     //         * an object REFERENCE (REFR/ACHR: an actor, an
+                                     //           XMarker, a container, anything loaded). Arrival
+                                     //           = distance to it <= the radius.
+                                     //         * a CELL. Arrival = the actor's PARENT CELL is that
+                                     //           cell; distance has no meaning for a cell, so the
+                                     //           radius is not consulted for this kind.
+                                     //       Anything else is REFUSED and logged, never
+                                     //       reinterpreted -- but read the two refusal TIMINGS
+                                     //       below, because they are not the same and a client
+                                     //       that assumes they are will leak a claim.
+                                     //
+                                     //       A WORLD POSITION IS NOT ON OFFER, and that is a
+                                     //       property of the engine, not a choice: an AI package's
+                                     //       location carries a form or a handle and NO
+                                     //       coordinates, on disk or at runtime. Vanilla's own way
+                                     //       to say "go to this spot" is to place an XMarker and
+                                     //       point at the MARKER REFERENCE -- so do that. A claim
+                                     //       whose param.pos is non-zero is REFUSED with that
+                                     //       message rather than silently ignored.
+                                     //
+                                     //       THE WHOLE CONTRACT, in marth's words: "it goes to
+                                     //       the target 50-100u from it. And combat interrupts
+                                     //       and cancels the movement. That's all." The leg ENDS
+                                     //       on ARRIVAL (inside the radius), on the ACTOR ENTERING
+                                     //       COMBAT (`Actor::IsInCombat`), or on the destination
+                                     //       dying / being disabled / unloading. Nothing else.
+                                     //
+                                     //       ONE INTENT, ONE FACET. ch.19 claims NOTHING on your
+                                     //       behalf -- no combat target (ch.6), no attack
+                                     //       selection, no casting, no equip (ch.17), no hands, no
+                                     //       aggression (ch.11), no movement block (ch.1). It
+                                     //       enters no combat, pins no target, and fakes no
+                                     //       perception (there is no line-of-sight or detection
+                                     //       test anywhere in it). A client that wants any of
+                                     //       those claims that intent ITSELF, separately, and the
+                                     //       two arbitrate independently. That orthogonality is
+                                     //       deliberate: marth, 2026-09-22, "We should avoid
+                                     //       combining intents anyway."
+                                     //       Convenience COMBO intents (one call that bundles,
+                                     //       say, travel + combat target + combat entry) are a
+                                     //       recognised and reasonable idea, DEFERRED until after
+                                     //       the full MFO port to APMF is complete -- not refused
+                                     //       on principle. Until then: one facet, one intent.
+                                     //
+                                     //       Repoint(handle, &param) moves the destination in
+                                     //       place -- no release/re-claim churn. Release ends the
+                                     //       claim and the leg.
+                                     //       TWO REFUSAL TIMINGS, and the difference matters:
+                                     //       * SYNCHRONOUS (RequestEx returns kInvalidHandle
+                                     //         before anything is queued): VR, [Travel]
+                                     //         bTravel=0, APMF.esl missing, param.form == 0,
+                                     //         param.pos non-zero. Nothing to clean up.
+                                     //       * AT ENGAGE (one Drain later, on the game thread):
+                                     //         param.form naming a record that is neither an
+                                     //         object reference nor a cell. RequestEx already
+                                     //         returned a LIVE HANDLE, the log says why the
+                                     //         claim does nothing, and the handle stays live
+                                     //         until you Release it. RELEASE IT.
+                                     //       Why not synchronous: RequestEx is callable FROM ANY
+                                     //         THREAD and its whole contract is that it copies
+                                     //         POD and enqueues (see the Threading note at the
+                                     //         top). Deciding a form's record type needs a form
+                                     //         lookup, and APMF does not take the engine's form
+                                     //         table off the game thread for an API call --
+                                     //         kIntent_Cast's own FromPackage extraction defers
+                                     //         for exactly the same reason. Every refusal is
+                                     //         logged with its reason either way.
+    };
+
+    // ── Travel flags (kIntent_Travel's param.ival, ABI v10) ─────────────────────
+    // Read at RequestEx/Repoint time from param.ival. APPEND-ONLY once shipped:
+    // never renumber an existing bit; OR in a new bit at the next free position.
+    // (These bit values are still fresh: ABI v10 has never been released and has
+    // never been mirrored into a client -- MFO's byte-shared copy is at v9 and does
+    // not contain this intent at all -- so the numbering below is the first and only
+    // one there has ever been.)
+    enum TravelFlags : std::uint32_t {
+        kTravel_None = 0,
+
+        kTravel_ReleaseOnTargetDead = 1u << 0,
+                                        // NAMES THE v1 DEFAULT; it does not switch it on. APMF
+                                        //   ALWAYS ends the leg when the destination dies, is
+                                        //   disabled, or unloads, whether or not this bit is set
+                                        //   -- walking an actor to a corpse would be a mask, not
+                                        //   a feature (CLAUDE.md principle 7). The bit exists so
+                                        //   a later ABI can add its inverse
+                                        //   (kTravel_HoldOnTargetDead) without a client having to
+                                        //   guess which way the default ran. Setting it is free
+                                        //   and documents intent; leaving it clear changes
+                                        //   nothing today.
     };
 
     // ── Equip-authority flags (kIntent_EquipAuthority's param.ival, ABI v7) ──
@@ -710,11 +826,18 @@ namespace APMF_API {
     //                                  the engine seats, core/CastSeats.cpp)
     //   ival   kIntent_EquipAuthority  an EquipAuthFlags bitmask (the worn set itself is NOT a
     //                                  param field -- it is declared with SetEquipSet, ABI v7)
+    //   form   kIntent_Travel          the DESTINATION: an object REFERENCE or a CELL (REQUIRED;
+    //                                  a 0 form, or any other record type, is refused)
+    //   fval   kIntent_Travel          the arrival radius in units (0 => 75u default, clamped 50-512);
+    //                                  not consulted when the destination is a CELL
+    //   ival   kIntent_Travel          a TravelFlags bitmask (see above)
+    //   pos    kIntent_Travel          REFUSED if non-zero -- a package location cannot carry a
+    //                                  world position; pass a marker REFERENCE instead
     //   none   every other Intent      accepted, not yet read by the channel
     //
-    // fval is not read by any channel yet (reserved for a future per-request bias
-    // on ch.11, scale on ch.1a, factor on ch.16). target/pos are not read by any
-    // Intent OTHER than kIntent_SelectSpell yet.
+    // fval is read ONLY by kIntent_Travel (ABI v10); it stays reserved for a
+    // future per-request bias on ch.11, scale on ch.1a, factor on ch.16. target/pos
+    // are not read by any Intent OTHER than kIntent_SelectSpell yet.
     // ─────────────────────────────────────────────────────────────────────────────
 
     // The v1 interface: a POD struct of function pointers. NO vtable. `abiVersion`

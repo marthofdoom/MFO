@@ -41,27 +41,10 @@ namespace MFO::APMFBridge {
         // publish/consume contract cheaply.
         std::atomic<const APMF_API::APMF_API_v2*> g_apmf{ nullptr };
 
-        // ── ch.19 kIntent_Travel, DECLARED LOCALLY (test/mfo-loot-travel-via-ch19) ──
-        // MFO's native/APMF_API.h is the BYTE-SHARED mirror of APMF's copy and is
-        // still at kABIVersion 9; APMF v0.9.5 ships ABI v10, whose ONLY addition is
-        // kIntent_Travel (ch.19) plus its TravelFlags -- no new APMF_Param field, no
-        // new function-pointer slot, nothing reordered. ch.19 rides the EXISTING
-        // RequestEx / Repoint / Release slots (APMF native/core/ClientAPI.cpp:171),
-        // and APMF_GetInterface hands back the FULL newest interface to a client that
-        // asked for any version <= its own (ClientAPI.cpp:206-223) with NO per-intent
-        // gate on what the client asked for -- ControlMap.cpp:98 gates a travel claim
-        // only on the CHANNEL being installed and on the parameters. So the v9 mirror
-        // stays ABI-correct and is deliberately left untouched here: re-mirroring a
-        // byte-shared header is its own step with its own review, not a side effect of
-        // an A/B test branch. These two values are verified against APMF
-        // a2c7d65:native/APMF_API.h:265 and :358.
-        constexpr APMF_API::Intent kIntentTravelCh19 = static_cast<APMF_API::Intent>(19);
-        // NAMES ch.19's v1 default; it does not switch anything on. APMF always ends
-        // the leg when the destination dies/is disabled/is deleted. Set because it
-        // documents intent and costs nothing.
-        constexpr std::int32_t     kTravelReleaseOnTargetDead = 1;   // 1u << 0
-        // The ABI that first implements ch.19. Below this, a claim is impossible and
-        // the caller takes the ch.9 control road.
+        // ── ch.19 kIntent_Travel (test/mfo-loot-travel-via-ch19) ──────────────────
+        // APMF_API::kIntent_Travel and APMF_API::kTravel_ReleaseOnTargetDead come
+        // from the byte-shared header (re-mirrored at ABI v10). The runtime check
+        // below stays as defence: the ABI that first implements ch.19.
         constexpr std::uint32_t    kTravelMinAbi = 10;
 
         // ONE ch.19 leg per MFO loot slot. Keyed by SLOT because that is the only key
@@ -1715,7 +1698,7 @@ namespace MFO::APMFBridge {
         APMF_API::APMF_Param p{};
         p.form = a_destRef;                            // REQUIRED: the destination REFERENCE
         p.fval = a_radius;                             // arrival radius; APMF clamps to [50,512]
-        p.ival = kTravelReleaseOnTargetDead;           // names ch.19's v1 default
+        p.ival = static_cast<std::int32_t>(APMF_API::kTravel_ReleaseOnTargetDead);   // names ch.19's v1 default
         // posX/Y/Z stay ZERO -- a non-zero position REFUSES the claim (a package
         // location carries a form or a handle, never coordinates).
 
@@ -1736,7 +1719,7 @@ namespace MFO::APMFBridge {
             return true;
         }
 
-        const APMF_API::Handle h = api->RequestEx(a_follower, kIntentTravelCh19, kOwnBasis, &p);
+        const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_Travel, kOwnBasis, &p);
         if (h == APMF_API::kInvalidHandle) {
             // REFUSAL, class 2: a SYNCHRONOUS refusal from a live, v10+ APMF --
             // Data/APMF.esl missing or disabled, [Travel] bTravel=0, VR, or all EIGHT
@@ -1775,9 +1758,7 @@ namespace MFO::APMFBridge {
         // MANDATORY even when APMF already ended the leg itself: APMF never revokes a
         // claim the client still holds, so an unreleased handle keeps an APMF travel
         // slot's claim alive (1 of only 8) doing nothing.
-        if (api) api->Release(leg.handle);
-        spdlog::info("[loot-road] {:08X}: RELEASE road=CH19 dest={:08X} slot={} handle={}",
-                     leg.follower, leg.dest, a_slot, leg.handle);
+        if (api) api->Release(leg.handle);   // the caller (Packages::LootTravelClear) logs the [loot-road] line
         leg = LootTravelLeg{};
         return true;
     }
@@ -1791,8 +1772,6 @@ namespace MFO::APMFBridge {
             auto& leg = g_lootTravelLeg[i];
             if (leg.handle == APMF_API::kInvalidHandle || leg.follower != a_follower) continue;
             if (api) api->Release(leg.handle);
-            spdlog::info("[loot-road] {:08X}: RELEASE road=CH19 dest={:08X} slot={} handle={} (by actor)",
-                         leg.follower, leg.dest, i, leg.handle);
             leg = LootTravelLeg{};
             ++n;
         }
