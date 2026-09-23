@@ -1383,7 +1383,9 @@ namespace MFO::Board {
             // finds nothing; false for arm's-reach loot that never claims a
             // slot at all) -- neither necessary nor sufficient for a real
             // pickup. JustLooted stamps only at a confirmed acquisition.
-            r.looting   = Logistics::JustLooted(r.id);
+            // WalkingLootLeg adds the walk itself, but only once the engine is
+            // really running the travel package (not merely dispatched).
+            r.looting   = Logistics::JustLooted(r.id) || Logistics::WalkingLootLeg(a);
             r.trading   = Logistics::IsTrading(r.id);
 
             // ONE formula, shared with the evaluator. These bars are how the

@@ -42,7 +42,7 @@ regressions here; the ripple notes are why the map exists.
     for non-authoring mechanical grinds — log/artifact sweeps, bulk greps, collating
     output — and even there, check their work. Their sloppiness is what cost us the
     invented-symbol CI failures and misapplied fixes.
-  - **FABLE reviews EVERY commit's diff** (see dispatcher rule 8), plus deep research
+  - **OPUS 5.5 reviews EVERY commit's diff** (see dispatcher rule 8), plus deep research
     and risky co-save/threading work.
   - **The coordinator does NOT author reasonably sized additions itself.** It dispatches,
     does small greps/reads/ssh-checks inline, READS diffs, and DIRECTS corrections back
@@ -66,6 +66,13 @@ regressions here; the ripple notes are why the map exists.
   real rules (`T#67` pointed at a REVOKED invariant, `T#75` at the xEdit
   subrecord-order rule). See `Docs/INVARIANTS.md` "CITATION NAMESPACE" for the
   convention and for the pre-2026-09-07 residue that is still bare.
+
+> **REVIEWER MODEL (marth 2026-09-23): every review, spot check and field diagnosis in this file is done by an
+> OPUS 5.5 agent (the Agent tool's `opus` model), replacing Fable.** Historical statements below about what
+> Fable found are left as they were, because they are records of what happened. marth's own quoted words
+> are left verbatim too. The standing review model is still the cheap one: the author names its 1-5
+> uncertain spots and the reviewer answers only those, unless the change is co-save / ABI / a new engine
+> seat / a TU split.
 
 ## SCOPE DISCIPLINE — the git system only catches regressions if nobody skips it
 
@@ -112,12 +119,12 @@ dispatches and merges it.
    is green — CI proves it compiles, not that it does what was asked.
 7. **Never deploy a branch you have not personally diffed.** CI-green plus a plausible agent summary is
    exactly how an unreviewed refactor reaches the field.
-8. **EVERY COMMIT GETS A FABLE DIFF REVIEW (marth 2026-09-06). No exceptions.** Not just pre-cut, not just
+8. **EVERY COMMIT GETS AN OPUS 5.5 DIFF REVIEW (marth 2026-09-06). No exceptions.** Not just pre-cut, not just
    risky ones — each commit, as it lands. CI-green is not a review and the coordinator's own read is not a
-   substitute: dispatch a Fable diff review of that SHA, give it the brief the commit was written against so
+   substitute: dispatch an Opus 5.5 diff review of that SHA, give it the brief the commit was written against so
    it can catch unrequested scope, and tell it to be adversarial and report via ReportFindings. Review the
    BRANCH's files (`git show <branch>:<path>`), never the main working copy. Nothing merges, tags or deploys
-   on a commit whose Fable review has not come back and been acted on.
+   on a commit whose Opus 5.5 review has not come back and been acted on.
    (Why: every regression this project shipped recently reached the deck through a review nobody performed.
    The 2026-09-06 deny/heal failure was a reviewed, CI-green, deliberate change that was simply the wrong
    trade — exactly what a summary-level review cannot catch. Supersedes "pre-cut = one focused review".)
@@ -127,7 +134,7 @@ dispatches and merges it.
    dropped: recorded in `Docs/REVIEW-BACKLOG.md` with the finding's VERBATIM text, its severity, the SHA it
    was raised against, and the reviewer's reasoning. Anything above SEV-3 keeps the cycle running as before.
    **Drain the backlog in ONE batch** at a natural boundary — before a release cut, or before a field cycle
-   touching that subsystem — as a single agent round with a single Fable review.
+   touching that subsystem — as a single agent round with a single Opus 5.5 review.
    **CARVE-OUTS that are ALWAYS fixed immediately, whatever their nominal severity:** (a) co-save layout,
    threading, or ABI / byte-shared-header findings — a SEV-4 threading finding is a SEV-4 right up until the
    day it is not, and `g_forcedWeapon`'s unguarded read was graded with "no live race today" while being the
@@ -149,10 +156,10 @@ dispatches and merges it.
      at all escalates to tier 2 or 3. (A comment-only commit consumed an 85k adversarial review on
      2026-09-08 to conclude what that strip-and-diff proves in seconds — which is exactly the check the
      reviewer itself ran first.)
-   - **Tier 2 — localized change inside an existing mechanism.** Focused Fable review, carrying the
+   - **Tier 2 — localized change inside an existing mechanism.** Focused Opus 5.5 review, carrying the
      cleared-ledger of what earlier rounds already proved so it does not re-derive settled ground.
    - **Tier 3 — NO DOWNGRADE EVER.** New mechanism, threading, co-save, ABI or byte-shared headers, engine
-     seats/hooks, or a TU split. Full adversarial Fable review. A TU split is tier 3 no matter how mechanical
+     seats/hooks, or a TU split. Full adversarial Opus 5.5 review. A TU split is tier 3 no matter how mechanical
      it looks, because "CI-identical" is not a claim a split may assert.
    Never downgrade the REVIEWER to a cheap model at any tier. Fable found every defect that mattered this
    week; cheap review is how the 2026-09-06 regression shipped.
@@ -160,11 +167,11 @@ dispatches and merges it.
    risk changes get higher effort checks with better agents"). Tier is decided by the DIFF'S SHAPE:**
    | Tier | Shape | Author | Review | Rounds |
    |---|---|---|---|---|
-   | A | engine seat / ABI / byte-shared header / co-save / threading / TU split | Opus | Fable tier 3 | until nothing >SEV-3 |
-   | B | logic inside an existing mechanism (most feature work) | Opus | Fable ONE pass; author fixes; coordinator merges on the author's report + its own diff read | ≤2 |
+   | A | engine seat / ABI / byte-shared header / co-save / threading / TU split | Opus | Opus 5.5 tier 3 | until nothing >SEV-3 |
+   | B | logic inside an existing mechanism (most feature work) | Opus | Opus 5.5 ONE pass; author fixes; coordinator merges on the author's report + its own diff read | ≤2 |
    | C | docs / strings / log text / comments / backlog entries / small INI | Opus small brief, or the coordinator inline for one-liners | mechanical (comment-strip diff) | 1 |
-   Two rules that cut the most waste: (1) a CLOSING round (strings, wording, backlog notes) never gets a
-   Fable pass — prove it by comment-strip diff or the coordinator's read; (2) SEV-4/SEV-5 findings go to
+   Two rules that cut the most waste: (1) a CLOSING round (strings, wording, backlog notes) never gets an
+   Opus 5.5 pass — prove it by comment-strip diff or the coordinator's read; (2) SEV-4/SEV-5 findings go to
    the backlog, never into the current round "because the author is there" — one drain before the cut
    (rule 9). Measured 2026-09-15: the equip authority took ~12 agent rounds / ~3M tokens across two repos,
    and most rounds after the first two were tier-C cleanup reviewed at tier A. Tier A stays expensive on
@@ -298,22 +305,22 @@ declarations are not ABI-trustworthy (a wrong `GetMagicTarget` signature with a 
 made a "passive" probe crash the game).
 
 **Open strategic question, not yet decided:** we are pinned four major versions behind (3.7.0 vs 7.2.0) on
-a dormant repo. Migrating to the alandtse fork is its own scoped brief with its own Fable review — changing
+a dormant repo. Migrating to the alandtse fork is its own scoped brief with its own Opus 5.5 review — changing
 the ABI source under a plugin doing vtable and offset work breaks in the FIELD, not in CI. Do not start it
 as a side effect of another task.
 
 ## FIELD DIAGNOSIS + AGENT REUSE (marth 2026-09-06)
 
-**4. WHEN AN IN-GAME TEST DOES NOT DO WHAT WE EXPECT, IT GOES STRAIGHT TO FABLE.** marth: *"when a test in
+**4. WHEN AN IN-GAME TEST DOES NOT DO WHAT WE EXPECT, IT GOES STRAIGHT TO OPUS 5.5.** marth: *"when a test in
 game doesnt do what we expect, immediately goes to fable."* The split is strict:
 - **The coordinator GATHERS.** Pull the deck logs; verify the deployed DLL sha against the branch that
   produced them; check the INI switch states; build a consolidated EVIDENCE file (tag histograms, message
-  shapes, per-ACTOR and per-HAND attribution, timestamps). This works and makes Fable fast.
-- **FABLE CONCLUDES.** Do NOT arrive with a root-cause theory. Hand over the evidence and the brief.
+  shapes, per-ACTOR and per-HAND attribution, timestamps). This works and makes Opus 5.5 fast.
+- **OPUS 5.5 CONCLUDES.** Do NOT arrive with a root-cause theory. Hand over the evidence and the brief.
 Measured 2026-09-06: from one 8-minute deck log the coordinator produced FOUR confident root causes and
 Fable overturned ALL FOUR using that same evidence file (a "deny hole" that was by-design chaining; a spell
 attributed to the follower that four Chaurus Reapers were casting; a "stale" proxy that was actually read
-before it was minted; a config problem that was a code problem). Also pass Fable any METHOD constraint marth
+before it was minted; a config problem that was a code problem). Also pass Opus 5.5 any METHOD constraint marth
 has already given — e.g. do NOT argue from loot arrival counts or travel/arrival ratios; a follower walking
 past loot during an ordinary follow produces arrival-shaped lines that prove nothing.
 

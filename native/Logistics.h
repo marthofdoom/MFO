@@ -151,11 +151,16 @@ namespace MFO::Logistics {
     //     (sized off the round-robin cadence, #9) after one of the three
     //     CONFIRMED-acquisition points in Logistics.cpp actually moved an item --
     //     never at the travel-slot claim. See MarkJustLooted (Logistics.cpp).
+    //   WalkingLootLeg: true while the follower holds a live loot leg in its
+    //     Walking phase AND GetCurrentPackage() is a recognised travel package
+    //     (Forms::IsTravelPackage). Dispatched-but-not-adopted reads false. The
+    //     board lights [L] on WalkingLootLeg OR JustLooted.
     //   IsTrading: the follower dispatched a vendor trade within the last 8 s
     //     (the g_econTrade settle window). A placeholder signal for the richer
     //     town-update trade/errand excursions to come.
     bool IsLooting(RE::FormID a_id);
     bool JustLooted(RE::FormID a_id);
+    bool WalkingLootLeg(RE::Actor* a_follower);
     bool IsTrading(RE::FormID a_id);
 
     // Drink the best restore potion of a_which the follower carries, if any and
