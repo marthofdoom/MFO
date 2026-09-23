@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## v2.0.12 -- Unreleased
 
+- **The [L] on the board now lights while a follower walks to loot.** Before, it only lit for a moment when he actually picked something up. It now also stays lit for the whole walk, but only once he is really on his way. A trip that has been sent but that he has not started yet stays dark.
 - **The walk-to-loot gait setting is marked as not working.** Followers run on loot trips whatever the setting says, and it looks like it never changed anything. Run is the speed built into the travel packages and also the default, so it only ever appeared to work. The MCM now says so instead of pretending. A real fix is planned.
 
 ## v2.0.11 -- A follower who ends up bare gets dressed again

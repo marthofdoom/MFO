@@ -2138,6 +2138,9 @@ declared there and defined in their home module). Layout:
   guessed constant — see `Logistics.h`'s `JustLooted` doc. `IsLooting` itself
   is UNCHANGED and still used by other callers; don't re-wire the board back
   to it.
+  **[L] CONTRACT (2026-09-23):** `r.looting = JustLooted || WalkingLootLeg` —
+  `WalkingLootLeg` (Logistics.cpp) = live slot in `Walking` phase AND
+  `Forms::IsTravelPackage(GetCurrentPackage())`; dispatched-not-adopted is dark.
   `EconomyProbe:488` (follower-side sell-candidate/buy-needs state built ONCE
   per call, ~583-909; only the per-vendor VEND-filter pass + chest/gold read
   stay inside the `for (auto& h : living)` loop, ~911-968 -- 2026-09 perf fix),
