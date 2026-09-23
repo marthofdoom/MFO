@@ -1126,6 +1126,15 @@ namespace MFO::CasterConsent {
         g_wantCount.store(g_want.size(), std::memory_order_relaxed);
     }
     void Clear(RE::FormID a_follower) {
+        // fix/mfo-spell-authority-0922: the ch.8 candidate-refusal gate is published
+        // from NoteGambits off the g_ctrl set this function erases, so its release
+        // point is exactly here -- combat end (the Scheduler's 2-tick party-OOC
+        // teardown) and dismissal. AT FIGHT END THE GATE LIFTS COMPLETELY, which is
+        // the decision, not an omission: out of combat MFO deliberately leaves a
+        // follower's own casting alone and the cast-time deny is gone too, so a gate
+        // that outlived the fight would mute something nothing in combat asked for.
+        // Before g_mx for the same reason NoteGambits publishes before it.
+        APMFBridge::ReleaseSpellAllowList(a_follower);
         std::unique_lock lk(g_mx);
         g_want.erase(a_follower);            // permitAfter dies with the latch --
                                              // a fresh fight's first cast is prompt
@@ -1179,6 +1188,27 @@ namespace MFO::CasterConsent {
     }
 
     void NoteGambits(RE::FormID a_follower, std::vector<RE::FormID> a_spells) {
+        // ── THE CANDIDATE REFUSAL RIDES THE SAME SET (fix/mfo-spell-authority-0922) ──
+        // MFO's deny is COMPLETE but nothing was ACTIVATED: the AI equipped an
+        // UNGAMBITED spell in both hands and charged it while every cast was denied
+        // (field 2026-09-22, Jesper: ~133 s of 221 s of party combat inactive). The
+        // missing half is CANDIDATE REFUSAL at the equip seat, which APMF has shipped
+        // since ABI v4 (SetSpellAllowList) and MFO had never called.
+        //
+        // PUBLISHED FROM HERE ON PURPOSE. This function is the SINGLE writer of
+        // g_ctrl, the set the continuous deny reads -- so the deny and the allow-list
+        // are built from one vector, on one lap, and CANNOT disagree about what this
+        // follower is allowed to use. That disagreement is the principle-2 violation
+        // the whole fix exists to close, so it is closed structurally rather than by
+        // two call sites promising to stay in step. An EMPTY set (control off, log
+        // mode, no cast gambit) releases the gate exactly as it erases the deny.
+        //
+        // BEFORE g_mx, NOT UNDER IT. The combat thread reads g_mx (shared) in both
+        // deny hooks; APMFBridge takes its own leaf lock and walks the follower's
+        // inventory and spell list, and holding this lock across that would put that
+        // work in front of a combat-thread deny. Same worker (the Scheduler's
+        // per-follower service), so there is no interleaving to protect against.
+        APMFBridge::PublishSpellAllowList(a_follower, a_spells);
         std::unique_lock lk(g_mx);
         if (a_spells.empty()) {
             // Cast control off / log mode / no cast gambits configured -> this

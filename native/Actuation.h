@@ -255,7 +255,29 @@ namespace MFO::Actuation {
     // Release the force-hold NOW: force-unequip the held weapon (forceEquip=true
     // on the UNequip clears the prevent-removal lock) and drop the record.
     // Idempotent (no record -> no-op). Combat end / death / dismissal.
-    void ReleaseForcedWeapon(RE::Actor* a_follower);
+    //
+    // a_standDown -- "NOBODY EVER SEES AN UNARMED FOLLOWER" (marth 2026-09-22:
+    // *"a fix so that no one ever sees an unarmed follower, they sheathe weapons.
+    // Not unequip."*). The force-unequip is KEPT and is not removed, but NOT for the
+    // reason this comment first gave: "a plain unequip is REFUSED against a forced
+    // item" is FALSE (corrected 2026-09-22 from disassembly -- `UnequipObject`'s
+    // dispatcher clears `ExtraCannotWear` unconditionally before it reads the force
+    // byte; see the call site in Actuation.cpp and Docs/ENGINE_NOTES.md). It is kept
+    // because it is harmless, because every release path in this file passes the same
+    // shape, and because the lock must be gone before the AI may re-arm. What an
+    // UNEQUIPPED weapon costs is VISIBILITY: it stops being drawn
+    // on the body at all, where a SHEATHED one is still worn on the hip/back. That is
+    // what the field saw ("weapons vanishing and returning", Cicero, three times in
+    // one dragon fight). So on a STAND-DOWN release -- the fight is over, the hold is
+    // simply finished, and no specific item has to leave the hand -- the same
+    // weapon(s) are RE-EQUIPPED non-forced (the AI is free to swap them from then on)
+    // and the follower is sheathed. The lock is still cleared; only the empty-handed
+    // end state is not.
+    //
+    // Pass false (the default, and every pre-existing call site's behaviour) when the
+    // item genuinely has to leave the hand: death/disable teardown, a category flip
+    // mid-fight, the kill switch, dismissal.
+    void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown = false);
 
     // The ledger as it stands NOW for a_follower: {right, left} hold FormIDs, 0 =
     // no hold in that hand (ABI v9, Fable F1 on 7857446). Read under g_forcedMx,

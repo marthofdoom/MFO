@@ -137,7 +137,28 @@ namespace MFO::ComposedCast {
         // (a native heal is not instant even AI-driven), well short of
         // kHealBoundsTtlMs's 6s ceiling so a genuinely dead claim is flagged
         // long before it would auto-expire on its own anyway.
-        constexpr auto kSilentWarnAfter = std::chrono::milliseconds(2000);
+        //
+        // RE-SIZED 2000 -> 3500 ms (fix/mfo-spell-authority-0922). At 2000 ms this
+        // warning was FALSE for the whole 2026-09-22 deck session: the measured
+        // claim -> first CHARGE STATE latency for an offense cast is 2.3-2.5 s (and
+        // claim -> observed SpellFire 5.8 s with an equip cycle in front), so every
+        // single claim tripped a warning that says "APMF's engine seats may not be
+        // firing it" while the seats were firing it perfectly. A diagnostic that
+        // cries wolf on every claim is worse than none (principle 8). 3500 ms sits
+        // above the measured charge latency and still strictly BELOW both
+        // kHealHoldNeverObservedMs (4000) and kIdleFloorUnobservedMs (8000), so both
+        // static_asserts below keep holding and the warning still precedes either
+        // lift in the log.
+        //
+        // The timer is not the real fix, though -- WatchArmed below now also stays
+        // quiet while the ENGINE IS ACTUALLY CHARGING this claim
+        // (Actuation::CastInFlightOnHand, THE one in-flight definition, already
+        // included by this TU and already called from it). A claim mid-charge is by
+        // definition not one the seats are failing to fire, so there is nothing to
+        // warn about however long it has stood. Same reasoning, same predicate and
+        // the same measurement as the idle-hand floor's gate in APMFBridge.cpp --
+        // the two diagnostics are sized off ONE physical quantity, as they must be.
+        constexpr auto kSilentWarnAfter = std::chrono::milliseconds(3500);
         // The F1 hold's never-observed cap MUST sit above this warning (Fable
         // diff review, 2026-09-06): the cap lifting a hold is the interesting
         // event, and the "[cfc] ... NO observed cast" line is the evidence that
@@ -195,6 +216,17 @@ namespace MFO::ComposedCast {
             const auto now = Clock::now();
             if (now - w.since < kSilentWarnAfter)  return;   // still within the grace window
             if (now - w.lastWarn < kSilentWarnEvery) return;  // rate-limited
+            // MID-CHARGE IS NOT SILENT (fix/mfo-spell-authority-0922). The engine has
+            // this claim's spell (or its delivery-flip proxy) selected on THIS hand
+            // and is in a live cast state -- the seats are firing it, it has simply
+            // not landed yet. Warning here is what made this line false on every
+            // claim of the 2026-09-22 session. Resolved from the fid the caller
+            // already passed; a null/unloaded actor reads as NOT in flight, so the
+            // warning behaves exactly as it did before for an actor we cannot see.
+            if (Actuation::CastInFlightOnHand(RE::TESForm::LookupByID<RE::Actor>(a_fid),
+                                              a_slot == 0 ? Actuation::kHandLeft : Actuation::kHandRight,
+                                              a_spell, w.proxy))
+                return;
             spdlog::warn("[cfc] {:08X} kIntent_Cast claim live {} ms with NO observed cast "
                          "(spell {:08X}, {} hand) -- APMF's engine seats may not be firing it; "
                          "check APMF.log for the seat state",

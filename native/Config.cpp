@@ -134,6 +134,7 @@ namespace MFO::Config {
             else if (a_key == "bUsePackages")       setB(g_usePackages);
             else if (a_key == "bForceCastOnMiss")   setB(g_forceCastOnMiss);
             else if (a_key == "bApmfCast")          setB(g_apmfCast);          // APMF cast assist, inert without APMF
+            else if (a_key == "bApmfSpellAllowList") setB(g_apmfSpellAllowList); // APMF cast-SELECT candidate refusal (gate-only ch.8 claim + allow-list), inert without APMF v4+
             else if (a_key == "bLegacyCastHybrid")  setB(g_legacyCastHybrid);  // ON = old AI-first+force hybrid; default OFF = APMF owned model
             else if (a_key == "bApmfLootTravel")    setB(g_apmfLootTravel);   // APMF package-offer loot-travel, inert without APMF
             else if (a_key == "bApmfRetreat")       setB(g_apmfRetreat);      // APMF package-offer retreat, inert without APMF
@@ -272,6 +273,7 @@ namespace MFO::Config {
             g_usePackages        = true;    // v1.0.27: the forced-cast delivery route
             g_forceCastOnMiss    = true;
             g_legacyCastHybrid   = false;   // default = APMF owned cast model (animated)
+            g_apmfSpellAllowList = true;    // default = gate the AI to the gambit spells (ch.8 allow-list), inert without APMF v4+
             g_apmfLootTravel     = true;    // default = APMF package-offer loot-travel, inert without APMF
             g_apmfRetreat        = true;    // default = APMF package-offer retreat, inert without APMF
             g_apmfEquipAuthority = true;    // default = declare the worn set to APMF (equip authority), inert without APMF v7+

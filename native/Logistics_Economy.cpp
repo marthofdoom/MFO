@@ -1520,9 +1520,65 @@ namespace MFO::Logistics {
                             redundantInferior = true;
                     }
                 }
+                // ── A WORN ITEM IN A CATEGORY OUR OWN DECLARATION DENIES ──────────
+                // (fix/mfo-spell-authority-0922; Cicero's shield, field 2026-09-22.)
+                // The gate order below tests `worn` BEFORE everything after it and
+                // reads worn as "keep". For a category MFO's OWN equip declaration
+                // DENIES that is wrong in one direction only, and permanently: the
+                // seat refuses every re-equip of the category (so the item can never
+                // legitimately come back), APMF ch.17 never UNEQUIPS an already-worn
+                // one, and nothing in MFO takes it off either -- so it stays "worn"
+                // for the rest of the save and is never offered to a vendor. Cicero
+                // kept a shield through 15 denies for exactly this reason, and
+                // `gemHold` was NOT the blocker (it is tested AFTER `worn` and so
+                // only ever sees an UNWORN item).
+                //
+                // ROUTED THROUGH THE EXISTING FORCE-SELL BRANCH, not a new one: that
+                // branch already sells a worn piece and its trade RemoveItem unequips
+                // it on sale, which is the same mechanism the redundant-inferior and
+                // blacklisted-apparel cases have used for months.
+                //
+                // DELIBERATELY NARROW. Only a category the declaration ACTUALLY
+                // denies, only for the follower it denies it for (EquipAuthorityDenies
+                // reads the `denied` mask last SENT on THAT follower's claim and
+                // answers false without a claim or before a declaration has gone
+                // out), and only SHIELD is mapped: Shield is the one category MFO
+                // ever puts in `denied` (RefreshEquipDeclaration rule 3 --
+                // roles.offHand == 2 under bWeaponStyleControl). An unmapped category
+                // is left alone rather than guessed at, so widening `denied` later
+                // cannot silently start selling armour through this line. gemHold is
+                // untouched.
+                //
+                // A PLAYER-GIFTED SHIELD IS DELIBERATELY SELLABLE HERE. DECIDED BY
+                // MARTH, 2026-09-22: *"Let them sell."* This is NOT an oversight and
+                // NOT a bug to fix later -- it was raised as an open question before
+                // this line shipped, and this is the answer.
+                //
+                // WHY IT NEEDS SAYING AT ALL. `IsPlayerPick` (tested a few lines
+                // above, and the gate that exists precisely to keep what the player
+                // put on a follower) CANNOT protect a shield: the pass that RECORDS
+                // player picks -- RefreshEquipDeclaration rule 4b, ~:885 -- skips
+                // shields outright (`if (!ar || ar->IsShield() || ar == pick)
+                // continue;`), so no shield is ever in `g_playerPicks` for
+                // `IsPlayerPick` to find. So a shield the player handed a follower who
+                // has since taken up dual wielding reaches this line with no
+                // player-intent protection at all, and sells. That is the intended
+                // outcome: the declaration denies the Shield category, nothing can
+                // ever equip it again, and a permanently unusable item on his arm is
+                // worse than the gold.
+                //
+                // WHAT STILL PROTECTS A SHIELD, so this is bounded rather than
+                // blanket: `IsStockGear` (T#69 signature gear, tested first),
+                // `gemHold` and `Catalog::IsExcluded` (artifacts / quest items) all
+                // run and all still stop the sale. Only an ordinary, gemless,
+                // non-signature, non-excluded shield on a dual-wielding follower goes.
+                const bool deniedWorn =
+                    armo && armo->IsShield() && data.second && data.second->IsWorn() &&
+                    APMFBridge::EquipAuthorityDenies(fid, APMF_API::kEquipCat_Shield);
                 // Force-sell also covers BLACKLISTED apparel (marth's annoyance list) --
                 // never keep/wear it; sell it even while worn (RemoveItem unequips it).
-                const bool forceSell = redundantInferior || (armo && IsBlacklistedApparel(armo));
+                const bool forceSell = redundantInferior || deniedWorn ||
+                                       (armo && IsBlacklistedApparel(armo));
                 if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
                 if (armo && IsPlayerPick(fid, obj->GetFormID())) { sdiag(obj, "playerPick"); continue; }   // the player put it on him: keep, never sell (round 3)
                 if (armo && keepArmor.count(obj) && !forceSell) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
@@ -1530,7 +1586,9 @@ namespace MFO::Logistics {
                     ? static_cast<RE::BGSKeywordForm*>(weap)
                     : static_cast<RE::BGSKeywordForm*>(armo);
                 auto* entry = data.second.get();
-                if (forceSell)                              sdiag(obj, "force-sell");           // redundant/blacklisted worn -> sell (RemoveItem unequips it)
+                if (forceSell)                                                                  // redundant/blacklisted/declaration-denied worn -> sell (RemoveItem unequips it)
+                    sdiag(obj, deniedWorn ? "force-sell (worn, category DENIED by our own declaration)"
+                                          : "force-sell");
                 else if (entry && entry->IsWorn())          { sdiag(obj, "worn"); continue; }     // never sell worn gear
                 if (gemHold(entry, obj->GetFormID()))       { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
                 if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest

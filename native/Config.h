@@ -220,6 +220,21 @@ namespace MFO::Config {
     // exists for A/B field testing. No save state.
     inline std::atomic<bool>  g_apmfCast{ true };
 
+    // APMF CAST-SELECT CANDIDATE REFUSAL (INI bApmfSpellAllowList, fix/mfo-spell-
+    // authority-0922). ON by default: while a follower is under continuous cast
+    // control MFO holds a GATE-ONLY ch.8 kIntent_SelectSpell claim and attaches the
+    // forms he is allowed to equip/charge (APMF ABI v4 SetSpellAllowList). That is
+    // what stops the AI arming an UNGAMBITED spell in both hands and standing there
+    // charging it while MFO's cast-time deny refuses every cast (field 2026-09-22,
+    // Jesper: ~60% of party combat visibly inactive). marth, 2026-09-07: "MFO by
+    // design ONLY is to allow the gambited spells to occur."
+    // Wholly INERT unless APMF is present at ABI >= 4, unless bApmfCast is ON, and
+    // unless cast control is on (which is what populates the gambit set this
+    // mirrors). This kill switch exists for A/B field testing and to turn the gate
+    // off without turning the rest of the cast facet off; it is INI-only (no MCM
+    // entry), same as bApmfCast. No save state. See APMFBridge.h's block doc.
+    inline std::atomic<bool>  g_apmfSpellAllowList{ true };
+
     // LEGACY CAST HYBRID (MCM bLegacyCastHybrid). The owned cast model (above) is the
     // DEFAULT. Turn this ON to force MFO's ORIGINAL AI-first-wait + force-on-miss
     // package hybrid instead (the pre-APMF behaviour, unanimated force via the cast
