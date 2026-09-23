@@ -1514,6 +1514,7 @@ namespace MFO::ProgAllocator {
             }
             st.hmsWithheld = 0.0f; st.hmsParityCredit = 0.0f;   // PRGN v8 parity starts clean
             st.hmsRetroPending = true;   // an engine level jump before the 1st player level-up
+            for (int p = 0; p < 3; ++p) st.hmsHeld[p] = st.hmsBaseline[p];   // v8: what he holds now
             st.hmsCaptured = true;
         }
 
@@ -1881,7 +1882,8 @@ namespace MFO::ProgAllocator {
     //         f32 hmsGrantRemainder[3], f32 hmsAwardAccum; + flags bit 0x20 = fixedStat
     //     v7 (after the HMS block): u16 autoLevelsGranted, u8 freeRespec,
     //         u16 strippedCount + u32 strippedPerk × N
-    //     v8 (after the v7 block): f32 hmsWithheld, f32 hmsParityCredit
+    //     v8 (after the v7 block): f32 hmsWithheld, f32 hmsParityCredit,
+    //         f32 hmsHeld[3] {H,M,S} (what MFO last held; flags bit 0x40 retro-pending)
     //     v1 ONLY: f32 unspentPerk        (legacy stored pool — read + DISCARDED;
     //                                      §17 derives the pool instead)
     //     v2: u16 manualBaselineLevel | u16 manualPointsApplied
@@ -2058,6 +2060,8 @@ namespace MFO::ProgAllocator {
             // ── v8 block — APPENDED after the v7 block: §HMS player-rate parity.
             a_intfc->WriteRecordData(st.hmsWithheld);       // v8 f32
             a_intfc->WriteRecordData(st.hmsParityCredit);   // v8 f32
+            for (int p = 0; p < 3; ++p)
+                a_intfc->WriteRecordData(st.hmsHeld[p]);    // v8 f32×3 {H,M,S}: last HELD
             ++written;
         }
         spdlog::info("[cosave] saved {} progression record(s), schema v{}{}", written, kProgVersion,
@@ -2451,8 +2455,16 @@ namespace MFO::ProgAllocator {
                 if (!a_intfc->ReadRecordData(c)) return;
                 st.hmsWithheld     = (std::isfinite(w) && w >= 0.0f) ? w : 0.0f;
                 st.hmsParityCredit = (std::isfinite(c) && c >= 0.0f) ? c : 0.0f;
-            } else if (resolved) {
-                HmsRetroParity(resolvedID, st);   // ProgAllocator_Hms.cpp
+                for (int p = 0; p < 3; ++p) {
+                    float h = 0.0f;
+                    if (!a_intfc->ReadRecordData(h)) return;
+                    st.hmsHeld[p] = (std::isfinite(h) && h >= 0.0f) ? h : st.hmsTarget[p];
+                }
+            } else {
+                // v<8: v7 HELD baseline + cumulative (== the recomputed target),
+                // captured BEFORE the retro scales it, so the retro's drop heals.
+                for (int p = 0; p < 3; ++p) st.hmsHeld[p] = st.hmsTarget[p];
+                if (resolved) HmsRetroParity(resolvedID, st);   // ProgAllocator_Hms.cpp
             }
 
             if (!resolved) { ++droppedActor; continue; }

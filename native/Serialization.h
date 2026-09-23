@@ -113,7 +113,12 @@ namespace MFO {
     //            APPENDS after the v7 block hmsWithheld (f32, engine-awarded HMS
     //            MFO has NOT applied: Σtarget + withheld == the engine's autocalc
     //            total) and hmsParityCredit (f32, player HMS gain not yet matched
-    //            by an applied award). Nothing before them moved. The v1–v7
+    //            by an applied award), then hmsHeld (f32×3 {H,M,S}, the base
+    //            values MFO last HELD: a record of what was written, NOT the
+    //            target, which stays baseline + cumulative. v6 dropped the stored
+    //            target only as redundancy, so this reintroduces nothing). v8 never
+    //            shipped before hmsHeld was added, so no shorter v8 record exists.
+    //            Nothing before them moved. The v1–v7
     //            readers are KEPT (#12): a v<8 record defaults both to 0, then
     //            runs the ONE-TIME retro (ProgAllocator_Hms.cpp HmsRetroParity)
     //            that scales each positive hmsCumulative pool by
@@ -122,6 +127,7 @@ namespace MFO {
     //            records skipped). The next save is v8, so it never re-runs.
     //            The flags byte also gains bit 0x40 = hmsRetroPending (0 in every
     //            v1–v7 save, so the read is version-agnostic like 0x20).
+    //            A v<8 record sets hmsHeld = baseline + cumulative BEFORE the retro.
     inline constexpr std::uint32_t kProgVersion    = 8;   // v8: §HMS player-rate parity (withheld + credit)
 
     // T#76 force-hold: a FOURTH independent record — the weapons MFO force-equipped

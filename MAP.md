@@ -62,7 +62,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; and a cap-saturated skill with a FRACTIONAL natural can display one integer lower after the v7 hold-time floor, REVIEW-BACKLOG MFO-B13), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`ProgAllocator_Hms.cpp:460`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; and a cap-saturated skill with a FRACTIONAL natural can display one integer lower after the v7 hold-time floor, REVIEW-BACKLOG MFO-B13), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`ProgAllocator_Hms.cpp:491`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -2624,8 +2624,10 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   offClassPool u8, hmsCaptured u8, **[v6: hmsZeroAwardStreak u8, hmsGrantRemainder
   f32×3, hmsAwardAccum f32]**], **[v7 APPENDED after the HMS block: autoLevelsGranted
   u16, freeRespec u8, strippedCount u16 + {perkFormID u32}×N]**, **[v8 APPENDED after
-  the v7 block: hmsWithheld f32, hmsParityCredit f32 — both finite + ≥0 guarded; a
-  v<8 record runs `HmsRetroParity` instead (resolved followers only)]**}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
+  the v7 block: hmsWithheld f32, hmsParityCredit f32, hmsHeld f32×3 {H,M,S} — all
+  finite + ≥0 guarded (a bad hmsHeld falls back to the target); a v<8 record sets
+  hmsHeld = baseline + cumulative, then runs `HmsRetroParity` (resolved followers
+  only)]**}`. Bounds: 4096 followers / 1024 perks / 64 skills. New fields MUST go
   behind `if(version>=N)` (**v6 header + block additions gated `if(version>=6)`;
   v5 keeps the old 4-f32/pool reader, reads+discards target, recomputes it; all
   floats finite-guarded, streak clamped 0..2**). The HMS block is read
@@ -2821,7 +2823,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 - **§HMS PLAYER-RATE PARITY (PRGN v8, 2026-09-23, marth "fix b (with retroactive
   fix)").** The engine awards a leveling NPC `iAVDhmsLevelUp + fNPCHealthLevelBonus`
   (10+5 = 15) per level against the player's 10; MFO used to pass the 15 through.
-  Now `RecomputeHMS` (`ProgAllocator_Hms.cpp:265`) applies `min(engineAward,
+  Now `RecomputeHMS` (`ProgAllocator_Hms.cpp:293`) applies `min(engineAward,
   hmsParityCredit)` and withholds the rest. **Two serialized fields, one invariant
   each:** `hmsWithheld` W — `Σ hmsTarget + W == the engine's autocalc total` (the
   engine re-slams ABSOLUTE values every level, so the signed drift re-measures every
@@ -2846,11 +2848,17 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   by v1–v7):** set by `HmsRetroParity` and `Enroll`; the NEXT award is capped at
   `max(credit, award × pRate/nRate)` (GMST ratio, `HmsNpcRates`) then the bit clears,
   so engine levels pending at migration (or a jump right after Enroll) are not all
-  withheld. **Health guard (general):** whenever a `RecomputeHMS` hold LOWERS base
-  Health for any reason (the retro landing in whatever session, a class reshape
-  reverting an engine slam), it heals `min(drop, damage held)` of Health DAMAGE
-  (`RestoreActorValue(kDamage, kHealth, n)`, main thread, no stored state) so current
-  health never falls. Health only. **Open findings:** REVIEW-BACKLOG MFO-B67..B72.
+  withheld. **`hmsHeld[3]` (v8, SAVED):** the base H/M/S MFO last HELD — a record of
+  what was written, NOT the target (that stays `baseline + cumulative`; v6 dropped
+  the stored target only as redundancy). Every hold sets it; Enroll/ADOPT seed it; a
+  v<8 load seeds it from baseline + cumulative BEFORE the retro. **Health guard:**
+  when a hold lowers base Health it heals `min(max(0, hmsHeld[H]_before − newTarget[H]),
+  damage held)` (`RestoreActorValue(kDamage, kHealth, n)`, main thread). A level-up
+  reshape heals nothing (new target ≥ held); the retro lowers the target but not
+  hmsHeld, so the first lowering hold in ANY later session heals exactly the drop.
+  **Outside-change detection:** no award and Σ(live − held) neither ≈0 nor ≈W → one
+  `[hms-parity] … outside change` line per divergence (runtime latch), observed only
+  (MFO-B70). **Open findings:** REVIEW-BACKLOG MFO-B67..B72.
 - **§HMS FIXED-STAT GRANT (PRGN v6, v1.1 Phase 3).** A fixed-stat NPC gets 0 engine
   award → 0 budget → never grows. Phase 3 gives it progression, gated by the SAME
   `Config::g_hmsRedistribute` master switch (no new MCM/Config). Three parts, all in

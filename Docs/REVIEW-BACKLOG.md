@@ -527,6 +527,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** the signed drift cannot tell a level award from any other engine write to base H/M/S. A positive one is withheld without credit. A negative one leaves hmsWithheld above the engine's real total, so the next awards under-measure by that amount.
 - **Why it was NOT fixed:** below the floor. Such writes are rare, and the pre-v8 code also measured them as awards.
 - **Fix shape when drained:** separate level awards from other writes (compare the actor's level at each measure), or let a negative signed drift shrink W.
+- **Update (2026-09-23, PRGN v8 `hmsHeld`):** DETECTION now exists. `RecomputeHMS` logs one `[hms-parity] <id> outside change` line per divergence when there is no award and the live total differs from `hmsHeld` by neither ≈0 nor ≈W. It does not act on it. The decision (adopt, revert, or shrink W) is still this entry's.
 
 ### MFO-B71 -- the parity log can print once with 0.0 values
 - **Raised:** Opus 5.5 tier-A review of `6891b0a` (`fix/mfo-hms-player-rate`, §HMS player-rate parity, PRGN v8), 2026-09-23.

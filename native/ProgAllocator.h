@@ -316,6 +316,19 @@ namespace MFO::ProgAllocator {
         //                     then the bit clears. SERIALIZED as flags bit 0x40 (v8;
         //                     0 in every v1–v7 save). Set by HmsRetroParity + Enroll.
         bool          hmsRetroPending{ false };
+        //   hmsHeld[3]      — the H/M/S base values MFO last HELD on the follower
+        //                     (written by every RecomputeHMS hold, set at Enroll /
+        //                     ADOPT). A RECORD of what we wrote, NOT the target going
+        //                     forward (that stays baseline + cumulative). Used by the
+        //                     Health guard (heal only the drop below it) and to
+        //                     DETECT outside writes (logged only, MFO-B70).
+        //                     SERIALIZED (v8, after hmsParityCredit). A v<8 record
+        //                     initializes it to baseline + cumulative BEFORE the
+        //                     retro scales it (what v7 held).
+        float         hmsHeld[3]{ 0.0f, 0.0f, 0.0f };
+        // runtime-only: the outside-change line was already logged for the current
+        // divergence (cleared when the base is back on held). Never serialized.
+        bool          hmsOutsideLogged{ false };
 
         // §HMS runtime-only, never serialized: combat-edge tracking for the
         // battle counters. hmsInBattle = currently inside a (dwell-smoothed)

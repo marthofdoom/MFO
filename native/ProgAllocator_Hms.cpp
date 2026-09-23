@@ -251,6 +251,7 @@ namespace MFO::ProgAllocator {
                     a_st.hmsCumulative[p] = 0.0f;
                 }
                 a_st.hmsWithheld     = 0.0f;   // v8: the adopted base IS the engine's view
+                for (int p = 0; p < 3; ++p) a_st.hmsHeld[p] = cur[p];   // v8: nothing written yet; this is what he holds
                 a_st.hmsParityCredit = 0.0f;
                 a_st.hmsCaptured = true;
                 spdlog::info("[hms] {:08X} baseline ADOPTED (uncaptured record): "
@@ -261,6 +262,33 @@ namespace MFO::ProgAllocator {
             }
 
             // (cur/delta/budget were measured above via MeasureEngineVitalAward.)
+
+            // OUTSIDE-CHANGE DETECTION (PRGN v8, hmsHeld = what MFO last held).
+            // Observe only, never act (REVIEW-BACKLOG MFO-B70 owns that call).
+            // The engine's own re-slam keeps the TOTAL at held + withheld (it only
+            // reshuffles pools), and a level award is measured as engineAward, so
+            // a TOTAL that moved by anything else, with no award, is somebody
+            // else's write (another mod, a script, a console setav). A same-total
+            // pool reshuffle cannot be told from a re-slam and is not reported.
+            // One line per change (runtime latch), not per poll.
+            {
+                float dTot = 0.0f;
+                for (int p = 0; p < 3; ++p) dTot += cur[p] - a_st.hmsHeld[p];
+                const bool slamShape = std::fabs(dTot) < 0.5f ||
+                                       std::fabs(dTot - a_st.hmsWithheld) < 0.5f;
+                if (engineAward <= 0.0f && !slamShape) {
+                    if (!a_st.hmsOutsideLogged)
+                        spdlog::info("[hms-parity] {:08X} outside change: live base H {:.0f} M {:.0f} S {:.0f} "
+                                     "| MFO last held H {:.0f} M {:.0f} S {:.0f} | target H {:.0f} M {:.0f} S {:.0f} "
+                                     "(observed only, MFO-B70)",
+                                     id, cur[0], cur[1], cur[2],
+                                     a_st.hmsHeld[0], a_st.hmsHeld[1], a_st.hmsHeld[2],
+                                     a_st.hmsTarget[0], a_st.hmsTarget[1], a_st.hmsTarget[2]);
+                    a_st.hmsOutsideLogged = true;
+                } else if (slamShape) {
+                    a_st.hmsOutsideLogged = false;
+                }
+            }
 
             // ── PLAYER-RATE PARITY (PRGN v8, marth 2026-09-23) ─────────────────
             // A leveling follower's HMS grows no faster than the player's: apply
@@ -385,28 +413,31 @@ namespace MFO::ProgAllocator {
             // HOLD: target = baseline + cumulative (this REVERTS the engine's raw
             // distribution in cur and grants the reshaped total — net per-follower
             // gain == the measured budget, reshaped to the class profile).
+            const float heldPrevH = a_st.hmsHeld[0];   // SAVED: what MFO last held (any session)
             for (int p = 0; p < 3; ++p) {
                 float tgt = a_st.hmsBaseline[p] + a_st.hmsCumulative[p];
                 if (tgt < a_st.hmsBaseline[p]) tgt = a_st.hmsBaseline[p];   // floor
                 a_st.hmsTarget[p] = tgt;
                 if (tgt != cur[p]) Followers::SetFollowerHMS(a_actor, p, tgt);   // v1.1 API (byte-identical)
+                a_st.hmsHeld[p] = tgt;   // v8: the value the follower now holds by our hold
             }
-            // HEALTH GUARD (PRGN v8 review): whenever this hold LOWERS base Health,
-            // for ANY reason (the v<8 retro landing in whatever session it lands,
-            // a class reshape reverting an engine slam), a hurt follower would lose
-            // the same from current health (bleedout/death at 0). Heal the Health
-            // DAMAGE by the drop in this same main-thread step, never above full
-            // (restore <= the damage held). Health only: magicka/stamina clamp.
+            // HEALTH GUARD (PRGN v8): heal only the NET drop below what MFO last
+            // HELD, never the revert of an engine raise. A level-up reshape that
+            // moves the engine's Health slam into M/S has newTarget >= held → 0.
+            // The v<8 retro lowers the TARGET but not hmsHeld (saved), so the first
+            // lowering hold after it, in whatever later session, heals exactly the
+            // drop. Never above full (<= the damage held). Health only.
             if (a_st.hmsTarget[0] < cur[0]) {
+                const float drop = std::max(0.0f, heldPrevH - a_st.hmsTarget[0]);
                 const float dmg  = std::max(0.0f, -a_actor->GetActorValueModifier(
                                        RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth));
-                const float heal = std::min(cur[0] - a_st.hmsTarget[0], dmg);
+                const float heal = std::min(drop, dmg);
                 if (heal > 0.0f) {
                     a_actor->AsActorValueOwner()->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                                                     RE::ActorValue::kHealth, heal);
-                    spdlog::info("[hms-parity] {:08X} base Health lowered {:.0f} -> {:.0f}: healed "
-                                 "{:.1f} of {:.1f} damage so current health does not fall",
-                                 id, cur[0], a_st.hmsTarget[0], heal, dmg);
+                    spdlog::info("[hms-parity] {:08X} base Health lowered below last held {:.0f} -> {:.0f}: "
+                                 "healed {:.1f} of {:.1f} damage so current health does not fall",
+                                 id, heldPrevH, a_st.hmsTarget[0], heal, dmg);
                 }
             }
 
