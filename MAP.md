@@ -4065,6 +4065,39 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   exactly as before. See `Docs/CAST-DELIVERY.md`'s "CAST-CLAIM OBSERVABILITY"
   section for the full writeup.
 
+### LOOT TRAVEL ROAD 2 — APMF ch.19 `kIntent_Travel` (A/B, `test/mfo-loot-travel-via-ch19`, NOT on main)
+An A/B alternative to the ch.9 road documented immediately below, behind the INI-only
+`bLootTravelViaApmfTravel` (`Config.h`, **DEFAULT 0 = the ch.9 road, which is the CONTROL**).
+With it ON, `Logistics_Loot.cpp`'s dispatch edge claims APMF's ch.19 travel facet
+(`APMFBridge::ClaimLootTravel`, arrival radius 128u = the control road's own
+`kAPMFTravelRadius`) naming the loot ref as the destination, and APMF points ITS own package
+(`Data/APMF.esl`, 8 slots), writes the location, files its own internal ch.9 offer at MFO's
+basis, and ends the leg on arrival / the actor entering combat / the destination going away.
+
+**Depended-on-by / what breaks if you change this.**
+- **The two roads are MUTUALLY EXCLUSIVE per excursion.** Road 2 never calls
+  `Packages::LootTravelFill/Retarget`, so MFO's own package is never pointed and
+  `APMFBridge::OfferPackage` is never called — exactly ONE ch.9 package-offer claim exists
+  for the follower either way. Breaking that (e.g. calling `LootTravelFill` "as well") gives
+  one actor two competing package-offer claims.
+- **The release funnel is `Packages::LootTravelClear` + `LootTravelEvictIf`**, which call
+  `APMFBridge::ReleaseLootTravelSlot` / `ReleaseLootTravelFor` unconditionally (no-ops on the
+  control road). The ch.19 leg table is keyed by LOOT SLOT because `Logistics.cpp`'s sweeps
+  pass a NULL actor and only a slot index. APMF ends the WORK it started but never revokes a
+  client's claim, so dropping either hook pins one of APMF's eight travel records per leak.
+- **`Forms::IsTravelPackage` DOES NOT recognise APMF's ch.19 package**, so on road 2
+  `Logistics.cpp`'s `onTravelNow` / `TravelIntent::legEngaged` are permanently false: every leg
+  logs `TRAVEL PKG NOT ENGAGED`, takes the theft guard's re-assert branch, and is ABANDONED
+  after `kStealGrace` (10 s). Legs needing more than ~10 s of walking therefore fail on road 2
+  and succeed on road 1. **A known, reported limitation of the test branch, not a design
+  choice** — fixing it needs `Forms.h` + `Logistics.cpp`, outside that branch's file boundary.
+- **ABI:** `native/APMF_API.h` is re-mirrored byte-for-byte at APMF ABI v10 (md5 `c06605105cae`),
+  so `APMF_API::kIntent_Travel` / `kTravel_ReleaseOnTargetDead` come from the header. v10 is
+  append-only (no struct field, no fn-ptr slot), BUT MFO now REQUESTS `APMF_GetInterface(10)`:
+  an APMF older than 0.9.5 (ABI v9) returns null and MFO runs with NO APMF facets at all.
+- **Logs:** every road-1/road-2 DISPATCH / RETARGET / RELEASE line carries the `[loot-road]`
+  prefix and `road=MFOPKG|CH19`; RELEASE lines carry the `why=` from `LootTravelClear/EvictIf`.
+
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
 `LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE
 THROUGH and COMMIT TO `APMFBridge::OfferPackage` whenever APMF is present (`Available() &&

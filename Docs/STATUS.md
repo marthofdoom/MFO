@@ -13,6 +13,11 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-22 TEST branch `test/mfo-loot-travel-via-ch19` (NOT for merge):** A/B loot travel.
+  INI `bLootTravelViaApmfTravel` 0 (default) = MFO's own packages via ch.9 (control), 1 = APMF
+  ch.19 `kIntent_Travel`. Grep `[loot-road]`. Header re-mirrored to APMF ABI v10, so this DLL needs
+  APMF 0.9.5+. KNOWN CONFOUND: `Forms::IsTravelPackage` does not know APMF.esl's packages, so road-2
+  legs longer than ~10 s are abandoned by MFO's theft guard (see MAP.md loot road 2).
 - **2026-09-22 branch `fix/mfo-declaration-hygiene-b63` (off `main` `e522f61` = v2.0.10 released;
   NOT merged, NOT deployed). Drains TWO of the three parts of backlog `MFO-B63`, the "follower gets
   naked" bug marth confirmed still live on v2.0.10.** No Fable review on this round by marth's

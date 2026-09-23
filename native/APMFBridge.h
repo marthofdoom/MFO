@@ -468,6 +468,69 @@ namespace MFO::APMFBridge {
     // follower's framework package resumes immediately, not after the expiry backstop.
     void ReleaseOfferPackage(RE::FormID a_follower);
 
+    // ── ch.19 TRAVEL facet: LOOT-TRAVEL ROAD 2 (APMF ABI v10, A/B ONLY) ─────────
+    // test/mfo-loot-travel-via-ch19 (2026-09-22), gated by
+    // Config::g_lootTravelViaApmfTravel (bLootTravelViaApmfTravel, DEFAULT OFF).
+    //
+    // WHAT THIS IS. The ch.9 road above needs MFO to ship its OWN travel package
+    // records (MFO_APMFLootTravelPackage0..3) and to write their Near-Reference
+    // location itself. APMF v0.9.5's ch.19 kIntent_Travel does that whole job with
+    // APMF's own records (Data/APMF.esl, EIGHT slots): the client names the
+    // DESTINATION and APMF points its package, writes the location, files an
+    // internal ch.9 offer at the client's basis, and ENDS the leg on arrival, on the
+    // actor entering combat, or on the destination dying/being disabled/deleted.
+    // So this is not a second claim beside the ch.9 one -- it REPLACES it for the
+    // excursion that took this road. THE TWO ROADS ARE NEVER BOTH LIVE FOR ONE
+    // FOLLOWER: on this road Logistics_Loot.cpp does not call
+    // Packages::LootTravelFill/Retarget at all, so OfferPackage above is never
+    // called for that excursion and MFO holds no ch.9 claim of its own.
+    //
+    // WHY IT IS KEYED BY LOOT SLOT, NOT BY FOLLOWER. The release edges all funnel
+    // through Packages::LootTravelClear, and Logistics.cpp's sweeps call it with
+    // a_follower == nullptr and only the slot index. The slot is therefore the only
+    // key every release edge actually has.
+    //
+    // ABI. kIntent_Travel is ABI v10; MFO's byte-shared APMF_API.h mirror is at v10
+    // (byte-identical to APMF's). The wrapper still gates on the LIVE
+    // api->abiVersion >= 10 as defence.
+
+    // Worker-safe. CLAIM (or RE-POINT, same handle) the ch.19 travel facet for
+    // a_follower with a_destRef as the destination and a_radius as the arrival
+    // radius in game units (APMF clamps to [50, 512] and logs any clamp; the value
+    // in force is also written into the package's own stop radius, so the engine's
+    // idea of "arrived" and APMF's cannot drift). a_slot is MFO's loot slot, which
+    // owns the leg record. A repeat call on the same slot with a DIFFERENT
+    // destination RE-POINTS in place (no release/re-claim churn) -- that is the
+    // retarget road; a repeat call with the SAME destination is a cheap no-op.
+    //
+    // Returns whether the slot now holds a LIVE ch.19 claim. FALSE means APMF
+    // REFUSED (absent, below ABI v10, Data/APMF.esl missing or disabled,
+    // [Travel] bTravel=0, VR, a zero destination, or all eight APMF travel slots
+    // busy) -- the ONE case where the caller falls back to the ch.9 control road,
+    // because a refusal means APMF will do nothing whatsoever and "no looting" is
+    // not an acceptable answer to it. Logged once per refusal reason class.
+    bool ClaimLootTravel(RE::FormID a_follower, RE::FormID a_destRef, int a_slot, float a_radius);
+
+    // Worker-safe. TRUE while a_slot holds a live ch.19 loot-travel claim. This is
+    // what makes the A/B switch safe to flip mid-session: the road is chosen only at
+    // a fresh DISPATCH, and a leg already in flight is retargeted (and released) on
+    // whichever road started it, whatever the switch now says.
+    bool HasLootTravelLeg(int a_slot);
+
+    // Worker-safe. Release a_slot's ch.19 claim if it holds one; returns whether it
+    // did. A no-op (false) on the ch.9 control road, which is what lets
+    // Packages::LootTravelClear call it unconditionally at every release edge.
+    // APMF never revokes a claim the client still holds -- it only ends the work it
+    // started (Travel.cpp EndLeg) -- so this call is MANDATORY on every end of an
+    // excursion that took this road, including the ends APMF reached first
+    // (arrival, combat, destination gone, its own 120 s abandon).
+    bool ReleaseLootTravelSlot(int a_slot);
+
+    // Worker-safe. Release every ch.19 loot-travel claim held for a_follower,
+    // whatever slot it sits in (the dismissal / retreat-preempt edge, which knows
+    // the actor and not the slot). Returns how many it released.
+    int ReleaseLootTravelFor(RE::FormID a_follower);
+
     // ── combat-action DENY facet CLAIM: PER-EXCURSION (ch.7, T1) ────────────────
     // Worker-safe. CLAIM the combat-action-deny facet for a_follower, naming
     // a_categoryMask (kIntent_CombatAction, param.ival -- an OR of

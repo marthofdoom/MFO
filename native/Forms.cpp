@@ -54,6 +54,18 @@ namespace MFO::Forms {
         g_retreatQuest   = Look<RE::TESQuest>(kRetreatQuest, "MFO_RetreatQuest");        // RETREAT PROBE
         g_retreatPackage = Look<RE::TESPackage>(kRetreatPackage, "MFO_RetreatPackage");  // RETREAT PROBE
         g_apmfRetreatPackage = Look<RE::TESPackage>(kAPMFRetreatPackage, "MFO_APMFRetreatPackage");  // APMF ch.9 0x49 route
+        // APMF ch.19 travel packages (loot-travel road 2's engagement read). Not
+        // MFO's plugin, so not Look(): absent APMF.esl is a normal install.
+        if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+            int n = 0;
+            for (int i = 0; i < kAPMFCh19TravelSlots; ++i) {
+                g_apmfCh19TravelPackage[i] = dh->LookupForm<RE::TESPackage>(
+                    kAPMFCh19TravelBase + static_cast<RE::FormID>(i), kAPMFPlugin);
+                if (g_apmfCh19TravelPackage[i]) ++n;
+            }
+            spdlog::info("[forms] APMF ch.19 travel packages resolved: {}/{} (0 = APMF.esl absent)",
+                         n, kAPMFCh19TravelSlots);
+        }
         // The two APMF animated-heal PACKs (0x83B/0x83C) are RETIRED: the package-
         // substitution heal route (HealAnimFill) was deleted for the Composed Forced
         // Cast rework (SPEC-FORCED-CAST.md §3). The ESP records are dead (the
