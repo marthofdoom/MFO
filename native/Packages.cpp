@@ -1825,6 +1825,27 @@ namespace MFO::Packages {
         // next dispatch replaces the marker.
         if (a_slot < 0 || a_slot >= kMaxLootSlots) return;
 
+        // ── LOOT TRAVEL ROAD 2 (ch.19 kIntent_Travel, bLootTravelViaApmfTravel).
+        // THE RELEASE FUNNEL. This function is where EVERY end of a loot excursion
+        // arrives -- combat, arrival/batch-done, the excursion cap, the leash, the
+        // player-combat interrupt, the subsystem toggle, revert -- and several of
+        // those callers (Logistics.cpp's sweeps) pass a NULL actor and only the slot
+        // index, which is why the ch.19 leg table is keyed by SLOT. A no-op (false) on
+        // the ch.9 control road, so this costs the control road nothing.
+        //
+        // MANDATORY, not an optimisation: APMF ends the WORK it started (arrival,
+        // the actor entering combat, the destination going away, its own 120 s
+        // abandon) but NEVER revokes a claim the client still holds, so an unreleased
+        // handle pins one of APMF's eight travel records for the rest of the session.
+        // Returning here is correct rather than lazy: no alias was ever filled on this
+        // road (so there is nothing to evict) and APMF's own ch.9 release posts the
+        // main-thread re-evaluate that hands the follower back to his framework
+        // package -- the same edge the road-1 branch below relies on APMF for.
+        if (APMFBridge::ReleaseLootTravelSlot(a_slot)) {
+            spdlog::info("[loot-road] travel released ({}) -- slot {}, road=CH19", a_why, a_slot);
+            return;
+        }
+
         // APMF ROUTE: no alias was ever filled for this slot -- release the
         // package-offer claim instead of evicting anything. a_follower is
         // optional (see the header): fall back to the tracked FormID from Fill/
@@ -1912,6 +1933,15 @@ namespace MFO::Packages {
         // with no alias fill) -- occupancy there is tracked in g_apmfSlotFollower
         // instead. Scan it the same way, releasing the claim so he doesn't outlive
         // the reason he was evicted still holding a package-offer claim.
+        // LOOT TRAVEL ROAD 2 (ch.19, bLootTravelViaApmfTravel): the by-ACTOR twin of
+        // the scan below. This edge knows the actor and not the slot (a follower
+        // dismissed mid-excursion, or preempted by RetreatFill so the two never hold
+        // overlapping claims), so the leg table is scanned by follower. A no-op on the
+        // ch.9 control road.
+        if (const int n = APMFBridge::ReleaseLootTravelFor(a_id); n > 0)
+            spdlog::info("[loot-road] travel released ({}) -- {} ch.19 leg(s) held by {:08X}",
+                         a_why, n, a_id);
+
         for (int slot = 0; slot < kMaxLootSlots; ++slot) {
             if (g_apmfSlotActive[slot] && g_apmfSlotFollower[slot] == a_id) {
                 g_apmfSlotActive[slot]   = false;

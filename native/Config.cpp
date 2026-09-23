@@ -137,6 +137,7 @@ namespace MFO::Config {
             else if (a_key == "bApmfSpellAllowList") setB(g_apmfSpellAllowList); // APMF cast-SELECT candidate refusal (gate-only ch.8 claim + allow-list), inert without APMF v4+
             else if (a_key == "bLegacyCastHybrid")  setB(g_legacyCastHybrid);  // ON = old AI-first+force hybrid; default OFF = APMF owned model
             else if (a_key == "bApmfLootTravel")    setB(g_apmfLootTravel);   // APMF package-offer loot-travel, inert without APMF
+            else if (a_key == "bLootTravelViaApmfTravel") setB(g_lootTravelViaApmfTravel); // A/B: route loot travel through APMF ch.19 kIntent_Travel, inert without APMF v10+
             else if (a_key == "bApmfRetreat")       setB(g_apmfRetreat);      // APMF package-offer retreat, inert without APMF
             else if (a_key == "bApmfEquipAuthority") setB(g_apmfEquipAuthority); // APMF equip authority (declared worn set), inert without APMF v7+
             else if (a_key == "bWarnNoApmf")        setB(g_warnNoApmf);       // corner-toast reminder when APMF is absent, default ON
@@ -275,6 +276,7 @@ namespace MFO::Config {
             g_legacyCastHybrid   = false;   // default = APMF owned cast model (animated)
             g_apmfSpellAllowList = true;    // default = gate the AI to the gambit spells (ch.8 allow-list), inert without APMF v4+
             g_apmfLootTravel     = true;    // default = APMF package-offer loot-travel, inert without APMF
+            g_lootTravelViaApmfTravel = false;  // default OFF = the proven MFO-package road is the CONTROL (A/B)
             g_apmfRetreat        = true;    // default = APMF package-offer retreat, inert without APMF
             g_apmfEquipAuthority = true;    // default = declare the worn set to APMF (equip authority), inert without APMF v7+
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent

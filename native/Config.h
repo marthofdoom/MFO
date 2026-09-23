@@ -284,6 +284,28 @@ namespace MFO::Config {
     // claims). Falls back to the byte-identical legacy alias route when off/absent.
     inline std::atomic<bool>  g_apmfLootTravel{ true };
 
+    // LOOT TRAVEL VIA APMF ch.19 kIntent_Travel -- A/B TEST SWITCH, INI-ONLY, NO
+    // MCM, DEFAULT OFF (test/mfo-loot-travel-via-ch19, 2026-09-22).
+    // OFF (default, THE CONTROL) = today's proven road: MFO writes the Near-Reference
+    //   location of its OWN MFO_APMFLootTravelPackage<slot> record and offers it
+    //   through ch.9 kIntent_OfferPackage (Packages::LootTravelFill/Retarget/Clear,
+    //   gated by bApmfLootTravel above). Byte-identical to v2.0.10.
+    // ON = MFO claims APMF's ch.19 kIntent_Travel facet instead (APMF v0.9.5+, ABI
+    //   v10), passing the loot ref as the destination; APMF points ITS OWN package
+    //   (Data/APMF.esl, 8 slots), writes the location, files its own internal ch.9
+    //   offer at MFO's basis, and ends the leg on arrival / the actor entering
+    //   combat / the destination going away.
+    // THE TWO ROADS ARE MUTUALLY EXCLUSIVE PER EXCURSION and neither is a fallback
+    // for the other's runtime failures: a REFUSED ch.19 claim (APMF absent or below
+    // ABI v10, Data/APMF.esl missing, [Travel] bTravel=0, VR, or all eight APMF
+    // travel slots busy) is the ONE case that drops to the control road, because a
+    // refusal means APMF will do nothing at all and "no looting" is not an
+    // acceptable answer to it. Flipping this mid-session never strands a traveller:
+    // the road is re-decided only at a fresh DISPATCH, and a leg already in flight
+    // is retargeted and released on whichever road started it.
+    // Wholly inert unless APMF v0.9.5+ is in the load order. No save state.
+    inline std::atomic<bool>  g_lootTravelViaApmfTravel{ false };
+
     // Same principle, the RETREAT counterpart: when APMF is present,
     // RetreatFill (Packages.cpp) -- shared by act.flee and the opt-in
     // auto-retreat leash safety -- routes the disengage through APMF's

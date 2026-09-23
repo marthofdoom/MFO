@@ -7,6 +7,7 @@
 // g_travelSlots) is shared with ServiceFollower and lives in
 // Logistics_internal.h.
 #include "Logistics_internal.h"
+#include "APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 
 namespace MFO::Logistics {
 
@@ -1564,6 +1565,17 @@ namespace MFO::Logistics {
             return as && as->GetWeaponState() >= RE::WEAPON_STATE::kDrawing;   // weapon out/coming out
         }
 
+        // ROAD 2's ARRIVAL RADIUS (bLootTravelViaApmfTravel), game units. NOT a new
+        // number: it is EXACTLY what the ch.9 control road writes into
+        // MFO_APMFLootTravelPackage<slot>'s stop radius (Packages.cpp kAPMFTravelRadius),
+        // so he parks in the same place on both roads and the A/B compares the delivery
+        // mechanism only. It is INSIDE ch.19's [50,512] clamp (a clamp would break that
+        // parity silently) and BELOW MFO's kArrivalDist
+        // of 200, which a corpse's grown grab radius only widens -- so MFO declares
+        // ARRIVED and transfers while he is still closing. Above 200 he would park
+        // beyond MFO's reach, ch.19 would end the leg there, and no pickup would run.
+        constexpr float kCh19LootArrivalRadius = 128.0f;
+
         bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
                         RE::ActorValue a_potionWant,
                         LootMode a_mode) {
@@ -2168,7 +2180,20 @@ namespace MFO::Logistics {
                                      a_follower->GetFormID(), rid);
                         continue;
                     }
-                    if (Packages::LootTravelRetarget(a_follower, ref, s)) {
+                    // ROAD CHOICE, LEG BOUNDARY (A/B). A leg in flight FINISHES ON THE
+                    // ROAD IT STARTED: the decision is the live ch.19 leg itself
+                    // (APMF-side truth, one record per slot), never the switch, so a
+                    // mid-excursion flip cannot split a slot. Road 2 re-points in place.
+                    const bool ch19Leg = APMFBridge::HasLootTravelLeg(s);
+                    const bool legTook = ch19Leg
+                        ? APMFBridge::ClaimLootTravel(a_follower->GetFormID(), rid, s,
+                                                      kCh19LootArrivalRadius)
+                        : Packages::LootTravelRetarget(a_follower, ref, s);
+                    if (!ch19Leg && legTook)
+                        spdlog::info("[loot-road] {:08X}: RETARGET road=MFOPKG dest={:08X} slot={} "
+                                     "radius={:.0f} handle=-",
+                                     a_follower->GetFormID(), rid, s, 128.0f);
+                    if (legTook) {
                         tr.target   = ref->GetHandle();
                         tr.cat      = a_cat;
                         tr.want     = a_potionWant;
@@ -2233,7 +2258,38 @@ namespace MFO::Logistics {
                                      a_follower->GetFormID(), rid);
                         continue;
                     }
-                    if (Packages::LootTravelFill(a_follower, ref, s)) {
+                    // ROAD CHOICE, EXCURSION START (A/B). The switch is read ONCE,
+                    // here, at the only edge that starts an excursion; everything after
+                    // follows the road that took. ROAD 2 claims ch.19 kIntent_Travel
+                    // with the loot ref as the destination and NEVER calls
+                    // LootTravelFill, so MFO's own package is never pointed and
+                    // APMFBridge::OfferPackage is never called for this excursion --
+                    // exactly ONE ch.9 package-offer claim exists for this follower
+                    // either way (on road 2, APMF's own internal one at MFO's basis),
+                    // never two. IsAPMFTravelHeld guards the one ordering that could
+                    // stack them: a slot still flagged APMF-routed from a previous
+                    // excursion holds a live MFO ch.9 offer, so it stays on road 1.
+                    // RETREAT PRECEDENCE is re-checked here: on road 1 that guard is
+                    // inside LootTravelFill, which road 2 never calls.
+                    // A REFUSED ch.19 claim (APMF absent/pre-v10, APMF.esl missing,
+                    // [Travel] bTravel=0, VR, all 8 APMF travel slots busy) falls back
+                    // to road 1 for THIS excursion and says so: a refusal means APMF
+                    // will do nothing at all. That is the ONLY fallback -- a road-1
+                    // FAILURE still fails closed as today, and so does a road-2 one.
+                    bool travelTook = false;
+                    if (Config::g_lootTravelViaApmfTravel.load() &&
+                        !Packages::IsAPMFTravelHeld(s) &&
+                        Packages::RetreatHolder() != a_follower->GetFormID())
+                        travelTook = APMFBridge::ClaimLootTravel(a_follower->GetFormID(), rid, s,
+                                                                 kCh19LootArrivalRadius);
+                    if (!travelTook) {
+                        travelTook = Packages::LootTravelFill(a_follower, ref, s);
+                        if (travelTook)
+                            spdlog::info("[loot-road] {:08X}: DISPATCH road=MFOPKG dest={:08X} slot={} "
+                                         "radius={:.0f} handle=-",
+                                         a_follower->GetFormID(), rid, s, 128.0f);
+                    }
+                    if (travelTook) {
                         g_travelSlots[s].active    = true;
                         g_travelSlots[s].follower  = a_follower->GetFormID();
                         g_travelSlots[s].target    = ref->GetHandle();
