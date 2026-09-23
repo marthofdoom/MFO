@@ -7,7 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## v2.0.12 -- Unreleased
 
-- **The walk-to-loot gait setting is marked as not working.** With Harbinger installed, followers run on loot trips whatever the setting says. The setting only ever changed the speed on the trips used without Harbinger. The MCM now says so instead of pretending. A real fix is planned.
+- **The walk-to-loot gait setting is marked as not working.** Followers run on loot trips whatever the setting says, and it looks like it never changed anything. Run is the speed built into the travel packages and also the default, so it only ever appeared to work. The MCM now says so instead of pretending. A real fix is planned.
 
 ## v2.0.11 -- A follower who ends up bare gets dressed again
 

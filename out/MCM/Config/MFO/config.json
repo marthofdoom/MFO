@@ -595,7 +595,7 @@
           "id": "iTravelGait:General",
           "text": "Walk-to-loot gait (not working yet)",
           "type": "enum",
-          "help": "Not working yet when Harbinger is installed. Followers run on loot trips no matter what this says. It only works without Harbinger. A fix is planned.",
+          "help": "Not working yet. Followers run on loot trips no matter what this says. A fix is planned.",
           "valueOptions": {
             "sourceType": "ModSettingInt",
             "options": [
