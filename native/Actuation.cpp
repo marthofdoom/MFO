@@ -2601,11 +2601,28 @@ namespace MFO::Actuation {
         }
         g_offHandRetryAt.erase(id);   // next combat's off-hand top-up starts fresh
         g_leftHeldRefusal.erase(id);  // ... and a refused hold is reported afresh
-        // forceEquip=true on the UNequip clears the prevent-removal lock the
-        // force-equip set; a plain unequip would be REFUSED against a forced
-        // item and the follower would stay stuck holding the weapon, unable to
-        // cast -- the worse-than-oscillation failure this whole feature must not
-        // create. Engine calls OUTSIDE the lock. BOTH hands (2026-09-13): the
+        // forceEquip=true on the UNequip. CORRECTED 2026-09-22 (disassembly, Fable
+        // spot check): the reason that stood here for months was WRONG, and a
+        // rules-shaped comment that teaches a false fact is worse than none.
+        //   * WRONG: "a plain unequip would be REFUSED against a forced item and
+        //     the follower would stay stuck holding the weapon". `UnequipObject`
+        //     does not work that way. Its dispatcher (AE `0x6CB550`, at
+        //     `0x6CB5DA`) clears `ExtraCannotWear` UNCONDITIONALLY with a constant
+        //     zero, BEFORE it even reads the force byte -- so a plain unequip
+        //     releases the lock exactly as a forced one does, and "stuck holding
+        //     it forever" was never a reachable state on this path.
+        //   * The only non-forced refusal anywhere near here is on the EQUIP side
+        //     (`0x69FB2A`): an equip with `!forceEquip` is refused when the
+        //     CALLER-SUPPLIED extraData carries kCannotWear. MFO passes `nullptr`,
+        //     so that gate never even applies to us.
+        // The force flag STAYS: it is harmless, it is what every other release
+        // path in this file passes (one shape, not two), and it keeps the call
+        // correct if the dispatcher's unconditional clear is ever version-specific.
+        // What it is NOT is load-bearing against a freeze. The lock itself is
+        // `ExtraCannotWear` (extra type `0x3D`) on the WORN item's ExtraDataList --
+        // see Docs/ENGINE_NOTES.md for where it is written and why the queued path
+        // cannot set it either.
+        // Engine calls OUTSIDE the lock. BOTH hands (2026-09-13): the
         // dual-wield left hold is released by the same call, same flags.
         // The LEFT hold names its slot (F4), mirroring EquipLeftHeld; the right
         // keeps the slot-less call it has always had.

@@ -131,6 +131,45 @@ Read it as history and this block as current.
   picks (rule 4b, `Logistics_Economy.cpp:~885`) skips shields outright, so no shield is ever in
   `g_playerPicks`. The behaviour stands as shipped; `IsStockGear`, `gemHold` and `Catalog::IsExcluded`
   still protect one. No backlog entry was opened for it.
+  **CLOSING ROUND 2026-09-22 (Fable spot check answered all four remaining questions; nothing blocked
+  the merge).** What changed as a result:
+  - **Q3 SETTLED, and MFO's comment was WRONG for months.** The lock is `ExtraCannotWear` (extra type
+    `0x3D`) on the WORN ITEM's `ExtraDataList`, written in exactly one place (AE `0x22C1B2` inside
+    `0x22B970`, via `SetCannotWear(bool)` at `0x15AF60` fed the forceEquip byte); the QUEUED path copies
+    the flag verbatim and re-issues with `queue = false`, so neither road can set it behind our back; and
+    `UnequipObject`'s dispatcher (`0x6CB550` @ `0x6CB5DA`) clears it **unconditionally** before it reads
+    the force byte. So `forceEquip = false` leaves no lock and actively REMOVES a stale one, and "a plain
+    unequip is REFUSED against a forced item" — the reason `Actuation.cpp`, `Actuation.h` and `MAP.md` all
+    gave — is **false**. Corrected in all three, with the real reason (the flag is kept because it is
+    harmless and keeps one call shape, NOT because it prevents a freeze). Full facts now in
+    `Docs/ENGINE_NOTES.md` **§0.48**, so this stops being re-derived.
+  - **Q2 CONFIRMED.** No cancel-coalescing exists (the queue dedupes on KIND byte + object + extraList +
+    slot, and equip vs unequip differ in kind, so both are kept in FIFO order). If the unequip is still
+    undrained the `!GetEquippedObject()` check skips the equip and the unequip then drains — today's
+    behaviour, not worse.
+  - **Q1 HONOURED, not inert.** vfunc `0xA6` -> AE `0x662F10`; the `a_draw = false` branch fires the
+    engine's own sheathe graph event and notifies the AIProcess. **Unsettled and left as field observable
+    (a)** — the post-combat search/alert window where `IsInCombat()` is false but the AI still wants the
+    weapon out. Cosmetic; the one line is deletable on its own if it contends.
+  - **Q4 mostly bounded, and its ONE named hole is now GUARDED IN CODE.** Covered by the spot check: mod
+    scroll variants, staff enchantments, shout words; non-staff weapon enchantments cannot surface (applied
+    on hit); the `kAbility` exclusion is safe in the direction that matters. The hole: it is NOT statically
+    determinable whether the AI's combat potion use routes an `AlchemyItem` through `CheckCast`. **MFO's own
+    `Docs/ENGINE_NOTES.md:1759-1762` says this own-goal already SHIPPED once** ("the deny was suppressing
+    combat potions"; fixed in v1.0.32 only by restricting the deny to `formType == Spell`), so it is not
+    hypothetical. Every carried `AlchemyItem` that is not food and not poison is now enumerated onto the
+    allow-list. The cost, stated: it spends the 32-form budget, so a large alchemy hoard can push a
+    follower's list past `kMaxSpellAllowList` and lose him the gate entirely — fail-open, loudly logged,
+    never a mute, and a deliberate trade against a denied healing potion.
+  **THE TWO FIELD OBSERVABLES THE NEXT DECK RUN SHOULD SETTLE CHEAPLY:**
+  (a) after an `[equip] <id>: stand-down re-arm ...` line **out of combat**, does the follower visibly
+  RE-DRAW within ~1 s? (yes = the sheathe contends with the AI in the search/alert window, drop that one
+  line);
+  (b) any **`[t2c] ... ch.8 select DENY` naming an ALCH form** while a follower is low on health and
+  carrying potions (that is the Q4 hole and it should now be impossible — the
+  `[cast-select] ... allow-list CLAIMED n=N (... + N potion + ...)` line prints the potion count, so a
+  missing class is identifiable by subtraction). **Kill switch for the whole gate:
+  `bApmfSpellAllowList=0`** (INI, default 1); the cast-time deny then carries the load as before.
 - **2026-09-21 21:50 PDT Deck run (`aca7d43` deployed) — Fable field diagnosis + branch
   `fix/mfo-field-batch-0921` (off `main` `db8fb7b`, v2.0.9 line; NOT merged, NOT deployed).**
   Evidence: memory note `field-diag-2026-09-21-evening` (the summary + pointers) and the Fable

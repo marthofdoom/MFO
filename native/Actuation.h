@@ -258,11 +258,14 @@ namespace MFO::Actuation {
     //
     // a_standDown -- "NOBODY EVER SEES AN UNARMED FOLLOWER" (marth 2026-09-22:
     // *"a fix so that no one ever sees an unarmed follower, they sheathe weapons.
-    // Not unequip."*). The force-unequip itself is LOAD-BEARING and is NOT removed:
-    // the prevent-removal lock lives on the ActorEquipManager, it did not die with
-    // the combat controller, and a plain unequip is REFUSED against a forced item --
-    // leaving the follower stuck holding the weapon and unable to cast, which is the
-    // worse bug. What an UNEQUIPPED weapon costs is VISIBILITY: it stops being drawn
+    // Not unequip."*). The force-unequip is KEPT and is not removed, but NOT for the
+    // reason this comment first gave: "a plain unequip is REFUSED against a forced
+    // item" is FALSE (corrected 2026-09-22 from disassembly -- `UnequipObject`'s
+    // dispatcher clears `ExtraCannotWear` unconditionally before it reads the force
+    // byte; see the call site in Actuation.cpp and Docs/ENGINE_NOTES.md). It is kept
+    // because it is harmless, because every release path in this file passes the same
+    // shape, and because the lock must be gone before the AI may re-arm. What an
+    // UNEQUIPPED weapon costs is VISIBILITY: it stops being drawn
     // on the body at all, where a SHEATHED one is still worn on the hip/back. That is
     // what the field saw ("weapons vanishing and returning", Cicero, three times in
     // one dragon fight). So on a STAND-DOWN release -- the fight is over, the hold is

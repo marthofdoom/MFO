@@ -2442,6 +2442,57 @@ any future "watch every actor do X" idea.
 
 ---
 
+### 0.48 The force-equip "prevent-removal lock" is `ExtraCannotWear` (extra type `0x3D`), and `UnequipObject` clears it UNCONDITIONALLY — the force flag on an UNequip is not what frees a locked hand (2026-09-22, disassembly)
+
+**Status: PROVEN (disassembly, Fable spot check on `fix/mfo-spell-authority-0922`).**
+Recorded because MFO re-derived this wrong and then carried the wrong reason in a
+comment for months. Addresses are **AE 1.6.1170**.
+
+**WHAT THE LOCK IS.** `ExtraCannotWear`, **extra data type `0x3D`**, living on the
+**WORN ITEM's** `ExtraDataList` — not on the actor, and not on the
+`ActorEquipManager` (MFO's comments said "the lock lives on the
+ActorEquipManager"; that was wrong too, and the only thing that mattered about it
+was that the lock does not die with the combat controller, which is still true).
+
+**WHERE IT IS WRITTEN — exactly one place in the equip flow.** `0x22C1B2`, inside
+`0x22B970`, through a `SetCannotWear(bool)` at `0x15AF60` that is fed **the
+forceEquip byte**. Call chain: `EquipObject` (id 38894) -> the equip worker
+(id 38929) -> `0x69F9C0` -> `0x6A0AA0` -> `0x22B970`. So `forceEquip = false`
+does not merely "not set" the lock: the same call **actively clears a stale one**,
+because the byte is written, not OR-ed.
+
+**THE QUEUED PATH CANNOT SET IT EITHER.** A queued equip copies the flag verbatim
+into its AIProcess task (task at `middleHigh + 0x188`, the forceEquip byte at
+`task + 0x31`) and re-issues with `queue = false`, landing on the same
+`SetCannotWear`. There is no road on which `a_queueEquip = true` upgrades a
+non-forced equip into a locking one.
+
+**AND THE UNEQUIP SIDE CLEARS IT WHATEVER YOU PASS.** `UnequipObject`'s dispatcher
+(`0x6CB550`, at `0x6CB5DA`) clears `ExtraCannotWear` **unconditionally, with a
+constant zero, before it even reads the force byte**. So a plain unequip releases
+the lock exactly as a forced one does. **The comment that stood in
+`Actuation.cpp`/`Actuation.h`/`MAP.md` — "a plain unequip would be REFUSED against
+a forced item and the follower would stay stuck holding the weapon" — is FALSE and
+has been corrected in all three places.** "Stuck holding it forever" was never a
+reachable state on that path.
+
+**THE ONE REAL NON-FORCED REFUSAL is on the EQUIP side and MFO never meets it.**
+`0x69FB2A`: an equip with `!forceEquip` is refused when the **CALLER-SUPPLIED**
+`extraData` carries `kCannotWear`. MFO passes `nullptr` for `extraData` on every
+equip, so that gate is skipped entirely.
+
+**WHAT THIS LICENSES.** Re-arming a released hold with
+`EquipObject(..., a_forceEquip = false)` is safe and is the correct shape: it
+leaves no lock, clears any stale one, and hands the item back to the AI. That is
+what `Actuation::ReleaseForcedWeapon`'s `a_standDown` re-arm does.
+**WHAT IT DOES NOT LICENSE:** dropping the force flag from the existing
+force-UNequips. They are harmless, they keep one call shape across every release
+path in that file, and if the dispatcher's unconditional clear ever turns out to
+be version-specific they are still correct. Keep them; just do not claim they
+prevent a freeze.
+
+---
+
 ## 5. Co-save serialization
 
 **Status: PROVEN (sibling).** Full rules in `INVARIANTS.md` §B; the

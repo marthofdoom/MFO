@@ -1900,6 +1900,29 @@ namespace MFO::APMFBridge {
         //     a_this->item->GetFormID()), while t2c's CheckCast sees the MagicItem
         //     the staff casts -- two different FormIDs for one staff, so both go on.
         //   * SCROLLS carried in the inventory (ScrollItem, SpellType kScroll).
+        //   * COMBAT POTIONS carried in the inventory -- every AlchemyItem that is
+        //     NOT food and NOT poison. THIS ONE IS NOT PRECAUTIONARY: the exact
+        //     own-goal has already SHIPPED ONCE. Docs/ENGINE_NOTES.md:1759-1762,
+        //     verbatim: *"The deny was suppressing combat potions.
+        //     `CombatMagicCasterRestore` is also the drink-potion caster (§0.29
+        //     scope fact, now load-bearing): the unconditional !isWanted deny
+        //     covered a latched follower's own combat drinking. v1.0.32 denies only
+        //     `formType == Spell`."* So a follower's combat drinking DOES deliberate
+        //     through a hooked caster, it was field-observed being suppressed, and
+        //     `formType == Spell` is the ONLY reason MFO's own deny stopped doing it.
+        //     APMF's allowance cannot be told "spells only", so a potion has to be
+        //     NAMED or this gate re-creates a regression we already paid for -- and
+        //     marth's `act.drink_health_potion` gambit depends on it working.
+        //     Food and poison are excluded because neither is drunk through this
+        //     road (a poison is applied to a weapon, not cast) and both would only
+        //     spend the 32-form budget. `IsFood()` is vfunc 5D and `IsPoison()` is
+        //     vfunc 61 on MagicItem, both overridden by AlchemyItem (pinned
+        //     include/RE/A/AlchemyItem.h:71-72); `AlchemyItem : MagicItem` at offset
+        //     000 (:15-16) so it is a TESBoundObject, and it is registered in
+        //     FormTraits.h:198 so `As<AlchemyItem>()` is a valid form-type switch.
+        //     `IsMedicine()` (vfunc 62) is deliberately NOT used as the filter: it
+        //     is an authored flag a mod potion can simply lack, and a missing flag
+        //     would put us straight back to denying someone's healing potion.
         //   * POWERS / LESSER POWERS / VOICE POWERS the actor knows, from the base
         //     spell list (TESNPC::GetSpellList(), verified against pinned
         //     CommonLibSSE-NG 3.7.0 TESSpellList.h: `SpellItem** spells` +
@@ -1919,7 +1942,13 @@ namespace MFO::APMFBridge {
         // one either. Verified against pinned CommonLibSSE-NG include/RE/M/
         // MagicCaster.h (slot 01 vs slot 0A), the same verification APMFBridge.cpp's
         // idle-hand floor note already rests on.
-        void AppendDenyExemptForms(RE::Actor* a_actor, std::vector<RE::FormID>& out) {
+        //
+        // `a_outPotions` (may be null) receives how many of the appended forms were
+        // COMBAT POTIONS, so the overflow error below can say whether a follower lost
+        // the gate to his own alchemy hoard rather than leaving the field to guess.
+        void AppendDenyExemptForms(RE::Actor* a_actor, std::vector<RE::FormID>& out,
+                                   std::uint32_t* a_outPotions = nullptr) {
+            if (a_outPotions) *a_outPotions = 0;
             if (!a_actor) return;
             const auto add = [&out](RE::FormID f) { if (f != 0) out.push_back(f); };
             for (auto& [obj, data] : a_actor->GetInventory()) {
@@ -1929,7 +1958,13 @@ namespace MFO::APMFBridge {
                     if (auto* ench = w->formEnchanting) add(ench->GetFormID());
                     continue;
                 }
-                if (auto* sc = obj->As<RE::ScrollItem>()) add(sc->GetFormID());
+                if (auto* sc = obj->As<RE::ScrollItem>()) { add(sc->GetFormID()); continue; }
+                // Combat potions: not food, not poison. See the block doc above --
+                // this is the v1.0.32 regression, guarded rather than re-paid for.
+                if (auto* al = obj->As<RE::AlchemyItem>(); al && !al->IsFood() && !al->IsPoison()) {
+                    add(al->GetFormID());
+                    if (a_outPotions) ++*a_outPotions;
+                }
             }
             const auto castable = [](const RE::SpellItem* s) {
                 if (!s) return false;
@@ -1957,7 +1992,8 @@ namespace MFO::APMFBridge {
         // engine reads, and holding a leaf lock across them would be gratuitous.
         // The proxies come from the map and are appended under the lock below.
         std::vector<RE::FormID> list = a_spells;
-        AppendDenyExemptForms(RE::TESForm::LookupByID<RE::Actor>(a_follower), list);
+        std::uint32_t potionCount = 0;
+        AppendDenyExemptForms(RE::TESForm::LookupByID<RE::Actor>(a_follower), list, &potionCount);
 
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
@@ -1981,9 +2017,14 @@ namespace MFO::APMFBridge {
             if (g_selectOverflow.insert(a_follower).second)
                 spdlog::error("[cast-select] {:08X}: allow-list needs {} forms, over kMaxSpellAllowList {} "
                               "-- the gate is NOT claimed for this follower (a truncated list would DENY "
-                              "the excess and disarm him). {} gambit spell(s) + the deny-exempt staves/"
-                              "scrolls/powers + live proxies. MFO's cast-time deny still applies.",
-                              a_follower, list.size(), APMF_API::kMaxSpellAllowList, a_spells.size());
+                              "the excess and disarm him, and could deny his POTIONS). {} gambit spell(s) "
+                              "+ {} combat potion(s) + the deny-exempt staves/scrolls/powers + live "
+                              "proxies. MFO's cast-time deny still applies, so nothing is muted -- but "
+                              "the candidate-refusal gate is INERT for this follower until the list fits "
+                              "(a large alchemy hoard is the usual cause; see Docs/REVIEW-BACKLOG.md "
+                              "MFO-B65).",
+                              a_follower, list.size(), APMF_API::kMaxSpellAllowList, a_spells.size(),
+                              potionCount);
             // Release inside the lock we already hold, not through the public
             // function (which would re-lock).
             if (o.selectHandle != APMF_API::kInvalidHandle) {
@@ -2056,10 +2097,10 @@ namespace MFO::APMFBridge {
             if (!forms.empty()) forms += ' ';
             forms += std::format("{:08X}", f);
         }
-        spdlog::info("[cast-select] {:08X}: allow-list {} n={} ({} gambit + exempt/proxy) [{}] -- "
-                     "gate-only ch.8 claim {}, so the AI may ONLY equip or charge these",
+        spdlog::info("[cast-select] {:08X}: allow-list {} n={} ({} gambit + {} potion + exempt/proxy) "
+                     "[{}] -- gate-only ch.8 claim {}, so the AI may ONLY equip or charge these",
                      a_follower, freshClaim ? "CLAIMED" : "updated", list.size(), a_spells.size(),
-                     forms, o.selectHandle);
+                     potionCount, forms, o.selectHandle);
         return true;
     }
 

@@ -872,9 +872,17 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `g_offHandRetryAt` too.
   **STAND DOWN = SHEATHE, NOT UNEQUIP (`a_standDown`, marth 2026-09-22: "no one ever sees an unarmed
   follower, they sheathe weapons. Not unequip.").** `ReleaseForcedWeapon(a_follower, bool a_standDown
-  = false)`. The force-unequip is UNCHANGED and stays LOAD-BEARING — the prevent-removal lock lives on
-  the `ActorEquipManager`, it did NOT die with the combat controller, and a plain unequip is REFUSED
-  against a forced item (a follower locked to a weapon can never cast again, the worse bug). What the
+  = false)`. The force-unequip is UNCHANGED and is KEPT, but **NOT for the reason this entry and the code
+  both used to give. "A plain unequip is REFUSED against a forced item" is FALSE — corrected 2026-09-22
+  from disassembly (Fable spot check):** `UnequipObject`'s dispatcher (AE `0x6CB550` @ `0x6CB5DA`) clears
+  `ExtraCannotWear` **unconditionally**, with a constant zero, before it even reads the force byte — so a
+  plain unequip releases the lock exactly as a forced one does and "stuck holding it forever" was never
+  reachable here. The only non-forced refusal on this path is on the **EQUIP** side (`0x69FB2A`): an equip
+  with `!forceEquip` is refused when the CALLER-SUPPLIED extraData carries `kCannotWear`, and MFO passes
+  `nullptr`, so that gate never applies to us. The flag stays because it is harmless, because every
+  release path in the file passes one shape, and because the lock must be gone before the AI may re-arm —
+  **not** because it prevents a freeze. Lock facts (what it is, where it is written, why the queued path
+  cannot set it): `Docs/ENGINE_NOTES.md` §0.48. What the
   unequip also costs is VISIBILITY: an unequipped weapon stops being drawn on the body at all, where a
   SHEATHED one is still worn — which is the "weapons vanishing and returning" the party-OOC teardown
   note at `Scheduler.cpp` already records. So with `a_standDown` the SAME weapon(s) go back on
@@ -905,7 +913,16 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   run the re-arm on the job worker and it is a 3D rebuild off the main thread; pass `true` from a
   mid-combat release and MFO re-arms a category its own next gambit is about to replace.
   **OPEN BACKLOG — read before editing:** `MFO-B64` (`CoLoadForcedWeapons` still leaves a loaded follower
-  empty-handed; re-arming there needs an `Is3DLoaded()` gate it does not have). **LEFT-SLOT RELEASES + READBACK (F4, principle 5):** every left-hand
+  empty-handed; re-arming there needs an `Is3DLoaded()` gate it does not have).
+  **FIELD OBSERVABLE THE NEXT DECK RUN MUST SETTLE (a).** `DrawWeaponMagicHands(false)` IS honoured —
+  vfunc `0xA6` -> AE `0x662F10`, and the `a_draw = false` branch fires the engine's OWN sheathe graph
+  event and notifies the AIProcess, the same entry the engine's post-combat sheathe uses (disassembly,
+  2026-09-22). What could NOT be settled statically is the **post-combat search/alert window**: a stretch
+  where `IsInCombat()` is already false but the AI still wants the weapon OUT. So: after an
+  `[equip] <id>: stand-down re-arm` line out of combat, **does the follower visibly RE-DRAW within ~1 s?**
+  If he does, the sheathe is contending with the AI in that window and the one
+  `DrawWeaponMagicHands(false)` line is deletable on its own (the re-arm, not the sheathe, is what
+  delivers the fix). Purely cosmetic either way — it cannot disarm anyone. **LEFT-SLOT RELEASES + READBACK (F4, principle 5):** every left-hand
   unequip names `Loadout::LeftHandSlot()` (Yield, Release; `CoLoadForcedWeapons` `:2538` picks the
   slot from the LIVE hands because a v1 pair carries no hand — left slot when held left, default
   when held right, BOTH for a same-form count≥2 dual hold, the old slot-less call when held in
@@ -3423,8 +3440,25 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   but `NoteGambits` and the deny and the allow-list can drift apart; call it while holding
   CasterConsent's `g_mx` and the combat thread's deny hooks queue behind an inventory walk; forget the
   `Tick()` sweep and a follower who stops being serviced keeps a DENY nothing can lift.
-  **OPEN BACKLOG — read before editing:** `MFO-B65` (the allow-list is an ENUMERATION and an enumeration
-  can be incomplete; how to identify a missing exempt class from one field log).
+  **COMBAT POTIONS ARE ON THE LIST, AND THAT IS NOT PRECAUTIONARY.** Every carried `AlchemyItem` that is
+  not food and not poison is enumerated, because **this own-goal already shipped once**:
+  `Docs/ENGINE_NOTES.md:1759-1762` records "the deny was suppressing combat potions —
+  `CombatMagicCasterRestore` is also the drink-potion caster", fixed in v1.0.32 only by restricting MFO's
+  own deny to `formType == Spell`. APMF's allowance cannot be told "spells only", so a potion must be
+  NAMED or this gate re-creates that regression, and `act.drink_health_potion` depends on it.
+  `IsMedicine()` is deliberately NOT the filter (an authored flag a mod potion can lack).
+  **FIELD OBSERVABLE THE NEXT DECK RUN MUST SETTLE (b).** It is NOT statically determinable whether the
+  AI's combat potion use routes an `AlchemyItem` through `CheckCast` at all. So watch for **any
+  `[t2c] ... ch.8 select DENY` naming an ALCH form while a follower is low on health and carrying
+  potions** — that is the hole, and it should now be impossible. The `[cast-select] ... allow-list
+  CLAIMED n=N (... + N potion + ...)` line prints the potion count, so a log identifies a missing class
+  by subtraction. **Kill switch if anything about the gate misbehaves: `bApmfSpellAllowList=0`** (INI,
+  default 1) — the cast-time deny then carries the load exactly as before the gate existed.
+  **THE COST OF THE POTION EXEMPTION, stated:** it spends the 32-form budget, so a follower with a large
+  alchemy hoard can push the list past `kMaxSpellAllowList` and lose the gate entirely (fail-open, loudly
+  logged, never a mute). That trade is deliberate — a denied healing potion is far worse than an inert
+  gate.
+  **OPEN BACKLOG — read before editing:** `MFO-B65` (the ALCH specifics + the budget consequence).
 - **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** offense-cast =
   PER-CAST, TTL-bounded (`kIntent_Cast`, PER-HAND now — see above; refreshed each winning cast
   tick; released crisply by
