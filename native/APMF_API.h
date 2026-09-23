@@ -356,16 +356,17 @@ namespace APMF_API {
         kTravel_None = 0,
 
         kTravel_ReleaseOnTargetDead = 1u << 0,
-                                        // NAMES THE v1 DEFAULT; it does not switch it on. APMF
-                                        //   ALWAYS ends the leg when the destination dies, is
-                                        //   disabled, or unloads, whether or not this bit is set
-                                        //   -- walking an actor to a corpse would be a mask, not
-                                        //   a feature (CLAUDE.md principle 7). The bit exists so
-                                        //   a later ABI can add its inverse
-                                        //   (kTravel_HoldOnTargetDead) without a client having to
-                                        //   guess which way the default ran. Setting it is free
-                                        //   and documents intent; leaving it clear changes
-                                        //   nothing today.
+                                        // NAMES THE DEFAULT; it does not switch it on. APMF
+                                        //   ends the leg when a destination that was ALIVE when
+                                        //   it was targeted DIES during travel, whether or not
+                                        //   this bit is set. A destination that was ALREADY DEAD
+                                        //   when targeted (a corpse) is a valid place to walk to
+                                        //   and never ends the leg by death (marth 2026-09-23:
+                                        //   "If the target is dead when targeted, it's fine. But
+                                        //   if it dies during travel, drop."). Re-pointing
+                                        //   re-samples. A disabled, deleted or unresolvable
+                                        //   destination ends the leg regardless. Setting the bit
+                                        //   is free and documents intent.
     };
 
     // ── Equip-authority flags (kIntent_EquipAuthority's param.ival, ABI v7) ──
