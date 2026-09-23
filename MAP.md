@@ -1392,6 +1392,40 @@ Hooks `CombatMagicCaster::CheckStartCast` (advisory, 14 vtables, idx `0x06`,
 gate, `VTABLE_ActorMagicCaster[0]` ONLY, idx `0x0A`, `CheckCastThunk` at `:874`,
 `InstallCheckCastHook` at `:994` — [1]/[2] are base-subobject vtables, patching
 them clobbers unrelated engine vtables).
+
+- **THE LATCH'S CONTRACT — IT DRIVES, IT DOES NOT GATE (2026-09-23,
+  `fix/mfo-cast-latch-gambit-set`).** `g_want` (`:73`, follower FormID -> spell) says
+  what MFO is currently DRIVING: the cast stance (`Scheduler.cpp:1102` via
+  `WantedSpell`), the equip-order gate (`CombatStyle.cpp:341`) and the force-YES of
+  that one spell. It NO LONGER decides what the follower is ALLOWED to cast. Both
+  LATCHED denies — `thunk`'s `!isWanted` branch (`:698`) and `ShouldDeny` (`:823`,
+  behind the 0x0A hard gate) — now consult the gambit SET through `CtrlHasSpell`
+  (`:359`, membership in `g_ctrl`, the same set `CtrlUnlatchedDeny` `:317` has always
+  read on the unlatched path). marth's rule: "ONLY non-gambited spells get denied. Any
+  spell allowed to be equipped is allowed to cast." Field cost of the old shape
+  (2026-09-23): Lightning Bolt `0002DD29`, a configured gambit spell, was refused by
+  MFO's own consent for the whole session because the latch held a different spell —
+  equipped constantly, charged zero times. **THE PER-HAND RULES ARE UNTOUCHED AND MUST
+  STAY SO ("there are two hands"):** the firing gambit's own per-hand lock,
+  rank-carried preemption (the stored rule index, never tenure) and the concentration
+  bound still run — `ConcUnboundedDeny` is checked AHEAD of the set test in both paths
+  (inline at `:717` in `thunk`; already ahead of `ShouldDeny` in `CheckCastThunk`), so
+  exact-mode bounding keeps its no-unbounded-channel invariant. **What breaks if you
+  change this:** narrowing the set test back to the latched spell re-creates "a
+  follower with two valid spells casts one and then stands there" (the same behaviour
+  marth REJECTED for APMF on 2026-09-06); widening it past `g_ctrl` hands the AI its
+  own spells back. `g_ctrl`'s single writer is `NoteGambits` (`:1190`), which publishes
+  APMF's `SetSpellAllowList` from the SAME vector — the deny and the equip allow-list
+  cannot disagree, and that is structural, not a promise.
+- **NO CAST PACING (2026-09-23, same branch).** The v1.0.32 `permitAfter` dial on the
+  latch entry, `NoteCooldown`, `g_lastPacedWindow` and the `if (cooling)` deny are
+  DELETED (not disabled), and `Loadout::StartCooldown` no longer mirrors into this
+  file. marth DECIDED cast pacing goes inert under the owned model
+  ([[cast-cooldown-inert-is-correct]]); it was never inert in practice, because consent
+  only stands down while a client claim LIVES, so every no-claim window paced an
+  already-charged spell (field 2026-09-23: 3.7 s of a 5.3 s hold). `Loadout`'s own
+  `g_coolUntil` re-EQUIP debounce is a DIFFERENT dial and it stays. Do not re-add a
+  cast-time pace here: the engine's own cast timing is the floor.
 - Signatures (mismatch corrupts every actor's cast gate): CheckStartCast
   `bool(*)(CombatMagicCaster*, CombatController*)` (`:495`); CheckCast
   `bool(*)(MagicCaster*, MagicItem*, bool, float*, CannotCastReason*, bool)` (`:874`).
@@ -1399,10 +1433,11 @@ them clobbers unrelated engine vtables).
   pointer; unrecognized vtable returns benign.
 - **§0.29 guard:** reads the actor via `a_cc->attackerHandle` (0x28) ONLY, never
   `cachedAttacker`; static_asserts pin `attackerHandle==0x28 && <0x68` (`:333,336`).
-- `ClassifySpell` (PUBLIC, `:33`) → `Actuation.cpp:239`. `Want` (`:1070`) →
-  `Actuation.cpp:788,1003,1080`. `WantedSpell` (`:1064`) → `Scheduler.cpp:596` +
-  `CombatStyle.cpp:268` (the equip gate's one exemption). `NoteCooldown` (`:1143`)
-  → `Loadout.cpp:321`. `ClearTransientState` (`:1188`) → `Serialization.cpp:598`.
+- `ClassifySpell` (PUBLIC, `:34`) → `Actuation.cpp:239`. `Want` (`:1137`) →
+  `Actuation.cpp:788,1003,1080`. `WantedSpell` (`:1131`) → `Scheduler.cpp:1102` +
+  `CombatStyle.cpp:341` (the equip gate's one exemption). `ClearTransientState`
+  (`:1267`) → `Serialization.cpp:718`. (`NoteCooldown` is GONE — see "NO CAST
+  PACING" above.)
 - **Phase 2 APMF hand-off (2026-09-02, ALLOWANCE-TEMPLATE.md §7):** both exclusivity
   denies (`thunk`'s `!isWanted` branch `:651`, `CheckCastThunk`'s `exclusivityDeny`
   verdict `:948-949`) now check `APMFBridge::IsOwnedCastActive(fid)` first and STAND
@@ -2364,9 +2399,10 @@ load — no co-save record.
   Actuation's left weapon holds are gated on (F-A) — it must keep reading `displacedLeft`
   only (a stowed two-hander is a RIGHT-hand debt and must not block the left).
   See §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS".
-- `Prepare` (`:240`) → sole call `Actuation.cpp:1097`. `StartCooldown` (`:413`) → Actuation
-  + Diagnostics; **mirrors into `CasterConsent::NoteCooldown`** (`:425`) so the combat
-  thread reads the mirror, never these non-atomic maps. `Tick` (`:465`) ←
+- `Prepare` (`:240`) → sole call `Actuation.cpp:1097`. `StartCooldown` (`:482`) → Actuation
+  + Diagnostics; it sets the re-EQUIP debounce `g_coolUntil` and `ReleaseSpell`s, and
+  since 2026-09-23 mirrors NOTHING into `CasterConsent` (the cast-time pacing deny is
+  deleted — see the CasterConsent entry's "NO CAST PACING"). `Tick` (`:465`) ←
   `Diagnostics.cpp:256` (settles debts). `Reconcile` (`:561`) ← `plugin.cpp:361`
   (undo a save taken mid-cast; iterates `g_active`, main-thread). `ClearTransientState`
   (`:625`) ← `Serialization.cpp:595`.

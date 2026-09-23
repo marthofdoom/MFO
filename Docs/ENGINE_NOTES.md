@@ -1756,6 +1756,16 @@ anything is written (the guard doing exactly the job it was built for).
    latch entry (`NoteCooldown`, from `Loadout::StartCooldown`); within the
    window the thunk denies the WANTED spell too. Deny and permit are two
    dials on one latch.
+   **CORRECTION 2026-09-23: THIS MECHANISM IS DELETED.** `permitAfter`,
+   `NoteCooldown` and the pacing deny are gone from `CasterConsent.cpp`. The
+   owned-cast model makes the engine's own cast timing the floor (marth's
+   ruling, [[cast-cooldown-inert-is-correct]]), and the pace was NOT inert as
+   that ruling assumed: consent stands down only while a client cast claim
+   LIVES, so in every no-claim window the deadline paced a spell the follower
+   had already charged — measured 3.7 s of a 5.3 s hold, field 2026-09-23. The
+   burst this fixed (4 casts in 2.2 s) has not been re-observed since the
+   owned model landed; if it returns, the fix is NOT a cast-time pace here.
+   `Loadout::StartCooldown`'s `g_coolUntil` re-EQUIP debounce is untouched.
 2. **The deny was suppressing combat potions.** `CombatMagicCasterRestore`
    is also the drink-potion caster (§0.29 scope fact, now load-bearing): the
    unconditional !isWanted deny covered a latched follower's own combat
