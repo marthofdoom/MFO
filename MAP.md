@@ -2846,11 +2846,11 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   by v1–v7):** set by `HmsRetroParity` and `Enroll`; the NEXT award is capped at
   `max(credit, award × pRate/nRate)` (GMST ratio, `HmsNpcRates`) then the bit clears,
   so engine levels pending at migration (or a jump right after Enroll) are not all
-  withheld. **Retro health guard:** the retro is the first change that LOWERS base
-  Health, so the first hold after it restores up to the retro's Health drop of Health
-  DAMAGE (`RestoreActorValue(kDamage, kHealth, n)`, main thread, runtime-only
-  `hmsRetroHealthDrop`) so current health never falls on load. **Open findings:**
-  REVIEW-BACKLOG MFO-B67..B71.
+  withheld. **Health guard (general):** whenever a `RecomputeHMS` hold LOWERS base
+  Health for any reason (the retro landing in whatever session, a class reshape
+  reverting an engine slam), it heals `min(drop, damage held)` of Health DAMAGE
+  (`RestoreActorValue(kDamage, kHealth, n)`, main thread, no stored state) so current
+  health never falls. Health only. **Open findings:** REVIEW-BACKLOG MFO-B67..B72.
 - **§HMS FIXED-STAT GRANT (PRGN v6, v1.1 Phase 3).** A fixed-stat NPC gets 0 engine
   award → 0 budget → never grows. Phase 3 gives it progression, gated by the SAME
   `Config::g_hmsRedistribute` master switch (no new MCM/Config). Three parts, all in

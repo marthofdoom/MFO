@@ -536,6 +536,14 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** log noise only.
 - **Fix shape when drained:** gate the parity block on `engineAward > 1e-3f`.
 
+### MFO-B72 -- the retro-pending bit clears on the first award even if the pending levels arrive in two measurements
+- **Raised:** author of `fix/mfo-hms-player-rate` (unsure #3 on `d0f1da6`), graded by the coordinator 2026-09-23.
+- **Severity:** SEV-4
+- **Finding (verbatim):** the 0x40 bit clears on the first award even if the pending levels arrive in two measurements
+- **Reviewer's reasoning:** `RecomputeHMS` clears `hmsRetroPending` on the first non-grant award. If the engine levels pending at a v<8 migration (or after Enroll) are measured across two calls, only the first gets the `max(credit, award x ratio)` cap and the rest is capped by credit alone, so it is withheld.
+- **Why it was NOT fixed:** coordinator's call: leave it, record it.
+- **Fix shape when drained:** keep the bit until a player level-up has been credited (clear it in `PollWork` on `playerLeveled`), not on the first award.
+
 ## DRAINED
 
 ### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight

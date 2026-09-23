@@ -391,23 +391,23 @@ namespace MFO::ProgAllocator {
                 a_st.hmsTarget[p] = tgt;
                 if (tgt != cur[p]) Followers::SetFollowerHMS(a_actor, p, tgt);   // v1.1 API (byte-identical)
             }
-            // PRGN v8 retro: the migration LOWERS base Health. A follower saved hurt
-            // would lose the same from current health (bleedout/death at 0), so
-            // heal back the Health DAMAGE by the migration's drop, in this same
-            // main-thread step. Never above full (restore <= the damage held).
-            // Health only: magicka/stamina just clamp. One shot per load.
-            if (a_st.hmsRetroHealthDrop > 0.0f && a_st.hmsTarget[0] < cur[0]) {
-                const float dmg  = -a_actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kDamage,
-                                                                   RE::ActorValue::kHealth);   // >= 0
-                const float heal = std::min({ a_st.hmsRetroHealthDrop, cur[0] - a_st.hmsTarget[0],
-                                              std::max(0.0f, dmg) });
-                if (heal > 0.0f)
+            // HEALTH GUARD (PRGN v8 review): whenever this hold LOWERS base Health,
+            // for ANY reason (the v<8 retro landing in whatever session it lands,
+            // a class reshape reverting an engine slam), a hurt follower would lose
+            // the same from current health (bleedout/death at 0). Heal the Health
+            // DAMAGE by the drop in this same main-thread step, never above full
+            // (restore <= the damage held). Health only: magicka/stamina clamp.
+            if (a_st.hmsTarget[0] < cur[0]) {
+                const float dmg  = std::max(0.0f, -a_actor->GetActorValueModifier(
+                                       RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth));
+                const float heal = std::min(cur[0] - a_st.hmsTarget[0], dmg);
+                if (heal > 0.0f) {
                     a_actor->AsActorValueOwner()->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                                                     RE::ActorValue::kHealth, heal);
-                spdlog::info("[hms-parity] {:08X} retro lowered base Health {:.0f} -> {:.0f}: "
-                             "healed {:.1f} of {:.1f} damage so current health does not fall",
-                             id, cur[0], a_st.hmsTarget[0], heal, std::max(0.0f, dmg));
-                a_st.hmsRetroHealthDrop = 0.0f;
+                    spdlog::info("[hms-parity] {:08X} base Health lowered {:.0f} -> {:.0f}: healed "
+                                 "{:.1f} of {:.1f} damage so current health does not fall",
+                                 id, cur[0], a_st.hmsTarget[0], heal, dmg);
+                }
             }
 
             if (budget > 0.0f) {
@@ -500,7 +500,6 @@ namespace MFO::ProgAllocator {
             }
             a_st.hmsWithheld     += taken;
             a_st.hmsParityCredit  = 0.0f;
-            a_st.hmsRetroHealthDrop = std::max(0.0f, before[0]) - std::max(0.0f, a_st.hmsCumulative[0]);
             spdlog::info("[hms-parity] {:08X} RETRO (PRGN v<8 save): ~{:.1f} level(s) at {:.0f}/level "
                          "-> player rate {:.0f}/level | cumulative H {:.1f} M {:.1f} S {:.1f} -> "
                          "H {:.1f} M {:.1f} S {:.1f} | base H {:.0f} M {:.0f} S {:.0f} -> "

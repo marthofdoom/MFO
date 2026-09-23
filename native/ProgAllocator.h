@@ -316,11 +316,6 @@ namespace MFO::ProgAllocator {
         //                     then the bit clears. SERIALIZED as flags bit 0x40 (v8;
         //                     0 in every v1–v7 save). Set by HmsRetroParity + Enroll.
         bool          hmsRetroPending{ false };
-        // runtime-only, never serialized: the Health the v<8 retro took off the
-        // held target. The first RecomputeHMS hold that LOWERS base Health restores
-        // up to this much of the Health DAMAGE so current health never falls
-        // because of the migration (a hurt follower must not bleed out on load).
-        float         hmsRetroHealthDrop{ 0.0f };
 
         // §HMS runtime-only, never serialized: combat-edge tracking for the
         // battle counters. hmsInBattle = currently inside a (dwell-smoothed)
