@@ -42,7 +42,7 @@ namespace MFO::APMFBridge {
         std::atomic<const APMF_API::APMF_API_v2*> g_apmf{ nullptr };
 
         // ── ch.19 kIntent_Travel (test/mfo-loot-travel-via-ch19) ──────────────────
-        // APMF_API::kIntent_Travel and APMF_API::kTravel_ReleaseOnTargetDead come
+        // APMF_API::kIntent_Travel and APMF_API::kTravel_None come
         // from the byte-shared header (re-mirrored at ABI v10). The runtime check
         // below stays as defence: the ABI that first implements ch.19.
         constexpr std::uint32_t    kTravelMinAbi = 10;
@@ -1698,7 +1698,7 @@ namespace MFO::APMFBridge {
         APMF_API::APMF_Param p{};
         p.form = a_destRef;                            // REQUIRED: the destination REFERENCE
         p.fval = a_radius;                             // arrival radius; APMF clamps to [50,512]
-        p.ival = static_cast<std::int32_t>(APMF_API::kTravel_ReleaseOnTargetDead);   // names ch.19's v1 default
+        p.ival = static_cast<std::int32_t>(APMF_API::kTravel_None);   // loot walks TO a corpse: no release-on-dead
         // posX/Y/Z stay ZERO -- a non-zero position REFUSES the claim (a package
         // location carries a form or a handle, never coordinates).
 
