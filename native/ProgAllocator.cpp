@@ -1513,6 +1513,7 @@ namespace MFO::ProgAllocator {
                 st.hmsCumulative[p] = 0.0f;
             }
             st.hmsWithheld = 0.0f; st.hmsParityCredit = 0.0f;   // PRGN v8 parity starts clean
+            st.hmsRetroPending = true;   // an engine level jump before the 1st player level-up
             st.hmsCaptured = true;
         }
 
@@ -1961,7 +1962,8 @@ namespace MFO::ProgAllocator {
                 (st.enrolled ? 1u : 0u) | (st.autoSpend ? 2u : 0u) |
                 (st.veteranConsumed ? 4u : 0u) | (st.wasInPotentialFollowerFaction ? 8u : 0u) |
                 (st.manualSkills ? 16u : 0u) |   // v2 (§16) — spare bit in the same byte
-                (st.fixedStat ? 32u : 0u);       // v6 (§HMS Phase 3) — 0x20, free in v1–v5
+                (st.fixedStat ? 32u : 0u) |      // v6 (§HMS Phase 3) — 0x20, free in v1–v5
+                (st.hmsRetroPending ? 64u : 0u); // v8 (§HMS parity) — 0x40, never written by v1–v7
             a_intfc->WriteRecordData(flags);
             // v4 (SEV-2 class-wipe fix): the class is written as its STABLE
             // plugin-qualified identity {u16 pluginLen, plugin bytes, u32
@@ -2064,7 +2066,7 @@ namespace MFO::ProgAllocator {
     }
 
     // GENERAL follower-allocation-state deserializer (host machinery). Keeps a
-    // reader for EVERY shipped version forever (v1–v6, INVARIANT #12); re-resolves
+    // reader for EVERY shipped version forever (v1–v8, INVARIANT #12); re-resolves
     // follower + plugin-qualified class references without interpreting them. Runs
     // even when the add-on is absent (state preserved, inert — OnPostLoad gates
     // application on g_ready).
@@ -2155,6 +2157,7 @@ namespace MFO::ProgAllocator {
             st.wasInPotentialFollowerFaction  = (flags & 8u) != 0;
             st.manualSkills                   = (flags & 16u) != 0;   // v2 (§16)
             st.fixedStat                      = (flags & 32u) != 0;   // v6 (§HMS Phase 3); 0 in v1–v5
+            st.hmsRetroPending                = (flags & 64u) != 0;   // v8 (§HMS parity); 0 in v1–v7
             if (a_version < 3) {
                 // MIGRATION (§18.6 PRGN discipline). Pre-v3 saves were ONLY ever
                 // written by MFO_Progression.esl as the sole addon, at the FIXED

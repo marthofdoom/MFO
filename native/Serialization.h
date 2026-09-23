@@ -120,6 +120,8 @@ namespace MFO {
     //            iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus) and moves
     //            the excess into hmsWithheld (fixed-stat / grant-history
     //            records skipped). The next save is v8, so it never re-runs.
+    //            The flags byte also gains bit 0x40 = hmsRetroPending (0 in every
+    //            v1–v7 save, so the read is version-agnostic like 0x20).
     inline constexpr std::uint32_t kProgVersion    = 8;   // v8: §HMS player-rate parity (withheld + credit)
 
     // T#76 force-hold: a FOURTH independent record — the weapons MFO force-equipped

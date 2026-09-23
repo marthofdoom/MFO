@@ -496,6 +496,46 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** the brief's condition for changing it was "if it CAN hide a new distinct problem spell", and it cannot. Item 1 of that branch should make these denies rare anyway.
 - **Fix shape when drained:** carry a `Clock::time_point` beside the spell in `g_lastDenied` and re-log the same pair after ~30 s. About ten lines, touching the map's five use sites (`:513-515`, the two erases, the clear). Same shape would apply to `g_lastConcDeny` and `g_lastAbort`, which have the identical blindness.
 
+### MFO-B67 -- the v<8 retro uses a GMST ratio while the forward cap uses the player's live gain
+- **Raised:** Opus 5.5 tier-A review of `6891b0a` (`fix/mfo-hms-player-rate`, §HMS player-rate parity, PRGN v8), 2026-09-23.
+- **Severity:** SEV-4
+- **Finding (verbatim):** retro uses a GMST ratio while the forward path uses the player's live gain, so a list with an SKSE plugin changing the player's per-level gain would disagree
+- **Reviewer's reasoning:** `HmsRetroParity` (`ProgAllocator_Hms.cpp`) scales by iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus). No per-level player gain is on disk for the past, so the GMSTs are the only source. The forward path reads the live gain, so the two agree only while nothing outside the GMSTs changes the player's per-level gain.
+- **Why it was NOT fixed:** below the floor. Tuxborn has no such plugin (research-hms-magicka.md).
+- **Fix shape when drained:** persist a running player-gain history, or recompute the retro from the player's own base total vs a stored enrollment-time player total. Both need a new field.
+
+### MFO-B68 -- the retro's grant-history test misses whole-number grants
+- **Raised:** Opus 5.5 tier-A review of `6891b0a` (`fix/mfo-hms-player-rate`, §HMS player-rate parity, PRGN v8), 2026-09-23.
+- **Severity:** SEV-4
+- **Finding (verbatim):** the grant-history test `hmsGrantRemainder != 0` misses whole-number grants, so a formerly fixed-stat follower's grants can be scaled down
+- **Reviewer's reasoning:** a fixed-stat grant whose per-pool award lands on exact integers leaves every remainder at 0. If that follower later levels on his own (fixedStat cleared), the retro scales his grants with his engine awards.
+- **Why it was NOT fixed:** below the floor. It needs a fixed-stat-then-leveling follower, which is rare.
+- **Fix shape when drained:** record grant history explicitly (a flags bit set by the grant path), or keep a separate granted-cumulative.
+
+### MFO-B69 -- the parity credit grows without limit for followers who never take an award
+- **Raised:** Opus 5.5 tier-A review of `6891b0a` (`fix/mfo-hms-player-rate`, §HMS player-rate parity, PRGN v8), 2026-09-23.
+- **Severity:** SEV-4
+- **Finding (verbatim):** credit grows without limit for fixed-stat and level-capped followers, suggest skipping the credit when fixedStat is set
+- **Reviewer's reasoning:** `PollWork` credits every enrolled record each player level-up. A fixed-stat or level-capped follower never spends it, so a later award passes in full. Never above the engine's own award.
+- **Why it was NOT fixed:** below the floor. The cap is a ceiling, the credit only lets the engine's own award through.
+- **Fix shape when drained:** skip `st.hmsParityCredit += playerGain` when `st.fixedStat` (and consider a clamp).
+
+### MFO-B70 -- non-level-up engine changes are now credit-capped
+- **Raised:** Opus 5.5 tier-A review of `6891b0a` (`fix/mfo-hms-player-rate`, §HMS player-rate parity, PRGN v8), 2026-09-23.
+- **Severity:** SEV-4
+- **Finding (verbatim):** non-level-up engine changes (race change, another mod raising stats) are now credit-capped when positive and leave W high when negative
+- **Reviewer's reasoning:** the signed drift cannot tell a level award from any other engine write to base H/M/S. A positive one is withheld without credit. A negative one leaves hmsWithheld above the engine's real total, so the next awards under-measure by that amount.
+- **Why it was NOT fixed:** below the floor. Such writes are rare, and the pre-v8 code also measured them as awards.
+- **Fix shape when drained:** separate level awards from other writes (compare the actor's level at each measure), or let a negative signed drift shrink W.
+
+### MFO-B71 -- the parity log can print once with 0.0 values
+- **Raised:** Opus 5.5 tier-A review of `6891b0a` (`fix/mfo-hms-player-rate`, §HMS player-rate parity, PRGN v8), 2026-09-23.
+- **Severity:** SEV-5
+- **Finding (verbatim):** the parity log can print once with 0.0 values after a retro or engine re-slam
+- **Reviewer's reasoning:** `engineAward > 0` passes on float residue a few ulps above 0 after W is subtracted.
+- **Why it was NOT fixed:** log noise only.
+- **Fix shape when drained:** gate the parity block on `engineAward > 1e-3f`.
+
 ## DRAINED
 
 ### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight

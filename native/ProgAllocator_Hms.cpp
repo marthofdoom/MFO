@@ -101,6 +101,19 @@ namespace MFO::ProgAllocator {
             return m;
         }
 
+        // The engine's per-level HMS split between player and NPC, from the GMSTs:
+        // pRate = iAVDhmsLevelUp (the player's), bonus = fNPCHealthLevelBonus (the
+        // NPC's extra). false when unreadable. Used by the v<8 retro and the one
+        // retro-pending award cap.
+        bool HmsNpcRates(float& a_pRate, float& a_bonus) {
+            auto* gsc = RE::GameSettingCollection::GetSingleton();
+            auto* sP  = gsc ? gsc->GetSetting("iAVDhmsLevelUp") : nullptr;
+            auto* sB  = gsc ? gsc->GetSetting("fNPCHealthLevelBonus") : nullptr;
+            a_pRate = sP ? static_cast<float>(sP->GetSInt()) : 0.0f;
+            a_bonus = sB ? sB->GetFloat() : 0.0f;
+            return sP && sB && a_pRate > 0.0f && std::isfinite(a_bonus);
+        }
+
     }   // anonymous namespace
 
         // Combat-edge battle counting for the skew usage metric. Runs every poll
@@ -257,7 +270,19 @@ namespace MFO::ProgAllocator {
             // player's total).
             if (a_grantBudget <= 0.0f && engineAward > 0.0f) {
                 const float creditBefore = a_st.hmsParityCredit;
-                const float applied      = std::min(engineAward, std::max(0.0f, creditBefore));
+                float cap = std::max(0.0f, creditBefore);
+                // Retro-pending: this award may carry engine levels no credit was
+                // ever booked for (pending at a v<8 migration, or a jump right after
+                // Enroll). Cap it at the player-rate share of the award instead.
+                if (a_st.hmsRetroPending) {
+                    float pR = 0.0f, bn = 0.0f;
+                    const float ratio = (HmsNpcRates(pR, bn) && bn > 0.0f) ? pR / (pR + bn) : 1.0f;
+                    cap = std::max(cap, engineAward * ratio);
+                    a_st.hmsRetroPending = false;
+                    spdlog::info("[hms-parity] {:08X} retro-pending award: cap max(credit {:.1f}, "
+                                 "award {:.1f} x {:.3f}) = {:.1f}", id, creditBefore, engineAward, ratio, cap);
+                }
+                const float applied      = std::min(engineAward, cap);
                 const float withheld     = engineAward - applied;
                 a_st.hmsParityCredit = std::max(0.0f, creditBefore - applied);
                 a_st.hmsWithheld    += withheld;
@@ -366,6 +391,24 @@ namespace MFO::ProgAllocator {
                 a_st.hmsTarget[p] = tgt;
                 if (tgt != cur[p]) Followers::SetFollowerHMS(a_actor, p, tgt);   // v1.1 API (byte-identical)
             }
+            // PRGN v8 retro: the migration LOWERS base Health. A follower saved hurt
+            // would lose the same from current health (bleedout/death at 0), so
+            // heal back the Health DAMAGE by the migration's drop, in this same
+            // main-thread step. Never above full (restore <= the damage held).
+            // Health only: magicka/stamina just clamp. One shot per load.
+            if (a_st.hmsRetroHealthDrop > 0.0f && a_st.hmsTarget[0] < cur[0]) {
+                const float dmg  = -a_actor->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                                                   RE::ActorValue::kHealth);   // >= 0
+                const float heal = std::min({ a_st.hmsRetroHealthDrop, cur[0] - a_st.hmsTarget[0],
+                                              std::max(0.0f, dmg) });
+                if (heal > 0.0f)
+                    a_actor->AsActorValueOwner()->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                                                    RE::ActorValue::kHealth, heal);
+                spdlog::info("[hms-parity] {:08X} retro lowered base Health {:.0f} -> {:.0f}: "
+                             "healed {:.1f} of {:.1f} damage so current health does not fall",
+                             id, cur[0], a_st.hmsTarget[0], heal, std::max(0.0f, dmg));
+                a_st.hmsRetroHealthDrop = 0.0f;
+            }
 
             if (budget > 0.0f) {
                 // REQUIRED [hms] probe (INVARIANTS #13): the measured engine
@@ -415,6 +458,11 @@ namespace MFO::ProgAllocator {
         // so no fixed-stat grant is ever taken back. Once: the v8 save that
         // follows is read by the v8 branch, never this one.
         void HmsRetroParity(RE::FormID a_id, ProgState& a_st) {
+            // Awards the engine made while MFO was not measuring (benched, no
+            // class, unmanaged, redistribute off) are still pending; C=0 below
+            // booked no credit for them, so the NEXT award is capped at the
+            // player-rate share instead (RecomputeHMS clears the bit).
+            a_st.hmsRetroPending = true;
             if (!a_st.hmsCaptured) return;   // pre-v5 / poisoned → ADOPTs live base, nothing to take back
             float cumTotal = 0.0f;
             for (int p = 0; p < 3; ++p) cumTotal += std::max(0.0f, a_st.hmsCumulative[p]);
@@ -428,15 +476,16 @@ namespace MFO::ProgAllocator {
                              cumTotal);
                 return;
             }
-            auto* gsc = RE::GameSettingCollection::GetSingleton();
-            auto* sP  = gsc ? gsc->GetSetting("iAVDhmsLevelUp") : nullptr;
-            auto* sB  = gsc ? gsc->GetSetting("fNPCHealthLevelBonus") : nullptr;
-            const float pRate = sP ? static_cast<float>(sP->GetSInt()) : 0.0f;
-            const float bonus = sB ? sB->GetFloat() : 0.0f;
-            if (!sP || !sB || !(pRate > 0.0f) || !std::isfinite(bonus) || !(bonus > 0.0f)) {
-                spdlog::error("[hms-parity] {:08X} retro NOT APPLIED: GMST iAVDhmsLevelUp={} "
-                              "fNPCHealthLevelBonus={} unreadable or no NPC excess (cumulative {:.1f} kept)",
+            float pRate = 0.0f, bonus = 0.0f;
+            if (!HmsNpcRates(pRate, bonus)) {
+                spdlog::error("[hms-parity] {:08X} retro NOT APPLIED: GMST iAVDhmsLevelUp={} / "
+                              "fNPCHealthLevelBonus={} unreadable (cumulative {:.1f} kept)",
                               a_id, pRate, bonus, cumTotal);
+                return;
+            }
+            if (!(bonus > 0.0f)) {   // a valid list: NPCs level at the player's rate already
+                spdlog::info("[hms-parity] {:08X} retro not needed: fNPCHealthLevelBonus={} "
+                             "(no NPC excess, cumulative {:.1f} kept)", a_id, bonus, cumTotal);
                 return;
             }
             const float ratio = pRate / (pRate + bonus);
@@ -451,6 +500,7 @@ namespace MFO::ProgAllocator {
             }
             a_st.hmsWithheld     += taken;
             a_st.hmsParityCredit  = 0.0f;
+            a_st.hmsRetroHealthDrop = std::max(0.0f, before[0]) - std::max(0.0f, a_st.hmsCumulative[0]);
             spdlog::info("[hms-parity] {:08X} RETRO (PRGN v<8 save): ~{:.1f} level(s) at {:.0f}/level "
                          "-> player rate {:.0f}/level | cumulative H {:.1f} M {:.1f} S {:.1f} -> "
                          "H {:.1f} M {:.1f} S {:.1f} | base H {:.0f} M {:.0f} S {:.0f} -> "
