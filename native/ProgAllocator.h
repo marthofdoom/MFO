@@ -288,6 +288,28 @@ namespace MFO::ProgAllocator {
         // evidence and falsely flag a LEVELING follower fixedStat within 2 levels.
         float         hmsAwardAccum{ 0.0f };
 
+        // ── §HMS PLAYER-RATE PARITY (PRGN v8, marth 2026-09-23 "fix b") ─────
+        // A leveling follower grows H/M/S at most as fast as the PLAYER: the
+        // engine awards an NPC iAVDhmsLevelUp + fNPCHealthLevelBonus (10+5=15)
+        // per level against the player's 10, and RecomputeHMS applies
+        // min(engine award, hmsParityCredit), withholding the rest.
+        //   hmsWithheld     — engine-awarded HMS MFO has NOT applied, cumulative.
+        //                     INVARIANT: Σ hmsTarget + hmsWithheld == the engine's
+        //                     own autocalc total the last time it slammed. The
+        //                     engine re-slams ABSOLUTE autocalc values every level,
+        //                     so without this the next level's signed drift would
+        //                     re-measure (and re-grant) every withheld point. Only
+        //                     ever grows (RecomputeHMS / the v<8 retro); zeroed at
+        //                     Enroll + the uncaptured ADOPT. SERIALIZED (v8).
+        //   hmsParityCredit — the player's HMS gain not yet matched by an applied
+        //                     engine award. PollWork adds the player's live gain on
+        //                     each player level-up; RecomputeHMS spends it. A CREDIT
+        //                     (not "this poll's playerGain") because an award can be
+        //                     measured OFF the level-up poll (bench, unmanaged,
+        //                     no class, redistribute off, reload). SERIALIZED (v8).
+        float         hmsWithheld{ 0.0f };
+        float         hmsParityCredit{ 0.0f };
+
         // §HMS runtime-only, never serialized: combat-edge tracking for the
         // battle counters. hmsInBattle = currently inside a (dwell-smoothed)
         // battle; hmsBattleOffCounted = this battle already counted as off-class;

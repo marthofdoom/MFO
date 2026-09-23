@@ -1038,10 +1038,17 @@ namespace MFO::ProgAllocator {
                     playerGain           = std::max(0.0f, playerTotalNow - g_playerHmsTotalLast);
                     g_playerHmsTotalLast = playerTotalNow;
                 }
+            } else if (g_playerHmsTotalLast <= 0.0f && !g_prog.empty()) {   // v8 parity: seed BEFORE the 1st level-up
+                float t = 0.0f;   // else the 1st level-up credits 0 and withholds a whole award
+                for (int p = 0; p < 3; ++p) t += Followers::GetFollowerHMS(player, p);
+                g_playerHmsTotalLast = t;
             }
+            if (playerGain > 0.0f)
+                spdlog::info("[hms-parity] player HMS gain {:.1f} -> credited to every enrolled follower", playerGain);
 
             for (auto& [id, st] : g_prog) {
                 if (!st.enrolled) continue;
+                st.hmsParityCredit += playerGain;   // PRGN v8: the player-rate cap RecomputeHMS spends
 
                 RE::Actor* actor   = RE::TESForm::LookupByID<RE::Actor>(id);
                 const bool managed = Followers::IsMfoEnabled(id);
@@ -1505,6 +1512,7 @@ namespace MFO::ProgAllocator {
                 st.hmsSkew[p]       = 0.0f;
                 st.hmsCumulative[p] = 0.0f;
             }
+            st.hmsWithheld = 0.0f; st.hmsParityCredit = 0.0f;   // PRGN v8 parity starts clean
             st.hmsCaptured = true;
         }
 
@@ -1870,6 +1878,9 @@ namespace MFO::ProgAllocator {
     //         u8 offClassPool, u8 hmsCaptured
     //     v6 §HMS additions (after hmsCaptured): u8 hmsZeroAwardStreak,
     //         f32 hmsGrantRemainder[3], f32 hmsAwardAccum; + flags bit 0x20 = fixedStat
+    //     v7 (after the HMS block): u16 autoLevelsGranted, u8 freeRespec,
+    //         u16 strippedCount + u32 strippedPerk × N
+    //     v8 (after the v7 block): f32 hmsWithheld, f32 hmsParityCredit
     //     v1 ONLY: f32 unspentPerk        (legacy stored pool — read + DISCARDED;
     //                                      §17 derives the pool instead)
     //     v2: u16 manualBaselineLevel | u16 manualPointsApplied
@@ -2042,6 +2053,9 @@ namespace MFO::ProgAllocator {
             a_intfc->WriteRecordData(strippedCount);
             for (std::uint16_t i = 0; i < strippedCount; ++i)
                 a_intfc->WriteRecordData(st.strippedPerks[i]);
+            // ── v8 block — APPENDED after the v7 block: §HMS player-rate parity.
+            a_intfc->WriteRecordData(st.hmsWithheld);       // v8 f32
+            a_intfc->WriteRecordData(st.hmsParityCredit);   // v8 f32
             ++written;
         }
         spdlog::info("[cosave] saved {} progression record(s), schema v{}{}", written, kProgVersion,
@@ -2424,6 +2438,18 @@ namespace MFO::ProgAllocator {
                 // from the OLD drifting split and are now frozen as they stood —
                 // the escape hatch. Only a v6-born record earns it.
                 st.freeRespec = true;
+            }
+
+            // ── v8 block (§HMS player-rate parity), read UNCONDITIONALLY for
+            // alignment. v<8: the ONE-TIME retro takes back the NPC-rate excess.
+            if (a_version >= 8) {
+                float w = 0.0f, c = 0.0f;
+                if (!a_intfc->ReadRecordData(w)) return;
+                if (!a_intfc->ReadRecordData(c)) return;
+                st.hmsWithheld     = (std::isfinite(w) && w >= 0.0f) ? w : 0.0f;
+                st.hmsParityCredit = (std::isfinite(c) && c >= 0.0f) ? c : 0.0f;
+            } else if (resolved) {
+                HmsRetroParity(resolvedID, st);   // ProgAllocator_Hms.cpp
             }
 
             if (!resolved) { ++droppedActor; continue; }

@@ -210,14 +210,21 @@ namespace MFO::ProgAllocator {
             // MeasureEngineVitalAward's header.
             float cur[3]; float delta[3];
             const float measured = Followers::MeasureEngineVitalAward(a_actor, a_st.hmsTarget, cur, delta);
+            // PRGN v8 parity: the engine's total sits hmsWithheld ABOVE the held
+            // total (points MFO withheld at earlier levels). Its absolute re-slam
+            // brings them back into the signed drift every level, so subtract
+            // them: engineAward is only what the engine awarded SINCE. Equal to
+            // max(0, Σdelta - W) because W >= 0 (a negative Σdelta reads 0 both
+            // ways). W == 0 (every pre-parity follower, fixed-stat) → == measured.
+            const float engineAward = std::max(0.0f, measured - a_st.hmsWithheld);
             // §HMS Phase 3 fixed-stat DETECTION tally: accumulate the MEASURED
             // engine award (never the injected grant) toward the next player
             // level-up's 0-award check. A grant call (a_grantBudget>0) measures 0
             // for a fixed-stat follower, so adding it is a harmless +0.
-            if (measured > 0.0f) a_st.hmsAwardAccum += measured;
-            // NORMAL path: budget = the measured engine award (byte-identical to
-            // Phase 2). GRANT path: reshape the injected player-gain instead.
-            float budget = (a_grantBudget > 0.0f) ? a_grantBudget : measured;
+            if (engineAward > 0.0f) a_st.hmsAwardAccum += engineAward;
+            // NORMAL path: budget = the engine award (capped at the player rate
+            // just below). GRANT path: reshape the injected player-gain instead.
+            float budget = (a_grantBudget > 0.0f) ? a_grantBudget : engineAward;
             diagBudget = budget;   // [hms-diag]: budget reported at whichever exit follows
 
             // First touch on an uncaptured record → adopt current base as the
@@ -230,6 +237,8 @@ namespace MFO::ProgAllocator {
                     a_st.hmsSkew[p]       = 0.0f;
                     a_st.hmsCumulative[p] = 0.0f;
                 }
+                a_st.hmsWithheld     = 0.0f;   // v8: the adopted base IS the engine's view
+                a_st.hmsParityCredit = 0.0f;
                 a_st.hmsCaptured = true;
                 spdlog::info("[hms] {:08X} baseline ADOPTED (uncaptured record): "
                              "H {:.0f} / M {:.0f} / S {:.0f} — no retro award",
@@ -239,6 +248,28 @@ namespace MFO::ProgAllocator {
             }
 
             // (cur/delta/budget were measured above via MeasureEngineVitalAward.)
+
+            // ── PLAYER-RATE PARITY (PRGN v8, marth 2026-09-23) ─────────────────
+            // A leveling follower's HMS grows no faster than the player's: apply
+            // min(engine award, player-gain credit) and WITHHOLD the rest into
+            // hmsWithheld so the next absolute re-slam does not re-measure it.
+            // The fixed-stat grant path is untouched (it already converges on the
+            // player's total).
+            if (a_grantBudget <= 0.0f && engineAward > 0.0f) {
+                const float creditBefore = a_st.hmsParityCredit;
+                const float applied      = std::min(engineAward, std::max(0.0f, creditBefore));
+                const float withheld     = engineAward - applied;
+                a_st.hmsParityCredit = std::max(0.0f, creditBefore - applied);
+                a_st.hmsWithheld    += withheld;
+                budget     = applied;
+                diagBudget = budget;
+                // Logged even on the quiet (a_log=false) reapply road: an award is
+                // rare (level-up edges), and a withhold must never be silent.
+                spdlog::info("[hms-parity] {:08X} engine award {:.1f} | player-rate credit {:.1f} "
+                             "| applied {:.1f} withheld {:.1f} | credit left {:.1f}, withheld total {:.1f}",
+                             id, engineAward, creditBefore, applied, withheld,
+                             a_st.hmsParityCredit, a_st.hmsWithheld);
+            }
 
             // ── Long-term CONVERGING allocation (marth 2026-08-25) ──────────────
             // The class ratio is a LONG-TERM target for the follower's RUNNING-TOTAL
@@ -366,6 +397,71 @@ namespace MFO::ProgAllocator {
                 a_st.hmsBattleOffCounted = false;
             }
             emitDiag();   // [hms-diag]: full path, earlyReturn=none, redistribute=measured budget
+        }
+
+        // PRGN v8 RETROACTIVE player-rate parity (marth 2026-09-23 "with
+        // retroactive fix"). A record written by PRGN v<=7 holds every engine
+        // award MFO passed through at the NPC rate. Nothing on disk records the
+        // follower's level at capture, but every award was one engine level of
+        // nRate = iAVDhmsLevelUp + fNPCHealthLevelBonus, so levels gained =
+        // Σcumulative / nRate and the player-rate cumulative is levels × pRate,
+        // i.e. each pool scales by pRate/nRate (class shape kept). The excess
+        // moves into hmsWithheld (whose invariant it preserves: Σtarget + W is
+        // unchanged == the engine total), the credit starts at 0, and the next
+        // RecomputeHMS hold writes the lowered base AVs. Floors: only POSITIVE
+        // cumulative pools scale (never below 0 → never below baseline);
+        // fixed-stat followers and any record with a carried grant remainder
+        // (grant history, which already ran at the player's rate) are SKIPPED,
+        // so no fixed-stat grant is ever taken back. Once: the v8 save that
+        // follows is read by the v8 branch, never this one.
+        void HmsRetroParity(RE::FormID a_id, ProgState& a_st) {
+            if (!a_st.hmsCaptured) return;   // pre-v5 / poisoned → ADOPTs live base, nothing to take back
+            float cumTotal = 0.0f;
+            for (int p = 0; p < 3; ++p) cumTotal += std::max(0.0f, a_st.hmsCumulative[p]);
+            if (cumTotal <= 0.0f) return;    // no engine award ever passed through
+            const bool grantHistory = a_st.hmsGrantRemainder[0] != 0.0f ||
+                                      a_st.hmsGrantRemainder[1] != 0.0f ||
+                                      a_st.hmsGrantRemainder[2] != 0.0f;
+            if (a_st.fixedStat || grantHistory) {
+                spdlog::info("[hms-parity] {:08X} retro SKIPPED: {} (cumulative {:.1f} kept)",
+                             a_id, a_st.fixedStat ? "fixed-stat follower" : "fixed-stat grant history",
+                             cumTotal);
+                return;
+            }
+            auto* gsc = RE::GameSettingCollection::GetSingleton();
+            auto* sP  = gsc ? gsc->GetSetting("iAVDhmsLevelUp") : nullptr;
+            auto* sB  = gsc ? gsc->GetSetting("fNPCHealthLevelBonus") : nullptr;
+            const float pRate = sP ? static_cast<float>(sP->GetSInt()) : 0.0f;
+            const float bonus = sB ? sB->GetFloat() : 0.0f;
+            if (!sP || !sB || !(pRate > 0.0f) || !std::isfinite(bonus) || !(bonus > 0.0f)) {
+                spdlog::error("[hms-parity] {:08X} retro NOT APPLIED: GMST iAVDhmsLevelUp={} "
+                              "fNPCHealthLevelBonus={} unreadable or no NPC excess (cumulative {:.1f} kept)",
+                              a_id, pRate, bonus, cumTotal);
+                return;
+            }
+            const float ratio = pRate / (pRate + bonus);
+            float before[3], taken = 0.0f;
+            for (int p = 0; p < 3; ++p) {
+                before[p] = a_st.hmsCumulative[p];
+                if (a_st.hmsCumulative[p] <= 0.0f) continue;
+                const float scaled = a_st.hmsCumulative[p] * ratio;
+                taken += a_st.hmsCumulative[p] - scaled;
+                a_st.hmsCumulative[p] = scaled;
+                a_st.hmsTarget[p] = a_st.hmsBaseline[p] + scaled;   // >= baseline (scaled > 0)
+            }
+            a_st.hmsWithheld     += taken;
+            a_st.hmsParityCredit  = 0.0f;
+            spdlog::info("[hms-parity] {:08X} RETRO (PRGN v<8 save): ~{:.1f} level(s) at {:.0f}/level "
+                         "-> player rate {:.0f}/level | cumulative H {:.1f} M {:.1f} S {:.1f} -> "
+                         "H {:.1f} M {:.1f} S {:.1f} | base H {:.0f} M {:.0f} S {:.0f} -> "
+                         "H {:.0f} M {:.0f} S {:.0f} | took back {:.1f}",
+                         a_id, cumTotal / (pRate + bonus), pRate + bonus, pRate,
+                         before[0], before[1], before[2],
+                         a_st.hmsCumulative[0], a_st.hmsCumulative[1], a_st.hmsCumulative[2],
+                         a_st.hmsBaseline[0] + std::max(0.0f, before[0]),
+                         a_st.hmsBaseline[1] + std::max(0.0f, before[1]),
+                         a_st.hmsBaseline[2] + std::max(0.0f, before[2]),
+                         a_st.hmsTarget[0], a_st.hmsTarget[1], a_st.hmsTarget[2], taken);
         }
 
     // §HMS off-class usage (F3): the combat scheduler (worker thread) publishes a

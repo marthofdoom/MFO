@@ -109,7 +109,18 @@ namespace MFO {
     //            unchanged, matters only if the cap is raised — REVIEW-BACKLOG
     //            MFO-B11), autoLevelsGranted as the loaded partition's auto
     //            levels (nothing pending, nothing re-split).
-    inline constexpr std::uint32_t kProgVersion    = 7;   // v7: A′ auto accumulator + B′ native-perk strip record
+    //   v8 (2026-09-23, §HMS player-rate parity, marth "fix b"): per follower
+    //            APPENDS after the v7 block hmsWithheld (f32, engine-awarded HMS
+    //            MFO has NOT applied: Σtarget + withheld == the engine's autocalc
+    //            total) and hmsParityCredit (f32, player HMS gain not yet matched
+    //            by an applied award). Nothing before them moved. The v1–v7
+    //            readers are KEPT (#12): a v<8 record defaults both to 0, then
+    //            runs the ONE-TIME retro (ProgAllocator_Hms.cpp HmsRetroParity)
+    //            that scales each positive hmsCumulative pool by
+    //            iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus) and moves
+    //            the excess into hmsWithheld (fixed-stat / grant-history
+    //            records skipped). The next save is v8, so it never re-runs.
+    inline constexpr std::uint32_t kProgVersion    = 8;   // v8: §HMS player-rate parity (withheld + credit)
 
     // T#76 force-hold: a FOURTH independent record — the weapons MFO force-equipped
     // (prevent-removal) for an active equip gambit. The engine's forceEquip lock
