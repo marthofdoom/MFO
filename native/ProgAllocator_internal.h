@@ -146,5 +146,8 @@ namespace MFO::ProgAllocator {
         // level poll / ReapplyFollower in ProgAllocator.cpp.
         void HmsTrackBattle(RE::Actor* a_actor, ProgState& a_st);
         void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log, float a_grantBudget = 0.0f);
+        // PRGN v8 one-time RETROACTIVE player-rate parity, called by CoSaveLoad
+        // for a record written by an older (v<8) PRGN. Main thread (load).
+        void HmsRetroParity(RE::FormID a_id, ProgState& a_st);
 
 }
