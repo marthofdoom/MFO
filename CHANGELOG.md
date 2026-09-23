@@ -5,7 +5,7 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
-## v2.0.9 -- Gear follows the perks, and Skyrim 1.5.97 joins
+## v2.0.9 -- Followers use the spells you gave them, gear follows the perks, and Skyrim 1.5.97 joins
 
 - **Followers only put a spell in their hands if you gave them that spell as a gambit.** Until now MFO stopped a follower casting anything ungambited, but it never stopped them picking it up. So a mage would arm a spell you never asked for, hold it charged in both hands, and stand there doing nothing for most of the fight because every cast was refused. MFO now tells Harbinger exactly which spells that follower is allowed to hold, so the ungambited one is never armed in the first place. The list is built from the same gambits the cast refusal already reads, so the two can never disagree. Staves, scrolls and powers are untouched, exactly as their casts always were. The list lifts the moment the fight ends. Needs Harbinger. There is a toggle if you want the old way.
 - **A follower whose spell takes a while to get off the ground keeps his other hand closed.** MFO holds the follower's free hand shut so the AI cannot slip its own spell in. That hold used to be dropped after four seconds if no cast had been seen yet, and the deck logs show a real attack spell takes closer to six seconds from the order to the cast, with the weapon swap in front of it. So the hold was being dropped on every single attack spell, and the AI armed its own spell in the freed hand under a second later. MFO now reads the game directly: while the follower is actually charging the spell you asked for, the other hand stays shut no matter how long it takes. The timer behind it was resized from the measured figure as well.
