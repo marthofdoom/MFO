@@ -128,6 +128,13 @@ apply it to any future channel MFO consumes from APMF.
 | concentration | Aimed / TargetActor / Touch | player / ally / foe | baseline + `SustainConcentrationEffect` | the target |
 | concentration | **Self** | **self** (target == follower) | baseline `CastSelfDirect`/`ApplySelfEffect` | the follower (correct) |
 | concentration | **Self** | **player / ally / foe** (≠ follower) | **`ConcProxy` delivery-flipped copy** → concentration-on-others path | **the recipient** |
+| **SUMMON** (any casting type, `kSummonCreature` + Target Location / Aimed) | — | **IGNORED** (self / player / ally / foe / AUTO all take this row) | **`CastSummonAtGround`**: `CastSpellImmediate` at an XMarker minted on a ground point 180u ahead (see "SUMMONS" below) | a creature at that ground point |
+
+**THE TARGET RULE (86e39pz55, 2026-09-23).** Before any row above is chosen, `Actuation::TargetKindFor`
+(`Actuation_Direct.cpp:943`) decides WHAT KIND of target MFO supplies from the spell's archetype:
+`Position` / `Self` / `Actor`. Only `Position` changes routing today (the SUMMON row, both with and
+without APMF). It is the first case of the "complex spells" design (86e3dmtr1): runes, walls and other
+location spells are meant to join `TargetKindFor` later, each with its own brief.
 
 **THE KEY FACT — why FF works but concentration collapses (and why the proxy exists):**
 For **fire-and-forget**, `CastSpellImmediate` applies the one-shot effect to the passed
@@ -148,6 +155,42 @@ and never builds one on that path. Read every row of this table as "APMF absent"
 APMF-present equivalent is the CAST-CLAIM OBSERVABILITY section near the bottom.
 
 ---
+
+## SUMMONS — the ground-position road (86e39pz55, 2026-09-23)
+
+**Why.** A gambited summon used to be aimed at an ACTOR on every road: CastOn's AI-grace →
+`Packages::CastAt` (UseMagic package at the actor) → `CastSpellImmediate(summon, actor)`;
+`CastSelfDirect` (self row); and AUTO's `CastAuto` fan-out, which sends a non-hostile spell to
+EVERY party member + the player in one tick (one `CastSpellImmediate(summon, ally)` each).
+Serana's summon, gambited, hard-froze the game (field, marth 2026-09-15). The freeze mechanism is
+NOT proven from code (see the task report); the fix removes the actor target entirely.
+
+**What runs.** `Actuation::Fire` and the Logistics OOC cast block both ask `TargetKindFor(spell)`
+right after the summon spam guard; `Position` → `Actuation::CastSummonAtGround`:
+- worker: `HasSpell`, magicka + reserve floor (same gate as CastOn), a 5 s in-flight window per
+  (follower, spell) so the scan cannot re-fire before `CasterHasLiveSummon` sees the summon.
+- main thread (`MainThread::Post`, never the worker): from the caster's feet + 96u, a forward ray
+  of 180u along `GetAngleZ` (kCharController layer, caster's system group, the Sightline ray
+  recipe) clamps the point 40u short of any wall; a down ray to 512u below the feet snaps it to
+  the ground. A non-persistent XMarker (base 0x3B) is minted there with
+  `TESDataHandler::CreateReferenceAtLocation` (the call `PlaceObjectAtMe` wraps), and
+  `GetMagicCaster(kInstant)->CastSpellImmediate(summon, false, marker, 1.0, false, 0.0, follower)`
+  fires at it. Magicka is deducted by hand (CastSpellImmediate spends none). The previous marker of
+  that follower is disabled + deleted when the next one is minted.
+- **Why a marker:** CommonLib 3.7.0 has no cast-at-coordinates entry (`MagicCaster::CastSpellImmediate`
+  takes a `TESObjectREFR*`), and the engine's own "here" is a marker reference.
+- **APMF is not on this road.** `APMF_Param.pos` is documented-reserved and read by NO channel;
+  `APMF_CastRequest.target` is an actor FormID. A summon is `Buff` by `ClassifySpell`, so it was never
+  APMF-claimed (owned cast needs Offense, ComposedCast is Heal-only). An APMF position cast would need
+  a new request field read by the 0x0A GetMagicTarget / 0x0D SetupAimController seats.
+
+**Log.** One `[summon] <follower> <spell> road=direct-position (combat|ooc): point (x,y,z) ahead=N
+[wall-clamped] snap=HIT ground z=… dz=… marker=… magicka -N` per cast. A snap failure is an ERROR
+(`snap=FAILED …  summon NOT cast (no actor-target fallback)`); there is no fallback.
+
+**Needs the field (principle 5):** that `CastSpellImmediate` with a Target Location summon and a
+non-actor ref target launches the projectile at the marker and conjures there; that the
+SummonCreatureEffect lands on the CASTER's active-effect list (what `CasterHasLiveSummon` reads).
 
 ## ConcProxy — the delivery-flipped concentration copy
 

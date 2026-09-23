@@ -5,6 +5,13 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.13 -- Unreleased
+
+- **Summon gambits cast on the ground in front of the follower.** A gambit that conjures a creature (a familiar, an atronach) used to aim the spell at an actor, like the player or an ally. Now MFO picks a spot on the ground a few steps in front of the follower and casts it there. The row's target no longer matters for a summon. A wall in the way pulls the spot closer.
+- **This is aimed at a freeze.** Serana's summon, cast from a gambit, could hard freeze the game. It is not proven yet that this fixes it. Please try it.
+- **If MFO can't find ground there, it doesn't cast.** It writes an error line to the log instead of falling back to an actor. Every summon cast writes one [summon] line with the spot it picked.
+- **Summons from a gambit have no cast animation.** The spell just goes off, the same as every other spell MFO casts directly.
+
 ## v2.0.12 -- Loot trips walk on Harbinger, and followers grow at your rate
 
 - **Followers walk to loot through Harbinger.** With Harbinger 0.9.7 or newer installed, the walk to a corpse or a chest now goes through Harbinger's travel command instead of MFO's own packages. Without Harbinger, or with an older one, MFO walks them there itself, the same as before. A follower can still loot a corpse. A trip only ends early if the target dies while he is on his way there. The setting is bLootTravelViaApmfTravel in MFO.ini and it is on by default.

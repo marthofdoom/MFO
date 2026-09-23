@@ -1211,6 +1211,37 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   rule, exactly like the cast-grace hold. Non-summon combat casts are byte-identical
   (helper returns false) and the AI-first-grace pacing is untouched; the helper only
   READS the active-effect list, the same off-worker read as the other combat guards.
+  (Line refs corrected 2026-09-23: the helper is `Actuation_Direct.cpp:914`, the combat
+  guard is in `Actuation::Fire` at `Actuation.cpp:~2384`, the OOC guard `Logistics.cpp:1592`.)
+- **Spell target archetype + THE SUMMON ROAD (86e39pz55, 2026-09-23; first case of the
+  "complex spells" design 86e3dmtr1)** — `Actuation::TargetKindFor` (PUBLIC,
+  `Actuation_Direct.cpp:943`) is the ONE place a spell's archetype decides the kind of
+  target MFO supplies: `Position` (a `kSummonCreature` effect on a Target Location or
+  Aimed spell), `Self` (Self delivery), `Actor` (everything else). Only `Position` is
+  acted on today. Both gambit dispatchers check it right AFTER the summon spam guard:
+  `Actuation::Fire` (`Actuation.cpp:2390`, all three cast opcodes incl. AUTO) and the
+  Logistics OOC cast block (`Logistics.cpp:1595`), and send a summon to
+  `Actuation::CastSummonAtGround` (`Actuation_Direct.cpp:1027`) instead of ANY actor road
+  (CastOn/ForceCast package/CastSelfDirect/CastTargetDirect/CastAuto fan-out). Worker side:
+  `HasSpell`, magicka + reserve, a 5 s per-(follower,spell) in-flight window
+  (`g_summonInFlight`, worker-serial). Main side (`MainThread::Post`): caster feet + 96u,
+  forward 180u along `GetAngleZ` (a kCharController ray clamps it 40u short of a wall), a
+  down ray to 512u below the feet snaps it to the ground, a NON-persistent XMarker (0x3B) is
+  minted there via `TESDataHandler::CreateReferenceAtLocation`, and
+  `CastSpellImmediate(kInstant)` is aimed at that marker with a hand magicka deduct. One
+  `[summon] ... road=direct-position` info line per cast; a failed snap is `spdlog::error`
+  and casts NOTHING. The previous marker per follower is `Disable`d + `SetDelete`d when the
+  next summon mints one (`g_summonMarker`, main-thread + leaf mutex, only if the ref is still
+  an XMarker at the stored point). **What breaks if you change this:** (a) adding an actor-
+  target fallback on a failed snap re-opens the freeze this road exists to avoid and masks
+  the failure (principle 7); (b) running the rays or the marker off the main thread is a
+  physics/cell race; (c) dropping the in-flight window lets the 133 ms scan re-fire before
+  `CasterHasLiveSummon` can see the summon (double conjures); (d) matching Reanimate or Self
+  delivery here breaks them (Reanimate needs a corpse actor, bound weapons are self casts);
+  (e) `ClearSelfCasts` must keep clearing both maps, or a recycled 0xFF FormID from the
+  previous game gets `SetDelete`d. APMF is NOT on this road: APMF_API.h's `APMF_Param.pos`
+  is read by no channel and `APMF_CastRequest.target` is an actor, and summons (Buff by
+  `ClassifySpell`) were never APMF-claimed anyway.
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
