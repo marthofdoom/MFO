@@ -13,6 +13,12 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-23 v2.0.12 RELEASED (GitHub, tag `v2.0.12`, main `0d2ee02`, DLL sha256 `c18bd232…`). NOT on Nexus yet: marth field-tests first.**
+  Contents: loot travel on APMF ch.19 by default (`bLootTravelViaApmfTravel = 1`, the old road-2 confound FIXED: `IsTravelPackage` knows APMF.esl 0x800-0x807; destination dies DURING travel ends the leg, corpses fine), [L] lit for the whole walk, magicka charge-for-time on the direct road, gait MCM option labelled not working, HMS player-rate parity with PRGN v8 (W / C / hmsHeld, retro-pending flag 0x40, one-time retro correction on v<8 load). Pairs with APMF v0.9.7 (sha `8f3f8c36…`, `APMF.esl` `78a3e6a4…`); with Harbinger 0.9.4 or older MFO runs Harbinger-absent.
+  DEPLOYED: ullr LoreRim (MFO + APMF 0.9.7) and Deck Tuxbornrc1 Testing (MFO + APMF 0.9.7 + esl enabled), local INIs kept, both `bLootTravelViaApmfTravel = 1`.
+  FIELD CHECKS for marth: `[loot-road]` lines show road 2 engaging; [L] lit during the walk; HMS retro line once per leveling follower on the first old-save load; held heals drain magicka at the right rate.
+  NEXT after marth confirms: the summon fix (ClickUp 86e39pz55), batch 1 with the CommonLib migration. ClickUp now holds the whole plan in weekly batches (tags `batch-N-*`).
+
 - **2026-09-22 TEST branch `test/mfo-loot-travel-via-ch19` (NOT for merge):** A/B loot travel.
   INI `bLootTravelViaApmfTravel` 0 (default) = MFO's own packages via ch.9 (control), 1 = APMF
   ch.19 `kIntent_Travel`. Grep `[loot-road]`. Header re-mirrored to APMF ABI v10, so this DLL needs
