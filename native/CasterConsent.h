@@ -72,7 +72,11 @@ namespace MFO::CasterConsent {
     // latch, in combat only: exact (>=4) allows only the gambit spells;
     // partial (1-3) applies the CastExempt kind-filter continuously. Gambit
     // spells always pass -- the takeover's own cast (forced or AI-fired) is
-    // never denied here. Dies with Clear/ClearAll (combat end, dismissal,
+    // never denied here. SINCE 2026-09-23 THIS SET ALSO GOVERNS THE LATCHED
+    // DENIES: a spell in it is never refused for not being the one latched
+    // spell, so a follower with two cast gambits casts both (one per hand).
+    // ONLY non-gambited spells get denied.
+    // Dies with Clear/ClearAll (combat end, dismissal,
     // revert/load). MAIN THREAD (task-queue tick), like Want.
     void NoteGambits(RE::FormID a_follower, std::vector<RE::FormID> a_spells);
 
@@ -81,21 +85,6 @@ namespace MFO::CasterConsent {
     // magicka-dry -> melee fallback. Locked shared read; safe off the job-worker
     // tick, cheap when nothing is latched (the map is empty).
     RE::FormID WantedSpell(RE::FormID a_follower);
-
-    // COOLDOWN-CONSULTED PERMIT (v1.0.32). fCastCooldown used to gate only the
-    // EQUIP debounce (Loadout::Prepare) -- the thunk's force-YES had no
-    // cooldown consult, so while the spell stayed in the follower's hand the
-    // permit fired every caster tick and casts BURST (deck: 4 in ~2.2s).
-    // Loadout::StartCooldown now stamps the next-allowed-cast time onto the
-    // latch entry itself (under the hook's own lock), and the combat-thread
-    // thunk DENIES the wanted spell until it is due -- the deny of OTHER
-    // spells is unaffected; exclusivity is separate from pacing. Deny and
-    // permit are two dials on one latch: deny spans the rule's lifetime, the
-    // permit opens once per cooldown. The pace dies with the latch (a fresh
-    // fight's first cast is prompt). No-op for an unlatched follower. Written
-    // from the task queue (every StartCooldown call site), read from the
-    // combat thread -- the thunk never calls Loadout's non-atomic maps.
-    void NoteCooldown(RE::FormID a_follower, float a_seconds);
 
     // OUR spell just fired -- the [cast] sink watched the gambit's own spell
     // leave the follower's hands (AI-driven or package-forced). v1.0.30: this
@@ -106,7 +95,7 @@ namespace MFO::CasterConsent {
     //    (with the package declined, that loop is a silent cast every service
     //    tick -- the pacing the cooldown exists to prevent);
     //  * the deny-log dedup entry -- reset, so the FIRST denied own-cast of
-    //    the NEXT cooldown window logs again: the once-per-cycle line that
+    //    the NEXT cast cycle logs again: the once-per-cycle line that
     //    proves the gap stays closed, at cast cadence, never tick cadence.
     // Returns whether the follower was actually latched, so the caller can log
     // the hold transition without taking a second lock. MAIN THREAD.

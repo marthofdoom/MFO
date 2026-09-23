@@ -6,12 +6,43 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-22 (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-09-23 UTC (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
+
+- **2026-09-23 Deck run (v2.0.9 line deployed) -- Fable field diagnosis + branch
+  `fix/mfo-cast-latch-gambit-set` (off `main` `10a28b2`; NOT merged, NOT deployed; NO full Fable
+  review on the round by marth's token order, coordinator diff read + green CI only).**
+  Evidence: memory note `cast-latch-is-actor-wide-hand-blind`, Fable agentlog
+  `field-diag-20260923.md`, evidence file `scratchpad/field-20260923/EVIDENCE.md` (session
+  `a935cdde`, not in the repo).
+  **THE HEADLINE:** the v2.0.9 allow-list made EQUIP multi-spell while cast-time consent stayed
+  SINGLE-spell. `CasterConsent`'s latch (`g_want`) is keyed by follower FormID only and both
+  LATCHED denies refused every spell that was not THE latched one -- including a second GAMBIT
+  spell. Field symptom: Lightning Bolt `0002DD29`, second form on the 23-entry allow-list,
+  configured and equipped, NEVER charged once in the session. Refused by MFO's own consent at
+  20:15:44 (latched for Fast Healing) and 20:17:12 (latched for Firebolt), and `DenyLog`'s dedupe
+  hid every repeat after that. The deny dated from `8bdc231` (2026-08-05), when it was correct
+  because MFO itself put ONE spell in the hand.
+  What the branch does: (1) both latched denies consult the gambit SET through the new
+  `CtrlHasSpell` helper, exactly as `CtrlUnlatchedDeny` already did on the unlatched path -- a
+  gambit-set spell is never denied for not being the latched one, only non-gambit spells are
+  (marth: "ONLY non-gambited spells get denied. Any spell allowed to be equipped is allowed to
+  cast."). The latch is KEPT and still drives the cast stance and the equip-order gate. The
+  per-hand rules are untouched by design ("there are two hands"), and `ConcUnboundedDeny` stays
+  AHEAD of the set test so bounded concentration keeps its invariant. (2) The v1.0.32 cast-time
+  pacing deny is DELETED (`permitAfter`, `NoteCooldown`, `g_lastPacedWindow`, and
+  `Loadout::StartCooldown`'s mirror into consent). It was pacing an already-charged spell for
+  3.7 s of a 5.3 s hold in every window where no client cast claim was live, which is exactly the
+  case `cast-cooldown-inert-is-correct` assumed could not happen. `Loadout`'s own `g_coolUntil`
+  re-EQUIP debounce STAYS.
+  Still open from the same diagnosis, NOT in this branch: claiming an occluded target as the cast
+  target, the unguarded `Loadout::Prepare` on the owned path (`Actuation.cpp:1101`), two late
+  windows with nothing of MFO's denying, and a 10 s main-thread stall at 20:17:54-20:18:04.
+  CLOSED by Fable, do not re-investigate: the ch.6 target pin cannot freeze movement.
 
 - **2026-09-22 Deck run (`47dbd6e` deployed) — Fable field diagnosis + branch
   `fix/mfo-spell-authority-0922` (off `main` `21fb9c1`, v2.0.9 line; NOT merged, NOT deployed, NO

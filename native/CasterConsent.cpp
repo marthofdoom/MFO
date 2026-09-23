@@ -54,24 +54,23 @@ namespace MFO::CasterConsent {
         // real lock, exactly like Targeting's. shared_mutex because the hook
         // only reads.
         //
-        // v1.0.32: the latch carries a PACE alongside the spell. v1.0.30 kept
-        // the latch alive through the cast cooldown so the DENY of competing
-        // spells stands -- but the standing latch also kept the PERMIT up, and
-        // the AI machine-gunned the gambit spell whenever it was in the magic
-        // branch (deck 2026-08-05: 4 casts in 2.2 s, 15:32:13-15). permitAfter
-        // is stamped by NoteCooldown (+fCastCooldown) -- Loadout::StartCooldown
-        // mirrors it on every cast path: the [cast] sink (AI-fired gambit
-        // cast), the forced package cast, and the silent fallback. Until it
-        // expires the thunk answers NO for the gambit spell TOO. Deny and
-        // permit are now separate dials on one latch: deny spans the rule's
-        // whole lifetime, permit opens once per cooldown. One store, under the
-        // existing g_mx -- the thunk never calls Loadout's non-atomic maps
-        // from the combat thread.
+        // THE LATCH CARRIES THE SPELL, AND ONLY THE SPELL (2026-09-23). It used
+        // to carry a PACE too: v1.0.32 stamped a permitAfter deadline from
+        // Loadout::StartCooldown and the thunk answered NO for the gambit spell
+        // itself until it expired, to stop the AI machine-gunning one spell
+        // (deck 2026-08-05: 4 casts in 2.2 s). Under the owned-cast model the
+        // engine's own cast timing IS the floor, so that dial is gone -- marth
+        // DECIDED cast pacing goes inert and must not be re-added
+        // ([[cast-cooldown-inert-is-correct]]). It was never inert in practice:
+        // consent only stands down while a CLIENT CLAIM LIVES, so in every
+        // no-claim window the deadline paced an already-charged spell for
+        // seconds (field 2026-09-23: 3.7 s of a 5.3 s hold). The re-EQUIP
+        // debounce is a different dial and it stays -- Loadout::StartCooldown's
+        // own g_coolUntil.
         std::shared_mutex g_mx;   // guards g_want + g_otherCast; the hook reads
                                   // (shared), the main thread writes (unique).
         struct Want {
-            RE::FormID        spell = 0;
-            Clock::time_point permitAfter{};   // epoch (default) = permit now
+            RE::FormID spell = 0;
         };
         std::unordered_map<RE::FormID, Want> g_want;         // follower -> latch
         std::atomic<std::size_t> g_wantCount{ 0 };           // fast-path: skip the lock when empty
@@ -340,11 +339,32 @@ namespace MFO::CasterConsent {
             return !CastExempt(k, selfHeal, lvl);         // partial: the kind-filter, continuous
         }
 
-        // Same throttle idea for the PACING deny (v1.0.32): one info line per
-        // cooldown WINDOW, keyed on the window's expiry -- a window is denied
-        // at caster-tick rate, and the log must show the pacing at cast
-        // cadence, never tick cadence. Same leaf mutex, same rare path.
-        std::unordered_map<RE::FormID, Clock::time_point> g_lastPacedWindow;
+        // -- IS THIS SPELL IN THE FOLLOWER'S GAMBIT SET? (2026-09-23) ---------
+        // marth's rule: "It should be equipped by the gambit matching, then
+        // allowed to cast until it gets replaced in hand. ONLY non-gambited
+        // spells get denied. Any spell allowed to be equipped is allowed to
+        // cast." g_want is keyed by FOLLOWER ONLY, so the two LATCHED denies
+        // used to refuse every spell that was not THE latched one -- including
+        // a second gambit spell in the other hand. Field 2026-09-23: Lightning
+        // Bolt 0002DD29 was configured, equipped, and never charged once,
+        // refused while the latch held Fast Healing and then Firebolt. This is
+        // the same membership test CtrlUnlatchedDeny already runs on the
+        // UNLATCHED path, factored out for the latched ones -- no hand read:
+        // the SET is what marth's rule turns on, and both hands draw from it.
+        // The per-hand rules are untouched by this (there are two hands): the
+        // firing gambit's own per-hand lock, rank-carried preemption and the
+        // concentration bound all still run, above this test.
+        // Membership only, no slider read -- lock-free when nothing is under
+        // control, shared lock otherwise (same leaf lock as g_want).
+        bool CtrlHasSpell(RE::FormID a_fid, RE::FormID a_spellID) {
+            if (g_ctrlCount.load(std::memory_order_relaxed) == 0) return false;
+            std::shared_lock lk(g_mx);
+            const auto it = g_ctrl.find(a_fid);
+            if (it == g_ctrl.end()) return false;
+            for (const auto s : it->second)
+                if (s == a_spellID) return true;
+            return false;
+        }
 
         // The 14 concrete CombatMagicCaster vtables. All share the
         // CheckStartCast(CombatController*) signature at index 0x06.
@@ -593,22 +613,13 @@ namespace MFO::CasterConsent {
             // spell -- for a non-latched actor, magicItem is only ever read
             // behind ConcUnboundedDeny's / CtrlUnlatchedDeny's atomic gates
             // (the latch-independent bounds), never on the plain fast-out.
-            // The permit deadline rides the same latch entry and the same
-            // shared lock (v1.0.32, the "existing locks" rule): the thunk must
-            // not call Loadout's non-atomic maps from the combat thread.
-            RE::FormID        wantSpell = 0;
-            bool              latched   = false;
-            bool              cooling   = false;
-            Clock::time_point coolUntil{};
+            RE::FormID wantSpell = 0;
+            bool       latched   = false;
             {
                 std::shared_lock lk(g_mx);
                 if (const auto w = g_want.find(fid); w != g_want.end()) {
                     latched   = true;
                     wantSpell = w->second.spell;
-                    if (Clock::now() < w->second.permitAfter) {
-                        cooling   = true;
-                        coolUntil = w->second.permitAfter;
-                    }
                 }
             }
 
@@ -703,6 +714,25 @@ namespace MFO::CasterConsent {
                 // because it does independent work right now.
                 if (APMFBridge::IsOwnedCastActive(fid)) return aiSaysYes;
                 if (Config::g_casterMode.load() == 0) return aiSaysYes;   // dev observe-only
+                // CONCENTRATION STAYS BOUNDED, ahead of the gambit-set pass
+                // below. Exact-mode bounding must leave no unbounded channel
+                // (marth: "exact spell bounding must affect all spells, or it
+                // may as well not exist"), and a gambit CONCENTRATION spell is
+                // MFO's to stream through the package/claim path, not the AI's
+                // to hold. Non-gambit spells reach the same verdict they always
+                // did (this helper is inert below Exact), only the log line
+                // names the reason more precisely.
+                if (ConcUnboundedDeny(fid, mi)) {
+                    ConcSuppressLog(fid, actor, mi->GetFormID());
+                    return false;
+                }
+                // A SPELL FROM THIS FOLLOWER'S GAMBIT SET IS NEVER DENIED FOR
+                // NOT BEING THE LATCHED ONE (2026-09-23, see CtrlHasSpell).
+                // The latch still decides what MFO DRIVES -- the cast stance
+                // and the equip-order gate read WantedSpell -- but it no longer
+                // decides what the follower is ALLOWED to cast. Two hands, two
+                // gambit spells, both allowed.
+                if (CtrlHasSpell(fid, mi->GetFormID())) return aiSaysYes;
                 if (castLvl < 4) {
                     const SpellKind kind = ClassifySpell(mi);
                     const bool selfHeal = kind == SpellKind::Heal &&
@@ -751,29 +781,9 @@ namespace MFO::CasterConsent {
                 return false;
             }
 
-            // PACING (v1.0.32). The force-YES below used to have no cooldown
-            // consult at all: while the spell stayed in the follower's hand,
-            // the permit fired on every caster tick and casts BURST (deck: 4
-            // in ~2.2s) -- fCastCooldown only ever gated the re-EQUIP. Within
-            // the cooldown the wanted spell is DENIED, so no cast fires until
-            // due; StartCooldown (stamped by the [cast] sink on every gambit
-            // cast, AI-fired or forced) opens the next window. Logged once per
-            // window, keyed on the window's expiry -- cast cadence, not tick.
-            if (cooling) {
-                {
-                    std::lock_guard<std::mutex> dl(g_denyLogMx);
-                    auto& last = g_lastPacedWindow[fid];
-                    if (last != coolUntil) {
-                        last = coolUntil;
-                        spdlog::info("[consent] {:08X} {} pacing: {:08X} held until cooldown "
-                                     "expires ({:.1f}s)", fid,
-                                     actor->GetName() ? actor->GetName() : "?", wantSpell,
-                                     std::chrono::duration<float>(coolUntil - Clock::now()).count());
-                    }
-                }
-                return false;
-            }
-
+            // NO PACING DENY (2026-09-23). v1.0.32 held the wanted spell until
+            // fCastCooldown expired; that dial is deleted, not disabled -- see
+            // struct Want. The engine's own cast timing is the floor.
             if (!aiSaysYes) {
                 ++g_forced;
                 spdlog::info("[consent] {:08X} {} -> FORCED cast of {:08X}",
@@ -822,6 +832,13 @@ namespace MFO::CasterConsent {
                 a_wantOut = w->second.spell;
             }
             if (a_mi->GetFormID() == a_wantOut) return false;   // the gambit spell -> allow
+            // ANY spell in this follower's gambit SET is allowed, not just the
+            // latched one (2026-09-23, see CtrlHasSpell). CheckCastThunk runs
+            // ConcUnboundedDeny BEFORE this call, so the concentration bound
+            // still comes first here exactly as it does in the 0x06 thunk.
+            // a_wantOut stays the LATCHED spell either way: the caller uses it
+            // as "the latched logic governed this spell", which is still true.
+            if (CtrlHasSpell(a_fid, a_mi->GetFormID())) return false;
             if (lvl >= 4) return true;                          // exact -> deny all non-gambit
             const SpellKind k = ClassifySpell(a_mi);
             const bool selfHeal = k == SpellKind::Heal &&
@@ -1119,9 +1136,6 @@ namespace MFO::CasterConsent {
 
     void Want(RE::FormID a_follower, RE::FormID a_spell) {
         std::unique_lock lk(g_mx);
-        // Overwrite the SPELL only. Re-Want() fires every service tick while
-        // the rule wins; resetting permitAfter with it would push the permit
-        // forever out of reach. The pace belongs to NoteCooldown alone.
         g_want[a_follower].spell = a_spell;
         g_wantCount.store(g_want.size(), std::memory_order_relaxed);
     }
@@ -1136,8 +1150,7 @@ namespace MFO::CasterConsent {
         // Before g_mx for the same reason NoteGambits publishes before it.
         APMFBridge::ReleaseSpellAllowList(a_follower);
         std::unique_lock lk(g_mx);
-        g_want.erase(a_follower);            // permitAfter dies with the latch --
-                                             // a fresh fight's first cast is prompt
+        g_want.erase(a_follower);
         g_otherCast.erase(a_follower);       // the miss flag dies with the latch
         g_wantCount.store(g_want.size(), std::memory_order_relaxed);
         // #59: the continuous-control reference dies here too -- Clear's call
@@ -1148,7 +1161,6 @@ namespace MFO::CasterConsent {
         {
             std::lock_guard<std::mutex> dl(g_denyLogMx);
             g_lastDenied.erase(a_follower);
-            g_lastPacedWindow.erase(a_follower);
             g_lastConcDeny.erase(a_follower);
         }
         { std::lock_guard<std::mutex> al(g_abortLogMx); g_lastAbort.erase(a_follower); }
@@ -1168,7 +1180,6 @@ namespace MFO::CasterConsent {
         {
             std::lock_guard<std::mutex> dl(g_denyLogMx);
             g_lastDenied.clear();
-            g_lastPacedWindow.clear();
             g_lastConcDeny.clear();
         }
         { std::lock_guard<std::mutex> al(g_abortLogMx); g_lastAbort.clear(); }
@@ -1220,18 +1231,6 @@ namespace MFO::CasterConsent {
         g_ctrlCount.store(g_ctrl.size(), std::memory_order_relaxed);
     }
 
-    void NoteCooldown(RE::FormID a_follower, float a_seconds) {
-        if (a_seconds <= 0.0f) return;
-        std::unique_lock lk(g_mx);
-        // Only a LATCHED follower carries a permit to pace. If the rule has
-        // already released, there is nothing to stamp -- and no stale deadline
-        // to greet the next latch (Clear() drops the whole entry).
-        const auto w = g_want.find(a_follower);
-        if (w == g_want.end()) return;
-        w->second.permitAfter = Clock::now() +
-            std::chrono::milliseconds(static_cast<int>(a_seconds * 1000.0f));
-    }
-
     void NoteCast(RE::FormID a_follower, RE::FormID a_spell) {
         std::unique_lock lk(g_mx);
         const auto w = g_want.find(a_follower);
@@ -1247,7 +1246,7 @@ namespace MFO::CasterConsent {
         if (!g_want.contains(a_follower)) return false;   // rule already released
         // KEEP g_want -- that is the whole point (see the header). Retire only
         // the per-cast transients: the miss flag is consumed by this cast, and
-        // the deny-log dedup entry resets so the next cooldown's first denied
+        // the deny-log dedup entry resets so the next cast cycle's first denied
         // own-spell logs once more. Same nested lock order as Clear().
         g_otherCast.erase(a_follower);
         { std::lock_guard<std::mutex> dl(g_denyLogMx); g_lastDenied.erase(a_follower); }

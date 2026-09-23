@@ -5,6 +5,11 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.10 -- A follower with two spell gambits casts both of them
+
+- **A follower with two spell gambits now casts both of them.** MFO picked one spell, put it in a hand and then refused every cast of any other spell for as long as that pick stood. The second spell you gave that follower was one of the spells being refused. So a mage set up with a heal and two attack spells cast the first attack spell over and over and never once cast the other, even while holding it charged and ready in the free hand. A spell you gave a follower as a gambit is now allowed to cast whenever the game reaches for it. Only spells you never gave them are refused. There are two hands and both of them work now.
+- **A charged spell fires as soon as the game is ready to fire it.** MFO paced its own casts on a timer of its own, on top of the game's. A spell already charged in the follower's other hand sat there waiting on that timer instead of firing. On the deck it cost 3.7 seconds out of a 5.3 second hold. The game's own cast timing sets the rate now, which is what it was always going to be once MFO stopped fighting it. The separate hold that stops MFO putting the same spell back in a follower's hand every second is untouched.
+
 ## v2.0.9 -- Followers use the spells you gave them, gear follows the perks, and Skyrim 1.5.97 joins
 
 - **Followers only put a spell in their hands if you gave them that spell as a gambit.** Until now MFO stopped a follower casting anything ungambited, but it never stopped them picking it up. So a mage would arm a spell you never asked for, hold it charged in both hands, and stand there doing nothing for most of the fight because every cast was refused. MFO now tells Harbinger exactly which spells that follower is allowed to hold, so the ungambited one is never armed in the first place. The list is built from the same gambits the cast refusal already reads, so the two can never disagree. Staves, scrolls and powers are untouched, exactly as their casts always were. The list lifts the moment the fight ends. Needs Harbinger. There is a toggle if you want the old way.

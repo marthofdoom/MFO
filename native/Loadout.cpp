@@ -484,14 +484,12 @@ namespace MFO::Loadout {
         if (cd <= 0.0f) return;
         g_coolUntil[a_actorID] = std::chrono::steady_clock::now() +
                                  std::chrono::milliseconds(static_cast<int>(cd * 1000.0f));
-        // MIRROR INTO THE CONSENT HOOK (v1.0.32). "Taking the spell back" was
-        // never the whole rate limit: ReleaseSpell's minimum hold (the grace)
-        // leaves the spell in hand for seconds after a cast, and the thunk's
-        // force-YES was firing on every caster tick of that window -- the
-        // deck's 4-casts-in-2.2s burst. The permit itself must know the
-        // deadline; the thunk reads this mirror under its own lock (never
-        // Loadout's non-atomic maps from the combat thread).
-        CasterConsent::NoteCooldown(a_actorID, cd);
+        // NO CONSENT MIRROR (2026-09-23). v1.0.32 also stamped this deadline
+        // onto CasterConsent's latch so the thunk denied the gambit spell until
+        // it expired. That pacing deny is deleted -- it was pacing an
+        // already-charged spell for seconds in every window where no client
+        // cast claim was live. THIS cooldown, the re-EQUIP debounce below, is a
+        // different dial and it stays.
         // Taking the spell back IS the rate limit -- they cannot cast what they
         // are not holding. Leaving it in hand and merely declining to re-equip
         // would pace MFO and do nothing about their AI.

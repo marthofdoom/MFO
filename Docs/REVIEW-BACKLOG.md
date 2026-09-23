@@ -489,6 +489,13 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** gem CHOICE (tier-2 ordering and preference) is marth's planned redesign; the brief forbade changing it.
 - **Fix shape when drained (verbatim):** when `det` holds a Conduit AND an off-domain gem, exclude the Conduit from the weakest-gem search (it is load-bearing); or rank a Conduit by the gem it carries.
 
+### MFO-B66 -- `DenyLog`'s dedupe hides how long a refusal lasts, not which spell it is
+- **Raised:** author of `fix/mfo-cast-latch-gambit-set` (2026-09-23), verifying Fable's field-diagnosis item 3 rather than changing it. Fable had suggested a time-based dedupe as a tier-C follow-up.
+- **Severity:** SEV-5 (diagnostic legibility, no behaviour)
+- **Finding:** `DenyLog` (`CasterConsent.cpp:509`) dedupes on `(follower, last denied spell)` by EQUALITY, so a DIFFERENT spell always logs a line. It cannot hide a new distinct problem spell. What it does hide is the DURATION and the REPEAT RATE of one spell's refusal: the 2026-09-23 session logged Lightning Bolt's refusal twice in eight minutes while the AI asked hundreds of times, which read as two incidents instead of a permanent condition. The dedupe entry resets on `NoteOurCast` and on `Clear`, so a repeat after either logs again.
+- **Why it was NOT fixed:** the brief's condition for changing it was "if it CAN hide a new distinct problem spell", and it cannot. Item 1 of that branch should make these denies rare anyway.
+- **Fix shape when drained:** carry a `Clock::time_point` beside the spell in `g_lastDenied` and re-log the same pair after ~30 s. About ten lines, touching the map's five use sites (`:513-515`, the two erases, the clear). Same shape would apply to `g_lastConcDeny` and `g_lastAbort`, which have the identical blindness.
+
 ## DRAINED
 
 ### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight
