@@ -356,12 +356,16 @@ namespace APMF_API {
         kTravel_None = 0,
 
         kTravel_ReleaseOnTargetDead = 1u << 0,
-                                        // OPT-IN: end the leg when the destination actor dies.
-                                        //   OFF by default. With it clear a dead destination is
-                                        //   just a reference to walk to (a corpse is a valid
-                                        //   travel target), and the leg ends only on arrival,
-                                        //   the actor entering combat, the destination being
-                                        //   deleted or disabled, or the client's Release.
+                                        // NAMES THE v1 DEFAULT; it does not switch it on. APMF
+                                        //   ALWAYS ends the leg when the destination dies, is
+                                        //   disabled, or unloads, whether or not this bit is set
+                                        //   -- walking an actor to a corpse would be a mask, not
+                                        //   a feature (CLAUDE.md principle 7). The bit exists so
+                                        //   a later ABI can add its inverse
+                                        //   (kTravel_HoldOnTargetDead) without a client having to
+                                        //   guess which way the default ran. Setting it is free
+                                        //   and documents intent; leaving it clear changes
+                                        //   nothing today.
     };
 
     // ── Equip-authority flags (kIntent_EquipAuthority's param.ival, ABI v7) ──
