@@ -129,6 +129,12 @@ apply it to any future channel MFO consumes from APMF.
 | concentration | **Self** | **self** (target == follower) | baseline `CastSelfDirect`/`ApplySelfEffect` | the follower (correct) |
 | concentration | **Self** | **player / ally / foe** (≠ follower) | **`ConcProxy` delivery-flipped copy** → concentration-on-others path | **the recipient** |
 
+**SUMMON RULE (fix/mfo-summon-no-fanout, 2026-09-23).** A spell with a Summon Creature effect is
+cast ONCE per fire, by the caster, whatever the row targets. AUTO's fan-out (`CastAuto`) no longer
+applies to it: it takes one `ApplyEffectFromTo(caster, caster)` on the same direct road
+(`Actuation_Direct.cpp:1839`). A summon only conjures for its own caster, so the old fan-out put one
+creature per party member on him in a single tick. Bound weapons and Reanimate are not summons here.
+
 **THE KEY FACT — why FF works but concentration collapses (and why the proxy exists):**
 For **fire-and-forget**, `CastSpellImmediate` applies the one-shot effect to the passed
 `target` **regardless of the spell's Self delivery** — recipients do **NOT** self-cast, and no

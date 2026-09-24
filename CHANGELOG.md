@@ -5,6 +5,11 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.0.13 -- Unreleased
+
+- **A summon gambit casts once.** A gambit set to cast a summon (a familiar, an atronach) on Auto used to cast it once for every member of the party, all at the same moment. A summon always appears next to the follower who cast it, so that put several creatures on him at once. Now he casts it one time. Bound weapons and raise dead spells are not affected.
+- **This may be what froze the game with Serana.** Her summon, cast from a gambit, could hard freeze the game. It is not proven yet that this was the cause. Please try it.
+
 ## v2.0.12 -- Loot trips walk on Harbinger, and followers grow at your rate
 
 - **Followers walk to loot through Harbinger.** With Harbinger 0.9.7 or newer installed, the walk to a corpse or a chest now goes through Harbinger's travel command instead of MFO's own packages. Without Harbinger, or with an older one, MFO walks them there itself, the same as before. A follower can still loot a corpse. A trip only ends early if the target dies while he is on his way there. The setting is bLootTravelViaApmfTravel in MFO.ini and it is on by default.

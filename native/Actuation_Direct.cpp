@@ -1836,6 +1836,36 @@ namespace MFO::Actuation {
                 spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
                 spell->GetDelivery()    == RE::MagicSystem::Delivery::kSelf;
 
+            // SUMMONS ARE NEVER FANNED OUT (fix/mfo-summon-no-fanout). A summon
+            // effect only ever conjures for its own caster, so the fan-out below
+            // (one CastSpellImmediate per ally + the player, all in one tick)
+            // conjured N creatures on the caster at once -- the lead for the
+            // Serana freeze. A spell with a Summon Creature effect is cast ONCE,
+            // by the caster, on the same direct road (ApplyEffectFromTo). Bound
+            // weapons (kBoundWeapon) and Reanimate (kReanimate) are other
+            // archetypes and never match.
+            bool summon = false;
+            for (auto* eff : spell->effects) {
+                if (eff && eff->baseEffect &&
+                    eff->baseEffect->GetArchetype() ==
+                        RE::EffectArchetypes::ArchetypeID::kSummonCreature) {
+                    summon = true;
+                    break;
+                }
+            }
+            if (summon) {
+                if (!affordable())
+                    return { Result::NoOp, "auto summon: insufficient magicka/reserve", true };
+                ApplyEffectFromTo(id, id, a_spellID, hostile);
+                g_autoCast[id] = now;
+                // No g_beneficialRecast window: CasterHasLiveSummon gates liveness, so a killed summon recasts at once.
+                spdlog::info("[cast] {:08X} {} SUMMON {} ({:08X}) -- road=direct (AUTO), cast once "
+                             "by the caster (never fanned out), cost {:.0f}",
+                             id, a_follower->GetName() ? a_follower->GetName() : "?",
+                             spell->GetName() ? spell->GetName() : "?", a_spellID, cost);
+                return { Result::Fired, "auto summon (cast once)" };
+            }
+
             // ENUMERATE the inferred set (worker-safe reads, same context/precedent
             // as Evaluator::PickFoe / PickAlly which run on this same tick). F1:
             // collect FormIDs, NEVER raw Actor* -- the fan-out below runs AFTER the
