@@ -2945,7 +2945,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   unchanged `WndProcHook` swap (`:313`, WM_CHAR/WM_KILLFOCUS), and `LazyInit`
   (`:401`, ImGui context + DX11/Win32 backend on first Present). `TryInstallHooks`
   (`:711`) polls for the live swapchain then patches.
-- **Fonts (`LazyInit`, `Board.cpp:445-483`):** body/head TTFs baked at backbuffer
+- **Fonts (`LazyInit`, `Board.cpp:445-483`; open backlog MFO-B78..B80):** body/head TTFs baked at backbuffer
   scale, each followed by `mergeCjk()` merging the optional `fonts/cjk.otf`
   (Noto Sans JP) into it. **What breaks:** a new face added without its own
   `mergeCjk()` right after it draws Japanese names as boxes; issuing a merge
