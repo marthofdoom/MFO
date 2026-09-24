@@ -637,6 +637,12 @@ namespace MFO::Logistics {
             bool                legEngaged = false;
             Clock::time_point   legStart{};
             Clock::time_point   nextLegPkgDiag{};
+            // MOVEMENT BLOCKED backstop (loot M1): first tick this leg saw the
+            // engine's kMovementBlocked runtime package, and the legStart it was
+            // seen under (a retarget rewrites legStart, so a stale onset can never
+            // gate the NEXT leg). Zero = not blocked. Worker-only, NOT serialized.
+            Clock::time_point   blockedSince{};
+            Clock::time_point   blockedLeg{};
             // ACQUIRE PROBE (route 2b) readback: after an Activate dispatch at a
             // LOOSE ref, the NEXT tick observes what the engine actually did
             // (dispatch is asynchronous -- Papyrus.h -- so same-tick reads lie).
@@ -785,12 +791,38 @@ namespace MFO::Logistics {
         inline std::unordered_map<RE::FormID, int>               g_stallStrikes;
         constexpr auto kTravelStickyCooldown = std::chrono::seconds(60);
 
+        // GATED (loot M1, 2026-09-24, marth: "never return to follow when valid
+        // items are reachable ... effective skipping, done intelligently"). A leg
+        // whose follower sat in the engine's kMovementBlocked package for
+        // kBlockedGate marks its target GATED and ALSO skips the items that lie
+        // behind the same block (GatedNow and the cone rule, below MarkTravelSticky),
+        // then the excursion continues with the next reachable item. A SKIP,
+        // never a verdict: no strike, never sticky, not in g_travelFailed (so
+        // the idle reassess neither clears nor feeds it). Re-admitted by a door/
+        // lever near it (TESOpenCloseEvent / ACTI|DOOR TESActivateEvent), by the
+        // gated item's own cell attaching again -- ONLY when the block may
+        // actually have cleared (marth 2026-09-24: "no timer"). An ACTOR in
+        // front of him is not a gate: that is a REORDER (FindActorBlocker /
+        // g_actorDefer below), never a GATED verdict.
+        // The records live below under a mutex (GateSink erases on the
+        // main thread); g_gateCount lets every other read skip the lock.
+        constexpr auto  kBlockedGate  = std::chrono::seconds(3);   // healthy MB blips ~1 s, freezes 39-45 s (deck-0924b)
+        constexpr auto  kEngageWindow = std::chrono::seconds(3);   // engage seen at 1.1-2.4 s (deck-0924b, field-0923b)
+        // CH19 concede (review R4): a CH19 leg never engaged by kCh19Concede is
+        // handed back. Engage was seen up to ~2.4 s (2nd Walking tick); at the
+        // 1 s cadence 5 s is that worst case plus two more ticks, where 3 s left
+        // under one. NOT ENGAGED and the theft-guard gate keep kEngageWindow.
+        constexpr auto  kCh19Concede  = std::chrono::seconds(5);
+        inline std::atomic<int> g_gateCount{ 0 };
+        inline bool GatedNow(RE::FormID a_id, Clock::time_point a_now);   // defined below MarkTravelSticky
+
         inline bool TravelFailedRecently(RE::FormID a_id, Clock::time_point a_now) {
             auto su = g_travelUnreach.find(a_id);
             if (su != g_travelUnreach.end() && a_now < su->second + kTravelStickyCooldown)
                 return true;
             auto it = g_travelFailed.find(a_id);
-            return it != g_travelFailed.end() && a_now < it->second + kTravelFailCooldown;
+            if (it != g_travelFailed.end() && a_now < it->second + kTravelFailCooldown) return true;
+            return g_gateCount.load(std::memory_order_relaxed) > 0 && GatedNow(a_id, a_now);
         }
         inline void MarkTravelFailed(RE::FormID a_id, Clock::time_point a_now) {
             if (a_id) { g_travelFailed[a_id] = a_now; EvictOldest(g_travelFailed); }
@@ -827,6 +859,242 @@ namespace MFO::Logistics {
             spdlog::info("[loot] {:08X} STICKY-unreachable (loose/unacquirable) -- won't re-pick "
                          "for {}s", a_id,
                          std::chrono::duration_cast<std::chrono::seconds>(kTravelStickyCooldown).count());
+        }
+
+        // ── GATED items (loot M1, 2026-09-24) ───────────────────────────────────
+        // Contract: kBlockedGate above. The records are cross-thread state: the
+        // worker marks and reads them, GateSink (Logistics.cpp) erases them on the
+        // main thread -> a plain mutex (the g_stockMx precedent);
+        // g_gateCount mirrors the size so the scan's hot path (TravelFailedRecently,
+        // called from the candidate sort) takes no lock while nothing is gated.
+        //
+        // "BEHIND THE SAME BLOCK". When a leg is declared blocked the follower is
+        // standing AT the obstruction (S = his position; the engine gives him
+        // kMovementBlocked because he is pressing into it) and the gated target T
+        // lies beyond it. Item I is behind the same block when, from S:
+        //   (1) same space: same interior cell, or same worldspace (interior
+        //       coordinates of two cells are unrelated);
+        //   (2) on T's side: inside the 90-degree cone (+-45) around S->T, flat (xy),
+        //       so the room entered through that opening is covered and everything
+        //       behind or beside him (the way he came) is not;
+        //   (3) past the block, not at it: |SI| >= 64 u and <= |ST| + 1024 u (about
+        //       one dungeon room past the target);
+        //   (4) on T's floor: |I.z - T.z| <= 256 u (one storey), so a landing above or
+        //       a pit below the cone is not swept in.
+        // Why this shape: S and T are the only geometry M1 has (navmesh reachability
+        // is round M3). A wrong INCLUSION costs nothing permanent: the item re-admits
+        // on a door/lever event near it or its cell re-attaching. A wrong
+        // EXCLUSION costs one more walk that ends in its own blocked verdict (<= 4 s)
+        // and gates it individually. So the rule takes the room behind the opening
+        // and stays out of everything on the follower's side.
+        constexpr float       kGateConeCos     = 0.70710678f;   // cos 45
+        constexpr float       kGateMinBehind   = 64.0f;
+        constexpr float       kGateBeyond      = 1024.0f;
+        constexpr float       kGateFloorBand   = 256.0f;
+        // A lever/door event re-admits every gate whose block OR target is within
+        // this radius: a lever sits within sight of its gate, 2048 u (~29 m)
+        // covers a large hall. Too wide only costs one re-probe walk.
+        constexpr float       kGateEventRadius = 2048.0f;
+        constexpr std::size_t kGateMax         = 64;   // memory bound only; eviction is logged
+
+        struct GateRecord {
+            RE::FormID        target = 0;
+            RE::FormID        follower = 0;
+            RE::FormID        space = 0;
+            RE::NiPoint3      blockPos{};
+            RE::NiPoint3      targetPos{};
+            Clock::time_point since{};
+            std::unordered_set<RE::FormID> logged;   // GATED-BEHIND lines already printed
+        };
+        inline std::mutex              g_gateMx;
+        inline std::vector<GateRecord> g_gates;   // guarded by g_gateMx
+
+        inline RE::FormID SpaceKey(const RE::TESObjectREFR* a_ref) {
+            auto* cell = a_ref ? a_ref->GetParentCell() : nullptr;
+            if (!cell) return 0;
+            if (cell->IsInteriorCell()) return cell->GetFormID();
+            auto* ws = a_ref->GetWorldspace();
+            return ws ? ws->GetFormID() : 0;
+        }
+        inline bool BehindBlock(const GateRecord& g, const RE::NiPoint3& p) {
+            const float tx = g.targetPos.x - g.blockPos.x, ty = g.targetPos.y - g.blockPos.y;
+            const float ix = p.x - g.blockPos.x,           iy = p.y - g.blockPos.y;
+            const float lt = std::sqrt(tx * tx + ty * ty), li = std::sqrt(ix * ix + iy * iy);
+            if (lt < 1.0f || li < kGateMinBehind || li > lt + kGateBeyond) return false;
+            if (std::fabs(p.z - g.targetPos.z) > kGateFloorBand) return false;
+            return (tx * ix + ty * iy) / (lt * li) >= kGateConeCos;
+        }
+        // Caller holds g_gateMx. Every re-admit is logged -- the skip is visible
+        // both ways, never a silent list change.
+        template <class Pred>
+        void EraseGatesIf(const char* a_why, RE::FormID a_by, Pred&& a_pred) {
+            std::erase_if(g_gates, [&](const GateRecord& g) {
+                if (!a_pred(g)) return false;
+                spdlog::info("[loot] GATED {:08X} re-admitted -- {} ({:08X}); items behind its "
+                             "block are eligible again", g.target, a_why, a_by);
+                return true;
+            });
+            g_gateCount.store(static_cast<int>(g_gates.size()), std::memory_order_relaxed);
+        }
+        inline void ReadmitNear(RE::TESObjectREFR* a_ref, const char* a_why) {
+            if (!a_ref) return;
+            const RE::FormID   space = SpaceKey(a_ref);
+            const RE::NiPoint3 p     = a_ref->GetPosition();
+            std::lock_guard lk(g_gateMx);
+            EraseGatesIf(a_why, a_ref->GetFormID(), [&](const GateRecord& g) {
+                return space && g.space == space &&
+                       (p.GetDistance(g.blockPos) <= kGateEventRadius ||
+                        p.GetDistance(g.targetPos) <= kGateEventRadius);
+            });
+        }
+        inline void ClearGates() {
+            std::lock_guard lk(g_gateMx);
+            g_gates.clear();
+            g_gateCount.store(0, std::memory_order_relaxed);
+        }
+
+        inline bool GatedNow(RE::FormID a_id, Clock::time_point) {
+            if (!a_id) return false;
+            auto*              ref   = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_id);
+            const RE::FormID   space = SpaceKey(ref);
+            const RE::NiPoint3 pos   = ref ? ref->GetPosition() : RE::NiPoint3{};
+            std::lock_guard lk(g_gateMx);
+            for (auto& g : g_gates) {
+                if (g.target == a_id) return true;
+                if (!ref || !space || space != g.space || !BehindBlock(g, pos)) continue;
+                if (g.logged.size() < 64 && g.logged.insert(a_id).second)
+                    spdlog::info("[loot] {:08X} GATED-BEHIND the block {:08X} ran into on the way to "
+                                 "{:08X} -- skipped (a skip, not a failure)", a_id, g.follower, g.target);
+                return true;
+            }
+            return false;
+        }
+
+        inline void MarkGated(RE::Actor* a_follower, RE::TESObjectREFR* a_target, float a_blockedSecs,
+                              Clock::time_point a_now) {
+            if (!a_follower || !a_target) return;
+            GateRecord g;
+            g.target    = a_target->GetFormID();
+            g.follower  = a_follower->GetFormID();
+            g.space     = SpaceKey(a_target);
+            g.blockPos  = a_follower->GetPosition();
+            g.targetPos = a_target->GetPosition();
+            g.since     = a_now;
+            spdlog::info("[loot] {:08X} target {:08X} GATED -- Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), "
+                         "{:.0f} u short; skipping it and the items behind the same block (45-degree cone past "
+                         "the block, <= +1024 u, same floor) until a door/gate/lever event near it or its "
+                         "cell re-attaching. No actor in front of him. No strike, not sticky, no timer.",
+                         g.follower, g.target, a_blockedSecs, g.blockPos.x, g.blockPos.y, g.blockPos.z,
+                         g.blockPos.GetDistance(g.targetPos));
+            std::lock_guard lk(g_gateMx);
+            std::erase_if(g_gates, [&](const GateRecord& o) { return o.target == g.target; });
+            if (g_gates.size() >= kGateMax) {   // oldest first, and said out loud
+                spdlog::info("[loot] GATED {:08X} re-admitted -- gate table full ({})",
+                             g_gates.front().target, kGateMax);
+                g_gates.erase(g_gates.begin());
+            }
+            g_gates.push_back(std::move(g));
+            g_gateCount.store(static_cast<int>(g_gates.size()), std::memory_order_relaxed);
+        }
+
+        // ── ACTOR BLOCK -> REORDER, not a gate (review R2, marth 2026-09-24: "During
+        // an actor block, do a loot reorder, not a loot drop. That way two of our
+        // followers blocking each other both reverse direction.") ───────────────
+        // At the Movement Blocked verdict, is a living ACTOR (the player, a
+        // follower, any NPC) right in front of him? FORWARD = either his facing
+        // (GetAngleZ: +Y at 0, x = sin, y = cos) or the straight line S->T -- the
+        // path can bend toward a doorway before it points at T, and he faces the
+        // way he is walking. Numbers:
+        //   kActorBlockReach 200 u: two humanoid capsules in contact sit ~50-70 u
+        //     apart center to center, so a jam is well inside it, with room for a
+        //     second actor one step behind the first; a guard standing further back
+        //     behind a real portcullis is outside it.
+        //   kActorBlockCos 45 degrees each side: a doorway jam is shoulder to
+        //     shoulder, off the axis; narrower misses exactly that case.
+        //   kActorBlockZ 128 u: same floor / same stair flight, not a balcony.
+        // Worker-thread read: the follower's and the player's ATTACHED cells walked
+        // with TESObjectCELL::ForEachReferenceInRange (the cell's own lock, the
+        // Logistics_Loot / Economy precedent), plus the player explicitly.
+        constexpr float kActorBlockReach = 200.0f;
+        constexpr float kActorBlockCos   = 0.70710678f;
+        constexpr float kActorBlockZ     = 128.0f;
+        struct ActorBlocker { RE::FormID id = 0; RE::NiPoint3 pos{}; float dist = 0.0f; };
+        inline ActorBlocker FindActorBlocker(RE::Actor* a_f, RE::TESObjectREFR* a_t) {
+            ActorBlocker best;
+            if (!a_f || !a_t) return best;
+            const RE::NiPoint3 S  = a_f->GetPosition();
+            const float        az = a_f->GetAngleZ();
+            const float        hx = std::sin(az), hy = std::cos(az);
+            float tx = a_t->GetPosition().x - S.x, ty = a_t->GetPosition().y - S.y;
+            const float lt = std::sqrt(tx * tx + ty * ty);
+            if (lt > 1.0f) { tx /= lt; ty /= lt; } else { tx = hx; ty = hy; }
+            float bestD = kActorBlockReach + 1.0f;
+            auto consider = [&](RE::Actor* x) {
+                if (!x || x == a_f || x->IsDead() || x->IsDisabled() || x->IsMarkedForDeletion()) return;
+                const RE::NiPoint3 P = x->GetPosition();
+                const float dx = P.x - S.x, dy = P.y - S.y, d = std::sqrt(dx * dx + dy * dy);
+                if (d < 1.0f || d > kActorBlockReach || std::fabs(P.z - S.z) > kActorBlockZ) return;
+                if ((dx * hx + dy * hy) / d < kActorBlockCos && (dx * tx + dy * ty) / d < kActorBlockCos) return;
+                if (d < bestD) { bestD = d; best = { x->GetFormID(), P, d }; }
+            };
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            consider(pc);
+            RE::TESObjectCELL* cells[2] = { a_f->GetParentCell(), pc ? pc->GetParentCell() : nullptr };
+            if (cells[1] == cells[0]) cells[1] = nullptr;
+            for (auto* c : cells) {
+                if (!c || !c->IsAttached()) continue;
+                c->ForEachReferenceInRange(S, kActorBlockReach, [&](RE::TESObjectREFR& r) {
+                    consider(r.As<RE::Actor>());
+                    return RE::BSContainer::ForEachResult::kContinue;
+                });
+            }
+            return best;
+        }
+        // Per-follower reorder record. The blocked item stays VALID; it only sorts
+        // after his other valid candidates, and items that lie toward the blocker
+        // sort after the ones leading away, so two jammed followers each turn
+        // around. Erased when the deferred item's turn comes (it is dispatched
+        // again), when he has no excursion, and on revert. Worker-only, no lock.
+        struct ActorDefer { RE::FormID item = 0; RE::FormID blocker = 0; RE::NiPoint3 blockerPos{}; };
+        inline std::unordered_map<RE::FormID, ActorDefer> g_actorDefer;
+
+        // THE candidate order (review R1). Every key -- failed/gated, the actor-
+        // block tier, the distance -- is taken ONCE per candidate before the sort,
+        // so a main-thread gate erase mid-sort cannot flip a key between two
+        // comparisons (a non-strict-weak comparator is UB in std::sort). Tiers:
+        // 0 free, 1 free but toward this follower's blocker, 2 his deferred item,
+        // 3 failed-recently or GATED (deprioritized, never removed; unresolvable
+        // handles too). Closest first inside a tier. With no defer record this is
+        // exactly the old two-tier "un-failed first, then closest" order.
+        inline void SortLootCandidates(std::vector<RE::ObjectRefHandle>& a_c, RE::Actor* a_f,
+                                       const RE::NiPoint3& a_origin, Clock::time_point a_now) {
+            const ActorDefer* df = nullptr;
+            if (a_f)
+                if (auto it = g_actorDefer.find(a_f->GetFormID()); it != g_actorDefer.end()) df = &it->second;
+            const float bx = df ? df->blockerPos.x - a_origin.x : 0.0f;
+            const float by = df ? df->blockerPos.y - a_origin.y : 0.0f;
+            const float bl = std::sqrt(bx * bx + by * by);
+            struct Keyed { int tier; float dist; RE::ObjectRefHandle h; };
+            std::vector<Keyed> k;
+            k.reserve(a_c.size());
+            for (auto& h : a_c) {
+                auto p = h.get();
+                if (!p) { k.push_back({ 3, 1e30f, h }); continue; }
+                const RE::FormID   pid = p->GetFormID();
+                const RE::NiPoint3 P   = p->GetPosition();
+                int tier = 0;
+                if (TravelFailedRecently(pid, a_now)) tier = 3;
+                else if (df && pid == df->item)      tier = 2;
+                else if (df && bl > 1.0f) {
+                    const float dx = P.x - a_origin.x, dy = P.y - a_origin.y, d = std::sqrt(dx * dx + dy * dy);
+                    if (d > 1.0f && (dx * bx + dy * by) / (d * bl) >= kActorBlockCos) tier = 1;
+                }
+                k.push_back({ tier, a_origin.GetDistance(P), h });
+            }
+            std::sort(k.begin(), k.end(), [](const Keyed& a, const Keyed& b) {
+                return a.tier != b.tier ? a.tier < b.tier : a.dist < b.dist;
+            });
+            for (std::size_t i = 0; i < k.size(); ++i) a_c[i] = k[i].h;
         }
 
         // IDLE REASSESS (marth: "to be fair, reassess all nearby bodies if nothing
@@ -1027,6 +1295,8 @@ namespace MFO::Logistics {
                   Category a_cat, RE::ActorValue a_want);
     float NavmeshReach(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
     bool LooseRef(RE::TESObjectREFR* a_ref);
+    bool HasLoot(RE::Actor* a_follower, RE::TESObjectREFR* a_ref,
+                 Category a_cat, RE::ActorValue a_want);   // Logistics_Loot.cpp (the scan's peek)
     bool PlayerActivelyStealthing();
     bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
                     RE::ActorValue a_potionWant = RE::ActorValue::kNone,

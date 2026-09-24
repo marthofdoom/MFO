@@ -1762,7 +1762,7 @@ state/types/small helpers live as `inline` members of `namespace
 MFO::Logistics` in `Logistics_internal.h` (ONE instance across the TUs — it
 replaces the old single anonymous namespace; big cross-module helpers are
 declared there and defined in their home module). Layout:
-- `Logistics.cpp` (2192) — core tick: `ServiceFollower` (`:722`, INCLUDING the
+- `Logistics.cpp` (2480 after loot M1; 20 lines of headroom under the cap) — core tick: `ServiceFollower` (`:869`, INCLUDING the
   OOC cast dispatch `:~1128-1368` — concentration direct-force `:~1258`,
   fire-and-forget `:~1348`), drink (`DrinkBest`), `EquipTorch`/`HealExcludedWeapon`/
   `ShedOffRoleWeapon`, sinks, lifecycle + MSTK API, evaluator pure reads.
@@ -2249,7 +2249,7 @@ declared there and defined in their home module). Layout:
 - `Logistics_Loot.cpp` (2358) — the loot judge + per-category looters,
   claim-and-release, navmesh reach, `AcquireEquip:538`, `LootEquipment:617`,
   `LootNearby:1609`, `StripCorpse:2250`, `RunExcursionScan:2314`.
-- `Logistics_internal.h` (715) — shared substrate: all `g_*` maps/state
+- `Logistics_internal.h` (1370 after loot M1, which put the GATED records, `GatedNow`/`MarkGated`, `FindActorBlocker`, `g_actorDefer` and `SortLootCandidates` here) — shared substrate: all `g_*` maps/state
   (`g_svc:222`, `TravelIntent:283`, `g_travelSlots:323`, `g_stockMx:568`,
   `g_stockGear:569`, econ clocks), `Category`/`LootMode`/`WeaponRoles`/
   `EquipmentContext`/`Claim`, inline small helpers, cross-module declarations.
@@ -2373,6 +2373,76 @@ anonymous-namespace copy — that silently forks the instance).
     condition restores the false-verdict masking; setting it from anything other than
     a live `GetCurrentPackage()` read re-introduces "claim requested == leg engaged",
     which is the exact inference this whole entry exists to forbid.
+- **LOOT ROUND M1 (2026-09-24, `fix/mfo-loot-m1`; design
+  `_research/loot-batch-design-2026-09-24.md` items 3-5). marth: "never return to follow when
+  valid items are reachable", "one follower per item is counter productive ... a smooth
+  correction if they aren't first to the item", MFO must not nudge a Harbinger-owned leg.**
+  - **EMPTIED-TARGET CORRECTION** (`Logistics.cpp:~1086`, an `else if` arm BEFORE the
+    Walking arm): every Walking tick peeks `HasLoot(tr.cat, tr.want)` on a non-loose target
+    (the scan's own peek, now declared in `Logistics_internal.h`). Empty -> Holding with NO
+    blocklist/strike/grace, and `RunExcursionScan` takes the next item the SAME tick. Log
+    `[loot] <id> target <ref> EMPTIED before arrival -- next item <ref|none ...>` (`noteNext`,
+    printed from the Holding block once the next item is known). Several followers may
+    converge on one ref by design.
+  - **MOVEMENT BLOCKED BACKSTOP** (`Logistics.cpp:~1380`, runs AFTER arrival and BEFORE the
+    theft guard, every road): `curPkg->packData.packType == kMovementBlocked` (36). Onset in
+    `TravelIntent::blockedSince`/`blockedLeg` (keyed to `legStart`, so a lingering MB never
+    gates the NEXT leg). `< kBlockedGate` (3 s): return, still walking (no guard, no stall).
+    `>= 3 s`: `FindActorBlocker` (`Logistics_internal.h`, review R2 + marth "a loot reorder,
+    not a loot drop"): a living actor (player / follower / any NPC) within 200 u, inside a
+    45-degree cone around his facing OR S->T, within 128 u of height, found by walking his
+    and the player's ATTACHED cells (`ForEachReferenceInRange`) -> **ACTOR-BLOCKED**: no gate,
+    `g_actorDefer[id] = {item, blocker, blockerPos}`, the item stays valid and sorts later
+    (below). No actor -> **GATED**: `MarkGated` (target + the items behind the same block).
+    Either way Holding, next item this tick; release ("batch done") ONLY when the scan finds
+    nothing valid.
+  - **CANDIDATE ORDER** (`SortLootCandidates`, `Logistics_internal.h`, called from
+    `LootNearby` in place of the old inline comparator; review R1): every key is taken ONCE
+    per candidate before `std::sort` (a main-thread gate erase mid-sort flipped keys between
+    comparisons = a non-strict-weak comparator, UB). Tiers: 0 free, 1 free but within 45
+    degrees of this follower's blocker, 2 his deferred item, 3 failed-recently / GATED /
+    unresolvable; closest first inside a tier. No defer record = exactly the old order.
+    `g_actorDefer` (worker-only) is erased when the deferred item is dispatched again ("back
+    in its turn"), when he has no excursion, and on revert.
+  - **GATED** (`Logistics_internal.h` `kBlockedGate:~806`, `GatedNow:~957`, `MarkGated:~975`,
+    records under `g_gateMx`, `g_gateCount` atomic fast path): consulted through
+    `TravelFailedRecently`, so every WALK path in `Logistics_Loot.cpp` skips a gated item
+    (sort-last + walk-skip + "stay the course" retarget) with no edit there; the in-range
+    grab paths never consult it (a gated item within grab reach is still taken). **"Behind
+    the same block"** = same interior cell / worldspace, inside the 45-degree xy cone from
+    the stuck position S toward the gated target T, `64 u <= |SI| <= |ST| + 1024 u`,
+    `|I.z - T.z| <= 256 u` (rationale in the header comment). **Re-admit** (each logged
+    `[loot] GATED <ref> re-admitted -- <why>`): `GateSink` (`Logistics.cpp:~297`, main
+    thread, registered in `RegisterSinks`) on `TESOpenCloseEvent` or an ACTI/DOOR
+    `TESActivateEvent` within 2048 u of S or T, on the gated ref's own
+    `TESCellAttachDetachEvent` (per-reference event), a full 64-entry table (memory bound,
+    logged) and `ClearGates` on revert. **NO TIMER** (marth: "only re-admit when the block
+    actually clears"); an actor jam never becomes a gate (above). Open/close and activate
+    events whose `activeRef` / `actionRef` is a teammate or tracked follower are IGNORED
+    (`ByFollower`, review R3): a follower's door use is portal traffic, and counting it walked
+    him back into the portcullis he had just skipped. NOT in `g_travelFailed`: the idle
+    reassess neither clears nor feeds it; never a strike, never sticky.
+  - **86e3dpn66**: the route label is `CH19 route` (`APMFBridge::HasLootTravelLeg(slot)`) /
+    `APMF ch.9 route` / `legacy alias route` on ENGAGED, NOT ENGAGED and DEADLINE EXPIRED.
+    `kEngageWindow` 3 s: NOT ENGAGED only past it, `ENGAGED LATE` when adopted after it, and
+    the theft guard is skipped entirely while a leg is inside it and not yet engaged.
+  - **Harbinger rule on CH19 legs**: the theft guard never posts MFO's own `EvaluatePackage`
+    (grace holds un-nudged); a CH19 leg never engaged by the window's end is conceded at
+    at `kCh19Concede` (5 s, review R4: engage seen up to ~2.4 s + two 1 s ticks; NOT ENGAGED
+    and the theft-guard gate keep the 3 s window) as a transient skip, and the Holding scan
+    re-points it through `ClaimLootTravel` or releases it. The ch.9 road (`apmfLeg`) is
+    unchanged.
+  - **What breaks:** moving the MB block after the theft guard re-opens the 10 s grace +
+    same-route retarget freeze (deck-0924b); adding the gated set to `g_travelFailed`
+    lets the idle reassess resurrect gated items; reading `g_gates` without `g_gateMx`
+    races the sinks; resetting `blockedSince` from `Logistics_Loot.cpp` is unnecessary
+    (the `blockedLeg != legStart` test does it) and that file is at the 2500 cap;
+    `HasLoot` in the emptied check must stay the scan's peek or the scan re-picks the
+    "emptied" ref and the follower ping-pongs; calling `TravelFailedRecently` / `GatedNow`
+    from inside a sort comparator again re-opens R1; gating on an actor block re-opens the
+    shared false gate (R2). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B88, MFO-B90** (SEV-5, the
+    CH19 episode log line) and **MFO-B89** (SEV-5, move the gate code into its own module in
+    the wave-2 Logistics split) -- read before editing.
 - **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1307`; cell set built at `:1417`):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs
@@ -2427,7 +2497,9 @@ anonymous-namespace copy — that silently forks the instance).
   verdict); grab paths never consult the blocklist. Weakening (d) or removing the
   walk-skip re-opens the frozen-Erik churn loop; removing (a)'s sort key stalls
   followers on unreachable-first ordering again.
-- **Sinks** (`RegisterSinks` `Logistics.cpp:1949` ← `plugin.cpp:297`): `ContainerSink`
+- **Sinks** (`RegisterSinks` `Logistics.cpp:2310` ← `plugin.cpp:297`; + `GateSink`, the loot-M1
+  GATED re-admit on `TESOpenCloseEvent` / `TESActivateEvent` / `TESCellAttachDetachEvent`, see
+  LOOT ROUND M1 above): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
   PlayerID()`, `ContainerSink` in `Logistics.cpp`) or it re-fires on its own removal (MAO infinite-credit loop);
   only QUEUES to the worker. `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
@@ -3366,13 +3438,13 @@ it is not:
   **support-limit** (a support gem: a dual-socket item is open but already holds, or
   was just given, its one support seat — was misreported as `capacity`),
   **unclassified** (a compatible, un-deferred socket the pass walked past — a bug,
-  never dropped). A copy a swap-out was issued FOR this pass (`swapPending`, a
-  per-entry COUNT) is not leftover — its socket opens next pass — but the rest of a
-  stack still is (`leftN = avail - pending`, the `x<n>` printed). Open notes:
-  **MFO-B35** (the duplicate-copy deferral is redundant against MEO's in-place mint
-  and starves a worn item while a spare is carried) and **MFO-B36** (the swap-up never
-  decrements `avail[loot]`, so two items can evict for one loose copy — one wasted
-  unsocket/re-socket, no loop). When no considered item has an empty socket
+  never dropped). A copy a swap-out was issued FOR this pass is RESERVED at the
+  swap-out (`--avail[loot]` when `UnsocketGem` returns true, MFO-B36 fixed on
+  `fix/mfo-loot-m1`), so a later item cannot evict for the same copy and the LEFTOVER
+  line's `leftN = avail[i]` already excludes it (its socket opens next pass); the old
+  `swapPending` count is gone — subtracting it too would count the copy twice. Open
+  note: **MFO-B35** (the duplicate-copy deferral is redundant against MEO's in-place mint
+  and starves a worn item while a spare is carried). When no considered item has an empty socket
   NOTHING is logged: that is the invariant holding. Classification relies on the slot
   loop's exhaustiveness: it re-picks until `pickGem` returns -1, so on a non-deferred
   item with sockets left every fitting gem in stock is in `excluded`; the deferral

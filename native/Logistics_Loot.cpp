@@ -2036,18 +2036,11 @@ namespace MFO::Logistics {
             // within each group closest-first, so the follower clears every
             // easy target before circling back to a path-troubled one (by which
             // time its grown grab radius usually lets it be taken from range).
-            // An unresolvable handle sorts last. (Bounded at kMaxCandidates=48,
-            // so this is a small sort.)
-            std::sort(candidates.begin(), candidates.end(),
-                [&origin, a_now](const RE::ObjectRefHandle& a, const RE::ObjectRefHandle& b) {
-                    auto pa = a.get(); auto pb = b.get();
-                    const bool fa = pa ? TravelFailedRecently(pa->GetFormID(), a_now) : true;
-                    const bool fb = pb ? TravelFailedRecently(pb->GetFormID(), a_now) : true;
-                    if (fa != fb) return !fa;   // un-failed targets first
-                    const float da = pa ? origin.GetDistance(pa->GetPosition()) : 1e30f;
-                    const float db = pb ? origin.GetDistance(pb->GetPosition()) : 1e30f;
-                    return da < db;
-                });
+            // An unresolvable handle sorts last. (Bounded at kMaxCandidates=48.)
+            // Keys snapshotted ONCE, plus the loot-M1 actor-block reorder tiers:
+            // SortLootCandidates, Logistics_internal.h (review R1: a mid-sort gate
+            // erase can no longer flip a key between comparisons).
+            SortLootCandidates(candidates, a_follower, origin, a_now);
 
             // CHURN GUARD (#48): never ARM a new excursion the release gate
             // (the excursion driver's x1.15 "left leash" margin) would kill on
