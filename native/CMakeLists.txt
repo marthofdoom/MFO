@@ -76,7 +76,11 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Sightline.cpp
     ItemCatalog.cpp
     MEOBridge.cpp
-    APMFBridge.cpp
+    apmf/Bridge.cpp
+    apmf/CastClaims.cpp
+    apmf/Equip.cpp
+    apmf/Excursion.cpp
+    apmf/SpellAllowList.cpp
     imgui_impl_win32.cpp
 )
 

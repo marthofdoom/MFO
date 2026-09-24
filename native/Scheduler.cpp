@@ -5,7 +5,7 @@
 #include "Followers.h"
 #include "Config.h"
 #include "Loadout.h"
-#include "APMFBridge.h"   // crisp release of owned-cast claims when no cast rule holds
+#include "apmf/APMFBridge.h"   // crisp release of owned-cast claims when no cast rule holds
 #include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside it
 #include "CasterConsent.h"
 #include "CombatStyle.h"

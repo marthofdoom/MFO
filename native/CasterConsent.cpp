@@ -16,7 +16,7 @@
                             // kInstant ConcProxy direct force (CastSpellImmediate) does
                             // NOT deliberate through these hooks, so it is never vetoed
                             // and needs no bound.
-#include "APMFBridge.h"    // IsOwnedCastActive -- stand down the exclusivity deny where
+#include "apmf/APMFBridge.h"    // IsOwnedCastActive -- stand down the exclusivity deny where
                             // APMF's T2 allowance hooks now own it (Phase 2); also folded
                             // into ClientCastClaimed's early-pass (feat/offense-cast-seats)
 

@@ -5,7 +5,7 @@
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
 #include "Runtime.h"      // CastPathsVerified(): the ONE exact-version gate the cast paths share
-#include "APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
+#include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
 #include "Logistics_internal.h" // 2026-09-13: EquipWeapon consumes THE weapon-style decision

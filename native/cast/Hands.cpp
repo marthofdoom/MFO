@@ -13,7 +13,7 @@
 // (NearestAlly, ForceCast, and the APMF-refusal log, whose names are deliberate
 // twins of Actuation_Direct.cpp's and so must stay internal in BOTH TUs).
 #include "Actuation_internal.h"
-#include "APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
+#include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps

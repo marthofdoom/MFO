@@ -6,7 +6,7 @@
 #include "CombatStyle.h"     // v1.0.33: dismissal drops weapon-stance ownership
 #include "cast/Actuation.h"       // T#76: dismissal releases the equip force-hold too
 #include "Packages.h"
-#include "APMFBridge.h"   // ReleaseHealCast/ReleaseOffenseCast -- drop a dismissed follower's live claims
+#include "apmf/APMFBridge.h"   // ReleaseHealCast/ReleaseOffenseCast -- drop a dismissed follower's live claims
 #include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside the offense claim
 #include "CastBounds.h"   // Disarm -- drop his MFO-executed-cast bound (§2 registry)
 #include "Logistics.h"

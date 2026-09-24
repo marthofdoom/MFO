@@ -4,7 +4,7 @@
 #include "Config.h"
 #include "Forms.h"
 #include "Sightline.h"   // concentration hold: the mid-stream line-of-fire watch
-#include "APMFBridge.h"  // ch.9 0x49 loot-travel route (package-locked-follower fix)
+#include "apmf/APMFBridge.h"  // ch.9 0x49 loot-travel route (package-locked-follower fix)
 #include "Runtime.h"     // CastPathsVerified(): the ONE exact-version gate shared with the cast paths
 #include "MainThread.h"  // the only road to the true main thread (§0.37) -- an
                          // EvaluatePackage is an engine AI write and this file's

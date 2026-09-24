@@ -22,7 +22,7 @@
 #include "Logistics.h"
 #include "Gait.h"
 #include "MEOBridge.h"
-#include "APMFBridge.h"
+#include "apmf/APMFBridge.h"
 #include "MainThread.h"
 #include "TradeBridge.h"
 

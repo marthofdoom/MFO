@@ -7,7 +7,7 @@
 // g_travelSlots) is shared with ServiceFollower and lives in
 // Logistics_internal.h.
 #include "Logistics_internal.h"
-#include "APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
+#include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 
 namespace MFO::Logistics {
 

@@ -1,7 +1,7 @@
 #pragma once
 #include "PCH.h"
 #include "CasterConsent.h"   // SpellKind
-#include "APMFBridge.h"      // kApmfHandLeft/kApmfHandRight -- WatchClaim's a_hand default/param
+#include "apmf/APMFBridge.h"      // kApmfHandLeft/kApmfHandRight -- WatchClaim's a_hand default/param
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ComposedCast -- the Composed Forced Cast (CFC) executor, a THIN SHIM over

@@ -8,7 +8,7 @@
                             // HealAnimFill package route at the two cast plug-ins below
 #include "CastBounds.h"     // Reset the MFO-executed-cast bound beside ConcProxy::Reset()
 #include "Runtime.h"        // CastPathsVerified(): the ONE exact-version gate the cast paths share
-#include "APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
+#include "apmf/APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
                             // non-heal (Offense/Buff) CONCENTRATION stream -- ComposedCast::Try
                             // above is HEAL-ONLY by design, so offense/buff concentration needs
                             // its OWN direct claim call here rather than a widened Try() gate.
