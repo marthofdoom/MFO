@@ -1,0 +1,945 @@
+{
+ "repo": "MFO",
+ "namespace": "MFO::VerifiedAddresses",
+ "rows": [
+  {
+   "seat": "Targeting.Character.UpdateCombat",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_Character[0]",
+   "rtti": ".?AVCharacter@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 207886,
+    "1.5.97": 261397
+   },
+   "slots": [
+    "0xE4"
+   ],
+   "source": "native/Targeting.cpp:162",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:64"
+  },
+  {
+   "seat": "MainThread.PlayerCharacter.Update",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_PlayerCharacter[0]",
+   "rtti": ".?AVPlayerCharacter@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 208040,
+    "1.5.97": 261916
+   },
+   "slots": [
+    "0xAD"
+   ],
+   "source": "native/MainThread.cpp:103",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:69"
+  },
+  {
+   "seat": "CasterConsent.ActorMagicCaster.CheckCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_ActorMagicCaster[0]",
+   "rtti": ".?AVActorMagicCaster@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 205828,
+    "1.5.97": 257613
+   },
+   "slots": [
+    "0x0A"
+   ],
+   "source": "native/CasterConsent.cpp:1070",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:65"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterOffensive.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterOffensive[0]",
+   "rtti": ".?AVCombatMagicCasterOffensive@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211104,
+    "1.5.97": 265003
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterRestore.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterRestore[0]",
+   "rtti": ".?AVCombatMagicCasterRestore@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211142,
+    "1.5.97": 265007
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterWard.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterWard[0]",
+   "rtti": ".?AVCombatMagicCasterWard@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211118,
+    "1.5.97": 265005
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterSummon.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterSummon[0]",
+   "rtti": ".?AVCombatMagicCasterSummon@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211146,
+    "1.5.97": 265009
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterStagger.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterStagger[0]",
+   "rtti": ".?AVCombatMagicCasterStagger@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211154,
+    "1.5.97": 265011
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterDisarm.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterDisarm[0]",
+   "rtti": ".?AVCombatMagicCasterDisarm@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211166,
+    "1.5.97": 265013
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterCloak.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterCloak[0]",
+   "rtti": ".?AVCombatMagicCasterCloak@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211176,
+    "1.5.97": 265015
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterLight.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterLight[0]",
+   "rtti": ".?AVCombatMagicCasterLight@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211186,
+    "1.5.97": 265017
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterInvisibility.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterInvisibility[0]",
+   "rtti": ".?AVCombatMagicCasterInvisibility@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211200,
+    "1.5.97": 265019
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterBoundItem.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterBoundItem[0]",
+   "rtti": ".?AVCombatMagicCasterBoundItem@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211210,
+    "1.5.97": 265021
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterTargetEffect.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterTargetEffect[0]",
+   "rtti": ".?AVCombatMagicCasterTargetEffect@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211232,
+    "1.5.97": 265025
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterParalyze.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterParalyze[0]",
+   "rtti": ".?AVCombatMagicCasterParalyze@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211270,
+    "1.5.97": 265029
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterScript.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterScript[0]",
+   "rtti": ".?AVCombatMagicCasterScript@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211276,
+    "1.5.97": 265031
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CasterConsent.CombatMagicCasterReanimate.CheckStartCast",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatMagicCasterReanimate[0]",
+   "rtti": ".?AVCombatMagicCasterReanimate@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211973,
+    "1.5.97": 265027
+   },
+   "slots": [
+    "0x06"
+   ],
+   "source": "native/CasterConsent.cpp:1104",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:72"
+  },
+  {
+   "seat": "CombatStyle.MagicOffensive.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterOffensive_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterOffensive@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211706,
+    "1.5.97": 265385
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicRestore.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterRestore_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterRestore@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211612,
+    "1.5.97": 265375
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicWard.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterWard_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterWard@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211658,
+    "1.5.97": 265380
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicSummon.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterSummon_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterSummon@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211568,
+    "1.5.97": 265370
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicStagger.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterStagger_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterStagger@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211524,
+    "1.5.97": 265365
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicDisarm.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterDisarm_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterDisarm@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211480,
+    "1.5.97": 265360
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicCloak.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterCloak_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterCloak@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211436,
+    "1.5.97": 265355
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicLight.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterLight_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterLight@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211390,
+    "1.5.97": 265350
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicInvisibility.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterInvisibility_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterInvisibility@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211346,
+    "1.5.97": 265345
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicBoundItem.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterBoundItem_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterBoundItem@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211302,
+    "1.5.97": 265340
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicTargetEffect.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterTargetEffect_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterTargetEffect@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211204,
+    "1.5.97": 265330
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicParalyze.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterParalyze_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterParalyze@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211092,
+    "1.5.97": 265320
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicScript.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterScript_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterScript@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211050,
+    "1.5.97": 265315
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicReanimate.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterReanimate_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterReanimate@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211148,
+    "1.5.97": 265325
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.MagicArmor.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemMagic_CombatMagicCasterArmor_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemMagic@@VCombatMagicCasterArmor@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211254,
+    "1.5.97": 265335
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffOffensive.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterOffensive_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterOffensive@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211688,
+    "1.5.97": 265383
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffRestore.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterRestore_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterRestore@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211608,
+    "1.5.97": 265373
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffWard.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterWard_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterWard@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211642,
+    "1.5.97": 265378
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffSummon.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterSummon_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterSummon@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211552,
+    "1.5.97": 265368
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffStagger.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterStagger_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterStagger@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211508,
+    "1.5.97": 265363
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffDisarm.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterDisarm_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterDisarm@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211464,
+    "1.5.97": 265358
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffCloak.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterCloak_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterCloak@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211420,
+    "1.5.97": 265353
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffLight.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterLight_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterLight@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211380,
+    "1.5.97": 265348
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffInvisibility.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterInvisibility_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterInvisibility@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211330,
+    "1.5.97": 265343
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffBoundItem.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterBoundItem_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterBoundItem@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211284,
+    "1.5.97": 265338
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffTargetEffect.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterTargetEffect_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterTargetEffect@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211182,
+    "1.5.97": 265328
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffParalyze.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterParalyze_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterParalyze@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211076,
+    "1.5.97": 265318
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffScript.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterScript_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterScript@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211034,
+    "1.5.97": 265313
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffReanimate.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterReanimate_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterReanimate@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211128,
+    "1.5.97": 265323
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "CombatStyle.StaffArmor.CheckShouldEquip",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_CombatInventoryItemMagicT_CombatInventoryItemStaff_CombatMagicCasterArmor_[0]",
+   "rtti": ".?AV?$CombatInventoryItemMagicT@VCombatInventoryItemStaff@@VCombatMagicCasterArmor@@@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 211234,
+    "1.5.97": 265333
+   },
+   "slots": [
+    "0x0F"
+   ],
+   "source": "native/CombatStyle.cpp:384",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:80"
+  },
+  {
+   "seat": "Board.PollInputDevices",
+   "kind": "callsite",
+   "construct": "REL::RelocationID(67315, 68617) + VariantOffset(0x7B)",
+   "ids": {
+    "1.6.1170": 68617,
+    "1.5.97": 67315
+   },
+   "sig": {
+    "1.6.1170": "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 30 0F 29 74 24 20 48 8D 59 60",
+    "1.5.97": "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 30 0F 29 74 24 20 48 8D 59 60"
+   },
+   "source": "native/Board.cpp:1648",
+   "offset": {
+    "1.6.1170": "0x7B",
+    "1.5.97": "0x7B"
+   },
+   "bytes": "E8",
+   "runtime_bytes": false,
+   "doc": "ADDRESS-TABLE-2026-09-15.md:60"
+  },
+  {
+   "seat": "Board.ToggleControls",
+   "kind": "function",
+   "construct": "REL::RelocationID(67245, 68545)",
+   "ids": {
+    "1.6.1170": 68545,
+    "1.5.97": 67245
+   },
+   "sig": {
+    "1.6.1170": "48 83 EC 28 44 8B 91 20 01 00 00 45 84 C0 74 2C",
+    "1.5.97": "48 83 EC 28 44 8B 91 18 01 00 00 45 84 C0 74 27"
+   },
+   "source": "native/Board.cpp:626",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:59"
+  },
+  {
+   "seat": "Packages.ForceRefTo",
+   "kind": "function",
+   "construct": "REL::RelocationID(24523, 25052)",
+   "ids": {
+    "1.6.1170": 25052,
+    "1.5.97": 24523
+   },
+   "sig": {
+    "1.6.1170": "89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 50 48 C7 45 F0 FE FF FF FF",
+    "1.5.97": "89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 70 48 C7 45 D8 FE FF FF FF"
+   },
+   "source": "native/Packages.cpp:329",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:62"
+  },
+  {
+   "seat": "Probe.StartCombat",
+   "kind": "function",
+   "construct": "REL::RelocationID(37608, 38561)",
+   "ids": {
+    "1.6.1170": 38561,
+    "1.5.97": 37608
+   },
+   "sig": {
+    "1.6.1170": "4C 8B DC 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 50 49 C7 43 A8 FE FF FF FF 49 89 5B 10 0F 29 74 24 40 49 8B E8",
+    "1.5.97": "4C 8B DC 56 57 41 54 41 56 41 57 48 83 EC 50 49 C7 43 B8 FE FF FF FF 49 89 5B 10 49 89 6B 18 0F 29 74 24 40 49 8B E8"
+   },
+   "source": "native/Probe.cpp:36",
+   "doc": "ADDRESS-TABLE-2026-09-15.md:58"
+  }
+ ],
+ "layout_facts": [
+  {
+   "what": "Character vtable slot, UpdateCombat",
+   "value": "0xE4",
+   "where": "Targeting.cpp:125",
+   "verified_by": "ADDRESS-TABLE:64 (slot dump both runtimes); slot targets in the Rows table",
+   "gate": "hook refused on VR and on any build the self-check does not cover"
+  },
+  {
+   "what": "PlayerCharacter vtable slot, Actor::Update",
+   "value": "0xAD",
+   "where": "MainThread.cpp:68",
+   "verified_by": "ADDRESS-TABLE:69; Rows table",
+   "gate": "as above"
+  },
+  {
+   "what": "ActorMagicCaster vtable slot, CheckCast",
+   "value": "0x0A",
+   "where": "CasterConsent.cpp:812",
+   "verified_by": "ADDRESS-TABLE:65; Rows table",
+   "gate": "as above"
+  },
+  {
+   "what": "CombatMagicCaster* vtable slot, CheckStartCast",
+   "value": "0x06",
+   "where": "CasterConsent.cpp:373",
+   "verified_by": "ADDRESS-TABLE:66,72; Rows table",
+   "gate": "as above"
+  },
+  {
+   "what": "CombatInventoryItemMagicT* vtable slot, CheckShouldEquip",
+   "value": "0x0F",
+   "where": "CombatStyle.cpp:255",
+   "verified_by": "ADDRESS-TABLE:67,80; Rows table",
+   "gate": "as above"
+  },
+  {
+   "what": "PollInputDevices call site to the input dispatch",
+   "value": "+0x7B, E8",
+   "where": "Board.cpp:1648",
+   "verified_by": "generator: bytes at rva+0x7B are E8 on both runtimes (offline only; MFO has no runtime byte check)",
+   "gate": "exact 1.6.1170 / 1.5.97 (Board.cpp isAE1170/isSE597) + self-check of the function"
+  },
+  {
+   "what": "Actor vtable slot, DropObject (called through the live vptr)",
+   "value": "0xCB (VR 0xCD)",
+   "where": "Logistics.cpp:739",
+   "verified_by": "ADDRESS-TABLE:63 area; not an id, not self-checkable",
+   "gate": "non-VR only (MainThread::IsInstalled)"
+  },
+  {
+   "what": "IPackageData + 0x10 -> PackageTarget* / PackageLocation*",
+   "value": "0x10",
+   "where": "Packages.cpp:81, :504, :663",
+   "verified_by": "type-name check before each read (GetTypeName)",
+   "gate": "none (all runtimes)"
+  },
+  {
+   "what": "CombatController attackerHandle / targetHandle / previousTargetHandle / combatStyle",
+   "value": "0x28 / 0x2C / 0x30 / 0x38",
+   "where": "Targeting.cpp:118; CombatStyle.cpp:167,288; CasterConsent.cpp:468,594",
+   "verified_by": "fork CombatController ctors (1.5.97 0x4FCA00, 1.6.1170 0x558070): identical below +0x68; static_asserts in each TU",
+   "gate": "inside the hooks above"
+  },
+  {
+   "what": "Actor runtime data currentCombatTarget / combatController",
+   "value": "RT+0xFC / RT+0x158 (RT = +0xE0 before 1.6.629, +0xE8 after)",
+   "where": "Targeting.cpp:56-102; Rapport.cpp:380; Evaluator.cpp:77",
+   "verified_by": "CommonLib RelocateMemberIfNewer(1.6.629) (not re-verified in F1)",
+   "gate": "Targeting: hook; Rapport.cpp:402 and Evaluator: none"
+  },
+  {
+   "what": "CombatGroup lock / targets, CombatTarget::targetHandle, CombatState::isFleeing",
+   "value": "0x160 / 0x08 (elem 0xA8) / 0x00 / 0x04",
+   "where": "Evaluator.cpp:177-219; CombatSense.h:17; Actuation_Direct.cpp:1879",
+   "verified_by": "CommonLib 3.7.0 declarations (not re-verified in F1)",
+   "gate": "none / CastPathsVerified"
+  },
+  {
+   "what": "Actor magicCasters[] / MagicCaster currentSpell, state",
+   "value": "RT+0x1A0 / 0x28, 0x30",
+   "where": "Actuation_Hands.cpp:257",
+   "verified_by": "CommonLib 3.7.0 declarations",
+   "gate": "none"
+  },
+  {
+   "what": "Renderer data / forwarder / context / renderWindows[0].swapChain",
+   "value": "+0x10 / +0x38 / +0x40 / +0x48, +0x18",
+   "where": "Board.cpp:415-426, :746",
+   "verified_by": "CommonLib Renderer (singleton RELOCATION_ID(524907, 411393))",
+   "gate": "Board::Install VR refusal"
+  },
+  {
+   "what": "ControlMap controlMap[] (context 0, gameplay)",
+   "value": "+0x60 (same on both; members after it move, see fork ControlMap)",
+   "where": "Board.cpp:163 (GetMappedKey)",
+   "verified_by": "fork ControlMap ctors (memset at +0x60, 0x88 vs 0x90)",
+   "gate": "fork: unverified build -> lookup refused"
+  },
+  {
+   "what": "IDXGISwapChain vtable slots Present / ResizeBuffers",
+   "value": "8 / 13",
+   "where": "Board.cpp:731-733",
+   "verified_by": "DXGI COM ABI (not a game address)",
+   "gate": "Board::Install VR refusal"
+  },
+  {
+   "what": "Game image PE header e_lfanew / SizeOfImage",
+   "value": "+0x3C / NT+0x50",
+   "where": "Diagnostics.cpp:1216",
+   "verified_by": "MZ / PE magic check in code",
+   "gate": "none"
+  },
+  {
+   "what": "CommonLib-bound calls MFO names: HasLineOfSight, HasQuestObject, GetMagicCaster (Actor 0x5C), CastSpellImmediate (MagicCaster 0x01), InterruptCast",
+   "value": "RELOCATION_ID(53029, 53829) / (19201, 19627) / vslot 0x5C / vslot 0x01 / (33630, 34408)",
+   "where": "Sightline.cpp:147; Logistics_Loot.cpp:753; Actuation*.cpp; Packages.cpp:868",
+   "verified_by": "CommonLib 3.7.0 ids (every id present in both libraries; a miss is now fatal, fork d9ad1072)",
+   "gate": "cast paths: CastPathsVerified; others none"
+  }
+ ]
+}

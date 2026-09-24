@@ -510,6 +510,21 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 - `Outcome.transparent` (`Actuation.h:38`) is the fall-through contract the
   scheduler reads (`Scheduler.cpp:521`); default false = "wall" = safe. Flipping it
   changes suppression + hand-claim + spellsword fallback.
+- **SEAT SELF-CHECK (mit-3.7 F1, `build/commonlib-f1`, 2026-09-24).** `native/Runtime.h`
+  `SelfCheckResult()` / `LogSelfCheck()` / **`SeatVerified(address, seat)`** over the generated
+  `native/VerifiedAddresses.h` (51 rows per runtime: Character 0xE4, PlayerCharacter 0xAD,
+  ActorMagicCaster 0x0A, 14 CombatMagicCaster 0x06, 30 CombatInventoryItemMagicT 0x0F,
+  PollInputDevices (+0x7B E8 checked offline), ToggleControls, ForceRefTo, StartCombat).
+  `plugin.cpp` logs `[selfcheck] ... N/N verified` right after the `=== MFO ... loading ===` line.
+  Guarded: `Targeting::InstallHook`, `MainThread::Install`, `CasterConsent::InstallHook` (per
+  vtable) + `InstallCheckCastHook`, `CombatStyle` equip gate (per vtable), `Board::InstallInputHook`
+  (refused -> sink + ControlMap path), `SyncControlBlock` ToggleControls, `ForceRefToNativeAvailable`
+  (refused -> Papyrus route), `Probe::StartCombatOn`. **What breaks:** a new id-based hook or
+  call without a spec row + regenerated header refuses itself at startup (by design); a spec row
+  whose id or RVA drifts makes the generator exit 1 and write nothing. Regenerate with
+  `tools/verified_addresses/gen_verified_addresses.py` (Docs/VERIFIED-ADDRESSES.md "Regenerating");
+  never hand-edit the header. The fork also changed CommonLib itself (id miss fatal, DOBJ / ControlMap /
+  CombatController exact-build accessors): verify against `_commonlib/mit-3.7-fork`, not the pinned tree.
 - **RUNTIME GATES — THE 1.5.97 PASS (`feat/mfo-1.5.97-pass`, 2026-09-15; Fable round 2 on
   `87cabc1` applied).** The five cast-control gates — `CastOn` (`Actuation.cpp:432`),
   `CastSelfDirect` (`Actuation_Direct.cpp:849`), `CastTargetDirect` (`:1166`), `CastAuto`

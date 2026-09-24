@@ -317,7 +317,12 @@ namespace MFO::Packages {
         // prints the same Runtime::CastPathsVerified() verdict so a deck log
         // shows it.
         bool ForceRefToNativeAvailable() {
-            return Runtime::CastPathsVerified();
+            if (!Runtime::CastPathsVerified()) return false;
+            // mit-3.7 F1: and the self-check verified the address (logged once when
+            // refused). Refused -> the Papyrus route below, the same as VR.
+            static const bool verified = Runtime::SeatVerified(
+                REL::Relocation<std::uintptr_t>{ REL::RelocationID(24523, 25052) }.address(), "Packages.ForceRefTo");
+            return verified;
         }
 
         bool ForceRefToNative(RE::TESQuest* a_quest, std::uint32_t a_aliasID,

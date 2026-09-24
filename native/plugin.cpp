@@ -502,6 +502,11 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
                  ver.major(), ver.minor(), ver.patch(),
                  REL::Module::get().version().string());
 
+    // mit-3.7 F1: compare the loaded Address Library with our own table of every
+    // hooked / called address (VerifiedAddresses.h). Every install below asks
+    // MFO::Runtime::SeatVerified() and refuses a seat whose row failed.
+    MFO::Runtime::LogSelfCheck();
+
     // The Field Kit overlay's RENDER hooks install at kDataLoaded (swapchain
     // vtable, v1.1) -- that path needs the swapchain LIVE, so it cannot go here.
     // See OnMessage's kDataLoaded case.

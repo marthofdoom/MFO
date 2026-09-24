@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 
 // d3d11.h drags in windows.h, which CommonLibSSE-NG never includes.
 // WIN32_LEAN_AND_MEAN / NOMINMAX come from CMakePresets; the GetObject macro
@@ -624,6 +625,11 @@ namespace MFO::Board {
                 using ToggleFn = void(RE::ControlMap*, RE::UserEvents::USER_EVENT_FLAG,
                                       bool a_enable, bool a_storeState);
                 static REL::Relocation<ToggleFn> toggle{ REL::RelocationID(67245, 68545) };
+                // mit-3.7 F1: refuse the call (logged once) unless the self-check
+                // verified this address. This path runs only where the input
+                // trampoline is not in, so it is the one that sees unverified builds.
+                static const bool toggleVerified = Runtime::SeatVerified(toggle.address(), "Board.ToggleControls");
+                if (!toggleVerified) return;
                 // storeState=FALSE. The overlay is a transient panel, not a game
                 // mode, and has no business writing the engine's SAVED control
                 // state at +0x124 (SE +0x11C) -- menus, favorites and dialogue
@@ -1632,6 +1638,19 @@ namespace MFO::Board {
                          "(+0x7B verified on 1.6.1170 and 1.5.97 only); using the input sink "
                          "+ ControlMap path", ver.string());
             return;
+        }
+
+        // mit-3.7 F1: the function the call site lives in must be a verified
+        // address (VerifiedAddresses.h row Board.PollInputDevices; the +0x7B E8 is
+        // checked offline by the generator). Refused -> same as an unverified
+        // runtime: no trampoline, the input sink + ControlMap path at kDataLoaded.
+        {
+            const REL::Relocation<std::uintptr_t> fn{ REL::RelocationID(67315, 68617) };
+            if (!Runtime::SeatVerified(fn.address(), "Board.PollInputDevices")) {
+                spdlog::error("[overlay-probe] runtime {} -- input trampoline NOT installed (self-check refused "
+                              "PollInputDevices); using the input sink + ControlMap path", ver.string());
+                return;
+            }
         }
 
         // 5-byte call -> one trampoline entry. Nothing else in MFO allocates the

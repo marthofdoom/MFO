@@ -423,3 +423,31 @@ version does not match the exe (`load_file`: "version mismatch" -> `report_and_e
 loads the library that matches its own build, or refuses. This is purely an OFFLINE ANALYSIS trap: it bites an
 agent decoding ids by hand against an unpacked binary, which is exactly how it was found (agentlog
 `apmf-combat-engage.md`).
+
+## ADDENDUM 2026-09-24 — mit-3.7 F1: the fork corrections and the seat self-check
+
+The per-seat expected RVAs now live in **`Docs/VERIFIED-ADDRESSES.md`** (generated, with `native/VerifiedAddresses.h`,
+by `tools/verified_addresses/gen_verified_addresses.py` from our unpacked 1.6.1170.0 and 1.5.97.0 images). That file is
+the current seat audit; the rows above stay as the review record of how each value was first graded. The file:line
+citations above predate this commit and have drifted.
+
+Corrections to this table, each proven in the named fork commit (`marthofdoom/CommonLibSSE-NG` `mit-3.7`):
+
+- **`BGSDefaultObjectManager` row (line 104): the "what CommonLib reads" note was wrong.** 3.7.0's
+  `GetObject(DefaultObjectID)` / `IsObjectInitialized(size_t)` did not read "the last two objects[] pointers as bools"
+  and were not "right on SE". `RelocateMember<T>` returns `T&`, so they loaded the qword AT +0xB80 and used it as the
+  flag-array pointer, and loaded `objects[0]` as the object-array base. 1.6.1170 read garbage (the 2026-08-01
+  GetGoldAmount CTD); 1.5.97 faulted on `0x0101010101010101`. The layout facts in the row (366 / +0xB90, 364 / +0xB80)
+  are right. Also: 1.6.1170 inserts HMCC (363) and HMAE (364) before MHFL (365); 1.5.97 has MHFL at 363. Fixed in
+  fork `05d05aab`.
+- **`ControlMap` (line 101): which context is new.** 1.6.1170's 18th context is index 16 ("Creations Menu" in its
+  controlmap.txt), so kFavor is 17 there. Contexts 0..15 are unchanged (menu ctors write the same inputContext:
+  Favorites 6, Map 7, Book 10, Journal 12, Lockpicking 15; IMenu kNone 0x12 on 1.5.97, 0x13 on 1.6.1170). Fork `5b80d53d`.
+- **`CombatController` members from +0x68**: 1.5.97 ctor `0x4FCA00` (id 32467, new 0xD8), 1.6.1170 ctor `0x558070`
+  (id 33214, new 0xE0) with 8 new bytes at +0x68. Fork `a6613ba7` puts them behind `GetRuntimeData()`.
+- **`GetMagicTarget` sret**: the Reanimate override (1.6.1170 `0x8222C0`, 1.5.97 `0x785F60`) has the same out-slot shape.
+  Fork `4065b48d` declares the return as `CombatMagicCaster::MagicTarget` by value.
+- **`SKSE::log::log_directory` AE id**: 3.7.0's 380738 is not in `versionlib-1-6-1170-0.bin`; the real variable is
+  id 502114 (`0x20123B0` -> "Skyrim Special Edition"). Fork `aef05fac`.
+- **An id missing from the library is now fatal** (fork `d9ad1072`). Offline, every id MFO and APMF use is present in
+  both libraries.
