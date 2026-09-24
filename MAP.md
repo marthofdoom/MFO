@@ -2767,7 +2767,9 @@ The engine-mutating half: writes perks (`AddPerk/RemovePerk`+`ApplyPerksFromBase
 and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 - **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
   function by `tools/splitcheck`; before it: `ProgAllocator.cpp` + `_Hms` + `_Manifest`, the
-  2026-08-31 split).** Other subsystems include ONLY `progression/ProgAllocator.h`.
+  2026-08-31 split).** Other subsystems include ONLY `progression/ProgAllocator.h`. Open:
+  REVIEW-BACKLOG **MFO-B91** (`PerkPointsAvailable` is declared `inline` there but defined only
+  in `ProgAllocator_internal.h`; a caller outside `progression/` cannot use it yet).
   - `progression/Allocator.cpp` (818) = the CORE: session state (`g_pollGen` `:38`,
     `g_lastPlayerLevel` `:44`, `g_playerHmsTotalLast` `:53`, all extern since wave 1), the catalog
     index (`NodeIndex` `:76`, `FindNode` `:97`), `OwnsAnyRank` (`:111`), the class table

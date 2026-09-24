@@ -74,7 +74,7 @@ namespace MFO::Loadout {
                      // spell, empowered. NOTE: today's kIntent_Cast claim
                      // shape (APMF_CastRequest) carries exactly ONE hand hint
                      // per claim -- this outcome is a DECISION, not yet an
-                     // executable claim; see APMFBridge.h's ClaimHealCast doc
+                     // executable claim; see apmf/APMFBridge.h's ClaimHealCast doc
                      // and CAST-DELIVERY.md for what is missing to fire it.
         EitherFree,  // both hands free, no dual-cast (no perk, or can't
                      // afford it) -- the caller may claim either hand for
@@ -121,7 +121,7 @@ namespace MFO::Loadout {
     // Prepare can still make (cooldown, two-handed debounce, open gear debt),
     // never before them, or a persistently refused cast flickers the left hand
     // weapon<->spell at lap rate. Loadout cannot see that ledger (it lives behind
-    // Actuation_internal.h, Actuation-TU-only by contract), so the caller hands
+    // cast/Actuation_internal.h, Actuation-TU-only by contract), so the caller hands
     // in the yield: called with the actor at the commit point, returns true when
     // it actually released a hold there. A true return also tells Prepare the
     // left item it read was MFO's OWN hold -- NOT gear the follower loses, so no

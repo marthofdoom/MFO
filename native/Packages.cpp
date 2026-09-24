@@ -698,7 +698,7 @@ namespace MFO::Packages {
         constexpr float kAPMFRetreatRadius = 150.0f;  // matches make_retreat_package()'s legacy radius
 
         // Per-slot bookkeeping for the APMF route -- file-local, NEVER serialized
-        // (the claim itself is runtime-only, APMFBridge.h). Mirrors g_travelSlots'
+        // (the claim itself is runtime-only, apmf/APMFBridge.h). Mirrors g_travelSlots'
         // shape (Logistics_internal.h) just enough to know, PER SLOT, whether this
         // excursion is APMF-routed (so Retarget/Clear touch the right mechanism)
         // and who to release if a caller clears a slot without a follower pointer
@@ -2037,7 +2037,7 @@ namespace MFO::Packages {
             // the same time as its release twin in RetreatClear below; leaving one of
             // the pair behind would have been worse than leaving both.
             // HARD MUTUAL-EXCLUSION GUARD: retreat and loot-travel share ONE
-            // per-follower APMFBridge::OfferPackage handle (APMFBridge.cpp's
+            // per-follower APMFBridge::OfferPackage handle (apmf/Excursion.cpp's
             // g_owned map is keyed by FormID alone, not by intent-plus-slot),
             // so a follower with BOTH a live loot excursion and a retreat hold
             // would have the two claims stomp that single handle every Pump

@@ -138,7 +138,7 @@ namespace MFO::ComposedCast {
     // MakeStopPct), which is read only by a CONCENTRATION channel's stop-cast
     // seat; harmless (ignored) on an instant heal. Defaults to 0 so every
     // caller that has no numeric threshold in scope (most of them -- see
-    // Actuation_Direct.cpp's CastAuto, the one caller that DOES have one) is
+    // cast/Auto.cpp's CastAuto, the one caller that DOES have one) is
     // unaffected.
     //
     // Call every tick the gambit still wants the heal -- a repeat call with the
@@ -297,7 +297,7 @@ namespace MFO::ComposedCast {
     // kPreLoadGame / revert -- beside CastBounds::Reset(). Drops this module's
     // own silent-cast diagnostic watch map (APMFBridge::ClearTransientState
     // drops the claim; CastBounds::Reset drops the bound); kept as the one seam
-    // Actuation_Direct.cpp's ClearSelfCasts already calls.
+    // cast/Direct.cpp's ClearSelfCasts already calls.
     void Reset();
 
 }

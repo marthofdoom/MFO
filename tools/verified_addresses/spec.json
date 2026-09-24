@@ -875,7 +875,7 @@
     "1.5.97": 516851
    },
    "global_seat": "Actuation.SummonCap.SkipFlagGlobal",
-   "source": "native/Actuation_Direct.cpp SummonCapSkipped",
+   "source": "native/cast/Summon.cpp SummonCapSkipped",
    "doc": "mov rax,[rip+g]; mov ecx,[rax+0x340]; shr ecx,1 (then test cl,1: bit 1 set -> the engine skips the summon cap)"
   }
  ],
@@ -960,7 +960,7 @@
   {
    "what": "Actor magicCasters[] / MagicCaster currentSpell, state",
    "value": "RT+0x1A0 / 0x28, 0x30",
-   "where": "Actuation_Hands.cpp:257",
+   "where": "cast/Hands.cpp:258",
    "verified_by": "CommonLib 3.7.0 declarations",
    "gate": "none"
   },
@@ -1002,7 +1002,7 @@
   {
    "what": "Summon limit reads (fix/mfo-summon-oneshot): MiddleHighProcessData commandedActors (raw count compared, no liveness, as the engine does; BSTArray<CommandedActorData>, elem 0x10: handle +0x00, ActiveEffect* +0x08); BGSEntryPoint::HandleEntryPoint(kModCommandedActorLimit 0x44, caster, spell, &limit); ActiveEffect spell / elapsedSeconds / flags",
    "value": "+0x100 data / +0x110 count; RELOCATION_ID(23073, 23526) -> 0x32ECE0 / 0x385F30; +0x40 / +0x70 / +0x7C",
-   "where": "Actuation_Direct.cpp SummonLimit / SummonOnMain",
+   "where": "cast/Summon.cpp SummonLimit / SummonOnMain",
    "verified_by": "disassembly of the engine's add-commanded-actor fn on both runtimes (1.5.97 0x683D70 id 38993, call at 0x683E11; 1.6.1170 0x717800 id 40056, call at 0x7178EC); GMST iMaxSummonedCreatures (int, default 1) and the round-half-up constant 0.5 identical on both; ActiveEffect +0x40 spell (both) and +0x70 elapsedSeconds (AE eviction compare) read in that fn; flags +0x7C verified by ActiveEffect::Dispel (1.5.97 0x53E380 / 1.6.1170 0x5AC880: bts [+0x7C] bit 0x12 = kDispelled); kInactive bit 15 is the CommonLib declaration",
    "gate": "cast paths: CastPathsVerified; main thread only; the skip-cap flag read is gated on the Actuation.SummonCap.* ripref rows"
   }

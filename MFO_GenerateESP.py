@@ -1112,7 +1112,7 @@ def make_csty():
     # word csThalmorMeleeDual / csAlikrBerserker carry). 2026-09-13, weapon style
     # by perks: the engine dual-wields an NPC only under a style that allows it,
     # and the DLL force-equips a second one-hander into the LEFT hand for a
-    # follower whose perks vote dual wield (Actuation.cpp EquipWeapon). THE ONE
+    # follower whose perks vote dual wield (cast/Equip.cpp EquipWeapon). THE ONE
     # GLOBAL CHANGE OF THAT FEATURE, and deliberately not gated per follower: a
     # second CSTY form would move FormIDs (Forms.h is a frozen contract) and the
     # DLL swaps ONE melee style onto every follower it forces melee. Exposure,
@@ -1145,7 +1145,7 @@ def make_qust():
 # author-tunable in xEdit without touching the DLL.
 #
 # FormID band: FROZEN generator<->DLL contract with native/Progression.h
-# (0x800/0x801) and native/ProgAllocator.h (everything else). §18.6: the ESL
+# (0x800/0x801) and native/progression/ProgAllocator.h (everything else). §18.6: the ESL
 # now masters TWO plugins — Skyrim.esm (index 0x00) and MFO.esp (index 0x01),
 # the latter so the manifest FLST can point at MFO.esp's addon sentinel — so
 # the ESL's OWN forms move to master index 0x02 (OWN_PROG). ESL-legal locals
@@ -1288,7 +1288,7 @@ AVIF_ILLUSION    = 0x0000045B
 
 # Class skill priority, ORDER = weight (triangular over the DLL's post-prune
 # list; with both weapon and both armor siblings listed, the DLL keeps the
-# follower's DOMINANT one — see ProgAllocator.cpp WeightsFor). Melee prunes to
+# follower's DOMINANT one — see progression/SkillScale.cpp WeightsFor). Melee prunes to
 # the design's exact 40/30/20/10.
 PROG_CLASS_SKILLS = [
     (PGID_SKILLS_MELEE,  "MFOP_ClassSkills_Melee",

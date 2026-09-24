@@ -1892,7 +1892,7 @@ namespace MFO::Logistics {
                     if (r == Actuation::SelfCast::Held) {
                         // DEDUPED at 2s per (follower, held-off spell) -- the SAME
                         // window and shape as its [cfc] twin (ComposedCast.cpp's
-                        // LogHealHoldOff) and Actuation.cpp's [eval] LogCastLockHold
+                        // LogHealHoldOff) and cast/Hands.cpp's [eval] LogCastLockHold
                         // (Fable diff review, 2026-09-06: this was unthrottled). A
                         // rule held off on every round-robin lap logged once per
                         // service, and up to TWICE per service, since the `pass < 2

@@ -839,7 +839,7 @@ namespace MFO::Board {
                     // PROGRESSION ALLOCATOR HARNESS HOTKEY (dev-only,
                     // bProgHarness=0 for everyone else). Same shape; mutates engine
                     // state so it rides MainThread::Post. The verb comes from the
-                    // addon's MFOP_DevCmd GLOB (console-set) -- see ProgAllocator.h.
+                    // addon's MFOP_DevCmd GLOB (console-set) -- see progression/ProgAllocator.h.
                     if (Config::g_progHarness.load()) {
                         const int hk = Config::g_progHarnessKey.load();
                         if (hk != 0) {

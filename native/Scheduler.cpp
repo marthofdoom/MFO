@@ -499,7 +499,7 @@ namespace MFO::Scheduler {
                 // the hand. The lock is still force-cleared -- it has to be -- but the same
                 // weapon goes straight back on NON-forced and the follower sheathes, so the
                 // "weapons vanishing" this comment already describes stops being visible.
-                // See ReleaseForcedWeapon's doc in Actuation.h for why the unequip itself
+                // See ReleaseForcedWeapon's doc in cast/Actuation.h for why the unequip itself
                 // cannot go away.
                 Actuation::ReleaseForcedWeapon(f, /*a_standDown=*/true);
                 // T#76 hysteresis dwell erased on the SAME 2-tick debounce (Fable

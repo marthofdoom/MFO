@@ -27,10 +27,19 @@ regressions here; the ripple notes are why the map exists.
   - **Every split is proven, not asserted.** `tools/splitcheck` (README there)
     compares main's CI build with the split branch's FUNCTION BY FUNCTION (PDB
     symbols, bytes compared with relocations resolved to symbols) and
-    `tools/splitcheck/linecheck.py` proves the source lines are the same multiset.
-    Paste both results into the report. A split is still tier A for review; the
-    tool replaces the line-by-line read, not the review. "CI-identical" remains
-    an invalid claim for a split: CI proves it compiles.
+    `tools/splitcheck/linecheck.py` proves the source lines are the same multiset
+    and in the same order. Paste both results into the report. A split is still
+    tier A for review. **marth 2026-09-24: "pass, explained can only pass if the
+    self test and logic tests on that changed area still result in the same
+    results as pre change."** So a function the tool can only EXPLAIN (it differs
+    in the shipped /O2 build) passes only with BEHAVIOURAL equivalence: (1) the
+    no-optimizer proof build (`native` workflow dispatch `noopt=true`, main and
+    the branch) compares `splitcheck --strict` PASS, fed to `--proof`; (2) any
+    co-save function in the explained set also passes an emulated save
+    round-trip over real co-saves (identical written bytes and call sequence in
+    both DLLs); (3) `tools/splitcheck/selftest.py` passes on the pair (the tool
+    still catches every planted defect). "CI-identical" remains an invalid claim
+    for a split: CI proves it compiles.
   - History: the 2026-08-31 split pass modularized the top four giants into
     ≤2500-line modules (Logistics [core + Loot/Economy/Cast], Board [shell +
     Progression tab], Actuation [dispatch + Direct + Hands], ProgAllocator

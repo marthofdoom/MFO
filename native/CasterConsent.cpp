@@ -196,7 +196,7 @@ namespace MFO::CasterConsent {
         // THIRD leg (feat/offense-cast-seats, 2026-09-05): `APMFBridge::
         // IsOwnedCastActive` -- offense's own kIntent_Cast claim, PORTED off the
         // retired ch.8 kIntent_SelectSpell gate-only claim onto the SAME
-        // kIntent_Cast facet ClaimHealCast uses (`APMFBridge.cpp`'s
+        // kIntent_Cast facet ClaimHealCast uses (`apmf/CastClaims.cpp`'s
         // `Owned::offenseHandle`). Once APMF's engine seats drive the AI's own
         // cast decision for an OFFENSE claim too, the identical HARD-ABORT risk
         // (2) exists to prevent for heal applies to it -- so it gets the
