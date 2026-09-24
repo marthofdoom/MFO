@@ -1858,8 +1858,7 @@ namespace MFO::Actuation {
                     return { Result::NoOp, "auto summon: insufficient magicka/reserve", true };
                 ApplyEffectFromTo(id, id, a_spellID, hostile);
                 g_autoCast[id] = now;
-                if (suppressible)
-                    g_beneficialRecast[recastKey] = { now, JitteredRecastWindow(authoredDur) };
+                // No g_beneficialRecast window: CasterHasLiveSummon gates liveness, so a killed summon recasts at once.
                 spdlog::info("[cast] {:08X} {} SUMMON {} ({:08X}) -- road=direct (AUTO), cast once "
                              "by the caster (never fanned out), cost {:.0f}",
                              id, a_follower->GetName() ? a_follower->GetName() : "?",

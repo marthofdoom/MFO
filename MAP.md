@@ -1219,7 +1219,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   the caster in one tick (lead for the Serana freeze). The non-AUTO roads (self/player/foe via
   CastOn, OOC immediate/package) already cast once per fire. **What breaks:** moving the
   check after the enumeration re-opens the N-summon tick; widening it to kReanimate breaks
-  raise-dead (needs a corpse target).
+  raise-dead (needs a corpse target); arming `g_beneficialRecast` for a summon holds a killed
+  summon off for ~85% of its duration (liveness is `CasterHasLiveSummon`'s job). Open backlog:
+  `Docs/REVIEW-BACKLOG.md` MFO-B75 (Script-archetype summons still fan out), MFO-B76 (hostile-
+  flagged summon skips the LoS gate), MFO-B77 (Serana's Reanimate spells still fan out).
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
