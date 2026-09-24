@@ -660,3 +660,19 @@ Raised against ebf0526. Verbatim: "a summon never sets `acted`, so the same tick
 
 ### MFO-B87 (SEV-5 x2) -- summon liveness edge cases
 Raised against ebf0526. (1) Verbatim: "a summon with a resolved handle not yet in commandedActors is missed by both live and appearing checks." (2) The worker trusts the main thread's Live/Landing/Limit verdict for 1 s, so a killed summon is re-cast up to ~1 s + one eval late (SEV-5). Reasoning: SummonAppearing requires an unresolved handle and the limit count reads commandedActors, so the window between the handle resolving and the engine adding the entry is uncovered; the trust window trades eval churn for that delay.
+
+### MFO-B88 (SEV-5) -- a CH19 steal episode's first log line promises a grace it will not get
+- **Raised:** Opus 5.5 review of `6fca120` (`fix/mfo-loot-m1`, loot round M1), R5, SEV-5.
+- **Finding:** the first-episode line (`[loot] <id> travel pkg NEVER ENGAGED ... grace 10s (strike 1/N)`) prints on a CH19 leg that is conceded without the grace (in `6fca120` in the same tick; after the R4 fix at `kCh19Concede`, 2 s later). The text says "grace 10s" for a leg that never waits it.
+- **Reviewer's reasoning:** log text only; the behaviour (no MFO nudge, concede) is right.
+- **Why it was NOT fixed:** below the severity floor (rule 9); coordinator's call in the M1 round.
+- **Fix shape when drained:** on a CH19 leg print the concede point (`kCh19Concede`) instead of `kStealGrace` in that line, or skip the strike text for CH19.
+- **Surfaced at edit time from:** MAP.md §4 Logistics "LOOT ROUND M1" What-breaks.
+
+### MFO-B89 (SEV-5, structure) -- the GATED / actor-block machinery wants its own module
+- **Raised:** Opus 5.5 review of `6fca120` (`fix/mfo-loot-m1`), structure note, SEV-5.
+- **Finding:** `GateSink` (`Logistics.cpp`) plus `g_gates` / `g_gateMx` / `GatedNow` / `MarkGated` / `FindActorBlocker` / `g_actorDefer` / `SortLootCandidates` (`Logistics_internal.h`) are one mechanism split across the core TU and the shared header, placed there only to keep `Logistics.cpp` under the 2500 cap (2480 after the M1 fix round) with `Logistics_Loot.cpp` at the cap.
+- **Reviewer's reasoning:** cohesion, not correctness; the header carries logic and a cross-thread mutex it would not normally hold.
+- **Why it was NOT fixed:** a move is its own brief (scope rule 1; a TU split is tier 3).
+- **Fix shape when drained:** in the wave-2 Logistics split, move it to `native/loot/Gate.cpp` (or `Logistics_Gate.{h,cpp}`) with its own small header; `TravelFailedRecently` keeps calling `GatedNow` through that header.
+- **Surfaced at edit time from:** MAP.md §4 Logistics "LOOT ROUND M1" What-breaks.

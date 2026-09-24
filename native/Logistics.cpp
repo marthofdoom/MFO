@@ -294,6 +294,13 @@ namespace MFO::Logistics {
         // Layouts: fork TESOpenCloseEvent.h / TESActivateEvent.h /
         // TESCellAttachDetachEvent.h; holder sources +0x8F0 (verified in both
         // binaries, SendOpenCloseEvent SE 14190 / AE 14299), +0x58, +0x1B8.
+        // Review R3: a follower/teammate using a door is navmesh portal traffic,
+        // not a gate opening -- counting it re-admits the portcullis he just
+        // skipped and walks him back into it. The player and other NPCs count.
+        bool ByFollower(RE::TESObjectREFR* a_by) {
+            auto* a = a_by ? a_by->As<RE::Actor>() : nullptr;
+            return a && (a->IsPlayerTeammate() || Followers::IsTrackedFast(a->GetFormID()));
+        }
         class GateSink final : public RE::BSTEventSink<RE::TESOpenCloseEvent>,
                                public RE::BSTEventSink<RE::TESActivateEvent>,
                                public RE::BSTEventSink<RE::TESCellAttachDetachEvent> {
@@ -301,7 +308,7 @@ namespace MFO::Logistics {
             static GateSink* GetSingleton() { static GateSink s; return &s; }
             RE::BSEventNotifyControl ProcessEvent(const RE::TESOpenCloseEvent* a_ev,
                                                   RE::BSTEventSource<RE::TESOpenCloseEvent>*) override {
-                if (a_ev && g_gateCount.load(std::memory_order_relaxed) > 0)
+                if (a_ev && g_gateCount.load(std::memory_order_relaxed) > 0 && !ByFollower(a_ev->activeRef.get()))
                     ReadmitNear(a_ev->ref.get(), a_ev->opened ? "door/gate OPENED near it"
                                                               : "door/gate CLOSED near it");
                 return RE::BSEventNotifyControl::kContinue;
@@ -311,7 +318,7 @@ namespace MFO::Logistics {
             // doors only -- item pickups and containers are not gate signals.
             RE::BSEventNotifyControl ProcessEvent(const RE::TESActivateEvent* a_ev,
                                                   RE::BSTEventSource<RE::TESActivateEvent>*) override {
-                if (!a_ev || g_gateCount.load(std::memory_order_relaxed) == 0)
+                if (!a_ev || g_gateCount.load(std::memory_order_relaxed) == 0 || ByFollower(a_ev->actionRef.get()))
                     return RE::BSEventNotifyControl::kContinue;
                 auto* r    = a_ev->objectActivated.get();
                 auto* base = r ? r->GetBaseObject() : nullptr;
@@ -971,7 +978,6 @@ namespace MFO::Logistics {
         auto& due = g_nextTick[id];
         if (due.time_since_epoch().count() != 0 && now < due) return;
         due = now + kLogisticsInterval;
-        PruneGates(now);   // loot M1: GATED age-out (kGateHold), logged per re-admit
 
         // APMF EQUIP AUTHORITY (feat/mfo-equip-authority, 2026-09-15): the OOC
         // road of the declaration. CLAIM on the first service (the claim alone
@@ -1020,6 +1026,7 @@ namespace MFO::Logistics {
         // he hoovers a batch instead of returning to the player after each corpse.
         // Release only on combat, the excursion cap, leaving the leash, or the
         // batch running dry (after a short dibs linger).
+        if (SlotIndexOf(id) < 0) g_actorDefer.erase(id);   // loot M1: a reorder lives one excursion
         if (const int slot = SlotIndexOf(id); slot >= 0) {
             TravelIntent& tr = g_travelSlots[slot];
             auto* pc = RE::PlayerCharacter::GetSingleton();
@@ -1136,6 +1143,14 @@ namespace MFO::Logistics {
                 // "legacy alias route" because only the ch.9 flag was consulted.
                 const bool  ch19Leg = APMFBridge::HasLootTravelLeg(slot);
                 const char* route   = ch19Leg ? "CH19 route" : (apmfLeg ? "APMF ch.9 route" : "legacy alias route");
+                // loot M1 actor-block REORDER: the deferred item was dispatched again,
+                // i.e. its turn came -> the reorder is done.
+                if (auto dit = g_actorDefer.find(id);
+                    dit != g_actorDefer.end() && tref && dit->second.item == tref->GetFormID()) {
+                    spdlog::info("[loot] {:08X} deferred {:08X} back in its turn (actor-block reorder done)",
+                                 id, dit->second.item);
+                    g_actorDefer.erase(dit);
+                }
                 // ENGAGE WINDOW (86e3dpn66): measured engage is 1.1-1.6 s on the first
                 // Walking tick and ~2.4 s on the second (deck-0924b, field-0923b), so a
                 // leg is not "not engaged" before kEngageWindow. The same window gates
@@ -1373,7 +1388,7 @@ namespace MFO::Logistics {
                 //   * CH19 leg (86e3dpn66)     -> normal guard OBSERVES only: Harbinger
                 //                                owns the leg, so MFO never posts its own
                 //                                EvaluatePackage there. A never-engaged
-                //                                CH19 leg concedes at the window's end; a
+                //                                CH19 leg concedes at kCh19Concede (5 s); a
                 //                                displaced one waits the grace un-nudged.
                 //   * any leg, first kEngageWindow, not yet engaged -> no guard at all.
                 //
@@ -1400,9 +1415,22 @@ namespace MFO::Logistics {
                     const float held = std::chrono::duration<float>(now - tr.blockedSince).count();
                     if (now - tr.blockedSince < kBlockedGate)
                         return;   // a blip: still walking, no guard, no stall verdict
-                    MarkGated(a_follower, tref, held, now);
+                    // ACTOR or GATE (review R2, marth): a living actor right in front
+                    // of him is a jam, not a gate -> REORDER his list (the item stays
+                    // valid, goes later, the way away from the blocker first); no
+                    // GATED verdict, no cone, nothing shared with other followers.
+                    if (const auto ab = FindActorBlocker(a_follower, tref); ab.id) {
+                        g_actorDefer[id] = ActorDefer{ tref->GetFormID(), ab.id, ab.pos };
+                        spdlog::info("[loot] {:08X} target {:08X} ACTOR-BLOCKED -- Movement Blocked {:.1f}s, "
+                                     "actor {:08X} {:.0f} u in front: REORDER (item kept, later in his list, "
+                                     "items away from the blocker first), not a gate", id, tref->GetFormID(),
+                                     held, ab.id, ab.dist);
+                        skipWhy = "ACTOR-BLOCKED (reordered, not dropped)";
+                    } else {
+                        MarkGated(a_follower, tref, held, now);
+                        skipWhy = "GATED (Movement Blocked, no actor in front)";
+                    }
                     skippedRef      = tref->GetFormID();
-                    skipWhy         = "GATED (Movement Blocked)";
                     tr.blockedSince = {};
                     tr.stolenSince  = {};
                     stealAbandon    = true;   // skip the stall/deadline blame path below
@@ -1461,11 +1489,12 @@ namespace MFO::Logistics {
                         // clears loot on combat anyway, but this tick may beat it).
                         const bool tooManySteals = g_stealStrikes[skey] >= kStealStrikeMax;
                         const bool folInCombat   = a_follower->IsInCombat();
-                        // CH19, never engaged by the end of kEngageWindow: Harbinger
+                        // CH19, never engaged by kCh19Concede (5 s, R4): Harbinger
                         // owns the leg and MFO may not nudge it, so there is nothing
                         // to wait for -- concede now and let the Holding scan re-point
                         // the leg (ClaimLootTravel) at the next item, or release it.
-                        const bool ch19NoEngage  = ch19Leg && !tr.legEngaged;
+                        const bool ch19NoEngage  = ch19Leg && !tr.legEngaged && legClock &&
+                                                   now - tr.legStart >= kCh19Concede;   // R4
                         if (tooManySteals || folInCombat || ch19NoEngage) {
                             MarkTravelFailed(tref->GetFormID(), now);   // transient only -- ref was reachable
                             g_stealStrikes.erase(skey);
@@ -1473,7 +1502,7 @@ namespace MFO::Logistics {
                                          id, tref->GetFormID(),
                                          folInCombat ? "in combat, conceding to combat package"
                                          : (tooManySteals ? "claim stolen too many times, backing off"
-                                                          : "CH19 leg never engaged within the engage window, "
+                                                          : "CH19 leg never engaged within 5 s, "
                                                             "Harbinger owns it (no MFO nudge)"));
                             tr.stolenSince = {};
                             stealAbandon = true;
@@ -2391,6 +2420,7 @@ namespace MFO::Logistics {
         g_stallStrikes.clear();
         g_grabGrow.clear();   // grown-grab radii are per-session verdicts
         ClearGates();         // loot M1: GATED records are per-session skips
+        g_actorDefer.clear(); // loot M1: actor-block reorder records
         g_idleCycles.clear();
         g_lastBlocklistReassess = {};
     }
