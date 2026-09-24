@@ -940,6 +940,13 @@
    "where": "Sightline.cpp:147; Logistics_Loot.cpp:753; Actuation*.cpp; Packages.cpp:868",
    "verified_by": "CommonLib 3.7.0 ids (every id present in both libraries; a miss is now fatal, fork d9ad1072)",
    "gate": "cast paths: CastPathsVerified; others none"
+  },
+  {
+   "what": "Summon limit reads (fix/mfo-summon-oneshot): MiddleHighProcessData commandedActors (BSTArray<CommandedActorData>, elem 0x10: handle +0x00, ActiveEffect* +0x08); BGSEntryPoint::HandleEntryPoint(kModCommandedActorLimit 0x44, caster, spell, &limit); ActiveEffect spell / elapsedSeconds / flags",
+   "value": "+0x100 data / +0x110 count; RELOCATION_ID(23073, 23526) -> 0x32ECE0 / 0x385F30; +0x40 / +0x70 / +0x7C",
+   "where": "Actuation_Direct.cpp SummonLimit / SummonOnMain",
+   "verified_by": "disassembly of the engine's add-commanded-actor fn on both runtimes (1.5.97 0x683D70 id 38993, call at 0x683E11; 1.6.1170 0x717800 id 40056, call at 0x7178EC); GMST iMaxSummonedCreatures (int, default 1) and the round-half-up constant 0.5 identical on both; ActiveEffect +0x40 spell (both) and +0x70 elapsedSeconds (AE eviction compare) read in that fn; flags +0x7C is the CommonLib declaration only",
+   "gate": "cast paths: CastPathsVerified; main thread only"
   }
  ]
 }

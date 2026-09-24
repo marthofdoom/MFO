@@ -132,11 +132,16 @@ apply it to any future channel MFO consumes from APMF.
 **SUMMON RULE (fix/mfo-summon-oneshot, 2026-09-24).** A spell with a Summon Creature effect is a
 ONE-SHOT CONJURE on every target setting (self / player / foe / AUTO) and on both gambit tables: the
 combat `Fire` dispatch and the Logistics OOC block both call `Actuation::CastSummonOnce` before any
-other road. It casts ONCE, by the caster, with one `ApplyEffectFromTo(caster, caster)` on the direct
-road (kInstant `CastSpellImmediate`, Post'd, magicka deducted). It is never a self/target stream and
-takes no hand lock, so no reconcile, combat-end or cleanup path ends it: it lasts its duration or
-until killed. Liveness is per spell (`CasterHasLiveSummon`), a killed summon recasts on the next
-eval (only a 2 s landing floor after a dispatch). Bound weapons and Reanimate are not summons here.
+other road. The decision and the cast run in ONE main-thread closure: skip while THIS spell's creature
+is alive (per spell) or still appearing (engine effect younger than `fMagicSummonMaxAppearTime`), skip
+while live commanded actors + other summons still appearing reach the caster's summon limit (the
+list's `iMaxSummonedCreatures` + `kModCommandedActorLimit` perks, rounded half-up, as the engine
+computes it), else cast ONCE by the caster: kInstant `CastSpellImmediate` on the caster, magicka
+deducted by hand. It is never a self/target stream and takes no hand lock (and ignores the cast-gambit
+lock, accepted: nothing to re-point), so no reconcile, combat-end or cleanup path ends it: it lasts
+its duration or until killed. A killed summon recasts on the next eval after the main thread's 1 s
+verdict expires. The worker result is always transparent, and a summon rule does not count as a cast
+rule for the Scheduler's H3 loan. Bound weapons and Reanimate are not summons here (MFO-B83).
 Harbinger routing + animation for summons is ClickUp 86e3dvkwm, not this rule.
 
 **THE KEY FACT — why FF works but concentration collapses (and why the proxy exists):**
