@@ -58,6 +58,7 @@ ANON_HASH_MANGLED = re.compile(r"\?A0x[0-9a-f]{8}@")
 DATA_SCOPE = re.compile(r"^(const )?(`)?MFO::")
 PATHLIT = re.compile(rb"[A-Za-z]:\\.*\\native\\.*\.(cpp|h)$", re.I)
 FUNCLET = re.compile(r"^`(.*)'::`\d+'::(dtor|catch)\$\d+$")
+XTOR = re.compile(r"`dynamic (atexit destructor|initializer) for '")
 # a function DEFINED by a library header (STL, CommonLib, SKSE, fmt/spdlog...),
 # possibly instantiated over an MFO type. Its out-of-line body is a COMDAT that
 # the linker takes from whichever TU it sees first, so a split can swap in
@@ -467,17 +468,33 @@ class Cmp:
         references anywhere in f plus every inlinee at any depth."""
         ranges = img.inl_ranges.get(f["key"], [])
         own, every = [], []
+        # A site's sub-ranges can leave a one-instruction gap (MSVC attributes the
+        # call instruction an inlined body makes to the caller's line table): fill
+        # gaps of <= 16 bytes between sub-ranges of the SAME site.
+        spans = []
+        by_site = defaultdict(list)
+        for a, b, n in ranges:
+            by_site[n].append((a, b))
+        for n, rs in by_site.items():
+            rs.sort()
+            cur_a, cur_b = rs[0]
+            for a, b in rs[1:]:
+                if a - cur_b <= 16:
+                    cur_b = max(cur_b, b)
+                else:
+                    spans.append((cur_a, cur_b)); cur_a, cur_b = a, b
+            spans.append((cur_a, cur_b))
         tbl = self.tables(img, f)
         end = tbl[0] if tbl else f["size"]
         for ins in self.disasm(img, f["rva"], end):
             off = ins.address - f["rva"]
-            inside = any(a <= off < b for a, b, _n in ranges)
+            inside = any(a <= off < b for a, b in spans)
             for _o, _s, kind, t in self.fields(img, ins):
                 cands = self.toks(img, f, kind, t)
                 if cands[0][0] == "local":
                     continue
                 tok = ("ref", img, tuple(cands))
-                every.append(tok)
+                every.append(("iref", img, tuple(cands)) if inside else tok)
                 if not inside:
                     own.append(tok)
         for nm in sorted({n for _a, _b, n in ranges}):
@@ -492,6 +509,15 @@ class Cmp:
         "inlined X" is equivalent to "calls X". Returns the unmatched tokens."""
         oa, ea = self.fingerprint(self.A, fa)
         ob, eb = self.fingerprint(self.B, fb)
+        if XTOR.search(fa["name"]):
+            # a compiler-generated initializer / atexit destructor only builds or
+            # destroys its ONE named variable; whether the member destructor is
+            # inlined decides which member OFFSET the code touches, so compare the
+            # variable referenced, not the offset into it
+            def loose(toks):
+                return [(t[0], t[1], tuple((c[0], c[1], 0, c[3]) if c[0] == "sym" else c for c in t[2]))
+                        if t[0] in ("ref", "iref") else t for t in toks]
+            oa, ea, ob, eb = loose(oa), loose(ea), loose(ob), loose(eb)
         un = []
         for side, mine, theirs in (("A", oa, eb), ("B", ob, ea)):
             for x in mine:
@@ -502,11 +528,23 @@ class Cmp:
     def _fp_tok_eq(self, x, y):
         if x[0] == "inl" and y[0] == "inl":
             return x[2] == y[2]
-        if x[0] == "ref" and y[0] == "ref":
+        if x[0] in ("ref", "iref") and y[0] in ("ref", "iref"):
             a, b = (x, y) if x[1] is self.A else (y, x)
-            return self.same_target(list(a[2]), list(b[2]), 1)
+            if self.same_target(list(a[2]), list(b[2]), 1):
+                return True
+            if "iref" in (x[0], y[0]):
+                # the other side reaches this object from INSIDE an inlined body
+                # (e.g. an inlined unordered_map::erase touching g_owned's members
+                # where this side passes &g_owned to the out-of-line call): same
+                # object, member offset free
+                la = [(c[0], c[1], 0, c[3]) if c[0] == "sym" else c for c in a[2]]
+                lb = [(c[0], c[1], 0, c[3]) if c[0] == "sym" else c for c in b[2]]
+                return self.same_target(la, lb, 1)
+            return False
         # "inlined X" == "calls X"
         inl, ref = (x, y) if x[0] == "inl" else (y, x)
+        if ref[0] == "inl":
+            return False
         c = ref[2][0]
         return c[0] == "proc" and c[2] == 0 and inl[2] in {short(n) for n in c[1]}
 
@@ -724,14 +762,57 @@ def main():
             continue
         fails.append((fa["name"], fa["sig"], r, [fmt_fp(u) for u in un[:6]]))
 
-    # only-in: copies, outlined
+    # only-in: renumbered funclets, copies, outlined
     copies, outlined, oa, ob = [], [], [], []
+    renumbered = []
+    if not args.strict:
+        # MSVC numbers a function's catch$N/dtor$N funclets per compile; the same
+        # funclet can come back under another number. Pair unmatched funclets of the
+        # same parent whose bodies are identical.
+        ga, gb = defaultdict(list), defaultdict(list)
+        for f in onlya:
+            m = FUNCLET.match(f["name"])
+            if m:
+                ga[norm(m.group(1))].append(f)
+        for f in onlyb:
+            m = FUNCLET.match(f["name"])
+            if m:
+                gb[norm(m.group(1))].append(f)
+        gone_a, gone_b = set(), set()
+        for parent in set(ga) & set(gb):
+            lb = list(gb[parent])
+            la = list(ga[parent])
+            for fa in list(la):
+                for fb in lb:
+                    if cmp.compare(fa, fb) is None:
+                        renumbered.append((fa["name"], fb["name"]))
+                        gone_a.add(id(fa)); gone_b.add(id(fb))
+                        lb.remove(fb); la.remove(fa)
+                        break
+            # a library parent's EH funclets come from whichever TU's COMDAT the
+            # linker kept; its catch handler may inline differently (drift)
+            if LIBRARY.match(parent) or parent in drift_names:
+                for fa in la:
+                    for fb in lb:
+                        if not cmp.fp_equal(fa, fb):
+                            renumbered.append((fa["name"], fb["name"] + "  [drift]"))
+                            gone_a.add(id(fa)); gone_b.add(id(fb))
+                            lb.remove(fb)
+                            break
+        onlya = [f for f in onlya if id(f) not in gone_a]
+        onlyb = [f for f in onlyb if id(f) not in gone_b]
     for mine, other, img_other, side, sink in ((onlya, B.procs, B, "A", oa), (onlyb, A.procs, A, "B", ob)):
         by = defaultdict(list)
         for f in other:
             by[(norm(f["name"]), norm(f["sig"]))].append(f)
         for f in mine:
             if not args.strict:
+                fm = FUNCLET.match(f["name"])
+                if fm and norm(fm.group(1)) in drift_names:
+                    # MSVC numbers a function's unwind funclets per compile; when the
+                    # parent's inlining drifted, its funclet set/numbering drifts too
+                    outlined.append((side, f["name"], "(funclet of a drift function)"))
+                    continue
                 twins = by.get((norm(f["name"]), norm(f["sig"])), [])
                 if twins and any((cmp.compare(f, t) if side == "A" else cmp.compare(t, f)) is None for t in twins):
                     copies.append((side, f["name"]))
@@ -752,7 +833,7 @@ def main():
         why = allowed(rules, "data", n)
         (allowed_hits.append(("data", n, why)) if why else ddiff.append((n, r)))
 
-    strict_ok = not diffs and not onlya and not onlyb and not ddiff0
+    strict_ok = not diffs and not onlya and not onlyb and not ddiff0 and not renumbered
     ok = not fails and not oa and not ob and not ddiff
     verdict = "PASS" if strict_ok else ("PASS-EXPLAINED" if ok else "FAIL")
 
@@ -761,7 +842,7 @@ def main():
     print(f"matched pairs: {len(pairs)}   identical: {same}   FAIL: {len(fails)}   "
           f"inline-drift: {len(drift)}   funclet-drift: {len(fdrift)}   "
           f"only-in-A: {len(oa)}   only-in-B: {len(ob)}   outlined: {len(outlined)}   "
-          f"copies: {len(copies)}   allow-listed: {len(allowed_hits)}")
+          f"copies: {len(copies)}   renumbered: {len(renumbered)}   allow-listed: {len(allowed_hits)}")
     print(f"named data compared: {dchecked}   data differing: {len(ddiff)}")
     if relinked:
         rl = [x for x in relinked if not x[0].startswith(("std::", "`std::"))]
@@ -784,8 +865,11 @@ def main():
           ", ".join(f"{k} {a}->{b}" for k, (a, b) in sorted(d.items())) for n, r, d in drift]),
         ("FUNCLET-DRIFT (explained: unwind funclet of a drift function, fingerprint equal)",
          [f"{n}" for n, r in fdrift]),
-        ("OUTLINED IN ONE BUILD ONLY (explained: inlined in the other)",
-         [f"[only in {s}] {n}   (inlined as `{sn}` in the other)" for s, n, sn in outlined]),
+        ("OUTLINED IN ONE BUILD ONLY (explained: inlined in the other, or an unwind funclet of a drift function)",
+         [f"[only in {s}] {n}   " + (sn if sn.startswith("(") else f"(inlined as `{sn}` in the other)")
+          for s, n, sn in outlined]),
+        ("RENUMBERED FUNCLETS (explained: identical body, per-compile catch$/dtor$ number changed)",
+         [f"{a}  ->  ...{b[-12:]}" for a, b in renumbered]),
         ("PER-TU COPIES (explained: copy count changed, every copy identical)",
          [f"[extra in {s}] {n}" for s, n in copies]),
         ("FAIL", [f"{n}  {s}\n      {r}" + "".join(f"\n        {u}" for u in us) for n, s, r, us in fails]),
@@ -808,7 +892,7 @@ def main():
                    "inline_drift": [{"name": n, "detail": r, "inline_delta": {k: list(v) for k, v in d.items()}}
                                     for n, r, d in drift],
                    "funclet_drift": [n for n, _ in fdrift],
-                   "outlined": outlined, "copies": copies,
+                   "outlined": outlined, "copies": copies, "renumbered": renumbered,
                    "only_a": [f["name"] for f in oa], "only_b": [f["name"] for f in ob],
                    "data_differing": ddiff, "relinked": relinked, "allowed": allowed_hits,
                    "notes": cmp.notes, "path_pairs": sorted(cmp.path_pairs)},
