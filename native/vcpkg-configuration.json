@@ -8,7 +8,7 @@
         {
             "kind": "git",
             "repository": "https://github.com/marthofdoom/vcpkg-registry",
-            "baseline": "fdea6987d1cc0325003c0b654ea93e694f511e44",
+            "baseline": "bb7b481869536bb36e88cf564a431b3a5ad4d337",
             "packages": [
                 "commonlibsse-ng"
             ]
