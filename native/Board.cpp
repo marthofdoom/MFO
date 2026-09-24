@@ -268,11 +268,18 @@ namespace MFO::Board {
                 ImGui::Separator();
 
                 int shown = 0;
+                // Name column by WIDTH, not bytes: "%-16s" padded by byte count,
+                // so a multibyte (e.g. Japanese) name misaligned the strip.
+                float nameColW = 0.0f;
+                for (const auto& r : snap.rows)
+                    if (r.active) nameColW = std::max(nameColW, ImGui::CalcTextSize(r.name.c_str()).x);
                 for (const auto& r : snap.rows) {
                     if (!r.active) continue;
                     ++shown;
-                    ImGui::Text("%-16s", r.name.c_str());
+                    const float nameX = ImGui::GetCursorPosX();
+                    ImGui::TextUnformatted(r.name.c_str());
                     ImGui::SameLine();
+                    ImGui::SetCursorPosX(nameX + nameColW + ImGui::GetStyle().ItemSpacing.x);
                     // Activity strip: red C combat, green L looting, blue T trading.
                     // Persistent bracket slots (marth 2026-09-06): the bracket is
                     // ALWAYS drawn -- only the letter comes and goes -- so the strip's
@@ -441,13 +448,38 @@ namespace MFO::Board {
                 namespace fs = std::filesystem;
                 constexpr const char* kBodyTTF = "Data/SKSE/Plugins/MFO/fonts/body.ttf";
                 constexpr const char* kHeadTTF = "Data/SKSE/Plugins/MFO/fonts/head.ttf";
-                if (fs::exists(kBodyTTF))
+                // CJK fallback (Noto Sans JP, OFL). Optional. The game hands us
+                // names as UTF-8, and body/head carry no CJK glyphs, so on a
+                // Japanese install every name drew as the missing-glyph box.
+                // Merged into each face RIGHT AFTER that face is added (MergeMode
+                // targets Fonts.back()), with SizePixels 0 so it bakes at the
+                // host face's size. Latin still resolves in the host face first.
+                constexpr const char* kCjkOTF = "Data/SKSE/Plugins/MFO/fonts/cjk.otf";
+                const bool haveCjk = fs::exists(kCjkOTF);
+                int cjkMerged = 0;
+                const auto mergeCjk = [&](ImFont* a_host) {
+                    if (!a_host || !haveCjk) return;
+                    ImFontConfig cfg;
+                    cfg.MergeMode = true;
+                    if (io.Fonts->AddFontFromFileTTF(kCjkOTF, 0.0f, &cfg)) ++cjkMerged;
+                };
+                if (fs::exists(kBodyTTF)) {
                     g_fontBody = io.Fonts->AddFontFromFileTTF(kBodyTTF, std::floor(19.0f * uiScale));
-                if (fs::exists(kHeadTTF))
+                    mergeCjk(g_fontBody);
+                }
+                if (fs::exists(kHeadTTF)) {
                     g_fontHead = io.Fonts->AddFontFromFileTTF(kHeadTTF, std::floor(27.0f * uiScale));
+                    mergeCjk(g_fontHead);
+                }
                 if (!g_fontHead) g_fontHead = g_fontBody;   // head falls back to body, not default
                 spdlog::info("[overlay-probe] fonts: body={} head={} (scale {:.2f})",
                              g_fontBody ? "ok" : "default", g_fontHead ? "ok" : "default", uiScale);
+                if (haveCjk)
+                    spdlog::info("[overlay-probe] cjk fallback font: loaded, merged into {} face(s) ({})",
+                                 cjkMerged, kCjkOTF);
+                else
+                    spdlog::info("[overlay-probe] cjk fallback font: absent ({}) -- Japanese "
+                                 "names will draw as boxes", kCjkOTF);
             }
 
             if (!ImGui_ImplWin32_Init(sd.OutputWindow) ||

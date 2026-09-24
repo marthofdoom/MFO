@@ -268,6 +268,6 @@ MFO's own code is MIT — see [`LICENSE`](LICENSE). All of it lives in `native/`
 no third-party source is vendored here. The shipped DLL statically links
 CommonLibSSE-NG (MIT, © 2018 Ryan-rsm-McKenzie), Dear ImGui, nlohmann/json,
 spdlog and fmt (all MIT); their notices are in
-[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The two board fonts —
-**Cinzel** and **EB Garamond** — are licensed under the SIL Open Font License
-1.1, reproduced in [`OFL.txt`](OFL.txt). Both files ship with every release.
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md). The three board fonts —
+**Cinzel**, **EB Garamond** and the **Noto Sans JP** fallback — are licensed
+under the SIL Open Font License 1.1, reproduced in [`OFL.txt`](OFL.txt). Both files ship with every release.
