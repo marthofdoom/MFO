@@ -237,14 +237,19 @@ namespace MFO::Actuation {
     bool IsSummonSpell(RE::SpellItem* a_spell);
     // THE single summon path for every target setting (self / player / foe /
     // AUTO) on both tables: the combat Fire dispatch and the Logistics OOC
-    // service call it before any other cast road. Per spell: skips while THIS
-    // spell's creature is alive (rate-limited [summon] skip line), then casts
-    // ONCE, by the caster, on the direct road (ApplyEffectFromTo(caster, caster)
-    // -> CastSpellImmediate kInstant, Post'd to main, magicka deducted). Never
-    // registers a self/target stream and takes no hand lock, so no MFO reconcile,
-    // combat-end or cleanup path ever ends the summon. A 2 s landing floor per
-    // (follower, spell) stops a second cast before the creature is visible; a
-    // summon killed later recasts on the next eval. WORKER only.
+    // service call it before any other cast road. WORKER side: competence +
+    // magicka gates, the main thread's last verdict (fresh 1 s), a 0.5 s post
+    // throttle, then ONE MainThread::Post. MAIN side (every engine read lives
+    // there): skip while THIS spell's creature is alive (per spell) or still
+    // APPEARING (engine effect younger than fMagicSummonMaxAppearTime with no
+    // resolved handle; fallback floor = that + 1 s after our own cast), skip
+    // when live commanded actors + other summons appearing >= the caster's
+    // summon limit (iMaxSummonedCreatures + kModCommandedActorLimit perks,
+    // round half-up, exactly as the engine computes it), else cast ONCE by the
+    // caster on the direct road (CastSpellImmediate kInstant, magicka deducted).
+    // Never a self/target stream, no hand lock, so no MFO reconcile, combat-end
+    // or cleanup path ends the summon. ALWAYS returns a transparent result: the
+    // main thread's [summon] line says whether it cast. WORKER only.
     Outcome CastSummonOnce(RE::Actor* a_follower, RE::SpellItem* a_spell, int a_rule,
                            const char* a_table, std::string_view a_target);
 

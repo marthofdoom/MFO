@@ -1590,8 +1590,9 @@ namespace MFO::Logistics {
                 // beneficial/light routing below is unchanged. Fall to the next rule
                 // exactly like the "buff still on the target" skip.
                 // SUMMON = ONE-SHOT CONJURE on every target setting, the same single
-                // path the combat table uses (fix/mfo-summon-oneshot). Fired is this
-                // tick's action; a live creature / landing / unaffordable falls through.
+                // path the combat table uses (fix/mfo-summon-oneshot). It returns a
+                // transparent result (the cast itself is decided on the main thread),
+                // so the scan always continues to the next rule.
                 if (Actuation::IsSummonSpell(sp)) {
                     if (Actuation::CastSummonOnce(a_follower, sp, choice.ruleIndex, "logistics", op)
                             .result == Actuation::Result::Fired) {

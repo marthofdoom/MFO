@@ -733,7 +733,7 @@ namespace MFO::Actuation {
         // the "is this target worth a cast?" gate for BOTH allies and enemies, so
         // this must NOT re-apply the old blanket already-active skip here: that
         // would defeat the hostile DoT burst-vs-tail recast the worker approved.
-        // a_hostile only tunes the log label. (Sole caller: CastAuto.)
+        // a_hostile only tunes the log label. (Sole caller: CastAuto's fan-out. A summon never comes here: CastSummonOnce casts it itself on the main thread.)
         void ApplyEffectFromTo(RE::FormID a_casterID, RE::FormID a_targetID,
                                RE::FormID a_spellID, bool a_hostile) {
             MainThread::Post([a_casterID, a_targetID, a_spellID, a_hostile] {
@@ -951,17 +951,230 @@ namespace MFO::Actuation {
     }
 
     namespace {
-        // (follower, spell) -> when this summon was last dispatched. WORKER-
-        // SERIAL (Fire and the Logistics service both run on the AddTask job
-        // worker, #4); cleared in ClearSelfCasts. A FLOOR, not a recast window:
-        // the cast is Post'd to the main thread and the creature is placed
-        // after that, so for a moment CasterHasLiveSummon cannot see it yet and
-        // the next 133 ms eval would conjure a second one. Once the summon is
-        // up, liveness alone decides; a summon killed later recasts at once.
-        constexpr float kSummonLandingSec = 2.0f;
-        std::unordered_map<std::uint64_t, SelfClock::time_point> g_summonDispatched;
-        // (follower, spell) -> last "still alive" skip log, 10 s rate limit.
-        std::unordered_map<std::uint64_t, SelfClock::time_point> g_summonSkipLog;
+        // ── THREADING (review of 78f9631) ──────────────────────────────────
+        // Every ENGINE read a summon decision needs -- the caster's active-
+        // effect list, commanded-actor handles, the process's commandedActors
+        // array, the GMSTs and the perk entry point -- runs on the TRUE MAIN
+        // thread, inside ONE posted closure that re-checks and then casts or
+        // skips. The worker only decides "this rule wants to summon", applies
+        // the cheap competence/magicka gates, and reads back the main thread's
+        // last verdict (g_summon, leaf mutex) so it does not post every eval.
+        //
+        // The WORKER RESULT IS ALWAYS a transparent NoOp: the summon holds no
+        // hand and no channel, so it must never occupy the tick or wall off
+        // the rules below it. Whether it actually cast is the main thread's
+        // [summon] line. Nothing double-casts: the main closure itself refuses
+        // while the spell is live or LANDING, and a second queued closure sees
+        // the first one's lastCast.
+        enum class SummonVerdict : std::uint8_t { None, Cast, Live, Landing, Limit, Failed };
+        struct SummonState {
+            SummonVerdict      verdict = SummonVerdict::None;
+            SelfClock::time_point verdictAt{};    // when the main thread decided
+            SelfClock::time_point lastCast{};     // main: the last CastSpellImmediate
+            SelfClock::time_point lastSkipLog{};  // main: "still alive" / "landing" throttle
+            SelfClock::time_point lastLimitLog{}; // main: "limit reached" throttle
+        };
+        std::mutex                                     g_summonMx;   // leaf: never held across an engine call
+        std::unordered_map<std::uint64_t, SummonState> g_summon;     // RecastKey(follower, spell)
+
+        // A main verdict of Live/Landing/Limit is trusted this long before the
+        // worker asks again. It bounds how late a killed summon is noticed.
+        constexpr float kSummonVerdictFreshSec = 1.0f;
+        // Worker-side post throttle (WORKER-SERIAL, #4): at most one queued
+        // check per (follower, spell) per this many seconds.
+        constexpr float kSummonPostEverySec    = 0.5f;
+        std::unordered_map<std::uint64_t, SelfClock::time_point> g_summonPosted;
+        // Added to fMagicSummonMaxAppearTime for the fallback floor (before
+        // the effect exists on the caster).
+        constexpr float kSummonAppearMarginSec = 1.0f;
+
+        float SecSince(SelfClock::time_point a_t, SelfClock::time_point a_now) {
+            if (a_t.time_since_epoch().count() == 0) return 1.0e9f;
+            return std::chrono::duration<float>(a_now - a_t).count();
+        }
+
+        // MAIN THREAD. GMST read by name; the fallback is the engine default.
+        float GmstFloat(const char* a_name, float a_default) {
+            auto* gsc = RE::GameSettingCollection::GetSingleton();
+            auto* s   = gsc ? gsc->GetSetting(a_name) : nullptr;
+            return s ? s->GetFloat() : a_default;
+        }
+        std::int32_t GmstInt(const char* a_name, std::int32_t a_default) {
+            auto* gsc = RE::GameSettingCollection::GetSingleton();
+            auto* s   = gsc ? gsc->GetSetting(a_name) : nullptr;
+            return s ? s->GetSInt() : a_default;
+        }
+
+        // MAIN THREAD. The caster's summon limit, computed EXACTLY as the
+        // engine's add-commanded-actor function does (1.6.1170 0x717800 id
+        // 40056, 1.5.97 0x683D70 id 38993; both disassembled): limit =
+        // (float)iMaxSummonedCreatures, then HandleEntryPoint(0x44
+        // kModCommandedActorLimit, caster, spell, &limit) (RELOCATION_ID(23073,
+        // 23526) -> 1.5.97 0x32ECE0 / 1.6.1170 0x385F30, the call target at
+        // 0x683E11 / 0x7178EC), then round half-up (trunc + (frac >= 0.5)).
+        int SummonLimit(RE::Actor* a_caster, RE::SpellItem* a_spell) {
+            float limit = static_cast<float>(
+                static_cast<std::uint32_t>(GmstInt("iMaxSummonedCreatures", 1)));
+            RE::BGSEntryPoint::HandleEntryPoint(
+                RE::BGSEntryPoint::ENTRY_POINT::kModCommandedActorLimit, a_caster,
+                static_cast<RE::MagicItem*>(a_spell), &limit);
+            const int t = static_cast<int>(limit);
+            return t + ((limit - static_cast<float>(t)) >= 0.5f ? 1 : 0);
+        }
+
+        // NOT HONOURED (reported): the engine also SKIPS the cap when bit 1 of
+        // +0x340 of the object at the global RELOCATION_ID(516851, 403330) is
+        // set (1.5.97 0x683DC1-0x683DD3 -> 0x2F266F8, 1.6.1170 0x7178A1-
+        // 0x7178B3 -> 0x317ABA8; identical shape on both). Reading it would be
+        // an MFO-owned id + raw offset, which the F1 self-check has no row kind
+        // for (data globals), so MFO always applies the cap.
+
+        // MAIN THREAD. Is this ActiveEffect a summon still APPEARING? A live
+        // (not inactive/dispelled) SummonCreatureEffect whose commanded handle
+        // does not resolve yet, younger than fMagicSummonMaxAppearTime (the
+        // engine's own appear window, read in the SummonCreatureEffect update).
+        bool SummonAppearing(RE::ActiveEffect* a_ae, float a_appearSec) {
+            auto* se = skyrim_cast<RE::SummonCreatureEffect*>(a_ae);
+            if (!se) return false;
+            if (a_ae->flags.any(RE::ActiveEffect::Flag::kInactive, RE::ActiveEffect::Flag::kDispelled))
+                return false;
+            if (se->commandedActor.get()) return false;   // resolved -> live or dead, not appearing
+            return a_ae->elapsedSeconds < a_appearSec;
+        }
+
+        // MAIN THREAD. The whole decision + cast for one summon rule.
+        void SummonOnMain(RE::FormID a_id, RE::FormID a_spellID, int a_rule,
+                          const std::string& a_table, const std::string& a_target) {
+            auto* f  = RE::TESForm::LookupByID<RE::Actor>(a_id);
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
+            if (!f || !sp) return;
+            const auto  key    = RecastKey(a_id, a_spellID);
+            const auto  now    = SelfClock::now();
+            const char* name   = sp->GetName() ? sp->GetName() : "?";
+            const char* fname  = f->GetName() ? f->GetName() : "?";
+            const float appear = GmstFloat("fMagicSummonMaxAppearTime", 4.0f);
+
+            auto setVerdict = [&](SummonVerdict a_v) {
+                std::lock_guard lk(g_summonMx);
+                auto& s = g_summon[key];
+                s.verdict = a_v; s.verdictAt = now;
+                if (a_v == SummonVerdict::Cast) s.lastCast = now;
+            };
+            SummonState st{};
+            {
+                std::lock_guard lk(g_summonMx);
+                st = g_summon[key];
+            }
+            auto skipLog = [&](const char* a_why) {
+                if (SecSince(st.lastSkipLog, now) < 10.0f) return;
+                {
+                    std::lock_guard lk(g_summonMx);
+                    g_summon[key].lastSkipLog = now;
+                }
+                spdlog::info("[summon] {:08X} {} ({:08X}) rule {} ({}, target {}): skipped -- {}",
+                             a_id, name, a_spellID, a_rule, a_table, a_target, a_why);
+            };
+
+            // 1. PER SPELL: a live creature from THIS spell blocks only this spell.
+            if (CasterHasLiveSummon(f, sp)) {
+                setVerdict(SummonVerdict::Live);
+                skipLog("this spell's creature is still alive");
+                return;
+            }
+            // 2. LANDING: read the engine. An appearing effect of THIS spell on
+            //    the caster; else (no effect yet) the fallback floor after our
+            //    own last cast (appear time + margin).
+            bool ownEffect = false, ownAppearing = false;
+            int  otherAppearing = 0;
+            std::vector<RE::FormID> otherSpellsWithEffect;
+            if (auto* mt = f->AsMagicTarget()) {
+                if (auto* list = mt->GetActiveEffectList()) {
+                    for (auto* ae : *list) {
+                        if (!ae || !ae->spell) continue;
+                        if (!skyrim_cast<RE::SummonCreatureEffect*>(ae)) continue;
+                        const bool mine = ae->spell == sp;
+                        if (mine) ownEffect = true;
+                        else      otherSpellsWithEffect.push_back(ae->spell->GetFormID());
+                        if (SummonAppearing(ae, appear)) {
+                            if (mine) ownAppearing = true;
+                            else      ++otherAppearing;
+                        }
+                    }
+                }
+            }
+            if (ownAppearing ||
+                (!ownEffect && SecSince(st.lastCast, now) < appear + kSummonAppearMarginSec)) {
+                setVerdict(SummonVerdict::Landing);
+                skipLog("this spell's creature is still appearing");
+                return;
+            }
+            // 3. THE LIST'S SUMMON LIMIT. live = commandedActors entries that
+            //    resolve to a live, not-deleted actor (Reanimate thralls count,
+            //    as they do for the engine); pending = OTHER summon spells this
+            //    follower cast that are still appearing (engine effect), or
+            //    whose effect does not exist yet but were cast inside the
+            //    fallback floor. A lower-ranked summon already out keeps its
+            //    slot until it dies -- that is the list's rule.
+            int live = 0;
+            if (auto* proc = f->GetActorRuntimeData().currentProcess; proc && proc->middleHigh) {
+                for (const auto& cad : proc->middleHigh->commandedActors) {
+                    if (auto a = cad.commandedActor.get(); a && !a->IsDead() && !a->IsDeleted())
+                        ++live;
+                }
+            }
+            int pendingFloor = 0;
+            {
+                std::lock_guard lk(g_summonMx);
+                for (const auto& [k, s] : g_summon) {
+                    if (static_cast<RE::FormID>(k >> 32) != a_id) continue;
+                    const auto other = static_cast<RE::FormID>(k & 0xFFFFFFFFu);
+                    if (other == a_spellID) continue;
+                    if (SecSince(s.lastCast, now) >= appear + kSummonAppearMarginSec) continue;
+                    if (std::find(otherSpellsWithEffect.begin(), otherSpellsWithEffect.end(), other) !=
+                        otherSpellsWithEffect.end())
+                        continue;   // its effect exists: counted by the engine read instead
+                    ++pendingFloor;
+                }
+            }
+            const int  pending = otherAppearing + pendingFloor;
+            const int  limit   = SummonLimit(f, sp);
+            if (live + pending >= limit) {
+                setVerdict(SummonVerdict::Limit);
+                if (SecSince(st.lastLimitLog, now) >= 10.0f) {
+                    {
+                        std::lock_guard lk(g_summonMx);
+                        g_summon[key].lastLimitLog = now;
+                    }
+                    spdlog::info("[summon] {:08X} {} ({:08X}) rule {} ({}, target {}): skipped -- "
+                                 "summon limit reached (live {} + appearing {} >= limit {})",
+                                 a_id, name, a_spellID, a_rule, a_table, a_target, live, pending, limit);
+                }
+                return;
+            }
+            // 4. CAST ONCE, by the caster, on the direct road: CastSpellImmediate
+            //    (kInstant) on the caster, magicka deducted by hand (it spends
+            //    none), clamped to the pool.
+            auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+            auto* avo    = f->AsActorValueOwner();
+            const float pool = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+            const float cost = sp->CalculateMagickaCost(f);
+            if (!caster || (avo && pool < cost)) {
+                setVerdict(SummonVerdict::Failed);
+                spdlog::info("[summon] {:08X} {} ({:08X}) rule {} ({}, target {}): not cast -- {}",
+                             a_id, name, a_spellID, a_rule, a_table, a_target,
+                             caster ? "magicka ran short before the cast" : "no instant magic caster");
+                return;
+            }
+            caster->CastSpellImmediate(sp, false, f, 1.0f, false, 0.0f, f);
+            const float spend = avo ? std::min(cost, pool) : 0.0f;
+            if (avo && spend > 0.0f)
+                avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kMagicka, -spend);
+            setVerdict(SummonVerdict::Cast);
+            spdlog::info("[summon] {:08X} {} {} ({:08X}) rule {} ({}, target {}): road=direct, cast once "
+                         "(magicka -{:.0f}; summons live {} + appearing {} of limit {})",
+                         a_id, fname, name, a_spellID, a_rule, a_table, a_target, spend,
+                         live, pending, limit);
+        }
     }
 
     Outcome CastSummonOnce(RE::Actor* a_follower, RE::SpellItem* a_spell, int a_rule,
@@ -970,6 +1183,8 @@ namespace MFO::Actuation {
             return { Result::FailedOther,
                      "cast control is verified on 1.6 and 1.5.97 only (this runtime uses the follower's own AI casting)", true };
         if (!a_follower || !a_spell) return { Result::FailedOther, "no summon spell", true };
+        if (!MainThread::IsInstalled())
+            return { Result::FailedOther, "summon needs the main-thread pump", true };
         if (!a_follower->HasSpell(a_spell))
             return { Result::FailedSkill, "follower does not know this spell", true };
 
@@ -977,25 +1192,26 @@ namespace MFO::Actuation {
         const auto spellID = a_spell->GetFormID();
         const auto key     = RecastKey(id, spellID);
         const auto now     = SelfClock::now();
-        const char* name   = a_spell->GetName() ? a_spell->GetName() : "?";
 
-        // PER SPELL: a live creature from THIS spell blocks only this spell.
-        if (CasterHasLiveSummon(a_follower, a_spell)) {
-            auto& last = g_summonSkipLog[key];
-            if (std::chrono::duration<float>(now - last).count() >= 10.0f) {
-                last = now;
-                spdlog::info("[summon] {:08X} {} ({:08X}) rule {} ({}, target {}): skipped -- "
-                             "this spell's creature is still alive",
-                             id, name, spellID, a_rule, a_table ? a_table : "?", a_target);
+        // The main thread's last verdict for this (follower, spell). A fresh
+        // Live / Landing / Limit answers without posting again.
+        {
+            std::lock_guard lk(g_summonMx);
+            if (auto it = g_summon.find(key); it != g_summon.end() &&
+                SecSince(it->second.verdictAt, now) < kSummonVerdictFreshSec) {
+                switch (it->second.verdict) {
+                case SummonVerdict::Live:    return { Result::NoOp, "summon still live", true };
+                case SummonVerdict::Landing: return { Result::NoOp, "summon appearing", true };
+                case SummonVerdict::Limit:   return { Result::NoOp, "summon limit reached", true };
+                case SummonVerdict::Cast:    return { Result::NoOp, "summon cast", true };
+                default: break;
+                }
             }
-            return { Result::NoOp, "summon still live", true };
         }
-        if (auto it = g_summonDispatched.find(key); it != g_summonDispatched.end() &&
-            std::chrono::duration<float>(now - it->second).count() < kSummonLandingSec)
-            return { Result::NoOp, "summon landing", true };
 
         // COMPETENCE IS NOT PERMISSION (DESIGN §5.3): the same magicka + reserve
-        // gate CastOn / CastSelfDirect apply. Transparent: fall to the next rule.
+        // gate CastOn / CastSelfDirect apply (the same worker-side AV reads they
+        // make). Transparent: fall to the next rule.
         if (auto* avo = a_follower->AsActorValueOwner()) {
             const float cost = a_spell->CalculateMagickaCost(a_follower);
             const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
@@ -1013,15 +1229,16 @@ namespace MFO::Actuation {
             }
         }
 
-        // The direct road summons already used: CastSpellImmediate(kInstant) by
-        // the caster ON the caster, Post'd to the main thread, magicka deducted
-        // by hand (ApplyEffectFromTo). No g_selfCast entry, no hand lock.
-        g_summonDispatched[key] = now;
-        ApplyEffectFromTo(id, id, spellID, /*hostile=*/false);
-        spdlog::info("[summon] {:08X} {} {} ({:08X}) rule {} ({}, target {}): road=direct, cast once",
-                     id, a_follower->GetName() ? a_follower->GetName() : "?", name, spellID,
-                     a_rule, a_table ? a_table : "?", a_target);
-        return { Result::Fired, "summon (cast once)" };
+        if (SecSince(g_summonPosted[key], now) < kSummonPostEverySec)
+            return { Result::NoOp, "summon check queued", true };
+        g_summonPosted[key] = now;
+        MainThread::Post([id, spellID, a_rule, table = std::string(a_table ? a_table : "?"),
+                          target = std::string(a_target)] {
+            SummonOnMain(id, spellID, a_rule, table, target);
+        });
+        // Optimistic and TRANSPARENT on purpose (see the threading note above):
+        // the main thread decides and logs whether this cast.
+        return { Result::NoOp, "summon dispatched to the main thread", true };
     }
 
     // See Actuation.h. Restoration = not Offense AND (restores Health OR any
@@ -1382,8 +1599,11 @@ namespace MFO::Actuation {
         ComposedCast::Reset();        // drop executor streams/backoff/expected-cast set
         ClearCastLocks();             // Task 2: drop every firing-spell gambit lock
         g_lastApmfRefusal.clear();    // this file's APMF-refusal log dedup, session-scoped
-        g_summonDispatched.clear();   // summon landing floors (worker state, session-scoped)
-        g_summonSkipLog.clear();      // summon "still alive" log throttle
+        g_summonPosted.clear();       // summon post throttle (worker state, session-scoped)
+        {
+            std::lock_guard lk(g_summonMx);   // main-written verdicts / last casts
+            g_summon.clear();
+        }
     }
 
     // F3-7 (deploy-gate review 2026-09-07). Drop ONE follower's APMF-refusal log
