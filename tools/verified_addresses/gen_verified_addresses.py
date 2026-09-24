@@ -285,6 +285,47 @@ def derive(spec, imgs, libs):
                     if row.get('target') and rt in row['target']:
                         tgt_rva = hits[0] + off + 5 + struct.unpack('<i', img.r(hits[0] + off + 1, 4))[0]
                         ent['target'] = (row['target'][rt], tgt_rva)
+            elif kind == 'ripref':
+                # A DATA GLOBAL, proven through the engine code that reads it: the function
+                # (unique signature, its own id) must hold, at a fixed offset, exactly `bytes`
+                # (per runtime: the RIP-relative instruction WITH its displacement, plus the
+                # use-site bytes after it), and that instruction's RIP-relative target must be
+                # the RVA the Address Library gives the global's id. Emits two runtime rows:
+                # the function (id + byte check) and the global (id only).
+                sig = row['sig'][rt]
+                hits = sig_scan(img, sig)
+                if len(hits) != 1:
+                    errors.append('%s %s: signature matches %d places %s' % (rt, row['seat'], len(hits), [hexs(x) for x in hits[:5]]))
+                    continue
+                ent['rva'] = hits[0]
+                off = int(row['offset'][rt], 0)
+                want = bytes.fromhex(row['bytes'][rt])
+                have = img.r(hits[0] + off, len(want))
+                if have != want:
+                    errors.append('%s %s: bytes at +0x%X are %s, spec says %s' % (rt, row['seat'], off, have.hex(), want.hex()))
+                    continue
+                ins = next(_md.disasm(want, hits[0] + off), None)
+                ripmem = [op for op in (ins.operands if ins else [])
+                          if op.type == capstone.x86.X86_OP_MEM and op.mem.base == capstone.x86.X86_REG_RIP]
+                if not ins or len(ripmem) != 1:
+                    errors.append('%s %s: +0x%X is not a single RIP-relative memory operand' % (rt, row['seat'], off))
+                    continue
+                gtgt = ins.address + ins.size + ripmem[0].mem.disp
+                gid = row['global'][rt]
+                glib = libs[rt].get(gid)
+                if glib is None or glib != gtgt:
+                    errors.append('%s %s: +0x%X references 0x%X, global id %d is %s' % (
+                        rt, row['seat'], off, gtgt, gid, hexs(glib) if glib is not None else 'NOT in the library'))
+                    continue
+                ent['bytesOffset'] = off
+                ent['bytes'] = row['bytes'][rt]
+                ent['method'] = 'signature (%d bytes, unique in .text); +0x%X = %s -> global 0x%X' % (
+                    len(sig.split()), off, row['bytes'][rt].upper(), gtgt)
+                grow = dict(row)
+                grow['kind'] = 'ripref global'
+                ent['global'] = {'label': row['global_seat'], 'id': gid, 'rva': gtgt, 'bytesOffset': 0,
+                                 'bytes': '', 'row': grow, 'slots': [],
+                                 'method': 'RIP-relative reference at %s +0x%X (id %d)' % (row['seat'], off, rid)}
             else:
                 errors.append('unknown kind %s' % kind)
                 continue
@@ -297,7 +338,11 @@ def derive(spec, imgs, libs):
                 errors.append('%s %s: id %d -> library 0x%X, our derivation 0x%X' % (rt, row['seat'], rid, lib, ent['rva']))
                 continue
             derived[rt][rid] = ent['rva']
+            g = ent.pop('global', None)
             out[rt].append(ent)
+            if g:
+                derived[rt][g['id']] = g['rva']
+                out[rt].append(g)
     # callsite target cross-check (target ids must be rows too, or be resolvable by the library)
     for rt in RUNTIMES:
         for ent in out[rt]:
@@ -433,6 +478,10 @@ def write_doc(spec, rows, path, args):
     L.append('- Adding a row: add it to `spec.json`. A vtable row needs the mangled RTTI name (`.?AV...@@`); a function row')
     L.append('  needs a signature per runtime, cut with `--make-sig <runtime> <rva>` at an RVA confirmed by the address-table')
     L.append('  method (skeleton + neighbour delta). The generator then re-finds it by unique scan and checks the library.')
+    L.append('- A `ripref` row proves a DATA GLOBAL through the engine function that reads it: the function\'s signature and')
+    L.append('  id, `offset` and per-runtime `bytes` (the RIP-relative instruction with its displacement, then the use-site')
+    L.append('  bytes, 15 at most), and `global` (the global\'s id per runtime). The instruction\'s RIP target must equal the')
+    L.append('  library\'s answer for `global`. It emits two rows: the function (id + byte check) and `global_seat` (id only).')
     L.append('- Keep `gen_verified_addresses.py` identical in MFO and APMF.')
     L.append('')
     open(path, 'w', newline='\n').write('\n'.join(L))

@@ -14,7 +14,7 @@
 
 namespace MFO::VerifiedAddresses
 {
-	// 1.6.1170.0: 53 rows
+	// 1.6.1170.0: 55 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_6_1170[] = {
 		{ 207886, 0x18A5558, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 208040, 0x18AB9C0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -69,9 +69,11 @@ namespace MFO::VerifiedAddresses
 		{ 38561, 0x6B6930, 0x0, 0, {  }, "Probe.StartCombat" },
 		{ 68233, 0xCC90C0, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.LockForRead" },
 		{ 68239, 0xCC9380, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.UnlockForRead" },
+		{ 40056, 0x717800, 0xA1, 15, { 0x48, 0x8B, 0x05, 0x00, 0x33, 0xA6, 0x02, 0x8B, 0x88, 0x40, 0x03, 0x00, 0x00, 0xD1, 0xE9 }, "Actuation.SummonCap.AddCommandedActor" },
+		{ 403330, 0x317ABA8, 0x0, 0, {  }, "Actuation.SummonCap.SkipFlagGlobal" },
 	};
 
-	// 1.5.97.0: 53 rows
+	// 1.5.97.0: 55 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_5_97[] = {
 		{ 261397, 0x165DA40, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 261916, 0x16635E0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -126,6 +128,8 @@ namespace MFO::VerifiedAddresses
 		{ 37608, 0x6251B0, 0x0, 0, {  }, "Probe.StartCombat" },
 		{ 66976, 0xC072D0, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.LockForRead" },
 		{ 66982, 0xC07590, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.UnlockForRead" },
+		{ 38993, 0x683D70, 0x51, 15, { 0x48, 0x8B, 0x05, 0x30, 0x29, 0x8A, 0x02, 0x8B, 0x88, 0x40, 0x03, 0x00, 0x00, 0xD1, 0xE9 }, "Actuation.SummonCap.AddCommandedActor" },
+		{ 516851, 0x2F266F8, 0x0, 0, {  }, "Actuation.SummonCap.SkipFlagGlobal" },
 	};
 
 	inline constexpr REL::SelfCheck::Table kTables[] = {

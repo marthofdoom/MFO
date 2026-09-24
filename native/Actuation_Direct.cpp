@@ -1022,12 +1022,40 @@ namespace MFO::Actuation {
             return t + ((limit - static_cast<float>(t)) >= 0.5f ? 1 : 0);
         }
 
-        // NOT HONOURED (reported): the engine also SKIPS the cap when bit 1 of
-        // +0x340 of the object at the global RELOCATION_ID(516851, 403330) is
-        // set (1.5.97 0x683DC1-0x683DD3 -> 0x2F266F8, 1.6.1170 0x7178A1-
-        // 0x7178B3 -> 0x317ABA8; identical shape on both). Reading it would be
-        // an MFO-owned id + raw offset, which the F1 self-check has no row kind
-        // for (data globals), so MFO always applies the cap.
+        // MAIN THREAD. The engine SKIPS the cap when bit 1 of +0x340 of the
+        // object at the global RELOCATION_ID(516851, 403330) is set: the add-
+        // commanded-actor fn (RELOCATION_ID(38993, 40056)) does `mov rax,[rip+g];
+        // mov ecx,[rax+0x340]; shr ecx,1; test cl,1` (1.5.97 0x683DC1 -> global
+        // 0x2F266F8, 1.6.1170 0x7178A1 -> 0x317ABA8). MFO mirrors it. The read is
+        // gated on the F1 self-check `ripref` row (Actuation.SummonCap.*: the
+        // function holds exactly that instruction + use site at its verified RVA
+        // and the RIP target is the library's answer for the global). If the row
+        // did not verify, the flag is NOT read and MFO caps (conservative),
+        // after one loud [selfcheck] line per seat.
+        bool SummonCapSkipped() {
+            static const bool verified = [] {
+                // No table for this build -> never even resolve the ids (a missing
+                // id is FATAL in the fork); cap, loudly, like a failed row.
+                if (!Runtime::SelfCheckResult().Covered()) {
+                    spdlog::error("[summon] the engine's skip-cap flag is NOT read on this build (no "
+                                  "self-check table) -- MFO always applies the summon limit");
+                    return false;
+                }
+                const REL::Relocation<std::uintptr_t> fn{ REL::RelocationID(38993, 40056) };
+                const REL::Relocation<std::uintptr_t> gl{ REL::RelocationID(516851, 403330) };
+                const bool okFn = Runtime::SeatVerified(fn.address(), "Actuation.SummonCap.AddCommandedActor");
+                const bool okGl = Runtime::SeatVerified(gl.address(), "Actuation.SummonCap.SkipFlagGlobal");
+                if (!(okFn && okGl))
+                    spdlog::error("[summon] the engine's skip-cap flag is NOT read on this build (self-check row "
+                                  "not verified) -- MFO always applies the summon limit");
+                return okFn && okGl;
+            }();
+            if (!verified) return false;
+            static const REL::Relocation<std::uintptr_t> gl{ REL::RelocationID(516851, 403330) };
+            const auto* obj = *reinterpret_cast<const std::uint8_t* const*>(gl.address());
+            if (!obj) return false;
+            return ((*reinterpret_cast<const std::uint32_t*>(obj + 0x340) >> 1) & 1u) != 0;
+        }
 
         // MAIN THREAD. Is this ActiveEffect a summon still APPEARING? A live
         // (not inactive/dispelled) SummonCreatureEffect whose commanded handle
@@ -1108,20 +1136,19 @@ namespace MFO::Actuation {
                 skipLog("this spell's creature is still appearing");
                 return;
             }
-            // 3. THE LIST'S SUMMON LIMIT. live = commandedActors entries that
-            //    resolve to a live, not-deleted actor (Reanimate thralls count,
-            //    as they do for the engine); pending = OTHER summon spells this
-            //    follower cast that are still appearing (engine effect), or
-            //    whose effect does not exist yet but were cast inside the
-            //    fallback floor. A lower-ranked summon already out keeps its
+            // 3. THE LIST'S SUMMON LIMIT. listed = EVERY commandedActors entry,
+            //    the raw count the engine itself compares (1.5.97 0x683E45 /
+            //    1.6.1170 0x7178F5 read [middleHigh+0x110] and never check
+            //    liveness; Reanimate thralls count too). Counting only live ones
+            //    would let MFO cast into a dead-but-listed slot and the engine
+            //    would then evict a LIVE older summon. pending = OTHER summon
+            //    spells this follower cast that are still appearing (engine
+            //    effect), or whose effect does not exist yet but were cast inside
+            //    the fallback floor. A lower-ranked summon already out keeps its
             //    slot until it dies -- that is the list's rule.
             int live = 0;
-            if (auto* proc = f->GetActorRuntimeData().currentProcess; proc && proc->middleHigh) {
-                for (const auto& cad : proc->middleHigh->commandedActors) {
-                    if (auto a = cad.commandedActor.get(); a && !a->IsDead() && !a->IsDeleted())
-                        ++live;
-                }
-            }
+            if (auto* proc = f->GetActorRuntimeData().currentProcess; proc && proc->middleHigh)
+                live = static_cast<int>(proc->middleHigh->commandedActors.size());
             int pendingFloor = 0;
             {
                 std::lock_guard lk(g_summonMx);
@@ -1138,7 +1165,8 @@ namespace MFO::Actuation {
             }
             const int  pending = otherAppearing + pendingFloor;
             const int  limit   = SummonLimit(f, sp);
-            if (live + pending >= limit) {
+            const bool noCap = SummonCapSkipped();
+            if (!noCap && live + pending >= limit) {
                 setVerdict(SummonVerdict::Limit);
                 if (SecSince(st.lastLimitLog, now) >= 10.0f) {
                     {
@@ -1146,7 +1174,7 @@ namespace MFO::Actuation {
                         g_summon[key].lastLimitLog = now;
                     }
                     spdlog::info("[summon] {:08X} {} ({:08X}) rule {} ({}, target {}): skipped -- "
-                                 "summon limit reached (live {} + appearing {} >= limit {})",
+                                 "summon limit reached (listed {} + appearing {} >= limit {})",
                                  a_id, name, a_spellID, a_rule, a_table, a_target, live, pending, limit);
                 }
                 return;
@@ -1171,9 +1199,9 @@ namespace MFO::Actuation {
                 avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kMagicka, -spend);
             setVerdict(SummonVerdict::Cast);
             spdlog::info("[summon] {:08X} {} {} ({:08X}) rule {} ({}, target {}): road=direct, cast once "
-                         "(magicka -{:.0f}; summons live {} + appearing {} of limit {})",
+                         "(magicka -{:.0f}; summons listed {} + appearing {} of limit {}{})",
                          a_id, fname, name, a_spellID, a_rule, a_table, a_target, spend,
-                         live, pending, limit);
+                         live, pending, limit, noCap ? ", cap skipped by the engine flag" : "");
         }
     }
 
