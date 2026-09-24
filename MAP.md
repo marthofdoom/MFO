@@ -512,9 +512,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   changes suppression + hand-claim + spellsword fallback.
 - **SEAT SELF-CHECK (mit-3.7 F1, `build/commonlib-f1`, 2026-09-24).** `native/Runtime.h` (open backlog: MFO-B81 MFO-B82)
   `SelfCheckResult()` / `LogSelfCheck()` / **`SeatVerified(address, seat)`** over the generated
-  `native/VerifiedAddresses.h` (51 rows per runtime: Character 0xE4, PlayerCharacter 0xAD,
+  `native/VerifiedAddresses.h` (53 rows per runtime: Character 0xE4, PlayerCharacter 0xAD,
   ActorMagicCaster 0x0A, 14 CombatMagicCaster 0x06, 30 CombatInventoryItemMagicT 0x0F,
-  PollInputDevices (+0x7B E8 checked offline), ToggleControls, ForceRefTo, StartCombat).
+  PollInputDevices (+0x7B E8 checked offline), ToggleControls, ForceRefTo, StartCombat, and since F1b
+  `BSReadWriteLock::LockForRead`/`UnlockForRead`, logged only, since the form lookup lives in CommonLib).
   `plugin.cpp` logs `[selfcheck] ... N/N verified` right after the `=== MFO ... loading ===` line.
   Guarded: `Targeting::InstallHook`, `MainThread::Install`, `CasterConsent::InstallHook` (per
   vtable) + `InstallCheckCastHook`, `CombatStyle` equip gate (per vtable), `Board::InstallInputHook`
@@ -525,6 +526,17 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `tools/verified_addresses/gen_verified_addresses.py` (Docs/VERIFIED-ADDRESSES.md "Regenerating");
   never hand-edit the header. The fork also changed CommonLib itself (id miss fatal, DOBJ / ControlMap /
   CombatController exact-build accessors): verify against `_commonlib/mit-3.7-fork`, not the pinned tree.
+- **FORM LOOKUP LOCK (mit-3.7 F1b, `build/commonlib-f1b`, 2026-09-24): threading.** `RE::TESForm::LookupByID`
+  and `LookupByEditorID` now hold the game's read lock on the form map for the find (3.7.0 copied the lock and held
+  nothing). Proof: Docs/ADDRESS-TABLE-2026-09-15.md "ADDENDUM 2026-09-24 (mit-3.7 F1b)". A read waits only while
+  another thread is inserting or erasing a form. The game's write sections are leaf, and a thread that already holds
+  the lock re-enters, so a lookup cannot deadlock from any thread. **What breaks:** do not hold an MFO mutex that the
+  game could wait on across a lookup (none can today), and do not take the form-map lock yourself for WRITE. Audit
+  2026-09-24: 0 risks. Lookups run on MAIN, JOB, inline event sinks and the co-save callbacks, never on the combat or
+  render threads. The one lookup under an MFO mutex is `APMFBridge.cpp` `ReconcileHandFloorLocked` (JOB, under
+  `APMFBridge::g_mx`). `Logistics_Loot.cpp` `IsCoinLoot`/`RefInPlayerStorage`/`IsLOTDDropOff` do their one-time
+  static lookup inside `ForEachReferenceInRange`, under the cell spin lock. Both are safe because a writer never waits
+  on those locks.
 - **RUNTIME GATES — THE 1.5.97 PASS (`feat/mfo-1.5.97-pass`, 2026-09-15; Fable round 2 on
   `87cabc1` applied).** The five cast-control gates — `CastOn` (`Actuation.cpp:432`),
   `CastSelfDirect` (`Actuation_Direct.cpp:849`), `CastTargetDirect` (`:1166`), `CastAuto`

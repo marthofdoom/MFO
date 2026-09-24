@@ -14,7 +14,7 @@
 
 namespace MFO::VerifiedAddresses
 {
-	// 1.6.1170.0: 51 rows
+	// 1.6.1170.0: 53 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_6_1170[] = {
 		{ 207886, 0x18A5558, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 208040, 0x18AB9C0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -67,9 +67,11 @@ namespace MFO::VerifiedAddresses
 		{ 68545, 0xCD5650, 0x0, 0, {  }, "Board.ToggleControls" },
 		{ 25052, 0x3CDEE0, 0x0, 0, {  }, "Packages.ForceRefTo" },
 		{ 38561, 0x6B6930, 0x0, 0, {  }, "Probe.StartCombat" },
+		{ 68233, 0xCC90C0, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.LockForRead" },
+		{ 68239, 0xCC9380, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.UnlockForRead" },
 	};
 
-	// 1.5.97.0: 51 rows
+	// 1.5.97.0: 53 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_5_97[] = {
 		{ 261397, 0x165DA40, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 261916, 0x16635E0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -122,6 +124,8 @@ namespace MFO::VerifiedAddresses
 		{ 67245, 0xC11C60, 0x0, 0, {  }, "Board.ToggleControls" },
 		{ 24523, 0x375050, 0x0, 0, {  }, "Packages.ForceRefTo" },
 		{ 37608, 0x6251B0, 0x0, 0, {  }, "Probe.StartCombat" },
+		{ 66976, 0xC072D0, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.LockForRead" },
+		{ 66982, 0xC07590, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.UnlockForRead" },
 	};
 
 	inline constexpr REL::SelfCheck::Table kTables[] = {
