@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include "CombatStyle.h"
 #include "CasterConsent.h"   // the equip gate exempts the latched gambit spell (T#75)
 #include "Config.h"
@@ -418,8 +419,13 @@ namespace MFO::CombatStyle {
         };
 
         int n = 0;
+        int i = 0;
         for (const auto& id : kVtables) {
             REL::Relocation<std::uintptr_t> vt{ id };
+            // mit-3.7 F1: a vtable the self-check did not verify is refused alone.
+            if (!Runtime::SeatVerified(vt.address(), fmt::format("CombatStyle.CheckShouldEquip kVtables[{}]", i++))) {
+                continue;
+            }
             // write_vfunc returns the previous entry -- store it under this
             // vtable's address so the thunk dispatches to the right original.
             g_gateOrig[vt.address()] = vt.write_vfunc(kCheckShouldEquip, &EquipGateThunk);

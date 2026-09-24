@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include "Probe.h"
 #include "Targeting.h"
 #include "Followers.h"
@@ -34,6 +35,8 @@ namespace MFO::Probe {
             if (REL::Module::IsVR()) return false;
             using func_t = bool(RE::Actor*, RE::Actor*, void*);
             static REL::Relocation<func_t> func{ REL::RelocationID(37608, 38561) };
+            static const bool verified = Runtime::SeatVerified(func.address(), "Probe.StartCombat");
+            if (!verified) return false;
             return func(a_actor, a_target, nullptr);
         }
 

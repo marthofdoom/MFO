@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include <unordered_set>   // g_otherCast -- NOT in the PCH (the v1.0.8/9 CI lesson)
 #include <thread>          // g_mainThread: std::this_thread::get_id (FF world-walk gate)
 #include "CasterConsent.h"
@@ -1068,6 +1069,10 @@ namespace MFO::CasterConsent {
             // caster dispatches CheckCast through [0]; patching [1]/[2] would clobber
             // unrelated engine vtables (Fable, 2026-08-06).
             REL::Relocation<std::uintptr_t> vt{ RE::VTABLE_ActorMagicCaster[0] };
+            if (!Runtime::SeatVerified(vt.address(), "CasterConsent.ActorMagicCaster.CheckCast")) {
+                spdlog::error("[consent] CheckCast deny NOT hooked (self-check refused the ActorMagicCaster vtable)");
+                return;
+            }
             g_castOrig[vt.address()] = vt.write_vfunc(kCheckCast, &CheckCastThunk);
             spdlog::info("[consent] CheckCast deny hooked (ActorMagicCaster vtable[0], pre-charge)");
         }
@@ -1113,8 +1118,14 @@ namespace MFO::CasterConsent {
         };
 
         int n = 0;
+        int i = 0;
         for (const auto& id : kVtables) {
             REL::Relocation<std::uintptr_t> vt{ id };
+            // mit-3.7 F1: a vtable the self-check did not verify is refused alone;
+            // the other casters still install.
+            if (!Runtime::SeatVerified(vt.address(), fmt::format("CasterConsent.CheckStartCast kVtables[{}]", i++))) {
+                continue;
+            }
             // write_vfunc returns the previous entry -- store it under this
             // vtable's address so the thunk can dispatch to the right original.
             const std::uintptr_t orig = vt.write_vfunc(kCheckStartCast, &thunk);

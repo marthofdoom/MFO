@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include "Targeting.h"
 #include "Config.h"
 #include "CombatStyle.h"
@@ -160,6 +161,10 @@ namespace MFO::Targeting {
         // version-resilient where a sourced relocation is not -- and StartCombat
         // via a sourced relocation is exactly what failed in the field (§0.12).
         REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_Character[0] };
+        if (!Runtime::SeatVerified(vtbl.address(), "Targeting.Character.UpdateCombat")) {
+            spdlog::error("[target] UpdateCombat hook NOT installed (self-check refused the Character vtable)");
+            return;
+        }
         UpdateCombatHook::func =
             vtbl.write_vfunc(UpdateCombatHook::idx, UpdateCombatHook::thunk);
 

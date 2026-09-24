@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include "MainThread.h"
 
 namespace MFO::MainThread {
@@ -101,6 +102,12 @@ namespace MFO::MainThread {
         // A VTABLE INDEX, not an AddressLib offset -- version-resilient the
         // same way Targeting's hook is (§0.12's lesson).
         REL::Relocation<std::uintptr_t> vtbl{ RE::VTABLE_PlayerCharacter[0] };
+        if (!Runtime::SeatVerified(vtbl.address(), "MainThread.PlayerCharacter.Update")) {
+            g_dead = true;
+            spdlog::error("[mainthread] player Update hook NOT installed (self-check refused the PlayerCharacter "
+                          "vtable); Post becomes a no-op.");
+            return;
+        }
         PlayerUpdateHook::func =
             vtbl.write_vfunc(PlayerUpdateHook::idx, PlayerUpdateHook::thunk);
 
