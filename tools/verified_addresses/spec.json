@@ -819,6 +819,36 @@
    },
    "source": "native/Probe.cpp:36",
    "doc": "ADDRESS-TABLE-2026-09-15.md:58"
+  },
+  {
+   "seat": "CommonLib.BSReadWriteLock.LockForRead",
+   "kind": "function",
+   "construct": "RE::Offset::BSReadWriteLock::LockForRead = RELOCATION_ID(66976, 68233)",
+   "ids": {
+    "1.6.1170": 68233,
+    "1.5.97": 66976
+   },
+   "sig": {
+    "1.6.1170": "40 57 48 83 EC 20 48 8B F9 FF 15 ?? ?? ?? ?? 39 07 75 0A F0 FF 47 04 48 83 C4 20 5F C3 8B 47 04",
+    "1.5.97": "40 57 48 83 EC 20 48 8B F9 FF 15 ?? ?? ?? ?? 39 07 75 0A F0 FF 47 04 48 83 C4 20 5F C3 8B 47 04"
+   },
+   "source": "CommonLib mit-3.7 fde0f3ae include/RE/T/TESForm.h LookupByID/LookupByEditorID (BSReadLockGuard)",
+   "doc": "ADDRESS-TABLE-2026-09-15.md ADDENDUM 2026-09-24 F1b"
+  },
+  {
+   "seat": "CommonLib.BSReadWriteLock.UnlockForRead",
+   "kind": "function",
+   "construct": "RE::Offset::BSReadWriteLock::UnlockForRead = RELOCATION_ID(66982, 68239)",
+   "ids": {
+    "1.6.1170": 68239,
+    "1.5.97": 66982
+   },
+   "sig": {
+    "1.6.1170": "F0 FF 49 04 C3 CC CC CC CC CC CC CC CC CC CC CC",
+    "1.5.97": "F0 FF 49 04 C3 CC CC CC CC CC CC CC CC CC CC CC 8B 41 04"
+   },
+   "source": "CommonLib mit-3.7 fde0f3ae include/RE/T/TESForm.h LookupByID/LookupByEditorID (BSReadLockGuard)",
+   "doc": "ADDRESS-TABLE-2026-09-15.md ADDENDUM 2026-09-24 F1b"
   }
  ],
  "layout_facts": [

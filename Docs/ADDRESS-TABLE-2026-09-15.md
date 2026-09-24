@@ -451,3 +451,41 @@ Corrections to this table, each proven in the named fork commit (`marthofdoom/Co
   id 502114 (`0x20123B0` -> "Skyrim Special Edition"). Fork `aef05fac`.
 - **An id missing from the library is now fatal** (fork `d9ad1072`). Offline, every id MFO and APMF use is present in
   both libraries.
+
+## ADDENDUM 2026-09-24 (mit-3.7 F1b): the form lookup lock
+
+3.7.0's `TESForm::LookupByID` and `LookupByEditorID` wrote `const BSReadWriteLock l{ lock };`. That copies the lock
+and holds nothing, so every lookup read the game's form maps unlocked. Fork `bf7e9a5d` holds a `BSReadLockGuard` on
+the real lock instead. Registry `3.7.0#4` (`038638a5`) serves it. All values below were read on our unpacked
+1.6.1170.0 and 1.5.97.0 images with `versionlib-1-6-1170-0.bin` and `version-1-5-97-0.bin`.
+
+| What | 1.6.1170 id | 1.6.1170 RVA | 1.5.97 id | 1.5.97 RVA |
+|---|---|---|---|---|
+| all-forms map pointer | 400507 | `0x20FBB88` | 514351 | `0x1EC3CB8` |
+| all-forms lock | 400517 | `0x20FC018` | 514360 | `0x1EC4150` |
+| editor-id map pointer | 400509 | `0x20FBFE0` | 514352 | `0x1EC3CC0` |
+| editor-id lock | 400518 | `0x20FC020` | 514361 | `0x1EC4158` |
+| game's own form lookup | 14617 | `0x1E01A0` | 14461 | `0x194230` |
+| game's own editor-id lookup | 14618 | `0x1E0250` | 14462 | `0x1942E0` |
+| `BSReadWriteLock::LockForRead` | 68233 | `0xCC90C0` | 66976 | `0xC072D0` |
+| `BSReadWriteLock::UnlockForRead` | 68239 | `0xCC9380` | 66982 | `0xC07590` |
+| `BSReadWriteLock::LockForWrite` | 68234 | `0xCC9140` | 66977 | `0xC07350` |
+| `BSReadWriteLock::UnlockForWrite` | 68240 | `0xCC9390` | 66983 | `0xC075A0` |
+
+- **The game reads under the read lock.** Its lookup is the same on both builds:
+  `lea rsi,[forms lock]; call LockForRead; <hash find>; mov rcx,rsi; call UnlockForRead`. The editor-id lookup does
+  the same on the editor-id lock. The fork now does exactly this.
+- **The lock.** Two dwords: the writer's thread id at +0, a count at +4 with bit 31 as the write bit.
+  `LockForRead` calls `GetCurrentThreadId`. If this thread is the writer it just adds one. Otherwise it adds one
+  with a compare-exchange, but only while bit 31 is clear, and it spins with `Sleep(0)` then `Sleep(1)` while a
+  writer holds it. `UnlockForRead` is one `lock dec`. Readers leave no owner and writers get no preference. So a
+  thread that already holds the lock, read or write, can read again and cannot deadlock itself.
+- **What the game does under the write lock.** Form construction (1.6.1170 14593, 1.5.97 14438 at `0x191E10`) holds
+  it only around a hash insert and its grow. Form removal (1.6.1170 14627, 1.5.97 14471) takes the forms lock and
+  then the editor-id lock, and only erases. Nothing inside calls out. A reader only waits out one insert, erase or grow, and
+  a writer never waits on anything a reader could hold.
+- **The fork interns the editor-id key before it takes the lock.** No other lock is ever taken while the read lock is
+  held.
+- **Self-check.** `LockForRead` and `UnlockForRead` are now rows in `tools/verified_addresses/spec.json`
+  (`CommonLib.BSReadWriteLock.*`). They log a failure by name at startup. They gate nothing, because the lookup
+  lives inside CommonLib.

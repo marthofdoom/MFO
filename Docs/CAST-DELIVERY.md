@@ -141,7 +141,7 @@ deducted by hand. It is never a self/target stream and takes no hand lock (and i
 lock, accepted: nothing to re-point), so no reconcile, combat-end or cleanup path ends it: it lasts
 its duration or until killed. A killed summon recasts on the next eval after the main thread's 1 s
 verdict expires. The worker result is always transparent, and a summon rule does not count as a cast
-rule for the Scheduler's H3 loan. Bound weapons and Reanimate are not summons here (MFO-B83).
+rule for the Scheduler's H3 loan. Bound weapons and Reanimate are not summons here (MFO-B84).
 Harbinger routing + animation for summons is ClickUp 86e3dvkwm, not this rule.
 
 **THE KEY FACT — why FF works but concentration collapses (and why the proxy exists):**

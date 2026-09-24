@@ -16,6 +16,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **This may be what froze the game with Serana.** Her summon, cast from a gambit, could hard freeze the game. It is not proven yet that this was the cause. Please try it. Bound weapons and raise dead spells are not affected.
 - **Japanese names show on the board.** On a Japanese game, follower, item, spell and skill names drew as rows of diamonds. The board's fonts have no Japanese letters. MFO now ships a Japanese fallback font (Noto Sans JP) and uses it for any letter the main fonts lack. The game's own names now show in Japanese and in any other language that font covers. Korean and Simplified Chinese are not covered yet. MFO's own labels are still English.
 - **Names on the HUD line up.** The name column was padded by bytes, so a Japanese name pushed the rest of its row out of line. It is now padded by width.
+- **Looking up a form from a background thread is safe now.** MFO finds items, spells and actors by ID from its worker thread and from combat hooks. The library underneath read the game's list of forms there without taking its lock. If the game added a form at the same moment (a spawned actor, a placed marker, a dropped item), the read could land on memory the game had just moved and crash, or come back empty. It now holds the game's own lock for the lookup, the same way the game does. Nothing else changes. A lookup only waits while the game is in the middle of adding or removing a form.
+- Built on CommonLib mit-3.7 F1b (registry 3.7.0#4). The startup self-check now also verifies the two lock functions on both runtimes. The log line reads 53/53.
 
 ## v2.0.12 -- Loot trips walk on Harbinger, and followers grow at your rate
 
