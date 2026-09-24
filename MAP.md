@@ -21,30 +21,23 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 ## How to use this map
 
 1. **Navigate by `file:line`.** Jump straight to the cited line; don't read
-   whole files. Sizes verified on `feat/mfo-idle-hand-and-churn` 2026-09-08 after
-   the Actuation split: ProgAllocator 2354, Actuation 2237, Logistics_Loot 2285,
-   Packages 2153, Logistics 2072, Actuation_Direct 1679, Board 1346,
-   CasterConsent 1243, Board_Progression 1234, Board_FieldKit 1135,
-   Actuation_Hands 894. None of these should sit in context — grep to a symbol,
-   read a narrow window. **2026-09-14 (`feat/mfo-dualwield-combat-pick` `1ac3c6b`):
-   Actuation 2605 — OVER the 2500 cap; marth relaxed the cap until the next major
-   release (report, do not split). Actuation_Hands 918, Actuation_internal.h 378,
-   Loadout 677.**
-   *(Two files have breached the 2500-line HARD RULE and been resolved the same
-   way — an internal header for the shared state plus a cohesive module.
-   `Board.cpp` hit 2577 at the overlay-swapchain merge `924f3a9`;
-   `refactor/board-split` moved the Field Kit panel into
-   `native/Board_FieldKit.cpp`. `Actuation.cpp` hit 3282 on this branch;
-   `refactor/actuation-split` moved the per-hand cast lock into
-   `native/Actuation_Hands.cpp` behind `Actuation_internal.h`. The cap holds
-   codebase-wide.)*
-   **CAUTION — `Actuation.cpp` line anchors below are a mixed bag.** The
-   2026-09-08 split re-anchored every citation that was accurate against this
-   branch. Citations that were ALREADY stale before it (written against `main`,
-   where the file is 2271 lines and those anchors still resolve — e.g. `CastOn` at `:600`, `Fire` at `:1832`,
-   `ConcentrationCast` at `:470`, and the interior call-site lists) were left
-   exactly as they were and still need their own re-anchor pass. Grep the symbol,
-   don't trust those numbers.
+   whole files. **Subsystem folders (wave 1, 2026-09-24, `refactor/subsystem-folders-wave1`):**
+   the Actuation family lives in `native/cast/`, ProgAllocator in `native/progression/`,
+   APMFBridge in `native/apmf/`; everything else is still flat in `native/`. A citation
+   written `cast/Fire.cpp:104` is relative to `native/`. The wave-1 pass re-derived EVERY
+   citation of the moved files against the new tree (by symbol where the text names one,
+   by the exact old->new line map otherwise), including the ones that were already stale
+   before the split. Largest files after it: Logistics_Loot 2499, Logistics 2290,
+   Packages 2214, Board 1718, cast/CastOn 1387, cast/Direct 1317, CasterConsent 1283,
+   Board_Progression 1248, Board_FieldKit 1135, apmf/Bridge 1074 (sizes 2026-09-24).
+   None of these should sit in context — grep to a symbol, read a narrow window.
+   *(File-size rule, CLAUDE.md "SOURCE FILE SIZE AND SPLITS": ~1500 lines = plan a
+   split as its own round, 2500 = hard backstop; every split is proven with
+   `tools/splitcheck`. History: `Board.cpp` hit 2577 at the overlay-swapchain merge
+   `924f3a9` and `refactor/board-split` moved the Field Kit panel into
+   `native/Board_FieldKit.cpp`; `Actuation.cpp` hit 3282 and `refactor/actuation-split`
+   moved the per-hand cast lock into `Actuation_Hands.cpp`; the wave-1 folder split then
+   cut Actuation (2998), ProgAllocator (2556) and APMFBridge (2658) by concern.)*
 2. **Re-verify before editing.** Line numbers drift with every commit. Before
    changing a subsystem, re-read its "What breaks" entry *against current code*
    and **update this map if the structure moved.** A stale impact note is worse
@@ -53,7 +46,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
    `native/` — **do not read it.** No `extern/`; ImGui itself comes via vcpkg.
 4. **When unsure a ripple is real,** entries say "UNVERIFIED — check before
    relying." Treat those as leads, not facts.
-5. 39 real translation units + headers; ~38k lines (verified 2026-09-07). Startup wiring lives in
+5. 56 real translation units (57 `.cpp` incl. the vendored ImGui backend) + headers; ~52k lines (verified 2026-09-24, after the wave-1 folder split). Startup wiring lives in
    `plugin.cpp` (read it first for the load order).
 
 ---
@@ -62,7 +55,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; and a cap-saturated skill with a FRACTIONAL natural can display one integer lower after the v7 hold-time floor, REVIEW-BACKLOG MFO-B13), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`ProgAllocator_Hms.cpp:491`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
+| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; and a cap-saturated skill with a FRACTIONAL natural can display one integer lower after the v7 hold-time floor, REVIEW-BACKLOG MFO-B13), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -149,7 +142,7 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   live in the manifest form the class reference points to. Delete the manifest →
   nothing enrolls → `g_prog` empty → writes header + count=0 (Phase 9 test). The
   `'PRGN'` fourCC + name are **historical/frozen** (deployed Tuxborn v6 save), not
-  an add-on-specific schema. Layout + I/O live in `ProgAllocator.cpp` (`CoSaveSave`,
+  an add-on-specific schema. Layout + I/O live in `progression/Allocator.cpp` (`CoSaveSave`,
   `CoSaveLoad` — grep the symbols, line numbers drift). Written **even when the
   addon ESL is absent** (state echoed back verbatim, not destroyed).
   v-history v1→v6 in `Serialization.h:21-83` (v4 = plugin-qualified class identity,
@@ -167,11 +160,11 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   live base. All floats finite-guarded; streak clamped 0..2.
 - **`'FWPN'` / `kForcedWeaponVersion=1`** (`Serialization.h:105-106`) — T#76 force-hold:
   the weapons MFO force-equipped for an active equip gambit. Owner
-  `Actuation.cpp` (`CoSaveForcedWeapons` `:2409`/`CoLoadForcedWeapons` `:2444`); **CoLoad
+  `cast/Equip.cpp` (`CoSaveForcedWeapons` `:899`/`CoLoadForcedWeapons` `:934`); **CoLoad
   RELEASES the locks, never repopulates** (a session starts with no force-hold,
   the gambit re-forces if still true). Fourth independent record. **LAYOUT UNCHANGED
   by the 2026-09-13 dual-wield left hold:** the ledger value became
-  `ForcedHold{right,left}` (`Actuation_internal.h:329`) but the record is still a
+  `ForcedHold{right,left}` (`cast/Actuation_internal.h:331`) but the record is still a
   flat list of (follower, weapon) pairs — a dual hold writes TWO pairs for one
   follower, and the loader has always released pairs by OBJECT, never by slot
   (since `1ac3c6b`, F4, the loader names the slot from the LIVE hands: left slot
@@ -230,7 +223,7 @@ re-reads the alias from the quest even when the module believes it holds nothing
 
 ---
 
-## 2. Actuation core — `Packages.*`, `Actuation.*`, `Scheduler.*`, `Gait.*`, `MainThread.*`  ⚠️ ENGINE-DANGEROUS
+## 2. Actuation core — `Packages.*`, `cast/` (was `Actuation.*`), `Scheduler.*`, `Gait.*`, `MainThread.*`  ⚠️ ENGINE-DANGEROUS
 
 The most engine-dangerous cluster: force-fills quest aliases (serialized into the
 `.ess`), mutates shared `TESPackage` records, and pumps a state machine off engine
@@ -267,7 +260,7 @@ releases **by eviction** with a non-actor XMarker.
   TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
   EXECUTE the foe cast — and a package is DECLINED outright on package-locked custom
   followers (Lucien, prio-80 quest). So self routes through
-  **`Actuation::CastSelfDirect`** (`Actuation_Direct.cpp:951`, public) — effect + magicka only,
+  **`Actuation::CastSelfDirect`** (`cast/Direct.cpp:628`, public) — effect + magicka only,
   **NO equip, NO channel** (registry `g_selfCast`, worker-serial; `SelfCastReconcile`
   ticks it from `Diagnostics` before `Loadout::Tick`; `ClearSelfCasts` on revert).
   **NEVER equips the spell**: `CastSpellImmediate`(kInstant) applies the effect
@@ -303,7 +296,7 @@ releases **by eviction** with a non-actor XMarker.
 - **CONCENTRATION = DIRECT FORCE everywhere, no package (`CastTargetDirect`) — see
   `Docs/CAST-DELIVERY.md` (canonical).** BOTH the Logistics OOC dispatch AND combat's
   `ConcentrationCast` deliver EVERY non-self concentration cast (player/ally/foe)
-  through `Actuation::CastTargetDirect` (`Actuation_Direct.cpp:1317`) — `CastSpellImmediate` straight onto the target
+  through `Actuation::CastTargetDirect` (`cast/Direct.cpp:999`) — `CastSpellImmediate` straight onto the target
   + magicka deduct, the SAME known-working force `CastSelfDirect` uses, touching NO
   package. Why: the package route `§4.6`-DECLINED every tick for a **package-locked
   custom follower** (Lucien 2F00591F, prio-80 quest owns the cast alias) — OOC his
@@ -320,16 +313,16 @@ releases **by eviction** with a non-actor XMarker.
   (the caster's EFFECTIVE cost: skill curve + `kModSpellCost` perk entry point; per
   SECOND for concentration; the SAME function the engine's own `MagicCaster::
   GetCurrentSpellCost` uses) × SECONDS, inside the existing main-thread posts:
-  `ApplySelfEffect` (`Actuation_Direct.cpp:441`, deduct `:501`), `ApplyTargetEffect`
-  (`:547`, deduct `:625`), and the release-time `PostSettle` (`:415`, deduct `:426`). A
+  `ApplySelfEffect` (`cast/Direct.cpp:356`, deduct `:416`), `ApplyTargetEffect`
+  (`:462`, deduct `:540`), and the release-time `PostSettle` (`:330`, deduct `:341`). A
   TIMED stream (`SelfCastState`/`TargetCastState::timed`: momentary concentration —
-  self `ConcMomentary` `:355`, target = concentration && kind != Buff) keeps a WORKER-side
-  `paidThrough` clock in the stream map: `BeatChargeSec` (`:382`) bills 1 s on the first
+  self `ConcMomentary` `:270`, target = concentration && kind != Buff) keeps a WORKER-side
+  `paidThrough` clock in the stream map: `BeatChargeSec` (`:297`) bills 1 s on the first
   beat, then the time since `paidThrough` capped at the previous beat + sustain `window`;
-  `SettleSec` (`:403`) bills the remainder on EVERY release (self switch `:1108`, self
-  reconcile `:1266`, target switch `:1504`, target reconcile `:1619`). Only the seconds
+  `SettleSec` (`:318`) bills the remainder on EVERY release (self switch `:785`, self
+  reconcile `:943`, target switch `:1186`, target reconcile `:1301`). Only the seconds
   cross threads, by value. Sticky wards (guarded — a skipped beat must not advance the
-  clock) and FF keep the flat per-application charge. AUTO's `ApplyEffectFromTo` (`:775`,
+  clock) and FF keep the flat per-application charge. AUTO's `ApplyEffectFromTo` (`cast/Auto.cpp:115`,
   no stream, no release) is NOT timed. Clamp = the live pool (#6); running dry ends the
   stream via the unchanged MAGICKA-OUT release. **What breaks:** moving a deduct off the
   main-thread post, or advancing `paidThrough` on a beat the post can skip, mis-bills;
@@ -348,7 +341,7 @@ releases **by eviction** with a non-actor XMarker.
   continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
   `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`.
   **CONCENTRATION + SELF-delivery off-self → DELIVERY-FLIPPED PROXY (`ConcProxy`/`DeliverySpell`,
-  `Actuation_Direct.cpp:174`/`:247`):** baseline `CastSpellImmediate(sp,target,follower)` lands an FF Self effect on
+  `cast/Direct.cpp:181`/`:255`):** baseline `CastSpellImmediate(sp,target,follower)` lands an FF Self effect on
   `target` (Candlelight/flesh work — do NOT touch), but a `kSelf` CONCENTRATION channel binds to
   the caster's OWNER, so a player/ally conc heal collapses onto the follower. Gated on
   `kSelf && kConcentration && target!=follower`, MFO casts a transient COPY with casting style
@@ -402,7 +395,7 @@ releases **by eviction** with a non-actor XMarker.
   the alias-2 `ReleaseAll` sweep are all still present but NO LONGER on the live path
   (nothing calls `CastSelf` with the gate on). Left in place (harmless; the ESP record
   never fills) rather than churn the frozen `0x835` FormID; can be removed later.
-- `CastAt`/`Available`/`StreamLive` (FOE cast) — callers `Actuation.cpp` (ForceCast,
+- `CastAt`/`Available`/`StreamLive` (FOE cast) — callers `cast/Roads.cpp` (ForceCast,
   the FF combat force-half ONLY) + `Logistics.cpp` (OOC FF-hostile-at-foe, now with a
   direct-force fallback when the package `§4.6`-declines), `CasterConsent.cpp:163`
   (reads the atomic mirror — `StreamLive` is now always false for concentration since
@@ -410,7 +403,7 @@ releases **by eviction** with a non-actor XMarker.
   `MFO_CastPackage` on alias 0 → single holder forced by shared `TESPackage::refCount`
   (`:790`); multi-holder needs per-verb records at 0x821+. The `CastHold` overload of
   `CastAt` is DORMANT (concentration no longer dispatches a package). **Concentration
-  stream time-cap** is drawn per-stream by ONE helper `DrawConcCap(kind)` (`Actuation_internal.h`,
+  stream time-cap** is drawn per-stream by ONE helper `DrawConcCap(kind)` (`cast/Actuation_internal.h`,
   shared `inline`, `std::mt19937` + `uniform_real_distribution`): heal/utility uniform `[8,15]`s,
   offense `[2,6]`s, stored in `TargetCastState::cap`/`SelfCastState::cap` at stream start,
   never serialized; consumed by `TargetCastReconcile` and `SelfCastReconcile` (+ magicka-out
@@ -430,7 +423,7 @@ releases **by eviction** with a non-actor XMarker.
   can't be lowered to release. `LootTravelRetarget` refills only the TARGET alias,
   leaving actor alias 0 filled (no hand-back between corpses). **PASS B: the loot
   trio now tries the APMF ch.9 0x49 route FIRST** (see the dedicated Packages.cpp
-  entry below, near APMFBridge.cpp) — degrades to this unchanged alias route when
+  entry below, near the apmf/ entry) — degrades to this unchanged alias route when
   APMF is absent/off.
   The full per-follower teardown (Loadout/Targeting/CombatStyle/ForcedWeapon/
   CasterConsent/Packages/OnFollowerRemoved/RetreatEvictIf) is now ONE helper
@@ -453,53 +446,73 @@ releases **by eviction** with a non-actor XMarker.
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
-### Actuation.cpp / Actuation_Direct.cpp / Actuation_Hands.cpp / Actuation_internal.h / Actuation.h — "a package IS the action"
-Only module that mutates actor state; main-thread only. **Split mechanically
-TWICE, no logic change either time — 2026-08-31 (`Actuation_Direct.cpp`) and
-2026-09-08 (`Actuation_Hands.cpp`, when `Actuation.cpp` reached 3282 lines):**
-`Actuation.cpp` (2237) = the combat-rule dispatch — `Fire` (`:1764`) + verbs,
-`CastOn` (`:396`)/`ConcentrationCast` (`:266`)/`ForceCast` (`:88`),
-`EquipWeapon` (`:1765`, **PERK-DRIVEN since 2026-09-13 — see "COMBAT PICK +
-DUAL WIELD BY PERKS" below**) with its anon helpers `WeaponRolesFor` (`:1660`),
-`IsOneHandMelee` (`:1668`), `PickOffHandWeapon` (`:1678`), `PickShield` (`:1695`),
-`EquipShieldOnMain` (`:1715`), `EquipLeftHeld` (`:1731`) + the off-hand top-up
-cadence `g_offHandRetryAt` / `kOffHandRetry` (`:1762-1763`), `NearestAlly`
-(`:53`)/`ResolveCastTarget` (`:1973`), the APMF-refusal log, `ClearCastLock(s)`
-(`:2474`/`:2490`), the T#76 force-hold map (`ForcedHold{right,left}`,
-`g_forcedWeapon` `:43`) + `LogLeftHandReadback` (`:2306`) / `ReleaseForcedWeapon`
-(`:2320`) / `YieldForcedLeftHand` (`:2365`) / `ReconcileForcedWeapon` (`:2396`) /
-`ClearForcedWeapons` (`:2460`) + FWPN co-save (`CoSaveForcedWeapons` `:2503`,
-`CoLoadForcedWeapons` `:2538`); `Actuation_Hands.cpp` (918) = THE PER-HAND CAST
-LOCK's implementation — `HoldCastLock`/`ClearCastLockHand` (`:61`/`:77`), the
-liveness ladder (`ClaimLiveOnHand` `:89`, `CastInFlightOnHand` `:251` (PUBLIC since 2.0.5 — declared in `Actuation.h`),
-`CastLockLive` `:299`), rank preemption (`CanPreemptHand` `:394`,
-`IncumbentTargetLost` `:433`, `IsOwnRetarget` `:484`, `PreemptHand` `:495`),
-`WeaponHandExposure` (`:163`), `CastProxyOnHand` (`:109`), `HandFree` (`:549`)
-and THE JUGGLE `ResolveCastHand` (`:575`); `Actuation_Direct.cpp` (1679) = the
-direct-delivery streams (`CastSelfDirect`/`CastTargetDirect` +
-reconciles/`ClearSelfCasts`, `CastAuto`) + their apply substrate
-(`ConcProxy`/`DeliverySpell`, dispel/sustain,
-`Apply{Self,Target}Effect`/`ApplyEffectFromTo`, beneficial-recast pacing) — the
-two direct-cast registries (`g_selfCast`/`g_targetCast`) are file-local there;
-`Actuation_internal.h` = everything that crosses a TU boundary: the shared
-concentration numbers (`kConc*` sustain windows, `kConcApplyPeriod` cadence
-contract, `DrawConcCap` random stream cap) AND the cast lock's shared state
-(`g_castLock` `:255` + the three rate-limited log maps, `g_firingRule` `:192`
-and `g_firingAllyThreshold` `:202`, `CastLock` `:204`, `HandPlan` `:304`, the
-hand indices `:168`) plus the lock's six cross-TU entry points, all as
-**`inline`** — any definition added to that header MUST be `inline` or it's an
-LNK2005. Since 2026-09-13 it also carries the force-hold ledger's VALUE type
-`ForcedHold{right,left}` (`:329`, `extern g_forcedWeapon`/`g_forcedMx` `:334-335`,
-defined in `Actuation.cpp:43/:49`) and two non-inline cross-TU declarations:
-`CastHandHeld(actor, hand)` (`:344`, defined `Actuation_Hands.cpp:363` =
-`ClaimLiveOnHand || CastLockLive` — THE one question the equip side asks before
-touching the left hand) and `bool YieldForcedLeftHand(actor, why)` (`:357`, defined
-`Actuation.cpp:2365`; handed to `Loadout::Prepare` as its `LeftHandYield` callback
-from `CastOn` `:1047`, and called from `ReconcileForcedWeapon` `:2421`). `Fire(follower,
-choice)` (`Actuation.cpp:1832`) dispatches one action/tick: Wait / Attack (→`Targeting::Command`) /
+### native/cast/ — Fire / Roads / CastOn / Equip / Direct / Summon / Auto / Hands + Actuation.h / Actuation_internal.h — "a package IS the action"
+Only module that mutates actor state; main-thread only. **Layout = the wave-1 subsystem-folder
+split (2026-09-24, `refactor/subsystem-folders-wave1`, drained REVIEW-BACKLOG MFO-B37), a pure
+move proven function by function by `tools/splitcheck`; before it the family was
+`Actuation.cpp` + `Actuation_Direct.cpp` (split 2026-08-31) + `Actuation_Hands.cpp` (split
+2026-09-08).** Other subsystems include ONLY the public header `cast/Actuation.h`. One file
+per concern:
+- `cast/Fire.cpp` (383) = the combat-rule DISPATCH: `Fire` (`:104`) + its verbs, and the #68
+  resolution ladder `ResolveCastTarget` (`:64`) with its anon helper `NearestAlly` (`:25`).
+- `cast/Roads.cpp` (288) = the three delivery ROADS `CastOn` forks to: `ForceCast` (`:31`, the
+  forced package cast), `ConcentrationCast` (`:129`, the bounded concentration stream entry) and
+  `RestorationCastDirect` (`:269`).
+- `cast/CastOn.cpp` (1387) = `CastOn` (`:110`, the AI-first hybrid of one spell at one target)
+  + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:116`)
+  + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1363`/`:1379`).
+- `cast/Equip.cpp` (1001) = THE WEAPON HOLD: `EquipWeapon` (`:336`, **PERK-DRIVEN since
+  2026-09-13 — see "COMBAT PICK + DUAL WIELD BY PERKS" below**) with its anon helpers
+  `WeaponRolesFor` (`:96`), `IsOneHandMelee` (`:104`), `PickOffHandWeapon` (`:114`), `PickShield`
+  (`:131`), `EquipShieldOnMain` (`:151`), `EquipLeftHeld` (`:186`), `RecordLeftHold` (`:245`),
+  `DeclareFromLedger` (`:288`) + the off-hand top-up cadence `g_offHandRetryAt`/`kOffHandRetry`
+  (`:331-332`); the T#76 force-hold ledger `g_forcedWeapon`/`g_forcedMx` (`:41`/`:47`) +
+  `LogLeftHandReadback` (`:607`), `ForcedHoldFor` (`:621`), `ReleaseForcedWeapon` (`:629`),
+  `YieldForcedLeftHand` (`:767`), `ReconcileForcedWeapon` (`:798`), `ClearForcedWeapons`
+  (`:884`); and the FWPN co-save, WHOLE in this file (`CoSaveForcedWeapons` `:899`,
+  `CoLoadForcedWeapons` `:934`).
+- `cast/Direct.cpp` (1317) = the DIRECT-DELIVERY road: the apply substrate (`ConcProxy` `:181`,
+  `DeliverySpell` `:255`, dispel/sustain, `ApplySelfEffect` `:356`, `ApplyTargetEffect` `:462`,
+  charge-for-time) and the per-follower streams `CastSelfDirect` (`:628`) / `SelfCastReconcile`
+  (`:848`) / `ClearSelfCasts` (`:954`) / `CastTargetDirect` (`:999`) / `TargetCastReconcile`
+  (`:1237`) / `TargetStreamLive` (`:1312`), plus `IsRestorationSpell` (`:617`) and
+  `SpellHealsHealth` (`:602`). The self registry `g_selfCast` (`:60`) is file-local; the target
+  registry `g_targetCast` (`:127`) went extern in wave 1 (`CastAuto` reads it).
+- `cast/Summon.cpp` (369) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
+  `CastSummonOnce` (`:305`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
+  `g_summonMx`/`g_summon`/`g_summonPosted` (`:68-69`, `:79`) is extern (ClearSelfCasts clears it).
+- `cast/Auto.cpp` (575) = the AUTO fan-out `CastAuto` (`:269`) with its pacing `g_autoCast` (`:22`)
+  and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:154`), and
+  `IsSummonSpell` (`:227`, public; it lives here because `CastAuto` inlines it).
+- `cast/Hands.cpp` (919) = THE PER-HAND CAST LOCK's implementation (moved whole) —
+  `HoldCastLock`/`ClearCastLockHand` (`:62`/`:78`), the liveness ladder (`ClaimLiveOnHand` `:90`,
+  `CastInFlightOnHand` `:252` (PUBLIC since 2.0.5, declared in the public header),
+  `CastLockLive` `:312`), rank preemption (`CanPreemptHand` `:431`, `IncumbentTargetLost` `:470`,
+  `IsOwnRetarget` `:521`, `PreemptHand` `:532`), `WeaponHandExposure` (`:164`), `CastProxyOnHand`
+  (`:110`), `HandFree` (`:586`), `CastHandHeld` (`:364`) and THE JUGGLE `ResolveCastHand` (`:612`).
+- `cast/Actuation_internal.h` (520) = everything that crosses a TU boundary inside the family: the
+  shared concentration numbers (`kConc*` sustain windows, `kConcApplyPeriod` `:67` cadence
+  contract, `DrawConcCap` `:83` random stream cap) AND the cast lock's shared state (`g_castLock`
+  `:260` + the three rate-limited log maps `:270`/`:281`/`:287`, `g_firingRule` `:197` and
+  `g_firingAllyThreshold` `:207`, `CastLock` `:209`, `HandPlan` `:309`; the hand indices
+  `kHandLeft`/`kHandRight`/`kHandCount` live in `cast/Actuation.h:54`) plus the lock's six
+  cross-TU entry points (`cast/Actuation_internal.h:369-376`), all as **`inline`** — any definition added to that header
+  MUST be `inline` or it's an LNK2005. It also carries the force-hold ledger's VALUE type
+  `ForcedHold{right,left}` (`:331`, `extern g_forcedWeapon`/`g_forcedMx` `:336-337`, defined in
+  `cast/Equip.cpp:41`/`:47`) and two non-inline declarations: `CastHandHeld(actor, hand)` (`:346`,
+  defined `cast/Hands.cpp:364` = `ClaimLiveOnHand || CastLockLive` — THE one question the equip
+  side asks before touching the left hand) and `bool YieldForcedLeftHand(actor, why)` (`:359`,
+  defined `cast/Equip.cpp:767`; handed to `Loadout::Prepare` as its `LeftHandYield` callback from
+  `CastOn` `cast/CastOn.cpp:787`, and called from `ReconcileForcedWeapon` `cast/Equip.cpp:845`).
+  **Its WAVE-1 section (`:380` to the end)** lists what the 2026-09-24 cut made cross-TU:
+  `ForceCast`/`ConcentrationCast`/`RestorationCastDirect`/`CastOn` (default arg moved to this
+  declaration)/`EquipWeapon`/`SpellHealsHealth` declarations, `SelfClock`, `TargetCastState`,
+  `BeneficialRecast`, `SummonVerdict`/`SummonState`, the `extern` stream/summon/AUTO maps, and
+  `SustainConcentrationEffect`/`RecastKey` as `inline` (the compiler inlines them across the cut).
+`Fire(follower, choice)` (`cast/Fire.cpp:104`) dispatches one action/tick: Wait / Attack (→`Targeting::Command`) /
 Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::RetreatFill`
 / PowerAttack / drink / unknown→fail-closed. First-match-wins.
-- **PowerAttack (`kActPowerAttack`) is RANGE-GATED** (`Actuation.cpp` ~:1008): it
+- **PowerAttack (`kActPowerAttack`) is RANGE-GATED** (`cast/Fire.cpp:289`): it
   latches the chosen foe (`Targeting::Command`, so the engine's combat AI closes
   distance — MFO invents no approach) and fires `attackPowerStartInPlace` ONLY when
   `GetDistance(follower,foe) <= Config::g_meleeReach` (200u, `fMeleeReach`).
@@ -507,7 +520,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   then latch (reject = transparent fall-through, mutates nothing). Foe = PickFoe's
   target (the specific blocking foe for `kCondFoeBlocking`). Without the gate it
   swung at air whenever any foe blocked.
-- `Outcome.transparent` (`Actuation.h:38`) is the fall-through contract the
+- `Outcome.transparent` (`cast/Actuation.h:38`) is the fall-through contract the
   scheduler reads (`Scheduler.cpp:521`); default false = "wall" = safe. Flipping it
   changes suppression + hand-claim + spellsword fallback.
 - **SEAT SELF-CHECK (mit-3.7 F1, `build/commonlib-f1`, 2026-09-24).** `native/Runtime.h` (open backlog: MFO-B81 MFO-B82, MFO-B83)
@@ -533,14 +546,14 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   the lock re-enters, so a lookup cannot deadlock from any thread. **What breaks:** do not hold an MFO mutex that the
   game could wait on across a lookup (none can today), and do not take the form-map lock yourself for WRITE. Audit
   2026-09-24: 0 risks. Lookups run on MAIN, JOB, inline event sinks and the co-save callbacks, never on the combat or
-  render threads. The one lookup under an MFO mutex is `APMFBridge.cpp` `ReconcileHandFloorLocked` (JOB, under
+  render threads. The one lookup under an MFO mutex is `apmf/Bridge.cpp` `ReconcileHandFloorLocked` (JOB, under
   `APMFBridge::g_mx`). `Logistics_Loot.cpp` `IsCoinLoot`/`RefInPlayerStorage`/`IsLOTDDropOff` do their one-time
   static lookup inside `ForEachReferenceInRange`, under the cell spin lock. Both are safe because a writer never waits
   on those locks.
 - **RUNTIME GATES — THE 1.5.97 PASS (`feat/mfo-1.5.97-pass`, 2026-09-15; Fable round 2 on
-  `87cabc1` applied).** The five cast-control gates — `CastOn` (`Actuation.cpp:432`),
-  `CastSelfDirect` (`Actuation_Direct.cpp:849`), `CastTargetDirect` (`:1166`), `CastAuto`
-  (`:1470`) and `ComposedCast::Enabled` (`ComposedCast.cpp:61`) — evaluate ONE shared
+  `87cabc1` applied).** The five cast-control gates — `CastOn` (`cast/CastOn.cpp:110`),
+  `CastSelfDirect` (`cast/Direct.cpp:628`), `CastTargetDirect` (`cast/Direct.cpp:999`), `CastAuto`
+  (`cast/Auto.cpp:269`) and `ComposedCast::Enabled` (`ComposedCast.cpp:61`) — evaluate ONE shared
   predicate, **`Runtime::CastPathsVerified()`** (`native/Runtime.h`, header-only) **=
   `REL::Module::IsAE() || Runtime::IsVerified1_5_97()`** — the pre-existing AE bucket, or
   EXACTLY 1.5.97 (`major.minor.patch == 1.5.97`). VR and every other 1.5.x are refused.
@@ -564,7 +577,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   measured):** on AE the `+0xB80` read is `objects[364]` = DOBJ `HMAE` = Update.esm FLST
   `0x01003275`, record flags `0x0`, so `LeftHandSlot()` ALWAYS returned `nullptr` on 1.6.1170
   in the field — every spell equip ran `EquipSpell(actor, spell, nullptr)` (engine-chosen hand
-  for an EitherHand spell) and `EquipLeftHeld` (`Actuation.cpp:1748`, `if (!slot) return
+  for an EitherHand spell) and `EquipLeftHeld` (`cast/Equip.cpp:186`, `if (!slot) return
   false`) was DEAD, with its five `UnequipObject(..., LeftHandSlot())` companions. This is the
   first build where the LeftHand slot reaches the engine on AE: gambit spells land LEFT,
   `[equip] ... GAMBIT equip off-hand` lines appear, a displaced left weapon returns LEFT at
@@ -602,25 +615,25 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   trampoline (per-runtime since v2.0.6, its own exact-version pair — the two predicates are
   the same test written twice; folding Board onto `Runtime.h` is a separate change), VR (refused
   everywhere), and anything 1.7.104 (no address library; the confirmed 1.7 values are recorded
-  in the table for marth's `REL::Offset` decision). `Actuation.cpp` is 2678 lines — over the
-  2500 cap, reported not split (rule 1; REVIEW-BACKLOG **MFO-B37** holds the split brief).
+  in the table for marth's `REL::Offset` decision). `Actuation.cpp` was 2678 lines — over the
+  2500 cap, reported not split (rule 1; REVIEW-BACKLOG **MFO-B37** held the split brief, drained by the wave-1 split into `cast/`, 2026-09-24).
 - **CAST-ROAD SELECTION BY SPELL NATURE (`fix/mfo-combat-restoration-direct`, 2026-09-21 — Deck
   2026-09-21, Jesper 750012C6).** On the COMBAT table a RESTORATION cast takes the DIRECT road and an
   OFFENSIVE cast keeps the AI-fired road. The classifier is **`Actuation::IsRestorationSpell`**
-  (`Actuation_Direct.cpp:838`, declared `Actuation.h:168`): `CasterConsent::ClassifySpell != Offense`
+  (`cast/Direct.cpp:617`, declared `cast/Actuation.h:168`): `CasterConsent::ClassifySpell != Offense`
   AND (`SpellHealsHealth` — a beneficial Health effect, the same read `ClassifySpell`'s Heal kind and
   `CastAuto` make — OR any effect whose `EffectSetting::data.associatedSkill == kRestoration`, a plain
   member read, never the `GetAssociatedSkill` vfunc). A hostile Restoration-school spell (Sun Fire,
   Turn Undead) is OFFENSE and stays AI-fired. Five sites consult it: `CastSelfDirect`
-  (`Actuation_Direct.cpp:933`) and `CastTargetDirect` (`:1302`) skip `ComposedCast::Try` for a
+  (`cast/Direct.cpp:628`) and `CastTargetDirect` (`cast/Direct.cpp:999`) skip `ComposedCast::Try` for a
   restoration spell and fall to their own kInstant direct force, and their two TASK 1
-  concentration-offense claims (`ClaimOffenseCast`, `:974` / `:1337`) are gated on it too so a
+  concentration-offense claims (`ClaimOffenseCast`, `cast/Direct.cpp:757` / `:1145`) are gated on it too so a
   Restoration-school ward streams direct instead of claiming the AI-fired road (**open `MFO-B58`:**
   those two sites carry NO `combatController` test, so a non-restoration concentration Buff on an
-  own-OOC party-combat follower reaches `ClaimOffenseCast` with no caster — mirror `:1302`'s
+  own-OOC party-combat follower reaches `ClaimOffenseCast` with no caster — mirror `cast/Direct.cpp:1106`'s
   `combatController &&` there when drained); `CastOn` forks a fire-and-forget
-  restoration cast at an ally/player (`Actuation.cpp:874`, after the concentration fork, non-self
-  only) to **`RestorationCastDirect`** (`:412`) = `CastTargetDirect` with the SAME outcome map, LEFT
+  restoration cast at an ally/player (`cast/CastOn.cpp:546`, after the concentration fork, non-self
+  only) to **`RestorationCastDirect`** (`cast/Roads.cpp:269`) = `CastTargetDirect` with the SAME outcome map, LEFT
   hand lock and `CasterConsent::Want` as `ConcentrationCast`'s non-self branch (labels `restoration
   (direct force)` / `restoration direct refresh (paced)`). WHY: the ch.8b AI-fired heal claim held
   the LEFT hand naming Fast Healing while the engine's kMultipleCast re-deliberation kept selecting
@@ -636,8 +649,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   still promises an animated hand cast (backlog `MFO-B48`). **What breaks if you change this:** re-routing any heal-kind spell
   back through `Try` re-creates the frozen follower unless the floor gate below holds; a self target
   reaching `CastOn` with `bCastSelf` OFF keeps its old road on purpose (`a_target != a_follower`).
-- `CastOn` (`Actuation.cpp:600`) escalation, IN EXECUTION ORDER: runtime gate `Runtime::CastPathsVerified()` (`:432`, AE bucket or exactly 1.5.97 — see RUNTIME GATES above) →
-  `:624` → `:649` → competence gate `HasSpell` (`:704`) → magicka reserve (`:742-752`) → range/competence/reserve →
+- `CastOn` (`cast/CastOn.cpp:110`) escalation, IN EXECUTION ORDER: runtime gate `Runtime::CastPathsVerified()` (`cast/CastOn.cpp:140`, AE bucket or exactly 1.5.97 — see RUNTIME GATES above) →
+  no target (`:146`) → spell lookup (`:148`) → #68 out-of-range skip (`:167`) → competence gate `HasSpell` (`:230`) → magicka reserve (`:268-280`) → range/competence/reserve →
   **the Task 2 firing-spell gambit lock, PER-HAND now (`ResolveCastHand`, feat/per-hand-
   cast-slots 2026-09-06 — renamed off `CheckCastLock`; TWO lock slots per follower,
   index 0=left/1=right, so a spell firing in one hand no longer holds off a DIFFERENT
@@ -647,31 +660,31 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   it holds off entirely — never a half-landed dual-cast). `handPlan`/`lockHands`
   thread the resolved hand(s) to every `HoldCastLock`/`ClaimOffenseCast` call site
   below in the SAME function so the lock and the actual APMF claim never disagree)** →
-  **the SATISFIED-IN-FLIGHT gate (F9, 2026-09-08, `Actuation.cpp:643`)** →
-  concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`:461`,
-  follower's own AI casts first) → on miss `ForceCast` (`Actuation.cpp:74`) via `Packages::CastAt`.
+  **the SATISFIED-IN-FLIGHT gate (F9, 2026-09-08, `cast/CastOn.cpp:373`)** →
+  concentration fork (→ `ConcentrationCast`) → equip + **AI-first grace** (`cast/CastOn.cpp:1079`,
+  follower's own AI casts first) → on miss `ForceCast` (`cast/Roads.cpp:31`) via `Packages::CastAt`.
 - **THE PER-HAND CAST LOCK, AND THE TWO 2026-09-08 CHANGES TO IT** (`Docs/DIAG-2026-09-08-field.md`
-  RC1/RC2). `CastLockLive` (`Actuation_Hands.cpp:311`) now answers "this hand is still busy" THREE ways,
-  in order: (1) `ClaimLiveOnHand` (`:89`, factored out — a live offense claim on that slot, or the
+  RC1/RC2). `CastLockLive` (`cast/Hands.cpp:312`) now answers "this hand is still busy" THREE ways,
+  in order: (1) `ClaimLiveOnHand` (`cast/Hands.cpp:90`, factored out — a live offense claim on that slot, or the
   heal claim for LEFT); (2) the round-robin `FacetExpiry()` staleness window, unchanged; (3) **NEW
-  (F8)** — `CastInFlightOnHand` (`:251`): the follower's own `RE::MagicCaster` for that hand is
+  (F8)** — `CastInFlightOnHand` (`cast/Hands.cpp:252`): the follower's own `RE::MagicCaster` for that hand is
   mid-cast (`state` not `kNone`/`kUnk08`/`kUnk09`) of the locked spell **or its APMF delivery-flip
   proxy** — read from `GetActorRuntimeData().magicCasters[]` DIRECTLY, never through the
   `Actor::GetMagicCaster` virtual (that body is the game's, CommonLib implements none of it, and
   SkyrimSE.exe is Steam-DRM encrypted on disk so it cannot be disassembled here — if it lazily allocates
   the caster, this always-on job-worker predicate would be allocating off-main; the array read removes the
-  question) — bounded by `kInFlightHoldCap` (`:274`, = `APMFBridge::kHealCastTtlMs`) so a wedged caster
+  question) — bounded by `kInFlightHoldCap` (`cast/Hands.cpp:287`, = `APMFBridge::kHealCastTtlMs`) so a wedged caster
   cannot own a hand forever. That third answer is what stops another rule taking a hand whose charged
   cast has not fired yet when the CLAIM lapsed mid-charge. **The cap is anchored on `CastLock::claimGoneAt`
-  (`Actuation_internal.h:221`), NOT on `lastSeen`** — F9 deliberately stops re-stamping the lock, so `lastSeen`
+  (`cast/Actuation_internal.h:226`), NOT on `lastSeen`** — F9 deliberately stops re-stamping the lock, so `lastSeen`
   freezes at the first claiming lap and anchoring there made the protection dead for any claim older than
   the cap. `claimGoneAt` is stamped the first time this third answer is reached, cleared when the claim is
   seen live again, and cleared by `HoldCastLock` (fresh hold = fresh cast).
   The proxy both this and the in-flight watch re-arm use comes from ONE resolver, `CastProxyOnHand`
-  (`:487`): offense proxy, falling back to the HEAL proxy on the left hand — heals are LEFT always, and a
+  (`cast/Hands.cpp:110`): offense proxy, falling back to the HEAL proxy on the left hand — heals are LEFT always, and a
   left lookup that consults only the offense accessor answers 0 for every proxied heal, which silently
   rebuilds the RC4 "[cfc] NO observed cast" false alarm. **It takes an `RE::Actor*` now** — so do
-  `HandFree` (`:925`) and `ResolveCastHand` (`:974`); every call site already had one.
+  `HandFree` (`cast/Hands.cpp:586`) and `ResolveCastHand` (`cast/Hands.cpp:612`); every call site already had one.
   `ResolveCastHand` additionally **PINS a request to the hand(s) its own live claim already occupies**
   (the incumbent pin) instead of honouring a freshly re-derived `Loadout::PlanCastHand` answer: a
   hand-mode flip (Dual↔single, left↔right) is a CHANGE to `EnsureCastClaimLocked`, i.e.
@@ -679,12 +692,12 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **What breaks if you change this:** widen the in-flight state set and a stuck caster owns a hand
   until the cap; drop the proxy match and every APMF-proxied cast reads as "not ours" and loses its
   protection; drop the incumbent pin and the Dual↔single churn returns.
-- **SATISFIED IN FLIGHT (F9, `Actuation.cpp:643`, `HandPlan::inFlight` at `Actuation_internal.h:304`).** A cast rule whose
+- **SATISFIED IN FLIGHT (F9, `cast/CastOn.cpp:373`, `HandPlan::inFlight` at `cast/Actuation_internal.h:310`).** A cast rule whose
   own cast is already running (its exact (spell,target) locks the hand AND a live claim stands there)
   no longer re-runs the claim/equip/consent path and returns `Fired` — which ENDED THE SCAN and let one
   self-heal monopolise 22 consecutive laps over 44 s with zero offense rules reached. It now calls
-  `APMFBridge::RefreshOwnedCastOnHand` (`APMFBridge.cpp:1245`), re-arms the `[cfc]` watch, logs one
-  throttled `[eval] ... SATISFIED IN FLIGHT` line (`LogCastInFlight`, `:345`, own map
+  `APMFBridge::RefreshOwnedCastOnHand` (`apmf/CastClaims.cpp:215`), re-arms the `[cfc]` watch, logs one
+  throttled `[eval] ... SATISFIED IN FLIGHT` line (`LogCastInFlight`, `cast/Hands.cpp:43`, own map
   `g_lastInFlightLog`, cleared with `g_lastLockLog` in `ClearCastLock`/`ClearCastLocks`), and returns a
   TRANSPARENT NoOp so the scan continues to the rules below.
   **What breaks if you change this:** call `lockHands` here and the lock outlives the claim it is
@@ -692,10 +705,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 - **RANK PREEMPTION — THE GAMBIT LIST ORDER IS THE PRIORITY ORDER (marth, 2026-09-08).** A higher-ranked
   rule must be able to TAKE a hand from a lower-ranked incumbent, not be held off behind it and not wait for
   its condition to go false. **Rank is CARRIED, not inferred:** `Actuation::Fire` records the winning rule's
-  index in `g_firingRule` (`Actuation_internal.h:192`) — the single entry point into every actuation in the family —
-  `HoldCastLock` stamps it into `CastLock::owningRule` (`:252`) when a hand is claimed, and `CanPreemptHand`
-  (`Actuation_Hands.cpp:406`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
-  EQUAL is the incumbent itself (`IsOwnRetarget`, `:484` — a rule re-aiming its own cast, which fails
+  index in `g_firingRule` (`cast/Actuation_internal.h:197`) — the single entry point into every actuation in the family —
+  `HoldCastLock` stamps it into `CastLock::owningRule` (`cast/Actuation_internal.h:257`) when a hand is claimed, and `CanPreemptHand`
+  (`cast/Hands.cpp:431`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
+  EQUAL is the incumbent itself (`IsOwnRetarget`, `cast/Hands.cpp:521` — a rule re-aiming its own cast, which fails
   `HandFree`'s incumbent match on `target`), higher is held off. `ResolveCastHand` keeps those two on
   SEPARATE predicates (`mine` vs `outranks`): a self-retarget displaces nothing and records no preempt flag,
   so it can never release its own claim through the preemption path (which for a heal would tear down
@@ -703,7 +716,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   mid-charge**, reusing `CastInFlightOnHand` rather than inventing a second notion of busy.
   **A self-retarget carries TWO bounds, and never-mid-charge is NOT the load-bearing one:** it protects a
   cast only from the moment charging BEGINS, and the claim-to-first-charge window is 2.3-4.5 s with the
-  caster reading `kNone` throughout. `IncumbentTargetLost` (`Actuation_Hands.cpp:445`) is the bound that matters —
+  caster reading `kNone` throughout. `IncumbentTargetLost` (`cast/Hands.cpp:470`) is the bound that matters —
   it asks the evaluator's own three questions (`Evaluator.cpp`'s `PickAlly`, `:354-375`, mirrored not
   invented): does the target still resolve to a live actor, is it still inside `fSharedRadius`, and — when
   the firing rule's condition is the ally selector that owns that number (`g_firingAllyThreshold`, `:254`,
@@ -773,9 +786,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   and (for the APMF-absent world, where `Loadout::Prepare` IS the claim on the hand) the equip switch. Every
   transparent refusal in between therefore refuses without having touched the incumbent; committing at
   resolve time turned a deterministically-failing higher rule into a dead hand at lap rate.
-  `PreemptHand` (`:873`) then releases via `APMFBridge::ReleaseCastClaimOnHand` (`APMFBridge.cpp:1357`,
+  `PreemptHand` (`:873`) then releases via `APMFBridge::ReleaseCastClaimOnHand` (`apmf/CastClaims.cpp:311`,
   per-hand, **offense slot only**), routes a heal-backed release through `ComposedCast::End` when
-  `APMFBridge::GetHealCastSpell` (`APMFBridge.cpp:1571`) says the lock being displaced IS the heal claim
+  `APMFBridge::GetHealCastSpell` (`apmf/CastClaims.cpp:411`) says the lock being displaced IS the heal claim
   (otherwise an unrelated coexisting heal would be dropped, and its watch/bounds/hold left armed for a claim
   that no longer exists), clears the lock, and — for a MIRRORED DUAL incumbent (both hands, same
   spell+target+owningRule) — clears BOTH locks, because one APMF handle on two hands has no half-release and
@@ -804,7 +817,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   collisions came from: the heal facet is LEFT-ONLY by contract (`ClaimHealCast`'s hard rule), so an offense
   cast idling on the left stands exactly where the next heal must go while the right hand sits empty. It now
   prefers the RIGHT hand — free-and-unclaimed first, then free, then by rank — leaving the left for the
-  facet that can use no other, **unless `WeaponHandExposure` (`Actuation_Hands.cpp:163`) says a weapon owns the
+  facet that can use no other, **unless `WeaponHandExposure` (`cast/Hands.cpp:164`) says a weapon owns the
   right hand or is coming back to it**, in which case the old LEFT-first order stands. That gate is not
   optional: `PlanCastHand` returns `EitherFree` only when `APMFBridge::WeaponHandActive` is false, and that
   reads the LIVE grip and the live equipment CLAIM — both false during the documented transient-unarmed
@@ -836,7 +849,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   as a pure predicate before either is committed, so a released claim is never spent for nothing).
     make it opaque (transparent=false) and RC2 comes straight back. If the refresh comes back FALSE the
   claim really is gone, so the pin that named it is VOID: the gate drops those hands' locks
-  (`ClearCastLockHand`, `Actuation_Hands.cpp:77`) and re-derives the plan (`resolveHands` lambda) before
+  (`ClearCastLockHand`, `cast/Hands.cpp:78`) and re-derives the plan (`resolveHands` lambda) before
   falling through — without that, a LEFT-always heal pinned to the RIGHT by a stale lock would claim,
   equip and lock the wrong hand.
   On an unverified runtime (VR, a non-97 1.5.x) the whole path declines transparently (the
@@ -847,11 +860,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   was the prime suspect for the queued 1.5.x `act.cast_target` AV reports (#14).
 - **COMBAT PICK + DUAL WIELD BY PERKS (2026-09-13, branch `feat/mfo-dualwield-combat-pick`,
   marth: "both gaps are clear to fix right away"; Fable tier-3 on `f771399` F1–F5 fixed in `1ac3c6b`).**
-  `EquipWeapon` (`Actuation.cpp:1765`) now CONSUMES the weapon-style decision the loot/keep/buy
+  `EquipWeapon` (`cast/Equip.cpp:336`) now CONSUMES the weapon-style decision the loot/keep/buy
   judges already share: the pick inside the ordered class is `Logistics::WeaponScore(roles, w)` with
-  `roles = Logistics::ComputeWeaponRoles(actor, g_followers[id])` (`WeaponRolesFor` `:1660`,
-  worker-serial `g_followers` read, #4; no record → default roles). **`Actuation.cpp` therefore
-  includes `Logistics_internal.h` (`:13`)** — its first non-Logistics include; `ComputeWeaponRoles`/
+  `roles = Logistics::ComputeWeaponRoles(actor, g_followers[id])` (`WeaponRolesFor` `cast/Equip.cpp:96`,
+  worker-serial `g_followers` read, #4; no record → default roles). **`cast/Equip.cpp` therefore
+  includes `Logistics_internal.h` (`:11`)** — the wave-1 split carried Actuation.cpp's include block, this line included, into every file cut from it; `ComputeWeaponRoles`/
   `WeaponScore` are NOT in `Logistics.h` (REVIEW-BACKLOG **MFO-B19**: the proper seam is a public
   declaration there). DEFAULT-CASE PROOF: `preferKinds==0` → score == `float(uint16 damage)`, same
   `>=` last-equal-wins loop, same inventory order → the same weapon as before. The melee CLASS is
@@ -902,11 +915,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   off, a `Prepare` that debounces/fails — and a yield ahead of a refusal flickered the left hand
   weapon→spell→weapon per lap). It happens INSIDE `Loadout::Prepare`, immediately before each of
   its two `EquipSpell`s (`Loadout.cpp:304`, `:391`), through the `LeftHandYield` function-pointer
-  parameter (`Loadout.h:128`) that `CastOn` passes (`Actuation.cpp:1047`) as a non-capturing lambda
+  parameter (`Loadout.h:128`) that `CastOn` passes (`cast/CastOn.cpp:787`) as a non-capturing lambda
   over `YieldForcedLeftHand` — keyed to the PHYSICAL hand `Prepare` takes (always LEFT), not to
-  `handPlan.left`. `YieldForcedLeftHand` (`:2365`) returns `bool` (a hold was released) and
+  `handPlan.left`. `YieldForcedLeftHand` (`cast/Equip.cpp:767`) returns `bool` (a hold was released) and
   re-stamps `g_offHandRetryAt` to `now + kOffHandRetry` — a FLOOR (principle 9), not an erase — so
-  a refused cast costs at most one flicker per 5 s. `ReconcileForcedWeapon` (`:2421`) still yields
+  a refused cast costs at most one flicker per 5 s. `ReconcileForcedWeapon` (`cast/Equip.cpp:845`) still yields
   when `CastHandHeld(left)` is live (covers the ComposedCast heal claim, which never passes
   `CastOn`), ORDERED BEFORE its release/claim decision. **ONE LEDGER PER HAND (F2):** `Prepare`
   uses the yield's `true` return to null `willDisplaceLeft`, so MFO's own hold is never booked as
@@ -950,7 +963,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `Scheduler.cpp`'s party-OOC 2-tick teardown (the fight is genuinely over and no specific item has to
   leave the hand). Everything else keeps the default `false`, deliberately: the dead/disabled teardown
   (`Scheduler.cpp:387`, the item must leave so a resurrection is not stuck), `ReconcileForcedWeapon`'s
-  release branch (`Actuation.cpp:~2737` — mid-combat kill-switch / category flip, where re-arming the
+  release branch (`cast/Equip.cpp:867` — mid-combat kill-switch / category flip, where re-arming the
   old category would fight the next gambit), `Followers.cpp:382` (dismissal — OUT OF this change's file
   boundary), `YieldForcedLeftHand` (the hand must be FREE for a spell), the four swap unequips
   (`:1853/:1890/:2169/:2171` — a replacement item takes the hand in the same breath) and
@@ -1102,7 +1115,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   take-back re-sends every lap. Observe-only this cycle (APMF ships `[EquipAuthority]
   bEquipObserveOnly=1`; the claim line prints `mode=observe-only|ENFORCE` from APMF's v8
   `IsEquipAuthorityEnforced`).
-- `ConcentrationCast` (anon, `Actuation.cpp:470`, COMBAT) = self→`CastSelfDirect`; non-self→
+- `ConcentrationCast` (`cast/Roads.cpp:129`, COMBAT; file-local until the wave-1 split) = self→`CastSelfDirect`; non-self→
   **`CastTargetDirect` (DIRECT FORCE, PRIMARY — the package delivery is REMOVED)**.
   Latches `CasterConsent::Want` on each Applied so the slider keeps denying competing
   AI spells and the AI's own unbounded concentration attempt; the direct apply itself
@@ -1113,7 +1126,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   Both its Applied/Refreshed branches now also call `HoldCastLock(id, kHandLeft, ...)`
   (PASS H; hardcoded LEFT — concentration always is) so a live stream is protected by
   the SAME per-hand lock `CastOn` checks up front (feat/per-hand-cast-slots).
-- `CastTargetDirect` (PUBLIC, `Actuation_Direct.cpp:1141`) = `CastSelfDirect` generalized to a NON-self target: the
+- `CastTargetDirect` (PUBLIC, `cast/Direct.cpp:999`) = `CastSelfDirect` generalized to a NON-self target: the
   known-working DIRECT FORCE (`CastSpellImmediate` onto the target + magicka deduct, NO
   package → beats the `§4.6` lock). Registry `g_targetCast`; concentration re-applies
   at `kConcApplyPeriod` (~1 s, the heal cadence contract — per-second authored
@@ -1149,9 +1162,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   deliberately — it IS the object the seats hang off (same read as
   `CombatSense.h`'s `FoeCount`). **IN COMBAT NOTHING CHANGES.** Twins deliberately
   left alone and recorded instead: `CastSelfDirect`'s own `ComposedCast::Try`
-  (`Actuation_Direct.cpp:886`) and this function's OOC offense-concentration
-  `ClaimOffenseCast` (`:1216`) carry the identical exposure.
-- `CastAuto` (PUBLIC, `Actuation_Direct.cpp:1390`) — AUTO target inference for `act.cast_target`,
+  (`cast/Direct.cpp:713`) and this function's OOC offense-concentration
+  `ClaimOffenseCast` (`cast/Direct.cpp:1145`) carry the identical exposure.
+- `CastAuto` (PUBLIC, `cast/Auto.cpp:269`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
@@ -1166,7 +1179,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   cast_target through the foe package and never land).
   A NON-auto MANUAL pick (Target=Nearest-ally/named/
   Player) on the OOC path resolves through the shared **public**
-  `Actuation::ResolveCastTarget` (`Actuation.cpp:1792`, moved out of the anon namespace
+  `Actuation::ResolveCastTarget` (`cast/Fire.cpp:64`, moved out of the anon namespace
   — same ladder combat `Fire` uses) so it fires instead of being dropped (Wave 6
   #1); AUTO still routes to `CastAuto`. Classifies
   HOSTILE via `CasterConsent::ClassifySpell` — **delivery is NOT consulted** (MFO
@@ -1184,7 +1197,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   restore-health spell the classifier does NOT tag Heal is still gated per target
   (field fix: a full-HP player was being healed because a different ally was hurt).
   The player runs the SAME `consider` gate as followers — full-HP members are never
-  in the fan. **Per-target apply guard `ShouldApplyTo` (`Actuation_Direct.cpp:733`):**
+  in the fan. **Per-target apply guard `ShouldApplyTo` (`cast/Auto.cpp:154`):**
   **#5:** a CONCENTRATION spell (Healing Hands, streams) returns true immediately —
   never blocked by the already-active/DoT gate; **#6a:** already-active detection is
   robust — HasMagicEffect(costliest) OR an active-effect-list scan for THIS spell
@@ -1218,7 +1231,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   window (`releaseSec`) is tuned so a party's round-robin gap can't outlast the
   self-buff and re-open the dispel/re-cast beat.
 - **Summon spam guard (v1.1.1)** — `Actuation::CasterHasLiveSummon` (PUBLIC,
-  `Actuation_Direct.cpp:811`). A conjured familiar/atronach (`SummonCreatureEffect`)
+  `cast/Summon.cpp:33`). A conjured familiar/atronach (`SummonCreatureEffect`)
   or reanimated corpse (`ReanimateEffect`) is a COMMANDED ACTOR, not a caster-side
   magic effect, so every OOC already-active guard (each reads a magic effect on the
   cast TARGET) misses it and a `cast [summon]` gambit re-summons every cadence
@@ -1231,7 +1244,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   (`Logistics.cpp`, right after the `HasSpell` check, before target resolution) so
   it covers self/target/player/AUTO routes; returns false for every non-summon
   spell, so candlelight/buff/heal pacing is byte-identical. The SAME guard is wired
-  into the COMBAT path (v1.1.1): `Actuation::Fire` (`Actuation.cpp:1832`, the sole
+  into the COMBAT path (v1.1.1): `Actuation::Fire` (`cast/Fire.cpp:104`, the sole
   caller is the Scheduler combat scan `Scheduler.cpp:612`) checks it once before the
   three cast opcodes (`kActCastSelf`/`kActCastPlayer`/`kActCastTarget`) and returns a
   TRANSPARENT NoOp ("summon still live") so the scan falls through to the next combat
@@ -1240,9 +1253,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   READS the active-effect list, the same off-worker read as the other combat guards.
 - **Summon = one-shot conjure (fix/mfo-summon-oneshot, 2026-09-24; supersedes the 09-23
   AUTO-only no-fanout)** — `Actuation::IsSummonSpell` + `Actuation::CastSummonOnce`
-  (`Actuation_Direct.cpp:~932-1240`; main-thread half `SummonOnMain` `:1046`, limit
-  `SummonLimit` `:1015`) are THE single summon path. The combat `Fire` guard
-  (`Actuation.cpp:2387`) and the Logistics OOC cast block (`Logistics.cpp:1596`) send every
+  (`cast/Summon.cpp`; main-thread half `SummonOnMain` `:171`, limit
+  `SummonLimit` `:109`) are THE single summon path. The combat `Fire` guard
+  (`cast/Fire.cpp:215`) and the Logistics OOC cast block (`Logistics.cpp:1596`) send every
   summon there BEFORE any other road, for every target setting (self/player/foe/AUTO);
   `CastAuto` delegates too. **Threading:** the worker only runs the competence/magicka gates,
   reads the main thread's last verdict (`g_summon`, leaf mutex, fresh 1 s), throttles posts
@@ -1465,7 +1478,7 @@ Hooks `Character::UpdateCombat` (`VTABLE_Character[0]`, idx `0xE4`, `:110,142`).
   when the engine ALREADY has a target (`:91`), never forces one in. Reads under
   `std::shared_lock`, fast-path `g_latchCount` atomic (`:52`). `idx=0xE4` is SE/AE-
   only (VR = different function = CTD, `:132`).
-- `Command` (`:162`) callers `Actuation.cpp:1222,1887,2033,2048`; `Current` (`:171`)
+- `Command` (`:162`) callers `cast/CastOn.cpp:914`, `cast/Fire.cpp:189,338,353`; `Current` (`Targeting.cpp:196`)
   `Scheduler.cpp:484`; `Clear` (`:177`) `Followers.cpp:280`, `Rapport.cpp:315`;
   `ClearAll` (`:183`) `Serialization.cpp:597`, `Probe.cpp:344,446`.
 - Co-writes `currentCombatTarget`/`combatController->targetHandle` (`:101`) with
@@ -1521,8 +1534,8 @@ them clobbers unrelated engine vtables).
   pointer; unrecognized vtable returns benign.
 - **§0.29 guard:** reads the actor via `a_cc->attackerHandle` (0x28) ONLY, never
   `cachedAttacker`; static_asserts pin `attackerHandle==0x28 && <0x68` (`:333,336`).
-- `ClassifySpell` (PUBLIC, `:34`) → `Actuation.cpp:239`. `Want` (`:1137`) →
-  `Actuation.cpp:788,1003,1080`. `WantedSpell` (`:1131`) → `Scheduler.cpp:1102` +
+- `ClassifySpell` (PUBLIC, `:34`) → the cast family (`cast/CastOn.cpp:314,679,758`, `cast/Direct.cpp`, `cast/Auto.cpp`). `Want` (`CasterConsent.cpp:1148`) →
+  `cast/CastOn.cpp:801,1130`, `cast/Roads.cpp:223,274`. `WantedSpell` (`CasterConsent.cpp:1142`) → `Scheduler.cpp:1102` +
   `CombatStyle.cpp:341` (the equip gate's one exemption). `ClearTransientState`
   (`:1267`) → `Serialization.cpp:718`. (`NoteCooldown` is GONE — see "NO CAST
   PACING" above.)
@@ -1704,16 +1717,16 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   no co-save/ESP/version touch.
 - `Measure` (`:~135`, MAIN THREAD ONLY) calls `HasLineOfSight` (RELOCATION_ID
   53029/53829) inside `MainThread::Post` (§0.30 crash class off-worker). `Check`
-  (decl `Sightline.h:52`, worker-safe cache read) → `Actuation.cpp:91,113`,
-  `Actuation_Direct.cpp:1240,1656`, `Evaluator.cpp:320`.
-  `Want` (decl `Sightline.h:58`) → `Evaluator.cpp:330`, `Actuation_Direct.cpp:1594` (F7 auto-cast),
+  (decl `Sightline.h:52`, worker-safe cache read) → `cast/Roads.cpp:48,70`,
+  `cast/Direct.cpp:1169`, `cast/Auto.cpp:552`, `Evaluator.cpp:320`.
+  `Want` (decl `Sightline.h:58`) → `Evaluator.cpp:330`, `cast/Auto.cpp:490` (F7 auto-cast),
   `Logistics.cpp:1801` (OOC hostile cast — seeds the `Check` at `:1805`; added to
   close the 2026-08-18 review SEV-3 "Check without a Want → Unknown always passes"
   inert wall-gate). `g_mx` is a strict LEAF (nothing called while held). Fail-open
   by design (cold/stale/VR → Unknown). **Every `Check` must have a `Want` seeding
   its pair** or the gate is inert; the seeders are Evaluator (combat foes),
   Actuation_Direct F7 (auto-cast fan), and Logistics (OOC hostile).
-- `TeammateInFireLine` (`:149`) → `Actuation.cpp:247`, `Packages.cpp:990`. Reads
+- `TeammateInFireLine` (`:149`) → `cast/Direct.cpp:1171`, `Packages.cpp:990`. Reads
   `Followers::g_active` UNGUARDED (`:168`) — documented as joining an existing
   tolerated pattern. **UNVERIFIED — check before relying** if `g_active` is ever
   rebuilt reallocating concurrently with a worker read.
@@ -1729,7 +1742,7 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   (`Of`/`LeashRadius`/`ChaseRadius`) — misfiled under "progression" by directory
   adjacency; zero relationship to perks/PRGN.
 - `Temperament(FormID)` (`:22`) — deterministic per-follower scalar (Knuth hash).
-  Consumed by Actuation/Scheduler for cadence deviation (`Actuation.cpp:255,483`,
+  Consumed by Actuation/Scheduler for cadence deviation (`cast/CastOn.cpp:1080`,
   `Scheduler.cpp:394,685`). No state/save impact; changing the hash silently
   re-rolls every follower's "personality." 
 
@@ -1804,7 +1817,7 @@ declared there and defined in their home module). Layout:
   damage widened to float, so every `>` / `>=` compare orders identically; with
   with the catalog unbuilt every
   vote is 0. **KNOWN GAPS (not consumers yet):** the COMBAT equip
-  `Actuation.cpp EquipWeapon` (`:1603`) still picks raw max damage across BOTH
+  `cast/Equip.cpp` `EquipWeapon` (`:336`) still picks raw max damage across BOTH
   melee classes (it needs `WeaponScore` — Actuation was outside the boundary);
   bow vs crossbow stays the ammo/damage rule (no perk record distinguishes
   them — both carry `WeapTypeBow`); dual wield needs a CSTY that allows it
@@ -1812,8 +1825,8 @@ declared there and defined in their home module). Layout:
   steers nothing until that mechanism exists. **What breaks:** changing
   no armor tie `ArmorClassSuits` is untouched; with the catalog unbuilt every
   vote is 0. **CONSUMERS ADDED 2026-09-13 (`feat/mfo-dualwield-combat-pick`):** the
-  COMBAT equip `Actuation.cpp EquipWeapon` (`:1729`) now picks by `WeaponScore`
-  too (via `Logistics_internal.h`, included from `Actuation.cpp`), and `offHand`
+  COMBAT equip `cast/Equip.cpp` `EquipWeapon` (`:336`) now picks by `WeaponScore`
+  too (via `Logistics_internal.h`, included from `cast/Equip.cpp`), and `offHand`
   STEERS: 2 → a second one-hander force-held in the left, 1 → best shield, under
   `MFO_MeleeStyle` DATA = `1|4` (`kAllowDualWielding`) — see §2 Actuation "COMBAT
   PICK + DUAL WIELD BY PERKS". **STILL A GAP:** bow vs crossbow stays the
@@ -2052,7 +2065,7 @@ declared there and defined in their home module). Layout:
   MFO has — APMF exposes no "the pass ran" query, and the field caught one hop posted at
   `08:23:16` that did not run until `08:24:42` (85 s). `g_lastDeclSentAt` (anon, worker-serial) is
   the clock; this is `MFO-B41`'s weapon-ledger detector generalised to armor, on the same 3 s hold
-  (`Actuation.cpp` `kB41Hold`). Non-ARMO keys are skipped (`MFO-B41` owns the hands), as is a form
+  (`cast/Equip.cpp:280` `kB41Hold`). Non-ARMO keys are skipped (`MFO-B41` owns the hands), as is a form
   the follower no longer owns (the next rebuild drops it; without that skip a vanished piece would
   re-send forever). Logged `[equip-auth] <id>: declared '<name>' is not worn -- re-declaring
   (MFO-B63)`. (2) **NOTHING IS DECLARED WHILE `!Is3DLoaded()`** — APMF's pass needs a loaded actor:
@@ -2492,7 +2505,7 @@ load — no co-save record.
   round 2, measured against the AE DOBJ tag table: 366 entries, 19 = LHEQ, 20 = RHEQ, 364 =
   HMAE, 365 = MHFL). Every AE spell equip therefore ran `EquipSpell(actor, spell, nullptr)`
   and the engine's helper (AE `0x6CAB20`) picked the hand for an EitherHand spell;
-  `EquipLeftHeld` (`Actuation.cpp:1748`) returned false on its `!slot` test and the dual-wield
+  `EquipLeftHeld` (`cast/Equip.cpp:186`) returned false on its `!slot` test and the dual-wield
   off-hand force never fired. THIS is the first build where the slot reaches the engine on AE
   — see Actuation's RUNTIME GATES entry for the observables.** `Docs/ADDRESS-TABLE-2026-09-15.md`
   rows: "held branch `Loadout.cpp:63,81`" (by construction — a Skyrim.esm FormID, the same
@@ -2501,7 +2514,7 @@ load — no co-save record.
   objectInit[]` count" (364 / 366 / 372). ONE implementation, no `RightHandSlot` twin.
   `plugin.cpp`'s `[runtime]` line prints the resolved FormID (error if null). The `<d3d11.h>` `GetObject`
   hijack note no longer applies to this TU. The slot is shared by `Prepare`'s `EquipSpell`
-  (`:325, :413`) and `Actuation.cpp`'s `EquipLeftHeld` (dual-wield left-hand WEAPON equip). It was the only hand-machinery
+  (`:325, :413`) and `cast/Equip.cpp`'s `EquipLeftHeld` (dual-wield left-hand WEAPON equip). It was the only hand-machinery
   piece usable for a weapon — `PlanCastHand`/`CastProxyOnHand`/`ClaimLiveOnHand`/`kHand*`
   are cast-only, and no `RightHandSlot` exists. Changing which slot form it resolves
   re-points BOTH the spell-in-hand path and the left weapon hold at once.
@@ -2513,7 +2526,7 @@ load — no co-save record.
   branch a `true` return ("a hold was released") nulls `willDisplaceLeft` so MFO's OWN left
   weapon hold is never booked as gear debt. `RestoreOne` (`:98`) repays a displaced LEFT-hand
   WEAPON with `LeftHandSlot()` (`EquipBack` `:88` gained a slot parameter). Sole caller
-  `Actuation.cpp:1047` (`CastOn`, always passes the yield). **What breaks:** calling the yield
+  `cast/CastOn.cpp:787` (`CastOn`, always passes the yield). **What breaks:** calling the yield
   before the refusals re-creates the F1 per-lap flicker; booking the debt on a `true` return
   re-creates F2 (repay in the RIGHT hand at combat end, then every later `Prepare` Debounces on
   the open debt); a second `Prepare` caller that omits the callback makes its `EquipSpell` meet
@@ -2521,10 +2534,10 @@ load — no co-save record.
   Actuation's left weapon holds are gated on (F-A) — it must keep reading `displacedLeft`
   only (a stowed two-hander is a RIGHT-hand debt and must not block the left).
   See §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS".
-- `Prepare` (`:240`) → sole call `Actuation.cpp:1097`. `StartCooldown` (`:482`) → Actuation
+- `Prepare` (`:240`) → sole call `cast/CastOn.cpp:787`. `StartCooldown` (`Loadout.cpp:482`) → the cast family
   + Diagnostics; it sets the re-EQUIP debounce `g_coolUntil` and `ReleaseSpell`s, and
   since 2026-09-23 mirrors NOTHING into `CasterConsent` (the cast-time pacing deny is
-  deleted — see the CasterConsent entry's "NO CAST PACING"). `Tick` (`:465`) ←
+  deleted — see the CasterConsent entry's "NO CAST PACING"). `Tick` (`Loadout.cpp:532`) ←
   `Diagnostics.cpp:256` (settles debts). `Reconcile` (`:561`) ← `plugin.cpp:361`
   (undo a save taken mid-cast; iterates `g_active`, main-thread). `ClearTransientState`
   (`:625`) ← `Serialization.cpp:595`.
@@ -2544,12 +2557,12 @@ load — no co-save record.
   `DualCast` or `EitherFree`. **Claim shape now supports it (2026-09-06)** —
   `APMFBridge::HandFor(HandPick)` + `kApmfHandDualCast` translate a `DualCast`
   plan into `APMF_API::kCastFlag_DualCast` on a `kIntent_Cast` claim (see
-  `APMFBridge.h`/`.cpp`'s `EnsureHealClaimLocked`) — but **still NOT wired to
+  `APMFBridge.h`/`.cpp`'s `EnsureHealClaimLocked`, today `apmf/Bridge.cpp`'s `EnsureCastClaimLocked`) — but **still NOT wired to
   any live caller**: heals bypass this policy entirely by hard rule (heal is
-  LEFT, unconditionally, see `APMFBridge.h`'s `ClaimHealCast` doc), and
-  offense's `ClaimCasting` (`Actuation.cpp`) neither carries a hand parameter
+  LEFT, unconditionally, see `apmf/APMFBridge.h`'s `ClaimHealCast` doc), and
+  offense's `ClaimCasting` (then `Actuation.cpp`, today `cast/CastOn.cpp`) neither carries a hand parameter
   nor uses a claim shape (`kIntent_SelectSpell`) that can carry `CastFlags` in
-  the first place. `APMFBridge::WeaponHandActive` (`APMFBridge.cpp`, combines
+  the first place. `APMFBridge::WeaponHandActive` (`apmf/Equip.cpp`, combines
   this file's `Read().grip` with `IsEquipmentClaimActive`) is the intended
   `a_weaponHandActive` producer for the APMF-owned path. **What breaks:** none
   yet (no live call sites) — but `DualCastPerkForSchool`'s FormIDs are
@@ -2569,7 +2582,7 @@ cure-poison gambit consumer doesn't exist yet).
 
 ---
 
-## 5. Progression / perk-economy — `ProgAllocator.*`, `Progression.*`, `ProgProbe.*`
+## 5. Progression / perk-economy — `progression/` (was `ProgAllocator.*`), `Progression.*`, `ProgProbe.*`
 
 Optional ESL addon (`MFO_Progression.esl`); inert if absent. Owns the third co-save
 record 'PRGN'. Main-thread-only.
@@ -2587,9 +2600,9 @@ OWN keyword → no MFO.esp master. `AddonRef` gained `keywordEdid`.
 **v1.1 generic manifest model:** `AddonManifest`/`ManifestClass`/`ManifestEconomy`/
 `ManifestAllocation`/`ManifestVerdict` (+ `ManifestBoardTab`) is the
 add-on-agnostic host model, built by `ProgAllocator::BuildGenericManifests` and
-exposed via `Progression::Manifests()` (defined at the foot of `ProgAllocator_Manifest.cpp`).
+exposed via `Progression::Manifests()` (defined at the foot of `progression/Manifest.cpp`).
 **v1.1 residual #3 — perk-effectiveness SPLIT (the last compiled-in judgment, removed):**
-the WALK is the general public primitive `WalkPerkEntries` (`:657`, Progression.h) +
+the WALK is the general public primitive `WalkPerkEntries` (`Progression.cpp:828`, decl `Progression.h:190`) +
 `EntryPointName` (`:653`) — add-on-agnostic, enumerates a perk's entries, their
 kind/entry-point index+name, and the mechanical `firesForNpc` fact (quest / player-gated
 ability); NO verdict. The effective/marginal/dead VERDICTS are now ADD-ON DATA: an add-on
@@ -2603,7 +2616,7 @@ table is gone; `kEntryPointNames[92]` (names only, a general engine fact) remain
 `DrawFieldKit` iterates `Manifests()[].boardTab.declared` to decide the hosted board-tab
 count (was hardcoded `snap.prog->active`); `BuildGenericManifests` sets `boardTab.declared=true`
 + `label`. **Phase 6b** — `BoardProgSnap`/`BoardFollowerView` wrapped behind a generic
-`BoardTabView` (`ProgAllocator.h:378`, `CopyBoardTabViews`). **Phase 6c (Phase 6 COMPLETE)** —
+`BoardTabView` (`progression/ProgAllocator.h:486`, `CopyBoardTabViews`). **Phase 6c (Phase 6 COMPLETE)** —
 (1) the tab CAPTION is `boardTab.label`, sourced from the add-on's own `MFOP_BoardTabLabel`
 MESG (FULL "Progression", manifest entry[1] before the classes FLST; `BuildGenericManifests`
 captures its FULL, no DLL literal) — `Board_Progression.cpp:43` `BeginTabItem(hostedTabLabel)`. (2) The
@@ -2614,9 +2627,9 @@ board edit queue's progression verbs collapsed to ONE generic carrier `EditKind:
 150,437,666,935,1047,1264,1554`) + `Board_Progression.cpp:202`. `kAddonPlugin=
 "MFO_Progression.esl"` (`:30`). **What breaks:** the catalog is the load-time drop
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
-(`ProgAllocator.cpp:2117`), so re-tuning the add-on's declared verdicts (the
+(`progression/Allocator.cpp:596-603`), so re-tuning the add-on's declared verdicts (the
 `MFOP_EntryPointVerdicts` GLOBs in `MFO_GenerateESP.py`, read via
-`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`:446`) silently changes which
+`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`Progression.cpp:485`) silently changes which
 saved perks survive a load (with an auto §17 refund). The verdicts are ESL DATA now, not a
 DLL table — changing them is a generator+regen change, not a code edit.
 **STYLE FACTS (2026-09-13, marth: "primary weapon, armor and wielding style are
@@ -2651,7 +2664,7 @@ the WEAP `0x1F4` edid). `StyleVotes::unarmed` is the ONE vote NOT counted off he
 `TallyStyleVotes` reads MFO's allocation record `ProgAllocator::g_prog[id].perks`
 (enrolled records; ranks 1..K of each allocated node; main thread, no lock — where the
 tally already runs) via a deliberate, commented component-1→component-2 include of
-`ProgAllocator.h` in `Progression.cpp` (headers stay acyclic). Consumer:
+`progression/ProgAllocator.h` in `Progression.cpp` (headers stay acyclic). Consumer:
 `Logistics::ShedOffRoleWeapon` (fists rule). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md`
 MFO-B14** (SEV-4) — the per-list empty-hand rule also matches a "left hand empty"-only
 one-hand perk (no keyword, no right-hand test); tightening shape recorded there.
@@ -2677,26 +2690,57 @@ off the main thread races the allocator's perk writes (the Logistics mirror exis
 exactly this); with the catalog unbuilt (addon absent) every vote is 0 → the whole
 perk-style decision is INERT and equipment behaves exactly as before.
 
-### ProgAllocator.cpp / ProgAllocator_Hms.cpp / ProgAllocator_Manifest.cpp / ProgAllocator_internal.h / ProgAllocator.h — component 2: allocator + 'PRGN' owner  ⚠️ SAVE-LAYOUT
+### native/progression/ — Allocator / SkillScale / PerkGate / BoardViews / Poll / Harness / Verbs / Hms / Manifest + ProgAllocator.h / ProgAllocator_internal.h — component 2: allocator + 'PRGN' owner  ⚠️ SAVE-LAYOUT
 The engine-mutating half: writes perks (`AddPerk/RemovePerk`+`ApplyPerksFromBase`)
 and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
-- **Module layout (mechanical split, 2026-08-31):** `ProgAllocator.cpp` (2354) =
-  the allocation engine + 'PRGN' — skill reconcile (`ReconcileSkill:235`,
-  `RecomputeSkills:366`), perk plumbing + `ReapplyFollower` (`:826`), the level
-  poll (`PollWork:959`), the verbs, board views, dev harness, and the WHOLE
-  co-save block (`CoSaveSave:1806`, `CoSaveLoad:1922`, `ClearAll:2258` — the
-  serializers NEVER leave this TU, and the PRGN field order inside them is the
-  save format). `ProgAllocator_Hms.cpp` (384) = §HMS — `HmsProfile` (`:37`),
-  the F3 fired-pool mirror consumers, `HmsTrackBattle` (`:113`), `RecomputeHMS`
-  (`:171`), `NoteCombatFire` (`:375`). `ProgAllocator_Manifest.cpp` (485) =
-  the §18.6 manifest reader — economy GLOB discovery + `ApplyEconomyOverride`
-  (`:149`), `ParseClassDef` (`:222`), `BuildGenericManifests` (`:277`), `Init`
-  (`:347`), and the PRGN class-identity resolvers `DeriveClassIdentity` (`:446`)
-  / `LookupAddonForm` (`:465`) called by the co-save. `ProgAllocator_internal.h`
-  = the shared substrate (these 3 TUs only): `Economy`/`g_econ`/`g_econDefaults`,
-  `g_ready`/`g_devCmd`, `g_classes`, `g_manifests`, `kSkillNames`, `kHmsAV`,
-  `g_hmsFireMx`/`g_hmsFiredMask`, + the cross-module decls — every definition in
-  it is `inline` (ODR: one shared instance, the `Logistics_internal.h` pattern).
+- **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
+  function by `tools/splitcheck`; before it: `ProgAllocator.cpp` + `_Hms` + `_Manifest`, the
+  2026-08-31 split).** Other subsystems include ONLY `progression/ProgAllocator.h`.
+  - `progression/Allocator.cpp` (818) = the CORE: session state (`g_pollGen` `:38`,
+    `g_lastPlayerLevel` `:44`, `g_playerHmsTotalLast` `:53`, all extern since wave 1), the catalog
+    index (`NodeIndex` `:76`, `FindNode` `:97`), `OwnsAnyRank` (`:111`), the class table
+    (`Classes` `:130`, `FindClassDef` `:132`), `OnPostLoad` (`:141`) / `OnMenuClose` (`:177`), and
+    the WHOLE PRGN co-save block (`CoSaveSave` `:262`, `CoSaveLoad` `:397`, `ClearAll` `:801`,
+    `PollGeneration` `:817`, the plugin-name codec `:232`/`:240`) — the serializers NEVER leave
+    this TU, and the PRGN field order inside them is the save format.
+  - `progression/SkillScale.cpp` (262) = skill points: `BaselineFloor` (`:28`), the §4.2
+    `ReconcileSkill` (`:73`), the §6 class weights (`DominantWeaponSkill`/`DominantArmorSkill`
+    `:135`/`:143`, `WeightsFor` `:154`) and the §15 auto-scale `RecomputeSkills` (`:193`).
+  - `progression/PerkGate.cpp` (534) = perks: grant plumbing + the condition evaluator
+    (`EvalCondItem` `:122`, `EvalPerkConditions` `:178`, `DumpConditions` `:202`),
+    `CountNativeTreeRanks` (`:256`), the B′ strip `StripNativePerks` (`:275`) /
+    `RestoreNativePerksImpl` (`:312`), the §5 gate `GateNextRank` (`:332`), `GrantRank` (`:440`)
+    and the session reapply `ReapplyFollower` (`:475`).
+  - `progression/BoardViews.cpp` (194) = component 3's views: the snapshot state (`g_viewMx`/
+    `g_boardSnap`/`g_boardFocus` `:28-30`), `EnrollBlocker` (`:40`), `BuildNodeViews` (`:59`),
+    `SetBoardFocus` (`:94`), `CopyBoardViews`/`CopyBoardTabViews` (`:96`/`:105`),
+    `PublishBoardViews` (`:119`).
+  - `progression/Poll.cpp` (224) = the level poll: `Unmanaged` (`:35`), `PollWork` (`:43`),
+    `PollTick` (`:200`, also drives the board-view refresh).
+  - `progression/Harness.cpp` (176) = the dev harness: `ClsName` (`:24`), `PickFollower` (`:35`),
+    `HarnessStatus` (`:55`), `HarnessSkillDump` (`:85`), `HarnessEconomyDump` (`:105`),
+    `OnHarnessHotkey` (`:121`).
+  - `progression/Verbs.cpp` (447) = the verbs: `Enroll` (`:40`), `SetClass` (`:120`),
+    `AllocatePerk` (`:173`), `AllocateNextEligible` (`:206`), `Respec` (`:266`), `HasFreeRespec`
+    (`:340`), `RestoreNativePerks` (`:345`), `SetManualSkills` (`:357`), `ApplyManualSkillPoint`
+    (`:396`); `FindTree` (`:30`) is file-local here.
+  - `progression/Hms.cpp` (563, moved whole) = §HMS — `HmsProfile` (`:37`), the F3 fired-pool
+    mirror consumers, `HmsTrackBattle` (`:126`), `RecomputeHMS` (`:184`), `HmsRetroParity`
+    (`:494`), `NoteCombatFire` (`:554`).
+  - `progression/Manifest.cpp` (503, moved whole) = the §18.6 manifest reader — economy GLOB
+    discovery + `ApplyEconomyOverride` (`:149`), `ParseClassDef` (`:222`),
+    `BuildGenericManifests` (`:277`), `Init` (`:360`), and the PRGN class-identity resolvers
+    `DeriveClassIdentity` (`:464`) / `LookupAddonForm` (`:483`) called by the co-save.
+  - `progression/ProgAllocator_internal.h` (286) = the shared substrate (progression/ TUs only):
+    `Economy`/`g_econ`/`g_econDefaults`, `g_ready`/`g_devCmd`, `g_classes`, `g_manifests`,
+    `kSkillNames`, `kHmsAV`, `g_hmsFireMx`/`g_hmsFiredMask`, + the cross-module decls — every
+    definition in it is `inline` (ODR: one shared instance, the `Logistics_internal.h` pattern).
+    **Its WAVE-1 section (`:156` to the end)** lists what the 2026-09-24 cut made cross-TU: the
+    `extern` session and board-view state, the small helpers the compiler inlines everywhere
+    (`AvName` `:177`, `IsKnownSkillAv` `:187`, `NameOf` `:193`, `AllocatedRanks` `:200`,
+    `FindAlloc` `:206`, `ManualAvail` `:216`, `PerkByID` `:224`, `IsActiveFollower` `:228`,
+    `PerkPointsAvailable` `:238` — whose public declaration in `progression/ProgAllocator.h:424`
+    gained `inline`) as `inline`, and the declarations of the functions each file exports.
 - **SAVE-COMPAT — `CoSaveSave` / `CoSaveLoad` exact order** (grep the symbols; line
   numbers drift. Any field-order/type/version change corrupts live saves): header
   `{lastPlayerLevel u16, [v6: g_playerHmsTotalLast f32], count u32}`; per follower
@@ -2724,17 +2768,17 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 - Version guard `Serialization.cpp:320` (newer PRGN skips this record only).
   `CoSaveSave` has no `g_ready` gate — writes even when the addon is disabled so the
   data survives a session without the ESL.
-- Lifecycle: `Init` (`ProgAllocator_Manifest.cpp:347`) ← `plugin.cpp:287` (early-returns `g_ready=false` if
-  `!Progression::Detected()`); `OnPostLoad` (`ProgAllocator.cpp:1235`) ← `plugin.cpp:363` (after the
-  co-save load); `ClearAll` (`ProgAllocator.cpp:2258`) ← `Serialization.cpp:591` (clears `g_prog`,
+- Lifecycle: `Init` (`progression/Manifest.cpp:360`) ← `plugin.cpp:287` (early-returns `g_ready=false` if
+  `!Progression::Detected()`); `OnPostLoad` (`progression/Allocator.cpp:141`) ← `plugin.cpp:363` (after the
+  co-save load); `ClearAll` (`progression/Allocator.cpp:801`) ← `Serialization.cpp:591` (clears `g_prog`,
   bumps `g_pollGen` to orphan in-flight polls).
 - Verbs (all ← Board.cpp, `g_ready`-gated): `Enroll`/`SetClass`/`AllocatePerk`/
-  `Respec`/`SetManualSkills`/`ApplyManualSkillPoint` (`ProgAllocator.cpp:1370-1750`).
+  `Respec`/`SetManualSkills`/`ApplyManualSkillPoint` (`progression/Verbs.cpp:266-446`).
 - **STRICT POINTS (#81, 2026-09-13; A′/A″ PRGN v7).** A skill point, once placed
   by ANY path, stays on that skill until Respec. `SkillAlloc::manualPoints` has
-  EXACTLY TWO writers — `ApplyManualSkillPoint` (`:1797`, +1) and `Respec`
-  (`:1685`, → 0); `SkillAlloc::autoPoints` (v7) has EXACTLY TWO — the GRANT step of
-  `RecomputeSkills` (`:354`, +=) and `Respec` (→ 0). `RecomputeSkills` is an
+  EXACTLY TWO writers — `ApplyManualSkillPoint` (`progression/Verbs.cpp:396`, +1) and `Respec`
+  (`progression/Verbs.cpp:266`, → 0); `SkillAlloc::autoPoints` (v7) has EXACTLY TWO — the GRANT step of
+  `RecomputeSkills` (`progression/SkillScale.cpp:193`, +=) and `Respec` (→ 0). `RecomputeSkills` is an
   ACCUMULATOR, not a re-derivation: `pending = (effAutoLvl − 1) − autoLevelsGranted`
   auto levels yield `skillPointsPerLevel` each, split by `WeightsFor` AT THAT
   MOMENT as the EXACT float share and ADDED to `autoPoints` (Fable F3: a per-level
@@ -2743,9 +2787,9 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   40/30/20/10); the weights are not consulted when nothing is pending, so a class
   change / dominance flip only steers FUTURE levels. Then every entry is held at
   natural + `floor(autoPoints + 1e-3)` + manualPoints through the single
-  `ReconcileSkill` (`:235`, baseline floor; REVERT drift-clobber unchanged) — the
+  `ReconcileSkill` (`progression/SkillScale.cpp:73`, baseline floor; REVERT drift-clobber unchanged) — the
   fraction stays in the ledger for the next grant to complete. `DominantWeaponSkill`
-  (`:297`) / `DominantArmorSkill` (`:305`) read BASE SKILLS ONLY (the old loadout
+  (`progression/SkillScale.cpp:135`) / `DominantArmorSkill` (`:143`) read BASE SKILLS ONLY (the old loadout
   read re-homed the share every ~2 s — marth's "fluidly managed" drift). **A″
   Respec returns ALL points:** perks cleared as before, every `autoPoints` and
   `manualPoints` → 0, `autoLevelsGranted` → 0, `manualPointsApplied` → 0,
@@ -2776,12 +2820,12 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   — the effective/marginal nodes of the 18 skill trees, which is exactly what the
   add-on's Board tab draws for EVERY class: `Board_Progression.cpp:340-356` lists all
   18 `kSkillNames` rows and opens a tree wherever the catalog has nodes; the class
-  FLSTs of `ProgAllocator_Manifest.cpp` are WEIGHTS, not visibility), the follower's
+  FLSTs of `progression/Manifest.cpp` are WEIGHTS, not visibility), the follower's
   base TESNPC holds that form, and MFO did not itself grant that form (MFO holds
   exactly `ranks[alloc.rank−1]`).* Not per class. Non-catalog perks (hidden engine,
   creature, filtered player-UI, non-tree abilities) are never touched; an
   ACTOR-only rank (never on the base) is logged and left. `StripNativePerks`
-  (`:~697`) runs at `Enroll` (`:1461`) and, for an unstripped enrolled follower (v6
+  (`:~697`) runs at `Enroll` (`progression/Verbs.cpp:40`) and, for an unstripped enrolled follower (v6
   save / enrolled while benched), on the first `PollWork` poll it reads ACTIVE —
   BEFORE `ReapplyFollower`, re-arming it (`applied=false`) when anything was removed
   so a rank the reapply had deferred to native ownership (`:~918`) is re-added now
@@ -2790,21 +2834,21 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   a session — `nativeHeld` stays true until the next load / re-check). **THE STRIP
   IS PER-SESSION BY NATURE (Fable F1):** base `AddPerk`/`RemovePerk` do not survive a
   load (P3, the reason `ReapplyFollower` exists), so every load puts the natives
-  back; `nativeHeld` is RUNTIME-ONLY (never serialized) and `OnPostLoad` (`:1325`)
+  back; `nativeHeld` is RUNTIME-ONLY (never serialized) and `OnPostLoad` (`progression/Allocator.cpp:141`)
   re-arms it beside `applied`, so the first managed ACTIVE poll re-strips (union)
   BEFORE the reapply. **Never restored while
   enrolled — a benched/dismissed follower stays stripped** (marth: "a clean restore
   when it's uninstalled"), which rules out the native+MFO same-node double rank by
   construction. The record `ProgState::strippedPerks` (set, union on re-strip,
-  unresolvable ids drop on load) is the v7 co-save field the safe-removal reads: public `ProgAllocator::RestoreNativePerks(actor)` (`:1754`,
-  header contract in `ProgAllocator.h`) puts every recorded perk back on the base,
+  unresolvable ids drop on load) is the v7 co-save field the safe-removal reads: public `ProgAllocator::RestoreNativePerks(actor)` (`progression/Verbs.cpp:345`,
+  header contract in `progression/ProgAllocator.h`) puts every recorded perk back on the base,
   settles, CLEARS the record — meant to run once per enrolled follower right before
   the mod is removed; **nothing calls it yet** (the Board/MCM uninstall verb is a
   separate brief). No refund: not credited, and `nativeTreePerksAtEnroll` (the §17
   debit) is recounted AFTER every strip as `CountNativeTreeRanks − AllocatedRanks`
   (native ranks STILL held — i.e. only unstrippable actor-only ranks — never MFO's
   own), which also corrects a pre-v7 follower's debit. Fixes marth's "engine gives
-  rank 1, rank 2 inaccessible" bug: `GateNextRank` (`:764`) froze natively-owned
+  rank 1, rank 2 inaccessible" bug: `GateNextRank` (`progression/PerkGate.cpp:332`) froze natively-owned
   nodes; stripped nodes are takeable. **What breaks:** stripping a form MFO granted
   (the `mfoForm` skip) would silently undo an allocation; restoring while enrolled
   re-creates the double-rank case; a caller of `RestoreNativePerks` that does not
@@ -2835,7 +2879,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   of the re-check moment; the manual pool `(progressionLevel − baseline) × rate −
   applied` has grown by the same levels; perk points are `floor(level/N) − spent`
   (derived). **Rapport is untouched on both edges:** progression's only rapport
-  write is `Rapport::Spend` in `Respec` (`ProgAllocator.cpp:1738`); the veteran
+  write is `Rapport::Spend` in `Respec` (`progression/Verbs.cpp:328`); the veteran
   level-match (`SetClass`) writes `progressionLevel` only. **What breaks:** gating
   the level ledger on `managed` would erase the back debt; touching the actor while
   unmanaged violates "don't touch"; `IsMfoEnabled` must keep reading the mirror,
@@ -2843,11 +2887,11 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   poll only after the next `Refresh` (one diag turn) — do not shorten that by
   reading the map.
 - **Actor-write safety:** perk reapply is idempotent — re-adds a rank only if
-  `GetPerkIndex` absent (`:841`) + native-ownership deferral (`:853`, if another mod
+  `GetPerkIndex` absent (`progression/PerkGate.cpp:490`) + native-ownership deferral (`:492`, if another mod
   granted a rank, MFO touches nothing). Skill writes funnel through the single
-  `ReconcileSkill` (`:235`) with the enrollment baseline as a **hard floor** — a
+  `ReconcileSkill` (`progression/SkillScale.cpp:73`) with the enrollment baseline as a **hard floor** — a
   shrink can never write below the follower's captured natural. `IsKnownSkillAv`
-  (`:68`) validates the raw AV value before Get/SetBaseActorValue (OOB guard).
+  (`progression/ProgAllocator_internal.h:187`) validates the raw AV value before Get/SetBaseActorValue (OOB guard).
   **Two skill models, one write site, live MCM toggle** `g_econ.cancelEngineAwards`
   (default ON, addon INI `bCancelEngineAwards` via `ApplyEconomyOverride` — no GLOB,
   no PRGN touch): ON = `natural = enrollmentBaseline` (REVERT — engine per-level/
@@ -2857,7 +2901,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   uncaptured (old save) → ADOPT fallback. Both idempotent/replay-safe; toggle
   changes NO co-save layout (baseline already serialized).
 - **§HMS class-redistribution (PRGN v5) — SIBLING of the skill reconcile.**
-  `RecomputeHMS` (`ProgAllocator_Hms.cpp:171`; the whole §HMS engine lives in that module) is called at the same
+  `RecomputeHMS` (`progression/Hms.cpp:184`; the whole §HMS engine lives in that module) is called at the same
   three sites as `RecomputeSkills`: the level-gain edge + the ~2s drift-watch in
   `PollWork`, and `ReapplyFollower`. **MEASURE-not-clobber** (the key difference
   from skills): it reads `cur=GetBaseActorValue(H/M/S)`, measures the POSITIVE
@@ -2911,13 +2955,13 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
 - **§HMS PLAYER-RATE PARITY (PRGN v8, 2026-09-23, marth "fix b (with retroactive
   fix)").** The engine awards a leveling NPC `iAVDhmsLevelUp + fNPCHealthLevelBonus`
   (10+5 = 15) per level against the player's 10; MFO used to pass the 15 through.
-  Now `RecomputeHMS` (`ProgAllocator_Hms.cpp:293`) applies `min(engineAward,
+  Now `RecomputeHMS` (`progression/Hms.cpp:184`) applies `min(engineAward,
   hmsParityCredit)` and withholds the rest. **Two serialized fields, one invariant
   each:** `hmsWithheld` W — `Σ hmsTarget + W == the engine's autocalc total` (the
   engine re-slams ABSOLUTE values every level, so the signed drift re-measures every
   withheld point; `engineAward = max(0, measured − W)` subtracts them; W only grows);
   `hmsParityCredit` — the player's HMS gain not yet matched, added in `PollWork`
-  (`ProgAllocator.cpp:1051`, every ENROLLED record, on each player level-up, from the
+  (`progression/Poll.cpp:43`, every ENROLLED record, on each player level-up, from the
   live `playerGain`) and spent by `RecomputeHMS`. A CREDIT, not "this poll's
   playerGain", because an award can be measured off the level-up poll (benched,
   unmanaged, no class, `bHmsRedistribute` off, the reapply after a load).
@@ -2968,7 +3012,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   total vs baseline, so a high-level player opens the gate immediately). A non-fixed-stat
   follower passes `grantBudget=0` → byte-identical to Phase 2. `[hms] … fixed-stat grant:
   streak/caughtUp/npcTotal/playerTotal/playerGain/budget` logs the decision.
-- **`Class` enum ordinals (`:84`) MUST stay == `combatClassOverride`** — the base
+- **`Class` enum ordinals (the enum itself is gone, `progression/ProgAllocator.h:74`; `ClassDef::stance` `:87` carries the mirror) MUST stay == `combatClassOverride`** — the base
   class (`combatClassOverride`) is the STANCE AUTHORITY, set by the user via the Gambit
   tab (Board `SetClassOverride`). **v1.1 Phase 2: progression-tab `SetClass` NO LONGER
   mirrors into it** — the old `Followers::SetBaseClass(id, def->stance)` write only ever
@@ -2976,7 +3020,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   removed. `SetClass` now sets the SKILL class (`clsId`) only. Reads of
   `combatClassOverride` on the serial-worker path (Scheduler/Actuation stance) — and now
   HMS (`RecomputeHMS`/`HmsTrackBattle`) — go through `Followers::GetBaseClass`. Board snapshot is the
-  one cross-thread structure (guarded `g_viewMx`); `Rapport::Spend` (`:1346`) is a
+  one cross-thread structure (guarded `g_viewMx`); `Rapport::Spend` (called at `progression/Verbs.cpp:328`) is a
   cross-module write on respec.
 
 ### ProgProbe.cpp / ProgProbe.h — throwaway field probe (NOT serialized)
@@ -3166,14 +3210,14 @@ Registers NO natives (that's TradeBridge). The **three method-name strings are t
 script-compat surface:** `"Actor"/"DoCombatSpellApply"` (`:70`), `"ObjectReference"/
 "Activate"` (`:104`), `"MFO_Trade"/"RunTrade"` (`:126`) — changing the `.psc` native's
 name/arity breaks dispatch silently (bumps `g_failures`). `DoCombatSpellApply` (`:41`)
-← `Actuation.cpp:1496-1497` (gated on `g_commandCast`+`Available()`). `DispatchTradeRun`
-(`:111`) ← `TradeBridge.cpp:266`. `DispatchActivate` (`:77`) has no live caller
+← `cast/CastOn.cpp:1188-1189` (gated on `g_commandCast`+`Available()`). `DispatchTradeRun`
+(`Papyrus.cpp:111`) ← `TradeBridge.cpp:266`. `DispatchActivate` (`Papyrus.cpp:77`) has no live caller
 (latent). `ClearTransientState` (`:136`) ← `Serialization.cpp:611`. `HandleFor` checks
 `policy->EmptyHandle()` not `0` (`:29`) — a real correctness point.
 
 ---
 
-## 7. External bridges / probes / diagnostics — `MEOBridge.*`, `MEO_API.h`, `TradeBridge.*`, `Probe.*`, `Diagnostics.*`
+## 7. External bridges / probes / diagnostics — `MEOBridge.*`, `MEO_API.h`, `apmf/` (APMFBridge), `TradeBridge.*`, `Probe.*`, `Diagnostics.*`
 
 ### MEO_API.h — FROZEN cross-mod ABI ⚠️
 The v1 SKSE inter-plugin C++ header shared **byte-for-byte with a separate shipped
@@ -3356,12 +3400,40 @@ primary's uid and Actuation's left-hand equip at the next combat fired
 end (overflow to the PLAYER's pouch). A future stock path must keep `a_forceStock`
 true or re-open this.
 
-### APMFBridge.cpp / APMFBridge.h — optional APMF client (MODERATOR model, Phase 3)
+### native/apmf/ — Bridge / CastClaims / Equip / Excursion / SpellAllowList + APMFBridge.h / APMFBridge_internal.h — optional APMF client (MODERATOR model, Phase 3)
 Makes MFO a client of the SEPARATE APMF.dll (AI Package Management Framework) via the
 byte-shared `APMF_API.h` (C-ABI POD; append-only, mirror APMF's copy). `Acquire()` ←
 `plugin.cpp:289` (kDataLoaded): `GetModuleHandleA("APMF.dll")` + `GetProcAddress(
 "APMF_GetInterface")` → `fn(kABIVersion)` → cast up to `APMF_API_v2*`; **null-degrades** with one
 log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-identical.
+- **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
+  function by `tools/splitcheck`; before it: one `APMFBridge.cpp`).** Other subsystems include
+  ONLY `apmf/APMFBridge.h`. `APMF_API.h` (the byte-shared ABI header) stays at `native/`.
+  - `apmf/Bridge.cpp` (1074) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
+    `g_mx`/`g_owned` (`:51-52`) + refusal sets, `FacetExpiry` (`:163`), the shared claim helpers
+    `EnsureClaimLocked` (`:174`), `ReleaseClaimLocked` (`:200`), `CastHeartbeatInterval` (`:241`),
+    `EnsureCastClaimLocked` (`:280`), the idle-hand floor `ReconcileHandFloorLocked` (`:672`),
+    `Acquire` (`:813`) / `Available` (`:846`) / `MaybeWarnAbsence` (`:864`), the expiry sweep
+    `Tick` (`:880`) and `ClearTransientState` (`:1029`).
+  - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
+    `ClaimOffenseCast` `:83`, `RefreshOwnedCastOnHand` `:215`, `ReleaseCastClaimOnHand` `:311`,
+    `ReleaseOffenseCast` `:326`) and heal (`ClaimHealCast` `:351`, `RefreshHealCastClaim` `:433`).
+  - `apmf/Equip.cpp` (274) = equipment: the ch.15 weapon-order claim (`ClaimEquipment` `:37`,
+    `WeaponHandActive` `:65`) and the ch.17 authority (`EquipAuthoritySupported` `:89`,
+    `ClaimEquipAuthority` `:111`, `DeclareEquipScope` `:196`, `DeclareEquipSet` `:246`).
+  - `apmf/Excursion.cpp` (282) = the per-combat / per-excursion facets: `ClaimCombatTarget`
+    (`:92`), `OfferPackage` (`:121`), the ch.19 loot-travel legs (`LootTravelLeg` `:54`,
+    `ClaimLootTravel` `:142`, `ReleaseLootTravelFor` `:246`) and `ClaimCombatActionDeny` (`:262`,
+    with its file-local `EnsureIvalClaimLocked` `:65`).
+  - `apmf/SpellAllowList.cpp` (308) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
+    `AppendDenyExemptForms` (`:126`), `PublishSpellAllowList` (`:162`), `ReleaseSpellAllowList`
+    (`:284`).
+  - `apmf/APMFBridge_internal.h` (389, NEW in wave 1) = the claim state the families share, all
+    of it from the old file's anonymous namespace: `CastClaim` (`:80`), `Owned` (`:208`), the
+    `extern` `g_apmf`/`g_mx`/`g_owned`/refusal sets (defined in `apmf/Bridge.cpp`),
+    `kEquipAuthValidateAfter` (`apmf/APMFBridge_internal.h:341`), `kOwnBasis` (`:345`), the helper declarations, and
+    `ReleaseHandleLocked` (`:362`) / `EraseIfEmpty` (`:370`) as `inline`. **THREADING is
+    unchanged: every map is still guarded by `g_mx`.**
 - **THE MODEL: APMF ARBITRATES/DRIVES; MFO EXECUTES the rest.** APMF never generates behaviour on its
   own initiative (its channels are client-declared, arbitration/drive-only). This bridge only ever
   CLAIMS facets (`ClaimOffenseCast`/`ClaimCombatTarget` → `RequestCast`/`RequestEx`/`Repoint`, basis
@@ -3415,7 +3487,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   APMF enqueues, `g_mx` for the map, FormIDs only. Ch.15 `ClaimEquipment` (param form, gate only)
   stands beside it — APMF INTEGRATION.md: unaffected by a ch.17 claim. The declaration itself
   (what is in the set, when it is sent) lives in `Logistics_Economy.cpp` `RefreshEquipDeclaration`
-  and `Actuation.cpp` `DeclareFromLedger` — see those entries. **What breaks:** sweeping the claim
+  and `cast/Equip.cpp` `DeclareFromLedger` — see those entries. **What breaks:** sweeping the claim
   on `FacetExpiry()`/`kExpiry` drops a standing authority mid-session and the follower's own AI
   re-dresses him the moment the set clears (nothing re-declares until the next change); releasing
   without `ForgetEquipDeclaration` leaves the change detector believing the set is still
@@ -3427,11 +3499,11 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   answering from APMF's `{All, 0}` default on a claim with NO declaration out would skip the
   torch on every fresh claim for nothing (APMF allows everything until a set is declared).
 - **THE OWNED CAST (default), a real AI-DECIDED animated cast — `Actuation::CastOn` FF-non-self
-  hostile branch (`Actuation.cpp:600` `CastOn`, worker).**
+  hostile branch (`cast/CastOn.cpp:110` `CastOn`, worker).**
   **ORDER OF OPERATIONS, RE-NARRATED 2026-09-07 (`fix/mfo-fourstate-followups`):** this bullet used
   to read *equip → consent → claim*, with the refusal returning from inside the equip switch. **That
   ordering is now WRONG.** `CastOn` runs the COMPETENCE gate (`follower->HasSpell`,
-  `Actuation.cpp:704`) and then a **PRE-FLIGHT** (comment `:901`, the asks at `:1013-1094`) that makes
+  `cast/CastOn.cpp:230`) and then a **PRE-FLIGHT** (comment `:577`, the asks at `:689-769`) that makes
   BOTH APMF asks BEFORE `Loadout::Prepare` touches a hand and BEFORE `CasterConsent::Want` latches
   consent — so a refusal returns with NO side effects at all. See "THE ASK RUNS BEFORE THE EQUIP
   (F3-2)" under `APMFBridge` below for why that reordering was needed and what it cost to restore.
@@ -3445,25 +3517,25 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   **neutralizes a competing spell in the OTHER hand** (`DeselectSpell`) — but ONLY at `iCastControl`
   level 4 (exact); looser levels leave that hand to the AI (`CastExempt`). MFO (a) CLAIMS the
   `kIntent_Cast` facet via `ClaimOffenseCast` **FIRST, in the pre-flight** (called at
-  `Actuation.cpp:1036`, PORTED feat/offense-cast-seats
+  `cast/CastOn.cpp:713`, PORTED feat/offense-cast-seats
   2026-09-05 off the retired ch.8 `kIntent_SelectSpell` gate-only claim — see PASS G below); ONLY on a
   LIVE claim does it also (b) claim `ClaimCombatTarget(create=true)` and (c) `Targeting::Command(
   follower, target->GetHandle())` to command the target (its UpdateCombat hook re-asserts
   `currentCombatTarget`) — **every owned tick this branch wins, deliberately not deduped here**:
-  `EnsureCastClaimLocked` (`APMFBridge.cpp:470`, shared with `ClaimHealCast`) already no-ops an
+  `EnsureCastClaimLocked` (`apmf/Bridge.cpp:280`, shared with `ClaimHealCast`) already no-ops an
   unchanged claim but still stamps its liveness timestamp on every call, which is what keeps the claim
-  alive past its `FacetExpiry()` backstop (round-robin-aware, `APMFBridge.cpp:332`; NOT the flat `kExpiry`, `:298` —
+  alive past its `FacetExpiry()` backstop (round-robin-aware, `apmf/Bridge.cpp:163`; NOT the flat `kExpiry`, `:129` —
   proven round-robin-bound by the Cicero equipment-claim capture) — a per-follower dedupe latch that
   skipped these calls on an unchanged tick was tried 2026-09-02 and reverted the same day (Fable
   review) for starving the claim mid-cast ("casting facet released" while the AI was still charging);
   `Targeting::Command` has its own unchanged-latch dedupe (`Targeting.h:37-41`) so calling it every
   tick is equally cheap. **A REFUSED claim FAILS CLOSED, from the pre-flight, with nothing done:**
-  APMF present AND capable AND refusing → `Actuation.cpp:1039-1052` returns
+  APMF present AND capable AND refusing → `cast/CastOn.cpp:716-729` returns
   `{FailedSkill, "APMF refused the cast claim", transparent}` plus a rate-limited
   `[apmf] … APMF REFUSED …`; nothing routes around APMF, and neither the equip nor the consent latch
   has run yet. Only the channel being ABSENT (`OffenseCastClaimSupported()` false) or
   `bLegacyCastHybrid` degrades to the hybrid. Full story: "Gating (NO DECLINE-FALLBACK…)" and
-  "THE ASK RUNS BEFORE THE EQUIP (F3-2)" below. `CasterConsent::Want` (granted at `Actuation.cpp:1109`, every tick —
+  "THE ASK RUNS BEFORE THE EQUIP (F3-2)" below. `CasterConsent::Want` (granted at `cast/CastOn.cpp:801`, every tick —
   same reasoning) permits our spell + is the only remaining source of "deny competing" (APMF's own
   seats now enforce exclusivity too, see `IsOwnedCastActive` below); the **Cast-biased combat style**
   (`Scheduler.cpp:~805` sets `Stance::Cast` when a cast is wanted → raises the magic score) STILL
@@ -3519,18 +3591,18 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   BOTH slots, dedupe-aware for a mirrored dual claim. `IsOwnedCastActive(follower)` keeps its
   existing "ANY hand" per-actor contract (CasterConsent/CombatStyle's standdowns never cared
   which hand); NEW `IsOwnedCastActiveOnHand(follower, hand)` answers ONE slot, consumed by
-  `Actuation.cpp`'s per-hand cast-gambit lock (`CastLockLive`). `ComposedCast`'s `[cfc]`
+  `cast/Hands.cpp`'s per-hand cast-gambit lock (`CastLockLive`). `ComposedCast`'s `[cfc]`
   silent-claim watch (`g_watch`) is likewise now `FollowerWatch{Watch hand[2]}` — `WatchClaim`
   takes an `a_hand` param (default `kApmfHandLeft`, so heal's own callers are unchanged);
   `ComposedCast::End()`/a refused heal claim clear ONLY the left slot so a concurrent
   right-hand offense watch survives.
 - **THE IDLE-HAND FLOOR (F10, marth's design ruling 2026-09-08).** A THIRD claim this bridge makes,
-  internal — no entry point. `Owned::floor` (`APMFBridge.cpp:284`) is a deny-only `kIntent_Cast` claim
+  internal — no entry point. `Owned::floor` (`apmf/APMFBridge_internal.h:281`) is a deny-only `kIntent_Cast` claim
   (`APMF_API::kCastFlag_DenyHandOnly`) standing on whichever ONE hand MFO's driving claims do NOT
   occupy, so nothing un-gambited can arm there (APMF leaving an unclaimed hand permissive is correct
   for a framework; MFO's design is that only gambited spells occur). Derived — not commanded — by
-  `ReconcileHandFloorLocked` (`APMFBridge.cpp:937`), called from ONE place: `Tick()`
-  (`APMFBridge.cpp:1698`), after every expiry sweep, every pump (~133 ms), gated on `bApmfCast` +
+  `ReconcileHandFloorLocked` (`apmf/Bridge.cpp:672`), called from ONE place: `Tick()`
+  (`apmf/Bridge.cpp:880`), after every expiry sweep, every pump (~133 ms), gated on `bApmfCast` +
   ABI ≥ 5. That pass also owns the floor's `refreshed` stamp and TTL heartbeat.
   **Exactly one hand driven → floor the other; both driven → none; NEITHER driven → NEITHER hand is
   floored** (not both: principle 4 — nothing was declared; it would mute followers with no cast gambit
@@ -3539,9 +3611,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   deny-only claim LOSE to a driving one at an EQUAL basis, so MFO's own next gambit takes the hand with
   no release/re-request gap and the floor stands underneath again when it ends. A floor at a higher
   basis would silence MFO's own casts (APMF warns loudly about it).
-  `EnsureCastClaimLocked` (`APMFBridge.cpp:546`) gained a `wantDenyOnly` parameter rather than a
+  `EnsureCastClaimLocked` (`apmf/Bridge.cpp:280`) gained a `wantDenyOnly` parameter rather than a
   parallel mint path, so the floor inherits the same liveness check / heartbeat / fail-closed split /
-  `reqParam` mirror; `CastClaim::denyOnly` (`:102`) is part of the claim's IDENTITY; the release
+  `reqParam` mirror; `CastClaim::denyOnly` (`apmf/APMFBridge_internal.h:99`) is part of the claim's IDENTITY; the release
   sentinel is now "no spell AND not a floor". Both log throttles became **two entries per follower**
   (driving / floor) — one shared entry would have alternated spell X ↔ 0 and defeated both 5 s windows.
   **What breaks if you change this:** floor at a higher basis → MFO denies its own casts; floor with no
@@ -3553,7 +3625,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   **THE UNOBSERVED GATE (`fix/mfo-combat-restoration-direct`, 2026-09-21; RE-SIZED AND ARMED ON CHARGE
   `fix/mfo-spell-authority-0922`, 2026-09-22).** A driving claim earns the
   floor only while it can be believed to be driving: younger than **`kIdleFloorUnobservedMs`**
-  (`APMFBridge.h`, **8000 ms, NO LONGER ALIASED** to `kHealHoldNeverObservedMs`. The 2026-09-22 Deck
+  (`apmf/APMFBridge.h`, **8000 ms, NO LONGER ALIASED** to `kHealHoldNeverObservedMs`. The 2026-09-22 Deck
   log supplied the measurement `MFO-B47` asked for: an OFFENSE claim reaches an observed SpellFire in
   **5.8 s** with an equip cycle in front (Jesper 750012C6, claim 08:26:59.202 → SpellFire
   08:27:04.997), so the old 4000 ms fired EARLY on every offense claim — and every claim is an
@@ -3574,13 +3646,13 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   gate and opens the other hand — the pre-F10 state, never a freeze.
   **AND THE AGE IS NOT THE WHOLE TEST ANY MORE (2026-09-22).** `silentPastGate` also refuses to call a
   claim silent while the ENGINE IS ACTUALLY CHARGING IT — `Actuation::CastInFlightOnHand(actor, hand,
-  c.spell, c.proxy)`, THE one in-flight definition (`Actuation_Hands.cpp:251`, a plain read of
+  c.spell, c.proxy)`, THE one in-flight definition (`cast/Hands.cpp:252`, a plain read of
   `ACTOR_RUNTIME_DATA::magicCasters[slot]->state`/`currentSpell`, no virtual call). On 09-22 the floor
   lifted **60 ms AFTER** the engine began charging the claimed Firebolt and the AI charged its own
   spell in the freed hand 0.78 s later: a longer timer alone could not have prevented that, only
   reading the engine could. `ReconcileHandFloorLocked` resolves the actor ONCE per pass
   (`RE::TESForm::LookupByID<RE::Actor>`); a null actor leaves the age test as the only word, which is
-  the pre-2026-09-22 behaviour. `APMFBridge.cpp` now includes `ComposedCast.h` AND `Actuation.h`; `Tick()` runs INSIDE the AddTask body (`Diagnostics.cpp:346`), i.e. ComposedCast's
+  the pre-2026-09-22 behaviour. `apmf/Bridge.cpp` now includes `ComposedCast.h` AND `cast/Actuation.h`; `Tick()` runs INSIDE the AddTask body (`Diagnostics.cpp:346`), i.e. ComposedCast's
   own serialized context, and ComposedCast never takes `g_mx`. **What breaks:** call the gate from any
   road that is not the job worker and the lock-free watch map races; shorten N below the measured
   tail and the other hand opens while a genuine cast is still charging.
@@ -3591,7 +3663,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   claim**, and on a follower carrying a shield or weapon in the left hand it DISPLACES that gear and books a
   restore debt. With right-first AUTO this is now the common case, not an edge. The fix is a hand parameter
   on `Prepare` — outside this brief's file boundary, reported rather than reached for.
-- **`RefreshOwnedCastOnHand(follower, hand, holdSpell = 0)` (`APMFBridge.cpp:1261`, F9).** Refreshes the cast claim(s)
+- **`RefreshOwnedCastOnHand(follower, hand, holdSpell = 0)` (`apmf/CastClaims.cpp:215`, F9).** Refreshes the cast claim(s)
   MFO already holds on a hand WITHOUT re-requesting: it replays each claim's OWN stored tuple through
   `EnsureCastClaimLocked`, so the identity compare matches by construction: the TTL is renewed in place
   (liveness, lazy proxy read, heartbeat Repoint, `refreshed` stamp) and the hand mode / target / a
@@ -3605,8 +3677,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   **What breaks if you change this:** pass anything but the stored tuple and it mints a second claim /
   interrupts the charge — the exact churn F8 removes.
 - **THE ch.8 CAST-SELECT GATE — CANDIDATE REFUSAL (`fix/mfo-spell-authority-0922`, 2026-09-22).**
-  `PublishSpellAllowList` / `ReleaseSpellAllowList` / `IsSpellAllowListClaimed` (`APMFBridge.h`,
-  `APMFBridge.cpp` just above `ClaimHealCast`) + `Owned::selectHandle/selectList/selectRefreshed/
+  `PublishSpellAllowList` / `ReleaseSpellAllowList` / `IsSpellAllowListClaimed` (`apmf/APMFBridge.h`,
+  `apmf/SpellAllowList.cpp`) + `Owned::selectHandle/selectList/selectRefreshed/
   selectMintedAt`. A GATE-ONLY `kIntent_SelectSpell` claim (`param.form == 0` — it names no spell and
   drives nothing) carrying an ABI v4 `SetSpellAllowList` allow-set. **THE HOLE IT CLOSES:** MFO governed
   CASTING but governed EQUIP/SCORE only on a hand with a live cast claim — the score steer only ADDS
@@ -3674,7 +3746,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   SWEPT claim's hand watch too — `ComposedCast::ClearWatchHand(follower, hand)`, per-hand, hand 0 only
   when no heal still shares it — so a later same-spell claim no longer inherits a dead `since` (deck:
   `[cfc] claim live 32383 ms` for a claim swept 19 s earlier)**). combat-target = PER-COMBAT (created by EITHER the cast directive
-  OR the ATTACK directive — both `ClaimCombatTarget(create=true)` ← `Actuation.cpp:1212` (and `:1869` from `Fire`) (2026-09-03:
+  OR the ATTACK directive — both `ClaimCombatTarget(create=true)` ← `cast/CastOn.cpp:904` (and `cast/Fire.cpp:171` from `Fire`) (2026-09-03:
   melee-attack directives now get the same arbitration a caster already had, not just a re-point of a
   pre-existing claim) — re-pointed via APMF `Repoint` when the foe changes; `RefreshCombatTarget` ←
   `Scheduler.cpp:~330` keeps it alive every in-combat tick; released only at combat end via the
@@ -3693,14 +3765,14 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     ONLY place `CastSpellImmediate` force and the rooting UseMagic package survive). Silent (APMFBridge
     already logs a too-old ABI once per session).
   - **FAIL CLOSED** — APMF present AND capable AND it REFUSED (`OffenseCastClaimSupported()` true) →
-    `Actuation.cpp` returns `{FailedSkill, "APMF refused the cast claim", transparent}`; the cast does
+    `cast/CastOn.cpp` returns `{FailedSkill, "APMF refused the cast claim", transparent}`; the cast does
     NOT happen and NOTHING routes around APMF into the legacy hybrid. One `spdlog::error` `[apmf] …
     APMF REFUSED the … claim` names actor/spell/target/hand, rate-limited to one line per
-    (follower, spell, target) per ~5s (`LogApmfRefusal`, `Actuation.cpp` anon ns; a twin lives in
-    `Actuation_Direct.cpp`). A refusal is a bug to fix in APMF, never a condition to degrade through
+    (follower, spell, target) per ~5s (`LogApmfRefusal`, `cast/CastOn.cpp` anon ns; a twin lives in
+    `cast/Direct.cpp`). A refusal is a bug to fix in APMF, never a condition to degrade through
     (`CLAUDE.md` principle 7). The heal twin (`ComposedCast::TryResult`, widened from three values
     to FOUR by this branch — see the ComposedCast entry below) and the two concentration
-    `ClaimOffenseCast` sites in `Actuation_Direct.cpp` (`CastSelfDirect`/`CastTargetDirect` →
+    `ClaimOffenseCast` sites in `cast/Direct.cpp` (`CastSelfDirect`/`CastTargetDirect` →
     `SelfCast::Declined` on a refusal) follow the identical split. **This bullet no longer contradicts the FAILS-CLOSED principle stated
     for `Packages.cpp` below.**
   - **THE ASK RUNS BEFORE THE EQUIP (F3-2, `fix/mfo-fourstate-followups` 2026-09-07).** Both asks used to
@@ -3709,8 +3781,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     owner holding the facet with its own spell equipped, `Prepare` short-circuits only when MFO's spell is
     already in hand, so MFO re-equipped over that owner EVERY 133 ms tick while logging "this cast does NOT
     happen", and latched consent let the follower's own AI cast it unforced — a fallback nobody asked for,
-    wearing a refusal's clothes. Both asks now sit in a **pre-flight** (comment `Actuation.cpp:901`, the
-    asks themselves `:1013-1094`), still
+    wearing a refusal's clothes. Both asks now sit in a **pre-flight** (comment `cast/CastOn.cpp:577`, the
+    asks themselves `:689-769`), still
     gated on `bEquipToCast`, and a refusal returns from there with nothing done.
     **Two things the reordering spent that main got for free, both restored by the pre-merge review
     2026-09-07:** (1) the COMPETENCE gate — `Prepare`'s `!HasSpell` check used to precede every ask, so a
@@ -3736,8 +3808,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `ComposedCast::Enabled` (`ComposedCast.cpp:38-45`) reads neither, so with APMF present and
     `bHealAnimPackage` ON a HEAL gambit still mints a claim on those paths and `ClientCastClaimed` stands the
     deny down identically — corrected by the re-review 2026-09-07), and the direct-force FF beats
-    (`Actuation_Direct.cpp:989`, `:1282`) and
-    `CastAuto`'s interval (`:1509`) are untouched. marth: *"a cast can only cast as fast as a cast. No
+    (`cast/Direct.cpp:833`, `:1224`) and
+    `CastAuto`'s interval (`cast/Auto.cpp:391`) are untouched. marth: *"a cast can only cast as fast as a cast. No
     reason to be slower."* The engine's own equip→charge→fire pipeline (~2.3-2.5s offense, 2.95s
     claim-to-observed on the one landed heal) already paces casting at the fastest a cast can physically
     occur, so a cooldown on top can only make a follower SLOWER than the engine allows — losing it on the
@@ -3751,7 +3823,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     later, in `Drain()`. So a request APMF ends up publishing NO claim for still returned a handle, reported
     `Claimed`, took the opaque `"owned cast: AI deciding"` NoOp that walls off every rule below, read
     not-live next tick, and was re-requested at INFO forever — the fail-closed path was nearly unreachable
-    in the field. `CastClaim` now carries **`everLive`** (`APMFBridge.cpp`, latched the first time
+    in the field. `CastClaim` now carries **`everLive`** (`apmf/Bridge.cpp`, latched the first time
     `IsClaimLive` answers true — including from `RefreshHealCastClaim`'s own sighting — and reset with the
     claim): a not-live handle that WAS live aged out at APMF's TTL and re-requests as before; one that was
     **never published** is released and NOT re-requested, so the claim comes back empty, the caller fails
@@ -3771,7 +3843,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     can.
 - **CAST-CLAIM HEARTBEAT — the TTL is a renewable FLOOR now, not an expiry (F5-1, 2026-09-08; RC2 of
   `Docs/DIAG-2026-09-06-deny-heal-failures.md`).** A `kIntent_Cast` claim used to hard-expire at APMF's
-  6 s TTL (`kHealCastTtlMs`, `APMFBridge.h:543`) and get re-requested on the next round-robin lap, which
+  6 s TTL (`kHealCastTtlMs`, `apmf/APMFBridge.h:876`) and get re-requested on the next round-robin lap, which
   left the actor **UNCLAIMED for 0.3–1.2 s every 6 s** — measured, with a foreign Stone Rune observed
   equipping and charging **110 ms** into one of those gaps. APMF's half of the fix is merged
   (`core/ControlMap.cpp`'s `ApplyRepoint` TTL RENEWAL: a `Repoint` on a **live** cast claim moves its
@@ -3779,24 +3851,24 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   here: `EnsureCastClaimLocked`'s **unchanged-AND-still-live** fast path now sends that `Repoint` before
   its early return.
   - **Where, and only there.** The heartbeat is inside the `liveNow` branch of `EnsureCastClaimLocked`
-    (`APMFBridge.cpp:470`), so it fires ONLY from `ClaimHealCast`/`ClaimOffenseCast` — a rule that WON its
+    (`apmf/Bridge.cpp:280`), so it fires ONLY from `ClaimHealCast`/`ClaimOffenseCast` — a rule that WON its
     lap re-asking for the identical `(spell,target,hand,conc,stopPct)` it already holds. It is
     **deliberately NOT in `RefreshHealCastClaim`**: that is `ComposedCast`'s incumbent HOLD, which keeps
     `refreshed` moving for a claim whose rule may have gone silent, and renewing APMF's TTL from there
     would remove the liveness bound that hold is documented to rely on.
   - **Covers heal AND both offense hands**, because it lives in the create-or-refresh helper all three
-    `CastClaim` slots already share (`Owned::heal` `:202`, `Owned::offense[2]` `:213`). A mirrored
+    `CastClaim` slots already share (`Owned::heal` `apmf/APMFBridge_internal.h:239`, `Owned::offense[2]` `:250`). A mirrored
     `DualCast` claim is ONE handle in both slots and `ClaimOffenseCast` only ever `Ensure`s slot 0, so it
     is renewed exactly once.
   - **Interval = `min(TTL/2, TTL − FacetExpiry())`, floored at 0** (`CastHeartbeatInterval()`,
-    `APMFBridge.cpp:449`, anon ns, right above `EnsureCastClaimLocked`). Sized from the REAL cadence (#9), and
+    `apmf/Bridge.cpp:241`, anon ns, right above `EnsureCastClaimLocked`). Sized from the REAL cadence (#9), and
     from the window this file ALREADY agrees on rather than a second invented budget: `FacetExpiry()`
-    (`:306`) is MFO's own upper bound on the gap between two services of one follower, so an interval
+    (`apmf/Bridge.cpp:163`) is MFO's own upper bound on the gap between two services of one follower, so an interval
     above it could let the window lapse between renewals. At the defaults (`fSuppressWindow` 1.5, solo)
     `FacetExpiry()` ≈ 2446 ms → the `TTL/2` = 3000 ms term wins; `fSuppressWindow` 3.0 + 5 followers →
     ≈ 4658 ms → interval ≈ 1342 ms. **Not an expiry:** nothing is released on it, and no release decision
     moved — the `Tick()` sweep still runs off `refreshed`.
-  - **New `CastClaim` fields** (`APMFBridge.cpp:82`): `renewed` (when APMF's window last started —
+  - **New `CastClaim` fields** (`apmf/APMFBridge_internal.h:80`): `renewed` (when APMF's window last started —
     stamped with `created` at the mint, then advanced by each renewal; `created` still never moves, so the
     never-observed hold cap keeps its bound and in fact TIGHTENS, since the 6 s expire-and-re-request cycle
     that used to reset it no longer happens under a still-winning rule) and `reqParam` (the exact
@@ -3854,10 +3926,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   (`CombatStyle.cpp`'s `EquipGateThunk`) onto APMF's T2a `CheckShouldEquip` hook, same
   `g_owned`/`EnsureClaimLocked` shape, one new field pair (`equipHandle`/`equip`). GATE-ONLY:
   the claim's `param.form` (the forced weapon's FormID) makes APMF write nothing; MFO still
-  EXECUTES the force-equip itself (`Actuation.cpp`'s `EquipWeapon`/`g_forcedWeapon`). Engaged
+  EXECUTES the force-equip itself (`cast/Equip.cpp`'s `EquipWeapon`/`g_forcedWeapon`). Engaged
   + refreshed every tick the force-hold survives by `Actuation::ReconcileForcedWeapon`
-  (`Actuation.cpp:1984` `kActPowerAttack`, gated `Config::g_weaponStyleControl`); released by
-  `Actuation::ReleaseForcedWeapon` (`:~1227`, the single choke point every teardown path —
+  (`cast/Equip.cpp:880`, gated `Config::g_weaponStyleControl`); released by
+  `Actuation::ReleaseForcedWeapon` (`cast/Equip.cpp:629`, the single choke point every teardown path —
   `Followers.cpp`, `Scheduler.cpp` — funnels through). `CombatStyle.cpp`'s `EquipGateThunk`
   consults `IsEquipmentClaimActive(fid)` right after the existing `IsOwnedCastActive` check
   (independent of it) and stands its own weapon-order deny down when true — APMF's hook
@@ -3885,13 +3957,13 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   accepted-and-ignored (gate-only again, exactly PASS E's own offense sibling
   `ClaimCasting` always was) — so PASS E's mechanism no longer does anything to
   a heal claim built on it. Nothing of PASS E's CODE survives here (see PASS F);
-  kept as history because the doc-comment trail (`APMFBridge.h`/`.cpp`,
+  kept as history because the doc-comment trail (`apmf/APMFBridge.h` / `apmf/*.cpp`,
   `Docs/CAST-DELIVERY.md`) still narrates it.
 - **PASS F (ch.8b `kIntent_Cast`/`RequestCast`, feat/mfo-cast-port, 2026-09-05):
   `ClaimHealCast`/`ReleaseHealCast`/`IsHealCastActive`/`GetHealCastProxy`/
-  `RefreshHealCastClaim`** (defs `APMFBridge.cpp:1116`/`:1155`/`:1163`/`:1170`/`:1184`
-  in that order — `:885` is the SEPARATE `GetOffenseCastProxy`, not one of these
-  five; decls `APMFBridge.h:610,625,635,644,719`; the last two ADDED 2026-09-06 by
+  `RefreshHealCastClaim`** (defs `apmf/CastClaims.cpp:351`/`:390`/`:398`/`:419`/`:433`
+  in that order — `:66` is the SEPARATE `GetOffenseCastProxy`, not one of these
+  five; decls `apmf/APMFBridge.h:1006,1021,1031,1047,1122`; the last two ADDED 2026-09-06 by
   feat/consume-cast-observability + `fix/mfo-heal-slot-and-proxy` — see the F1
   hold bullet under `ComposedCast.cpp` below for what they are for) — the
   heal-cast facet `ComposedCast` claims, PORTED BACK to the same ch.8b Intent PASS D used (the
@@ -3907,7 +3979,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   Own `g_owned` slot — **field names corrected 2026-09-07: these were written as
   `healHandle`/`healSpell`/`healTarget`/`healHand`/`healConc`/`healStopPct`/
   `healRefreshed` and NO SUCH FIELDS EXIST.** The slot is `Owned::heal`, a
-  `CastClaim` (`APMFBridge.cpp:228`), whose members are plain
+  `CastClaim` (`apmf/APMFBridge_internal.h:80`), whose members are plain
   `handle`/`spell`/`target`/`hand`/`conc`/`stopPct`/`refreshed`. Heal and hostile casts are
   mutually exclusive per tick by `CasterConsent::SpellKind`, never concurrent
   on one follower, but kept distinct to avoid cross-talk. AT THE TIME (2026-09-05,
@@ -3918,7 +3990,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   SAME facet as this heal claim via its OWN distinct `offenseHandle` slot —
   still never concurrent, never cross-talking, just sharing one underlying
   mechanism instead of two.
-  `EnsureCastClaimLocked` (`APMFBridge.cpp:470`, anon ns, RENAMED from `EnsureHealClaimLocked`
+  `EnsureCastClaimLocked` (`apmf/Bridge.cpp:280`, anon ns, RENAMED from `EnsureHealClaimLocked`
   by PASS G — it was always generic) create-or-REFRESHES: unlike PASS
   E's `Repoint`, `RequestCast`'s rich payload has NO in-place re-point, so a
   CHANGE in `(spell, target, hand, concentration, stopPct)` releases the old
@@ -3927,15 +3999,15 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   g_healAnimPackage` + APMF present + `api->abiVersion >= 5` (`RequestCast` is
   a v5 slot — logged-once warn + clean degrade to kInstant on an older
   APMF.dll, never a crash). `a_hand` is always `kApmfHandLeft` (2,
-  `APMFBridge.h:102`) — see the HAND FIX below, unchanged in policy from PASS
+  `apmf/APMFBridge.h:119`) — see the HAND FIX below, unchanged in policy from PASS
   E/D, just re-expressed as `APMF_API::kCastFlag_LeftHand` in `req.flags`
   instead of `ival` bits (which are gone with the retired drive). NEW this
   pass: `a_concentration` sets `kCastFlag_Concentration` (TTL floor for a held
   stream) and `a_stopPct` (0..100, `APMF_API::MakeStopPct`) tells seat 0x07
   `CheckStopCast` where to end a concentration channel instead of always full
-  restoration — see `Actuation_Direct.cpp`'s `CastAuto` entry below for the one
+  restoration — see `cast/Auto.cpp`'s `CastAuto` entry below for the one
   real threshold source. `req.ttlMs` is `APMFBridge::kHealCastTtlMs`
-  (`APMFBridge.h:543`, 6000) — the SAME constant `ComposedCast.cpp`'s
+  (`apmf/APMFBridge.h:876`, 6000) — the SAME constant `ComposedCast.cpp`'s
   `kHealBoundsTtlMs` now aliases, so the `RequestCast` window and the
   `CastBounds::Arm` window can never drift apart.
 - **HAND FIX (2026-09-05, deck: heal driven right hand, then displaced by the
@@ -3954,7 +4026,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   kApmfHandLeft` unconditionally, forwarded into `req.flags` as
   `kCastFlag_LeftHand` — UNCHANGED, on purpose: heals bypass the intelligent
   hand pass below entirely (heal is left, regardless).
-- **`WeaponHandActive`** (`APMFBridge.cpp:1052`, decl `APMFBridge.h:347`,
+- **`WeaponHandActive`** (`apmf/Equip.cpp:65`, decl `apmf/APMFBridge.h:442`,
   2026-09-06) — the canonical "does a weapon own this hand" signal for cast
   hand-selection: `Loadout::Read(follower, nullptr).grip` (a weapon equipped
   RIGHT NOW) OR `IsEquipmentClaimActive` (an equip gambit about to reassert
@@ -3968,7 +4040,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   when the follower's REAL dual-cast perk + magicka afford it, else
   EitherFree for the caller to assign, including a second "juggle" spell).
   **The claim SHAPE gap is closed (2026-09-06):** `APMF_API::kCastFlag_DualCast`
-  (bit 3) exists, `APMFBridge::HandFor(HandPick)` (`APMFBridge.h`) translates a
+  (bit 3) exists, `APMFBridge::HandFor(HandPick)` (`apmf/APMFBridge.h`) translates a
   `PlanCastHand` result into this bridge's `a_hand` encoding (`kApmfHandLeft`
   / new `kApmfHandDualCast` / 0), and `EnsureHealClaimLocked`'s `req.flags`
   build sets `kCastFlag_DualCast` INSTEAD OF `kCastFlag_LeftHand` for
@@ -3976,10 +4048,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   distinguishes "asked for dual, claim granted" from "asked for dual, claim
   REFUSED outright" (silence = never asked). **NOW WIRED (integration/2026-09-06
   then feat/per-hand-cast-slots, 2026-09-06)** — superseded the "still NOT
-  wired" state this entry used to describe: `Actuation.cpp`'s `CastOn`
+  wired" state this entry used to describe: `cast/CastOn.cpp`'s `CastOn`
   (`ownedCast` branch, ch.8b `ClaimOffenseCast`) consults `PlanCastHand`
   (via the per-hand cast-gambit lock's `ResolveCastHand`, see this file's
-  `Actuation.cpp` entry) and passes the resolved `HandPlan` through as
+  cast/ entry) and passes the resolved `HandPlan` through as
   `ClaimOffenseCast`'s `a_hand` — `HandFor` is no longer the last step for this
   call site (it cannot express an already-juggled concrete Right; `CastOn`
   builds the `a_hand` value directly from `HandPlan`) but still documents the
@@ -4012,15 +4084,15 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   APMF-side equipment GATE lapsing mid-hold let something else (the AI's own
   idle/holster behavior, or a competing custom-AI framework's own equip logic
   under APMF arbitration) interfere with the weapon while MFO's own force-hold
-  was still nominally up, and since `ReconcileForcedWeapon` (`Actuation.cpp:2106`) never re-asserts
+  was still nominally up, and since `ReconcileForcedWeapon` (`cast/Equip.cpp:798`) never re-asserts
   the physical equip (only the claim) between `EquipWeapon`'s one-shot fires,
   a follower stuck in that gap the moment reads as "standing around unarmed
   until the next fight re-fires the equip gambit." Fixed with a dedicated
-  `FacetExpiry()` (`APMFBridge.cpp:332`, decl `APMFBridge.h:81`, renamed from `HealExpiry()`)
+  `FacetExpiry()` (`apmf/Bridge.cpp:163`, decl `apmf/APMFBridge.h:98`, renamed from `HealExpiry()`)
   sized the SAME way `TargetCastReconcile`/`SelfCastReconcile` already size
   their own round-robin-aware release windows (`suppress*1.12 +
   0.133*partySize + 0.5`, floored at the old 500ms) — `Tick()`'s
-  (`APMFBridge.cpp:1289`) per-claim expiry checks (the `CastClaim` slots plus
+  (`apmf/Bridge.cpp:880`) per-claim expiry checks (the `CastClaim` slots plus
   `targetHandle`/`equipHandle`) all compare against `FacetExpiry()` now, not
   the flat `kExpiry`. package-offer
   (`packageHandle`) stays on the flat `kExpiry` — VERIFIED (not assumed) it is
@@ -4050,7 +4122,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **PASS G (ch.8b `kIntent_Cast`/`RequestCast`, feat/offense-cast-seats,
   2026-09-05): offense PORTED off ch.8 `kIntent_SelectSpell` onto the SAME
   facet PASS F ported heal onto.** `ClaimOffenseCast`/`ReleaseOffenseCast`
-  (defs `APMFBridge.cpp:902`/`:977`) REPLACE the retired
+  (defs `apmf/CastClaims.cpp:83`/`:326`) REPLACE the retired
   `ClaimCasting`/`ReleaseCasting` (`kIntent_SelectSpell`, ARBITRATE+DENY only --
   the follower's own AI still picked whichever spell IT wanted, the
   long-standing "target right, spell wrong" defect,
@@ -4060,17 +4132,17 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   spell at EXACTLY the claimed target -- closing the defect. Own `g_owned`
   slot. **STRUCTURE, CORRECTED 2026-09-07 — this used to name
   `offenseHandle`/`offenseSpell`/`offenseTarget`/`offenseHand`/`offenseConc`/
-  `offenseStopPct`/`offenseRefreshed` at `APMFBridge.cpp:111-114`. NO SUCH FIELDS
-  EXIST** (`:111-114` is the `everLive` comment). The real shape: `Owned` holds
-  `CastClaim heal` (`APMFBridge.cpp:228`) and `CastClaim offense[2]` (`:239`,
+  `offenseStopPct`/`offenseRefreshed` at `apmf/APMFBridge_internal.h:124-132`. NO SUCH FIELDS
+  EXIST** (`:124-132` is the `everLive` comment). The real shape: `Owned` holds
+  `CastClaim heal` (`apmf/APMFBridge_internal.h:239`) and `CastClaim offense[2]` (`:250`,
   [0]=left/[1]=right); the per-claim state — `handle`/`spell`/`target`/`hand`/
   `conc`/`stopPct`/`refreshed`/`created`/`proxy`/`everLive` — lives on `CastClaim`
-  itself (`conc`/`stopPct` at `:87-88`). So offense is
+  itself (`conc`/`stopPct` at `apmf/APMFBridge_internal.h:85-86`). So offense is
   a DISTINCT claim slot from the heal one (Task 3's invariant preserved),
   sharing its create-or-refresh plumbing via the RENAMED, now-generic
-  `EnsureCastClaimLocked` (`APMFBridge.cpp:470`, was `EnsureHealClaimLocked` -- the function
+  `EnsureCastClaimLocked` (`apmf/Bridge.cpp:280`, was `EnsureHealClaimLocked` -- the function
   was always generic over its handle/out-params). Sole call site:
-  `Actuation::CastOn`'s `ownedCast` branch (`Actuation.cpp:1036`, in the pre-flight) always
+  `Actuation::CastOn`'s `ownedCast` branch (`cast/CastOn.cpp:713`, in the pre-flight) always
   passes `hand=kApmfHandLeft` (matches `Loadout::Prepare`'s own
   `LeftHandSlot()` equip target exactly -- no weapon-state branching needed,
   since MFO's offense equip has ALWAYS targeted LEFT regardless of grip),
@@ -4102,7 +4174,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   * **FAIL CLOSED** — APMF present AND capable AND it REFUSED (an arbitration
     loss lands HERE, not above; and since `fix/mfo-fourstate-followups` it returns from the
     PRE-FLIGHT, before any hand is touched — see "THE ASK RUNS BEFORE THE EQUIP (F3-2)") →
-    `Actuation.cpp:1039-1052` returns
+    `cast/CastOn.cpp:716-729` returns
     `{FailedSkill, "APMF refused the cast claim", transparent}` with a
     rate-limited `[apmf] … APMF REFUSED …`. The cast IS dropped, deliberately and
     loudly; nothing routes around APMF. `transparent` keeps the rules below it
@@ -4122,14 +4194,14 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   CONCENTRATION stream now reaches the engine-seat path, + the firing-spell
   gambit LOCK.** Two independent fixes; full writeup in `Docs/CAST-DELIVERY.md`'s
   "CONCENTRATION CLAIM PORT + THE FIRING-SPELL GAMBIT LOCK" section.
-  (1) `CastSelfDirect`/`CastTargetDirect` (`Actuation_Direct.cpp`), right after
+  (1) `CastSelfDirect`/`CastTargetDirect` (`cast/Direct.cpp`), right after
   their existing `ComposedCast::Try` call (which stays HEAL-ONLY, untouched —
   owned by a parallel change), now call `APMFBridge::ClaimOffenseCast` DIRECTLY
   with `concentration=true, stopPct=0` when `kind != Heal` and the spell is
   `kConcentration` -- the exact "FUTURE call site" PASS G's own doc predicted
   and left unwired. Absent/off/SE/ABI < 5 degrades to the SAME direct-force
   stream that already ran, byte-identical; a REFUSAL from a present, capable APMF fails
-  closed instead (`fix/mfo-no-decline-fallback`, 2026-09-07). (2) `Actuation.cpp` gained a
+  closed instead (`fix/mfo-no-decline-fallback`, 2026-09-07). (2) `Actuation.cpp` (today `cast/Hands.cpp` + `cast/Actuation_internal.h`) gained a
   cast-gambit lock (`g_castLock`/`g_lastLockLog`, anon-namespace, file-local)
   that `CastOn` consults right after the range/competence gates before letting
   a DIFFERENT `(spell,target)` than one already occupying the follower touch
@@ -4163,8 +4235,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   block, and `Followers::ReleaseHeldState`'s dismissal teardown) -- and in bulk
   by `Actuation::ClearCastLocks()`, called from `Actuation::ClearSelfCasts()`
   (the existing `Serialization.cpp` revert call site; no new one added).
-  `APMFBridge::FacetExpiry()` (`APMFBridge.cpp:332` was anon-namespace-private;
-  MOVED to external linkage + declared in `APMFBridge.h` for this cross-TU
+  `APMFBridge::FacetExpiry()` (`apmf/Bridge.cpp:163` was anon-namespace-private;
+  MOVED to external linkage + declared in `apmf/APMFBridge.h` for this cross-TU
   reuse -- pure visibility change, same formula, every in-TU caller unaffected).
   **Scope, deliberate:** the legacy AI-first-grace + force-on-miss hybrid and
   `CastAuto`'s sequential-most-hurt heal fan are NOT covered by the lock (own
@@ -4179,7 +4251,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   delivery APMF flipped through its own proxy (e.g. a heal-other) landed as a cast of
   the PROXY and was filed as "their own spell, not ours" — every `[cfc] ... NO
   observed cast` warning on that claim was a false alarm; (b) `EnsureCastClaimLocked`'s
-  unchanged-claim fast path (`APMFBridge.cpp`) trusted a stored handle blindly and
+  unchanged-claim fast path (`apmf/Bridge.cpp`) trusted a stored handle blindly and
   returned early, so once APMF auto-expired a claim MFO kept believing it was still
   live and never re-requested (field: 23s of re-fires, zero `RequestCast` reaching
   APMF). Fix, guarded `abiVersion >= 6` throughout (ABI < 6 = byte-identical
@@ -4192,8 +4264,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `GetOffenseCastProxy`. `ComposedCast`'s silent-claim `Watch` struct
   (`ComposedCast.cpp`) gained a `proxy` field alongside `spell`;
   `WatchArmed`/`WatchClaim` take a new `a_proxy` parameter (every call site —
-  `ComposedCast::Try`, `Actuation.cpp`'s owned-cast branch,
-  `Actuation_Direct.cpp`'s two concentration-offense claims — fetches it via the new
+  `ComposedCast::Try`, `cast/CastOn.cpp`'s owned-cast branch,
+  `cast/Direct.cpp`'s two concentration-offense claims — fetches it via the new
   accessors and forwards it); `ExpectingCast`/`NoteObservedCast` now match on spell
   OR proxy. `Diagnostics.cpp`'s `SpellSink` "ours" check (the `*** MFO GAMBIT
   SPELL ***` log tag, previously `g.actionParamForm == spellID` only) now also
@@ -4305,12 +4377,12 @@ decline-fallback.
   APMF-delivered package must read as "on the travel package", never as "stolen" (0x49 wins on
   every nudge while the claim is published — but NOT on the engine's own cadence, so a claim
   nobody re-nudges can be displaced; the guard must not misfire and churn regardless).
-- **`ClaimCombatActionDeny` is NOT wired here** (see APMFBridge.cpp above) — left available, not
+- **`ClaimCombatActionDeny` is NOT wired here** (see the apmf/ entry above) — left available, not
   scoped into this dispatch, per marth's "keep it scoped" instruction and the existing
   concede-to-combat design.
 - **APMF RETREAT (ch.9 0x49 route, 2026-09-03), the same PASS B conversion applied to
   `RetreatFill/Clear/EvictIf` (`Packages.cpp:1848-2021`) — shared by BOTH callers, the
-  `act.flee` gambit (`Actuation.cpp:1969`, `Vocab::kActFlee`) and the opt-in
+  `act.flee` gambit (`cast/Fire.cpp:274`, `Vocab::kActFlee`) and the opt-in
   auto-retreat leash safety (`Scheduler.cpp:462`).** Same showpiece/commit principle as
   loot-travel: `Available() && Config::g_apmfRetreat` routes through `APMFBridge::
   OfferPackage`/`ReleaseOfferPackage` naming `Forms::g_apmfRetreatPackage`
@@ -4337,7 +4409,7 @@ decline-fallback.
   the new package — retreat is the one Travel use that must win THROUGH combat, opposite
   of loot-travel's plain preferred-speed flag.
 - **HARD MUTUAL-EXCLUSION GUARD (2026-09-03): retreat and loot-travel share ONE
-  per-follower `APMFBridge::OfferPackage` handle** (`APMFBridge.cpp`'s `g_owned` map is
+  per-follower `APMFBridge::OfferPackage` handle** (`apmf/Bridge.cpp`'s `g_owned` map is
   keyed by `FormID` alone, not by intent+slot) — if a follower ever held BOTH a live
   loot-travel excursion and a retreat hold, the two claims would stomp that single
   handle every `Pump()` tick (loot's slot-refresh loop and the retreat refresh both call
@@ -4384,7 +4456,7 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   with the real proxy key on the main thread inside the drive (`PhaseSelect`).
 - `Disarm(RE::FormID actor)` (`:79`) — clears EVERY slot the actor owns (both spell
   and proxy keys). Called on every `ComposedCast` exit (`Try`'s refused-claim
-  branch; `End`), by `Actuation_Direct.cpp:928` beside `ConcProxy::Reset()`, and
+  branch; `End`), by `cast/Direct.cpp:964` beside `ConcProxy::Reset()`, and
   by `Followers.cpp:324` (`ReleaseHeldState`, dismissal path, beside
   `APMFBridge::ReleaseHealCast` — replaces the deleted
   `Packages::HealAnimEvictIf`).
@@ -4395,7 +4467,7 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   `:222`) by `ConcUnboundedDeny` (`:244`), the `CheckStartCast` thunk's
   early-pass (`:579`), and `CheckCastThunk`'s early-pass (`:947`, 0x0A).
 - `Reset()` (`:104`) — clears every slot. `kPreLoadGame`/revert, called from
-  `Actuation_Direct.cpp:928` beside `ConcProxy::Reset()`, NOT independently wired
+  `cast/Direct.cpp:964` beside `ConcProxy::Reset()`, NOT independently wired
   into `plugin.cpp` (folded into `ClearSelfCasts`'s existing teardown call site).
 - `LiveCount()` (`:111`) — diagnostics only, cheap and lock-free.
 - **What breaks:** ONLY relevant to a cast that DELIBERATES through the engine's
@@ -4437,7 +4509,7 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   reflexively"). No code changed here this pass.
 
 ### ComposedCast.cpp / ComposedCast.h — the Composed Forced Cast (CFC) shim (feat/mfo-cast-port, 2026-09-05)
-THIN SHIM, now over PASS F (`APMFBridge.cpp`'s entry above) — replaces the deleted
+THIN SHIM, now over PASS F (the apmf/ entry above) — replaces the deleted
 `HealAnimFill` package route AND its own former MFO-side hand-drive. Composes a
 `kIntent_Cast` claim (`APMFBridge::ClaimHealCast`) + a `CastBounds` arm; APMF's
 engine seats drive the follower's OWN AI to equip/animate/deliver the cast
@@ -4454,8 +4526,8 @@ native seats) and ENGINE_NOTES §0.40.
   ARBITRATION answered. The old `Refused` was **renamed** to `NotApplicable` rather than
   re-pointed, deliberately: re-using the name for the opposite meaning would have let every
   call site keep compiling with inverted semantics.
-  ← `Actuation_Direct.cpp:886` (in `CastSelfDirect`, `:829`), `:1183` (in
-  `CastTargetDirect`, `:1141`) **and `Actuation.cpp:1079`** (`CastOn`'s ally/player
+  ← `cast/Direct.cpp:713` (in `CastSelfDirect`, `:628`), `:1107` (in
+  `CastTargetDirect`, `:999`) **and `cast/CastOn.cpp:757`** (`CastOn`'s ally/player
   branch — a third call site, MISSING from this entry until 2026-09-06; MOVED by
   F3-2 out of the equip switch into `CastOn`'s pre-flight, so the ask now precedes
   `Loadout::Prepare`/`CasterConsent::Want` and a refusal leaves no side effects).
@@ -4493,15 +4565,15 @@ native seats) and ENGINE_NOTES §0.40.
   inspects/substitutes, same discipline as PASS E, field-proven under it (deck
   APMF.log: `driving left hand -- spell 0002F3B8 cast-as FF001A7D target
   0009BCB0`, Fast Healing/Self correctly proxied onto an ally). MFO still SENDS
-  APMF `req.proxy = 0` (`APMFBridge.cpp`'s `EnsureCastClaimLocked`) — F4 changed
+  APMF `req.proxy = 0` (`apmf/Bridge.cpp`'s `EnsureCastClaimLocked`) — F4 changed
   only what MFO READS BACK (`GetCastProxy`) and forwards to `CastBounds::Arm` /
   `WatchArmed`, never what it asks for.
 - **STOP-PERCENT (`a_stopPct`, NEW this pass).** Forwarded into
   `ClaimHealCast`'s `a_stopPct` → `req.flags`'s `APMF_API::MakeStopPct` bits —
   tells seat 0x07 `CheckStopCast` to end a CONCENTRATION channel at a whole
   percent (1..100) of the target's PERMANENT actor value, not always full
-  restoration. `Actuation_Direct.cpp`'s `CastAuto` (its conc-heal branch,
-  `:1154`) is the ONE call site with a real per-gambit threshold in scope
+  restoration. `cast/Auto.cpp`'s `CastAuto` (its conc-heal branch,
+  `:313`) is the ONE call site with a real per-gambit threshold in scope
   (the firing rule's own `conditionParam`, already used there to pick the
   neediest target) and converts it to a whole percent; every other
   `CastSelfDirect`/`CastTargetDirect` caller passes the default 0 (stop at
@@ -4520,7 +4592,7 @@ native seats) and ENGINE_NOTES §0.40.
   separate since this TU has no access to that anon-ns helper, but the two
   MUST agree) is the same arm for a caller claiming `kIntent_Cast` directly
   (`Actuation::CastOn`'s `ownedCast` branch, via `ClaimOffenseCast`, and
-  `Actuation_Direct.cpp`'s two concentration-offense claims) — called
+  `cast/Direct.cpp`'s two concentration-offense claims) — called
   once per hand the claim actually occupies (both, for a DualCast plan). If
   2s+ pass with no observed cast on that hand (rate-limited to once per 5s),
   logs a `[cfc]` warning naming the follower/spell/hand.
@@ -4541,31 +4613,31 @@ native seats) and ENGINE_NOTES §0.40.
   spells). The diagnostic is NOT weakened — a claim producing neither match
   still warns exactly as before. Both are worker-serial, no lock
   — `Try`/`End` and the sink's call site are the SAME serialized AddTask
-  job-worker queue (mirrors `Actuation_Direct.cpp`'s unlocked
+  job-worker queue (mirrors `cast/Direct.cpp`'s unlocked
   `g_selfCast`/`g_targetCast`).
 - **THE F1 INCUMBENT HOLD (`TryResult::Held`) — `fix/mfo-heal-slot-and-proxy`,
   2026-09-06. NEW: nothing in MAP described this machinery before.** The heal slot
-  is ONE `CastClaim` per follower (`APMFBridge.cpp`'s `Owned::heal`), and two heal
+  is ONE `CastClaim` per follower (`apmf/APMFBridge_internal.h`'s `Owned::heal`), and two heal
   rules alternating on it every 1-3s each released the live claim before the
   engine's equip+charge finished, so no heal ever landed
   (`Docs/DIAG-2026-09-06-deny-heal-failures.md` RC1 — that file lives on `main`,
   `88398dd`; this branch predates it, so the path resolves only after merge). `Try()` (`:360-404`) now
   HOLDS the incumbent instead: if hand 0's watch holds a DIFFERENT spell, is
   `!observed`, and `APMFBridge::RefreshHealCastClaim(fid)` says the claim is still
-  live, it logs (`LogHealHoldOff`, `:186`, deduped 2s per (follower, spell)),
-  records `g_lastHold[fid]` (`HoldRecord`, `:173`) and returns `TryResult::Held` —
+  live, it logs (`LogHealHoldOff`, `ComposedCast.cpp:271`, deduped 2s per (follower, spell)),
+  records `g_lastHold[fid]` (`HoldRecord`, `ComposedCast.cpp:258`) and returns `TryResult::Held` —
   the incumbent keeps its charge window; NOTHING is claimed and NOTHING applied.
   Pieces:
-  - `APMFBridge::RefreshHealCastClaim` (`APMFBridge.cpp:1184`, decl
-    `APMFBridge.h:719`) — the hold's HEARTBEAT: bumps the same `refreshed` stamp
+  - `APMFBridge::RefreshHealCastClaim` (`apmf/CastClaims.cpp:433`, decl
+    `apmf/APMFBridge.h:1122`) — the hold's HEARTBEAT: bumps the same `refreshed` stamp
     `ClaimHealCast` bumps, because the hold path deliberately never reaches
     `ClaimHealCast` and `Tick()`'s `FacetExpiry()` sweep would otherwise release
     the very claim the hold protects (~2.45s at the default `fSuppressWindow`,
     ~0.77s at a legal 0). Bounded twice: APMF's `IsClaimLive` (ABI ≥ 6; **ABI < 6
     returns false outright** — an honest degrade to the pre-F1 thrash, never a
     hold nothing can break, #7), AND the claim-age cap below.
-  - `APMFBridge::kHealHoldNeverObservedMs` (`APMFBridge.h`, **4000ms**) vs
-    `CastClaim::created` (`APMFBridge.cpp:103`, stamped once at `:734`) — the
+  - `APMFBridge::kHealHoldNeverObservedMs` (`apmf/APMFBridge.h`, **4000ms**) vs
+    `CastClaim::created` (`apmf/APMFBridge_internal.h:114`, stamped once at `apmf/Bridge.cpp:560`) — the
     NEVER-OBSERVED cap. **It races `observed` (the `[cast]` SpellSink signal), not
     the fire, and it is sized from the HEAL datum:** the one heal that landed on
     the deck took **2.95s claim-to-observed** (minted 19:59:11.158 → `[cast]`
@@ -4615,10 +4687,10 @@ native seats) and ENGINE_NOTES §0.40.
     `ComposedCast.h:218`) ← `Logistics.cpp:1545` — names WHICH incumbent held a
     spell off, for the LOG ONLY. Reads `g_lastHold`, which every `Try()` erases at
     its top (`:207`), so it needs no expiry and MUST NOT grow one (#9).
-  - **Depended-on-by:** `Actuation_Direct.cpp:888`/`:1185` map `Held` →
-    `SelfCast::Held` (`Actuation.h:93`) → `Actuation_Direct.cpp:1488` (`CastAuto`,
+  - **Depended-on-by:** `cast/Direct.cpp:715`/`:1109` map `Held` →
+    `SelfCast::Held` (`cast/Actuation.h:120`) → `cast/Auto.cpp:370` (`CastAuto`,
     transparent NoOp) and `Logistics.cpp:1506` (transparent `continue`, log deduped
-    2s); `Actuation.cpp:289-291` (`ConcentrationCast`) returns a TRANSPARENT NoOp with NO hand
+    2s); `cast/Roads.cpp:166-167`/`:242-243` (`ConcentrationCast`) returns a TRANSPARENT NoOp with NO hand
     lock.
 - **THE F12 IN-FLIGHT HOLD — `fix/mfo-heal-recognition`, v2.0.5, 2026-09-09.** The
   SECOND answer in `Try()` (`ComposedCast.cpp:484-556`), reached only when the F1
@@ -4634,14 +4706,14 @@ native seats) and ENGINE_NOTES §0.40.
   5457 ms old and still `!observed`, because `observed` means the
   `TESSpellCastEvent` FIRED and this cast had only reached Casting. The cap is not
   wrong; it is blind to the engine's own state.
-  - **Reuses `Actuation::CastInFlightOnHand`** (`Actuation_Hands.cpp:251`) — that
-    predicate was file-local and went PUBLIC (decl `Actuation.h`, and
+  - **Reuses `Actuation::CastInFlightOnHand`** (`cast/Hands.cpp:252`) — that
+    predicate was file-local and went PUBLIC (decl `cast/Actuation.h`, and
     `kHandLeft`/`kHandRight`/`kHandCount` MOVED from `Actuation_internal.h` to
-    `Actuation.h` for the same reason: `ComposedCast.cpp` is not one of the three
-    Actuation TUs). ONE definition of "in flight", not a second liveness test.
+    `cast/Actuation.h` for the same reason: `ComposedCast.cpp` is not one of the
+    cast/ TUs). ONE definition of "in flight", not a second liveness test.
   - **Bounded by `kInFlightHoldCap`** (`ComposedCast.cpp:32-42`, `=
     APMFBridge::kHealCastTtlMs`, the same source constant as
-    `Actuation_Hands.cpp:286`), anchored on `Watch::inFlightHoldSince` — the twin
+    `cast/Hands.cpp:287`), anchored on `Watch::inFlightHoldSince` — the twin
     of `CastLock::claimGoneAt`, stamped when the extension first engages and zeroed
     the moment the engine is no longer casting that spell, so an idle gap between
     casts hands the slot over at once (matching `CanPreemptHand`'s "only the idle
@@ -4655,7 +4727,7 @@ native seats) and ENGINE_NOTES §0.40.
   - **Why HERE and not in the hand lock.** `ComposedCast::Try` is the ONE
     `ClaimHealCast` call site in `native/`; BOTH the Logistics OOC concentration
     dispatch (`Logistics.cpp:~1500` → `CastTargetDirect`) and combat `CastOn`'s
-    composed branch (`Actuation.cpp:1004`) bottom out here. The per-hand cast lock
+    composed branch (`cast/CastOn.cpp:757`) bottom out here. The per-hand cast lock
     never saw the Logistics claim at all, which is why F8's identical protection did
     not cover this.
   - **What breaks if you change this:** (1) folding `Held` back into
@@ -4677,14 +4749,14 @@ native seats) and ENGINE_NOTES §0.40.
     `IsClaimLive`/`GetCastProxy` read the PUBLISHED snapshot only, so a check in
     the same frame as a fresh `RequestCast` reads NOT-live and would thrash. Both
     sites carry the corrected dependency as a comment (`ComposedCast.cpp`'s hold
-    check and `EnsureCastClaimLocked`'s unchanged fast path in `APMFBridge.cpp`).
+    check and `EnsureCastClaimLocked`'s unchanged fast path in `apmf/Bridge.cpp`).
   - `Logistics.cpp:1444` labels an `Applied` heal **"APMF claimed"**, not
     "delivered": a live claim may sit UNOBSERVED for its whole window. The FIRING
     signal is separate (`Diagnostics.cpp`'s SpellSink → the watch; `[cfc] ... NO
     observed cast` when it never fires). Do not word that back to "delivered" (#7).
     **Since 2026-09-21 that label is derived from the ROAD, not from claim liveness:**
     `Logistics.cpp:~1741` reads `Actuation::TargetStreamLive(id, spell, target)`
-    (`Actuation_Direct.cpp:1484`, the direct road's own `g_targetCast` entry) — `IsHealCastActive`
+    (`cast/Direct.cpp:1312`, the direct road's own `g_targetCast` entry) — `IsHealCastActive`
     answered "any live heal claim on this follower" and labelled a direct Healing Hands "APMF
     claimed" because rule 0's Fast Healing claim was live (deck 2026-09-21 08:09:39).
 - `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`
@@ -4707,7 +4779,7 @@ native seats) and ENGINE_NOTES §0.40.
   `ClaimCombatTarget`/`ClaimOffenseCast` already use — not a new pattern.
 - `Reset()` — clears `g_watch` (the diagnostic's only local state): `APMFBridge::
   ClearTransientState` drops the claim on `kPreLoadGame`, `CastBounds::Reset` drops
-  the bound. Kept as the seam `Actuation_Direct.cpp`'s `ClearSelfCasts` already calls.
+  the bound. Kept as the seam `cast/Direct.cpp`'s `ClearSelfCasts` already calls.
 - **Threading:** `Try`/`End` run on the AddTask job worker (#4), matching every other
   `Actuation_Direct` entry point. No main-thread posting left in this module — APMF's
   own seats run inside APMF.dll's driven engine calls. `CastBounds` is lock-free;
@@ -4725,7 +4797,7 @@ native seats) and ENGINE_NOTES §0.40.
   casts would ALSO route through this claim — this pass's explicit "offense
   stays on the legacy AI-fired path" boundary depends on that one check.
   Offense's OWN `ClaimCasting`/`kIntent_SelectSpell` claim (PASS 1 above,
-  `Actuation.cpp:522`) no longer shares ANY channel with the heal claim here
+  today's offense claim is `cast/CastOn.cpp:713`) no longer shares ANY channel with the heal claim here
   (PASS F moved heal to its own `kIntent_Cast` facet) — the PASS E-era
   cross-talk risk this bullet used to flag is structurally gone.
 - **TASK 1 VERDICT (feat/mfo-claim-only-heal, 2026-09-05): already claim-only —
@@ -4735,7 +4807,7 @@ native seats) and ENGINE_NOTES §0.40.
 - **feat/mfo-cast-port (this pass): the "let the native AI cast it" design,
   previously RE'd-but-not-built, is SHIPPED.** MAP's own former "FORWARD LOOK"
   entry here predicted exactly this shape once APMF answered the five seats —
-  see the PASS F bullet in `APMFBridge.cpp`'s entry above for the mechanism,
+  see the PASS F bullet in the apmf/ entry above for the mechanism,
   and `Docs/CAST-DELIVERY.md`'s "Native-AI seat-answering — SHIPPED" section
   for the full narrative closing that loop.
 
@@ -4941,7 +5013,7 @@ concurrency question (distinct threads, mutual exclusion UNPROVEN).
   observe-not-clobber engine-award read). **General, add-on-agnostic — no progression
   types in the signatures**; the host applies add-on DATA through them. **Domain: main-
   thread / serial-worker only** (same as `TryEnsureRecord`). Callers today: `SetBaseClass`
-  ← `ProgAllocator::SetClass`; `GetBaseClass` ← `Scheduler.cpp` stance + `Actuation.cpp`
+  ← `ProgAllocator::SetClass`; `GetBaseClass` ← `Scheduler.cpp` stance + `cast/Equip.cpp:354`
   dagger-melee; `Get/SetFollowerHMS`+`MeasureEngineVitalAward` ← `ProgAllocator::RecomputeHMS`.
   This is the surface Phases 2+ grow (SetSkill/GrantPerk/level-up events) — keep it general.
 - `Refresh` (`:419`, the eviction hub) — **runs on the JOB WORKER** (`Diagnostics.cpp`
@@ -4969,9 +5041,9 @@ Per-follower rapport/rank + death/combat sinks + the ally-combat quash.
 Sinks QUEUE, never act inline (#1): `QuashAllyPair` (`:336`) MUST defer `StopCombat`
 off the TESCombatEvent dispatch (`:393`) or it's the v1.0.53 hard-freeze; backstop
 `Scheduler.cpp:294`. `Award` (`:434`, scaled by `g_rapportRate`) / `Spend` (`:481`,
-NOT scaled) main-thread; `Spend` external caller `ProgAllocator.cpp:1346`. `RankFor`
-(`:426`) reads `g_rank2..g_rank5` atomics — the sole rapport→slot map. `ResetSessionCounters`
-(`:407`) ← `Serialization.cpp:619`.
+NOT scaled) main-thread; `Spend` external caller `progression/Verbs.cpp:328`. `RankFor`
+(`Rapport.cpp:435`) reads `g_rank2..g_rank5` atomics — the sole rapport→slot map. `ResetSessionCounters`
+(`Rapport.cpp:416`) ← `Serialization.cpp:619`.
 
 ### Evaluator.cpp / Evaluator.h
 Gambit condition/action evaluator: scan a table top-down, **first true wins, PURE
@@ -4993,7 +5065,7 @@ The gambit opcode **strings are a frozen co-save contract (#10)** — written ve
 is a **schema migration, not an edit** (old saves carry the old string; the `==`
 compares silently stop matching). Adding an opcode requires wiring in Evaluator +
 Actuation + Board's picker or it's inert. **`Subject` enum** (Self=0/Player=1/
-NearestAlly=2, `:37`) is serialized as the raw `subject` byte (read `Actuation.cpp:73`,
+NearestAlly=2, `:37`) is serialized as the raw `subject` byte (read `cast/Fire.cpp:80`,
 `Board.cpp:850,858-863`) — reordering reinterprets every saved byte (a specific follower is
 carried as `subjectActorForm`, NOT an enum value, precisely to keep the enum frozen).
 `Pct`/`HealthPct`/etc. (`:214`) use permanent+temporary AV — changing the max formula
