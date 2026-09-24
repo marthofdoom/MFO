@@ -1,0 +1,11 @@
+# Wave-1 subsystem-folder split (2026-09-24): which new translation units each
+# old one became. splitcheck uses it to pair module-tagged twins (file-local
+# symbols of one name in several TUs), so a reference that re-binds to another
+# TU's same-named twin is a FAIL. Modules not listed map to themselves.
+Actuation.cpp:          cast/Fire.cpp cast/Roads.cpp cast/CastOn.cpp cast/Equip.cpp
+Actuation_Direct.cpp:   cast/Direct.cpp cast/Summon.cpp cast/Auto.cpp
+Actuation_Hands.cpp:    cast/Hands.cpp
+ProgAllocator.cpp:      progression/Allocator.cpp progression/SkillScale.cpp progression/PerkGate.cpp progression/BoardViews.cpp progression/Poll.cpp progression/Harness.cpp progression/Verbs.cpp
+ProgAllocator_Hms.cpp:  progression/Hms.cpp
+ProgAllocator_Manifest.cpp: progression/Manifest.cpp
+APMFBridge.cpp:         apmf/Bridge.cpp apmf/CastClaims.cpp apmf/Equip.cpp apmf/Excursion.cpp apmf/SpellAllowList.cpp

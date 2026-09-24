@@ -94,6 +94,81 @@ def short(name):
     return last
 
 
+def split_scope(name):
+    """Split a demangled name on '::' at template/paren depth 0."""
+    parts, cur, depth = [], "", 0
+    i = 0
+    while i < len(name):
+        ch = name[i]
+        if ch in "<(":
+            depth += 1
+        elif ch in ">)":
+            depth -= 1
+        if depth == 0 and name.startswith("::", i):
+            parts.append(cur)
+            cur = ""
+            i += 2
+            continue
+        cur += ch
+        i += 1
+    parts.append(cur)
+    return parts
+
+
+def qual_key(name):
+    """The FULLY QUALIFIED spelling "inlined X" and "calls X" are compared on:
+    anonymous namespace and whitespace removed, template arguments KEPT. The
+    PDB's inline sites carry an id whose qualified name we rebuild from the IPI
+    stream (Image.inl_name), so two different functions that merely share a
+    last name component (erase, clear, Reset, {ctor}) can no longer stand in
+    for each other."""
+    n = untag(name).replace("`anonymous-namespace'::", ANON)
+    n = re.sub(r"\s+", "", norm(canon(n)))
+    # The IPI stream spells a member function WITHOUT its own template argument
+    # list (`...>::erase`), the symbol record WITH it (`...>::erase<It,0>`):
+    # drop the last component's own argument list; the class's stays.
+    parts = split_scope(n)
+    last = parts[-1]
+    if last.endswith(">") and "<" in last and not last.startswith("<lambda"):
+        depth, cut = 0, None
+        for i in range(len(last) - 1, -1, -1):
+            if last[i] == ">":
+                depth += 1
+            elif last[i] == "<":
+                depth -= 1
+                if depth == 0:
+                    cut = i
+                    break
+        if cut:
+            parts[-1] = last[:cut]
+    return "::".join(parts)
+
+
+# A symbol whose NAME exists at two or more addresses in one image (two TUs'
+# file-local twins: LogApmfRefusal, g_lastApmfRefusal ...) is TAGGED with its
+# module, "name\x1fmodule", so a reference that re-binds to the other TU's twin
+# is visible. Tags compare through the old->new TU map (--tu-map).
+TAG = "\x1f"
+
+
+def untag(name):
+    return name.split(TAG, 1)[0]
+
+
+def tag_of(name):
+    return name.split(TAG, 1)[1] if TAG in name else None
+
+
+def module_key(path):
+    """`...\\CMakeFiles\\MFO.dir\\cast\\Fire.cpp.obj` -> `cast/Fire.cpp`."""
+    p = path.replace("\\", "/")
+    if "/MFO.dir/" in p:
+        p = p.split("/MFO.dir/", 1)[1]
+    else:
+        p = p.rsplit("/", 1)[-1]
+    return p[:-4] if p.endswith(".obj") else p
+
+
 # --------------------------------------------------------------------------
 # PDB + PE loading
 # --------------------------------------------------------------------------
@@ -113,16 +188,64 @@ class Image:
                 for e in blk.entries:
                     if e.type == 10:  # IMAGE_REL_BASED_DIR64
                         self.relocs.add(e.rva)
-        self.procs = []           # dicts: name, sig, rva, size, key
+        self.procs = []           # dicts: name, sig, rva, size, key, mod
         self.names_at = defaultdict(set)  # rva -> set(names)  (procs, data, publics)
         self.proc_at = {}         # rva -> size (for containment)
-        self.datas = []           # (name, rva) of named variables/constants
-        self.inl_ranges = {}      # (name, rva) -> [(start, end, inlinee short name)] top-level sites
-        self.inl_all = {}         # (name, rva) -> Counter(inlinee short names, all depths)
-        self.inlinees = Counter()  # every inlinee short name anywhere in the image
+        self.datas = []           # (name, rva, module) of named variables/constants (module streams)
+        self.inl_ranges = {}      # (name, rva) -> [(start, end, inlinee qualified name)] top-level sites
+        self.inl_all = {}         # (name, rva) -> Counter(inlinee qualified names, all depths)
+        self.inlinees = Counter()  # every inlinee qualified key anywhere in the image
+        self.inl_name = {}        # IPI id -> qualified function name
+        self.constants = {}       # S_CONSTANT name -> value (constexprs folded out of storage)
+        self._load_ids(pdb)
         self._load_pdb(pdb)
         self.sym_rvas = sorted(self.names_at)
         self.proc_starts = sorted(self.proc_at)
+
+    def _load_ids(self, pdb):
+        """Qualified names of every function id an inline site can name
+        (LF_FUNC_ID: scope string + name; LF_MFUNC_ID: class name + name)."""
+        out = subprocess.run(["llvm-pdbutil", "dump", "-ids", "-types", pdb],
+                             check=True, capture_output=True, text=True, errors="replace").stdout
+        rec = re.compile(r"^\s*(0x[0-9A-F]+) \| (LF_[A-Z_]+) \[size = \d+\](?: `(.*)`)?(.*)$")
+        fn = re.compile(r"^\s*name = (.*), type = (?:0x[0-9A-F]+|<no type>), "
+                        r"(parent scope|class type) = (0x[0-9A-F]+|<no type>)\s*$")
+        strs, udts, funcs = {}, {}, {}
+        lines = out.splitlines()
+        for i, ln in enumerate(lines):
+            m = rec.match(ln)
+            if not m:
+                continue
+            tid, kind = int(m.group(1), 16), m.group(2)
+            if kind == "LF_STRING_ID":
+                s = re.search(r"String: (.*)$", ln)
+                if s:
+                    strs[tid] = s.group(1)
+            elif kind in ("LF_CLASS", "LF_STRUCTURE", "LF_UNION", "LF_ENUM", "LF_INTERFACE") and m.group(3):
+                udts.setdefault(tid, m.group(3))
+            elif kind in ("LF_FUNC_ID", "LF_MFUNC_ID") and i + 1 < len(lines):
+                f = fn.match(lines[i + 1])
+                if f:
+                    funcs[tid] = (kind, f.group(1), f.group(2),
+                                  int(f.group(3), 16) if f.group(3).startswith("0x") else None)
+        # ids and types are separate streams whose indices overlap: the dump
+        # prints TPI first, then IPI, so a later IPI record of the same index
+        # must not be confused with a TPI class -- keep them in separate maps
+        # (udts only from LF_CLASS-like kinds, strs/funcs only from ID kinds).
+        for tid, (kind, name, rel, scope) in funcs.items():
+            if kind == "LF_FUNC_ID":
+                q = strs.get(scope, "") if scope is not None else ""
+                q = re.sub(r"\?A0x[0-9a-f]{8}", "`anonymous namespace'", q)
+                full = (q + "::" + name) if q else name
+            else:
+                cls = udts.get(scope, "?")
+                last = split_scope(cls)[-1]
+                if name == "{ctor}":
+                    name = last
+                elif name == "{dtor}":
+                    name = "~" + last
+                full = cls + "::" + name
+            self.inl_name[tid] = full
 
     def sec_rva(self, sec, off):
         for i, _n, va, _sz in self.secs:
@@ -141,11 +264,14 @@ class Image:
                              check=True, capture_output=True, text=True, errors="replace").stdout
         lines = out.splitlines()
         hdr = re.compile(r"^\s*(\d+) \| (S_[A-Z0-9_]+) \[size = \d+\](?: `(.*)`)?\s*$")
-        modre = re.compile(r"^\s*Mod \d+ \|")
+        modre = re.compile(r"^\s*Mod \d+ \| `(.*)`")
+        secre = re.compile(r"^\s*(Global Symbols|Public Symbols)\s*$")
         addr = re.compile(r"addr = (\d+):(\d+)")
         csize = re.compile(r"code size = (\d+)")
         typ = re.compile(r"type = `?0x[0-9A-F]+ \((.*)\)`?")
-        inl = re.compile(r"inlinee = 0x[0-9A-F]+ \((.*)\), parent = (\d+), end = (\d+)")
+        inl = re.compile(r"inlinee = (0x[0-9A-F]+) \((.*)\), parent = (\d+), end = (\d+)")
+        cur_mod = None
+        raw_names = []        # (rva, name, module or None)
         codere = re.compile(r"\bcode (?:end )?0x([0-9A-F]+)")
         seen = set()
         cur_proc = None       # (key, record offset)
@@ -167,10 +293,17 @@ class Image:
 
         for i in range(n):
             line = lines[i]
-            if modre.match(line):
+            mm = modre.match(line)
+            if mm:
                 close_site()
                 cur_proc = None
                 sites = {}
+                cur_mod = module_key(mm.group(1))
+                continue
+            if secre.match(line):
+                close_site()
+                cur_proc = None
+                cur_mod = None        # globals / publics: no owning module
                 continue
             m = hdr.match(line)
             if not m:
@@ -193,12 +326,17 @@ class Image:
             if kind == "S_INLINESITE":
                 im = inl.search(body)
                 if im and cur_proc is not None:
-                    nm = im.group(1)
-                    parent = int(im.group(2))
+                    nm = qual_key(self.inl_name.get(int(im.group(1), 16), im.group(2)))
+                    parent = int(im.group(3))
                     top = parent == cur_proc[1]
                     self.inl_all.setdefault(cur_proc[0], Counter())[nm] += 1
                     self.inlinees[nm] += 1
                     cur_site = [cur_proc[0], top, nm, [], None]
+                continue
+            if kind == "S_CONSTANT":
+                v = re.search(r"value = (-?\d+)", body)
+                if v:
+                    self.constants.setdefault(norm(name), int(v.group(1)))
                 continue
             a = addr.search(body)
             if not a:
@@ -219,14 +357,41 @@ class Image:
                 if (name, sig, rva) in seen:
                     continue
                 seen.add((name, sig, rva))
-                self.procs.append({"name": name, "sig": sig, "rva": rva, "size": size, "key": key})
-                self.names_at[rva].add(name)
+                self.procs.append({"name": name, "sig": sig, "rva": rva, "size": size, "key": key,
+                                   "mod": cur_mod})
+                raw_names.append((rva, name, cur_mod))
                 self.proc_at[rva] = max(self.proc_at.get(rva, 0), size)
             elif kind in ("S_GDATA32", "S_LDATA32", "S_GTHREAD32", "S_LTHREAD32", "S_PUB32"):
-                self.names_at[rva].add(name)
+                raw_names.append((rva, name, cur_mod))
                 if kind in ("S_GDATA32", "S_LDATA32"):
-                    self.datas.append((name, rva))
+                    self.datas.append((name, rva, cur_mod))
         close_site()
+        # TWINS: a name at two or more addresses (file-local symbols of the same
+        # name in different TUs -- the PDB drops "anonymous namespace" from DATA
+        # names entirely, so g_lastApmfRefusal's two twins look identical). Tag
+        # every module-owned occurrence of such a name with its module and drop
+        # the untagged globals/publics copy, so a reference can only match the
+        # twin of the corresponding TU.
+        at = defaultdict(set)
+        for rva, name, mod in raw_names:
+            at[name].add(rva)
+        self.twins = {n for n, r in at.items() if len(r) > 1}
+        owned = {(rva, name) for rva, name, mod in raw_names if mod is not None and name in self.twins}
+        for rva, name, mod in raw_names:
+            if name in self.twins:
+                if mod is not None:
+                    self.names_at[rva].add(name + TAG + mod)
+                elif (rva, name) not in owned:
+                    self.names_at[rva].add(name)       # a twin with no module record
+            else:
+                self.names_at[rva].add(name)
+        for p in self.procs:
+            p["twin"] = p["name"] in self.twins
+        # a variable listed by its module AND by the globals stream is one
+        # definition: keep the module-owned record
+        owned_at = {(n, r) for n, r, m in self.datas if m is not None}
+        self.datas = [(n, r, m) for n, r, m in self.datas if m is not None or (n, r) not in owned_at]
+        self.datas = list(dict.fromkeys(self.datas))
 
     def read(self, rva, n):
         return bytes(self.data[rva:rva + n])
@@ -290,6 +455,8 @@ class Cmp:
         self.notes = defaultdict(int)   # accepted-by-rule counters
         self.path_pairs = set()
         self._dis = {}
+        self.tu_map = {}        # old module -> set(new modules); filled by main (--tu-map)
+        self._hcache = {}
 
     def disasm(self, img, rva, size):
         k = (id(img), rva, size)
@@ -343,6 +510,35 @@ class Cmp:
                     return True
         return False
 
+    def tu_ok(self, mod_a, mod_b):
+        """May a symbol owned by TU mod_a in build A be the same one owned by
+        TU mod_b in build B? Identity, or listed in the old->new TU map."""
+        if mod_a is None or mod_b is None:
+            return True
+        return mod_b == mod_a or mod_b in self.tu_map.get(mod_a, ())
+
+    def names_match(self, na, nb):
+        """Two target name sets denote the same entity: some name in each is the
+        same after dropping the anonymous namespace, and when BOTH are module-
+        tagged twins, B's module is one A's module became (--tu-map). A twin on
+        one side against a now-unique symbol on the other (the split made it
+        extern / removed the other twin) matches by name and is counted."""
+        for x in na:
+            bx, mx = untag(x), tag_of(x)
+            nx = norm(bx)
+            for y in nb:
+                by, my = untag(y), tag_of(y)
+                if norm(by) != nx:
+                    continue
+                if mx is not None and my is not None:
+                    if self.tu_ok(mx, my):
+                        return True
+                    continue
+                if (mx is None) != (my is None):
+                    self.notes["twin on one side, unique symbol on the other (matched by name)"] += 1
+                return True
+        return False
+
     def _same(self, ta, tb, depth):
         ka, na, oa, ra = ta
         kb, nb, ob, rb = tb
@@ -356,9 +552,9 @@ class Cmp:
                     self.notes["unnamed read-only data equal by content"] += 1
                     return True
             return False
-        if oa == ob and na and nb and (na == nb or {norm(x) for x in na} & {norm(x) for x in nb}):
+        if oa == ob and na and nb and self.names_match(na, nb):
             if na != nb:
-                self.notes["target name-set differs only by ICF alias / anon namespace"] += 1
+                self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
             return True
         # string literals: content compare, source-path literals tolerated
         if oa == ob == 0 and na and nb and all(x.startswith("??_C@") for x in na | nb):
@@ -486,9 +682,14 @@ class Cmp:
             spans.append((cur_a, cur_b))
         tbl = self.tables(img, f)
         end = tbl[0] if tbl else f["size"]
-        for ins in self.disasm(img, f["rva"], end):
+        imms = Counter()
+        seq = self.disasm(img, f["rva"], end)
+        for n_ins, ins in enumerate(seq):
             off = ins.address - f["rva"]
             inside = any(a <= off < b for a, b in spans)
+            if not inside:
+                for v in self.own_imm(img, ins, seq[n_ins + 1] if n_ins + 1 < len(seq) else None):
+                    imms[v] += 1
             for _o, _s, kind, t in self.fields(img, ins):
                 cands = self.toks(img, f, kind, t)
                 if cands[0][0] == "local":
@@ -501,14 +702,88 @@ class Cmp:
             own.append(("inl", None, nm))
         for nm in img.inl_all.get(f["key"], {}):
             every.append(("inl", None, nm))
-        return own, every
+        return own, every, imms
+
+    FRAME_REGS = {X.X86_REG_RSP, X.X86_REG_RBP, X.X86_REG_ESP, X.X86_REG_EBP}
+
+    def own_imm(self, img, ins, nxt):
+        """The CONSTANTS an instruction carries as immediate operands, excluding
+        what legitimately moves when inlining changes: frame-size arithmetic on
+        rsp/rbp, the __chkstk size, branch/call targets and relocated addresses
+        (those are compared by symbol already)."""
+        if ins.group(capstone.CS_GRP_JUMP) or ins.group(capstone.CS_GRP_CALL) or \
+                ins.group(capstone.CS_GRP_RET):
+            return []
+        if any(f[2] == "abs" for f in self.fields(img, ins)):
+            return []
+        ops = ins.operands
+        if ops and ops[0].type == X.X86_OP_REG and ops[0].reg in self.FRAME_REGS:
+            return []
+        if ins.mnemonic == "mov" and nxt is not None and nxt.group(capstone.CS_GRP_CALL):
+            tgt = [t for _o, _s, k, t in self.fields(img, nxt) if k == "rel"]
+            if tgt and any("chkstk" in n for c in img.resolve(tgt[0]) for n in c[1]):
+                return []
+        return [(ins.mnemonic, op.imm) for op in ops if op.type == X.X86_OP_IMM]
+
+    def helper_imms(self, img, helpers, depth=3):
+        """Every (mnemonic, constant) in the out-of-line bodies (in img) of the
+        given helpers, following their direct calls `depth` levels."""
+        key = (id(img), tuple(sorted(helpers)), depth)
+        if key in self._hcache:
+            return self._hcache[key]
+        pool = Counter()
+        todo = [p for p in img.procs if qual_key(p["name"]) in set(helpers)]
+        seen = set()
+        for _lvl in range(depth):
+            nxt = []
+            for p in todo:
+                if p["rva"] in seen:
+                    continue
+                seen.add(p["rva"])
+                tbl = self.tables(img, p)
+                seq = self.disasm(img, p["rva"], tbl[0] if tbl else p["size"])
+                for n_ins, ins in enumerate(seq):
+                    for v in self.own_imm(img, ins, seq[n_ins + 1] if n_ins + 1 < len(seq) else None):
+                        pool[v] += 1
+                    if ins.group(capstone.CS_GRP_CALL):
+                        for _o, _s, k, t in self.fields(img, ins):
+                            if k == "rel" and t in img.proc_at:
+                                nxt.append({"rva": t, "size": img.proc_at[t], "name": "", "key": None})
+            todo = nxt
+        self._hcache[key] = pool
+        return pool
 
     def fp_equal(self, fa, fb):
         """Modulo-inlining equivalence (SET semantics): every own-code token of
         either side has an equivalent token ANYWHERE in the other side, where
         "inlined X" is equivalent to "calls X". Returns the unmatched tokens."""
-        oa, ea = self.fingerprint(self.A, fa)
-        ob, eb = self.fingerprint(self.B, fb)
+        oa, ea, ima = self.fingerprint(self.A, fa)
+        ob, eb, imb = self.fingerprint(self.B, fb)
+        imm_un = []
+        if ima != imb:
+            # MULTISET of own-code constants. A constant only one side carries is
+            # accepted ONLY when it can be attributed to the inlining difference:
+            # this side inlined helper H more often than the other side, and the
+            # other side's out-of-line body of H (or of a function H's body calls,
+            # 3 levels) contains that very constant. Anything else -- a changed
+            # constant in a drift function -- is unmatched and FAILs the pair.
+            ia = self.A.inl_all.get(fa["key"], Counter()) if fa.get("key") else Counter()
+            ib = self.B.inl_all.get(fb["key"], Counter()) if fb.get("key") else Counter()
+            # helpers whose inline count differs between the builds; their
+            # out-of-line bodies are looked up in BOTH images (a helper inlined
+            # everywhere in one build still has its out-of-line COMDAT in the other)
+            for side, extra, mine_inl, other_inl in (("A", ima - imb, ia, ib), ("B", imb - ima, ib, ia)):
+                # a constant only THIS side carries may come from a helper THIS side
+                # inlined more often; its out-of-line body is looked up in both
+                # images (a helper inlined everywhere in one build still has its
+                # COMDAT body in the other)
+                helpers = sorted(h for h in mine_inl if mine_inl[h] > other_inl.get(h, 0))
+                pool = self.helper_imms(self.A, helpers) + self.helper_imms(self.B, helpers)
+                for (mn, v), c in sorted(extra.items(), key=str):
+                    if pool[(mn, v)] >= 1:
+                        self.notes["own-code constant attributed to a helper inlined on one side only"] += c
+                        continue
+                    imm_un.append((side, ("imm", None, f"{mn} {v:#x} x{c}")))
         if XTOR.search(fa["name"]):
             # a compiler-generated initializer / atexit destructor only builds or
             # destroys its ONE named variable; whether the member destructor is
@@ -518,7 +793,7 @@ class Cmp:
                 return [(t[0], t[1], tuple((c[0], c[1], 0, c[3]) if c[0] == "sym" else c for c in t[2]))
                         if t[0] in ("ref", "iref") else t for t in toks]
             oa, ea, ob, eb = loose(oa), loose(ea), loose(ob), loose(eb)
-        un = []
+        un = list(imm_un)
         for side, mine, theirs in (("A", oa, eb), ("B", ob, ea)):
             for x in mine:
                 if not any(self._fp_tok_eq(x, y) for y in theirs):
@@ -546,7 +821,7 @@ class Cmp:
         if ref[0] == "inl":
             return False
         c = ref[2][0]
-        return c[0] == "proc" and c[2] == 0 and inl[2] in {short(n) for n in c[1]}
+        return c[0] == "proc" and c[2] == 0 and inl[2] in {qual_key(n) for n in c[1]}
 
 
 def fmt(t):
@@ -564,7 +839,9 @@ def fmt(t):
 def fmt_fp(u):
     side, tok = u
     if tok[0] == "inl":
-        return f"{side}: inlined {tok[2]}"
+        return f"{side}: inlined {tok[2][:160]}"
+    if tok[0] == "imm":
+        return f"{side}: own-code constant {tok[2]}"
     return f"{side}: ref {fmt(tok[2][0])}"
 
 
@@ -572,58 +849,116 @@ def fmt_fp(u):
 # named data
 # --------------------------------------------------------------------------
 def compare_data(A, B, cmp, cap=512):
-    """Initial contents of every named MFO variable/constant present once in
-    each build. Extent = distance to the next symbol in EACH image (min of
-    both, capped); DIR64 pointer slots are compared by the symbol they point to."""
-    da, db = defaultdict(set), defaultdict(set)
-    for n, r in A.datas:
-        da[norm(n)].add(r)
-    for n, r in B.datas:
-        db[norm(n)].add(r)
-    diffs, checked = [], 0
-    for n in sorted(set(da) & set(db)):
-        # scope: the plugin's own variables/constants/vtables. RTTI records hold
-        # 32-bit image-relative offsets and per-TU anonymous-namespace hashes,
-        # and CRT/load-config/guard data is link metadata, not program state.
-        if not DATA_SCOPE.match(n) or "`RTTI" in n:
-            continue
-        if len(da[n]) != 1 or len(db[n]) != 1:
-            continue
-        ra, rb = next(iter(da[n])), next(iter(db[n]))
-        sa, sb = A.sec_of(ra), B.sec_of(rb)
-        if sa != sb or sa in (None, ".text"):
-            diffs.append((n, f"section {sa} vs {sb}"))
-            continue
+    """Initial contents of every named MFO variable/constant (module streams).
+    Extent = distance to the next symbol in EACH image (min of both, capped);
+    DIR64 pointer slots are compared by the symbol they point to. Twins (one name
+    defined in several TUs) are paired through the TU map. Returns
+    (checked, diffs, only_a, only_b, folded): a name present in only one build is
+    reported -- it is FOLDED (explained) only when the other build carries it as
+    an S_CONSTANT whose value equals the first build's stored bytes."""
+    da, db = defaultdict(list), defaultdict(list)
+    for n, r, m in A.datas:
+        if (r, m) not in da[norm(n)]:
+            da[norm(n)].append((r, m))
+    for n, r, m in B.datas:
+        if (r, m) not in db[norm(n)]:
+            db[norm(n)].append((r, m))
+    in_scope = lambda n: DATA_SCOPE.match(n) and "`RTTI" not in n
+    diffs, checked, only_a, only_b, folded, copies = [], 0, [], [], [], []
 
-        def extent(img, r):
-            j = bisect.bisect_right(img.sym_rvas, r)
-            nxt = img.sym_rvas[j] if j < len(img.sym_rvas) else r + cap
-            return nxt - r
-        ln = min(extent(A, ra), extent(B, rb), cap)
-        ba, bb = A.read(ra, ln), B.read(rb, ln)
-        checked += 1
-        k = 0
-        bad = None
-        while k < ln:
-            pa, pb = (ra + k) in A.relocs, (rb + k) in B.relocs
-            if pa or pb:
-                if not (pa and pb):
-                    bad = f"+{k:#x}: pointer slot in one build only"
-                    break
-                va = int.from_bytes(ba[k:k + 8], "little") - A.base
-                vb = int.from_bytes(bb[k:k + 8], "little") - B.base
-                if not cmp.same_target(A.resolve(va), B.resolve(vb), 0):
-                    bad = f"+{k:#x}: pointer A={fmt(A.resolve(va)[0])} B={fmt(B.resolve(vb)[0])}"
-                    break
-                k += 8
-                continue
-            if ba[k] != bb[k]:
-                bad = f"+{k:#x}: byte {ba[k]:#04x} vs {bb[k]:#04x}"
-                break
-            k += 1
-        if bad:
-            diffs.append((n, bad))
-    return checked, diffs
+    def const_equal(img_with, rva, img_const, n):
+        v = img_const.constants.get(n)
+        if v is None:
+            return False
+        raw = img_with.read(rva, 8)
+        return any(int.from_bytes(raw[:k], "little", signed=True) == v or
+                   int.from_bytes(raw[:k], "little") == v for k in (1, 2, 4, 8))
+
+    for n in sorted(set(da) | set(db)):
+        if not in_scope(n):
+            continue
+        la, lb = da.get(n, []), db.get(n, [])
+        if not lb:
+            if len(la) == 1 and const_equal(A, la[0][0], B, n):
+                folded.append((n, "A stores it, B folded it to an S_CONSTANT of the same value"))
+            else:
+                only_a.append((n, f"{len(la)} definition(s) in A, none in B"))
+            continue
+        if not la:
+            if len(lb) == 1 and const_equal(B, lb[0][0], A, n):
+                folded.append((n, "B stores it, A folded it to an S_CONSTANT of the same value"))
+            else:
+                only_b.append((n, f"{len(lb)} definition(s) in B, none in A"))
+            continue
+        # pair definitions: unique on both sides pair directly; twins pair only
+        # with a definition in a TU their TU became
+        pairs = []
+        if len(la) == 1 and len(lb) == 1:
+            pairs = [(la[0], lb[0])]
+        elif any(sum(1 for x in lb if cmp.tu_ok(ma, x[1])) > 1 for _r, ma in la):
+            # PER-TU COPIES of a header constant (one per including TU): a TU that
+            # became several TUs has several copies now. Every copy on each side
+            # must be byte-identical to a copy on the other side in a mapped TU.
+            bad = []
+            for rb_, mb in lb:
+                if not any(cmp.tu_ok(ma, mb) and _data_diff(A, B, cmp, ra_, rb_, cap) is None for ra_, ma in la):
+                    bad.append(f"B copy in {mb} matches no A copy")
+            for ra_, ma in la:
+                if not any(cmp.tu_ok(ma, mb) and _data_diff(A, B, cmp, ra_, rb_, cap) is None for rb_, mb in lb):
+                    bad.append(f"A copy in {ma} matches no B copy")
+            checked += 1
+            if bad:
+                diffs.append((n, "; ".join(bad)))
+            else:
+                copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical"))
+            continue
+        else:
+            free = list(lb)
+            for ra_, ma in la:
+                cand = [x for x in free if cmp.tu_ok(ma, x[1])]
+                if len(cand) != 1:
+                    diffs.append((n, f"twin in {ma}: {len(cand)} candidate(s) in B "
+                                     f"({', '.join(str(x[1]) for x in cand) or 'none'})"))
+                    continue
+                pairs.append(((ra_, ma), cand[0]))
+                free.remove(cand[0])
+            for rb_, mb in free:
+                diffs.append((n, f"twin in B's {mb} has no counterpart in A"))
+        for (ra, _ma), (rb, _mb) in pairs:
+            bad = _data_diff(A, B, cmp, ra, rb, cap)
+            checked += 1
+            if bad:
+                diffs.append((n, bad))
+    return checked, diffs, only_a, only_b, folded, copies
+
+
+def _data_diff(A, B, cmp, ra, rb, cap):
+    sa, sb = A.sec_of(ra), B.sec_of(rb)
+    if sa != sb or sa in (None, ".text"):
+        return f"section {sa} vs {sb}"
+
+    def extent(img, r):
+        j = bisect.bisect_right(img.sym_rvas, r)
+        nxt = img.sym_rvas[j] if j < len(img.sym_rvas) else r + cap
+        return nxt - r
+    ln = min(extent(A, ra), extent(B, rb), cap)
+    ba, bb = A.read(ra, ln), B.read(rb, ln)
+    k = 0
+    while k < ln:
+        pa, pb = (ra + k) in A.relocs, (rb + k) in B.relocs
+        if pa or pb:
+            if not (pa and pb):
+                return f"+{k:#x}: pointer slot in one build only"
+            va = int.from_bytes(ba[k:k + 8], "little") - A.base
+            vb = int.from_bytes(bb[k:k + 8], "little") - B.base
+            if not cmp.same_target(A.resolve(va), B.resolve(vb), 0):
+                return f"+{k:#x}: pointer A={fmt(A.resolve(va)[0])} B={fmt(B.resolve(vb)[0])}"
+            k += 8
+            continue
+        if ba[k] != bb[k]:
+            return f"+{k:#x}: byte {ba[k]:#04x} vs {bb[k]:#04x}"
+        k += 1
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -648,17 +983,18 @@ def match(A, B, cmp):
                 continue
             la, lb = list(la), list(lb)
             got = []
+            compat = lambda fa, fb: not (fa.get("twin") and fb.get("twin")) or cmp.tu_ok(fa["mod"], fb["mod"])
             for fa in list(la):          # identical pairs first
                 for fb in lb:
-                    if cmp.compare(fa, fb) is None:
+                    if compat(fa, fb) and cmp.compare(fa, fb) is None:
                         got.append((fa, fb))
                         la.remove(fa)
                         lb.remove(fb)
                         break
             la.sort(key=lambda f: f["rva"])
             lb.sort(key=lambda f: f["rva"])
-            if len(la) == len(lb):       # leftovers pair in address order
-                got += list(zip(la, lb))
+            if len(la) == len(lb) and all(compat(x, y) for x, y in zip(la, lb)):
+                got += list(zip(la, lb))   # leftovers pair in address order
                 la, lb = [], []
             elif not la or not lb:
                 pass
@@ -676,6 +1012,28 @@ def match(A, B, cmp):
     # in half ("`anonymous-..."): fall back to the name when it is unique
     run_pass(lambda f: norm(f["name"]), "relinked", unique_only=True)
     return pairs, onlya, onlyb
+
+
+def load_tu_map(path):
+    """`old/Module.cpp: new/A.cpp new/B.cpp` per line; # comments."""
+    tm = {}
+    if not path:
+        return tm
+    for ln in open(path, encoding="utf-8"):
+        ln = ln.split("#", 1)[0].strip()
+        if not ln:
+            continue
+        old, new = ln.split(":", 1)
+        tm.setdefault(old.strip(), set()).update(new.split())
+    return tm
+
+
+def library_only(name):
+    """A library template instance with NO own type in it. Only those may be
+    explained by "the linker took another TU's COMDAT" without an inline-site
+    difference; anything naming an MFO:: entity (a std::function wrapping an MFO
+    lambda, a container of an MFO struct) must show a real inline-site delta."""
+    return bool(LIBRARY.match(name)) and "MFO::" not in name
 
 
 def load_allow(path):
@@ -709,13 +1067,36 @@ def main():
     ap.add_argument("--max", type=int, default=60, help="max entries printed per list")
     ap.add_argument("--strict", action="store_true",
                     help="no explained classes: anything not byte-identical is FAIL")
+    ap.add_argument("--proof", nargs=4, metavar=("A0_DLL", "A0_PDB", "B0_DLL", "B0_PDB"),
+                    help="the same two commits built with inlining OFF (native.yml dispatch noinline=true). "
+                         "They must compare STRICT PASS; then an /O2 pair whose only difference is an "
+                         "inlining difference (inline sites differ) is PROVEN, and the verdict is PASS-PROVEN")
+    ap.add_argument("--tu-map", help="old->new translation-unit map (see tumaps/); a module-tagged "
+                                     "twin in A may only match a twin in a TU its TU became")
     args = ap.parse_args()
 
     A = Image(args.a_dll, args.a_pdb)
     B = Image(args.b_dll, args.b_pdb)
     cmp = Cmp(A, B)
+    cmp.tu_map = load_tu_map(args.tu_map)
     rules = load_allow(args.allow)
     pairs, onlya, onlyb = match(A, B, cmp)
+
+    proof = None
+    if args.proof:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+            jpath = tf.name
+        cmd = [sys.executable, __file__, *args.proof, "--strict", "--json", jpath, "--max", "0"]
+        if args.tu_map:
+            cmd += ["--tu-map", args.tu_map]
+        subprocess.run(cmd, capture_output=True, text=True)
+        try:
+            proof = json.load(open(jpath))
+        except (OSError, ValueError):
+            proof = None
+    proof_ok = bool(proof) and proof.get("result") == "PASS"
+    proven = []
 
     same = 0
     relinked, fails, drift, fdrift, allowed_hits = [], [], [], [], []
@@ -735,9 +1116,16 @@ def main():
             continue
         ia, ib = A.inl_all.get(ka, Counter()), B.inl_all.get(kb, Counter())
         un = cmp.fp_equal(fa, fb) if not args.strict else ["strict"]
-        if not args.strict and not un and (ia != ib or LIBRARY.match(fa["name"])):
+        if not args.strict and not un and (ia != ib or library_only(fa["name"])):
             delta = {k: (ia[k], ib[k]) for k in set(ia) | set(ib) if ia[k] != ib[k]}
             drift.append((fa["name"], r, delta))
+            drift_names.add(norm(fa["name"]))
+            continue
+        if not args.strict and proof_ok and ia != ib:
+            # the no-inline build of the SAME two commits is byte-identical, so
+            # this function's source compiles identically; with the inline sites
+            # differing here, the /O2 difference is the inlining decision alone
+            proven.append((fa["name"], r, [fmt_fp(u) for u in un[:6]]))
             drift_names.add(norm(fa["name"]))
             continue
         why = allowed(rules, "differ", fa["name"])
@@ -753,7 +1141,7 @@ def main():
             continue
         parent = norm(m.group(1))
         un = cmp.fp_equal(fa, fb)
-        if not args.strict and parent in drift_names and not un:
+        if not args.strict and parent in drift_names and (not un or proof_ok):
             fdrift.append((fa["name"], r))
             continue
         why = allowed(rules, "differ", fa["name"])
@@ -791,7 +1179,7 @@ def main():
                         break
             # a library parent's EH funclets come from whichever TU's COMDAT the
             # linker kept; its catch handler may inline differently (drift)
-            if LIBRARY.match(parent) or parent in drift_names:
+            if library_only(parent) or parent in drift_names:
                 for fa in la:
                     for fb in lb:
                         if not cmp.fp_equal(fa, fb):
@@ -817,9 +1205,9 @@ def main():
                 if twins and any((cmp.compare(f, t) if side == "A" else cmp.compare(t, f)) is None for t in twins):
                     copies.append((side, f["name"]))
                     continue
-                sn = short(f["name"])
-                if img_other.inlinees.get(sn):
-                    outlined.append((side, f["name"], sn))
+                qn = qual_key(f["name"])
+                if img_other.inlinees.get(qn):
+                    outlined.append((side, f["name"], qn))
                     continue
             why = allowed(rules, "only-" + side.lower(), f["name"])
             if why:
@@ -827,15 +1215,22 @@ def main():
             else:
                 sink.append(f)
 
-    dchecked, ddiff0 = compare_data(A, B, cmp)
+    dchecked, ddiff0, donly_a, donly_b, dfolded, dcopies = compare_data(A, B, cmp)
     ddiff = []
-    for n, r in ddiff0:
+    for n, r in ddiff0 + [(n, "ONLY IN A: " + r) for n, r in donly_a] + [(n, "ONLY IN B: " + r) for n, r in donly_b]:
         why = allowed(rules, "data", n)
         (allowed_hits.append(("data", n, why)) if why else ddiff.append((n, r)))
+    if args.strict:
+        ddiff += [(n, "FOLDED (not allowed under --strict): " + r) for n, r in dfolded]
+        ddiff += [(n, "COPY COUNT CHANGED (not allowed under --strict): " + r) for n, r in dcopies]
 
-    strict_ok = not diffs and not onlya and not onlyb and not ddiff0 and not renumbered
+    strict_ok = not diffs and not onlya and not onlyb and not ddiff0 and not renumbered \
+        and not donly_a and not donly_b and not dfolded and not dcopies
     ok = not fails and not oa and not ob and not ddiff
-    verdict = "PASS" if strict_ok else ("PASS-EXPLAINED" if ok else "FAIL")
+    if args.proof and not proof_ok:
+        ok = False
+    verdict = "PASS" if strict_ok else ("FAIL" if not ok else
+                                        "PASS-PROVEN" if proof_ok else "PASS-EXPLAINED-UNPROVEN")
 
     print(f"A: {args.a_dll}  ({len(A.procs)} procs)")
     print(f"B: {args.b_dll}  ({len(B.procs)} procs)")
@@ -843,7 +1238,8 @@ def main():
           f"inline-drift: {len(drift)}   funclet-drift: {len(fdrift)}   "
           f"only-in-A: {len(oa)}   only-in-B: {len(ob)}   outlined: {len(outlined)}   "
           f"copies: {len(copies)}   renumbered: {len(renumbered)}   allow-listed: {len(allowed_hits)}")
-    print(f"named data compared: {dchecked}   data differing: {len(ddiff)}")
+    print(f"named data compared: {dchecked}   data differing / only-in-one-build: {len(ddiff)}   "
+          f"folded constants: {len(dfolded)}   per-TU data copies: {len(dcopies)}")
     if relinked:
         rl = [x for x in relinked if not x[0].startswith(("std::", "`std::"))]
         print(f"\nanonymous-namespace -> extern re-links ({len(relinked)}; {len(relinked) - len(rl)} "
@@ -873,7 +1269,11 @@ def main():
         ("PER-TU COPIES (explained: copy count changed, every copy identical)",
          [f"[extra in {s}] {n}" for s, n in copies]),
         ("FAIL", [f"{n}  {s}\n      {r}" + "".join(f"\n        {u}" for u in us) for n, s, r, us in fails]),
-        ("DATA DIFFERING", [f"{n}\n      {r}" for n, r in ddiff]),
+        ("FOLDED CONSTANTS (explained: stored in one build, an S_CONSTANT of the same value in the other)",
+         [f"{n}\n      {r}" for n, r in dfolded]),
+        ("PER-TU DATA COPIES (explained: a header constant, one copy per including TU; every copy identical)",
+         [f"{n}\n      {r}" for n, r in dcopies]),
+        ("DATA DIFFERING / ONLY IN ONE BUILD", [f"{n}\n      {r}" for n, r in ddiff]),
         ("ONLY IN A", [f"{f['name']}  ({f['sig']})" for f in oa]),
         ("ONLY IN B", [f"{f['name']}  ({f['sig']})" for f in ob]),
         ("ALLOW-LISTED", [f"[{k}] {n}   -- {w}" for k, n, w in allowed_hits]),
@@ -885,19 +1285,30 @@ def main():
                 print("  " + s)
             if len(lst) > args.max:
                 print(f"  ... {len(lst) - args.max} more (see --json)")
+    if args.proof:
+        pr = proof or {}
+        print(f"\nPROOF (no-inline builds, --strict): {pr.get('result', 'did not run')}"
+              f"   identical: {pr.get('identical', '-')}   fail: {len(pr.get('fail', []))}   "
+              f"only-in: {len(pr.get('only_a', [])) + len(pr.get('only_b', []))}   "
+              f"data: {len(pr.get('data_differing', []))}")
+        if proven:
+            print(f"\nPROVEN BY THE NO-INLINE BUILD (inline sites differ; the own-code fingerprint "
+                  f"differs too) ({len(proven)}):")
+            for n, r, us in proven[:args.max]:
+                print(f"  {n}\n      {r}" + "".join(f"\n        {u}" for u in us))
     print("\nRESULT:", verdict)
     if args.json:
-        json.dump({"result": verdict, "identical": same,
+        json.dump({"result": verdict, "identical": same, "proven": [n for n, _r, _u in proven],
                    "fail": [{"name": n, "sig": s, "detail": r, "fingerprint": u} for n, s, r, u in fails],
                    "inline_drift": [{"name": n, "detail": r, "inline_delta": {k: list(v) for k, v in d.items()}}
                                     for n, r, d in drift],
                    "funclet_drift": [n for n, _ in fdrift],
                    "outlined": outlined, "copies": copies, "renumbered": renumbered,
                    "only_a": [f["name"] for f in oa], "only_b": [f["name"] for f in ob],
-                   "data_differing": ddiff, "relinked": relinked, "allowed": allowed_hits,
+                   "data_differing": ddiff, "data_folded": dfolded, "relinked": relinked, "allowed": allowed_hits,
                    "notes": cmp.notes, "path_pairs": sorted(cmp.path_pairs)},
                   open(args.json, "w"), indent=1, default=str)
-    sys.exit(0 if ok else 1)
+    sys.exit(0 if verdict in ("PASS", "PASS-PROVEN") else 3 if verdict == "PASS-EXPLAINED-UNPROVEN" else 1)
 
 
 if __name__ == "__main__":
