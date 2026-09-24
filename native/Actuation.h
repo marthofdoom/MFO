@@ -243,9 +243,10 @@ namespace MFO::Actuation {
     // there): skip while THIS spell's creature is alive (per spell) or still
     // APPEARING (engine effect younger than fMagicSummonMaxAppearTime with no
     // resolved handle; fallback floor = that + 1 s after our own cast), skip
-    // when live commanded actors + other summons appearing >= the caster's
-    // summon limit (iMaxSummonedCreatures + kModCommandedActorLimit perks,
-    // round half-up, exactly as the engine computes it), else cast ONCE by the
+    // when listed commanded actors (raw count, as the engine) + other summons
+    // appearing >= the caster's summon limit (iMaxSummonedCreatures +
+    // kModCommandedActorLimit perks, round half-up, exactly as the engine; not
+    // when the engine's skip-cap flag is set, read behind its self-check rows), else cast ONCE by the
     // caster on the direct road (CastSpellImmediate kInstant, magicka deducted).
     // Never a self/target stream, no hand lock, so no MFO reconcile, combat-end
     // or cleanup path ends the summon. ALWAYS returns a transparent result: the

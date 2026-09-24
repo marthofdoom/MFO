@@ -134,9 +134,10 @@ ONE-SHOT CONJURE on every target setting (self / player / foe / AUTO) and on bot
 combat `Fire` dispatch and the Logistics OOC block both call `Actuation::CastSummonOnce` before any
 other road. The decision and the cast run in ONE main-thread closure: skip while THIS spell's creature
 is alive (per spell) or still appearing (engine effect younger than `fMagicSummonMaxAppearTime`), skip
-while live commanded actors + other summons still appearing reach the caster's summon limit (the
-list's `iMaxSummonedCreatures` + `kModCommandedActorLimit` perks, rounded half-up, as the engine
-computes it), else cast ONCE by the caster: kInstant `CastSpellImmediate` on the caster, magicka
+while the caster's listed commanded actors (the raw count the engine compares) + other summons still
+appearing reach his summon limit (the list's `iMaxSummonedCreatures` + `kModCommandedActorLimit`
+perks, rounded half-up, as the engine computes it; not applied when the engine's own skip-cap flag
+is set, read only behind its self-check rows), else cast ONCE by the caster: kInstant `CastSpellImmediate` on the caster, magicka
 deducted by hand. It is never a self/target stream and takes no hand lock (and ignores the cast-gambit
 lock, accepted: nothing to re-point), so no reconcile, combat-end or cleanup path ends it: it lasts
 its duration or until killed. A killed summon recasts on the next eval after the main thread's 1 s

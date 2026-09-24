@@ -1255,11 +1255,13 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   skip; (3) THE LIST'S SUMMON LIMIT exactly as the engine's add-commanded-actor fn computes it
   (1.6.1170 0x717800 id 40056 / 1.5.97 0x683D70 id 38993): `(float)iMaxSummonedCreatures`,
   `BGSEntryPoint::HandleEntryPoint(kModCommandedActorLimit, caster, spell, &limit)`, round
-  half-up; skip when live `middleHigh->commandedActors` (+0x100, count +0x110, both runtimes)
-  + OTHER summons still appearing >= limit (a lower-ranked summon already out keeps its slot);
-  (4) `CastSpellImmediate(kInstant)` on the caster + hand magicka deduct, one `[summon] ...
-  road=direct, cast once` line. The engine's own skip-cap flag (global id 516851/403330
-  +0x340 bit 1) is NOT honoured: no F1 self-check row kind covers a data global. It is
+  half-up; skip when the RAW `middleHigh->commandedActors` count (+0x110, the number the engine
+  compares, dead-but-listed entries included) + OTHER summons still appearing >= limit (a
+  lower-ranked summon already out keeps its slot), unless the engine's skip-cap flag is set
+  (global id 516851/403330 +0x340 bit 1, `SummonCapSkipped`, read ONLY when the self-check
+  `ripref` rows `Actuation.SummonCap.AddCommandedActor` / `.SkipFlagGlobal` verified, else MFO
+  caps and logs once); (4) `CastSpellImmediate(kInstant)` on the caster + hand magicka deduct,
+  one `[summon] ... road=direct, cast once` line. It is
   NEVER put in `g_selfCast`/`g_targetCast`, takes NO hand lock, and ignores the cast-gambit
   lock (F4, accepted: kInstant caster, no hands, nothing to re-point). The Scheduler does not
   count a summon rule as a cast rule (`Scheduler.cpp:837-841`: no `castSeen`, no
@@ -1270,7 +1272,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   CastOn/CastSelfDirect/CastTargetDirect re-opens the stale-dispel loop and the hand lock;
   reading the effect list / commandedActors on the worker is a data race; returning Fired
   from the worker walls off every rule below a live summon; dropping the landing check
-  double-casts during the ~4 s appear window; widening `IsSummonSpell` to kReanimate breaks
+  double-casts during the ~4 s appear window; counting only LIVE listed entries lets the engine
+  evict a live older summon; reading the skip-cap global without its ripref rows is an unverified
+  raw read; widening `IsSummonSpell` to kReanimate breaks
   raise-dead; a recast window (e.g. `g_beneficialRecast`) holds a killed summon off. Open
   backlog: `Docs/REVIEW-BACKLOG.md` MFO-B75 (Script-archetype summons still fan out),
   MFO-B76 (hostile-flagged summon skips the LoS gate), MFO-B77 (Serana's Reanimate spells

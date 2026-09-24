@@ -1043,7 +1043,10 @@ namespace MFO::Actuation {
                 }
                 const REL::Relocation<std::uintptr_t> fn{ REL::RelocationID(38993, 40056) };
                 const REL::Relocation<std::uintptr_t> gl{ REL::RelocationID(516851, 403330) };
-                const bool okFn = Runtime::SeatVerified(fn.address(), "Actuation.SummonCap.AddCommandedActor");
+                // A row with a byte check verifies base + rva + bytesOffset: the
+                // `mov rax,[rip+g]` itself (+0x51 on 1.5.97, +0xA1 on 1.6.1170).
+                const std::uintptr_t refAt = fn.address() + (REL::Module::IsAE() ? 0xA1u : 0x51u);
+                const bool okFn = Runtime::SeatVerified(refAt, "Actuation.SummonCap.AddCommandedActor");
                 const bool okGl = Runtime::SeatVerified(gl.address(), "Actuation.SummonCap.SkipFlagGlobal");
                 if (!(okFn && okGl))
                     spdlog::error("[summon] the engine's skip-cap flag is NOT read on this build (self-check row "
