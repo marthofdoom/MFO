@@ -194,6 +194,7 @@ class Image:
         self.datas = []           # (name, rva, module) of named variables/constants (module streams)
         self.inl_ranges = {}      # (name, rva) -> [(start, end, inlinee qualified name)] top-level sites
         self.inl_all = {}         # (name, rva) -> Counter(inlinee qualified names, all depths)
+        self.inl_ranges_all = {}  # (name, rva) -> [(start, end, inlinee)] sites at ALL depths
         self.inlinees = Counter()  # every inlinee qualified key anywhere in the image
         self.inl_name = {}        # IPI id -> qualified function name
         self.constants = {}       # S_CONSTANT name -> value (constexprs folded out of storage)
@@ -286,9 +287,11 @@ class Image:
             key, top, nm, ranges, open_start = cur_site
             if open_start is not None:
                 ranges.append((open_start, open_start + 1))
-            if top and key is not None:
+            if key is not None:
                 for a, b in ranges:
-                    self.inl_ranges.setdefault(key, []).append((a, b, nm))
+                    if top:
+                        self.inl_ranges.setdefault(key, []).append((a, b, nm))
+                    self.inl_ranges_all.setdefault(key, []).append((a, b, nm))
             cur_site = None
 
         for i in range(n):
@@ -664,30 +667,15 @@ class Cmp:
         references anywhere in f plus every inlinee at any depth."""
         ranges = img.inl_ranges.get(f["key"], [])
         own, every = [], []
-        # A site's sub-ranges can leave a one-instruction gap (MSVC attributes the
-        # call instruction an inlined body makes to the caller's line table): fill
-        # gaps of <= 16 bytes between sub-ranges of the SAME site.
-        spans = []
-        by_site = defaultdict(list)
-        for a, b, n in ranges:
-            by_site[n].append((a, b))
-        for n, rs in by_site.items():
-            rs.sort()
-            cur_a, cur_b = rs[0]
-            for a, b in rs[1:]:
-                if a - cur_b <= 16:
-                    cur_b = max(cur_b, b)
-                else:
-                    spans.append((cur_a, cur_b)); cur_a, cur_b = a, b
-            spans.append((cur_a, cur_b))
+        spans = self.own_spans(img, f)
         tbl = self.tables(img, f)
         end = tbl[0] if tbl else f["size"]
         imms = Counter()
         seq = self.disasm(img, f["rva"], end)
         for n_ins, ins in enumerate(seq):
             off = ins.address - f["rva"]
-            inside = any(a <= off < b for a, b in spans)
-            if not inside:
+            inside = any(a <= off < b for a, b, _n in spans)
+            if not inside or self.in_mfo_inlinee(img, f, off):
                 for v in self.own_imm(img, ins, seq[n_ins + 1] if n_ins + 1 < len(seq) else None):
                     imms[v] += 1
             for _o, _s, kind, t in self.fields(img, ins):
@@ -703,6 +691,35 @@ class Cmp:
         for nm in img.inl_all.get(f["key"], {}):
             every.append(("inl", None, nm))
         return own, every, imms
+
+    def in_mfo_inlinee(self, img, f, off):
+        """True when the innermost inline site covering f+off is MFO code (a
+        lambda body inlined through std::invoke into its std::function wrapper,
+        an inlined MFO helper). Constants there are counted like own code; only
+        LIBRARY inlinees are left to the inline-site comparison."""
+        cover = [(b - a, n) for a, b, n in img.inl_ranges_all.get(f["key"], []) if a <= off < b]
+        return bool(cover) and not library_only(min(cover)[1])
+
+    def own_spans(self, img, f):
+        """f's top-level inline-site byte spans, function-relative (a, b, inlinee)."""
+        ranges = img.inl_ranges.get(f["key"], [])
+        # A site's sub-ranges can leave a one-instruction gap (MSVC attributes the
+        # call instruction an inlined body makes to the caller's line table): fill
+        # gaps of <= 16 bytes between sub-ranges of the SAME site.
+        spans = []
+        by_site = defaultdict(list)
+        for a, b, n in ranges:
+            by_site[n].append((a, b))
+        for n, rs in by_site.items():
+            rs.sort()
+            cur_a, cur_b = rs[0]
+            for a, b in rs[1:]:
+                if a - cur_b <= 16:
+                    cur_b = max(cur_b, b)
+                else:
+                    spans.append((cur_a, cur_b, n)); cur_a, cur_b = a, b
+            spans.append((cur_a, cur_b, n))
+        return spans
 
     FRAME_REGS = {X.X86_REG_RSP, X.X86_REG_RBP, X.X86_REG_ESP, X.X86_REG_EBP}
 
@@ -909,7 +926,9 @@ def compare_data(A, B, cmp, cap=512):
             checked += 1
             if bad:
                 diffs.append((n, "; ".join(bad)))
-            else:
+            elif sorted(str(m) for _r, m in la) != sorted(str(m) for _r, m in lb):
+                # the copy layout changed (the split's doing); an unchanged layout
+                # with every copy identical is simply identical
                 copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical"))
             continue
         else:

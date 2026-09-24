@@ -16,6 +16,15 @@ on:
         description: "Proof build: compile with /O2 /Ob0 (inlining off). Not a shippable DLL."
         type: boolean
         default: false
+      # /Ob0 alone is not enough for byte identity: without inlining MSVC still
+      # optimizes ACROSS the functions of one TU (a caller's register allocation
+      # uses what it knows of a same-TU callee), so moving a function to another
+      # TU still changes its callers' registers. /Od turns the optimizer off, so
+      # each function compiles from its own source alone. (Measured 2026-09-24.)
+      noopt:
+        description: "Proof build: compile with /Od (optimizer off, so no inlining). Not a shippable DLL."
+        type: boolean
+        default: false
       source_ref:
         description: "Build this commit instead of the dispatched ref (e.g. main's SHA as the proof baseline)."
         type: string
@@ -57,7 +66,7 @@ jobs:
           restore-keys: vcpkg-
 
       - name: Configure
-        if: ${{ inputs.noinline != true }}
+        if: ${{ inputs.noinline != true && inputs.noopt != true }}
         run: cmake --preset release
         env:
           VCPKG_ROOT: C:\vcpkg
@@ -66,8 +75,14 @@ jobs:
       # their own triplet flags, so the dependency cache is shared with the
       # normal build.
       - name: Configure (proof build, inlining off)
-        if: ${{ inputs.noinline == true }}
+        if: ${{ inputs.noinline == true && inputs.noopt != true }}
         run: cmake --preset release "-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob0 /DNDEBUG"
+        env:
+          VCPKG_ROOT: C:\vcpkg
+
+      - name: Configure (proof build, optimizer off)
+        if: ${{ inputs.noopt == true }}
+        run: cmake --preset release "-DCMAKE_CXX_FLAGS_RELEASE=/Od /DNDEBUG"
         env:
           VCPKG_ROOT: C:\vcpkg
 
@@ -90,10 +105,10 @@ jobs:
       # Proof/rebuild dispatches only: a normal build's artifact stays exactly
       # MFO.dll + MFO.pdb (it is unzipped straight over the mod folder).
       - name: Record the built commit
-        if: ${{ inputs.noinline == true || inputs.source_ref != '' }}
+        if: ${{ inputs.noinline == true || inputs.noopt == true || inputs.source_ref != '' }}
         run: |
           git rev-parse HEAD
-          "built=$(git rev-parse HEAD) noinline=${{ inputs.noinline == true }}" | Out-File -FilePath build/release/build-info.txt -Encoding ascii
+          "built=$(git rev-parse HEAD) noinline=${{ inputs.noinline == true }} noopt=${{ inputs.noopt == true }}" | Out-File -FilePath build/release/build-info.txt -Encoding ascii
 
       - name: Upload DLL
         uses: actions/upload-artifact@v4
