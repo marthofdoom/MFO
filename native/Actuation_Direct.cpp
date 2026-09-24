@@ -929,6 +929,101 @@ namespace MFO::Actuation {
         return false;
     }
 
+    // ── SUMMON = ONE-SHOT CONJURE (fix/mfo-summon-oneshot) ──────────────────
+    // See Actuation.h. A summon used to ride whatever road its target setting
+    // picked: SELF went through CastSelfDirect, which registered it as a
+    // self-CHANNEL in g_selfCast and took a left-hand cast lock. The summon
+    // guard then (correctly) skipped the live summon, so the channel's
+    // lastFired never refreshed, SelfCastReconcile called it stale ~3 s later
+    // and SelfCastEndActor DISPELLED the summon -- recast, dispel, recast
+    // (deck 2026-09-24, Jesper: 23 Matrons in one fight). A summon is not a
+    // channel. It is cast once, by the caster, and MFO never ends it: it is
+    // never registered in g_selfCast / g_targetCast (so no reconcile, combat-
+    // end or cleanup path can dispel it) and takes no hand lock.
+    bool IsSummonSpell(RE::SpellItem* a_spell) {
+        if (!a_spell) return false;
+        for (auto* eff : a_spell->effects) {
+            if (eff && eff->baseEffect &&
+                eff->baseEffect->GetArchetype() == RE::EffectArchetypes::ArchetypeID::kSummonCreature)
+                return true;
+        }
+        return false;
+    }
+
+    namespace {
+        // (follower, spell) -> when this summon was last dispatched. WORKER-
+        // SERIAL (Fire and the Logistics service both run on the AddTask job
+        // worker, #4); cleared in ClearSelfCasts. A FLOOR, not a recast window:
+        // the cast is Post'd to the main thread and the creature is placed
+        // after that, so for a moment CasterHasLiveSummon cannot see it yet and
+        // the next 133 ms eval would conjure a second one. Once the summon is
+        // up, liveness alone decides; a summon killed later recasts at once.
+        constexpr float kSummonLandingSec = 2.0f;
+        std::unordered_map<std::uint64_t, SelfClock::time_point> g_summonDispatched;
+        // (follower, spell) -> last "still alive" skip log, 10 s rate limit.
+        std::unordered_map<std::uint64_t, SelfClock::time_point> g_summonSkipLog;
+    }
+
+    Outcome CastSummonOnce(RE::Actor* a_follower, RE::SpellItem* a_spell, int a_rule,
+                           const char* a_table, std::string_view a_target) {
+        if (!Runtime::CastPathsVerified())
+            return { Result::FailedOther,
+                     "cast control is verified on 1.6 and 1.5.97 only (this runtime uses the follower's own AI casting)", true };
+        if (!a_follower || !a_spell) return { Result::FailedOther, "no summon spell", true };
+        if (!a_follower->HasSpell(a_spell))
+            return { Result::FailedSkill, "follower does not know this spell", true };
+
+        const auto id      = a_follower->GetFormID();
+        const auto spellID = a_spell->GetFormID();
+        const auto key     = RecastKey(id, spellID);
+        const auto now     = SelfClock::now();
+        const char* name   = a_spell->GetName() ? a_spell->GetName() : "?";
+
+        // PER SPELL: a live creature from THIS spell blocks only this spell.
+        if (CasterHasLiveSummon(a_follower, a_spell)) {
+            auto& last = g_summonSkipLog[key];
+            if (std::chrono::duration<float>(now - last).count() >= 10.0f) {
+                last = now;
+                spdlog::info("[summon] {:08X} {} ({:08X}) rule {} ({}, target {}): skipped -- "
+                             "this spell's creature is still alive",
+                             id, name, spellID, a_rule, a_table ? a_table : "?", a_target);
+            }
+            return { Result::NoOp, "summon still live", true };
+        }
+        if (auto it = g_summonDispatched.find(key); it != g_summonDispatched.end() &&
+            std::chrono::duration<float>(now - it->second).count() < kSummonLandingSec)
+            return { Result::NoOp, "summon landing", true };
+
+        // COMPETENCE IS NOT PERMISSION (DESIGN §5.3): the same magicka + reserve
+        // gate CastOn / CastSelfDirect apply. Transparent: fall to the next rule.
+        if (auto* avo = a_follower->AsActorValueOwner()) {
+            const float cost = a_spell->CalculateMagickaCost(a_follower);
+            const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
+            if (cost > have)
+                return { Result::FailedSkill,
+                         std::format("insufficient magicka (needs {:.0f})", cost), true };
+            const float reserve = Config::g_magickaReserve.load();
+            if (reserve > 0.0f) {
+                const float mx = avo->GetPermanentActorValue(RE::ActorValue::kMagicka) +
+                    a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
+                                                      RE::ActorValue::kMagicka);
+                if (mx > 0.0f && (have - cost) < reserve * mx)
+                    return { Result::FailedSkill,
+                             std::format("magicka reserve (floor {:.0f})", reserve * mx), true };
+            }
+        }
+
+        // The direct road summons already used: CastSpellImmediate(kInstant) by
+        // the caster ON the caster, Post'd to the main thread, magicka deducted
+        // by hand (ApplyEffectFromTo). No g_selfCast entry, no hand lock.
+        g_summonDispatched[key] = now;
+        ApplyEffectFromTo(id, id, spellID, /*hostile=*/false);
+        spdlog::info("[summon] {:08X} {} {} ({:08X}) rule {} ({}, target {}): road=direct, cast once",
+                     id, a_follower->GetName() ? a_follower->GetName() : "?", name, spellID,
+                     a_rule, a_table ? a_table : "?", a_target);
+        return { Result::Fired, "summon (cast once)" };
+    }
+
     // See Actuation.h. Restoration = not Offense AND (restores Health OR any
     // effect of the Restoration school). The school read is the EffectSetting's
     // own data field (pinned CommonLibSSE-NG 3.7.0 include/RE/E/EffectSetting.h:72
@@ -1287,6 +1382,8 @@ namespace MFO::Actuation {
         ComposedCast::Reset();        // drop executor streams/backoff/expected-cast set
         ClearCastLocks();             // Task 2: drop every firing-spell gambit lock
         g_lastApmfRefusal.clear();    // this file's APMF-refusal log dedup, session-scoped
+        g_summonDispatched.clear();   // summon landing floors (worker state, session-scoped)
+        g_summonSkipLog.clear();      // summon "still alive" log throttle
     }
 
     // F3-7 (deploy-gate review 2026-09-07). Drop ONE follower's APMF-refusal log
@@ -1843,28 +1940,12 @@ namespace MFO::Actuation {
             // Serana freeze. A spell with a Summon Creature effect is cast ONCE,
             // by the caster, on the same direct road (ApplyEffectFromTo). Bound
             // weapons (kBoundWeapon) and Reanimate (kReanimate) are other
-            // archetypes and never match.
-            bool summon = false;
-            for (auto* eff : spell->effects) {
-                if (eff && eff->baseEffect &&
-                    eff->baseEffect->GetArchetype() ==
-                        RE::EffectArchetypes::ArchetypeID::kSummonCreature) {
-                    summon = true;
-                    break;
-                }
-            }
-            if (summon) {
-                if (!affordable())
-                    return { Result::NoOp, "auto summon: insufficient magicka/reserve", true };
-                ApplyEffectFromTo(id, id, a_spellID, hostile);
-                g_autoCast[id] = now;
-                // No g_beneficialRecast window: CasterHasLiveSummon gates liveness, so a killed summon recasts at once.
-                spdlog::info("[cast] {:08X} {} SUMMON {} ({:08X}) -- road=direct (AUTO), cast once "
-                             "by the caster (never fanned out), cost {:.0f}",
-                             id, a_follower->GetName() ? a_follower->GetName() : "?",
-                             spell->GetName() ? spell->GetName() : "?", a_spellID, cost);
-                return { Result::Fired, "auto summon (cast once)" };
-            }
+            // archetypes and never match. (fix/mfo-summon-oneshot: both gambit
+            // dispatchers now send every summon to CastSummonOnce BEFORE they
+            // reach CastAuto; this is the same single path, kept so no future
+            // CastAuto caller can fan a summon out.)
+            if (IsSummonSpell(spell))
+                return CastSummonOnce(a_follower, spell, -1, "auto", "auto");
 
             // ENUMERATE the inferred set (worker-safe reads, same context/precedent
             // as Evaluator::PickFoe / PickAlly which run on this same tick). F1:

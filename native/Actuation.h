@@ -231,6 +231,23 @@ namespace MFO::Actuation {
     // candlelight/buff/heal pacing is untouched. Worker/main context, list read only.
     bool CasterHasLiveSummon(RE::Actor* a_caster, RE::SpellItem* a_spell);
 
+    // SUMMON = ONE-SHOT CONJURE (fix/mfo-summon-oneshot, deck 2026-09-24). True
+    // when any effect of a_spell has the kSummonCreature archetype (bound weapons
+    // and Reanimate never match).
+    bool IsSummonSpell(RE::SpellItem* a_spell);
+    // THE single summon path for every target setting (self / player / foe /
+    // AUTO) on both tables: the combat Fire dispatch and the Logistics OOC
+    // service call it before any other cast road. Per spell: skips while THIS
+    // spell's creature is alive (rate-limited [summon] skip line), then casts
+    // ONCE, by the caster, on the direct road (ApplyEffectFromTo(caster, caster)
+    // -> CastSpellImmediate kInstant, Post'd to main, magicka deducted). Never
+    // registers a self/target stream and takes no hand lock, so no MFO reconcile,
+    // combat-end or cleanup path ever ends the summon. A 2 s landing floor per
+    // (follower, spell) stops a second cast before the creature is visible; a
+    // summon killed later recasts on the next eval. WORKER only.
+    Outcome CastSummonOnce(RE::Actor* a_follower, RE::SpellItem* a_spell, int a_rule,
+                           const char* a_table, std::string_view a_target);
+
     // (CONCENTRATION delivery is DIRECT FORCE everywhere -- Docs/CAST-DELIVERY.md.
     // COMBAT: CastOn's concentration fork -> ConcentrationCast -> CastTargetDirect
     // (self -> CastSelfDirect); the v1.0.58-65 package stream is REMOVED -- it

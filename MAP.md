@@ -1226,16 +1226,23 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   rule, exactly like the cast-grace hold. Non-summon combat casts are byte-identical
   (helper returns false) and the AI-first-grace pacing is untouched; the helper only
   READS the active-effect list, the same off-worker read as the other combat guards.
-- **Summons are never fanned out (fix/mfo-summon-no-fanout, 2026-09-23)** — `CastAuto`
-  (`Actuation_Direct.cpp:1839`) checks for a `kSummonCreature` effect BEFORE building the
-  AUTO target set and casts the spell ONCE via `ApplyEffectFromTo(caster, caster)` (same
-  direct road, same cooldown/recast/magicka gates), logging `[cast] ... SUMMON ... cast once`.
-  A summon only ever conjures for its own caster, so the old per-ally fan-out put N summons on
-  the caster in one tick (lead for the Serana freeze). The non-AUTO roads (self/player/foe via
-  CastOn, OOC immediate/package) already cast once per fire. **What breaks:** moving the
-  check after the enumeration re-opens the N-summon tick; widening it to kReanimate breaks
-  raise-dead (needs a corpse target); arming `g_beneficialRecast` for a summon holds a killed
-  summon off for ~85% of its duration (liveness is `CasterHasLiveSummon`'s job). Open backlog:
+- **Summon = one-shot conjure (fix/mfo-summon-oneshot, 2026-09-24; supersedes the 09-23
+  AUTO-only no-fanout)** — `Actuation::IsSummonSpell` + `Actuation::CastSummonOnce`
+  (`Actuation_Direct.cpp:~933-1022`) are THE single summon path. The combat `Fire` guard
+  (`Actuation.cpp:~2386`) and the Logistics OOC cast block (`Logistics.cpp:~1592`) send every
+  summon there BEFORE any other road, for every target setting (self/player/foe/AUTO);
+  `CastAuto` delegates too. Per spell: `CasterHasLiveSummon` skips (rate-limited `[summon] ...
+  skipped` line), a 2 s landing floor (`g_summonDispatched`) covers the Post-to-placement gap,
+  then ONE `ApplyEffectFromTo(caster, caster)` on the direct road with a `[summon] ... road=direct,
+  cast once` line. It is NEVER put in `g_selfCast`/`g_targetCast` and takes NO hand lock.
+  Deck 2026-09-24: on the old self road the guard skipped the live summon, `lastFired` never
+  refreshed, `SelfCastReconcile` marked the stream stale and `SelfCastEndActor` dispelled the
+  summon every ~3 s (23 recasts), and the left-hand lock starved heal/flames. **What breaks:**
+  routing a summon back through CastOn/CastSelfDirect/CastTargetDirect re-opens the stale-dispel
+  loop and the hand lock; refreshing `lastFired` from the guard or exempting summons inside the
+  reconcile only fakes a channel; widening `IsSummonSpell` to kReanimate breaks raise-dead (needs
+  a corpse target; Reanimate still rides the old roads, incl. the self-stream loop); a recast
+  window (e.g. `g_beneficialRecast`) holds a killed summon off. Open backlog:
   `Docs/REVIEW-BACKLOG.md` MFO-B75 (Script-archetype summons still fan out), MFO-B76 (hostile-
   flagged summon skips the LoS gate), MFO-B77 (Serana's Reanimate spells still fan out).
 

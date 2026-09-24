@@ -129,11 +129,15 @@ apply it to any future channel MFO consumes from APMF.
 | concentration | **Self** | **self** (target == follower) | baseline `CastSelfDirect`/`ApplySelfEffect` | the follower (correct) |
 | concentration | **Self** | **player / ally / foe** (≠ follower) | **`ConcProxy` delivery-flipped copy** → concentration-on-others path | **the recipient** |
 
-**SUMMON RULE (fix/mfo-summon-no-fanout, 2026-09-23).** A spell with a Summon Creature effect is
-cast ONCE per fire, by the caster, whatever the row targets. AUTO's fan-out (`CastAuto`) no longer
-applies to it: it takes one `ApplyEffectFromTo(caster, caster)` on the same direct road
-(`Actuation_Direct.cpp:1839`). A summon only conjures for its own caster, so the old fan-out put one
-creature per party member on him in a single tick. Bound weapons and Reanimate are not summons here.
+**SUMMON RULE (fix/mfo-summon-oneshot, 2026-09-24).** A spell with a Summon Creature effect is a
+ONE-SHOT CONJURE on every target setting (self / player / foe / AUTO) and on both gambit tables: the
+combat `Fire` dispatch and the Logistics OOC block both call `Actuation::CastSummonOnce` before any
+other road. It casts ONCE, by the caster, with one `ApplyEffectFromTo(caster, caster)` on the direct
+road (kInstant `CastSpellImmediate`, Post'd, magicka deducted). It is never a self/target stream and
+takes no hand lock, so no reconcile, combat-end or cleanup path ends it: it lasts its duration or
+until killed. Liveness is per spell (`CasterHasLiveSummon`), a killed summon recasts on the next
+eval (only a 2 s landing floor after a dispatch). Bound weapons and Reanimate are not summons here.
+Harbinger routing + animation for summons is ClickUp 86e3dvkwm, not this rule.
 
 **THE KEY FACT — why FF works but concentration collapses (and why the proxy exists):**
 For **fire-and-forget**, `CastSpellImmediate` applies the one-shot effect to the passed

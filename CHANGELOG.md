@@ -7,8 +7,13 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## v2.0.13 -- Unreleased
 
-- **A summon gambit casts once.** A gambit set to cast a summon (a familiar, an atronach) on Auto used to cast it once for every member of the party, all at the same moment. A summon always appears next to the follower who cast it, so that put several creatures on him at once. Now he casts it one time. Bound weapons and raise dead spells are not affected.
-- **This may be what froze the game with Serana.** Her summon, cast from a gambit, could hard freeze the game. It is not proven yet that this was the cause. Please try it.
+- **Summons stay summoned.** A summon gambit set to cast on the follower himself kept dismissing its own creature about three seconds after casting it, then cast it again. One fight could burn through twenty of them and all of his magicka. MFO was treating the summon like a spell he holds, and ended it when he stopped holding it. Now a summon is cast once and left alone. It lasts its full duration or until it is killed.
+- **A summon is cast once, whatever it targets.** Self, the player, an enemy or Auto all mean the same thing for a summon: the follower conjures it one time. On Auto it used to be cast once for every member of the party at the same moment.
+- **A killed summon comes back right away.** When the creature dies, the follower summons it again the next time his gambits run.
+- **Each summon spell tracks its own creature.** A live familiar only stops the familiar rule. A different summon spell can still be cast. (The game itself may dismiss the older creature if the follower can only hold one summon.)
+- **Summons no longer lock the follower's hand.** A summon used to hold his left hand, which kept his heal and damage spells from firing.
+- **In and out of combat work the same.** The only difference is which gambit list the rule is on.
+- **This may be what froze the game with Serana.** Her summon, cast from a gambit, could hard freeze the game. It is not proven yet that this was the cause. Please try it. Bound weapons and raise dead spells are not affected.
 - **Japanese names show on the board.** On a Japanese game, follower, item, spell and skill names drew as rows of diamonds. The board's fonts have no Japanese letters. MFO now ships a Japanese fallback font (Noto Sans JP) and uses it for any letter the main fonts lack. The game's own names now show in Japanese and in any other language that font covers. Korean and Simplified Chinese are not covered yet. MFO's own labels are still English.
 - **Names on the HUD line up.** The name column was padded by bytes, so a Japanese name pushed the rest of its row out of line. It is now padded by width.
 

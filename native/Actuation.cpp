@@ -2384,6 +2384,9 @@ namespace MFO::Actuation {
         if (op == Vocab::kActCastSelf || op == Vocab::kActCastPlayer ||
             op == Vocab::kActCastTarget) {
             if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
+                sp && IsSummonSpell(sp))   // one-shot conjure, any target (fix/mfo-summon-oneshot)
+                return CastSummonOnce(a_follower, sp, a_choice.ruleIndex, "combat", op);
+            if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
                 sp && CasterHasLiveSummon(a_follower, sp)) {
                 return { Result::NoOp, "summon still live", true };
             }

@@ -1589,6 +1589,17 @@ namespace MFO::Logistics {
                 // spell (candlelight/buffs/heals carry no summon archetype), so the
                 // beneficial/light routing below is unchanged. Fall to the next rule
                 // exactly like the "buff still on the target" skip.
+                // SUMMON = ONE-SHOT CONJURE on every target setting, the same single
+                // path the combat table uses (fix/mfo-summon-oneshot). Fired is this
+                // tick's action; a live creature / landing / unaffordable falls through.
+                if (Actuation::IsSummonSpell(sp)) {
+                    if (Actuation::CastSummonOnce(a_follower, sp, choice.ruleIndex, "logistics", op)
+                            .result == Actuation::Result::Fired) {
+                        acted = true;
+                        break;
+                    }
+                    start = choice.ruleIndex + 1; continue;
+                }
                 if (Actuation::CasterHasLiveSummon(a_follower, sp)) {
                     start = choice.ruleIndex + 1; continue;
                 }
