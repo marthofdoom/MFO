@@ -637,6 +637,12 @@ namespace MFO::Logistics {
             bool                legEngaged = false;
             Clock::time_point   legStart{};
             Clock::time_point   nextLegPkgDiag{};
+            // MOVEMENT BLOCKED backstop (loot M1): first tick this leg saw the
+            // engine's kMovementBlocked runtime package, and the legStart it was
+            // seen under (a retarget rewrites legStart, so a stale onset can never
+            // gate the NEXT leg). Zero = not blocked. Worker-only, NOT serialized.
+            Clock::time_point   blockedSince{};
+            Clock::time_point   blockedLeg{};
             // ACQUIRE PROBE (route 2b) readback: after an Activate dispatch at a
             // LOOSE ref, the NEXT tick observes what the engine actually did
             // (dispatch is asynchronous -- Papyrus.h -- so same-tick reads lie).
@@ -785,12 +791,31 @@ namespace MFO::Logistics {
         inline std::unordered_map<RE::FormID, int>               g_stallStrikes;
         constexpr auto kTravelStickyCooldown = std::chrono::seconds(60);
 
+        // GATED (loot M1, 2026-09-24, marth: "never return to follow when valid
+        // items are reachable ... effective skipping, done intelligently"). A leg
+        // whose follower sat in the engine's kMovementBlocked package for
+        // kBlockedGate marks its target GATED and ALSO skips the items that lie
+        // behind the same block (GatedNow and the cone rule, below MarkTravelSticky),
+        // then the excursion continues with the next reachable item. A SKIP,
+        // never a verdict: no strike, never sticky, not in g_travelFailed (so
+        // the idle reassess neither clears nor feeds it). Re-admitted by a door/
+        // lever near it (TESOpenCloseEvent / ACTI|DOOR TESActivateEvent), by the
+        // gated item's own cell attaching again, or after kGateHold.
+        // The records live below under a mutex (GateSink erases on the
+        // main thread); g_gateCount lets every other read skip the lock.
+        constexpr auto  kBlockedGate  = std::chrono::seconds(3);   // healthy MB blips ~1 s, freezes 39-45 s (deck-0924b)
+        constexpr auto  kEngageWindow = std::chrono::seconds(3);   // engage seen at 1.1-2.4 s (deck-0924b, field-0923b)
+        constexpr auto  kGateHold     = std::chrono::seconds(60);  // false-gate recovery (an actor jam), = kTravelStickyCooldown
+        inline std::atomic<int> g_gateCount{ 0 };
+        inline bool GatedNow(RE::FormID a_id, Clock::time_point a_now);   // defined below MarkTravelSticky
+
         inline bool TravelFailedRecently(RE::FormID a_id, Clock::time_point a_now) {
             auto su = g_travelUnreach.find(a_id);
             if (su != g_travelUnreach.end() && a_now < su->second + kTravelStickyCooldown)
                 return true;
             auto it = g_travelFailed.find(a_id);
-            return it != g_travelFailed.end() && a_now < it->second + kTravelFailCooldown;
+            if (it != g_travelFailed.end() && a_now < it->second + kTravelFailCooldown) return true;
+            return g_gateCount.load(std::memory_order_relaxed) > 0 && GatedNow(a_id, a_now);
         }
         inline void MarkTravelFailed(RE::FormID a_id, Clock::time_point a_now) {
             if (a_id) { g_travelFailed[a_id] = a_now; EvictOldest(g_travelFailed); }
@@ -827,6 +852,152 @@ namespace MFO::Logistics {
             spdlog::info("[loot] {:08X} STICKY-unreachable (loose/unacquirable) -- won't re-pick "
                          "for {}s", a_id,
                          std::chrono::duration_cast<std::chrono::seconds>(kTravelStickyCooldown).count());
+        }
+
+        // ── GATED items (loot M1, 2026-09-24) ───────────────────────────────────
+        // Contract: kBlockedGate above. The records are cross-thread state: the
+        // worker marks and reads them, GateSink (Logistics.cpp) erases them on the
+        // main thread -> a plain mutex (the g_stockMx precedent);
+        // g_gateCount mirrors the size so the scan's hot path (TravelFailedRecently,
+        // called from the candidate sort) takes no lock while nothing is gated.
+        //
+        // "BEHIND THE SAME BLOCK". When a leg is declared blocked the follower is
+        // standing AT the obstruction (S = his position; the engine gives him
+        // kMovementBlocked because he is pressing into it) and the gated target T
+        // lies beyond it. Item I is behind the same block when, from S:
+        //   (1) same space: same interior cell, or same worldspace (interior
+        //       coordinates of two cells are unrelated);
+        //   (2) on T's side: inside the 90-degree cone (+-45) around S->T, flat (xy),
+        //       so the room entered through that opening is covered and everything
+        //       behind or beside him (the way he came) is not;
+        //   (3) past the block, not at it: |SI| >= 64 u and <= |ST| + 1024 u (about
+        //       one dungeon room past the target);
+        //   (4) on T's floor: |I.z - T.z| <= 256 u (one storey), so a landing above or
+        //       a pit below the cone is not swept in.
+        // Why this shape: S and T are the only geometry M1 has (navmesh reachability
+        // is round M3). A wrong INCLUSION costs nothing permanent: the item re-admits
+        // on a door/lever event near it, its cell re-attaching, or kGateHold. A wrong
+        // EXCLUSION costs one more walk that ends in its own blocked verdict (<= 4 s)
+        // and gates it individually. So the rule takes the room behind the opening
+        // and stays out of everything on the follower's side.
+        constexpr float       kGateConeCos     = 0.70710678f;   // cos 45
+        constexpr float       kGateMinBehind   = 64.0f;
+        constexpr float       kGateBeyond      = 1024.0f;
+        constexpr float       kGateFloorBand   = 256.0f;
+        // A lever/door event re-admits every gate whose block OR target is within
+        // this radius: a lever sits within sight of its gate, 2048 u (~29 m)
+        // covers a large hall. Too wide only costs one re-probe walk.
+        constexpr float       kGateEventRadius = 2048.0f;
+        constexpr std::size_t kGateMax         = 16;
+
+        struct GateRecord {
+            RE::FormID        target = 0;
+            RE::FormID        follower = 0;
+            RE::FormID        space = 0;
+            RE::NiPoint3      blockPos{};
+            RE::NiPoint3      targetPos{};
+            Clock::time_point since{};
+            std::unordered_set<RE::FormID> logged;   // GATED-BEHIND lines already printed
+        };
+        inline std::mutex              g_gateMx;
+        inline std::vector<GateRecord> g_gates;   // guarded by g_gateMx
+
+        inline RE::FormID SpaceKey(const RE::TESObjectREFR* a_ref) {
+            auto* cell = a_ref ? a_ref->GetParentCell() : nullptr;
+            if (!cell) return 0;
+            if (cell->IsInteriorCell()) return cell->GetFormID();
+            auto* ws = a_ref->GetWorldspace();
+            return ws ? ws->GetFormID() : 0;
+        }
+        inline bool BehindBlock(const GateRecord& g, const RE::NiPoint3& p) {
+            const float tx = g.targetPos.x - g.blockPos.x, ty = g.targetPos.y - g.blockPos.y;
+            const float ix = p.x - g.blockPos.x,           iy = p.y - g.blockPos.y;
+            const float lt = std::sqrt(tx * tx + ty * ty), li = std::sqrt(ix * ix + iy * iy);
+            if (lt < 1.0f || li < kGateMinBehind || li > lt + kGateBeyond) return false;
+            if (std::fabs(p.z - g.targetPos.z) > kGateFloorBand) return false;
+            return (tx * ix + ty * iy) / (lt * li) >= kGateConeCos;
+        }
+        // Caller holds g_gateMx. Every re-admit is logged -- the skip is visible
+        // both ways, never a silent list change.
+        template <class Pred>
+        void EraseGatesIf(const char* a_why, RE::FormID a_by, Pred&& a_pred) {
+            std::erase_if(g_gates, [&](const GateRecord& g) {
+                if (!a_pred(g)) return false;
+                spdlog::info("[loot] GATED {:08X} re-admitted -- {} ({:08X}); items behind its "
+                             "block are eligible again", g.target, a_why, a_by);
+                return true;
+            });
+            g_gateCount.store(static_cast<int>(g_gates.size()), std::memory_order_relaxed);
+        }
+        inline void ReadmitNear(RE::TESObjectREFR* a_ref, const char* a_why) {
+            if (!a_ref) return;
+            const RE::FormID   space = SpaceKey(a_ref);
+            const RE::NiPoint3 p     = a_ref->GetPosition();
+            std::lock_guard lk(g_gateMx);
+            EraseGatesIf(a_why, a_ref->GetFormID(), [&](const GateRecord& g) {
+                return space && g.space == space &&
+                       (p.GetDistance(g.blockPos) <= kGateEventRadius ||
+                        p.GetDistance(g.targetPos) <= kGateEventRadius);
+            });
+        }
+        // Worker tick: the kGateHold age-out (the recovery for a FALSE gate, e.g.
+        // two followers jammed in a doorway, which no door or lever event ends).
+        inline void PruneGates(Clock::time_point a_now) {
+            if (g_gateCount.load(std::memory_order_relaxed) == 0) return;
+            std::lock_guard lk(g_gateMx);
+            EraseGatesIf("gate hold expired, no door/lever/cell event seen", 0,
+                         [&](const GateRecord& g) { return a_now >= g.since + kGateHold; });
+        }
+        inline void ClearGates() {
+            std::lock_guard lk(g_gateMx);
+            g_gates.clear();
+            g_gateCount.store(0, std::memory_order_relaxed);
+        }
+
+        inline bool GatedNow(RE::FormID a_id, Clock::time_point a_now) {
+            if (!a_id) return false;
+            auto*              ref   = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_id);
+            const RE::FormID   space = SpaceKey(ref);
+            const RE::NiPoint3 pos   = ref ? ref->GetPosition() : RE::NiPoint3{};
+            std::lock_guard lk(g_gateMx);
+            for (auto& g : g_gates) {
+                if (a_now >= g.since + kGateHold) continue;   // PruneGates logs its re-admit
+                if (g.target == a_id) return true;
+                if (!ref || !space || space != g.space || !BehindBlock(g, pos)) continue;
+                if (g.logged.size() < 64 && g.logged.insert(a_id).second)
+                    spdlog::info("[loot] {:08X} GATED-BEHIND the block {:08X} ran into on the way to "
+                                 "{:08X} -- skipped (a skip, not a failure)", a_id, g.follower, g.target);
+                return true;
+            }
+            return false;
+        }
+
+        inline void MarkGated(RE::Actor* a_follower, RE::TESObjectREFR* a_target, float a_blockedSecs,
+                              Clock::time_point a_now) {
+            if (!a_follower || !a_target) return;
+            GateRecord g;
+            g.target    = a_target->GetFormID();
+            g.follower  = a_follower->GetFormID();
+            g.space     = SpaceKey(a_target);
+            g.blockPos  = a_follower->GetPosition();
+            g.targetPos = a_target->GetPosition();
+            g.since     = a_now;
+            spdlog::info("[loot] {:08X} target {:08X} GATED -- Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), "
+                         "{:.0f} u short; skipping it and the items behind the same block (45-degree cone past "
+                         "the block, <= +1024 u, same floor) until a door/lever event near it, its cell "
+                         "re-attaching, or {}s. No strike, not sticky.",
+                         g.follower, g.target, a_blockedSecs, g.blockPos.x, g.blockPos.y, g.blockPos.z,
+                         g.blockPos.GetDistance(g.targetPos),
+                         std::chrono::duration_cast<std::chrono::seconds>(kGateHold).count());
+            std::lock_guard lk(g_gateMx);
+            std::erase_if(g_gates, [&](const GateRecord& o) { return o.target == g.target; });
+            if (g_gates.size() >= kGateMax) {   // oldest first, and said out loud
+                spdlog::info("[loot] GATED {:08X} re-admitted -- gate table full ({})",
+                             g_gates.front().target, kGateMax);
+                g_gates.erase(g_gates.begin());
+            }
+            g_gates.push_back(std::move(g));
+            g_gateCount.store(static_cast<int>(g_gates.size()), std::memory_order_relaxed);
         }
 
         // IDLE REASSESS (marth: "to be fair, reassess all nearby bodies if nothing
@@ -1027,6 +1198,8 @@ namespace MFO::Logistics {
                   Category a_cat, RE::ActorValue a_want);
     float NavmeshReach(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
     bool LooseRef(RE::TESObjectREFR* a_ref);
+    bool HasLoot(RE::Actor* a_follower, RE::TESObjectREFR* a_ref,
+                 Category a_cat, RE::ActorValue a_want);   // Logistics_Loot.cpp (the scan's peek)
     bool PlayerActivelyStealthing();
     bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
                     RE::ActorValue a_potionWant = RE::ActorValue::kNone,

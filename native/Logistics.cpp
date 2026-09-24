@@ -285,6 +285,57 @@ namespace MFO::Logistics {
 
     }
 
+    // ── GATED re-admit sink (loot M1). The gate records, the "behind the same
+    // block" rule and GatedNow/MarkGated live in Logistics_internal.h (the scan
+    // reads them through TravelFailedRecently).
+    namespace {
+        // Re-admit signals. Main thread (engine event dispatch); each one only
+        // erases records under g_gateMx and is a no-op while nothing is gated.
+        // Layouts: fork TESOpenCloseEvent.h / TESActivateEvent.h /
+        // TESCellAttachDetachEvent.h; holder sources +0x8F0 (verified in both
+        // binaries, SendOpenCloseEvent SE 14190 / AE 14299), +0x58, +0x1B8.
+        class GateSink final : public RE::BSTEventSink<RE::TESOpenCloseEvent>,
+                               public RE::BSTEventSink<RE::TESActivateEvent>,
+                               public RE::BSTEventSink<RE::TESCellAttachDetachEvent> {
+        public:
+            static GateSink* GetSingleton() { static GateSink s; return &s; }
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESOpenCloseEvent* a_ev,
+                                                  RE::BSTEventSource<RE::TESOpenCloseEvent>*) override {
+                if (a_ev && g_gateCount.load(std::memory_order_relaxed) > 0)
+                    ReadmitNear(a_ev->ref.get(), a_ev->opened ? "door/gate OPENED near it"
+                                                              : "door/gate CLOSED near it");
+                return RE::BSEventNotifyControl::kContinue;
+            }
+            // A lever portcullis may animate without SetOpen (no open/close
+            // event), but its LEVER always fires an activation. Activators and
+            // doors only -- item pickups and containers are not gate signals.
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESActivateEvent* a_ev,
+                                                  RE::BSTEventSource<RE::TESActivateEvent>*) override {
+                if (!a_ev || g_gateCount.load(std::memory_order_relaxed) == 0)
+                    return RE::BSEventNotifyControl::kContinue;
+                auto* r    = a_ev->objectActivated.get();
+                auto* base = r ? r->GetBaseObject() : nullptr;
+                if (base && (base->Is(RE::FormType::Activator) || base->Is(RE::FormType::Door)))
+                    ReadmitNear(r, "lever/door ACTIVATED near it");
+                return RE::BSEventNotifyControl::kContinue;
+            }
+            // Fired PER REFERENCE: the gated item's own cell attached again (the
+            // player left and came back, the world may have changed).
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESCellAttachDetachEvent* a_ev,
+                                                  RE::BSTEventSource<RE::TESCellAttachDetachEvent>*) override {
+                if (!a_ev || !a_ev->attached || g_gateCount.load(std::memory_order_relaxed) == 0)
+                    return RE::BSEventNotifyControl::kContinue;
+                if (auto* r = a_ev->reference.get()) {
+                    const RE::FormID rid = r->GetFormID();
+                    std::lock_guard lk(g_gateMx);
+                    EraseGatesIf("its cell attached again", rid,
+                                 [rid](const GateRecord& g) { return g.target == rid; });
+                }
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+    }
+
     // ── public: pure reads used by the evaluator ────────────────────────────
 
     RE::ActorValue PotionRestores(RE::AlchemyItem* a_potion) {
@@ -920,6 +971,7 @@ namespace MFO::Logistics {
         auto& due = g_nextTick[id];
         if (due.time_since_epoch().count() != 0 && now < due) return;
         due = now + kLogisticsInterval;
+        PruneGates(now);   // loot M1: GATED age-out (kGateHold), logged per re-admit
 
         // APMF EQUIP AUTHORITY (feat/mfo-equip-authority, 2026-09-15): the OOC
         // road of the declaration. CLAIM on the first service (the claim alone
@@ -971,6 +1023,17 @@ namespace MFO::Logistics {
         if (const int slot = SlotIndexOf(id); slot >= 0) {
             TravelIntent& tr = g_travelSlots[slot];
             auto* pc = RE::PlayerCharacter::GetSingleton();
+            // loot M1: a leg this tick SKIPPED (emptied / gated) names its next item
+            // once the Holding scan below has picked it (noteNext).
+            RE::FormID  skippedRef = 0;
+            const char* skipWhy    = "";
+            auto noteNext = [&](const char* a_none) {
+                if (!skippedRef) return;
+                const RE::FormID nxt = tr.active && tr.phase == TravelPhase::Walking
+                                           ? [&] { auto t = tr.target.get(); return t ? t->GetFormID() : 0u; }() : 0u;
+                spdlog::info("[loot] {:08X} target {:08X} {} -- next item {}", id, skippedRef, skipWhy,
+                             nxt ? std::format("{:08X}", nxt) : std::string(a_none));
+            };
             // HARD interrupts -> END the excursion.
             const bool overCap = now > tr.startTime + std::chrono::seconds(
                                           static_cast<int>(Config::g_excursionMax.load()));
@@ -1019,6 +1082,33 @@ namespace MFO::Logistics {
                 tr.phase = TravelPhase::Holding;
                 tr.lingerUntil = now + BatchLingerDur();
                 return;
+            } else if (tr.phase == TravelPhase::Walking && [&] {
+                           // ── EMPTIED-TARGET CORRECTION (loot M1, marth: "a smooth
+                           // correction if they aren't first to the item where it
+                           // immediately continues on the list"). Another follower or
+                           // the player emptied the container/corpse he is walking to:
+                           // `gone` never fires for that (the ref stays), so he used to
+                           // walk the whole leg to "nothing to take". Peek the SAME
+                           // HasLoot the scan picked it with, every Walking tick; if
+                           // the trip's reason is gone, drop to Holding and let
+                           // RunExcursionScan take the next item THIS tick. No grace,
+                           // no deadline, no blocklist, no strike: the ref is neither
+                           // unreachable nor failed, and an empty ref fails the scan's
+                           // own HasLoot gate, so it is never re-picked (while one it
+                           // still holds for ANOTHER rule is, naturally). Loose refs
+                           // are covered by `gone` (a pickup disables them).
+                           auto t = tr.target.get();
+                           auto* r = t.get();
+                           if (!r || r->IsDisabled() || r->IsMarkedForDeletion() || LooseRef(r) ||
+                               HasLoot(a_follower, r, tr.cat, tr.want))
+                               return false;
+                           skippedRef = r->GetFormID();
+                           return true;
+                       }()) {
+                skipWhy        = "EMPTIED before arrival";
+                tr.phase       = TravelPhase::Holding;
+                tr.lingerUntil = now + BatchLingerDur();
+                // no return -- fall into Holding (the next item, same tick)
             } else if (tr.phase == TravelPhase::Walking) {
                 auto tptr  = tr.target.get();
                 auto* tref = tptr.get();
@@ -1041,27 +1131,39 @@ namespace MFO::Logistics {
                 auto*      curPkg      = a_follower->GetCurrentPackage();
                 const bool onTravelNow = Forms::IsTravelPackage(curPkg);
                 const bool apmfLeg     = Packages::IsAPMFTravelHeld(slot);
+                // 86e3dpn66: name the road the leg is REALLY on. A ch.19 leg (the
+                // Harbinger travel channel, APMF-side record per slot) used to print
+                // "legacy alias route" because only the ch.9 flag was consulted.
+                const bool  ch19Leg = APMFBridge::HasLootTravelLeg(slot);
+                const char* route   = ch19Leg ? "CH19 route" : (apmfLeg ? "APMF ch.9 route" : "legacy alias route");
+                // ENGAGE WINDOW (86e3dpn66): measured engage is 1.1-1.6 s on the first
+                // Walking tick and ~2.4 s on the second (deck-0924b, field-0923b), so a
+                // leg is not "not engaged" before kEngageWindow. The same window gates
+                // the theft guard below: a healthy leg never starts a steal episode
+                // (strike + nudge) before it could have engaged.
+                const bool legClock       = tr.legStart.time_since_epoch().count() != 0;
+                const bool inEngageWindow = !tr.legEngaged && legClock && now - tr.legStart < kEngageWindow;
                 if (onTravelNow && !tr.legEngaged) {
                     tr.legEngaged = true;
-                    spdlog::info("[loot] {:08X} leg->{:08X}: TRAVEL PKG ENGAGED -- curPkg={:08X} "
+                    const bool late = legClock && now - tr.legStart >= kEngageWindow;
+                    spdlog::info("[loot] {:08X} leg->{:08X}: TRAVEL PKG ENGAGED{} -- curPkg={:08X} "
                                  "after {:.1f}s, dist={:.0f} ({})",
-                                 id, tref ? tref->GetFormID() : 0u,
+                                 id, tref ? tref->GetFormID() : 0u, late ? " LATE" : "",
                                  curPkg ? curPkg->GetFormID() : 0u,
-                                 tr.legStart.time_since_epoch().count() ?
-                                     std::chrono::duration<float>(now - tr.legStart).count() : -1.0f,
-                                 dist, apmfLeg ? "APMF route" : "legacy alias route");
+                                 legClock ? std::chrono::duration<float>(now - tr.legStart).count() : -1.0f,
+                                 dist, route);
                 }
                 // NOT ENGAGED. This is the line the diagnosis asked for: a dispatch
                 // whose package never took used to be indistinguishable from a
                 // follower who walked and failed, because the only trace either left
                 // was a stall/deadline verdict against the CORPSE. Fires on the first
-                // Walking tick of the leg (nextLegPkgDiag is zeroed at dispatch),
+                // Walking tick past kEngageWindow (nextLegPkgDiag is zeroed at dispatch),
                 // then at most every 4 s -- the same throttle shape as the WALK
                 // diagnostic below, but stored PER LEG so a new dispatch is never
                 // swallowed by the previous leg's window. It stops entirely the
                 // moment the leg engages, so a healthy excursion prints one line at
                 // most. No re-assert, no retry, no fallback: it reports, nothing else.
-                if (tref && !tr.legEngaged &&
+                if (tref && !tr.legEngaged && !inEngageWindow &&
                     (tr.nextLegPkgDiag.time_since_epoch().count() == 0 || now >= tr.nextLegPkgDiag)) {
                     tr.nextLegPkgDiag = now + std::chrono::seconds(4);
                     spdlog::warn("[loot] {:08X} leg->{:08X}: TRAVEL PKG NOT ENGAGED -- still on "
@@ -1070,9 +1172,8 @@ namespace MFO::Logistics {
                                  "stall/deadline verdict below is about the FOLLOWER not moving, "
                                  "NOT about the ref being unreachable.",
                                  id, tref->GetFormID(), curPkg ? curPkg->GetFormID() : 0u,
-                                 tr.legStart.time_since_epoch().count() ?
-                                     std::chrono::duration<float>(now - tr.legStart).count() : -1.0f,
-                                 apmfLeg ? "APMF route" : "legacy alias route", dist);
+                                 legClock ? std::chrono::duration<float>(now - tr.legStart).count() : -1.0f,
+                                 route, dist);
                 }
                 // DIAGNOSTIC (v0.8.6): is MFO's travel package driving him, and is
                 // he closing on the target? onTravelPkg=true + shrinking dist =
@@ -1269,8 +1370,46 @@ namespace MFO::Logistics {
                 //                                clocks and the strike/grace machinery
                 //                                apply exactly as on any other leg.
                 //   * legacy alias-route leg   -> normal guard, unchanged.
+                //   * CH19 leg (86e3dpn66)     -> normal guard OBSERVES only: Harbinger
+                //                                owns the leg, so MFO never posts its own
+                //                                EvaluatePackage there. A never-engaged
+                //                                CH19 leg concedes at the window's end; a
+                //                                displaced one waits the grace un-nudged.
+                //   * any leg, first kEngageWindow, not yet engaged -> no guard at all.
+                //
+                // MOVEMENT BLOCKED BACKSTOP (loot M1) runs FIRST, on every road. The
+                // engine's own kMovementBlocked runtime package (type 36, fork
+                // TESPackage.h) is its collision resolution: never fought, never
+                // nudged, never a theft. Held < kBlockedGate it is a blip (healthy legs
+                // show ~1 s) and the leg keeps walking, clocks untouched. Held >=
+                // kBlockedGate (freezes held 39-45 s in deck-0924b) the target is GATED
+                // with the items behind the same block (MarkGated) and the excursion
+                // CONTINUES with the next reachable item -- never a retarget along the
+                // same route, never a strike; back to follow only when nothing valid is
+                // left (the Holding scan below).
                 bool stealAbandon = false;
-                if (!gone && tref && apmfLeg && tr.legEngaged) {
+                const bool mbNow = curPkg && curPkg->packData.packType.get() ==
+                                                 RE::PACKAGE_PROCEDURE_TYPE::kMovementBlocked;
+                if (!mbNow) {
+                    tr.blockedSince = {};
+                } else if (tr.blockedSince.time_since_epoch().count() == 0 || tr.blockedLeg != tr.legStart) {
+                    tr.blockedSince = now;   // onset (or a new leg under a lingering MB)
+                    tr.blockedLeg   = tr.legStart;
+                }
+                if (mbNow && !gone && tref) {
+                    const float held = std::chrono::duration<float>(now - tr.blockedSince).count();
+                    if (now - tr.blockedSince < kBlockedGate)
+                        return;   // a blip: still walking, no guard, no stall verdict
+                    MarkGated(a_follower, tref, held, now);
+                    skippedRef      = tref->GetFormID();
+                    skipWhy         = "GATED (Movement Blocked)";
+                    tr.blockedSince = {};
+                    tr.stolenSince  = {};
+                    stealAbandon    = true;   // skip the stall/deadline blame path below
+                    tr.phase        = TravelPhase::Holding;
+                    tr.lingerUntil  = now + BatchLingerDur();
+                    // no return -- fall into Holding (the next reachable item, same tick)
+                } else if (!gone && tref && apmfLeg && tr.legEngaged) {
                     // The hold is real for this leg: the 0x49 override has been
                     // observed. Fall through to the arrival/stall/deadline checks
                     // unconditionally -- a genuinely stuck APMF leg (path fail, not a
@@ -1292,7 +1431,7 @@ namespace MFO::Logistics {
                                      "line repeats, the displacement is NOT transient.",
                                      id, tref->GetFormID(), curPkg ? curPkg->GetFormID() : 0u, dist);
                     }
-                } else if (!gone && tref) {
+                } else if (!gone && tref && !inEngageWindow) {
                     if (!onTravelNow) {
                         const auto skey = StealKey(id, tref->GetFormID());
                         if (tr.stolenSince.time_since_epoch().count() == 0) {
@@ -1304,11 +1443,13 @@ namespace MFO::Logistics {
                             // and calling that a theft is how the last diagnosis got
                             // pointed at the wrong subsystem.
                             spdlog::info("[loot] {:08X} travel pkg {} "
-                                         "(curPkg={:08X}) -- re-asserting claim, grace {}s (strike {}/{})",
+                                         "(curPkg={:08X}, {}) -- {}, grace {}s (strike {}/{})",
                                          id,
                                          tr.legEngaged ? "STOLEN mid-walk"
                                                        : "NEVER ENGAGED (not a theft -- it never ran)",
-                                         curPkg ? curPkg->GetFormID() : 0u,
+                                         curPkg ? curPkg->GetFormID() : 0u, route,
+                                         ch19Leg ? "Harbinger owns the leg, MFO does not nudge"
+                                                 : "re-asserting claim",
                                          std::chrono::duration_cast<std::chrono::seconds>(kStealGrace).count(),
                                          strikes, kStealStrikeMax);
                         }
@@ -1320,13 +1461,20 @@ namespace MFO::Logistics {
                         // clears loot on combat anyway, but this tick may beat it).
                         const bool tooManySteals = g_stealStrikes[skey] >= kStealStrikeMax;
                         const bool folInCombat   = a_follower->IsInCombat();
-                        if (tooManySteals || folInCombat) {
+                        // CH19, never engaged by the end of kEngageWindow: Harbinger
+                        // owns the leg and MFO may not nudge it, so there is nothing
+                        // to wait for -- concede now and let the Holding scan re-point
+                        // the leg (ClaimLootTravel) at the next item, or release it.
+                        const bool ch19NoEngage  = ch19Leg && !tr.legEngaged;
+                        if (tooManySteals || folInCombat || ch19NoEngage) {
                             MarkTravelFailed(tref->GetFormID(), now);   // transient only -- ref was reachable
                             g_stealStrikes.erase(skey);
                             spdlog::info("[loot] {:08X} leg {:08X} abandoned -- {} -- transient skip",
                                          id, tref->GetFormID(),
                                          folInCombat ? "in combat, conceding to combat package"
-                                                     : "claim stolen too many times, backing off");
+                                         : (tooManySteals ? "claim stolen too many times, backing off"
+                                                          : "CH19 leg never engaged within the engage window, "
+                                                            "Harbinger owns it (no MFO nudge)"));
                             tr.stolenSince = {};
                             stealAbandon = true;
                             tr.phase = TravelPhase::Holding;
@@ -1346,7 +1494,9 @@ namespace MFO::Logistics {
                             // before. Look the actor up by FormID inside the lambda,
                             // never capture the pointer. No pump (VR) -> no nudge and
                             // the grace simply expires; the failure is not masked.
-                            if (MainThread::IsInstalled()) {
+                            // NEVER on a CH19 leg (86e3dpn66, the Harbinger rule):
+                            // Harbinger owns that leg; MFO observes and decides only.
+                            if (!ch19Leg && MainThread::IsInstalled()) {
                                 const RE::FormID nid = id;
                                 MainThread::Post([nid]() {
                                     if (auto* a = RE::TESForm::LookupByID<RE::Actor>(nid))
@@ -1434,7 +1584,7 @@ namespace MFO::Logistics {
                                          "legEngaged={}) -- transient skip. {}",
                                          id, tref->GetFormID(), CatName(tr.cat), budget, over, dist,
                                          curPkg ? curPkg->GetFormID() : 0u,
-                                         apmfLeg ? "APMF" : "legacy-alias", tr.legEngaged,
+                                         route, tr.legEngaged,
                                          tr.legEngaged
                                              ? "He was on the travel package and did not close the "
                                                "distance in time -- a verdict about the WALK."
@@ -1469,15 +1619,19 @@ namespace MFO::Logistics {
                 // gives -- don't let a menu/crouch gut the batch.
                 auto* ui = RE::UI::GetSingleton();
                 if ((ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) ||
-                    PlayerActivelyStealthing())
+                    PlayerActivelyStealthing()) {
+                    noteNext("pending (holding: container menu open / player sneaking)");
                     return;   // hold, retry next tick
+                }
                 if (RunExcursionScan(a_follower, a_state, now)) {
                     // Retargeted (phase now Walking) or grabbed a cluster corpse
                     // (still Holding) -- productive, so extend the linger.
                     if (tr.phase == TravelPhase::Holding)
                         tr.lingerUntil = now + BatchLingerDur();
+                    noteNext("none walked (took one within reach, scanning on)");
                     return;
                 }
+                noteNext("none -- no valid item left, back to follow");
                 // No pause on an all-waiting dibs category (marth): even a
                 // g_scanSawWaiting-bounded hold here is a visible stall, so
                 // release the excursion immediately instead of lingering --
@@ -2161,7 +2315,12 @@ namespace MFO::Logistics {
         }
         holder->AddEventSink<RE::TESContainerChangedEvent>(ContainerSink::GetSingleton());
         holder->AddEventSink<RE::TESEquipEvent>(BeastHeadSink::GetSingleton());   // #62 beast-head reattach
-        spdlog::info("[logistics] player-looted waiver + beast-head equip sinks installed");
+        // loot M1: GATED re-admit signals (a door/gate/lever near a gate, a gated
+        // item's cell attaching again). Each is a no-op while nothing is gated.
+        holder->AddEventSink<RE::TESOpenCloseEvent>(GateSink::GetSingleton());
+        holder->AddEventSink<RE::TESActivateEvent>(GateSink::GetSingleton());
+        holder->AddEventSink<RE::TESCellAttachDetachEvent>(GateSink::GetSingleton());
+        spdlog::info("[logistics] player-looted waiver + beast-head equip + loot gate sinks installed");
     }
 
     // #62 ON-LOAD broken-gear clean. A follower can come up from a save already
@@ -2231,6 +2390,7 @@ namespace MFO::Logistics {
         g_travelUnreach.clear();
         g_stallStrikes.clear();
         g_grabGrow.clear();   // grown-grab radii are per-session verdicts
+        ClearGates();         // loot M1: GATED records are per-session skips
         g_idleCycles.clear();
         g_lastBlocklistReassess = {};
     }

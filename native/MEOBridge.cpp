@@ -533,7 +533,6 @@ namespace MFO::MEOBridge {
             };
             std::vector<ItemPass> recs(items.size());
             std::unordered_set<RE::FormID> mintedBases;    // bases that took a uid-0 SocketGem this pass (one per base per pass)
-            std::unordered_map<std::uint32_t, std::uint32_t> swapPending; // loose entry -> swap-outs issued FOR it this pass (each exempts ONE copy from LEFTOVER)
 
             for (std::size_t idx = 0; idx < items.size(); ++idx) {
                 auto& item = items[idx];
@@ -715,7 +714,11 @@ namespace MFO::MEOBridge {
                         const StuckKey ukey{ 1, item.base, item.uid, det[weakIdx].slot, 0 };
                         if (!stallGate(ukey, emptyCount, "UnsocketGem", det[weakIdx].name)) continue;
                         if (g_meo->UnsocketGem(a_actor, item.base, item.uid, det[weakIdx].slot)) {
-                            ++swapPending[static_cast<std::uint32_t>(loot)];   // one copy's socket opens next pass: not a LEFTOVER
+                            // MFO-B36: RESERVE the copy this swap-out is for, so a later item
+                            // cannot evict its own weakest for the same single loose gem. It is
+                            // out of avail[] now, so the LEFTOVER line below no longer counts it
+                            // (its socket opens next pass) -- no separate swap-pending exemption.
+                            --avail[static_cast<std::uint32_t>(loot)];
                             spdlog::info("[meo] reconcile swap-out '{}' (slot {}) on {:08X} -- '{}' will re-fill (queued{})",
                                          det[weakIdx].name, det[weakIdx].slot, a_actor->GetFormID(), loose[loot].name,
                                          passOf(ukey) > 1 ? std::format(", pass {}", passOf(ukey)) : std::string{});
@@ -738,10 +741,9 @@ namespace MFO::MEOBridge {
                 if (rec.considered || rec.dupDeferred) if (rec.emptyAtStart - rec.issued > 0) { anyEmpty = true; break; }
             if (anyEmpty) {
                 for (std::uint32_t i = 0; i < nLoose; ++i) {
-                    // Copies a swap-out was issued FOR this pass are not leftover (their
-                    // socket opens next pass); the REST of a stack still are.
+                    // Copies a swap-out was issued FOR this pass are already out of
+                    // avail[] (MFO-B36 reservation): the REST of a stack still count.
                     std::uint32_t leftN = avail[i];
-                    if (auto sp = swapPending.find(i); sp != swapPending.end()) leftN = sp->second >= leftN ? 0u : leftN - sp->second;
                     if (leftN == 0) continue;
                     bool compatNow = false, stuck = false, refused = false, dup = false, minting = false, supportLimit = false, hole = false;
                     for (std::size_t idx = 0; idx < items.size(); ++idx) {

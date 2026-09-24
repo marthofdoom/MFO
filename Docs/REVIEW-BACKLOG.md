@@ -276,6 +276,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** bounded to one wasted pair of MEO ops per such pass; no loop, no loss.
 - **Why it was NOT fixed:** coordinator call 2026-09-15: nothing above SEV-3 this round, cycle ended (rule 9); tier 2 is OFF by default and gem CHOICE is marth's planned redesign.
 - **Fix shape when drained (verbatim):** reserve the candidate at the swap-out (`--avail[loot]` when `UnsocketGem` returns true) so a later item cannot evict for the same copy.
+- **FIXED-IN `fix/mfo-loot-m1`** (loot round M1, 2026-09-24): the fix shape as written, `--avail[loot]` when `UnsocketGem` returns true (`native/MEOBridge.cpp`, the swap-up block). The LEFTOVER line's `swapPending` subtraction is removed with it (and the now-dead `swapPending` map), because the reserved copy is already out of `avail[]` and subtracting it again would count it twice. Pending its Opus 5.5 review on the branch.
 
 ### MFO-B37 — `Actuation.cpp` is over the 2500-line cap (2678): the split is its own brief
 - **Raised:** Fable tier-3 review of `87cabc1` (`feat/mfo-1.5.97-pass`), SEV-5 hygiene, CONFIRMED (`wc -l`: 2605 on `main` `5e1c41b` before the branch, 2678 after round 2's gate comments and the EquipLeftHeld refusal logging).
