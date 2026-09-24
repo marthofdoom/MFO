@@ -339,7 +339,7 @@ namespace MFO::Rapport {
         // held, and the Post below happens strictly OUTSIDE it.
         std::mutex g_quashMx;
         std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_quashNext;
-        constexpr auto kQuashPairCooldown = std::chrono::seconds(3);
+        constexpr auto kQuashPairCooldown = std::chrono::seconds(2);
     }
 
     bool QuashAllyPair(RE::FormID a_actor, RE::FormID a_target) {
