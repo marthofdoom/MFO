@@ -35,7 +35,6 @@ namespace MFO::Actuation {
         // never entered here -- they must re-fire on demand.
         std::unordered_map<std::uint64_t, BeneficialRecast> g_beneficialRecast;
 
-
     namespace {
         // The spell's own authored duration = the longest effectItem.duration over
         // its effects (0 = an instant spell -> exempt from recast suppression).
@@ -133,7 +132,6 @@ namespace MFO::Actuation {
             if (a_mgef->data.primaryAV != RE::ActorValue::kHealth) return false;
             return a_mgef->IsDetrimental() || a_mgef->IsHostile();
         }
-
 
         // WORKER-SIDE per-target gate for the AUTO fan-out (F2/F3/F4). Decides,
         // BEFORE any main-thread post, whether this cast should actually land on

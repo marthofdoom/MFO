@@ -587,7 +587,6 @@ namespace MFO::Actuation {
 
         // (EquipTorch moved to Logistics -- torch is upkeep, not a combat action, #35.)
 
-
     // ── T#76: EQUIP FORCE-HOLD lifecycle ──────────────────────────────────────
     namespace {
         // READBACK (Fable F4 on f771399, principle 5 -- observe the path, do not
@@ -891,7 +890,6 @@ namespace MFO::Actuation {
         std::scoped_lock lk(g_forcedMx);
         g_forcedWeapon.clear();
     }
-
 
     // T#76 force-hold co-save. Persist the force-equip locks so a load clears the
     // stale ones the .ess carried (the engine's forceEquip serializes; the map

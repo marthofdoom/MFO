@@ -19,7 +19,7 @@
 #include "MainThread.h"
 #include "Probe.h"
 #include "Board.h"
-#include "ProgAllocator.h"
+#include "progression/ProgAllocator.h"
 #include <unordered_set>   // T#69: stock-gear per-follower sets (kRecStock)
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.

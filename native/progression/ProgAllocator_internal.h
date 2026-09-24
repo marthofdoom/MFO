@@ -1,16 +1,19 @@
 #pragma once
-// ProgAllocator_internal.h -- the ProgAllocator family's SHARED substrate. One
-// TU (ProgAllocator.cpp) used to hold all of this in its anonymous namespaces;
-// the mechanical module split (ProgAllocator.cpp / _Hms / _Manifest) moved the
+// progression/ProgAllocator_internal.h -- the ProgAllocator family's SHARED
+// substrate. NOT a public API: only the native/progression/*.cpp TUs may include
+// this (the public API is progression/ProgAllocator.h). History: one TU
+// (ProgAllocator.cpp) used to hold all of this in its anonymous namespaces; the
+// mechanical module split (ProgAllocator.cpp / _Hms / _Manifest) moved the
 // cross-module state, types, and constants here as `inline` (ONE shared
-// instance across the three TUs -- never per-TU copies), and declares the big
-// cross-module helpers next to the module that defines them. Single-module
-// helpers stay file-local in their module. NOT a public API: only the three
-// ProgAllocator*.cpp TUs may include this.
+// instance across the TUs -- never per-TU copies), and declares the big
+// cross-module helpers next to the module that defines them. The wave-1
+// subsystem-folder split (2026-09-24) cut ProgAllocator.cpp by concern and added
+// the section at the END of this file. Single-module helpers stay file-local.
 
 #include "PCH.h"
 #include "ProgAllocator.h"
 #include "Progression.h"
+#include "Followers.h"   // wave-1 split: IsActiveFollower (below) reads Followers::IsTrackedFast
 #include <mutex>          // g_hmsFireMx (worker-thread fire mirror)
 #include <unordered_map>  // g_hmsFiredMask
 #include <vector>
@@ -149,5 +152,135 @@ namespace MFO::ProgAllocator {
         // PRGN v8 one-time RETROACTIVE player-rate parity, called by CoSaveLoad
         // for a record written by an older (v<8) PRGN. Main thread (load).
         void HmsRetroParity(RE::FormID a_id, ProgState& a_st);
+
+        // ── WAVE-1 SPLIT (2026-09-24): FILE-LOCAL -> SHARED, BODIES UNCHANGED ──────
+        // The subsystem-folder split cut ProgAllocator.cpp by concern into
+        // progression/{Allocator,SkillScale,PerkGate,BoardViews,Poll,Harness,Verbs}.cpp.
+        // Each symbol below was file-local (anonymous namespace) and is now used from a
+        // second TU, so it gained external linkage: functions are declared here and
+        // defined where they were (unchanged), variables are `extern` here and defined
+        // in the file that owns them, and the small helpers the compiler INLINED across
+        // the new cut moved here whole as `inline` (so every TU can still inline them).
+        // tools/splitcheck proves the generated code is unchanged (modulo per-TU
+        // inlining drift, which it lists).
+        //
+        // Session state (defined in progression/Allocator.cpp; the level poll, the
+        // harness and the PRGN co-save all read/write it):
+        extern int           g_pollGen;
+        extern int           g_pollFrames;
+        extern std::uint16_t g_lastPlayerLevel;
+        extern float         g_playerHmsTotalLast;
+        inline constexpr int kPollFrames = 120;   // ~2s at 60fps
+        inline constexpr std::uint16_t kMaxPerkAllocs    = 1024;
+
+        // Small helpers (were anon in ProgAllocator.cpp; inlined at most call sites):
+        inline const char* AvName(RE::ActorValue a_av) {
+            for (const auto& s : kSkillNames)
+                if (s.av == a_av) return s.name;
+            return "?";
+        }
+
+        // Is this raw co-save ordinal one of the 18 skill AVs this module
+        // ever writes? Ingestion defense (INVARIANTS #11): a garbage av fed
+        // to Get/SetBaseActorValue would index the engine's AV array out of
+        // bounds — validate the VALUE, not just the count.
+        inline bool IsKnownSkillAv(std::uint32_t a_raw) {
+            for (const auto& s : kSkillNames)
+                if (static_cast<std::uint32_t>(s.av) == a_raw) return true;
+            return false;
+        }
+
+        inline const char* NameOf(RE::TESForm* a_form) {
+            if (!a_form) return "<none>";
+            const char* n = a_form->GetName();
+            return (n && *n) ? n : "<unnamed>";
+        }
+
+        // §17: ranks MFO has allocated — each one cost a point.
+        inline int AllocatedRanks(const ProgState& a_st) {
+            int total = 0;
+            for (const auto& p : a_st.perks) total += p.rank;
+            return total;
+        }
+
+        inline PerkAlloc* FindAlloc(ProgState& a_st, RE::FormID a_nodePerkID) {
+            for (auto& p : a_st.perks)
+                if (p.nodePerkID == a_nodePerkID) return &p;
+            return nullptr;
+        }
+
+        // §16 manual pool — a PURE FUNCTION of serialized baselines, never an
+        // incremental accumulator (the round-2 SEV-1 lesson: accumulators
+        // drift under replay; a formula cannot). Rate: flat 5/level (marth).
+        // Self-clamping: applied can never read as a negative pool.
+        inline int ManualAvail(const ProgState& a_st) {
+            if (!a_st.manualSkills || a_st.manualBaselineLevel == 0) return 0;
+            const int lvls = std::max(0, static_cast<int>(a_st.progressionLevel) -
+                                          static_cast<int>(a_st.manualBaselineLevel));
+            const int accrued = lvls * g_econ.manualSkillPtsPerLevel;
+            return std::max(0, accrued - static_cast<int>(a_st.manualPointsApplied));
+        }
+
+        inline RE::BGSPerk* PerkByID(RE::FormID a_id) {
+            return a_id ? RE::TESForm::LookupByID<RE::BGSPerk>(a_id) : nullptr;
+        }
+
+        inline bool IsActiveFollower(RE::FormID a_id) {
+            // Off-worker membership probe: g_activeIds is reassigned by Refresh on
+            // the worker, so walk the lock-guarded FormID mirror instead of the
+            // live list (SEV-1 cluster).
+            return Followers::IsTrackedFast(a_id);
+        }
+
+    // §17: THE perk-point authority — derived, never stored. Idempotent
+    // across reloads and level-ups by construction; clamped at 0 so a
+    // heavily pre-trained follower is simply "ahead", never negative.
+    inline int PerkPointsAvailable(const ProgState& a_st) {
+        const int earned = static_cast<int>(a_st.progressionLevel) /
+                           std::max(1, g_econ.levelsPerPerkPoint);
+        // native tree perks NO LONGER subtracted (marth 2026-08-13): a follower's
+        // starting perks are their build, not a debt to earn back. available = earned - spent.
+        return std::max(0, earned - AllocatedRanks(a_st));
+    }
+
+        // The catalog index (progression/Allocator.cpp):
+        struct NodeRef {
+            const Progression::SkillTree*    tree = nullptr;
+            const Progression::PerkNodeView* node = nullptr;
+        };
+        const std::unordered_map<RE::FormID, NodeRef>& NodeIndex();
+        NodeRef FindNode(RE::FormID a_nodePerkID);
+        bool OwnsAnyRank(RE::Actor* a_actor, RE::TESNPC* a_base,
+                         const ProgState& a_st, RE::FormID a_nodePerkID);
+
+        // Skill points (progression/SkillScale.cpp):
+        std::vector<std::pair<RE::ActorValue, float>> WeightsFor(RE::Actor* a_actor,
+                                                                 const ClassDef& a_def);
+        void RecomputeSkills(RE::Actor* a_actor, ProgState& a_st, bool a_log);
+
+        // Perks (progression/PerkGate.cpp):
+        int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base);
+        int StripNativePerks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
+        int RestoreNativePerksImpl(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
+        int GateNextRank(RE::Actor* a_actor, RE::TESNPC* a_base,
+                         ProgState& a_st, const Progression::PerkNodeView& a_node,
+                         std::string& a_whyNot);
+        bool GrantRank(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st,
+                       const Progression::PerkNodeView& a_node, int a_targetRank);
+        void ReapplyFollower(RE::Actor* a_actor, ProgState& a_st);
+
+        // Board-view state (defined in progression/BoardViews.cpp; the poll drives the
+        // refresh, ClearAll drops the snapshot):
+        extern std::mutex                           g_viewMx;
+        extern std::shared_ptr<const BoardProgSnap> g_boardSnap;
+        extern std::atomic<RE::FormID>              g_boardFocus;
+        extern RE::FormID                           g_lastPublishedFocus;
+        extern bool                                 g_boardWasOpen;
+        extern int                                  g_viewFrames;
+
+        // The level poll (progression/Poll.cpp) and the harness (progression/Harness.cpp):
+        bool Unmanaged(RE::Actor* a_actor, const char* a_verb);
+        void PollTick(int a_gen);
+        const char* ClsName(RE::FormID a_id);
 
 }

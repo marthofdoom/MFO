@@ -32,7 +32,7 @@
 #include "State.h"
 #include "Probe.h"
 #include "ProgProbe.h"
-#include "ProgAllocator.h"
+#include "progression/ProgAllocator.h"
 #include "MainThread.h"
 #include "Vocabulary.h"
 #include "Scheduler.h"

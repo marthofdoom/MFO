@@ -144,7 +144,6 @@ namespace MFO::Actuation {
             for (auto* ae : hits) ae->Dispel(true);
         }
 
-
         // ── CONCENTRATION + SELF-DELIVERY PROXY (the ONLY delivery fix on top of the
         // baseline). A fire-and-forget Self spell force-cast at another actor lands on
         // that actor (baseline, field-proven -- Candlelight/flesh work). A
@@ -606,7 +605,6 @@ namespace MFO::Actuation {
                 if (eff && IsHealEffect(eff->baseEffect)) return true;
             return false;
         }
-
 
     // See Actuation.h. Restoration = not Offense AND (restores Health OR any
     // effect of the Restoration school). The school read is the EffectSetting's

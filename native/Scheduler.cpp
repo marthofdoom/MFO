@@ -19,7 +19,7 @@
 #include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
-#include "ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
+#include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
 #include <unordered_set>   // T#78: MFO-OFF one-time-release latch (g_mfoDisabledSwept)
 
 namespace MFO::Scheduler {

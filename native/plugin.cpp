@@ -11,7 +11,7 @@
 #include "Probe.h"
 #include "ProgProbe.h"
 #include "Progression.h"
-#include "ProgAllocator.h"
+#include "progression/ProgAllocator.h"
 #include "Vocabulary.h"
 #include "Loadout.h"
 #include "Runtime.h"

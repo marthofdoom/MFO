@@ -17,7 +17,7 @@
 #include "Packages.h"
 #include "CasterConsent.h"
 #include "CombatStyle.h"
-#include "ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
+#include "progression/ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
 #include "MainThread.h"      // [atk-obs]: graph sink attach/detach is main-thread work (#62-class)
 
 // Two Win32 symbols, declared by hand. <windows.h> is BANNED outside Board.cpp
