@@ -231,6 +231,29 @@ namespace MFO::Actuation {
     // candlelight/buff/heal pacing is untouched. Worker/main context, list read only.
     bool CasterHasLiveSummon(RE::Actor* a_caster, RE::SpellItem* a_spell);
 
+    // SUMMON = ONE-SHOT CONJURE (fix/mfo-summon-oneshot, deck 2026-09-24). True
+    // when any effect of a_spell has the kSummonCreature archetype (bound weapons
+    // and Reanimate never match).
+    bool IsSummonSpell(RE::SpellItem* a_spell);
+    // THE single summon path for every target setting (self / player / foe /
+    // AUTO) on both tables: the combat Fire dispatch and the Logistics OOC
+    // service call it before any other cast road. WORKER side: competence +
+    // magicka gates, the main thread's last verdict (fresh 1 s), a 0.5 s post
+    // throttle, then ONE MainThread::Post. MAIN side (every engine read lives
+    // there): skip while THIS spell's creature is alive (per spell) or still
+    // APPEARING (engine effect younger than fMagicSummonMaxAppearTime with no
+    // resolved handle; fallback floor = that + 1 s after our own cast), skip
+    // when listed commanded actors (raw count, as the engine) + other summons
+    // appearing >= the caster's summon limit (iMaxSummonedCreatures +
+    // kModCommandedActorLimit perks, round half-up, exactly as the engine; not
+    // when the engine's skip-cap flag is set, read behind its self-check rows), else cast ONCE by the
+    // caster on the direct road (CastSpellImmediate kInstant, magicka deducted).
+    // Never a self/target stream, no hand lock, so no MFO reconcile, combat-end
+    // or cleanup path ends the summon. ALWAYS returns a transparent result: the
+    // main thread's [summon] line says whether it cast. WORKER only.
+    Outcome CastSummonOnce(RE::Actor* a_follower, RE::SpellItem* a_spell, int a_rule,
+                           const char* a_table, std::string_view a_target);
+
     // (CONCENTRATION delivery is DIRECT FORCE everywhere -- Docs/CAST-DELIVERY.md.
     // COMBAT: CastOn's concentration fork -> ConcentrationCast -> CastTargetDirect
     // (self -> CastSelfDirect); the v1.0.58-65 package stream is REMOVED -- it

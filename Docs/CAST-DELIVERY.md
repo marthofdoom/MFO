@@ -129,11 +129,21 @@ apply it to any future channel MFO consumes from APMF.
 | concentration | **Self** | **self** (target == follower) | baseline `CastSelfDirect`/`ApplySelfEffect` | the follower (correct) |
 | concentration | **Self** | **player / ally / foe** (≠ follower) | **`ConcProxy` delivery-flipped copy** → concentration-on-others path | **the recipient** |
 
-**SUMMON RULE (fix/mfo-summon-no-fanout, 2026-09-23).** A spell with a Summon Creature effect is
-cast ONCE per fire, by the caster, whatever the row targets. AUTO's fan-out (`CastAuto`) no longer
-applies to it: it takes one `ApplyEffectFromTo(caster, caster)` on the same direct road
-(`Actuation_Direct.cpp:1839`). A summon only conjures for its own caster, so the old fan-out put one
-creature per party member on him in a single tick. Bound weapons and Reanimate are not summons here.
+**SUMMON RULE (fix/mfo-summon-oneshot, 2026-09-24).** A spell with a Summon Creature effect is a
+ONE-SHOT CONJURE on every target setting (self / player / foe / AUTO) and on both gambit tables: the
+combat `Fire` dispatch and the Logistics OOC block both call `Actuation::CastSummonOnce` before any
+other road. The decision and the cast run in ONE main-thread closure: skip while THIS spell's creature
+is alive (per spell) or still appearing (engine effect younger than `fMagicSummonMaxAppearTime`), skip
+while the caster's listed commanded actors (the raw count the engine compares) + other summons still
+appearing reach his summon limit (the list's `iMaxSummonedCreatures` + `kModCommandedActorLimit`
+perks, rounded half-up, as the engine computes it; not applied when the engine's own skip-cap flag
+is set, read only behind its self-check rows), else cast ONCE by the caster: kInstant `CastSpellImmediate` on the caster, magicka
+deducted by hand. It is never a self/target stream and takes no hand lock (and ignores the cast-gambit
+lock, accepted: nothing to re-point), so no reconcile, combat-end or cleanup path ends it: it lasts
+its duration or until killed. A killed summon recasts on the next eval after the main thread's 1 s
+verdict expires. The worker result is always transparent, and a summon rule does not count as a cast
+rule for the Scheduler's H3 loan. Bound weapons and Reanimate are not summons here (MFO-B84).
+Harbinger routing + animation for summons is ClickUp 86e3dvkwm, not this rule.
 
 **THE KEY FACT — why FF works but concentration collapses (and why the proxy exists):**
 For **fire-and-forget**, `CastSpellImmediate` applies the one-shot effect to the passed

@@ -10,7 +10,7 @@ nothing when one does not. At startup `REL::SelfCheck::Run` repeats the comparis
 game actually loaded. A row that fails refuses THAT seat by name in the log; the expected RVA is never
 used in place of the library's answer.
 
-Offline result of this generation: 1.6.1170.0 53/53 verified, 0 refused, 1.5.97.0 53/53 verified, 0 refused.
+Offline result of this generation: 1.6.1170.0 55/55 verified, 0 refused, 1.5.97.0 55/55 verified, 0 refused.
 
 ## Rows
 
@@ -69,6 +69,8 @@ Offline result of this generation: 1.6.1170.0 53/53 verified, 0 refused, 1.5.97.
 | Probe.StartCombat | function | 38561 | 0x6B6930 | 37608 | 0x6251B0 | signature (38 bytes, unique in .text) |  | native/Probe.cpp:36 | ADDRESS-TABLE-2026-09-15.md:58 |
 | CommonLib.BSReadWriteLock.LockForRead | function | 68233 | 0xCC90C0 | 66976 | 0xC072D0 | signature (32 bytes, unique in .text) |  | CommonLib mit-3.7 fde0f3ae include/RE/T/TESForm.h LookupByID/LookupByEditorID (BSReadLockGuard) | ADDRESS-TABLE-2026-09-15.md ADDENDUM 2026-09-24 F1b |
 | CommonLib.BSReadWriteLock.UnlockForRead | function | 68239 | 0xCC9380 | 66982 | 0xC07590 | signature (16 bytes, unique in .text) |  | CommonLib mit-3.7 fde0f3ae include/RE/T/TESForm.h LookupByID/LookupByEditorID (BSReadLockGuard) | ADDRESS-TABLE-2026-09-15.md ADDENDUM 2026-09-24 F1b |
+| Actuation.SummonCap.AddCommandedActor | ripref | 40056 | 0x717800 +0xA1 48 8B 05 00 33 A6 02 8B 88 40 03 00 00 D1 E9 | 38993 | 0x683D70 +0x51 48 8B 05 30 29 8A 02 8B 88 40 03 00 00 D1 E9 | signature (33 bytes, unique in .text) |  | native/Actuation_Direct.cpp SummonCapSkipped | mov rax,[rip+g]; mov ecx,[rax+0x340]; shr ecx,1 (then test cl,1: bit 1 set -> the engine skips the summon cap) |
+| Actuation.SummonCap.SkipFlagGlobal | ripref global | 403330 | 0x317ABA8 | 516851 | 0x2F266F8 | RIP-relative reference at Actuation.SummonCap.AddCommandedActor +0xA1 (id 40056) |  | native/Actuation_Direct.cpp SummonCapSkipped | mov rax,[rip+g]; mov ecx,[rax+0x340]; shr ecx,1 (then test cl,1: bit 1 set -> the engine skips the summon cap) |
 
 ## Slots and offsets that are not Address Library ids
 
@@ -95,6 +97,7 @@ audit covers everything the DLL installs or reads.
 | IDXGISwapChain vtable slots Present / ResizeBuffers | 8 / 13 | Board.cpp:731-733 | DXGI COM ABI (not a game address) | Board::Install VR refusal |
 | Game image PE header e_lfanew / SizeOfImage | +0x3C / NT+0x50 | Diagnostics.cpp:1216 | MZ / PE magic check in code | none |
 | CommonLib-bound calls MFO names: HasLineOfSight, HasQuestObject, GetMagicCaster (Actor 0x5C), CastSpellImmediate (MagicCaster 0x01), InterruptCast | RELOCATION_ID(53029, 53829) / (19201, 19627) / vslot 0x5C / vslot 0x01 / (33630, 34408) | Sightline.cpp:147; Logistics_Loot.cpp:753; Actuation*.cpp; Packages.cpp:868 | CommonLib 3.7.0 ids (every id present in both libraries; a miss is now fatal, fork d9ad1072) | cast paths: CastPathsVerified; others none |
+| Summon limit reads (fix/mfo-summon-oneshot): MiddleHighProcessData commandedActors (raw count compared, no liveness, as the engine does; BSTArray<CommandedActorData>, elem 0x10: handle +0x00, ActiveEffect* +0x08); BGSEntryPoint::HandleEntryPoint(kModCommandedActorLimit 0x44, caster, spell, &limit); ActiveEffect spell / elapsedSeconds / flags | +0x100 data / +0x110 count; RELOCATION_ID(23073, 23526) -> 0x32ECE0 / 0x385F30; +0x40 / +0x70 / +0x7C | Actuation_Direct.cpp SummonLimit / SummonOnMain | disassembly of the engine's add-commanded-actor fn on both runtimes (1.5.97 0x683D70 id 38993, call at 0x683E11; 1.6.1170 0x717800 id 40056, call at 0x7178EC); GMST iMaxSummonedCreatures (int, default 1) and the round-half-up constant 0.5 identical on both; ActiveEffect +0x40 spell (both) and +0x70 elapsedSeconds (AE eviction compare) read in that fn; flags +0x7C verified by ActiveEffect::Dispel (1.5.97 0x53E380 / 1.6.1170 0x5AC880: bts [+0x7C] bit 0x12 = kDispelled); kInactive bit 15 is the CommonLib declaration | cast paths: CastPathsVerified; main thread only; the skip-cap flag read is gated on the Actuation.SummonCap.* ripref rows |
 
 ## Regenerating
 
@@ -111,4 +114,8 @@ python3 tools/verified_addresses/gen_verified_addresses.py --spec tools/verified
 - Adding a row: add it to `spec.json`. A vtable row needs the mangled RTTI name (`.?AV...@@`); a function row
   needs a signature per runtime, cut with `--make-sig <runtime> <rva>` at an RVA confirmed by the address-table
   method (skeleton + neighbour delta). The generator then re-finds it by unique scan and checks the library.
+- A `ripref` row proves a DATA GLOBAL through the engine function that reads it: the function's signature and
+  id, `offset` and per-runtime `bytes` (the RIP-relative instruction with its displacement, then the use-site
+  bytes, 15 at most), and `global` (the global's id per runtime). The instruction's RIP target must equal the
+  library's answer for `global`. It emits two rows: the function (id + byte check) and `global_seat` (id only).
 - Keep `gen_verified_addresses.py` identical in MFO and APMF.

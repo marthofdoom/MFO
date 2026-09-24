@@ -832,8 +832,13 @@ namespace MFO::Scheduler {
             if (choice.ruleIndex < 0) break;          // nothing (more) matched
 
             const auto& op = choice.actionOpcode;
-            const bool isCast  = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
-                                 op == Vocab::kActCastPlayer;
+            // A SUMMON rule is not a cast channel (fix/mfo-summon-oneshot): it holds
+            // no hand and no claim, so it must not keep the H3 cast loan alive
+            // (castSeen) or be passed as castFacetHeld to the OOC service.
+            const bool isCast  = (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
+                                  op == Vocab::kActCastPlayer) &&
+                                 !Actuation::IsSummonSpell(
+                                     RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam));
             const bool isEquip = op == Vocab::kActEquipMelee || op == Vocab::kActEquipRanged;
 
             // SUPPRESSION IS POSITIONAL, NEVER ABSOLUTE (INVARIANTS #26) --

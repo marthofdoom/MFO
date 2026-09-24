@@ -1238,18 +1238,47 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   rule, exactly like the cast-grace hold. Non-summon combat casts are byte-identical
   (helper returns false) and the AI-first-grace pacing is untouched; the helper only
   READS the active-effect list, the same off-worker read as the other combat guards.
-- **Summons are never fanned out (fix/mfo-summon-no-fanout, 2026-09-23)** — `CastAuto`
-  (`Actuation_Direct.cpp:1839`) checks for a `kSummonCreature` effect BEFORE building the
-  AUTO target set and casts the spell ONCE via `ApplyEffectFromTo(caster, caster)` (same
-  direct road, same cooldown/recast/magicka gates), logging `[cast] ... SUMMON ... cast once`.
-  A summon only ever conjures for its own caster, so the old per-ally fan-out put N summons on
-  the caster in one tick (lead for the Serana freeze). The non-AUTO roads (self/player/foe via
-  CastOn, OOC immediate/package) already cast once per fire. **What breaks:** moving the
-  check after the enumeration re-opens the N-summon tick; widening it to kReanimate breaks
-  raise-dead (needs a corpse target); arming `g_beneficialRecast` for a summon holds a killed
-  summon off for ~85% of its duration (liveness is `CasterHasLiveSummon`'s job). Open backlog:
-  `Docs/REVIEW-BACKLOG.md` MFO-B75 (Script-archetype summons still fan out), MFO-B76 (hostile-
-  flagged summon skips the LoS gate), MFO-B77 (Serana's Reanimate spells still fan out).
+- **Summon = one-shot conjure (fix/mfo-summon-oneshot, 2026-09-24; supersedes the 09-23
+  AUTO-only no-fanout)** — `Actuation::IsSummonSpell` + `Actuation::CastSummonOnce`
+  (`Actuation_Direct.cpp:~932-1240`; main-thread half `SummonOnMain` `:1046`, limit
+  `SummonLimit` `:1015`) are THE single summon path. The combat `Fire` guard
+  (`Actuation.cpp:2387`) and the Logistics OOC cast block (`Logistics.cpp:1596`) send every
+  summon there BEFORE any other road, for every target setting (self/player/foe/AUTO);
+  `CastAuto` delegates too. **Threading:** the worker only runs the competence/magicka gates,
+  reads the main thread's last verdict (`g_summon`, leaf mutex, fresh 1 s), throttles posts
+  (`g_summonPosted`, 0.5 s, worker-serial) and Posts ONE closure; EVERY engine read (active
+  effects, commanded handles, `commandedActors`, GMSTs, the perk entry point) and the cast run
+  in that closure on the true main thread. The worker result is ALWAYS transparent. Main side,
+  in order: (1) per-spell `CasterHasLiveSummon` -> skip; (2) LANDING: an own
+  SummonCreatureEffect not inactive/dispelled, no resolved handle, younger than GMST
+  `fMagicSummonMaxAppearTime`; or, with no effect yet, within that + 1 s of our own cast ->
+  skip; (3) THE LIST'S SUMMON LIMIT exactly as the engine's add-commanded-actor fn computes it
+  (1.6.1170 0x717800 id 40056 / 1.5.97 0x683D70 id 38993): `(float)iMaxSummonedCreatures`,
+  `BGSEntryPoint::HandleEntryPoint(kModCommandedActorLimit, caster, spell, &limit)`, round
+  half-up; skip when the RAW `middleHigh->commandedActors` count (+0x110, the number the engine
+  compares, dead-but-listed entries included) + OTHER summons still appearing >= limit (a
+  lower-ranked summon already out keeps its slot), unless the engine's skip-cap flag is set
+  (global id 516851/403330 +0x340 bit 1, `SummonCapSkipped`, read ONLY when the self-check
+  `ripref` rows `Actuation.SummonCap.AddCommandedActor` / `.SkipFlagGlobal` verified, else MFO
+  caps and logs once); (4) `CastSpellImmediate(kInstant)` on the caster + hand magicka deduct,
+  one `[summon] ... road=direct, cast once` line. It is
+  NEVER put in `g_selfCast`/`g_targetCast`, takes NO hand lock, and ignores the cast-gambit
+  lock (F4, accepted: kInstant caster, no hands, nothing to re-point). The Scheduler does not
+  count a summon rule as a cast rule (`Scheduler.cpp:837-841`: no `castSeen`, no
+  `castFacetHeld`). Deck 2026-09-24: on the old self road the guard skipped the live summon,
+  `lastFired` never refreshed, `SelfCastReconcile` marked the stream stale and
+  `SelfCastEndActor` dispelled the summon every ~3 s (23 recasts), and the left-hand lock
+  starved heal/flames. **What breaks:** routing a summon back through
+  CastOn/CastSelfDirect/CastTargetDirect re-opens the stale-dispel loop and the hand lock;
+  reading the effect list / commandedActors on the worker is a data race; returning Fired
+  from the worker walls off every rule below a live summon; dropping the landing check
+  double-casts during the ~4 s appear window; counting only LIVE listed entries lets the engine
+  evict a live older summon; reading the skip-cap global without its ripref rows is an unverified
+  raw read; widening `IsSummonSpell` to kReanimate breaks
+  raise-dead; a recast window (e.g. `g_beneficialRecast`) holds a killed summon off. Open
+  backlog: `Docs/REVIEW-BACKLOG.md` MFO-B75 (Script-archetype summons still fan out),
+  MFO-B76 (hostile-flagged summon skips the LoS gate), MFO-B77 (Serana's Reanimate spells
+  still fan out), MFO-B84 (Reanimate on the old roads; its liveness read looks at the caster), MFO-B85 (HMS no longer credits summons), MFO-B86 (a logistics summon never counts as the tick's action), MFO-B87 (liveness edge cases + the 1 s trust window).
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
