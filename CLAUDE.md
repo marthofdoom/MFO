@@ -289,10 +289,15 @@ re-creates the exact invented-symbol CI failures the "NEVER GUESS AN API OR A SY
 to prevent** — a symbol can be real in one tree and absent in the other.
 
 - **`/mnt/gaming/modlists/Projects/_commonlib/pinned-3.7.0-c4ab853d/`**  ← **AUTHORITATIVE. VERIFY HERE.**
-  `CharmedBaryon/CommonLibSSE-NG` @ `c4ab853d095e81e3390b282d7ba01ab2f24ebf25` = commonlibsse-ng **3.7.0**,
-  exactly what the colorglass vcpkg registry pins (`native/vcpkg-configuration.json` baseline
-  `6309841a…`) and therefore exactly what CI compiles and links. **Every symbol/vfunc/signature claim
-  must be checked against THIS tree.** If it is not here, it does not exist for our build.
+  `CharmedBaryon/CommonLibSSE-NG` @ `c4ab853d095e81e3390b282d7ba01ab2f24ebf25` = commonlibsse-ng **3.7.0**.
+  **SOURCE OF TRUTH (F0, 2026-09-23): OUR MIT FORK, via OUR registry.** CI builds CommonLib from
+  `marthofdoom/CommonLibSSE-NG` branch **`mit-3.7`** @ `7382a9a5bf0e2179036d7b3c56fc2f165891de71`
+  (= `c4ab853d` + a README-only commit; library source byte-identical to the pinned tree), served by
+  `marthofdoom/vcpkg-registry` @ `fdea6987d1cc0325003c0b654ea93e694f511e44` (port `commonlibsse-ng`
+  3.7.0#1, which `native/vcpkg-configuration.json` points at instead of colorglass). Local clones:
+  `_commonlib/mit-3.7-fork/` and `_commonlib/vcpkg-registry/`. Until the fork carries its own changes (F1+),
+  the pinned tree IS its source. **Every symbol/vfunc/signature claim must be checked against THIS tree**
+  (or the fork's `mit-3.7` tip once it diverges). If it is not here, it does not exist for our build.
 - **`/mnt/gaming/modlists/Projects/_commonlib/live-alandtse-ng/`**  ← reference only, DO NOT verify against.
   `alandtse/CommonLibSSE-NG` branch `ng`, currently **v7.2.0** — the actively maintained fork (the pinned
   CharmedBaryon repo has not been pushed to since 2024-09-04). Useful for seeing how upstream solved
@@ -304,10 +309,11 @@ Refresh with `git -C <dir> fetch --depth 1` if ever needed; the pinned tree must
 declarations are not ABI-trustworthy (a wrong `GetMagicTarget` signature with a hidden sret out-slot once
 made a "passive" probe crash the game).
 
-**Open strategic question, not yet decided:** we are pinned four major versions behind (3.7.0 vs 7.2.0) on
-a dormant repo. Migrating to the alandtse fork is its own scoped brief with its own Opus 5.5 review — changing
-the ABI source under a plugin doing vtable and offset work breaks in the FIELD, not in CI. Do not start it
-as a side effect of another task.
+**DECIDED (marth 2026-09-23): no migration to the alandtse fork** (7.x is GPL-3.0-or-later, our mods are MIT).
+We own an MIT 3.7.0 line instead: plan in `_commonlib/fork-plan-2026-09-23/own-addrlib-design.md`
+(F0 fork + registry, byte-identical; F1 corrections + self-check; F2 1.7.104 clean-room). Never copy code
+from `live-alandtse-ng/` into the fork. Changing the ABI source under a plugin doing vtable and offset work
+breaks in the FIELD, not in CI, so each fork stage is its own scoped brief with its own Opus 5.5 review.
 
 ## FIELD DIAGNOSIS + AGENT REUSE (marth 2026-09-06)
 
