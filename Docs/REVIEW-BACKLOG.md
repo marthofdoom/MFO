@@ -676,3 +676,6 @@ Raised against ebf0526. (1) Verbatim: "a summon with a resolved handle not yet i
 - **Why it was NOT fixed:** a move is its own brief (scope rule 1; a TU split is tier 3).
 - **Fix shape when drained:** in the wave-2 Logistics split, move it to `native/loot/Gate.cpp` (or `Logistics_Gate.{h,cpp}`) with its own small header; `TravelFailedRecently` keeps calling `GatedNow` through that header.
 - **Surfaced at edit time from:** MAP.md §4 Logistics "LOOT ROUND M1" What-breaks.
+
+### MFO-B90 (SEV-4) -- actor-block check only walks two cells
+Raised against e39cee2 (loot M1, author's least-sure spot 5), coordinator 2026-09-24. `FindActorBlocker` (Logistics_internal.h) walks only the follower's and the player's attached cells with ForEachReferenceInRange, so near an exterior cell border an actor standing in a third cell is missed and an actor jam is read as a GATE (with no timer, that gate lasts until a door/lever/cell event). Prefer the engine's loaded-actor list (ProcessLists high/middle actors) filtered by the 200 u cone, which is cell-independent. Also note spot 4: a block that is neither a gate nor an actor (clutter physics) is GATED and only clears on a door/lever/cell event (marth's no-timer rule; accepted, documented).

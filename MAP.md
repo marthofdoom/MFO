@@ -2427,7 +2427,7 @@ anonymous-namespace copy — that silently forks the instance).
     `HasLoot` in the emptied check must stay the scan's peek or the scan re-picks the
     "emptied" ref and the follower ping-pongs; calling `TravelFailedRecently` / `GatedNow`
     from inside a sort comparator again re-opens R1; gating on an actor block re-opens the
-    shared false gate (R2). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B88** (SEV-5, the
+    shared false gate (R2). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B88, MFO-B90** (SEV-5, the
     CH19 episode log line) and **MFO-B89** (SEV-5, move the gate code into its own module in
     the wave-2 Logistics split) -- read before editing.
 - **Loot scan is MULTI-CELL** (`LootNearby` `Logistics_Loot.cpp:1307`; cell set built at `:1417`):
