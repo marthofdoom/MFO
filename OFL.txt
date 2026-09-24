@@ -1,4 +1,4 @@
-MFO ships two fonts on the in-game board. Both are licensed under the SIL Open
+MFO ships three fonts on the in-game board. All are licensed under the SIL Open
 Font License, Version 1.1, reproduced in full below. The board renders them
 unmodified; MFO bakes them into ImGui atlases at load, which the OFL permits
 (the fonts are bundled with, and used by, the software).
@@ -13,6 +13,12 @@ unmodified; MFO bakes them into ImGui atlases at load, which the OFL permits
     with Reserved Font Name EB Garamond.
     Copyright (c) 2017, Octavio Pardo, with Reserved Font Name EBGaramond.
     Source: https://github.com/georgd/EB-Garamond
+
+  cjk.otf  —  Noto Sans JP (Noto Sans CJK, Japanese subset), Regular, version 2.004
+    Copyright (c) 2014-2021 Adobe (http://www.adobe.com/).
+    Source: https://github.com/notofonts/noto-cjk (release Sans2.004,
+    16_NotoSansJP.zip, NotoSansJP-Regular.otf). A fallback face: the board
+    merges it behind the two fonts above so Japanese names render.
 
 The Reserved Font Names above may not be used to name any derivative of these
 fonts; a modified copy must be renamed.

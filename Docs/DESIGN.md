@@ -1790,6 +1790,15 @@ optional with an `ifstream(...).good()` gate, head falling back to body (not
 to the default bitmap font). `FontGlobalScale` on the bitmap font was blurry
 above 1080p.
 
+**CJK fallback face (v2.0.13, ClickUp 86e3dw7z0).** Optional
+`fonts/cjk.otf` (Noto Sans JP Regular 2.004, OFL) is merged
+(`ImFontConfig::MergeMode`, `SizePixels` 0 = the host's size) into EVERY face
+the board adds, each merge issued right after its host face because MergeMode
+targets `Fonts.back()`. Game names arrive as UTF-8 straight from `GetName()`,
+so no conversion is needed. The host face still wins for any glyph it has.
+Absent file = one info line (`cjk fallback font: absent`), never a failure.
+Any new face added here must get its own `mergeCjk()` call.
+
 **Seed the cursor position on open.** ImGui only learns cursor position from
 move events, so the first click of a session landed at an invalid position
 and silently missed. The cursor itself is integrated from raw

@@ -2945,6 +2945,12 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   unchanged `WndProcHook` swap (`:313`, WM_CHAR/WM_KILLFOCUS), and `LazyInit`
   (`:401`, ImGui context + DX11/Win32 backend on first Present). `TryInstallHooks`
   (`:711`) polls for the live swapchain then patches.
+- **Fonts (`LazyInit`, `Board.cpp:445-483`):** body/head TTFs baked at backbuffer
+  scale, each followed by `mergeCjk()` merging the optional `fonts/cjk.otf`
+  (Noto Sans JP) into it. **What breaks:** a new face added without its own
+  `mergeCjk()` right after it draws Japanese names as boxes; issuing a merge
+  before any face is added asserts (MergeMode needs a host). Font setup must stay
+  before the DX11 backend init. Log: `[overlay-probe] cjk fallback font:`.
 - **INPUT: TWO MUTUALLY EXCLUSIVE CARRIERS over ONE translation body (v2.0.4).**
   The translation is `InputSink::Feed` (`:751`, hotkeys → close grace → ImGui feed);
   it returns TRUE when the board has taken the batch. `g_inputTrampoline` (`:92`)

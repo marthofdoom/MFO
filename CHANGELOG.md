@@ -9,6 +9,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 - **A summon gambit casts once.** A gambit set to cast a summon (a familiar, an atronach) on Auto used to cast it once for every member of the party, all at the same moment. A summon always appears next to the follower who cast it, so that put several creatures on him at once. Now he casts it one time. Bound weapons and raise dead spells are not affected.
 - **This may be what froze the game with Serana.** Her summon, cast from a gambit, could hard freeze the game. It is not proven yet that this was the cause. Please try it.
+- **Japanese names show on the board.** On a Japanese game, follower, item, spell and skill names drew as rows of diamonds. The board's fonts have no Japanese letters. MFO now ships a Japanese fallback font (Noto Sans JP) and uses it for any letter the main fonts lack. The game's own names now show in Japanese and in any other language that font covers. Korean and Simplified Chinese are not covered yet. MFO's own labels are still English.
+- **Names on the HUD line up.** The name column was padded by bytes, so a Japanese name pushed the rest of its row out of line. It is now padded by width.
 
 ## v2.0.12 -- Loot trips walk on Harbinger, and followers grow at your rate
 

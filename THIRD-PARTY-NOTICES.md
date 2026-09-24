@@ -4,7 +4,7 @@ MFO's own source is MIT (see `LICENSE`) and lives entirely in `native/`, all
 written for this project. **No third-party source is vendored into this
 repository.** Dependencies are fetched at build time by vcpkg from the pinned
 registries in `native/vcpkg-configuration.json`. The one class of third-party
-*asset* that does ship in the repo is the two board fonts (below).
+*asset* that does ship in the repo is the three board fonts (below).
 
 However, `MFO.dll` is built with the `x64-windows-static-md` triplet, so its
 dependencies are **statically linked into the shipped binary**. MIT requires
@@ -93,14 +93,18 @@ Licensed under the MIT License. MIT text as above, with this copyright line.
 
 ## Fonts — SIL Open Font License 1.1
 
-The board bakes two OFL fonts into its ImGui atlases at load, shipped under
+The board bakes three OFL fonts into its ImGui atlases at load, shipped under
 `SKSE/Plugins/MFO/fonts/`:
 
 - `head.ttf` — **Cinzel**, © 2012 Natanael Gama (Reserved Font Name *Cinzel*).
 - `body.ttf` — **EB Garamond**, © 2017 Georg Duffner and Octavio Pardo
   (Reserved Font Name *EB Garamond*).
+- `cjk.otf` — **Noto Sans JP** Regular 2.004 (the Japanese subset of Noto Sans
+  CJK), © 2014-2021 Adobe. From `notofonts/noto-cjk` release `Sans2.004`
+  (`16_NotoSansJP.zip`). Merged behind the other two as a glyph fallback so
+  Japanese names render; optional at runtime.
 
-Both are used unmodified and are not renamed, so the Reserved Font Names are
+All are used unmodified and are not renamed, so the Reserved Font Names are
 respected. The full licence text and per-font copyright notices travel with
 every release in [`OFL.txt`](OFL.txt), as OFL §2 requires.
 
