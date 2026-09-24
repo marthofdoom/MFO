@@ -10,7 +10,7 @@
 #include "Targeting.h"
 #include "CasterConsent.h"
 #include "CombatStyle.h"
-#include "Actuation.h"   // T#76: revert drops the equip force-hold records
+#include "cast/Actuation.h"   // T#76: revert drops the equip force-hold records
 #include "Sightline.h"
 #include "Packages.h"
 #include "Papyrus.h"

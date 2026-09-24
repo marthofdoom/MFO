@@ -1,7 +1,7 @@
 #include "APMFBridge.h"
 #include "APMF_API.h"
 #include "ComposedCast.h"   // ObservedFiring (the idle-hand floor's unobserved gate) + ClearWatchHand
-#include "Actuation.h"     // CastInFlightOnHand -- THE one in-flight definition; the idle-hand
+#include "cast/Actuation.h"     // CastInFlightOnHand -- THE one in-flight definition; the idle-hand
                            // floor's gate is armed on CHARGE, not on claim age alone (2026-09-22)
                             // (the expiry sweep drops the swept claim's [cfc] watch) -- both called
                             // from Tick() ONLY, which runs inside the AddTask job-worker body

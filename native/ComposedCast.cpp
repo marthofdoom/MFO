@@ -3,7 +3,7 @@
 #include "Config.h"
 #include "APMFBridge.h"
 #include "CastBounds.h"
-#include "Actuation.h"   // kHandLeft + CastInFlightOnHand -- THE one in-flight definition
+#include "cast/Actuation.h"   // kHandLeft + CastInFlightOnHand -- THE one in-flight definition
 #include "Runtime.h"     // CastPathsVerified(): the ONE exact-version gate the cast paths share
 
 #include <chrono>

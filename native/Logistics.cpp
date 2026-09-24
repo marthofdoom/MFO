@@ -4,7 +4,7 @@
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
-#include "Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
+#include "cast/Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
 #include "APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
 #include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))

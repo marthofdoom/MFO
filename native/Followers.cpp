@@ -4,7 +4,7 @@
 #include "Targeting.h"
 #include "CasterConsent.h"   // v1.0.30: dismissal releases the cast latch too
 #include "CombatStyle.h"     // v1.0.33: dismissal drops weapon-stance ownership
-#include "Actuation.h"       // T#76: dismissal releases the equip force-hold too
+#include "cast/Actuation.h"       // T#76: dismissal releases the equip force-hold too
 #include "Packages.h"
 #include "APMFBridge.h"   // ReleaseHealCast/ReleaseOffenseCast -- drop a dismissed follower's live claims
 #include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside the offense claim

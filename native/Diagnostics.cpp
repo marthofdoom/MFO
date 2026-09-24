@@ -9,7 +9,7 @@
 #include "Probe.h"
 #include "Scheduler.h"
 #include "Loadout.h"
-#include "Actuation.h"   // SelfCastReconcile -- the forced self-cast channel lifecycle
+#include "cast/Actuation.h"   // SelfCastReconcile -- the forced self-cast channel lifecycle
 #include "ComposedCast.h" // CFC observe hand-off: an executor-armed cast landing is THE animated path
 #include "APMFBridge.h"  // Phase 3: per-pump auto-release of APMF cast-select claims
 #include "Papyrus.h"

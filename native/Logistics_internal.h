@@ -13,7 +13,7 @@
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
-#include "Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
+#include "cast/Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone

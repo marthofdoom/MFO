@@ -1,4 +1,5 @@
-// Actuation_Hands.cpp -- THE PER-HAND CAST LOCK. Split off Actuation.cpp
+// cast/Hands.cpp (was native/Actuation_Hands.cpp; moved whole by the wave-1
+// subsystem-folder split, 2026-09-24) -- THE PER-HAND CAST LOCK. Split off Actuation.cpp
 // mechanically on 2026-09-08 (it stood at 3282 lines, over the project's 2500-line
 // hard cap): NO logic changed, nothing was reordered, and every line below is the
 // line that was there. This TU owns the lock's IMPLEMENTATION -- the per-hand
