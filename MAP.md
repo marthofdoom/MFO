@@ -1211,6 +1211,15 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   rule, exactly like the cast-grace hold. Non-summon combat casts are byte-identical
   (helper returns false) and the AI-first-grace pacing is untouched; the helper only
   READS the active-effect list, the same off-worker read as the other combat guards.
+- **Summons are never fanned out (fix/mfo-summon-no-fanout, 2026-09-23)** — `CastAuto`
+  (`Actuation_Direct.cpp:1839`) checks for a `kSummonCreature` effect BEFORE building the
+  AUTO target set and casts the spell ONCE via `ApplyEffectFromTo(caster, caster)` (same
+  direct road, same cooldown/recast/magicka gates), logging `[cast] ... SUMMON ... cast once`.
+  A summon only ever conjures for its own caster, so the old per-ally fan-out put N summons on
+  the caster in one tick (lead for the Serana freeze). The non-AUTO roads (self/player/foe via
+  CastOn, OOC immediate/package) already cast once per fire. **What breaks:** moving the
+  check after the enumeration re-opens the N-summon tick; widening it to kReanimate breaks
+  raise-dead (needs a corpse target).
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
