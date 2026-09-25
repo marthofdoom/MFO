@@ -19,7 +19,7 @@
 #include "CasterConsent.h"
 #include "CombatStyle.h"
 #include "Packages.h"
-#include "Logistics.h"
+#include "logistics/Logistics.h"
 #include "Gait.h"
 #include "MEOBridge.h"
 #include "apmf/APMFBridge.h"

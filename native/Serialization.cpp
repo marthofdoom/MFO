@@ -5,7 +5,7 @@
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Scheduler.h"
-#include "Logistics.h"
+#include "logistics/Logistics.h"
 #include "Loadout.h"
 #include "Targeting.h"
 #include "CasterConsent.h"

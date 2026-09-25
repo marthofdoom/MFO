@@ -33,6 +33,15 @@ Every *_DIR holds MFO.dll + MFO.pdb (a CI `MFO-dll` artifact). Cases:
       TU's copy in B0 (one copy in A0)                     -> must FAIL as a STATE split
   N12 an unnamed object's bytes set to "AB\\0" in B0 only (a
       content-derived boundary in one build)               -> --proof must FAIL
+  N13 a moved function's $TSSn guard reference pointed at
+      another function's guard copy (same name, same TU) in
+      B (/O2), with the real pair's guards passing          -> must FAIL as a STATE split
+  N14 an adjustor thunk in a vftable slot jumps to another
+      function in B (/O2)                                   -> must FAIL (vftable reported)
+  N15 a funclet of an OUTLINED function (only in B) calls
+      another function (its body changed)                   -> must FAIL (only in B)
+  N16 a literal referenced right after a referenced ""
+      changed in B0 ("" compares only its NUL)              -> --proof must FAIL
   N11 A0's build record names B's commit                    -> --proof must REFUSE (provenance)
   N11b a DLL that is not the one its build record hashes    -> --proof must REFUSE (provenance)
 A planted copy gets a build record describing IT (same commit, its own SHA-256),
@@ -340,6 +349,7 @@ def main():
     # ---- N6 / P1 the no-inline proof -------------------------------------------------
     if args.a0 and args.b0:
         r = run_sc(args.a, args.b, work, args.tu_map, proof=(args.a0, args.b0))
+        r_p1 = r
         record("P1 real pair with --proof", r["result"] == "PASS-PROVEN" or r["result"] == "PASS",
                f"{r['result']} (exit {r['_exit']}), proven {len(r.get('proven', []))}")
         B0 = load(args.b0)
@@ -646,6 +656,175 @@ def main():
                    r["result"] == "FAIL" and not r.get("provenance"),
                    f"{r['result']} (exit {r['_exit']}), object at {t:#x} ({ext} bytes, read by {f['name'][:50]}) "
                    f"bytes {k}..{k + 2} = 'AB\\0'")
+
+        # N13: a thread-safe-static guard ($TSSn, keyed by its OWNING function)
+        # SHARED: in the branch /O2 build, one reference of a moved function
+        # to its static's guard is pointed at ANOTHER function's guard copy of
+        # the same name in the same TU (two function-local statics now share one
+        # init guard; the second is never initialised). Every function compares
+        # identical (both targets are "$TSSn" of that TU); only the owner-keyed
+        # state check can see it -- in the same run where the real pair's
+        # inlined/outlined guards (P1) must pass.
+        tu = SC.load_tu_map(args.tu_map) if args.tu_map else {}
+        split_b = {m for v in tu.values() for m in v}
+        cmpb = SC.Cmp(B, B)
+        guards = {r_: SC.norm(n) for n, r_, _m in B.datas if SC.GUARD.fullmatch(SC.norm(n))}
+        grefs = []
+        for p in sorted(B.procs, key=lambda p: p["name"]):
+            if p.get("mod") not in split_b or SC.FUNCLET.match(p["name"]) or not p["name"].startswith("MFO::"):
+                continue
+            for ins in cmpb.disasm(B, p["rva"], p["size"]):
+                for o in ins.operands:
+                    if o.type == X.X86_OP_MEM and o.mem.base == X.X86_REG_RIP \
+                            and ins.address + ins.size + o.mem.disp in guards:
+                        grefs.append((p, ins, ins.address + ins.size + o.mem.disp))
+        plan = None
+        for p1, _i1, c1 in grefs:
+            for p2, i2, c2 in grefs:
+                if p1["rva"] == p2["rva"] or c1 == c2 or guards[c1] != guards[c2] \
+                        or p1.get("mod") != p2.get("mod") \
+                        or any(q["rva"] == p2["rva"] and c == c1 for q, _i, c in grefs) \
+                        or B.inl_all.get(p2["key"], {}).get(SC.qual_key(p1["name"])):
+                    continue
+                plan = (p1, c1, p2, i2, c2)
+                break
+            if plan:
+                break
+        if plan is None:
+            record("N13 a $TSS guard shared by two moved functions' statics", False, "no candidate")
+        else:
+            p1, c1, p2, i2, c2 = plan
+            dst = copy_build(args.b, os.path.join(work, "n13"))
+            patch_dll(dst, i2.address + i2.disp_offset,
+                      (c1 - (i2.address + i2.size)).to_bytes(4, "little", signed=True))
+            r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+            hit = [x for x in r["data_differing"] if SC.norm(SC.untag(x[0])) == guards[c1] and "STATE" in x[1]]
+            record("N13 a $TSS guard shared by two moved functions' statics",
+                   r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                   f"{r['result']}, {p2['name'][:50]} +{i2.address - p2['rva']:#x} ({i2.mnemonic} {i2.op_str[:30]}) "
+                   f"now reads {guards[c1]} at {c1:#x}, {p1['name'][:40]}'s guard ({p1.get('mod')}); "
+                   f"reported as state split: {bool(hit)}")
+
+        # N14: an adjustor thunk (unnamed code in a vftable slot: sub rcx, N ;
+        # jmp F) whose jump target is changed to another function, in the
+        # branch /O2 build. The thunk is compared by its body and target.
+        cand = None
+        for n, r_, _m in sorted(B.datas):
+            if "`vftable'" not in n or not n.startswith("MFO::"):
+                continue
+            k, slots = 0, []
+            while (r_ + k) in B.relocs:
+                v = int.from_bytes(B.data[r_ + k:r_ + k + 8], "little") - B.base
+                if not B.executable(v):
+                    break
+                slots.append(v)
+                k += 8
+            for v in slots:
+                if B.resolve(v)[0][0] == "proc":
+                    continue
+                ins = list(cmpb.md.disasm(B.read(v, 16), v))
+                if len(ins) >= 2 and ins[0].mnemonic == "sub" and ins[1].mnemonic == "jmp" \
+                        and ins[1].bytes[0] == 0xE9:
+                    old = ins[1].operands[0].imm
+                    new = next((s for s in slots if s in B.proc_at and s != old), None)
+                    if new is not None:
+                        cand = (n, r_, v, ins[1], old, new)
+                        break
+            if cand:
+                break
+        if cand is None:
+            record("N14 an adjustor thunk's jump target changed", False, "no vftable slot holding a thunk")
+        else:
+            n, r_, v, j, old, new = cand
+            dst = copy_build(args.b, os.path.join(work, "n14"))
+            patch_dll(dst, j.address + 1, (new - (j.address + 5)).to_bytes(4, "little", signed=True))
+            r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+            hit = [x for x in r["data_differing"] if "`vftable'" in x[0]]
+            record("N14 an adjustor thunk's jump target changed",
+                   r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                   f"{r['result']}, {n[:50]} slot thunk {v:#x}: jmp {sorted(B.names_at[old])[0][:40]} -> "
+                   f"{sorted(B.names_at[new])[0][:40]}; vftable reported: {bool(hit)}")
+
+        # N15: an unwind funclet of an OUTLINED function (only in the branch
+        # build; accepted when identical to a funclet of a function that inlines
+        # the parent in main) with its body changed: its first call/jmp to a
+        # function is pointed at another function.
+        outl = [x[1] for x in r_p1.get("outlined", []) if x[0] == "B" and "funclet of an outlined" in x[2]]
+        cand = None
+        for nm in outl:
+            f = next((p for p in B.procs if p["name"] == nm), None)
+            if f is None:
+                continue
+            for ins in cmpb.disasm(B, f["rva"], f["size"]):
+                if ins.mnemonic in ("call", "jmp") and ins.bytes[0] in (0xE8, 0xE9) \
+                        and ins.operands[0].imm in B.proc_at:
+                    old = ins.operands[0].imm
+                    j = SC.bisect.bisect_right(B.proc_starts, old)
+                    new = B.proc_starts[j] if j < len(B.proc_starts) else None
+                    if new is not None:
+                        cand = (f, ins, old, new)
+                        break
+            if cand:
+                break
+        if cand is None:
+            record("N15 a funclet of an outlined function with its body changed", False,
+                   f"no candidate ({len(outl)} outlined-function funclets in P1)")
+        else:
+            f, ins, old, new = cand
+            dst = copy_build(args.b, os.path.join(work, "n15"))
+            patch_dll(dst, ins.address + 1, (new - (ins.address + 5)).to_bytes(4, "little", signed=True))
+            r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+            hit = f["name"] in r.get("only_b", [])
+            record("N15 a funclet of an outlined function with its body changed",
+                   r["result"] == "FAIL" and hit and not r.get("provenance"),
+                   f"{r['result']}, {f['name'][:70]} +{ins.address - f['rva']:#x}: {ins.mnemonic} "
+                   f"{sorted(B.names_at[old])[0][:30]} -> {sorted(B.names_at[new])[0][:30]}; reported only-in-B: {hit}")
+
+        # N16: an object that reads as the empty literal "" (its NUL) in both
+        # builds is compared as that one byte; what follows it is another
+        # object. When that tail is itself referenced, a change to it must still
+        # FAIL (compared at its own reference): the first letter of a literal
+        # referenced right after a referenced "" is case-flipped, proof build.
+        tg = set()
+        for f in B0.procs:
+            if not f["name"].startswith("MFO::"):
+                continue
+            for ins in cmp0.disasm(B0, f["rva"], f["size"]):
+                for o in ins.operands:
+                    if o.type == X.X86_OP_MEM and o.mem.base == X.X86_REG_RIP:
+                        t = ins.address + ins.size + o.mem.disp
+                        if B0.readonly_data(t):
+                            tg.add(t)
+        cand = None
+        stg = sorted(tg)
+        for i, t in enumerate(stg):
+            if B0.data[t] != 0:
+                continue
+            kt, _n, ot, _r = B0.resolve(t)[0]
+            if kt == "sym" and ot == 0:
+                continue                       # a named object: compared by name, not by the "" rule
+            nxt = next((u for u in stg[i + 1:i + 8] if t < u <= t + 32), None)
+            if nxt is None:
+                continue
+            ku, _n, ou, _r = B0.resolve(nxt)[0]
+            s = B0.cstring(nxt)
+            # an UNNAMED literal (a named constant such as __real@... is
+            # compared by its name, which encodes its value in a real build)
+            if not (ku == "sym" and ou == 0) and len(s) >= 4 and s.isascii() and SC.is_text(s) \
+                    and s[:2].isalpha():
+                cand = (t, nxt, s)
+                break
+        if cand is None:
+            record("N16 a referenced object in the tail of a \"\" changed (proof build)", False, "no candidate")
+        else:
+            t, u, s = cand
+            dst = copy_build(args.b0, os.path.join(work, "n16"))
+            patch_dll(dst, u, bytes([s[0] ^ 0x20]))
+            r = run_sc(args.a, args.b, work, args.tu_map, proof=(args.a0, dst))
+            record("N16 a referenced object in the tail of a \"\" changed (proof build)",
+                   r["result"] == "FAIL" and not r.get("provenance"),
+                   f"{r['result']} (exit {r['_exit']}), \"\" at {t:#x}, literal {s[:30]!r} at +{u - t} first letter "
+                   f"case-flipped")
 
         # N11: the four builds do not pair up -- the proof must refuse
         info_b, _p = SC.read_build_info(os.path.join(args.b, "MFO.dll"))

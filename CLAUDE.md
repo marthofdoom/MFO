@@ -12,8 +12,8 @@ regressions here; the ripple notes are why the map exists.
 - **SOURCE FILE SIZE AND SPLITS (marth 2026-09-24: "Go with the subsystem folders,
   tool first." Supersedes the bare 2500-line rule of 2026-08-31, history below).**
   - **Subsystem folders, split by concern.** Code lives in `native/<subsystem>/`
-    (`cast/`, `progression/`, `apmf/` so far; `loot/`, `board/` ... as later waves
-    move them), each with ONE small public header (the only thing another
+    (`cast/`, `progression/`, `apmf/`, `logistics/` so far; `board/` ... as later
+    waves move them), each with ONE small public header (the only thing another
     subsystem may include, e.g. `cast/Actuation.h`), ONE internal header for the
     state its files share (`<Name>_internal.h`), and cohesive one-concern `.cpp`
     files.
@@ -53,8 +53,11 @@ regressions here; the ripple notes are why the map exists.
     [engine+co-save + Hms + Manifest]); Packages/CasterConsent deferred. Wave 1 of
     the folder layout (2026-09-24) moved Actuation to `cast/`, ProgAllocator to
     `progression/` (the PRGN co-save block stays whole in
-    `progression/Allocator.cpp`) and APMFBridge to `apmf/`. Keep MAP.md's
-    file:line nav current.
+    `progression/Allocator.cpp`) and APMFBridge to `apmf/`. Wave 2 (2026-09-25)
+    moved the Logistics family to `logistics/` (the one 1462-line
+    `ServiceFollower` stays whole in `logistics/Service.cpp`; the loot-travel
+    state is `logistics/LootTravel_internal.h`, included by the internal
+    header). Keep MAP.md's file:line nav current.
 - **Delegate bulk file-reads to a subagent** and keep only its conclusion, so
   large files never sit in the main context.
 - **AGENTS KEEP DISK LOGS (marth 2026-09-15).** Token-heavy work is protected against

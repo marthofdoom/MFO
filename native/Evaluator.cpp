@@ -3,7 +3,7 @@
 #include <unordered_map>   // brawl-gate log throttle (#34)
 #include "Evaluator.h"
 #include "Vocabulary.h"
-#include "Logistics.h"   // supply-condition reads (counts of potions / arrows)
+#include "logistics/Logistics.h"   // supply-condition reads (counts of potions / arrows)
 #include "Followers.h"   // g_active -- the maintained teammate list (ally selector)
 #include "Config.h"      // g_sharedRadius -- "ally" locality
 #include "Confidence.h"  // ChaseRadius -- the combat chase cap (#22)

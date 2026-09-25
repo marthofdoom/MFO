@@ -25,7 +25,7 @@
 #include "Followers.h"
 #include "Rapport.h"
 #include "Config.h"
-#include "Logistics.h"   // IsLooting/IsTrading for the [C][L][T] activity glyphs
+#include "logistics/Logistics.h"   // IsLooting/IsTrading for the [C][L][T] activity glyphs
 #include "Forms.h"
 #include "State.h"
 #include "Probe.h"

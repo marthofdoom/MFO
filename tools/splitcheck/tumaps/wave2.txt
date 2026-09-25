@@ -1,0 +1,7 @@
+# Wave-2 subsystem-folder split (2026-09-25): the Logistics family -> native/logistics/.
+# Which new translation units each old one became (see wave1.txt for the format).
+Logistics.cpp:                logistics/Service.cpp logistics/Upkeep.cpp logistics/Sinks.cpp
+Logistics_Loot.cpp:           logistics/LootTake.cpp logistics/Gear.cpp logistics/LootScan.cpp
+Logistics_Economy.cpp:        logistics/Economy.cpp logistics/EquipAuthority.cpp
+Logistics_Cast.cpp:           logistics/Cast.cpp
+Logistics_Loot_Equipment.cpp: logistics/LootEquipment.cpp

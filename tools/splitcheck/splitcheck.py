@@ -27,7 +27,9 @@ it falls in one of the EXPLAINED classes below (each is listed in the output):
                  function whose fingerprint is equal (its frame offsets follow
                  the parent's new stack layout).
   outlined       a function present as an out-of-line body in only one build
-                 and INLINED (PDB inline site) in the other.
+                 and INLINED (PDB inline site) in the other; an unwind funclet
+                 of such a function when a funclet of one of its inlining
+                 callers in the other build is identical to it.
   copies         a header-defined internal-linkage symbol (one copy per TU that
                  includes the header) whose copy count changed; every copy is
                  byte-identical to a copy in the other build.
@@ -66,6 +68,8 @@ DATA_SCOPE = re.compile(r"^(const )?(`)?MFO::")
 PATHLIT = re.compile(rb"[A-Za-z]:\\.*\\native\\.*\.(cpp|h)$", re.I)
 FUNCLET = re.compile(r"^`(.*)'::`\d+'::(dtor|catch)\$\d+$")
 XTOR = re.compile(r"`dynamic (atexit destructor|initializer) for '")
+# MSVC's thread-safe-static init guard of a function-local static ($TSS0, ...)
+GUARD = re.compile(r"\$TSS\d+")
 # a function DEFINED by a library header (STL, CommonLib, SKSE, fmt/spdlog...),
 # possibly instantiated over an MFO type. Its out-of-line body is a COMDAT that
 # the linker takes from whichever TU it sees first, so a split can swap in
@@ -521,6 +525,13 @@ class Image:
         z = b.find(b"\0")
         return b if z < 0 else b[:z]
 
+    def executable(self, rva):
+        """rva lies in an executable (code) section."""
+        for s in self.pe.sections:
+            if s.VirtualAddress <= rva < s.VirtualAddress + max(s.Misc_VirtualSize, s.SizeOfRawData):
+                return bool(s.Characteristics & 0x20000000)
+        return False
+
     def readonly_data(self, rva):
         """rva lies in a section that is neither code nor writable (.rdata...)."""
         for s in self.pe.sections:
@@ -710,7 +721,60 @@ class Cmp:
             return spans[j][0] if j >= 0 and spans[j][0] <= t < spans[j][1] else None
         readers = defaultdict(set)
         own = re.compile(r"dynamic (?:initializer|atexit destructor) for '" + re.escape(var.rsplit("::", 1)[-1]) + "''")
-        for p in img.procs:
+        if GUARD.fullmatch(var):
+            # A THREAD-SAFE-STATIC GUARD ($TSSn): the compiler's per-function
+            # name for the init guard of a function-local static, reused by
+            # every function that has one. It is private state of its OWNING
+            # function, so a reader is keyed by that owner, not by the proc the
+            # owner's code sits in: an instruction inside an inline site belongs
+            # to the innermost inlined function (a function-local static
+            # travels with its function whether it is inlined or not). An
+            # unwind funclet only aborts its parent's guard; its reference is
+            # the parent's when the parent's body reads that copy, else the
+            # parent owner's own (so a funclet reading ANOTHER guard shows).
+            # An instruction the optimizer left outside its innermost inline
+            # site's code ranges (a guard test hoisted into the enclosing
+            # function) is attributed by position to that enclosing function; it
+            # is re-attributed to the ONE other function that reads the same
+            # guard copy elsewhere in the image, is inlined (at any depth) into
+            # the proc the instruction sits in, AND is inlined by the enclosing
+            # function's own out-of-line body (so the guard is the deeper
+            # function's; two sites with identical ranges are told apart this
+            # way too).
+            body = defaultdict(set)
+            fun, bare = [], []
+            by_copy = defaultdict(set)
+            for p in img.procs:
+                fm = FUNCLET.match(p["name"])
+                if fm:
+                    fun.append((p, fm.group(1)))
+                    continue
+                ranges = img.inl_ranges_all.get(p["key"], [])
+                for ins in self.disasm(img, p["rva"], p["size"]):
+                    for _o, _s, _k, t in self.fields(img, ins):
+                        c = copy_of(t)
+                        if c is None:
+                            continue
+                        off = ins.address - p["rva"]
+                        cover = [(b - a, n) for a, b, n in ranges if a <= off < b]
+                        body[(norm(p["name"]), p.get("mod"))].add(c)
+                        me = min(cover)[1] if cover else qual_key(p["name"])
+                        bare.append((p, c, me))
+                        by_copy[c].add(me)
+            inl_of = defaultdict(set)       # what a function's out-of-line body inlines
+            for p in img.procs:
+                inl_of[qual_key(p["name"])].update(img.inl_all.get(p["key"], ()))
+            for p, c, me in bare:
+                inl = img.inl_all.get(p["key"], {})
+                others = sorted(o for o in by_copy[c] if o != me and inl.get(o) and o in inl_of.get(me, ()))
+                readers[(others[0] if len(others) == 1 else me, p.get("mod"))].add(c)
+            for p, parent in fun:
+                for ins in self.disasm(img, p["rva"], p["size"]):
+                    for _o, _s, _k, t in self.fields(img, ins):
+                        c = copy_of(t)
+                        if c is not None and c not in body.get((norm(parent), p.get("mod")), ()):
+                            readers[(qual_key(parent), p.get("mod"))].add(c)
+        for p in (() if GUARD.fullmatch(var) else img.procs):
             if own.search(p["name"]):
                 continue
             for ins in self.disasm(img, p["rva"], p["size"]):
@@ -739,6 +803,15 @@ class Cmp:
         layout changed, finding NO reader at all is a FAIL (nothing proves the
         state is unsplit). Returns (ok, detail)."""
         ra, rb = self.copy_readers(self.A, var), self.copy_readers(self.B, var)
+        if GUARD.fullmatch(var):
+            # a guard belongs to ONE function-local static of ONE owner: an owner
+            # reading more guard copies in B than any same-named owner in A has
+            # its static's state split (or shares another's guard)
+            for kb, cb in sorted(rb.items(), key=str):
+                most = max((len(c) for ka, c in ra.items() if ka[0] == kb[0]), default=0)
+                if len(cb) > max(most, 1):
+                    return False, (f"owner {kb[0][:60]} ({kb[1]}) reads {len(cb)} {var} guard copies "
+                                   f"in B, {most} in A")
         if not ra and not rb:
             if layout_changed:
                 return False, "no reader of any copy was found, so no sharing can be proven"
@@ -894,15 +967,25 @@ class Cmp:
                 self.notes["unnamed string literal equal in full"] += 1
                 return True
             return False
+        if sa == sb == b"":
+            # "" in BOTH builds (the target byte is a NUL on each side): the
+            # empty literal IS its one NUL byte, and only that byte is compared.
+            # What follows it is another object (a pooled literal present in one
+            # build only, padding); anything else that is referenced is compared
+            # at its own reference. RESIDUAL (MFO-B92): a non-string object
+            # whose first byte is 0 in both builds is read as "" here, so an
+            # UNREFERENCED tail of it is not compared.
+            self.notes["unnamed empty string literal (its NUL)"] += 1
+            return True
         if (ra, rb) in self._ue_active:        # a pointer cycle: assume, then verify the rest
             return True
         self._ue_active.add((ra, rb))
         try:
-            return self._unnamed_equal_body(ra, rb, empty=(sa == sb == b""))
+            return self._unnamed_equal_body(ra, rb)
         finally:
             self._ue_active.discard((ra, rb))
 
-    def _unnamed_equal_body(self, ra, rb, empty=False):
+    def _unnamed_equal_body(self, ra, rb):
         # The object ends at the first boundary present at the SAME relative
         # offset in BOTH builds. A boundary only one build has (a content-derived
         # pooled-literal start, a reference only one side makes) is compared
@@ -919,12 +1002,6 @@ class Cmp:
         while k < lim:
             if k and (ra + k) in ba_set and (rb + k) in bb_set:
                 break
-            if empty and k and ((ra + k) in self.A._lbounds or (rb + k) in self.B._lbounds):
-                # "" (the object starts with its NUL in BOTH builds): the text
-                # literal that follows in one build only is another, unreferenced
-                # literal. RESIDUAL (backlog): a non-string object whose first
-                # byte is 0 in both builds is read as "" here.
-                break
             pa, pb = (ra + k) in self.A.relocs, (rb + k) in self.B.relocs
             if pa or pb:
                 if not (pa and pb) or k + 8 > lim:
@@ -940,6 +1017,33 @@ class Cmp:
             k += 1
         self.notes["unnamed read-only data equal up to the first common boundary"] += 1
         return True
+
+    def _unnamed_code_equal(self, ra, rb, depth):
+        """Code outside every PDB procedure, compared instruction by instruction
+        in lockstep up to and including its first unconditional jmp / ret (at
+        most 8 instructions): equal lengths and bytes with the address fields
+        masked, and every address field (the jmp's target above all) the same
+        target by name. No jmp / ret within 8 instructions is not equal."""
+        key = ("code", ra, rb)
+        if key in self.memo:
+            return self.memo[key] is None
+        self.memo[key] = None           # a cycle: assume, verify the rest
+        ia = list(self.md.disasm(self.A.read(ra, 128), ra))[:8]
+        ib = list(self.md.disasm(self.B.read(rb, 128), rb))[:8]
+        ok = False
+        for x, y in zip(ia, ib):
+            fx, fy = self.fields(self.A, x), self.fields(self.B, y)
+            if x.size != y.size or [f[:3] for f in fx] != [f[:3] for f in fy] \
+                    or self.masked(x, fx) != self.masked(y, fy):
+                break
+            if not all(self.same_target(self.A.resolve(tx), self.B.resolve(ty), depth + 1)
+                       for (_o, _s, _k, tx), (_p, _t, _l, ty) in zip(fx, fy)):
+                break
+            if x.mnemonic in ("jmp", "ret"):
+                ok = True
+                break
+        self.memo[key] = None if ok else "unnamed code differs"
+        return ok
 
     def _same(self, ta, tb, depth):
         ka, na, oa, ra = ta
@@ -978,6 +1082,18 @@ class Cmp:
                         self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
                     return True
             return self._unnamed_equal(ra, rb)
+        # UNNAMED CODE: an executable target that is no PDB procedure's start or
+        # inside one -- an adjustor thunk in a vftable slot (`sub rcx, N ; jmp F`)
+        # -- resolves only as "the nearest symbol before it + offset", which the
+        # link layout decides. Compare it by its BODY instead. (A named entry at
+        # offset 0, e.g. a public-only library routine, still matches by name.)
+        if ka in ("sym", "none") and kb in ("sym", "none") \
+                and self.A.executable(ra) and self.B.executable(rb) \
+                and not (ka == kb == "sym" and oa == ob == 0 and na and nb and self.names_match(na, nb)):
+            if self._unnamed_code_equal(ra, rb, depth):
+                self.notes["unnamed code (adjustor thunk) equal by body and jump target"] += 1
+                return True
+            return False
         if ka == "none" or kb == "none":
             return False
         if oa == ob and na and nb and self.names_match(na, nb):
@@ -1410,7 +1526,23 @@ def _data_diff(A, B, cmp, ra, rb, cap):
         _lo, hi = img.sec_bounds(r)
         nxt = img.sym_rvas[j] if j < len(img.sym_rvas) else hi
         return min(nxt, hi) - r
-    xa, xb = extent(A, ra), extent(B, rb)
+    def vft_slots(img, r):
+        # a VFTABLE is its leading run of code pointers (its RTTI locator
+        # pointer sits BEFORE it). The PDB type size of a vftable symbol is not
+        # its slot count (GateSink: 24 bytes for each of three 2-slot
+        # vftables), so it runs into whatever the linker placed next: the next
+        # vftable's locator pointer, or an unrelated object.
+        n = 0
+        while (r + 8 * n) in img.relocs and img.executable(
+                int.from_bytes(img.data[r + 8 * n:r + 8 * n + 8], "little") - img.base):
+            n += 1
+        return 8 * n
+    if any("`vftable'" in x for x in A.names_at.get(ra, ()) | B.names_at.get(rb, ())):
+        xa, xb = vft_slots(A, ra), vft_slots(B, rb)
+        if xa != xb or not xa:
+            return f"vftable slot count {xa // 8} vs {xb // 8}"
+    else:
+        xa, xb = extent(A, ra), extent(B, rb)
     if A.data_size.get(ra) and B.data_size.get(rb) and xa != xb:
         return f"type size {xa} vs {xb}"
     ln = min(xa, xb)
@@ -1738,6 +1870,10 @@ def main():
         by = defaultdict(list)
         for f in other:
             by[(norm(f["name"]), norm(f["sig"]))].append(f)
+        # functions OUTLINED in this build (an out-of-line body here, inlined
+        # everywhere in the other): their unwind funclets exist here only too
+        outl = {norm(f["name"]): qual_key(f["name"]) for f in mine
+                if not FUNCLET.match(f["name"]) and img_other.inlinees.get(qual_key(f["name"]))}
         for f in mine:
             if not args.strict:
                 fm = FUNCLET.match(f["name"])
@@ -1746,6 +1882,22 @@ def main():
                     # parent's inlining drifted, its funclet set/numbering drifts too
                     outlined.append((side, f["name"], "(funclet of a drift function)"))
                     continue
+                if fm and norm(fm.group(1)) in outl:
+                    # a funclet of an OUTLINED function: in the other build the
+                    # parent is inlined into its callers, and its unwind code with
+                    # it, as a funclet of such a caller. Accepted only when one of
+                    # THOSE callers' funclets is identical to it (bytes, targets by
+                    # name); a changed body matches none and is reported.
+                    qn = outl[norm(fm.group(1))]
+                    hosts = {norm(k[0]) for k, c in img_other.inl_all.items() if c.get(qn)}
+                    cand = [g for g in other if FUNCLET.match(g["name"])
+                            and norm(FUNCLET.match(g["name"]).group(1)) in hosts]
+                    hit = next((g for g in cand if (cmp.compare(f, g) if side == "A"
+                                                     else cmp.compare(g, f)) is None), None)
+                    if hit is not None:
+                        outlined.append((side, f["name"], "(funclet of an outlined function; identical to "
+                                         + hit["name"][:80] + ")"))
+                        continue
             if not args.strict or args.copies_ok:
                 twins = by.get((norm(f["name"]), norm(f["sig"])), [])
                 vc = (A if side == "A" else B).xtor_var_const(f["name"])

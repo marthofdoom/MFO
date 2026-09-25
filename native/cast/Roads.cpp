@@ -8,7 +8,7 @@
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
-#include "Logistics_internal.h" // 2026-09-13: EquipWeapon consumes THE weapon-style decision
+#include "logistics/Logistics_internal.h" // 2026-09-13: EquipWeapon consumes THE weapon-style decision
                           // (ComputeWeaponRoles / WeaponScore) -- not in Logistics.h, and that
                           // header was outside the change's boundary. First non-Logistics include.
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps

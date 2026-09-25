@@ -57,11 +57,16 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/Auto.cpp
     cast/Hands.cpp
     Scheduler.cpp
-    Logistics.cpp
-    Logistics_Cast.cpp
-    Logistics_Economy.cpp
-    Logistics_Loot.cpp
-    Logistics_Loot_Equipment.cpp
+    logistics/Upkeep.cpp
+    logistics/Sinks.cpp
+    logistics/Service.cpp
+    logistics/Cast.cpp
+    logistics/Economy.cpp
+    logistics/EquipAuthority.cpp
+    logistics/LootTake.cpp
+    logistics/Gear.cpp
+    logistics/LootScan.cpp
+    logistics/LootEquipment.cpp
     Loadout.cpp
     Papyrus.cpp
     TradeBridge.cpp

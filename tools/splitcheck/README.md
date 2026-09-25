@@ -114,6 +114,20 @@ not a whole-program alias analysis: an access through a pointer computed at
 run time (a copy's address stored somewhere and loaded later) is attributed
 to the code that took the address, not to the code that dereferences it.
 
+**Thread-safe-static guards (`$TSSn`).** MSVC names the init guard of a
+function-local static `$TSS0`, `$TSS1`, ... per function, so one name has many
+copies that are NOT per-TU copies of one header static: each is private state
+of the function that owns the static. Their readers are keyed by that OWNER:
+a reference inside an inline site belongs to the innermost inlined function
+(the static travels with its function, inlined or not); a reference the
+optimizer left outside its site's ranges goes to the one other function that
+reads the same copy, is inlined into that proc, and is inlined by the
+enclosing function's own body; an unwind funclet's reference is its parent's
+when the parent's body reads that copy. The same mapping and sharing rules
+then apply, plus: an owner reading more guard copies in B than any
+same-named owner in A FAILs (its static's state is split, or it now shares
+another static's guard; selftest N13).
+
 `--tu-map FILE` lists which new TUs each old
 TU became (`old.cpp<TAB>new/a.cpp new/b.cpp`); it is how file-local twins are
 kept apart.
@@ -153,11 +167,20 @@ kept apart.
    object early by creating or removing one in a single build (selftest N12).
    Residuals (REVIEW-BACKLOG MFO-B92): an object whose first bytes read as text
    and a NUL is compared as that string; an object whose first byte is 0 in
-   both builds is read as the empty literal "" and may stop at a pooled literal
-   only one build has.
+   both builds is read as the empty literal "" and only that NUL is compared
+   (an unreferenced tail of it is not; a referenced one is compared at its own
+   reference, selftest N16).
+   **Unnamed code** (an executable target that is no PDB procedure's start or
+   inside one, e.g. an adjustor thunk `sub rcx, N ; jmp F` in a vftable slot)
+   is compared by its BODY: instruction by instruction up to its first
+   unconditional `jmp` / `ret` (at most 8), address fields masked and compared
+   by target, so the `jmp`'s target must be the same function by name
+   (selftest N14). A named entry at offset 0 still matches by name.
 4. **Named data.** Every `MFO::` variable/constant compared byte by byte over
    its PDB type size, else up to the next symbol, no cap (pointer slots by
-   target). A datum in one build only, or
+   target). A `vftable` is compared over its leading run of code-pointer slots
+   in each build, which must be the same count (its PDB type size is not its
+   slot count and runs into the next object). A datum in one build only, or
    duplicated, is REPORTED; one side folded into an `S_CONSTANT` of the same
    value is listed as folded.
 
@@ -167,7 +190,7 @@ kept apart.
 |---|---|
 | inline-drift | inline sites differ (or a pure LIBRARY template COMDAT: a name with no `MFO::` in it), AND the own-code fingerprint is equal AND the constant multiset is equal |
 | funclet-drift / renumbered | an unwind funclet of a drift function / a funclet renumbered with an identical body |
-| outlined | present in one build only and inlined (PDB inline site, qualified name) in the other |
+| outlined | present in one build only and inlined (PDB inline site, qualified name) in the other; an unwind funclet (`dtor$N` / `catch$N`) of such a function when a funclet of one of the functions that inline it in the other build is IDENTICAL to it (bytes, targets by name; a changed body matches none, selftest N15) |
 | copies | a header-defined internal-linkage object's per-TU copies (count changed, each identical), CONST only, or mutable with the same copy-sharing among its readers (see above) |
 | PROVEN | with `--proof` passing: a pair whose inline sites differ; the /Od build proves its source compiles identically |
 
