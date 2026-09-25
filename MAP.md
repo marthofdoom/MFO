@@ -1755,6 +1755,7 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
 `MainThread::Post`. Owns the serialized `g_stockGear` ('MSTK') map.
 
 ### Logistics family: `native/logistics/` (wave-2 subsystem folder, 2026-09-25)
+**OPEN BACKLOG (wave-2 split review, SEV-5): `Docs/REVIEW-BACKLOG.md` MFO-B95** (stale `Logistics_internal.h` header banner), **MFO-B96** (`LootTravel_internal.h` is not self-contained; include only via `Logistics_internal.h`), **MFO-B97** (per-TU header-static copy counts grew; informational). Read them before editing these headers.
 **WAVE-2 FOLDER SPLIT (2026-09-25, `refactor/subsystem-folders-wave2`, a pure move proven
 function by function with `tools/splitcheck`; before it: `Logistics.cpp` / `_Cast` /
 `_Economy` / `_Loot` / `_Loot_Equipment` / `_internal.h` / `Logistics.h` in `native/`,
