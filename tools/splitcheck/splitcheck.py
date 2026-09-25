@@ -218,6 +218,7 @@ class Image:
         self.inl_name = {}        # IPI id -> qualified function name
         self.tpi = {}             # TPI type index -> (kind, record text) for type_size()
         self.data_size = {}       # rva -> byte size of a named variable (from its PDB type)
+        self.data_const = {}      # rva -> its PDB type is const-qualified (arrays: the element)
         self.constants = {}       # S_CONSTANT name -> value (constexprs folded out of storage)
         self._load_ids(pdb)
         self._load_pdb(pdb)
@@ -309,6 +310,36 @@ class Image:
             m = re.search(r"underlying type: (0x[0-9A-F]+)", txt)
             return self.type_size(int(m.group(1), 16), depth + 1) if m else None
         return None
+
+    def type_const(self, ti, depth=0):
+        """TPI type ti is const-qualified (an array: its element type)."""
+        if ti < 0x1000 or depth > 8:
+            return False
+        kind, txt = self.tpi.get(ti, ("", ""))
+        if kind == "LF_MODIFIER":
+            return bool(re.search(r"modifiers = [^\n]*\bconst\b", txt))
+        if kind == "LF_ARRAY":
+            m = re.search(r"element type: (0x[0-9A-F]+)", txt)
+            return bool(m) and self.type_const(int(m.group(1), 16), depth + 1)
+        return False
+
+    def is_const_data(self, rva):
+        """A variable that cannot change after initialisation: const by its PDB
+        type, or placed in a read-only section."""
+        return bool(self.data_const.get(rva)) or self.readonly_data(rva)
+
+    def xtor_var_const(self, name):
+        """For `dynamic initializer/atexit destructor for 'X'`: are ALL of X's
+        definitions in this image const? None when name is not such an XTOR or
+        X has no data record."""
+        m = re.search(r"dynamic (?:initializer|atexit destructor) for '(.+?)''", name)
+        if not m:
+            return None
+        v = norm(m.group(1))
+        rv = [r for n, r, _m in self.datas if norm(n) == v or norm(n).endswith("::" + v)]
+        if not rv:
+            return None
+        return all(self.is_const_data(r) for r in rv)
 
     def sec_rva(self, sec, off):
         for i, _n, va, _sz in self.secs:
@@ -434,6 +465,8 @@ class Image:
                     sz = self.type_size(int(ti.group(1), 16)) if ti else None
                     if sz:
                         self.data_size[rva] = sz
+                    if ti:
+                        self.data_const[rva] = self.type_const(int(ti.group(1), 16))
         close_site()
         # TWINS: a name at two or more addresses (file-local symbols of the same
         # name in different TUs -- the PDB drops "anonymous namespace" from DATA
@@ -618,6 +651,39 @@ class Cmp:
         self.own_tu_twins = False
         self._hcache = {}
         self._ue_active = set()
+        self._live = {}
+
+    def live_copies(self, img, var):
+        """Definitions of variable `var` (norm'd name) in img that something
+        other than their own initializer / atexit destructor refers to: code
+        (any function, via any address field) or data (a relocated pointer).
+        A per-TU copy nothing else touches is unobservable state."""
+        key = (id(img), var)
+        if key in self._live:
+            return self._live[key]
+        defs = {r for n, r, _m in img.datas if norm(n) == var}
+        live = set()
+        own = re.compile(r"dynamic (?:initializer|atexit destructor) for '" + re.escape(var.rsplit("::", 1)[-1]) + "''")
+        for p in img.procs:
+            if own.search(p["name"]) or (FUNCLET.match(p["name"]) and own.search(p["name"])):
+                continue
+            for ins in self.disasm(img, p["rva"], p["size"]):
+                for _o, _s, _k, t in self.fields(img, ins):
+                    if t in defs:
+                        live.add(t)
+        for r in img.relocs:
+            v = int.from_bytes(img.data[r:r + 8], "little") - img.base
+            if v in defs:
+                live.add(v)
+        self._live[key] = live
+        return live
+
+    def state_split_ok(self, var):
+        """A MUTABLE variable whose per-TU copy count changed splits no state
+        when, in each build, at most ONE copy is live (see live_copies): every
+        reader and writer then still shares one copy."""
+        la, lb = self.live_copies(self.A, var), self.live_copies(self.B, var)
+        return len(la) <= 1 and len(lb) <= 1, len(la), len(lb)
 
     def disasm(self, img, rva, size):
         k = (id(img), rva, size)
@@ -1144,8 +1210,22 @@ def compare_data(A, B, cmp, cap=512):
                 diffs.append((n, "; ".join(bad)))
             elif sorted(str(m) for _r, m in la) != sorted(str(m) for _r, m in lb):
                 # the copy layout changed (the split's doing); an unchanged layout
-                # with every copy identical is simply identical
-                copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical"))
+                # with every copy identical is simply identical. Only a CONST
+                # object may change its copy count: a mutable one would be STATE
+                # the old TU's functions shared and the new TUs now each keep
+                # their own of -- a behaviour change no byte compare can see
+                mut = [f"A {m}" for r, m in la if not A.is_const_data(r)] + \
+                      [f"B {m}" for r, m in lb if not B.is_const_data(r)]
+                ok, na_, nb_ = cmp.state_split_ok(n) if mut else (True, 0, 0)
+                if mut and ok:
+                    copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical, MUTABLE but at "
+                                      f"most one copy live per build ({na_} in A, {nb_} in B): no state split"))
+                elif mut:
+                    diffs.append((n, f"PER-TU COPY COUNT CHANGED ON MUTABLE STATE ({len(la)} copies in A, "
+                                     f"{len(lb)} in B; mutable: {', '.join(mut[:4])}): the split gives each new "
+                                     f"TU its own copy of state the old TU shared"))
+                else:
+                    copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical, const"))
             continue
         else:
             free = list(lb)
@@ -1450,7 +1530,14 @@ def main():
                     continue
             if not args.strict or args.copies_ok:
                 twins = by.get((norm(f["name"]), norm(f["sig"])), [])
-                if twins and f.get("twin"):
+                vc = (A if side == "A" else B).xtor_var_const(f["name"])
+                if vc is False:
+                    mv = re.search(r"dynamic (?:initializer|atexit destructor) for '(.+?)''", f["name"])
+                    var = norm(f["name"].split("`dynamic")[0] + mv.group(1)) if mv else None
+                    vc = None if var and cmp.state_split_ok(var)[0] else False
+                if twins and f.get("twin") and vc is not False:
+                    # (an initializer/destructor copy of a MUTABLE variable is not
+                    # accepted: see compare_data's per-TU copies)
                     # a copy refers to its own TU's twin data; compare with the TU of
                     # a twin reference free (fresh memo: these pairs are not reused)
                     saved, cmp.memo, cmp.own_tu_twins = cmp.memo, {}, True
