@@ -34,7 +34,14 @@ regressions here; the ripple notes are why the map exists.
     results as pre change."** So a function the tool can only EXPLAIN (it differs
     in the shipped /O2 build) passes only with BEHAVIOURAL equivalence: (1) the
     no-optimizer proof build (`native` workflow dispatch `noopt=true`, main and
-    the branch) compares `splitcheck --strict` PASS, fed to `--proof`; (2) any
+    the branch) compares `splitcheck --strict` PASS, fed to `--proof`, and the
+    four builds are PROVABLY PAIRED (each run's `MFO-build-info` record: O2 and
+    /Od of main built from one SHA, O2 and /Od of the branch from another,
+    bound to each DLL by SHA-256; `--proof` refuses otherwise), and a per-TU
+    copy-count change is accepted only for CONST objects; a MUTABLE per-TU
+    variable must keep, for every reader the tool can see inside the split's
+    TUs, who shares a copy with whom, or it is a state split (tools/splitcheck
+    README "Mutable per-TU state" for exactly what is and is not seen); (2) any
     co-save function in the explained set also passes an emulated save
     round-trip over real co-saves (identical written bytes and call sequence in
     both DLLs); (3) `tools/splitcheck/selftest.py` passes on the pair (the tool

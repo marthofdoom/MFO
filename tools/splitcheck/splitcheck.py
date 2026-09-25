@@ -74,6 +74,18 @@ LIBRARY = re.compile(r"^`?(std|RE|REL|SKSE|SKSE::stl|fmt|spdlog|nlohmann|rapidcs
                      r"Concurrency|concurrency|__std|__scrt|_)[:A-Za-z_]")
 
 
+def is_text(b, minlen=2):
+    """A NUL-free byte string that reads as text: valid UTF-8 (so a log line
+    with an em-dash counts), no control characters but tab/newline/CR."""
+    if len(b) < minlen:
+        return False
+    try:
+        s = b.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return all(c >= " " or c in "\t\n\r" for c in s)
+
+
 def canon(name):
     return ANON_HASH_MANGLED.sub("?A0x@", ANON_HASH.sub(ANON, name))
 
@@ -206,6 +218,7 @@ class Image:
         self.inl_name = {}        # IPI id -> qualified function name
         self.tpi = {}             # TPI type index -> (kind, record text) for type_size()
         self.data_size = {}       # rva -> byte size of a named variable (from its PDB type)
+        self.data_const = {}      # rva -> its PDB type is const-qualified (arrays: the element)
         self.constants = {}       # S_CONSTANT name -> value (constexprs folded out of storage)
         self._load_ids(pdb)
         self._load_pdb(pdb)
@@ -297,6 +310,39 @@ class Image:
             m = re.search(r"underlying type: (0x[0-9A-F]+)", txt)
             return self.type_size(int(m.group(1), 16), depth + 1) if m else None
         return None
+
+    def type_const(self, ti, depth=0):
+        """TPI type ti is const-qualified (an array: its element type)."""
+        if ti < 0x1000 or depth > 8:
+            return False
+        kind, txt = self.tpi.get(ti, ("", ""))
+        if kind == "LF_MODIFIER":
+            return bool(re.search(r"modifiers = [^\n]*\bconst\b", txt))
+        if kind == "LF_ARRAY":
+            m = re.search(r"element type: (0x[0-9A-F]+)", txt)
+            return bool(m) and self.type_const(int(m.group(1), 16), depth + 1)
+        return False
+
+    def is_const_data(self, rva):
+        """A variable that cannot change after initialisation: const-qualified
+        by its PDB type (arrays by element), or placed in a read-only section.
+        Both are needed: MSVC records a constexpr CLASS-typed variable
+        (std::chrono::seconds kTravelFailCooldown) with the plain class type,
+        no const modifier, but places it in .rdata."""
+        return bool(self.data_const.get(rva)) or self.readonly_data(rva)
+
+    def xtor_var_const(self, name):
+        """For `dynamic initializer/atexit destructor for 'X'`: are ALL of X's
+        definitions in this image const? None when name is not such an XTOR or
+        X has no data record."""
+        m = re.search(r"dynamic (?:initializer|atexit destructor) for '(.+?)''", name)
+        if not m:
+            return None
+        v = norm(m.group(1))
+        rv = [r for n, r, _m in self.datas if norm(n) == v or norm(n).endswith("::" + v)]
+        if not rv:
+            return None
+        return all(self.is_const_data(r) for r in rv)
 
     def sec_rva(self, sec, off):
         for i, _n, va, _sz in self.secs:
@@ -422,6 +468,8 @@ class Image:
                     sz = self.type_size(int(ti.group(1), 16)) if ti else None
                     if sz:
                         self.data_size[rva] = sz
+                    if ti:
+                        self.data_const[rva] = self.type_const(int(ti.group(1), 16))
         close_site()
         # TWINS: a name at two or more addresses (file-local symbols of the same
         # name in different TUs -- the PDB drops "anonymous namespace" from DATA
@@ -433,6 +481,12 @@ class Image:
         for rva, name, mod in raw_names:
             at[name].add(rva)
         self.twins = {n for n, r in at.items() if len(r) > 1}
+        # the owning module of every UNIQUE (non-twin) name, so a twin on one
+        # side can still be TU-checked against a unique symbol on the other
+        self.mod_of = {}
+        for rva, name, mod in raw_names:
+            if mod is not None and name not in self.twins:
+                self.mod_of.setdefault(name, mod)
         owned = {(rva, name) for rva, name, mod in raw_names if mod is not None and name in self.twins}
         for rva, name, mod in raw_names:
             if name in self.twins:
@@ -453,17 +507,131 @@ class Image:
     def read(self, rva, n):
         return bytes(self.data[rva:rva + n])
 
-    def cstring(self, rva, limit=512):
-        b = self.read(rva, limit)
+    def sec_bounds(self, rva):
+        for _i, n, va, sz in self.secs:
+            if va <= rva < va + sz:
+                return va, va + sz
+        return rva, rva
+
+    def cstring(self, rva):
+        """The whole NUL-terminated byte string at rva (no length cap: it ends
+        at its NUL or at the end of its section)."""
+        _lo, hi = self.sec_bounds(rva)
+        b = self.read(rva, hi - rva)
         z = b.find(b"\0")
         return b if z < 0 else b[:z]
+
+    def readonly_data(self, rva):
+        """rva lies in a section that is neither code nor writable (.rdata...)."""
+        for s in self.pe.sections:
+            if s.VirtualAddress <= rva < s.VirtualAddress + max(s.Misc_VirtualSize, s.SizeOfRawData):
+                ch = s.Characteristics
+                return not (ch & 0x20000000) and not (ch & 0x80000000) and not (ch & 0x20)
+        return False
+
+    _bounds = None
+    _sbounds = None
+    _lbounds = None
+
+    def boundaries(self):
+        """Every address that can START an object: each symbol, each DIR64
+        relocation slot and relocation target, each RIP-relative target in the
+        code (PDB functions and the gaps between them), each pooled text
+        literal. Unnamed read-only data runs from its address to the next one."""
+        if self._bounds is None:
+            b = set(self.sym_rvas)
+            b |= self.relocs           # a relocated pointer slot starts a pointer
+            for r in self.relocs:
+                v = int.from_bytes(self.data[r:r + 8], "little") - self.base
+                if 0 < v < len(self.data):
+                    b.add(v)
+            md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+            md.detail = True
+            md.skipdata = True
+
+            def sweep(lo, hi):
+                for ins in md.disasm(self.read(lo, hi - lo), lo):
+                    if ins.id == 0:          # skipped data byte
+                        continue
+                    for op in ins.operands:
+                        if op.type == X.X86_OP_MEM and op.mem.base == X.X86_REG_RIP:
+                            b.add(ins.address + ins.size + op.mem.disp)
+            # every PDB function, then the GAPS between them: code with no PDB
+            # record (prebuilt libraries without debug info: fmt's "inf"/"nan"
+            # literals are referenced only from there)
+            covered = 0
+            for s in self.pe.sections:
+                if not s.Characteristics & 0x20000000:
+                    continue
+                lo, hi = s.VirtualAddress, s.VirtualAddress + s.Misc_VirtualSize
+                cur = lo
+                for st in self.proc_starts:
+                    if st < lo or st >= hi:
+                        continue
+                    if st > cur:
+                        sweep(cur, st)
+                    end = st + self.proc_at[st]
+                    sweep(st, end)
+                    covered += 1
+                    cur = max(cur, end)
+                if cur < hi:
+                    sweep(cur, hi)
+            for _i, _n, va, sz in self.secs:
+                b.add(va + sz)
+            # STRUCTURAL boundaries end here: they come from how the image is
+            # linked and referenced, so no data byte can create or remove one
+            self._sbounds = sorted(b)
+            # the start of every pooled TEXT literal in read-only data: /Od keeps
+            # a TU's whole literal pool, referenced or not, so an unreferenced
+            # literal (from an inline function this TU never emitted) can sit
+            # right after a referenced object; it is an object of its own. These
+            # are CONTENT-derived (a changed byte can make or break one), so the
+            # compare only ever cuts at one found at the same offset in BOTH builds
+            lit = set()
+            for s in self.pe.sections:
+                ch = s.Characteristics
+                if ch & 0x20000000 or ch & 0x80000000 or ch & 0x20:
+                    continue
+                lo = s.VirtualAddress
+                raw = self.read(lo, s.Misc_VirtualSize)
+                for m in re.finditer(rb"(?<=\x00)[^\x00]{2,}(?=\x00)", raw):
+                    if is_text(m.group(0)):
+                        lit.add(lo + m.start())
+            self._lbounds = lit
+            self._bounds = sorted(b | lit)
+        return self._bounds
+
+    _bset = None
+
+    def boundary_set(self):
+        if self._bset is None:
+            self._bset = set(self.boundaries())
+        return self._bset
+
+    def struct_extent(self, rva):
+        """Bytes from rva to the next STRUCTURAL boundary (symbol, relocation
+        slot or target, code reference, section end) -- never content-derived."""
+        self.boundaries()
+        bs = self._sbounds
+        j = bisect.bisect_right(bs, rva)
+        _lo, hi = self.sec_bounds(rva)
+        nxt = bs[j] if j < len(bs) else hi
+        return max(0, min(nxt, hi) - rva)
+
+    def extent(self, rva):
+        """Bytes from rva to the next object boundary (see boundaries())."""
+        bs = self.boundaries()
+        j = bisect.bisect_right(bs, rva)
+        _lo, hi = self.sec_bounds(rva)
+        nxt = bs[j] if j < len(bs) else hi
+        return max(0, min(nxt, hi) - rva)
 
     def type_descriptor_name(self, rva):
         """Decorated class name if rva is an RTTI TypeDescriptor
         ({pVFTable, spare, char name[]}), else None."""
         if rva not in self.relocs:
             return None
-        s = self.cstring(rva + 16, 1024)
+        s = self.cstring(rva + 16)
         if not s.startswith(b".?A"):
             return None
         # drop the anonymous-namespace component and the decorated name's
@@ -517,6 +685,103 @@ class Cmp:
         # each copy refers to its OWN TU's twin, so any TU's twin is the same shape
         self.own_tu_twins = False
         self._hcache = {}
+        self._ue_active = set()
+        self._named_ok = {}
+        self._live = {}
+
+    def copy_readers(self, img, var):
+        """Who touches each definition (copy) of variable `var` (norm'd name) in
+        img, other than its own initializer / atexit destructor. A reference
+        ANYWHERE inside a copy counts ([rip+g+4], an element, a member), the
+        copy's extent being its PDB type size (else up to the next structural
+        boundary). Readers are keyed by (function name, owning MODULE), so
+        per-TU copies of a same-named file-local accessor stay distinct; a
+        relocated pointer to a copy is the reader ("data:<symbol>", module).
+        Returns {(reader, module): set(copy rvas)}."""
+        key = (id(img), var)
+        if key in self._live:
+            return self._live[key]
+        spans = sorted((r, r + (img.data_size.get(r) or max(1, img.struct_extent(r))))
+                       for n, r, _m in img.datas if norm(n) == var)
+        starts = [a for a, _b in spans]
+
+        def copy_of(t):
+            j = bisect.bisect_right(starts, t) - 1
+            return spans[j][0] if j >= 0 and spans[j][0] <= t < spans[j][1] else None
+        readers = defaultdict(set)
+        own = re.compile(r"dynamic (?:initializer|atexit destructor) for '" + re.escape(var.rsplit("::", 1)[-1]) + "''")
+        for p in img.procs:
+            if own.search(p["name"]):
+                continue
+            for ins in self.disasm(img, p["rva"], p["size"]):
+                for _o, _s, _k, t in self.fields(img, ins):
+                    c = copy_of(t)
+                    if c is not None:
+                        readers[(norm(untag(p["name"])), p.get("mod"))].add(c)
+        for r in img.relocs:
+            v = int.from_bytes(img.data[r:r + 8], "little") - img.base
+            c = copy_of(v)
+            if c is not None:
+                sym = img.resolve(r)[0]
+                nm = untag(min(sym[1])) if sym[1] else hex(r)
+                readers[("data:" + norm(nm), img.mod_of.get(nm))].add(c)
+        self._live[key] = dict(readers)
+        return self._live[key]
+
+    def state_split_ok(self, var, layout_changed=True):
+        """A MUTABLE variable with per-TU copies is still the same state only if
+        the split kept who shares a copy with whom. Every reader in B (keyed by
+        name + module) must map to exactly one reader in A of the same name in
+        a TU its TU came from (--tu-map), every A reader must be mapped, and for
+        every two B readers "they touch a common copy" must equal the same fact
+        for their A readers -- two B readers that map to ONE A reader (per-TU
+        copies of one accessor) must therefore share a copy. When the copy
+        layout changed, finding NO reader at all is a FAIL (nothing proves the
+        state is unsplit). Returns (ok, detail)."""
+        ra, rb = self.copy_readers(self.A, var), self.copy_readers(self.B, var)
+        if not ra and not rb:
+            if layout_changed:
+                return False, "no reader of any copy was found, so no sharing can be proven"
+            return True, "no readers"
+        # The SPLIT's TUs: the old ones (--tu-map keys) and what they became.
+        # A reader in any other TU is outside the split; when it is an inline /
+        # template COMDAT (RE::TESForm::As<...>) the linker keeps ONE TU's
+        # instance, and which TU's -- hence which per-TU copy it reads -- can
+        # change between two links of unchanged source. Such readers match by
+        # name alone, and a pair of two of them is not judged: only a pair with
+        # at least one reader inside the split can show a split the split made.
+        split_a = set(self.tu_map)
+        split_b = {m for v in self.tu_map.values() for m in v}
+        mapping, why = {}, []
+        for kb in rb:
+            if kb[1] in split_b:
+                c = [ka for ka in ra if ka[0] == kb[0] and self.tu_ok(ka[1], kb[1])]
+            else:
+                c = [ka for ka in ra if ka[0] == kb[0] and ka[1] not in split_a]
+                c = c[:1]
+            if len(c) != 1:
+                why.append(f"B reader {kb[0][:60]} ({kb[1]}) maps to {len(c)} A reader(s)")
+            else:
+                mapping[kb] = c[0]
+        unmapped = [ka for ka in ra if ka not in mapping.values()
+                    and (ka[1] in split_a or not any(kb[0] == ka[0] for kb in rb))]
+        if unmapped:
+            why.append(f"A reader(s) with no B counterpart: {[k[0][:50] for k in unmapped[:3]]}")
+        if why:
+            return False, "; ".join(why[:3])
+        kbs = sorted(rb, key=str)
+        for x in range(len(kbs)):
+            for y in range(x + 1, len(kbs)):
+                p, q = kbs[x], kbs[y]
+                if p[1] not in split_b and q[1] not in split_b:
+                    continue
+                sa = mapping[p] == mapping[q] or bool(ra[mapping[p]] & ra[mapping[q]])
+                sb = bool(rb[p] & rb[q])
+                if sa != sb:
+                    return False, (f"{p[0][:50]} ({p[1]}) and {q[0][:50]} ({q[1]}) "
+                                   f"{'share' if sa else 'do not share'} a copy in A but "
+                                   f"{'share' if sb else 'do not share'} one in B")
+        return True, f"{len(rb)} reader(s), sharing unchanged"
 
     def disasm(self, img, rva, size):
         k = (id(img), rva, size)
@@ -595,78 +860,132 @@ class Cmp:
                         return True
                     continue
                 if (mx is None) != (my is None):
-                    self.notes["twin on one side, unique symbol on the other (matched by name)"] += 1
+                    # a twin on one side, a now-unique symbol on the other (the
+                    # split made it extern / left one copy): the unique one's
+                    # owning module must still be one the twin's TU became
+                    ma = mx if mx is not None else self.A.mod_of.get(bx)
+                    mb = my if my is not None else self.B.mod_of.get(by)
+                    if ma is not None and mb is not None:
+                        if not (self.tu_ok(ma, mb) or self.own_tu_twins):
+                            continue
+                        self.notes["twin on one side, unique on the other: same TU lineage"] += 1
+                    else:
+                        self.notes["twin on one side, unique on the other: unique one has no module record"] += 1
                 return True
         return False
+
+    def _unnamed_equal(self, ra, rb):
+        """Unnamed read-only data. A string literal (UTF-8 accepted) is compared
+        as its whole NUL-terminated byte string; a source-path literal may
+        change its file name. Anything else is compared over min(extent in A,
+        extent in B), the extent running to the next object boundary: the
+        object ends before the next object starts in EACH build, so the shorter
+        extent still covers all of it (the longer one's excess is a different,
+        e.g. unreferenced, object). Relocated pointer slots compare by target."""
+        sa, sb = self.A.cstring(ra), self.B.cstring(rb)
+        if sa != sb and PATHLIT.search(sa) and PATHLIT.search(sb):
+            self.path_pairs.add((sa.decode(errors="replace"), sb.decode(errors="replace")))
+            self.notes["source-path string literal moved file"] += 1
+            return True
+        if is_text(sa, 1) or is_text(sb, 1):
+            # a STRING LITERAL (UTF-8 accepted): the object is the whole
+            # NUL-terminated byte string, compared in full
+            if sa == sb:
+                self.notes["unnamed string literal equal in full"] += 1
+                return True
+            return False
+        if (ra, rb) in self._ue_active:        # a pointer cycle: assume, then verify the rest
+            return True
+        self._ue_active.add((ra, rb))
+        try:
+            return self._unnamed_equal_body(ra, rb, empty=(sa == sb == b""))
+        finally:
+            self._ue_active.discard((ra, rb))
+
+    def _unnamed_equal_body(self, ra, rb, empty=False):
+        # The object ends at the first boundary present at the SAME relative
+        # offset in BOTH builds. A boundary only one build has (a content-derived
+        # pooled-literal start, a reference only one side makes) is compared
+        # THROUGH: a changed byte must never be able to end its own object early
+        # by creating or removing a boundary in one build.
+        # ...and never past the first STRUCTURAL boundary of either build (those
+        # no data byte can move): the object ends before the next object starts
+        # in each build, so the shorter structural extent still covers it.
+        ba_set, bb_set = self.A.boundary_set(), self.B.boundary_set()
+        lim = min(self.A.struct_extent(ra), self.B.struct_extent(rb))
+        if lim <= 0:
+            return False
+        k = 0
+        while k < lim:
+            if k and (ra + k) in ba_set and (rb + k) in bb_set:
+                break
+            if empty and k and ((ra + k) in self.A._lbounds or (rb + k) in self.B._lbounds):
+                # "" (the object starts with its NUL in BOTH builds): the text
+                # literal that follows in one build only is another, unreferenced
+                # literal. RESIDUAL (backlog): a non-string object whose first
+                # byte is 0 in both builds is read as "" here.
+                break
+            pa, pb = (ra + k) in self.A.relocs, (rb + k) in self.B.relocs
+            if pa or pb:
+                if not (pa and pb) or k + 8 > lim:
+                    return False
+                va = int.from_bytes(self.A.read(ra + k, 8), "little") - self.A.base
+                vb = int.from_bytes(self.B.read(rb + k, 8), "little") - self.B.base
+                if not self.same_target(self.A.resolve(va), self.B.resolve(vb), 3):
+                    return False
+                k += 8
+                continue
+            if self.A.data[ra + k] != self.B.data[rb + k]:
+                return False
+            k += 1
+        self.notes["unnamed read-only data equal up to the first common boundary"] += 1
+        return True
 
     def _same(self, ta, tb, depth):
         ka, na, oa, ra = ta
         kb, nb, ob, rb = tb
         if ka in ("local", "hdr", "rtti") or kb in ("local", "hdr", "rtti"):
             return ka == kb and oa == ob and (na == nb) and (ka != "hdr" or ra == rb)
+        # READ-ONLY DATA (a section neither code nor writable). A target that is
+        # a named object's start, or lies inside a named object of known size,
+        # is compared by name (named data is byte-compared by compare_data).
+        # Anything else is UNNAMED read-only data -- /Od string literals (no
+        # ??_C symbols), template statics such as _Hash::_Min_buckets, a constant
+        # named in one build only -- and is compared by CONTENT over its whole
+        # extent: from the target to the next object boundary (a symbol, a
+        # relocation target, a code reference), never a fixed length.
+        if ka in ("sym", "none") and kb in ("sym", "none") \
+                and self.A.readonly_data(ra) and self.B.readonly_data(rb):
+            if ka == kb == "sym" and oa == ob and na and nb and self.names_match(na, nb):
+                za = self.A.data_size.get(ra - oa)
+                is_lit = any(x.startswith("??_C@") for x in na | nb)
+                if (oa == 0 and not is_lit) or (za and oa <= za):
+                    # a named object (at its start, inside it, or one past its end
+                    # -- a loop bound): the same name, and -- whatever namespace it
+                    # is in, compare_data only covers MFO:: -- the same CONTENT over
+                    # its PDB type size (cached per object pair)
+                    sa_, sb_ = self.A.data_size.get(ra - oa), self.B.data_size.get(rb - ob)
+                    # (RTTI records hold image-relative RVAs, not relocations: they
+                    # are compared by name, as compare_data does)
+                    if (sa_ or sb_) and not any("`RTTI" in x for x in na | nb):
+                        k_ = (ra - oa, rb - ob)
+                        if k_ not in self._named_ok:
+                            self._named_ok[k_] = True          # a pointer cycle: assume, verify the rest
+                            self._named_ok[k_] = _data_diff(self.A, self.B, self, ra - oa, rb - ob, None) is None
+                        if not self._named_ok[k_]:
+                            return False
+                    if na != nb:
+                        self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
+                    return True
+            return self._unnamed_equal(ra, rb)
         if ka == "none" or kb == "none":
-            if ka == kb == "none":
-                sa, sb = self.A.sec_of(ra), self.B.sec_of(rb)
-                if sa == sb and sa not in (".text", ".data", ".bss", None) \
-                        and self.A.read(ra, 16) == self.B.read(rb, 16):
-                    self.notes["unnamed read-only data equal by content"] += 1
-                    return True
             return False
-        # an UNNAMED string literal (no /GF pooling: an /Od proof build puts
-        # literals in .rdata with no ??_C symbol, so the target reads as "the
-        # previous symbol + offset"): the text itself decides, before any name
-        if ka == kb == "sym" and oa and ob and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
-            sa, sb = self.A.cstring(ra), self.B.cstring(rb)
-            if sa == sb == b"":
-                # "" -- the empty literal (e.g. a default fmt argument)
-                self.notes["unnamed empty string literal"] += 1
-                return True
-            if sa and sb and all(32 <= c < 127 or c in (9, 10, 13) for c in sa + sb) \
-                    and self.A.read(ra + len(sa), 1) == b"\0" and self.B.read(rb + len(sb), 1) == b"\0":
-                if sa == sb:
-                    self.notes["unnamed string literal equal by content"] += 1
-                    return True
-                if PATHLIT.search(sa) and PATHLIT.search(sb):
-                    self.path_pairs.add((sa.decode(errors="replace"), sb.decode(errors="replace")))
-                    self.notes["source-path string literal moved file"] += 1
-                    return True
-                return False
-        # a read-only constant that has a symbol in one build only (a static data
-        # member of a template over a type the split moved out of the anonymous
-        # namespace: internal and unnamed before, external and named after) --
-        # equal when the named object's bytes (its PDB type size) are equal
-        # both targets PAST the end of the named object before them (its PDB type
-        # size says so): unnamed read-only data on both sides, same rule as "none"
-        if ka == kb == "sym" and oa and ob and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
-            za, zb = self.A.data_size.get(ra - oa), self.B.data_size.get(rb - ob)
-            if za and zb and oa >= za and ob >= zb and not (oa == ob and self.names_match(na, nb)) \
-                    and self.A.read(ra, 8) == self.B.read(rb, 8):
-                # (8 bytes: the unnamed objects referenced this way are size_t
-                # template statics such as _Hash::_Min_buckets)
-                self.notes["unnamed read-only data equal by content"] += 1
-                return True
-        if ka == kb == "sym" and bool(oa) != bool(ob) and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
-            sz = self.B.data_size.get(rb) if ob == 0 else self.A.data_size.get(ra)
-            if sz and sz <= 64 and self.A.read(ra, sz) == self.B.read(rb, sz):
-                self.notes["read-only constant named in one build only, equal by content"] += 1
-                return True
         if oa == ob and na and nb and self.names_match(na, nb):
             if na != nb:
                 self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
             return True
-        # string literals: content compare, source-path literals tolerated
-        if oa == ob == 0 and na and nb and all(x.startswith("??_C@") for x in na | nb):
-            sa, sb = self.A.cstring(ra), self.B.cstring(rb)
-            if sa == sb:
-                return True
-            if PATHLIT.search(sa) and PATHLIT.search(sb):
-                self.path_pairs.add((sa.decode(errors="replace"), sb.decode(errors="replace")))
-                self.notes["source-path string literal moved file"] += 1
-                return True
-            return False
-        # an UNNAMED string literal (no /GF pooling, e.g. an /Od proof build puts
-        # literals in .rdata with no ??_C symbol, so the target reads as "the
-        # previous symbol + offset"): compare the NUL-terminated text itself
+        # (string literals, named ??_C or unnamed, are read-only data: handled
+        # above by _unnamed_equal over their whole extent)
         # different named functions: equal if structurally identical (ICF-like)
         if ka == kb == "proc" and oa == ob == 0 and depth < 4:
             fa = {"rva": ra, "size": self.A.proc_at[ra], "name": min(na), "key": None}
@@ -965,7 +1284,7 @@ def fmt_fp(u):
 # --------------------------------------------------------------------------
 def compare_data(A, B, cmp, cap=512):
     """Initial contents of every named MFO variable/constant (module streams).
-    Extent = distance to the next symbol in EACH image (min of both, capped);
+    Extent = the PDB type size, else the distance to the next symbol (no cap);
     DIR64 pointer slots are compared by the symbol they point to. Twins (one name
     defined in several TUs) are paired through the TU map. Returns
     (checked, diffs, only_a, only_b, folded): a name present in only one build is
@@ -990,9 +1309,22 @@ def compare_data(A, B, cmp, cap=512):
                    int.from_bytes(raw[:k], "little") == v for k in (1, 2, 4, 8))
 
     for n in sorted(set(da) | set(db)):
+        la, lb = da.get(n, []), db.get(n, [])
+        # MUTABLE per-TU copies (a twin in either build): the state-split check
+        # runs whenever they exist, whether or not the copy layout changed, and
+        # for EVERY variable -- a header static of a library (rapidcsv) is split
+        # by a TU split exactly like one of MFO's
+        if (len(la) > 1 or len(lb) > 1) and la and lb and n and "`" not in n and \
+                not any(A.sec_of(r) == ".text" for r, _m in la) and \
+                (any(not A.is_const_data(r) for r, _m in la) or any(not B.is_const_data(r) for r, _m in lb)):
+            changed = sorted(str(m) for _r, m in la) != sorted(str(m) for _r, m in lb)
+            ok_, why_ = cmp.state_split_ok(n, layout_changed=changed)
+            if not ok_:
+                diffs.append((n, f"STATE SPLIT on a MUTABLE per-TU variable ({len(la)} copies in A, "
+                                 f"{len(lb)} in B): {why_}"))
+                continue
         if not in_scope(n):
             continue
-        la, lb = da.get(n, []), db.get(n, [])
         if not lb:
             if len(la) == 1 and const_equal(A, la[0][0], B, n):
                 folded.append((n, "A stores it, B folded it to an S_CONSTANT of the same value"))
@@ -1026,8 +1358,22 @@ def compare_data(A, B, cmp, cap=512):
                 diffs.append((n, "; ".join(bad)))
             elif sorted(str(m) for _r, m in la) != sorted(str(m) for _r, m in lb):
                 # the copy layout changed (the split's doing); an unchanged layout
-                # with every copy identical is simply identical
-                copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical"))
+                # with every copy identical is simply identical. Only a CONST
+                # object may change its copy count: a mutable one would be STATE
+                # the old TU's functions shared and the new TUs now each keep
+                # their own of -- a behaviour change no byte compare can see
+                mut = [f"A {m}" for r, m in la if not A.is_const_data(r)] + \
+                      [f"B {m}" for r, m in lb if not B.is_const_data(r)]
+                ok, why_ = cmp.state_split_ok(n) if mut else (True, "")
+                if mut and ok:
+                    copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical, MUTABLE but "
+                                      f"no state split ({why_})"))
+                elif mut:
+                    diffs.append((n, f"PER-TU COPY COUNT CHANGED ON MUTABLE STATE ({len(la)} copies in A, "
+                                     f"{len(lb)} in B; mutable: {', '.join(mut[:4])}): the split gives each new "
+                                     f"TU its own copy of state the old TU shared -- {why_}"))
+                else:
+                    copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical, const"))
             continue
         else:
             free = list(lb)
@@ -1055,12 +1401,19 @@ def _data_diff(A, B, cmp, ra, rb, cap):
         return f"section {sa} vs {sb}"
 
     def extent(img, r):
+        # the variable's own PDB type size when known (bytes past the object --
+        # an unnamed literal the linker placed next to it -- are not it); else
+        # up to the next symbol (or its section's end). Never a fixed cap.
+        if img.data_size.get(r):
+            return img.data_size[r]
         j = bisect.bisect_right(img.sym_rvas, r)
-        nxt = img.sym_rvas[j] if j < len(img.sym_rvas) else r + cap
-        # the variable's own type size when the PDB tells it: bytes past the
-        # object (an unnamed literal the linker placed next to it) are not it
-        return min(nxt - r, img.data_size.get(r, cap))
-    ln = min(extent(A, ra), extent(B, rb), cap)
+        _lo, hi = img.sec_bounds(r)
+        nxt = img.sym_rvas[j] if j < len(img.sym_rvas) else hi
+        return min(nxt, hi) - r
+    xa, xb = extent(A, ra), extent(B, rb)
+    if A.data_size.get(ra) and B.data_size.get(rb) and xa != xb:
+        return f"type size {xa} vs {xb}"
+    ln = min(xa, xb)
     ba, bb = A.read(ra, ln), B.read(rb, ln)
     k = 0
     while k < ln:
@@ -1133,6 +1486,62 @@ def match(A, B, cmp):
     return pairs, onlya, onlyb
 
 
+def read_build_info(dll, explicit=None):
+    """The CI build record of a DLL (native.yml "Record the built commit"):
+    `built=<sha> noinline=<b> noopt=<b> dll_sha256=<hex>`, from the explicit
+    path, else the MFO-build-info artifact next to the DLL's MFO-dll folder
+    (`gh run download` layout), else a build-info.txt beside the DLL (older
+    proof artifacts). Returns (dict or None, path tried)."""
+    import os
+    here = os.path.dirname(os.path.abspath(dll))
+    cands = [explicit] if explicit else [os.path.join(os.path.dirname(here), "MFO-build-info", "build-info.txt"),
+                                         os.path.join(here, "build-info.txt")]
+    for c in cands:
+        if c and os.path.isfile(c):
+            raw = open(c, "rb").read()
+            txt = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8-sig", "replace")
+            return dict(kv.split("=", 1) for kv in txt.split() if "=" in kv), c
+    return None, cands[0]
+
+
+def check_provenance(a_dll, b_dll, a0_dll, b0_dll, explicit=None):
+    """--proof is sound only when the proof pair is the SAME two commits as the
+    shipped pair: A and A0 built from one SHA, B and B0 from another, A0/B0
+    with the optimizer off, A/B the normal build, and each record bound to its
+    DLL by SHA-256. Returns the list of violations (empty = paired)."""
+    import hashlib
+    ex = explicit or [None] * 4
+    why, info = [], {}
+    for tag, dll, e in (("A", a_dll, ex[0]), ("B", b_dll, ex[1]), ("A0", a0_dll, ex[2]), ("B0", b0_dll, ex[3])):
+        d, path = read_build_info(dll, e)
+        if d is None:
+            why.append(f"{tag}: no build record ({path}); every native run uploads MFO-build-info")
+            continue
+        info[tag] = d
+        if "built" not in d:
+            why.append(f"{tag}: build record has no built= SHA ({path})")
+        h = d.get("dll_sha256")
+        if not h:
+            why.append(f"{tag}: build record carries no dll_sha256, so it cannot be bound to {dll}")
+        elif hashlib.sha256(open(dll, "rb").read()).hexdigest() != h.lower():
+            why.append(f"{tag}: {dll} is not the DLL its build record describes (SHA-256 mismatch)")
+    if len(info) == 4:
+        for o2, od in (("A", "A0"), ("B", "B0")):
+            if info[o2].get("built") != info[od].get("built"):
+                why.append(f"{o2} built {info[o2].get('built')} but {od} built {info[od].get('built')}: "
+                           f"the proof build is not the same commit")
+        for t in ("A0", "B0"):
+            if str(info[t].get("noopt")).lower() != "true":
+                why.append(f"{t} is not a noopt (/Od) build: noopt={info[t].get('noopt')}")
+        for t in ("A", "B"):
+            if str(info[t].get("noopt")).lower() != "false" or str(info[t].get("noinline")).lower() != "false":
+                why.append(f"{t} is not the normal /O2 build: noopt={info[t].get('noopt')} "
+                           f"noinline={info[t].get('noinline')}")
+        if info["A"].get("built") == info["B"].get("built"):
+            why.append("A and B are the same commit: there is no split to prove")
+    return why
+
+
 def load_tu_map(path):
     """`old/Module.cpp: new/A.cpp new/B.cpp` per line; # comments."""
     tm = {}
@@ -1193,9 +1602,23 @@ def main():
                     help="the same two commits built with the optimizer OFF (native.yml dispatch noopt=true, "
                          "/Od; /Ob0 is not enough, see README). They must compare STRICT PASS (--copies-ok); "
                          "then an /O2 pair whose inline sites differ is PROVEN, and the verdict is PASS-PROVEN")
+    ap.add_argument("--build-info", nargs=4, metavar=("A", "B", "A0", "B0"),
+                    help="the four CI build records (build-info.txt) when they are not in the "
+                         "`gh run download` layout next to each DLL; --proof refuses without them")
     ap.add_argument("--tu-map", help="old->new translation-unit map (see tumaps/); a module-tagged "
                                      "twin in A may only match a twin in a TU its TU became")
     args = ap.parse_args()
+
+    if args.proof:
+        # PROVENANCE first (cheap, and nothing else is worth running without it)
+        why = check_provenance(args.a_dll, args.b_dll, args.proof[0], args.proof[2], args.build_info)
+        if why:
+            print("PROVENANCE: the four builds do not pair up -- refusing to run --proof:\n  " + "\n  ".join(why))
+            print("\nRESULT: FAIL")
+            if args.json:
+                json.dump({"result": "FAIL", "provenance": why, "identical": 0, "proven": [], "fail": [],
+                           "inline_drift": [], "data_differing": []}, open(args.json, "w"), indent=1)
+            sys.exit(1)
 
     A = Image(args.a_dll, args.a_pdb)
     B = Image(args.b_dll, args.b_pdb)
@@ -1325,7 +1748,14 @@ def main():
                     continue
             if not args.strict or args.copies_ok:
                 twins = by.get((norm(f["name"]), norm(f["sig"])), [])
-                if twins and f.get("twin"):
+                vc = (A if side == "A" else B).xtor_var_const(f["name"])
+                if vc is False:
+                    mv = re.search(r"dynamic (?:initializer|atexit destructor) for '(.+?)''", f["name"])
+                    var = norm(f["name"].split("`dynamic")[0] + mv.group(1)) if mv else None
+                    vc = None if var and cmp.state_split_ok(var)[0] else False
+                if twins and f.get("twin") and vc is not False:
+                    # (an initializer/destructor copy of a MUTABLE variable is not
+                    # accepted: see compare_data's per-TU copies)
                     # a copy refers to its own TU's twin data; compare with the TU of
                     # a twin reference free (fresh memo: these pairs are not reused)
                     saved, cmp.memo, cmp.own_tu_twins = cmp.memo, {}, True
