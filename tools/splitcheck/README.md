@@ -91,10 +91,30 @@ a header-defined internal-linkage object whose copy COUNT changed (a split
 adds TUs that include the header), and only when that object is CONST (its PDB
 type is const-qualified, or it sits in a read-only section: MSVC records a
 constexpr class-typed variable such as `std::chrono::seconds` with no const
-modifier, but in `.rdata`). A MUTABLE object's copy-count change FAILs as a STATE
-SPLIT unless the same functions read it in both builds and every two of them
-share a copy in A exactly when they share one in B (so a split that hands two
-moved functions their own copies of state they used to share is caught). `--tu-map FILE` lists which new TUs each old
+modifier, but in `.rdata`).
+
+**Mutable per-TU state.** Whenever a MUTABLE variable (any variable, MFO's or a
+library's) has copies in more than one TU in either build, the state-split
+check runs, whether or not the copy layout changed. Its readers are found by
+every code reference that lands ANYWHERE inside a copy (the copy sized by its
+PDB type: `[rip+g+8]` counts) and every relocated pointer to one, and keyed by
+(function name, owning module), so per-TU copies of one file-local accessor
+stay distinct. Each B reader must map to exactly one A reader of the same name
+in a TU its TU came from (`--tu-map`), every A reader must be mapped, and every
+two B readers must share a copy exactly when their A readers do (two B copies
+of ONE A accessor must share one). Finding no reader at all when the copy
+layout changed is a FAIL. A reader in a TU OUTSIDE the split (not in the TU
+map) is matched by name alone and a pair of two such readers is not judged:
+they are typically inline/template COMDATs (`RE::TESForm::As<...>`), of which
+the linker keeps one TU's instance, so which per-TU copy they read can change
+between two links of the same source; every pair with at least one reader
+inside the split is judged. Nameless typeless data records in `.text` are
+not variables and are skipped. This is sound for readers the tool can see; it is
+not a whole-program alias analysis: an access through a pointer computed at
+run time (a copy's address stored somewhere and loaded later) is attributed
+to the code that took the address, not to the code that dereferences it.
+
+`--tu-map FILE` lists which new TUs each old
 TU became (`old.cpp<TAB>new/a.cpp new/b.cpp`); it is how file-local twins are
 kept apart.
 
@@ -120,15 +140,21 @@ kept apart.
    size, or one past its end (a loop bound) compares by name. Anything else is
    compared by CONTENT, never a fixed length: a string literal (named `??_C` or
    unnamed, UTF-8 accepted) as its whole NUL-terminated byte string (a
-   source-path literal may change its file name); other unnamed data over
-   min(extent in A, extent in B), the extent running to the next object
-   boundary (a symbol, a relocation slot or target, a RIP-relative target
-   anywhere in the code including non-PDB library code, a pooled text literal).
-   The object ends before the next object starts in EACH build, so the shorter
-   extent still covers all of it; the longer one's excess is another object
-   (/Od keeps whole literal pools, referenced or not). Residual: a non-string
-   object whose bytes read as a one-character string and a NUL is compared as
-   that string.
+   source-path literal may change its file name); other unnamed data from the
+   target up to the first object boundary present at the SAME offset in BOTH
+   builds, and never past the first STRUCTURAL boundary of either build. A
+   structural boundary (a symbol, a relocation slot or target, a RIP-relative
+   target anywhere in the code including non-PDB library code) comes from how
+   the image is linked and referenced, so no data byte can make or break one;
+   the object ends before the next object starts in each build, so the shorter
+   structural extent still covers it. A pooled-text-literal start (/Od keeps
+   whole literal pools, referenced or not) is CONTENT-derived, so it ends the
+   compare only when both builds have it: a changed byte cannot end its own
+   object early by creating or removing one in a single build (selftest N12).
+   Residuals (REVIEW-BACKLOG MFO-B92): an object whose first bytes read as text
+   and a NUL is compared as that string; an object whose first byte is 0 in
+   both builds is read as the empty literal "" and may stop at a pooled literal
+   only one build has.
 4. **Named data.** Every `MFO::` variable/constant compared byte by byte over
    its PDB type size, else up to the next symbol, no cap (pointer slots by
    target). A datum in one build only, or

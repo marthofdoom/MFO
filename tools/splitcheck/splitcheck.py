@@ -742,14 +742,28 @@ class Cmp:
             if layout_changed:
                 return False, "no reader of any copy was found, so no sharing can be proven"
             return True, "no readers"
+        # The SPLIT's TUs: the old ones (--tu-map keys) and what they became.
+        # A reader in any other TU is outside the split; when it is an inline /
+        # template COMDAT (RE::TESForm::As<...>) the linker keeps ONE TU's
+        # instance, and which TU's -- hence which per-TU copy it reads -- can
+        # change between two links of unchanged source. Such readers match by
+        # name alone, and a pair of two of them is not judged: only a pair with
+        # at least one reader inside the split can show a split the split made.
+        split_a = set(self.tu_map)
+        split_b = {m for v in self.tu_map.values() for m in v}
         mapping, why = {}, []
         for kb in rb:
-            c = [ka for ka in ra if ka[0] == kb[0] and self.tu_ok(ka[1], kb[1])]
+            if kb[1] in split_b:
+                c = [ka for ka in ra if ka[0] == kb[0] and self.tu_ok(ka[1], kb[1])]
+            else:
+                c = [ka for ka in ra if ka[0] == kb[0] and ka[1] not in split_a]
+                c = c[:1]
             if len(c) != 1:
                 why.append(f"B reader {kb[0][:60]} ({kb[1]}) maps to {len(c)} A reader(s)")
             else:
                 mapping[kb] = c[0]
-        unmapped = [ka for ka in ra if ka not in mapping.values()]
+        unmapped = [ka for ka in ra if ka not in mapping.values()
+                    and (ka[1] in split_a or not any(kb[0] == ka[0] for kb in rb))]
         if unmapped:
             why.append(f"A reader(s) with no B counterpart: {[k[0][:50] for k in unmapped[:3]]}")
         if why:
@@ -758,6 +772,8 @@ class Cmp:
         for x in range(len(kbs)):
             for y in range(x + 1, len(kbs)):
                 p, q = kbs[x], kbs[y]
+                if p[1] not in split_b and q[1] not in split_b:
+                    continue
                 sa = mapping[p] == mapping[q] or bool(ra[mapping[p]] & ra[mapping[q]])
                 sb = bool(rb[p] & rb[q])
                 if sa != sb:
@@ -1285,7 +1301,8 @@ def compare_data(A, B, cmp, cap=512):
         # runs whenever they exist, whether or not the copy layout changed, and
         # for EVERY variable -- a header static of a library (rapidcsv) is split
         # by a TU split exactly like one of MFO's
-        if (len(la) > 1 or len(lb) > 1) and la and lb and "`" not in n and \
+        if (len(la) > 1 or len(lb) > 1) and la and lb and n and "`" not in n and \
+                not any(A.sec_of(r) == ".text" for r, _m in la) and \
                 (any(not A.is_const_data(r) for r, _m in la) or any(not B.is_const_data(r) for r, _m in lb)):
             changed = sorted(str(m) for _r, m in la) != sorted(str(m) for _r, m in lb)
             ok_, why_ = cmp.state_split_ok(n, layout_changed=changed)
