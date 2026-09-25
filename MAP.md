@@ -417,7 +417,7 @@ releases **by eviction** with a non-actor XMarker.
   `§4.6`-DECLINES for package-locked custom
   followers — every concentration path avoids it entirely (`CastTargetDirect`), and
   the FF paths fall back to a direct silent cast.
-- `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (`:1380-1623`)
+- `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (retreat `:2105-2345`)
   — callers throughout Logistics/Scheduler + dismissal. **All release by eviction,
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and
   can't be lowered to release. `LootTravelRetarget` refills only the TARGET alias,
@@ -1336,8 +1336,8 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   group, `Evaluator.cpp:176`) and is logged once per fight `[sched] <id>: party
   combat, own combat=0 -- combat table live` (`:574`, latch `g_partyCombatNoted`,
   erased in the party-OOC branch). GATE 2 (`:451`, `MFO-B60` fixed, item G) — the
-  WHOLE party-OOC teardown (RetreatClear, the ready-beat / proposal / per-fight
-  latches, `CasterConsent::Clear`, `ClearCastLock`, `CombatStyle::Clear`,
+  WHOLE party-OOC teardown (the ready-beat / proposal / per-fight latches — NOT the
+  retreat since 86e3erv94, see the AUTO-RETREAT DRIVER entry below — `CasterConsent::Clear`, `ClearCastLock`, `CombatStyle::Clear`,
   `ReleaseForcedWeapon`, the dwell erase) sits behind `++g_outOfCombatTicks[id] >= 2`
   — two consecutive PARTY-OOC services. Before item G only the hold release waited;
   a 145 ms party OFF/ON flap (21:57:34.884/35.029, a REAL engine combat-controller
@@ -1412,6 +1412,35 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   `MFO-B59` (the `ownedCast` explicit-subject ally + Offense road, the stream outliving a
   castSeen-false lap by the reconcile's stale window, a magicka-dry Declined stretch delaying
   logistics) and `MFO-B58` (the Task-1 concentration claims with no controller test).
+- **AUTO-RETREAT DRIVER (ClickUp 86e3erv94, batch L, 2026-09-25; tier A).** `ServiceRetreat`
+  (`:335`) runs on EVERY service from BOTH tables — the party-OOC branch (`:721`, before
+  `Logistics::ServiceFollower`) and the combat table (`:895`) — and returns true while the
+  follower holds a retreat, so neither table acts for him that lap. Phases (`RetreatNote`,
+  `:162`): TRAVEL (walk to the player) → STAY (held at the player's side after arrival
+  ≤200u while the FIGHT confidence is < 0.25) → released. A retreat ends ONLY on: no live
+  foes near him (`LiveFoeNear`, `:309`: a `highActorHandles` actor, not player/teammate,
+  alive, enabled, 3D-loaded, `IsHostileToActor(him)`, within `fChaseMax` of him), the
+  30 s travel timeout, or STAY end (fight confidence back at the floor, or the 30 s stay
+  cap). "Fight confidence" = `Of()` as last read WHILE IN COMBAT (`fightConf`) — out of
+  combat `Of()` drops the foe multiplier and MFO's own StopCombat is what took him out.
+  The auto-fill (`:895` block) needs `rearmLaps == 0 && now >= rearmAt` — the COOLDOWN
+  (`:280`): 3 of his own services AND 10 s wall, started on every release and on every
+  DECLINED fill (replaces one-per-fight `tried`, which also burned on a decline). The
+  `[retreat] falling back` line logs the confidence read BEFORE the fill.
+  RE-ENTRY: an in-combat read after an out-of-combat one (his flag, or
+  `Packages::RetreatConsumeStopLanded`) posts exactly one more StopCombat
+  (`Packages::RetreatReengage`) — never per tick (#22a). `[sense]` carries `dPlayer=`.
+  **What breaks:** a `RetreatClear` / `g_retreatNotes.erase` back in the party-OOC teardown
+  (`:659`) re-creates the self-cancel (the retreat's own StopCombat ends the party fight,
+  deck-MFO-v9.log:1544-1582); calling `ServiceRetreat` from the combat table only does the
+  same (the OOC branch stops driving it); an `f->StopCombat()` anywhere on this worker
+  re-opens the v1.0.58-class cross-thread StopCombat (#74, ENGINE_NOTES §0.47) — go
+  through `Packages::RetreatReengage`; posting it every lap violates #22a; reading
+  `Of()` out of combat for STAY ends every foe-count retreat on arrival; replacing
+  `LiveFoeNear` with `CombatSense::FoeCount` reads 0 the moment StopCombat lands (same
+  self-cancel); reading foes' `IsInCombat()` there adds a worker-side controller deref.
+  The Confidence formula is untouched (its v2 is a separate round). Open review findings:
+  `Docs/REVIEW-BACKLOG.md` (search `86e3erv94`).
 - `ClearTransientState` (`:230`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,
@@ -4489,15 +4518,28 @@ decline-fallback.
   player, so there is no per-follower runtime-target collision — `SetAPMFLootTravelTarget`
   (the SAME generic Location-writer loot-travel uses) is reused verbatim, called once at
   engage with the player ref as a defensive reassertion (the authored FREF_PLAYER
-  placeholder is already the permanent correct value for retreat specifically). Single-
-  holder semantics UNCHANGED from the legacy probe (`g_retreatHold`, ONE retreat at a
-  time — a second `RetreatFill` while one is held is declined, same as before); the
-  route choice is tracked by a NEW `RetreatHold::viaAPMF` bool (no alias exists to query
-  under the 0x49 route, unlike loot's `g_apmfSlotActive` per-slot array — retreat only
-  ever has one hold, so one bool suffices) consulted by `RetreatClear`/`RetreatEvictIf`/
-  `ReleaseAll` to pick the right release mechanism. `Pump()` refreshes the claim
-  unconditionally every worker tick (same 500ms-expiry keep-alive loot-travel needs —
-  Scheduler's per-tick `StopCombat` while falling back does NOT touch this claim).
+  placeholder is already the permanent correct value for retreat specifically).
+  **PER-FOLLOWER HOLDS since 86e3erv94 (2026-09-25):** `g_retreatHolds` (`:1098`, FormID →
+  `RetreatHold`, worker-only #4) replaced the single global `g_retreatHold`. The APMF road
+  holds one per follower (the ch.9 handle is per FormID); the LEGACY alias road stays
+  single-holder (`LegacyRetreatHolder()` — its fill declines while another follower holds
+  a non-APMF hold). A fill on a follower already holding is a no-op returning true (#22a;
+  it used to reset startAt/startPos). Each hold's `viaAPMF` picks the release mechanism in
+  `RetreatClear`/`RetreatEvictIf`/`ReleaseAll`. API: `IsRetreating(id)` /
+  `RetreatSeconds(id)` / `RetreatStartPos(id)` (the old `RetreatHolder()` is gone —
+  `logistics/LootScan.cpp:717` uses `IsRetreating`). `Pump()` refreshes every APMF hold's
+  claim every worker tick (`:1371`, same 500ms-expiry keep-alive loot-travel needs).
+  **MAIN-THREAD DISENGAGE:** no retreat StopCombat runs on the worker any more.
+  `PostRetreatStopCombat` (`:1155`) posts it (`MainThread::Post`; AddTask on VR — the
+  `Rapport::QuashAllyPair` road) capturing FormID + a per-engage generation; the main
+  thread checks the any-thread mirror `g_retreatLive` (`:1122`, mutex) that the SAME
+  retreat is live, re-validates the actor (resolves, 3D-loaded, alive), calls StopCombat
+  (legacy road then `EvaluatePackage(true,false)`, keeping the shipped order), and sets
+  `stopLanded` if he left combat, else logs a WARNING and does not retry (principle 7).
+  Posted at engage (`RetreatFill`) and on re-entry only (`RetreatReengage`). **What breaks:**
+  reading `g_retreatHolds` from the posted lambda (use `g_retreatLive`); dropping the
+  generation check (a stale post lands on the next retreat); re-adding a single-holder
+  decline on the APMF branch re-serializes retreats party-wide.
   `Forms::IsRetreatPackage` (mirrors `IsTravelPackage`) recognizes both the legacy alias
   package and `g_apmfRetreatPackage` — load-bearing for `Scheduler.cpp:419`'s `note.took`
   measurement (would silently never latch under the APMF route without it). `bApmfRetreat`
@@ -4512,11 +4554,11 @@ decline-fallback.
   handle every `Pump()` tick (loot's slot-refresh loop and the retreat refresh both call
   `OfferPackage` unconditionally, unaware of each other). Belt-and-suspenders, retreat
   wins (the disengage is the more urgent directive): `RetreatFill`'s APMF branch
-  (`Packages.cpp:~1911`, right where `g_retreatHold.actorID` is set) calls
+  (right where the follower's `g_retreatHolds` entry is created) calls
   `LootTravelEvictIf(fid, "retreat engaging")` to drop any live loot claim BEFORE
   finalizing the retreat hold; `LootTravelFill`/`LootTravelRetarget` (`Packages.cpp:1548`,
-  `1633`) reciprocally early-return `false` while `g_retreatHold.actorID` names that same
-  follower, covering the reverse race. `LootTravelEvictIf` gained an `a_why` parameter
+  `1633`) reciprocally early-return `false` while that same follower holds a retreat
+  (`FindRetreatHold`), covering the reverse race. `LootTravelEvictIf` gained an `a_why` parameter
   (default `"dismissed"`, its original/only caller `logistics/Upkeep.cpp:626` unaffected) so the
   retreat-triggered eviction logs distinctly from the roster-dismissal one. **This closes a
   window that was live in this SAME change** (retreat never touched `OfferPackage` before

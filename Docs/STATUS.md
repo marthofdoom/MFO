@@ -13,6 +13,19 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-25 branch `fix/mfo-retreat` (off `main` `97ac782`; NOT merged, NOT deployed). ClickUp 86e3erv94 (batch L), tier A.**
+  Auto-retreat fixes (assessment: scratchpad `agentlogs/assess-confidence-leash.md`): (1) every retreat StopCombat is now
+  POSTED to the main thread (Rapport::QuashAllyPair road), once at engage and again only on a re-entry into combat, with a
+  main-thread re-validation (resolves, 3D-loaded, alive, same retreat generation); (2) the party-OOC teardown no longer
+  cancels a retreat its own StopCombat caused; a retreat ends only on no live foes near him (hostile, alive, loaded, within
+  fChaseMax), the 30 s travel timeout, or the end of STAY; (3) per-follower holds on the APMF road (legacy alias road still
+  single-holder), one-per-fight replaced by a cooldown (3 own services AND 10 s) and a STAY phase after arrival (held at the
+  player while the in-combat confidence is < 0.25, capped 30 s); (6) `[retreat] falling back` logs the pre-StopCombat
+  confidence, `[sense]` gains `dPlayer=`. Confidence formula untouched (v2 is its own round).
+  FIELD CHECKS: `[retreat] ... StopCombat (engage) landed on main`; no `released (combat ended)` lines; `reached player ...
+  STAY` then `stay over` / `stay cap`; two followers holding at once on APMF; `re-entered combat mid-retreat` appears only
+  on real re-entries, never per lap.
+
 - **2026-09-24 v2.0.13 RELEASED (GitHub, tag `v2.0.13`, manifest `e6401d4`, stamp `dc0ae75`, CI 36085950743, DLL sha256 `ddf5526c…`). NOT on Nexus yet: marth tests first.**
   Contents: CommonLib now our MIT fork `mit-3.7` (F1: exact id match, startup self-check, 55 verified rows, fails closed on unknown builds), summons stay up (one cast per spell, respects the list's summon cap incl. perk bonus + skip-cap flag, never dismissed by MFO; Deck-confirmed), loot M1 (emptied-target move-on, Movement Blocked 3 s -> actor block reorders / static block gates until an open/close/activate/cell-attach event), LOTD shipping crates never looted (base 0x1772A7), CJK font in the menus, locked form lookup. Pairs with Harbinger v0.9.8 (ABI v12, tag `v0.9.8`, DLL `8dfb63da…`, esl `78a3e6a4…` unchanged). MEO v1.0.18 (Japanese gem pouch names) cut alongside.
   NEXT: wave-1 subsystem-folder split (round-2 review running), then batch L remainder (M2 leg state, leash, ammo swap-up, lockpicking, LOTD), batch L play session.
