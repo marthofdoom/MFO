@@ -478,6 +478,12 @@ class Image:
         for rva, name, mod in raw_names:
             at[name].add(rva)
         self.twins = {n for n, r in at.items() if len(r) > 1}
+        # the owning module of every UNIQUE (non-twin) name, so a twin on one
+        # side can still be TU-checked against a unique symbol on the other
+        self.mod_of = {}
+        for rva, name, mod in raw_names:
+            if mod is not None and name not in self.twins:
+                self.mod_of.setdefault(name, mod)
         owned = {(rva, name) for rva, name, mod in raw_names if mod is not None and name in self.twins}
         for rva, name, mod in raw_names:
             if name in self.twins:
@@ -762,7 +768,17 @@ class Cmp:
                         return True
                     continue
                 if (mx is None) != (my is None):
-                    self.notes["twin on one side, unique symbol on the other (matched by name)"] += 1
+                    # a twin on one side, a now-unique symbol on the other (the
+                    # split made it extern / left one copy): the unique one's
+                    # owning module must still be one the twin's TU became
+                    ma = mx if mx is not None else self.A.mod_of.get(bx)
+                    mb = my if my is not None else self.B.mod_of.get(by)
+                    if ma is not None and mb is not None:
+                        if not (self.tu_ok(ma, mb) or self.own_tu_twins):
+                            continue
+                        self.notes["twin on one side, unique on the other: same TU lineage"] += 1
+                    else:
+                        self.notes["twin on one side, unique on the other: unique one has no module record"] += 1
                 return True
         return False
 
@@ -840,7 +856,7 @@ class Cmp:
                     if na != nb:
                         self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
                     return True
-                if za and oa < za:
+                if za and oa <= za:          # inside it, or one past its end (a loop bound)
                     return True
             return self._unnamed_equal(ra, rb)
         if ka == "none" or kb == "none":
