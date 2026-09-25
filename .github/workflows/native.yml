@@ -108,7 +108,8 @@ jobs:
         run: |
           git rev-parse HEAD
           New-Item -ItemType Directory -Force -Path build/buildinfo | Out-Null
-          "built=$(git rev-parse HEAD) noinline=${{ inputs.noinline == true }} noopt=${{ inputs.noopt == true }}" | Out-File -FilePath build/buildinfo/build-info.txt -Encoding ascii
+          $dll = (Get-FileHash -Algorithm SHA256 build/release/MFO.dll).Hash.ToLower()
+          "built=$(git rev-parse HEAD) noinline=${{ inputs.noinline == true }} noopt=${{ inputs.noopt == true }} dll_sha256=$dll" | Out-File -FilePath build/buildinfo/build-info.txt -Encoding ascii
 
       - name: Upload build info
         uses: actions/upload-artifact@v4
