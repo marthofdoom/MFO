@@ -5,8 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
-## v2.0.13 -- Unreleased
+## v2.0.13 -- Summons stay up, loot trips work around gates, Japanese names show
 
+- **MFO now checks every game address it uses when the game starts.** Each hook and engine call is compared against a table checked by hand for Skyrim 1.6.1170 and 1.5.97. If one does not match, that one feature switches off and the log says which. On a game version MFO has no table for, its hooks stay off and the log says so. Harbinger does the same.
+- **Use Harbinger 0.9.8 with this version.** MFO 2.0.13 still runs with Harbinger 0.9.5 or newer.
 - **Followers leave your museum shipping crates alone.** With Legacy of the Dragonborn installed, a follower could loot the items you had put in a town, inn or house shipping crate for the museum. Those crates are now off limits, the same as the museum's own drop-off boxes.
 - **Summons stay summoned.** A summon gambit set to cast on the follower himself kept dismissing its own creature about three seconds after casting it, then cast it again. One fight could burn through twenty of them and all of his magicka. MFO was treating the summon like a spell he holds, and ended it when he stopped holding it. Now a summon is cast once and left alone. It lasts its full duration or until it is killed.
 - **A summon is cast once, whatever it targets.** Self, the player, an enemy or Auto all mean the same thing for a summon: the follower conjures it one time. On Auto it used to be cast once for every member of the party at the same moment.
