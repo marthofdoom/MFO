@@ -74,6 +74,18 @@ LIBRARY = re.compile(r"^`?(std|RE|REL|SKSE|SKSE::stl|fmt|spdlog|nlohmann|rapidcs
                      r"Concurrency|concurrency|__std|__scrt|_)[:A-Za-z_]")
 
 
+def is_text(b, minlen=2):
+    """A NUL-free byte string that reads as text: valid UTF-8 (so a log line
+    with an em-dash counts), no control characters but tab/newline/CR."""
+    if len(b) < minlen:
+        return False
+    try:
+        s = b.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return all(c >= " " or c in "\t\n\r" for c in s)
+
+
 def canon(name):
     return ANON_HASH_MANGLED.sub("?A0x@", ANON_HASH.sub(ANON, name))
 
@@ -453,17 +465,105 @@ class Image:
     def read(self, rva, n):
         return bytes(self.data[rva:rva + n])
 
-    def cstring(self, rva, limit=512):
-        b = self.read(rva, limit)
+    def sec_bounds(self, rva):
+        for _i, n, va, sz in self.secs:
+            if va <= rva < va + sz:
+                return va, va + sz
+        return rva, rva
+
+    def cstring(self, rva):
+        """The whole NUL-terminated byte string at rva (no length cap: it ends
+        at its NUL or at the end of its section)."""
+        _lo, hi = self.sec_bounds(rva)
+        b = self.read(rva, hi - rva)
         z = b.find(b"\0")
         return b if z < 0 else b[:z]
+
+    def readonly_data(self, rva):
+        """rva lies in a section that is neither code nor writable (.rdata...)."""
+        for s in self.pe.sections:
+            if s.VirtualAddress <= rva < s.VirtualAddress + max(s.Misc_VirtualSize, s.SizeOfRawData):
+                ch = s.Characteristics
+                return not (ch & 0x20000000) and not (ch & 0x80000000) and not (ch & 0x20)
+        return False
+
+    _bounds = None
+
+    def boundaries(self):
+        """Every address that can START an object: each symbol, each DIR64
+        relocation slot and relocation target, each RIP-relative target in the
+        code (PDB functions and the gaps between them), each pooled text
+        literal. Unnamed read-only data runs from its address to the next one."""
+        if self._bounds is None:
+            b = set(self.sym_rvas)
+            b |= self.relocs           # a relocated pointer slot starts a pointer
+            for r in self.relocs:
+                v = int.from_bytes(self.data[r:r + 8], "little") - self.base
+                if 0 < v < len(self.data):
+                    b.add(v)
+            md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
+            md.detail = True
+            md.skipdata = True
+
+            def sweep(lo, hi):
+                for ins in md.disasm(self.read(lo, hi - lo), lo):
+                    if ins.id == 0:          # skipped data byte
+                        continue
+                    for op in ins.operands:
+                        if op.type == X.X86_OP_MEM and op.mem.base == X.X86_REG_RIP:
+                            b.add(ins.address + ins.size + op.mem.disp)
+            # every PDB function, then the GAPS between them: code with no PDB
+            # record (prebuilt libraries without debug info: fmt's "inf"/"nan"
+            # literals are referenced only from there)
+            covered = 0
+            for s in self.pe.sections:
+                if not s.Characteristics & 0x20000000:
+                    continue
+                lo, hi = s.VirtualAddress, s.VirtualAddress + s.Misc_VirtualSize
+                cur = lo
+                for st in self.proc_starts:
+                    if st < lo or st >= hi:
+                        continue
+                    if st > cur:
+                        sweep(cur, st)
+                    end = st + self.proc_at[st]
+                    sweep(st, end)
+                    covered += 1
+                    cur = max(cur, end)
+                if cur < hi:
+                    sweep(cur, hi)
+            # the start of every pooled TEXT literal in read-only data: /Od keeps
+            # a TU's whole literal pool, referenced or not, so an unreferenced
+            # literal (from an inline function this TU never emitted) can sit
+            # right after a referenced object; it is an object of its own
+            for s in self.pe.sections:
+                ch = s.Characteristics
+                if ch & 0x20000000 or ch & 0x80000000 or ch & 0x20:
+                    continue
+                lo = s.VirtualAddress
+                raw = self.read(lo, s.Misc_VirtualSize)
+                for m in re.finditer(rb"(?<=\x00)[^\x00]{2,}(?=\x00)", raw):
+                    if is_text(m.group(0)):
+                        b.add(lo + m.start())
+            for _i, _n, va, sz in self.secs:
+                b.add(va + sz)
+            self._bounds = sorted(b)
+        return self._bounds
+
+    def extent(self, rva):
+        """Bytes from rva to the next object boundary (see boundaries())."""
+        bs = self.boundaries()
+        j = bisect.bisect_right(bs, rva)
+        _lo, hi = self.sec_bounds(rva)
+        nxt = bs[j] if j < len(bs) else hi
+        return max(0, min(nxt, hi) - rva)
 
     def type_descriptor_name(self, rva):
         """Decorated class name if rva is an RTTI TypeDescriptor
         ({pVFTable, spare, char name[]}), else None."""
         if rva not in self.relocs:
             return None
-        s = self.cstring(rva + 16, 1024)
+        s = self.cstring(rva + 16)
         if not s.startswith(b".?A"):
             return None
         # drop the anonymous-namespace component and the decorated name's
@@ -517,6 +617,7 @@ class Cmp:
         # each copy refers to its OWN TU's twin, so any TU's twin is the same shape
         self.own_tu_twins = False
         self._hcache = {}
+        self._ue_active = set()
 
     def disasm(self, img, rva, size):
         k = (id(img), rva, size)
@@ -599,74 +700,91 @@ class Cmp:
                 return True
         return False
 
+    def _unnamed_equal(self, ra, rb):
+        """Unnamed read-only data. A string literal (UTF-8 accepted) is compared
+        as its whole NUL-terminated byte string; a source-path literal may
+        change its file name. Anything else is compared over min(extent in A,
+        extent in B), the extent running to the next object boundary: the
+        object ends before the next object starts in EACH build, so the shorter
+        extent still covers all of it (the longer one's excess is a different,
+        e.g. unreferenced, object). Relocated pointer slots compare by target."""
+        sa, sb = self.A.cstring(ra), self.B.cstring(rb)
+        if sa != sb and PATHLIT.search(sa) and PATHLIT.search(sb):
+            self.path_pairs.add((sa.decode(errors="replace"), sb.decode(errors="replace")))
+            self.notes["source-path string literal moved file"] += 1
+            return True
+        if is_text(sa, 1) or is_text(sb, 1):
+            # a STRING LITERAL (UTF-8 accepted): the object is the whole
+            # NUL-terminated byte string, compared in full
+            if sa == sb:
+                self.notes["unnamed string literal equal in full"] += 1
+                return True
+            return False
+        if (ra, rb) in self._ue_active:        # a pointer cycle: assume, then verify the rest
+            return True
+        self._ue_active.add((ra, rb))
+        try:
+            return self._unnamed_equal_body(ra, rb)
+        finally:
+            self._ue_active.discard((ra, rb))
+
+    def _unnamed_equal_body(self, ra, rb):
+        ea, eb = self.A.extent(ra), self.B.extent(rb)
+        n = min(ea, eb)
+        if n == 0:
+            return False
+        ba, bb = self.A.read(ra, max(ea, n)), self.B.read(rb, max(eb, n))
+        k = 0
+        while k < n:
+            pa, pb = (ra + k) in self.A.relocs, (rb + k) in self.B.relocs
+            if pa or pb:
+                if not (pa and pb) or k + 8 > n:
+                    return False
+                va = int.from_bytes(ba[k:k + 8], "little") - self.A.base
+                vb = int.from_bytes(bb[k:k + 8], "little") - self.B.base
+                if not self.same_target(self.A.resolve(va), self.B.resolve(vb), 3):
+                    return False
+                k += 8
+                continue
+            if ba[k] != bb[k]:
+                return False
+            k += 1
+        self.notes["unnamed read-only data equal over its whole extent"] += 1
+        return True
+
     def _same(self, ta, tb, depth):
         ka, na, oa, ra = ta
         kb, nb, ob, rb = tb
         if ka in ("local", "hdr", "rtti") or kb in ("local", "hdr", "rtti"):
             return ka == kb and oa == ob and (na == nb) and (ka != "hdr" or ra == rb)
+        # READ-ONLY DATA (a section neither code nor writable). A target that is
+        # a named object's start, or lies inside a named object of known size,
+        # is compared by name (named data is byte-compared by compare_data).
+        # Anything else is UNNAMED read-only data -- /Od string literals (no
+        # ??_C symbols), template statics such as _Hash::_Min_buckets, a constant
+        # named in one build only -- and is compared by CONTENT over its whole
+        # extent: from the target to the next object boundary (a symbol, a
+        # relocation target, a code reference), never a fixed length.
+        if ka in ("sym", "none") and kb in ("sym", "none") \
+                and self.A.readonly_data(ra) and self.B.readonly_data(rb):
+            if ka == kb == "sym" and oa == ob and na and nb and self.names_match(na, nb):
+                za = self.A.data_size.get(ra - oa)
+                is_lit = any(x.startswith("??_C@") for x in na | nb)
+                if oa == 0 and not is_lit:
+                    if na != nb:
+                        self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
+                    return True
+                if za and oa < za:
+                    return True
+            return self._unnamed_equal(ra, rb)
         if ka == "none" or kb == "none":
-            if ka == kb == "none":
-                sa, sb = self.A.sec_of(ra), self.B.sec_of(rb)
-                if sa == sb and sa not in (".text", ".data", ".bss", None) \
-                        and self.A.read(ra, 16) == self.B.read(rb, 16):
-                    self.notes["unnamed read-only data equal by content"] += 1
-                    return True
             return False
-        # an UNNAMED string literal (no /GF pooling: an /Od proof build puts
-        # literals in .rdata with no ??_C symbol, so the target reads as "the
-        # previous symbol + offset"): the text itself decides, before any name
-        if ka == kb == "sym" and oa and ob and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
-            sa, sb = self.A.cstring(ra), self.B.cstring(rb)
-            if sa == sb == b"":
-                # "" -- the empty literal (e.g. a default fmt argument)
-                self.notes["unnamed empty string literal"] += 1
-                return True
-            if sa and sb and all(32 <= c < 127 or c in (9, 10, 13) for c in sa + sb) \
-                    and self.A.read(ra + len(sa), 1) == b"\0" and self.B.read(rb + len(sb), 1) == b"\0":
-                if sa == sb:
-                    self.notes["unnamed string literal equal by content"] += 1
-                    return True
-                if PATHLIT.search(sa) and PATHLIT.search(sb):
-                    self.path_pairs.add((sa.decode(errors="replace"), sb.decode(errors="replace")))
-                    self.notes["source-path string literal moved file"] += 1
-                    return True
-                return False
-        # a read-only constant that has a symbol in one build only (a static data
-        # member of a template over a type the split moved out of the anonymous
-        # namespace: internal and unnamed before, external and named after) --
-        # equal when the named object's bytes (its PDB type size) are equal
-        # both targets PAST the end of the named object before them (its PDB type
-        # size says so): unnamed read-only data on both sides, same rule as "none"
-        if ka == kb == "sym" and oa and ob and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
-            za, zb = self.A.data_size.get(ra - oa), self.B.data_size.get(rb - ob)
-            if za and zb and oa >= za and ob >= zb and not (oa == ob and self.names_match(na, nb)) \
-                    and self.A.read(ra, 8) == self.B.read(rb, 8):
-                # (8 bytes: the unnamed objects referenced this way are size_t
-                # template statics such as _Hash::_Min_buckets)
-                self.notes["unnamed read-only data equal by content"] += 1
-                return True
-        if ka == kb == "sym" and bool(oa) != bool(ob) and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
-            sz = self.B.data_size.get(rb) if ob == 0 else self.A.data_size.get(ra)
-            if sz and sz <= 64 and self.A.read(ra, sz) == self.B.read(rb, sz):
-                self.notes["read-only constant named in one build only, equal by content"] += 1
-                return True
         if oa == ob and na and nb and self.names_match(na, nb):
             if na != nb:
                 self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
             return True
-        # string literals: content compare, source-path literals tolerated
-        if oa == ob == 0 and na and nb and all(x.startswith("??_C@") for x in na | nb):
-            sa, sb = self.A.cstring(ra), self.B.cstring(rb)
-            if sa == sb:
-                return True
-            if PATHLIT.search(sa) and PATHLIT.search(sb):
-                self.path_pairs.add((sa.decode(errors="replace"), sb.decode(errors="replace")))
-                self.notes["source-path string literal moved file"] += 1
-                return True
-            return False
-        # an UNNAMED string literal (no /GF pooling, e.g. an /Od proof build puts
-        # literals in .rdata with no ??_C symbol, so the target reads as "the
-        # previous symbol + offset"): compare the NUL-terminated text itself
+        # (string literals, named ??_C or unnamed, are read-only data: handled
+        # above by _unnamed_equal over their whole extent)
         # different named functions: equal if structurally identical (ICF-like)
         if ka == kb == "proc" and oa == ob == 0 and depth < 4:
             fa = {"rva": ra, "size": self.A.proc_at[ra], "name": min(na), "key": None}
@@ -965,7 +1083,7 @@ def fmt_fp(u):
 # --------------------------------------------------------------------------
 def compare_data(A, B, cmp, cap=512):
     """Initial contents of every named MFO variable/constant (module streams).
-    Extent = distance to the next symbol in EACH image (min of both, capped);
+    Extent = the PDB type size, else the distance to the next symbol (no cap);
     DIR64 pointer slots are compared by the symbol they point to. Twins (one name
     defined in several TUs) are paired through the TU map. Returns
     (checked, diffs, only_a, only_b, folded): a name present in only one build is
@@ -1055,12 +1173,19 @@ def _data_diff(A, B, cmp, ra, rb, cap):
         return f"section {sa} vs {sb}"
 
     def extent(img, r):
+        # the variable's own PDB type size when known (bytes past the object --
+        # an unnamed literal the linker placed next to it -- are not it); else
+        # up to the next symbol (or its section's end). Never a fixed cap.
+        if img.data_size.get(r):
+            return img.data_size[r]
         j = bisect.bisect_right(img.sym_rvas, r)
-        nxt = img.sym_rvas[j] if j < len(img.sym_rvas) else r + cap
-        # the variable's own type size when the PDB tells it: bytes past the
-        # object (an unnamed literal the linker placed next to it) are not it
-        return min(nxt - r, img.data_size.get(r, cap))
-    ln = min(extent(A, ra), extent(B, rb), cap)
+        _lo, hi = img.sec_bounds(r)
+        nxt = img.sym_rvas[j] if j < len(img.sym_rvas) else hi
+        return min(nxt, hi) - r
+    xa, xb = extent(A, ra), extent(B, rb)
+    if A.data_size.get(ra) and B.data_size.get(rb) and xa != xb:
+        return f"type size {xa} vs {xb}"
+    ln = min(xa, xb)
     ba, bb = A.read(ra, ln), B.read(rb, ln)
     k = 0
     while k < ln:
