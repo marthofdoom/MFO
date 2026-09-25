@@ -540,49 +540,66 @@ def main():
 
             # N10b: the split reaches the state through PER-TU COPIES of ONE
             # same-named function (a header static / anonymous-namespace
-            # accessor): in A0 the old TU's copy reads the old TU's variable; in
-            # B0 each new TU's copy reads its own TU's variable. Readers keyed by
-            # name alone would merge the two B copies into one reader.
-            acc = None
-            ma_all = {m: r_ for r_, m in by_name_a[var]}
+            # accessor): one copy in the old TU reads the old TU's variable in
+            # A0; each new TU's copy reads its own TU's variable in B0. Wave 1
+            # has no such accessor, so it is built from the N10 plant: the second
+            # function's NAME is rewritten to the first's in both PDBs (the two
+            # names are picked to have equal length), which makes them two per-TU
+            # copies of one function. Readers keyed by name alone would merge the
+            # two B copies into one reader and see nothing split.
+            fa0, fb0, _ia0, _ib0, mb0 = picks[0]
+            pair = None
             for ma2, news in sorted(tu.items()):
-                if ma2 not in ma_all:
+                if ma2 != ma:
                     continue
-                groups = {}
-                for pb in B0.procs:
-                    if pb.get("mod") in news and pb.get("mod") in mb_copy and pb["size"] >= 7 \
-                            and "dynamic" not in pb["name"] and not pb["name"].startswith("`"):
-                        groups.setdefault((pb["name"], pb["sig"]), {}).setdefault(pb["mod"], pb)
-                for (nm, sg), per in sorted(groups.items()):
-                    if len(per) < 2:
+                cands = {}
+                for fb in B0.procs:
+                    mb = fb.get("mod")
+                    if mb not in news or mb not in mb_copy or not fb["name"].startswith("MFO::") \
+                            or "dynamic" in fb["name"] or "`" in fb["name"]:
                         continue
-                    pa = [x for x in A0.procs if x["name"] == nm and x["sig"] == sg and x.get("mod") == ma2
-                          and x["size"] >= 7]
-                    if len(pa) == 1:
-                        acc = (pa[0], list(per.values())[:2], ma2, ma_all[ma2])
+                    fa = next((q for q in A0.procs if q["name"] == fb["name"] and q.get("mod") == ma
+                               and q["size"] == fb["size"]), None)
+                    if not fa:
+                        continue
+                    ia = [x for x in cmpa.disasm(A0, fa["rva"], fa["size"])
+                          if x.mnemonic == "lea" and x.operands[1].type == X.X86_OP_MEM
+                          and x.operands[1].mem.base == X.X86_REG_RIP]
+                    ib = [x for x in cmp0.disasm(B0, fb["rva"], fb["size"])
+                          if x.mnemonic == "lea" and x.operands[1].type == X.X86_OP_MEM
+                          and x.operands[1].mem.base == X.X86_REG_RIP]
+                    if ia and ib and ia[0].address - fa["rva"] == ib[0].address - fb["rva"]:
+                        cands.setdefault(len(fb["name"]), []).append((fa, fb, ia[0], ib[0], mb))
+                for _ln, lst in sorted(cands.items()):
+                    mods = {}
+                    for c in lst:
+                        mods.setdefault(c[4], c)
+                    if len(mods) >= 2 and len({c[1]["name"] for c in mods.values()}) >= 2:
+                        pair = list(mods.values())[:2]
                         break
-                if acc:
-                    break
-            if acc is None:
+            if pair is None:
                 record("N10b per-TU copies of one accessor split the state", False,
-                       "no same-named, same-signature function with one copy in an old TU (A0) and copies "
-                       "in two of its new TUs (B0)")
+                       "no two moved functions of equal name length in two new TUs to stand in for one accessor")
             else:
-                pa, pbs2, ma, ra_copy = acc
                 da = copy_build(args.a0, os.path.join(work, "n10ba"))
                 db = copy_build(args.b0, os.path.join(work, "n10bb"))
-
-                def lea(at, tgt):                           # lea rax, [rip + tgt]
-                    return b"\x48\x8d\x05" + (tgt - (at + 7)).to_bytes(4, "little", signed=True)
-                patch_dll(da, pa["rva"], lea(pa["rva"], ra_copy))
-                for x in pbs2:
-                    patch_dll(db, x["rva"], lea(x["rva"], mb_copy[x["mod"]]))
+                keep, other = pair[0][1]["name"], pair[1][1]["name"]
+                for d in (da, db):
+                    pdbp = os.path.join(d, "MFO.pdb")
+                    raw = open(pdbp, "rb").read()
+                    raw = raw.replace(other.encode() + b"\0", keep.encode() + b"\0")
+                    open(pdbp, "wb").write(raw)
+                for fa, fb, ia, ib, mb in pair:
+                    patch_dll(da, ia.address + ia.disp_offset,
+                              (ra_copy - (ia.address + ia.size)).to_bytes(4, "little", signed=True))
+                    patch_dll(db, ib.address + ib.disp_offset,
+                              (mb_copy[mb] - (ib.address + ib.size)).to_bytes(4, "little", signed=True))
                 r = run_sc(da, db, work, args.tu_map, strict=True, copies_ok=True)
                 hit = [x for x in r["data_differing"] if SC.norm(SC.untag(x[0])) == var and "STATE" in x[1]]
                 record("N10b per-TU copies of one accessor split the state", r["result"] == "FAIL" and bool(hit),
-                       f"{r['result']}, {pa['name'][:60]}: one copy in {os.path.basename(ma)} reads {var}'s old "
-                       f"copy in A0; its copies in {pbs2[0]['mod']} / {pbs2[1]['mod']} read their own in B0; "
-                       f"reported as state split: {bool(hit)}")
+                       f"{r['result']}, {keep[:50]} (and {other[:40]} renamed to it): one copy in "
+                       f"{os.path.basename(ma)} reads {var}'s old copy in A0; the copies in {pair[0][4]} / "
+                       f"{pair[1][4]} read their own in B0; reported as state split: {bool(hit)}")
 
         # N12: a change that CREATES a content-derived boundary in one build:
         # bytes k..k+2 of an unnamed non-text object set to "AB\0", so B0 alone
