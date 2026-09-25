@@ -702,3 +702,12 @@ Raised against 31d97ab (`fix/splitcheck-hardening`), 2026-09-24. Reviewer's verb
 
 ### MFO-B94 (SEV-5) -- splitcheck F5: a twin vs a unique symbol with no module record is accepted by name
 Raised against 31d97ab (`fix/splitcheck-hardening`), 2026-09-24. Reviewer's verbatim finding (review summary, SEV-5): "F5 no-module accept". Reviewer's reasoning: `names_match` TU-checks a twin on one side against a unique symbol on the other through the unique symbol's owning module, but when that symbol has no module record (globals/publics only) it still accepts by name (counted in the notes); on wave 1 every one of the 77 hits had a module record. Fix shape when drained: FAIL (or report) the no-module case instead of accepting it.
+
+### MFO-B95 (SEV-5) -- logistics: Logistics_internal.h header comment still describes the pre-split TU set
+Raised against 6badb85 (`refactor/subsystem-folders-wave2`, tier-A review of the wave-2 split), 2026-09-25. Reviewer's verbatim finding: "native/logistics/Logistics_internal.h lines 2-9 still say 'One TU (Logistics.cpp)…', 'the four Logistics*.cpp TUs' and 'only the four … may include this'; the file now has 10 logistics TUs plus the 4 existing cast/*.cpp includers." Reviewer's reasoning: comment only, and fixing it would have broken the pure-move brief.
+
+### MFO-B96 (SEV-5) -- logistics: LootTravel_internal.h is not self-contained
+Raised against 6badb85 (`refactor/subsystem-folders-wave2`), 2026-09-25. Reviewer's verbatim finding: "LootTravel_internal.h is not self-contained; including it directly fails to compile (loud, not a silent misbehaviour). Only Logistics_internal.h:583 includes it; #pragma once; the banner says so." Reviewer's reasoning: a direct include fails loudly at compile time, never silently; the one includer and the banner document the contract.
+
+### MFO-B97 (SEV-5, informational) -- logistics split: per-TU copy counts of header statics grew
+Raised against 6badb85 (`refactor/subsystem-folders-wave2`), 2026-09-25. Reviewer's verbatim finding: "rapidcsv::s_Utf8BOM gained 5 per-TU copies (a header static std::string with a dynamic initializer), and k* constants went from 9 to 14 copies; all identical, none reads another TU's object." Reviewer's reasoning: informational; every copy is identical and no TU reads another TU's copy, so no state is split.
