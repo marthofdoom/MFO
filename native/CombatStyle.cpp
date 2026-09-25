@@ -4,7 +4,7 @@
 #include "CasterConsent.h"   // the equip gate exempts the latched gambit spell (T#75)
 #include "Config.h"
 #include "Forms.h"
-#include "APMFBridge.h"      // IsOwnedCastActive -- stand the gate down where APMF's
+#include "apmf/APMFBridge.h"      // IsOwnedCastActive -- stand the gate down where APMF's
                              // T2a CheckShouldEquip hook now owns it (Phase 2)
 
 namespace MFO::CombatStyle {

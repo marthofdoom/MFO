@@ -15,12 +15,16 @@ it is not "the model", and the STANDING PRINCIPLE further down says exactly that
 document grew by appending a dated section per branch, so its oldest framing sits at the top;
 read the top as history and lines 272 onward as the current mechanism.
 
-**WHERE THE CODE LIVES (corrected 2026-09-07).** Not "everything in `native/Actuation.cpp`".
-`Actuation.cpp` holds the dispatch and the owned-cast branch; `native/Actuation_Direct.cpp`
-holds `ConcProxy`, `SustainConcentrationEffect`, `DrawConcCap`, `CastSelfDirect`,
-`CastTargetDirect` and the reconcilers; `native/ComposedCast.cpp` holds the composed/claimed
-path; `native/APMFBridge.cpp` holds the claim lifecycle; the OOC dispatch is in
-`native/Logistics.cpp` and `native/Logistics_Cast.cpp`.
+**WHERE THE CODE LIVES (corrected 2026-09-07; paths updated for the 2026-09-24 subsystem
+folders).** The old `Actuation.cpp` / `Actuation_Direct.cpp` / `Actuation_Hands.cpp` are now
+`native/cast/`: `cast/Fire.cpp` holds the dispatch, `cast/CastOn.cpp` the owned-cast branch;
+`cast/Direct.cpp` holds `ConcProxy`, `CastSelfDirect`, `CastTargetDirect` and the
+reconcilers, and `SustainConcentrationEffect` / `DrawConcCap` are inline in
+`cast/Actuation_internal.h`; `native/ComposedCast.cpp` holds the composed/claimed path;
+`native/apmf/` (was `APMFBridge.cpp`; claims in `apmf/CastClaims.cpp`, lifecycle in
+`apmf/Bridge.cpp`) holds the claim lifecycle; the OOC dispatch is in `native/Logistics.cpp`
+and `native/Logistics_Cast.cpp`. Line citations below that still name the old files were
+written against older trees and are left as written (MAP.md has the current nav).
 
 ---
 
@@ -167,7 +171,7 @@ APMF-present equivalent is the CAST-CLAIM OBSERVABILITY section near the bottom.
 
 ## ConcProxy — the delivery-flipped concentration copy
 
-`ConcProxy` / `DeliverySpell` in `Actuation.cpp` (used only by the concentration branches of
+`ConcProxy` / `DeliverySpell` in `cast/Direct.cpp` (used only by the concentration branches of
 `ApplyTargetEffect` and AUTO's `ApplyEffectFromTo`).
 
 - **Gate:** `delivery == kSelf && castingType == kConcentration && target != follower`.
@@ -414,7 +418,7 @@ thin shim over it — the shape below is CURRENT, not history.
 
 `ComposedCast::Try(follower, spell, target, kind, stopPct)`
 (`native/ComposedCast.cpp`) sits where `HealAnimFill` used to be called, in
-`CastSelfDirect`/`CastTargetDirect` (`Actuation_Direct.cpp`), after the
+`CastSelfDirect`/`CastTargetDirect` (`cast/Direct.cpp`), after the
 competence gate — call sites forward an extra `a_stopPct` now (see STOP-PERCENT
 below), otherwise unchanged. It is **HEAL-ONLY-gated** (`kind != SpellKind::Heal`
 → immediate false): offense and buff casts never enter this module and stay on
@@ -422,7 +426,7 @@ the byte-identical AI-fired / kInstant paths. It composes two things, no hand
 touch at all:
 
 **Third call site (feat/castone-heal-gate, 2026-09-06, API-PORT-AUDIT.md #1):**
-`Actuation.cpp`'s `CastOn` — the FF (non-concentration) non-self dispatch —
+`cast/CastOn.cpp`'s `CastOn` — the FF (non-concentration) non-self dispatch —
 now also calls `Try` directly, immediately after its `ownedCast` (Offense-only)
 block and before the AI-first-grace wait, with `stopPct=0` (no per-gambit
 threshold in scope there, same as every site but `CastAuto`'s). This closes the
@@ -517,7 +521,7 @@ one.
    hand from a policy that never requested one.
    **NOW WIRED (integration/2026-09-06, then feat/per-hand-cast-slots,
    2026-09-06)** — supersedes the "still NOT wired" state this paragraph used
-   to describe. `Actuation.cpp`'s `CastOn` (`ownedCast` branch, ch.8b
+   to describe. `cast/CastOn.cpp`'s `CastOn` (`ownedCast` branch, ch.8b
    `ClaimOffenseCast`) consults `Loadout::PlanCastHand` (via the per-hand
    cast-gambit lock's `ResolveCastHand` — see the "PER-HAND CAST SLOTS"
    section below) and passes the resolved hand plan through directly, rather
@@ -529,13 +533,13 @@ one.
    (`APMF_API::MakeStopPct`) tell seat 0x07 `CheckStopCast` to end a
    CONCENTRATION channel once the target's HEALTH reaches a whole percent
    (1..100) of its PERMANENT actor value, instead of the engine default (full
-   restoration). `Actuation_Direct.cpp`'s `CastAuto` is the one call site in the
+   restoration). `cast/Auto.cpp`'s `CastAuto` is the one call site in the
    tree where a real per-gambit heal threshold is in scope at a
    `CastSelfDirect`/`CastTargetDirect` call (a "Health < N% → Heal" rule's own
    `conditionParam`, already used there to pick the neediest target) — it
    converts that fraction to a whole percent and forwards it through
    `CastSelfDirect`/`CastTargetDirect` → `ComposedCast::Try` →
-   `ClaimHealCast`. Every OTHER call site (`Actuation.cpp`'s `ConcentrationCast`
+   `ClaimHealCast`. Every OTHER call site (`cast/Roads.cpp`'s `ConcentrationCast`
    self-fork and target-fork, `Logistics.cpp`'s OOC concentration dispatch) has
    no numeric threshold in scope today and passes the default 0 (stop at full),
    byte-identical to the pre-port behaviour. Harmless (ignored) on an instant
@@ -590,7 +594,7 @@ every ~0.133s × party size. For anything but a 1-2-follower party that gap alre
 exceeds a flat 500ms, so the OLD flat backstop released a live, still-wanted claim
 every round-robin lap (deck-proven: `feat/heal-claim-hold`'s "claim/release every
 ~530ms, caster stuck at rest forever", then re-proven the SAME day on the
-equipment claim, Cicero deck capture). `FacetExpiry()` (`APMFBridge.cpp`, anon ns)
+equipment claim, Cicero deck capture). `FacetExpiry()` (`apmf/Bridge.cpp`, anon ns)
 sizes the window the SAME way `TargetCastReconcile`/`SelfCastReconcile` already
 size their own round-robin-aware release windows (`suppress*1.12 + 0.133*partySize
 + 0.5`, floored at the old 500ms) — `Tick()`'s heal/cast/target/equipment handle
@@ -718,7 +722,7 @@ combat caster object while a `kIntent_Cast` claim stands — `CheckShouldEquip`
 > the wrong vtable.
 `SetupAimController` (0x0D) — so the FOLLOWER'S OWN AI equips, aims, charges, and
 fires the heal at the claimed target, with ZERO engine-cast call from either mod.
-`APMFBridge::ClaimHealCast` (`native/APMFBridge.cpp`) now calls `RequestCast`
+`APMFBridge::ClaimHealCast` (`native/apmf/CastClaims.cpp`) now calls `RequestCast`
 directly (see the CFC section's code block above for the exact payload); the
 Intent's own doc comment in `APMF_API.h` was updated on APMF's side to match (no
 longer "APMF fires NO cast: the CLIENT executes its own animated cast" — that was
@@ -788,7 +792,7 @@ spell selection, so the follower's own AI still picked whichever spell IT wanted
 directly (the same seats already proven for heals), so the gambit's named spell
 is now the one that actually fires.
 
-**New/changed symbols (`native/APMFBridge.h`/`.cpp`):**
+**New/changed symbols (`native/apmf/APMFBridge.h` / `native/apmf/*.cpp`):**
 - `ClaimOffenseCast(follower, spell, target, hand, concentration, stopPct)` —
   replaces `ClaimCasting` (retired, along with `ReleaseCasting`). Same
   create-or-refresh/RequestCast shape as `ClaimHealCast`, sharing its
@@ -1143,7 +1147,7 @@ one `Watch` per follower) — a heal claim (hand 0) and a concurrent offense
 claim (hand 0 or 1) no longer overwrite each other's watch. `WatchClaim`
 gained an `a_hand` parameter (default `kApmfHandLeft`, so every existing
 heal-adjacent call site — the two concentration-offense claims in
-`Actuation_Direct.cpp`, both hardcoded LEFT — needed no edit); `CastOn`'s
+`cast/Direct.cpp`, both hardcoded LEFT — needed no edit); `CastOn`'s
 owned-cast branch calls it once per hand `handPlan` actually granted (both,
 for a DualCast plan). `ExpectingCast`/`NoteObservedCast` keep their existing
 `(follower, spell)` signature (`Diagnostics.cpp`'s sink has no hand to report)
@@ -1165,7 +1169,7 @@ weapon is active, because `PlanCastHand`'s own gate runs first and produces
 layer on top of that decision — it does not re-derive or second-guess it.
 
 **Open item, flagged not fixed by this pass.** `Loadout::Prepare`'s own
-`EquipSpell` call (`Actuation.cpp`, in `CastOn`'s equip step, unchanged by this
+`EquipSpell` call (`cast/CastOn.cpp`, in `CastOn`'s equip step, unchanged by this
 pass) still ALWAYS equips into `LeftHandSlot()` unconditionally, regardless of
 `handPlan`. Before this pass that was provably correct (the offense claim was
 ALSO always LEFT, so the claimed hand and the physically-equipped hand could
@@ -1242,7 +1246,7 @@ changed here this pass.
 | APMF owned cast | `APMFBridge::ClaimOffenseCast` (`kIntent_Cast`/`RequestCast`, ch.8b — ported feat/offense-cast-seats off ch.8) drives the follower's OWN AI to cast the EXACT gambit spell | yes | hostile foe only | default when APMF is present. A refused claim **FAILS CLOSED** (`{FailedSkill, "APMF refused the cast claim", transparent}`, `Actuation.cpp:1039-1052`, in the PRE-FLIGHT before any hand is touched) — only the channel being ABSENT/`bLegacyCastHybrid` degrades to the AI-first-grace + force-on-miss hybrid |
 | Composed Forced Cast (CFC) | `ComposedCast::Try` → `APMFBridge::ClaimHealCast` (`kIntent_Cast`/`RequestCast`, ch.8b) | the follower's OWN AI, via APMF's five engine seats — real native animated cast, ZERO engine-cast call from either mod | any actor (explicit target rides the claim, LOAD-BEARING at seats 0x0A/0x0D) | opt-in (`bHealAnimPackage`), HEAL-ONLY. A refused claim **FAILS CLOSED** — `TryResult::ApmfRefused` (`ComposedCast.cpp:441`) and every caller drops the heal with no kInstant apply (`Actuation.cpp:1082-1089`, `Actuation_Direct.cpp:889`/`:1186`); **only `NotApplicable` (channel absent) degrades to kInstant**, so a heal CAN be lost to arbitration. A claim that stands with no observed cast logs a rate-limited diagnostic (Task 6) instead of falling back — no delivery watchdog |
 
-`native/APMFBridge.h`'s `kHealCastTtlMs` (6 s) sizes BOTH the `RequestCast`
+`native/apmf/APMFBridge.h`'s `kHealCastTtlMs` (6 s) sizes BOTH the `RequestCast`
 payload's `req.ttlMs` and (via `native/ComposedCast.cpp`'s `kHealBoundsTtlMs`,
 which aliases it) the `CastBounds::Arm` ceiling.
 
@@ -1291,7 +1295,7 @@ bool       (*IsClaimLive)(Handle h);   // true while APMF still holds that claim
 
 **1. Recognise the proxy as our own cast.** APMF mints its own delivery-flip
 proxy for a `kSelf`-delivery spell aimed at a non-self target (`req.proxy = 0`
-in `EnsureCastClaimLocked`, `native/APMFBridge.cpp` — MFO never inspects
+in `EnsureCastClaimLocked`, `native/apmf/Bridge.cpp` — MFO never inspects
 delivery, never builds one itself). The cast that actually lands is of that
 PROXY FormID (e.g. `0xFF001F2F`), never the gambit's original spell (e.g.
 `0x0002F3B8`) — but `Diagnostics.cpp`'s `SpellSink` and `ComposedCast::
@@ -1330,7 +1334,7 @@ Fix (as designed, and as it now behaves on `main`):
 successful `RequestCast` (ABI < 6 → `0`, same as a claim that minted none) and
 stores it on the `CastClaim` (`native/APMFBridge.cpp`'s `CastClaim::proxy`).
 Two new bridge accessors expose it read-only: `APMFBridge::GetHealCastProxy`
-and `APMFBridge::GetOffenseCastProxy` (`native/APMFBridge.h`). Every caller
+and `APMFBridge::GetOffenseCastProxy` (`native/apmf/APMFBridge.h`). Every caller
 that arms `ComposedCast`'s silent-claim watch now fetches this alongside the
 spell and forwards it: `ComposedCast::Try` (heal, always LEFT) and every
 `ComposedCast::WatchClaim` call site (`Actuation.cpp`'s owned-cast branch,
@@ -1373,10 +1377,11 @@ Both changes are entirely inside `native/APMFBridge.cpp` (`CastClaim`,
 `Actuation_Direct.cpp`/`Diagnostics.cpp` — no ABI header change, no widened
 deny, no fabricated cast.
 
-## KEY SYMBOLS (`Actuation_Direct.cpp` — NOT `Actuation.cpp`; corrected 2026-09-07)
+## KEY SYMBOLS (`cast/Direct.cpp`; corrected 2026-09-07, paths updated 2026-09-24)
 
-*Every symbol in this list lives in `native/Actuation_Direct.cpp` on `main` (zero hits in
-`Actuation.cpp`); they moved there in the 2026-08-31 split.*
+*Every symbol in this list lives in `native/cast/Direct.cpp` (was `Actuation_Direct.cpp`),
+except `SustainConcentrationEffect` and `DrawConcCap`, which are inline in
+`native/cast/Actuation_internal.h` since the 2026-09-24 subsystem-folder split.*
 
 `ConcProxy` (owner-keyed `Slot g_slot[2]{form,source,owner}`, `Configure`, `Acquire`,
 `FormForOwner`, `Free`, `Reset`) · `DeliverySpell` (gate; nullptr → caller skips) ·

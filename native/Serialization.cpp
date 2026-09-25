@@ -10,7 +10,7 @@
 #include "Targeting.h"
 #include "CasterConsent.h"
 #include "CombatStyle.h"
-#include "Actuation.h"   // T#76: revert drops the equip force-hold records
+#include "cast/Actuation.h"   // T#76: revert drops the equip force-hold records
 #include "Sightline.h"
 #include "Packages.h"
 #include "Papyrus.h"
@@ -19,7 +19,7 @@
 #include "MainThread.h"
 #include "Probe.h"
 #include "Board.h"
-#include "ProgAllocator.h"
+#include "progression/ProgAllocator.h"
 #include <unordered_set>   // T#69: stock-gear per-follower sets (kRecStock)
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.

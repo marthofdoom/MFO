@@ -11,7 +11,7 @@
 #include "Probe.h"
 #include "ProgProbe.h"
 #include "Progression.h"
-#include "ProgAllocator.h"
+#include "progression/ProgAllocator.h"
 #include "Vocabulary.h"
 #include "Loadout.h"
 #include "Runtime.h"
@@ -22,7 +22,7 @@
 #include "Logistics.h"
 #include "Gait.h"
 #include "MEOBridge.h"
-#include "APMFBridge.h"
+#include "apmf/APMFBridge.h"
 #include "MainThread.h"
 #include "TradeBridge.h"
 

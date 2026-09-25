@@ -421,7 +421,7 @@ namespace MFO::ProgAllocator {
 
     // §17: the derived perk-point pool (see ProgState) — the ONE authority
     // every gate, log line and board view asks.
-    int PerkPointsAvailable(const ProgState& a_st);
+    inline int PerkPointsAvailable(const ProgState& a_st);
 
     // ── board views (component 3 — the Progression tab's read seam) ─────────
     // The tab draws on the RENDER thread; g_prog and every engine read here

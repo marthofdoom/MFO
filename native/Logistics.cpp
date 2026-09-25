@@ -4,9 +4,9 @@
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
-#include "Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
+#include "cast/Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
-#include "APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
+#include "apmf/APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
 #include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
@@ -1892,7 +1892,7 @@ namespace MFO::Logistics {
                     if (r == Actuation::SelfCast::Held) {
                         // DEDUPED at 2s per (follower, held-off spell) -- the SAME
                         // window and shape as its [cfc] twin (ComposedCast.cpp's
-                        // LogHealHoldOff) and Actuation.cpp's [eval] LogCastLockHold
+                        // LogHealHoldOff) and cast/Hands.cpp's [eval] LogCastLockHold
                         // (Fable diff review, 2026-09-06: this was unthrottled). A
                         // rule held off on every round-robin lap logged once per
                         // service, and up to TWICE per service, since the `pass < 2

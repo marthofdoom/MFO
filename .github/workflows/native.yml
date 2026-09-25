@@ -6,12 +6,36 @@ on:
       - "native/**"
       - ".github/workflows/native.yml"
   workflow_dispatch:
+    inputs:
+      # PROOF BUILD for tools/splitcheck (CLAUDE.md "SOURCE FILE SIZE AND SPLITS"):
+      # the same Release build with inline expansion OFF (/O2 /Ob0), so a TU split
+      # cannot change which helpers the compiler inlines, and `splitcheck --strict`
+      # can demand byte identity. NEVER shipped: the release DLL is always the
+      # normal /O2 build (a push run, or a dispatch with noinline=false).
+      noinline:
+        description: "Proof build: compile with /O2 /Ob0 (inlining off). Not a shippable DLL."
+        type: boolean
+        default: false
+      # /Ob0 alone is not enough for byte identity: without inlining MSVC still
+      # optimizes ACROSS the functions of one TU (a caller's register allocation
+      # uses what it knows of a same-TU callee), so moving a function to another
+      # TU still changes its callers' registers. /Od turns the optimizer off, so
+      # each function compiles from its own source alone. (Measured 2026-09-24.)
+      noopt:
+        description: "Proof build: compile with /Od (optimizer off, so no inlining). Not a shippable DLL."
+        type: boolean
+        default: false
+      source_ref:
+        description: "Build this commit instead of the dispatched ref (e.g. main's SHA as the proof baseline)."
+        type: string
+        default: ""
 
 # A newer push supersedes an in-flight build. Without this, several ~30 min
 # cold builds run in parallel racing to populate the same cache, and none of
-# them wins.
+# them wins. A manual dispatch gets a group of its own, so proof builds of two
+# commits can run side by side without cancelling each other.
 concurrency:
-  group: native-${{ github.ref }}
+  group: ${{ github.event_name == 'workflow_dispatch' && format('native-dispatch-{0}', github.run_id) || format('native-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
@@ -22,6 +46,8 @@ jobs:
         working-directory: native
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
 
       - uses: ilammy/msvc-dev-cmd@v1
 
@@ -40,7 +66,23 @@ jobs:
           restore-keys: vcpkg-
 
       - name: Configure
+        if: ${{ inputs.noinline != true && inputs.noopt != true }}
         run: cmake --preset release
+        env:
+          VCPKG_ROOT: C:\vcpkg
+
+      # Only MFO's own sources get /Ob0: the vcpkg ports are built by vcpkg with
+      # their own triplet flags, so the dependency cache is shared with the
+      # normal build.
+      - name: Configure (proof build, inlining off)
+        if: ${{ inputs.noinline == true && inputs.noopt != true }}
+        run: cmake --preset release "-DCMAKE_CXX_FLAGS_RELEASE=/O2 /Ob0 /DNDEBUG"
+        env:
+          VCPKG_ROOT: C:\vcpkg
+
+      - name: Configure (proof build, optimizer off)
+        if: ${{ inputs.noopt == true }}
+        run: cmake --preset release "-DCMAKE_CXX_FLAGS_RELEASE=/Od /DNDEBUG"
         env:
           VCPKG_ROOT: C:\vcpkg
 
@@ -57,6 +99,17 @@ jobs:
       - name: Build
         run: cmake --build build/release
 
+      # The commit actually compiled (differs from the run's headSha when
+      # source_ref is set) and whether inlining was off -- shipped inside the
+      # artifact, next to the DLL, so a comparison can never pair the wrong builds.
+      # Proof/rebuild dispatches only: a normal build's artifact stays exactly
+      # MFO.dll + MFO.pdb (it is unzipped straight over the mod folder).
+      - name: Record the built commit
+        if: ${{ inputs.noinline == true || inputs.noopt == true || inputs.source_ref != '' }}
+        run: |
+          git rev-parse HEAD
+          "built=$(git rev-parse HEAD) noinline=${{ inputs.noinline == true }} noopt=${{ inputs.noopt == true }}" | Out-File -FilePath build/release/build-info.txt -Encoding ascii
+
       - name: Upload DLL
         uses: actions/upload-artifact@v4
         with:
@@ -64,4 +117,5 @@ jobs:
           path: |
             native/build/release/MFO.dll
             native/build/release/MFO.pdb
+            native/build/release/build-info.txt
           if-no-files-found: error

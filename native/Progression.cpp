@@ -4,9 +4,9 @@
 #include "Forms.h"   // §18.6 (v1.1: addon manifests self-declare via their own keyword)
 // DELIBERATE component-1 -> component-2 dependency (approved 2026-09-14): TallyStyleVotes
 // counts the UNARMED vote off MFO's own allocation record (ProgAllocator::g_prog), the
-// only source that means "selected via progression"; headers stay acyclic (ProgAllocator.h
+// only source that means "selected via progression"; headers stay acyclic (progression/ProgAllocator.h
 // includes PCH.h only). Do not "fix" this by reverting to the held-perk walk.
-#include "ProgAllocator.h"
+#include "progression/ProgAllocator.h"
 #include <array>     // v1.1 residual #3: the classifier's add-on-declared verdict table
 
 // The production catalog reader. See Progression.h for the contract;

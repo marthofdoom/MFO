@@ -38,13 +38,24 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Probe.cpp
     ProgProbe.cpp
     Progression.cpp
-    ProgAllocator.cpp
-    ProgAllocator_Hms.cpp
-    ProgAllocator_Manifest.cpp
+    progression/Allocator.cpp
+    progression/SkillScale.cpp
+    progression/PerkGate.cpp
+    progression/BoardViews.cpp
+    progression/Poll.cpp
+    progression/Harness.cpp
+    progression/Verbs.cpp
+    progression/Hms.cpp
+    progression/Manifest.cpp
     Evaluator.cpp
-    Actuation.cpp
-    Actuation_Direct.cpp
-    Actuation_Hands.cpp
+    cast/Fire.cpp
+    cast/Roads.cpp
+    cast/CastOn.cpp
+    cast/Equip.cpp
+    cast/Direct.cpp
+    cast/Summon.cpp
+    cast/Auto.cpp
+    cast/Hands.cpp
     Scheduler.cpp
     Logistics.cpp
     Logistics_Cast.cpp
@@ -65,7 +76,11 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Sightline.cpp
     ItemCatalog.cpp
     MEOBridge.cpp
-    APMFBridge.cpp
+    apmf/Bridge.cpp
+    apmf/CastClaims.cpp
+    apmf/Equip.cpp
+    apmf/Excursion.cpp
+    apmf/SpellAllowList.cpp
     imgui_impl_win32.cpp
 )
 

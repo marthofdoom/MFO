@@ -1,14 +1,16 @@
 #pragma once
-// Actuation_internal.h -- the Actuation family's SHARED substrate. One TU
-// (Actuation.cpp) used to hold all of this; two mechanical module splits
-// (Actuation.cpp / Actuation_Direct.cpp, then Actuation_Hands.cpp on
-// 2026-09-08) moved what crosses a TU boundary here as `inline` (ONE shared
-// instance across the THREE TUs -- never per-TU copies): the cross-module
-// concentration numbers (sustain windows, the cadence contract, the
-// randomized stream time-cap draw), and the per-hand cast lock's shared
-// state + cross-TU entry points. Everything else stays file-local in its
-// module. NOT a public API: only the three Actuation*.cpp TUs may include
-// this.
+// cast/Actuation_internal.h -- the cast family's SHARED substrate. NOT a
+// public API: only the native/cast/*.cpp TUs may include this (the public API
+// is cast/Actuation.h). History: one TU (Actuation.cpp) used to hold all of
+// this; two mechanical module splits (Actuation.cpp / Actuation_Direct.cpp,
+// then Actuation_Hands.cpp on 2026-09-08) moved what crosses a TU boundary here
+// as `inline` (ONE shared instance across the TUs -- never per-TU copies): the
+// cross-module concentration numbers (sustain windows, the cadence contract,
+// the randomized stream time-cap draw), and the per-hand cast lock's shared
+// state + cross-TU entry points. The wave-1 subsystem-folder split (2026-09-24)
+// cut the three TUs into cast/*.cpp by concern and added the section at the
+// END of this file: what that cut made cross-TU. Everything else stays
+// file-local in its module.
 
 #include "PCH.h"
 #include "Actuation.h"
@@ -374,5 +376,145 @@ namespace MFO::Actuation {
         std::optional<Outcome> ResolveCastHand(RE::Actor* a_follower, Loadout::HandPick a_pick,
                                                RE::FormID a_spell, RE::FormID a_target,
                                                HandPlan& a_out);
+
+        // ── WAVE-1 SPLIT (2026-09-24): FILE-LOCAL -> SHARED, BODIES UNCHANGED ──────
+        // The subsystem-folder split cut Actuation.cpp and Actuation_Direct.cpp by
+        // concern. Each symbol below was in an anonymous namespace and is now used
+        // from a second cast/*.cpp TU, so it gained external linkage: functions are
+        // declared here and defined where they were (unchanged), variables are
+        // `extern` here and defined in the file that owns them, and the helpers the
+        // compiler INLINED across the new cut moved here whole as `inline` (so every
+        // TU still inlines them -- tools/splitcheck proves the generated code is
+        // unchanged). Types the shared maps hold moved here with them.
+        //
+        // CastOn's roads and the equip entry point (were anon in Actuation.cpp):
+        std::optional<Outcome> ForceCast(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                         RE::Actor* a_target, bool a_aiCastOther);   // cast/Roads.cpp
+        Outcome ConcentrationCast(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                  RE::Actor* a_target);                            // cast/Roads.cpp
+        Outcome RestorationCastDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                      RE::Actor* a_target);                        // cast/Roads.cpp
+        Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target,
+                       bool a_rangeGate = false);                                 // cast/CastOn.cpp
+        Outcome EquipWeapon(RE::Actor* a_follower, bool a_ranged);                  // cast/Equip.cpp
+
+        // The direct road's shared clock + stream state (were anon in Actuation_Direct.cpp):
+        using SelfClock = std::chrono::steady_clock;
+        // ── ON-TARGET DIRECT FORCE (package-lock-proof; g_selfCast generalized) ──
+        // The SAME known-working force (CastSpellImmediate straight onto the actor +
+        // magicka deduct) applied to a NON-self target -- player / ally / foe. It
+        // touches NO package, so it beats a package-locked custom follower's §4.6
+        // alias lock: Lucien (2F00591F) has a prio-80 quest owning the cast alias,
+        // so the package route [pkg]-DECLINED every tick and his on-PLAYER heal never
+        // landed (deck, build 5f8e873). Direct force lands it. One stream per follower
+        // (single channel, like the package). Worker-serial, no lock (#4 discipline);
+        // cleared with g_selfCast on revert. `kind` (cached at start) decides the
+        // time cap AND when release DISPELS: a ward/buff (Buff) on any release; a
+        // momentary heal/damage's SUSTAINED real effect only at end-of-stream
+        // (stale/gone/switch -- it genuinely channels and must die with the
+        // stream), never on a cap-only re-stream (the re-arm continues it).
+        struct TargetCastState {
+            RE::FormID               spell  = 0;
+            RE::FormID               target = 0;
+            CasterConsent::SpellKind kind   = CasterConsent::SpellKind::Buff;
+            SelfClock::time_point    started{};
+            SelfClock::time_point    lastFired{};
+            SelfClock::time_point    lastApply{};
+            float                    cap    = 0.0f;  // per-stream randomized time cap (DrawConcCap)
+            // CHARGE FOR TIME (v2.0.12): same meaning as SelfCastState's trio.
+            SelfClock::time_point    paidThrough{};
+            float                    window = 0.0f;
+            bool                     timed  = false;
+        };
+        extern std::unordered_map<RE::FormID, TargetCastState> g_targetCast;   // cast/Direct.cpp
+
+        // ── THE REAL EFFECT, WITH A SYNTHESIZED DURATION (marth's ruling) ────
+        // "Shouldn't you be using the ACTUAL spell effect? It seems like you
+        // are trying to recreate it instead." -- correct, and it supersedes two
+        // earlier attempts: the per-beat CastSpellImmediate re-cast (dc856ea:
+        // HUD churn of duration-0 momentaries, no sustained shader) AND the
+        // ApplyConcentrationBeat RestoreActorValue recreation (REMOVED: it only
+        // covered value-modifier AVs and could never generalize -- a forced
+        // waterbreathing/invisibility/ward concentration is not an AV write).
+        //
+        // THE PREMISE (field, b63beb9 A/B): a one-shot CastSpellImmediate of a
+        // concentration spell creates its REAL ActiveEffect but with duration
+        // 0 and no sustaining channel, so it dies within a frame -- a
+        // per-second Restore Health accumulates ~0, the shader never sustains,
+        // and re-casting per beat just stacks short-lived effects. FF spells
+        // are untouched by all of this: a duration-0 FF instant applies its
+        // per-CAST magnitude in full through the plain call (field-proven).
+        //
+        // THE FIX: attach the spell's REAL effect(s) ONCE per stream (plain
+        // CastSpellImmediate -- correct effect, shader, HUD entry, resists,
+        // hostility, every archetype), then SUSTAIN that single ActiveEffect
+        // by pinning a real `duration` (the stream's window) and re-arming
+        // `elapsedSeconds` on every beat. Given a real duration the engine
+        // runs the effect NORMALLY: a per-second value-modifier accumulates
+        // its authored magnitude the ordinary way (a duration'd Restore Health
+        // heals magnitude-per-second, exactly like a regen potion), a duration
+        // archetype (waterbreathing, invisibility, muffle) simply LASTS, a
+        // ward wards. No recreation, no manual math, ALL archetypes. The
+        // writes are instance-local on the live AE (the same `duration`/
+        // `elapsedSeconds` fields the DoT-recast logic already reads) -- NEVER
+        // a shared-form (MGEF/SpellItem) mutation.
+        //
+        // Returns TRUE if a live effect for this spell was found + re-armed
+        // (the caller must NOT re-cast); FALSE -> the caller attaches once via
+        // CastSpellImmediate and calls this again to pin it. EVIDENCE
+        // COLLECTOR: the caller logs "conc effect ATTACHED" on every attach --
+        // if the engine honors the pinned duration that line appears ONCE per
+        // stream and the HUD shows one continuous effect; if the engine
+        // expires the effect regardless (e.g. a no-duration-flagged MGEF, the
+        // open premise CI cannot test), the line repeats every beat and the
+        // presentation degrades to the previous per-beat re-attach -- loud in
+        // the log, and the fix would be an FF-variant runtime spell, NOT a
+        // return to RestoreActorValue. MAIN THREAD only (live AE list).
+        inline bool SustainConcentrationEffect(RE::Actor* a_target, RE::SpellItem* a_spell,
+                                        float a_window) {
+            auto* mt = a_target ? a_target->AsMagicTarget() : nullptr;
+            if (!mt || !a_spell) return false;
+            auto* list = mt->GetActiveEffectList();
+            if (!list) return false;
+            bool found = false;
+            for (auto* ae : *list) {
+                if (!ae || ae->spell != a_spell) continue;
+                ae->duration       = a_window;   // real duration -> the engine channels it
+                ae->elapsedSeconds = 0.0f;       // rolling re-arm, one beat at a time
+                found = true;
+            }
+            return found;
+        }
+
+        // AUTO's pacing + beneficial-recast state (defined in cast/Auto.cpp; ClearSelfCasts
+        // in cast/Direct.cpp clears them on revert):
+        extern std::unordered_map<RE::FormID, SelfClock::time_point> g_autoCast;
+        struct BeneficialRecast {
+            SelfClock::time_point lastCast{};
+            float                 windowSec = 0.0f;
+        };
+        extern std::unordered_map<std::uint64_t, BeneficialRecast> g_beneficialRecast;
+
+        inline std::uint64_t RecastKey(RE::FormID a_caster, RE::FormID a_spell) {
+            return (static_cast<std::uint64_t>(a_caster) << 32) | a_spell;
+        }
+
+        // Does a_spell restore Health to its target? Defined in cast/Direct.cpp (it is
+        // inlined into IsRestorationSpell there); cast/Auto.cpp calls it.
+        bool SpellHealsHealth(RE::SpellItem* a_spell);
+
+        // The summon verdict ledger (defined in cast/Summon.cpp; ClearSelfCasts in
+        // cast/Direct.cpp clears it on revert). See the THREADING note there.
+        enum class SummonVerdict : std::uint8_t { None, Cast, Live, Landing, Limit, Failed };
+        struct SummonState {
+            SummonVerdict      verdict = SummonVerdict::None;
+            SelfClock::time_point verdictAt{};    // when the main thread decided
+            SelfClock::time_point lastCast{};     // main: the last CastSpellImmediate
+            SelfClock::time_point lastSkipLog{};  // main: "still alive" / "landing" throttle
+            SelfClock::time_point lastLimitLog{}; // main: "limit reached" throttle
+        };
+        extern std::mutex                                     g_summonMx;
+        extern std::unordered_map<std::uint64_t, SummonState> g_summon;
+        extern std::unordered_map<std::uint64_t, SelfClock::time_point> g_summonPosted;
 
 }

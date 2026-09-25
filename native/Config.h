@@ -232,7 +232,7 @@ namespace MFO::Config {
     // unless cast control is on (which is what populates the gambit set this
     // mirrors). This kill switch exists for A/B field testing and to turn the gate
     // off without turning the rest of the cast facet off; it is INI-only (no MCM
-    // entry), same as bApmfCast. No save state. See APMFBridge.h's block doc.
+    // entry), same as bApmfCast. No save state. See apmf/APMFBridge.h's block doc.
     inline std::atomic<bool>  g_apmfSpellAllowList{ true };
 
     // LEGACY CAST HYBRID (MCM bLegacyCastHybrid). The owned cast model (above) is the
@@ -246,7 +246,7 @@ namespace MFO::Config {
     // fallback that exists while APMF is present. It does not). The four sites that
     // read this key are all OFFENSE/hybrid paths: `Actuation.cpp`'s `ownedCast` gate
     // and its melee/attack combat-target claim, and the two concentration
-    // `ClaimOffenseCast` sites in `Actuation_Direct.cpp` (`CastSelfDirect` /
+    // `ClaimOffenseCast` sites in `cast/Direct.cpp` (`CastSelfDirect` /
     // `CastTargetDirect`).
     //
     // IT DOES NOT GATE `ComposedCast::Try`, so it does not touch the APMF HEAL path

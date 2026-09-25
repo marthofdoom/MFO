@@ -1,9 +1,9 @@
 #include "PCH.h"
 #include "ComposedCast.h"
 #include "Config.h"
-#include "APMFBridge.h"
+#include "apmf/APMFBridge.h"
 #include "CastBounds.h"
-#include "Actuation.h"   // kHandLeft + CastInFlightOnHand -- THE one in-flight definition
+#include "cast/Actuation.h"   // kHandLeft + CastInFlightOnHand -- THE one in-flight definition
 #include "Runtime.h"     // CastPathsVerified(): the ONE exact-version gate the cast paths share
 
 #include <chrono>
@@ -243,7 +243,7 @@ namespace MFO::ComposedCast {
         // until Fable SEV-2 gave the hold its own tri-state value.) Two things
         // follow, and the first cut of that guard did neither:
         //   1. The hold MUST be visible. Its offense twin logs every hold it
-        //      takes (Actuation.cpp's LogCastLockHold, [eval]); a silent hold is
+        //      takes (cast/Hands.cpp's LogCastLockHold, [eval]); a silent hold is
         //      a mechanism the field cannot see at all.
         //   2. The caller must be able to tell a HOLD from a DELIVERY, because
         //      Logistics.cpp's OOC-concentration label read "a live heal claim
@@ -262,7 +262,7 @@ namespace MFO::ComposedCast {
         std::unordered_map<RE::FormID, HoldRecord> g_lastHold;
 
         // Rate-limit: at most one line per (follower, held-off spell) per 2 s --
-        // the SAME dedup shape as Actuation.cpp's LogCastLockHold, so a rule held
+        // the SAME dedup shape as cast/Hands.cpp's LogCastLockHold, so a rule held
         // off on every round-robin lap cannot spam the log at scan rate.
         constexpr auto kHoldLogEvery = std::chrono::milliseconds(2000);
         struct HoldLog { RE::FormID spell = 0; Clock::time_point when{}; };
@@ -343,7 +343,7 @@ namespace MFO::ComposedCast {
         // follower's single heal-claim slot every 1-3 s (Healing Hands vs a
         // kSelf heal) each Release the live claim and RequestCast fresh before
         // the engine's ~2.5 s equip+charge ever completes -- no heal lands.
-        // Mirrors the offense per-hand cast lock (Actuation.cpp's HandFree/
+        // Mirrors the offense per-hand cast lock (cast/Hands.cpp's HandFree/
         // CastLockLive): if a DIFFERENT spell already holds this slot and has
         // not been observed firing yet, HOLD the incumbent instead of swapping
         // it out -- treat this Try() as Applied (the caller skips its own
@@ -449,7 +449,7 @@ namespace MFO::ComposedCast {
         // have made the newcomer's ClaimHealCast RELEASE a heal that was already
         // CASTING -- RC1 re-created for the exact two-rule case this hold exists
         // to fix. There is NO "provably not going to fire" point available from
-        // this evidence; see APMFBridge.h's kHealHoldNeverObservedMs for the full
+        // this evidence; see apmf/APMFBridge.h's kHealHoldNeverObservedMs for the full
         // trade-off (a held rule waits cap + one lap either way; cutting a firing
         // heal is the field failure).
         //
@@ -566,7 +566,7 @@ namespace MFO::ComposedCast {
             // branch BOTH bottom out here, at the single ClaimHealCast call site,
             // and this is the only place that decides to release/re-point a heal.
             // So reuse CastInFlightOnHand rather than invent a second notion of
-            // "busy" (Actuation.h; it went public for this).
+            // "busy" (cast/Actuation.h; it went public for this).
             //
             // BOUNDED, AND IT DOES NOT HEARTBEAT. Two deliberate limits:
             //   * kInFlightHoldCap above bounds the hold, so a wedged caster cannot
@@ -610,7 +610,7 @@ namespace MFO::ComposedCast {
         // charge/aim/fire/channel this spell natively. hand = LEFT
         // (APMFBridge::kApmfHandLeft), never auto -- an equip gambit's forced
         // weapon owns the RIGHT hand, so the spell must not contest it (see
-        // APMFBridge.h's ClaimHealCast doc for the deck-proven failure auto
+        // apmf/APMFBridge.h's ClaimHealCast doc for the deck-proven failure auto
         // caused). LEFT is also the right fallback with no weapon held -- heals
         // are left-hand almost always regardless. a_stopPct forwards the
         // gambit's own configured heal threshold (0 = none -> full restoration);

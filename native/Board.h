@@ -1,6 +1,6 @@
 #pragma once
 #include "PCH.h"
-#include "ProgAllocator.h"   // #74 component 3: the Progression tab's view types
+#include "progression/ProgAllocator.h"   // #74 component 3: the Progression tab's view types
 
 // The Field Kit — the in-game overlay.
 //

@@ -15,7 +15,7 @@
 #include "Board.h"
 #include "Board_internal.h"
 #include "Progression.h"   // #74: the frozen catalog — lock-free render reads by contract
-#include "ProgAllocator.h"
+#include "progression/ProgAllocator.h"
 
 namespace MFO::Board {
 

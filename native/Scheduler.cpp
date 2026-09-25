@@ -1,11 +1,11 @@
 #include "PCH.h"
 #include "Scheduler.h"
 #include "Evaluator.h"
-#include "Actuation.h"
+#include "cast/Actuation.h"
 #include "Followers.h"
 #include "Config.h"
 #include "Loadout.h"
-#include "APMFBridge.h"   // crisp release of owned-cast claims when no cast rule holds
+#include "apmf/APMFBridge.h"   // crisp release of owned-cast claims when no cast rule holds
 #include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside it
 #include "CasterConsent.h"
 #include "CombatStyle.h"
@@ -19,7 +19,7 @@
 #include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
-#include "ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
+#include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
 #include <unordered_set>   // T#78: MFO-OFF one-time-release latch (g_mfoDisabledSwept)
 
 namespace MFO::Scheduler {
@@ -499,7 +499,7 @@ namespace MFO::Scheduler {
                 // the hand. The lock is still force-cleared -- it has to be -- but the same
                 // weapon goes straight back on NON-forced and the follower sheathes, so the
                 // "weapons vanishing" this comment already describes stops being visible.
-                // See ReleaseForcedWeapon's doc in Actuation.h for why the unequip itself
+                // See ReleaseForcedWeapon's doc in cast/Actuation.h for why the unequip itself
                 // cannot go away.
                 Actuation::ReleaseForcedWeapon(f, /*a_standDown=*/true);
                 // T#76 hysteresis dwell erased on the SAME 2-tick debounce (Fable

@@ -120,7 +120,7 @@ namespace MFO {
     //            shipped before hmsHeld was added, so no shorter v8 record exists.
     //            Nothing before them moved. The v1–v7
     //            readers are KEPT (#12): a v<8 record defaults both to 0, then
-    //            runs the ONE-TIME retro (ProgAllocator_Hms.cpp HmsRetroParity)
+    //            runs the ONE-TIME retro (progression/Hms.cpp HmsRetroParity)
     //            that scales each positive hmsCumulative pool by
     //            iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus) and moves
     //            the excess into hmsWithheld (fixed-stat / grant-history

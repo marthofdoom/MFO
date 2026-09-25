@@ -79,7 +79,7 @@ REQUIRED = {
 SEQ_EXPECTED = {0x808, 0x80A, 0x80C, 0x830, 0x80E}
 
 # MFO_Progression.esl — what native/Progression.h (0x800/0x801) and
-# native/ProgAllocator.h (the rest) hardcode. Keep in lockstep with the
+# native/progression/ProgAllocator.h (the rest) hardcode. Keep in lockstep with the
 # generator's PROG_* tables AND the DLL's lookups.
 PROG_REQUIRED = {
     0x800: ('GLOB', "MFOP_Version",             ['EDID', 'FNAM', 'FLTV']),

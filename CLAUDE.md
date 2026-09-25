@@ -9,14 +9,45 @@ regressions here; the ripple notes are why the map exists.
 
 - **Navigate by `file:line` from MAP.md.** Grep to a symbol, read a narrow
   window — do NOT read whole files. Large files must never linger in context.
-- **HARD RULE (marth 2026-08-31): NEVER let a source file exceed 2500 lines.**
-  Split it into focused modules before it crosses (an internal header for shared
-  file-local state + cohesive modules; a pure mechanical move, CI-identical).
-  The split pass is COMPLETE: the top four giants are modularized (Logistics
-  [core + Loot/Economy/Cast], Board [shell + Progression tab], Actuation
-  [dispatch + Direct], ProgAllocator [DONE: engine+co-save + Hms + Manifest —
-  the PRGN co-save block stays whole in ProgAllocator.cpp]) into ≤2500-line
-  modules; Packages/CasterConsent deferred. Keep MAP.md's file:line nav current.
+- **SOURCE FILE SIZE AND SPLITS (marth 2026-09-24: "Go with the subsystem folders,
+  tool first." Supersedes the bare 2500-line rule of 2026-08-31, history below).**
+  - **Subsystem folders, split by concern.** Code lives in `native/<subsystem>/`
+    (`cast/`, `progression/`, `apmf/` so far; `loot/`, `board/` ... as later waves
+    move them), each with ONE small public header (the only thing another
+    subsystem may include, e.g. `cast/Actuation.h`), ONE internal header for the
+    state its files share (`<Name>_internal.h`), and cohesive one-concern `.cpp`
+    files.
+  - **A new mechanism is a new file in its subsystem, by default** (write it into
+    the brief), unless it is a small change to an existing concern.
+  - **~1500 lines = plan a split.** The next brief that touches a file past ~1500
+    proposes the split; it is done as ITS OWN round (a split brief), never inside
+    an unrelated task (scope rule 1 below still holds).
+  - **2500 lines = hard backstop** only. Crossing it inside another task is a
+    STOP-and-report (scope rule 1).
+  - **Every split is proven, not asserted.** `tools/splitcheck` (README there)
+    compares main's CI build with the split branch's FUNCTION BY FUNCTION (PDB
+    symbols, bytes compared with relocations resolved to symbols) and
+    `tools/splitcheck/linecheck.py` proves the source lines are the same multiset
+    and in the same order. Paste both results into the report. A split is still
+    tier A for review. **marth 2026-09-24: "pass, explained can only pass if the
+    self test and logic tests on that changed area still result in the same
+    results as pre change."** So a function the tool can only EXPLAIN (it differs
+    in the shipped /O2 build) passes only with BEHAVIOURAL equivalence: (1) the
+    no-optimizer proof build (`native` workflow dispatch `noopt=true`, main and
+    the branch) compares `splitcheck --strict` PASS, fed to `--proof`; (2) any
+    co-save function in the explained set also passes an emulated save
+    round-trip over real co-saves (identical written bytes and call sequence in
+    both DLLs); (3) `tools/splitcheck/selftest.py` passes on the pair (the tool
+    still catches every planted defect). "CI-identical" remains an invalid claim
+    for a split: CI proves it compiles.
+  - History: the 2026-08-31 split pass modularized the top four giants into
+    ≤2500-line modules (Logistics [core + Loot/Economy/Cast], Board [shell +
+    Progression tab], Actuation [dispatch + Direct + Hands], ProgAllocator
+    [engine+co-save + Hms + Manifest]); Packages/CasterConsent deferred. Wave 1 of
+    the folder layout (2026-09-24) moved Actuation to `cast/`, ProgAllocator to
+    `progression/` (the PRGN co-save block stays whole in
+    `progression/Allocator.cpp`) and APMFBridge to `apmf/`. Keep MAP.md's
+    file:line nav current.
 - **Delegate bulk file-reads to a subagent** and keep only its conclusion, so
   large files never sit in the main context.
 - **AGENTS KEEP DISK LOGS (marth 2026-09-15).** Token-heavy work is protected against
@@ -84,8 +115,8 @@ dispatches and merges it.
 1. **DO EXACTLY WHAT THE BRIEF ASKS. NOTHING ELSE.** No refactors, no file splits, no moving code between
    files, no renames, no "while I was in there" cleanups, no new files — unless the brief asks for them by
    name. If the work seems to *need* one, **STOP and report it**; do not do it and mention it afterwards.
-   **This OVERRIDES the 2500-line rule above: crossing 2500 lines is a STOP-and-report, NOT a licence to
-   split inside an unrelated task.** A split is its own brief and its own field cycle, because a "pure
+   **This OVERRIDES the file-size rule above (~1500 plan / 2500 backstop): crossing either is a
+   STOP-and-report, NOT a licence to split inside an unrelated task.** A split is its own brief and its own field cycle, because a "pure
    mechanical, CI-identical" move is exactly the change whose breakage only shows up in the field — and
    "CI-identical" is not a claim any TU split may assert, since CI proves it compiles, not that it behaves.
    (What actually happened, 2026-09-06 — CORRECTED 2026-09-06 after a transcript audit, because the first

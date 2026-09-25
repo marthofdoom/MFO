@@ -9,15 +9,15 @@
 #include "Probe.h"
 #include "Scheduler.h"
 #include "Loadout.h"
-#include "Actuation.h"   // SelfCastReconcile -- the forced self-cast channel lifecycle
+#include "cast/Actuation.h"   // SelfCastReconcile -- the forced self-cast channel lifecycle
 #include "ComposedCast.h" // CFC observe hand-off: an executor-armed cast landing is THE animated path
-#include "APMFBridge.h"  // Phase 3: per-pump auto-release of APMF cast-select claims
+#include "apmf/APMFBridge.h"  // Phase 3: per-pump auto-release of APMF cast-select claims
 #include "Papyrus.h"
 #include "Targeting.h"
 #include "Packages.h"
 #include "CasterConsent.h"
 #include "CombatStyle.h"
-#include "ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
+#include "progression/ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
 #include "MainThread.h"      // [atk-obs]: graph sink attach/detach is main-thread work (#62-class)
 
 // Two Win32 symbols, declared by hand. <windows.h> is BANNED outside Board.cpp
