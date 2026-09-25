@@ -173,8 +173,10 @@ namespace MFO::Actuation {
             // Ask the HOOK, not the config. They disagree whenever install was
             // refused with the flag on -- VR, today. Reporting Fired there would
             // buy a suppression window for a latch nothing reads.
-            if (!Targeting::IsHooked()) {
-                return { Result::FailedOther, "targeting hook not installed", true };
+            // (Harbinger ch.20 pin route: the pin does not need MFO's hook, so the
+            // question there is bCommandTarget -- Targeting::Commandable.)
+            if (!Targeting::Commandable()) {
+                return { Result::FailedOther, "target command unavailable (hook not installed or bCommandTarget=0)", true };
             }
 
             // Re-commanding the SAME foe is not an action. The latch persists
@@ -304,8 +306,8 @@ namespace MFO::Actuation {
             auto ptr = a_choice.target.get();
             auto* foe = ptr.get();
             if (!foe) return { Result::FailedOther, "chosen foe no longer resolves", true };
-            if (!Targeting::IsHooked())
-                return { Result::FailedOther, "targeting hook not installed", true };
+            if (!Targeting::Commandable())
+                return { Result::FailedOther, "target command unavailable (hook not installed or bCommandTarget=0)", true };
             // Only meaningful with a MELEE weapon drawn -- a power attack from a bow
             // or empty hands is nonsense and would just burn the tick (Fable).
             auto* r = a_follower->GetEquippedObject(false);

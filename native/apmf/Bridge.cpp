@@ -882,6 +882,9 @@ namespace MFO::APMFBridge {
         if (!api) return;
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(g_mx);
+        // ch.20 target pins: notice a pin Harbinger ended (IsClaimLive false) so the
+        // next gambit pass re-picks instead of believing a dead pin (apmf/Excursion.cpp).
+        SweepTargetPinsLocked(api, now);
         // Computed once per sweep, not per-facet-per-follower: same inputs
         // (Config::g_suppressWindow, Followers::g_active.size()) for every claim
         // checked below, and Tick() already holds g_mx for the whole loop.
@@ -1067,6 +1070,7 @@ namespace MFO::APMFBridge {
             o.selectList.clear();
         }
         g_owned.clear();
+        ClearTargetPinsLocked();   // ch.20 pins: APMF drops them at its own kPreLoadGame; stale Release is a no-op
         g_equipAuthRefused.clear();
         g_selectOverflow.clear();
         g_selectRefused.clear();

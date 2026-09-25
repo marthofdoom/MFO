@@ -117,6 +117,164 @@ namespace MFO::APMFBridge {
             it->second.targetRefreshed = std::chrono::steady_clock::now();   // keep-alive: timestamp only
     }
 
+    // ── ch.20 TARGET PIN (ABI v13, kIntent_TargetPin) ──────────────────────────────
+    // Contract: APMF_API.h kIntent_TargetPin; Harbinger Docs/INTEGRATION.md "Pinning a
+    // combat target". The CLIENT declares {follower, foe}; Harbinger answers the engine's
+    // own target selector with it. MFO writes no target of its own on this route
+    // (Targeting.cpp's hook stands down -- Targeting.h "the pin route").
+    namespace {
+        constexpr std::uint32_t kPinMinAbi = 13;   // the ABI that first serves intent 20
+
+        // IsClaimLive reads APMF's PUBLISHED map, which a RequestEx reaches only at
+        // APMF's next writer Drain. A pin MFO has never seen live is therefore not
+        // "ended" merely because IsClaimLive is false yet -- only once it has been
+        // seen live, or once this long has passed since it was filed. Same value and
+        // same reasoning as kEquipAuthValidateAfter (ch.17's standing claim). A FLOOR,
+        // not an expiry (CLAUDE.md principle 9): it only delays noticing an end.
+        constexpr auto kPinValidateAfter = std::chrono::seconds(2);
+
+        struct TargetPinClaim {
+            APMF_API::Handle handle   = APMF_API::kInvalidHandle;   // invalid once ENDED
+            RE::FormID       target   = 0;     // the foe MFO chose (kept after an end: the no-loop key)
+            RE::ActorHandle  targetH{};        // same foe, as a handle (Targeting::Current)
+            std::chrono::steady_clock::time_point filedAt{};
+            bool everLive       = false;
+            bool ended          = false;       // Harbinger ended it (IsClaimLive went false)
+            bool suppressLogged = false;       // one [target-pin] line per ended pin, not per tick
+        };
+        std::unordered_map<RE::FormID, TargetPinClaim> g_pins;   // guarded by g_mx
+
+        // Liveness of one filed pin. Marks it ENDED (and says so, once) when APMF no
+        // longer holds it. Returns true iff the pin is ended. g_mx HELD.
+        bool PinEndedLocked(const APMF_API::APMF_API_v2* api, RE::FormID follower, TargetPinClaim& p,
+                            std::chrono::steady_clock::time_point now) {
+            if (p.ended) return true;
+            if (p.handle == APMF_API::kInvalidHandle) return false;
+            // v6 IsClaimLive: this table only ever holds handles from an ABI >= 13 APMF.
+            if (reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(p.handle)) {
+                p.everLive = true;
+                return false;
+            }
+            if (!p.everLive && now - p.filedAt < kPinValidateAfter) return false;   // not drained yet
+            spdlog::info("[target-pin] {:08X}: Harbinger ENDED the pin on {:08X} (h={}; target lost, dead, "
+                         "disabled, unloaded or unresolvable, the follower dead, or an outranking claim -- "
+                         "APMF's '[ch.20] pin ended' line names it). The engine picks until MFO's gambit "
+                         "chooses a foe again; {:08X} itself is not re-pinned until the choice moves.",
+                         follower, p.target, p.handle, p.target);
+            p.handle = APMF_API::kInvalidHandle;   // dead: Harbinger released it (Release would be a no-op)
+            p.ended  = true;
+            return true;
+        }
+    }
+
+    bool TargetPinOffered() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= kPinMinAbi;
+    }
+
+    PinResult PinTarget(RE::FormID a_follower, RE::FormID a_target, RE::ActorHandle a_targetHandle) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kPinMinAbi) return PinResult::SeatAbsent;
+        // APMF refuses these synchronously too; filtering them here keeps a synchronous
+        // refusal meaning exactly ONE thing to Targeting (the seat is not installed).
+        if (a_follower == 0 || a_target == 0 || a_target == a_follower || a_follower == 0x14)
+            return PinResult::Invalid;
+
+        const auto now = std::chrono::steady_clock::now();
+        std::scoped_lock lock(g_mx);
+        auto it = g_pins.find(a_follower);
+        if (it != g_pins.end()) {
+            auto& p = it->second;
+            const bool ended = PinEndedLocked(api, a_follower, p, now);
+            if (p.target == a_target) {
+                if (!ended) return PinResult::Unchanged;
+                // THE NO-LOOP RULE. Harbinger dropped this foe; MFO's selectors already
+                // skip dead / disabled / lost foes, so reaching here means a foe they
+                // still rate (e.g. an outranking claim, or unloaded 3D) -- re-pinning it
+                // would be ended again at Harbinger's next poll, forever.
+                if (!p.suppressLogged) {
+                    p.suppressLogged = true;
+                    spdlog::info("[target-pin] {:08X}: gambit re-chose {:08X} after Harbinger ended its pin -- "
+                                 "NOT re-pinned (it pins again once the gambit chooses another foe first). "
+                                 "(Logged once per ended pin.)",
+                                 a_follower, a_target);
+                }
+                return PinResult::Suppressed;
+            }
+            // A CHANGED choice. Release + a fresh RequestEx rather than Repoint: a
+            // Repoint onto a handle Harbinger ended a moment ago is silently a no-op,
+            // and the next sweep would then record the NEW foe as the one Harbinger
+            // dropped and suppress it. Both ops are queued in order and applied at
+            // APMF's same writer Drain, so there is no unpinned gap.
+            if (p.handle != APMF_API::kInvalidHandle) api->Release(p.handle);
+            g_pins.erase(it);
+        }
+
+        APMF_API::APMF_Param prm{};
+        prm.form = a_target;   // REQUIRED: the target ACTOR. Nothing else is read.
+        const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_TargetPin, kOwnBasis, &prm);
+        if (h == APMF_API::kInvalidHandle) {
+            // Synchronous refusal with valid params = the ch.20 seat is not installed
+            // (VR, runtime, [TargetPin] bTargetPin=0, self-check). Session-stable: the
+            // seat installs once at APMF's kDataLoaded. Targeting logs the route change.
+            return PinResult::SeatAbsent;
+        }
+        TargetPinClaim p{};
+        p.handle  = h;
+        p.target  = a_target;
+        p.targetH = a_targetHandle;
+        p.filedAt = now;
+        g_pins.emplace(a_follower, p);
+        spdlog::info("[target-pin] {:08X}: PIN {:08X} (h={})", a_follower, a_target, h);
+        return PinResult::Pinned;
+    }
+
+    void ReleaseTargetPin(RE::FormID a_follower) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        std::scoped_lock lock(g_mx);
+        auto it = g_pins.find(a_follower);
+        if (it == g_pins.end()) return;
+        if (api && it->second.handle != APMF_API::kInvalidHandle) api->Release(it->second.handle);
+        spdlog::info("[target-pin] {:08X}: release (target {:08X}{})", a_follower, it->second.target,
+                     it->second.ended ? ", already ended by Harbinger" : "");
+        g_pins.erase(it);
+    }
+
+    void ReleaseAllTargetPins() {
+        std::scoped_lock lock(g_mx);
+        ClearTargetPinsLocked();
+    }
+
+    RE::ActorHandle PinnedTarget(RE::FormID a_follower) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kPinMinAbi) return {};
+        const auto now = std::chrono::steady_clock::now();
+        std::scoped_lock lock(g_mx);
+        auto it = g_pins.find(a_follower);
+        if (it == g_pins.end()) return {};
+        if (PinEndedLocked(api, a_follower, it->second, now)) return {};
+        return it->second.targetH;
+    }
+
+    void SweepTargetPinsLocked(const APMF_API::APMF_API_v2* api, std::chrono::steady_clock::time_point now) {
+        if (g_pins.empty() || !api || api->abiVersion < kPinMinAbi) return;
+        // KILL SWITCH: bCommandTarget flipped OFF mid-session releases every pin on the
+        // pump's cadence, as the legacy hook stopped writing the moment it read the flag.
+        if (!Config::g_commandTarget.load()) {
+            spdlog::info("[target-pin] bCommandTarget off -- releasing {} pin(s)", g_pins.size());
+            ClearTargetPinsLocked();
+            return;
+        }
+        for (auto& [fid, p] : g_pins) PinEndedLocked(api, fid, p, now);
+    }
+
+    void ClearTargetPinsLocked() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        for (auto& [fid, p] : g_pins)
+            if (api && p.handle != APMF_API::kInvalidHandle) api->Release(p.handle);
+        g_pins.clear();
+    }
+
     // ── package-offer (per-excursion) ───────────────────────────────────────────
     bool OfferPackage(RE::FormID a_follower, RE::FormID a_packageForm) {
         auto* api = g_apmf.load(std::memory_order_relaxed);

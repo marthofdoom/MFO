@@ -33,7 +33,8 @@ namespace MFO::Targeting {
     void InstallHook();
 
     // Latch a follower onto a target. MAIN THREAD. Held until cleared, and
-    // re-asserted by the hook every combat update.
+    // re-asserted by the hook every combat update. (Pin route: PINNED through
+    // Harbinger ch.20 instead -- see PinRoute() below.)
     // Returns TRUE only when the latch actually CHANGED. A gambit that keeps
     // winning re-commands the same foe every tick, and the hook already
     // re-asserts continuously -- so an unchanged command is a no-op and should
@@ -49,6 +50,18 @@ namespace MFO::Targeting {
     RE::ActorHandle Current(RE::FormID a_follower);
 
     bool IsHooked();
+
+    // THE PIN ROUTE (Harbinger ch.20 kIntent_TargetPin, ABI v13). With Harbinger present
+    // at ABI >= 13, Command/Clear/ClearAll/Current route to APMFBridge's pin table instead
+    // of the latch, and the hook writes NO target for any actor (it still drives
+    // CombatStyle). The latch is the degrade for Harbinger absent / older than v13 / the
+    // ch.20 seat not installed (first pin refused synchronously) -- never for a pin that
+    // Harbinger ENDED, which is not re-pinned onto the same foe until the choice moves.
+    bool PinRoute();
+
+    // Can MFO command a target right now? Pin route: bCommandTarget. Latch route: the
+    // hook is installed (the old IsHooked() gate the Attack / power-attack verbs used).
+    bool Commandable();
 
     // Probe instrumentation (§0.14's decisive measurement).
     struct Stats {

@@ -3,6 +3,7 @@
 #include "Targeting.h"
 #include "Config.h"
 #include "CombatStyle.h"
+#include "apmf/APMFBridge.h"   // ch.20 target pin: the pin route (Command/Clear/ClearAll/Current)
 
 // ONE Win32 symbol, declared by hand.
 //
@@ -33,6 +34,20 @@ namespace MFO::Targeting {
         // lock at all.
         std::atomic<std::size_t> g_latchCount{ 0 };
 
+        // THE PIN ROUTE (Harbinger ch.20 kIntent_TargetPin, ABI v13). When ON, MFO's
+        // foe choice is declared to Harbinger (APMFBridge::PinTarget) instead of
+        // latched here, and the hook below writes NO target for ANY actor: it runs
+        // after the engine's whole update, so a write here would overwrite the pin in
+        // every install order (Harbinger review F3). The hook itself stays installed
+        // because it also carries CombatStyle::ApplyTick (MAP.md cluster invariant 5).
+        // Set ONCE at InstallHook from APMFBridge::TargetPinOffered() (APMF present AND
+        // abiVersion >= 13); cleared ONCE, for the session, if the first pin is refused
+        // synchronously (the seat is not installed). Never set again after that: the
+        // legacy latch is the Harbinger-absent / older-Harbinger / seat-absent degrade
+        // ONLY -- a pin that ENDS never falls back to the latch.
+        // Read on the combat thread: an atomic, never the follower lists.
+        std::atomic<bool> g_pinRoute{ false };
+
         std::atomic<bool> g_hooked{ false };
         std::atomic<bool> g_conflict{ false };
         std::atomic<std::uint32_t> g_asserts{ 0 }, g_drifts{ 0 }, g_passes{ 0 };
@@ -50,7 +65,11 @@ namespace MFO::Targeting {
                 // (an archer given a melee gambit has no target override), so it
                 // gets its own lock-free gate alongside the targeting one.
                 const bool anyStyle  = CombatStyle::AnyActive();
-                const bool anyTarget = g_latchCount.load(std::memory_order_relaxed) != 0;
+                // Pin route: the target write is RETIRED (g_pinRoute above). The latch
+                // map is also empty on that route, so this is belt and braces -- and it
+                // keeps the fast path when only CombatStyle is active.
+                const bool anyTarget = !g_pinRoute.load(std::memory_order_relaxed) &&
+                                       g_latchCount.load(std::memory_order_relaxed) != 0;
                 if (!anyStyle && !anyTarget) return;
                 if (!a_this) return;
 
@@ -129,6 +148,15 @@ namespace MFO::Targeting {
     }
 
     void InstallHook() {
+        // ROUTE FIRST, before any early return below: the pin route does not depend on
+        // this hook (Harbinger holds the target), and APMFBridge::Acquire has already
+        // run (plugin.cpp, a few lines above the InstallHook call).
+        if (APMFBridge::TargetPinOffered()) {
+            g_pinRoute.store(true, std::memory_order_relaxed);
+            spdlog::info("[target] Harbinger ch.20 target pin offered (ABI >= 13) -- MFO's foe choices are "
+                         "PINNED through Harbinger; MFO's own UpdateCombat target write is RETIRED (the hook "
+                         "writes no target for any actor). The seat's own state is learned at the first pin.");
+        }
         // The UpdateCombat hook now drives THREE features: the target redirect
         // (bCommandTarget), weapon-stance ownership (bWeaponStyleControl, default
         // ON), and the owned-cast STANCE -- CombatStyle::ApplyTick (which writes
@@ -185,6 +213,31 @@ namespace MFO::Targeting {
     }
 
     bool Command(RE::FormID a_follower, RE::ActorHandle a_target) {
+        if (g_pinRoute.load(std::memory_order_relaxed)) {
+            // bCommandTarget is the user's switch for commanding the target at all; the
+            // legacy hook read it at write time, the pin route reads it at the choice.
+            if (!Config::g_commandTarget.load()) return false;
+            auto ptr = a_target.get();   // HOLD the NiPointer across the FormID read
+            auto* foe = ptr.get();
+            if (!foe) return false;
+            switch (APMFBridge::PinTarget(a_follower, foe->GetFormID(), a_target)) {
+            case APMFBridge::PinResult::Pinned:
+                return true;
+            case APMFBridge::PinResult::SeatAbsent:
+                // The ONE road back to the latch: Harbinger ch.20 is NOT available this
+                // session (a valid-param pin refused synchronously = seat not installed:
+                // VR, runtime, [TargetPin] bTargetPin=0, self-check). This is the third
+                // availability gate, not a per-claim decline fallback: it can only fire
+                // on the FIRST pin, before any pin ever stood.
+                if (g_pinRoute.exchange(false, std::memory_order_relaxed))
+                    spdlog::warn("[target] Harbinger REFUSED the ch.20 target pin synchronously -- its seat is "
+                                 "not installed (APMF's log names why). MFO's own target latch is the degrade "
+                                 "for the rest of the session.");
+                break;   // -> the latch below
+            default:
+                return false;   // Unchanged / Suppressed (ended, never re-pinned) / Invalid
+            }
+        }
         std::unique_lock lk(g_latchMx);
         const auto it = g_latch.find(a_follower);
         if (it != g_latch.end() && it->second == a_target) return false;   // unchanged
@@ -194,24 +247,35 @@ namespace MFO::Targeting {
     }
 
     RE::ActorHandle Current(RE::FormID a_follower) {
+        if (g_pinRoute.load(std::memory_order_relaxed)) return APMFBridge::PinnedTarget(a_follower);
         std::shared_lock lk(g_latchMx);
         const auto it = g_latch.find(a_follower);
         return it != g_latch.end() ? it->second : RE::ActorHandle{};
     }
 
     void Clear(RE::FormID a_follower) {
+        // Pin route: release the follower's ch.20 pin (live or already ended). Called
+        // outside g_latchMx -- the bridge takes its own g_mx and never calls back here.
+        if (g_pinRoute.load(std::memory_order_relaxed)) APMFBridge::ReleaseTargetPin(a_follower);
         std::unique_lock lk(g_latchMx);
         g_latch.erase(a_follower);
         g_latchCount.store(g_latch.size(), std::memory_order_relaxed);
     }
 
     void ClearAll() {
+        if (g_pinRoute.load(std::memory_order_relaxed)) APMFBridge::ReleaseAllTargetPins();
         std::unique_lock lk(g_latchMx);
         g_latch.clear();
         g_latchCount.store(0, std::memory_order_relaxed);
     }
 
     bool IsHooked() { return g_hooked.load(); }
+
+    bool PinRoute() { return g_pinRoute.load(std::memory_order_relaxed); }
+
+    bool Commandable() {
+        return g_pinRoute.load(std::memory_order_relaxed) ? Config::g_commandTarget.load() : IsHooked();
+    }
 
     Stats GetStats() {
         Stats s;
