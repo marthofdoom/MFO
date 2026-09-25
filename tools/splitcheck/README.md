@@ -28,22 +28,28 @@ python3 -m venv /tmp/splitcheck-venv
 
 ## Getting the builds
 
-CI uploads `MFO.dll` + `MFO.pdb` as the `MFO-dll` artifact of every `native` run.
-Four builds are needed: main and the branch, each twice.
+CI uploads `MFO.dll` + `MFO.pdb` as the `MFO-dll` artifact of every `native` run,
+and a SEPARATE `MFO-build-info` artifact (never inside the deploy zip):
+`build-info.txt` = `built=<sha> noinline=<b> noopt=<b> dll_sha256=<hex>`.
+Four builds are needed: main and the branch, each twice. Dispatch all four with
+a FULL `source_ref` SHA so each pair is provably the same commit:
 
 ```sh
-# the shipped /O2 builds: the push runs of main and of the branch tip
-gh run download <main-push-run>   -D a
-gh run download <branch-push-run> -D b
-# the PROOF builds: optimizer off, same two commits (dispatch from the branch)
-gh workflow run native --ref <branch> -f noopt=true -f source_ref=<main-sha>
-gh workflow run native --ref <branch> -f noopt=true
-gh run download <main-noopt-run>   -D a0
-gh run download <branch-noopt-run> -D b0
+M=<main-sha>; B=<branch-sha>          # full 40-char SHAs
+gh workflow run native --ref <branch> -f source_ref=$M
+gh workflow run native --ref <branch> -f source_ref=$B
+gh workflow run native --ref <branch> -f noopt=true -f source_ref=$M
+gh workflow run native --ref <branch> -f noopt=true -f source_ref=$B
+gh run download <run> -D a     # a/MFO-dll/MFO.dll + a/MFO-build-info/build-info.txt
 ```
 
-A proof artifact carries `build-info.txt` (`built=<sha> noinline=.. noopt=true`);
-check it names the commit you mean. Only `success` runs.
+**Provenance is checked, not trusted.** `--proof` refuses to run (FAIL, exit 1,
+"PROVENANCE") unless the four records pair up: A and A0 built from one SHA, B
+and B0 from another (and A != B), A0/B0 `noopt=true`, A/B the normal build, and
+every record's `dll_sha256` equal to the DLL beside it. The record is found in the
+`gh run download` layout (`<dir>/MFO-build-info/build-info.txt` next to
+`<dir>/MFO-dll/`), or beside the DLL, or given with `--build-info A B A0 B0`.
+Only `success` runs.
 
 **Why /Od and not /Ob0.** Without LTCG, MSVC decides inlining per TU, so a split
 changes which helpers get inlined. /Ob0 removes inlining, but MSVC still
@@ -82,7 +88,13 @@ planted change), else 1. `selftest`: 0 = every case behaved, 1 = a hole.
 `--strict` disables every explained class. `--strict --copies-ok` (what
 `--proof` runs on the proof pair) still accepts only identical per-TU copies of
 a header-defined internal-linkage object whose copy COUNT changed (a split
-adds TUs that include the header). `--tu-map FILE` lists which new TUs each old
+adds TUs that include the header), and only when that object is CONST (its PDB
+type is const-qualified, or it sits in a read-only section: MSVC records a
+constexpr class-typed variable such as `std::chrono::seconds` with no const
+modifier, but in `.rdata`). A MUTABLE object's copy-count change FAILs as a STATE
+SPLIT unless the same functions read it in both builds and every two of them
+share a copy in A exactly when they share one in B (so a split that hands two
+moved functions their own copies of state they used to share is caught). `--tu-map FILE` lists which new TUs each old
 TU became (`old.cpp<TAB>new/a.cpp new/b.cpp`); it is how file-local twins are
 kept apart.
 
@@ -97,16 +109,29 @@ kept apart.
    (a file-local helper the split made extern; listed as "re-links"), then by
    unique name. A name defined at 2+ addresses (file-local TWINS: the PDB drops
    "anonymous namespace" from data names) is tagged with its module, and a
-   twin pairs only with a twin in a TU its TU became (`--tu-map`).
+   twin pairs only with a twin in a TU its TU became (`--tu-map`). A twin on
+   one side against a unique symbol on the other is TU-checked the same way,
+   through the unique symbol's owning module.
 3. **Compare** in lockstep (capstone). Opcode, register and immediate bytes must
    be equal; every address field is compared by what it points at: symbols
-   (twins by TU), string literals by text (named `??_C` ones, and unnamed ones in
-   `.rdata` in the /Od build, "" included; a source-path literal may change its
-   file name), RTTI by class name, unnamed read-only data by content, a
-   read-only constant named in one build only by its bytes (its type size), and
-   differently-named callees by structural identity.
-4. **Named data.** Every `MFO::` variable/constant compared byte by byte up to
-   its PDB type size (pointer slots by target). A datum in one build only, or
+   (twins by TU), RTTI by class name, differently-named callees by structural
+   identity. **Read-only data** (a section neither code nor writable): a
+   reference to a named object's start, inside a named object of known PDB
+   size, or one past its end (a loop bound) compares by name. Anything else is
+   compared by CONTENT, never a fixed length: a string literal (named `??_C` or
+   unnamed, UTF-8 accepted) as its whole NUL-terminated byte string (a
+   source-path literal may change its file name); other unnamed data over
+   min(extent in A, extent in B), the extent running to the next object
+   boundary (a symbol, a relocation slot or target, a RIP-relative target
+   anywhere in the code including non-PDB library code, a pooled text literal).
+   The object ends before the next object starts in EACH build, so the shorter
+   extent still covers all of it; the longer one's excess is another object
+   (/Od keeps whole literal pools, referenced or not). Residual: a non-string
+   object whose bytes read as a one-character string and a NUL is compared as
+   that string.
+4. **Named data.** Every `MFO::` variable/constant compared byte by byte over
+   its PDB type size, else up to the next symbol, no cap (pointer slots by
+   target). A datum in one build only, or
    duplicated, is REPORTED; one side folded into an `S_CONSTANT` of the same
    value is listed as folded.
 
@@ -117,7 +142,7 @@ kept apart.
 | inline-drift | inline sites differ (or a pure LIBRARY template COMDAT: a name with no `MFO::` in it), AND the own-code fingerprint is equal AND the constant multiset is equal |
 | funclet-drift / renumbered | an unwind funclet of a drift function / a funclet renumbered with an identical body |
 | outlined | present in one build only and inlined (PDB inline site, qualified name) in the other |
-| copies | a header-defined internal-linkage object's per-TU copies (count changed, each identical) |
+| copies | a header-defined internal-linkage object's per-TU copies (count changed, each identical), CONST only, or mutable with the same copy-sharing among its readers (see above) |
 | PROVEN | with `--proof` passing: a pair whose inline sites differ; the /Od build proves its source compiles identically |
 
 The **own-code fingerprint**: every reference outside the function's top-level
