@@ -689,14 +689,24 @@ class Cmp:
         self._live = {}
 
     def copy_readers(self, img, var):
-        """Who touches each definition of variable `var` (norm'd name) in img,
-        other than its own initializer / atexit destructor: reader (a function
-        name, or "data:<symbol>" for a relocated pointer) -> set of the copies
-        it refers to."""
+        """Who touches each definition (copy) of variable `var` (norm'd name) in
+        img, other than its own initializer / atexit destructor. A reference
+        ANYWHERE inside a copy counts ([rip+g+4], an element, a member), the
+        copy's extent being its PDB type size (else up to the next structural
+        boundary). Readers are keyed by (function name, owning MODULE), so
+        per-TU copies of a same-named file-local accessor stay distinct; a
+        relocated pointer to a copy is the reader ("data:<symbol>", module).
+        Returns {(reader, module): set(copy rvas)}."""
         key = (id(img), var)
         if key in self._live:
             return self._live[key]
-        defs = {r for n, r, _m in img.datas if norm(n) == var}
+        spans = sorted((r, r + (img.data_size.get(r) or max(1, img.struct_extent(r))))
+                       for n, r, _m in img.datas if norm(n) == var)
+        starts = [a for a, _b in spans]
+
+        def copy_of(t):
+            j = bisect.bisect_right(starts, t) - 1
+            return spans[j][0] if j >= 0 and spans[j][0] <= t < spans[j][1] else None
         readers = defaultdict(set)
         own = re.compile(r"dynamic (?:initializer|atexit destructor) for '" + re.escape(var.rsplit("::", 1)[-1]) + "''")
         for p in img.procs:
@@ -704,36 +714,57 @@ class Cmp:
                 continue
             for ins in self.disasm(img, p["rva"], p["size"]):
                 for _o, _s, _k, t in self.fields(img, ins):
-                    if t in defs:
-                        readers[norm(untag(p["name"]))].add(t)
+                    c = copy_of(t)
+                    if c is not None:
+                        readers[(norm(untag(p["name"])), p.get("mod"))].add(c)
         for r in img.relocs:
             v = int.from_bytes(img.data[r:r + 8], "little") - img.base
-            if v in defs:
-                c = img.resolve(r)[0]
-                readers["data:" + (norm(untag(min(c[1]))) if c[1] else hex(r))].add(v)
+            c = copy_of(v)
+            if c is not None:
+                sym = img.resolve(r)[0]
+                nm = untag(min(sym[1])) if sym[1] else hex(r)
+                readers[("data:" + norm(nm), img.mod_of.get(nm))].add(c)
         self._live[key] = dict(readers)
         return self._live[key]
 
-    def state_split_ok(self, var):
-        """A MUTABLE variable whose per-TU copy count changed is still ONE piece
-        of state per group of users only if the split kept exactly who shares a
-        copy with whom: the same readers in both builds, and for every two of
-        them "they touch a common copy" is true in A exactly when it is true in
-        B. Two moved functions that shared the old TU's copy and now each read
-        their own TU's copy (a STATE SPLIT) fail this. Returns (ok, detail)."""
+    def state_split_ok(self, var, layout_changed=True):
+        """A MUTABLE variable with per-TU copies is still the same state only if
+        the split kept who shares a copy with whom. Every reader in B (keyed by
+        name + module) must map to exactly one reader in A of the same name in
+        a TU its TU came from (--tu-map), every A reader must be mapped, and for
+        every two B readers "they touch a common copy" must equal the same fact
+        for their A readers -- two B readers that map to ONE A reader (per-TU
+        copies of one accessor) must therefore share a copy. When the copy
+        layout changed, finding NO reader at all is a FAIL (nothing proves the
+        state is unsplit). Returns (ok, detail)."""
         ra, rb = self.copy_readers(self.A, var), self.copy_readers(self.B, var)
-        if set(ra) != set(rb):
-            return False, (f"readers differ: only in A {sorted(set(ra) - set(rb))[:3]}, "
-                           f"only in B {sorted(set(rb) - set(ra))[:3]}")
-        names = sorted(ra)
-        for x in range(len(names)):
-            for y in range(x + 1, len(names)):
-                p, q = names[x], names[y]
-                sa, sb = bool(ra[p] & ra[q]), bool(rb[p] & rb[q])
+        if not ra and not rb:
+            if layout_changed:
+                return False, "no reader of any copy was found, so no sharing can be proven"
+            return True, "no readers"
+        mapping, why = {}, []
+        for kb in rb:
+            c = [ka for ka in ra if ka[0] == kb[0] and self.tu_ok(ka[1], kb[1])]
+            if len(c) != 1:
+                why.append(f"B reader {kb[0][:60]} ({kb[1]}) maps to {len(c)} A reader(s)")
+            else:
+                mapping[kb] = c[0]
+        unmapped = [ka for ka in ra if ka not in mapping.values()]
+        if unmapped:
+            why.append(f"A reader(s) with no B counterpart: {[k[0][:50] for k in unmapped[:3]]}")
+        if why:
+            return False, "; ".join(why[:3])
+        kbs = sorted(rb, key=str)
+        for x in range(len(kbs)):
+            for y in range(x + 1, len(kbs)):
+                p, q = kbs[x], kbs[y]
+                sa = mapping[p] == mapping[q] or bool(ra[mapping[p]] & ra[mapping[q]])
+                sb = bool(rb[p] & rb[q])
                 if sa != sb:
-                    return False, (f"{p} and {q} {'share' if sa else 'do not share'} a copy in A but "
+                    return False, (f"{p[0][:50]} ({p[1]}) and {q[0][:50]} ({q[1]}) "
+                                   f"{'share' if sa else 'do not share'} a copy in A but "
                                    f"{'share' if sb else 'do not share'} one in B")
-        return True, f"{len(names)} reader(s), sharing unchanged"
+        return True, f"{len(rb)} reader(s), sharing unchanged"
 
     def disasm(self, img, rva, size):
         k = (id(img), rva, size)
@@ -1252,6 +1283,16 @@ def compare_data(A, B, cmp, cap=512):
         if not in_scope(n):
             continue
         la, lb = da.get(n, []), db.get(n, [])
+        # MUTABLE per-TU copies (a twin in either build): the state-split check
+        # runs whenever they exist, whether or not the copy layout changed
+        if (len(la) > 1 or len(lb) > 1) and la and lb and \
+                (any(not A.is_const_data(r) for r, _m in la) or any(not B.is_const_data(r) for r, _m in lb)):
+            changed = sorted(str(m) for _r, m in la) != sorted(str(m) for _r, m in lb)
+            ok_, why_ = cmp.state_split_ok(n, layout_changed=changed)
+            if not ok_:
+                diffs.append((n, f"STATE SPLIT on a MUTABLE per-TU variable ({len(la)} copies in A, "
+                                 f"{len(lb)} in B): {why_}"))
+                continue
         if not lb:
             if len(la) == 1 and const_equal(A, la[0][0], B, n):
                 folded.append((n, "A stores it, B folded it to an S_CONSTANT of the same value"))
