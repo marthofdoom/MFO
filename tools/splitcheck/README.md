@@ -156,9 +156,17 @@ kept apart.
    both builds is read as the empty literal "" and only that NUL is compared
    (an unreferenced tail of it is not; a referenced one is compared at its own
    reference, selftest N16).
+   **Unnamed code** (an executable target that is no PDB procedure's start or
+   inside one, e.g. an adjustor thunk `sub rcx, N ; jmp F` in a vftable slot)
+   is compared by its BODY: instruction by instruction up to its first
+   unconditional `jmp` / `ret` (at most 8), address fields masked and compared
+   by target, so the `jmp`'s target must be the same function by name
+   (selftest N14). A named entry at offset 0 still matches by name.
 4. **Named data.** Every `MFO::` variable/constant compared byte by byte over
    its PDB type size, else up to the next symbol, no cap (pointer slots by
-   target). A datum in one build only, or
+   target). A `vftable` is compared over its leading run of code-pointer slots
+   in each build, which must be the same count (its PDB type size is not its
+   slot count and runs into the next object). A datum in one build only, or
    duplicated, is REPORTED; one side folded into an `S_CONSTANT` of the same
    value is listed as folded.
 

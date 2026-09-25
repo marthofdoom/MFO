@@ -523,6 +523,13 @@ class Image:
         z = b.find(b"\0")
         return b if z < 0 else b[:z]
 
+    def executable(self, rva):
+        """rva lies in an executable (code) section."""
+        for s in self.pe.sections:
+            if s.VirtualAddress <= rva < s.VirtualAddress + max(s.Misc_VirtualSize, s.SizeOfRawData):
+                return bool(s.Characteristics & 0x20000000)
+        return False
+
     def readonly_data(self, rva):
         """rva lies in a section that is neither code nor writable (.rdata...)."""
         for s in self.pe.sections:
@@ -947,6 +954,33 @@ class Cmp:
         self.notes["unnamed read-only data equal up to the first common boundary"] += 1
         return True
 
+    def _unnamed_code_equal(self, ra, rb, depth):
+        """Code outside every PDB procedure, compared instruction by instruction
+        in lockstep up to and including its first unconditional jmp / ret (at
+        most 8 instructions): equal lengths and bytes with the address fields
+        masked, and every address field (the jmp's target above all) the same
+        target by name. No jmp / ret within 8 instructions is not equal."""
+        key = ("code", ra, rb)
+        if key in self.memo:
+            return self.memo[key] is None
+        self.memo[key] = None           # a cycle: assume, verify the rest
+        ia = list(self.md.disasm(self.A.read(ra, 128), ra))[:8]
+        ib = list(self.md.disasm(self.B.read(rb, 128), rb))[:8]
+        ok = False
+        for x, y in zip(ia, ib):
+            fx, fy = self.fields(self.A, x), self.fields(self.B, y)
+            if x.size != y.size or [f[:3] for f in fx] != [f[:3] for f in fy] \
+                    or self.masked(x, fx) != self.masked(y, fy):
+                break
+            if not all(self.same_target(self.A.resolve(tx), self.B.resolve(ty), depth + 1)
+                       for (_o, _s, _k, tx), (_p, _t, _l, ty) in zip(fx, fy)):
+                break
+            if x.mnemonic in ("jmp", "ret"):
+                ok = True
+                break
+        self.memo[key] = None if ok else "unnamed code differs"
+        return ok
+
     def _same(self, ta, tb, depth):
         ka, na, oa, ra = ta
         kb, nb, ob, rb = tb
@@ -984,6 +1018,18 @@ class Cmp:
                         self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
                     return True
             return self._unnamed_equal(ra, rb)
+        # UNNAMED CODE: an executable target that is no PDB procedure's start or
+        # inside one -- an adjustor thunk in a vftable slot (`sub rcx, N ; jmp F`)
+        # -- resolves only as "the nearest symbol before it + offset", which the
+        # link layout decides. Compare it by its BODY instead. (A named entry at
+        # offset 0, e.g. a public-only library routine, still matches by name.)
+        if ka in ("sym", "none") and kb in ("sym", "none") \
+                and self.A.executable(ra) and self.B.executable(rb) \
+                and not (ka == kb == "sym" and oa == ob == 0 and na and nb and self.names_match(na, nb)):
+            if self._unnamed_code_equal(ra, rb, depth):
+                self.notes["unnamed code (adjustor thunk) equal by body and jump target"] += 1
+                return True
+            return False
         if ka == "none" or kb == "none":
             return False
         if oa == ob and na and nb and self.names_match(na, nb):
@@ -1416,7 +1462,23 @@ def _data_diff(A, B, cmp, ra, rb, cap):
         _lo, hi = img.sec_bounds(r)
         nxt = img.sym_rvas[j] if j < len(img.sym_rvas) else hi
         return min(nxt, hi) - r
-    xa, xb = extent(A, ra), extent(B, rb)
+    def vft_slots(img, r):
+        # a VFTABLE is its leading run of code pointers (its RTTI locator
+        # pointer sits BEFORE it). The PDB type size of a vftable symbol is not
+        # its slot count (GateSink: 24 bytes for each of three 2-slot
+        # vftables), so it runs into whatever the linker placed next: the next
+        # vftable's locator pointer, or an unrelated object.
+        n = 0
+        while (r + 8 * n) in img.relocs and img.executable(
+                int.from_bytes(img.data[r + 8 * n:r + 8 * n + 8], "little") - img.base):
+            n += 1
+        return 8 * n
+    if any("`vftable'" in x for x in A.names_at.get(ra, ()) | B.names_at.get(rb, ())):
+        xa, xb = vft_slots(A, ra), vft_slots(B, rb)
+        if xa != xb or not xa:
+            return f"vftable slot count {xa // 8} vs {xb // 8}"
+    else:
+        xa, xb = extent(A, ra), extent(B, rb)
     if A.data_size.get(ra) and B.data_size.get(rb) and xa != xb:
         return f"type size {xa} vs {xb}"
     ln = min(xa, xb)
