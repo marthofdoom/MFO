@@ -99,16 +99,23 @@ jobs:
       - name: Build
         run: cmake --build build/release
 
-      # The commit actually compiled (differs from the run's headSha when
-      # source_ref is set) and whether inlining was off -- shipped inside the
-      # artifact, next to the DLL, so a comparison can never pair the wrong builds.
-      # Proof/rebuild dispatches only: a normal build's artifact stays exactly
-      # MFO.dll + MFO.pdb (it is unzipped straight over the mod folder).
+      # PROVENANCE (splitcheck --proof refuses unpaired builds): EVERY run records
+      # the commit it actually compiled (differs from the run's headSha when
+      # source_ref is set) and the optimizer flags, as its OWN artifact
+      # (MFO-build-info), never inside MFO-dll -- that zip is unzipped straight
+      # over the mod folder and stays exactly MFO.dll + MFO.pdb.
       - name: Record the built commit
-        if: ${{ inputs.noinline == true || inputs.noopt == true || inputs.source_ref != '' }}
         run: |
           git rev-parse HEAD
-          "built=$(git rev-parse HEAD) noinline=${{ inputs.noinline == true }} noopt=${{ inputs.noopt == true }}" | Out-File -FilePath build/release/build-info.txt -Encoding ascii
+          New-Item -ItemType Directory -Force -Path build/buildinfo | Out-Null
+          "built=$(git rev-parse HEAD) noinline=${{ inputs.noinline == true }} noopt=${{ inputs.noopt == true }}" | Out-File -FilePath build/buildinfo/build-info.txt -Encoding ascii
+
+      - name: Upload build info
+        uses: actions/upload-artifact@v4
+        with:
+          name: MFO-build-info
+          path: native/build/buildinfo/build-info.txt
+          if-no-files-found: error
 
       - name: Upload DLL
         uses: actions/upload-artifact@v4
@@ -117,5 +124,4 @@ jobs:
           path: |
             native/build/release/MFO.dll
             native/build/release/MFO.pdb
-            native/build/release/build-info.txt
           if-no-files-found: error
