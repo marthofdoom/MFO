@@ -68,6 +68,8 @@ DATA_SCOPE = re.compile(r"^(const )?(`)?MFO::")
 PATHLIT = re.compile(rb"[A-Za-z]:\\.*\\native\\.*\.(cpp|h)$", re.I)
 FUNCLET = re.compile(r"^`(.*)'::`\d+'::(dtor|catch)\$\d+$")
 XTOR = re.compile(r"`dynamic (atexit destructor|initializer) for '")
+# MSVC's thread-safe-static init guard of a function-local static ($TSS0, ...)
+GUARD = re.compile(r"\$TSS\d+")
 # a function DEFINED by a library header (STL, CommonLib, SKSE, fmt/spdlog...),
 # possibly instantiated over an MFO type. Its out-of-line body is a COMDAT that
 # the linker takes from whichever TU it sees first, so a split can swap in
@@ -719,7 +721,60 @@ class Cmp:
             return spans[j][0] if j >= 0 and spans[j][0] <= t < spans[j][1] else None
         readers = defaultdict(set)
         own = re.compile(r"dynamic (?:initializer|atexit destructor) for '" + re.escape(var.rsplit("::", 1)[-1]) + "''")
-        for p in img.procs:
+        if GUARD.fullmatch(var):
+            # A THREAD-SAFE-STATIC GUARD ($TSSn): the compiler's per-function
+            # name for the init guard of a function-local static, reused by
+            # every function that has one. It is private state of its OWNING
+            # function, so a reader is keyed by that owner, not by the proc the
+            # owner's code sits in: an instruction inside an inline site belongs
+            # to the innermost inlined function (a function-local static
+            # travels with its function whether it is inlined or not). An
+            # unwind funclet only aborts its parent's guard; its reference is
+            # the parent's when the parent's body reads that copy, else the
+            # parent owner's own (so a funclet reading ANOTHER guard shows).
+            # An instruction the optimizer left outside its innermost inline
+            # site's code ranges (a guard test hoisted into the enclosing
+            # function) is attributed by position to that enclosing function; it
+            # is re-attributed to the ONE other function that reads the same
+            # guard copy elsewhere in the image, is inlined (at any depth) into
+            # the proc the instruction sits in, AND is inlined by the enclosing
+            # function's own out-of-line body (so the guard is the deeper
+            # function's; two sites with identical ranges are told apart this
+            # way too).
+            body = defaultdict(set)
+            fun, bare = [], []
+            by_copy = defaultdict(set)
+            for p in img.procs:
+                fm = FUNCLET.match(p["name"])
+                if fm:
+                    fun.append((p, fm.group(1)))
+                    continue
+                ranges = img.inl_ranges_all.get(p["key"], [])
+                for ins in self.disasm(img, p["rva"], p["size"]):
+                    for _o, _s, _k, t in self.fields(img, ins):
+                        c = copy_of(t)
+                        if c is None:
+                            continue
+                        off = ins.address - p["rva"]
+                        cover = [(b - a, n) for a, b, n in ranges if a <= off < b]
+                        body[(norm(p["name"]), p.get("mod"))].add(c)
+                        me = min(cover)[1] if cover else qual_key(p["name"])
+                        bare.append((p, c, me))
+                        by_copy[c].add(me)
+            inl_of = defaultdict(set)       # what a function's out-of-line body inlines
+            for p in img.procs:
+                inl_of[qual_key(p["name"])].update(img.inl_all.get(p["key"], ()))
+            for p, c, me in bare:
+                inl = img.inl_all.get(p["key"], {})
+                others = sorted(o for o in by_copy[c] if o != me and inl.get(o) and o in inl_of.get(me, ()))
+                readers[(others[0] if len(others) == 1 else me, p.get("mod"))].add(c)
+            for p, parent in fun:
+                for ins in self.disasm(img, p["rva"], p["size"]):
+                    for _o, _s, _k, t in self.fields(img, ins):
+                        c = copy_of(t)
+                        if c is not None and c not in body.get((norm(parent), p.get("mod")), ()):
+                            readers[(qual_key(parent), p.get("mod"))].add(c)
+        for p in (() if GUARD.fullmatch(var) else img.procs):
             if own.search(p["name"]):
                 continue
             for ins in self.disasm(img, p["rva"], p["size"]):
@@ -748,6 +803,15 @@ class Cmp:
         layout changed, finding NO reader at all is a FAIL (nothing proves the
         state is unsplit). Returns (ok, detail)."""
         ra, rb = self.copy_readers(self.A, var), self.copy_readers(self.B, var)
+        if GUARD.fullmatch(var):
+            # a guard belongs to ONE function-local static of ONE owner: an owner
+            # reading more guard copies in B than any same-named owner in A has
+            # its static's state split (or shares another's guard)
+            for kb, cb in sorted(rb.items(), key=str):
+                most = max((len(c) for ka, c in ra.items() if ka[0] == kb[0]), default=0)
+                if len(cb) > max(most, 1):
+                    return False, (f"owner {kb[0][:60]} ({kb[1]}) reads {len(cb)} {var} guard copies "
+                                   f"in B, {most} in A")
         if not ra and not rb:
             if layout_changed:
                 return False, "no reader of any copy was found, so no sharing can be proven"

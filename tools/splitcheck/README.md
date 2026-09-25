@@ -114,6 +114,20 @@ not a whole-program alias analysis: an access through a pointer computed at
 run time (a copy's address stored somewhere and loaded later) is attributed
 to the code that took the address, not to the code that dereferences it.
 
+**Thread-safe-static guards (`$TSSn`).** MSVC names the init guard of a
+function-local static `$TSS0`, `$TSS1`, ... per function, so one name has many
+copies that are NOT per-TU copies of one header static: each is private state
+of the function that owns the static. Their readers are keyed by that OWNER:
+a reference inside an inline site belongs to the innermost inlined function
+(the static travels with its function, inlined or not); a reference the
+optimizer left outside its site's ranges goes to the one other function that
+reads the same copy, is inlined into that proc, and is inlined by the
+enclosing function's own body; an unwind funclet's reference is its parent's
+when the parent's body reads that copy. The same mapping and sharing rules
+then apply, plus: an owner reading more guard copies in B than any
+same-named owner in A FAILs (its static's state is split, or it now shares
+another static's guard; selftest N13).
+
 `--tu-map FILE` lists which new TUs each old
 TU became (`old.cpp<TAB>new/a.cpp new/b.cpp`); it is how file-local twins are
 kept apart.
