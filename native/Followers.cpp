@@ -9,7 +9,7 @@
 #include "apmf/APMFBridge.h"   // ReleaseHealCast/ReleaseOffenseCast -- drop a dismissed follower's live claims
 #include "ComposedCast.h" // ClearWatch -- drop the shared [cfc] silent-claim watch alongside the offense claim
 #include "CastBounds.h"   // Disarm -- drop his MFO-executed-cast bound (§2 registry)
-#include "Logistics.h"
+#include "logistics/Logistics.h"
 #include "MainThread.h"   // F7: the deferred dismissal restore under the APMF equip authority
 #include "Diagnostics.h"  // F7: CurrentPumpEpoch / PumpTickGate for its AddTask body
 #include "Forms.h"

@@ -4,7 +4,7 @@
 #include "Papyrus.h"
 #include "Config.h"
 #include "ItemCatalog.h"
-#include "Logistics.h"   // Logistics::PotionRestores -- the SAME classifier CountPotions uses
+#include "logistics/Logistics.h"   // Logistics::PotionRestores -- the SAME classifier CountPotions uses
 #include "Vocabulary.h"  // Vocab::IsCastableSpell -- the tome-buy gate
 #include <mutex>
 

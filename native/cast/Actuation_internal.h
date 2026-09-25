@@ -20,7 +20,7 @@
 #include "Papyrus.h"
 #include "CasterConsent.h"
 #include "Targeting.h"
-#include "Logistics.h"
+#include "logistics/Logistics.h"
 #include "Followers.h"   // #68: g_active -- NearestAlly walks the maintained teammate list
 #include "Serialization.h" // T#76: FWPN record ids for the force-hold co-save
 #include "MainThread.h"   // T#76: defer the load-time force-lock release to the main thread

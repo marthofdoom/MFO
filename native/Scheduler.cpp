@@ -11,7 +11,7 @@
 #include "CombatStyle.h"
 #include "Packages.h"
 #include "Vocabulary.h"
-#include "Logistics.h"
+#include "logistics/Logistics.h"
 #include "State.h"
 #include "Confidence.h"   // retreat probe: the fill gate reads Of()
 #include "CombatSense.h"  // party combat: the [sense] foe tally (FoeCount), reused, not re-scanned
