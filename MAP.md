@@ -1442,7 +1442,7 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   STAY by an out-of-combat `Of()` or by a frozen `fightConf` benches a foe-count retreat for
   the whole cap; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
   StopCombat lands (same self-cancel). The Confidence formula is untouched (its v2 is a
-  separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B98..MFO-B103.
+  separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B107.
 - `ClearTransientState` (`:230`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,

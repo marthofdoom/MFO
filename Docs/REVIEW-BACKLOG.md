@@ -712,20 +712,20 @@ Raised against 6badb85 (`refactor/subsystem-folders-wave2`), 2026-09-25. Reviewe
 ### MFO-B97 (SEV-5, informational) -- logistics split: per-TU copy counts of header statics grew
 Raised against 6badb85 (`refactor/subsystem-folders-wave2`), 2026-09-25. Reviewer's verbatim finding: "rapidcsv::s_Utf8BOM gained 5 per-TU copies (a header static std::string with a dynamic initializer), and k* constants went from 9 to 14 copies; all identical, none reads another TU's object." Reviewer's reasoning: informational; every copy is identical and no TU reads another TU's copy, so no state is split.
 
-### MFO-B98 (SEV-5, author-raised, pre-existing; CORRECTED by the 7580bea review) -- retreat: a follower who dies mid-retreat keeps his hold briefly
+### MFO-B102 (SEV-5, author-raised, pre-existing; CORRECTED by the 7580bea review) -- retreat: a follower who dies mid-retreat keeps his hold briefly
 Raised by the author of `fix/mfo-retreat` (ClickUp 86e3erv94), 2026-09-25, as SEV-4; corrected by the tier-A review of 7580bea. Original claim: `Scheduler::Tick`'s dead/disabled early return runs before `ServiceRetreat`, so the hold (and on the APMF road the Pump's ch.9 re-offer) outlives him until load/dismissal. Correction (reviewer): it self-heals in ~1.6 s via Refresh -> ReleaseHeldState -> RetreatEvictIf -- a dead/disabled follower fails IsEligibleFollower and is dropped after kMissesBeforeDrop=3 Refresh sweeps. Residual: ~1.6 s of re-offers for a dead actor. Fix shape if ever wanted: `Packages::RetreatClear("dead", f)` in the dead/disabled branch.
 
-### MFO-B99 (SEV-5) -- retreat: posted-lambda generation check is not held across StopCombat
+### MFO-B103 (SEV-5) -- retreat: posted-lambda generation check is not held across StopCombat
 Raised against 7580bea (`fix/mfo-retreat`, tier-A review), 2026-09-25. Finding (as relayed by the coordinator): "the posted-lambda race (SEV-5, harmless)". The posted StopCombat checks (FormID, gen) under `g_retreatLiveMx`, releases the lock, then calls StopCombat; the worker can clear the retreat in between. Reasoning: worst case one extra StopCombat on a follower who has just stopped retreating; no state corruption.
 
-### MFO-B100 (SEV-5, outside the 86e3erv94 boundary) -- cast/Fire.cpp:276-277 comment is stale
+### MFO-B104 (SEV-5, outside the 86e3erv94 boundary) -- cast/Fire.cpp:276-277 comment is stale
 Raised against 7580bea (`fix/mfo-retreat`, tier-A review), 2026-09-25. Finding (as relayed): "the stale comment at cast/Fire.cpp:276-277 (SEV-5, outside the boundary)". The act.flee comment still says the retreat is "Cleared on combat end / arrival by the retreat driver"; since 86e3erv94 it ends on arrival (out-of-combat flee) / stay end / timeout / no engaged foes, never on combat end. cast/ was owned by the ch.20 pin branch during this change.
 
-### MFO-B101 (SEV-4, pre-existing) -- a flee rule re-fires about every 2 services at the player's side
+### MFO-B105 (SEV-4, pre-existing) -- a flee rule re-fires about every 2 services at the player's side
 Raised against 7580bea (`fix/mfo-retreat`, tier-A review), 2026-09-25. Finding (as relayed): "a flee rule re-firing about every 2 services at the player's side, brushing #22a (pre-existing)". An act.flee gambit whose condition stays true re-fills a retreat each time the previous one releases on arrival, because the gambit path is not gated by the auto-retreat cooldown. Pre-existing shape; needs its own decision (gate act.flee by the cooldown, or by distance to the player).
 
-### MFO-B102 (SEV-4, structural) -- Packages.cpp is near the 2500-line cap
+### MFO-B106 (SEV-4, structural) -- Packages.cpp is near the 2500-line cap
 Raised against 7580bea (`fix/mfo-retreat`, tier-A review), 2026-09-25. Finding (as relayed): "Packages.cpp at 2378 lines, near the cap: the next addition there needs a split plan." After review round 1 (main-thread foe probe) it is 2459 lines. The next non-trivial addition needs a split brief first (e.g. the retreat plumbing into its own TU); a split is tier A.
 
-### MFO-B103 (SEV-4, informational) -- retreat foe probe: engaged filter is target-handle only
+### MFO-B107 (SEV-4, informational) -- retreat foe probe: engaged filter is target-handle only
 Raised by the author in response to the 7580bea review's SEV-4 ("LiveFoeNear counts unengaged hostiles"), 2026-09-25. The probe now counts only hostiles holding a live `currentCombatTarget`; it does NOT read the foe's `IsInCombat()`, which derefs the raw `combatController` that StopCombat frees inline on BSJobs (ENGINE_NOTES §0.47) while main-thread exclusion from those jobs is unproven (#74). A hostile that is in combat with a momentarily empty target handle is therefore not counted on that probe; the 3-probe / 3 s window absorbs single-probe gaps. Revisit when the combat-thread FoeCount/inCombat mirror (STATUS "MFO-next") lands.
