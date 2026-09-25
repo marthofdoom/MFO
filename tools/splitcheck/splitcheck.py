@@ -894,15 +894,25 @@ class Cmp:
                 self.notes["unnamed string literal equal in full"] += 1
                 return True
             return False
+        if sa == sb == b"":
+            # "" in BOTH builds (the target byte is a NUL on each side): the
+            # empty literal IS its one NUL byte, and only that byte is compared.
+            # What follows it is another object (a pooled literal present in one
+            # build only, padding); anything else that is referenced is compared
+            # at its own reference. RESIDUAL (MFO-B92): a non-string object
+            # whose first byte is 0 in both builds is read as "" here, so an
+            # UNREFERENCED tail of it is not compared.
+            self.notes["unnamed empty string literal (its NUL)"] += 1
+            return True
         if (ra, rb) in self._ue_active:        # a pointer cycle: assume, then verify the rest
             return True
         self._ue_active.add((ra, rb))
         try:
-            return self._unnamed_equal_body(ra, rb, empty=(sa == sb == b""))
+            return self._unnamed_equal_body(ra, rb)
         finally:
             self._ue_active.discard((ra, rb))
 
-    def _unnamed_equal_body(self, ra, rb, empty=False):
+    def _unnamed_equal_body(self, ra, rb):
         # The object ends at the first boundary present at the SAME relative
         # offset in BOTH builds. A boundary only one build has (a content-derived
         # pooled-literal start, a reference only one side makes) is compared
@@ -918,12 +928,6 @@ class Cmp:
         k = 0
         while k < lim:
             if k and (ra + k) in ba_set and (rb + k) in bb_set:
-                break
-            if empty and k and ((ra + k) in self.A._lbounds or (rb + k) in self.B._lbounds):
-                # "" (the object starts with its NUL in BOTH builds): the text
-                # literal that follows in one build only is another, unreferenced
-                # literal. RESIDUAL (backlog): a non-string object whose first
-                # byte is 0 in both builds is read as "" here.
                 break
             pa, pb = (ra + k) in self.A.relocs, (rb + k) in self.B.relocs
             if pa or pb:

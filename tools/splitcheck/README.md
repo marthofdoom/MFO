@@ -153,8 +153,9 @@ kept apart.
    object early by creating or removing one in a single build (selftest N12).
    Residuals (REVIEW-BACKLOG MFO-B92): an object whose first bytes read as text
    and a NUL is compared as that string; an object whose first byte is 0 in
-   both builds is read as the empty literal "" and may stop at a pooled literal
-   only one build has.
+   both builds is read as the empty literal "" and only that NUL is compared
+   (an unreferenced tail of it is not; a referenced one is compared at its own
+   reference, selftest N16).
 4. **Named data.** Every `MFO::` variable/constant compared byte by byte over
    its PDB type size, else up to the next symbol, no cap (pointer slots by
    target). A datum in one build only, or
