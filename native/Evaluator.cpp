@@ -227,6 +227,12 @@ namespace MFO::Eval {
                     // #59 guards against, one layer up.
                     if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
 
+                    // 3D not loaded: a foe Harbinger's ch.20 pin cannot track (it ends a
+                    // pin on an unloaded target). Skipping it here keeps "the gambit chose
+                    // this foe" meaning "MFO sees it trackable", which is what licenses
+                    // re-pinning a foe whose pin ended (apmf/Excursion.cpp PinTarget).
+                    if (!foe->Is3DLoaded()) continue;
+
                     // BRAWL / PROVING-FIGHT GATE (#34): the engine keeps a
                     // NON-HOSTILE sparring partner in the combat group -- a tavern
                     // brawl, or the Companions' proving fight vs Vilkas. Latching a

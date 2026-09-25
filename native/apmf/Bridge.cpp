@@ -825,10 +825,17 @@ namespace MFO::APMFBridge {
                          APMF_API::kGetInterfaceExport);
             return;
         }
-        const APMF_API::APMF_API_v1* base = fn(APMF_API::kABIVersion);
+        // REQUEST MFO's MINIMUM ABI, NOT the header's. APMF_GetInterface returns null
+        // for any request ABOVE its own version and its NEWEST struct for any request
+        // at or below it (APMF ClientAPI.cpp). Asking for kABIVersion (13 since the
+        // ch.20 mirror) would turn a v10-v12 Harbinger (e.g. the released 0.9.8, ABI
+        // v12) into "APMF absent" and drop EVERY facet. 10 is what main requested
+        // before the v13 mirror (the ABI that first serves ch.19); every newer facet
+        // gates itself on api->abiVersion (ch.20: TargetPinOffered, >= 13).
+        constexpr std::uint32_t kRequestAbi = 10;
+        const APMF_API::APMF_API_v1* base = fn(kRequestAbi);
         if (!base) {
-            spdlog::warn("[apmf] APMF refused ABI v{} (too old) -- owned-cast model OFF.",
-                         APMF_API::kABIVersion);
+            spdlog::warn("[apmf] APMF refused ABI v{} (too old) -- owned-cast model OFF.", kRequestAbi);
             return;
         }
         if (base->abiVersion < 2) {

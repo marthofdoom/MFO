@@ -40,6 +40,17 @@ namespace MFO::Targeting {
     // re-asserts continuously -- so an unchanged command is a no-op and should
     // not be reported as an action.
     bool Command(RE::FormID a_follower, RE::ActorHandle a_target);
+
+    // The same call, with the outcome spelled out, for callers that must report it
+    // truthfully (the Attack / power-attack verbs). Command() == (CommandEx == Changed).
+    enum class CommandOutcome {
+        Changed,       // latched / pinned a new choice
+        Unchanged,     // already latched / pinned (or pending) on this foe
+        Suppressed,    // pin route: Harbinger ended the pin on this foe and it is not
+                       // re-pinned yet (APMFBridge::PinResult::Suppressed) -- NOTHING is held
+        Unavailable,   // pin route: bCommandTarget off, or no foe / invalid params
+    };
+    CommandOutcome CommandEx(RE::FormID a_follower, RE::ActorHandle a_target);
     void Clear(RE::FormID a_follower);
     void ClearAll();
 

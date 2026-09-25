@@ -8,7 +8,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 ## Unreleased
 
 - **With a Harbinger that has the target pin (ABI v13), Harbinger holds the foe your gambit picks.** An Attack, power attack or offensive spell gambit now tells Harbinger which foe to fight, and Harbinger answers the game's own target choice with it. MFO no longer writes the target itself when that Harbinger is installed. Without it, or with an older Harbinger, MFO steers the target the old way.
-- **A lost or dead foe lets go by itself.** When the foe dies, is lost, unloads, or the follower dies, Harbinger ends the pin. The follower's gambits then pick again in their normal order. MFO does not pin the same foe again until the gambit has picked someone else first.
+- **A lost or dead foe lets go by itself.** When the foe dies, is lost, unloads, or the follower dies, Harbinger ends the pin. The follower's gambits then pick again in their normal order. A foe that was only lost for a moment is pinned again once the gambit can see it and still wants it.
+- **Gambits no longer pick a foe that is too far away to be loaded.** Harbinger cannot hold a foe like that, and the follower could not reach it anyway.
 
 ## v2.0.13 -- Summons stay up, loot trips work around gates, Japanese names show
 

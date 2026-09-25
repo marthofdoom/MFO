@@ -212,38 +212,46 @@ namespace MFO::Targeting {
                      UpdateCombatHook::idx);
     }
 
-    bool Command(RE::FormID a_follower, RE::ActorHandle a_target) {
+    CommandOutcome CommandEx(RE::FormID a_follower, RE::ActorHandle a_target) {
         if (g_pinRoute.load(std::memory_order_relaxed)) {
             // bCommandTarget is the user's switch for commanding the target at all; the
             // legacy hook read it at write time, the pin route reads it at the choice.
-            if (!Config::g_commandTarget.load()) return false;
+            if (!Config::g_commandTarget.load()) return CommandOutcome::Unavailable;
             auto ptr = a_target.get();   // HOLD the NiPointer across the FormID read
             auto* foe = ptr.get();
-            if (!foe) return false;
+            if (!foe) return CommandOutcome::Unavailable;
             switch (APMFBridge::PinTarget(a_follower, foe->GetFormID(), a_target)) {
             case APMFBridge::PinResult::Pinned:
-                return true;
+                return CommandOutcome::Changed;
+            case APMFBridge::PinResult::Unchanged:
+                return CommandOutcome::Unchanged;
+            case APMFBridge::PinResult::Suppressed:
+                return CommandOutcome::Suppressed;
             case APMFBridge::PinResult::SeatAbsent:
-                // The ONE road back to the latch: Harbinger ch.20 is NOT available this
-                // session (a valid-param pin refused synchronously = seat not installed:
-                // VR, runtime, [TargetPin] bTargetPin=0, self-check). This is the third
-                // availability gate, not a per-claim decline fallback: it can only fire
-                // on the FIRST pin, before any pin ever stood.
+                // CAPABILITY-ABSENT (the seat is not installed), not a decline fallback:
+                // Harbinger ch.20 is NOT available this session (a valid-param pin
+                // refused synchronously = seat not installed: VR, runtime, [TargetPin]
+                // bTargetPin=0, self-check). It is the third availability gate and can
+                // only fire on the FIRST pin, before any pin ever stood.
                 if (g_pinRoute.exchange(false, std::memory_order_relaxed))
                     spdlog::warn("[target] Harbinger REFUSED the ch.20 target pin synchronously -- its seat is "
                                  "not installed (APMF's log names why). MFO's own target latch is the degrade "
                                  "for the rest of the session.");
                 break;   // -> the latch below
             default:
-                return false;   // Unchanged / Suppressed (ended, never re-pinned) / Invalid
+                return CommandOutcome::Unavailable;   // Invalid
             }
         }
         std::unique_lock lk(g_latchMx);
         const auto it = g_latch.find(a_follower);
-        if (it != g_latch.end() && it->second == a_target) return false;   // unchanged
+        if (it != g_latch.end() && it->second == a_target) return CommandOutcome::Unchanged;
         g_latch[a_follower] = a_target;
         g_latchCount.store(g_latch.size(), std::memory_order_relaxed);
-        return true;
+        return CommandOutcome::Changed;
+    }
+
+    bool Command(RE::FormID a_follower, RE::ActorHandle a_target) {
+        return CommandEx(a_follower, a_target) == CommandOutcome::Changed;
     }
 
     RE::ActorHandle Current(RE::FormID a_follower) {
@@ -254,16 +262,17 @@ namespace MFO::Targeting {
     }
 
     void Clear(RE::FormID a_follower) {
-        // Pin route: release the follower's ch.20 pin (live or already ended). Called
-        // outside g_latchMx -- the bridge takes its own g_mx and never calls back here.
-        if (g_pinRoute.load(std::memory_order_relaxed)) APMFBridge::ReleaseTargetPin(a_follower);
+        // Release the follower's ch.20 pin (live or already ended) REGARDLESS of the
+        // route, so a route flip after pins exist can never orphan one (no-op when none).
+        // Called outside g_latchMx -- the bridge takes its own g_mx and never calls back.
+        APMFBridge::ReleaseTargetPin(a_follower);
         std::unique_lock lk(g_latchMx);
         g_latch.erase(a_follower);
         g_latchCount.store(g_latch.size(), std::memory_order_relaxed);
     }
 
     void ClearAll() {
-        if (g_pinRoute.load(std::memory_order_relaxed)) APMFBridge::ReleaseAllTargetPins();
+        APMFBridge::ReleaseAllTargetPins();   // regardless of the route (see Clear)
         std::unique_lock lk(g_latchMx);
         g_latch.clear();
         g_latchCount.store(0, std::memory_order_relaxed);
