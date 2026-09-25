@@ -307,8 +307,36 @@ def main():
         dst = copy_build(args.b0, os.path.join(work, "n6"))
         note = plant_imm(cmp0, B0, target, dst)
         r = run_sc(args.a, args.b, work, args.tu_map, proof=(args.a0, dst))
-        record("N6 constant changed in the no-inline proof build", r["result"] == "FAIL",
+        record("N6 constant changed in the no-optimizer proof build", r["result"] == "FAIL",
                f"{r['result']} (exit {r['_exit']}), patched {note}")
+        # N7: one character of an UNNAMED string literal (the /Od build has no
+        # ??_C symbols; the tool compares such literals by their text)
+        lit = None
+        for f in sorted(B0.procs, key=lambda f: f["name"]):
+            if not f["name"].startswith("MFO::"):
+                continue
+            for ins in cmp0.disasm(B0, f["rva"], f["size"]):
+                mem = [o for o in ins.operands if o.type == X.X86_OP_MEM]
+                if ins.mnemonic != "lea" or not mem or mem[0].mem.base != X.X86_REG_RIP:
+                    continue
+                t = ins.address + ins.size + mem[0].mem.disp
+                c = B0.resolve(t)[0]
+                s = B0.cstring(t)
+                if B0.sec_of(t) == ".rdata" and c[0] == "sym" and c[2] and len(s) >= 6 and s.isascii() \
+                        and s[:1].isalpha():
+                    lit = (f, t, s)
+                    break
+            if lit:
+                break
+        if lit is None:
+            record("N7 unnamed string literal changed in the proof build", False, "no candidate literal")
+        else:
+            f, t, s = lit
+            dst = copy_build(args.b0, os.path.join(work, "n7"))
+            patch_dll(dst, t, bytes([s[0] ^ 0x20]))       # flip the case of its first letter
+            r = run_sc(args.a, args.b, work, args.tu_map, proof=(args.a0, dst))
+            record("N7 unnamed string literal changed in the proof build", r["result"] == "FAIL",
+                   f"{r['result']} (exit {r['_exit']}), {f['name'][:80]} literal {s[:40]!r} first letter case-flipped")
 
     bad = [c for c, ok, _d in results if not ok]
     print(f"\n{len(results) - len(bad)}/{len(results)} cases behaved as required" + (f"; HOLES: {bad}" if bad else ""))

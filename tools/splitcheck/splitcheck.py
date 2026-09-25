@@ -16,9 +16,13 @@ it falls in one of the EXPLAINED classes below (each is listed in the output):
                  same source compiled in a differently-composed TU can inline a
                  different set of helpers (mostly STL/CommonLib templates). A
                  pair is drift only when (1) its PDB inline-site lists differ
-                 and (2) its OWN-CODE fingerprint is equal: every call, data,
+                 (or it is a pure library COMDAT, no `MFO::` in its name),
+                 (2) its OWN-CODE fingerprint is equal: every call, data,
                  string-literal and RTTI reference made outside the inlined
-                 regions, with "inlined X" == "calls X".
+                 regions, with "inlined X" == "calls X" on qualified names, and
+                 (3) its constant multiset (own code + inlined MFO code) is
+                 equal, or a differing constant comes from a helper that side
+                 inlined more.
   funclet-drift  an unwind funclet (`...'::`1'::dtor$N / catch$N) of a drift
                  function whose fingerprint is equal (its frame offsets follow
                  the parent's new stack layout).
@@ -28,9 +32,12 @@ it falls in one of the EXPLAINED classes below (each is listed in the output):
                  includes the header) whose copy count changed; every copy is
                  byte-identical to a copy in the other build.
 
-RESULT: PASS           every function identical, nothing added or missing
-        PASS-EXPLAINED no FAIL; the explained classes above are listed
-        FAIL           anything else
+RESULT: PASS                     every function identical, nothing added or missing (exit 0)
+        PASS-PROVEN              no FAIL, and --proof (the /Od builds of the same two
+                                 commits) compares strict PASS (exit 0)
+        PASS-EXPLAINED-UNPROVEN  no FAIL, explained classes only, no proof (exit 3;
+                                 not enough for a split, CLAUDE.md)
+        FAIL                     anything else (exit 1)
 
 See README.md. Needs llvm-pdbutil on PATH and python packages capstone + pefile.
 """
@@ -628,6 +635,16 @@ class Cmp:
         # member of a template over a type the split moved out of the anonymous
         # namespace: internal and unnamed before, external and named after) --
         # equal when the named object's bytes (its PDB type size) are equal
+        # both targets PAST the end of the named object before them (its PDB type
+        # size says so): unnamed read-only data on both sides, same rule as "none"
+        if ka == kb == "sym" and oa and ob and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
+            za, zb = self.A.data_size.get(ra - oa), self.B.data_size.get(rb - ob)
+            if za and zb and oa >= za and ob >= zb and not (oa == ob and self.names_match(na, nb)) \
+                    and self.A.read(ra, 8) == self.B.read(rb, 8):
+                # (8 bytes: the unnamed objects referenced this way are size_t
+                # template statics such as _Hash::_Min_buckets)
+                self.notes["unnamed read-only data equal by content"] += 1
+                return True
         if ka == kb == "sym" and bool(oa) != bool(ob) and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
             sz = self.B.data_size.get(rb) if ob == 0 else self.A.data_size.get(ra)
             if sz and sz <= 64 and self.A.read(ra, sz) == self.B.read(rb, sz):
@@ -1173,9 +1190,9 @@ def main():
                     help="with --strict: still accept identical per-TU copies of a header-defined "
                          "internal-linkage object whose copy COUNT changed (what --proof runs)")
     ap.add_argument("--proof", nargs=4, metavar=("A0_DLL", "A0_PDB", "B0_DLL", "B0_PDB"),
-                    help="the same two commits built with inlining OFF (native.yml dispatch noinline=true). "
-                         "They must compare STRICT PASS; then an /O2 pair whose only difference is an "
-                         "inlining difference (inline sites differ) is PROVEN, and the verdict is PASS-PROVEN")
+                    help="the same two commits built with the optimizer OFF (native.yml dispatch noopt=true, "
+                         "/Od; /Ob0 is not enough, see README). They must compare STRICT PASS (--copies-ok); "
+                         "then an /O2 pair whose inline sites differ is PROVEN, and the verdict is PASS-PROVEN")
     ap.add_argument("--tu-map", help="old->new translation-unit map (see tumaps/); a module-tagged "
                                      "twin in A may only match a twin in a TU its TU became")
     args = ap.parse_args()
@@ -1227,7 +1244,7 @@ def main():
             drift_names.add(norm(fa["name"]))
             continue
         if not args.strict and proof_ok and ia != ib:
-            # the no-inline build of the SAME two commits is byte-identical, so
+            # the proof build (/Od, no optimizer) of the SAME two commits is byte-identical, so
             # this function's source compiles identically; with the inline sites
             # differing here, the /O2 difference is the inlining decision alone
             proven.append((fa["name"], r, [fmt_fp(u) for u in un[:6]]))
@@ -1408,12 +1425,12 @@ def main():
                 print(f"  ... {len(lst) - args.max} more (see --json)")
     if args.proof:
         pr = proof or {}
-        print(f"\nPROOF (no-inline builds, --strict): {pr.get('result', 'did not run')}"
+        print(f"\nPROOF (no-optimizer builds, --strict --copies-ok): {pr.get('result', 'did not run')}"
               f"   identical: {pr.get('identical', '-')}   fail: {len(pr.get('fail', []))}   "
               f"only-in: {len(pr.get('only_a', [])) + len(pr.get('only_b', []))}   "
               f"data: {len(pr.get('data_differing', []))}")
         if proven:
-            print(f"\nPROVEN BY THE NO-INLINE BUILD (inline sites differ; the own-code fingerprint "
+            print(f"\nPROVEN BY THE NO-OPTIMIZER BUILD (inline sites differ; the own-code fingerprint "
                   f"differs too) ({len(proven)}):")
             for n, r, us in proven[:args.max]:
                 print(f"  {n}\n      {r}" + "".join(f"\n        {u}" for u in us))
