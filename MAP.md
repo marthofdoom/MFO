@@ -1506,8 +1506,12 @@ Hooks `Character::UpdateCombat` (`VTABLE_Character[0]`, idx `0xE4`, `:145,197`).
   callers `cast/Fire.cpp:197,353`; `Current` (`:257`) `Scheduler.cpp:893`; `Clear` (`:264`)
   `Followers.cpp:371`, `Rapport.cpp:324`; `ClearAll` (`:274`) `Serialization.cpp:717`,
   `Probe.cpp:347,449`. All of them are converted to the pin at this choke point; no caller
-  names the route. The foe selector `Evaluator.cpp:234` also skips a foe whose 3D is not
-  loaded (the pin's "unloaded" end), on both routes.
+  names the route. The foe selector also skips a foe whose 3D is not loaded (the pin's
+  "unloaded" end), on both routes: the group scan at `Evaluator.cpp:254`, and the
+  targeted-range early return (`kCondFoeWithinRange`/`BeyondRange`, `:175`), which also
+  requires the current target to be in the group's targets and not `kTargetLost` (one group
+  read lock, taken before the chase-cap computation, so it never nests — #23). Both are the
+  no-loop rule's precondition: a foe the selector returns is one MFO sees as trackable.
 - Co-writes `currentCombatTarget`/`combatController->targetHandle` (`:121`) with
   SmartNPCTargetSelector.dll if present (`g_conflict` logged, not resolved). Latch route only.
 - **Also drives CombatStyle:** `AnyActive()` (`:67`) + `ApplyTick(a_this, cc)`
@@ -1522,7 +1526,7 @@ Hooks `Character::UpdateCombat` (`VTABLE_Character[0]`, idx `0xE4`, `:145,197`).
   APMF-absent only"); calling APMFBridge while holding `g_latchMx` (the bridge takes `g_mx`);
   making Clear/ClearAll release pins only on the pin route; raising `Acquire`'s requested ABI
   to the header's (a v10-v12 Harbinger returns null and MFO loses EVERY facet). Open deferred
-  findings: `Docs/REVIEW-BACKLOG.md` MFO-B98..B99.
+  findings: `Docs/REVIEW-BACKLOG.md` MFO-B98..B101.
 
 ### CasterConsent.cpp — cast control (magic twin of Targeting)
 Hooks `CombatMagicCaster::CheckStartCast` (advisory, 14 vtables, idx `0x06`,
@@ -3588,7 +3592,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     ~0.25 s poll: a loop); erasing a `g_pins` entry when its pin ENDS (that forgets the no-loop
     key); a synchronous refusal meaning anything but "seat not installed" (keep the Invalid
     pre-filter, or Targeting switches to the latch on a decline). Open deferred findings:
-    `Docs/REVIEW-BACKLOG.md` MFO-B98..B99.
+    `Docs/REVIEW-BACKLOG.md` MFO-B98..B101.
   - `apmf/SpellAllowList.cpp` (308) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
     `AppendDenyExemptForms` (`:126`), `PublishSpellAllowList` (`:162`), `ReleaseSpellAllowList`
     (`:284`).
