@@ -103,7 +103,8 @@ namespace MFO::Packages {
     // slot k's travel package) and target alias 2*k+1 (the DLL-filled destination).
     // Slot 0 = aliases 0/1, byte-identical to the shipped single-slot route. The
     // claim model per slot is UNCHANGED (static priority 60, claim at alias fill,
-    // release by eviction). The RETREAT quest is a SEPARATE, still-single holder.
+    // release by eviction). The RETREAT quest is a SEPARATE, still-single holder
+    // (its APMF road is per follower -- see RetreatFill).
     inline constexpr int kMaxLootSlots = 4;
 
     // The observed lifecycle of one commanded action. Advanced ONLY by Pump()
@@ -318,18 +319,40 @@ namespace MFO::Packages {
     // model -- STATIC priority 60, claim at fill, release by eviction, never a
     // priority flip (ENGINE_NOTES 0.36) -- with alias 1 filled with the PLAYER
     // and a Travel package that does NOT yield to combat. The Scheduler drives
-    // it (fill once per combat per low-confidence far follower) and instruments
-    // every tick; this module owns the alias plumbing only.
+    // it (fill when a low-confidence far follower's cooldown has lapsed, then
+    // travel -> stay -> release) and instruments every service; this module
+    // owns the claim plumbing only.
     //
-    // The fill is SAVE-SERIALIZED like the loot fill (#55): the Scheduler MUST
-    // RetreatClear on combat end / arrival / timeout, and ReleaseAll evicts the
-    // retreat alias on load so a mid-retreat save self-heals.
+    // HOLDS ARE PER FOLLOWER on the APMF road (the ch.9 OfferPackage handle is
+    // per FormID); the LEGACY alias road (APMF absent) is one quest / one alias
+    // pair, so it stays single-holder. A fill on a follower already holding a
+    // retreat is a no-op returning true (#22a).
+    //
+    // THE DISENGAGE IS MAIN-THREAD: RetreatFill never calls StopCombat on the
+    // calling (AddTask worker) thread; it POSTS one to the main thread
+    // (Rapport::QuashAllyPair's road), which re-validates the actor and that
+    // the same retreat is still live before calling. RetreatReengage posts
+    // another -- the Scheduler calls it ONLY on a re-entry into combat.
+    //
+    // The legacy fill is SAVE-SERIALIZED like the loot fill (#55): the
+    // Scheduler MUST RetreatClear on arrival-stay end / timeout / no live foes,
+    // and ReleaseAll evicts the retreat alias on load so a mid-retreat save
+    // self-heals.
     bool RetreatFill(RE::Actor* a_follower);
     void RetreatClear(const char* a_why, RE::Actor* a_follower = nullptr);
-    // Who currently holds the retreat alias (0 when nobody), and for how long.
-    RE::FormID RetreatHolder();
-    float      RetreatSeconds();
-    RE::NiPoint3 RetreatStartPos();   // where she was when the retreat began (movement proof)
+    // Whether a_id holds a retreat, and for how long / from where. Worker-only
+    // (#4), like every other reader of the hold map.
+    bool         IsRetreating(RE::FormID a_id);
+    float        RetreatSeconds(RE::FormID a_id);
+    RE::NiPoint3 RetreatStartPos(RE::FormID a_id);   // where she was when the retreat began (movement proof)
+    // Post another main-thread StopCombat for a_id's live retreat (a RE-ENTRY
+    // into combat mid-retreat -- never per tick). No-op when not retreating.
+    void RetreatReengage(RE::FormID a_id, const char* a_why);
+    // True ONCE after a posted StopCombat left a_id out of combat on the main
+    // thread (consumes the flag). Lets the Scheduler read a later
+    // IsInCombat() as a re-entry rather than as the combat the post has not
+    // reached yet.
+    bool RetreatConsumeStopLanded(RE::FormID a_id);
     // Evict a_id from the retreat alias if he occupies it -- the dismissal-path
     // twin of LootTravelEvictIf, same #55 tail: the fill is engine-serialized
     // and nothing reclaims a dismissed follower.

@@ -1081,8 +1081,121 @@ namespace MFO::Packages {
             // which release mechanism applies. Defaults false (legacy); reset
             // to false along with everything else by every `= RetreatHold{}`.
             bool              viaAPMF = false;
+            // Per-engage generation (g_retreatGen), mirrored into g_retreatLive
+            // so a posted StopCombat can tell THIS retreat from a later one.
+            std::uint32_t     gen     = 0;
         };
-        RetreatHold g_retreatHold;
+        // ONE HOLD PER FOLLOWER (ClickUp 86e3erv94, batch L). The APMF road's
+        // ch.9 OfferPackage handle is per FormID (apmf/Excursion.cpp g_owned is
+        // keyed by FormID alone), so nothing forces the old single global hold
+        // there: two losing followers can each run back at once. The LEGACY
+        // alias road (APMF absent) is still ONE quest with ONE alias pair, so
+        // it stays single-holder -- RetreatFill's legacy branch declines while
+        // any non-APMF hold exists for another follower. Worker-only, no lock
+        // (#4): every reader/writer is Scheduler/Pump/ReleaseAll/the dismissal
+        // sweep on the AddTask worker. The ONE cross-thread reader (the posted
+        // StopCombat, main thread) reads g_retreatLive below instead.
+        std::unordered_map<RE::FormID, RetreatHold> g_retreatHolds;
+
+        RetreatHold* FindRetreatHold(RE::FormID a_id) {
+            const auto it = g_retreatHolds.find(a_id);
+            return it == g_retreatHolds.end() ? nullptr : &it->second;
+        }
+        // The legacy alias road's single holder, 0 when none.
+        RE::FormID LegacyRetreatHolder() {
+            for (const auto& [id, h] : g_retreatHolds)
+                if (!h.viaAPMF) return id;
+            return 0;
+        }
+
+        // ANY-THREAD MIRROR of "who is retreating", for the posted StopCombat's
+        // main-thread re-validation (#74: the worker and the main thread are
+        // treated as concurrent, so the main thread never reads g_retreatHolds).
+        // gen is a per-engage generation: a StopCombat posted for retreat N must
+        // not land on the same follower's retreat N+1 (or on no retreat at all)
+        // if the worker ended N before the main thread drained the post.
+        // stopLanded is written by the main thread when a posted StopCombat left
+        // the follower OUT of combat, and consumed by the worker -- that is how
+        // the Scheduler knows a later IsInCombat() is a RE-ENTRY (issue again)
+        // rather than the original combat the post has not reached yet (#22a:
+        // never re-issue per tick).
+        struct RetreatLive {
+            std::uint32_t gen        = 0;
+            bool          stopLanded = false;
+        };
+        std::mutex                                  g_retreatLiveMx;
+        std::unordered_map<RE::FormID, RetreatLive> g_retreatLive;
+        std::uint32_t                               g_retreatGen = 0;   // worker-only counter
+
+        void PublishRetreatLive(RE::FormID a_id, std::uint32_t a_gen) {
+            std::lock_guard lk(g_retreatLiveMx);
+            g_retreatLive[a_id] = RetreatLive{ a_gen, false };
+        }
+        void UnpublishRetreatLive(RE::FormID a_id) {
+            std::lock_guard lk(g_retreatLiveMx);
+            g_retreatLive.erase(a_id);
+        }
+        void UnpublishAllRetreatLive() {
+            std::lock_guard lk(g_retreatLiveMx);
+            g_retreatLive.clear();
+        }
+
+        // THE RETREAT DISENGAGE, ON THE MAIN THREAD (tier A, 86e3erv94 item 1).
+        // StopCombat (vtable slot 0xE5) frees the combat controller INLINE with
+        // no refcount (ENGINE_NOTES §0.47); the engine's own UpdateCombat runs on
+        // BSJobs, and a worker-side StopCombat is the exact shape of the v1.0.58
+        // deadlock the #63 quash was moved off the worker for. Same road as
+        // Rapport::QuashAllyPair: MainThread::Post (non-VR), AddTask on VR where
+        // the pump is a documented no-op. FormID + generation captured, never a
+        // pointer; the main thread re-validates the actor (resolves, 3D loaded,
+        // alive) and that THIS retreat is still live before it calls. Issued at
+        // ENGAGE (RetreatFill) and again only on a RE-ENTRY into combat seen by
+        // the Scheduler -- never per tick (#22a). A StopCombat that does not end
+        // combat is logged as a WARNING and NOT retried (principle 7).
+        void PostRetreatStopCombat(RE::FormID a_id, std::uint32_t a_gen, const char* a_why, bool a_legacy) {
+            auto work = [a_id, a_gen, a_why, a_legacy]() {
+                {
+                    std::lock_guard lk(g_retreatLiveMx);
+                    const auto it = g_retreatLive.find(a_id);
+                    if (it == g_retreatLive.end() || it->second.gen != a_gen) {
+                        spdlog::info("[retreat] {:08X}: posted StopCombat ({}) dropped -- that retreat "
+                                     "already ended", a_id, a_why);
+                        return;
+                    }
+                }
+                auto* a = RE::TESForm::LookupByID<RE::Actor>(a_id);
+                if (!a || !a->Is3DLoaded() || a->IsDead()) {
+                    spdlog::warn("[retreat] {:08X}: posted StopCombat ({}) skipped -- actor {} on the "
+                                 "main thread", a_id, a_why,
+                                 !a ? "does not resolve" : (a->IsDead() ? "is dead" : "is not 3D-loaded"));
+                    return;
+                }
+                const bool was = a->IsInCombat();
+                a->StopCombat();
+                // Legacy alias road: re-evaluate AFTER the disengage, preserving the
+                // shipped StopCombat -> EvaluatePackage order (the fill's own
+                // worker-side evaluate ran before this landed). (true, false):
+                // NEVER resetAI. The APMF road leaves evaluation to APMF's own
+                // deferred Engage nudge (DIAG-2026-09-06 fix 1).
+                if (a_legacy) a->EvaluatePackage(true, false);
+                const bool still = a->IsInCombat();
+                {
+                    std::lock_guard lk(g_retreatLiveMx);
+                    const auto it = g_retreatLive.find(a_id);
+                    if (it != g_retreatLive.end() && it->second.gen == a_gen && !still)
+                        it->second.stopLanded = true;
+                }
+                if (still)
+                    spdlog::warn("[retreat] {:08X}: StopCombat ({}) did NOT end combat (wasInCombat={}) "
+                                 "-- not retried; the next re-entry edge is invisible until he leaves "
+                                 "combat", a_id, a_why, was);
+                else
+                    spdlog::info("[retreat] {:08X}: StopCombat ({}) landed on main (wasInCombat={})",
+                                 a_id, a_why, was);
+            };
+            if (REL::Module::IsVR()) SKSE::GetTaskInterface()->AddTask(work);
+            else                     MainThread::Post(std::move(work));
+        }
 
         // EVICTION MARKER (#48 furniture-ejection). Releasing a follower from a
         // package-carrying ACTOR alias means forcing some OTHER ref into that
@@ -1256,12 +1369,13 @@ namespace MFO::Packages {
         }
 
         // APMF RETREAT REFRESH (ch.9 0x49 route): same keep-alive discipline,
-        // same reason -- Scheduler's per-tick StopCombat (while she falls
-        // back) never touches this claim, and RetreatFill only stamps it once
-        // at engage time, not every tick mid-walk.
-        if (g_retreatHold.actorID && g_retreatHold.viaAPMF) {
-            if (auto* pkg = Forms::g_apmfRetreatPackage)
-                APMFBridge::OfferPackage(g_retreatHold.actorID, pkg->GetFormID());
+        // same reason -- RetreatFill only stamps the claim once at engage
+        // time, not every tick mid-walk, and the disengage (a posted
+        // StopCombat) never touches it. One refresh per APMF-road hold: the
+        // handle is per FormID, so several followers may retreat at once.
+        if (auto* pkg = Forms::g_apmfRetreatPackage) {
+            for (const auto& [rid, hold] : g_retreatHolds)
+                if (hold.viaAPMF) APMFBridge::OfferPackage(rid, pkg->GetFormID());
         }
 
         if (g_holder.phase == Phase::Idle) return;
@@ -1485,10 +1599,11 @@ namespace MFO::Packages {
         // is in-process state that must self-heal on every load/revert
         // exactly like the loot slots above -- and any still-live claim must
         // be dropped so a stale package-offer never outlives its session.
-        if (g_retreatHold.actorID && g_retreatHold.viaAPMF) {
-            APMFBridge::ReleaseOfferPackage(g_retreatHold.actorID);
+        for (const auto& [rid, hold] : g_retreatHolds) {
+            if (!hold.viaAPMF) continue;
+            APMFBridge::ReleaseOfferPackage(rid);
             spdlog::info("[retreat] {} -- APMF retreat was live (held {:08X}); released",
-                         a_why, g_retreatHold.actorID);
+                         a_why, rid);
         }
 
         // RETREAT PROBE: same eviction on load, same reason -- the retreat alias
@@ -1510,7 +1625,8 @@ namespace MFO::Packages {
                 if (held == player) sweptPlayer = true;
             }
         }
-        g_retreatHold = RetreatHold{};
+        g_retreatHolds.clear();
+        UnpublishAllRetreatLive();
 
         // CAST-PACKAGE sweep (#73's second half, applied to the hybrid forced
         // cast): the command alias fill is engine-serialized like loot's and
@@ -1595,7 +1711,7 @@ namespace MFO::Packages {
         // already evicts any live loot excursion when retreat engages, so this
         // only matters for the reverse ordering (a loot dispatch landing on a
         // follower already retreating, same tick or a race).
-        if (g_retreatHold.actorID == a_follower->GetFormID()) return false;
+        if (FindRetreatHold(a_follower->GetFormID())) return false;
 
         // APMF SHOWPIECE PRINCIPLE (marth, Docs/STATUS.md): MFO is a showpiece for
         // APMF -- with APMF present, MFO ROUTES THROUGH APMF and COMMITS to it.
@@ -1706,7 +1822,7 @@ namespace MFO::Packages {
         // (RetreatFill evicts any live loot excursion on engage, but this
         // guards the reverse race) must not re-touch the shared per-follower
         // OfferPackage handle either.
-        if (g_retreatHold.actorID == a_follower->GetFormID()) return false;
+        if (FindRetreatHold(a_follower->GetFormID())) return false;
 
         // APMF ROUTE: this slot's excursion started on the APMF package (Fill
         // above), so it stays on it for the whole excursion -- rewrite the SAME
@@ -1988,23 +2104,24 @@ namespace MFO::Packages {
     // (Scheduler.cpp) -- so both route through APMF for free.
     bool RetreatFill(RE::Actor* a_follower) {
         if (!a_follower) return false;
+        const RE::FormID fid = a_follower->GetFormID();
+        // Already retreating: a standing order is issued ONCE (#22a). A second
+        // fill used to re-offer, re-StopCombat and RESET startAt/startPos --
+        // silently restarting the timeout and the movement proof.
+        if (FindRetreatHold(fid)) return true;
 
         if (APMFBridge::Available() && Config::g_apmfRetreat.load()) {
-            // ONE retreat at a time -- shared with the legacy route below via
-            // the SAME g_retreatHold. A second fill would silently steal the
-            // measurement fields (startAt/startPos) out from under the first.
-            if (g_retreatHold.actorID && g_retreatHold.actorID != a_follower->GetFormID()) {
-                spdlog::debug("[retreat] {:08X}: declined -- held by {:08X}",
-                              a_follower->GetFormID(), g_retreatHold.actorID);
-                return false;
-            }
+            // PER-FOLLOWER on this road (86e3erv94 item 3): the ch.9 handle is
+            // keyed by FormID, and each hold carries its own startAt/startPos,
+            // so a second follower's fill no longer has anything to steal. The
+            // old global single-holder decline is gone from THIS branch only.
             auto* pkg    = Forms::g_apmfRetreatPackage;
             auto* player = RE::PlayerCharacter::GetSingleton();
             if (!pkg || !player) {
                 spdlog::error("[retreat] {:08X}: APMF present but MFO_APMFRetreatPackage did not "
                              "resolve (stale/missing ESP record?) -- APMF is the COMMITTED route, "
                              "NOT falling back to the alias route; retreat declined this tick",
-                             a_follower->GetFormID());
+                             fid);
                 return false;
             }
             // Retreat's target is ALWAYS the player -- unlike loot's per-corpse
@@ -2012,23 +2129,21 @@ namespace MFO::Packages {
             // it is the SAME defensive "read the wrapper by name, guard the
             // layout, write only after both guards pass" discipline, reused
             // verbatim rather than trusting the authored placeholder blind.
+            // (One shared package form, one shared target -- the player -- so
+            // several concurrent holders all want the identical write.)
             if (!SetAPMFLootTravelTarget(pkg, player, kAPMFRetreatRadius)) {
                 spdlog::error("[retreat] {:08X}: APMF retreat package write failed -- APMF is the "
                              "COMMITTED route, NOT falling back to the alias route; retreat "
-                             "declined this tick", a_follower->GetFormID());
+                             "declined this tick", fid);
                 return false;
             }
-            if (!APMFBridge::OfferPackage(a_follower->GetFormID(), pkg->GetFormID())) {
+            if (!APMFBridge::OfferPackage(fid, pkg->GetFormID())) {
                 spdlog::error("[retreat] {:08X}: APMF REFUSED the package-offer claim (lost "
                              "arbitration to a higher-basis client?) -- APMF is the COMMITTED "
                              "route, NOT falling back to the alias route; retreat declined this "
-                             "tick", a_follower->GetFormID());
+                             "tick", fid);
                 return false;
             }
-            // Same disengage discipline as the legacy route (see its comment
-            // below): StopCombat() so the kIgnoreCombat travel actually wins
-            // over a live combat target, not just runs alongside it.
-            a_follower->StopCombat();
             // NO NUDGE HERE (DIAG-2026-09-06 fix 1). Identical defect to the loot
             // dispatch edge above -- pre-drain (the claim is only enqueued) and on the
             // AddTask job worker -- and identically covered by APMF's deferred
@@ -2046,16 +2161,25 @@ namespace MFO::Packages {
             // right as retreat claims the handle, so the next loot Pump
             // refresh (Packages::Pump, g_apmfSlotActive loop) has nothing left
             // to re-assert. Reciprocal guard in LootTravelFill/Retarget (early
-            // return while g_retreatHold.actorID == this follower) covers the
-            // reverse ordering. Not previously guarded -- see the commit
-            // message for whether a collision window existed before this.
-            LootTravelEvictIf(a_follower->GetFormID(), "retreat engaging");
-            g_retreatHold.actorID  = a_follower->GetFormID();
-            g_retreatHold.startAt  = Clock::now();
-            g_retreatHold.startPos = a_follower->GetPosition();
-            g_retreatHold.viaAPMF  = true;
-            spdlog::info("[retreat] {:08X}: APMF retreat dispatched + StopCombat (kIgnoreCombat)",
-                         a_follower->GetFormID());
+            // return while this follower holds a retreat) covers the reverse
+            // ordering.
+            LootTravelEvictIf(fid, "retreat engaging");
+            RetreatHold h;
+            h.actorID  = fid;
+            h.startAt  = Clock::now();
+            h.startPos = a_follower->GetPosition();
+            h.viaAPMF  = true;
+            h.gen      = ++g_retreatGen;
+            g_retreatHolds[fid] = h;
+            PublishRetreatLive(fid, h.gen);
+            // Same disengage discipline as the legacy route (see its comment
+            // below): StopCombat so the kIgnoreCombat travel actually wins over
+            // a live combat target, not just runs alongside it -- now POSTED to
+            // the main thread (PostRetreatStopCombat), never called here on the
+            // AddTask worker.
+            PostRetreatStopCombat(fid, h.gen, "engage", /*a_legacy=*/false);
+            spdlog::info("[retreat] {:08X}: APMF retreat dispatched (kIgnoreCombat); StopCombat "
+                         "posted to main ({} holding)", fid, g_retreatHolds.size());
             return true;
         }
 
@@ -2073,12 +2197,13 @@ namespace MFO::Packages {
         }
         auto* player = RE::PlayerCharacter::GetSingleton();
         if (!player) return false;
-        // ONE retreat at a time -- one quest, one alias pair, same single-holder
-        // shape as loot travel. A second fill would silently evict the first
-        // mid-measurement and corrupt both data points.
-        if (g_retreatHold.actorID && g_retreatHold.actorID != a_follower->GetFormID()) {
-            spdlog::debug("[retreat] {:08X}: declined -- alias held by {:08X}",
-                          a_follower->GetFormID(), g_retreatHold.actorID);
+        // ONE retreat at a time ON THIS ROAD -- one quest, one alias pair, same
+        // single-holder shape as loot travel. A second fill would silently evict
+        // the first mid-measurement and corrupt both data points. (A still-live
+        // APMF-road hold of ANOTHER follower does not block it: it owns no alias.)
+        if (const auto holder = LegacyRetreatHolder(); holder && holder != fid) {
+            spdlog::info("[retreat] {:08X}: declined -- legacy retreat alias held by {:08X}",
+                         fid, holder);
             return false;
         }
         // Fill the TARGET first, then the ACTOR -- same no-rooting order as
@@ -2097,36 +2222,45 @@ namespace MFO::Packages {
         // NOT resetAI) -> the travel wins; if foes re-aggro, kIgnoreCombat sustains
         // the walk. (The old "0.36 reliable" read took=true + dPlayer closing as
         // success, but dPlayer also closes when the PLAYER approaches -- it never
-        // proved she moved.) Called each retreat tick in the Scheduler too, since
-        // hostiles re-initiate combat.
-        a_follower->StopCombat();
+        // proved she moved.) The StopCombat is POSTED to the main thread
+        // (PostRetreatStopCombat, which re-evaluates after it on this road); the
+        // Scheduler posts it again only when she RE-ENTERS combat mid-retreat.
         // Static 60 is already in the record; the fill IS the claim (0.36).
         // (true, false): NEVER resetAI -- it clears the combat group.
         a_follower->EvaluatePackage(true, false);
-        g_retreatHold.actorID = a_follower->GetFormID();
-        g_retreatHold.startAt = Clock::now();
-        g_retreatHold.startPos = a_follower->GetPosition();   // measure HER movement, not dPlayer
-        g_retreatHold.viaAPMF = false;   // explicit: guards a mid-session bApmfRetreat/APMF-avail flip
-        spdlog::info("[retreat] {:08X}: dispatched + StopCombat (prio={}, kIgnoreCombat)",
-                     a_follower->GetFormID(), static_cast<int>(quest->data.priority));
+        RetreatHold h;
+        h.actorID  = fid;
+        h.startAt  = Clock::now();
+        h.startPos = a_follower->GetPosition();   // measure HER movement, not dPlayer
+        h.viaAPMF  = false;   // explicit: guards a mid-session bApmfRetreat/APMF-avail flip
+        h.gen      = ++g_retreatGen;
+        g_retreatHolds[fid] = h;
+        PublishRetreatLive(fid, h.gen);
+        PostRetreatStopCombat(fid, h.gen, "engage", /*a_legacy=*/true);
+        spdlog::info("[retreat] {:08X}: dispatched (prio={}, kIgnoreCombat); StopCombat posted to main",
+                     fid, static_cast<int>(quest->data.priority));
         return true;
     }
 
     void RetreatClear(const char* a_why, RE::Actor* a_follower) {
+        // a_follower is optional: the legacy fill's own "actor fill failed"
+        // unwind passes none (there is no hold yet, only the alias to evict);
+        // a follower-less clear therefore addresses the LEGACY road's single
+        // holder only. Every Scheduler caller passes the follower.
+        const RE::FormID fid  = a_follower ? a_follower->GetFormID() : LegacyRetreatHolder();
+        const auto*      hold = fid ? FindRetreatHold(fid) : nullptr;
+
         // APMF ROUTE: no alias was ever filled -- release the package-offer
         // claim instead of evicting anything, exactly like LootTravelClear's
-        // APMF branch. a_follower is optional (Scheduler's ClearAlias-style
-        // callers pass it; ReleaseAll below does not): fall back to the
-        // tracked FormID from Fill so a follower-less clear still releases
-        // the right claim.
-        if (g_retreatHold.viaAPMF) {
-            const RE::FormID fid = a_follower ? a_follower->GetFormID() : g_retreatHold.actorID;
-            if (fid) APMFBridge::ReleaseOfferPackage(fid);
+        // APMF branch.
+        if (hold && hold->viaAPMF) {
+            APMFBridge::ReleaseOfferPackage(fid);
             // NO NUDGE HERE (DIAG-2026-09-06 fix 1) -- see LootTravelClear's APMF
             // branch: pre-drain, off the main thread, and now done correctly by
             // APMF's deferred Release nudge.
-            g_retreatHold = RetreatHold{};
-            spdlog::info("[retreat] APMF retreat released ({})", a_why);
+            g_retreatHolds.erase(fid);
+            UnpublishRetreatLive(fid);
+            spdlog::info("[retreat] {:08X}: APMF retreat released ({})", fid, a_why);
             return;
         }
 
@@ -2144,23 +2278,53 @@ namespace MFO::Packages {
             a_follower->EvaluatePackage(true, false);   // reclaim THIS tick; never resetAI
             VerifyDetachedFrom(quest, a_follower, "retreat", "MFO_RetreatQuest", a_why);
         }
-        g_retreatHold = RetreatHold{};
-        spdlog::info("[retreat] travel released ({}) -- evicted (marker)", a_why);
+        if (fid) {
+            g_retreatHolds.erase(fid);
+            UnpublishRetreatLive(fid);
+        }
+        spdlog::info("[retreat] {:08X}: travel released ({}) -- evicted (marker)", fid, a_why);
     }
 
-    RE::FormID RetreatHolder() { return g_retreatHold.actorID; }
-    float      RetreatSeconds() { return Since(g_retreatHold.startAt); }
-    RE::NiPoint3 RetreatStartPos() { return g_retreatHold.startPos; }
+    bool IsRetreating(RE::FormID a_id) { return FindRetreatHold(a_id) != nullptr; }
+    float RetreatSeconds(RE::FormID a_id) {
+        const auto* h = FindRetreatHold(a_id);
+        return h ? Since(h->startAt) : 0.0f;
+    }
+    RE::NiPoint3 RetreatStartPos(RE::FormID a_id) {
+        const auto* h = FindRetreatHold(a_id);
+        return h ? h->startPos : RE::NiPoint3{};
+    }
+
+    bool RetreatConsumeStopLanded(RE::FormID a_id) {
+        std::lock_guard lk(g_retreatLiveMx);
+        const auto it = g_retreatLive.find(a_id);
+        if (it == g_retreatLive.end() || !it->second.stopLanded) return false;
+        it->second.stopLanded = false;
+        return true;
+    }
+
+    void RetreatReengage(RE::FormID a_id, const char* a_why) {
+        const auto* h = FindRetreatHold(a_id);
+        if (!h) return;
+        PostRetreatStopCombat(a_id, h->gen, a_why, /*a_legacy=*/!h->viaAPMF);
+    }
 
     void RetreatEvictIf(RE::FormID a_id) {
         // APMF ROUTE: a_id never occupied an alias (0x49 delivers with no
-        // alias fill) -- occupancy is tracked in g_retreatHold instead, the
+        // alias fill) -- occupancy is tracked in g_retreatHolds instead, the
         // dismissal-path twin of LootTravelEvictIf's g_apmfSlotFollower scan.
-        if (g_retreatHold.actorID == a_id && g_retreatHold.viaAPMF) {
+        const auto* hold = FindRetreatHold(a_id);
+        if (hold && hold->viaAPMF) {
             APMFBridge::ReleaseOfferPackage(a_id);
-            g_retreatHold = RetreatHold{};
+            g_retreatHolds.erase(a_id);
+            UnpublishRetreatLive(a_id);
             spdlog::info("[retreat] APMF retreat released (dismissed) -- held {:08X}", a_id);
             return;
+        }
+        // A dismissed follower never keeps a hold, whatever the alias says.
+        if (hold) {
+            g_retreatHolds.erase(a_id);
+            UnpublishRetreatLive(a_id);
         }
 
         // LEGACY ALIAS ROUTE (unchanged): the dismissal-path twin of
@@ -2180,7 +2344,6 @@ namespace MFO::Packages {
             ForceRefToNative(quest, kAliasRetreatActor, ev);   // no-op on VR, fine
         if (auto* actor = held->As<RE::Actor>())
             VerifyDetachedFrom(quest, actor, "retreat", "MFO_RetreatQuest", "dismissed");
-        if (g_retreatHold.actorID == a_id) g_retreatHold = RetreatHold{};
     }
 
     Status Get() {
@@ -2204,7 +2367,8 @@ namespace MFO::Packages {
 
     void ClearTransientState() {
         ResetHolder();
-        g_retreatHold = RetreatHold{};
+        g_retreatHolds.clear();
+        UnpublishAllRetreatLive();
         g_requests    = 0;
         g_completions = 0;
         g_declines    = 0;

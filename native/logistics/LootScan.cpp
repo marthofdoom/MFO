@@ -714,7 +714,7 @@ namespace MFO::Logistics {
                     bool travelTook = false;
                     if (Config::g_lootTravelViaApmfTravel.load() &&
                         !Packages::IsAPMFTravelHeld(s) &&
-                        Packages::RetreatHolder() != a_follower->GetFormID())
+                        !Packages::IsRetreating(a_follower->GetFormID()))
                         travelTook = APMFBridge::ClaimLootTravel(a_follower->GetFormID(), rid, s,
                                                                  kCh19LootArrivalRadius);
                     if (!travelTook) {
