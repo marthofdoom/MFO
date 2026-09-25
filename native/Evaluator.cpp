@@ -165,6 +165,26 @@ namespace MFO::Eval {
                 auto tp   = a_self->GetActorRuntimeData().currentCombatTarget.get();
                 auto* tgt = tp.get();
                 if (!tgt || tgt->IsDead() || tgt->IsDisabled()) return best;
+                // The SAME trackability gates the group scan below applies (3D loaded,
+                // present in the group's targets and not kTargetLost): what ends a
+                // Harbinger ch.20 pin must also stop this path choosing the foe, or an
+                // ended pin re-pins onto a foe Harbinger cannot track, at gambit cadence
+                // (apmf/Excursion.cpp PinTarget's no-loop rule). ONE group read lock and
+                // nothing else inside it; this branch returns before the chase-cap
+                // computation, so it never nests (#23).
+                if (!tgt->Is3DLoaded()) return best;
+                {
+                    auto* cc = a_self->GetActorRuntimeData().combatController;
+                    if (!cc || !cc->combatGroup) return best;
+                    bool trackable = false;
+                    RE::BSReadLockGuard lk(cc->combatGroup->lock);
+                    for (const auto& t : cc->combatGroup->targets) {
+                        if (t.targetHandle.native_handle() != tgt->GetHandle().native_handle()) continue;
+                        trackable = !t.flags.any(RE::CombatTarget::Flags::kTargetLost);
+                        break;
+                    }
+                    if (!trackable) return best;
+                }
                 if (!tgt->IsHostileToActor(a_self)) return best;   // don't act in a brawl
                 const float d  = a_self->GetPosition().GetDistance(tgt->GetPosition());
                 const bool  ok = (a_op == Vocab::kCondFoeWithinRange) ? (d <= a_param)
@@ -226,6 +246,12 @@ namespace MFO::Eval {
                     // something they cannot perceive, which is the same failure
                     // #59 guards against, one layer up.
                     if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
+
+                    // 3D not loaded: a foe Harbinger's ch.20 pin cannot track (it ends a
+                    // pin on an unloaded target). Skipping it here keeps "the gambit chose
+                    // this foe" meaning "MFO sees it trackable", which is what licenses
+                    // re-pinning a foe whose pin ended (apmf/Excursion.cpp PinTarget).
+                    if (!foe->Is3DLoaded()) continue;
 
                     // BRAWL / PROVING-FIGHT GATE (#34): the engine keeps a
                     // NON-HOSTILE sparring partner in the combat group -- a tavern

@@ -1043,8 +1043,9 @@ namespace MFO::Diagnostics {
         }
         {
             const auto t = Targeting::GetStats();
-            spdlog::info("  targeting: hook {} | {} latched | {} assert(s), {} drift(s), {} pass(es){}",
+            spdlog::info("  targeting: hook {} | route {} ({} ch.20 pin(s)) | {} latched | {} assert(s), {} drift(s), {} pass(es){}",
                          Targeting::IsHooked() ? "INSTALLED" : "off",
+                         Targeting::PinRoute() ? "PIN" : "latch", APMFBridge::TargetPinCount(),
                          t.latched, t.asserts, t.drifts, t.passes,
                          t.conflictMod ? "  [SmartNPCTargetSelector ALSO LOADED]" : "");
         }

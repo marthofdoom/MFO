@@ -117,6 +117,194 @@ namespace MFO::APMFBridge {
             it->second.targetRefreshed = std::chrono::steady_clock::now();   // keep-alive: timestamp only
     }
 
+    // ── ch.20 TARGET PIN (ABI v13, kIntent_TargetPin) ──────────────────────────────
+    // Contract: APMF_API.h kIntent_TargetPin; Harbinger Docs/INTEGRATION.md "Pinning a
+    // combat target". The CLIENT declares {follower, foe}; Harbinger answers the engine's
+    // own target selector with it. MFO writes no target of its own on this route
+    // (Targeting.cpp's hook stands down -- Targeting.h "the pin route").
+    namespace {
+        constexpr std::uint32_t kPinMinAbi = 13;   // the ABI that first serves intent 20
+
+        // IsClaimLive reads APMF's PUBLISHED map, which a RequestEx reaches only at
+        // APMF's next writer Drain -- and APMF drains ONLY on its PlayerCharacter::Update
+        // seat, which does not tick while a game-pausing menu is open. So a pin MFO has
+        // never seen live is judged "ended" only after this many UNPAUSED sweeps (the
+        // bridge pump, ~133 ms each: ~2 s of running game), never on wall time. A FLOOR,
+        // not an expiry (CLAUDE.md principle 9): it only delays noticing an end.
+        constexpr std::uint32_t kPinNeverLiveSweeps = 15;
+
+        struct TargetPinClaim {
+            APMF_API::Handle handle   = APMF_API::kInvalidHandle;   // invalid once ENDED
+            RE::FormID       target   = 0;     // the foe MFO chose (kept after an end: the no-loop key)
+            RE::ActorHandle  targetH{};        // same foe, as a handle (Targeting::Current)
+            std::uint32_t    unpausedSweeps = 0;   // sweeps with the game running since filing
+            bool everLive       = false;       // seen IsClaimLive at least once (kept after an end)
+            bool ended          = false;       // Harbinger ended it (IsClaimLive went false)
+            bool suppressLogged = false;       // one [target-pin] line per ended pin, not per tick
+        };
+        std::unordered_map<RE::FormID, TargetPinClaim> g_pins;   // guarded by g_mx
+
+        bool GamePaused() {
+            auto* ui = RE::UI::GetSingleton();   // same read Scheduler.cpp's tick gate makes on this worker
+            return ui && ui->GameIsPaused();
+        }
+
+        // Liveness of one filed pin. Marks it ENDED (and says so, once) when APMF no
+        // longer holds it. Returns true iff the pin is ended. g_mx HELD.
+        bool PinEndedLocked(const APMF_API::APMF_API_v2* api, RE::FormID follower, TargetPinClaim& p) {
+            if (p.ended) return true;
+            if (p.handle == APMF_API::kInvalidHandle) return false;
+            // v6 IsClaimLive: this table only ever holds handles from an ABI >= 13 APMF.
+            if (reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(p.handle)) {
+                p.everLive = true;
+                return false;
+            }
+            if (!p.everLive) {
+                // Never seen live: judge only with the game running, and only after the
+                // floor of unpaused sweeps (APMF may simply not have drained yet).
+                if (GamePaused() || p.unpausedSweeps < kPinNeverLiveSweeps) return false;
+            }
+            spdlog::info("[target-pin] {:08X}: pin on {:08X} ENDED (h={}, {}; Harbinger ends a pin when the "
+                         "target is lost, dead, disabled, unloaded or unresolvable, or the follower dies -- "
+                         "APMF's '[ch.20] pin ended' line names it). The engine picks until MFO's gambit "
+                         "chooses a foe again.",
+                         follower, p.target, p.handle, p.everLive ? "was live" : "never seen live");
+            // ALWAYS Release before dropping the handle: a no-op on a claim Harbinger
+            // already released, and it FIFO-cancels one still pending in APMF's queue,
+            // so a false "never live" judgement can never leave an ORPHAN claim that
+            // keeps winning on equal basis with no MFO handle left to release it.
+            api->Release(p.handle);
+            p.handle = APMF_API::kInvalidHandle;
+            p.ended  = true;
+            return true;
+        }
+    }
+
+    bool TargetPinOffered() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= kPinMinAbi;
+    }
+
+    PinResult PinTarget(RE::FormID a_follower, RE::FormID a_target, RE::ActorHandle a_targetHandle) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kPinMinAbi) return PinResult::SeatAbsent;
+        // APMF refuses these synchronously too; filtering them here keeps a synchronous
+        // refusal meaning exactly ONE thing to Targeting (the seat is not installed).
+        if (a_follower == 0 || a_target == 0 || a_target == a_follower || a_follower == 0x14)
+            return PinResult::Invalid;
+
+        std::scoped_lock lock(g_mx);
+        auto it = g_pins.find(a_follower);
+        if (it != g_pins.end()) {
+            auto& p = it->second;
+            const bool ended = PinEndedLocked(api, a_follower, p);
+            if (p.target == a_target) {
+                if (!ended) return PinResult::Unchanged;
+                // THE NO-LOOP RULE. The gambit re-chose the foe of an ENDED pin. MFO's foe
+                // selector (Evaluator.cpp) skips exactly what ends a pin -- dead,
+                // disabled, lost (kTargetLost), 3D not loaded -- so being chosen again IS
+                // MFO observing the foe trackable again. Re-pin it IF the ended pin had
+                // gone live (Harbinger applied it, then lost track: the foe was briefly
+                // lost and is back). A pin that NEVER went live is not re-pinned: nothing
+                // MFO can see explains why it never took, so re-filing it would repeat.
+                if (!p.everLive) {
+                    if (!p.suppressLogged) {
+                        p.suppressLogged = true;
+                        spdlog::info("[target-pin] {:08X}: gambit re-chose {:08X}, whose pin ended without ever "
+                                     "going live -- NOT re-pinned (it pins again once the gambit chooses another "
+                                     "foe first). (Logged once per ended pin.)",
+                                     a_follower, a_target);
+                    }
+                    return PinResult::Suppressed;
+                }
+                spdlog::info("[target-pin] {:08X}: {:08X} is trackable again (re-chosen by the gambit) -- re-pinning",
+                             a_follower, a_target);
+            }
+            // A CHANGED choice (or the re-pin above). Release + a fresh RequestEx rather than Repoint: a
+            // Repoint onto a handle Harbinger ended a moment ago is silently a no-op,
+            // and the next sweep would then record the NEW foe as the one Harbinger
+            // dropped and suppress it. Both ops are queued in order and applied at
+            // APMF's same writer Drain, so there is no unpinned gap.
+            if (p.handle != APMF_API::kInvalidHandle) api->Release(p.handle);
+            g_pins.erase(it);
+        }
+
+        APMF_API::APMF_Param prm{};
+        prm.form = a_target;   // REQUIRED: the target ACTOR. Nothing else is read.
+        const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_TargetPin, kOwnBasis, &prm);
+        if (h == APMF_API::kInvalidHandle) {
+            // Synchronous refusal with valid params = the ch.20 seat is not installed
+            // (VR, runtime, [TargetPin] bTargetPin=0, self-check). Session-stable: the
+            // seat installs once at APMF's kDataLoaded. Targeting logs the route change.
+            return PinResult::SeatAbsent;
+        }
+        TargetPinClaim p{};
+        p.handle  = h;
+        p.target  = a_target;
+        p.targetH = a_targetHandle;
+        g_pins.emplace(a_follower, p);
+        spdlog::info("[target-pin] {:08X}: PIN {:08X} (h={})", a_follower, a_target, h);
+        return PinResult::Pinned;
+    }
+
+    void ReleaseTargetPin(RE::FormID a_follower) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        std::scoped_lock lock(g_mx);
+        auto it = g_pins.find(a_follower);
+        if (it == g_pins.end()) return;
+        if (api && it->second.handle != APMF_API::kInvalidHandle) api->Release(it->second.handle);
+        spdlog::info("[target-pin] {:08X}: release (target {:08X}{})", a_follower, it->second.target,
+                     it->second.ended ? ", already ended by Harbinger" : "");
+        g_pins.erase(it);
+    }
+
+    void ReleaseAllTargetPins() {
+        std::scoped_lock lock(g_mx);
+        ClearTargetPinsLocked();
+    }
+
+    RE::ActorHandle PinnedTarget(RE::FormID a_follower) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kPinMinAbi) return {};
+        std::scoped_lock lock(g_mx);
+        auto it = g_pins.find(a_follower);
+        if (it == g_pins.end()) return {};
+        if (PinEndedLocked(api, a_follower, it->second)) return {};
+        return it->second.targetH;
+    }
+
+    std::size_t TargetPinCount() {
+        std::scoped_lock lock(g_mx);
+        std::size_t n = 0;
+        for (const auto& [fid, p] : g_pins) if (!p.ended) ++n;
+        return n;
+    }
+
+    void SweepTargetPinsLocked(const APMF_API::APMF_API_v2* api, std::chrono::steady_clock::time_point /*now*/) {
+        if (g_pins.empty() || !api || api->abiVersion < kPinMinAbi) return;
+        // KILL SWITCH: bCommandTarget flipped OFF mid-session releases every pin on the
+        // pump's cadence, as the legacy hook stopped writing the moment it read the flag.
+        if (!Config::g_commandTarget.load()) {
+            spdlog::info("[target-pin] bCommandTarget off -- releasing {} pin(s)", g_pins.size());
+            ClearTargetPinsLocked();
+            return;
+        }
+        // The never-live floor counts UNPAUSED sweeps only (APMF cannot drain while a
+        // game-pausing menu is open), so a menu can never age a pending pin into "ended".
+        const bool paused = GamePaused();
+        for (auto& [fid, p] : g_pins) {
+            if (!paused && !p.ended && !p.everLive) ++p.unpausedSweeps;
+            PinEndedLocked(api, fid, p);
+        }
+    }
+
+    void ClearTargetPinsLocked() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        for (auto& [fid, p] : g_pins)
+            if (api && p.handle != APMF_API::kInvalidHandle) api->Release(p.handle);
+        g_pins.clear();
+    }
+
     // ── package-offer (per-excursion) ───────────────────────────────────────────
     bool OfferPackage(RE::FormID a_follower, RE::FormID a_packageForm) {
         auto* api = g_apmf.load(std::memory_order_relaxed);

@@ -1470,22 +1470,63 @@ layout rule** — any `CombatController` member touched on the combat thread mus
 `< 0x68` (static_asserts in CasterConsent.cpp + CombatStyle.cpp); (4) Stance
 ordinals `0/1/2/3` are a serialized ABI shared with `combatClassOverride`; (5) one
 shared carrier hook — Targeting's `UpdateCombat` thunk drives BOTH targeting and
-`CombatStyle::ApplyTick`/`AnyActive`, they can't be decoupled without a 2nd hook.
+`CombatStyle::ApplyTick`/`AnyActive`, they can't be decoupled without a 2nd hook;
+(6) with Harbinger ch.20 available (APMF ABI >= 13) the thunk's TARGET half is retired
+and MFO's foe choice is pinned through Harbinger (`Targeting.cpp` "pin route" below,
+`apmf/Excursion.cpp` ch.20 pin table) — which is why the hook stays installed for style
+alone rather than being skipped.
 
-### Targeting.cpp — combat-target latch
-Hooks `Character::UpdateCombat` (`VTABLE_Character[0]`, idx `0xE4`, `:110,142`).
-- Thunk `void thunk(RE::Actor*)` (`:40`) — calls original first, only redirects
-  when the engine ALREADY has a target (`:91`), never forces one in. Reads under
-  `std::shared_lock`, fast-path `g_latchCount` atomic (`:52`). `idx=0xE4` is SE/AE-
-  only (VR = different function = CTD, `:132`).
-- `Command` (`:162`) callers `cast/CastOn.cpp:914`, `cast/Fire.cpp:189,338,353`; `Current` (`Targeting.cpp:196`)
-  `Scheduler.cpp:484`; `Clear` (`:177`) `Followers.cpp:280`, `Rapport.cpp:315`;
-  `ClearAll` (`:183`) `Serialization.cpp:597`, `Probe.cpp:344,446`.
-- Co-writes `currentCombatTarget`/`combatController->targetHandle` (`:101`) with
-  SmartNPCTargetSelector.dll if present (`g_conflict` logged, not resolved).
-- **Also drives CombatStyle:** `AnyActive()` (`:51`) + `ApplyTick(a_this, cc)`
-  (`:62`). Renaming/moving those stops stance re-assertion. `InstallHook` installs
-  if EITHER `g_commandTarget` OR `g_weaponStyleControl` is on (`:122`).
+### Targeting.cpp — combat-target latch / Harbinger ch.20 pin route
+Hooks `Character::UpdateCombat` (`VTABLE_Character[0]`, idx `0xE4`, `:145,197`).
+- **TWO ROUTES (feat/mfo-target-pin, 2026-09-25).** `g_pinRoute` (`:49`, atomic) is set
+  ONCE at the top of `InstallHook` (`:150`) from `APMFBridge::TargetPinOffered()` (APMF
+  present AND `abiVersion >= 13`; `Acquire` requests ABI **10**, not the header's 13, so a
+  v10-v12 Harbinger still hands MFO its interface and the latch branch is reachable).
+  **Pin route:** `CommandEx` (`:215`, `Command` `:253` = `CommandEx == Changed`) / `Current`
+  (`:257`) delegate to APMFBridge's ch.20 pin table (`apmf/Excursion.cpp`, below) and the
+  thunk writes **NO target for any actor** (`anyTarget` gate `:71`) — the hook stays
+  installed only because it carries CombatStyle. `Clear` (`:264`) / `ClearAll` (`:274`)
+  release pins on EITHER route (a route flip can never orphan one).
+  **Latch route** (below) = the degrade for Harbinger absent / ABI < 13 / the ch.20 seat not
+  installed. The pin route switches to the latch ONCE, for the session, only when the FIRST
+  pin is refused synchronously (`PinResult::SeatAbsent` in `CommandEx`): a
+  **CAPABILITY-ABSENT (seat not installed)** switch, not a decline fallback — MFO's params
+  are pre-filtered so that refusal can only mean "seat not installed". An ENDED pin never
+  falls back to the latch. `Commandable()` (`:285`) = pin route ? `bCommandTarget` :
+  `IsHooked()` (the Attack / power-attack gate, `cast/Fire.cpp:178,319`). `CommandOutcome`
+  (`Targeting.h`) lets Fire report a Suppressed pin truthfully (`cast/Fire.cpp:197,353`:
+  an OPAQUE NoOp "target pin ended by Harbinger; not re-pinned until the gambit picks
+  another foe", per GAMBIT_FLOWS D3), and the power-attack CLOSE branch no longer reports
+  Fired when nothing holds the foe.
+- Thunk `void thunk(RE::Actor*)` (`:56`) — calls original first, only redirects
+  when the engine ALREADY has a target (`:111`), never forces one in. Reads under
+  `std::shared_lock`, fast-path `g_latchCount` atomic (`:72`). `idx=0xE4` is SE/AE-
+  only (VR = different function = CTD, `:181`).
+- `Command` callers `cast/CastOn.cpp:914`, `cast/Fire.cpp:372`, `Probe.cpp:240,357`; `CommandEx`
+  callers `cast/Fire.cpp:197,353`; `Current` (`:257`) `Scheduler.cpp:893`; `Clear` (`:264`)
+  `Followers.cpp:371`, `Rapport.cpp:324`; `ClearAll` (`:274`) `Serialization.cpp:717`,
+  `Probe.cpp:347,449`. All of them are converted to the pin at this choke point; no caller
+  names the route. The foe selector also skips a foe whose 3D is not loaded (the pin's
+  "unloaded" end), on both routes: the group scan at `Evaluator.cpp:254`, and the
+  targeted-range early return (`kCondFoeWithinRange`/`BeyondRange`, `:175`), which also
+  requires the current target to be in the group's targets and not `kTargetLost` (one group
+  read lock, taken before the chase-cap computation, so it never nests — #23). Both are the
+  no-loop rule's precondition: a foe the selector returns is one MFO sees as trackable.
+- Co-writes `currentCombatTarget`/`combatController->targetHandle` (`:121`) with
+  SmartNPCTargetSelector.dll if present (`g_conflict` logged, not resolved). Latch route only.
+- **Also drives CombatStyle:** `AnyActive()` (`:67`) + `ApplyTick(a_this, cc)`
+  (`:82`). Renaming/moving those stops stance re-assertion. `InstallHook` installs
+  if ANY of `g_commandTarget` / `g_weaponStyleControl` / `iCastControl > 0` is on (`:170`).
+- **What breaks:** moving the `TargetPinOffered()` read below an early return in
+  `InstallHook` (the pin route would silently never start when bCommandTarget/style/cast
+  are all off, or on a self-check refusal); letting the thunk write while `g_pinRoute` is on
+  (it runs after the engine's whole update, so it OVERWRITES Harbinger's pin in every install
+  order — Harbinger review F3); switching the route to the latch on anything but the
+  synchronous seat-absent refusal (that would be a decline fallback — memory rule "legacy =
+  APMF-absent only"); calling APMFBridge while holding `g_latchMx` (the bridge takes `g_mx`);
+  making Clear/ClearAll release pins only on the pin route; raising `Acquire`'s requested ABI
+  to the header's (a v10-v12 Harbinger returns null and MFO loses EVERY facet). Open deferred
+  findings: `Docs/REVIEW-BACKLOG.md` MFO-B98..B101.
 
 ### CasterConsent.cpp — cast control (magic twin of Targeting)
 Hooks `CombatMagicCaster::CheckStartCast` (advisory, 14 vtables, idx `0x06`,
@@ -3506,30 +3547,61 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
   function by `tools/splitcheck`; before it: one `APMFBridge.cpp`).** Other subsystems include
   ONLY `apmf/APMFBridge.h`. `APMF_API.h` (the byte-shared ABI header) stays at `native/`.
-  - `apmf/Bridge.cpp` (1074) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
+  - `apmf/Bridge.cpp` (1085) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
     `g_mx`/`g_owned` (`:51-52`) + refusal sets, `FacetExpiry` (`:163`), the shared claim helpers
     `EnsureClaimLocked` (`:174`), `ReleaseClaimLocked` (`:200`), `CastHeartbeatInterval` (`:241`),
     `EnsureCastClaimLocked` (`:280`), the idle-hand floor `ReconcileHandFloorLocked` (`:672`),
-    `Acquire` (`:813`) / `Available` (`:846`) / `MaybeWarnAbsence` (`:864`), the expiry sweep
-    `Tick` (`:880`) and `ClearTransientState` (`:1029`).
+    `Acquire` (`:813`, requests ABI 10) / `Available` (`:853`) / `MaybeWarnAbsence` (`:871`), the expiry sweep
+    `Tick` (`:887`) and `ClearTransientState` (`:1039`).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
     `ClaimOffenseCast` `:83`, `RefreshOwnedCastOnHand` `:215`, `ReleaseCastClaimOnHand` `:311`,
     `ReleaseOffenseCast` `:326`) and heal (`ClaimHealCast` `:351`, `RefreshHealCastClaim` `:433`).
   - `apmf/Equip.cpp` (274) = equipment: the ch.15 weapon-order claim (`ClaimEquipment` `:37`,
     `WeaponHandActive` `:65`) and the ch.17 authority (`EquipAuthoritySupported` `:89`,
     `ClaimEquipAuthority` `:111`, `DeclareEquipScope` `:196`, `DeclareEquipSet` `:246`).
-  - `apmf/Excursion.cpp` (282) = the per-combat / per-excursion facets: `ClaimCombatTarget`
-    (`:92`), `OfferPackage` (`:121`), the ch.19 loot-travel legs (`LootTravelLeg` `:54`,
-    `ClaimLootTravel` `:142`, `ReleaseLootTravelFor` `:246`) and `ClaimCombatActionDeny` (`:262`,
-    with its file-local `EnsureIvalClaimLocked` `:65`).
+  - `apmf/Excursion.cpp` (470) = the per-combat / per-excursion facets: `ClaimCombatTarget`
+    (`:92`), the **ch.20 TARGET PIN** table (below), `OfferPackage` (`:309`), the ch.19 loot-travel
+    legs (`LootTravelLeg` `:54`, `ClaimLootTravel` `:330`, `ReleaseLootTravelFor` `:434`) and
+    `ClaimCombatActionDeny` (`:450`, with its file-local `EnsureIvalClaimLocked` `:65`).
+  - **ch.20 TARGET PIN (ABI v13 `kIntent_TargetPin`, feat/mfo-target-pin 2026-09-25).** File-local
+    `g_pins` (`Excursion.cpp:145`, guarded by `g_mx`), one `TargetPinClaim` per follower.
+    `TargetPinOffered` (`:183`) = APMF present AND ABI >= 13. `PinTarget` (`:188`) files
+    `RequestEx(follower, kIntent_TargetPin, kOwnBasis, {form = foe})`; a CHANGED foe is Release +
+    fresh RequestEx (not Repoint: a Repoint onto a handle Harbinger just ended is a silent no-op
+    and the sweep would then blame the NEW foe); returns `PinResult` (Pinned / Unchanged /
+    Suppressed / Invalid / SeatAbsent). `PinEndedLocked` (`:154`) = `IsClaimLive` false after the
+    pin was seen live, or, never seen live, after `kPinNeverLiveSweeps` (15, `:134`) UNPAUSED
+    sweeps and never while `UI::GameIsPaused()` (APMF drains only on its PlayerCharacter::Update
+    seat, which a pausing menu stops) → **Release(handle) ALWAYS** (no-op on a dead claim,
+    FIFO-cancels a pending one: no orphan), marked ENDED, logged once. Harbinger ends a pin on
+    target lost / dead / disabled / unloaded / unresolvable or the follower dead; an OUTRANKED
+    pin is NOT ended (it stays live — backlog MFO-B98). **No-loop rule:** when the gambit
+    re-chooses an ended pin's foe it is re-pinned only if that pin had gone LIVE (the selector
+    skips dead / disabled / lost / 3D-unloaded foes, so being re-chosen = trackable again); an
+    ended pin that never went live is `Suppressed` until the gambit chooses a DIFFERENT foe.
+    `ReleaseTargetPin` (`:250`), `ReleaseAllTargetPins` (`:261`), `PinnedTarget` (`:266`, empty
+    once ended — feeds `Targeting::Current`, so the retarget hesitation does not stall on a dead
+    pin), `TargetPinCount` (`:276`, the Diagnostics targeting line), `SweepTargetPinsLocked`
+    (`:283`, called from `Tick` `Bridge.cpp:894`; counts unpaused sweeps; also the
+    `bCommandTarget`-off kill switch) and `ClearTargetPinsLocked` (`:301`, from
+    `ClearTransientState` `Bridge.cpp:1080`). Only `Targeting.cpp` / `Diagnostics.cpp` call these.
+    **What breaks:** judging a never-live pin on wall time, or while paused (a menu then ages a
+    pending claim into a false "ended"); dropping a handle without `Release` (an orphan claim
+    that keeps winning on equal basis, ControlMap.cpp:923-935); re-pinning the SAME foe after an
+    end without the everLive + selector-trackable condition (Harbinger ends it again at its next
+    ~0.25 s poll: a loop); erasing a `g_pins` entry when its pin ENDS (that forgets the no-loop
+    key); a synchronous refusal meaning anything but "seat not installed" (keep the Invalid
+    pre-filter, or Targeting switches to the latch on a decline). Open deferred findings:
+    `Docs/REVIEW-BACKLOG.md` MFO-B98..B101.
   - `apmf/SpellAllowList.cpp` (308) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
     `AppendDenyExemptForms` (`:126`), `PublishSpellAllowList` (`:162`), `ReleaseSpellAllowList`
     (`:284`).
-  - `apmf/APMFBridge_internal.h` (389, NEW in wave 1) = the claim state the families share, all
+  - `apmf/APMFBridge_internal.h` (396, NEW in wave 1) = the claim state the families share, all
     of it from the old file's anonymous namespace: `CastClaim` (`:80`), `Owned` (`:208`), the
     `extern` `g_apmf`/`g_mx`/`g_owned`/refusal sets (defined in `apmf/Bridge.cpp`),
     `kEquipAuthValidateAfter` (`apmf/APMFBridge_internal.h:341`), `kOwnBasis` (`:345`), the helper declarations, and
-    `ReleaseHandleLocked` (`:362`) / `EraseIfEmpty` (`:370`) as `inline`. **THREADING is
+    `ReleaseHandleLocked` (`:362`) / `EraseIfEmpty` (`:377`) as `inline`, plus the ch.20 pin
+    table's two locked hooks `SweepTargetPinsLocked` / `ClearTargetPinsLocked` (`:374-375`). **THREADING is
     unchanged: every map is still guarded by `g_mx`.**
 - **THE MODEL: APMF ARBITRATES/DRIVES; MFO EXECUTES the rest.** APMF never generates behaviour on its
   own initiative (its channels are client-declared, arbitration/drive-only). This bridge only ever

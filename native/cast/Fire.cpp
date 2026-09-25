@@ -173,8 +173,10 @@ namespace MFO::Actuation {
             // Ask the HOOK, not the config. They disagree whenever install was
             // refused with the flag on -- VR, today. Reporting Fired there would
             // buy a suppression window for a latch nothing reads.
-            if (!Targeting::IsHooked()) {
-                return { Result::FailedOther, "targeting hook not installed", true };
+            // (Harbinger ch.20 pin route: the pin does not need MFO's hook, so the
+            // question there is bCommandTarget -- Targeting::Commandable.)
+            if (!Targeting::Commandable()) {
+                return { Result::FailedOther, "target command unavailable (hook not installed or bCommandTarget=0)", true };
             }
 
             // Re-commanding the SAME foe is not an action. The latch persists
@@ -186,7 +188,17 @@ namespace MFO::Actuation {
             // OPAQUE by design (GAMBIT_FLOWS D3): Attack is an ACTIVITY --
             // FFXII's own semantics put reactive rules ABOVE it, and lines
             // below an active Attack never run. Do NOT make this transparent.
-            if (!Targeting::Command(a_follower->GetFormID(), a_choice.target)) {
+            // Harbinger ch.20 pin route: a SUPPRESSED pin (Harbinger ended it on this
+            // foe and it never went live, so it is not re-pinned) holds NOTHING -- say
+            // so, instead of "already on that target". Still OPAQUE per D3: the rule is
+            // the follower's activity, and a transparent outcome here would let a lower
+            // Attack rule pin a different foe, which this rule then re-picks away from
+            // on its next pass -- an alternation D3's opacity exists to prevent.
+            const auto cmd = Targeting::CommandEx(a_follower->GetFormID(), a_choice.target);
+            if (cmd == Targeting::CommandOutcome::Suppressed) {
+                return { Result::NoOp, "target pin ended by Harbinger; not re-pinned until the gambit picks another foe" };
+            }
+            if (cmd != Targeting::CommandOutcome::Changed) {
                 return { Result::NoOp, "already on that target" };
             }
             // Log the foe's HP% too, so "Foe: lowest HP -> Attack" is legible in
@@ -304,8 +316,8 @@ namespace MFO::Actuation {
             auto ptr = a_choice.target.get();
             auto* foe = ptr.get();
             if (!foe) return { Result::FailedOther, "chosen foe no longer resolves", true };
-            if (!Targeting::IsHooked())
-                return { Result::FailedOther, "targeting hook not installed", true };
+            if (!Targeting::Commandable())
+                return { Result::FailedOther, "target command unavailable (hook not installed or bCommandTarget=0)", true };
             // Only meaningful with a MELEE weapon drawn -- a power attack from a bow
             // or empty hands is nonsense and would just burn the tick (Fable).
             auto* r = a_follower->GetEquippedObject(false);
@@ -335,7 +347,14 @@ namespace MFO::Actuation {
             // it does NOT reintroduce the "latch + transparent-reject" two-mutation
             // tick the anim path below still guards against.
             if (dist > Config::g_meleeReach.load()) {
-                Targeting::Command(a_follower->GetFormID(), a_choice.target);
+                // Report Fired only while a latch / pin actually HOLDS the foe (a new one,
+                // or the standing one). A Suppressed pin holds nothing, so nothing is
+                // closing on this foe on our order -- an honest NoOp (opaque, like Attack).
+                const auto cmd = Targeting::CommandEx(a_follower->GetFormID(), a_choice.target);
+                if (cmd == Targeting::CommandOutcome::Suppressed)
+                    return { Result::NoOp, "target pin ended by Harbinger; not re-pinned until the gambit picks another foe" };
+                if (cmd == Targeting::CommandOutcome::Unavailable)
+                    return { Result::FailedOther, "target command unavailable", true };
                 return { Result::Fired, std::format("closing to melee on {}", foeName) };
             }
 
