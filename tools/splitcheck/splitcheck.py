@@ -686,6 +686,7 @@ class Cmp:
         self.own_tu_twins = False
         self._hcache = {}
         self._ue_active = set()
+        self._named_ok = {}
         self._live = {}
 
     def copy_readers(self, img, var):
@@ -958,11 +959,23 @@ class Cmp:
             if ka == kb == "sym" and oa == ob and na and nb and self.names_match(na, nb):
                 za = self.A.data_size.get(ra - oa)
                 is_lit = any(x.startswith("??_C@") for x in na | nb)
-                if oa == 0 and not is_lit:
+                if (oa == 0 and not is_lit) or (za and oa <= za):
+                    # a named object (at its start, inside it, or one past its end
+                    # -- a loop bound): the same name, and -- whatever namespace it
+                    # is in, compare_data only covers MFO:: -- the same CONTENT over
+                    # its PDB type size (cached per object pair)
+                    sa_, sb_ = self.A.data_size.get(ra - oa), self.B.data_size.get(rb - ob)
+                    # (RTTI records hold image-relative RVAs, not relocations: they
+                    # are compared by name, as compare_data does)
+                    if (sa_ or sb_) and not any("`RTTI" in x for x in na | nb):
+                        k_ = (ra - oa, rb - ob)
+                        if k_ not in self._named_ok:
+                            self._named_ok[k_] = True          # a pointer cycle: assume, verify the rest
+                            self._named_ok[k_] = _data_diff(self.A, self.B, self, ra - oa, rb - ob, None) is None
+                        if not self._named_ok[k_]:
+                            return False
                     if na != nb:
                         self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
-                    return True
-                if za and oa <= za:          # inside it, or one past its end (a loop bound)
                     return True
             return self._unnamed_equal(ra, rb)
         if ka == "none" or kb == "none":

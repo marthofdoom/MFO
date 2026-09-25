@@ -414,8 +414,10 @@ def main():
                    r["result"] == "FAIL" and not r.get("provenance"),
                    f"{r['result']} (exit {r['_exit']}), {f['name'][:70]} literal {s[:36]!r}... byte {k} case-flipped")
 
-        # N9b: the LAST byte of an unnamed read-only aggregate larger than 16
-        # bytes, in the proof build (a table the old 16-byte rule stopped short of)
+        # N9b: the LAST byte of a NAMED read-only aggregate > 16 bytes that is
+        # OUTSIDE compare_data's MFO:: scope (a library/CommonLib table), so only
+        # the code reference sees it: the same name used to be enough there.
+        # (/Od has no unnamed non-text read-only object > 16 bytes to plant in.)
         cand = None
         for f in sorted(B0.procs, key=lambda f: f["name"]):
             if not f["name"].startswith("MFO::"):
@@ -425,30 +427,32 @@ def main():
                 if not mem or mem[0].mem.base != X.X86_REG_RIP:
                     continue
                 t = ins.address + ins.size + mem[0].mem.disp
-                if not B0.readonly_data(t) or SC.is_text(B0.cstring(t), 1):
+                if not B0.readonly_data(t):
                     continue
                 kind, names, off, _r = B0.resolve(t)[0]
-                if kind == "sym" and off == 0:
-                    continue                                   # a named object: N9 covers those
-                ext = B0.extent(t)
-                body = B0.read(t, ext)
-                last = max((i for i in range(16, ext) if body[i] and (t + i) not in B0.relocs), default=None)
-                if ext > 16 and last is not None and not any((t + i) in B0.relocs for i in range(ext)):
-                    cand = (f, t, ext, last, body[last])
+                sz = B0.data_size.get(t) or 0
+                if kind != "sym" or off != 0 or sz <= 16 or any("`" in x or SC.DATA_SCOPE.match(x)
+                                                                 or x.startswith("??_C") for x in names):
+                    continue
+                body = B0.read(t, sz)
+                last = max((q for q in range(16, sz) if not any(t + q - d in B0.relocs for d in range(8))),
+                           default=None)
+                if last is not None:
+                    cand = (f, t, sz, last, body[last], sorted(names)[0])
                     break
             if cand:
                 break
         if cand is None:
-            record("N9b tail byte of an unnamed read-only aggregate >16 bytes (proof build)", False,
-                   "no candidate: no unnamed non-text read-only object longer than 16 bytes is referenced")
+            record("N9b tail byte of a named out-of-scope read-only aggregate >16 bytes (proof build)", False,
+                   "no candidate")
         else:
-            f, t, ext, last, v = cand
+            f, t, sz, last, v, nm = cand
             dst = copy_build(args.b0, os.path.join(work, "n9b"))
             patch_dll(dst, t + last, bytes([v ^ 0x01]))
             r = run_sc(args.a, args.b, work, args.tu_map, proof=(args.a0, dst))
-            record("N9b tail byte of an unnamed read-only aggregate >16 bytes (proof build)",
+            record("N9b tail byte of a named out-of-scope read-only aggregate >16 bytes (proof build)",
                    r["result"] == "FAIL" and not r.get("provenance"),
-                   f"{r['result']} (exit {r['_exit']}), object at {t:#x} ({ext} bytes, read by {f['name'][:60]}) "
+                   f"{r['result']} (exit {r['_exit']}), {nm[:60]} ({sz} bytes, read by {f['name'][:50]}) "
                    f"byte {last} flipped")
 
         # N10: a MUTABLE header static read by two functions the split moved
@@ -540,28 +544,31 @@ def main():
             # B0 each new TU's copy reads its own TU's variable. Readers keyed by
             # name alone would merge the two B copies into one reader.
             acc = None
-            bmods = {}
-            for pb in B0.procs:
-                bmods.setdefault(pb["name"], []).append(pb)
-            for name, pbs in sorted(bmods.items()):
-                if "dynamic" in name or name.startswith("`"):
+            ma_all = {m: r_ for r_, m in by_name_a[var]}
+            for ma2, news in sorted(tu.items()):
+                if ma2 not in ma_all:
                     continue
-                pa = [x for x in A0.procs if x["name"] == name and x.get("mod") == ma and x["size"] >= 7]
-                pbn = [x for x in pbs if x.get("mod") in mb_copy and x.get("mod") in tu.get(ma, ())
-                       and x["size"] >= 7]
-                if len(pa) == 1 and len({x.get("mod") for x in pbn}) >= 2:
-                    seen, two = set(), []
-                    for x in pbn:
-                        if x["mod"] not in seen:
-                            seen.add(x["mod"])
-                            two.append(x)
-                    acc = (pa[0], two[:2])
+                groups = {}
+                for pb in B0.procs:
+                    if pb.get("mod") in news and pb.get("mod") in mb_copy and pb["size"] >= 7 \
+                            and "dynamic" not in pb["name"] and not pb["name"].startswith("`"):
+                        groups.setdefault((pb["name"], pb["sig"]), {}).setdefault(pb["mod"], pb)
+                for (nm, sg), per in sorted(groups.items()):
+                    if len(per) < 2:
+                        continue
+                    pa = [x for x in A0.procs if x["name"] == nm and x["sig"] == sg and x.get("mod") == ma2
+                          and x["size"] >= 7]
+                    if len(pa) == 1:
+                        acc = (pa[0], list(per.values())[:2], ma2, ma_all[ma2])
+                        break
+                if acc:
                     break
             if acc is None:
                 record("N10b per-TU copies of one accessor split the state", False,
-                       f"no function with a copy in {ma} (A0) and in two of its new TUs (B0)")
+                       "no same-named, same-signature function with one copy in an old TU (A0) and copies "
+                       "in two of its new TUs (B0)")
             else:
-                pa, pbs2 = acc
+                pa, pbs2, ma, ra_copy = acc
                 da = copy_build(args.a0, os.path.join(work, "n10ba"))
                 db = copy_build(args.b0, os.path.join(work, "n10bb"))
 
@@ -596,8 +603,13 @@ def main():
                         continue
                     ext = B0.struct_extent(t)
                     body = B0.read(t, ext)
+                    za = B0.data_size.get(t - off) if kind == "sym" else None
+                    if za and off <= za:
+                        continue                       # inside a named object: compared by name + content
                     if any((t + q) in B0.relocs for q in range(ext)):
                         continue
+                    if not body or body[0] == 0:
+                        continue                       # "" is the documented residual (MFO-B92)
                     k = next((q for q in range(4, ext - 3) if body[q - 1] == 0), None)
                     if k is not None:
                         cand = (f, t, ext, k)
@@ -645,7 +657,8 @@ def main():
         names_a.setdefault(SC.norm(n), []).append(r_)
     for n, r_, m in sorted(B.datas):
         sz = B.data_size.get(r_) or 0
-        if n.startswith("MFO::") and sz > 16 and B.is_const_data(r_) and len(names_a.get(SC.norm(n), [])) == 1 \
+        if SC.DATA_SCOPE.match(n) and "`" not in n and sz > 16 and B.is_const_data(r_) \
+                and len(names_a.get(SC.norm(n), [])) == 1 \
                 and sum(1 for nn, _r, _m in B.datas if nn == n) == 1:
             body = B.read(r_, sz)
             last = max((i for i in range(16, sz) if (r_ + i) not in B.relocs), default=None)
