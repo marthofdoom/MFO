@@ -1003,18 +1003,18 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   flag is GLOBAL to every follower forced melee — an UNPERKED follower carrying two one-handers may
   be dual-wielded by its OWN AI (`EquipGateThunk` denies spells/staves only); not deny-complete; a
   per-follower CSTY needs `Forms.h` + `CombatStyle.cpp`.
-  **SHED INTERACTION (traced 2026-09-14, no fight):** `ShedOffRoleWeapon` (`logistics/Upkeep.cpp:394`)
+  **SHED INTERACTION (traced 2026-09-14, no fight):** `ShedOffRoleWeapon` (`logistics/Upkeep.cpp:288`)
   never reads the ledger — it does not need to, by ORDERING: the equip gambit fires only in
   `Scheduler.cpp`'s party-combat branch, the party-OOC branch calls `ReleaseForcedWeapon`
   (`:384-385`, both hands, after 2 party-OOC services) BEFORE `ServiceFollower` (`:393`), and
   the shed additionally waits `kShedPostBattleDwell` 3 s (`logistics/Logistics_internal.h:125`) past
-  the last PARTY-combat stamp (`NoteInCombat` `logistics/Upkeep.cpp:670`, stamped on every party-combat service
+  the last PARTY-combat stamp (`NoteInCombat` `logistics/Upkeep.cpp:564`, stamped on every party-combat service
   since 2026-09-21 — an own-OOC follower inside a party fight now keeps his hold AND runs
   `ServiceFollower` via `serviceOwnOoc`, so the dwell must key on the party fight). So the
   shed only ever sees an UNHELD pack; the top-up runs only in
   combat, picks from `GetInventory()` (a dropped weapon is gone), so it cannot re-equip what the
   shed dropped; and a second one-hander is in-role whenever `roles.melee == OneHand` (or the
-  magic-user sidearm rule) — `inRole` (`logistics/Upkeep.cpp:463`) is per class with no count cap. A
+  magic-user sidearm rule) — `inRole` (`logistics/Upkeep.cpp:357`) is per class with no count cap. A
   two-handed-BY-SKILL follower dual-wielding one-handers has BOTH judged off-role post-battle,
   exactly as the right hand alone was before this branch. **What breaks:** moving the yield back
   ahead of a transparent refusal (into commitPreempt, or before `Prepare`'s cooldown/debounce/debt
@@ -1154,7 +1154,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   only `CheckCast` still runs OOC and that is a DENY gate. Field proof: after combat
   ended 14:19:14 the claim stood and heartbeated for 2+ minutes with ZERO APMF seat
   lines for that actor and no heal. This RESTORES marth's ruling recorded at
-  `logistics/Service.cpp:1017-1024` ("OOC concentration delivery must always use the known
+  `logistics/Service.cpp:1124-1131` ("OOC concentration delivery must always use the known
   working force"), which the claim path silently overrode once `bHealAnimPackage`
   went ON. **Not a decline-fallback:** `ApmfRefused` still FAILS CLOSED; out of
   combat APMF has no delivery to arbitrate for, so this is the APMF-ABSENT degrade
@@ -1168,7 +1168,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
   `kActCastTarget` branch AND `Logistics::ServiceFollower`'s OOC cast dispatch
-  (`logistics/Service.cpp:~990-1200`, inside `ServiceFollower`). On that OOC path a **non-AUTO** resolved `cast_target`
+  (`logistics/Service.cpp:~1097-1307`, inside `ServiceFollower`). On that OOC path a **non-AUTO** resolved `cast_target`
   now routes by nature: a **CONCENTRATION** spell (any non-self target) is
   intercepted FIRST → `CastTargetDirect` (direct force, package-lock-proof); the rest is
   FIRE-AND-FORGET, routed by `CasterConsent::ClassifySpell` + foe test — a **hostile
@@ -1255,7 +1255,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   AUTO-only no-fanout)** — `Actuation::IsSummonSpell` + `Actuation::CastSummonOnce`
   (`cast/Summon.cpp`; main-thread half `SummonOnMain` `:171`, limit
   `SummonLimit` `:109`) are THE single summon path. The combat `Fire` guard
-  (`cast/Fire.cpp:215`) and the Logistics OOC cast block (`logistics/Service.cpp:953`) send every
+  (`cast/Fire.cpp:215`) and the Logistics OOC cast block (`logistics/Service.cpp:1060`) send every
   summon there BEFORE any other road, for every target setting (self/player/foe/AUTO);
   `CastAuto` delegates too. **Threading:** the worker only runs the competence/magicka gates,
   reads the main thread's last verdict (`g_summon`, leaf mutex, fresh 1 s), throttles posts
@@ -1720,7 +1720,7 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   (decl `Sightline.h:52`, worker-safe cache read) → `cast/Roads.cpp:48,70`,
   `cast/Direct.cpp:1169`, `cast/Auto.cpp:552`, `Evaluator.cpp:320`.
   `Want` (decl `Sightline.h:58`) → `Evaluator.cpp:330`, `cast/Auto.cpp:490` (F7 auto-cast),
-  `logistics/Service.cpp:1317` (OOC hostile cast — seeds the `Check` at `:1321`; added to
+  `logistics/Service.cpp:1424` (OOC hostile cast — seeds the `Check` at `:1321`; added to
   close the 2026-08-18 review SEV-3 "Check without a Want → Unknown always passes"
   inert wall-gate). `g_mx` is a strict LEAF (nothing called while held). Fail-open
   by design (cold/stale/VR → Unknown). **Every `Check` must have a `Want` seeding
@@ -1765,33 +1765,36 @@ REVIEW-BACKLOG **MFO-B19**). Cross-module state/types/small helpers live as `inl
 members of `namespace MFO::Logistics` in `logistics/Logistics_internal.h` (ONE instance
 across the TUs); big cross-module helpers are declared there and defined in their home
 module. Module layout:
-  - `logistics/Service.cpp` (1513) = the per-follower TICK, `ServiceFollower:50` alone (one
-    1462-line function: the travel backstop `:80-145`, the arrival / theft-guard / movement-
-    blocked legs `~250-800`, the gambit dispatch loop `:871`, the OOC cast block `~940-1330`
-    — concentration direct-force `~1017`, FF fallback `~1300` — the gem reconcile `:1499`).
-  - `logistics/Upkeep.cpp` (758) = what the tick calls into: `DrinkBest:55` (left the
-    anonymous namespace in wave 2; declared in the internal header), `PotionRestores:139`,
-    `CountPotions:239`, `EquipTorch:262`, `DrinkPotion:299`, `HealExcludedWeapon:312`,
-    `ShedOffRoleWeapon:394`, `IsLooting:618`, `WalkingLootLeg:659`, the lifecycle hooks
-    (`NoteInCombat:670`, `ClearTransientState:674`, `OnFollowerRemoved:719`) and the
-    MSTK co-save accessors (`CopyStockGear:743`, `LoadStockRecord:748`, `ClearStockGear:753`).
+  - `logistics/Service.cpp` (1620) = the per-follower TICK: `ServiceFollower:157` (one
+    1462-line function: the travel backstop `:187-252`, the arrival / theft-guard / movement-
+    blocked legs `~357-907`, the gambit dispatch loop `:978`, the OOC cast block `~1047-1437`
+    — concentration direct-force `~1124`, FF fallback `~1408` — the gem reconcile `:1606`),
+    plus the DRINK path it shares with the public forwarder: `DrinkBest:62` (file-local, in
+    the anonymous namespace as before, so it stays with its callers) and `DrinkPotion:152`.
+    The one file over ~1500: `ServiceFollower` alone is 1462 lines and a function is never
+    cut by a move.
+  - `logistics/Upkeep.cpp` (652) = what the tick calls into: `PotionRestores:44`,
+    `CountPotions:144`, `EquipTorch:167`, `HealExcludedWeapon:206`,
+    `ShedOffRoleWeapon:288`, `IsLooting:512`, `WalkingLootLeg:553`, the lifecycle hooks
+    (`NoteInCombat:564`, `ClearTransientState:568`, `OnFollowerRemoved:613`) and the
+    MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`).
   - `logistics/Sinks.cpp` (299) = `BeastHeadSink:52`, `ContainerSink:129`, `GateSink:208`
     (anonymous namespace), `RegisterSinks:250`, `SweepBeastHeadsOnLoad:274`.
   - `logistics/LootTake.cpp` (840), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (934),
     `logistics/LootEquipment.cpp` (526), `logistics/Economy.cpp` (1169),
     `logistics/EquipAuthority.cpp` (761), `logistics/Cast.cpp` (268): see the bullets below.
-  - `logistics/Logistics_internal.h` (851) = shared state/types/declarations;
+  - `logistics/Logistics_internal.h` (849) = shared state/types/declarations;
     `logistics/LootTravel_internal.h` (562) = the loot TRAVEL substrate (`TravelIntent`,
     `g_travelSlots:91`, stall/sticky/gate/actor-block state, `SortLootCandidates`, scan
     timing), included by `Logistics_internal.h` at the block's old position (NOT
     self-contained; never include it directly).
   - `logistics/Logistics.h` (232) = the public API (unchanged, moved whole).
   Wave 2 added declarations to `Logistics_internal.h` for helpers that were file-local only
-  by position: `DrinkBest`, `EquipTorch`, `HealExcludedWeapon`, `ShedOffRoleWeapon`,
+  by position: `EquipTorch`, `HealExcludedWeapon`, `ShedOffRoleWeapon`,
   `MarkJustLooted`, `IsDrinkablePotion`, `IsCoinLoot`, `IsSoulGemItem`, `IsIngredientItem`,
   `RefInPlayerStorage`, `IsLOTDDropOff`, `LockPickable`, `TierReleased`, `IsPlayerPick`.
 - **PLAYER-COMBAT LOOT INTERRUPT (2026-09-06):** the GLOBAL travel-intent
-  backstop (`logistics/Service.cpp:80-145`, runs on EVERY out-of-combat service call, ANY
+  backstop (`logistics/Service.cpp:187-252`, runs on EVERY out-of-combat service call, ANY
   follower, ~133 ms-scale — not gated on the 1 s logistics cadence) now also
   clears every active loot-travel slot when `RE::PlayerCharacter::IsInCombat()`
   is true (`playerInCombat:119`), same mechanism as the existing cap/
@@ -2255,7 +2258,7 @@ module. Module layout:
   `SlotOf(id) != nullptr`) is a pure travel-slot proxy — true the whole walk-
   there and even on an arrival that finds nothing, false for arm's-reach loot
   that never claims a slot. The board's "Looting" signal now reads
-  `JustLooted` (`logistics/Upkeep.cpp:649`) instead, stamped by `MarkJustLooted` (`:643`) at the
+  `JustLooted` (`logistics/Upkeep.cpp:543`) instead, stamped by `MarkJustLooted` (`:643`) at the
   THREE confirmed-acquisition points in `logistics/Service.cpp` — the arm's-reach
   fall-through (`:1386`, gated `IsLootOp` — `logistics/Logistics_internal.h:568`), the
   loose-item Activate readback (`:256`), and the `StripCorpse` call (`:508`).
@@ -2277,21 +2280,21 @@ Adding shared state? Put it in `_internal.h` as `inline` (never a per-TU
 anonymous-namespace copy — that silently forks the instance).
 - **SAVE-COMPAT — `g_stockGear`/'MSTK'** (`logistics/Logistics_internal.h:622`, guarded
   `g_stockMx` `logistics/Logistics_internal.h:621`, the one cross-thread map here): the only serialized state the cluster
-  owns. `CopyStockGear` (`logistics/Upkeep.cpp:743`) → `Serialization.cpp:209`; `LoadStockRecord`
+  owns. `CopyStockGear` (`logistics/Upkeep.cpp:637`) → `Serialization.cpp:209`; `LoadStockRecord`
   (`:1690`) → `:332`; `ClearStockGear` (`:1695`) → `:256,646`. Only
   `IsPersistableID` FormIDs written, sets capped 512, unresolvable IDs dropped.
   Changing the map's key/value shape or record framing breaks the shed-protection
   ("Gauldurbow fix") — signature gear could get shed (dropped on the floor) after a load.
   **Not** cleared by `ClearTransientState` — cleared separately by `ClearStockGear`.
-- `ServiceFollower` (`logistics/Service.cpp:50`) — callers `Scheduler.cpp:393` (the party-OOC
+- `ServiceFollower` (`logistics/Service.cpp:157`) — callers `Scheduler.cpp:393` (the party-OOC
   branch) and `serviceOwnOoc` `Scheduler.cpp:459` (an own-OOC follower inside a party fight,
   no-action exits only), both on the worker. Sets
   `g_svc` (`logistics/Logistics_internal.h:233`) raw pointer valid only for that call — safe only because the
   worker services followers sequentially; parallelizing dangles it.
-- `ShedOffRoleWeapon` (`logistics/Upkeep.cpp:394`) — one off-role weapon per idle tick, **DROPPED on
+- `ShedOffRoleWeapon` (`logistics/Upkeep.cpp:288`) — one off-role weapon per idle tick, **DROPPED on
   the floor** (no longer handed to the player; no value split, no knob — marth
   simplified). Disposal is the engine's `DropObject` vfunc (a world-ref/3D create) so it MUST
-  go through `MainThread::Post` (`doDrop` `logistics/Upkeep.cpp:539`, mirrors the #62 equip / ActivateRef
+  go through `MainThread::Post` (`doDrop` `logistics/Upkeep.cpp:433`, mirrors the #62 equip / ActivateRef
   hops in this file). **`doDrop` calls the vfunc DIRECTLY (slot 0xCB SE/AE, 0xCD VR)
   with an explicit `ObjectRefHandle* a_out` second parameter -- NEVER through
   `RE::Actor::DropObject`**: CommonLib 3.7.0's `RelocateVirtual<>` wrapper builds a
@@ -2300,7 +2303,7 @@ anonymous-namespace copy — that silently forks the instance).
   (deterministic CTD, 4x on LoreRim, fixed v2.0.7; principle 6, the third instance).
   Verified against the unpacked 1.6.1170 (`+0x6781D0`) and 1.5.97 (`+0x5E6150`) binaries; on VR (`!MainThread::IsInstalled()`) it SKIPS rather than
   drop off-worker. **POST-BATTLE GATE:** early-returns until `kShedPostBattleDwell`
-  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`logistics/Upkeep.cpp:670`) ←
+  (3 s) since `g_lastCombatSeen[id]`, stamped by `NoteInCombat` (`logistics/Upkeep.cpp:564`) ←
   `Scheduler.cpp:409` (the PARTY-combat branch, every party-combat service, own flag or
   not — since 2026-09-21 this path also runs for an own-OOC follower inside a party fight,
   via `serviceOwnOoc`). Survives an `IsInCombat()` mid-fight flap: a party-combat service
@@ -2331,22 +2334,22 @@ anonymous-namespace copy — that silently forks the instance).
   BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B14** (SEV-4) — a "left hand empty"-only
   one-hand perk can vote `unarmed` and make the shed strip a legitimately wielded
   off-role weapon; read it before touching `inRole` or the unarmed classifier.
-- `ClearTransientState` (`logistics/Upkeep.cpp:674`) → `Serialization.cpp:641`, after StopPump. Wipes
+- `ClearTransientState` (`logistics/Upkeep.cpp:568`) → `Serialization.cpp:641`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
-- Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`logistics/Upkeep.cpp:139`),
-  `AmmoIsBolt`, `CountPotions`/`ArrowCount`/`BoltCount` (`logistics/Upkeep.cpp:239-253`) →
+- Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`logistics/Upkeep.cpp:44`),
+  `AmmoIsBolt`, `CountPotions`/`ArrowCount`/`BoltCount` (`logistics/Upkeep.cpp:144-158`) →
   `Evaluator.cpp:397-409` + `TradeBridge.cpp:52-71` (buy side shares them so bought
-  supply matches looted). `ComputeWeakPotionFloor` (`logistics/Upkeep.cpp:211`) ← `plugin.cpp:288`
+  supply matches looted). `ComputeWeakPotionFloor` (`logistics/Upkeep.cpp:116`) ← `plugin.cpp:288`
   (after `Catalog::Load`).
 - **Alias/travel:** `g_travelSlots` (`logistics/LootTravel_internal.h:91`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
   `Packages::LootTravelClear` (this follower's own combat via `ReleaseTravelOnCombat`
-  `logistics/Upkeep.cpp:706` ← `Scheduler.cpp:486`, keyed on the follower's OWN flag; the PLAYER's combat via the global
-  backstop `logistics/Service.cpp:80-145`, see the PLAYER-COMBAT LOOT INTERRUPT note
+  `logistics/Upkeep.cpp:600` ← `Scheduler.cpp:486`, keyed on the follower's OWN flag; the PLAYER's combat via the global
+  backstop `logistics/Service.cpp:187-252`, see the PLAYER-COMBAT LOOT INTERRUPT note
   above; cap/leash/dismissal/revert). Leash hysteresis guards
   (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.
-  **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `logistics/Service.cpp:~521`) detects an EXTERNAL package
+  **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `logistics/Service.cpp:~628`) detects an EXTERNAL package
   holding a claimed follower (scene/framework; onTravelPkg=false mid-walk), pauses
   the stall/deadline clocks (`stolenSince`, `kStealGrace=10s` `logistics/LootTravel_internal.h`) and re-asserts
   via `EvaluatePackage(true,false)`; only a genuine on-package zero-move stall
@@ -2357,12 +2360,12 @@ anonymous-namespace copy — that silently forks the instance).
   (`logistics/LootTravel_internal.h`, keyed `StealKey`=follower<<32|target) counts displacements;
   at `kStealStrikeMax=4`, or while `IsInCombat()`, the leg ABANDONS to the transient
   blocklist (`MarkTravelFailed`, never sticky) instead of re-asserting. Reset on
-  arrival (`logistics/Service.cpp:~515`, provably reachable) or target change (fresh key);
+  arrival (`logistics/Service.cpp:~622`, provably reachable) or target change (fresh key);
   erased on every give-up. Normal single-steal-then-reclaim path unchanged.
   **QUIET HOLD — NOW OBSERVATION-GATED (2026-09-03, CORRECTED 2026-09-07,
   `Docs/DIAG-2026-09-06-loot-travel.md`):** the theft-guard above is skipped for an
   APMF-held leg ONLY once that leg has been SEEN running the travel package.
-  `logistics/Service.cpp:614` now reads `apmfLeg && tr.legEngaged`, not
+  `logistics/Service.cpp:721` now reads `apmfLeg && tr.legEngaged`, not
   `Packages::IsAPMFTravelHeld(slot)` alone. The old unconditional bypass rested on a
   probe-era premise ("0x49 re-holds the package every engine re-eval, so a momentary
   framework `curPkg` is benign") that the 2026-09-06 field session falsified: **0 of
@@ -2381,7 +2384,7 @@ anonymous-namespace copy — that silently forks the instance).
     (first Walking tick of a leg then ≤1/4s, per-leg timer so a new dispatch is
     never swallowed), `TRAVEL PKG DISPLACED` (engaged-then-displaced = RC#3, the
     runtime-FF-package case, ≤1/4s — deliberately OBSERVABLE ONLY, no recovery).
-  - **`DEADLINE EXPIRED`** (`logistics/Service.cpp:785`, plain-deadline branch, ≤1/2s per
+  - **`DEADLINE EXPIRED`** (`logistics/Service.cpp:892`, plain-deadline branch, ≤1/2s per
     follower) ends the silent `MarkTravelFailed` that hid three of five "batch done"
     releases; it carries cat/budget/overrun/dist/curPkg/route/`legEngaged`.
   - A never-engaged APMF leg now falls into the NORMAL guard: `stolenSince` pauses
@@ -2396,14 +2399,14 @@ anonymous-namespace copy — that silently forks the instance).
   `_research/loot-batch-design-2026-09-24.md` items 3-5). marth: "never return to follow when
   valid items are reachable", "one follower per item is counter productive ... a smooth
   correction if they aren't first to the item", MFO must not nudge a Harbinger-owned leg.**
-  - **EMPTIED-TARGET CORRECTION** (`logistics/Service.cpp:~267`, an `else if` arm BEFORE the
+  - **EMPTIED-TARGET CORRECTION** (`logistics/Service.cpp:~374`, an `else if` arm BEFORE the
     Walking arm): every Walking tick peeks `HasLoot(tr.cat, tr.want)` on a non-loose target
     (the scan's own peek, now declared in `logistics/Logistics_internal.h`). Empty -> Holding with NO
     blocklist/strike/grace, and `RunExcursionScan` takes the next item the SAME tick. Log
     `[loot] <id> target <ref> EMPTIED before arrival -- next item <ref|none ...>` (`noteNext`,
     printed from the Holding block once the next item is known). Several followers may
     converge on one ref by design.
-  - **MOVEMENT BLOCKED BACKSTOP** (`logistics/Service.cpp:~569`, runs AFTER arrival and BEFORE the
+  - **MOVEMENT BLOCKED BACKSTOP** (`logistics/Service.cpp:~676`, runs AFTER arrival and BEFORE the
     theft guard, every road): `curPkg->packData.packType == kMovementBlocked` (36). Onset in
     `TravelIntent::blockedSince`/`blockedLeg` (keyed to `legStart`, so a lingering MB never
     gates the NEXT leg). `< kBlockedGate` (3 s): return, still walking (no guard, no stall).
@@ -2472,7 +2475,7 @@ anonymous-namespace copy — that silently forks the instance).
 - **LOOT RUN ORDERING, no-dibs-first (2026-09, marth: "no-dibs + closest only
   first, then the dibs items later in the runs, no pauses").** Both gambit-
   table dispatch loops that pick a loot action — the normal per-tick loop
-  (`logistics/Service.cpp:~871-1386`) and the excursion leg-boundary dispatcher
+  (`logistics/Service.cpp:~978-1493`) and the excursion leg-boundary dispatcher
   (`RunExcursionScan`, `logistics/LootScan.cpp:890`) — now run the follower's
   gambit table TWICE: pass 0 defers any dibs-tier loot op (Equipment/Gold/
   Jewelry/SoulGems/Valuables — `IsDibsTierLootOp`, `logistics/Logistics_internal.h:558`)
@@ -2525,7 +2528,7 @@ anonymous-namespace copy — that silently forks the instance).
   → `KeepHeadClear`; since 2026-09-14 it also emits the passive `[armor-obs]` line
   (`logistics/Sinks.cpp:60`) for every rated-ARMO equip/unequip on a tracked follower
   BEFORE its own equipped-only / toggle gates (pure reads, `Followers::IsTrackedFast`). `SweepBeastHeadsOnLoad` (`logistics/Sinks.cpp:274`) ← `plugin.cpp:360`.
-- `OnFollowerRemoved` (`logistics/Upkeep.cpp:719`) ← `Followers.cpp:306` (dismissal alias eviction).
+- `OnFollowerRemoved` (`logistics/Upkeep.cpp:613`) ← `Followers.cpp:306` (dismissal alias eviction).
 - Hardcoded base FormIDs (stable): Gold `0x0F`, Lockpick `0x0A`, player `0x14`,
   house loc types, PlayerFaction — resolved/used throughout.
 - Economy probe (`EconomyProbe`, worker, `Config::g_economy && Po3Present`, now takes
@@ -2950,7 +2953,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   "unmanage, don't touch ... remember the state when dropped and restore it plus
   back debt when re-enrolled").** Before this change `ProgAllocator` never read
   `FollowerState::mfoEnabled` (the Board writes it at `Board.cpp:1203`, the
-  Scheduler/Logistics ticks skip on it at `Scheduler.cpp:318` / `logistics/Service.cpp:56`)
+  Scheduler/Logistics ticks skip on it at `Scheduler.cpp:318` / `logistics/Service.cpp:163`)
   — the toggle preserved `ProgState` but did NOT stop progression's actor writes.
   Now `Followers::IsMfoEnabled(id)` (`Followers.cpp`, an **off-worker-safe read of
   the `g_mx`-guarded `g_mfoOff` mirror** that `PublishActiveMirror` republishes from
@@ -3332,7 +3335,7 @@ live caller (**UNVERIFIED** — check Board before removing). `g_pending` keys o
 616`) stops being called on revert, a reused FormID next session moves gems onto the
 wrong actor.
 **GEM RECONCILE (ABI v3)** — `GemReconcileSupported`/`RequestGemReconcile` (MEOBridge.h)
-← `Logistics::ServiceFollower` idle branch (`logistics/Service.cpp:1499`, each management
+← `Logistics::ServiceFollower` idle branch (`logistics/Service.cpp:1606`, each management
 scan). Decoupled re-socket of a follower's OWN loose gems (left loose by the
 ungem-then-sell `UnsocketItemGems`) back into his WORN gear's empty sockets, so a gem
 extracted for a sale never stays loose. `RequestGemReconcile` posts the whole pass to
@@ -4466,7 +4469,7 @@ decline-fallback.
   (the exact starvation lesson from the owned-cast dedupe-latch revert above, applied up front
   instead of discovered the same way).
 - **`Forms::IsTravelPackage`** now recognizes all 8 packages (4 alias + 4 APMF) — load-bearing for
-  the PACKAGE-THEFT guard (`logistics/Service.cpp:521`): a follower legitimately running his
+  the PACKAGE-THEFT guard (`logistics/Service.cpp:628`): a follower legitimately running his
   APMF-delivered package must read as "on the travel package", never as "stolen" (0x49 wins on
   every nudge while the claim is published — but NOT on the engine's own cadence, so a claim
   nobody re-nudges can be displaced; the guard must not misfire and churn regardless).
@@ -4513,7 +4516,7 @@ decline-fallback.
   finalizing the retreat hold; `LootTravelFill`/`LootTravelRetarget` (`Packages.cpp:1548`,
   `1633`) reciprocally early-return `false` while `g_retreatHold.actorID` names that same
   follower, covering the reverse race. `LootTravelEvictIf` gained an `a_why` parameter
-  (default `"dismissed"`, its original/only caller `logistics/Upkeep.cpp:732` unaffected) so the
+  (default `"dismissed"`, its original/only caller `logistics/Upkeep.cpp:626` unaffected) so the
   retreat-triggered eviction logs distinctly from the roster-dismissal one. **This closes a
   window that was live in this SAME change** (retreat never touched `OfferPackage` before
   this pass — see the paragraph above — so the collision could not occur on any
@@ -4777,12 +4780,12 @@ native seats) and ENGINE_NOTES §0.40.
     flaps back true and neither claim is ever observed, the slot can ping-pong on
     a cap-plus-lap beat (bounded, and loud — every swap prints a HELD OFF line).
   - `HeldOffBy(follower, spell)` (`ComposedCast.cpp:514`, decl
-    `ComposedCast.h:218`) ← `logistics/Service.cpp:1105` — names WHICH incumbent held a
+    `ComposedCast.h:218`) ← `logistics/Service.cpp:1212` — names WHICH incumbent held a
     spell off, for the LOG ONLY. Reads `g_lastHold`, which every `Try()` erases at
     its top (`:207`), so it needs no expiry and MUST NOT grow one (#9).
   - **Depended-on-by:** `cast/Direct.cpp:715`/`:1109` map `Held` →
     `SelfCast::Held` (`cast/Actuation.h:120`) → `cast/Auto.cpp:370` (`CastAuto`,
-    transparent NoOp) and `logistics/Service.cpp:1066` (transparent `continue`, log deduped
+    transparent NoOp) and `logistics/Service.cpp:1173` (transparent `continue`, log deduped
     2s); `cast/Roads.cpp:166-167`/`:242-243` (`ConcentrationCast`) returns a TRANSPARENT NoOp with NO hand
     lock.
 - **THE F12 IN-FLIGHT HOLD — `fix/mfo-heal-recognition`, v2.0.5, 2026-09-09.** The
@@ -4819,7 +4822,7 @@ native seats) and ENGINE_NOTES §0.40.
     exclusive on any one call, so sharing cannot silence either).
   - **Why HERE and not in the hand lock.** `ComposedCast::Try` is the ONE
     `ClaimHealCast` call site in `native/`; BOTH the Logistics OOC concentration
-    dispatch (`logistics/Service.cpp:1054` → `CastTargetDirect`) and combat `CastOn`'s
+    dispatch (`logistics/Service.cpp:1161` → `CastTargetDirect`) and combat `CastOn`'s
     composed branch (`cast/CastOn.cpp:757`) bottom out here. The per-hand cast lock
     never saw the Logistics claim at all, which is why F8's identical protection did
     not cover this.
@@ -4833,7 +4836,7 @@ native seats) and ENGINE_NOTES §0.40.
     bound, since the incumbent's own rule re-requests a fresh handle — and a fresh
     `created` — each time APMF auto-expires the old one. (3) The hold check rests
     on a NARROW invariant: **not** "one heal `Try()` per follower per tick" (false
-    — a `Held` outcome continues the scan at `logistics/Service.cpp:1066`, and the
+    — a `Held` outcome continues the scan at `logistics/Service.cpp:1173`, and the
     `pass < 2 && !acted` wrapper at `:871` re-runs it), but **"no heal `Try()`
     runs after a same-tick `ClaimHealCast` that MINTED"** — a `Claimed` outcome
     ends all three scans, and a NON-claimed one out of the `ClaimHealCast` branch (either
@@ -4843,12 +4846,12 @@ native seats) and ENGINE_NOTES §0.40.
     the same frame as a fresh `RequestCast` reads NOT-live and would thrash. Both
     sites carry the corrected dependency as a comment (`ComposedCast.cpp`'s hold
     check and `EnsureCastClaimLocked`'s unchanged fast path in `apmf/Bridge.cpp`).
-  - `logistics/Service.cpp:1147` labels an `Applied` heal **"APMF claimed"**, not
+  - `logistics/Service.cpp:1254` labels an `Applied` heal **"APMF claimed"**, not
     "delivered": a live claim may sit UNOBSERVED for its whole window. The FIRING
     signal is separate (`Diagnostics.cpp`'s SpellSink → the watch; `[cfc] ... NO
     observed cast` when it never fires). Do not word that back to "delivered" (#7).
     **Since 2026-09-21 that label is derived from the ROAD, not from claim liveness:**
-    `logistics/Service.cpp:1146` reads `Actuation::TargetStreamLive(id, spell, target)`
+    `logistics/Service.cpp:1253` reads `Actuation::TargetStreamLive(id, spell, target)`
     (`cast/Direct.cpp:1312`, the direct road's own `g_targetCast` entry) — `IsHealCastActive`
     answered "any live heal claim on this follower" and labelled a direct Healing Hands "APMF
     claimed" because rule 0's Fast Healing claim was live (deck 2026-09-21 08:09:39).
@@ -5140,7 +5143,7 @@ NOT scaled) main-thread; `Spend` external caller `progression/Verbs.cpp:328`. `R
 
 ### Evaluator.cpp / Evaluator.h
 Gambit condition/action evaluator: scan a table top-down, **first true wins, PURE
-READS (#23).** `Evaluate` (`:436`) ← `Scheduler.cpp:432` (combat) + `logistics/Service.cpp:874`
+READS (#23).** `Evaluate` (`:436`) ← `Scheduler.cpp:432` (combat) + `logistics/Service.cpp:981`
 . `Choice` (`Evaluator.h:11`: `actionOpcode`, `actionParam`, `subject`,
 `subjectActorForm` #68, `target`) is the ABI to `Actuation::Fire`. The `a_startIndex`
 resume contract (`Evaluator.h:41`) prevents a near-always-true rule shadowing rules

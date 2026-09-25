@@ -827,9 +827,7 @@ namespace MFO::Logistics {
     // file-local BY POSITION (defined above their only caller in the same TU)
     // and now cross a file boundary. Declarations only; no default arguments.
 
-    // defined in logistics/Upkeep.cpp (DrinkBest was in Logistics.cpp's
-    // anonymous namespace; ServiceFollower and DrinkPotion both call it)
-    bool DrinkBest(RE::Actor* a_follower, RE::ActorValue a_which);
+    // defined in logistics/Upkeep.cpp, called by ServiceFollower
     bool EquipTorch(RE::Actor* a_follower);
     void HealExcludedWeapon(RE::Actor* a_follower);
     bool ShedOffRoleWeapon(RE::Actor* a_follower, const FollowerState& a_state);

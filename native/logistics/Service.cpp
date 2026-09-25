@@ -1,6 +1,7 @@
 // logistics/Service.cpp -- the per-follower logistics TICK: ServiceFollower, the
 // one out-of-combat action a follower takes per idle tick (drink, torch, shed,
-// loot excursion and travel legs, economy probe).
+// loot excursion and travel legs, economy probe), and the DRINK path it and
+// DrinkPotion share (DrinkBest, file-local).
 // Split out of the old native/Logistics*.cpp by the wave-2 subsystem-folder split
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "PCH.h"
@@ -46,6 +47,112 @@ extern "C" __declspec(dllimport) void* __stdcall GetModuleHandleA(const char* a_
 // behind bLogistics, and NEVER interleaved with the combat table (§4.8).
 
 namespace MFO::Logistics {
+
+    namespace {
+
+        // ── DRINK ───────────────────────────────────────────────────────────
+        // Consume the BEST (highest-magnitude) restore potion of a_which the
+        // follower already carries. The AlchemyItem equip path IS the vanilla
+        // "drink" for an actor (DESIGN §4.5 Tier A). Reads/mutates the named
+        // follower only.
+        std::uint64_t drinkKey(RE::FormID a_fid, RE::ActorValue a_av) {
+            return (static_cast<std::uint64_t>(a_fid) << 8) | static_cast<std::uint8_t>(a_av);
+        }
+
+        bool DrinkBest(RE::Actor* a_follower, RE::ActorValue a_which) {
+            // COOLDOWN: a restore potion works over its duration; do not chain-
+            // drink the stack while the first is still active (M5).
+            const auto key = drinkKey(a_follower->GetFormID(), a_which);
+            if (auto it = g_drinkUntil.find(key);
+                it != g_drinkUntil.end() && std::chrono::steady_clock::now() < it->second) {
+                return false;
+            }
+
+            // IN COMBAT drink the STRONGEST (survival first). OUT of combat, drink the
+            // WEAKEST potion that still covers the missing amount -- topping up with an
+            // Ultimate potion to heal a scratch is the wasteful "burns the best potion"
+            // tell (Fable P10). If nothing single-handedly covers the deficit, fall to
+            // the strongest to close the most gap.
+            const bool  inCombat = a_follower->IsInCombat();
+            float deficit = 0.0f;
+            if (!inCombat) {
+                if (auto* avo = a_follower->AsActorValueOwner())
+                    deficit = std::max(0.0f, avo->GetPermanentActorValue(a_which) -
+                                             avo->GetActorValue(a_which));
+            }
+
+            RE::AlchemyItem* strong = nullptr; float strongMag = -1.0f;
+            RE::AlchemyItem* cover  = nullptr; float coverMag  = std::numeric_limits<float>::max();
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* alc = obj->As<RE::AlchemyItem>();
+                if (!alc || PotionRestores(alc) != a_which) continue;
+                // Magnitude of the costliest effect -- the same effect PotionRestores
+                // classified on, so ranking is by the resource the potion is FOR.
+                const auto* eff = alc->GetCostliestEffectItem();
+                const float mag = eff ? eff->GetMagnitude() : 0.0f;
+                if (mag > strongMag) { strongMag = mag; strong = alc; }
+                if (!inCombat && mag + 0.5f >= deficit && mag < coverMag) { coverMag = mag; cover = alc; }
+            }
+            RE::AlchemyItem* best = (!inCombat && cover) ? cover : strong;
+            if (!best) {
+                // REGRESSION GUARD [potprobe]: a wanted drink found no potion. If the
+                // follower carries alchemy anyway, a classifier regression (a mod
+                // reworking potion archetypes -> PotionRestores misreads them) is the
+                // suspect -- dump the raw archetype/AV so it is diagnosable. Silent
+                // when the follower simply has no alchemy. Rate-limited 15s/follower.
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextPotProbe;
+                auto& pn = s_nextPotProbe[a_follower->GetFormID()];
+                const auto tnow = std::chrono::steady_clock::now();
+                if (pn.time_since_epoch().count() == 0 || tnow >= pn) {
+                    pn = tnow + std::chrono::seconds(15);
+                    std::string dump;
+                    for (auto& [obj, data] : a_follower->GetInventory()) {
+                        if (!obj || data.first <= 0) continue;
+                        auto* alc = obj->As<RE::AlchemyItem>();
+                        if (!alc || alc->IsFood() || alc->IsPoison()) continue;
+                        const auto* eff = alc->GetCostliestEffectItem();
+                        auto* mgef = eff ? eff->baseEffect : nullptr;
+                        dump += std::format(" [{} x{} arch={} primAV={} -> restores={}]",
+                            alc->GetFullName() ? alc->GetFullName() : "?", data.first,
+                            mgef ? static_cast<int>(mgef->data.archetype) : -1,
+                            mgef ? static_cast<int>(mgef->data.primaryAV) : -1,
+                            static_cast<int>(PotionRestores(alc)));
+                    }
+                    if (!dump.empty())
+                        spdlog::info("[potprobe] {:08X} want={} -- no match, but carries alchemy:{}",
+                                     a_follower->GetFormID(), static_cast<int>(a_which), dump);
+                }
+                return false;
+            }
+
+            auto* mgr = RE::ActorEquipManager::GetSingleton();
+            if (!mgr) return false;
+            // Equipping a potion on an actor consumes it -- the documented Tier A
+            // path. One unit; the engine removes it from the pack.
+            mgr->EquipObject(a_follower, best, nullptr, 1);
+            // Gate this AV for the potion's own duration (min one logistics
+            // interval), so the next tick does not drink the rest of the stack.
+            float dur = 1.0f;
+            if (const auto* eff = best->GetCostliestEffectItem())
+                dur = std::max<float>(1.0f, static_cast<float>(eff->GetDuration()));
+            g_drinkUntil[key] = std::chrono::steady_clock::now() +
+                                std::chrono::milliseconds(static_cast<int>(dur * 1000.0f));
+            return true;
+        }
+
+    }
+
+    // ── public: actuation ───────────────────────────────────────────────────
+
+    // Public forwarder so Actuation (the combat dispatcher) drinks through the
+    // exact same cooldown-gated path as the logistics table. NOT gated on
+    // bLogistics: that flag governs OUT-OF-COMBAT looting/drinking; an in-combat
+    // drink is a combat gambit, and the gate is that the player assigned it.
+    bool DrinkPotion(RE::Actor* a_follower, RE::ActorValue a_which) {
+        if (!a_follower) return false;
+        return DrinkBest(a_follower, a_which);
+    }
 
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
