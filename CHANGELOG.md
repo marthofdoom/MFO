@@ -7,8 +7,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
-- **A losing follower runs back to you and stays there.** Auto-retreat used to cancel itself. Pulling the follower out of the fight often ended the whole fight on paper, and MFO then called the retreat off half a second later. Now a retreat ends only when he reaches you and is ready to fight again, when no enemies are left near him, or after 30 seconds.
-- **He stays by your side after he arrives.** A follower who reaches you while the fight is still going badly for him waits at your side instead of walking straight back in. He goes back when his confidence recovers or after 30 seconds.
+- **A losing follower runs back to you.** Auto-retreat used to cancel itself. Pulling the follower out of the fight often ended the whole fight on paper, and MFO then called the retreat off half a second later. Now a retreat ends when he reaches you, when no enemy near him is still fighting, or after 30 seconds.
+- **He fights at your side, not back out there.** A follower who reaches you while the fight is still going badly for him stays by you for a few seconds instead of walking straight back in. If the enemies come to him he fights them beside you. He is never held out of a fight at your side.
 - **More than one follower can retreat at once.** With Harbinger installed each follower retreats on his own. Without it only one can retreat at a time, as before.
 - **Retreat is no longer once per fight.** After a retreat ends MFO waits at least 10 seconds before the next one. A retreat that could not start is tried again after the same wait.
 - **Safer disengage.** The call that pulls a follower out of combat now runs on the game's main thread, once when the retreat starts and again only if an enemy drags him back in.

@@ -417,7 +417,7 @@ releases **by eviction** with a non-actor XMarker.
   `§4.6`-DECLINES for package-locked custom
   followers — every concentration path avoids it entirely (`CastTargetDirect`), and
   the FF paths fall back to a direct silent cast.
-- `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (retreat `:2105-2345`)
+- `LootTravelFill/Retarget/Clear/EvictIf`, `RetreatFill/Clear/EvictIf` (retreat `:2119-2430`)
   — callers throughout Logistics/Scheduler + dismissal. **All release by eviction,
   never VM Clear** (scriptless aliases no-op a VM Clear); priority 60 is static and
   can't be lowered to release. `LootTravelRetarget` refills only the TARGET alias,
@@ -1412,35 +1412,37 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   `MFO-B59` (the `ownedCast` explicit-subject ally + Offense road, the stream outliving a
   castSeen-false lap by the reconcile's stale window, a magicka-dry Declined stretch delaying
   logistics) and `MFO-B58` (the Task-1 concentration claims with no controller test).
-- **AUTO-RETREAT DRIVER (ClickUp 86e3erv94, batch L, 2026-09-25; tier A).** `ServiceRetreat`
-  (`:335`) runs on EVERY service from BOTH tables — the party-OOC branch (`:721`, before
-  `Logistics::ServiceFollower`) and the combat table (`:895`) — and returns true while the
-  follower holds a retreat, so neither table acts for him that lap. Phases (`RetreatNote`,
-  `:162`): TRAVEL (walk to the player) → STAY (held at the player's side after arrival
-  ≤200u while the FIGHT confidence is < 0.25) → released. A retreat ends ONLY on: no live
-  foes near him (`LiveFoeNear`, `:309`: a `highActorHandles` actor, not player/teammate,
-  alive, enabled, 3D-loaded, `IsHostileToActor(him)`, within `fChaseMax` of him), the
-  30 s travel timeout, or STAY end (fight confidence back at the floor, or the 30 s stay
-  cap). "Fight confidence" = `Of()` as last read WHILE IN COMBAT (`fightConf`) — out of
-  combat `Of()` drops the foe multiplier and MFO's own StopCombat is what took him out.
-  The auto-fill (`:895` block) needs `rearmLaps == 0 && now >= rearmAt` — the COOLDOWN
-  (`:280`): 3 of his own services AND 10 s wall, started on every release and on every
-  DECLINED fill (replaces one-per-fight `tried`, which also burned on a decline). The
-  `[retreat] falling back` line logs the confidence read BEFORE the fill.
-  RE-ENTRY: an in-combat read after an out-of-combat one (his flag, or
+- **AUTO-RETREAT DRIVER (ClickUp 86e3erv94, batch L, 2026-09-25; tier A; revised after the
+  7580bea review).** `ServiceRetreat` (`:334`) runs on EVERY service from BOTH tables — the
+  party-OOC branch (`:749`, before `Logistics::ServiceFollower`) and the combat table (`:923`)
+  — and returns true while the follower holds a retreat, so neither table acts for him that
+  lap. Phases (`RetreatNote`, `:162`): TRAVEL (walk to the player) → STAY → released. A
+  retreat ends ONLY on: NO LIVE FOES (the main-thread foe probe saw no engaged hostile on
+  the last 3 landed probes AND for 3 s, `:288`), the 30 s travel timeout, or STAY end.
+  At arrival (≤200u) he is released at once if the last IN-COMBAT `Of()` (`fightConf`) is at
+  the 0.25 floor, or if the hold is an act.flee one adopted out of combat (`skipStay`, the
+  shipped flee behaviour); otherwise STAY. **STAY never benches him:** any in-combat read
+  during STAY releases the hold ("engaged at your side") with NO StopCombat; STAY otherwise
+  ends after 3 consecutive out-of-combat services AND 3 s, or the 30 s cap. TRAVEL re-entry
+  (an in-combat read after an out-of-combat one — his flag, or
   `Packages::RetreatConsumeStopLanded`) posts exactly one more StopCombat
-  (`Packages::RetreatReengage`) — never per tick (#22a). `[sense]` carries `dPlayer=`.
+  (`Packages::RetreatReengage`), never per tick (#22a). FOE PROBE: `ServiceRetreat` posts
+  one `Packages::RetreatPostFoeProbe` per own service; the highActorHandles walk runs on
+  MAIN. The auto-fill (`:923` block) needs `rearmLaps == 0 && now >= rearmAt` — the
+  COOLDOWN (`:313`): 3 own services AND 10 s, started on every release and every DECLINED
+  fill. The `[retreat] falling back` line logs the confidence read BEFORE the fill.
+  `[sense]` carries `dPlayer=`.
   **What breaks:** a `RetreatClear` / `g_retreatNotes.erase` back in the party-OOC teardown
-  (`:659`) re-creates the self-cancel (the retreat's own StopCombat ends the party fight,
+  (`:687`) re-creates the self-cancel (the retreat's own StopCombat ends the party fight,
   deck-MFO-v9.log:1544-1582); calling `ServiceRetreat` from the combat table only does the
-  same (the OOC branch stops driving it); an `f->StopCombat()` anywhere on this worker
-  re-opens the v1.0.58-class cross-thread StopCombat (#74, ENGINE_NOTES §0.47) — go
-  through `Packages::RetreatReengage`; posting it every lap violates #22a; reading
-  `Of()` out of combat for STAY ends every foe-count retreat on arrival; replacing
-  `LiveFoeNear` with `CombatSense::FoeCount` reads 0 the moment StopCombat lands (same
-  self-cancel); reading foes' `IsInCombat()` there adds a worker-side controller deref.
-  The Confidence formula is untouched (its v2 is a separate round). Open review findings:
-  `Docs/REVIEW-BACKLOG.md` (search `86e3erv94`).
+  same; an `f->StopCombat()` or a `highActorHandles` walk on this worker re-opens a
+  cross-thread hazard (#74, ENGINE_NOTES §0.47, §0.30), so go through `Packages::`; posting
+  StopCombat every lap violates #22a; a StopCombat (or holding the hold) on a STAY re-entry
+  leaves him defenceless at the player's side (the SEV-2 of the 7580bea review); judging
+  STAY by an out-of-combat `Of()` or by a frozen `fightConf` benches a foe-count retreat for
+  the whole cap; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
+  StopCombat lands (same self-cancel). The Confidence formula is untouched (its v2 is a
+  separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B98..MFO-B103.
 - `ClearTransientState` (`:230`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,
@@ -4528,11 +4530,16 @@ decline-fallback.
   `RetreatClear`/`RetreatEvictIf`/`ReleaseAll`. API: `IsRetreating(id)` /
   `RetreatSeconds(id)` / `RetreatStartPos(id)` (the old `RetreatHolder()` is gone —
   `logistics/LootScan.cpp:717` uses `IsRetreating`). `Pump()` refreshes every APMF hold's
-  claim every worker tick (`:1371`, same 500ms-expiry keep-alive loot-travel needs).
+  claim every worker tick (`:1385`, same 500ms-expiry keep-alive loot-travel needs).
+  FOE PROBE `RetreatPostFoeProbe` (`:2320`) / `RetreatFoeProbeResult` (`:2374`): the
+  highActorHandles walk runs on MAIN (§0.30) behind the same (FormID, gen) check, counts
+  hostiles to him within `fChaseMax` holding a live `currentCombatTarget` (the handle, NOT
+  `IsInCombat()`, which derefs the raw controller), and writes `probeSeq` / `lastFoeSeq` /
+  `lastCount` / `lastFoeSeenAt` into `g_retreatLive`.
   **MAIN-THREAD DISENGAGE:** no retreat StopCombat runs on the worker any more.
-  `PostRetreatStopCombat` (`:1155`) posts it (`MainThread::Post`; AddTask on VR — the
+  `PostRetreatStopCombat` (`:1169`) posts it (`MainThread::Post`; AddTask on VR — the
   `Rapport::QuashAllyPair` road) capturing FormID + a per-engage generation; the main
-  thread checks the any-thread mirror `g_retreatLive` (`:1122`, mutex) that the SAME
+  thread checks the any-thread mirror `g_retreatLive` (`:1127`, mutex) that the SAME
   retreat is live, re-validates the actor (resolves, 3D-loaded, alive), calls StopCombat
   (legacy road then `EvaluatePackage(true,false)`, keeping the shipped order), and sets
   `stopLanded` if he left combat, else logs a WARNING and does not retry (principle 7).

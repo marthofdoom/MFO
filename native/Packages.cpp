@@ -1119,9 +1119,18 @@ namespace MFO::Packages {
         // the Scheduler knows a later IsInCombat() is a RE-ENTRY (issue again)
         // rather than the original combat the post has not reached yet (#22a:
         // never re-issue per tick).
+        // The FOE PROBE fields (probeSeq / lastFoeSeq / lastCount /
+        // lastFoeSeenAt) are written ONLY by the main-thread probe
+        // (RetreatPostFoeProbe) and read by the worker through
+        // RetreatFoeProbeResult -- the highActorHandles walk never runs on the
+        // worker (review of 7580bea, SEV-3 threading carve-out).
         struct RetreatLive {
             std::uint32_t gen        = 0;
             bool          stopLanded = false;
+            std::uint32_t probeSeq   = 0;   // probes that LANDED for this retreat
+            std::uint32_t lastFoeSeq = 0;   // probeSeq of the last probe that saw a foe
+            int           lastCount  = -1;  // engaged hostiles on the last landed probe (-1: none yet)
+            std::chrono::steady_clock::time_point lastFoeSeenAt{};   // engage time until a probe sees one
         };
         std::mutex                                  g_retreatLiveMx;
         std::unordered_map<RE::FormID, RetreatLive> g_retreatLive;
@@ -1129,7 +1138,12 @@ namespace MFO::Packages {
 
         void PublishRetreatLive(RE::FormID a_id, std::uint32_t a_gen) {
             std::lock_guard lk(g_retreatLiveMx);
-            g_retreatLive[a_id] = RetreatLive{ a_gen, false };
+            RetreatLive live;
+            live.gen           = a_gen;
+            // Engage is itself a foe sighting: the fill gate required him in
+            // combat with confidence under the floor.
+            live.lastFoeSeenAt = std::chrono::steady_clock::now();
+            g_retreatLive[a_id] = live;
         }
         void UnpublishRetreatLive(RE::FormID a_id) {
             std::lock_guard lk(g_retreatLiveMx);
@@ -2301,6 +2315,73 @@ namespace MFO::Packages {
         if (it == g_retreatLive.end() || !it->second.stopLanded) return false;
         it->second.stopLanded = false;
         return true;
+    }
+
+    void RetreatPostFoeProbe(RE::FormID a_id, float a_radius) {
+        const auto* h = FindRetreatHold(a_id);
+        if (!h) return;
+        const std::uint32_t gen = h->gen;
+        // ON THE MAIN THREAD: highActorHandles is resized by the main thread
+        // (§0.30), so the walk runs there, never on this worker. Counts ENGAGED
+        // hostiles near him: not him / the player / a teammate, alive, enabled,
+        // 3D-loaded, hostile to HIM, within a_radius of him, AND holding a live
+        // combat target (currentCombatTarget resolves to a living actor). The
+        // engaged filter reads the target HANDLE, not IsInCombat(): IsInCombat
+        // dereferences the raw combatController that StopCombat frees inline on
+        // BSJobs (ENGINE_NOTES §0.47), and whether the main thread is excluded
+        // from those jobs is unproven (#74); a handle resolve through the handle
+        // table touches no controller. A probe whose follower does not resolve /
+        // is not loaded does not land (probeSeq unchanged) -- the timeout bounds it.
+        auto work = [a_id, gen, a_radius]() {
+            {
+                std::lock_guard lk(g_retreatLiveMx);
+                const auto it = g_retreatLive.find(a_id);
+                if (it == g_retreatLive.end() || it->second.gen != gen) return;
+            }
+            auto* self = RE::TESForm::LookupByID<RE::Actor>(a_id);
+            auto* pl   = RE::ProcessLists::GetSingleton();
+            if (!self || !self->Is3DLoaded() || !pl) return;
+            const auto selfPos = self->GetPosition();
+            int n = 0;
+            for (auto& hh : pl->highActorHandles) {
+                auto  ptr = hh.get();          // HOLD the NiPointer
+                auto* a   = ptr.get();
+                if (!a || a == self) continue;
+                if (a->IsPlayerRef() || a->IsPlayerTeammate()) continue;
+                if (a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) continue;
+                if (a->GetPosition().GetDistance(selfPos) > a_radius) continue;
+                if (!a->IsHostileToActor(self)) continue;
+                auto  tp = a->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+                auto* t  = tp.get();
+                if (!t || t->IsDead()) continue;
+                ++n;
+            }
+            std::lock_guard lk(g_retreatLiveMx);
+            const auto it = g_retreatLive.find(a_id);
+            if (it == g_retreatLive.end() || it->second.gen != gen) return;
+            auto& live = it->second;
+            ++live.probeSeq;
+            live.lastCount = n;
+            if (n > 0) {
+                live.lastFoeSeq    = live.probeSeq;
+                live.lastFoeSeenAt = std::chrono::steady_clock::now();
+            }
+        };
+        if (REL::Module::IsVR()) SKSE::GetTaskInterface()->AddTask(work);
+        else                     MainThread::Post(std::move(work));
+    }
+
+    RetreatFoeView RetreatFoeProbeResult(RE::FormID a_id) {
+        RetreatFoeView v;
+        std::lock_guard lk(g_retreatLiveMx);
+        const auto it = g_retreatLive.find(a_id);
+        if (it == g_retreatLive.end()) return v;
+        v.valid          = true;
+        v.lastCount      = it->second.lastCount;
+        v.probesSinceFoe = it->second.probeSeq - it->second.lastFoeSeq;
+        v.secsSinceFoe   = std::chrono::duration<float>(
+                               std::chrono::steady_clock::now() - it->second.lastFoeSeenAt).count();
+        return v;
     }
 
     void RetreatReengage(RE::FormID a_id, const char* a_why) {

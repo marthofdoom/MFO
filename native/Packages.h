@@ -353,6 +353,18 @@ namespace MFO::Packages {
     // IsInCombat() as a re-entry rather than as the combat the post has not
     // reached yet.
     bool RetreatConsumeStopLanded(RE::FormID a_id);
+    // FOE PROBE: post one main-thread walk of highActorHandles counting ENGAGED
+    // hostiles within a_radius of a_id (see the .cpp for the exact filter).
+    // The Scheduler posts at most one per own service of a retreating follower;
+    // the result lands in the same generation-checked mirror as the StopCombat.
+    void RetreatPostFoeProbe(RE::FormID a_id, float a_radius);
+    struct RetreatFoeView {
+        bool          valid          = false;
+        int           lastCount      = -1;     // -1: no probe landed yet
+        std::uint32_t probesSinceFoe = 0;      // landed probes since the last one that saw a foe
+        float         secsSinceFoe   = 0.0f;   // since the last sighting (engage counts as one)
+    };
+    RetreatFoeView RetreatFoeProbeResult(RE::FormID a_id);
     // Evict a_id from the retreat alias if he occupies it -- the dismissal-path
     // twin of LootTravelEvictIf, same #55 tail: the fill is engine-serialized
     // and nothing reclaims a dismissed follower.

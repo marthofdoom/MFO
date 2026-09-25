@@ -19,11 +19,12 @@ Read it as history and this block as current.
   main-thread re-validation (resolves, 3D-loaded, alive, same retreat generation); (2) the party-OOC teardown no longer
   cancels a retreat its own StopCombat caused; a retreat ends only on no live foes near him (hostile, alive, loaded, within
   fChaseMax), the 30 s travel timeout, or the end of STAY; (3) per-follower holds on the APMF road (legacy alias road still
-  single-holder), one-per-fight replaced by a cooldown (3 own services AND 10 s) and a STAY phase after arrival (held at the
-  player while the in-combat confidence is < 0.25, capped 30 s); (6) `[retreat] falling back` logs the pre-StopCombat
+  single-holder), one-per-fight replaced by a cooldown (3 own services AND 10 s) and a STAY phase after arrival (review
+  round 1: STAY ends on any combat re-entry with no StopCombat, else after 3 out-of-combat services AND 3 s, cap 30 s; the
+  no-foes walk moved to a main-thread probe, 3 probes AND 3 s without an engaged hostile); (6) `[retreat] falling back` logs the pre-StopCombat
   confidence, `[sense]` gains `dPlayer=`. Confidence formula untouched (v2 is its own round).
   FIELD CHECKS: `[retreat] ... StopCombat (engage) landed on main`; no `released (combat ended)` lines; `reached player ...
-  STAY` then `stay over` / `stay cap`; two followers holding at once on APMF; `re-entered combat mid-retreat` appears only
+  STAY` then `stay over` / `engaged at your side`; two followers holding at once on APMF; `re-entered combat mid-retreat` appears only
   on real re-entries, never per lap.
 
 - **2026-09-24 v2.0.13 RELEASED (GitHub, tag `v2.0.13`, manifest `e6401d4`, stamp `dc0ae75`, CI 36085950743, DLL sha256 `ddf5526c…`). NOT on Nexus yet: marth tests first.**
