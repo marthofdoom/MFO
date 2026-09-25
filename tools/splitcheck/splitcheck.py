@@ -197,6 +197,8 @@ class Image:
         self.inl_ranges_all = {}  # (name, rva) -> [(start, end, inlinee)] sites at ALL depths
         self.inlinees = Counter()  # every inlinee qualified key anywhere in the image
         self.inl_name = {}        # IPI id -> qualified function name
+        self.tpi = {}             # TPI type index -> (kind, record text) for type_size()
+        self.data_size = {}       # rva -> byte size of a named variable (from its PDB type)
         self.constants = {}       # S_CONSTANT name -> value (constexprs folded out of storage)
         self._load_ids(pdb)
         self._load_pdb(pdb)
@@ -213,11 +215,16 @@ class Image:
                         r"(parent scope|class type) = (0x[0-9A-F]+|<no type>)\s*$")
         strs, udts, funcs = {}, {}, {}
         lines = out.splitlines()
+        in_tpi = True
         for i, ln in enumerate(lines):
+            if re.match(r"^\s*Types \(IPI Stream\)", ln):
+                in_tpi = False
             m = rec.match(ln)
             if not m:
                 continue
             tid, kind = int(m.group(1), 16), m.group(2)
+            if in_tpi:
+                self.tpi[tid] = (kind, " ".join(lines[i:i + 4]))
             if kind == "LF_STRING_ID":
                 s = re.search(r"String: (.*)$", ln)
                 if s:
@@ -247,6 +254,42 @@ class Image:
                     name = "~" + last
                 full = cls + "::" + name
             self.inl_name[tid] = full
+
+    PRIM_SIZE = {0x03: 0, 0x10: 1, 0x20: 1, 0x68: 1, 0x69: 1, 0x70: 1, 0x7C: 1, 0x71: 2, 0x7A: 2, 0x7B: 4,
+                 0x30: 1, 0x11: 2, 0x21: 2, 0x72: 2, 0x73: 2, 0x12: 4, 0x22: 4, 0x74: 4, 0x75: 4,
+                 0x13: 8, 0x23: 8, 0x76: 8, 0x77: 8, 0x40: 4, 0x41: 8}
+
+    def type_size(self, ti, depth=0):
+        """Byte size of TPI type ti, or None when it cannot be told (then the
+        named-data compare falls back to "up to the next symbol")."""
+        if depth > 8:
+            return None
+        if ti < 0x1000:
+            if (ti >> 8) & 0xF:
+                return 8                          # a 64-bit pointer mode
+            return self.PRIM_SIZE.get(ti & 0xFF)
+        r = self.tpi.get(ti)
+        if not r:
+            return None
+        kind, txt = r
+        if kind == "LF_MODIFIER":
+            m = re.search(r"referent = (0x[0-9A-F]+)", txt)
+            return self.type_size(int(m.group(1), 16), depth + 1) if m else None
+        if kind == "LF_POINTER":
+            return 8
+        if kind == "LF_ARRAY":
+            m = re.search(r"size: (\d+)", txt)
+            return int(m.group(1)) if m else None
+        if kind in ("LF_CLASS", "LF_STRUCTURE", "LF_UNION"):
+            m = re.search(r"forward ref \(-> (0x[0-9A-F]+)\)", txt)
+            if m:
+                return self.type_size(int(m.group(1), 16), depth + 1)
+            m = re.search(r"sizeof (\d+)", txt)
+            return int(m.group(1)) if m and int(m.group(1)) > 0 else None
+        if kind == "LF_ENUM":
+            m = re.search(r"underlying type: (0x[0-9A-F]+)", txt)
+            return self.type_size(int(m.group(1), 16), depth + 1) if m else None
+        return None
 
     def sec_rva(self, sec, off):
         for i, _n, va, _sz in self.secs:
@@ -368,6 +411,10 @@ class Image:
                 raw_names.append((rva, name, cur_mod))
                 if kind in ("S_GDATA32", "S_LDATA32"):
                     self.datas.append((name, rva, cur_mod))
+                    ti = re.search(r"type = (0x[0-9A-F]+)", body)
+                    sz = self.type_size(int(ti.group(1), 16)) if ti else None
+                    if sz:
+                        self.data_size[rva] = sz
         close_site()
         # TWINS: a name at two or more addresses (file-local symbols of the same
         # name in different TUs -- the PDB drops "anonymous namespace" from DATA
@@ -459,6 +506,9 @@ class Cmp:
         self.path_pairs = set()
         self._dis = {}
         self.tu_map = {}        # old module -> set(new modules); filled by main (--tu-map)
+        # set ONLY while comparing per-TU COPIES of a header object's initializer:
+        # each copy refers to its OWN TU's twin, so any TU's twin is the same shape
+        self.own_tu_twins = False
         self._hcache = {}
 
     def disasm(self, img, rva, size):
@@ -534,7 +584,7 @@ class Cmp:
                 if norm(by) != nx:
                     continue
                 if mx is not None and my is not None:
-                    if self.tu_ok(mx, my):
+                    if self.tu_ok(mx, my) or self.own_tu_twins:
                         return True
                     continue
                 if (mx is None) != (my is None):
@@ -555,6 +605,34 @@ class Cmp:
                     self.notes["unnamed read-only data equal by content"] += 1
                     return True
             return False
+        # an UNNAMED string literal (no /GF pooling: an /Od proof build puts
+        # literals in .rdata with no ??_C symbol, so the target reads as "the
+        # previous symbol + offset"): the text itself decides, before any name
+        if ka == kb == "sym" and oa and ob and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
+            sa, sb = self.A.cstring(ra), self.B.cstring(rb)
+            if sa == sb == b"":
+                # "" -- the empty literal (e.g. a default fmt argument)
+                self.notes["unnamed empty string literal"] += 1
+                return True
+            if sa and sb and all(32 <= c < 127 or c in (9, 10, 13) for c in sa + sb) \
+                    and self.A.read(ra + len(sa), 1) == b"\0" and self.B.read(rb + len(sb), 1) == b"\0":
+                if sa == sb:
+                    self.notes["unnamed string literal equal by content"] += 1
+                    return True
+                if PATHLIT.search(sa) and PATHLIT.search(sb):
+                    self.path_pairs.add((sa.decode(errors="replace"), sb.decode(errors="replace")))
+                    self.notes["source-path string literal moved file"] += 1
+                    return True
+                return False
+        # a read-only constant that has a symbol in one build only (a static data
+        # member of a template over a type the split moved out of the anonymous
+        # namespace: internal and unnamed before, external and named after) --
+        # equal when the named object's bytes (its PDB type size) are equal
+        if ka == kb == "sym" and bool(oa) != bool(ob) and self.A.sec_of(ra) == self.B.sec_of(rb) == ".rdata":
+            sz = self.B.data_size.get(rb) if ob == 0 else self.A.data_size.get(ra)
+            if sz and sz <= 64 and self.A.read(ra, sz) == self.B.read(rb, sz):
+                self.notes["read-only constant named in one build only, equal by content"] += 1
+                return True
         if oa == ob and na and nb and self.names_match(na, nb):
             if na != nb:
                 self.notes["target name-set differs only by ICF alias / anon namespace / TU of a twin"] += 1
@@ -569,6 +647,9 @@ class Cmp:
                 self.notes["source-path string literal moved file"] += 1
                 return True
             return False
+        # an UNNAMED string literal (no /GF pooling, e.g. an /Od proof build puts
+        # literals in .rdata with no ??_C symbol, so the target reads as "the
+        # previous symbol + offset"): compare the NUL-terminated text itself
         # different named functions: equal if structurally identical (ICF-like)
         if ka == kb == "proc" and oa == ob == 0 and depth < 4:
             fa = {"rva": ra, "size": self.A.proc_at[ra], "name": min(na), "key": None}
@@ -959,7 +1040,9 @@ def _data_diff(A, B, cmp, ra, rb, cap):
     def extent(img, r):
         j = bisect.bisect_right(img.sym_rvas, r)
         nxt = img.sym_rvas[j] if j < len(img.sym_rvas) else r + cap
-        return nxt - r
+        # the variable's own type size when the PDB tells it: bytes past the
+        # object (an unnamed literal the linker placed next to it) are not it
+        return min(nxt - r, img.data_size.get(r, cap))
     ln = min(extent(A, ra), extent(B, rb), cap)
     ba, bb = A.read(ra, ln), B.read(rb, ln)
     k = 0
@@ -1086,6 +1169,9 @@ def main():
     ap.add_argument("--max", type=int, default=60, help="max entries printed per list")
     ap.add_argument("--strict", action="store_true",
                     help="no explained classes: anything not byte-identical is FAIL")
+    ap.add_argument("--copies-ok", action="store_true",
+                    help="with --strict: still accept identical per-TU copies of a header-defined "
+                         "internal-linkage object whose copy COUNT changed (what --proof runs)")
     ap.add_argument("--proof", nargs=4, metavar=("A0_DLL", "A0_PDB", "B0_DLL", "B0_PDB"),
                     help="the same two commits built with inlining OFF (native.yml dispatch noinline=true). "
                          "They must compare STRICT PASS; then an /O2 pair whose only difference is an "
@@ -1106,7 +1192,7 @@ def main():
         import tempfile
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
             jpath = tf.name
-        cmd = [sys.executable, __file__, *args.proof, "--strict", "--json", jpath, "--max", "0"]
+        cmd = [sys.executable, __file__, *args.proof, "--strict", "--copies-ok", "--json", jpath, "--max", "0"]
         if args.tu_map:
             cmd += ["--tu-map", args.tu_map]
         subprocess.run(cmd, capture_output=True, text=True)
@@ -1220,10 +1306,18 @@ def main():
                     # parent's inlining drifted, its funclet set/numbering drifts too
                     outlined.append((side, f["name"], "(funclet of a drift function)"))
                     continue
+            if not args.strict or args.copies_ok:
                 twins = by.get((norm(f["name"]), norm(f["sig"])), [])
-                if twins and any((cmp.compare(f, t) if side == "A" else cmp.compare(t, f)) is None for t in twins):
-                    copies.append((side, f["name"]))
-                    continue
+                if twins and f.get("twin"):
+                    # a copy refers to its own TU's twin data; compare with the TU of
+                    # a twin reference free (fresh memo: these pairs are not reused)
+                    saved, cmp.memo, cmp.own_tu_twins = cmp.memo, {}, True
+                    hit = any((cmp.compare(f, t) if side == "A" else cmp.compare(t, f)) is None for t in twins)
+                    cmp.memo, cmp.own_tu_twins = saved, False
+                    if hit:
+                        copies.append((side, f["name"]))
+                        continue
+            if not args.strict:
                 qn = qual_key(f["name"])
                 if img_other.inlinees.get(qn):
                     outlined.append((side, f["name"], qn))
@@ -1241,10 +1335,18 @@ def main():
         (allowed_hits.append(("data", n, why)) if why else ddiff.append((n, r)))
     if args.strict:
         ddiff += [(n, "FOLDED (not allowed under --strict): " + r) for n, r in dfolded]
-        ddiff += [(n, "COPY COUNT CHANGED (not allowed under --strict): " + r) for n, r in dcopies]
+        if not args.copies_ok:
+            ddiff += [(n, "COPY COUNT CHANGED (not allowed under --strict): " + r) for n, r in dcopies]
 
-    strict_ok = not diffs and not onlya and not onlyb and not ddiff0 and not renumbered \
-        and not donly_a and not donly_b and not dfolded and not dcopies
+    if args.copies_ok:
+        # --strict --copies-ok (the no-optimizer proof): every function and every
+        # datum byte-identical; the ONLY tolerance is the number of identical
+        # per-TU copies of a header-defined internal-linkage object
+        strict_ok = not diffs and not oa and not ob and not ddiff0 and not renumbered \
+            and not donly_a and not donly_b and not dfolded
+    else:
+        strict_ok = not diffs and not onlya and not onlyb and not ddiff0 and not renumbered \
+            and not donly_a and not donly_b and not dfolded and not dcopies
     ok = not fails and not oa and not ob and not ddiff
     if args.proof and not proof_ok:
         ok = False
@@ -1324,7 +1426,8 @@ def main():
                    "funclet_drift": [n for n, _ in fdrift],
                    "outlined": outlined, "copies": copies, "renumbered": renumbered,
                    "only_a": [f["name"] for f in oa], "only_b": [f["name"] for f in ob],
-                   "data_differing": ddiff, "data_folded": dfolded, "relinked": relinked, "allowed": allowed_hits,
+                   "data_differing": ddiff, "data_folded": dfolded, "data_copies": dcopies,
+                   "relinked": relinked, "allowed": allowed_hits,
                    "notes": cmp.notes, "path_pairs": sorted(cmp.path_pairs)},
                   open(args.json, "w"), indent=1, default=str)
     sys.exit(0 if verdict in ("PASS", "PASS-PROVEN") else 3 if verdict == "PASS-EXPLAINED-UNPROVEN" else 1)
