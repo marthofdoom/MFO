@@ -13,6 +13,18 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-25 branch `feat/mfo-target-pin` (off `main` `97ac782`; NOT merged, NOT deployed; tier A,
+  awaiting its Opus 5.5 review). ClickUp 86e3eu6fd, batch L.** MFO becomes the client of Harbinger's
+  ch.20 `kIntent_TargetPin` (APMF main `588cd5e`, ABI v13; `native/APMF_API.h` re-mirrored byte-identical).
+  With APMF present at ABI >= 13, `Targeting::Command/Clear/ClearAll/Current` route to the bridge's pin
+  table (`apmf/Excursion.cpp`) and MFO's UpdateCombat hook writes NO target for any actor (it still drives
+  CombatStyle). The latch is the degrade for APMF absent / ABI < 13 / the ch.20 seat not installed (first
+  pin refused synchronously). A pin Harbinger ends is not re-pinned onto the same foe until the gambit's
+  choice moves. Needs a Harbinger build with ch.20 on the deck.
+  FIELD CHECKS: MFO `[target] ... target pin offered` at load; `[target-pin] ... PIN` per chosen foe;
+  APMF `[ch.20] FIRST SOURCE DENY` and no `SOURCE SEAT MISSED` / `OVERWRITTEN`; on a foe dying, APMF
+  `pin ended` then MFO `[target-pin] ... Harbinger ENDED` and a fresh `PIN` on the next foe.
+
 - **2026-09-24 v2.0.13 RELEASED (GitHub, tag `v2.0.13`, manifest `e6401d4`, stamp `dc0ae75`, CI 36085950743, DLL sha256 `ddf5526c…`). NOT on Nexus yet: marth tests first.**
   Contents: CommonLib now our MIT fork `mit-3.7` (F1: exact id match, startup self-check, 55 verified rows, fails closed on unknown builds), summons stay up (one cast per spell, respects the list's summon cap incl. perk bonus + skip-cap flag, never dismissed by MFO; Deck-confirmed), loot M1 (emptied-target move-on, Movement Blocked 3 s -> actor block reorders / static block gates until an open/close/activate/cell-attach event), LOTD shipping crates never looted (base 0x1772A7), CJK font in the menus, locked form lookup. Pairs with Harbinger v0.9.8 (ABI v12, tag `v0.9.8`, DLL `8dfb63da…`, esl `78a3e6a4…` unchanged). MEO v1.0.18 (Japanese gem pouch names) cut alongside.
   NEXT: wave-1 subsystem-folder split (round-2 review running), then batch L remainder (M2 leg state, leash, ammo swap-up, lockpicking, LOTD), batch L play session.
