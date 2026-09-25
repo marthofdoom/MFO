@@ -27,7 +27,9 @@ it falls in one of the EXPLAINED classes below (each is listed in the output):
                  function whose fingerprint is equal (its frame offsets follow
                  the parent's new stack layout).
   outlined       a function present as an out-of-line body in only one build
-                 and INLINED (PDB inline site) in the other.
+                 and INLINED (PDB inline site) in the other; an unwind funclet
+                 of such a function when a funclet of one of its inlining
+                 callers in the other build is identical to it.
   copies         a header-defined internal-linkage symbol (one copy per TU that
                  includes the header) whose copy count changed; every copy is
                  byte-identical to a copy in the other build.
@@ -1742,6 +1744,10 @@ def main():
         by = defaultdict(list)
         for f in other:
             by[(norm(f["name"]), norm(f["sig"]))].append(f)
+        # functions OUTLINED in this build (an out-of-line body here, inlined
+        # everywhere in the other): their unwind funclets exist here only too
+        outl = {norm(f["name"]): qual_key(f["name"]) for f in mine
+                if not FUNCLET.match(f["name"]) and img_other.inlinees.get(qual_key(f["name"]))}
         for f in mine:
             if not args.strict:
                 fm = FUNCLET.match(f["name"])
@@ -1750,6 +1756,22 @@ def main():
                     # parent's inlining drifted, its funclet set/numbering drifts too
                     outlined.append((side, f["name"], "(funclet of a drift function)"))
                     continue
+                if fm and norm(fm.group(1)) in outl:
+                    # a funclet of an OUTLINED function: in the other build the
+                    # parent is inlined into its callers, and its unwind code with
+                    # it, as a funclet of such a caller. Accepted only when one of
+                    # THOSE callers' funclets is identical to it (bytes, targets by
+                    # name); a changed body matches none and is reported.
+                    qn = outl[norm(fm.group(1))]
+                    hosts = {norm(k[0]) for k, c in img_other.inl_all.items() if c.get(qn)}
+                    cand = [g for g in other if FUNCLET.match(g["name"])
+                            and norm(FUNCLET.match(g["name"]).group(1)) in hosts]
+                    hit = next((g for g in cand if (cmp.compare(f, g) if side == "A"
+                                                     else cmp.compare(g, f)) is None), None)
+                    if hit is not None:
+                        outlined.append((side, f["name"], "(funclet of an outlined function; identical to "
+                                         + hit["name"][:80] + ")"))
+                        continue
             if not args.strict or args.copies_ok:
                 twins = by.get((norm(f["name"]), norm(f["sig"])), [])
                 vc = (A if side == "A" else B).xtor_var_const(f["name"])

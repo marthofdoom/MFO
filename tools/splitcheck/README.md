@@ -168,7 +168,7 @@ kept apart.
 |---|---|
 | inline-drift | inline sites differ (or a pure LIBRARY template COMDAT: a name with no `MFO::` in it), AND the own-code fingerprint is equal AND the constant multiset is equal |
 | funclet-drift / renumbered | an unwind funclet of a drift function / a funclet renumbered with an identical body |
-| outlined | present in one build only and inlined (PDB inline site, qualified name) in the other |
+| outlined | present in one build only and inlined (PDB inline site, qualified name) in the other; an unwind funclet (`dtor$N` / `catch$N`) of such a function when a funclet of one of the functions that inline it in the other build is IDENTICAL to it (bytes, targets by name; a changed body matches none, selftest N15) |
 | copies | a header-defined internal-linkage object's per-TU copies (count changed, each identical), CONST only, or mutable with the same copy-sharing among its readers (see above) |
 | PROVEN | with `--proof` passing: a pair whose inline sites differ; the /Od build proves its source compiles identically |
 
