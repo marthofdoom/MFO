@@ -530,6 +530,8 @@ class Image:
         return False
 
     _bounds = None
+    _sbounds = None
+    _lbounds = None
 
     def boundaries(self):
         """Every address that can START an object: each symbol, each DIR64
@@ -574,10 +576,18 @@ class Image:
                     cur = max(cur, end)
                 if cur < hi:
                     sweep(cur, hi)
+            for _i, _n, va, sz in self.secs:
+                b.add(va + sz)
+            # STRUCTURAL boundaries end here: they come from how the image is
+            # linked and referenced, so no data byte can create or remove one
+            self._sbounds = sorted(b)
             # the start of every pooled TEXT literal in read-only data: /Od keeps
             # a TU's whole literal pool, referenced or not, so an unreferenced
             # literal (from an inline function this TU never emitted) can sit
-            # right after a referenced object; it is an object of its own
+            # right after a referenced object; it is an object of its own. These
+            # are CONTENT-derived (a changed byte can make or break one), so the
+            # compare only ever cuts at one found at the same offset in BOTH builds
+            lit = set()
             for s in self.pe.sections:
                 ch = s.Characteristics
                 if ch & 0x20000000 or ch & 0x80000000 or ch & 0x20:
@@ -586,11 +596,27 @@ class Image:
                 raw = self.read(lo, s.Misc_VirtualSize)
                 for m in re.finditer(rb"(?<=\x00)[^\x00]{2,}(?=\x00)", raw):
                     if is_text(m.group(0)):
-                        b.add(lo + m.start())
-            for _i, _n, va, sz in self.secs:
-                b.add(va + sz)
-            self._bounds = sorted(b)
+                        lit.add(lo + m.start())
+            self._lbounds = lit
+            self._bounds = sorted(b | lit)
         return self._bounds
+
+    _bset = None
+
+    def boundary_set(self):
+        if self._bset is None:
+            self._bset = set(self.boundaries())
+        return self._bset
+
+    def struct_extent(self, rva):
+        """Bytes from rva to the next STRUCTURAL boundary (symbol, relocation
+        slot or target, code reference, section end) -- never content-derived."""
+        self.boundaries()
+        bs = self._sbounds
+        j = bisect.bisect_right(bs, rva)
+        _lo, hi = self.sec_bounds(rva)
+        nxt = bs[j] if j < len(bs) else hi
+        return max(0, min(nxt, hi) - rva)
 
     def extent(self, rva):
         """Bytes from rva to the next object boundary (see boundaries())."""
@@ -824,32 +850,47 @@ class Cmp:
             return True
         self._ue_active.add((ra, rb))
         try:
-            return self._unnamed_equal_body(ra, rb)
+            return self._unnamed_equal_body(ra, rb, empty=(sa == sb == b""))
         finally:
             self._ue_active.discard((ra, rb))
 
-    def _unnamed_equal_body(self, ra, rb):
-        ea, eb = self.A.extent(ra), self.B.extent(rb)
-        n = min(ea, eb)
-        if n == 0:
+    def _unnamed_equal_body(self, ra, rb, empty=False):
+        # The object ends at the first boundary present at the SAME relative
+        # offset in BOTH builds. A boundary only one build has (a content-derived
+        # pooled-literal start, a reference only one side makes) is compared
+        # THROUGH: a changed byte must never be able to end its own object early
+        # by creating or removing a boundary in one build.
+        # ...and never past the first STRUCTURAL boundary of either build (those
+        # no data byte can move): the object ends before the next object starts
+        # in each build, so the shorter structural extent still covers it.
+        ba_set, bb_set = self.A.boundary_set(), self.B.boundary_set()
+        lim = min(self.A.struct_extent(ra), self.B.struct_extent(rb))
+        if lim <= 0:
             return False
-        ba, bb = self.A.read(ra, max(ea, n)), self.B.read(rb, max(eb, n))
         k = 0
-        while k < n:
+        while k < lim:
+            if k and (ra + k) in ba_set and (rb + k) in bb_set:
+                break
+            if empty and k and ((ra + k) in self.A._lbounds or (rb + k) in self.B._lbounds):
+                # "" (the object starts with its NUL in BOTH builds): the text
+                # literal that follows in one build only is another, unreferenced
+                # literal. RESIDUAL (backlog): a non-string object whose first
+                # byte is 0 in both builds is read as "" here.
+                break
             pa, pb = (ra + k) in self.A.relocs, (rb + k) in self.B.relocs
             if pa or pb:
-                if not (pa and pb) or k + 8 > n:
+                if not (pa and pb) or k + 8 > lim:
                     return False
-                va = int.from_bytes(ba[k:k + 8], "little") - self.A.base
-                vb = int.from_bytes(bb[k:k + 8], "little") - self.B.base
+                va = int.from_bytes(self.A.read(ra + k, 8), "little") - self.A.base
+                vb = int.from_bytes(self.B.read(rb + k, 8), "little") - self.B.base
                 if not self.same_target(self.A.resolve(va), self.B.resolve(vb), 3):
                     return False
                 k += 8
                 continue
-            if ba[k] != bb[k]:
+            if self.A.data[ra + k] != self.B.data[rb + k]:
                 return False
             k += 1
-        self.notes["unnamed read-only data equal over its whole extent"] += 1
+        self.notes["unnamed read-only data equal up to the first common boundary"] += 1
         return True
 
     def _same(self, ta, tb, depth):
