@@ -64,10 +64,23 @@ def run_sc(a, b, work, tu_map=None, proof=None, strict=False):
     return res
 
 
+def write_info(dst, info):
+    import hashlib
+    info = dict(info)
+    info["dll_sha256"] = hashlib.sha256(open(os.path.join(dst, "MFO.dll"), "rb").read()).hexdigest()
+    open(os.path.join(dst, "build-info.txt"), "w").write(" ".join(f"{k}={v}" for k, v in info.items()) + "\n")
+
+
 def copy_build(src, dst):
+    """A copy of a build, WITH a build record beside it that describes the
+    copy (same commit and flags, the copy's own SHA-256): a planted defect must
+    be caught by the comparison itself, not by the provenance check."""
     os.makedirs(dst, exist_ok=True)
     for f in ("MFO.dll", "MFO.pdb"):
         shutil.copy(os.path.join(src, f), os.path.join(dst, f))
+    info, _p = SC.read_build_info(os.path.join(src, "MFO.dll"))
+    if info:
+        write_info(dst, info)
     return dst
 
 
@@ -80,6 +93,9 @@ def patch_dll(dst, rva, data):
     raw = bytearray(open(path, "rb").read())
     raw[off:off + len(data)] = data
     open(path, "wb").write(raw)
+    info, p = SC.read_build_info(path)
+    if info and p == os.path.join(dst, "build-info.txt"):
+        write_info(dst, info)
 
 
 def imm_candidates(cmp, img, f, own_only=True):

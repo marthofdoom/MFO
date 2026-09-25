@@ -324,8 +324,11 @@ class Image:
         return False
 
     def is_const_data(self, rva):
-        """A variable that cannot change after initialisation: const by its PDB
-        type, or placed in a read-only section."""
+        """A variable that cannot change after initialisation: const-qualified
+        by its PDB type (arrays by element), or placed in a read-only section.
+        Both are needed: MSVC records a constexpr CLASS-typed variable
+        (std::chrono::seconds kTravelFailCooldown) with the plain class type,
+        no const modifier, but places it in .rdata."""
         return bool(self.data_const.get(rva)) or self.readonly_data(rva)
 
     def xtor_var_const(self, name):
@@ -659,37 +662,52 @@ class Cmp:
         self._ue_active = set()
         self._live = {}
 
-    def live_copies(self, img, var):
-        """Definitions of variable `var` (norm'd name) in img that something
-        other than their own initializer / atexit destructor refers to: code
-        (any function, via any address field) or data (a relocated pointer).
-        A per-TU copy nothing else touches is unobservable state."""
+    def copy_readers(self, img, var):
+        """Who touches each definition of variable `var` (norm'd name) in img,
+        other than its own initializer / atexit destructor: reader (a function
+        name, or "data:<symbol>" for a relocated pointer) -> set of the copies
+        it refers to."""
         key = (id(img), var)
         if key in self._live:
             return self._live[key]
         defs = {r for n, r, _m in img.datas if norm(n) == var}
-        live = set()
+        readers = defaultdict(set)
         own = re.compile(r"dynamic (?:initializer|atexit destructor) for '" + re.escape(var.rsplit("::", 1)[-1]) + "''")
         for p in img.procs:
-            if own.search(p["name"]) or (FUNCLET.match(p["name"]) and own.search(p["name"])):
+            if own.search(p["name"]):
                 continue
             for ins in self.disasm(img, p["rva"], p["size"]):
                 for _o, _s, _k, t in self.fields(img, ins):
                     if t in defs:
-                        live.add(t)
+                        readers[norm(untag(p["name"]))].add(t)
         for r in img.relocs:
             v = int.from_bytes(img.data[r:r + 8], "little") - img.base
             if v in defs:
-                live.add(v)
-        self._live[key] = live
-        return live
+                c = img.resolve(r)[0]
+                readers["data:" + (norm(untag(min(c[1]))) if c[1] else hex(r))].add(v)
+        self._live[key] = dict(readers)
+        return self._live[key]
 
     def state_split_ok(self, var):
-        """A MUTABLE variable whose per-TU copy count changed splits no state
-        when, in each build, at most ONE copy is live (see live_copies): every
-        reader and writer then still shares one copy."""
-        la, lb = self.live_copies(self.A, var), self.live_copies(self.B, var)
-        return len(la) <= 1 and len(lb) <= 1, len(la), len(lb)
+        """A MUTABLE variable whose per-TU copy count changed is still ONE piece
+        of state per group of users only if the split kept exactly who shares a
+        copy with whom: the same readers in both builds, and for every two of
+        them "they touch a common copy" is true in A exactly when it is true in
+        B. Two moved functions that shared the old TU's copy and now each read
+        their own TU's copy (a STATE SPLIT) fail this. Returns (ok, detail)."""
+        ra, rb = self.copy_readers(self.A, var), self.copy_readers(self.B, var)
+        if set(ra) != set(rb):
+            return False, (f"readers differ: only in A {sorted(set(ra) - set(rb))[:3]}, "
+                           f"only in B {sorted(set(rb) - set(ra))[:3]}")
+        names = sorted(ra)
+        for x in range(len(names)):
+            for y in range(x + 1, len(names)):
+                p, q = names[x], names[y]
+                sa, sb = bool(ra[p] & ra[q]), bool(rb[p] & rb[q])
+                if sa != sb:
+                    return False, (f"{p} and {q} {'share' if sa else 'do not share'} a copy in A but "
+                                   f"{'share' if sb else 'do not share'} one in B")
+        return True, f"{len(names)} reader(s), sharing unchanged"
 
     def disasm(self, img, rva, size):
         k = (id(img), rva, size)
@@ -1232,14 +1250,14 @@ def compare_data(A, B, cmp, cap=512):
                 # their own of -- a behaviour change no byte compare can see
                 mut = [f"A {m}" for r, m in la if not A.is_const_data(r)] + \
                       [f"B {m}" for r, m in lb if not B.is_const_data(r)]
-                ok, na_, nb_ = cmp.state_split_ok(n) if mut else (True, 0, 0)
+                ok, why_ = cmp.state_split_ok(n) if mut else (True, "")
                 if mut and ok:
-                    copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical, MUTABLE but at "
-                                      f"most one copy live per build ({na_} in A, {nb_} in B): no state split"))
+                    copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical, MUTABLE but "
+                                      f"no state split ({why_})"))
                 elif mut:
                     diffs.append((n, f"PER-TU COPY COUNT CHANGED ON MUTABLE STATE ({len(la)} copies in A, "
                                      f"{len(lb)} in B; mutable: {', '.join(mut[:4])}): the split gives each new "
-                                     f"TU its own copy of state the old TU shared"))
+                                     f"TU its own copy of state the old TU shared -- {why_}"))
                 else:
                     copies.append((n, f"{len(la)} copies in A, {len(lb)} in B, all identical, const"))
             continue
@@ -1354,6 +1372,62 @@ def match(A, B, cmp):
     return pairs, onlya, onlyb
 
 
+def read_build_info(dll, explicit=None):
+    """The CI build record of a DLL (native.yml "Record the built commit"):
+    `built=<sha> noinline=<b> noopt=<b> dll_sha256=<hex>`, from the explicit
+    path, else the MFO-build-info artifact next to the DLL's MFO-dll folder
+    (`gh run download` layout), else a build-info.txt beside the DLL (older
+    proof artifacts). Returns (dict or None, path tried)."""
+    import os
+    here = os.path.dirname(os.path.abspath(dll))
+    cands = [explicit] if explicit else [os.path.join(os.path.dirname(here), "MFO-build-info", "build-info.txt"),
+                                         os.path.join(here, "build-info.txt")]
+    for c in cands:
+        if c and os.path.isfile(c):
+            raw = open(c, "rb").read()
+            txt = raw.decode("utf-16") if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else raw.decode("utf-8-sig", "replace")
+            return dict(kv.split("=", 1) for kv in txt.split() if "=" in kv), c
+    return None, cands[0]
+
+
+def check_provenance(a_dll, b_dll, a0_dll, b0_dll, explicit=None):
+    """--proof is sound only when the proof pair is the SAME two commits as the
+    shipped pair: A and A0 built from one SHA, B and B0 from another, A0/B0
+    with the optimizer off, A/B the normal build, and each record bound to its
+    DLL by SHA-256. Returns the list of violations (empty = paired)."""
+    import hashlib
+    ex = explicit or [None] * 4
+    why, info = [], {}
+    for tag, dll, e in (("A", a_dll, ex[0]), ("B", b_dll, ex[1]), ("A0", a0_dll, ex[2]), ("B0", b0_dll, ex[3])):
+        d, path = read_build_info(dll, e)
+        if d is None:
+            why.append(f"{tag}: no build record ({path}); every native run uploads MFO-build-info")
+            continue
+        info[tag] = d
+        if "built" not in d:
+            why.append(f"{tag}: build record has no built= SHA ({path})")
+        h = d.get("dll_sha256")
+        if not h:
+            why.append(f"{tag}: build record carries no dll_sha256, so it cannot be bound to {dll}")
+        elif hashlib.sha256(open(dll, "rb").read()).hexdigest() != h.lower():
+            why.append(f"{tag}: {dll} is not the DLL its build record describes (SHA-256 mismatch)")
+    if len(info) == 4:
+        for o2, od in (("A", "A0"), ("B", "B0")):
+            if info[o2].get("built") != info[od].get("built"):
+                why.append(f"{o2} built {info[o2].get('built')} but {od} built {info[od].get('built')}: "
+                           f"the proof build is not the same commit")
+        for t in ("A0", "B0"):
+            if str(info[t].get("noopt")).lower() != "true":
+                why.append(f"{t} is not a noopt (/Od) build: noopt={info[t].get('noopt')}")
+        for t in ("A", "B"):
+            if str(info[t].get("noopt")).lower() != "false" or str(info[t].get("noinline")).lower() != "false":
+                why.append(f"{t} is not the normal /O2 build: noopt={info[t].get('noopt')} "
+                           f"noinline={info[t].get('noinline')}")
+        if info["A"].get("built") == info["B"].get("built"):
+            why.append("A and B are the same commit: there is no split to prove")
+    return why
+
+
 def load_tu_map(path):
     """`old/Module.cpp: new/A.cpp new/B.cpp` per line; # comments."""
     tm = {}
@@ -1414,9 +1488,23 @@ def main():
                     help="the same two commits built with the optimizer OFF (native.yml dispatch noopt=true, "
                          "/Od; /Ob0 is not enough, see README). They must compare STRICT PASS (--copies-ok); "
                          "then an /O2 pair whose inline sites differ is PROVEN, and the verdict is PASS-PROVEN")
+    ap.add_argument("--build-info", nargs=4, metavar=("A", "B", "A0", "B0"),
+                    help="the four CI build records (build-info.txt) when they are not in the "
+                         "`gh run download` layout next to each DLL; --proof refuses without them")
     ap.add_argument("--tu-map", help="old->new translation-unit map (see tumaps/); a module-tagged "
                                      "twin in A may only match a twin in a TU its TU became")
     args = ap.parse_args()
+
+    if args.proof:
+        # PROVENANCE first (cheap, and nothing else is worth running without it)
+        why = check_provenance(args.a_dll, args.b_dll, args.proof[0], args.proof[2], args.build_info)
+        if why:
+            print("PROVENANCE: the four builds do not pair up -- refusing to run --proof:\n  " + "\n  ".join(why))
+            print("\nRESULT: FAIL")
+            if args.json:
+                json.dump({"result": "FAIL", "provenance": why, "identical": 0, "proven": [], "fail": [],
+                           "inline_drift": [], "data_differing": []}, open(args.json, "w"), indent=1)
+            sys.exit(1)
 
     A = Image(args.a_dll, args.a_pdb)
     B = Image(args.b_dll, args.b_pdb)
