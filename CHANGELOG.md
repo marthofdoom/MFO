@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## v2.0.13 -- Unreleased
 
+- **Followers leave your museum shipping crates alone.** With Legacy of the Dragonborn installed, a follower could loot the items you had put in a town, inn or house shipping crate for the museum. Those crates are now off limits, the same as the museum's own drop-off boxes.
 - **Summons stay summoned.** A summon gambit set to cast on the follower himself kept dismissing its own creature about three seconds after casting it, then cast it again. One fight could burn through twenty of them and all of his magicka. MFO was treating the summon like a spell he holds, and ended it when he stopped holding it. Now a summon is cast once and left alone. It lasts its full duration or until it is killed.
 - **A summon is cast once, whatever it targets.** Self, the player, an enemy or Auto all mean the same thing for a summon: the follower conjures it one time. On Auto it used to be cast once for every member of the party at the same moment.
 - **A killed summon comes back right away.** When the creature dies, the follower summons it again the next time his gambits run.

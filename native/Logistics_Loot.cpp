@@ -1300,11 +1300,11 @@ namespace MFO::Logistics {
             static const std::unordered_set<RE::FormID> s_bases = [] {
                 std::unordered_set<RE::FormID> s;
                 if (auto* dh = RE::TESDataHandler::GetSingleton()) {
-                    // DBM_AutoSortDropOff (Display Drop-off, the town/inn box),
-                    // DBMMuseumShipmentsCrateIncoming, DBM_SalesBox (Sales Income),
-                    // DBM_Incomebox (Donations), DBM_SellStorage.
+                    // DBM_AutoSortDropOff (museum Display Drop-off), DBMMuseumShipmentsCrate-
+                    // Incoming / -Outgoing (every town/inn/house shipping crate), DBM_SalesBox
+                    // (Sales Income), DBM_Incomebox (Donations), DBM_SellStorage.
                     for (const RE::FormID local :
-                         { 0x07EEFDu, 0x1772A6u, 0x166349u, 0x0BE533u, 0x11CC99u }) {
+                         { 0x07EEFDu, 0x1772A6u, 0x1772A7u, 0x166349u, 0x0BE533u, 0x11CC99u }) {
                         if (auto* f = dh->LookupForm<RE::TESObjectCONT>(local, "LegacyoftheDragonborn.esm"))
                             s.insert(f->GetFormID());
                     }
