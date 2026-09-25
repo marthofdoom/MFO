@@ -28,6 +28,11 @@ Every *_DIR holds MFO.dll + MFO.pdb (a CI `MFO-dll` artifact). Cases:
   N9b the last byte of an unnamed read-only aggregate > 16  -> --proof must FAIL
   N10 a MUTABLE header static that two moved functions
       shared (one copy in A0) now read as two copies (B0)   -> must FAIL as a STATE split
+  N10a the same split reached at an offset into the variable -> must FAIL as a STATE split
+  N10b per-TU copies of ONE same-named accessor read their own
+      TU's copy in B0 (one copy in A0)                     -> must FAIL as a STATE split
+  N12 an unnamed object's bytes set to "AB\\0" in B0 only (a
+      content-derived boundary in one build)               -> --proof must FAIL
   N11 A0's build record names B's commit                    -> --proof must REFUSE (provenance)
   N11b a DLL that is not the one its build record hashes    -> --proof must REFUSE (provenance)
 A planted copy gets a build record describing IT (same commit, its own SHA-256),
@@ -505,21 +510,113 @@ def main():
                    "no candidate: no mutable per-TU static with copies in an old TU and two of its new TUs")
         else:
             var, ma, ra_copy, picks, mb_copy = plan
-            da = copy_build(args.a0, os.path.join(work, "n10a"))
-            db = copy_build(args.b0, os.path.join(work, "n10b"))
-            for fa, fb, ia, ib, mb in picks:
-                patch_dll(da, ia.address + ia.disp_offset,
-                          (ra_copy - (ia.address + ia.size)).to_bytes(4, "little", signed=True))
-                patch_dll(db, ib.address + ib.disp_offset,
-                          (mb_copy[mb] - (ib.address + ib.size)).to_bytes(4, "little", signed=True))
-            r = run_sc(da, db, work, args.tu_map, strict=True, copies_ok=True)
-            hit = [x for x in r["data_differing"] if SC.norm(SC.untag(x[0])) == var and "STATE" in x[1]]
-            fns_ok = not any(named_in(r["fail"], fa["name"]) for fa, *_ in picks)
-            record("N10 mutable header static split across two moved functions",
-                   r["result"] == "FAIL" and bool(hit),
-                   f"{r['result']}, {var}: {picks[0][0]['name'][:50]} and {picks[1][0]['name'][:50]} share "
-                   f"{os.path.basename(ma)}'s copy in A0, read {picks[0][4]} / {picks[1][4]} copies in B0; "
-                   f"reported as state split: {bool(hit)}; the two functions themselves compare identical: {fns_ok}")
+
+            def plant_split(tag, off):
+                da = copy_build(args.a0, os.path.join(work, tag + "a"))
+                db = copy_build(args.b0, os.path.join(work, tag + "b"))
+                for fa, fb, ia, ib, mb in picks:
+                    patch_dll(da, ia.address + ia.disp_offset,
+                              (ra_copy + off - (ia.address + ia.size)).to_bytes(4, "little", signed=True))
+                    patch_dll(db, ib.address + ib.disp_offset,
+                              (mb_copy[mb] + off - (ib.address + ib.size)).to_bytes(4, "little", signed=True))
+                return run_sc(da, db, work, args.tu_map, strict=True, copies_ok=True)
+            for tag, off, label in (("n10", 0, "N10 mutable header static split across two moved functions"),
+                                    ("n10x", 8, "N10a the same split, reached at an OFFSET into the variable "
+                                                "([rip+g+8], a member)")):
+                if off and (B0.data_size.get(mb_copy[picks[0][4]]) or 0) <= off:
+                    record(label, False, f"{var} is too small for an offset access")
+                    continue
+                r = plant_split(tag, off)
+                hit = [x for x in r["data_differing"] if SC.norm(SC.untag(x[0])) == var and "STATE" in x[1]]
+                fns_ok = not any(named_in(r["fail"], fa["name"]) for fa, *_ in picks)
+                record(label, r["result"] == "FAIL" and bool(hit),
+                       f"{r['result']}, {var}+{off}: {picks[0][0]['name'][:44]} and {picks[1][0]['name'][:44]} share "
+                       f"{os.path.basename(ma)}'s copy in A0, read the {picks[0][4]} / {picks[1][4]} copies in B0; "
+                       f"reported as state split: {bool(hit)}; the functions themselves compare identical: {fns_ok}")
+
+            # N10b: the split reaches the state through PER-TU COPIES of ONE
+            # same-named function (a header static / anonymous-namespace
+            # accessor): in A0 the old TU's copy reads the old TU's variable; in
+            # B0 each new TU's copy reads its own TU's variable. Readers keyed by
+            # name alone would merge the two B copies into one reader.
+            acc = None
+            bmods = {}
+            for pb in B0.procs:
+                bmods.setdefault(pb["name"], []).append(pb)
+            for name, pbs in sorted(bmods.items()):
+                if "dynamic" in name or name.startswith("`"):
+                    continue
+                pa = [x for x in A0.procs if x["name"] == name and x.get("mod") == ma and x["size"] >= 7]
+                pbn = [x for x in pbs if x.get("mod") in mb_copy and x.get("mod") in tu.get(ma, ())
+                       and x["size"] >= 7]
+                if len(pa) == 1 and len({x.get("mod") for x in pbn}) >= 2:
+                    seen, two = set(), []
+                    for x in pbn:
+                        if x["mod"] not in seen:
+                            seen.add(x["mod"])
+                            two.append(x)
+                    acc = (pa[0], two[:2])
+                    break
+            if acc is None:
+                record("N10b per-TU copies of one accessor split the state", False,
+                       f"no function with a copy in {ma} (A0) and in two of its new TUs (B0)")
+            else:
+                pa, pbs2 = acc
+                da = copy_build(args.a0, os.path.join(work, "n10ba"))
+                db = copy_build(args.b0, os.path.join(work, "n10bb"))
+
+                def lea(at, tgt):                           # lea rax, [rip + tgt]
+                    return b"\x48\x8d\x05" + (tgt - (at + 7)).to_bytes(4, "little", signed=True)
+                patch_dll(da, pa["rva"], lea(pa["rva"], ra_copy))
+                for x in pbs2:
+                    patch_dll(db, x["rva"], lea(x["rva"], mb_copy[x["mod"]]))
+                r = run_sc(da, db, work, args.tu_map, strict=True, copies_ok=True)
+                hit = [x for x in r["data_differing"] if SC.norm(SC.untag(x[0])) == var and "STATE" in x[1]]
+                record("N10b per-TU copies of one accessor split the state", r["result"] == "FAIL" and bool(hit),
+                       f"{r['result']}, {pa['name'][:60]}: one copy in {os.path.basename(ma)} reads {var}'s old "
+                       f"copy in A0; its copies in {pbs2[0]['mod']} / {pbs2[1]['mod']} read their own in B0; "
+                       f"reported as state split: {bool(hit)}")
+
+        # N12: a change that CREATES a content-derived boundary in one build:
+        # bytes k..k+2 of an unnamed non-text object set to "AB\0", so B0 alone
+        # sees a pooled-literal start there (review repro, rv3b/repro_b.py)
+        cand = None
+        for f in sorted(B0.procs, key=lambda f: f["name"]):
+            if not f["name"].startswith("MFO::"):
+                continue
+            for ins in cmp0.disasm(B0, f["rva"], f["size"]):
+                for o in ins.operands:
+                    if o.type != X.X86_OP_MEM or o.mem.base != X.X86_REG_RIP:
+                        continue
+                    t = ins.address + ins.size + o.mem.disp
+                    if not B0.readonly_data(t) or SC.is_text(B0.cstring(t), 1):
+                        continue
+                    kind, _n, off, _r = B0.resolve(t)[0]
+                    if kind == "sym" and off == 0:
+                        continue
+                    ext = B0.struct_extent(t)
+                    body = B0.read(t, ext)
+                    if any((t + q) in B0.relocs for q in range(ext)):
+                        continue
+                    k = next((q for q in range(4, ext - 3) if body[q - 1] == 0), None)
+                    if k is not None:
+                        cand = (f, t, ext, k)
+                        break
+                if cand:
+                    break
+            if cand:
+                break
+        if cand is None:
+            record("N12 a change that creates a boundary in one build only (proof build)", False, "no candidate")
+        else:
+            f, t, ext, k = cand
+            dst = copy_build(args.b0, os.path.join(work, "n12"))
+            patch_dll(dst, t + k, b"AB\0")
+            r = run_sc(args.a, args.b, work, args.tu_map, proof=(args.a0, dst))
+            record("N12 a change that creates a boundary in one build only (proof build)",
+                   r["result"] == "FAIL" and not r.get("provenance"),
+                   f"{r['result']} (exit {r['_exit']}), object at {t:#x} ({ext} bytes, read by {f['name'][:50]}) "
+                   f"bytes {k}..{k + 2} = 'AB\\0'")
 
         # N11: the four builds do not pair up -- the proof must refuse
         info_b, _p = SC.read_build_info(os.path.join(args.b, "MFO.dll"))

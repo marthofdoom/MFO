@@ -111,13 +111,6 @@ jobs:
           $dll = (Get-FileHash -Algorithm SHA256 build/release/MFO.dll).Hash.ToLower()
           "built=$(git rev-parse HEAD) noinline=${{ inputs.noinline == true }} noopt=${{ inputs.noopt == true }} dll_sha256=$dll" | Out-File -FilePath build/buildinfo/build-info.txt -Encoding ascii
 
-      - name: Upload build info
-        uses: actions/upload-artifact@v4
-        with:
-          name: MFO-build-info
-          path: native/build/buildinfo/build-info.txt
-          if-no-files-found: error
-
       - name: Upload DLL
         uses: actions/upload-artifact@v4
         with:
@@ -125,4 +118,13 @@ jobs:
           path: |
             native/build/release/MFO.dll
             native/build/release/MFO.pdb
+          if-no-files-found: error
+
+      # AFTER the DLL: an artifact-service failure on this small record must
+      # never cost the release's MFO-dll upload.
+      - name: Upload build info
+        uses: actions/upload-artifact@v4
+        with:
+          name: MFO-build-info
+          path: native/build/buildinfo/build-info.txt
           if-no-files-found: error

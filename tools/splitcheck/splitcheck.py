@@ -1280,12 +1280,12 @@ def compare_data(A, B, cmp, cap=512):
                    int.from_bytes(raw[:k], "little") == v for k in (1, 2, 4, 8))
 
     for n in sorted(set(da) | set(db)):
-        if not in_scope(n):
-            continue
         la, lb = da.get(n, []), db.get(n, [])
         # MUTABLE per-TU copies (a twin in either build): the state-split check
-        # runs whenever they exist, whether or not the copy layout changed
-        if (len(la) > 1 or len(lb) > 1) and la and lb and \
+        # runs whenever they exist, whether or not the copy layout changed, and
+        # for EVERY variable -- a header static of a library (rapidcsv) is split
+        # by a TU split exactly like one of MFO's
+        if (len(la) > 1 or len(lb) > 1) and la and lb and "`" not in n and \
                 (any(not A.is_const_data(r) for r, _m in la) or any(not B.is_const_data(r) for r, _m in lb)):
             changed = sorted(str(m) for _r, m in la) != sorted(str(m) for _r, m in lb)
             ok_, why_ = cmp.state_split_ok(n, layout_changed=changed)
@@ -1293,6 +1293,8 @@ def compare_data(A, B, cmp, cap=512):
                 diffs.append((n, f"STATE SPLIT on a MUTABLE per-TU variable ({len(la)} copies in A, "
                                  f"{len(lb)} in B): {why_}"))
                 continue
+        if not in_scope(n):
+            continue
         if not lb:
             if len(la) == 1 and const_equal(A, la[0][0], B, n):
                 folded.append((n, "A stores it, B folded it to an S_CONSTANT of the same value"))
