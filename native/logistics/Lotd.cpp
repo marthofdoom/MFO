@@ -571,7 +571,7 @@ namespace MFO::Lotd {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const auto fpos = a_follower->GetPosition();
             const auto ppos = pc ? pc->GetPosition() : fpos;
-            const float leash = TeleportCompat::View(a_follower).leash;
+            const float leash = Logistics::TeleportCompat::View(a_follower).leash;
             RE::TESObjectREFR* best = nullptr;
             float bestD = kCrateRange;
             std::unordered_set<RE::TESObjectCELL*> seen;
@@ -918,6 +918,11 @@ namespace MFO::Lotd {
             return false;
         }
         if (a_now - g_trip.start > kTripMax) { EndTripLocked(a_now, "timed out (90 s)", false, true); return false; }
+        // The loot driver's leash rule: a trip never outlasts the player walking off.
+        if (pc && a_follower->GetPosition().GetDistance(pc->GetPosition()) > Logistics::TeleportCompat::View(a_follower).release) {
+            EndTripLocked(a_now, "the player left his leash", false, false);
+            return false;
+        }
 
         const RE::FormID cid = g_trip.crate;
         switch (g_trip.phase) {
