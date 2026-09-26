@@ -66,11 +66,14 @@ namespace MFO::Logistics {
         // (marth 2026-09-24: "lower arrows are worthless when better ones are
         // available, lowest removed first"), and a body stack the rule would call
         // obsolete on landing is never taken (the peek agrees with the take, so he
-        // never walks back to the junk he shed). Running this action means he
-        // gathers this kind, so the kind is always judged (usesKind = true).
+        // never walks back to the junk he shed). The kind is judged ONLY when he
+        // actually uses it (UsesAmmoKind -- review round 1 on 4f23c30: the seeded
+        // "arrows below 10" rule sits on every follower); otherwise the target is 0
+        // and this is the plain restock, with no shed.
         bool LootAmmo(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
                       bool a_peek) {
-            const int target = AmmoKeepTarget(g_svc, a_wantBolt, /*a_usesKind*/ true);
+            const bool uses  = g_svc && UsesAmmoKind(g_svc, ComputeWeaponRoles(a_follower, *g_svc), a_wantBolt);
+            const int target = AmmoKeepTarget(g_svc, a_wantBolt, uses);
             return SwapUpAmmoFrom(a_follower, a_src, a_wantBolt, target, /*a_upgradeOnly*/ false, a_peek);
         }
 

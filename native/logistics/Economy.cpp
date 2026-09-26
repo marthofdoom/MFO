@@ -382,11 +382,12 @@ namespace MFO::Logistics {
                 // obsolete, and the sell list offers them on the next visit.
                 if (doRanged) {
                     const int target = AmmoKeepTarget(&a_state, wantCrossbow, /*a_usesKind*/ true);
-                    float bar = 0.0f; std::int32_t qty = 0;
+                    AmmoRank bar; std::int32_t qty = 0;
                     if (AmmoUpgradeBar(a_follower, wantCrossbow, target, bar, qty)) {
                         buy.ammoUpgrade    = true;
                         buy.ammoWantBolt   = wantCrossbow;
-                        buy.ammoBarDmg     = bar;
+                        buy.ammoBarDmg     = bar.dmg;
+                        buy.ammoBarValue   = bar.value;
                         buy.ammoUpgradeQty = qty;
                     }
                 }
@@ -557,7 +558,7 @@ namespace MFO::Logistics {
             // KEEP THE LOADOUT -- THE SWAP-UP RULE's keep half (86e3ebfu3). The
             // keep set (best weapon per class bucket, worn + best-scored armor per
             // logical slot) moved VERBATIM to logistics/SwapUp.cpp ComputeKeepSet so
-            // the loot side's superseded-gear drop (MakeRoomForSwapUp) reads the
+            // the loot side's superseded-gear drop (PlanRoomForSwapUp) reads the
             // SAME set this sell list does. Everything outside it is superseded and
             // sells below; the full rationale is there.
             const KeepSet keep = ComputeKeepSet(a_follower, a_state);
@@ -784,18 +785,18 @@ namespace MFO::Logistics {
             // OBSOLETE AMMO -- THE SWAP-UP RULE (86e3ebfu3, logistics/SwapUp.cpp;
             // marth: "lower arrows are worthless when better ones are available ...
             // slated for sale when obsolete"). Per kind the follower is judged on
-            // (AmmoKeepTarget: his ranged kind, or a gambit for that kind), every
-            // stack STRICTLY below his cutoff tier is offered; a higher stack is
-            // never obsolete while a lower one is kept. Worn / signature / quest /
-            // excluded / bound ammo is pinned by HeldAmmo and never offered.
+            // (UsesAmmoKind: his ranged kind -- a gambit alone is not use), every
+            // stack ranked STRICTLY below his cutoff is offered; a higher stack is
+            // never obsolete while a lower one is kept. Worn / special (explosion or
+            // enchanted) / player-picked / signature / quest / excluded / bound ammo
+            // is pinned by HeldAmmo and never offered.
             // PRICE FLOOR 1: Papyrus pays a whole-gold UNIT price and skips a row
             // whose unit is 0, and an Iron Arrow (value 1) at the speech-0 fraction
             // (0.30) rounds to 0 -- the very stack marth named would never sell.
             // So an obsolete ammo row sells for at least 1g a unit (at most <1g per
             // arrow above the speech-scaled price).
             for (const bool bolt : { false, true }) {
-                const int target = AmmoKeepTarget(&a_state, bolt,
-                                                  keepRoles.doRanged && keepRoles.wantCrossbow == bolt);
+                const int target = AmmoKeepTarget(&a_state, bolt, UsesAmmoKind(&a_state, keepRoles, bolt));
                 if (target <= 0) continue;
                 for (const auto& s : ObsoleteHeldAmmo(a_follower, bolt, target)) {
                     const auto unit = std::max<std::int32_t>(

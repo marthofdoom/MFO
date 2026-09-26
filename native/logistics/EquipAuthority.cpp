@@ -220,10 +220,12 @@ namespace MFO::Logistics {
         //     declares Armor-only on its own.
         //   * BOUND weapons (live BoundItemEffect): declared only into an OWNED
         //     hand (a one-hander needs its hand, a bound bow/2H both).
-        //   * AMMO only under a bow/crossbow HOLD (Ammo owned exactly then): the
-        //     worn ammo of the matching kind, else the best carried by damage
-        //     (bolts for a crossbow, arrows otherwise). The archer AI's own ammo
-        //     equips pass in the unowned category.
+        //   * AMMO only under a bow/crossbow HOLD (Ammo owned exactly then), of the
+        //     matching kind (bolts for a crossbow, arrows otherwise): a player ammo
+        //     pick while owned, else a worn special / bound round as is, else the
+        //     swap-up rule's best stack by damage (value on a tie) when it holds
+        //     kAmmoDeclareMin rounds or is already worn, else the worn stack (rule
+        //     2 below). The archer AI's own ammo equips pass in the unowned category.
         //   * the SHIELD: NEVER declared. offHand==2 (dual wield by perks) ->
         //     the category is DENIED (the field fix, now without owning a hand);
         //     offHand==1 -> Actuation's direct EquipShieldOnMain (an unowned-
@@ -558,30 +560,71 @@ namespace MFO::Logistics {
             //    then). With no ranged hold the archer AI's own ammo equips pass
             //    in an unowned category; declaring ammo there would only be an
             //    entry the pass skips as unowned.
-            //    THE SWAP-UP RULE (86e3ebfu3, logistics/SwapUp.cpp): the BEST carried
-            //    ammo of the matching kind by damage (the rule's ranking) is what
-            //    is declared, the worn stack only when it ties the best -- was
-            //    "worn, else best", which pinned a hold to whatever the AI last
-            //    nocked (MFO-B44's shape) even with better arrows in the pack.
-            //    A worn NON-PLAYABLE ammo (a Bound Bow's conjured arrows) is the
-            //    engine's pairing and stays declared as it is.
+            //    THE SWAP-UP RULE (86e3ebfu3, logistics/SwapUp.cpp), in this order:
+            //    (a) a PLAYER AMMO PICK stands (review round 1 on 4f23c30): under
+            //        enforcement, with Ammo OWNED by the last declaration, a worn
+            //        ammo that declaration did not carry can only have come through
+            //        the trade/gift menu (APMF's seat refuses the AI's own equips in
+            //        an owned category and allows path=PlayerMenu) -- it is recorded
+            //        in g_playerPicks like rule 4b's armor, declared while owned,
+            //        and HeldAmmo pins it (never shed, never sold);
+            //    (b) a worn SPECIAL round (explosion projectile / enchanted) or a
+            //        worn NON-PLAYABLE one (a Bound Bow's arrows) stays as it is;
+            //    (c) else the BEST ordinary stack by the rule's rank (damage, value
+            //        breaking a tie; the worn stack wins a tie) -- but over a DIFFERENT
+            //        worn stack only when it holds at least kAmmoDeclareMin (20)
+            //        rounds (MFO-B44: owning Ammo pins the archer to the declared
+            //        stack, so a 5-arrow better stack would leave him dry after 5
+            //        shots with the category refused). 20 is about one fight's
+            //        volley for an NPC archer at vanilla draw speed (~2-3 s a shot,
+            //        under a minute of shooting); below it the worn stack keeps the
+            //        hold. The keep target (>= 50) is deliberately NOT the bar: a
+            //        better stack of 30 is worth nocking even though it does not yet
+            //        retire the old one.
             if (rightRanged) {
                 const bool wantBolt = rightW->IsCrossbow();
-                RE::TESAmmo* worn = nullptr; RE::TESAmmo* best = nullptr;
-                float bestDmg = -1.0f; bool bestWorn = false;
+                auto& ammoPicks = g_playerPicks[id];
+                const auto lastIt = g_lastDeclared.find(id);
+                const bool ammoWasOwned = lastIt != g_lastDeclared.end() &&
+                                          (lastIt->second.owned & APMF_API::kEquipCat_Ammo) != 0;
+                RE::TESAmmo* worn = nullptr; bool wornSpecial = false;
+                RE::TESAmmo* best = nullptr; float bestDmg = 0.0f; std::int32_t bestVal = 0;
+                std::int32_t bestCount = 0; bool bestWorn = false;
+                RE::TESAmmo* pickAmmo = nullptr; bool pickWorn = false;
                 for (auto& [obj, data] : inv) {
                     if (!obj || data.first <= 0) continue;
                     auto* am = obj->As<RE::TESAmmo>();
                     if (!am || AmmoIsBolt(am) != wantBolt) continue;
-                    const bool isWorn = data.second && data.second->IsWorn();
-                    if (isWorn) worn = am;
-                    if (!AmmoSwapEligible(am)) continue;
-                    const float dmg = AmmoDamage(am);
-                    if (!best || dmg > bestDmg || (dmg == bestDmg && isWorn && !bestWorn)) {
-                        best = am; bestDmg = dmg; bestWorn = isWorn;
+                    auto* entry = data.second.get();
+                    const bool isWorn = entry && entry->IsWorn();
+                    const bool special = !AmmoSwapEligible(am) || AmmoIsSpecial(am, entry);
+                    if (isWorn) { worn = am; wornSpecial = special; }
+                    if (ammoPicks.count(am->GetFormID()) && (!pickAmmo || (isWorn && !pickWorn))) {
+                        pickAmmo = am; pickWorn = isWorn;
+                    }
+                    if (special) continue;
+                    const float        dmg = AmmoDamage(am);
+                    const std::int32_t val = entry ? entry->GetValue() : 0;
+                    if (!best || AmmoRankAbove(dmg, val, bestDmg, bestVal) ||
+                        (dmg == bestDmg && val == bestVal && isWorn && !bestWorn)) {
+                        best = am; bestDmg = dmg; bestVal = val;
+                        bestCount = static_cast<std::int32_t>(data.first); bestWorn = isWorn;
                     }
                 }
-                decl.Add((worn && !AmmoSwapEligible(worn)) ? worn : (best ? best : worn));
+                if (worn && APMFBridge::IsEquipAuthorityEnforced() && ammoWasOwned &&
+                    !lastSentHas(worn->GetFormID()) && !ammoPicks.count(worn->GetFormID())) {
+                    ammoPicks.insert(worn->GetFormID());
+                    pickAmmo = worn; pickWorn = true;
+                    spdlog::info("[equip-auth] {:08X}: player put on ammo '{}' -- kept", id,
+                                 worn->GetName() ? worn->GetName() : "?");
+                }
+                RE::TESAmmo* declared = nullptr;
+                if (pickAmmo)                                        declared = pickAmmo;   // (a)
+                else if (worn && wornSpecial)                        declared = worn;       // (b)
+                else if (best && (!worn || best == worn || bestCount >= kAmmoDeclareMin))
+                                                                     declared = best;       // (c)
+                else                                                 declared = worn ? worn : best;
+                decl.Add(declared);
             }
 
             // 3. THE SHIELD: NOT DECLARED (v9). Shield is never an owned category:

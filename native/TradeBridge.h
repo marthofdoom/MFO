@@ -127,6 +127,9 @@ namespace MFO::TradeBridge {
         bool          ammoWantBolt   = false;
         float         ammoBarDmg     = 0.0f;
         std::int32_t  ammoUpgradeQty = 0;
+        // Round 1 (review of 4f23c30): the rank is damage, VALUE breaking a tie, so
+        // the bar is the pair (ammoBarDmg, ammoBarValue).
+        std::int32_t  ammoBarValue   = 0;
     };
 
     // THE rated-armor score, shared with Logistics::ArmorScore (loot / keep /

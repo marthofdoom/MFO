@@ -770,7 +770,8 @@ namespace MFO::Logistics {
     // 2500-line hard rule) -- the EquipmentContext type itself lives above,
     // WeaponRoles-adjacent, since both TUs construct/consume it by value.
     bool LootEquipment(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false);
-    EquipmentContext BuildEquipmentContext(RE::Actor* a_follower);
+    EquipmentContext BuildEquipmentContext(RE::Actor* a_follower);   // reads g_svc
+    EquipmentContext BuildEquipmentContext(RE::Actor* a_follower, const FollowerState* a_state);
     bool LooseEquipmentQualifies(RE::Actor* a_follower, RE::TESBoundObject* a_obj,
                                  const EquipmentContext& ctx);
 
@@ -863,44 +864,75 @@ namespace MFO::Logistics {
         std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best (worn-inferior convergence)
     };
     KeepSet ComputeKeepSet(RE::Actor* a_follower, const FollowerState& a_state);
-    // Loot: when a_incoming would not fit the carry weight, drop superseded gear
-    // (outside the keep set, unworn, unprotected) lowest value first into a_src until
-    // it fits -- all or nothing. a_peek: would it fit after the drop (no move)?
-    bool MakeRoomForSwapUp(RE::Actor* a_follower, RE::TESObjectREFR* a_src,
-                           const FollowerState& a_state, RE::TESBoundObject* a_incoming,
-                           bool a_peek);
-
-    // Ammo: ranked by DAMAGE within one kind (arrows / bolts). The follower keeps
-    // AmmoKeepTarget() rounds; walking his stacks best-first, the stack that reaches
-    // the target is the CUTOFF tier and every unpinned stack STRICTLY below it is
-    // obsolete (lowest first). kAmmoKeepFloor: the smallest target -- an archer
-    // whose "arrows below N" rule says 10 still keeps 50 before anything is obsolete,
-    // so a handful of ebony arrows never retires a quiver of steel.
-    inline constexpr int kAmmoKeepFloor = 50;
-    struct AmmoStack {
+    // Loot: when a_incoming would not fit the carry weight, PLAN the superseded gear
+    // to drop (outside the keep set, unworn, not enchanted, worth <= a_incomingValue,
+    // unprotected), least valuable first -- all or nothing. True = it fits already
+    // (empty plan) or the plan frees enough. Only under bEconomy. Nothing moves: the
+    // caller acquires first and CommitSwapUpDrops only once the upgrade has landed.
+    struct SwapUpDrop {
         RE::TESBoundObject* obj    = nullptr;
         std::int32_t        count  = 0;
-        float               dmg    = 0.0f;
-        std::int32_t        value  = 0;       // per-unit instance value (held stacks only)
-        bool                held   = false;   // the follower's own (vs a body's)
-        bool                worn   = false;
-        bool                pinned = false;   // worn / signature / quest / excluded: never obsolete
+        float               weight = 0.0f;   // per copy
+        std::int32_t        value  = 0;      // per copy
     };
-    inline bool AmmoObsolete(const AmmoStack& a_s, float a_cutoff) { return !a_s.pinned && a_s.dmg < a_cutoff; }
+    bool PlanRoomForSwapUp(RE::Actor* a_follower, const FollowerState& a_state,
+                           RE::TESBoundObject* a_incoming, std::int32_t a_incomingValue,
+                           std::vector<SwapUpDrop>& a_outPlan);
+    void CommitSwapUpDrops(RE::Actor* a_follower, RE::TESObjectREFR* a_src,
+                           const std::vector<SwapUpDrop>& a_plan, RE::TESBoundObject* a_incoming);
+    std::int32_t HeldCount(RE::Actor* a_follower, RE::TESBoundObject* a_obj);
+
+    // Ammo: ranked by DAMAGE, VALUE breaking a tie, within one kind (arrows /
+    // bolts), judged only for the kind the follower USES (UsesAmmoKind). He keeps
+    // AmmoKeepTarget() rounds; walking his ordinary stacks best-first, the stack that
+    // reaches the target is the CUTOFF and every unpinned stack ranked strictly below
+    // it is obsolete (lowest first). kAmmoKeepFloor: the smallest target -- an archer
+    // whose "arrows below N" rule says 10 still keeps 50 before anything is obsolete,
+    // so a handful of ebony arrows never retires a quiver of steel. SPECIAL rounds
+    // (projectile explosion / enchanted instance) never count and are never obsolete.
+    inline constexpr int kAmmoKeepFloor = 50;
+    struct AmmoStack {
+        RE::TESBoundObject* obj     = nullptr;
+        std::int32_t        count   = 0;
+        float               dmg     = 0.0f;
+        std::int32_t        value   = 0;       // per-unit instance value
+        bool                held    = false;   // the follower's own (vs a body's)
+        bool                worn    = false;
+        bool                special = false;   // explosion projectile or enchanted: outside the ladder
+        bool                pinned  = false;   // worn / special / signature / player pick / quest / excluded
+    };
+    struct AmmoRank {
+        float        dmg   = 0.0f;
+        std::int32_t value = 0;
+        bool         valid = false;   // false = no cutoff (short of the target / not judged)
+    };
+    inline bool AmmoRankAbove(float a_dmg, std::int32_t a_val, float b_dmg, std::int32_t b_val) {
+        return a_dmg > b_dmg || (a_dmg == b_dmg && a_val > b_val);
+    }
+    inline bool AmmoObsolete(const AmmoStack& a_s, const AmmoRank& a_cutoff) {
+        return a_cutoff.valid && !a_s.pinned && AmmoRankAbove(a_cutoff.dmg, a_cutoff.value, a_s.dmg, a_s.value);
+    }
     bool  AmmoSwapEligible(const RE::TESAmmo* a_ammo);   // playable (a bound bow's arrows are not ours)
+    bool  AmmoIsSpecialBase(const RE::TESAmmo* a_ammo);  // the projectile carries an explosion
+    bool  AmmoIsSpecial(const RE::TESAmmo* a_ammo, RE::InventoryEntryData* a_entry);   // + an enchanted instance
     float AmmoDamage(const RE::TESAmmo* a_ammo);
-    // 0 = not managed (not his ranged kind, no gambit for it): never judged.
+    bool  UsesAmmoKind(const FollowerState* a_state, const WeaponRoles& a_roles, bool a_wantBolt);
+    // 0 = not judged (a_usesKind false): never shed, never sold.
     int   AmmoKeepTarget(const FollowerState* a_state, bool a_wantBolt, bool a_usesKind);
     std::vector<AmmoStack> HeldAmmo(RE::Actor* a_follower, bool a_wantBolt);
-    float AmmoCutoff(std::vector<AmmoStack>& a_pool, int a_target);   // sorts a_pool best-first
+    AmmoRank AmmoCutoff(std::vector<AmmoStack>& a_pool, int a_target);   // sorts a_pool best-first
     std::vector<AmmoStack> ObsoleteHeldAmmo(RE::Actor* a_follower, bool a_wantBolt, int a_target);
-    // Shop: the weakest tier he relies on (a_outBarDmg) and how many rounds above it
+    // Shop: the weakest tier he relies on (a_outBar) and how many rounds above it
     // would carry the whole target (a_outQty). False = nothing held / nothing to buy.
     bool  AmmoUpgradeBar(RE::Actor* a_follower, bool a_wantBolt, int a_target,
-                         float& a_outBarDmg, std::int32_t& a_outQty);
+                         AmmoRank& a_outBar, std::int32_t& a_outQty);
     // Loot: take the body's ammo the rule keeps (restock: >= his worst held; upgrade:
     // > the bar), best-first under the carry weight, then drop what became obsolete
     // back into a_src, lowest first. a_peek: would it take anything (no move)?
     bool  SwapUpAmmoFrom(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
                          int a_target, bool a_upgradeOnly, bool a_peek);
+    // The ch.17 declaration's minimum stack: a better stack is declared over the
+    // worn one only when it holds at least this many rounds (MFO-B44, see
+    // RefreshEquipDeclaration rule 2).
+    inline constexpr std::int32_t kAmmoDeclareMin = 20;
 }

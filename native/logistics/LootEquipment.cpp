@@ -24,7 +24,16 @@ namespace MFO::Logistics {
         // the ground is judged by the EXACT same rule as one in a corpse's
         // pack -- ONE decision path, two call sites.
 
+        // a_state: the follower's gambit tables. The loot scan passes g_svc (the
+        // follower being serviced, the forwarder below); the swap-up keep set
+        // (logistics/SwapUp.cpp ComputeKeepSet) passes its own state, so the keep
+        // set and the loot judge read the SAME mage-backup contract (review round 1
+        // on 4f23c30: the caster backup-dagger churn).
         EquipmentContext BuildEquipmentContext(RE::Actor* a_follower) {
+            return BuildEquipmentContext(a_follower, g_svc);
+        }
+
+        EquipmentContext BuildEquipmentContext(RE::Actor* a_follower, const FollowerState* a_state) {
             EquipmentContext ctx;
             using WT = RE::WEAPON_TYPE;
 
@@ -38,9 +47,9 @@ namespace MFO::Logistics {
             // the player) and the hybrid-1h-gets-shed bug. WHAT gets force-
             // EQUIPPED over a drawn weapon is still decided by LootEquipment's
             // equipIt gate, UNCHANGED -- roles only decide what's looted/kept.
-            const bool wantsRanged = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipRanged);
-            const bool wantsMelee  = g_svc && TableHasAction(g_svc->combat(), Vocab::kActEquipMelee);
-            const WeaponRoles roles = g_svc ? ComputeWeaponRoles(a_follower, *g_svc) : WeaponRoles{};
+            const bool wantsRanged = a_state && TableHasAction(a_state->combat(), Vocab::kActEquipRanged);
+            const bool wantsMelee  = a_state && TableHasAction(a_state->combat(), Vocab::kActEquipMelee);
+            const WeaponRoles roles = a_state ? ComputeWeaponRoles(a_follower, *a_state) : WeaponRoles{};
             ctx.roles       = roles;   // carries the perk-style preference into WeaponScore
             ctx.armorPref   = ArmorPrefFor(a_follower);   // ONE armor class/perk judgment for the whole scan (ArmorScore)
             ctx.wantsRanged = wantsRanged;
@@ -48,7 +57,7 @@ namespace MFO::Logistics {
             // Base class (#65 combatClassOverride; 1=Melee 2=Ranged 3=Mage, 0=Auto)
             // read here, BEFORE mageMode, so mageMode can gate on it directly --
             // no circular dependency on the roles derived further down.
-            const std::uint8_t baseClass = g_svc ? g_svc->combatClassOverride : 0;
+            const std::uint8_t baseClass = a_state ? a_state->combatClassOverride : 0;
 
             // ── MAGIC LOADOUT (v1.0.29) ─────────────────────────────────────
             // Gambit-driven magic-user detection. A magic user gets two loot
@@ -59,8 +68,8 @@ namespace MFO::Logistics {
             // caster must be kept OUT of the general weapon-upgrade role.
             int castGambits = 0;
             RE::ActorValue school = RE::ActorValue::kNone;
-            if (Config::g_magicLoadout.load() && g_svc)
-                school = TargetMagicSchool(*g_svc, castGambits);
+            if (Config::g_magicLoadout.load() && a_state)
+                school = TargetMagicSchool(*a_state, castGambits);
             ctx.school      = school;
             ctx.castGambits = castGambits;
             // mageMode requires the follower be PRIMARILY a caster, not just
@@ -92,7 +101,7 @@ namespace MFO::Logistics {
             // clothing + jewelry slots (MageClothingSlot). See MageApparelBuyKey.
             ctx.mageTop2          = ctx.useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
             ctx.mageSchoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
-            ctx.mageAllowVillain  = ctx.useMageApparel && g_svc && IsNecromancerFollower(*g_svc);
+            ctx.mageAllowVillain  = ctx.useMageApparel && a_state && IsNecromancerFollower(*a_state);
 
             // The MELEE class we loot/upgrade, or Other = "no melee role at all".
             // T#69: ComputeWeaponRoles hands a role to ANY carried melee/ranged
@@ -465,20 +474,25 @@ namespace MFO::Logistics {
             // on and drops what that makes obsolete back into the body (lowest
             // first). Lowest priority: one gear piece per call beats ammo, and
             // StripCorpse's repeat calls reach the ammo once the gear is done.
+            // The drops are PLANNED here and COMMITTED only after AcquireEquip put the
+            // upgrade in his inventory (below) -- a failed acquire drops nothing.
             const int  ammoTarget = ctx.doRanged ? AmmoKeepTarget(g_svc, ctx.wantCrossbow, /*a_usesKind*/ true) : 0;
-            auto fitsOrRoom = [&](bool a_dry) {
+            std::vector<SwapUpDrop> room;
+            auto fitsOrRoom = [&]() {
+                room.clear();
                 return FitsCarryWeight(a_follower, best->GetWeight()) ||
-                       (g_svc && MakeRoomForSwapUp(a_follower, a_src, *g_svc, best, a_dry));
+                       (g_svc && PlanRoomForSwapUp(a_follower, *g_svc, best, best->GetGoldValue(), room));
             };
             if (a_peek) {
-                if (best && fitsOrRoom(true)) return true;
+                if (best && fitsOrRoom()) return true;
                 return ammoTarget > 0 &&
                        SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ true);
             }
-            if (best && !fitsOrRoom(false)) best = nullptr;   // does not fit, nothing superseded frees the room
+            if (best && !fitsOrRoom()) best = nullptr;   // does not fit, nothing superseded frees the room
             if (!best)
                 return ammoTarget > 0 &&
                        SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ false);
+            const std::int32_t heldBefore = room.empty() ? 0 : HeldCount(a_follower, best);
 
             // ACQUIRE + EQUIP through the shared v1.0.38 safe step: transfers from
             // a_src, captures + carries MEO gems, equips IN PLACE on the main thread
@@ -493,6 +507,16 @@ namespace MFO::Logistics {
             const bool trueSecond = best == bestOffHand && best != bestWeap;
             const bool equipped   = AcquireEquip(a_follower, best, a_src, myWeap,
                                                  best == bestBackup || trueSecond);
+            // THE SWAP-UP RULE: commit the planned drops only now that the upgrade
+            // is in his inventory (AcquireEquip's transfer is synchronous on this
+            // worker). If it did not arrive, nothing is dropped -- and said so.
+            if (!room.empty()) {
+                if (HeldCount(a_follower, best) > heldBefore)
+                    CommitSwapUpDrops(a_follower, a_src, room, best);
+                else
+                    spdlog::warn("[swapup] {:08X}: '{}' did not arrive from {:08X} -- the planned drops were NOT made",
+                                 a_follower->GetFormID(), best->GetName() ? best->GetName() : "?", a_src->GetFormID());
+            }
 
             // [equip] DIAGNOSTIC: log WHAT we put on, over WHAT, and the reasoning.
             if (auto* nw = best->As<RE::TESObjectWEAP>()) {
