@@ -1446,6 +1446,28 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   frozen `fightConf` benches a foe-count retreat; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
   StopCombat lands (same self-cancel). The Confidence formula is untouched (its v2 is a
   separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B108 and MFO-B110.
+  **ch.22 RE-ENTRY DENY (feat/mfo-reentry-leash 2026-09-25, Harbinger >= v15; `apmf/ReentryDeny.cpp`).**
+  `RetreatFill` claims the deny instead of posting its StopCombat (`Packages.cpp:2194/:2253`, an
+  in-place edit, the file did not grow); the bridge sweep posts the SINGLE StopCombat on the first
+  LIVE read. TRAVEL re-entry (`:440`) reads `RetreatReentryDenyStateOf`: PENDING = nothing (the
+  sweep posts it), LIVE = a WARN and NO StopCombat (a ch.21 entry passes by contract, anything else
+  is a Harbinger DENY MISSED), NONE / ENDED = the shipped per-re-entry StopCombat. The deny is
+  released at TRAVEL -> STAY (`:425`) and in `finish` (`:390`); Harbinger absent / < v15 / seat
+  refused = the shipped behaviour exactly. **What breaks:** keeping the deny in STAY (benches him:
+  the 7580bea SEV-2); re-issuing StopCombat under a LIVE deny (masks a DENY MISSED); a window
+  shorter than `kRetreatTimeout` (keep `kRetreatDenyWindowSecs` in step, `ReentryDeny.cpp:58`).
+- **IN-COMBAT LEASH (Harbinger ch.23, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5ve /
+  86e3erv94; `apmf/PursuitLeash.cpp`).** Combat table, right after the auto-retreat block
+  (`:1045-1052`): a non-retreating follower gets `ServicePursuitLeash(id,
+  Confidence::LeashRadius(f))` (anchor the player); a retreating one `ReleasePursuitLeash`. Also
+  released in the retreat exit of the combat table (`:1002`) and the party-OOC teardown (`:742`).
+  RADIUS = `LeashRadius`, the confidence tenet's distance FROM THE PLAYER (fLeashMin 512 ..
+  fLeashMax 4000 by `Of()`), because ch.23's radius is measured from the anchor; `ChaseRadius` is
+  measured from the follower (PickFoe's cap) and stays where it is. Stable: Repoint only on a
+  band-sized change (`PursuitLeash.cpp:51-52`). Harbinger absent / < v16 = no in-combat leash, as
+  before. **What breaks:** calling it before `ServiceRetreat` or from the party-OOC branch (a leash
+  outside the fight / over a retreat); dropping the release in the party-OOC teardown (the leash
+  outlives the fight until dismissal or load).
 - **ENGAGE-ON-SIGHT HOOK (ClickUp 86e3errnu, feat/mfo-ooc-engage 2026-09-25).** In the party-OOC
   branch, AFTER the `ServiceRetreat` block and BEFORE `Logistics::ServiceFollower` (`:785-799`):
   `EngageOnSight::Service(f, id, cooling, kRetreatConfidence)` (`:794`), `cooling` = this
@@ -1904,6 +1926,12 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   firewall). **Note:** `Confidence.h` is the combat/loot **leash** primitive
   (`Of`/`LeashRadius`/`ChaseRadius`) — misfiled under "progression" by directory
   adjacency; zero relationship to perks/PRGN.
+- `Confidence::LeashRadius` CONSUMERS (2026-09-25): the loot leash (logistics) and, IN COMBAT, the
+  Harbinger ch.23 pursuit leash radius around the player (`Scheduler.cpp:1052` ->
+  `apmf/PursuitLeash.cpp`, Repointed on a band-sized change). `ChaseRadius` stays the follower-
+  centred PickFoe cap (`Evaluator.cpp`) + AUTO fan-out; it is NOT the ch.23 radius. A change to
+  `LeashRadius` or the fLeashMin/fLeashMax dials now also moves how far a follower may pursue in
+  combat when Harbinger >= v16 is installed.
 - `Temperament(FormID)` (`:22`) — deterministic per-follower scalar (Knuth hash).
   Consumed by Actuation/Scheduler for cadence deviation (`cast/CastOn.cpp:1080`,
   `Scheduler.cpp:394,685`). No state/save impact; changing the hash silently
@@ -3745,12 +3773,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
   function by `tools/splitcheck`; before it: one `APMFBridge.cpp`).** Other subsystems include
   ONLY `apmf/APMFBridge.h`. `APMF_API.h` (the byte-shared ABI header) stays at `native/`.
-  - `apmf/Bridge.cpp` (1089) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
+  - `apmf/Bridge.cpp` (1095) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
     `g_mx`/`g_owned` (`:51-52`) + refusal sets, `FacetExpiry` (`:163`), the shared claim helpers
     `EnsureClaimLocked` (`:174`), `ReleaseClaimLocked` (`:200`), `CastHeartbeatInterval` (`:241`),
     `EnsureCastClaimLocked` (`:280`), the idle-hand floor `ReconcileHandFloorLocked` (`:672`),
     `Acquire` (`:813`, requests ABI 10) / `Available` (`:853`) / `MaybeWarnAbsence` (`:871`), the expiry sweep
-    `Tick` (`:887`) and `ClearTransientState` (`:1042`).
+    `Tick` (`:887`) and `ClearTransientState` (`:1046`).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
     `ClaimOffenseCast` `:83`, `RefreshOwnedCastOnHand` `:215`, `ReleaseCastClaimOnHand` `:311`,
     `ReleaseOffenseCast` `:326`) and heal (`ClaimHealCast` `:351`, `RefreshHealCastClaim` `:433`).
@@ -3804,14 +3832,49 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     Standing / Invalid / SeatAbsent). `EntryEndedLocked` (`:58`) = the pin table's judgement
     (IsClaimLive false once seen live, or never seen live after 15 UNPAUSED sweeps) -> Release ALWAYS,
     marked ENDED, logged once. `CombatEntryStateOf` (`:150`) / `ForgetCombatEntry` (`:159`, Release +
-    erase; Release stops no fight). `SweepCombatEntriesLocked` (`:85`, from `Tick` `Bridge.cpp:897`;
+    erase; Release stops no fight). `SweepCombatEntriesLocked` (`:85`, from `Tick` `Bridge.cpp:901`;
     also the `bEngageOnSight`-off kill switch) and `ClearCombatEntriesLocked` (`:103`, from
-    `ClearTransientState` `Bridge.cpp:1084`), declared in `APMFBridge_internal.h`.
+    `ClearTransientState` `Bridge.cpp:1088`), declared in `APMFBridge_internal.h`.
     **What breaks:** Repointing an ended entry (a silent no-op on a dead handle), or re-filing the
     same target from here (the no-loop rule lives in EngageOnSight's given-up set, keyed on the
     ENDED state this table reports — erasing an entry when it ends instead of marking it loses that
     signal); dropping a handle without Release; a synchronous refusal meaning anything but "seat not
     installed" (keep the Invalid pre-filter, or the gambit goes inert for the session on a bad param).
+  - `apmf/ReentryDeny.cpp` (225, NEW, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5v9) = the
+    **ch.22 COMBAT RE-ENTRY DENY** table (ABI v15 `kIntent_CombatReentryDeny`), the retreat's half of
+    Harbinger's recipe "StopCombat once + deny re-entry". File-local `g_denies` under its OWN
+    `g_denyMx` (never `g_mx`). `ClaimRetreatReentryDeny` (`:92`, from `Packages::RetreatFill` both
+    roads, `Packages.cpp:2194/:2253`) files `RequestEx(follower, 22, kOwnBasis, {fval =
+    kRetreatDenyWindowSecs 35})` (`:58`: TRAVEL's 30 s timeout + 5 s for the timeout being seen on
+    his own service); true = filed, and RetreatFill then does NOT post its StopCombat.
+    `SweepReentryDenies` (`:155`, from `Tick` `Bridge.cpp:892`, BEFORE `g_mx`): first `IsClaimLive`
+    true -> `Packages::RetreatReengage(fid, "engage (ch.22 deny live)")` (the single StopCombat, the
+    retreat's generation-checked main-thread road); live then not -> ENDED BY HARBINGER (logged,
+    kept as Ended); never live after 15 unpaused sweeps -> WARN, Release, Ended, and the StopCombat
+    posted without the deny (the no-ch.22 road); `!Packages::IsRetreating` -> released.
+    `RetreatReentryDenyStateOf` (`:126`: None / Pending / Live / Ended) steers the Scheduler's
+    TRAVEL re-entry. `ReleaseRetreatReentryDeny` (`:134`, idempotent) from the Scheduler (`finish`
+    `:390`, TRAVEL -> STAY `:425`) and `Followers::ReleaseHeldState` (`:403`); `ClearReentryDenies`
+    (`:217`) from `ClearTransientState` (`Bridge.cpp:1089`).
+    **What breaks:** posting the StopCombat at the claim (before live) re-opens the gap the recipe
+    closes; releasing on the first never-live read throws the request away; holding the deny into
+    STAY benches him at the player's side ("engaged at your side" needs the engine's StartCombat to
+    pass: the 7580bea SEV-2); taking `g_mx` inside this table or calling `RetreatReengage` under
+    `g_denyMx` (the sweep posts after dropping it); a window shorter than TRAVEL's own bound (the
+    deny would end under a travelling retreat and the re-entry StopCombat would come back mid-walk).
+  - `apmf/PursuitLeash.cpp` (182, NEW, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5ve /
+    86e3erv94) = the **ch.23 IN-COMBAT PURSUIT LEASH** table (ABI v16 `kIntent_PursuitLeash`). File-
+    local `g_leashes` under its OWN `g_leashMx`. `ServicePursuitLeash` (`:85`, from the Scheduler's
+    combat table `Scheduler.cpp:1052`) files `{target = 0x14 the player, fval = radius}` once, then
+    Repoints ONLY when the wanted radius leaves the band max(`kRepointFloor` 256 u, `kRepointFrac`
+    20 %) around the claimed one (`:51-52`). `SweepPursuitLeashes` (`:143`, from `Tick` before
+    `g_mx`): a claim that ended (was live, now not) or never went live (15 unpaused sweeps) is logged,
+    Released and kept ENDED (not re-filed until the fight's end); a retreating follower's leash is
+    released. `ReleasePursuitLeash` (`:128`) from the Scheduler (party-OOC teardown `:742`, retreat
+    `:1002`/`:1051`) and `ReleaseHeldState` (`Followers.cpp:404`); `ClearPursuitLeashes` (`:174`).
+    **What breaks:** a per-service Repoint (churns Harbinger's arbitration every 133 ms x N);
+    re-filing an ENDED claim within a fight (a loop against an outranking leash); feeding it
+    `ChaseRadius` (measured from the follower, not the anchor); keeping it through a retreat.
   - `apmf/SpellAllowList.cpp` (308) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
     `AppendDenyExemptForms` (`:126`), `PublishSpellAllowList` (`:162`), `ReleaseSpellAllowList`
     (`:284`).

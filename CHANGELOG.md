@@ -21,6 +21,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **A follower you told to wait stays put.** So does one whose gambit list has a Wait rule that is winning.
 - **No fights started in towns, inns, houses or other lived-in places.** Unless you are already fighting, followers do not start a fight while you are in one, or with an enemy standing in one. A dungeon under a town still counts as a dungeon.
 - **No endless re-tries.** If the game refuses the fight, or the fight ends with the enemy still around, he leaves that enemy alone until it dies, leaves, stops being hostile or is far from you.
+- **A retreating follower stays out of the fight on the way back.** With a Harbinger that has the re-entry deny (its next release after 0.9.9), the game cannot pull him back into combat while he walks to you. MFO takes him out of the fight once, the moment Harbinger holds the door shut. Enemies can still hit him on the way. Once he reaches you he fights again if the enemies come to him. Older Harbinger or none: the retreat works as before.
+- **Followers do not chase too far from you in a fight.** With a Harbinger that has the pursuit leash (its next release after 0.9.9), a follower who is farther from you than his confidence leash does not run after a foe that would take him farther still. A confident follower ranges wide. A hurt or outnumbered one stays close. He still fights whatever comes to him. Older Harbinger or none: no change.
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 
