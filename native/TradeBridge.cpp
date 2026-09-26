@@ -224,6 +224,48 @@ namespace MFO::TradeBridge {
                 plan[idx] += 1; o->budget -= value; o->buySpent += value;
             };
 
+            // ── AMMO SWAP-UP (THE SWAP-UP RULE, 86e3ebfu3; logistics/SwapUp.cpp) ──
+            // marth: "an archer should be willing to sell iron for better arrows".
+            // The BEST-damage ammo of his kind STRICTLY above the weakest tier he
+            // relies on (b.ammoBarDmg), up to b.ammoUpgradeQty rounds (what carries
+            // his whole keep target), cheaper line on a damage tie. Units the SUPPLY
+            // pass above already planned above the bar count toward the quantity,
+            // and never more of a stock line than it still has (plan[] < avail --
+            // the MFO-B36 shape: one copy is never planned twice). Spend is held to
+            // half of the remaining purse (the gear reserve rule, per round). The
+            // obsolete stacks this purchase creates sell on the next visit.
+            if (b.ammoUpgrade && b.ammoUpgradeQty > 0) {
+                const std::int32_t kind = b.ammoWantBolt ? NeedCat::kBolts : NeedCat::kArrows;
+                auto dmgOf = [](RE::TESForm* f) -> float {
+                    auto* am = f ? f->As<RE::TESAmmo>() : nullptr;
+                    if (!am || am->GetRuntimeData().data.flags.all(RE::AMMO_DATA::Flag::kNonPlayable)) return -1.0f;
+                    return am->GetRuntimeData().data.damage;
+                };
+                std::int32_t already = 0;
+                std::size_t best = SIZE_MAX; float bestDmg = b.ammoBarDmg; int bestVal = 0; int bestAvail = 0;
+                for (auto& c : cands) {
+                    if (c.kind != kind) continue;
+                    const float dmg = dmgOf(c.f);
+                    if (!(dmg > b.ammoBarDmg)) continue;
+                    already += plan[c.idx];
+                    const int left = c.avail - plan[c.idx];
+                    if (left <= 0) continue;
+                    if (dmg > bestDmg || (best != SIZE_MAX && dmg == bestDmg && c.value < bestVal)) {
+                        best = c.idx; bestDmg = dmg; bestVal = c.value; bestAvail = left;
+                    }
+                }
+                if (best != SIZE_MAX && bestVal > 0) {
+                    std::int64_t qty = static_cast<std::int64_t>(b.ammoUpgradeQty) - already;
+                    qty = std::min<std::int64_t>(qty, bestAvail);
+                    qty = std::min<std::int64_t>(qty, (o->budget / 2) / bestVal);
+                    if (qty > 0) {
+                        plan[best]  += static_cast<std::int32_t>(qty);
+                        o->budget   -= static_cast<std::int32_t>(qty) * bestVal;
+                        o->buySpent += static_cast<std::int32_t>(qty) * bestVal;
+                    }
+                }
+            }
+
             // ── GEAR (Feature A): at most ONE upgrade per category per window. ──
             std::size_t offHandIdx = SIZE_MAX;   // the second one-hander's plan line, named in buyPlan
             if (b.buyGear) {

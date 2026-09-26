@@ -558,18 +558,30 @@ namespace MFO::Logistics {
             //    then). With no ranged hold the archer AI's own ammo equips pass
             //    in an unowned category; declaring ammo there would only be an
             //    entry the pass skips as unowned.
+            //    THE SWAP-UP RULE (86e3ebfu3, logistics/SwapUp.cpp): the BEST carried
+            //    ammo of the matching kind by damage (the rule's ranking) is what
+            //    is declared, the worn stack only when it ties the best -- was
+            //    "worn, else best", which pinned a hold to whatever the AI last
+            //    nocked (MFO-B44's shape) even with better arrows in the pack.
+            //    A worn NON-PLAYABLE ammo (a Bound Bow's conjured arrows) is the
+            //    engine's pairing and stays declared as it is.
             if (rightRanged) {
                 const bool wantBolt = rightW->IsCrossbow();
-                RE::TESAmmo* worn = nullptr; RE::TESAmmo* best = nullptr; float bestDmg = -1.0f;
+                RE::TESAmmo* worn = nullptr; RE::TESAmmo* best = nullptr;
+                float bestDmg = -1.0f; bool bestWorn = false;
                 for (auto& [obj, data] : inv) {
                     if (!obj || data.first <= 0) continue;
                     auto* am = obj->As<RE::TESAmmo>();
                     if (!am || AmmoIsBolt(am) != wantBolt) continue;
-                    if (data.second && data.second->IsWorn()) worn = am;
-                    const float dmg = am->GetRuntimeData().data.damage;
-                    if (!best || dmg > bestDmg) { best = am; bestDmg = dmg; }
+                    const bool isWorn = data.second && data.second->IsWorn();
+                    if (isWorn) worn = am;
+                    if (!AmmoSwapEligible(am)) continue;
+                    const float dmg = AmmoDamage(am);
+                    if (!best || dmg > bestDmg || (dmg == bestDmg && isWorn && !bestWorn)) {
+                        best = am; bestDmg = dmg; bestWorn = isWorn;
+                    }
                 }
-                decl.Add(worn ? worn : best);
+                decl.Add((worn && !AmmoSwapEligible(worn)) ? worn : (best ? best : worn));
             }
 
             // 3. THE SHIELD: NOT DECLARED (v9). Shield is never an owned category:

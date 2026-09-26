@@ -846,4 +846,61 @@ namespace MFO::Logistics {
 
     // defined in logistics/EquipAuthority.cpp, called by EconomyProbe
     bool IsPlayerPick(RE::FormID a_follower, RE::FormID a_form);
+
+    // ── THE SWAP-UP RULE (86e3ebfu3, 2026-09-25), defined in logistics/SwapUp.cpp
+    // (full doc there). ONE rule shared by the loot side and the economy: what a
+    // follower KEEPS, and therefore what is superseded (sold at a vendor, or dropped
+    // into the source while looting when carrying it no longer makes sense).
+
+    // Weapons + armor: the keep set EconomyProbe's sell list and the loot drop read.
+    // armorJudged = the armor half ran (bEconomyBuyGear); with it false `armor` is
+    // empty and must not be read as "everything is superseded".
+    struct KeepSet {
+        WeaponRoles                                  roles;
+        bool                                         armorJudged = false;
+        std::unordered_set<RE::TESBoundObject*>      weapons;
+        std::unordered_set<RE::TESBoundObject*>      armor;
+        std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best (worn-inferior convergence)
+    };
+    KeepSet ComputeKeepSet(RE::Actor* a_follower, const FollowerState& a_state);
+    // Loot: when a_incoming would not fit the carry weight, drop superseded gear
+    // (outside the keep set, unworn, unprotected) lowest value first into a_src until
+    // it fits -- all or nothing. a_peek: would it fit after the drop (no move)?
+    bool MakeRoomForSwapUp(RE::Actor* a_follower, RE::TESObjectREFR* a_src,
+                           const FollowerState& a_state, RE::TESBoundObject* a_incoming,
+                           bool a_peek);
+
+    // Ammo: ranked by DAMAGE within one kind (arrows / bolts). The follower keeps
+    // AmmoKeepTarget() rounds; walking his stacks best-first, the stack that reaches
+    // the target is the CUTOFF tier and every unpinned stack STRICTLY below it is
+    // obsolete (lowest first). kAmmoKeepFloor: the smallest target -- an archer
+    // whose "arrows below N" rule says 10 still keeps 50 before anything is obsolete,
+    // so a handful of ebony arrows never retires a quiver of steel.
+    inline constexpr int kAmmoKeepFloor = 50;
+    struct AmmoStack {
+        RE::TESBoundObject* obj    = nullptr;
+        std::int32_t        count  = 0;
+        float               dmg    = 0.0f;
+        std::int32_t        value  = 0;       // per-unit instance value (held stacks only)
+        bool                held   = false;   // the follower's own (vs a body's)
+        bool                worn   = false;
+        bool                pinned = false;   // worn / signature / quest / excluded: never obsolete
+    };
+    inline bool AmmoObsolete(const AmmoStack& a_s, float a_cutoff) { return !a_s.pinned && a_s.dmg < a_cutoff; }
+    bool  AmmoSwapEligible(const RE::TESAmmo* a_ammo);   // playable (a bound bow's arrows are not ours)
+    float AmmoDamage(const RE::TESAmmo* a_ammo);
+    // 0 = not managed (not his ranged kind, no gambit for it): never judged.
+    int   AmmoKeepTarget(const FollowerState* a_state, bool a_wantBolt, bool a_usesKind);
+    std::vector<AmmoStack> HeldAmmo(RE::Actor* a_follower, bool a_wantBolt);
+    float AmmoCutoff(std::vector<AmmoStack>& a_pool, int a_target);   // sorts a_pool best-first
+    std::vector<AmmoStack> ObsoleteHeldAmmo(RE::Actor* a_follower, bool a_wantBolt, int a_target);
+    // Shop: the weakest tier he relies on (a_outBarDmg) and how many rounds above it
+    // would carry the whole target (a_outQty). False = nothing held / nothing to buy.
+    bool  AmmoUpgradeBar(RE::Actor* a_follower, bool a_wantBolt, int a_target,
+                         float& a_outBarDmg, std::int32_t& a_outQty);
+    // Loot: take the body's ammo the rule keeps (restock: >= his worst held; upgrade:
+    // > the bar), best-first under the carry weight, then drop what became obsolete
+    // back into a_src, lowest first. a_peek: would it take anything (no move)?
+    bool  SwapUpAmmoFrom(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
+                         int a_target, bool a_upgradeOnly, bool a_peek);
 }

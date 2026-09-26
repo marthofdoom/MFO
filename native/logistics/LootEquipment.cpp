@@ -455,9 +455,30 @@ namespace MFO::Logistics {
             // the weight gate an overencumbered follower walks a whole excursion leg,
             // takes nothing at arrival (the real take IS weight-gated below), and the
             // corpse gets marked DONE -- a wasted trip.
-            if (a_peek) return best != nullptr && FitsCarryWeight(a_follower, best->GetWeight());
-            if (!best) return false;
-            if (!FitsCarryWeight(a_follower, best->GetWeight())) return false;
+            // THE SWAP-UP RULE (86e3ebfu3, logistics/SwapUp.cpp): an upgrade that
+            // does not fit is still taken when dropping SUPERSEDED gear (outside the
+            // keep set the economy sells by, unworn, unprotected) into this body
+            // frees the weight -- all or nothing, least valuable first. The peek
+            // asks the same question without moving anything, so peek and take agree.
+            // AMMO UPGRADE (same rule): with no gear upgrade here, a ranged follower
+            // takes ammo of HIS kind strictly better than the weakest tier he relies
+            // on and drops what that makes obsolete back into the body (lowest
+            // first). Lowest priority: one gear piece per call beats ammo, and
+            // StripCorpse's repeat calls reach the ammo once the gear is done.
+            const int  ammoTarget = ctx.doRanged ? AmmoKeepTarget(g_svc, ctx.wantCrossbow, /*a_usesKind*/ true) : 0;
+            auto fitsOrRoom = [&](bool a_dry) {
+                return FitsCarryWeight(a_follower, best->GetWeight()) ||
+                       (g_svc && MakeRoomForSwapUp(a_follower, a_src, *g_svc, best, a_dry));
+            };
+            if (a_peek) {
+                if (best && fitsOrRoom(true)) return true;
+                return ammoTarget > 0 &&
+                       SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ true);
+            }
+            if (best && !fitsOrRoom(false)) best = nullptr;   // does not fit, nothing superseded frees the room
+            if (!best)
+                return ammoTarget > 0 &&
+                       SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ false);
 
             // ACQUIRE + EQUIP through the shared v1.0.38 safe step: transfers from
             // a_src, captures + carries MEO gems, equips IN PLACE on the main thread

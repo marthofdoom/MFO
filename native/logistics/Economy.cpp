@@ -374,6 +374,22 @@ namespace MFO::Logistics {
                 buy.doRanged      = doRanged;
                 buy.wantCrossbow  = wantCrossbow;
                 buy.rangedBaseDmg = myRangedDmg;
+                // AMMO SWAP-UP (86e3ebfu3, logistics/SwapUp.cpp; marth: "an archer
+                // should be willing to sell iron for better arrows"): a ranged
+                // follower buys ammo of HIS kind strictly better than the weakest
+                // tier he relies on, up to what carries his whole keep target on its
+                // own (AmmoUpgradeBar). That purchase is what makes the old stacks
+                // obsolete, and the sell list offers them on the next visit.
+                if (doRanged) {
+                    const int target = AmmoKeepTarget(&a_state, wantCrossbow, /*a_usesKind*/ true);
+                    float bar = 0.0f; std::int32_t qty = 0;
+                    if (AmmoUpgradeBar(a_follower, wantCrossbow, target, bar, qty)) {
+                        buy.ammoUpgrade    = true;
+                        buy.ammoWantBolt   = wantCrossbow;
+                        buy.ammoBarDmg     = bar;
+                        buy.ammoUpgradeQty = qty;
+                    }
+                }
                 buy.buyArmor       = !useMageApparel && !dolls;   // non-caster OR caster-in-armor: rated armor
                 // A shield is in-role ONLY for a dedicated one-hand melee follower (not a
                 // ranged/caster, even one carrying a 1h backup, and not a DUAL WIELDER --
@@ -538,183 +554,17 @@ namespace MFO::Logistics {
             // gold read legitimately vary per vendor, so those alone remain in
             // the loop.
 
-            // KEEP THE LOADOUT: a follower who fights with a bow AND a melee weapon
-            // only ever has ONE worn at a time, so the sheathed other reads unworn
-            // and was SOLD (marth). Protect the best weapon of EACH weapon CLASS --
-            // 1H, 2H, bow, crossbow, staff kept SEPARATELY (Fable: merging 1H+2H or
-            // bow+crossbow by raw damage let a junk greatsword/crossbow win the keep
-            // and the real weapon get sold). Only worse in-class duplicates are junk.
-            // STYLE BY PERKS (marth 2026-09-13): the melee buckets (1H, 2H) rank
-            // by the loot judge's WeaponScore -- damage x the perk-style bias --
-            // so the greatsword the loot side just preferred over a stronger
-            // warhammer is the one KEPT, not the one sold. Ranged/staff buckets
-            // are unchanged; with no preferred kind the score IS the damage.
-            // SECOND ONE-HANDER (dual wield by perks, 2026-09-14): a dual wielder
-            // fights with the TOP-2 owned one-handers (Actuation's PickOffHandWeapon
-            // pairs from the pack, and ReleaseForcedWeapon un-wears the left at
-            // combat end, so the off-hand weapon reads UNWORN here). Bucket 1
-            // therefore keeps its runner-up too -- unless the best form is a
-            // stack of >= 2, which already covers both hands (PickOffHandWeapon
-            // takes the second copy), so the runner-up is junk and sells.
-            const WeaponRoles keepRoles = ComputeWeaponRoles(a_follower, a_state);
-            const bool keepSecond1H = keepRoles.offHand == 2 && keepRoles.melee == WepClass::OneHand;
-            std::unordered_set<RE::TESBoundObject*> keepWeapons;
-            {
-                // bucket: 1=1H 2=2H 3=bow 4=crossbow 5=staff; -1 = don't protect.
-                auto bucketOf = [](RE::WEAPON_TYPE wt) -> int {
-                    using WT = RE::WEAPON_TYPE;
-                    switch (wt) {
-                        case WT::kBow:          return 3;
-                        case WT::kCrossbow:     return 4;
-                        case WT::kStaff:        return 5;
-                        case WT::kTwoHandSword:
-                        case WT::kTwoHandAxe:   return 2;
-                        case WT::kHandToHandMelee: return -1;   // never protect fists
-                        default:                return 1;      // 1h sword/dagger/axe/mace
-                    }
-                };
-                std::unordered_map<int, std::pair<RE::TESBoundObject*, float>> best;
-                struct OneHander { RE::TESBoundObject* obj; float rank; std::int32_t count; };
-                std::vector<OneHander> oneHanders;   // bucket 1, for the dual-wield runner-up
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
-                    auto* w = obj->As<RE::TESObjectWEAP>();
-                    if (!w || IsCreatureWeapon(w)) continue;
-                    const int b = bucketOf(w->GetWeaponType());
-                    if (b < 0) continue;
-                    // Staves are ranked by their ENCHANTED WORTH (GetGoldValue), not
-                    // GetAttackDamage() -- a staff's melee swing stat is irrelevant to
-                    // its value, so ranking that bucket by damage could keep the worse
-                    // (cheaper) of 2+ unworn staves and sell the better one (SEV2 fix).
-                    // Melee buckets rank by WeaponScore (perk-style biased damage);
-                    // bow/crossbow by attack damage.
-                    const float rank = (b == 5)
-                        ? static_cast<float>(std::clamp<std::int32_t>(w->GetGoldValue(), 0, 0xFFFF))
-                        : (b == 1 || b == 2) ? WeaponScore(keepRoles, w)
-                                             : static_cast<float>(w->GetAttackDamage());
-                    auto& slot = best[b];
-                    if (!slot.first || rank >= slot.second)
-                        slot = { obj, rank };
-                    if (keepSecond1H && b == 1) oneHanders.push_back({ obj, rank, data.first });
-                }
-                for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
-                // Dual wield: keep the runner-up one-hander as well (top-2 by
-                // WeaponScore), unless the best is a stack of >= 2 of one form.
-                if (keepSecond1H && oneHanders.size() >= 2) {
-                    auto bi = best.find(1);
-                    RE::TESBoundObject* top = (bi != best.end()) ? bi->second.first : nullptr;
-                    bool topStacked = false;
-                    const OneHander* runnerUp = nullptr;
-                    for (const auto& oh : oneHanders) {
-                        if (oh.obj == top) { topStacked = oh.count >= 2; continue; }
-                        if (!runnerUp || oh.rank > runnerUp->rank) runnerUp = &oh;
-                    }
-                    if (top && !topStacked && runnerUp) keepWeapons.insert(runnerUp->obj);
-                }
-            }
-
-            // #21 KEEP-ARMOR: protect what the follower WEARS + its single best
-            // next-upgrade PER LOGICAL SLOT from being sold, so a just-BOUGHT
-            // upgrade is not re-sold as junk (keepWeapons does this for weapons) --
-            // but EVERYTHING ELSE (extra/old clothing, spare armor) stays sellable.
-            // BUG FIXED: the old version bucketed by the RAW GetSlotMask() bitmask,
-            // so two same-logical-slot robes with different modded slot-bit combos
-            // (plain robe = body; "Blue Mage Robes" = head+body) each survived as
-            // "best in its own bucket" -> a mage kept ALL his clothing and sold
-            // none. Now: bucket by LOGICAL slot (MageClothingSlot for clothing/
-            // jewelry, primary biped slot for rated armor), keep ONE best per slot,
-            // ranked to MATCH what EquipBestOwnedGear would actually wear.
-            std::unordered_set<RE::TESBoundObject*> keepArmor;
-            std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best obj (worn-inferior convergence)
-            if (Config::g_economyBuyGear.load()) {
-                using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-                const bool caster         = IsCasterFollower(a_state);
-                const bool useMageApparel = caster && Config::g_mageWearRobes.load() &&
-                                            !Config::g_dollsMode.load();
-                const std::uint8_t top2   = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
-                const bool schoolPrimary  = !MEOBridge::Available() ||
-                                            Config::g_mageApparelStrictSchool.load();
-                const bool allowVillain   = useMageApparel && IsNecromancerFollower(a_state);
-                // A shield is in-role ONLY for a dedicated one-hand MELEE follower. A
-                // ranged (bow) or caster follower never equips one, so it must NOT be
-                // kept -- it is dead weight that should sell. (The off-role WEAPON shed
-                // drops wrong-role weapons; a shield is armor and slipped past it.)
-                const WeaponRoles& roles = keepRoles;   // computed once above (keepWeapons)
-                // ... and not for a DUAL WIELDER (roles.offHand == 2): his left hand
-                // holds a weapon, so a shield is dead weight for him too.
-                const bool usesShield   = (roles.melee == WepClass::OneHand) &&
-                                          !roles.doRanged && !caster && roles.offHand != 2;
-                // ARMOR CLASS (2026-09-14): the rated buckets rank by ArmorScore --
-                // the SAME judge EquipBestOwnedGear wears by -- so the piece kept
-                // per slot is the one the follower will actually wear, and the
-                // off-class piece he is still wearing becomes the redundant
-                // inferior the force-sell below removes (the trade's RemoveItem is
-                // the un-wear). Computed once per scan.
-                const ArmorPref keepPref = ArmorPrefFor(a_follower);
-
-                // (a) Always keep what is WORN, regardless of the bucket math (the
-                //     sell loop's IsWorn gate already bars worn gear; this is belt-
-                //     and-suspenders and also pins the jewelry logical slots).
-                //     YIELDS to the redundant-inferior force-sell below: a worn
-                //     piece that is not its slot's best BY SCORE bypasses this set
-                //     (forceSell) -- that is how a worn off-class cuirass leaves.
-                for (int ls = 0; ls < 6; ++ls)
-                    if (auto* w = WornInLogicalSlot(a_follower, ls)) keepArmor.insert(w);
-                for (auto sl : { Slot::kForearms, Slot::kCalves })
-                    if (auto* w = a_follower->GetWornArmor(sl)) keepArmor.insert(w);
-                if (usesShield)
-                    if (auto* w = a_follower->GetWornArmor(Slot::kShield)) keepArmor.insert(w);
-
-                // (b) The single best NEXT-UPGRADE per LOGICAL slot.
-                auto armorLogicalSlot = [](std::uint32_t mask) -> int {
-                    if (mask & static_cast<std::uint32_t>(Slot::kBody))   return 1;
-                    if (IsHeadSlotMask(mask))                             return 0;   // Head|Hair|Circlet (vanilla helmets have no bit 30)
-                    if (mask & static_cast<std::uint32_t>(Slot::kHands))  return 2;
-                    if (mask & static_cast<std::uint32_t>(Slot::kFeet))   return 3;
-                    if (mask & static_cast<std::uint32_t>(Slot::kShield)) return 4;
-                    return -1;
-                };
-                struct Best { RE::TESBoundObject* obj = nullptr; float primary = -1e9f; float secondary = -1e9f; };
-                std::unordered_map<int, Best> best;   // key: clothing 0..5, rated armor 10..14
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
-                    auto* ar = obj->As<RE::TESObjectARMO>();
-                    if (!ar) continue;
-                    int key = -1; float primary = 0.0f, secondary = 0.0f;
-                    if (useMageApparel) {
-                        // A mage's body/clothing slot holds ONE item -- a robe (rating 0)
-                        // OR a rated-armor outfit both compete for the SAME biped slot, so
-                        // bucket BOTH by MageClothingSlot (one bucket per slot) instead of
-                        // splitting rated-vs-clothing (which let two body pieces both survive).
-                        // Rated armor competes at plain tier by BASE value (no gem), so a
-                        // pricier outfit beats a cheaper robe and only one survives
-                        // (marth: Khajiit ~800 must beat Nord ~100, not bucket apart).
-                        const int cs = MageClothingSlot(ar);
-                        if (cs < 0) continue;   // shields/other -> a mage doesn't wear them, sells
-                        int t = 0; std::int32_t m = 0;
-                        if (ar->GetArmorRating() > 0.0f) {
-                            t = 0; m = std::max<std::int32_t>(ar->GetGoldValue(), 0);
-                        } else if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain, t, m)) {
-                            continue;
-                        }
-                        key = cs; primary = static_cast<float>(t); secondary = static_cast<float>(m);
-                    } else if (ar->GetArmorRating() > 0.0f) {                // non-mage: rated armor by biped slot
-                        const int ls = armorLogicalSlot(static_cast<std::uint32_t>(ar->GetSlotMask()));
-                        if (ls < 0) continue;
-                        if (ls == 4 && !usesShield) continue;   // don't keep a shield for a non-shield-user -> it sells
-                        key = 10 + ls;
-                        primary   = ArmorScore(keepPref, ar);   // class x perk biased rating, never the raw rating
-                        secondary = static_cast<float>(std::max<std::int32_t>(ar->GetGoldValue(), 0));
-                    } else {
-                        continue;   // a non-mage's clothing/jewelry is sellable junk (nothing wears it)
-                    }
-                    auto& b = best[key];
-                    if (!b.obj || primary > b.primary ||
-                        (primary == b.primary && secondary > b.secondary))
-                        b = { obj, primary, secondary };
-                }
-                for (auto& [k, b] : best) if (b.obj) { keepArmor.insert(b.obj); bestBySlot[k] = b.obj; }
-            }
+            // KEEP THE LOADOUT -- THE SWAP-UP RULE's keep half (86e3ebfu3). The
+            // keep set (best weapon per class bucket, worn + best-scored armor per
+            // logical slot) moved VERBATIM to logistics/SwapUp.cpp ComputeKeepSet so
+            // the loot side's superseded-gear drop (MakeRoomForSwapUp) reads the
+            // SAME set this sell list does. Everything outside it is superseded and
+            // sells below; the full rationale is there.
+            const KeepSet keep = ComputeKeepSet(a_follower, a_state);
+            const WeaponRoles& keepRoles   = keep.roles;
+            const auto&        keepWeapons = keep.weapons;
+            const auto&        keepArmor   = keep.armor;
+            const auto&        bestBySlot  = keep.bestBySlot;
 
             int purse = 0;
             // GEM HANDLING (marth: NEVER HOARD -- ungem-then-sell where possible,
@@ -930,6 +780,30 @@ namespace MFO::Logistics {
                     obj, static_cast<std::int32_t>(data.first),
                     static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
                     armo && IsJewelryPiece(armo), kwf, "SELL" });
+            }
+            // OBSOLETE AMMO -- THE SWAP-UP RULE (86e3ebfu3, logistics/SwapUp.cpp;
+            // marth: "lower arrows are worthless when better ones are available ...
+            // slated for sale when obsolete"). Per kind the follower is judged on
+            // (AmmoKeepTarget: his ranged kind, or a gambit for that kind), every
+            // stack STRICTLY below his cutoff tier is offered; a higher stack is
+            // never obsolete while a lower one is kept. Worn / signature / quest /
+            // excluded / bound ammo is pinned by HeldAmmo and never offered.
+            // PRICE FLOOR 1: Papyrus pays a whole-gold UNIT price and skips a row
+            // whose unit is 0, and an Iron Arrow (value 1) at the speech-0 fraction
+            // (0.30) rounds to 0 -- the very stack marth named would never sell.
+            // So an obsolete ammo row sells for at least 1g a unit (at most <1g per
+            // arrow above the speech-scaled price).
+            for (const bool bolt : { false, true }) {
+                const int target = AmmoKeepTarget(&a_state, bolt,
+                                                  keepRoles.doRanged && keepRoles.wantCrossbow == bolt);
+                if (target <= 0) continue;
+                for (const auto& s : ObsoleteHeldAmmo(a_follower, bolt, target)) {
+                    const auto unit = std::max<std::int32_t>(
+                        1, static_cast<std::int32_t>(std::lround(s.value * sellFraction)));
+                    sellCandidates.push_back(SellCandidate{
+                        s.obj, s.count, unit, false, s.obj->As<RE::BGSKeywordForm>(),
+                        "SELL (obsolete ammo)" });
+                }
             }
             // Highest-value first: the vendor's barter gold is limited (field log:
             // sale total often > vendor gold), so sell the most valuable junk first
