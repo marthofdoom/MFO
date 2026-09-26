@@ -521,6 +521,7 @@ namespace MFO::Scheduler {
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
         g_nextSense.clear();          // #11: was a Tick-local static that leaked
+        Confidence::ClearTrend();     // Confidence v2: the per-follower HP ring is session state
         g_lastServiced = 0;
         g_lastTick = {};
         g_lastTickMs = 0.0;
@@ -689,6 +690,12 @@ namespace MFO::Scheduler {
 
         const auto it = g_followers.find(id);
         if (it == g_followers.end()) return;          // no record -> nothing to run
+
+        // CONFIDENCE v2 HP TREND: one health sample per own unpaused service (both
+        // tables), on the service clock, so every Of() read later in this service
+        // (loot leash, chase cap, retreat gate, ch.23 leash, engage-on-sight) sees a
+        // trend that includes this lap. Cadence = his service period (Confidence.h).
+        Confidence::NoteHealth(id, Vocab::HealthPct(f), g_serviceClock);
 
         // T#78: THE PER-FOLLOWER MFO MASTER SWITCH. When OFF, MFO leaves this
         // follower completely untouched -- no combat gambits, no logistics /
@@ -960,16 +967,25 @@ namespace MFO::Scheduler {
             CasterConsent::NoteGambits(id, std::move(gambits));
         }
 
-        // COMBAT SENSE sample (#23): confidence now folds foe count in, so a
-        // field test can watch a growing pack tighten the leash and, past a few
-        // foes, arm auto-retreat. Purely observational; throttled ~3 s / follower.
+        // COMBAT SENSE sample (#23, Confidence v2): the inputs Of() folds in, for
+        // tuning. own = his OWN combat flag -- on the combat table it can read 0
+        // while the PARTY fights (he has no combat group yet, so foes=0 and Of() is
+        // his out-of-combat read, vitality x trend: not a stale tally). load = the
+        // weighted foe load (CombatSense::FoeLoad; 1.0 = one even foe), hpLoss =
+        // the HP-trend loss rate in %/s, trend = its factor. Purely observational;
+        // throttled ~3 s / follower.
         {
             auto& nxt = g_nextSense[id];
             if (nxt.time_since_epoch().count() == 0 || now >= nxt) {
                 nxt = now + std::chrono::seconds(3);
                 auto* spc = RE::PlayerCharacter::GetSingleton();
-                spdlog::info("[sense] {:08X}: foes={} confidence={:.2f} leash={:.0f} chase={:.0f} dPlayer={:.0f}",
-                             id, CombatSense::FoeCount(f), Confidence::Of(f),
+                int         foes = 0;
+                const float load = CombatSense::FoeLoad(f, &foes);
+                const float loss = Confidence::HpLossRate(id);
+                spdlog::info("[sense] {:08X}: own={} foes={} load={:.2f} hpLoss={:.1f}%/s trend={:.2f} "
+                             "confidence={:.2f} leash={:.0f} chase={:.0f} dPlayer={:.0f}",
+                             id, f->IsInCombat() ? 1 : 0, foes, load, loss * 100.0f,
+                             Confidence::TrendFactor(Vocab::HealthPct(f), loss), Confidence::Of(f),
                              Confidence::LeashRadius(f), Confidence::ChaseRadius(f),
                              spc ? f->GetPosition().GetDistance(spc->GetPosition()) : -1.0f);
             }
