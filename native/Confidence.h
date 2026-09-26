@@ -22,6 +22,20 @@
 // follower"; both read Of()/LeashRadius().
 namespace MFO::Confidence {
 
+    // The vitality term of Of() (no fight multiplier), unclamped.
+    inline float Vitality(RE::Actor* a_follower) {
+        const float hp = Vocab::HealthPct(a_follower);
+        const float st = Vocab::StaminaPct(a_follower);
+        const float mg = Vocab::MagickaPct(a_follower);
+        return 0.6f * hp + 0.2f * st + 0.2f * mg;
+    }
+
+    // The fight multiplier Of() applies for a_foes foes (a_foes >= 1). ONE definition,
+    // shared by Of() and OfFacing() so the estimate cannot drift from the real read.
+    inline float FoeMultiplier(int a_foes) {
+        return std::clamp(0.90f - 0.135f * static_cast<float>(a_foes), 0.15f, 0.90f);
+    }
+
     // [0,1]: how safe a_follower feels operating alone. v1 is VITALITY-driven
     // (mostly health, plus the resources they would actually fight with),
     // knocked down while in a live fight. The area-difficulty / foe-strength
@@ -31,10 +45,7 @@ namespace MFO::Confidence {
     // strolling an easy zone reads healthy -> high -> ranges out.
     inline float Of(RE::Actor* a_follower) {
         if (!a_follower) return 0.0f;
-        const float hp = Vocab::HealthPct(a_follower);
-        const float st = Vocab::StaminaPct(a_follower);
-        const float mg = Vocab::MagickaPct(a_follower);
-        float c = 0.6f * hp + 0.2f * st + 0.2f * mg;
+        float c = Vitality(a_follower);
         // A live fight is less safe to wander off in than a lull -- and being
         // MOBBED is worse than a duel (#23). Each foe past the first tightens
         // the multiplier; the curve is pinned so a TWO-foe fight lands ~0.63
@@ -46,11 +57,18 @@ namespace MFO::Confidence {
         // < gate). Clamped so a mob can't zero it out.
         if (a_follower->IsInCombat()) {
             const int   foes = std::max(1, CombatSense::FoeCount(a_follower));
-            const float mult = std::clamp(0.90f - 0.135f * static_cast<float>(foes),
-                                          0.15f, 0.90f);
-            c *= mult;
+            c *= FoeMultiplier(foes);
         }
         return std::clamp(c, 0.0f, 1.0f);
+    }
+
+    // ESTIMATE, out of combat: the Of() a_follower would read once fighting a_foes foes
+    // (at least one) -- his vitality times the same fight multiplier. Makes no engine
+    // combat read. The engage-on-sight gate (EngageOnSight.cpp) compares it with the
+    // retreat floor, so a follower never starts a fight he would at once retreat from.
+    inline float OfFacing(RE::Actor* a_follower, int a_foes) {
+        if (!a_follower) return 0.0f;
+        return std::clamp(Vitality(a_follower) * FoeMultiplier(std::max(1, a_foes)), 0.0f, 1.0f);
     }
 
     // The confidence-scaled leash from the player, in game units: lerp between

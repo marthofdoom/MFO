@@ -33,6 +33,32 @@ Read it as history and this block as current.
   (`RETARGET ... same ref, its last leg had ended` when it is the same ref). A `Movement Blocked held ... Harbinger still
   reads leg state` warn is a Harbinger-side miss: report it.
 
+- **2026-09-25 branch `feat/mfo-ooc-engage` (off `main` `94ce807`; NOT merged, NOT deployed; tier A, awaiting its
+  Opus 5.5 review). ClickUp 86e3errnu, batch L.** The hidden out-of-combat gambit "nearest visible enemy", MFO's
+  adoption of Harbinger ch.21 `kIntent_CombatEntry` (ABI v14, Harbinger 0.9.9). MCM `bEngageOnSight` (default OFF)
+  and `bEngageOnSightSneaking` (default OFF). While the party is out of combat (logistics included) a follower who
+  SEES an enemy (Sightline VISIBLE, measured on the main thread) inside the leash from the player enters combat
+  against the nearest one through ch.21 and pins the same target (ch.20, via Targeting). No MFO direct road:
+  Harbinger absent / < v14 / seat refused = inert. Stands down while bAutoRetreat is OFF, the player sneaks (unless
+  the second toggle), the follower's retreat cooldown runs, or his confidence is under the retreat floor. An entry
+  Harbinger ends gives its target up until a later probe no longer lists it (no re-request loop). The engage ends
+  his loot trip. New files `native/EngageOnSight.{h,cpp}`, `native/apmf/CombatEntry.cpp`. **Open question for
+  marth: engage while the player sneaks?** (default no; its own toggle). The MCM cannot grey the toggle out at
+  runtime without a Papyrus property, so "unavailable" is the help text plus the `[engage-on-sight] ... inert` log.
+  REVIEW ROUND 1 (on 1c50696): enemy test filters crime-faction actors not already fighting the party, player/teammate-
+  commanded actors, restrained / bleeding-out / IgnoreCombat actors (ghost check backlogged MFO-B111); given-up targets
+  are released only when GONE (dead / unloaded / not hostile / past fLeashMax); one global probe sequence (no stale
+  engage after re-hire); gate on the in-combat confidence estimate; the kill switch releases its pin; `[los]` from the
+  probe logs on change only. DESIGN DEFAULTS pending marth: (i) a follower told to wait (WaitingForPlayer or a sandbox
+  package) does not engage; (ii) an actor hostile only to the follower still counts. ADDED (marth): no engage in towns /
+  inns (player's location or the enemy's, 20 Skyrim.esm LocType keywords, a Clearable/Dungeon tag nearer in wins) unless the
+  player is fighting. ROUND 2 (marth rulings + re-review of 72a7964): a Wait rule that holds in his out-of-combat gambit
+  list stops engage-on-sight (the table's own result, recorded in logistics/Service.cpp); told-to-wait = WaitingForPlayer
+  only; hostile-to-follower-only CONFIRMED; the confidence gate counts only enemies within 1500u of the chosen target and
+  in sight of him or it; a crime-faction commander's summon/thrall is filtered. Backlog MFO-B112/B113.
+  FIELD CHECKS: `[engage-on-sight] <name> (<id>) ENGAGE ...` once per engage; APMF `[ch.21] ... ENTERED` with
+  `Target is a combat-group target: yes`, then `[ch.20] ... FIRST SOURCE DENY`; after a fight `entry on ... is over
+  -- target given up`, and no second ENGAGE on that target while it stays in view.
 - **2026-09-25 branch `fix/mfo-retreat` (off `main` `97ac782`; NOT merged, NOT deployed). ClickUp 86e3erv94 (batch L), tier A.**
   Auto-retreat fixes (assessment: scratchpad `agentlogs/assess-confidence-leash.md`): (1) every retreat StopCombat is now
   POSTED to the main thread (Rapport::QuashAllyPair road), once at engage and again only on a re-entry into combat, with a

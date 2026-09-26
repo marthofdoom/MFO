@@ -13,6 +13,14 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **The loot log says why each Harbinger trip leg ended, once per leg.**
 - **Loot trips respect Automatic Follower Teleporter.** When that mod is installed, MFO reads its distances and logs them. While your weapon is drawn, MFO never plans a loot trip past its teleport distance, and it ends a trip that drifts toward it. A trip that crosses it anyway can still be teleported. Sheathed, the normal leash returns.
 - **A follower moved mid-trip carries on cleanly, with or without a teleport mod.** Fast travel, a door, a mod's teleport or any other sudden jump to your side ends the trip leg, and he picks the next item near him. The item is not marked as failed. Nothing changes unless he really jumps.
+- **New option: followers engage enemies on sight.** Off by default. Turn it on and a follower who can see an enemy near you starts the fight with the nearest one, even in the middle of a loot run. His own gambits take over from there.
+- **It needs Harbinger 0.9.9 or newer.** Without it the option does nothing.
+- **It only works while Auto-retreat is on.** A follower who starts a fight can still fall back. He also holds off while his last retreat is cooling down or while he is too hurt for the enemies that would join the fight.
+- **He does not start fights while you sneak.** A second option lets him.
+- **He never starts a fight with guards or townsfolk.** Anyone whose attack would be a crime is left alone unless they are already fighting you or a follower. Your summons and thralls, and enemies who are tied up, bleeding out or scripted to ignore fights are left alone too.
+- **A follower you told to wait stays put.** So does one whose gambit list has a Wait rule that is winning.
+- **No fights started in towns, inns, houses or other lived-in places.** Unless you are already fighting, followers do not start a fight while you are in one, or with an enemy standing in one. A dungeon under a town still counts as a dungeon.
+- **No endless re-tries.** If the game refuses the fight, or the fight ends with the enemy still around, he leaves that enemy alone until it dies, leaves, stops being hostile or is far from you.
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 

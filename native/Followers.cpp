@@ -2,6 +2,7 @@
 #include "Followers.h"
 #include "Loadout.h"
 #include "Targeting.h"
+#include "EngageOnSight.h"   // ReleaseHeldState: forget the engage-on-sight entry
 #include "CasterConsent.h"   // v1.0.30: dismissal releases the cast latch too
 #include "CombatStyle.h"     // v1.0.33: dismissal drops weapon-stance ownership
 #include "cast/Actuation.h"       // T#76: dismissal releases the equip force-hold too
@@ -369,6 +370,9 @@ namespace MFO::Followers {
         // latch left behind keeps redirecting the follower AND keeps every
         // Character in combat worldwide off the fast path.
         Targeting::Clear(id);
+        // The engage-on-sight gambit's ch.21 entry claim + its per-follower notes
+        // (Release stops no fight: Harbinger's contract). Worker, like every call here.
+        EngageOnSight::Forget(id);
         // The weapon-stance ownership -- an entry left behind keeps every
         // combatant paying the ApplyTick lookup and could re-swap a style we no
         // longer own. Idempotent erase-miss when unowned.

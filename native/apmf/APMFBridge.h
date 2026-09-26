@@ -416,6 +416,41 @@ namespace MFO::APMFBridge {
     // Pins currently standing (not ended) -- the Diagnostics targeting line.
     std::size_t TargetPinCount();
 
+    // ── ch.21 COMBAT ENTRY (ABI v14, kIntent_CombatEntry): the engage-on-sight gambit ──
+    // Harbinger calls the engine's own Actor::StartCombat(target) ONCE, on the game thread,
+    // one frame after the claim is applied (Harbinger INTEGRATION.md "Starting a fight").
+    // MFO's only client is the hidden "nearest visible enemy" out-of-combat gambit
+    // (EngageOnSight.cpp, called from the Scheduler's party-OOC branch; ClickUp 86e3errnu); there is NO MFO direct road:
+    // Harbinger absent or older than v14 = the gambit is inert.
+    // THE CLAIM ENDS ON HARBINGER'S SIDE: engine refused / entry not attempted / combat
+    // ended / owner or target dead, disabled, unloaded, unresolvable. IsClaimLive turns
+    // false; Tick()'s sweep marks the entry ENDED and Releases the handle (a no-op on a dead
+    // claim; FIFO-cancels a still-pending one). MFO never Repoints it: a new target is a
+    // NEW request, and an ended entry is only ever forgotten, never re-filed by this table
+    // (EngageOnSight's per-follower given-up set is the no-loop rule).
+    // Worker-safe (the tick's AddTask worker); takes g_mx.
+    enum class EntryResult {
+        Filed,        // a NEW entry claim was filed; *a_outHandle carries it
+        Standing,     // this follower already holds an entry (live, pending or ended-unconsumed)
+        Invalid,      // no follower / no target / self / the player: nothing filed
+        SeatAbsent,   // APMF absent, ABI < 14, or a synchronous refusal (VR, runtime,
+                      // [CombatEntry] bCombatEntry=0, self-check) -- session-stable
+    };
+    enum class EntryState {
+        None,         // no entry held for this follower
+        Standing,     // filed and not ended (live, or not yet drained by Harbinger)
+        Ended,        // Harbinger ended it (the sweep saw IsClaimLive false); not yet forgotten
+    };
+    // True when APMF is present at ABI >= 14 AND no synchronous refusal has been seen this
+    // session (the ch.21 seat is installed as far as MFO can tell).
+    bool CombatEntryOffered();
+    EntryResult RequestCombatEntry(RE::FormID a_follower, RE::FormID a_target, std::uint32_t* a_outHandle);
+    // The follower's entry state; *a_outTarget (may be null) = the entry's target.
+    EntryState CombatEntryStateOf(RE::FormID a_follower, RE::FormID* a_outTarget);
+    // Release (if still standing) and forget this follower's entry. No-op when none.
+    // Release STOPS NOTHING (Harbinger's contract): the fight is the engine's.
+    void ForgetCombatEntry(RE::FormID a_follower);
+
     // Worker-safe. Once-per-pump sweep: release each claim not refreshed within its
     // expiry window (offense-cast backstop; combat-target = combat-end detector).
     // offense-cast/combat-target/weapon-order-equipment/heal-cast all use the
