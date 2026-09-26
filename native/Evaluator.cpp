@@ -220,7 +220,7 @@ namespace MFO::Eval {
             RE::FormID  lastNH     = 0;
 
             // Compute the chase cap ONCE, and BEFORE taking the combat-group lock.
-            // ChaseRadius -> Confidence::Of -> CombatSense::FoeCount ALSO reads
+            // ChaseRadius -> Confidence::Of -> CombatSense::FoeLoad ALSO reads
             // cc->combatGroup under that same lock (#23). Calling it inside the
             // loop below (as this used to) would nest a read-lock inside the read
             // lock we hold here -- benign only until the main thread's combat AI

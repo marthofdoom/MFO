@@ -6,13 +6,31 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-25 UTC (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-09-26 UTC (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-26 branch `feat/mfo-confidence-v2` (off `main` `92e8932`; NOT merged, NOT deployed; tier B+, a shared
+  primitive). Batch L, ClickUp 86e3erv94 (the Confidence half of the assessment's "STILL OPEN").** `Confidence::Of` v2 =
+  vitality x HP-loss TREND x, in combat, a fight multiplier on the WEIGHTED foe load (`CombatSense::FoeLoad`: each foe
+  weighted 0.5..2.0 by level and health against the follower). Count alone no longer retreats a full-health follower
+  (5 mudcrabs 0.22 -> 0.55, 5 even foes 0.22 -> 0.40); a losing duel retreats before his HP collapses (dragon lost at
+  4%/s at ~59% HP, 2%/s at ~38%; v1 ~21% always). Full before/after table: MAP.md section 3 (CombatSense.h /
+  Confidence.h). No co-save, no ABI, no new files. `Scheduler.cpp` samples health once per own service; the ring
+  clears on revert. The foes=0 [sense] samples (~275 of ~300 read confidence=1.00) were followers with NO combat group
+  of their own while the PARTY fought (first lap after party combat ON, or a follower who never engaged): a true zero,
+  not a Confidence input bug; the [sense] line now prints `own=` so they read as such.
+  FIELD CHECKS: `[sense] ... own=1 foes=N load=L hpLoss=X%/s trend=T confidence=C`; a mudcrab/skeever pack reads
+  load ~0.5 per foe and no `[retreat] ... falling back` at full health; a hard duel shows hpLoss rising and trend
+  falling BEFORE HP is low, then `falling back -- confidence<0.25`; a follower holding his own reads trend=1.00.
+  Engage-on-sight has its OWN bar since the review round: `kEngageConfidence` = retreat floor + 0.15 = 0.40, so at full
+  health it starts fights against at most ~5 even joiners (v1: 4; v2 at the bare floor would have been ~10). Review round
+  (tier B, SEV-4): the trend rate divides by max(span, 5 s), so a lone burst or a fresh ring reads as spread over 5 s.
+  Backlog MFO-B117 (ring not erased on dismissal), MFO-B118 (`OfFacing` ignores foe weight). Field check: engage-on-sight's
+  stand-down line now reads "under the engage bar ... bar 0.40".
 - **2026-09-25 branch `feat/mfo-reentry-leash` (off `main` `53d61c0`; NOT merged, NOT deployed; tier A, awaiting its
   Opus 5.5 review). Batch L, ClickUp 86e3ex5v9 / 86e3ex5ve (the MFO halves) + 86e3erv94.** MFO adopts Harbinger ch.22
   `kIntent_CombatReentryDeny` in the retreat and ch.23 `kIntent_PursuitLeash` as the in-combat leash. `native/APMF_API.h`

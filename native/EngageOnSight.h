@@ -36,7 +36,7 @@
 // must be able to break it off), the player sneaks (unless
 // bEngageOnSightSneaking), he is told to wait (WaitingForPlayer), a Wait rule in his
 // out-of-combat gambit list holds (it outranks this gambit), his auto-retreat cooldown runs, or his in-combat confidence estimate
-// (Confidence::OfFacing against the candidate count) is under the retreat floor.
+// (Confidence::OfFacing against the candidate count) is under the engage bar (the retreat floor + 0.15).
 //
 // NO LOOP. When Harbinger ends an entry (engine refused, combat ended, target
 // gone), that target is GIVEN UP for this follower until a probe posted after
@@ -54,8 +54,8 @@ namespace MFO::EngageOnSight {
 
     // Worker. Called from the Scheduler's party-OOC branch AFTER ServiceRetreat
     // returned false and BEFORE Logistics::ServiceFollower. a_retreatCooling =
-    // his auto-retreat cooldown is still running; a_minConfidence = the retreat
-    // floor (Scheduler's kRetreatConfidence). Returns true when this lap is the
+    // his auto-retreat cooldown is still running; a_minConfidence = the engage
+    // bar (Scheduler's kEngageConfidence = kRetreatConfidence + 0.15). Returns true when this lap is the
     // gambit's (an entry was filed now, or one is standing and he is not yet
     // fighting): the caller then skips logistics this lap.
     bool Service(RE::Actor* a_follower, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence);
