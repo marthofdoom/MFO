@@ -1508,7 +1508,9 @@ rule in the header. Called only from the Scheduler hook above.
   the worker; the "gone" radius = the FIXED `g_leashMax`.
 - `RunProbe` (`:288`, MAIN THREAD via `MainThread::Post`; VR: Post is a no-op, never lands):
   walks `highActorHandles` (NiPointer held) for candidates = not him / the player / a teammate,
-  alive, enabled, 3D-loaded, within the leash OF THE PLAYER, and `IsEnemy` (`:206`): not commanded
+  alive, enabled, 3D-loaded, within the leash OF THE PLAYER, within the REACTION distance OF HIM
+  (`min(leash, fEngageOnSightRange)`, `ProbeResult::range`, default 2000u, MCM 500-4000; feat/mfo-engage-range
+  2026-09-26; logged in the ENGAGE line), and `IsEnemy` (`:206`): not commanded
   by the player or a teammate, nor by a crime-faction commander unless it or the commander is
   fighting the party (`FightingParty` `:180`); not restrained / bleeding out / on an IgnoreCombat package;
   `IsHostileToActor(player) || IsHostileToActor(him)` (hostile to him alone counts: CONFIRMED by
