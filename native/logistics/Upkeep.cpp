@@ -14,6 +14,7 @@
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
 #include "apmf/APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
 #include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
+#include "Lotd.h"          // LOTD awareness: the deposit trip's lifecycle edges (feat/mfo-lotd)
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -595,10 +596,12 @@ namespace MFO::Logistics {
         g_actorDefer.clear(); // loot M1: actor-block reorder records
         g_idleCycles.clear();
         g_lastBlocklistReassess = {};
+        Lotd::ClearTransientState();   // LOTD: the deposit trip + its claims, the needs cache, the ledger
     }
 
     void ReleaseTravelOnCombat(RE::Actor* a_follower) {
         if (!a_follower) return;
+        Lotd::EndDeposit(a_follower->GetFormID(), "combat");   // LOTD: a deposit trip yields to combat too
         const int slot = SlotIndexOf(a_follower->GetFormID());
         if (slot >= 0) {
             // EVICT him from the loot alias and re-evaluate NOW so the combat
@@ -627,6 +630,7 @@ namespace MFO::Logistics {
         // Forget the live intent too, if he was the active traveller (his slot).
         if (const int slot = SlotIndexOf(a_id); slot >= 0)
             g_travelSlots[slot] = TravelIntent{};
+        Lotd::EndDeposit(a_id, "dismissed");   // LOTD: his deposit trip (if any) and its claims
     }
 
     // ── #69: co-save companions for g_stockGear ─────────────────────────────

@@ -171,6 +171,7 @@ namespace MFO::Config {
             else if (a_key == "bLootTravel")        setB(g_lootTravel);
             else if (a_key == "bLootInPlayerHomes") setB(g_lootInPlayerHomes);
             else if (a_key == "bLootSpecialItems")  setB(g_lootSpecialItems);  // default ON: loot artifacts + sell socketed gear
+            else if (a_key == "bLootLOTD")          setB(g_lootLOTD);          // default OFF: LOTD awareness (inert without LOTD)
             else if (a_key == "bEconomy")           setB(g_economy);
             else if (a_key == "bEconomyBuyGear")    setB(g_economyBuyGear);
             else if (a_key == "bEconomyBuyTomes")   setB(g_economyBuyTomes);
@@ -329,6 +330,7 @@ namespace MFO::Config {
             g_lootTravel         = true;
             g_lootInPlayerHomes  = false;
             g_lootSpecialItems   = true;    // default ON -- loot artifacts + sell socketed gear
+            g_lootLOTD           = false;   // default OFF -- LOTD awareness
             g_economy            = true;
             g_economyBuyGear     = true;    // #21 gear-buy sub-toggle -- ON, gated under bEconomy
             g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
@@ -400,7 +402,7 @@ namespace MFO::Config {
             { "fPlayerBubble", "150.000000" }, { "fValuablesRatio", "20.000000" },
             { "fLootRadius", "3000.000000" },
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
-            { "bLootSpecialItems", "1" },
+            { "bLootSpecialItems", "1" },      { "bLootLOTD", "0" },
             { "bEconomy", "1" },               { "bAutoRetreat", "1" },
             { "bEngageOnSight", "0" },         { "bEngageOnSightSneaking", "0" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },

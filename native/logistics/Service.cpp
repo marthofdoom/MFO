@@ -15,6 +15,7 @@
 #include "apmf/APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
 #include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
 #include "TeleportCompat.h" // follower-teleport mod leash clamp + teleport recognition (86e3ec824)
+#include "Lotd.h"          // LOTD awareness: the museum gambit + deposit trip (feat/mfo-lotd)
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -305,6 +306,10 @@ namespace MFO::Logistics {
         // Hand back one off-role weapon per idle tick (AI-usable wrong-role gear /
         // pre-1.0.12 leftovers). Cheap when the pack is clean; stops on its own.
         ShedOffRoleWeapon(a_follower, a_state);
+
+        // LOTD MUSEUM DEPOSIT (logistics/Lotd.cpp): while THIS follower is on a deposit
+        // trip it owns his logistics tick, exactly as a loot excursion does below.
+        if (Lotd::DepositTick(a_follower, now)) return;
 
         // ── BATCH EXCURSION driver. While THIS follower is on a loot excursion
         // (claimed at priority 60), drive it: walk to the current target, grab it
@@ -1220,6 +1225,7 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, now);
             else if (op == Vocab::kActLootIngredients)    acted = LootNearby(a_follower, Category::Ingredients, now);
             else if (op == Vocab::kActLootValuables)      acted = LootNearby(a_follower, Category::Valuables, now);
+            else if (op == Vocab::kActLootMuseum)         acted = Lotd::RunGambit(a_follower, now);   // LOTD: deposit, else loot
             else if (op == Vocab::kActEquipTorch)         acted = EquipTorch(a_follower);   // #35: torch is upkeep
             else if (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
                      op == Vocab::kActCastPlayer) {

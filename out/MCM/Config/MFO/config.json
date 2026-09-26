@@ -326,6 +326,26 @@
           }
         },
         {
+          "type": "hiddenToggle",
+          "groupControl": 1,
+          "valueOptions": {
+            "sourceType": "GlobalValue",
+            "sourceForm": "MFO.esp|903"
+          }
+        },
+        {
+          "id": "bLootLOTD:General",
+          "text": "Legacy of the Dragonborn awareness",
+          "type": "toggle",
+          "groupCondition": 1,
+          "groupBehavior": "hide",
+          "help": "OFF (default). ON: followers know what your museum still needs. The Loot museum items gambit appears on the board, a follower never sells a relic the museum needs, and a follower with that gambit carries what he finds to a nearby Museum Shipments crate. Turning it on shows LOTD's own shipping intro once. Only shown when Legacy of the Dragonborn is installed.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
+        },
+        {
           "id": "iMinPotionMag:General",
           "text": "Ignore weak potions (min power)",
           "type": "slider",

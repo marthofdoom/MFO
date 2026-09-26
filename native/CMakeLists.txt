@@ -69,6 +69,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/LootScan.cpp
     logistics/LootEquipment.cpp
     logistics/TeleportCompat.cpp
+    logistics/Lotd.cpp
     Loadout.cpp
     Papyrus.cpp
     TradeBridge.cpp
@@ -89,6 +90,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/Excursion.cpp
     apmf/CombatEntry.cpp
     apmf/SpellAllowList.cpp
+    apmf/Deposit.cpp
     imgui_impl_win32.cpp
 )
 

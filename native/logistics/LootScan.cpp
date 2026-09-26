@@ -337,7 +337,10 @@ namespace MFO::Logistics {
                     // below never fires on these (ref-unowned). This half IS gated
                     // by bLootInPlayerHomes, so a player who wants followers tidying
                     // their own chests still can (the town/inn boxes above are not).
-                    if (!loose && !Config::g_lootInPlayerHomes.load()) {
+                    // LOTD (Category::Museum): the museum's own halls and every player
+                    // storage are off limits UNCONDITIONALLY -- a relic hunt never takes
+                    // from the player's own chests, whatever bLootInPlayerHomes says.
+                    if (!loose && (a_cat == Category::Museum || !Config::g_lootInPlayerHomes.load())) {
                         auto* cbase = ref->GetBaseObject();
                         if (cbase && cbase->Is(RE::FormType::Container) && RefInPlayerStorage(ref)) {
                             ++dOffLimits;
@@ -854,6 +857,7 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootLockpicks)      cat = Category::Lockpicks;
                 else if (op == Vocab::kActLootIngredients)    cat = Category::Ingredients;
                 else if (op == Vocab::kActLootValuables)      cat = Category::Valuables;
+                else if (op == Vocab::kActLootMuseum)         cat = Category::Museum;   // LOTD (inert unless active)
                 else if (op == Vocab::kActWait) break;   // user's STOP gambit ends the sweep
                 else isLoot = false;
                 if (isLoot) {
@@ -925,6 +929,7 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, a_now, RE::ActorValue::kNone,  LootMode::kExcursion);
                 else if (op == Vocab::kActLootIngredients)    acted = LootNearby(a_follower, Category::Ingredients, a_now, RE::ActorValue::kNone, LootMode::kExcursion);
                 else if (op == Vocab::kActLootValuables)      acted = LootNearby(a_follower, Category::Valuables, a_now, RE::ActorValue::kNone,   LootMode::kExcursion);
+                else if (op == Vocab::kActLootMuseum)         acted = LootNearby(a_follower, Category::Museum,  a_now, RE::ActorValue::kNone,    LootMode::kExcursion);
                 else if (op == Vocab::kActWait) return false;   // Wait is the user's deliberate STOP
                                                          // gambit (#3.3): end the batch -- returning
                                                          // false with nothing "waiting" makes Holding

@@ -733,6 +733,7 @@ namespace MFO::Logistics {
             case Category::Lockpicks: return LootLockpicks(a_follower, a_ref);
             case Category::Ingredients: return LootIngredients(a_follower, a_ref);
             case Category::Valuables: return LootValuables(a_follower, a_ref);
+            case Category::Museum:    return LootMuseum(a_follower, a_ref);   // LOTD, logistics/Lotd.cpp
             }
             return false;
         }
@@ -753,6 +754,7 @@ namespace MFO::Logistics {
             case Category::Lockpicks: return LootLockpicks(a_follower, a_ref, true);
             case Category::Ingredients: return LootIngredients(a_follower, a_ref, true);
             case Category::Valuables: return LootValuables(a_follower, a_ref, true);
+            case Category::Museum:    return LootMuseum(a_follower, a_ref, true);
             }
             return false;
         }

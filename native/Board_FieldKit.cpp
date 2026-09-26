@@ -26,6 +26,7 @@
 #include "Rapport.h"
 #include "Config.h"
 #include "logistics/Logistics.h"   // IsLooting/IsTrading for the [C][L][T] activity glyphs
+#include "logistics/Lotd.h"        // GambitOffered: the LOTD museum gambit is offered only while LOTD awareness is on
 #include "Forms.h"
 #include "State.h"
 #include "Probe.h"
@@ -568,6 +569,11 @@ namespace MFO::Board {
                         std::vector<int> actMiscIdx;       // actTab indices in the Loot misc: submenu
                         int actPotionSlot = -1, actMiscSlot = -1;
                         for (int k = 0; k < actN; ++k) {
+                            // LOTD: "Loot museum items" appears only while LOTD awareness
+                            // is on (detected + bLootLOTD). A rule already holding it
+                            // still shows its label (labelFor), it just is not offered.
+                            if (!std::strcmp(actTab[k].op, Vocab::kActLootMuseum) &&
+                                !Lotd::GambitOffered()) continue;
                             if (IsPotionLootAct(actTab[k].op)) {
                                 if (actPotionSlot < 0) { actPotionSlot = (int)actTopIdx.size();
                                                           actTopIdx.push_back(-1); }
