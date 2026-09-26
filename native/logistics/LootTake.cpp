@@ -637,29 +637,6 @@ namespace MFO::Logistics {
                         >= Config::g_abandonDelay.load());
         }
 
-        // Can this follower open a_ref's lock with their own Lockpicking skill?
-        // marth: a follower does not loot through a lock they could not actually
-        // pick. The CommonLib enum is { kUnlocked=-1, kVeryEasy, kEasy, kAverage,
-        // kHard, kVeryHard, kRequiresKey } and maps kVeryEasy=Novice, kEasy=
-        // Apprentice, kAverage=Adept, kHard=Expert, kVeryHard=MASTER. Vanilla
-        // skill thresholds (0/25/50/75); MASTER (kVeryHard), key-required, and
-        // inaccessible fall to default and are NEVER pickable -- deliberately out
-        // of reach even for a maxed follower. Owned locks never reach here (the
-        // ownership gate bars them first), so this only opens UNOWNED containers.
-        bool LockPickable(RE::Actor* a_follower, RE::TESObjectREFR* a_ref) {
-            float need;
-            switch (a_ref->GetLockLevel()) {
-            case RE::LOCK_LEVEL::kVeryEasy: need = 0.0f;   break;   // Novice
-            case RE::LOCK_LEVEL::kEasy:     need = 25.0f;  break;   // Apprentice
-            case RE::LOCK_LEVEL::kAverage:  need = 50.0f;  break;   // Adept
-            case RE::LOCK_LEVEL::kHard:     need = 75.0f;  break;   // Expert
-            default:                        return false;          // Master / requires key / inaccessible
-            }
-            auto* avo = a_follower->AsActorValueOwner();
-            const float skill = avo ? avo->GetActorValue(RE::ActorValue::kLockpicking) : 0.0f;
-            return skill >= need;
-        }
-
         // Walk nearby refs, gate them, and perform ONE transfer. Returns true if
         // something was looted. Collect-then-act (#2): the world walk only reads
         // and records timers; all mutation happens afterwards on re-resolved
@@ -668,6 +645,11 @@ namespace MFO::Logistics {
         // scan act-loop, the excursion arrival, and the arm's-reach path.
         bool LootHere(RE::Actor* a_follower, RE::TESObjectREFR* a_ref,
                       Category a_cat, RE::ActorValue a_want) {
+            // NEVER THROUGH A LOCK (LP-M1). RemoveItem ignores locks, so this is the one
+            // place every transfer (StripCorpse included) passes: a locked ref is opened
+            // first by the excursion's lockpick step (logistics/Lockpick.cpp), never looted
+            // shut.
+            if (a_ref && a_ref->IsLocked()) return false;
             switch (a_cat) {
             case Category::Arrows:    return LootAmmo(a_follower, a_ref, false);
             case Category::Bolts:     return LootAmmo(a_follower, a_ref, true);

@@ -371,11 +371,10 @@ namespace MFO::Logistics {
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
                     if (ref->IsOffLimits()) { ++dOffLimits; return RE::BSContainer::ForEachResult::kContinue; }
-                    // Locked -- UNLESS the follower's Lockpicking skill can open
-                    // it. RemoveItem ignores locks, so without this a follower
-                    // would loot through any lock; with it, only locks their
-                    // skill covers (marth). Owned locks are already barred above.
-                    if (ref->IsLocked() && !LockPickable(a_follower, ref)) {
+                    // Locked -- UNLESS the lockpick judge admits it (LP-M1,
+                    // logistics/Lockpick.cpp): the excursion then picks it on
+                    // arrival before any transfer. Owned locks are already barred above.
+                    if (ref->IsLocked() && !Lockpick::Admit(a_follower, ref, a_now)) {
                         ++dLocked; return RE::BSContainer::ForEachResult::kContinue;
                     }
                     // Beyond the confidence leash from the player -- too far for
@@ -549,7 +548,10 @@ namespace MFO::Logistics {
                     const int s = SlotIndexOf(a_follower->GetFormID());
                     if (s < 0) continue;   // no live slot: nothing to drive
                     TravelIntent& tr = g_travelSlots[s];
-                    if (grabOk && !LooseRef(ref)) {
+                    // A LOCKED ref (admitted by the lockpick judge) is never drained in
+                    // place: it retargets like a loose ref, and the driver's ARRIVAL picks
+                    // it first (LP-M1).
+                    if (grabOk && !LooseRef(ref) && !ref->IsLocked()) {
                         // DRAIN IN PLACE (perf pass): he is on it (or within its
                         // grown grab radius), so take EVERYTHING his gambits want
                         // in this visit -- the same full strip the arrival path
@@ -659,7 +661,10 @@ namespace MFO::Logistics {
                 // takes the excursion path REGARDLESS of distance -- there is no
                 // in-place transfer for it, the acquire is the driver's arrival
                 // Activate -- so it must claim/walk even from arm's reach.
-                if ((!grabOk || LooseRef(ref)) && Config::g_lootTravel.load()) {
+                // A LOCKED ref (admitted by the lockpick judge) takes the excursion
+                // path at any distance too: its pick runs at the driver's ARRIVAL
+                // (LP-M1), never as an in-place transfer.
+                if ((!grabOk || LooseRef(ref) || ref->IsLocked()) && Config::g_lootTravel.load()) {
                     // Already drained in-reach loot this tick: that WAS the
                     // action. Candidates are closest-first, so everything in
                     // reach came before this far/loose one; arming a walk on

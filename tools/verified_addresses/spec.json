@@ -821,6 +821,21 @@
    "doc": "ADDRESS-TABLE-2026-09-15.md:58"
   },
   {
+   "seat": "Lockpick.Unlock",
+   "kind": "function",
+   "construct": "REL::RelocationID(19821, 20226)",
+   "ids": {
+    "1.6.1170": 20226,
+    "1.5.97": 19821
+   },
+   "sig": {
+    "1.6.1170": "40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 48 85 C0 74 18 48 8B 48 10 33 D2",
+    "1.5.97": "40 53 48 83 EC 20 48 8B D9 E8 ?? ?? ?? ?? 48 85 C0 74 18 48 8B 48 10 33 D2"
+   },
+   "source": "native/logistics/Lockpick.cpp UnlockOnMain",
+   "doc": "_research/lockpick-design-2026-09-24.md section 1: the engine's own unlock (ExtraLock SetLocked(false) + AddChange(kLockExtra 0x1000) + lock-changed event), void(TESObjectREFR*); callers include the LockpickingMenu success path (1.6.1170 id 51968 +0xA8, 1.5.97 id 51088 +0xA8)"
+  },
+  {
    "seat": "CommonLib.BSReadWriteLock.LockForRead",
    "kind": "function",
    "construct": "RE::Offset::BSReadWriteLock::LockForRead = RELOCATION_ID(66976, 68233)",

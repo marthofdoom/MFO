@@ -186,6 +186,11 @@ namespace MFO::Logistics {
             }
         }
 
+        // LOCKPICK (LP-M1): abandon any pick whose excursion no longer drives it
+        // (ended, retargeted, or its arrival step stopped) -- the hold is released
+        // and nothing is consumed. Cheap: a map of at most one job per follower.
+        Lockpick::SweepStale(now);
+
         // GLOBAL travel-intent BACKSTOP, keyed to NO follower in particular, and
         // run BEFORE the logistics early-return on purpose. The per-follower
         // arrival branch below only runs when the TRAVELLER is serviced out of
@@ -746,6 +751,22 @@ namespace MFO::Logistics {
                         tr.acquireBase    = base ? base->GetFormID() : 0;
                         tr.acquirePre     = pre;
                         return;   // the activate IS this tick's action; readback next tick
+                    }
+                    // ── LOCKPICK (LP-M1, logistics/Lockpick.cpp): a LOCKED chest is
+                    // picked here first -- snapshot, simulation, ch.1 + ch.12 v2
+                    // IdleLockPick for the simulated seconds, then the engine Unlock --
+                    // and only an open lock reaches the transfer below.
+                    if (tref->IsLocked()) {
+                        const auto pick = Lockpick::Step(a_follower, tref, now,
+                            tr.startTime + std::chrono::seconds(static_cast<int>(Config::g_excursionMax.load())));
+                        if (pick == Lockpick::StepResult::kHold) return;   // the pick IS this tick's action
+                        if (pick == Lockpick::StepResult::kRefused) {
+                            MarkTravelFailed(tref->GetFormID(), now);        // transient skip, never sticky
+                            tr.phase = TravelPhase::Holding;
+                            tr.lingerUntil = now + BatchLingerDur();
+                            return;
+                        }
+                        // kProceed: open now -> the transfer below
                     }
                     // Take EVERYTHING his gambits want in this one visit, not just
                     // the category the trip was for -- else gold trips strand the

@@ -10,7 +10,7 @@ nothing when one does not. At startup `REL::SelfCheck::Run` repeats the comparis
 game actually loaded. A row that fails refuses THAT seat by name in the log; the expected RVA is never
 used in place of the library's answer.
 
-Offline result of this generation: 1.6.1170.0 55/55 verified, 0 refused, 1.5.97.0 55/55 verified, 0 refused.
+Offline result of this generation: 1.6.1170.0 56/56 verified, 0 refused, 1.5.97.0 56/56 verified, 0 refused.
 
 ## Rows
 
@@ -67,6 +67,7 @@ Offline result of this generation: 1.6.1170.0 55/55 verified, 0 refused, 1.5.97.
 | Board.ToggleControls | function | 68545 | 0xCD5650 | 67245 | 0xC11C60 | signature (16 bytes, unique in .text) |  | native/Board.cpp:626 | ADDRESS-TABLE-2026-09-15.md:59 |
 | Packages.ForceRefTo | function | 25052 | 0x3CDEE0 | 24523 | 0x375050 | signature (30 bytes, unique in .text) |  | native/Packages.cpp:329 | ADDRESS-TABLE-2026-09-15.md:62 |
 | Probe.StartCombat | function | 38561 | 0x6B6930 | 37608 | 0x6251B0 | signature (38 bytes, unique in .text) |  | native/Probe.cpp:36 | ADDRESS-TABLE-2026-09-15.md:58 |
+| Lockpick.Unlock | function | 20226 | 0x2FAF00 | 19821 | 0x2A75B0 | signature (25 bytes, unique in .text) |  | native/logistics/Lockpick.cpp UnlockOnMain | _research/lockpick-design-2026-09-24.md section 1: the engine's own unlock (ExtraLock SetLocked(false) + AddChange(kLockExtra 0x1000) + lock-changed event), void(TESObjectREFR*); callers include the LockpickingMenu success path (1.6.1170 id 51968 +0xA8, 1.5.97 id 51088 +0xA8) |
 | CommonLib.BSReadWriteLock.LockForRead | function | 68233 | 0xCC90C0 | 66976 | 0xC072D0 | signature (32 bytes, unique in .text) |  | CommonLib mit-3.7 fde0f3ae include/RE/T/TESForm.h LookupByID/LookupByEditorID (BSReadLockGuard) | ADDRESS-TABLE-2026-09-15.md ADDENDUM 2026-09-24 F1b |
 | CommonLib.BSReadWriteLock.UnlockForRead | function | 68239 | 0xCC9380 | 66982 | 0xC07590 | signature (16 bytes, unique in .text) |  | CommonLib mit-3.7 fde0f3ae include/RE/T/TESForm.h LookupByID/LookupByEditorID (BSReadLockGuard) | ADDRESS-TABLE-2026-09-15.md ADDENDUM 2026-09-24 F1b |
 | Actuation.SummonCap.AddCommandedActor | ripref | 40056 | 0x717800 +0xA1 48 8B 05 00 33 A6 02 8B 88 40 03 00 00 D1 E9 | 38993 | 0x683D70 +0x51 48 8B 05 30 29 8A 02 8B 88 40 03 00 00 D1 E9 | signature (33 bytes, unique in .text) |  | native/cast/Summon.cpp SummonCapSkipped | mov rax,[rip+g]; mov ecx,[rax+0x340]; shr ecx,1 (then test cl,1: bit 1 set -> the engine skips the summon cap) |

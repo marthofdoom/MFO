@@ -35,4 +35,9 @@ namespace MFO::Scheduler {
     double LastTickMs();
     std::uint32_t TicksThisSession();
 
+    // The UNPAUSED service clock in seconds (advanced only on unpaused services, each step
+    // capped; reset on revert). WORKER ONLY, the thread that advances it. Read by the
+    // lockpick step (logistics/Lockpick.cpp) so a menu or a pause never ages a pick.
+    double ServiceClock();
+
 }

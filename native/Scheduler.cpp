@@ -529,6 +529,7 @@ namespace MFO::Scheduler {
 
     double        LastTickMs()       { return g_lastTickMs.load(); }
     std::uint32_t TicksThisSession() { return g_ticks.load(); }
+    double        ServiceClock()     { return g_serviceClock; }   // worker-only (#4), like its writer
 
     void Tick() {
         const auto now = std::chrono::steady_clock::now();
