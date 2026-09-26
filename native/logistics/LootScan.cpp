@@ -19,6 +19,44 @@ namespace MFO::Logistics {
         // beyond MFO's reach, ch.19 would end the leg there, and no pickup would run.
         constexpr float kCh19LootArrivalRadius = 128.0f;
 
+        // RETARGET an in-flight excursion's leg to a_ref (moved out of LootNearby's excursion
+        // branch unchanged, LP-M2, so the lockpick door leg reuses it). ROAD CHOICE, LEG
+        // BOUNDARY (A/B): a leg in flight FINISHES ON THE ROAD IT STARTED -- the decision is
+        // the live ch.19 leg itself (APMF-side truth, one record per slot), never the switch,
+        // so a mid-excursion flip cannot split a slot. Road 2 re-points in place.
+        bool RetargetExcursionLeg(RE::Actor* a_follower, int a_slot, RE::TESObjectREFR* a_ref,
+                                  Category a_cat, RE::ActorValue a_want, float a_df,
+                                  Clock::time_point a_now) {
+            if (!a_follower || !a_ref || a_slot < 0 || a_slot >= Packages::kMaxLootSlots) return false;
+            TravelIntent& tr = g_travelSlots[a_slot];
+            const RE::FormID rid = a_ref->GetFormID();
+            const bool ch19Leg = APMFBridge::HasLootTravelLeg(a_slot);
+            const bool legTook = ch19Leg
+                ? APMFBridge::ClaimLootTravel(a_follower->GetFormID(), rid, a_slot,
+                                              kCh19LootArrivalRadius)
+                : Packages::LootTravelRetarget(a_follower, a_ref, a_slot);
+            if (!ch19Leg && legTook)
+                spdlog::info("[loot-road] {:08X}: RETARGET road=MFOPKG dest={:08X} slot={} "
+                             "radius={:.0f} handle=-",
+                             a_follower->GetFormID(), rid, a_slot, 128.0f);
+            if (!legTook) return false;
+            tr.target   = a_ref->GetHandle();
+            tr.cat      = a_cat;
+            tr.want     = a_want;
+            tr.deadline = TravelDeadline(a_df, a_now);
+            tr.phase    = TravelPhase::Walking;
+            tr.lastPos    = a_follower->GetPosition();   // reset no-progress tracker
+            tr.progressAt = a_now;
+            tr.stolenSince = {};      // fresh leg -> fresh theft episode
+            // Fresh leg -> fresh ENGAGEMENT observation (DIAG-2026-09-06):
+            // a retarget rewrites the package's runtime target, so the
+            // previous leg's "engaged" reading says nothing about this one.
+            tr.legEngaged        = false;
+            tr.legStart          = a_now;
+            tr.nextLegPkgDiag    = {};   // -> first Walking tick reports
+            return true;
+        }
+
         bool LootNearby(RE::Actor* a_follower, Category a_cat, Clock::time_point a_now,
                         RE::ActorValue a_potionWant,
                         LootMode a_mode) {
@@ -627,32 +665,8 @@ namespace MFO::Logistics {
                     // ROAD IT STARTED: the decision is the live ch.19 leg itself
                     // (APMF-side truth, one record per slot), never the switch, so a
                     // mid-excursion flip cannot split a slot. Road 2 re-points in place.
-                    const bool ch19Leg = APMFBridge::HasLootTravelLeg(s);
-                    const bool legTook = ch19Leg
-                        ? APMFBridge::ClaimLootTravel(a_follower->GetFormID(), rid, s,
-                                                      kCh19LootArrivalRadius)
-                        : Packages::LootTravelRetarget(a_follower, ref, s);
-                    if (!ch19Leg && legTook)
-                        spdlog::info("[loot-road] {:08X}: RETARGET road=MFOPKG dest={:08X} slot={} "
-                                     "radius={:.0f} handle=-",
-                                     a_follower->GetFormID(), rid, s, 128.0f);
-                    if (legTook) {
-                        tr.target   = ref->GetHandle();
-                        tr.cat      = a_cat;
-                        tr.want     = a_potionWant;
-                        tr.deadline = TravelDeadline(df, a_now);
-                        tr.phase    = TravelPhase::Walking;
-                        tr.lastPos    = origin;   // reset no-progress tracker
-                        tr.progressAt = a_now;
-                        tr.stolenSince = {};      // fresh leg -> fresh theft episode
-                        // Fresh leg -> fresh ENGAGEMENT observation (DIAG-2026-09-06):
-                        // a retarget rewrites the package's runtime target, so the
-                        // previous leg's "engaged" reading says nothing about this one.
-                        tr.legEngaged        = false;
-                        tr.legStart          = a_now;
-                        tr.nextLegPkgDiag    = {};   // -> first Walking tick reports
+                    if (RetargetExcursionLeg(a_follower, s, ref, a_cat, a_potionWant, df, a_now))
                         return true;   // new leg -- the excursion continues at 60
-                    }
                     continue;
                 }
 

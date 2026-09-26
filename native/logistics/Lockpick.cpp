@@ -113,14 +113,14 @@ namespace MFO::Logistics::Lockpick {
         enum class Reason : std::uint8_t {
             kNone, kOwned, kOffLimits, kNotChest, kRequiresKey, kNoPicks, kCreature,
             kNoHarbinger, kNoMainThread, kUnlockSeat, kSimFail, kTooLong, kNotLocked,
-            kGone, kSettings, kIdleEnded, kUnlockFailed, kNoTime, kNoSweetSpot,
+            kGone, kSettings, kIdleEnded, kUnlockFailed, kNoTime, kNoSweetSpot, kDoorInto,
         };
         const char* ReasonName(Reason a_r) {
             switch (a_r) {
             case Reason::kNone:         return "none";
             case Reason::kOwned:        return "owned";
             case Reason::kOffLimits:    return "offlimits";
-            case Reason::kNotChest:     return "notChest";
+            case Reason::kNotChest:     return "notChestOrDoor";
             case Reason::kRequiresKey:  return "requiresKey";
             case Reason::kNoPicks:      return "noPicks";
             case Reason::kCreature:     return "creature";
@@ -136,6 +136,7 @@ namespace MFO::Logistics::Lockpick {
             case Reason::kUnlockFailed: return "unlockFailed";
             case Reason::kNoTime:       return "noTime";
             case Reason::kNoSweetSpot:  return "noSweetSpot";
+            case Reason::kDoorInto:     return "doorIntoLivedIn";
             }
             return "?";
         }
@@ -459,6 +460,54 @@ namespace MFO::Logistics::Lockpick {
             g_jobs.erase(it);
         }
 
+        // ── LP-M2 DOORS: the design's section 3 rule 2 ────────────────────────────
+        // A LOAD door (one with ExtraTeleport) is picked only when opening it is not trespass
+        // by intent: its DESTINATION (the linked door on the far side) must not be owned (the
+        // linked ref or its cell), not a player home / player-owned cell (RefInPlayerStorage,
+        // the loot scan's own test), not crime-to-activate, and its location must not be a
+        // lived-in place. Lived-in = the innermost of these location types on the linked door's
+        // location chain (LocTypeClearable / LocTypeDungeon first = a dungeon, allowed; the
+        // same innermost-first rule EngageOnSight uses for its civilised test). Returns "" when
+        // the door may be picked, else the reason text. Worker, read-only.
+        std::string LoadDoorBar(RE::TESObjectREFR* a_door) {
+            auto* tele = a_door ? a_door->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+            if (!tele || !tele->teleportData) return {};   // not a load door: no destination to bar
+            auto  lptr   = tele->teleportData->linkedDoor.get();
+            auto* linked = lptr.get();
+            if (!linked) return "a load door whose destination cannot be resolved";
+            if (auto* o = linked->GetOwner()) return std::format("its destination door is owned ({:08X})", o->GetFormID());
+            if (auto* cell = linked->GetParentCell(); cell && cell->GetOwner())
+                return std::format("its destination cell is owned ({:08X})", cell->GetOwner()->GetFormID());
+            if (RefInPlayerStorage(linked)) return "its destination is a player home";
+            if (linked->IsOffLimits()) return "entering its destination is a crime";
+            static constexpr std::pair<RE::FormID, bool> kTypes[] = {
+                { 0x000F5E80, false },   // LocTypeClearable
+                { 0x000130DB, false },   // LocTypeDungeon
+                { 0x0001CB85, true },    // LocTypeHouse
+                { 0x0001CB87, true },    // LocTypeInn
+                { 0x0001CB86, true },    // LocTypeStore
+                { 0x000130DC, true },    // LocTypeDwelling
+                { 0x000FC1A3, true },    // LocTypePlayerHouse
+                { 0x000504F9, true },    // LocTypeStewardsDwelling
+                { 0x0001CD5A, true },    // LocTypeGuild
+                { 0x0001CD56, true },    // LocTypeTemple
+                { 0x0001CD57, true },    // LocTypeCastle
+                { 0x0001CD55, true },    // LocTypeBarracks
+                { 0x0001CD59, true },    // LocTypeJail
+            };
+            int guard = 0;
+            for (auto* loc = linked->GetCurrentLocation(); loc && guard < 8; loc = loc->parentLoc, ++guard) {
+                for (const auto& [id, livedIn] : kTypes) {
+                    auto* kw = RE::TESForm::LookupByID<RE::BGSKeyword>(id);
+                    if (!kw || !loc->HasKeyword(kw)) continue;
+                    if (!livedIn) return {};   // innermost is a dungeon: allowed
+                    return std::format("its destination is a lived-in place ({})",
+                                       kw->GetFormEditorID() ? kw->GetFormEditorID() : "location type");
+                }
+            }
+            return {};
+        }
+
         // Session-wide inertness (Harbinger / VR / the Unlock seat). Logged once each.
         Reason InertReason() {
             if (!MainThread::IsInstalled()) {
@@ -492,7 +541,17 @@ namespace MFO::Logistics::Lockpick {
         if (a_ref->GetOwner()) { LogRefusal(fid, a_ref, Reason::kOwned, ""); return false; }
         if (a_ref->IsOffLimits()) { LogRefusal(fid, a_ref, Reason::kOffLimits, ""); return false; }
         auto* base = a_ref->GetBaseObject();
-        if (!base || !base->Is(RE::FormType::Container)) { LogRefusal(fid, a_ref, Reason::kNotChest, ""); return false; }
+        const bool door = base && base->Is(RE::FormType::Door);
+        if (!base || (!door && !base->Is(RE::FormType::Container))) {
+            LogRefusal(fid, a_ref, Reason::kNotChest, "");
+            return false;
+        }
+        if (door) {   // LP-M2: a load door's destination bar (the door ref's own owner is barred above)
+            if (const std::string bar = LoadDoorBar(a_ref); !bar.empty()) {
+                LogRefusal(fid, a_ref, Reason::kDoorInto, " -- " + bar);
+                return false;
+            }
+        }
         auto* race = a_follower->GetRace();
         if (!race || !race->HasKeywordString("ActorTypeNPC")) {
             LogRefusal(fid, a_ref, Reason::kCreature, " -- IdleLockPick has no clip outside the humanoid graph");
@@ -808,6 +867,75 @@ namespace MFO::Logistics::Lockpick {
             ++it;   // EndJob erases fid's entry
             EndJob(fid, why);
         }
+    }
+
+    bool IsDoor(const RE::TESObjectREFR* a_ref) {
+        auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
+        return base && base->Is(RE::FormType::Door);
+    }
+
+    // ── LP-M2: a locked DOOR at a GATED block (see the declaration) ─────────────────
+    // Which door: a LOCKED, enabled DOOR ref within kGateDoorReach of the block point S, on
+    // the target's side of S (the angle between S->door and S->target at most 90 degrees)
+    // unless it is right at S (within kGateDoorAtS), nearest to S first. Searched in the
+    // follower's and the target's ATTACHED parent cells (#72: the cell's own locked walk,
+    // read-only; the judge runs after the walk). kGateDoorReach: he stalls pressing into the
+    // door, so its reference (at the door's center) sits within a door's width of S; 256 u is
+    // about two door widths. A door farther than that is not the thing that stopped him.
+    bool DispatchGateDoor(RE::Actor* a_follower, int a_slot, RE::TESObjectREFR* a_target,
+                          const RE::NiPoint3& a_blockPos, Clock::time_point a_now) {
+        constexpr float kGateDoorReach = 256.0f;
+        constexpr float kGateDoorAtS   = 64.0f;
+        if (!a_follower || !a_target || IsDoor(a_target)) return false;   // no door-behind-a-door chains
+        if (a_slot < 0 || a_slot >= Packages::kMaxLootSlots) return false;
+        if (InertReason() != Reason::kNone) return false;
+        const RE::FormID fid = a_follower->GetFormID();
+        const RE::NiPoint3 S = a_blockPos;
+        const RE::NiPoint3 T = a_target->GetPosition();
+        const float tx = T.x - S.x, ty = T.y - S.y;
+        RE::ObjectRefHandle best;
+        float bestD = kGateDoorReach + 1.0f;
+        RE::TESObjectCELL* cells[2] = { a_follower->GetParentCell(), a_target->GetParentCell() };
+        if (cells[1] == cells[0]) cells[1] = nullptr;
+        for (auto* c : cells) {
+            if (!c || !c->IsAttached()) continue;
+            c->ForEachReferenceInRange(S, kGateDoorReach, [&](RE::TESObjectREFR& r) {
+                auto* base = r.GetBaseObject();
+                if (!base || !base->Is(RE::FormType::Door) || r.IsDisabled() || r.IsMarkedForDeletion())
+                    return RE::BSContainer::ForEachResult::kContinue;
+                if (!r.IsLocked()) return RE::BSContainer::ForEachResult::kContinue;
+                const RE::NiPoint3 P = r.GetPosition();
+                const float d = P.GetDistance(S);
+                if (d > kGateDoorReach || d >= bestD) return RE::BSContainer::ForEachResult::kContinue;
+                if (d > kGateDoorAtS && ((P.x - S.x) * tx + (P.y - S.y) * ty) < 0.0f)
+                    return RE::BSContainer::ForEachResult::kContinue;   // behind him
+                bestD = d;
+                best  = r.GetHandle();
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+        }
+        auto  dptr = best.get();
+        auto* door = dptr.get();
+        if (!door) {
+            spdlog::info("[lockpick] {:08X}: GATED on the way to {:08X} with no locked door within {:.0f} u of the "
+                         "block -- a gate, not a lock (M1's re-admit applies)", fid, a_target->GetFormID(),
+                         kGateDoorReach);
+            return false;
+        }
+        if (!Admit(a_follower, door, a_now)) return false;   // logged once, with its reason
+        const TravelIntent& tr = g_travelSlots[a_slot];
+        const float df = a_follower->GetPosition().GetDistance(door->GetPosition());
+        if (!RetargetExcursionLeg(a_follower, a_slot, door, tr.cat, tr.want, df, a_now)) {
+            spdlog::info("[lockpick] {:08X}: locked door {:08X} blocks {:08X} but the door leg did not dispatch "
+                         "(the travel road refused) -- the item stays GATED", fid, door->GetFormID(),
+                         a_target->GetFormID());
+            return false;
+        }
+        spdlog::info("[lockpick] {:08X}: {:08X} is GATED by LOCKED DOOR {:08X} '{}' ({:.0f} u from the block, "
+                     "{:.0f} u from him) -- door leg dispatched: pick it, unlock it, and its lock-changed event "
+                     "re-admits the gate", fid, a_target->GetFormID(), door->GetFormID(),
+                     door->GetDisplayFullName() ? door->GetDisplayFullName() : "?", bestD, df);
+        return true;
     }
 
     void Abort(RE::FormID a_follower, const char* a_why) {

@@ -860,7 +860,21 @@ namespace MFO::Logistics {
         void SweepStale(Clock::time_point a_now);
         void Abort(RE::FormID a_follower, const char* a_why);
         void Clear();   // revert / load
+        // LP-M2 (doors): at a GATED verdict with no actor in front (Service.cpp's M1 block
+        // reaction, after MarkGated), look for a LOCKED DOOR at the block point a_blockPos on
+        // the way to a_target. If one is found and admitted, the slot's leg is retargeted to
+        // it (RetargetExcursionLeg) and true is returned: the arrival step then picks it, and
+        // its Unlock's lock-changed event re-admits the gate (Sinks.cpp GateSink). Never for a
+        // leg whose target is itself a door (no door-behind-a-door chains this round).
+        bool DispatchGateDoor(RE::Actor* a_follower, int a_slot, RE::TESObjectREFR* a_target,
+                              const RE::NiPoint3& a_blockPos, Clock::time_point a_now);
+        // Is this ref a DOOR (the arrival step opens it, there is nothing to transfer)?
+        bool IsDoor(const RE::TESObjectREFR* a_ref);
     }
+    // defined in logistics/LootScan.cpp: retarget an in-flight excursion's leg (the scan's
+    // excursion branch and the lockpick door leg share it).
+    bool RetargetExcursionLeg(RE::Actor* a_follower, int a_slot, RE::TESObjectREFR* a_ref,
+                              Category a_cat, RE::ActorValue a_want, float a_df, Clock::time_point a_now);
     bool TierReleased(Category a_cat, RE::TESObjectREFR* a_src,
                       const RE::NiPoint3& a_playerPos, Clock::time_point a_now);
 

@@ -480,6 +480,7 @@ namespace MFO::Logistics {
                            auto t = tr.target.get();
                            auto* r = t.get();
                            if (!r || r->IsDisabled() || r->IsMarkedForDeletion() || LooseRef(r) ||
+                               Lockpick::IsDoor(r) ||   // LP-M2: a door leg carries no loot
                                HasLoot(a_follower, r, tr.cat, tr.want))
                                return false;
                            skippedRef = r->GetFormID();
@@ -768,6 +769,14 @@ namespace MFO::Logistics {
                         }
                         // kProceed: open now -> the transfer below
                     }
+                    // A DOOR leg (LP-M2) has nothing to transfer: once it is open (picked,
+                    // keyed, or unlocked by someone else meanwhile) the leg is done, the gate
+                    // re-admits on the lock-changed event, and the Holding scan re-picks the item.
+                    if (Lockpick::IsDoor(tref)) {
+                        tr.phase = TravelPhase::Holding;
+                        tr.lingerUntil = now + BatchLingerDur();
+                        return;
+                    }
                     // Take EVERYTHING his gambits want in this one visit, not just
                     // the category the trip was for -- else gold trips strand the
                     // arrows (marth's 340u/382u bodies). Only THEN is the corpse
@@ -951,6 +960,11 @@ namespace MFO::Logistics {
                     stealAbandon    = true;   // skip the stall/deadline blame path below
                     tr.phase        = TravelPhase::Holding;
                     tr.lingerUntil  = now + BatchLingerDur();
+                    // LP-M2 (logistics/Lockpick.cpp): a LOCKED DOOR at the block becomes the
+                    // next leg (pick, unlock -> its lock-changed event re-admits the gate).
+                    if (!ab.id && Lockpick::DispatchGateDoor(a_follower, slot, tref,
+                                                             blockPos ? *blockPos : a_follower->GetPosition(), now))
+                        skipWhy = "GATED by a LOCKED DOOR (door leg dispatched)";
                     // no return -- fall into Holding (the next reachable item, same tick)
                 } else if (!gone && tref && apmfLeg && tr.legEngaged) {
                     // The hold is real for this leg: the 0x49 override has been
