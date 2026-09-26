@@ -62,6 +62,19 @@ Read it as history and this block as current.
   `[target-pin] ... ENDED` and a fresh `PIN` on the next foe. On Harbinger 0.9.8 (ABI v12): every
   other facet still works and targeting runs on the latch.
 
+- **2026-09-25 branch `feat/mfo-swapup-ammo` (off `main` `7b6f405`; NOT merged, NOT deployed; tier B,
+  awaiting its Opus 5.5 review). ClickUp 86e3ebfu3 + 86e394xqp, batch L.** THE SWAP-UP RULE in the new
+  `native/logistics/SwapUp.cpp`, shared by loot and shop, ammo included (MAP.md "THE SWAP-UP RULE"):
+  keep set moved verbatim out of EconomyProbe; loot drops superseded gear into the body only to make room
+  for an upgrade; ammo ranked by damage in the follower's kind, keep target = max(50, the "arrows/bolts
+  below N" N), stacks strictly below the cutoff tier obsolete, lowest first: shed into the body on a loot,
+  offered at a vendor (1g unit floor), the upgrade bought by `PlanBuy`'s new AMMO SWAP-UP pass (appended
+  `BuyThresholds` fields); the ch.17 ammo declaration picks the best stack. Out-of-boundary touches:
+  `native/CMakeLists.txt` (new source), `native/TradeBridge.h/.cpp` (the buy pass). MFO-B36 was already
+  fixed on main by loot M1.
+  FIELD CHECKS: `[swapup] ... RESTOCK|UPGRADE arrows took N ... dropped obsolete [...]`; `[sell] ... SELL
+  (obsolete ammo)` and the `[econ] ... offered [...]` rows naming the old arrows; `bought plan` naming a
+  better arrow; `[swapup] ... dropped superseded [...] to carry '<item>'` only when overweight.
 - **2026-09-25 v2.0.14 RELEASED (GitHub, tag `v2.0.14`, stamp `325e6a9`, CI 36209693967, DLL sha256 `80a5b73e…`). NOT on Nexus yet: marth tests first.**
   Contents: wave-1 + wave-2 subsystem-folder splits (proven identical); foe gambits target through Harbinger ch.20 (MFO requests ABI 10, pin route at >= 13; own target write retired when the pin is available); auto-retreat fix (main-thread StopCombat, no self-cancel, per-follower holds, main-thread foe probe, STAY 10 s unpaused or fully healed). Pairs with Harbinger v0.9.9.
 - **2026-09-24 v2.0.13 RELEASED (GitHub, tag `v2.0.13`, manifest `e6401d4`, stamp `dc0ae75`, CI 36085950743, DLL sha256 `ddf5526c…`). NOT on Nexus yet: marth tests first.**

@@ -11,6 +11,12 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **Loot trips on Harbinger's road now listen to why a walk stopped.** Arrived means loot now. A vanished target means the next item at once. Blocked by someone standing in the way means the item goes later in his list. Blocked by a gate means the item is skipped until the gate changes. MFO no longer runs its own blocked timer on that road.
 - **A follower sent back to the same item walks again.** Before, a second trip to an item whose first walk had ended never started.
 - **The loot log says why each Harbinger trip leg ended, once per leg.**
+- **Followers swap up while looting and shopping, arrows and bolts included.** Ammo is ranked by damage, arrows for a bow and bolts for a crossbow. A follower keeps his best rounds up to his "arrows below" number, and never fewer than 50. Anything weaker than that is obsolete. The weakest goes first.
+- **A follower drops obsolete arrows into the body when he loots better ones.** He no longer picks up arrows he would drop straight back.
+- **A follower sells obsolete arrows and bolts at a vendor, and buys better ones.** An archer with a stock of iron buys steel or better when he can afford it with half his purse. The iron sells on the next visit.
+- **A follower with the Loot equipment gambit also takes better ammo of his kind from a body.**
+- **A better weapon or armor piece that is too heavy to carry is still taken when dropping gear he already replaced makes room.** The least valuable replaced gear goes back into the body first. Worn gear, his own signature gear, quest items, gear you put on him, and gear that may hold gems are never dropped.
+- **With Harbinger's equip authority, an archer MFO holds on his bow gets his best arrows.** Before, he kept whatever arrows he last had equipped.
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 
