@@ -2318,6 +2318,14 @@ namespace MFO::Packages {
     }
 
     void RetreatPostFoeProbe(RE::FormID a_id, float a_radius) {
+        // NOT ON VR: the main-thread pump is a documented no-op there, and the
+        // only other road (AddTask) would walk highActorHandles on the job
+        // worker again -- the exact hazard this probe exists to avoid (review of
+        // 19f67e0, SEV-4 threading carve-out). So on VR no probe lands and the
+        // "no live foes" end is simply OFF; the travel timeout and the STAY end
+        // still bound every retreat. (The retreat StopCombat's VR->AddTask road
+        // is left as is: the documented Rapport::QuashAllyPair compromise.)
+        if (REL::Module::IsVR()) return;
         const auto* h = FindRetreatHold(a_id);
         if (!h) return;
         const std::uint32_t gen = h->gen;
@@ -2367,8 +2375,7 @@ namespace MFO::Packages {
                 live.lastFoeSeenAt = std::chrono::steady_clock::now();
             }
         };
-        if (REL::Module::IsVR()) SKSE::GetTaskInterface()->AddTask(work);
-        else                     MainThread::Post(std::move(work));
+        MainThread::Post(std::move(work));   // non-VR only (see the top of this function)
     }
 
     RetreatFoeView RetreatFoeProbeResult(RE::FormID a_id) {

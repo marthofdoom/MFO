@@ -1442,7 +1442,7 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   STAY by an out-of-combat `Of()` or by a frozen `fightConf` benches a foe-count retreat for
   the whole cap; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
   StopCombat lands (same self-cancel). The Confidence formula is untouched (its v2 is a
-  separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B107.
+  separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B110.
 - `ClearTransientState` (`:230`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,
@@ -4535,7 +4535,10 @@ decline-fallback.
   highActorHandles walk runs on MAIN (§0.30) behind the same (FormID, gen) check, counts
   hostiles to him within `fChaseMax` holding a live `currentCombatTarget` (the handle, NOT
   `IsInCombat()`, which derefs the raw controller), and writes `probeSeq` / `lastFoeSeq` /
-  `lastCount` / `lastFoeSeenAt` into `g_retreatLive`.
+  `lastCount` / `lastFoeSeenAt` into `g_retreatLive`. **Not posted on VR** (the pump is a
+  no-op there and AddTask would walk the array on the worker): on VR the "no live foes" end
+  is OFF and the travel timeout / STAY end bound every retreat. The retreat StopCombat keeps
+  its VR->AddTask road (the documented QuashAllyPair compromise).
   **MAIN-THREAD DISENGAGE:** no retreat StopCombat runs on the worker any more.
   `PostRetreatStopCombat` (`:1169`) posts it (`MainThread::Post`; AddTask on VR — the
   `Rapport::QuashAllyPair` road) capturing FormID + a per-engage generation; the main

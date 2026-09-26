@@ -729,3 +729,12 @@ Raised against 7580bea (`fix/mfo-retreat`, tier-A review), 2026-09-25. Finding (
 
 ### MFO-B107 (SEV-4, informational) -- retreat foe probe: engaged filter is target-handle only
 Raised by the author in response to the 7580bea review's SEV-4 ("LiveFoeNear counts unengaged hostiles"), 2026-09-25. The probe now counts only hostiles holding a live `currentCombatTarget`; it does NOT read the foe's `IsInCombat()`, which derefs the raw `combatController` that StopCombat frees inline on BSJobs (ENGINE_NOTES §0.47) while main-thread exclusion from those jobs is unproven (#74). A hostile that is in combat with a momentarily empty target handle is therefore not counted on that probe; the 3-probe / 3 s window absorbs single-probe gaps. Revisit when the combat-thread FoeCount/inCombat mirror (STATUS "MFO-next") lands.
+
+### MFO-B108 (SEV-4) -- retreat: after a pause the wall-clock floors are already spent
+Raised against 19f67e0 (`fix/mfo-retreat`, closing re-review), 2026-09-25. Reviewer's finding (as relayed): "after a pause, the wall-clock seconds floors are already spent, so only the 3-probe floor guards the ends." Suggested fix: time the floors by service time, or reset the timestamps on the first service after a pause.
+
+### MFO-B109 (SEV-5) -- retreat: kRetreatStayMax (30 s) is unreachable
+Raised against 19f67e0 (`fix/mfo-retreat`, closing re-review), 2026-09-25. Reviewer's finding (as relayed): "kRetreatStayMax (30 s) is unreachable; STAY is effectively a fixed ~3 s pause (matches the CHANGELOG)." Document the cap as a backstop or delete it (marth's design call).
+
+### MFO-B110 (SEV-5) -- retreat: being hit in STAY without entering combat can hold him up to ~3 s
+Raised against 19f67e0 (`fix/mfo-retreat`, closing re-review), 2026-09-25. Reviewer's finding (as relayed): "being hit in STAY without entering combat can hold him for up to ~3 s."
