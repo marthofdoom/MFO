@@ -18,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -40,6 +41,20 @@ namespace MFO::EngageOnSight {
         // this floor between two lines for one follower, so a gate that flaps (the
         // player crouching, confidence at the floor) cannot flood the log.
         constexpr float kStatusFloorSecs = 5.0f;
+        // THE JOIN ESTIMATE (review of 72a7964, SEV-3). The confidence gate counts only the
+        // enemies that would plausibly join the fight he starts: within kJoinRadius of the
+        // CHOSEN target AND in sight of him or of the chosen target, given-up ones excluded.
+        // kJoinRadius is a DESIGN CONSTANT, not an engine value: the engine has no single
+        // "allies join within X" setting (its joining is detection-driven; the 1.6.1170 GMST
+        // names were searched for Ally / Alert / Assist / Alarm / Detection and none is that
+        // radius). 1500u (~21 m) is about one encounter space -- a camp, a dungeon room and
+        // the next -- and well under the leash ceiling (fLeashMax 4000), so a pack on another
+        // floor or across a valley is not counted, while the sight test drops what a wall
+        // hides. kMaxJoinMeasured bounds the extra sightline measurements per probe; a
+        // nearby enemy left unmeasured past it COUNTS (the conservative side: a count too
+        // high only holds the gambit back).
+        constexpr float kJoinRadius      = 1500.0f;
+        constexpr int   kMaxJoinMeasured = 6;
 
         // ── MAIN-THREAD PROBE MIRROR ─────────────────────────────────────────────
         // Written by the main-thread probe, read by the worker. A real lock (#4:
@@ -64,6 +79,8 @@ namespace MFO::EngageOnSight {
             // skipped because THEIR location is civilised (player not fighting).
             bool civilStandDown = false;
             int  civilSkipped   = 0;
+            // The chosen target plus the candidates that would plausibly join (kJoinRadius).
+            int  joiners        = 0;
         };
         std::mutex                                   g_probeMx;
         std::unordered_map<RE::FormID, ProbeResult>  g_probes;   // guarded by g_probeMx
@@ -96,6 +113,9 @@ namespace MFO::EngageOnSight {
             RE::FormID        pinned = 0;
         };
         std::unordered_map<RE::FormID, Note> g_notes;
+        // Followers whose LAST logistics-table evaluation stopped on a Wait rule
+        // (NoteWaitRule, from logistics/Service.cpp -- the same worker). Worker-only.
+        std::unordered_set<RE::FormID> g_waitHeld;
 
         const char* NameOf(RE::Actor* a_actor) {
             const char* n = a_actor ? a_actor->GetName() : nullptr;
@@ -143,16 +163,24 @@ namespace MFO::EngageOnSight {
             return false;
         }
 
-        // DESIGN DEFAULT (i), pending marth (review of 1c50696): a follower TOLD TO WAIT
-        // does not engage. Vanilla "wait here" sets the WaitingForPlayer actor value (the
-        // one MFO's [follower] state line already reads); a follower idling on a Sandbox
-        // package is the other "wait" shape. One branch; plain data reads on the worker.
+        // A follower TOLD TO WAIT does not engage (marth 2026-09-25 kept this beside the
+        // Wait-gambit gate). Vanilla "wait here" is exactly the WaitingForPlayer actor value
+        // (the follower dialogue sets it and its wait package is conditioned on it; MFO's
+        // [follower] state line already reads it). The earlier bare "any Sandbox package"
+        // read is DROPPED: sandbox is also the ordinary follower relax/idle shape (the
+        // player sitting, a follower pottering near you), so it was not that command's
+        // package and blocked the gambit far more often than "told to wait" does.
         bool ToldToWait(RE::Actor* a_f) {
-            if (auto* avo = a_f->AsActorValueOwner();
-                avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f)
-                return true;
-            const auto* pkg = a_f->GetCurrentPackage();
-            return pkg && pkg->packData.packType.get() == RE::PACKAGE_PROCEDURE_TYPE::kSandbox;
+            auto* avo = a_f->AsActorValueOwner();
+            return avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f;
+        }
+
+        // Is a_actor fighting the party right now (its currentCombatTarget resolves to the
+        // player or a teammate)? The crime filter's exemption. Main thread.
+        bool FightingParty(RE::Actor* a_actor) {
+            auto  tp = a_actor->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+            auto* t  = tp.get();
+            return t && (t->IsPlayerRef() || t->IsPlayerTeammate());
         }
 
         // MAIN THREAD. The ENEMY test (review of 1c50696, SEV-2). Actor::IsHostileToActor
@@ -161,21 +189,25 @@ namespace MFO::EngageOnSight {
         // a werewolf it names every guard and townsperson, and starting that fight is a
         // hold-wide crime. So, in this order:
         //   (b) a COMMANDED actor whose commander is the player or a teammate (a summon,
-        //       a thrall) is never an enemy;
+        //       a thrall) is never an enemy; and one whose commander has a crime faction
+        //       (a guard's or townsperson's summon / thrall) counts only when it or its
+        //       commander is already fighting the party (GetCrimeFaction is null for any
+        //       commanded actor, so (a) below cannot see it -- review of 72a7964, SEV-4);
         //   (c) a restrained or bleeding-out actor, or one running an IgnoreCombat
         //       package, is not one to start a fight with. (A GHOST check is NOT here:
         //       Actor::IsGhost is an id call, RELOCATION_ID(36286, 37275), with no row in
         //       VerifiedAddresses.h -- backlogged as MFO-B111.);
-        //   then hostile to the player OR to him (design default (ii) below);
+        //   then hostile to the player OR to him (confirmed, below);
         //   (a) an actor with a CRIME FACTION (guards, townsfolk: anyone whose attack is a
         //       crime) counts only when it is ALREADY fighting the party: its
         //       currentCombatTarget resolves to the player or a teammate.
-        // DESIGN DEFAULT (ii), pending marth: hostile to HIM alone (not to the player)
-        // still counts -- the spec says "hostile to the player/party", and he is party.
+        // Hostile to HIM alone (not to the player) still counts -- CONFIRMED by marth
+        // 2026-09-25: "yes, there will be fights without player involvement".
         bool IsEnemy(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc) {
             if (a->IsCommandedActor()) {
                 auto cmd = a->GetCommandingActor();   // HOLD the NiPointer
                 if (cmd && (cmd->IsPlayerRef() || cmd->IsPlayerTeammate())) return false;
+                if (cmd && cmd->GetCrimeFaction() && !FightingParty(a) && !FightingParty(cmd.get())) return false;
             }
             if (const auto* st = a->AsActorState()) {
                 if (st->GetLifeState() == RE::ACTOR_LIFE_STATE::kRestrained || st->IsBleedingOut()) return false;
@@ -184,11 +216,7 @@ namespace MFO::EngageOnSight {
                 pkg && pkg->packData.packFlags.any(RE::PACKAGE_DATA::GeneralFlag::kIgnoreCombat))
                 return false;
             if (!a->IsHostileToActor(a_pc) && !a->IsHostileToActor(a_self)) return false;
-            if (a->GetCrimeFaction()) {
-                auto  tp = a->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
-                auto* t  = tp.get();
-                if (!t || !(t->IsPlayerRef() || t->IsPlayerTeammate())) return false;
-            }
+            if (a->GetCrimeFaction() && !FightingParty(a)) return false;
             return true;
         }
 
@@ -304,6 +332,26 @@ namespace MFO::EngageOnSight {
                 r.dPlayer = t ? t->GetPosition().GetDistance(pcPos) : 0.0f;
                 break;
             }
+            // THE JOIN ESTIMATE (kJoinRadius): the chosen target + every other non-given-up
+            // candidate near it that he or the chosen target can see.
+            if (r.chosen) {
+                r.joiners = 1;
+                auto* ct = RE::TESForm::LookupByID<RE::Actor>(r.chosen);
+                const auto cpos = ct ? ct->GetPosition() : RE::NiPoint3{};
+                int budget = kMaxJoinMeasured;
+                for (const auto& [d, fid] : found) {
+                    if (fid == r.chosen) continue;
+                    if (std::find(a_givenUp.begin(), a_givenUp.end(), fid) != a_givenUp.end()) continue;
+                    auto* o = RE::TESForm::LookupByID<RE::Actor>(fid);
+                    if (!o || !ct || o->GetPosition().GetDistance(cpos) > kJoinRadius) continue;
+                    if (budget <= 0) { ++r.joiners; continue; }   // unmeasured: counts (conservative)
+                    --budget;
+                    if (Sightline::MeasureNow(a_id, fid) == Sightline::Verdict::Visible) { ++r.joiners; continue; }
+                    if (budget <= 0) { ++r.joiners; continue; }
+                    --budget;
+                    if (Sightline::MeasureNow(r.chosen, fid) == Sightline::Verdict::Visible) ++r.joiners;
+                }
+            }
             // Given-up targets that are GONE (see ProbeResult::gone). Hostility here is the
             // bare engine read, not IsEnemy: a target stays given up while the engine still
             // calls it hostile, whatever the filters make of it.
@@ -394,7 +442,13 @@ namespace MFO::EngageOnSight {
             }
         }
         if (ToldToWait(a_f)) {
-            Status(note, a_f, a_id, "standing down: told to wait (WaitingForPlayer set, or on a sandbox package)", now);
+            Status(note, a_f, a_id, "standing down: told to wait (WaitingForPlayer set)", now);
+            return false;
+        }
+        if (g_waitHeld.contains(a_id)) {
+            // marth 2026-09-25: "If wait is higher than anything it stops all gambits below
+            // it." This gambit sits BELOW his list; the table's own last result says Wait won.
+            Status(note, a_f, a_id, "standing down: a Wait rule in his gambit list holds (it outranks this gambit)", now);
             return false;
         }
         if (a_retreatCooling) {
@@ -440,13 +494,13 @@ namespace MFO::EngageOnSight {
                 // The confidence gate on the IN-COMBAT estimate (review of 1c50696): the Of()
                 // he would read once fighting as many foes as the probe counted -- so he never
                 // starts a fight he would at once retreat from.
-                const int   foes = static_cast<int>(r.candidates.size());
+                const int   foes = std::max(1, r.joiners);   // the join estimate, not every enemy in the leash
                 const float conf = Confidence::OfFacing(a_f, foes);
                 auto* t = RE::TESForm::LookupByID<RE::Actor>(r.chosen);
                 if (conf < a_minConfidence) {
                     Status(note, a_f, a_id, "standing down: his in-combat confidence estimate is under the retreat "
                                             "floor (he would start a fight only to flee it)", now,
-                           fmt::format(" -- estimate {:.2f} against {} foe(s), floor {:.2f}", conf, foes,
+                           fmt::format(" -- estimate {:.2f} against {} foe(s) that would join, floor {:.2f}", conf, foes,
                                        a_minConfidence));
                 } else if (t && !t->IsDead() && !t->IsDisabled()) {
                     std::uint32_t h = 0;
@@ -467,10 +521,10 @@ namespace MFO::EngageOnSight {
                         Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
                         spdlog::info("[engage-on-sight] {} ({:08X}) ENGAGE {} ({:08X}): nearest visible enemy, "
                                      "{:.0f}u from him, {:.0f}u from you (leash {:.0f}u), sightline=VISIBLE "
-                                     "({} measured, {} not visible), {} candidate(s); ch.21 entry h={}; "
-                                     "ch.20 pin: {}; in-combat confidence estimate {:.2f}",
+                                     "({} measured, {} not visible), {} candidate(s), {} would join; ch.21 entry "
+                                     "h={}; ch.20 pin: {}; in-combat confidence estimate {:.2f}",
                                      NameOf(a_f), a_id, NameOf(t), r.chosen, r.dSelf, r.dPlayer, r.leash,
-                                     r.measured, r.occluded, r.candidates.size(), h, pin, conf);
+                                     r.measured, r.occluded, r.candidates.size(), foes, h, pin, conf);
                         engaged = true;
                         break;
                     }
@@ -493,9 +547,15 @@ namespace MFO::EngageOnSight {
         return false;
     }
 
+    void NoteWaitRule(RE::FormID a_id, bool a_waitHolds) {
+        if (a_waitHolds) g_waitHeld.insert(a_id);
+        else             g_waitHeld.erase(a_id);
+    }
+
     void Forget(RE::FormID a_id) {
         APMFBridge::ForgetCombatEntry(a_id);
-        g_notes.erase(a_id);   // g_seq is NOT reset: a probe still in flight stays older than any new post
+        g_notes.erase(a_id);
+        g_waitHeld.erase(a_id);   // g_seq is NOT reset: a probe still in flight stays older than any new post
         std::lock_guard lk(g_probeMx);
         g_probes.erase(a_id);
     }
@@ -503,6 +563,7 @@ namespace MFO::EngageOnSight {
     void ClearTransientState() {
         g_gen.fetch_add(1, std::memory_order_relaxed);
         g_notes.clear();
+        g_waitHeld.clear();
         std::lock_guard lk(g_probeMx);
         g_probes.clear();
     }

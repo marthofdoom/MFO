@@ -32,7 +32,10 @@ Read it as history and this block as current.
   probe logs on change only. DESIGN DEFAULTS pending marth: (i) a follower told to wait (WaitingForPlayer or a sandbox
   package) does not engage; (ii) an actor hostile only to the follower still counts. ADDED (marth): no engage in towns /
   inns (player's location or the enemy's, 20 Skyrim.esm LocType keywords, a Clearable/Dungeon tag nearer in wins) unless the
-  player is fighting.
+  player is fighting. ROUND 2 (marth rulings + re-review of 72a7964): a Wait rule that holds in his out-of-combat gambit
+  list stops engage-on-sight (the table's own result, recorded in logistics/Service.cpp); told-to-wait = WaitingForPlayer
+  only; hostile-to-follower-only CONFIRMED; the confidence gate counts only enemies within 1500u of the chosen target and
+  in sight of him or it; a crime-faction commander's summon/thrall is filtered. Backlog MFO-B112/B113.
   FIELD CHECKS: `[engage-on-sight] <name> (<id>) ENGAGE ...` once per engage; APMF `[ch.21] ... ENTERED` with
   `Target is a combat-group target: yes`, then `[ch.20] ... FIRST SOURCE DENY`; after a fight `entry on ... is over
   -- target given up`, and no second ENGAGE on that target while it stays in view.

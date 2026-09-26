@@ -754,3 +754,11 @@ Note: with STAY now "about ten seconds, or until fully healed" (same closing rou
 ### MFO-B111 (SEV-4) -- engage-on-sight: no ghost filter in the enemy test
 Raised against 1c50696 (`feat/mfo-ooc-engage`, tier-A review round 1), 2026-09-25. Coordinator's fix list (as relayed): "(c) skip hostile ghosts, restrained, bleeding-out, or ignore-combat-package actors, where each symbol verifies cleanly (otherwise backlog it)."
 Deferred part: the GHOST check only. `Actor::IsGhost` in the fork is an id call (`Offset::Actor::GetGhost` = `RELOCATION_ID(36286, 37275)`, `src/RE/A/Actor.cpp:780`) with no row in `native/VerifiedAddresses.h`, so using it needs a spec row, a regenerated header and a `SeatVerified()` guard (CLAUDE.md SEAT SELF-CHECK). Restrained / bleed-out / IgnoreCombat shipped in the same round (`EngageOnSight.cpp` `IsEnemy`).
+
+### MFO-B112 (SEV-4) -- engage-on-sight: a stale currentCombatTarget can let a guard through the crime filter
+Raised against 72a7964 (`feat/mfo-ooc-engage`, tier-A re-review), 2026-09-25. Reviewer's finding (verbatim from the review log): "commanded actors of civilians pass the crime filter (GetCrimeFaction returns null for commanded actors); a stale currentCombatTarget can pass it too." Coordinator's framing: "a stale currentCombatTarget letting a guard through after a yield or bounty payment."
+The commanded-actor half was fixed in the next commit (the commander's crime faction is checked). Deferred: `FightingParty` trusts `currentCombatTarget` alone; after the player yields or pays a bounty the guard's handle can still name the player for a while, so one engage could slip through in that window.
+
+### MFO-B113 (SEV-4) -- engage-on-sight: three quest mines read as civilised
+Raised against 72a7964 (`feat/mfo-ooc-engage`, tier-A re-review), 2026-09-25. Reviewer's finding (verbatim from the review log): "Quest mines Kolskeggr/Redbelly/Soljund's (Mine+Dwelling, no Clearable) do read civilised." Coordinator: "the three quest mines read as civilised (Kolskeggr, Redbelly, Soljund's Sinkhole: inert, harmless)."
+Effect: the town/inn filter stops engage-on-sight inside those three while their quest enemies are there (unless the player is fighting). Inert, never a wrong engage.

@@ -18,8 +18,10 @@
 // the player or a player teammate, not commanded by the player or a teammate, not
 // restrained, bleeding out or on an IgnoreCombat package, and hostile to the player
 // OR to him (Actor::IsHostileToActor: the engine's "would attack" read, which alone
-// names guards and townsfolk once the player has a bounty). An actor with a CRIME
-// FACTION counts only when it is already fighting the party. This is NOT the combat
+// names guards and townsfolk once the player has a bounty). Hostile to HIM alone
+// counts -- CONFIRMED by marth 2026-09-25: "yes, there will be fights without player
+// involvement". An actor with a CRIME FACTION -- or a commanded actor whose COMMANDER
+// has one -- counts only when it is already fighting the party. This is NOT the combat
 // foe test (that one reads his combat group's targets); out of combat there is no
 // group, so the scan needs its own filters.
 //
@@ -32,8 +34,8 @@
 // refused = the gambit is inert (logged per follower on transition).
 // It also stands down while: bAutoRetreat is OFF (a follower who starts a fight
 // must be able to break it off), the player sneaks (unless
-// bEngageOnSightSneaking), he is told to wait (WaitingForPlayer, or a sandbox
-// package), his auto-retreat cooldown runs, or his in-combat confidence estimate
+// bEngageOnSightSneaking), he is told to wait (WaitingForPlayer), a Wait rule in his
+// out-of-combat gambit list holds (it outranks this gambit), his auto-retreat cooldown runs, or his in-combat confidence estimate
 // (Confidence::OfFacing against the candidate count) is under the retreat floor.
 //
 // NO LOOP. When Harbinger ends an entry (engine refused, combat ended, target
@@ -57,6 +59,14 @@ namespace MFO::EngageOnSight {
     // gambit's (an entry was filed now, or one is standing and he is not yet
     // fighting): the caller then skips logistics this lap.
     bool Service(RE::Actor* a_follower, RE::FormID a_id, bool a_retreatCooling, float a_minConfidence);
+
+    // Worker. Called by the logistics table's evaluation (logistics/Service.cpp) with its
+    // OUTCOME: true when the scan stopped on a Wait rule (the OPAQUE authored suppress,
+    // GAMBIT_FLOWS §7.1), false when an evaluation ran and did not. marth 2026-09-25: "If
+    // wait is higher than anything it stops all gambits below it" -- engage-on-sight sits
+    // BELOW his gambit list, so while the last evaluation ended on Wait it does not run.
+    // No second evaluation pass: this is the table's own result, recorded where it is made.
+    void NoteWaitRule(RE::FormID a_id, bool a_waitHolds);
 
     // Worker. Dismissal / MFO-off: release his entry claim (Release stops no
     // fight) and forget his per-follower state.

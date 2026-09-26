@@ -32,6 +32,7 @@
 #include "Sightline.h"    // LoS + line-of-fire gate on the OOC hostile-FF direct fallback
 #include "Followers.h"    // #62 on-load beast-head sweep iterates g_active (main thread)
 #include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the loot-waiver sink
+#include "EngageOnSight.h" // marth: a winning Wait rule here also stops engage-on-sight (NoteWaitRule)
 #include <functional>     // #62 self-reposting on-load sweep closure
 #include <memory>         // std::shared_ptr for that closure
 #include "TradeBridge.h"  // #21 econ bridge: MFO_Trade Papyrus round-trip (Phase 0 self-test)
@@ -251,7 +252,10 @@ namespace MFO::Logistics {
             }
         }
 
-        if (!Config::g_logistics.load()) return;   // whole subsystem off by default (#45)
+        if (!Config::g_logistics.load()) {   // whole subsystem off by default (#45)
+            EngageOnSight::NoteWaitRule(id, false);   // no table evaluated -> no Wait holds
+            return;
+        }
 
         // CADENCE GATE (~1 s). Cheap early-out on the frames between logistics
         // ticks -- the Scheduler calls this every time it services the follower
@@ -954,6 +958,9 @@ namespace MFO::Logistics {
             }
         }
 
+        // engage-on-sight reads the OUTCOME of this evaluation (marth: "If wait is higher
+        // than anything it stops all gambits below it"): cleared here, set at the Wait exit.
+        EngageOnSight::NoteWaitRule(id, false);
         if (a_state.logistics().empty()) return;   // no rules -> nothing to run
 
         // FALL-THROUGH scan. Try matching rules in order until one ACTUALLY
@@ -1476,6 +1483,7 @@ namespace MFO::Logistics {
                 }
             }
             else if (op == Vocab::kActWait) {
+                EngageOnSight::NoteWaitRule(id, true);   // engage-on-sight sits BELOW the table
                 return;   // Wait consumes the tick and suppresses below (#3.3) -- stops the scan.
             }
             else {
