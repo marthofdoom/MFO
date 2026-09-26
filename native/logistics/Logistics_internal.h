@@ -840,7 +840,26 @@ namespace MFO::Logistics {
     bool IsIngredientItem(RE::TESBoundObject* a_obj);
     bool RefInPlayerStorage(RE::TESObjectREFR* a_ref);
     bool IsLOTDDropOff(RE::TESObjectREFR* a_ref);
-    bool LockPickable(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
+
+    // defined in logistics/Lockpick.cpp (LP-M1, follower lockpicking of chests; replaces the
+    // old LockPickable). Worker-only; see that file's banner.
+    namespace Lockpick {
+        // The scan's lock gate: may this follower attempt this locked ref? Logs each refusal
+        // reason once per (follower, lock). Read-only.
+        bool Admit(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Clock::time_point a_now);
+        enum class StepResult {
+            kProceed,   // the lock is open (picked, keyed, or already unlocked): transfer now
+            kHold,      // the attempt is in progress: do nothing else this tick
+            kRefused,   // refused or failed: skip this ref (the caller blocklists it transiently)
+        };
+        // The excursion's ARRIVAL at a locked ref. a_excursionEnd = the excursion cap's end.
+        StepResult Step(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, Clock::time_point a_now,
+                        Clock::time_point a_excursionEnd);
+        // Abandon (release the hold, consume nothing) every job its excursion no longer drives.
+        void SweepStale(Clock::time_point a_now);
+        void Abort(RE::FormID a_follower, const char* a_why);
+        void Clear();   // revert / load
+    }
     bool TierReleased(Category a_cat, RE::TESObjectREFR* a_src,
                       const RE::NiPoint3& a_playerPos, Clock::time_point a_now);
 

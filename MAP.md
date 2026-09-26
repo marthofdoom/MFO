@@ -1953,10 +1953,13 @@ module. Module layout:
     timing), included by `Logistics_internal.h` at the block's old position (NOT
     self-contained; never include it directly).
   - `logistics/Logistics.h` (232) = the public API (unchanged, moved whole).
+  - `logistics/Lockpick.cpp` (748, NEW LP-M1 2026-09-25) = follower LOCKPICKING of chests: see the
+    LOCKPICK entry below. Declared in `Logistics_internal.h` (`namespace Lockpick`, `:846`).
   Wave 2 added declarations to `Logistics_internal.h` for helpers that were file-local only
   by position: `EquipTorch`, `HealExcludedWeapon`, `ShedOffRoleWeapon`,
   `MarkJustLooted`, `IsDrinkablePotion`, `IsCoinLoot`, `IsSoulGemItem`, `IsIngredientItem`,
-  `RefInPlayerStorage`, `IsLOTDDropOff`, `LockPickable`, `TierReleased`, `IsPlayerPick`.
+  `RefInPlayerStorage`, `IsLOTDDropOff`, `TierReleased`, `IsPlayerPick` (`LockPickable` was
+  REMOVED by LP-M1: `Lockpick::Admit` replaces it).
 - **PLAYER-COMBAT LOOT INTERRUPT (2026-09-06):** the GLOBAL travel-intent
   backstop (`logistics/Service.cpp:187-252`, runs on EVERY out-of-combat service call, ANY
   follower, ~133 ms-scale — not gated on the 1 s logistics cadence) now also
@@ -2705,6 +2708,48 @@ anonymous-namespace copy — that silently forks the instance).
     destForm test acts on another destination's end. Principle 7: the ends M2 does not react to
     are logged, not guessed at. `Service.cpp` is 1718 lines (past the ~1500 plan-a-split mark,
     under the 2500 backstop): the next brief touching it should propose its split.
+- **LOCKPICK, chests (LP-M1, 2026-09-25, `feat/mfo-lockpick`; ClickUp 86e3edgha; design
+  `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
+  `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-
+  the-lock. Pieces:
+  - **Gate** `Lockpick::Admit` (`Lockpick.cpp:445`, called by the scan `LootScan.cpp:377` after the
+    owner / off-limits bars): refuses (logged once per follower+lock+reason) owned, offlimits,
+    notChest (doors are LP-M2), creature (no `ActorTypeNPC` race keyword: `IdleLockPick` is a
+    humanoid clip), requiresKey without the key, noPicks, a standing failed verdict (`g_fail`:
+    simFail / tooLong / idleEnded / unlockFailed, lifted when his lockpick count or skill rises),
+    and the session-wide INERT cases (`InertReason` `:422`: no main-thread pump / Harbinger absent,
+    below ABI v17 or its v2 idle refused / the `Lockpick.Unlock` self-check row refused).
+  - **Routing:** an admitted LOCKED candidate is never drained in place: both act-loop branches
+    of `LootNearby` send it down the excursion path like a loose ref (`LootScan.cpp:551`, `:664`),
+    and `LootHere` (`LootTake.cpp:706`) refuses any locked ref, so NO transfer path can loot through
+    a lock any more (StripCorpse goes through LootHere).
+  - **Arrival** (`Service.cpp:760`, before StripCorpse): `Lockpick::Step` (`Lockpick.cpp:488`) is a
+    per-follower job: SNAPSHOT (one `MainThread::Post`: lock level, key, picks, clamped skill,
+    `Progression::LockpickEntryPointsFor` (`Progression.cpp:1036`, the NARROW progression query:
+    EP59/63/65 through `HandleEntryPoint` with the menu's own args and seeds; EP62 is inert in the
+    engine and not evaluated), every GMST / INI setting by name -- a missing one REFUSES) ->
+    SIMULATE (`Simulate` `:252`, seeded per follower+lock; engine formulas + the one modelled
+    constant `kBindReactSec`) -> a window that does not fit the excursion cap is not started
+    (noTime; tooLong when it exceeds the whole cap) -> `APMFBridge::ClaimLockpickHold` (ch.1 +
+    ch.12 v2 IdleLockPick at the lock) -> the unpaused pick clock runs only once Harbinger reads
+    the idle claim LIVE; one `ReplayLockpickIdle` per simulated pick break -> at the window's end
+    ONE `MainThread::Post`: RemoveItem of the broken picks from the FOLLOWER, then (success) the
+    engine Unlock `UnlockOnMain` (`:155`, `REL::RelocationID(19821, 20226)`, row `Lockpick.Unlock`,
+    `SeatVerified`) -> the next step sees the ref unlocked -> kProceed -> the transfer.
+  - **Lifecycle:** `SweepStale` (`:712`, top of `ServiceFollower` `Service.cpp:192`) abandons a job
+    whose slot no longer targets its lock or whose arrival step stopped for `kStaleFloor` (3 s);
+    `Abort` from `ReleaseTravelOnCombat` / `OnFollowerRemoved` (`Upkeep.cpp:603` / `:623`); `Clear`
+    from `ClearTransientState` (`Upkeep.cpp:598`). An abandoned pick releases the hold and consumes
+    NOTHING.
+  - **What breaks:** removing the `LootHere` lock refusal re-opens loot-through-the-lock on every
+    path; draining a locked candidate in place (the two `IsLocked()` routing tests) strands it
+    forever (LootHere refuses, no excursion is armed); calling the Unlock off the main thread or
+    without its verified row; letting the follower `Activate` a locked container (the engine's NPC
+    CONT activate unlocks with no skill check -- design section 1); starting the window before
+    the idle claim is LIVE (the clock would run while nothing plays); holding a job after its
+    excursion ended (ch.1 would keep him frozen: the sweep and the combat Abort are the only
+    releases). Crime: #22e stays absolute (owned / offlimits refused twice: scan + judge); MFO
+    never calls TrespassAlarm and never Activates a locked ref.
 - **Loot scan is MULTI-CELL** (`LootNearby` `logistics/LootScan.cpp:21`; cell set built at `:134`):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs
@@ -3763,6 +3808,18 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `LegEnded` `:96` / `NoteStaleSeqLocked` `:102`, `ClaimLootTravel` `:376`, `ReadLootTravelLeg`
     `:494`, `ReleaseLootTravelFor` `:542`) and `ClaimCombatActionDeny` (`:558`, with its file-local
     `EnsureIvalClaimLocked` `:111`).
+  - **LOCKPICK HOLD (LP-M1, ABI v17, 2026-09-25)** in `apmf/Excursion.cpp` (now 745): file-local
+    `g_pickHolds` (`:608`, guarded by `g_mx`), one `LockpickHold` per follower = a ch.12 v2 idle
+    claim (`param.form` = IDLE, `param.target` = lock ref) + a ch.1 `kIntent_MovementBlock`.
+    `LockpickIdleOffered` (`:632`) = ABI >= 17 and no synchronous v2 refusal
+    (`g_idleV2Refused` `:613`, session-stable). `ClaimLockpickHold` (`:637`), `ReplayLockpickIdle`
+    (`:680`, a v3 Repoint with the same idle = one more PlayIdle; the caller's pick-break events
+    only, never a timer), `LockpickHoldStateOf` (`:695`, Pending / Live / Ended with the entry
+    table's never-live floors: 15 unpaused polls AND 2 s; an end is Released at once, idle first
+    then the stand-still), `ReleaseLockpickHold` (`:729`), `ReleaseAllLockpickHolds` (`:738`).
+    Its only client is `logistics/Lockpick.cpp`. **What breaks:** filing a v2 idle on an APMF
+    below v17 (it plays IdleForceDefaultState instead, silently); releasing the stand-still before
+    the idle (the reset would play on a walking follower).
   - **ch.20 TARGET PIN (ABI v13 `kIntent_TargetPin`, feat/mfo-target-pin 2026-09-25).** File-local
     `g_pins` (`Excursion.cpp:191`, guarded by `g_mx`), one `TargetPinClaim` per follower.
     `TargetPinOffered` (`:229`) = APMF present AND ABI >= 13. `PinTarget` (`:234`) files

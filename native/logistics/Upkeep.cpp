@@ -595,10 +595,12 @@ namespace MFO::Logistics {
         g_actorDefer.clear(); // loot M1: actor-block reorder records
         g_idleCycles.clear();
         g_lastBlocklistReassess = {};
+        Lockpick::Clear();    // LP-M1: pick jobs, verdicts and their Harbinger holds are per-session
     }
 
     void ReleaseTravelOnCombat(RE::Actor* a_follower) {
         if (!a_follower) return;
+        Lockpick::Abort(a_follower->GetFormID(), "combat");   // LP-M1: never hold him still into a fight
         const int slot = SlotIndexOf(a_follower->GetFormID());
         if (slot >= 0) {
             // EVICT him from the loot alias and re-evaluate NOW so the combat
@@ -618,6 +620,7 @@ namespace MFO::Logistics {
         // declares from scratch. Idempotent (no claim -> no-op, no log).
         APMFBridge::ReleaseEquipAuthority(a_id);
         ForgetEquipDeclaration(a_id);
+        Lockpick::Abort(a_id, "dismissed");   // LP-M1: release his pick hold, if any
         // A follower dismissed DURING an excursion may still hold alias 0 (Clear
         // hasn't run). With his framework claim gone, MFO's static-60 claim is his
         // sole one -- he'd walk to the stale corpse and re-latch every load.
