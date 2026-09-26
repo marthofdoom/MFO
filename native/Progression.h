@@ -356,11 +356,13 @@ namespace MFO::Progression {
     //   EP59 kModLockpickSweetSpot     (owner, lockRef, &v), v starts 1.0 (a multiplier)
     //   EP63 kSetLockpickStartingArc   (owner, &v),          v starts 0.0 (degrees; 0 = none)
     //   EP65 kMakeLockpicksUnbreakable (owner, &v),          v starts 0.0 (nonzero = no wear)
-    // EP62 kModLockpickLevelAllowed is NOT evaluated: no engine code calls HandleEntryPoint
-    // with 62 on either runtime and sLockpickInsufficientPerks is referenced only by its
-    // own static registration, so the player's odds never consult it. Honouring it on a
-    // follower would make his odds LESS faithful, and its argument shape has no engine
-    // caller to verify against. ClickUp 86e3eevgz (batch 8) will fold PROGRESSION's
+    // EP62 kModLockpickLevelAllowed is NOT evaluated. The evidence is PARTIAL, not a proof:
+    // no HandleEntryPoint call site on either runtime loads 62 (0x3E) as an immediate, and
+    // sLockpickInsufficientPerks is referenced only by its own static registration; but the
+    // call sites that pass the entry point in a REGISTER (22 of them on 1.6.1170, per the
+    // tier-A review of cbde1c3) were not resolved, so a computed 62 is not ruled out.
+    // Honouring it on a follower would still have no engine caller to verify its argument
+    // shape against. ClickUp 86e3eevgz (batch 8) will fold PROGRESSION's
     // follower copies of hidden player-only perk effects (a perk on the player that is in
     // no AVI tree, e.g. Requiem's RFTI_Player_Lockpicking) into THIS query; until then it
     // reads the follower's own perks only. MAIN THREAD ONLY (perk condition evaluation).

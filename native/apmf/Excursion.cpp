@@ -582,26 +582,24 @@ namespace MFO::APMFBridge {
     // Contract: APMF_API.h kIntent_Idle (v17 param) / kIntent_MovementBlock; Harbinger
     // Docs/INTEGRATION.md "Playing an idle at a target". The caller (logistics/Lockpick.cpp)
     // owns the window: it files the hold at the start of a pick, Repoints the idle once per
-    // simulated pick break, and releases at the window's end. Nothing here re-asserts.
+    // clip length (the one-shot clip ends), and releases at the window's end. Nothing here re-asserts.
     namespace {
         constexpr std::uint32_t kIdleV2MinAbi = 17;   // the ABI that gives ch.12 a form + target
 
         // PENDING vs ENDED (INTEGRATION.md "When a claim is refused -- and the two timings"):
         // IsClaimLive reads APMF's PUBLISHED map, which a RequestEx reaches only at APMF's next
         // writer Drain (not while a menu pauses the game). A never-seen-live idle claim is
-        // judged ended only after this many UNPAUSED polls AND this much wall time since the
-        // filing. FLOORS, not expiries (principle 9): they only delay noticing an end. Same
-        // values and reasoning as the ch.21 entry table (apmf/CombatEntry.cpp).
-        constexpr std::uint32_t kPickNeverLivePolls = 15;
-        constexpr auto          kPickNeverLiveFloor = std::chrono::seconds(2);
+        // judged ended only after this much UNPAUSED time since the filing, measured by the
+        // caller on the Scheduler's unpaused service clock (~2 s of running game = the entry
+        // table's 15 sweeps x 133 ms, apmf/CombatEntry.cpp). A FLOOR, not an expiry
+        // (principle 9): it only delays noticing an end, and a pause never ages it.
+        constexpr double kPickNeverLiveUnpausedSec = 2.0;
 
         struct LockpickHold {
             APMF_API::Handle idle  = APMF_API::kInvalidHandle;   // ch.12 v2 (invalid once ENDED)
             APMF_API::Handle block = APMF_API::kInvalidHandle;   // ch.1 stand-still
             RE::FormID       idleForm = 0;
             RE::FormID       lockRef  = 0;
-            std::chrono::steady_clock::time_point filedAt{};
-            std::uint32_t    unpausedPolls = 0;
             bool             everLive = false;
             bool             ended    = false;
         };
@@ -611,11 +609,6 @@ namespace MFO::APMFBridge {
         // this session (VR, runtime, [Idle] bIdleV2=0, the SetupSpecialIdle self-check,
         // before kDataLoaded). Session-stable, never reset. Atomic: read without g_mx.
         std::atomic<bool> g_idleV2Refused{ false };
-
-        bool PickGamePaused() {
-            auto* ui = RE::UI::GetSingleton();   // the same read the entry / pin tables make on this worker
-            return ui && ui->GameIsPaused();
-        }
 
         void ReleasePickHoldLocked(const APMF_API::APMF_API_v2* api, LockpickHold& h) {
             if (api) {
@@ -672,7 +665,6 @@ namespace MFO::APMFBridge {
         h.block    = hb;
         h.idleForm = a_idle;
         h.lockRef  = a_lockRef;
-        h.filedAt  = std::chrono::steady_clock::now();
         g_pickHolds.emplace(a_follower, h);
         return PickHoldResult::Filed;
     }
@@ -692,7 +684,7 @@ namespace MFO::APMFBridge {
         return true;
     }
 
-    PickHoldState LockpickHoldStateOf(RE::FormID a_follower) {
+    PickHoldState LockpickHoldStateOf(RE::FormID a_follower, double a_unpausedSinceFiled) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         std::scoped_lock lock(g_mx);
         const auto it = g_pickHolds.find(a_follower);
@@ -708,12 +700,8 @@ namespace MFO::APMFBridge {
             h.everLive = true;
             return PickHoldState::Live;
         }
-        if (!h.everLive) {
-            if (!PickGamePaused()) ++h.unpausedPolls;
-            if (h.unpausedPolls < kPickNeverLivePolls ||
-                std::chrono::steady_clock::now() - h.filedAt < kPickNeverLiveFloor)
-                return PickHoldState::Pending;
-        }
+        if (!h.everLive && a_unpausedSinceFiled < kPickNeverLiveUnpausedSec)
+            return PickHoldState::Pending;
         spdlog::info("[lockpick] {:08X}: the ch.12 idle claim at {:08X} ENDED on Harbinger's side (h={}, {}). "
                      "Harbinger ends it when the idle could not be played or the engine refused it, or the "
                      "follower died / unloaded; APMF's '[ch.12] ... idle claim ended' line names the reason.",

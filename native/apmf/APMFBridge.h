@@ -458,7 +458,7 @@ namespace MFO::APMFBridge {
     // with param.form = the IDLE (IdleLockPick) and param.target = the lock ref (Harbinger
     // INTEGRATION.md "Playing an idle at a target"). Harbinger makes ONE
     // AIProcess::PlayIdle per declaration; a Repoint with the same idle is a new
-    // declaration (one per simulated pick break). Release resets only a HELD idle.
+    // declaration (the caller replays once per clip length). Release resets only a HELD idle.
     // There is NO MFO direct road: Harbinger absent, older than v17, or a synchronous
     // refusal of the v2 idle = lockpicking is inert (an APMF below v17 would not refuse a
     // form, it would silently play IdleForceDefaultState instead -- hence the version gate).
@@ -481,9 +481,11 @@ namespace MFO::APMFBridge {
     bool LockpickIdleOffered();
     PickHoldResult ClaimLockpickHold(RE::FormID a_follower, RE::FormID a_idle, RE::FormID a_lockRef);
     // Repoint the idle claim with the same idle + target (a NEW declaration: one more
-    // PlayIdle). False when no live hold. Never on a timer: the caller's own events only.
+    // PlayIdle). False when no live hold. The caller replays on the clip-length cadence, never mid-clip.
     bool ReplayLockpickIdle(RE::FormID a_follower);
-    PickHoldState LockpickHoldStateOf(RE::FormID a_follower);
+    // a_unpausedSinceFiled = UNPAUSED seconds since ClaimLockpickHold (the caller's unpaused
+    // service clock): a never-seen-live idle claim stays Pending below 2 s of running game.
+    PickHoldState LockpickHoldStateOf(RE::FormID a_follower, double a_unpausedSinceFiled);
     // Release both claims (idle first, then the stand-still) and forget the hold. No-op when none.
     void ReleaseLockpickHold(RE::FormID a_follower);
     // Revert / load teardown: release and forget every hold.

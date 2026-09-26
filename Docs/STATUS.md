@@ -13,6 +13,17 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-26 branch `feat/mfo-lockpick` (off `main` `53d61c0`; NOT merged, NOT deployed). Follower lockpicking of CHESTS, LP-R0 + LP-M1, batch L, tier A. ClickUp 86e3edgha.**
+  NEW `logistics/Lockpick.cpp` (MAP section 4 LOCKPICK entry). Needs Harbinger ABI v17 (ch.12 Idle v2, unreleased at
+  c0f0e43); below it locked chests are skipped (no loot through a lock on any road). A seeded outcome that would fail is
+  never started (zero picks spent). The IdleLockPick clip (5.6 s, `kIdleClipSec`) replays on a clip-length cadence for
+  the whole pick window.
+  FIELD CHECKS (Tuxborn): one `[lockpick] ... seeded outcome: OPENS ...` line per chest (level / skill / sweet / partial /
+  life / EP59/63/65 / breaks / seconds), then `PICKED ... broke N pick(s) ... (R replay(s))` and the loot line; the
+  follower's pick count drops by N; the player can open the chest with no pick; APMF `[ch.12] ... ANIMATION CONFIRMED`
+  for IdleLockPick, **NO `REFUSED` on any replay** (a replay is a Repoint of the same idle), and the Release line's
+  `IdleStop N ms after the call` (correct `kIdleClipSec` from it); refusals once each with their reason (owned, noPicks,
+  requiresKey, creature, simFail with "needs B break(s)"); no bounty.
 - **2026-09-25 branch `fix/mfo-teleport-leash` (off `main` `7b6f405`; NOT merged, NOT deployed). Teleport-mod leash compatibility, batch L, tier B. ClickUp 86e3ec824.**
   FINDING: the loot leash WAS already enforced mid-trip (`logistics/Service.cpp` `outOfLeash`: follower->player > LeashRadius x1.15 ends the excursion, ~1 s cadence); the target is only leash-checked at selection. NEW `logistics/TeleportCompat.{h,cpp}`: detects Automatic Follower Teleporter NG (loaded DLL + its INI `[Teleport]` fDrawDistance / fDrawnDistance / fBehindOffset / bNoTeleportOnHorse / bOnlyAllowTeleportOnCombatStart), logs Simple Follower Framework as checked-no-teleport. While the player's weapon is drawn the loot leash is capped at D-350 (select) / D-150 (release), D = min(fDraw, fDrawn); a Walking leg whose TARGET lies past the release while clamped re-plans; GENERIC (every install, not AFT-gated): a one-tick jump to the player's side (>= 800 u, >= 700 u/s, lands <= 1000 u from him after closing >= 600 u; mounted follower excluded) ends the leg cleanly (no stall / strike / blocklist) and re-plans. Clamped mid-trip release is best-effort; recognition is the backstop.
   FIELD CHECKS (LoreRim): one `[teleport-compat] Automatic Follower Teleporter NG IS LOADED ...` line; `[teleport-compat] player weapon DRAWN ... capped at 1150 select / 1322 release` on draw; `[loot] ... r=... leash=1150` scan lines while drawn; no AFT yank during a drawn-weapon loot trip; a draw with a follower past 2000 u gives `[loot] ... TELEPORTED to the player mid-leg ...` and he carries on with a near item.

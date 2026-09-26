@@ -12,12 +12,14 @@
 //     no standing failed verdict. Refusals are logged once per (follower, lock, reason).
 //   * Step()   (the excursion's ARRIVAL, worker): travel -> a main-thread snapshot (skill, the
 //     follower's lockpick entry points through the narrow progression query, the GMSTs / INI
-//     settings, picks, key) -> the seeded SIMULATION -> Harbinger ch.1 stand-still + ch.12 v2
-//     IdleLockPick at the lock for the simulated seconds (one Repoint per simulated pick
-//     break) -> on success ONE main-thread post that removes the broken picks from the
-//     FOLLOWER's inventory and calls the engine's own Unlock (bound by id, verified row) ->
-//     the lock reads unlocked -> the existing transfer (StripCorpse) runs. On failure the
-//     same post removes every pick used and the lock stays locked.
+//     settings, picks, key) -> the seeded SIMULATION, run once WITHOUT a pick cap, giving the
+//     breaks B the lock needs -> a KNOWN FAILURE IS NEVER STARTED (B >= picks held, or a sweet
+//     spot <= 0): refused with zero consumption and a standing verdict that lifts when his
+//     picks exceed B or his skill rises -> Harbinger ch.1 stand-still + ch.12 v2 IdleLockPick
+//     at the lock for the simulated seconds, re-played on the clip-length cadence for the
+//     whole window -> ONE main-thread post that re-validates, removes the B broken picks from
+//     the FOLLOWER's inventory and calls the engine's own Unlock (bound by id, verified row)
+//     -> the lock reads unlocked -> the existing transfer (StripCorpse) runs.
 //   * LootHere refuses a locked ref (logistics/LootTake.cpp), so nothing loots through a lock.
 //
 // THE SIMULATION (LP-R0, disassembly of both runtimes; agentlog mfo-lockpick.md). The engine
@@ -34,12 +36,18 @@
 //   TENSION: while the lock is held at its allowed angle (< max) the pick's health drains at
 //            100 / life per second (a pick survives `life` seconds of cumulative binding;
 //            health carries across probes of the same pick); EP65 nonzero = no drain; life 0
-//            = an instant break; a break costs one lockpick and resets health to 100;
+//            = an instant break; a NEGATIVE life makes the drain positive and the engine
+//            clamps health at 100, so it never breaks (treated so here, and logged); a break
+//            costs one lockpick and resets health to 100;
 //   success = the lock reaches fLockMaxAngle, then fUnlockDoorDelay seconds.
-// The SEARCHER is the one modelled (non-engine) part: it sweeps from the start angle in steps
-// of the partial window until the lock gives, then narrows (pattern search on how far the lock
-// turned). It holds a binding lock for kBindReactSec before letting go. Seeded per
-// (follower, lock) so a re-issue of the same lock replays the same outcome.
+// The SEARCHER is the one modelled (non-engine) part. Phase A sweeps from the start angle with
+// a stride of 2*(sweet/2 + partial) - sweet/2: the felt window around the center is
+// sweet/2 + partial wide on each side, and that stride leaves every center within
+// (partial + sweet/4) of some probe, so no center is missed. Phase B INFERS the distance from
+// how far the lock turned, d = sweet/2 + partial * (1 - A / fLockMaxAngle) (the allowed-angle
+// formula solved for d), and probes best +/- d (the side order is seeded); the right side
+// lands on the center. The searcher holds a binding lock for kBindReactSec before letting go.
+// Seeded per (follower, lock) so a re-issue of the same lock replays the same outcome.
 //
 // THREADING. Admit / Step / SweepStale / Abort / Clear run on the tick's job worker (#4, #72);
 // their state is worker-only. The engine reads the snapshot needs (perk entry points evaluate
@@ -53,6 +61,7 @@
 #include "Logistics_internal.h"
 #include "apmf/APMFBridge.h"   // ch.1 + ch.12 v2 lockpick hold (APMF ABI v17)
 #include "Runtime.h"           // SeatVerified(): the mit-3.7 F1 self-check gate (Lockpick.Unlock row)
+#include "Scheduler.h"         // ServiceClock(): the UNPAUSED service clock every pick timer runs on
 
 #include <cmath>
 #include <mutex>
@@ -75,31 +84,36 @@ namespace MFO::Logistics::Lockpick {
         // turning is the player's reaction, which no binary contains. A quarter second is a
         // typical human visual reaction. Flagged for review.
         constexpr float kBindReactSec = 0.25f;
-        // Pattern-search bounds: a sweet spot of 0 (an EP59 of 0) never opens, so the
-        // search must end. A cap on the number of probes and a floor on the step are the
-        // only exits besides success and running out of picks.
+        // A backstop on the number of probes. With a sweet spot > 0 (a sweet spot <= 0 is
+        // refused before simulating) the searcher succeeds in a handful of probes; this only
+        // bounds float corner cases.
         constexpr int   kProbeCap  = 512;
-        constexpr float kMinStepDeg = 0.001f;
 
+        // THE IdleLockPick CLIP LENGTH (seconds). The clip is one-shot, so it is re-played on
+        // this cadence from the last play for the WHOLE pick window (marth: proper animations
+        // for ALL actions). 5.6 s is Harbinger INTEGRATION.md's figure for 0x0BB051; CORRECT
+        // IT from the first field log's Release line ("the graph raised IdleStop N ms after
+        // the call"). Never re-played on a pick break mid-clip.
+        constexpr double kIdleClipSec = 5.6;
+
+        // All three floors below run on the Scheduler's UNPAUSED service clock (seconds), so
+        // a menu or a pause never ages a pick. FLOORS, not expiries (principle 9).
         // A snapshot that never comes back (the main-thread pump stalled) ends the attempt
-        // loudly after this long. A FLOOR: the pump drains every frame.
-        constexpr auto kSnapshotFloor = std::chrono::seconds(5);
+        // loudly after this long; the pump drains every frame.
+        constexpr double kSnapshotFloorSec = 5.0;
         // A posted Unlock that has not shown up on the ref after this long is a failure,
-        // logged, never retried in place. A floor (one frame is the real latency).
-        constexpr auto kUnlockFloor = std::chrono::seconds(3);
+        // logged, never retried in place (one frame is the real latency).
+        constexpr double kUnlockFloorSec = 3.0;
         // A pick job whose arrival step has not run for this long is abandoned (the caller
         // stopped driving it: a courtesy hold, a leash, a teleport). Three logistics ticks
         // (kLogisticsInterval is 1 s), so a live job is never aged out. Abandoning releases
         // the hold and consumes nothing.
-        constexpr auto kStaleFloor = std::chrono::seconds(3);
-        // Unpaused pick clock: one step of it is capped here (the logistics cadence is 1 s;
-        // a longer gap is a pause or a load, not picking time).
-        constexpr float kMaxClockStep = 2.0f;
+        constexpr double kStaleFloorSec = 3.0;
 
         enum class Reason : std::uint8_t {
             kNone, kOwned, kOffLimits, kNotChest, kRequiresKey, kNoPicks, kCreature,
             kNoHarbinger, kNoMainThread, kUnlockSeat, kSimFail, kTooLong, kNotLocked,
-            kGone, kSettings, kIdleEnded, kUnlockFailed, kNoTime,
+            kGone, kSettings, kIdleEnded, kUnlockFailed, kNoTime, kNoSweetSpot,
         };
         const char* ReasonName(Reason a_r) {
             switch (a_r) {
@@ -121,6 +135,7 @@ namespace MFO::Logistics::Lockpick {
             case Reason::kIdleEnded:    return "idleEnded";
             case Reason::kUnlockFailed: return "unlockFailed";
             case Reason::kNoTime:       return "noTime";
+            case Reason::kNoSweetSpot:  return "noSweetSpot";
             }
             return "?";
         }
@@ -235,18 +250,20 @@ namespace MFO::Logistics::Lockpick {
             int      level = 0;        // 0..4
             float    ep59 = 1.0f, ep63 = 0.0f;
             bool     unbreakable = false;
-            int      picks = 0;
             Settings s{};
             std::uint64_t seed = 0;
         };
+        // The run is UNCAPPED on picks: `broken` is the number of breaks the lock needs (B).
+        // With P picks held the seeded attempt succeeds exactly when B < P (the path up to the
+        // success probe does not depend on how many picks are held).
         struct SimOut {
-            bool   success = false;
-            int    broken = 0;
+            bool   success = false;    // false only when no sweet spot could be found
+            int    broken = 0;         // B: breaks before the opening probe
             float  seconds = 0.0f;
             int    probes = 0;
             bool   probeCap = false;
+            bool   negativeLife = false;
             float  sweet = 0, partial = 0, life = 0, center = 0, start = 0;
-            std::vector<float> breakAt;   // window-relative seconds of each simulated break
         };
 
         SimOut Simulate(const SimIn& a_in) {
@@ -258,7 +275,12 @@ namespace MFO::Logistics::Lockpick {
             o.sweet   = s.sweet[L] * (s.sweetBase + s.sweetMult * a_in.skill) * a_in.ep59 + 0.0f * s.brokenMult;
             o.partial = s.partial[L] * (s.partialBase + s.partialMult * a_in.skill);
             o.life    = (s.brkBase + s.brkMult * a_in.skill) * s.brk[L] * 1.0f;
+            if (o.sweet <= 0.0f) {       // never opens: the caller refuses before starting
+                o.probeCap = true;
+                return o;
+            }
             const float half = o.sweet * 0.5f;
+            const float partial = std::max(o.partial, 0.0f);
             const float lo = half - s.pickMax, hi = s.pickMax - half;
             o.center = lo + rng.U() * (hi - lo);
             float p0 = 0.0f;
@@ -268,12 +290,16 @@ namespace MFO::Logistics::Lockpick {
                 p0 = a + rng.U() * (b - a);
             }
             o.start = p0;
+            // The engine: health += (-100 / life) * dt, clamped to [0, 100]. life < 0 -> the
+            // drain is positive and health stays at 100: no break. life == 0 -> an instant break.
+            o.negativeLife = o.life < 0.0f;
+            const bool noWear = a_in.unbreakable || o.negativeLife;
 
             auto allowed = [&](float a_p) {
                 const float d = std::fabs(a_p - o.center);
                 if (d <= half) return s.lockMax;
-                if (d > half + o.partial) return 0.0f;
-                return (1.0f - (d - half) / o.partial) * s.lockMax;
+                if (partial <= 0.0f || d > half + partial) return 0.0f;
+                return (1.0f - (d - half) / partial) * s.lockMax;
             };
             float t = 0.0f, health = 100.0f;
             bool done = false;
@@ -289,8 +315,8 @@ namespace MFO::Logistics::Lockpick {
                 }
                 t += A / s.rotSpeed;              // the lock turns until it binds
                 float bind = kBindReactSec;
-                if (!a_in.unbreakable) {
-                    if (o.life <= 0.0f) {         // the engine's zero-life branch: an instant break
+                if (!noWear) {
+                    if (o.life == 0.0f) {         // the engine's zero-life branch: an instant break
                         bind = 0.0f;
                         health = 0.0f;
                     } else {
@@ -301,49 +327,56 @@ namespace MFO::Logistics::Lockpick {
                     }
                 }
                 t += bind;
-                if (!a_in.unbreakable && health <= 0.0f) {
+                if (!noWear && health <= 0.0f) {
                     ++o.broken;
-                    o.breakAt.push_back(t);
                     health = 100.0f;
-                    if (o.broken >= a_in.picks) done = true;
                 }
                 t += A / (2.0f * s.rotSpeed);     // spring back at twice the turn speed
                 return A;
             };
-            auto clampP = [&](float a_p) { return std::clamp(a_p, -s.pickMax, s.pickMax); };
+            auto inDomain = [&](float a_p) { return a_p >= -s.pickMax && a_p <= s.pickMax; };
 
-            // Phase A: sweep outward from the start in steps of the partial window. Coverage:
-            // any center lies within step/2 of a probe, inside the felt window (half+partial).
-            const float step = o.partial > 0.0f ? o.partial : std::max(o.sweet, 1.0f);
+            // Phase A: sweep outward from the start with stride half + 2*partial (see the
+            // banner: every center is within partial + sweet/4 < sweet/2 + partial of a probe).
+            const float stride = half + 2.0f * partial;
             const float dir0 = (rng.Next() & 1ull) ? 1.0f : -1.0f;
+            // A step that would leave the pick's range probes the range END once instead (the
+            // last in-range probe and the end are less than a stride apart, so coverage holds
+            // up to the edge), then that side is exhausted.
             float best = 0.0f, bestA = -1.0f;
+            bool exhausted[2] = { false, false };
             for (int k = 0; !done && o.probes < kProbeCap; ++k) {
                 bool any = false;
                 for (int side = 0; side < (k == 0 ? 1 : 2) && !done; ++side) {
-                    const float off = static_cast<float>(k) * step * (side == 0 ? dir0 : -dir0);
-                    const float p   = p0 + off;
-                    if (p < -s.pickMax || p > s.pickMax) continue;
+                    if (exhausted[side]) continue;
+                    float p = p0 + static_cast<float>(k) * stride * (side == 0 ? dir0 : -dir0);
+                    if (!inDomain(p)) {
+                        p = std::clamp(p, -s.pickMax, s.pickMax);
+                        exhausted[side] = true;
+                    }
                     any = true;
                     const float A = probe(p);
                     if (A > 0.0f && A > bestA) { best = p; bestA = A; }
                 }
                 if (bestA > 0.0f || !any) break;
             }
-            // Phase B: pattern search on how far the lock turned, halving the step.
-            float h   = std::max(o.partial * 0.5f, half);
+            // Phase B: infer the distance from how far the lock turned and probe both sides.
             float dir = dir0;
-            while (!done && bestA > 0.0f && o.probes < kProbeCap && h >= kMinStepDeg) {
-                const float p1 = clampP(best + dir * h);
-                const float A1 = probe(p1);
+            while (!done && bestA > 0.0f && o.probes < kProbeCap) {
+                const float d = half + partial * (1.0f - bestA / s.lockMax);
+                float nb = best, nA = bestA;
+                for (int side = 0; side < 2 && !done; ++side) {
+                    const float p = best + (side == 0 ? dir : -dir) * d;
+                    if (!inDomain(p)) continue;
+                    const float A = probe(p);
+                    if (A > nA) { nb = p; nA = A; }
+                }
                 if (done) break;
-                if (A1 > bestA) { best = p1; bestA = A1; continue; }
-                const float p2 = clampP(best - dir * h);
-                const float A2 = probe(p2);
-                if (done) break;
-                if (A2 > bestA) { best = p2; bestA = A2; dir = -dir; continue; }
-                h *= 0.5f;
+                if (nA <= bestA) break;   // no progress (float corner): give up, logged by the caller
+                if (nb < best) dir = -1.0f; else dir = 1.0f;
+                best = nb; bestA = nA;
             }
-            if (!done) o.probeCap = true;   // no sweet spot to find (e.g. EP59 = 0) or cap hit
+            if (!done) o.probeCap = true;
             o.seconds = t;
             return o;
         }
@@ -354,7 +387,10 @@ namespace MFO::Logistics::Lockpick {
         }
         // A standing failed verdict: the lock is refused for this follower until his
         // lockpick count or his skill rises above what the verdict was reached with.
+        // `picks` is the threshold: refused while he holds <= picks lockpicks (and his skill has
+        // not risen). For simFail it is B, the breaks the lock needs, so it lifts at B+1 picks.
         struct FailVerdict { Reason why = Reason::kNone; std::int32_t picks = 0; float skill = 0.0f; };
+        constexpr std::int32_t kNoPickCountHelps = 0x7FFFFFFF;   // retried on a skill rise only
         std::unordered_map<std::uint64_t, FailVerdict> g_fail;
         // Log-once memory: the last reason logged per (follower, lock).
         std::unordered_map<std::uint64_t, Reason> g_logged;
@@ -378,16 +414,21 @@ namespace MFO::Logistics::Lockpick {
         std::uint64_t g_nextTicket = 1;                    // worker-only
 
         enum class Phase : std::uint8_t { kSnapshot, kPicking, kUnlocking };
+        // Every time below is on the Scheduler's UNPAUSED service clock (Scheduler::ServiceClock).
         struct Job {
             RE::FormID    ref = 0;
             Phase         phase = Phase::kSnapshot;
             std::uint64_t ticket = 0;
-            Clock::time_point startedAt{}, lastStep{}, unlockPostedAt{};
+            double        startedAt = 0.0;     // the attempt began (snapshot posted)
+            double        lastStep = 0.0;      // the arrival step last ran (SweepStale reads it)
+            double        filedAt = 0.0;       // the hold was filed (the never-live floor)
+            double        liveAt = -1.0;       // Harbinger first read the idle claim live (-1 = not yet)
+            double        lastPlay = 0.0;      // the last (re)play, relative to liveAt
+            double        unlockPostedAt = 0.0;
             bool          viaKey = false;
             bool          holdFiled = false;
-            float         clock = 0.0f;        // unpaused pick-window seconds elapsed
+            int           replays = 0;
             float         window = 0.0f;       // the simulated seconds
-            std::size_t   nextBreak = 0;
             int           level = 0;
             float         skill = 0.0f;
             std::int32_t  picksHeld = 0;
@@ -503,8 +544,8 @@ namespace MFO::Logistics::Lockpick {
             j.ref       = rid;
             j.phase     = Phase::kSnapshot;
             j.ticket    = g_nextTicket++;
-            j.startedAt = a_now;
-            j.lastStep  = a_now;
+            j.startedAt = Scheduler::ServiceClock();
+            j.lastStep  = j.startedAt;
             const std::uint64_t ticket = j.ticket;
             {
                 std::scoped_lock lk(g_snapMx);
@@ -539,9 +580,10 @@ namespace MFO::Logistics::Lockpick {
         }
 
         Job& j = jt->second;
-        // Unpaused pick clock (the caller runs only on unpaused services).
-        const float dt = std::chrono::duration<float>(a_now - j.lastStep).count();
-        j.lastStep = a_now;
+        // The UNPAUSED service clock: the caller runs only on unpaused services, and the
+        // clock itself advances only while the game runs (Scheduler.cpp g_serviceClock).
+        const double clk = Scheduler::ServiceClock();
+        j.lastStep = clk;
 
         if (j.phase == Phase::kSnapshot) {
             Snap s{};
@@ -554,10 +596,9 @@ namespace MFO::Logistics::Lockpick {
                 }
             }
             if (!s.done) {
-                if (a_now - j.startedAt < kSnapshotFloor) return StepResult::kHold;
-                spdlog::error("[lockpick] {:08X}: the main-thread snapshot for {:08X} never came back ({}s) -- "
-                              "attempt dropped", fid, rid,
-                              std::chrono::duration_cast<std::chrono::seconds>(kSnapshotFloor).count());
+                if (clk - j.startedAt < kSnapshotFloorSec) return StepResult::kHold;
+                spdlog::error("[lockpick] {:08X}: the main-thread snapshot for {:08X} never came back ({:.0f}s of "
+                              "running game) -- attempt dropped", fid, rid, kSnapshotFloorSec);
                 EndJob(fid, nullptr);
                 return StepResult::kRefused;
             }
@@ -571,6 +612,7 @@ namespace MFO::Logistics::Lockpick {
             j.skill     = s.skill;
             j.picksHeld = s.picks;
             j.viaKey    = s.hasKey;
+            const auto pairKey = PairKey(fid, rid);
             if (j.viaKey) {
                 // The player's key road: no pick, no odds. The follower still plays the
                 // idle at the lock for the success tail (the lock turning home + the delay).
@@ -589,28 +631,48 @@ namespace MFO::Logistics::Lockpick {
                 in.ep59        = s.ep.sweetSpotMult;
                 in.ep63        = s.ep.startingArc;
                 in.unbreakable = s.ep.unbreakable;
-                in.picks       = s.picks;
                 in.s           = s.s;
-                in.seed        = PairKey(fid, rid) ^ 0x4C4F434B5049434Bull;   // "LOCKPICK"
-                j.sim = Simulate(in);
+                in.seed        = pairKey ^ 0x4C4F434B5049434Bull;   // "LOCKPICK"
+                j.sim = Simulate(in);   // UNCAPPED on picks: j.sim.broken = B
             }
             j.window = j.sim.seconds;
             const float left = std::chrono::duration<float>(a_excursionEnd - a_now).count();
+            const bool enough = j.viaKey || (j.sim.success && j.sim.broken < j.picksHeld);
             spdlog::info("[lockpick] {:08X}: {:08X} '{}' {} lock ({}), skill {:.0f}, picks {}{} | sweet {:.2f} "
-                         "partial {:.2f} life {:.3f}s center {:.1f} start {:.1f} | EP59 {:.3f} EP63 {:.1f} EP65 {} | "
-                         "-> {} after {} probe(s), {} broken, {:.1f}s{}",
+                         "partial {:.2f} life {:.3f}s{} center {:.1f} start {:.1f} | EP59 {:.3f} EP63 {:.1f} EP65 {} | "
+                         "seeded outcome: {} after {} probe(s), needs {} break(s), {:.1f}s{}",
                          fid, rid, a_ref->GetDisplayFullName() ? a_ref->GetDisplayFullName() : "?",
                          LevelName(j.level), j.level, j.skill, j.picksHeld, j.viaKey ? " (HAS THE KEY)" : "",
-                         j.sim.sweet, j.sim.partial, j.sim.life, j.sim.center, j.sim.start,
+                         j.sim.sweet, j.sim.partial, j.sim.life, j.sim.negativeLife ? " (NEGATIVE: no wear, as the engine)" : "",
+                         j.sim.center, j.sim.start,
                          s.ep.sweetSpotMult, s.ep.startingArc, s.ep.unbreakable ? 1 : 0,
-                         j.sim.success ? "SUCCESS" : (j.sim.probeCap ? "FAIL (no sweet spot found)" : "FAIL (out of picks)"),
+                         !j.sim.success ? "NO SWEET SPOT" : (enough ? "OPENS" : "OUT OF PICKS"),
                          j.sim.probes, j.sim.broken, j.window, j.viaKey ? " (key)" : "");
+            // A KNOWN FAILURE IS NEVER STARTED (coordinator decision pending marth: no picks are
+            // spent on a seeded failure). Zero consumption, a standing verdict, a logged reason.
+            if (!j.sim.success) {
+                g_fail[pairKey] = FailVerdict{ Reason::kNoSweetSpot, kNoPickCountHelps, j.skill };
+                LogRefusal(fid, a_ref, Reason::kNoSweetSpot,
+                           std::format(" -- sweet spot {:.3f} (EP59 {:.3f}); retried when his skill rises",
+                                       j.sim.sweet, s.ep.sweetSpotMult));
+                EndJob(fid, nullptr);
+                return StepResult::kRefused;
+            }
+            if (!enough) {
+                g_fail[pairKey] = FailVerdict{ Reason::kSimFail, j.sim.broken, j.skill };
+                LogRefusal(fid, a_ref, Reason::kSimFail,
+                           std::format(" -- the lock needs {} break(s), he holds {} pick(s); nothing spent, retried "
+                                       "when he holds more than {} or his skill rises",
+                                       j.sim.broken, j.picksHeld, j.sim.broken));
+                EndJob(fid, nullptr);
+                return StepResult::kRefused;
+            }
             // A window that cannot fit the excursion is not started (the cap would end it
             // mid-animation). Longer than the whole cap = never fits: a standing verdict.
             const float cap = Config::g_excursionMax.load();
             if (j.window > left) {
                 const Reason why = j.window > cap ? Reason::kTooLong : Reason::kNoTime;
-                if (why == Reason::kTooLong) g_fail[PairKey(fid, rid)] = FailVerdict{ why, j.picksHeld, j.skill };
+                if (why == Reason::kTooLong) g_fail[pairKey] = FailVerdict{ why, j.picksHeld, j.skill };
                 LogRefusal(fid, a_ref, why, std::format(" -- the pick takes {:.1f}s, {:.1f}s left of the {:.0f}s "
                                                         "excursion cap", j.window, left, cap));
                 EndJob(fid, nullptr);
@@ -620,8 +682,11 @@ namespace MFO::Logistics::Lockpick {
             case APMFBridge::PickHoldResult::Filed:
                 break;
             case APMFBridge::PickHoldResult::Standing:
-                // A hold MFO no longer tracks as a job (cannot normally happen: jobs and
-                // holds end together). Release it and refile once.
+                // Should not happen: every job end releases its hold (EndJob), including the
+                // ended-by-Harbinger path. A leftover means a job was dropped without EndJob --
+                // say so, release it, refile once.
+                spdlog::warn("[lockpick] {:08X}: a lockpick hold was still filed with no job for it -- released "
+                             "and refiled", fid);
                 APMFBridge::ReleaseLockpickHold(fid);
                 if (APMFBridge::ClaimLockpickHold(fid, kIdleLockPick, rid) == APMFBridge::PickHoldResult::Filed)
                     break;
@@ -633,88 +698,103 @@ namespace MFO::Logistics::Lockpick {
             }
             j.holdFiled = true;
             j.phase     = Phase::kPicking;
-            j.clock     = 0.0f;
-            j.nextBreak = 0;
+            j.filedAt   = clk;
+            j.liveAt    = -1.0;
             return StepResult::kHold;
         }
 
         if (j.phase == Phase::kPicking) {
-            const auto st = APMFBridge::LockpickHoldStateOf(fid);
+            const auto st = APMFBridge::LockpickHoldStateOf(fid, clk - j.filedAt);
             if (st == APMFBridge::PickHoldState::Ended || st == APMFBridge::PickHoldState::None) {
                 // Harbinger ended the idle (not played / refused / follower died): no
-                // animation = no pick (principle 7: logged, not masked, nothing unlocked).
-                LogRefusal(fid, a_ref, Reason::kIdleEnded, " -- the idle claim ended before the pick window did");
+                // animation = no pick (principle 7: logged, not masked, nothing unlocked,
+                // nothing consumed).
+                LogRefusal(fid, a_ref, Reason::kIdleEnded,
+                           std::format(" -- the idle claim ended {} (after {} replay(s)); nothing spent",
+                                       j.liveAt < 0.0 ? "before it was ever live" : "during the pick window",
+                                       j.replays));
                 // A standing verdict, so a refused idle is not re-walked to every blocklist
                 // cycle: retried when his picks or skill rise (or after a load).
                 g_fail[PairKey(fid, rid)] = FailVerdict{ Reason::kIdleEnded, j.picksHeld, j.skill };
-                j.holdFiled = false;   // the bridge already released it
-                EndJob(fid, nullptr);
+                EndJob(fid, nullptr);   // holdFiled stays true: EndJob forgets the bridge's ended entry
                 return StepResult::kRefused;
             }
             if (st == APMFBridge::PickHoldState::Pending) return StepResult::kHold;   // not playing yet
-            j.clock += std::clamp(dt, 0.0f, kMaxClockStep);
-            // One replay per simulated pick break (a declared event, never a timer): the
-            // clip is one-shot, a new pick starts a new play.
-            bool replay = false;
-            while (j.nextBreak < j.sim.breakAt.size() && j.sim.breakAt[j.nextBreak] <= j.clock) {
-                ++j.nextBreak;
-                replay = true;
+            if (j.liveAt < 0.0) {
+                j.liveAt   = clk;   // the first play is live: the window starts now
+                j.lastPlay = 0.0;
             }
-            if (replay && j.clock < j.window) APMFBridge::ReplayLockpickIdle(fid);
-            if (j.clock < j.window) return StepResult::kHold;
+            const double elapsed = clk - j.liveAt;
+            if (elapsed < j.window) {
+                // ONE replay per clip length from the last play, for the whole window (the clip is
+                // one-shot). Never on a pick break: a Repoint mid-clip would cut the clip.
+                if (elapsed - j.lastPlay >= kIdleClipSec) {
+                    if (APMFBridge::ReplayLockpickIdle(fid)) {
+                        j.lastPlay = elapsed;
+                        ++j.replays;
+                    }
+                }
+                return StepResult::kHold;
+            }
 
-            // The window is over: the world write, in ONE main-thread post.
+            // The window is over: the world write, in ONE main-thread post that re-validates.
             APMFBridge::ReleaseLockpickHold(fid);
             j.holdFiled = false;
-            const int  remove = j.viaKey ? 0 : j.sim.broken;
-            const bool unlock = j.sim.success;
-            MainThread::Post([fid, rid, remove, unlock]() {
+            const int remove = j.viaKey ? 0 : j.sim.broken;
+            MainThread::Post([fid, rid, remove]() {
                 auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
                 auto* r = RE::TESForm::LookupByID<RE::TESObjectREFR>(rid);
-                if (f && remove > 0) {
+                // RE-VALIDATE on the main thread: the world moved since the worker decided.
+                if (!f || f->IsDead()) {
+                    spdlog::info("[lockpick] {:08X}: pick of {:08X} SKIPPED at the write -- the follower is gone or "
+                                 "dead (nothing removed, not unlocked)", fid, rid);
+                    return;
+                }
+                if (!r || r->IsDisabled() || r->IsMarkedForDeletion() || !r->Is3DLoaded() || !r->IsLocked()) {
+                    spdlog::info("[lockpick] {:08X}: pick of {:08X} SKIPPED at the write -- the chest is {} (nothing "
+                                 "removed, not unlocked)", fid, rid,
+                                 !r ? "gone" : (r->IsDisabled() || r->IsMarkedForDeletion()) ? "disabled or deleted"
+                                     : !r->Is3DLoaded() ? "not loaded" : "already unlocked");
+                    return;
+                }
+                if (remove > 0) {
                     const std::int32_t have = CountOf(f, LockpickObject());
                     const std::int32_t n = std::min<std::int32_t>(remove, have);
                     if (n > 0) f->RemoveItem(LockpickObject(), n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
                     if (n < remove)
                         spdlog::warn("[lockpick] {:08X}: {} broken pick(s) to remove, only {} held now", fid, remove, have);
                 }
-                if (unlock && r) UnlockOnMain(r);
+                UnlockOnMain(r);
             });
-            if (!unlock) {
-                g_fail[PairKey(fid, rid)] = FailVerdict{ Reason::kSimFail, j.picksHeld - remove, j.skill };
-                spdlog::info("[lockpick] {:08X}: FAILED {:08X} ({} lock) -- broke {} pick(s) in {:.1f}s, the lock "
-                             "stays locked", fid, rid, LevelName(j.level), remove, j.window);
-                EndJob(fid, nullptr);
-                return StepResult::kRefused;
-            }
             j.phase          = Phase::kUnlocking;
-            j.unlockPostedAt = a_now;
+            j.unlockPostedAt = clk;
             return StepResult::kHold;
         }
 
         // kUnlocking: wait for the posted Unlock to show on the ref.
         if (!a_ref->IsLocked()) {
-            spdlog::info("[lockpick] {:08X}: {} {:08X} ({} lock){} in {:.1f}s -- transferring", fid,
+            spdlog::info("[lockpick] {:08X}: {} {:08X} ({} lock){} in {:.1f}s ({} replay(s)) -- transferring", fid,
                          j.viaKey ? "UNLOCKED with the key" : "PICKED", rid, LevelName(j.level),
-                         j.viaKey ? "" : std::format(", broke {} pick(s)", j.sim.broken), j.window);
+                         j.viaKey ? "" : std::format(", broke {} pick(s)", j.sim.broken), j.window, j.replays);
             EndJob(fid, nullptr);
             return StepResult::kProceed;
         }
-        if (a_now - j.unlockPostedAt < kUnlockFloor) return StepResult::kHold;
-        spdlog::error("[lockpick] {:08X}: the engine Unlock was posted for {:08X} {}s ago and the lock still "
-                      "reads locked -- attempt dropped (picks already removed)", fid, rid,
-                      std::chrono::duration_cast<std::chrono::seconds>(kUnlockFloor).count());
+        if (clk - j.unlockPostedAt < kUnlockFloorSec) return StepResult::kHold;
+        spdlog::error("[lockpick] {:08X}: the engine Unlock was posted for {:08X} {:.0f}s of running game ago and "
+                      "the lock still reads locked (the post may have skipped: see its line) -- attempt dropped",
+                      fid, rid, kUnlockFloorSec);
         g_fail[PairKey(fid, rid)] = FailVerdict{ Reason::kUnlockFailed, j.picksHeld, j.skill };
         EndJob(fid, nullptr);
         return StepResult::kRefused;
     }
 
-    void SweepStale(Clock::time_point a_now) {
+    void SweepStale(Clock::time_point /*a_now*/) {
+        const double clk = Scheduler::ServiceClock();   // UNPAUSED: a menu never ages a pick
         for (auto it = g_jobs.begin(); it != g_jobs.end();) {
             const RE::FormID fid = it->first;
             const Job& j = it->second;
             // Still driven? His loot slot must still target this lock, and the arrival
-            // step must have run recently.
+            // step must have run within kStaleFloorSec of running game.
             const TravelIntent* tr = SlotOf(fid);
             RE::FormID slotRef = 0;
             if (tr) {
@@ -723,7 +803,7 @@ namespace MFO::Logistics::Lockpick {
             }
             const char* why = nullptr;
             if (!tr || slotRef != j.ref)             why = "the loot excursion ended or moved on";
-            else if (a_now - j.lastStep > kStaleFloor) why = "the arrival step stopped running";
+            else if (clk - j.lastStep > kStaleFloorSec) why = "the arrival step stopped running";
             if (!why) { ++it; continue; }
             ++it;   // EndJob erases fid's entry
             EndJob(fid, why);
