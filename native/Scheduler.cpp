@@ -149,17 +149,57 @@ namespace MFO::Scheduler {
         std::atomic<double>        g_lastTickMs{ 0.0 };
         std::atomic<std::uint32_t> g_ticks{ 0 };
 
-        // ── AUTO-RETREAT bookkeeping ────────────────────────────────────────
-        // One fall-back per combat per follower: `tried` arms once when the
-        // fill gate first passes and is erased when the follower leaves combat,
-        // so the next fight can fall back again. `took` records whether the
-        // travel package was ever his current package -- lets the timeout line
-        // tell "controller never yielded" from "took but too slow".
+        // ── AUTO-RETREAT bookkeeping (ClickUp 86e3erv94, batch L) ───────────
+        // The driver's per-follower state. A retreat runs TRAVEL (walk to the
+        // player) -> STAY (held at the player's side while the fight's
+        // confidence is still under the floor) -> released; after a release a
+        // COOLDOWN gates the next auto-fill (replacing the old one-per-fight
+        // `tried`, which also burned on a DECLINED fill). The note is NOT erased
+        // by the party-OOC teardown: the cooldown must survive the fight edge
+        // the retreat's own StopCombat can cause, and the map holds at most one
+        // small entry per follower seen. Cleared on revert (ClearTransientState).
+        // Worker-only, no lock (#4).
+        enum class RetreatPhase : std::uint8_t { None, Travel, Stay };
         struct RetreatNote {
-            bool tried = false;
-            bool took  = false;
+            RetreatPhase phase = RetreatPhase::None;
+            // Whether the retreat package was ever his current package -- lets
+            // the timeout line tell "controller never yielded" from "took but
+            // too slow".
+            bool took = false;
+            // Out of combat observed since the last posted StopCombat (his own
+            // flag read false on a service, or the main thread reported the
+            // StopCombat landed). The NEXT in-combat read is then a RE-ENTRY and
+            // gets exactly one more StopCombat (#22a: never per tick).
+            bool outOfCombatSeen = false;
+            // Confidence::Of() as last read while he WAS in combat. Out of
+            // combat Of() drops the combat/foe multiplier -- and MFO's own
+            // StopCombat is what took him out -- so an out-of-combat read is not
+            // the fight's confidence. Read only at ARRIVAL: at or above the
+            // floor he is released there instead of entering STAY.
+            float fightConf = 1.0f;
+            // An act.flee hold adopted while he was OUT of combat: release on
+            // arrival, no STAY (the shipped flee behaviour).
+            bool skipStay = false;
+            std::uint32_t reentries = 0;
+            std::chrono::steady_clock::time_point stayAt{};
+            // STAY start on the UNPAUSED service clock (g_serviceClock).
+            double stayClockAt = 0.0;
+            // COOLDOWN: the next auto-fill waits until BOTH floors pass.
+            std::chrono::steady_clock::time_point rearmAt{};
+            std::uint32_t rearmLaps = 0;   // own services still to wait
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
+
+        // UNPAUSED SERVICE CLOCK (seconds). Advanced at the per-follower pause
+        // gate in Tick by the time since the previous advance, ONLY when the
+        // game is not paused, and each step capped at kServiceClockMaxStep: a
+        // gap longer than that means the pump did not run (a menu, a load, the
+        // pause itself), not gameplay. 4 x 133 ms covers AddTask jitter and a
+        // dead / null round-robin slot skipping a service. Worker-only (#4);
+        // reset on revert. STAY is timed on it (marth: "about ten seconds").
+        double g_serviceClock = 0.0;
+        std::chrono::steady_clock::time_point g_serviceClockAt{};
+        constexpr double kServiceClockMaxStep = 4 * 0.133;
 
         // T#78: followers we have already swept on their MFO-OFF transition. The
         // gate below skips every disabled follower each tick, but the one-time
@@ -224,11 +264,214 @@ namespace MFO::Scheduler {
         constexpr float kRetreatMinDist    = 400.0f;
         constexpr float kRetreatArriveDist = 200.0f;
         constexpr float kRetreatTimeout    = 30.0f;
+        // STAY (marth 2026-09-25: "about ten seconds, or until fully healed",
+        // whichever comes FIRST). After a follower has fallen back to the player,
+        // STAY holds him there so he does not walk straight back out to the
+        // fight. It ends on the FIRST of:
+        //   - kRetreatStaySecs (10 s) of UNPAUSED service time (g_serviceClock,
+        //     advanced only on unpaused Ticks -- a pause or menu never spends
+        //     it; this is also the pause fix for STAY, MFO-B108);
+        //   - his health reaching full: Vocab::HealthPct >= Vocab::kHealFull
+        //     (99.95%), the codebase's one "full HP" mark -- HealthPct is
+        //     current / (permanent + temporary max) and rarely equals exactly
+        //     1.0, so a strict >= 1.0 could never end it;
+        //   - ANY in-combat read ("engaged at your side"): he is released at once
+        //     with NO StopCombat -- STAY never leaves him defenceless; if the
+        //     fight comes to him he fights beside the player (review of 7580bea,
+        //     SEV-2).
+        // A follower whose last in-combat confidence (fightConf) is already at
+        // the floor at arrival gets no STAY at all (released on arrival).
+        constexpr double kRetreatStaySecs = 10.0;
+        // NO LIVE FOES (review of 7580bea, SEV-3 threading carve-out): judged
+        // from the MAIN-THREAD foe probe (Packages::RetreatPostFoeProbe), posted
+        // at most once per own service while he retreats, so its cadence is his
+        // service period N x 133 ms (N = active roster). The retreat ends when
+        // the last kRetreatNoFoeProbes LANDED probes all saw no engaged hostile
+        // AND none has been seen for kRetreatNoFoeSecs. 3 probes = the same
+        // two-consecutive-reads-plus-one rule as the party-OOC debounce and the
+        // cooldown; 3 s is a wall floor over it (the probe count alone is 0.8 s
+        // at N=2) -- ~20x the measured 145 ms engine combat-controller restart
+        // (21:57:34.884/35.029), during which a foe's currentCombatTarget can
+        // read empty, and one [sense] sampling period. The laps floor dominates
+        // from N = 3 s / (3 x 133 ms) ~ 8 followers up.
+        constexpr std::uint32_t kRetreatNoFoeProbes = 3;
+        constexpr float         kRetreatNoFoeSecs   = 3.0f;
+        // COOLDOWN (principle 9 -- a FLOOR, sized from the real cadences, not
+        // an expiry): after a release, or a DECLINED fill, the next auto-fill
+        // waits until BOTH
+        //   (a) kRetreatCooldownLaps of HIS OWN services have passed. The
+        //       round-robin services one follower per 133 ms tick, so his own
+        //       refresh period is N x 133 ms (N = active roster, summons
+        //       included). 3 laps = the releasing lap + one lap on which the
+        //       release is first observable (the APMF Release nudge / legacy
+        //       evaluate and the engine's re-engage land between laps) + one
+        //       lap confirming it, the same two-consecutive-reads rule as the
+        //       party-OOC debounce. At N=4 that is 1.6 s, at N=8 3.2 s -- it
+        //       scales with the party instead of silently shrinking to one
+        //       sample for a big one; and
+        //   (b) kRetreatCooldownSecs of wall time. The measured field retreats
+        //       arrived in 2.0-8.7 s (7 auto-retreats, deck logs 2026-09-21..24,
+        //       scratchpad assess-confidence-leash.md); 10 s is just over the
+        //       longest, so a released follower gets at least one measured
+        //       retreat-walk's worth of time back in the fight before the next
+        //       pull -- the fill cannot yo-yo him faster than one walk each way.
+        //       (b) dominates up to N = 10 s / (3 x 133 ms) ~ 25 followers.
+        // A declined fill pays the same cooldown so a refusing road (APMF
+        // refusal, legacy alias busy) retries within the fight at a bounded log
+        // rate instead of every service.
+        constexpr std::uint32_t kRetreatCooldownLaps = 3;
+        constexpr float         kRetreatCooldownSecs = 10.0f;
+
+        void StartRetreatCooldown(RetreatNote& a_note, std::chrono::steady_clock::time_point a_now) {
+            a_note.rearmAt   = a_now + std::chrono::milliseconds(
+                                   static_cast<long long>(kRetreatCooldownSecs * 1000.0f));
+            a_note.rearmLaps = kRetreatCooldownLaps;
+        }
+
+        // THE RETREAT DRIVER for one serviced follower -- called on EVERY service
+        // from BOTH tables (party combat and party-OOC), because a retreat's own
+        // StopCombat can end the party fight: keying it to the combat table
+        // alone is what let the party-OOC teardown cancel a retreat 0.54 s
+        // after dispatch (deck-MFO-v9.log:1544-1582, Cicero). Returns true iff he
+        // held a retreat at entry -- the retreat is then his action this lap and
+        // the caller runs neither table. Ends a retreat ONLY on: no live foes
+        // near him (the main-thread probe), the travel timeout, or the end of
+        // STAY (engaged at the player's side, sustained out of combat, or the
+        // stay cap). Arrival does not end it, it starts STAY -- unless the fight
+        // confidence at arrival is already at the floor, or the hold is an
+        // out-of-combat act.flee one (skipStay), which release on arrival.
+        bool ServiceRetreat(RE::Actor* a_f, RE::FormID a_id, float a_dPlayer, bool a_havePlayer) {
+            auto& note = g_retreatNotes[a_id];
+            const auto now = std::chrono::steady_clock::now();
+            if (note.rearmLaps > 0) --note.rearmLaps;
+
+            if (!Packages::IsRetreating(a_id)) {
+                if (note.phase != RetreatPhase::None) {
+                    // Released OUTSIDE the driver (dismissal / MFO-off sweep /
+                    // load). Not an error; keep the cooldown so the next fill
+                    // is not instant.
+                    spdlog::info("[retreat] {:08X}: hold released outside the driver -- cooldown", a_id);
+                    note.phase = RetreatPhase::None;
+                    StartRetreatCooldown(note, now);
+                }
+                return false;
+            }
+            const bool inCombat = a_f->IsInCombat();
+            if (note.phase == RetreatPhase::None) {
+                // A hold the driver did not dispatch (the act.flee gambit's
+                // RetreatFill): adopt it as a fresh TRAVEL. STAY only when he is
+                // in combat right now, judged by that in-combat reading; an
+                // out-of-combat flee keeps the shipped flee behaviour (release
+                // on arrival) -- an out-of-combat Of() is not a fight's
+                // confidence (review of 7580bea, SEV-4).
+                note.phase           = RetreatPhase::Travel;
+                note.took            = false;
+                note.outOfCombatSeen = false;
+                note.reentries       = 0;
+                note.skipStay        = !inCombat;
+                note.fightConf       = inCombat ? Confidence::Of(a_f) : 1.0f;
+            }
+
+            if (Forms::IsRetreatPackage(a_f->GetCurrentPackage())) note.took = true;
+            if (Packages::RetreatConsumeStopLanded(a_id)) note.outOfCombatSeen = true;
+            if (!inCombat) note.outOfCombatSeen = true;
+
+            // One main-thread foe probe per own service; its result is read below
+            // on this and later services (it lands next frame).
+            Packages::RetreatPostFoeProbe(a_id, Config::g_chaseMax.load());
+
+            const float secs  = Packages::RetreatSeconds(a_id);
+            // Measure HER movement, not dPlayer -- dPlayer also closes when the
+            // PLAYER walks toward her (the Auri false-positive that made a
+            // stuck follower look like a successful retreat).
+            const float moved = a_f->GetPosition().GetDistance(Packages::RetreatStartPos(a_id));
+            const auto  finish = [&](const char* a_why) {
+                Packages::RetreatClear(a_why, a_f);
+                note.phase = RetreatPhase::None;
+                StartRetreatCooldown(note, now);
+            };
+
+            const auto foes = Packages::RetreatFoeProbeResult(a_id);
+            if (foes.valid && foes.probesSinceFoe >= kRetreatNoFoeProbes &&
+                foes.secsSinceFoe >= kRetreatNoFoeSecs) {
+                spdlog::info("[retreat] {:08X}: no engaged foes within {:.0f}u for {} probes / {:.1f}s -- "
+                             "ending ({} after {:.1f}s, moved {:.0f}, dPlayer={:.0f})",
+                             a_id, Config::g_chaseMax.load(), foes.probesSinceFoe, foes.secsSinceFoe,
+                             note.phase == RetreatPhase::Stay ? "stay" : "travel", secs, moved, a_dPlayer);
+                finish("no live foes");
+                return true;
+            }
+
+            if (note.phase == RetreatPhase::Travel) {
+                if (a_havePlayer && a_dPlayer <= kRetreatArriveDist) {
+                    if (note.skipStay || note.fightConf >= kRetreatConfidence) {
+                        spdlog::info("[retreat] {:08X}: reached player after {:.1f}s (moved {:.0f}, took={}) -- "
+                                     "released ({})", a_id, secs, moved, note.took,
+                                     note.skipStay ? "out-of-combat flee, no stay" : "fight confidence at floor");
+                        finish("arrived");
+                        return true;
+                    }
+                    spdlog::info("[retreat] {:08X}: reached player after {:.1f}s (moved {:.0f}, took={}) -- "
+                                 "STAY (fight confidence={:.2f}, floor {:.2f})",
+                                 a_id, secs, moved, note.took, note.fightConf, kRetreatConfidence);
+                    note.phase       = RetreatPhase::Stay;
+                    note.stayAt      = now;
+                    note.stayClockAt = g_serviceClock;
+                    // fall through to the STAY checks on this same lap
+                } else if (inCombat) {
+                    // TRAVEL RE-ENTRY: one more main-thread StopCombat, ONLY on
+                    // the out -> in edge (#22a: never per tick).
+                    note.fightConf = Confidence::Of(a_f);
+                    if (note.outOfCombatSeen) {
+                        note.outOfCombatSeen = false;
+                        ++note.reentries;
+                        spdlog::info("[retreat] {:08X}: re-entered combat mid-retreat (#{}, confidence={:.2f}) "
+                                     "-- StopCombat posted to main", a_id, note.reentries, note.fightConf);
+                        Packages::RetreatReengage(a_id, "re-entered combat");
+                    }
+                }
+                if (note.phase == RetreatPhase::Travel && secs > kRetreatTimeout) {
+                    // Transition-only: one line when the fall-back gives up. moved
+                    // tells "she walked but too slow" (large) from "controller never
+                    // yielded" (near 0).
+                    spdlog::warn("[retreat] {:08X}: gave up after {:.1f}s (took={}, moved={:.0f}, dPlayer={:.0f}, "
+                                 "re-entries={})", a_id, secs, note.took, moved, a_dPlayer, note.reentries);
+                    finish("timeout");
+                    return true;
+                }
+            }
+
+            if (note.phase == RetreatPhase::Stay) {
+                const double stayed = g_serviceClock - note.stayClockAt;   // unpaused seconds
+                if (inCombat) {
+                    // The fight came to him: never hold a follower out of a fight
+                    // at the player's side. Release, NO StopCombat.
+                    spdlog::info("[retreat] {:08X}: engaged at your side after {:.1f}s of stay -- released "
+                                 "(no StopCombat)", a_id, stayed);
+                    finish("engaged at your side");
+                    return true;
+                }
+                const float hp = Vocab::HealthPct(a_f);
+                if (hp >= Vocab::kHealFull) {
+                    spdlog::info("[retreat] {:08X}: stay over after {:.1f}s -- fully healed (dPlayer={:.0f}, "
+                                 "engaged foes on last probe={})", a_id, stayed, a_dPlayer, foes.lastCount);
+                    finish("stay over: healed");
+                } else if (stayed >= kRetreatStaySecs) {
+                    spdlog::info("[retreat] {:08X}: stay over after {:.1f}s (unpaused) -- health {:.0f}% "
+                                 "(dPlayer={:.0f}, engaged foes on last probe={})", a_id, stayed, hp * 100.0f,
+                                 a_dPlayer, foes.lastCount);
+                    finish("stay over: time");
+                }
+            }
+            return true;
+        }
 
     }
 
     void ClearTransientState() {
         g_retreatNotes.clear();
+        g_serviceClock   = 0.0;
+        g_serviceClockAt = {};
         g_mfoDisabledSwept.clear();   // T#78: revert/load re-arms the OFF-edge release
         g_outOfCombatTicks.clear();
         g_meleeClampTrueAt.clear();   // T#76 hysteresis dwell
@@ -392,7 +635,18 @@ namespace MFO::Scheduler {
         // A cast/drink/loot issued into a paused game resolves strangely on
         // unpause, and menus are exactly when the player is editing the list
         // that drives it. Applies to BOTH tables, so it gates before the branch.
-        if (auto* ui = RE::UI::GetSingleton(); ui && ui->GameIsPaused()) return;
+        {
+            // UNPAUSED SERVICE CLOCK (see g_serviceClock): advance only on an
+            // unpaused service, capped per step; a paused one just re-anchors.
+            auto* ui = RE::UI::GetSingleton();
+            const bool paused = ui && ui->GameIsPaused();
+            if (!paused && g_serviceClockAt.time_since_epoch().count() != 0) {
+                const double dt = std::chrono::duration<double>(now - g_serviceClockAt).count();
+                g_serviceClock += std::clamp(dt, 0.0, kServiceClockMaxStep);
+            }
+            g_serviceClockAt = now;
+            if (paused) return;
+        }
 
         const auto it = g_followers.find(id);
         if (it == g_followers.end()) return;          // no record -> nothing to run
@@ -449,13 +703,15 @@ namespace MFO::Scheduler {
             // Idempotent teardown (every call is an erase-miss / no-op when
             // nothing is held).
             if (++g_outOfCombatTicks[id] >= 2) {
-                // RETREAT PROBE teardown on combat end: release the claim (evict to
-                // player -- never a VM Clear, never a priority flip) and re-arm the
-                // once-per-combat latch for the next fight.
-                if (Packages::RetreatHolder() == id) {
-                    Packages::RetreatClear("combat ended", f);
-                }
-                g_retreatNotes.erase(id);
+                // NO RETREAT TEARDOWN HERE (86e3erv94 item 2). This used to
+                // RetreatClear("combat ended") and erase the retreat note -- but a
+                // retreat's own StopCombat is often what ENDS the party fight (the
+                // only fighter just disengaged), so the retreat cancelled itself
+                // 0.54 s after dispatch (deck-MFO-v9.log:1544-1582). A retreat now
+                // ends only in ServiceRetreat (arrival-stay end, timeout, no live
+                // foes near him), which runs just below on this branch too; the
+                // note carries the cooldown across the fight edge and is never
+                // erased here.
                 g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
                 g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
 
@@ -507,6 +763,21 @@ namespace MFO::Scheduler {
                 // drop the dwell, and the flap-back tick at the gambit's false edge
                 // would then release instantly, skipping the commit window.
                 g_meleeClampTrueAt.erase(id);
+            }
+
+            // A RETREAT OUTLIVES THE PARTY FIGHT (86e3erv94 item 2): drive it here
+            // too. While he holds one it is his action -- no logistics this lap (a
+            // loot walk armed under it would fight the retreat travel for the
+            // actor, the same reason the combat table's retreat exit skips
+            // serviceOwnOoc).
+            {
+                auto* pc = RE::PlayerCharacter::GetSingleton();
+                const float dPlayer = pc ? f->GetPosition().GetDistance(pc->GetPosition()) : 0.0f;
+                if (ServiceRetreat(f, id, dPlayer, pc != nullptr)) {
+                    g_lastTickMs = std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - t0).count();
+                    return;
+                }
             }
 
             Logistics::ServiceFollower(f, it->second);
@@ -640,9 +911,11 @@ namespace MFO::Scheduler {
             auto& nxt = g_nextSense[id];
             if (nxt.time_since_epoch().count() == 0 || now >= nxt) {
                 nxt = now + std::chrono::seconds(3);
-                spdlog::info("[sense] {:08X}: foes={} confidence={:.2f} leash={:.0f} chase={:.0f}",
+                auto* spc = RE::PlayerCharacter::GetSingleton();
+                spdlog::info("[sense] {:08X}: foes={} confidence={:.2f} leash={:.0f} chase={:.0f} dPlayer={:.0f}",
                              id, CombatSense::FoeCount(f), Confidence::Of(f),
-                             Confidence::LeashRadius(f), Confidence::ChaseRadius(f));
+                             Confidence::LeashRadius(f), Confidence::ChaseRadius(f),
+                             spc ? f->GetPosition().GetDistance(spc->GetPosition()) : -1.0f);
             }
         }
 
@@ -666,56 +939,24 @@ namespace MFO::Scheduler {
             }
         }
 
-        // ── AUTO-RETREAT (leash safety, opt-in via bAutoRetreat) ─────────────
+        // ── AUTO-RETREAT (leash safety, bAutoRetreat, default ON) ────────────
         // The confidence leash taken to its conclusion: a follower who is badly
         // outmatched (confidence below threshold -- by the leash tenet he WANTS
         // to be at the player's side) AND far from the player in combat falls
-        // back under a kIgnoreCombat alias Travel package that outranks his
-        // combat controller's locomotion. Fires once per fight; teardown on
-        // arrival / timeout here and on combat end in the non-combat branch
-        // above. OFF by default -- a default install never acts without an
-        // authored rule. Measured reliable in §0.36; logging is transition-only.
+        // back under a kIgnoreCombat Travel package that outranks his combat
+        // controller's locomotion (APMF ch.9 offer; legacy alias when APMF is
+        // absent). ON by default (Config.h g_autoRetreat -- the one place MFO
+        // acts without an authored rule; the MCM toggle is the override). The
+        // driver (ServiceRetreat) runs TRAVEL -> STAY -> release on every
+        // service from both tables; after a release a cooldown gates the next
+        // fill (kRetreatCooldownLaps / kRetreatCooldownSecs). Logging is
+        // transition-only.
         {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const float dPlayer = pc ?
                 f->GetPosition().GetDistance(pc->GetPosition()) : 0.0f;
 
-            if (Packages::RetreatHolder() == id) {
-                auto& note = g_retreatNotes[id];
-                const float secs  = Packages::RetreatSeconds();
-                auto*       cur   = f->GetCurrentPackage();
-                // Either retreat package counts as "took" -- legacy alias or
-                // APMF-delivered (Forms::IsRetreatPackage), same as loot's
-                // IsTravelPackage recognizing both its alias and APMF forms.
-                if (Forms::IsRetreatPackage(cur)) note.took = true;
-                // Re-disengage each tick: hostiles re-initiate combat, and while she
-                // holds a live target the combat behaviour out-competes the
-                // kIgnoreCombat travel (Auri: took=true but never moved). StopCombat
-                // every tick keeps the travel winning until she reaches you. Cheap;
-                // a no-op when she is not in combat.
-                // TODO(v1.0.53 freeze follow-up): worker-side StopCombat -- the
-                // same cross-thread concern the #63 quash just moved onto the
-                // main-thread pump (Rapport::QuashAllyPair). Migrate this one
-                // too when auto-retreat is next touched; left alone now
-                // (opt-in feature, no field freeze attributed to it).
-                f->StopCombat();
-                // Measure HER movement, not dPlayer -- dPlayer also closes when the
-                // PLAYER walks toward her (the Auri false-positive that made a
-                // stuck follower look like a successful retreat).
-                const float moved = f->GetPosition().GetDistance(Packages::RetreatStartPos());
-
-                if (pc && dPlayer <= kRetreatArriveDist) {
-                    spdlog::info("[retreat] {:08X}: reached player after {:.1f}s (moved {:.0f})", id, secs, moved);
-                    Packages::RetreatClear("arrived", f);
-                } else if (secs > kRetreatTimeout) {
-                    // Transition-only: one line when the fall-back gives up. moved
-                    // tells "she walked but too slow" (large) from "controller never
-                    // yielded" (near 0).
-                    spdlog::info("[retreat] {:08X}: gave up after {:.1f}s (took={}, moved={:.0f}, dPlayer={:.0f})",
-                                  id, secs, note.took, moved, dPlayer);
-                    Packages::RetreatClear("timeout", f);
-                }
-
+            if (ServiceRetreat(f, id, dPlayer, pc != nullptr)) {
                 // While falling back, do NOT run the gambit table: a cast rule
                 // would fill the COMMAND alias (also priority 60) on the same
                 // actor and fight the retreat travel for the alias. A retreating
@@ -728,13 +969,32 @@ namespace MFO::Scheduler {
             }
 
             auto& note = g_retreatNotes[id];
-            if (Config::g_autoRetreat.load() && !note.tried &&
-                Confidence::Of(f) < kRetreatConfidence &&
+            if (Config::g_autoRetreat.load() && note.rearmLaps == 0 && now >= note.rearmAt &&
                 f->IsInCombat() && pc && dPlayer > kRetreatMinDist) {
-                note.tried = true;   // one fall-back per fight, fill failures included
-                if (Packages::RetreatFill(f)) {
-                    spdlog::info("[retreat] {:08X}: falling back -- confidence={:.2f} dPlayer={:.0f}",
-                                  id, Confidence::Of(f), dPlayer);
+                // Read BEFORE the fill: the fill posts a StopCombat, and once it
+                // lands Of() loses the combat/foe multiplier, so any later read
+                // would log a misleading 0.8-1.0 (assess-confidence-leash step 4).
+                const float conf = Confidence::Of(f);
+                if (conf < kRetreatConfidence) {
+                    const int foes = CombatSense::FoeCount(f);
+                    if (Packages::RetreatFill(f)) {
+                        note.phase           = RetreatPhase::Travel;
+                        note.took            = false;
+                        note.outOfCombatSeen = false;
+                        note.reentries       = 0;
+                        note.skipStay        = false;
+                        note.fightConf       = conf;
+                        spdlog::info("[retreat] {:08X}: falling back -- confidence={:.2f} (pre-StopCombat) "
+                                     "foes={} dPlayer={:.0f}", id, conf, foes, dPlayer);
+                    } else {
+                        // NOT silent (principle 7) and NOT one-per-fight: the fill
+                        // failed (RetreatFill logged why), so wait out the cooldown
+                        // and try again within this fight.
+                        StartRetreatCooldown(note, now);
+                        spdlog::warn("[retreat] {:08X}: fill FAILED -- confidence={:.2f} foes={} dPlayer={:.0f}; "
+                                     "retry after {} own services and {:.0f}s", id, conf, foes, dPlayer,
+                                     kRetreatCooldownLaps, kRetreatCooldownSecs);
+                    }
                 }
             }
         }

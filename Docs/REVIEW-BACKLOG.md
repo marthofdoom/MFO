@@ -724,3 +724,29 @@ Raised against 3d7f191 (`feat/mfo-target-pin`, tier-A re-review), 2026-09-25. Re
 
 ### MFO-B101 (SEV-5) -- target pin: log volume on a flickering kTargetLost
 Raised against 3d7f191 (`feat/mfo-target-pin`, same re-review), 2026-09-25. Reviewer's wording (as relayed): "log volume on a flickering kTargetLost (3 lines per re-pin cycle, no rate limit)." The three lines are `[target-pin] ... ENDED`, `... is trackable again -- re-pinning` and `... PIN` (apmf/Excursion.cpp). Fix shape when drained: a per-follower rate limit on the re-pin cycle's lines, or fold them into one line. Surfaced at edit time from: MAP.md §7 apmf/ "ch.20 TARGET PIN" What-breaks.
+
+### MFO-B102 (SEV-5, author-raised, pre-existing; CORRECTED by the 7580bea review) -- retreat: a follower who dies mid-retreat keeps his hold briefly
+Raised by the author of `fix/mfo-retreat` (ClickUp 86e3erv94), 2026-09-25, as SEV-4; corrected by the tier-A review of 7580bea. Original claim: `Scheduler::Tick`'s dead/disabled early return runs before `ServiceRetreat`, so the hold (and on the APMF road the Pump's ch.9 re-offer) outlives him until load/dismissal. Correction (reviewer): it self-heals in ~1.6 s via Refresh -> ReleaseHeldState -> RetreatEvictIf -- a dead/disabled follower fails IsEligibleFollower and is dropped after kMissesBeforeDrop=3 Refresh sweeps. Residual: ~1.6 s of re-offers for a dead actor. Fix shape if ever wanted: `Packages::RetreatClear("dead", f)` in the dead/disabled branch.
+
+### MFO-B103 (SEV-5) -- retreat: posted-lambda generation check is not held across StopCombat
+Raised against 7580bea (`fix/mfo-retreat`, tier-A review), 2026-09-25. Finding (as relayed by the coordinator): "the posted-lambda race (SEV-5, harmless)". The posted StopCombat checks (FormID, gen) under `g_retreatLiveMx`, releases the lock, then calls StopCombat; the worker can clear the retreat in between. Reasoning: worst case one extra StopCombat on a follower who has just stopped retreating; no state corruption.
+
+### MFO-B104 (SEV-5, outside the 86e3erv94 boundary) -- cast/Fire.cpp:276-277 comment is stale
+Raised against 7580bea (`fix/mfo-retreat`, tier-A review), 2026-09-25. Finding (as relayed): "the stale comment at cast/Fire.cpp:276-277 (SEV-5, outside the boundary)". The act.flee comment still says the retreat is "Cleared on combat end / arrival by the retreat driver"; since 86e3erv94 it ends on arrival (out-of-combat flee) / stay end / timeout / no engaged foes, never on combat end. cast/ was owned by the ch.20 pin branch during this change.
+
+### MFO-B105 (SEV-4, pre-existing) -- a flee rule re-fires about every 2 services at the player's side
+Raised against 7580bea (`fix/mfo-retreat`, tier-A review), 2026-09-25. Finding (as relayed): "a flee rule re-firing about every 2 services at the player's side, brushing #22a (pre-existing)". An act.flee gambit whose condition stays true re-fills a retreat each time the previous one releases on arrival, because the gambit path is not gated by the auto-retreat cooldown. Pre-existing shape; needs its own decision (gate act.flee by the cooldown, or by distance to the player).
+
+### MFO-B106 (SEV-4, structural) -- Packages.cpp is near the 2500-line cap
+Raised against 7580bea (`fix/mfo-retreat`, tier-A review), 2026-09-25. Finding (as relayed): "Packages.cpp at 2378 lines, near the cap: the next addition there needs a split plan." After review round 1 (main-thread foe probe) it is 2459 lines. The next non-trivial addition needs a split brief first (e.g. the retreat plumbing into its own TU); a split is tier A.
+
+### MFO-B107 (SEV-4, informational) -- retreat foe probe: engaged filter is target-handle only
+Raised by the author in response to the 7580bea review's SEV-4 ("LiveFoeNear counts unengaged hostiles"), 2026-09-25. The probe now counts only hostiles holding a live `currentCombatTarget`; it does NOT read the foe's `IsInCombat()`, which derefs the raw `combatController` that StopCombat frees inline on BSJobs (ENGINE_NOTES §0.47) while main-thread exclusion from those jobs is unproven (#74). A hostile that is in combat with a momentarily empty target handle is therefore not counted on that probe; the 3-probe / 3 s window absorbs single-probe gaps. Revisit when the combat-thread FoeCount/inCombat mirror (STATUS "MFO-next") lands.
+
+### MFO-B108 (SEV-4) -- retreat: after a pause the wall-clock floors are already spent
+Raised against 19f67e0 (`fix/mfo-retreat`, closing re-review), 2026-09-25. Reviewer's finding (as relayed): "after a pause, the wall-clock seconds floors are already spent, so only the 3-probe floor guards the ends." Suggested fix: time the floors by service time, or reset the timestamps on the first service after a pause.
+Partly resolved in the same closing round: STAY is now timed on the unpaused service clock (marth's "about ten seconds, or until fully healed"). Still open for the no-foe window (3 s) and the cooldown (10 s).
+
+### MFO-B110 (SEV-5) -- retreat: being hit in STAY without entering combat can hold him up to ~3 s
+Raised against 19f67e0 (`fix/mfo-retreat`, closing re-review), 2026-09-25. Reviewer's finding (as relayed): "being hit in STAY without entering combat can hold him for up to ~3 s."
+Note: with STAY now "about ten seconds, or until fully healed" (same closing round) the bound is up to ~10 s of unpaused time. (MFO-B109, "kRetreatStayMax is unreachable", was dropped: that rework removed the cap.)

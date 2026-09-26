@@ -307,7 +307,7 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_lootTravelViaApmfTravel{ true };
 
     // Same principle, the RETREAT counterpart: when APMF is present,
-    // RetreatFill (Packages.cpp) -- shared by act.flee and the opt-in
+    // RetreatFill (Packages.cpp) -- shared by act.flee and the default-ON
     // auto-retreat leash safety -- routes the disengage through APMF's
     // package-offer channel instead of MFO_RetreatQuest's alias/static-
     // priority-60 race. ON by default but wholly INERT unless APMF is in the
@@ -781,7 +781,10 @@ namespace MFO::Config {
     // floor -- foe count feeds confidence) AND far from you in combat falls back to
     // your side under kIgnoreCombat travel. This is the one place MFO acts without
     // an authored rule; the MCM toggle is the override (turn OFF to require an
-    // authored fall-back rule instead). Fires once per fight. bAutoRetreat.
+    // authored fall-back rule instead). Not once per fight: after a retreat ends
+    // (or a fill is declined) a cooldown gates the next one, and after arrival
+    // he STAYS at your side while the fight's confidence is still under the
+    // floor (Scheduler.cpp kRetreatCooldown* / kRetreatStayMax). bAutoRetreat.
     inline std::atomic<bool>  g_autoRetreat{ true };
 
     // MAGIC LOADOUT (v1.0.29). A magic-user follower -- anyone with at least

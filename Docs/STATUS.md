@@ -13,6 +13,20 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-25 branch `fix/mfo-retreat` (off `main` `97ac782`; NOT merged, NOT deployed). ClickUp 86e3erv94 (batch L), tier A.**
+  Auto-retreat fixes (assessment: scratchpad `agentlogs/assess-confidence-leash.md`): (1) every retreat StopCombat is now
+  POSTED to the main thread (Rapport::QuashAllyPair road), once at engage and again only on a re-entry into combat, with a
+  main-thread re-validation (resolves, 3D-loaded, alive, same retreat generation); (2) the party-OOC teardown no longer
+  cancels a retreat its own StopCombat caused; a retreat ends only on no live foes near him (hostile, alive, loaded, within
+  fChaseMax), the 30 s travel timeout, or the end of STAY; (3) per-follower holds on the APMF road (legacy alias road still
+  single-holder), one-per-fight replaced by a cooldown (3 own services AND 10 s) and a STAY phase after arrival (review
+  round 1: STAY ends on any combat re-entry with no StopCombat; closing round, marth: else after about 10 s of unpaused time
+  or full health, whichever comes first; the
+  no-foes walk moved to a main-thread probe, 3 probes AND 3 s without an engaged hostile); (6) `[retreat] falling back` logs the pre-StopCombat
+  confidence, `[sense]` gains `dPlayer=`. Confidence formula untouched (v2 is its own round).
+  FIELD CHECKS: `[retreat] ... StopCombat (engage) landed on main`; no `released (combat ended)` lines; `reached player ...
+  STAY` then `stay over after ... fully healed` / `stay over after ... (unpaused)` / `engaged at your side`; two followers holding at once on APMF; `re-entered combat mid-retreat` appears only
+  on real re-entries, never per lap.
 - **2026-09-25 branch `feat/mfo-target-pin` (off `main` `97ac782`; NOT merged, NOT deployed; tier A,
   awaiting its Opus 5.5 review). ClickUp 86e3eu6fd, batch L.** MFO becomes the client of Harbinger's
   ch.20 `kIntent_TargetPin` (APMF main `588cd5e`, ABI v13; `native/APMF_API.h` re-mirrored byte-identical).
