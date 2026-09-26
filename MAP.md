@@ -2937,7 +2937,9 @@ BY SKILL + PERKS above.
 
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B117 (the VM reads race Papyrus), MFO-B118 (alternatives
-over-count), MFO-B119 (a reload before arrival can ship one duplicate).** Read them before editing.
+over-count), MFO-B119 (a reload before arrival can ship one duplicate), MFO-B120 (the ledger floor leaks
+for the session), MFO-B121 (the same base in two crates), MFO-B122 (a kept relic auto-equipped, never
+shipped).** Read them before editing.
 ClickUp 86e3edghj, rounds L1-L3, design `_research/lotd-design-2026-09-24.md`. LOTD has no DLL;
 MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (local to
 `LegacyoftheDragonborn.esm`) is verified against the installed 6.9.0 and 6.10.0 ESMs and listed at
@@ -2997,8 +2999,10 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   (`DepositIdleStatus` 1) and still live >= 1 s later on a later tick (the never-live grace never
   counts; 2 = Harbinger ended it → the trip ends) → `TransferOnMain:826` (MAIN) refuses under an open
   container / barter menu and unless the crate CONFIRMS `ready` / `waitingtoship`, re-reads every
-  item, reads the crate count back, fills the ledger floor → Settling (2.5 s) → `EndTripLocked:760`
-  releases all three claims.
+  item (NOT `IsPlayerPick`: `g_playerPicks` is worker-only, Shippable filtered it), reads the crate
+  count back, fills the ledger floor, and reports `g_transferResult` → Settling: a SKIPPED or empty
+  transfer (2) ends the trip as a FAIL with the crate cooldown (never a silent DONE loop); a move (1)
+  waits 2.5 s → `EndTripLocked` releases all three claims.
 - **Trip ends:** combat (`ReleaseTravelOnCombat` → `EndDeposit`), dismissal (`OnFollowerRemoved`),
   awareness off, crate gone, a non-arrived leg end, the player leaving his leash, 90 s — and the
   OWNER-INDEPENDENT backstop `SweepTrip:1172` ← the pump (`Diagnostics.cpp:937`, every lap): logistics

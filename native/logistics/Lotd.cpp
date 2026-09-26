@@ -199,6 +199,10 @@ namespace MFO::Lotd {
         // The shipping intro is in flight (steady ms until which no second activation is
         // posted), so it can never show twice.
         std::atomic<std::int64_t> g_introPendingUntilMs{ 0 };
+        // The posted transfer's outcome, read by the trip's Settling phase: 0 = not run
+        // yet, 1 = moved something, 2 = skipped / moved nothing (-> a FAIL end with the
+        // crate cooldown, so he never walks, gives and ships nothing on a loop).
+        std::atomic<int> g_transferResult{ 0 };
 
         std::int64_t SteadyMs() {
             return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -818,8 +822,8 @@ namespace MFO::Lotd {
         }
 
         // The transfer, on the MAIN thread. Re-reads everything (the worker's list is
-        // a plan, not a promise): a worn / quest / player-given instance is skipped here
-        // too. The crate must be CONFIRMED Ready (or WaitingtoShip, whose pending update
+        // a plan, not a promise): a worn / quest instance is skipped here too (the
+        // player-given filter ran on the worker, in Shippable). The crate must be CONFIRMED Ready (or WaitingtoShip, whose pending update
         // ships everything in it) first -- a crate still in FirstActivation would keep
         // the items forever. What moved is read back from the crate and entered in the
         // ledger with the DropoffCrate baseline its arrival is measured against.
@@ -829,17 +833,19 @@ namespace MFO::Lotd {
             if (!f || !c || c->IsDisabled()) {
                 spdlog::warn("[lotd] {:08X}: transfer skipped -- follower or crate {:08X} no longer resolves",
                              a_follower, a_crate);
+                g_transferResult.store(2);
                 return;
             }
             if (InventoryMenuOpen()) {
-                spdlog::warn("[lotd] {:08X}: transfer skipped -- a container / barter menu is open (the next trip "
-                             "ships)", a_follower);
+                spdlog::warn("[lotd] {:08X}: transfer skipped -- a container / barter menu is open", a_follower);
+                g_transferResult.store(2);
                 return;
             }
             const std::string st = CrateState(c);
             if (st != "ready" && st != "waitingtoship") {
                 spdlog::warn("[lotd] {:08X}: transfer skipped -- crate {:08X} is '{}', not Ready (its activation has "
-                             "not run yet; the next trip ships)", a_follower, a_crate, st.empty() ? "unreadable" : st);
+                             "not run)", a_follower, a_crate, st.empty() ? "unreadable" : st);
+                g_transferResult.store(2);
                 return;
             }
             auto* drop = ById<RE::TESObjectREFR>(g_dropoffRef);
@@ -862,7 +868,9 @@ namespace MFO::Lotd {
                     have += d.first;
                     if (auto* e = d.second.get(); e && (e->IsWorn() || e->IsQuestObject())) hold = true;
                 }
-                if (hold || have <= 0 || Logistics::IsPlayerPick(a_follower, it.base)) continue;
+                // IsPlayerPick is NOT re-checked here: g_playerPicks is an unlocked WORKER-only
+                // map (EquipAuthority.cpp); Shippable filtered it on the worker.
+                if (hold || have <= 0) continue;
                 const std::int32_t before = countIn(c, it.base, false);
                 f->RemoveItem(obj, std::min(it.count, have), RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, c);
                 const std::int32_t delta = countIn(c, it.base, false) - before;
@@ -879,6 +887,7 @@ namespace MFO::Lotd {
             else
                 spdlog::warn("[lotd] {:08X}: transfer into crate {:08X} moved NOTHING ({} planned item(s))",
                              a_follower, a_crate, a_items.size());
+            g_transferResult.store(moved > 0 ? 1 : 2);
             RefreshMainSupplyOnMain();   // the ledger and the player's counts changed: republish now
         }
     }
@@ -992,6 +1001,7 @@ namespace MFO::Lotd {
         g_rebuildQueued.store(false);
         g_mainQueued.store(false);
         g_introPendingUntilMs.store(0);
+        g_transferResult.store(0);
         // g_depositLatched is NOT reset: a synchronous ch.12 v2 refusal is process-stable.
     }
 
@@ -1147,6 +1157,7 @@ namespace MFO::Lotd {
                 EndTripLocked(a_now, "nothing left to ship", true, false);
                 return false;
             }
+            g_transferResult.store(0);
             MainThread::Post([fid, cid, items = std::move(items)]() mutable {
                 TransferOnMain(fid, cid, std::move(items));
             });
@@ -1155,10 +1166,16 @@ namespace MFO::Lotd {
             g_trip.settleFrom = a_now;
             return true;
         }
-        case Phase::Settling:
-            if (a_now - g_trip.settleFrom < kIdleSettle) return true;
+        case Phase::Settling: {
+            const int r = g_transferResult.load();
+            if (r == 2) {   // skipped or moved nothing: FAIL + crate cooldown (never a silent DONE loop)
+                EndTripLocked(a_now, "the transfer was skipped or moved nothing (see the transfer line)", false, true);
+                return false;
+            }
+            if (r == 0 || a_now - g_trip.settleFrom < kIdleSettle) return true;   // not run yet / idle still playing
             EndTripLocked(a_now, "", true, false);
             return false;
+        }
         }
         return true;
     }
