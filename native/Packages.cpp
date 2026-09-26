@@ -2191,9 +2191,9 @@ namespace MFO::Packages {
             // a live combat target, not just runs alongside it -- now POSTED to
             // the main thread (PostRetreatStopCombat), never called here on the
             // AddTask worker.
-            PostRetreatStopCombat(fid, h.gen, "engage", /*a_legacy=*/false);
+            if (!APMFBridge::ClaimRetreatReentryDeny(fid)) PostRetreatStopCombat(fid, h.gen, "engage", false);  // ch.22: its sweep posts it once LIVE
             spdlog::info("[retreat] {:08X}: APMF retreat dispatched (kIgnoreCombat); StopCombat "
-                         "posted to main ({} holding)", fid, g_retreatHolds.size());
+                         "posted to main, or on the ch.22 deny going live ({} holding)", fid, g_retreatHolds.size());
             return true;
         }
 
@@ -2250,8 +2250,8 @@ namespace MFO::Packages {
         h.gen      = ++g_retreatGen;
         g_retreatHolds[fid] = h;
         PublishRetreatLive(fid, h.gen);
-        PostRetreatStopCombat(fid, h.gen, "engage", /*a_legacy=*/true);
-        spdlog::info("[retreat] {:08X}: dispatched (prio={}, kIgnoreCombat); StopCombat posted to main",
+        if (!APMFBridge::ClaimRetreatReentryDeny(fid)) PostRetreatStopCombat(fid, h.gen, "engage", true);  // ch.22: its sweep posts it once LIVE
+        spdlog::info("[retreat] {:08X}: dispatched (prio={}, kIgnoreCombat); StopCombat posted to main, or on the ch.22 deny going live",
                      fid, static_cast<int>(quest->data.priority));
         return true;
     }

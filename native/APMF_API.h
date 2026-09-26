@@ -127,7 +127,37 @@ namespace APMF_API {
     // before it asks for the intent: an OLDER APMF has no channel for intent 21 and
     // REFUSES the request (kInvalidHandle, "no channel serves intent 21" in its log),
     // which is the documented degrade -- start the fight your own way.
-    inline constexpr std::uint32_t kABIVersion = 14;
+    //
+    // ABI v15 (2026-09-25) adds kIntent_CombatReentryDeny (ch.22) and NOTHING else: no struct,
+    // no function-pointer slot, no APMF_Param field -- the v10 / v13 / v14 shape again. ch.22
+    // rides the EXISTING RequestEx/Repoint/Release slots and reads the EXISTING param.fval (the
+    // window in seconds), so there is no APMF_API_v15 struct and a v14 client is byte-unaffected.
+    // A client must see abiVersion >= 15 before it asks for the intent: an OLDER APMF has no
+    // channel for intent 22 and REFUSES the request (kInvalidHandle, "no channel serves intent
+    // 22" in its log), which is the documented degrade -- keep the actor out of combat your own
+    // way.
+    //
+    // ABI v16 (2026-09-25) adds kIntent_PursuitLeash (ch.23) and NOTHING else: no struct, no
+    // function-pointer slot, no APMF_Param field -- the v13 / v14 / v15 shape. ch.23 rides the
+    // EXISTING RequestEx/Repoint/Release slots and reads the EXISTING param.target (the ANCHOR
+    // actor) and param.fval (the radius, game units). A client must see abiVersion >= 16 before
+    // it asks for the intent: an OLDER APMF has no channel for intent 23 and REFUSES the request
+    // (kInvalidHandle, "no channel serves intent 23" in its log), which is the documented degrade
+    // -- keep your own leash. (An earlier, never-released v16 draft carried the leash as a ch.7
+    // category bit, kCombatActionCat_Pursuit; it was withdrawn before any release, so no client
+    // ever saw it. The leash is its own facet, arbitrated separately from ch.7.)
+    //
+    // ABI v17 (2026-09-25) gives kIntent_Idle (ch.12) a FORM and a TARGET and NOTHING else: no
+    // new intent, no struct, no function-pointer slot, no APMF_Param field. The idle rides the
+    // EXISTING param.form (the TESIdleForm to play) and param.target (the reference to play it
+    // at), which v1..v16 accept and ignore for this intent. That is why no field is added: the
+    // two values are a form and a ref, exactly what those fields already carry for every other
+    // intent, and a zero form still means the v1 behaviour. There is no APMF_API_v17 struct and
+    // a v16 client is byte-unaffected. A client must see abiVersion >= 17 before it sets
+    // param.form on kIntent_Idle: an OLDER APMF does NOT refuse such a claim -- it ignores the
+    // form and plays its form-free IdleForceDefaultState -- so an unchecked client gets the
+    // wrong animation, silently. That is the degrade to avoid; check the version.
+    inline constexpr std::uint32_t kABIVersion = 17;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -207,8 +237,30 @@ namespace APMF_API {
                                      //       denying a competing framework's own target
                                      //       write is a future gap). Param: form (the
                                      //       target actor).
-        kIntent_Idle          = 11,  // ch.12 One-shot idle/animation. Mode: PROMOTE.
-                                     //       Param: none.
+        kIntent_Idle          = 11,  // ch.12 Play an idle/animation. Mode: PROMOTE.
+                                     //       Param v1 (form 0, every ABI): none -- one
+                                     //       IdleForceDefaultState at engage, nothing at release.
+                                     //       Param v2 (ABI v17): form = a TESIdleForm (an IDLE
+                                     //       record) to play; target = an optional reference to
+                                     //       play it AT (0 = none). ONE AIProcess::PlayIdle(actor,
+                                     //       idle, target) at engage and one per Repoint / owner
+                                     //       change; at release ONE IdleForceDefaultState, and only
+                                     //       when the idle is still HELD (the actor's graph has
+                                     //       not raised IdleStop since the call -- a one-shot idle
+                                     //       has ended by itself and gets nothing). No Tick.
+                                     //       The idle's OWN conditions are evaluated by the engine
+                                     //       against (actor, target): a failing one refuses it.
+                                     //       The client picks the idle; Harbinger never does.
+                                     //       ENDS (released by Harbinger, logged): the form is not
+                                     //       an IDLE, the target is not a loaded reference, the
+                                     //       actor is not loaded / dead / has no AI process, the
+                                     //       engine refused the idle, or the owner died; plus
+                                     //       Release, an unload, a save load or a new game.
+                                     //       REFUSED SYNCHRONOUSLY (form != 0 only; kInvalidHandle,
+                                     //       logged): VR, a runtime other than 1.6.1170 / 1.5.97,
+                                     //       a self-check refusal, before kDataLoaded, or target
+                                     //       == the actor. An APMF older than v17 does NOT refuse
+                                     //       a form: it plays the v1 idle. Check abiVersion >= 17.
         kIntent_ShoutPower    = 12,  // ch.14 Shout/power selection. Mode: ARBITRATE only
                                      //       (mirrors ch.6/ch.8, no deny gate yet). Param:
                                      //       form (the shout/power FormID).
@@ -540,6 +592,107 @@ namespace APMF_API {
                                      //       player. The TARGET may be the player. A target that
                                      //       is not an Actor is found one frame later and ENDS the
                                      //       claim (above).
+
+        kIntent_CombatReentryDeny = 22, // ch.22 KEEP this actor OUT OF COMBAT for a bounded window
+                                     //       (ABI v15, ClickUp 86e3ex5v9). Mode: DENY the ENGINE'S
+                                     //       OWN COMBAT ENTRY for this actor at its source
+                                     //       (INVARIANTS #0 (h)). A BOUNDED claim: it ends by itself.
+                                     //       Param: fval = the WINDOW in seconds (0 => 10 s; above
+                                     //       120 s it is clamped to 120, logged; negative or NaN is
+                                     //       refused). form / ival / target / pos are not read.
+                                     //
+                                     //       WHAT IT DOES. Every way the engine puts an actor into
+                                     //       combat (it sees an enemy, it is attacked, an ally is
+                                     //       fighting, a script or another mod calls StartCombat) goes
+                                     //       through one engine function, Actor::StartCombat. While
+                                     //       the claim holds and its window runs, APMF makes that
+                                     //       function refuse for this actor EVERY time, before it does
+                                     //       anything (no weapon draw, no equip, no alarm). The actor
+                                     //       keeps doing what its package says.
+                                     //
+                                     //       IT STOPS NOTHING. An actor that is already in combat is
+                                     //       not taken out of it (it only gains no new foes through
+                                     //       StartCombat). The recipe for a retreat is: claim this, and
+                                     //       on the first tick IsClaimLive(handle) reads true (the
+                                     //       claim is applied at the next drain; before that the handle
+                                     //       is PENDING, not ended) call Actor::StopCombat ONCE yourself
+                                     //       (INTEGRATION.md "retreat: StopCombat once + deny
+                                     //       re-entry"). From then on
+                                     //       the engine cannot pull the actor back in until the window
+                                     //       ends. Other actors may still attack it: their fight is
+                                     //       their facet. Nothing is undone when the claim ends:
+                                     //       nothing was written.
+                                     //
+                                     //       YOUR OWN kIntent_CombatEntry IS NOT DENIED. A ch.21 entry
+                                     //       for the actor (yours or another client's) is a declared
+                                     //       decision and passes. It does not end this claim: once
+                                     //       that fight ends, the window (if still running) refuses the
+                                     //       engine's re-entries again.
+                                     //
+                                     //       THE CLAIM ENDS, AND APMF RELEASES IT ITSELF (the log names
+                                     //       the reason, IsClaimLive(handle) turns false), when the
+                                     //       window elapses ("window elapsed") or the actor dies
+                                     //       ("owner dead"). The window runs from the claim's OWN
+                                     //       request (or last Repoint): a claim that takes over from a
+                                     //       released rival gets only what is left of it, and ends at
+                                     //       once if nothing is. Repoint(handle, &param) restarts the
+                                     //       window from that moment with the new fval. Your own
+                                     //       Release, an outranking claim, a save load, a new game or
+                                     //       the actor unloading also end it (never saved).
+                                     //
+                                     //       FIELD STATUS: the seat must be OBSERVED on the deck (the
+                                     //       log line "[ch.22] seat OBSERVED") before a client relies on
+                                     //       it (CLAUDE.md principle 5). "[ch.22] ... DENY MISSED" in
+                                     //       the log means the actor entered combat anyway: report it.
+                                     //
+                                     //       REFUSED SYNCHRONOUSLY (kInvalidHandle, logged): VR, a
+                                     //       runtime other than 1.6.1170 / 1.5.97, [CombatReentryDeny]
+                                     //       bCombatReentryDeny=0, a self-check refusal, before
+                                     //       kDataLoaded, a negative or NaN fval, or the actor is the
+                                     //       player.
+
+        kIntent_PursuitLeash = 23,   // ch.23 LEASH this actor's in-combat PURSUIT to an anchor actor
+                                     //       (ABI v16, ClickUp 86e3ex5ve). Mode: DENY, CONDITIONAL.
+                                     //       Param: target = the ANCHOR actor (REQUIRED; 0 or the
+                                     //       actor itself refused); fval = the RADIUS in game units
+                                     //       (REQUIRED, > 0). form / ival / pos are not read.
+                                     //
+                                     //       WHAT IT DOES. While the actor is farther than the radius
+                                     //       from the anchor, the combat behaviour-tree moves that
+                                     //       take it toward its goal are refused when that goal is
+                                     //       farther from the anchor than the actor is (the move
+                                     //       would take it farther). The goal is the combat TARGET
+                                     //       for the ten pursuit leaves (Advance, Chase,
+                                     //       FindAttackLocation, Flank, FlankDistant,
+                                     //       MaintainOptimalRange, PursueTarget, Reposition, Stalk,
+                                     //       Surround) and the combat group's SEARCH CENTER for the
+                                     //       four search leaves (Search, SearchCenter,
+                                     //       SearchLocation, SearchWander). A leaf is refused before
+                                     //       it starts, and one already running is ended the way the
+                                     //       engine ends a leaf whose path failed. Every other move,
+                                     //       every attack, spell and block runs natively; the actor is
+                                     //       never walked back.
+                                     //
+                                     //       ITS OWN FACET: arbitrated separately from ch.7
+                                     //       (kIntent_CombatAction). A ch.7 claim by another mod
+                                     //       neither replaces nor is replaced by a leash.
+                                     //
+                                     //       ENDS: Release, an outranking ch.23 claim, a save load, a
+                                     //       new game, or the actor unloading. A dead actor runs no
+                                     //       combat tree; a dead, unloaded or other-cell anchor holds
+                                     //       nothing back.
+                                     //
+                                     //       REFUSED SYNCHRONOUSLY (kInvalidHandle, logged): an APMF
+                                     //       older than v16 ("no channel serves intent 23"), VR, a
+                                     //       runtime other than 1.6.1170 / 1.5.97, [PursuitLeash]
+                                     //       bPursuitLeash=0, a self-check refusal, before
+                                     //       kDataLoaded, target 0 or the actor itself, a radius that
+                                     //       is not a positive number, or the actor is the player. An
+                                     //       anchor that is not a loaded Actor is found at Engage:
+                                     //       the claim stands and denies nothing (logged).
+                                     //
+                                     //       FIELD STATUS: built, CI-verified, NOT yet observed on a
+                                     //       deck (the "[ch.23] pursuit H" heartbeat counts the leaves).
     };
 
     // ── Travel flags (kIntent_Travel's param.ival, ABI v10) ─────────────────────
@@ -880,7 +1033,8 @@ namespace APMF_API {
     // free position for a future category (defense/movement/utility are
     // deliberately NOT assigned a bit yet -- Docs/ALLOWANCE-TEMPLATE.md §3's T1
     // row lists them as never-denied by design until a real client need names
-    // one).
+    // one. The in-combat pursuit LEASH is not a category here: it is its own
+    // intent, kIntent_PursuitLeash (ch.23, ABI v16), on the same leaf seats).
     enum CombatActionCategory : std::uint32_t {
         kCombatActionCat_None    = 0,
         kCombatActionCat_Offense = 1u << 0,   // Attack/AttackLow/Bash/RangedAttack/SpecialAttack/
@@ -1272,16 +1426,27 @@ namespace APMF_API {
     //   pos    kIntent_Travel          ABI v11: the destination POINT when ival has kTravel_ToPosition
     //                                  (form must then be 0; APMF walks the actor to its own XMarker
     //                                  there). Without the flag: REFUSED if non-zero.
+    //   form   kIntent_Idle            ABI v17: the TESIdleForm to play (0 = the v1 form-free idle)
+    //   target kIntent_Idle            ABI v17: optional reference to play the idle AT (read only
+    //                                  when form != 0)
     //   form   kIntent_TargetPin       ABI v13: the TARGET actor (REQUIRED; 0 or the actor itself
     //                                  is refused). No other field is read.
     //   form   kIntent_CombatEntry     ABI v14: the TARGET actor (REQUIRED; 0 or the actor itself
     //                                  is refused; the player may be the target, not the actor).
     //                                  No other field is read.
+    //   fval   kIntent_CombatReentryDeny  ABI v15: the WINDOW in seconds (0 => 10 s; clamped to 120;
+    //                                  negative / NaN refused). No other field is read.
+    //   target kIntent_PursuitLeash    ABI v16: the ANCHOR actor (REQUIRED; 0 or the actor itself
+    //                                  is refused).
+    //   fval   kIntent_PursuitLeash    ABI v16: the RADIUS in game units (REQUIRED, > 0; 0,
+    //                                  negative or NaN is refused). No other field is read.
     //   none   every other Intent      accepted, not yet read by the channel
     //
-    // fval is read ONLY by kIntent_Travel (ABI v10); it stays reserved for a
-    // future per-request bias on ch.11, scale on ch.1a, factor on ch.16. target is
-    // not read by any Intent OTHER than kIntent_SelectSpell yet. pos is read by
+    // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15) and
+    // kIntent_PursuitLeash (ABI v16); it stays reserved for a
+    // future per-request bias on ch.11, scale on ch.1a, factor on ch.16. target is read by
+    // kIntent_PursuitLeash (ABI v16, the anchor) and was by kIntent_SelectSpell (retired).
+    // pos is read by
     // kIntent_Cast with kCastFlag_AtPosition and by kIntent_Travel with kTravel_ToPosition
     // (both ABI v11). Without its flag, kIntent_Travel refuses a non-zero pos.
     // ─────────────────────────────────────────────────────────────────────────────

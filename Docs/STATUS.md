@@ -13,6 +13,37 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-25 branch `feat/mfo-reentry-leash` (off `main` `53d61c0`; NOT merged, NOT deployed; tier A, awaiting its
+  Opus 5.5 review). Batch L, ClickUp 86e3ex5v9 / 86e3ex5ve (the MFO halves) + 86e3erv94.** MFO adopts Harbinger ch.22
+  `kIntent_CombatReentryDeny` in the retreat and ch.23 `kIntent_PursuitLeash` as the in-combat leash. `native/APMF_API.h`
+  re-mirrored byte-identical from Harbinger `c0f0e43` (ABI v17); MFO still REQUESTS 10 and gates ch.22 on >= 15, ch.23 on
+  >= 16. New files `native/apmf/ReentryDeny.cpp`, `native/apmf/PursuitLeash.cpp`.
+  RETREAT (ch.22): `RetreatFill` claims the deny (window 35 s = TRAVEL's 30 s timeout + 5 s service lag) instead of its
+  immediate StopCombat; the bridge sweep posts the SINGLE StopCombat when the claim first reads LIVE; a pending that never
+  goes live (15 unpaused sweeps) is WARNed and the StopCombat posted without it. While LIVE the TRAVEL per-re-entry
+  StopCombat is not posted (a re-entry is WARNed: a ch.21 entry or a Harbinger DENY MISSED); with no deny or an ENDED one
+  it is posted as before. RELEASED AT ARRIVAL (TRAVEL -> STAY), not at STAY end: a deny in STAY would bench him ("engaged
+  at your side" needs the engine's combat entry; the 7580bea SEV-2), and on every retreat end, dismissal, MFO-off, load.
+  IN-COMBAT LEASH (ch.23): anchor the player, radius `Confidence::LeashRadius` (the tenet's distance from the PLAYER;
+  `ChaseRadius` is follower-centred), filed on the first non-retreat combat-table service, Repointed only when the radius
+  moves by max(256 u, 20 %), released on retreat, the party-OOC teardown, dismissal, load.
+  Harbinger absent / older / seat refused = the shipped behaviour exactly. Assessment questions closed (scratchpad
+  `agentlogs/assess-confidence-leash.md` "Fix plan status"): the retreat's re-entry StopCombat churn (ch.22) and the
+  unbounded in-combat pursuit with no player-relative bound (ch.23).
+  FIELD CHECKS (needs the Harbinger build with ch.22 + ch.23): `[retreat] ... ch.22 re-entry deny CLAIMED ... PENDING`,
+  then `ch.22 re-entry deny LIVE -- posting the single StopCombat` and `StopCombat (engage (ch.22 deny live)) landed on
+  main`; APMF `[ch.22] seat OBSERVED` and `FIRST DENY`, and NO `DENY MISSED`; `re-entered combat mid-retreat ... UNDER A
+  LIVE ch.22 deny` should not appear; `ch.22 re-entry deny released (arrived: STAY ...)` at arrival, then an `engaged at
+  your side` release is still possible. `[leash] ... ch.23 pursuit leash CLAIMED (... radius N)` once per fight per
+  follower, a few `radius A -> B (Repoint` lines at most, `released (combat ended)`; APMF `[ch.23] pursuit LEASH set` and
+  `pursuit H` heartbeats with `update-anomaly=0`. Scheduler.cpp is 1680 lines (past the ~1500 plan-a-split mark:
+  propose a split brief); Packages.cpp stayed 2466.
+  CLOSING ROUND (tier-A review of 497b6cd clean, nothing above SEV-4): a deny still PENDING at arrival gets the retreat's
+  own StopCombat posted once as it is released (a fast arrival was never disengaged); a deny that never goes live is a
+  named DEGRADE ("ch.22 deny never went live (Harbinger apply failure): degraded to per-re-entry StopCombat for this
+  retreat"), **marth's policy call on that degrade is pending**; the deny claim also releases any standing ch.21 entry
+  (FIFO-cancel) so it cannot punch through. Extra field check: `arrived with the ch.22 deny still PENDING` should be rare.
+
 - **2026-09-25 branch `fix/mfo-teleport-leash` (off `main` `7b6f405`; NOT merged, NOT deployed). Teleport-mod leash compatibility, batch L, tier B. ClickUp 86e3ec824.**
   FINDING: the loot leash WAS already enforced mid-trip (`logistics/Service.cpp` `outOfLeash`: follower->player > LeashRadius x1.15 ends the excursion, ~1 s cadence); the target is only leash-checked at selection. NEW `logistics/TeleportCompat.{h,cpp}`: detects Automatic Follower Teleporter NG (loaded DLL + its INI `[Teleport]` fDrawDistance / fDrawnDistance / fBehindOffset / bNoTeleportOnHorse / bOnlyAllowTeleportOnCombatStart), logs Simple Follower Framework as checked-no-teleport. While the player's weapon is drawn the loot leash is capped at D-350 (select) / D-150 (release), D = min(fDraw, fDrawn); a Walking leg whose TARGET lies past the release while clamped re-plans; GENERIC (every install, not AFT-gated): a one-tick jump to the player's side (>= 800 u, >= 700 u/s, lands <= 1000 u from him after closing >= 600 u; mounted follower excluded) ends the leg cleanly (no stall / strike / blocklist) and re-plans. Clamped mid-trip release is best-effort; recognition is the backstop.
   FIELD CHECKS (LoreRim): one `[teleport-compat] Automatic Follower Teleporter NG IS LOADED ...` line; `[teleport-compat] player weapon DRAWN ... capped at 1150 select / 1322 release` on draw; `[loot] ... r=... leash=1150` scan lines while drawn; no AFT yank during a drawn-weapon loot trip; a draw with a follower past 2000 u gives `[loot] ... TELEPORTED to the player mid-leg ...` and he carries on with a near item.

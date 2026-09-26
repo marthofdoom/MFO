@@ -89,6 +89,8 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/Equip.cpp
     apmf/Excursion.cpp
     apmf/CombatEntry.cpp
+    apmf/ReentryDeny.cpp
+    apmf/PursuitLeash.cpp
     apmf/SpellAllowList.cpp
     imgui_impl_win32.cpp
 )

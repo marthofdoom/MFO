@@ -887,6 +887,10 @@ namespace MFO::APMFBridge {
     void Tick() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api) return;
+        // ch.22 / ch.23 tables: their own mutexes, swept BEFORE g_mx (the ch.22 sweep posts the
+        // retreat's single StopCombat through Packages once a deny reads live).
+        SweepReentryDenies();
+        SweepPursuitLeashes();
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(g_mx);
         // ch.20 target pins: notice a pin Harbinger ended (IsClaimLive false) so the
@@ -1082,6 +1086,8 @@ namespace MFO::APMFBridge {
         g_owned.clear();
         ClearTargetPinsLocked();   // ch.20 pins: APMF drops them at its own kPreLoadGame; stale Release is a no-op
         ClearCombatEntriesLocked();   // ch.21 entries: same (never saved on APMF's side either)
+        ClearReentryDenies();         // ch.22 retreat denies: same (Harbinger never saves them)
+        ClearPursuitLeashes();        // ch.23 leashes: same
         g_equipAuthRefused.clear();
         g_selectOverflow.clear();
         g_selectRefused.clear();

@@ -29,6 +29,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **A better weapon or armor piece that is too heavy to carry is still taken when dropping gear he already replaced makes room.** This needs the economy on. The least valuable replaced gear goes back into the body first, and only once the new piece is in his pack. Nothing worth more than the new piece is dropped. Worn gear, enchanted gear, his own signature gear, quest items, gear you put on him, and gear that may hold gems are never dropped.
 - **With Harbinger's equip authority, an archer MFO holds on his bow gets his best arrows, when he has at least 20 of them.** Arrows you hand him through the trade menu stay on. Before, he kept whatever arrows he last had equipped.
 - **A mage no longer sells the backup dagger he just looted.**
+- **A retreating follower stays out of the fight on the way back.** With a Harbinger that has the re-entry deny (its next release after 0.9.9), the game cannot pull him back into combat while he walks to you. MFO takes him out of the fight once, the moment Harbinger holds the door shut. Enemies can still hit him on the way. Once he reaches you he fights again if the enemies come to him. Older Harbinger or none: the retreat works as before.
+- **Followers do not chase too far from you in a fight.** With a Harbinger that has the pursuit leash (its next release after 0.9.9), a follower who is farther from you than his confidence leash does not run after a foe that would take him farther still. A confident follower ranges wide. A hurt or outnumbered one stays close. He still fights whatever comes to him. Older Harbinger or none: no change.
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 

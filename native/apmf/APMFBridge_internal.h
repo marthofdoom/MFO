@@ -379,6 +379,14 @@ namespace MFO::APMFBridge {
         // ClearCombatEntriesLocked: ClearTransientState's teardown. Both need g_mx HELD.
         void SweepCombatEntriesLocked(const APMF_API::APMF_API_v2* api);
         void ClearCombatEntriesLocked();
+        // ch.22 re-entry deny table (apmf/ReentryDeny.cpp) and ch.23 pursuit leash table
+        // (apmf/PursuitLeash.cpp): each has its OWN mutex. The sweeps are called by Tick()
+        // BEFORE it takes g_mx (the deny sweep posts the retreat's StopCombat); the clears by
+        // ClearTransientState under g_mx (order g_mx -> table mutex; the tables never take g_mx).
+        void SweepReentryDenies();
+        void ClearReentryDenies();
+        void SweepPursuitLeashes();
+        void ClearPursuitLeashes();
 
         inline void EraseIfEmpty(std::unordered_map<RE::FormID, Owned>::iterator it) {
             const auto& o = it->second;
