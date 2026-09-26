@@ -23,6 +23,11 @@
 // foe test (that one reads his combat group's targets); out of combat there is no
 // group, so the scan needs its own filters.
 //
+// TOWN / INN FILTER (marth 2026-09-25): unless the PLAYER is fighting, no engage
+// while the player stands in a civilised location, and no enemy whose own location
+// is civilised (EngageOnSight.cpp IsCivilised: innermost-first walk of the location
+// chain; a Clearable / Dungeon tag first means a fight site).
+//
 // NO MFO DIRECT ROAD. Harbinger absent, older than ABI 14, or its ch.21 seat
 // refused = the gambit is inert (logged per follower on transition).
 // It also stands down while: bAutoRetreat is OFF (a follower who starts a fight

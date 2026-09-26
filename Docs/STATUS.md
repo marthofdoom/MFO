@@ -30,7 +30,9 @@ Read it as history and this block as current.
   are released only when GONE (dead / unloaded / not hostile / past fLeashMax); one global probe sequence (no stale
   engage after re-hire); gate on the in-combat confidence estimate; the kill switch releases its pin; `[los]` from the
   probe logs on change only. DESIGN DEFAULTS pending marth: (i) a follower told to wait (WaitingForPlayer or a sandbox
-  package) does not engage; (ii) an actor hostile only to the follower still counts.
+  package) does not engage; (ii) an actor hostile only to the follower still counts. ADDED (marth): no engage in towns /
+  inns (player's location or the enemy's, 20 Skyrim.esm LocType keywords, a Clearable/Dungeon tag nearer in wins) unless the
+  player is fighting.
   FIELD CHECKS: `[engage-on-sight] <name> (<id>) ENGAGE ...` once per engage; APMF `[ch.21] ... ENTERED` with
   `Target is a combat-group target: yes`, then `[ch.20] ... FIRST SOURCE DENY`; after a fight `entry on ... is over
   -- target given up`, and no second ENGAGE on that target while it stays in view.

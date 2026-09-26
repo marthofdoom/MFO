@@ -1482,37 +1482,42 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
 MFO's adoption of Harbinger ch.21 (ClickUp 86e3errnu). Not a Gambit record (not in the board list,
 not editable); `bEngageOnSight` (default OFF) is its only control. Contract, threads and the no-loop
 rule in the header. Called only from the Scheduler hook above.
-- `Service` (`:269`, WORKER) in order: (1) his ch.21 entry (`APMFBridge::CombatEntryStateOf`):
-  Standing -> return true (pending); Ended (`:280`) -> the target joins `givenUp`, the pin this
-  gambit filed (`Note::pinned`) is released via `ReleaseOwnPin` (`:130`) only if Targeting still
+- `Service` (`:344`, WORKER) in order: (1) his ch.21 entry (`APMFBridge::CombatEntryStateOf`):
+  Standing -> return true (pending); Ended (`:355`) -> the target joins `givenUp`, the pin this
+  gambit filed (`Note::pinned`) is released via `ReleaseOwnPin` (`:135`) only if Targeting still
   holds that target, `ForgetCombatEntry`. (2) gates: toggle OFF (silent; also the KILL SWITCH for
-  the pin it filed, `:294` -- the entries are released by the bridge sweep), VR, `bAutoRetreat`
+  the pin it filed, `:369` -- the entries are released by the bridge sweep), VR, `bAutoRetreat`
   OFF, `CombatEntryOffered()` false (Harbinger absent / < v14 / seat refused: INERT, no direct
-  road), player `IsSneaking()` unless `bEngageOnSightSneaking`, `ToldToWait` (`:145`, DESIGN
+  road), player `IsSneaking()` unless `bEngageOnSightSneaking`, `ToldToWait` (`:150`, DESIGN
   DEFAULT pending marth: `kWaitingForPlayer` > 0 or a Sandbox package), the retreat cooldown.
   Each stand-down is a transition line with a STABLE key (live values go in a printed detail),
   floored 5 s per follower (`Status`). (3) the newest landed probe (only the one answering his
-  last post, consumed once): given-up targets the probe reports GONE are dropped (`:351`); if it
+  last post, consumed once): given-up targets the probe reports GONE are dropped (`:426`); if it
   chose a VISIBLE target not given up, the IN-COMBAT confidence estimate
-  `Confidence::OfFacing(f, candidates)` (`:363`) must reach the retreat floor, then
-  `RequestCombatEntry` (`:372`); on Filed pin the same target via `Targeting::CommandEx` when
-  `Targeting::Commandable()`, `Logistics::ReleaseTravelOnCombat` (`:385`, his loot trip ends),
-  ONE `[engage-on-sight] ... ENGAGE` line, return true. (4) `PostProbe` (`:250`): at most one per
-  0.3 s per follower; seq from the GLOBAL monotonic `g_seq` (`:75`, never reset: a probe in flight
+  `Confidence::OfFacing(f, candidates)` (`:444`) must reach the retreat floor, then
+  `RequestCombatEntry` (`:453`); on Filed pin the same target via `Targeting::CommandEx` when
+  `Targeting::Commandable()`, `Logistics::ReleaseTravelOnCombat` (`:466`, his loot trip ends),
+  ONE `[engage-on-sight] ... ENGAGE` line, return true. (4) `PostProbe` (`:325`): at most one per
+  0.3 s per follower; seq from the GLOBAL monotonic `g_seq` (`:80`, never reset: a probe in flight
   across `Forget` is always older than any later post); leash = `Confidence::LeashRadius(f)` on
   the worker; the "gone" radius = the FIXED `g_leashMax`.
-- `RunProbe` (`:193`, MAIN THREAD via `MainThread::Post`; VR: Post is a no-op, never lands):
+- `RunProbe` (`:260`, MAIN THREAD via `MainThread::Post`; VR: Post is a no-op, never lands):
   walks `highActorHandles` (NiPointer held) for candidates = not him / the player / a teammate,
-  alive, enabled, 3D-loaded, within the leash OF THE PLAYER, and `IsEnemy` (`:170`): not commanded
+  alive, enabled, 3D-loaded, within the leash OF THE PLAYER, and `IsEnemy` (`:175`): not commanded
   by the player or a teammate; not restrained / bleeding out / on an IgnoreCombat package;
   `IsHostileToActor(player) || IsHostileToActor(him)` (DESIGN DEFAULT (ii) pending marth: hostile
   to him alone counts); a CRIME-FACTION actor only when its `currentCombatTarget` is the player or
-  a teammate. No ghost check (`IsGhost` is an unverified id call: backlog MFO-B111). Sorts nearest
+  a teammate. No ghost check (`IsGhost` is an unverified id call: backlog MFO-B111). TOWN / INN
+  FILTER (marth 2026-09-25), off while `pc->IsInCombat()`: `IsCivilised` (`:208`) walks the location chain
+  innermost-first -- a LocTypeClearable / LocTypeDungeon tag first = a fight site (not civilised),
+  a civilised LocType first = civilised (20 Skyrim.esm keywords resolved once by FormID; the
+  LocTypeHold* family is excluded because it tags wilderness). Player's location civilised -> the
+  probe lands with no candidates (`civilStandDown`); an enemy's location civilised -> skipped. Sorts nearest
   to him first; `Sightline::MeasureNow` on at most 3 non-given-up candidates, first VISIBLE wins;
   reports which given-up targets are GONE (dead / disabled / unloaded / unresolvable / no longer
   hostile by the bare engine read / past `g_leashMax` from the player). Writes under `g_probeMx`
   (a leaf), generation-checked (`g_gen`), older posts never overwrite newer.
-- `Forget` (`:415`) from `Followers::ReleaseHeldState` (`Followers.cpp:375`, worker): release the
+- `Forget` (`:496`) from `Followers::ReleaseHeldState` (`Followers.cpp:375`, worker): release the
   entry, drop his notes.
 - **What breaks:** a `highActorHandles` walk or a sightline measure on the worker (§0.30 / §0.47,
   #74); treating `Sightline::Verdict::Unknown` as seen (fights through walls on a cold cache);

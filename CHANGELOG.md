@@ -13,6 +13,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **He does not start fights while you sneak.** A second option lets him.
 - **He never starts a fight with guards or townsfolk.** Anyone whose attack would be a crime is left alone unless they are already fighting you or a follower. Your summons and thralls, and enemies who are tied up, bleeding out or scripted to ignore fights are left alone too.
 - **A follower you told to wait stays put.**
+- **No fights started in towns, inns, houses or other lived-in places.** Unless you are already fighting, followers do not start a fight while you are in one, or with an enemy standing in one. A dungeon under a town still counts as a dungeon.
 - **No endless re-tries.** If the game refuses the fight, or the fight ends with the enemy still around, he leaves that enemy alone until it dies, leaves, stops being hostile or is far from you.
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing

@@ -59,6 +59,11 @@ namespace MFO::EngageOnSight {
             // confidence-scaled leash (review of 1c50696, SEV-3: a follower whose leash
             // shrank would forget a refused target still standing there, and loop).
             std::vector<RE::FormID> gone;
+            // TOWN / INN FILTER (marth 2026-09-25): the player stands in a civilised place
+            // and is not fighting -> no candidates at all this probe. civilSkipped = enemies
+            // skipped because THEIR location is civilised (player not fighting).
+            bool civilStandDown = false;
+            int  civilSkipped   = 0;
         };
         std::mutex                                   g_probeMx;
         std::unordered_map<RE::FormID, ProbeResult>  g_probes;   // guarded by g_probeMx
@@ -187,6 +192,68 @@ namespace MFO::EngageOnSight {
             return true;
         }
 
+        // MAIN THREAD. TOWN / INN FILTER (marth 2026-09-25: "filter out enemies in Inns or
+        // Towns, UNLESS the player is in a battle"). A location is CIVILISED when, walking
+        // from the innermost location out through parentLoc, a civilised keyword is met
+        // BEFORE a hostile-place one. Hostile-place = LocTypeClearable / LocTypeDungeon: a
+        // bandit mine or the Ratway under Riften is a fight site even though its parent is
+        // a town, and the innermost tag decides. Civilised = every Skyrim.esm LocType that
+        // marks a lived-in place (erring toward civilised, per marth): Inn, City, Town,
+        // Settlement, Habitation, HabitationHasInn, Dwelling, House, PlayerHouse, Store,
+        // Guild, Temple, Castle, Barracks, Jail, StewardsDwelling, Farm, Mine, LumberMill,
+        // OrcStronghold. NOT the LocTypeHold* family: those tag a whole hold, wilderness
+        // included. Resolved ONCE by FormID in Skyrim.esm (EditorIDs are not reliably kept;
+        // the same road as logistics' InPlayerHome); a keyword that does not resolve is
+        // simply absent from the set. FormIDs verified against Skyrim.esm's KYWD records.
+        bool IsCivilised(const RE::BGSLocation* a_loc) {
+            struct Kw { RE::FormID id; bool civil; };
+            static const std::vector<std::pair<const RE::BGSKeyword*, bool>> s_kws = [] {
+                constexpr Kw kList[] = {
+                    { 0x000F5E80, false },   // LocTypeClearable
+                    { 0x000130DB, false },   // LocTypeDungeon
+                    { 0x0001CB87, true },    // LocTypeInn
+                    { 0x00013168, true },    // LocTypeCity
+                    { 0x00013166, true },    // LocTypeTown
+                    { 0x00013167, true },    // LocTypeSettlement
+                    { 0x00039793, true },    // LocTypeHabitation
+                    { 0x000A6E84, true },    // LocTypeHabitationHasInn
+                    { 0x000130DC, true },    // LocTypeDwelling
+                    { 0x0001CB85, true },    // LocTypeHouse
+                    { 0x000FC1A3, true },    // LocTypePlayerHouse
+                    { 0x0001CB86, true },    // LocTypeStore
+                    { 0x0001CD5A, true },    // LocTypeGuild
+                    { 0x0001CD56, true },    // LocTypeTemple
+                    { 0x0001CD57, true },    // LocTypeCastle
+                    { 0x0001CD55, true },    // LocTypeBarracks
+                    { 0x0001CD59, true },    // LocTypeJail
+                    { 0x000504F9, true },    // LocTypeStewardsDwelling
+                    { 0x00018EF0, true },    // LocTypeFarm
+                    { 0x00018EF1, true },    // LocTypeMine
+                    { 0x00018EF2, true },    // LocTypeLumberMill
+                    { 0x000130E9, true },    // LocTypeOrcStronghold
+                };
+                std::vector<std::pair<const RE::BGSKeyword*, bool>> v;
+                auto* dh = RE::TESDataHandler::GetSingleton();
+                for (const auto& k : kList) {
+                    auto* kw = dh ? dh->LookupForm<RE::BGSKeyword>(k.id & 0x00FFFFFF, "Skyrim.esm") : nullptr;
+                    if (kw) v.emplace_back(kw, k.civil);
+                }
+                spdlog::info("[engage-on-sight] town/inn filter: {} of {} Skyrim.esm location keywords resolved",
+                             v.size(), std::size(kList));
+                return v;
+            }();
+            int guard = 0;
+            for (auto* loc = a_loc; loc && guard < 8; loc = loc->parentLoc, ++guard) {
+                for (const auto& [kw, civil] : s_kws) {
+                    if (!civil && loc->HasKeyword(kw)) return false;   // a fight site, innermost first
+                }
+                for (const auto& [kw, civil] : s_kws) {
+                    if (civil && loc->HasKeyword(kw)) return true;
+                }
+            }
+            return false;
+        }
+
         // MAIN THREAD ONLY (posted). The highActorHandles walk (resized by the main
         // thread, §0.30) and the sightline measurement (a physics query, §0.30) both
         // run here. Everything crosses back as FormIDs.
@@ -200,8 +267,18 @@ namespace MFO::EngageOnSight {
             const auto selfPos = self->GetPosition();
             const auto pcPos   = pc->GetPosition();
 
+            // TOWN / INN FILTER, on unless the PLAYER is fighting (read here on main; in the
+            // party-OOC branch that calls Service the player is normally out of combat, so
+            // this mostly reads false -- the "unless" is honoured for the frame it is not).
+            const bool pcFighting = pc->IsInCombat();
+            ProbeResult r;
+            r.seq   = a_seq;
+            r.leash = a_leash;
+            r.civilStandDown = !pcFighting && IsCivilised(pc->GetCurrentLocation());
+
             std::vector<std::pair<float, RE::FormID>> found;
             for (auto& hh : pl->highActorHandles) {
+                if (r.civilStandDown) break;
                 auto  ptr = hh.get();          // HOLD the NiPointer
                 auto* a   = ptr.get();
                 if (!a || a == self) continue;
@@ -209,13 +286,11 @@ namespace MFO::EngageOnSight {
                 if (a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) continue;
                 if (a->GetPosition().GetDistance(pcPos) > a_leash) continue;   // the leash is from the PLAYER
                 if (!IsEnemy(a, self, pc)) continue;
+                if (!pcFighting && IsCivilised(a->GetCurrentLocation())) { ++r.civilSkipped; continue; }
                 found.emplace_back(a->GetPosition().GetDistance(selfPos), a->GetFormID());
             }
             std::sort(found.begin(), found.end());
 
-            ProbeResult r;
-            r.seq   = a_seq;
-            r.leash = a_leash;
             r.candidates.reserve(found.size());
             for (const auto& [d, fid] : found) r.candidates.push_back(fid);
             for (const auto& [d, fid] : found) {
@@ -353,8 +428,14 @@ namespace MFO::EngageOnSight {
                     ++it;
                 }
             }
-            if (!r.chosen) {
-                Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
+            if (r.civilStandDown) {
+                Status(note, a_f, a_id, "standing down: in a town/inn, player not fighting", now);
+            } else if (!r.chosen) {
+                if (r.civilSkipped > 0 && r.candidates.empty())
+                    Status(note, a_f, a_id, "standing down: the enemies in view are in a town/inn, player not fighting",
+                           now, fmt::format(" -- {} skipped", r.civilSkipped));
+                else
+                    Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
             } else if (!note.givenUp.contains(r.chosen)) {
                 // The confidence gate on the IN-COMBAT estimate (review of 1c50696): the Of()
                 // he would read once fighting as many foes as the probe counted -- so he never

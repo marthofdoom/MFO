@@ -412,7 +412,7 @@
           "id": "bEngageOnSight:General",
           "text": "Engage enemies on sight (needs Harbinger 0.9.9)",
           "type": "toggle",
-          "help": "OFF (default). ON: out of combat, including while looting, a follower who can see an enemy inside the leash from you starts the fight against the nearest one. Needs Harbinger (APMF) 0.9.9 or newer. Without it this does nothing. Works only while Auto-retreat is ON, so a follower who starts a fight can still fall back. A follower you told to wait does not start fights, and nobody starts one with guards or townsfolk unless they are already fighting you.",
+          "help": "OFF (default). ON: out of combat, including while looting, a follower who can see an enemy inside the leash from you starts the fight against the nearest one. Needs Harbinger (APMF) 0.9.9 or newer. Without it this does nothing. Works only while Auto-retreat is ON, so a follower who starts a fight can still fall back. A follower you told to wait does not start fights, and nobody starts one with guards or townsfolk unless they are already fighting you. No fights are started in towns, inns or houses unless you are already fighting.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": 0
