@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **New option: followers engage enemies on sight.** Off by default. Turn it on and a follower who can see an enemy near you starts the fight with the nearest one, even in the middle of a loot run. His own gambits take over from there.
+- **It needs Harbinger 0.9.9 or newer.** Without it the option does nothing.
+- **It only works while Auto-retreat is on.** A follower who starts a fight can still fall back. He also holds off while his last retreat is cooling down or while he is too hurt to fight.
+- **He does not start fights while you sneak.** A second option lets him.
+- **No endless re-tries.** If the game refuses the fight, or the fight ends with the enemy still in view, he leaves that enemy alone until it has left his view.
+
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 
 - **Use Harbinger 0.9.9.** It adds the target pin this version uses. MFO still works with 0.9.8, just without the pin.

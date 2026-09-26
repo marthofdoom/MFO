@@ -1446,6 +1446,16 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   frozen `fightConf` benches a foe-count retreat; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
   StopCombat lands (same self-cancel). The Confidence formula is untouched (its v2 is a
   separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B108 and MFO-B110.
+- **ENGAGE-ON-SIGHT HOOK (ClickUp 86e3errnu, feat/mfo-ooc-engage 2026-09-25).** In the party-OOC
+  branch, AFTER the `ServiceRetreat` block and BEFORE `Logistics::ServiceFollower` (`:785-799`):
+  `EngageOnSight::Service(f, id, cooling, kRetreatConfidence)` (`:794`), `cooling` = this
+  follower's retreat cooldown (`rearmLaps > 0 || now < rearmAt`). True = the gambit owns the lap
+  (it filed an entry, or one is pending) -> return without logistics. `ClearTransientState` calls
+  `EngageOnSight::ClearTransientState` (`:474`). **What breaks:** calling it before
+  `ServiceRetreat` (a retreating follower would start fights); calling it from the combat table
+  (it is an OUT-of-combat gambit; in combat his foe gambits choose); dropping the `return` on
+  true (logistics would re-arm the loot walk the engage just ended); passing anything but the
+  retreat's own cooldown / floor (two definitions drift). Details: `EngageOnSight.cpp` below.
 - `ClearTransientState` (`:230`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,
@@ -1467,6 +1477,41 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   `PublishActiveMirror()` after that write — BUT `PublishActiveMirror` is file-local
   (Followers.cpp anonymous namespace `:43`/`:98`, no Followers.h decl), so the drain
   must first export it (Followers.h + Followers.cpp), verified 2026-09-14).
+
+### EngageOnSight.cpp / EngageOnSight.h — the hidden OOC gambit "nearest visible enemy" (NEW 2026-09-25)
+MFO's adoption of Harbinger ch.21 (ClickUp 86e3errnu). Not a Gambit record (not in the board list,
+not editable); `bEngageOnSight` (default OFF) is its only control. Contract, threads and the no-loop
+rule in the header. Called only from the Scheduler hook above.
+- `Service` (`:173`, WORKER) in order: (1) his ch.21 entry (`APMFBridge::CombatEntryStateOf`):
+  Standing -> return true (pending); Ended (`:184`) -> the target joins `givenUp`, the pin is
+  cleared only if `Targeting::Current` is still that target, `ForgetCombatEntry`. (2) gates:
+  toggle (silent), VR, `bAutoRetreat` OFF, `CombatEntryOffered()` false (Harbinger absent / < v14 /
+  seat refused: INERT, no direct road), player `IsSneaking()` unless `bEngageOnSightSneaking`, the
+  retreat cooldown, `Confidence::Of < kRetreatConfidence`; each stand-down is a transition line,
+  floored 5 s per follower (`Status`). (3) the newest landed probe (only the one answering his last
+  post, consumed once): drop given-up targets a later probe no longer lists (`:257`); if it chose a
+  VISIBLE target not given up -> `RequestCombatEntry` (`:266`), on Filed pin the same target via
+  `Targeting::CommandEx` when `Targeting::Commandable()`, `Logistics::ReleaseTravelOnCombat`
+  (`:275`, his loot trip ends), ONE `[engage-on-sight] ... ENGAGE` line (who, target, distance from
+  him and from the player, leash, sightline, candidates, ch.21 handle, pin outcome, confidence),
+  return true. (4) `PostProbe` (`:157`): at most one per 0.3 s per follower, leash =
+  `Confidence::LeashRadius(f)` read on the worker.
+- `RunProbe` (`:110`, MAIN THREAD via `MainThread::Post`; VR: Post is a no-op, never lands):
+  walks `highActorHandles` (NiPointer held) for enemies = not him / the player / a teammate, alive,
+  enabled, 3D-loaded, within the leash OF THE PLAYER, `IsHostileToActor(player) ||
+  IsHostileToActor(him)`; sorts nearest-to-him first; measures `Sightline::MeasureNow` for at most
+  3 non-given-up candidates, first VISIBLE wins. Writes the result under `g_probeMx` (a leaf),
+  generation-checked against `ClearTransientState` (`g_gen`), older posts never overwrite newer.
+- `Forget` (`:304`) from `Followers::ReleaseHeldState` (`Followers.cpp:375`, worker): release the
+  entry, drop his notes.
+- **What breaks:** a `highActorHandles` walk or a sightline measure on the worker (§0.30 / §0.47,
+  #74); treating `Sightline::Verdict::Unknown` as seen (the gambit would start fights through walls
+  on a cold cache — SEES means VISIBLE, never the fail-open read the combat selector uses);
+  clearing a given-up target on anything but a later probe that does not list it (the engine gave
+  up: re-requesting it is the loop Harbinger's INTEGRATION forbids); reading the leash from the
+  follower instead of the player; adding an MFO direct `StartCombat` road for Harbinger absent (the
+  brief: inert, no direct road); dropping the retreat gates (a follower who starts a fight must be
+  able to break it off, and one under the floor would engage and flee in a loop).
 
 ### Gait.cpp / Gait.h — travel-package speed byte (low risk)
 `Apply()` (`:8`) copies `Config::g_travelGait` onto the loot-travel packages'
@@ -1801,6 +1846,11 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   by design (cold/stale/VR → Unknown). **Every `Check` must have a `Want` seeding
   its pair** or the gate is inert; the seeders are Evaluator (combat foes),
   Actuation_Direct F7 (auto-cast fan), and Logistics (OOC hostile).
+- `MeasureNow` (`Sightline.cpp:209`, decl `Sightline.h:68`, MAIN THREAD ONLY, NEW 2026-09-25) = a
+  synchronous `Measure` for a caller already on the main thread (the engage-on-sight probe,
+  `EngageOnSight.cpp` `RunProbe`); writes the cache, returns the verdict; Unknown on VR or an
+  unresolvable / dead / unloaded pair (it does not let an older cache entry answer). Not throttled:
+  its one caller bounds itself (<= 3 per probe, one probe per 0.3 s per follower).
 - `TeammateInFireLine` (`:149`) → `cast/Direct.cpp:1171`, `Packages.cpp:990`. Reads
   `Followers::g_active` UNGUARDED (`:168`) — documented as joining an existing
   tolerated pattern. **UNVERIFIED — check before relying** if `g_active` is ever
@@ -3581,12 +3631,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
   function by `tools/splitcheck`; before it: one `APMFBridge.cpp`).** Other subsystems include
   ONLY `apmf/APMFBridge.h`. `APMF_API.h` (the byte-shared ABI header) stays at `native/`.
-  - `apmf/Bridge.cpp` (1085) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
+  - `apmf/Bridge.cpp` (1089) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
     `g_mx`/`g_owned` (`:51-52`) + refusal sets, `FacetExpiry` (`:163`), the shared claim helpers
     `EnsureClaimLocked` (`:174`), `ReleaseClaimLocked` (`:200`), `CastHeartbeatInterval` (`:241`),
     `EnsureCastClaimLocked` (`:280`), the idle-hand floor `ReconcileHandFloorLocked` (`:672`),
     `Acquire` (`:813`, requests ABI 10) / `Available` (`:853`) / `MaybeWarnAbsence` (`:871`), the expiry sweep
-    `Tick` (`:887`) and `ClearTransientState` (`:1039`).
+    `Tick` (`:887`) and `ClearTransientState` (`:1042`).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
     `ClaimOffenseCast` `:83`, `RefreshOwnedCastOnHand` `:215`, `ReleaseCastClaimOnHand` `:311`,
     `ReleaseOffenseCast` `:326`) and heal (`ClaimHealCast` `:351`, `RefreshHealCastClaim` `:433`).
@@ -3618,7 +3668,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     pin), `TargetPinCount` (`:276`, the Diagnostics targeting line), `SweepTargetPinsLocked`
     (`:283`, called from `Tick` `Bridge.cpp:894`; counts unpaused sweeps; also the
     `bCommandTarget`-off kill switch) and `ClearTargetPinsLocked` (`:301`, from
-    `ClearTransientState` `Bridge.cpp:1080`). Only `Targeting.cpp` / `Diagnostics.cpp` call these.
+    `ClearTransientState` `Bridge.cpp:1083`). Only `Targeting.cpp` / `Diagnostics.cpp` call these.
     **What breaks:** judging a never-live pin on wall time, or while paused (a menu then ages a
     pending claim into a false "ended"); dropping a handle without `Release` (an orphan claim
     that keeps winning on equal basis, ControlMap.cpp:923-935); re-pinning the SAME foe after an
@@ -3627,15 +3677,35 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     key); a synchronous refusal meaning anything but "seat not installed" (keep the Invalid
     pre-filter, or Targeting switches to the latch on a decline). Open deferred findings:
     `Docs/REVIEW-BACKLOG.md` MFO-B98..B101.
+  - `apmf/CombatEntry.cpp` (NEW, feat/mfo-ooc-engage 2026-09-25) = the **ch.21 COMBAT ENTRY** table
+    (ABI v14 `kIntent_CombatEntry`), same shape as the ch.20 pin table. File-local `g_entries`
+    (guarded by `g_mx`), one `CombatEntryClaim` per follower; its only client is the engage-on-sight
+    gambit (`EngageOnSight.cpp`, below the Scheduler). `CombatEntryOffered` (`:110`) = APMF present,
+    ABI >= 14, and no synchronous refusal seen this session (`g_entrySeatRefused`, never reset: the
+    seat installs once per process). `RequestCombatEntry` (`:115`) files `RequestEx(follower,
+    kIntent_CombatEntry, kOwnBasis, {form = target})` ONCE per entry (never Repointed: a new target
+    is a new request, INTEGRATION.md "How combat entry ends"); returns `EntryResult` (Filed /
+    Standing / Invalid / SeatAbsent). `EntryEndedLocked` (`:58`) = the pin table's judgement
+    (IsClaimLive false once seen live, or never seen live after 15 UNPAUSED sweeps) -> Release ALWAYS,
+    marked ENDED, logged once. `CombatEntryStateOf` (`:150`) / `ForgetCombatEntry` (`:159`, Release +
+    erase; Release stops no fight). `SweepCombatEntriesLocked` (`:85`, from `Tick` `Bridge.cpp:897`;
+    also the `bEngageOnSight`-off kill switch) and `ClearCombatEntriesLocked` (`:103`, from
+    `ClearTransientState` `Bridge.cpp:1084`), declared in `APMFBridge_internal.h`.
+    **What breaks:** Repointing an ended entry (a silent no-op on a dead handle), or re-filing the
+    same target from here (the no-loop rule lives in EngageOnSight's given-up set, keyed on the
+    ENDED state this table reports — erasing an entry when it ends instead of marking it loses that
+    signal); dropping a handle without Release; a synchronous refusal meaning anything but "seat not
+    installed" (keep the Invalid pre-filter, or the gambit goes inert for the session on a bad param).
   - `apmf/SpellAllowList.cpp` (308) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
     `AppendDenyExemptForms` (`:126`), `PublishSpellAllowList` (`:162`), `ReleaseSpellAllowList`
     (`:284`).
-  - `apmf/APMFBridge_internal.h` (396, NEW in wave 1) = the claim state the families share, all
+  - `apmf/APMFBridge_internal.h` (402, NEW in wave 1) = the claim state the families share, all
     of it from the old file's anonymous namespace: `CastClaim` (`:80`), `Owned` (`:208`), the
     `extern` `g_apmf`/`g_mx`/`g_owned`/refusal sets (defined in `apmf/Bridge.cpp`),
     `kEquipAuthValidateAfter` (`apmf/APMFBridge_internal.h:341`), `kOwnBasis` (`:345`), the helper declarations, and
     `ReleaseHandleLocked` (`:362`) / `EraseIfEmpty` (`:377`) as `inline`, plus the ch.20 pin
-    table's two locked hooks `SweepTargetPinsLocked` / `ClearTargetPinsLocked` (`:374-375`). **THREADING is
+    table's two locked hooks `SweepTargetPinsLocked` / `ClearTargetPinsLocked` (`:374-375`) and the ch.21
+    entry table's `SweepCombatEntriesLocked` / `ClearCombatEntriesLocked` (`:380-381`). **THREADING is
     unchanged: every map is still guarded by `g_mx`.**
 - **THE MODEL: APMF ARBITRATES/DRIVES; MFO EXECUTES the rest.** APMF never generates behaviour on its
   own initiative (its channels are client-declared, arbitration/drive-only). This bridge only ever
