@@ -451,6 +451,44 @@ namespace MFO::APMFBridge {
     // Release STOPS NOTHING (Harbinger's contract): the fight is the engine's.
     void ForgetCombatEntry(RE::FormID a_follower);
 
+    // ── LOCKPICK HOLD (LP-M1, ClickUp 86e3edgha): ch.1 + ch.12 Idle v2 (ABI v17) ──
+    // The pick window's two claims, filed together when a follower standing at a locked
+    // chest starts to pick it (logistics/Lockpick.cpp): kIntent_MovementBlock (ch.1, the
+    // follow package must not walk him off the lock mid-animation) and kIntent_Idle v2
+    // with param.form = the IDLE (IdleLockPick) and param.target = the lock ref (Harbinger
+    // INTEGRATION.md "Playing an idle at a target"). Harbinger makes ONE
+    // AIProcess::PlayIdle per declaration; a Repoint with the same idle is a new
+    // declaration (one per simulated pick break). Release resets only a HELD idle.
+    // There is NO MFO direct road: Harbinger absent, older than v17, or a synchronous
+    // refusal of the v2 idle = lockpicking is inert (an APMF below v17 would not refuse a
+    // form, it would silently play IdleForceDefaultState instead -- hence the version gate).
+    // Worker-safe (the tick's AddTask worker); takes g_mx.
+    enum class PickHoldResult {
+        Filed,        // both claims filed (the idle claim is PENDING until Harbinger's next drain)
+        Standing,     // this follower already holds a lockpick hold
+        Invalid,      // no follower / no idle / no lock / the lock is the follower: nothing filed
+        SeatAbsent,   // APMF absent, ABI < 17, or the v2 idle refused at the call (VR, runtime,
+                      // [Idle] bIdleV2=0, self-check) -- session-stable
+    };
+    enum class PickHoldState {
+        None,         // no hold for this follower
+        Pending,      // filed; Harbinger has not published the idle claim yet
+        Live,         // IsClaimLive(idle) read true
+        Ended,        // Harbinger ended the idle claim (not played / refused / owner died), or it
+                      // was never seen live within the pending floor; already Released here
+    };
+    // True when APMF is present at ABI >= 17 AND no synchronous v2-idle refusal was seen.
+    bool LockpickIdleOffered();
+    PickHoldResult ClaimLockpickHold(RE::FormID a_follower, RE::FormID a_idle, RE::FormID a_lockRef);
+    // Repoint the idle claim with the same idle + target (a NEW declaration: one more
+    // PlayIdle). False when no live hold. Never on a timer: the caller's own events only.
+    bool ReplayLockpickIdle(RE::FormID a_follower);
+    PickHoldState LockpickHoldStateOf(RE::FormID a_follower);
+    // Release both claims (idle first, then the stand-still) and forget the hold. No-op when none.
+    void ReleaseLockpickHold(RE::FormID a_follower);
+    // Revert / load teardown: release and forget every hold.
+    void ReleaseAllLockpickHolds();
+
     // Worker-safe. Once-per-pump sweep: release each claim not refreshed within its
     // expiry window (offense-cast backstop; combat-target = combat-end detector).
     // offense-cast/combat-target/weapon-order-equipment/heal-cast all use the

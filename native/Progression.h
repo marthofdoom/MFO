@@ -347,6 +347,30 @@ namespace MFO::Progression {
     };
     StyleVotes TallyStyleVotes(RE::Actor* a_actor);
 
+    // ── LOCKPICK ENTRY POINTS: the NARROW progression query (LP-M1, ClickUp 86e3edgha) ──
+    // The follower's EFFECTIVE lockpick entry points, evaluated with the follower as the
+    // perk owner EXACTLY as the engine's LockpickingMenu evaluates them for the player
+    // (disassembly, both runtimes: 1.6.1170 Show 0x938170 id 51964 / pick damage 0x938D30
+    // id 51975; 1.5.97 0x897860 id 51085 / 0x8983E0 id 51093), through the same
+    // BGSEntryPoint::HandleEntryPoint (23073 / 23526) with the same arguments and seeds:
+    //   EP59 kModLockpickSweetSpot     (owner, lockRef, &v), v starts 1.0 (a multiplier)
+    //   EP63 kSetLockpickStartingArc   (owner, &v),          v starts 0.0 (degrees; 0 = none)
+    //   EP65 kMakeLockpicksUnbreakable (owner, &v),          v starts 0.0 (nonzero = no wear)
+    // EP62 kModLockpickLevelAllowed is NOT evaluated: no engine code calls HandleEntryPoint
+    // with 62 on either runtime and sLockpickInsufficientPerks is referenced only by its
+    // own static registration, so the player's odds never consult it. Honouring it on a
+    // follower would make his odds LESS faithful, and its argument shape has no engine
+    // caller to verify against. ClickUp 86e3eevgz (batch 8) will fold PROGRESSION's
+    // follower copies of hidden player-only perk effects (a perk on the player that is in
+    // no AVI tree, e.g. Requiem's RFTI_Player_Lockpicking) into THIS query; until then it
+    // reads the follower's own perks only. MAIN THREAD ONLY (perk condition evaluation).
+    struct LockpickEntryPoints {
+        float sweetSpotMult{ 1.0f };   // EP59
+        float startingArc{ 0.0f };     // EP63
+        bool  unbreakable{ false };    // EP65
+    };
+    LockpickEntryPoints LockpickEntryPointsFor(RE::Actor* a_actor, RE::TESObjectREFR* a_lock);
+
     // kDataLoaded, MAIN THREAD, once: detect the addon, resolve the version
     // GLOB, build the catalog (when detected OR bProgCatalogDump), and emit
     // the [prog] census when bProgCatalogDump is set.

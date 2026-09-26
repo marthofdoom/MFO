@@ -1030,6 +1030,27 @@ namespace MFO::Progression {
                id.substr(id.size() - a_suffix.size()) == a_suffix;
     }
 
+    // LP-M1 narrow query (Progression.h). The three calls, argument lists and seed values are
+    // the LockpickingMenu's own (1.6.1170 0x9381C7 / 0x93828D / 0x938D58; 1.5.97 twins in
+    // 51085 / 51093). MAIN THREAD ONLY.
+    LockpickEntryPoints LockpickEntryPointsFor(RE::Actor* a_actor, RE::TESObjectREFR* a_lock) {
+        LockpickEntryPoints out{};
+        if (!a_actor) return out;
+        float sweet = 1.0f;   // EP59: HandleEntryPoint(0x3B, owner, lockRef, &v), v = 1.0
+        RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kModLockpickSweetSpot,
+                                            a_actor, a_lock, &sweet);
+        float arc = 0.0f;     // EP63: HandleEntryPoint(0x3F, owner, &v), v = 0
+        RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kSetLockpickStartingArc,
+                                            a_actor, &arc);
+        float unbreak = 0.0f; // EP65: HandleEntryPoint(0x41, owner, &v), v = 0; nonzero = no wear
+        RE::BGSEntryPoint::HandleEntryPoint(RE::BGSEntryPoint::ENTRY_POINT::kMakeLockpicksUnbreakable,
+                                            a_actor, &unbreak);
+        out.sweetSpotMult = sweet;
+        out.startingArc   = arc;
+        out.unbreakable   = unbreak != 0.0f;
+        return out;
+    }
+
     void Init() {
         // ── §18.6 REGISTRATION: enumerate addon manifests ───────────────────
         // An addon = ONE BGSListForm whose FIRST entry is a KEYWORD self-declaring
