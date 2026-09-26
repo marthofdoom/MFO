@@ -262,6 +262,13 @@ namespace MFO::Scheduler {
         // drift. Arrival: 200u (package radius 150 + engine stop slack).
         // Timeout: 30 s -- past any plausible walk time at Run speed.
         constexpr float kRetreatConfidence = 0.25f;
+        // ENGAGE-ON-SIGHT BAR (Confidence v2 review, SEV-3): starting a fight needs a
+        // margin OVER the retreat floor, so a follower never starts a fight he would
+        // flee at the first damage (the v2 HP trend drops Of() as soon as he is hit).
+        // With the v2 multiplier, at full health this admits ~5 even joiners (v1's
+        // 0.25 floor admitted 4; v2 at 0.25 would admit ~10). ONE definition, passed
+        // to EngageOnSight::Service like the retreat floor was.
+        constexpr float kEngageConfidence = kRetreatConfidence + 0.15f;
         constexpr float kRetreatMinDist    = 400.0f;
         constexpr float kRetreatArriveDist = 200.0f;
         constexpr float kRetreatTimeout    = 30.0f;
@@ -832,11 +839,11 @@ namespace MFO::Scheduler {
             // starts a fight) and BEFORE logistics: on a lap it engages (or while its
             // Harbinger ch.21 entry is pending) it preempts logistics the way player
             // combat does -- his loot trip was ended inside Service. The retreat cooldown
-            // and the retreat floor are passed from here so they have ONE definition.
+            // and the engage bar (kEngageConfidence) are passed from here so they have ONE definition.
             {
                 const auto& rn = g_retreatNotes[id];
                 const bool cooling = rn.rearmLaps > 0 || now < rn.rearmAt;
-                if (EngageOnSight::Service(f, id, cooling, kRetreatConfidence)) {
+                if (EngageOnSight::Service(f, id, cooling, kEngageConfidence)) {
                     g_lastTickMs = std::chrono::duration<double, std::milli>(
                                        std::chrono::steady_clock::now() - t0).count();
                     return;

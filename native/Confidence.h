@@ -77,9 +77,12 @@ namespace MFO::Confidence {
     // with the observed cadence instead of expiring live data. A gap longer than
     // kTrendMaxGap (unpaused service time: dismissal, a long absence) or a clock
     // that ran backwards (revert reset g_serviceClock) restarts the ring.
-    // Rate = the NET loss from the oldest in-window sample to the newest over
-    // their span (a heal offsets the damage it undoes; rising HP reads 0), only
-    // once the span is >= kTrendMinSpan so a single fresh hit cannot spike it.
+    // Rate = the NET loss from the oldest in-window sample to the newest (a heal
+    // offsets the damage it undoes; rising HP reads 0), divided by
+    // max(span, kTrendWindow) -- never by a span shorter than the base window, so
+    // a lone burst or a freshly restarted ring reads as that loss spread over 5 s,
+    // not as a sustained rate (review of 09cb24e, SEV-4). Needs >= kTrendMinSpan
+    // of span to read at all.
     // THREADING: pushed on the worker; read wherever Of() is read. A leaf mutex
     // guards the map (nothing is called under it, and it is never taken with the
     // combat-group lock held), so an off-worker Of() reader stays sound.
@@ -135,7 +138,7 @@ namespace MFO::Confidence {
         }
         const double span = nw.t - old->t;
         if (span < kTrendMinSpan) return 0.0f;
-        return std::max(0.0f, static_cast<float>((old->hp - nw.hp) / span));
+        return std::max(0.0f, static_cast<float>((old->hp - nw.hp) / std::max(span, kTrendWindow)));
     }
 
     // The trend factor for a loss rate a_rate (/s) at health a_hpPct: time to

@@ -26,8 +26,11 @@ Read it as history and this block as current.
   FIELD CHECKS: `[sense] ... own=1 foes=N load=L hpLoss=X%/s trend=T confidence=C`; a mudcrab/skeever pack reads
   load ~0.5 per foe and no `[retreat] ... falling back` at full health; a hard duel shows hpLoss rising and trend
   falling BEFORE HP is low, then `falling back -- confidence<0.25`; a follower holding his own reads trend=1.00.
-  Engage-on-sight's estimate (`OfFacing`) moves with the new multiplier: at full health it now starts fights against
-  up to ~10 joiners (v1: 4).
+  Engage-on-sight has its OWN bar since the review round: `kEngageConfidence` = retreat floor + 0.15 = 0.40, so at full
+  health it starts fights against at most ~5 even joiners (v1: 4; v2 at the bare floor would have been ~10). Review round
+  (tier B, SEV-4): the trend rate divides by max(span, 5 s), so a lone burst or a fresh ring reads as spread over 5 s.
+  Backlog MFO-B117 (ring not erased on dismissal), MFO-B118 (`OfFacing` ignores foe weight). Field check: engage-on-sight's
+  stand-down line now reads "under the engage bar ... bar 0.40".
 - **2026-09-25 branch `feat/mfo-reentry-leash` (off `main` `53d61c0`; NOT merged, NOT deployed; tier A, awaiting its
   Opus 5.5 review). Batch L, ClickUp 86e3ex5v9 / 86e3ex5ve (the MFO halves) + 86e3erv94.** MFO adopts Harbinger ch.22
   `kIntent_CombatReentryDeny` in the retreat and ch.23 `kIntent_PursuitLeash` as the in-combat leash. `native/APMF_API.h`

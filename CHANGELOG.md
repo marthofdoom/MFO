@@ -10,6 +10,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **A follower who is losing now runs back to you.** Confidence watches how fast he is losing health. A duel he is losing badly sends him back well before he is nearly dead.
 - **Strong enemies count for more, weak ones for less.** A dragon weighs about four times a mudcrab. A pack of mudcrabs no longer sends a healthy follower running.
 - **A crowd alone no longer forces a retreat at full health.** Five even enemies keep him fighting while he holds his own. If the pack starts hurting him, he falls back.
+- **Engage on sight needs a margin.** A follower only starts a fight he could keep fighting after the first hits. At full health that is about five even enemies.
 - **The combat log line shows the new inputs.** The [sense] line now reads his own combat state, the weighted enemy load, his health loss per second and the trend factor.
 - **Followers pick locks on chests.** A follower out looting walks to a locked chest, picks it with the lock picking animation and then loots it. His odds come from his own Lockpicking skill and perks, worked out the way the game's own lock picking works. Picks he breaks come out of his own pack.
 - **He never starts a lock he would fail.** If the lock needs more picks than he carries, he leaves it alone and spends nothing. He tries again once he carries more picks or his skill goes up.

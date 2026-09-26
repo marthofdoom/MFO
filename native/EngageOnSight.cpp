@@ -498,15 +498,16 @@ namespace MFO::EngageOnSight {
                     Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
             } else if (!note.givenUp.contains(r.chosen)) {
                 // The confidence gate on the IN-COMBAT estimate (review of 1c50696): the Of()
-                // he would read once fighting as many foes as the probe counted -- so he never
-                // starts a fight he would at once retreat from.
+                // he would read once fighting as many foes as the probe counted, against the
+                // engage bar (the retreat floor + 0.15) -- so he never starts a fight he would
+                // flee at the first damage.
                 const int   foes = std::max(1, r.joiners);   // the join estimate, not every enemy in the leash
                 const float conf = Confidence::OfFacing(a_f, foes);
                 auto* t = RE::TESForm::LookupByID<RE::Actor>(r.chosen);
                 if (conf < a_minConfidence) {
-                    Status(note, a_f, a_id, "standing down: his in-combat confidence estimate is under the retreat "
-                                            "floor (he would start a fight only to flee it)", now,
-                           fmt::format(" -- estimate {:.2f} against {} foe(s) that would join, floor {:.2f}", conf, foes,
+                    Status(note, a_f, a_id, "standing down: his in-combat confidence estimate is under the engage "
+                                            "bar (he would start a fight only to flee it)", now,
+                           fmt::format(" -- estimate {:.2f} against {} foe(s) that would join, bar {:.2f}", conf, foes,
                                        a_minConfidence));
                 } else if (t && !t->IsDead() && !t->IsDisabled()) {
                     std::uint32_t h = 0;

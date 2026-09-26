@@ -1480,7 +1480,8 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   outlives the fight until dismissal or load).
 - **ENGAGE-ON-SIGHT HOOK (ClickUp 86e3errnu, feat/mfo-ooc-engage 2026-09-25).** In the party-OOC
   branch, AFTER the `ServiceRetreat` block and BEFORE `Logistics::ServiceFollower` (`:785-799`):
-  `EngageOnSight::Service(f, id, cooling, kRetreatConfidence)` (`:794`), `cooling` = this
+  `EngageOnSight::Service(f, id, cooling, kEngageConfidence)` (`:846`; the bar = `kRetreatConfidence`
+  + 0.15 = 0.40, `:271`, Confidence v2 review), `cooling` = this
   follower's retreat cooldown (`rearmLaps > 0 || now < rearmAt`). True = the gambit owns the lap
   (it filed an entry, or one is pending) -> return without logistics. `ClearTransientState` calls
   `EngageOnSight::ClearTransientState` (`:474`). **What breaks:** calling it before
@@ -1531,7 +1532,7 @@ rule in the header. Called only from the Scheduler hook above.
   floored 5 s per follower (`Status`). (3) the newest landed probe (only the one answering his
   last post, consumed once): given-up targets the probe reports GONE are dropped (`:480`); if it
   chose a VISIBLE target not given up, the IN-COMBAT confidence estimate
-  `Confidence::OfFacing(f, joiners)` (`:498`) must reach the retreat floor, then
+  `Confidence::OfFacing(f, joiners)` (`:505`) must reach the engage bar (retreat floor + 0.15), then
   `RequestCombatEntry` (`:507`); on Filed pin the same target via `Targeting::CommandEx` when
   `Targeting::Commandable()`, `Logistics::ReleaseTravelOnCombat` (`:520`, his loot trip ends),
   ONE `[engage-on-sight] ... ENGAGE` line, return true. (4) `PostProbe` (`:373`): at most one per
@@ -1928,19 +1929,22 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
 
 ### CombatSense.h / Confidence.h / Temperament.h (header-only)
 - **CONFIDENCE v2 (feat/mfo-confidence-v2, 2026-09-26, ClickUp 86e3erv94).** `Of()` (`Confidence.h:162`)
-  = `Vitality` (`:50`) x `TrendFactor` (`:143/:147`) x, in combat, `FoeMultiplier(load)` (`:63`,
+  = `Vitality` (`:50`) x `TrendFactor` (`:146/:150`) x, in combat, `FoeMultiplier(load)` (`:63`,
   `0.90 / (1 + 0.25 L)` clamped 0.15..0.90; an empty group in combat counts L = 1). The load is
   `CombatSense::FoeLoad` (`CombatSense.h:65`): the SAME foes `FoeCount` counts (same group, lock,
   filters), each weighted by `FoeWeight` (`:45`) = sqrt(level ratio x foe current HP / his max HP),
   clamped 0.5..2.0 (mudcrab 0.5, even foe 1.0, dragon 2.0). The trend is a per-follower ring of
-  (service clock, HealthPct) samples (`NoteHealth` `:107`, pushed once per own unpaused service at
-  `Scheduler.cpp:698`, decimated to >= 0.25 s, 32 entries; `HpLossRate` `:122` = net loss over
-  max(5 s, 2.5 x the newest gap), needs >= 1 s of span; a > 10 s gap or a backwards clock restarts
-  it; `ClearTrend` `:153` on revert at `Scheduler.cpp:524`). Trend = time-to-death / 20 s in
+  (service clock, HealthPct) samples (`NoteHealth` `:110`, pushed once per own unpaused service at
+  `Scheduler.cpp:705`, decimated to >= 0.25 s, 32 entries; `HpLossRate` `:125` = net loss over the
+  window max(5 s, 2.5 x the newest gap), DIVIDED BY max(span, 5 s) so a lone burst or a freshly
+  restarted ring reads as that loss spread over 5 s (review SEV-4), needs >= 1 s of span; a > 10 s
+  gap or a backwards clock restarts it; `ClearTrend` `:156` on revert at `Scheduler.cpp:531`). Trend = time-to-death / 20 s in
   [0.30, 1]. Map + ring are behind ONE leaf mutex (`detail::g_trendLock`): never call anything under
   it, never take it with a combat-group lock held (`Of` reads the trend BEFORE `FoeLoad`).
-  `OfFacing(f, n)` (`:178`) = `Vitality x Trend x FoeMultiplier(n)` with each probe foe counted EVEN
-  (1.0): the engage-on-sight gate. TARGET BEHAVIOURS (offline harness, retreat floor 0.25, leash
+  `OfFacing(f, n)` (`:181`) = `Vitality x Trend x FoeMultiplier(n)` with each probe foe counted EVEN
+  (1.0): the engage-on-sight gate, judged against its OWN bar `kEngageConfidence` = retreat floor +
+  0.15 = 0.40 (`Scheduler.cpp:271`), so at full health he starts a fight against at most ~5 even
+  joiners and never one he would flee at the first damage. TARGET BEHAVIOURS (offline harness, retreat floor 0.25, leash
   512..4000; before -> after): 5 mudcrabs at full HP 0.22 RETREAT -> 0.55 (leash 2444); 5 even foes
   at full HP 0.22 RETREAT -> 0.40; 10 even foes at full HP 0.15 -> 0.26 (count alone no longer
   retreats a full-health follower, a pack that is also HURTING him does); an even duel at full HP
@@ -1949,16 +1953,19 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   duel lost at 3%/s at ~44%, holding (0%/s) at ~24% (v1 ~21%); out of combat and not losing HP the
   loot leash is exactly v1's. **What breaks:** `Of()` feeds the loot leash (`LeashRadius` via
   `TeleportCompat::View`), the PickFoe chase cap and AUTO fan-out (`ChaseRadius`), the retreat
-  fill gate and its `fightConf` (`Scheduler.cpp:1050`, `:373/:440`), the ch.23 pursuit leash
+  fill gate and its `fightConf` (`Scheduler.cpp:1057`, `:380/:447`), the ch.23 pursuit leash
   radius, and engage-on-sight (`OfFacing` + `LeashRadius`), so ANY change to the multiplier, the
   weight clamp or the trend constants moves all of them together. Calling `Of()` with a
   combat-group read lock held nests the lock (the Evaluator deadlock note at `Evaluator.cpp:222`).
   Moving `NoteHealth` below an early return starves the ring for that path (the trend then reads
   1); a flat trend window shorter than the service period (N x 133 ms) reads no trend at large
-  rosters (principle 9). The trend is NOT save-scoped. The `[sense]` line (`Scheduler.cpp:985`,
+  rosters (principle 9). The trend is NOT save-scoped. The `[sense]` line (`Scheduler.cpp:992`,
   3 s / follower) prints `own= foes= load= hpLoss= trend=` for tuning; `own=0` with `foes=0` on the
   combat table is a follower who has no combat group while the PARTY fights (not a stale tally:
-  his `Of()` is then the out-of-combat read, vitality x trend).
+  his `Of()` is then the out-of-combat read, vitality x trend). A lone hit of ~37% at full health
+  still reads as losing (37% over 5 s = a ~9 s time to death) and can arm the retreat in an even
+  duel (harness burst rows). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B117 (ring not erased on
+  dismissal), MFO-B118 (`OfFacing` ignores foe weight).
 - `Confidence::Vitality` / `FoeMultiplier` / `OfFacing` (2026-09-25; v2 above): `Of()` reads its
   vitality term and fight multiplier through the first two; `OfFacing(f, n)` = the `Of()` he would
   read fighting n even foes, with no engine combat read -- the engage-on-sight gate. A change to
