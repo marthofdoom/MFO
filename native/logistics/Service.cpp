@@ -450,7 +450,7 @@ namespace MFO::Logistics {
                     static constexpr const char* kBlk[] = { "none (static block)", "the player",
                         "a teammate", "an actor" };
                     const char* reaction =
-                        ch19Arrived  ? "arrival -- take the loot, next item at once" :
+                        ch19Arrived  ? "arrival (MFO's distance test takes the loot; if he drifted away, the leg restarts)" :
                         ch19Blocked  ? (leg19.blockerKind != APMF_API::kBlocker_None
                                            ? "actor block -- REORDER, next item at once"
                                            : "static block -- GATED, next item at once") :
@@ -592,10 +592,12 @@ namespace MFO::Logistics {
                             arrivalDist = grown;
                     }
                 }
-                // loot M2: Harbinger's ARRIVED (inside its arrival radius) is an arrival
-                // whatever MFO's own distance test says; its leg has ended, so waiting
-                // for MFO's radius would only leave him standing with no package.
-                if (!gone && (dist <= arrivalDist || ch19Arrived)) {
+                // Arrival is ALWAYS MFO's own distance test: StripCorpse / the loose
+                // Activate never run from afar (closing round, review SEV-3). Harbinger's
+                // ARRIVED radius (128 u) sits inside kArrivalDist (200 u), so a genuine
+                // ARRIVED passes this same tick; an ARRIVED he has since drifted away
+                // from is restarted below (ch19FarArrival), never looted remotely.
+                if (!gone && dist <= arrivalDist) {
                     // REACHED it -> this body is provably reachable: clear any stall
                     // strike so a merely-transient earlier block (boxed in by an actor,
                     // a door) never accumulates toward the sticky verdict. Only bodies
@@ -738,6 +740,12 @@ namespace MFO::Logistics {
                 // same route, never a strike; back to follow only when nothing valid is
                 // left (the Holding scan below).
                 bool stealAbandon = false;
+                // loot M2 closing round: Harbinger says ARRIVED but he is no longer within
+                // MFO's arrival test (a dibs/sneak hold let the ended leg drift him back
+                // toward the player). The leg has ended, so drop to Holding with NO
+                // blocklist: the scan re-picks the item and ClaimLootTravel re-points the
+                // ENDED same-ref leg (sameEnded), whose stale ARRIVED is then rejected by seq.
+                const bool ch19FarArrival = ch19Arrived && !gone && tref;   // arrival above returned otherwise
                 const bool mbNow = curPkg && curPkg->packData.packType.get() ==
                                                  RE::PACKAGE_PROCEDURE_TYPE::kMovementBlocked;
                 if (!mbNow) {
@@ -746,18 +754,21 @@ namespace MFO::Logistics {
                     tr.blockedSince = now;   // onset (or a new leg under a lingering MB)
                     tr.blockedLeg   = tr.legStart;
                 }
-                // loot M2: on a CH19 leg with Harbinger's leg state (ch19State) the
-                // BLOCKED verdict is HARBINGER'S (its ch.19 Poll, 3 s of running game
-                // time, blocker found at the verdict). MFO's own timer stays ONLY for
-                // road 1 (ch.9), the legacy alias road, and a CH19 leg on an APMF
-                // below v12 (no verdict there to wait for). Both then share ONE
-                // reaction below: an actor in front = REORDER, none = GATED.
+                // loot M2: while Harbinger reads THIS CH19 leg live (ch19Live: ours,
+                // Pending/Walking, ABI v12) the BLOCKED verdict is HARBINGER'S (its ch.19
+                // Poll, 3 s of running game time, blocker found at the verdict). Every
+                // other case keeps MFO's own M1 timer: road 1 (ch.9), the legacy alias
+                // road, a CH19 leg on an APMF below v12, and a CH19 reading that is not
+                // ours or not live. Both share ONE reaction below: an actor in front =
+                // REORDER, none = GATED.
                 bool                 blockVerdict = false;
                 float                held         = 0.0f;
                 ActorBlocker         ab{};
                 RE::NiPoint3         stallPos{};
                 const RE::NiPoint3*  blockPos     = nullptr;
-                if (ch19Blocked && !gone && tref) {
+                if (ch19FarArrival) {
+                    // handled in the if-chain below (restart the ended leg)
+                } else if (ch19Blocked && !gone && tref) {
                     blockVerdict = true;
                     held         = leg19.blockedMs / 1000.0f;
                     stallPos     = leg19.stall;
@@ -774,16 +785,21 @@ namespace MFO::Logistics {
                     }
                 } else if (mbNow && !gone && tref) {
                     held = std::chrono::duration<float>(now - tr.blockedSince).count();
-                    if (ch19State) {
-                        // Harbinger owns this verdict: stay walking, no guard, no stall.
-                        // Not masked: a Movement Blocked that outlives Harbinger's 3 s by
-                        // another 3 s while it still reads the leg as live is said once.
+                    // Harbinger owns this verdict ONLY while it reads THIS leg as live
+                    // (ours, Pending/Walking); any other reading (not ours, stale, an end
+                    // M2 does not react to) leaves the verdict to MFO's own M1 timer.
+                    const bool ch19Live = ch19Mine && (leg19.state == APMF_API::kLeg_Pending ||
+                                                       leg19.state == APMF_API::kLeg_Walking);
+                    if (ch19Live) {
+                        // Stay walking, no guard, no stall. Not masked: a Movement Blocked
+                        // that outlives Harbinger's 3 s by another 3 s while it still reads
+                        // the leg as live is said once.
                         if (now - tr.blockedSince >= 2 * kBlockedGate && tr.ch19MbWarnedLeg != tr.legStart) {
                             tr.ch19MbWarnedLeg = tr.legStart;
                             spdlog::warn("[loot] {:08X} leg->{:08X}: Movement Blocked held {:.1f}s on a CH19 leg "
-                                         "and Harbinger still reads leg state {} (not BLOCKED). MFO waits for "
-                                         "Harbinger's verdict (its own timer is off on a v12 CH19 leg); the "
-                                         "excursion cap still bounds it. Once per leg.",
+                                         "and Harbinger still reads it live (leg state {}, not BLOCKED). MFO "
+                                         "waits for Harbinger's verdict (its own timer is off while Harbinger "
+                                         "reads this leg live); the excursion cap still bounds it. Once per leg.",
                                          id, tref->GetFormID(), held, leg19.state);
                         }
                         return;
@@ -793,7 +809,19 @@ namespace MFO::Logistics {
                     blockVerdict = true;
                     ab = FindActorBlocker(a_follower, tref);
                 }
-                if (blockVerdict) {
+                if (ch19FarArrival) {
+                    spdlog::info("[loot] {:08X} leg->{:08X}: Harbinger ARRIVED but he is {:.0f} u away now "
+                                 "(> {:.0f}) -- the leg ended, re-dispatching (no blocklist, no strike)",
+                                 id, tref->GetFormID(), dist, arrivalDist);
+                    skippedRef      = tref->GetFormID();
+                    skipWhy         = "ARRIVED per Harbinger but drifted away (leg restarted)";
+                    tr.blockedSince = {};
+                    tr.stolenSince  = {};
+                    stealAbandon    = true;   // not a failure: skip the stall/deadline blame path
+                    tr.phase        = TravelPhase::Holding;
+                    tr.lingerUntil  = now + BatchLingerDur();
+                    // no return -- fall into Holding (the scan re-picks it, same tick)
+                } else if (blockVerdict) {
                     // ACTOR or GATE (review R2, marth): a living actor right in front
                     // of him is a jam, not a gate -> REORDER his list (the item stays
                     // valid, goes later, the way away from the blocker first); no

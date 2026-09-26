@@ -97,8 +97,11 @@ namespace MFO::APMFBridge {
             return a_state >= APMF_API::kLeg_Arrived && a_state <= APMF_API::kLeg_Released;
         }
 
-        // Record the seq that stands BEFORE a RequestEx/Repoint on `a_leg` (g_mx held;
-        // APMF's read takes only its own mirror mutex and never calls back into MFO).
+        // Record the seq that stands BEFORE a RequestEx/Repoint on `a_leg`.
+        // LOCK ORDER: called with g_mx HELD, and it calls APMF's GetTravelLegState
+        // under it. A safe LEAF edge: APMF takes only its own per-actor mirror mutex
+        // for the copy and never calls back into MFO (the same shape as the
+        // RequestEx/Repoint/Release calls this file already makes under g_mx).
         void NoteStaleSeqLocked(const APMF_API::APMF_API_v2* a_api, RE::FormID a_actor, LootTravelLeg& a_leg) {
             APMF_API::APMF_TravelLegInfo info{};
             a_leg.hasStale = ReadLegInfo(a_api, a_actor, info);

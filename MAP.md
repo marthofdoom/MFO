@@ -2555,17 +2555,23 @@ anonymous-namespace copy — that silently forks the instance).
     Repoint (`LootTravelLeg::staleSeq`, `NoteStaleSeqLocked` `Excursion.cpp:102`), so the
     previous leg's end never speaks for the new one. `ch19State` false (APMF < v12, no ch.19 leg)
     = every road keeps MFO's own observations exactly as M1 left them.
-  - **Reactions:** `kLeg_Arrived` = an arrival whatever MFO's own 200 u test says
-    (`Service.cpp:~598`, the arrival branch, dibs/sneak holds included); `kLeg_DestGone` = `gone`
+  - **Reactions:** arrival is ALWAYS MFO's own distance test (`Service.cpp:~600`): StripCorpse
+    and the loose Activate never run from afar. Harbinger's 128 u ARRIVED radius sits inside
+    `kArrivalDist` (200 u), so a real `kLeg_Arrived` passes it the same tick; an ARRIVED he has
+    drifted away from (a dibs/sneak hold on an ended leg) is `ch19FarArrival` (`:~748`): Holding,
+    no blocklist, the scan re-picks the item and `ClaimLootTravel` restarts the ended same-ref
+    leg (closing round, review SEV-3). `kLeg_DestGone` = `gone`
     (`:~556`, transient skip + next item the same tick, `skipWhy` "DESTINATION GONE");
     `kLeg_Blocked` = M1's ONE reaction (`:~749`): blocker actor from Harbinger
     (`blocker`/`blockerKind`) -> REORDER via `g_actorDefer`; none -> `MarkGated` with the
     STALL point (`MarkGated`'s new optional `a_blockPos`, `logistics/LootTravel_internal.h:~417`).
     Every other end (combat-cancelled, stuck-timeout, actor-gone, failed, released) is LOGGED
     only; MFO's existing guard decides as before.
-  - **MFO's Movement Blocked timer** runs only when `ch19State` is false: road 1 (ch.9), the
-    legacy alias road, and a CH19 leg on an APMF below v12. On a v12 CH19 leg Movement Blocked
-    holds the leg (no guard, no stall) and waits for Harbinger's BLOCKED; one warn per leg if it
+  - **MFO's Movement Blocked timer** yields ONLY while Harbinger reads THIS leg live
+    (`ch19Live` = ours AND Pending/Walking, `Service.cpp:~790`); it keeps deciding on road 1
+    (ch.9), the legacy alias road, a CH19 leg on an APMF below v12, and any CH19 reading that is
+    not ours or not live. While live, Movement Blocked holds the leg (no guard, no stall) and
+    waits for Harbinger's BLOCKED; one warn per leg if it
     outlives 2 x `kBlockedGate` with Harbinger still reading the leg live (never acted on:
     principle 7, the excursion cap still bounds it).
   - **Same-ref re-dispatch** (`ClaimLootTravel` `Excursion.cpp:~430`): a same dest+radius call is
