@@ -20,11 +20,12 @@ Read it as history and this block as current.
   cancels a retreat its own StopCombat caused; a retreat ends only on no live foes near him (hostile, alive, loaded, within
   fChaseMax), the 30 s travel timeout, or the end of STAY; (3) per-follower holds on the APMF road (legacy alias road still
   single-holder), one-per-fight replaced by a cooldown (3 own services AND 10 s) and a STAY phase after arrival (review
-  round 1: STAY ends on any combat re-entry with no StopCombat, else after 3 out-of-combat services AND 3 s, cap 30 s; the
+  round 1: STAY ends on any combat re-entry with no StopCombat; closing round, marth: else after about 10 s of unpaused time
+  or full health, whichever comes first; the
   no-foes walk moved to a main-thread probe, 3 probes AND 3 s without an engaged hostile); (6) `[retreat] falling back` logs the pre-StopCombat
   confidence, `[sense]` gains `dPlayer=`. Confidence formula untouched (v2 is its own round).
   FIELD CHECKS: `[retreat] ... StopCombat (engage) landed on main`; no `released (combat ended)` lines; `reached player ...
-  STAY` then `stay over` / `engaged at your side`; two followers holding at once on APMF; `re-entered combat mid-retreat` appears only
+  STAY` then `stay over after ... fully healed` / `stay over after ... (unpaused)` / `engaged at your side`; two followers holding at once on APMF; `re-entered combat mid-retreat` appears only
   on real re-entries, never per lap.
 - **2026-09-25 branch `feat/mfo-target-pin` (off `main` `97ac782`; NOT merged, NOT deployed; tier A,
   awaiting its Opus 5.5 review). ClickUp 86e3eu6fd, batch L.** MFO becomes the client of Harbinger's

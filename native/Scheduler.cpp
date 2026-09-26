@@ -182,14 +182,24 @@ namespace MFO::Scheduler {
             bool skipStay = false;
             std::uint32_t reentries = 0;
             std::chrono::steady_clock::time_point stayAt{};
-            // STAY: consecutive out-of-combat services, and since when.
-            std::uint32_t oocLaps = 0;
-            std::chrono::steady_clock::time_point oocSince{};
+            // STAY start on the UNPAUSED service clock (g_serviceClock).
+            double stayClockAt = 0.0;
             // COOLDOWN: the next auto-fill waits until BOTH floors pass.
             std::chrono::steady_clock::time_point rearmAt{};
             std::uint32_t rearmLaps = 0;   // own services still to wait
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
+
+        // UNPAUSED SERVICE CLOCK (seconds). Advanced at the per-follower pause
+        // gate in Tick by the time since the previous advance, ONLY when the
+        // game is not paused, and each step capped at kServiceClockMaxStep: a
+        // gap longer than that means the pump did not run (a menu, a load, the
+        // pause itself), not gameplay. 4 x 133 ms covers AddTask jitter and a
+        // dead / null round-robin slot skipping a service. Worker-only (#4);
+        // reset on revert. STAY is timed on it (marth: "about ten seconds").
+        double g_serviceClock = 0.0;
+        std::chrono::steady_clock::time_point g_serviceClockAt{};
+        constexpr double kServiceClockMaxStep = 4 * 0.133;
 
         // T#78: followers we have already swept on their MFO-OFF transition. The
         // gate below skips every disabled follower each tick, but the one-time
@@ -254,25 +264,24 @@ namespace MFO::Scheduler {
         constexpr float kRetreatMinDist    = 400.0f;
         constexpr float kRetreatArriveDist = 200.0f;
         constexpr float kRetreatTimeout    = 30.0f;
-        // STAY (review of 7580bea, SEV-2 + SEV-3). STAY only keeps a follower who
-        // reached the player from walking straight back OUT to the fight. It
-        // NEVER leaves him defenceless: any in-combat read during STAY ends it
-        // ("engaged at your side") with NO StopCombat -- if the fight comes to
-        // him, he fights beside the player. So STAY only ever holds him while
-        // he is OUT of combat, and it ends after he has been out of combat for
-        // BOTH kRetreatStayOocLaps consecutive own services AND
-        // kRetreatStayOocSecs of wall time -- the same "sustained, not one
-        // sample" shape as the cooldown, and the same 3 laps / 3 s floor as the
-        // foe probe's no-foe window below, so STAY and "no foes" judge
-        // "sustained" by one measure. (Chosen over a recomputed out-of-combat
-        // confidence proxy: that would copy Confidence::Of's combat multiplier
-        // outside Confidence.h -- a second copy of the formula for v2 to miss --
-        // and feed it the probe's count, which is a different population (all
-        // engaged hostiles within fChaseMax, not his combat group).) kStayMax
-        // stays as the outer bound.
-        constexpr std::uint32_t kRetreatStayOocLaps = 3;
-        constexpr float         kRetreatStayOocSecs = 3.0f;
-        constexpr float         kRetreatStayMax     = kRetreatTimeout;
+        // STAY (marth 2026-09-25: "about ten seconds, or until fully healed",
+        // whichever comes FIRST). After a follower has fallen back to the player,
+        // STAY holds him there so he does not walk straight back out to the
+        // fight. It ends on the FIRST of:
+        //   - kRetreatStaySecs (10 s) of UNPAUSED service time (g_serviceClock,
+        //     advanced only on unpaused Ticks -- a pause or menu never spends
+        //     it; this is also the pause fix for STAY, MFO-B108);
+        //   - his health reaching full: Vocab::HealthPct >= Vocab::kHealFull
+        //     (99.95%), the codebase's one "full HP" mark -- HealthPct is
+        //     current / (permanent + temporary max) and rarely equals exactly
+        //     1.0, so a strict >= 1.0 could never end it;
+        //   - ANY in-combat read ("engaged at your side"): he is released at once
+        //     with NO StopCombat -- STAY never leaves him defenceless; if the
+        //     fight comes to him he fights beside the player (review of 7580bea,
+        //     SEV-2).
+        // A follower whose last in-combat confidence (fightConf) is already at
+        // the floor at arrival gets no STAY at all (released on arrival).
+        constexpr double kRetreatStaySecs = 10.0;
         // NO LIVE FOES (review of 7580bea, SEV-3 threading carve-out): judged
         // from the MAIN-THREAD foe probe (Packages::RetreatPostFoeProbe), posted
         // at most once per own service while he retreats, so its cadence is his
@@ -405,10 +414,9 @@ namespace MFO::Scheduler {
                     spdlog::info("[retreat] {:08X}: reached player after {:.1f}s (moved {:.0f}, took={}) -- "
                                  "STAY (fight confidence={:.2f}, floor {:.2f})",
                                  a_id, secs, moved, note.took, note.fightConf, kRetreatConfidence);
-                    note.phase    = RetreatPhase::Stay;
-                    note.stayAt   = now;
-                    note.oocLaps  = 0;
-                    note.oocSince = {};
+                    note.phase       = RetreatPhase::Stay;
+                    note.stayAt      = now;
+                    note.stayClockAt = g_serviceClock;
                     // fall through to the STAY checks on this same lap
                 } else if (inCombat) {
                     // TRAVEL RE-ENTRY: one more main-thread StopCombat, ONLY on
@@ -434,7 +442,7 @@ namespace MFO::Scheduler {
             }
 
             if (note.phase == RetreatPhase::Stay) {
-                const float stayed = std::chrono::duration<float>(now - note.stayAt).count();
+                const double stayed = g_serviceClock - note.stayClockAt;   // unpaused seconds
                 if (inCombat) {
                     // The fight came to him: never hold a follower out of a fight
                     // at the player's side. Release, NO StopCombat.
@@ -443,18 +451,16 @@ namespace MFO::Scheduler {
                     finish("engaged at your side");
                     return true;
                 }
-                if (note.oocLaps == 0) note.oocSince = now;
-                ++note.oocLaps;
-                const float ooc = std::chrono::duration<float>(now - note.oocSince).count();
-                if (note.oocLaps >= kRetreatStayOocLaps && ooc >= kRetreatStayOocSecs) {
-                    spdlog::info("[retreat] {:08X}: stay over -- out of combat {} services / {:.1f}s at your "
-                                 "side (dPlayer={:.0f}, engaged foes on last probe={})",
-                                 a_id, note.oocLaps, ooc, a_dPlayer, foes.lastCount);
-                    finish("stay over");
-                } else if (stayed > kRetreatStayMax) {
-                    spdlog::info("[retreat] {:08X}: stay cap {:.0f}s reached (dPlayer={:.0f})",
-                                 a_id, kRetreatStayMax, a_dPlayer);
-                    finish("stay cap");
+                const float hp = Vocab::HealthPct(a_f);
+                if (hp >= Vocab::kHealFull) {
+                    spdlog::info("[retreat] {:08X}: stay over after {:.1f}s -- fully healed (dPlayer={:.0f}, "
+                                 "engaged foes on last probe={})", a_id, stayed, a_dPlayer, foes.lastCount);
+                    finish("stay over: healed");
+                } else if (stayed >= kRetreatStaySecs) {
+                    spdlog::info("[retreat] {:08X}: stay over after {:.1f}s (unpaused) -- health {:.0f}% "
+                                 "(dPlayer={:.0f}, engaged foes on last probe={})", a_id, stayed, hp * 100.0f,
+                                 a_dPlayer, foes.lastCount);
+                    finish("stay over: time");
                 }
             }
             return true;
@@ -464,6 +470,8 @@ namespace MFO::Scheduler {
 
     void ClearTransientState() {
         g_retreatNotes.clear();
+        g_serviceClock   = 0.0;
+        g_serviceClockAt = {};
         g_mfoDisabledSwept.clear();   // T#78: revert/load re-arms the OFF-edge release
         g_outOfCombatTicks.clear();
         g_meleeClampTrueAt.clear();   // T#76 hysteresis dwell
@@ -627,7 +635,18 @@ namespace MFO::Scheduler {
         // A cast/drink/loot issued into a paused game resolves strangely on
         // unpause, and menus are exactly when the player is editing the list
         // that drives it. Applies to BOTH tables, so it gates before the branch.
-        if (auto* ui = RE::UI::GetSingleton(); ui && ui->GameIsPaused()) return;
+        {
+            // UNPAUSED SERVICE CLOCK (see g_serviceClock): advance only on an
+            // unpaused service, capped per step; a paused one just re-anchors.
+            auto* ui = RE::UI::GetSingleton();
+            const bool paused = ui && ui->GameIsPaused();
+            if (!paused && g_serviceClockAt.time_since_epoch().count() != 0) {
+                const double dt = std::chrono::duration<double>(now - g_serviceClockAt).count();
+                g_serviceClock += std::clamp(dt, 0.0, kServiceClockMaxStep);
+            }
+            g_serviceClockAt = now;
+            if (paused) return;
+        }
 
         const auto it = g_followers.find(id);
         if (it == g_followers.end()) return;          // no record -> nothing to run

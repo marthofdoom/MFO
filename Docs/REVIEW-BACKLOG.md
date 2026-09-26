@@ -745,9 +745,8 @@ Raised by the author in response to the 7580bea review's SEV-4 ("LiveFoeNear cou
 
 ### MFO-B108 (SEV-4) -- retreat: after a pause the wall-clock floors are already spent
 Raised against 19f67e0 (`fix/mfo-retreat`, closing re-review), 2026-09-25. Reviewer's finding (as relayed): "after a pause, the wall-clock seconds floors are already spent, so only the 3-probe floor guards the ends." Suggested fix: time the floors by service time, or reset the timestamps on the first service after a pause.
-
-### MFO-B109 (SEV-5) -- retreat: kRetreatStayMax (30 s) is unreachable
-Raised against 19f67e0 (`fix/mfo-retreat`, closing re-review), 2026-09-25. Reviewer's finding (as relayed): "kRetreatStayMax (30 s) is unreachable; STAY is effectively a fixed ~3 s pause (matches the CHANGELOG)." Document the cap as a backstop or delete it (marth's design call).
+Partly resolved in the same closing round: STAY is now timed on the unpaused service clock (marth's "about ten seconds, or until fully healed"). Still open for the no-foe window (3 s) and the cooldown (10 s).
 
 ### MFO-B110 (SEV-5) -- retreat: being hit in STAY without entering combat can hold him up to ~3 s
 Raised against 19f67e0 (`fix/mfo-retreat`, closing re-review), 2026-09-25. Reviewer's finding (as relayed): "being hit in STAY without entering combat can hold him for up to ~3 s."
+Note: with STAY now "about ten seconds, or until fully healed" (same closing round) the bound is up to ~10 s of unpaused time. (MFO-B109, "kRetreatStayMax is unreachable", was dropped: that rework removed the cap.)

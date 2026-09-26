@@ -1413,36 +1413,39 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   castSeen-false lap by the reconcile's stale window, a magicka-dry Declined stretch delaying
   logistics) and `MFO-B58` (the Task-1 concentration claims with no controller test).
 - **AUTO-RETREAT DRIVER (ClickUp 86e3erv94, batch L, 2026-09-25; tier A; revised after the
-  7580bea review).** `ServiceRetreat` (`:334`) runs on EVERY service from BOTH tables — the
-  party-OOC branch (`:749`, before `Logistics::ServiceFollower`) and the combat table (`:923`)
+  7580bea and 19f67e0 reviews).** `ServiceRetreat` (`:343`) runs on EVERY service from BOTH tables — the
+  party-OOC branch (`:768`, before `Logistics::ServiceFollower`) and the combat table (`:942`)
   — and returns true while the follower holds a retreat, so neither table acts for him that
   lap. Phases (`RetreatNote`, `:162`): TRAVEL (walk to the player) → STAY → released. A
   retreat ends ONLY on: NO LIVE FOES (the main-thread foe probe saw no engaged hostile on
-  the last 3 landed probes AND for 3 s, `:288`), the 30 s travel timeout, or STAY end.
+  the last 3 landed probes AND for 3 s, `:297`), the 30 s travel timeout, or STAY end.
   At arrival (≤200u) he is released at once if the last IN-COMBAT `Of()` (`fightConf`) is at
   the 0.25 floor, or if the hold is an act.flee one adopted out of combat (`skipStay`, the
   shipped flee behaviour); otherwise STAY. **STAY never benches him:** any in-combat read
   during STAY releases the hold ("engaged at your side") with NO StopCombat; STAY otherwise
-  ends after 3 consecutive out-of-combat services AND 3 s, or the 30 s cap. TRAVEL re-entry
+  ends on the FIRST of 10 s of UNPAUSED service time (`g_serviceClock`, `:200`, advanced at
+  the pause gate only while unpaused, each step capped at 4 x 133 ms) or full health
+  (`HealthPct >= Vocab::kHealFull`) — marth 2026-09-25, "about ten seconds, or until fully
+  healed". TRAVEL re-entry
   (an in-combat read after an out-of-combat one — his flag, or
   `Packages::RetreatConsumeStopLanded`) posts exactly one more StopCombat
   (`Packages::RetreatReengage`), never per tick (#22a). FOE PROBE: `ServiceRetreat` posts
   one `Packages::RetreatPostFoeProbe` per own service; the highActorHandles walk runs on
-  MAIN. The auto-fill (`:923` block) needs `rearmLaps == 0 && now >= rearmAt` — the
-  COOLDOWN (`:313`): 3 own services AND 10 s, started on every release and every DECLINED
+  MAIN. The auto-fill (`:942` block) needs `rearmLaps == 0 && now >= rearmAt` — the
+  COOLDOWN (`:322`): 3 own services AND 10 s, started on every release and every DECLINED
   fill. The `[retreat] falling back` line logs the confidence read BEFORE the fill.
   `[sense]` carries `dPlayer=`.
   **What breaks:** a `RetreatClear` / `g_retreatNotes.erase` back in the party-OOC teardown
-  (`:687`) re-creates the self-cancel (the retreat's own StopCombat ends the party fight,
+  (`:706`) re-creates the self-cancel (the retreat's own StopCombat ends the party fight,
   deck-MFO-v9.log:1544-1582); calling `ServiceRetreat` from the combat table only does the
   same; an `f->StopCombat()` or a `highActorHandles` walk on this worker re-opens a
   cross-thread hazard (#74, ENGINE_NOTES §0.47, §0.30), so go through `Packages::`; posting
   StopCombat every lap violates #22a; a StopCombat (or holding the hold) on a STAY re-entry
-  leaves him defenceless at the player's side (the SEV-2 of the 7580bea review); judging
-  STAY by an out-of-combat `Of()` or by a frozen `fightConf` benches a foe-count retreat for
-  the whole cap; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
+  leaves him defenceless at the player's side (the SEV-2 of the 7580bea review); timing STAY
+  on the wall clock lets a pause spend it; judging STAY by an out-of-combat `Of()` or by a
+  frozen `fightConf` benches a foe-count retreat; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
   StopCombat lands (same self-cancel). The Confidence formula is untouched (its v2 is a
-  separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B110.
+  separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B108 and MFO-B110.
 - `ClearTransientState` (`:230`) — caller `Serialization.cpp:699`; must run inside
   the StopPump bracket. Save-scoped maps: `g_recent` (suppression), `g_lastServiced`
   (round-robin cursor), `g_retreatNotes`, `g_combatEnteredAt`, `g_proposedTarget`,
