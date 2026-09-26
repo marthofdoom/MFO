@@ -463,7 +463,9 @@ namespace MFO::APMFBridge {
         None,      // no deny for this follower (never claimed, or released)
         Pending,   // filed, not yet read live (StopCombat not posted yet)
         Live,      // read live at least once and not ended (StopCombat posted)
-        Ended,     // Harbinger ended it (window elapsed / owner dead) or it never went live
+        Ended,     // Harbinger ended it (window elapsed / owner dead) after it was live
+        Degraded,  // it NEVER went live (a Harbinger apply failure): this retreat is DEGRADED to
+                   // the per-re-entry StopCombat (review of 497b6cd SEV-4 #2; marth's policy call pending)
     };
     bool      ClaimRetreatReentryDeny(RE::FormID a_follower);
     DenyState RetreatReentryDenyStateOf(RE::FormID a_follower);

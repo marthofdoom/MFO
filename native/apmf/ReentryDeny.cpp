@@ -68,6 +68,7 @@ namespace MFO::APMFBridge {
             std::uint32_t    unpausedSweeps = 0;
             bool             everLive       = false;   // IsClaimLive read true (StopCombat posted)
             bool             ended          = false;   // ended by Harbinger or never went live
+            bool             neverLive      = false;   // ended because it never went live (DEGRADED)
         };
         std::mutex                                g_denyMx;
         std::unordered_map<RE::FormID, DenyClaim> g_denies;   // guarded by g_denyMx
@@ -117,6 +118,11 @@ namespace MFO::APMFBridge {
             d.handle = h;
         }
         if (old != APMF_API::kInvalidHandle) api->Release(old);   // one deny per follower
+        // A ch.21 entry still standing for him (engage-on-sight filed it before the retreat) is
+        // a declared entry the deny lets through: release it now so, if it is still queued,
+        // Harbinger FIFO-cancels it and it cannot pull him back in (review of 497b6cd SEV-5).
+        // Takes g_mx; g_denyMx is not held here. No-op when he holds none.
+        ForgetCombatEntry(a_follower);
         spdlog::info("[retreat] {:08X}: ch.22 re-entry deny CLAIMED (h={}, window {:.0f} s) -- PENDING; the "
                      "single StopCombat is posted on the first sweep that reads it LIVE",
                      a_follower, h, kRetreatDenyWindowSecs);
@@ -127,7 +133,7 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_denyMx);
         const auto it = g_denies.find(a_follower);
         if (it == g_denies.end()) return DenyState::None;
-        if (it->second.ended)    return DenyState::Ended;
+        if (it->second.ended)    return it->second.neverLive ? DenyState::Degraded : DenyState::Ended;
         return it->second.everLive ? DenyState::Live : DenyState::Pending;
     }
 
@@ -185,13 +191,17 @@ namespace MFO::APMFBridge {
                 // PRINCIPLE 7: a pending that never turned live is a FAILURE, said loudly. The
                 // retreat then gets the shipped disengage (one StopCombat now), exactly what it
                 // would have had with no ch.22 at all.
-                spdlog::warn("[retreat] {:08X}: ch.22 re-entry deny NEVER WENT LIVE (h={}, {} unpaused sweeps) -- "
-                             "released; posting the retreat's StopCombat WITHOUT the deny (the no-ch.22 road). "
-                             "APMF's log should say why the claim was not applied.",
+                // DEGRADE, not the capability-absent road: Harbinger serves ch.22 but did not
+                // apply this claim. The per-re-entry StopCombat stays on for this retreat
+                // (review of 497b6cd SEV-4 #2; marth's policy call is pending).
+                spdlog::warn("[retreat] {:08X}: ch.22 deny never went live (Harbinger apply failure): degraded to "
+                             "per-re-entry StopCombat for this retreat (h={}, {} unpaused sweeps; the StopCombat is "
+                             "posted now; APMF's log should say why the claim was not applied)",
                              fid, d.handle, d.unpausedSweeps);
                 api->Release(d.handle);       // FIFO-cancels it if it is still queued
-                d.handle = APMF_API::kInvalidHandle;
-                d.ended  = true;
+                d.handle    = APMF_API::kInvalidHandle;
+                d.ended     = true;
+                d.neverLive = true;
                 acts.emplace_back(fid, Act::StopNeverLive);
             }
         }

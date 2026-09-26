@@ -422,7 +422,17 @@ namespace MFO::Scheduler {
                     // ch.22: the deny covers TRAVEL only. STAY must never bench him --
                     // "engaged at your side" below needs the engine's combat entry to pass
                     // (the SEV-2 of the 7580bea review), so the deny ends at arrival.
+                    // A deny still PENDING here never posted its StopCombat (a fast arrival):
+                    // post the retreat's own one now, once, as the deny goes (review of
+                    // 497b6cd SEV-4 #1) -- otherwise he would never be disengaged.
+                    const bool denyPending =
+                        APMFBridge::RetreatReentryDenyStateOf(a_id) == APMFBridge::DenyState::Pending;
                     APMFBridge::ReleaseRetreatReentryDeny(a_id, "arrived: STAY");
+                    if (denyPending) {
+                        spdlog::info("[retreat] {:08X}: arrived with the ch.22 deny still PENDING -- released; "
+                                     "posting the retreat's StopCombat once", a_id);
+                        Packages::RetreatReengage(a_id, "arrived: STAY (ch.22 deny still pending)");
+                    }
                     // fall through to the STAY checks on this same lap
                 } else if (inCombat) {
                     // TRAVEL RE-ENTRY: one more main-thread StopCombat, ONLY on
@@ -436,7 +446,8 @@ namespace MFO::Scheduler {
                         // put him back in, so a re-entry is a declared ch.21 entry (passes by
                         // contract) or a Harbinger DENY MISSED -- said loudly, NOT papered over
                         // with another StopCombat (principle 7). No deny / an ENDED one: the
-                        // shipped per-re-entry StopCombat, unchanged.
+                        // shipped per-re-entry StopCombat, unchanged. A DEGRADED one (never went
+                        // live): the same StopCombat, named as a degrade (marth's call pending).
                         const auto deny = APMFBridge::RetreatReentryDenyStateOf(a_id);
                         if (deny == APMFBridge::DenyState::Live) {
                             spdlog::warn("[retreat] {:08X}: re-entered combat mid-retreat (#{}) UNDER A LIVE ch.22 "
@@ -449,7 +460,9 @@ namespace MFO::Scheduler {
                                          a_id, note.reentries);
                         } else {
                             spdlog::info("[retreat] {:08X}: re-entered combat mid-retreat (#{}, confidence={:.2f}) "
-                                         "-- StopCombat posted to main", a_id, note.reentries, note.fightConf);
+                                         "-- StopCombat posted to main{}", a_id, note.reentries, note.fightConf,
+                                         deny == APMFBridge::DenyState::Degraded
+                                             ? " (DEGRADED: this retreat's ch.22 deny never went live)" : "");
                             Packages::RetreatReengage(a_id, "re-entered combat");
                         }
                     }

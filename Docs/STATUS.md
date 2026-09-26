@@ -38,6 +38,11 @@ Read it as history and this block as current.
   follower, a few `radius A -> B (Repoint` lines at most, `released (combat ended)`; APMF `[ch.23] pursuit LEASH set` and
   `pursuit H` heartbeats with `update-anomaly=0`. Scheduler.cpp is 1680 lines (past the ~1500 plan-a-split mark:
   propose a split brief); Packages.cpp stayed 2466.
+  CLOSING ROUND (tier-A review of 497b6cd clean, nothing above SEV-4): a deny still PENDING at arrival gets the retreat's
+  own StopCombat posted once as it is released (a fast arrival was never disengaged); a deny that never goes live is a
+  named DEGRADE ("ch.22 deny never went live (Harbinger apply failure): degraded to per-re-entry StopCombat for this
+  retreat"), **marth's policy call on that degrade is pending**; the deny claim also releases any standing ch.21 entry
+  (FIFO-cancel) so it cannot punch through. Extra field check: `arrived with the ch.22 deny still PENDING` should be rare.
 
 - **2026-09-25 branch `fix/mfo-teleport-leash` (off `main` `7b6f405`; NOT merged, NOT deployed). Teleport-mod leash compatibility, batch L, tier B. ClickUp 86e3ec824.**
   FINDING: the loot leash WAS already enforced mid-trip (`logistics/Service.cpp` `outOfLeash`: follower->player > LeashRadius x1.15 ends the excursion, ~1 s cadence); the target is only leash-checked at selection. NEW `logistics/TeleportCompat.{h,cpp}`: detects Automatic Follower Teleporter NG (loaded DLL + its INI `[Teleport]` fDrawDistance / fDrawnDistance / fBehindOffset / bNoTeleportOnHorse / bOnlyAllowTeleportOnCombatStart), logs Simple Follower Framework as checked-no-teleport. While the player's weapon is drawn the loot leash is capped at D-350 (select) / D-150 (release), D = min(fDraw, fDrawn); a Walking leg whose TARGET lies past the release while clamped re-plans; GENERIC (every install, not AFT-gated): a one-tick jump to the player's side (>= 800 u, >= 700 u/s, lands <= 1000 u from him after closing >= 600 u; mounted follower excluded) ends the leg cleanly (no stall / strike / blocklist) and re-plans. Clamped mid-trip release is best-effort; recognition is the backstop.
