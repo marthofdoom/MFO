@@ -119,7 +119,15 @@ namespace APMF_API {
     // abiVersion >= 13 before it asks for the intent: an OLDER APMF has no channel for
     // intent 20 and REFUSES the request (kInvalidHandle, "no channel serves intent 20"
     // in its log), which is the documented degrade -- keep your own targeting.
-    inline constexpr std::uint32_t kABIVersion = 13;
+    //
+    // ABI v14 (2026-09-25) adds kIntent_CombatEntry (ch.21) and NOTHING else: no struct,
+    // no function-pointer slot, no APMF_Param field -- the v10 / v13 shape again. ch.21
+    // rides the EXISTING RequestEx/Repoint/Release slots, so there is no APMF_API_v14
+    // struct and a v13 client is byte-unaffected. A client must see abiVersion >= 14
+    // before it asks for the intent: an OLDER APMF has no channel for intent 21 and
+    // REFUSES the request (kInvalidHandle, "no channel serves intent 21" in its log),
+    // which is the documented degrade -- start the fight your own way.
+    inline constexpr std::uint32_t kABIVersion = 14;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -456,6 +464,82 @@ namespace APMF_API {
                                      //       Repoint(handle, &param) moves the pin to a new target
                                      //       in place; a Repoint naming a non-actor, 0 or the actor
                                      //       itself leaves the claim live and inert, logged.
+
+        kIntent_CombatEntry   = 21,  // ch.21 PUT this actor INTO COMBAT against a named target
+                                     //       (ABI v14, marth 2026-09-25, ClickUp 86e3940zb).
+                                     //       Mode: ONE ENGINE CALL per engage (INVARIANTS #0 (g)).
+                                     //       Param: form = the TARGET actor's FormID (REQUIRED).
+                                     //       fval / ival / target / pos are not read.
+                                     //
+                                     //       WHAT IT DOES. On the game thread, one frame after
+                                     //       the claim is applied, Harbinger calls the engine's
+                                     //       own combat entry, Actor::StartCombat(target), ONCE.
+                                     //       Not in combat: the engine builds the actor's combat
+                                     //       controller and group with your target as the group's
+                                     //       first combat target (if the engine accepts it; if it
+                                     //       does not, no controller is kept). Already in combat:
+                                     //       the engine adds your target to the group's combat
+                                     //       targets and keeps its current target. Everything
+                                     //       after that is the engine's own AI.
+                                     //
+                                     //       IT DOES NOT CHOOSE WHOM THE ACTOR FIGHTS FIRST. The
+                                     //       engine's own target selector does, among its group's
+                                     //       targets. To make the actor fight YOUR target, also
+                                     //       claim kIntent_TargetPin (ch.20) with the same target:
+                                     //       entry puts the target in the group, the pin answers
+                                     //       the selector with it. Two intents, two handles (one
+                                     //       intent, one facet). INTEGRATION.md "enter combat +
+                                     //       pin" is the recipe.
+                                     //
+                                     //       ONE CALL PER DECLARATION, NEVER SUSTAINED. Harbinger
+                                     //       does not re-enter combat when the engine ends it and
+                                     //       does not keep the fight going. A Repoint of a live
+                                     //       claim (or a new winning claim) makes ONE more call for
+                                     //       its target.
+                                     //
+                                     //       RELEASE STOPS NOTHING. Releasing the claim ends
+                                     //       Harbinger's part and calls no StopCombat: the fight
+                                     //       is the engine's state now, and the engine ends it
+                                     //       the way it ends any fight. Call Actor::StopCombat
+                                     //       yourself if you want it over.
+                                     //
+                                     //       THE CLAIM ENDS, AND APMF RELEASES IT ITSELF (never
+                                     //       left live and inert; IsClaimLive(handle) turns false,
+                                     //       the log names the reason), when:
+                                     //         * the ENGINE REFUSED the entry (StartCombat returned
+                                     //           false: a restrained, unconscious or dead actor, a
+                                     //           dead target, the engine's own distance test, its
+                                     //           identity test against one engine-global actor,
+                                     //           or an engine flag) -- "engine refused entry: ...";
+                                     //         * the entry could not be attempted: the target is
+                                     //           not an Actor, or the actor is not loaded, has no
+                                     //           AI process or is dead;
+                                     //         * the FIGHT ENDED: the entry succeeded and the actor
+                                     //           now has no combat controller -- "combat ended";
+                                     //         * the target is dead, disabled, not loaded or no
+                                     //           longer resolves, or the actor itself dies.
+                                     //       After "combat ended" or a refusal, another claim on
+                                     //       the actor that takes over naming the SAME target ends
+                                     //       with the same reason (no re-entry) until the actor has
+                                     //       no combat-entry claim left.
+                                     //       To try again, send a NEW RequestEx. Your own Release,
+                                     //       an outranking claim, a save load, a new game or the
+                                     //       actor unloading also end it (never saved).
+                                     //
+                                     //       The world's reaction to the fight is YOURS (CLAUDE.md
+                                     //       principle 2): crime, bounty, faction and aggression
+                                     //       changes, allies and guards joining, combat music
+                                     //       happen as the engine does them, and Release does not
+                                     //       undo them.
+                                     //
+                                     //       REFUSED SYNCHRONOUSLY (kInvalidHandle, logged): VR, a
+                                     //       runtime other than 1.6.1170 / 1.5.97, [CombatEntry]
+                                     //       bCombatEntry=0, the StartCombat address self-check
+                                     //       failed, before kDataLoaded, param.form == 0,
+                                     //       param.form == the actor itself, or the actor is the
+                                     //       player. The TARGET may be the player. A target that
+                                     //       is not an Actor is found one frame later and ENDS the
+                                     //       claim (above).
     };
 
     // ── Travel flags (kIntent_Travel's param.ival, ABI v10) ─────────────────────
@@ -1190,6 +1274,9 @@ namespace APMF_API {
     //                                  there). Without the flag: REFUSED if non-zero.
     //   form   kIntent_TargetPin       ABI v13: the TARGET actor (REQUIRED; 0 or the actor itself
     //                                  is refused). No other field is read.
+    //   form   kIntent_CombatEntry     ABI v14: the TARGET actor (REQUIRED; 0 or the actor itself
+    //                                  is refused; the player may be the target, not the actor).
+    //                                  No other field is read.
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is read ONLY by kIntent_Travel (ABI v10); it stays reserved for a
