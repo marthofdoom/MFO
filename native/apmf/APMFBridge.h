@@ -572,6 +572,35 @@ namespace MFO::APMFBridge {
     // the actor and not the slot). Returns how many it released.
     int ReleaseLootTravelFor(RE::FormID a_follower);
 
+    // ── ch.19 LEG STATE (loot M2, APMF ABI v12 GetTravelLegState) ───────────────
+    // Worker-safe (APMF's read is a mutex snapshot, "safe from any thread"; the
+    // slot's handle/dest/follower are copied under g_mx and the call is made
+    // OUTSIDE it). Returns FALSE when there is nothing to read: no APMF, an APMF
+    // below ABI v12 (MFO requests 10; APMF hands back its newest struct and
+    // abiVersion says how far it goes), or a_slot holds no ch.19 leg. The caller
+    // then keeps its own observation (the Movement Blocked timer): that is the
+    // documented degrade, not a mask.
+    //   `ours`  = the state is about THIS slot's claim and destination
+    //             (ownerHandle == our handle, or 0 while APMF has not composed it
+    //             yet; destForm == our destination) AND it is not the state that
+    //             stood before our own latest RequestEx/Repoint (its seq differs
+    //             from the one read just before that call), so an ended leg's end
+    //             is never re-read as the end of the leg that replaced it.
+    //   `state` = an APMF_API::TravelLegState. Only meaningful when `ours`.
+    struct LootLegState {
+        bool          ours        = false;
+        std::uint32_t state       = 0;
+        std::uint32_t seq         = 0;
+        std::uint32_t msInState   = 0;
+        std::uint32_t blockedMs   = 0;
+        std::uint32_t speed       = 0xFFFFFFFFu;
+        std::uint32_t blockerKind = 0;
+        RE::FormID    blocker     = 0;
+        RE::FormID    dest        = 0;
+        RE::NiPoint3  stall{};
+    };
+    bool ReadLootTravelLeg(int a_slot, LootLegState& a_out);
+
     // ── combat-action DENY facet CLAIM: PER-EXCURSION (ch.7, T1) ────────────────
     // Worker-safe. CLAIM the combat-action-deny facet for a_follower, naming
     // a_categoryMask (kIntent_CombatAction, param.ival -- an OR of

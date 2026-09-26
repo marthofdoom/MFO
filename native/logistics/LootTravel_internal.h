@@ -76,6 +76,13 @@ namespace MFO::Logistics {
             // gate the NEXT leg). Zero = not blocked. Worker-only, NOT serialized.
             Clock::time_point   blockedSince{};
             Clock::time_point   blockedLeg{};
+            // loot M2 (Harbinger ABI v12 leg state): the seq of the last ch.19 leg
+            // END already logged (each end is logged once), and the legStart for
+            // which "Movement Blocked held, Harbinger still says walking" was
+            // warned (once per leg). Worker-only, NOT serialized.
+            std::uint32_t       ch19SeqLogged = 0;
+            bool                ch19SeqLoggedSet = false;
+            Clock::time_point   ch19MbWarnedLeg{};
             // ACQUIRE PROBE (route 2b) readback: after an Activate dispatch at a
             // LOOSE ref, the NEXT tick observes what the engine actually did
             // (dispatch is asynchronous -- Papyrus.h -- so same-tick reads lie).
@@ -403,14 +410,18 @@ namespace MFO::Logistics {
             return false;
         }
 
+        // a_blockPos (loot M2): where the block happened when it is known better than
+        // "where he stands now" -- Harbinger's BLOCKED end reports the stall point, and
+        // by the next logistics tick the ended leg may already have let him drift back
+        // toward the player. Null = his current position (MFO's own MB timer, M1).
         inline void MarkGated(RE::Actor* a_follower, RE::TESObjectREFR* a_target, float a_blockedSecs,
-                              Clock::time_point a_now) {
+                              Clock::time_point a_now, const RE::NiPoint3* a_blockPos = nullptr) {
             if (!a_follower || !a_target) return;
             GateRecord g;
             g.target    = a_target->GetFormID();
             g.follower  = a_follower->GetFormID();
             g.space     = SpaceKey(a_target);
-            g.blockPos  = a_follower->GetPosition();
+            g.blockPos  = a_blockPos ? *a_blockPos : a_follower->GetPosition();
             g.targetPos = a_target->GetPosition();
             g.since     = a_now;
             spdlog::info("[loot] {:08X} target {:08X} GATED -- Movement Blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), "

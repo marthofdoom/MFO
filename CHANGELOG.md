@@ -5,6 +5,13 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **The walk-to-loot gait setting works on Harbinger's travel road.** With Harbinger 0.9.8 or newer, a loot trip walks, jogs, runs or fast-walks as the setting says. A changed setting applies from the next trip leg. MFO's own travel packages (Harbinger absent) are unchanged until that road's gait is proven.
+- **Loot trips on Harbinger's road now listen to why a walk stopped.** Arrived means loot now. A vanished target means the next item at once. Blocked by someone standing in the way means the item goes later in his list. Blocked by a gate means the item is skipped until the gate changes. MFO no longer runs its own blocked timer on that road.
+- **A follower sent back to the same item walks again.** Before, a second trip to an item whose first walk had ended never started.
+- **The loot log says why each Harbinger trip leg ended, once per leg.**
+
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 
 - **Use Harbinger 0.9.9.** It adds the target pin this version uses. MFO still works with 0.9.8, just without the pin.
