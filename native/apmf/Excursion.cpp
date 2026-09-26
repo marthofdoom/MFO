@@ -28,6 +28,7 @@
 #include <unordered_map>
 #include <unordered_set>   // ch.17 claim-refusal throttle
 #include <algorithm>       // ch.8 allow-list: sort + unique over the published form set
+#include <cmath>           // LP-M2: std::isfinite on the door-leg point
 
 #include <spdlog/spdlog.h>
 
@@ -491,6 +492,40 @@ namespace MFO::APMFBridge {
                      "gait={}{}",
                      a_follower, a_destRef, a_slot, a_radius, h, gaitBits ? gait : -1,
                      gaitBits ? "" : " (APMF < v12: no gait bits, APMF's authored speed)");
+        return true;
+    }
+
+    bool ClaimLootTravelToPoint(RE::FormID a_follower, const RE::NiPoint3& a_point, int a_slot, float a_radius) {
+        constexpr std::uint32_t kToPositionAbi = 11;   // the ABI that first serves kTravel_ToPosition
+        if (a_slot < 0 || a_slot >= Packages::kMaxLootSlots || a_follower == 0) return false;
+        if (!std::isfinite(a_point.x) || !std::isfinite(a_point.y) || !std::isfinite(a_point.z)) return false;
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!api || api->abiVersion < kToPositionAbi) return false;
+        std::scoped_lock lock(g_mx);
+        auto& leg = g_lootTravelLeg[a_slot];
+        if (leg.handle == APMF_API::kInvalidHandle) return false;   // re-points an EXISTING leg only
+        APMF_API::APMF_Param p{};
+        p.form = 0;                                     // REQUIRED 0 with kTravel_ToPosition
+        p.fval = a_radius;
+        p.posX = a_point.x;
+        p.posY = a_point.y;
+        p.posZ = a_point.z;
+        std::uint32_t flags = APMF_API::kTravel_ToPosition;
+        // GAIT: the same bits and ABI rule as ClaimLootTravel.
+        const bool gaitBits = LegStateApi(api) != nullptr;
+        const int  gait     = std::clamp(Config::g_travelGait.load(), 0, 3);
+        if (gaitBits)
+            flags |= APMF_API::kTravel_SpeedSet |
+                     ((static_cast<std::uint32_t>(gait) << 3) & APMF_API::kTravel_SpeedMask);
+        p.ival = static_cast<std::int32_t>(flags);
+        NoteStaleSeqLocked(api, leg.follower, leg);
+        reinterpret_cast<const APMF_API::APMF_API_v3*>(api)->Repoint(leg.handle, &p);
+        leg.dest   = 0;   // Harbinger's own marker: never "ours" by destForm (see the declaration)
+        leg.radius = a_radius;
+        spdlog::info("[loot-road] {:08X}: RETARGET road=CH19 dest=POINT({:.0f},{:.0f},{:.0f}) slot={} radius={:.0f} "
+                     "handle={} gait={} (re-pointed in place, kTravel_ToPosition)",
+                     a_follower, a_point.x, a_point.y, a_point.z, a_slot, a_radius, leg.handle,
+                     gaitBits ? gait : -1);
         return true;
     }
 

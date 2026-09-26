@@ -18,6 +18,10 @@ namespace MFO::Logistics {
         // ARRIVED and transfers while he is still closing. Above 200 he would park
         // beyond MFO's reach, ch.19 would end the leg there, and no pickup would run.
         constexpr float kCh19LootArrivalRadius = 128.0f;
+        // LP-M2 door leg: the POINT sits 96 u in front of the door, so with this radius he
+        // parks 96..160 u from the door ref -- inside MFO's kArrivalDist (200 u) for the pick,
+        // outside the door's own portal. 64 is inside ch.19's [50, 512] clamp.
+        constexpr float kCh19PointArrivalRadius = 64.0f;
 
         // RETARGET an in-flight excursion's leg to a_ref (moved out of LootNearby's excursion
         // branch unchanged, LP-M2, so the lockpick door leg reuses it). ROAD CHOICE, LEG
@@ -26,12 +30,19 @@ namespace MFO::Logistics {
         // so a mid-excursion flip cannot split a slot. Road 2 re-points in place.
         bool RetargetExcursionLeg(RE::Actor* a_follower, int a_slot, RE::TESObjectREFR* a_ref,
                                   Category a_cat, RE::ActorValue a_want, float a_df,
-                                  Clock::time_point a_now) {
+                                  Clock::time_point a_now, const RE::NiPoint3* a_point) {
             if (!a_follower || !a_ref || a_slot < 0 || a_slot >= Packages::kMaxLootSlots) return false;
             TravelIntent& tr = g_travelSlots[a_slot];
             const RE::FormID rid = a_ref->GetFormID();
             const bool ch19Leg = APMFBridge::HasLootTravelLeg(a_slot);
-            const bool legTook = ch19Leg
+            // A POINT leg (LP-M2 door leg) exists only on road 2: MFO's own travel package takes
+            // a REFERENCE, and the only MFO XMarker is the session evict marker (#73, the inert
+            // alias occupant) -- moving it to a door would couple two lifecycles, and minting
+            // markers is exactly what ch.19's kTravel_ToPosition already does and cleans up.
+            if (a_point && !ch19Leg) return false;
+            const bool legTook = a_point
+                ? APMFBridge::ClaimLootTravelToPoint(a_follower->GetFormID(), *a_point, a_slot, kCh19PointArrivalRadius)
+                : ch19Leg
                 ? APMFBridge::ClaimLootTravel(a_follower->GetFormID(), rid, a_slot,
                                               kCh19LootArrivalRadius)
                 : Packages::LootTravelRetarget(a_follower, a_ref, a_slot);

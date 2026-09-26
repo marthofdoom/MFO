@@ -1548,7 +1548,7 @@ rule in the header. Called only from the Scheduler hook above.
   `IsHostileToActor(player) || IsHostileToActor(him)` (hostile to him alone counts: CONFIRMED by
   marth, "yes, there will be fights without player involvement"); a CRIME-FACTION actor only when its `currentCombatTarget` is the player or
   a teammate. No ghost check (`IsGhost` is an unverified id call: backlog MFO-B111). TOWN / INN
-  FILTER (marth 2026-09-25), off while `pc->IsInCombat()`: `IsCivilised` (`:236`) walks the location chain
+  FILTER (marth 2026-09-25), off while `pc->IsInCombat()`: `IsCivilised` (`:229`, now `LocationTypes::Classify` in `native/LocationTypes.h`, shared with the lockpick load-door bar) walks the location chain
   innermost-first -- a LocTypeClearable / LocTypeDungeon tag first = a fight site (not civilised),
   a civilised LocType first = civilised (20 Skyrim.esm keywords resolved once by FormID; the
   LocTypeHold* family is excluded because it tags wilderness). Player's location civilised -> the
@@ -2875,23 +2875,42 @@ anonymous-namespace copy — that silently forks the instance).
     releases). Crime: #22e stays absolute (owned / offlimits refused twice: scan + judge); MFO
     never calls TrespassAlarm and never Activates a locked ref.
   - **DOORS (LP-M2, 2026-09-26, `feat/mfo-lockpick-doors`).** A locked door on a loot route is found
-    at M1's GATED verdict (no actor in front): `Service.cpp:965`, right after `MarkGated`, calls
-    `Lockpick::DispatchGateDoor` (`Lockpick.cpp:885`): the nearest LOCKED, enabled DOOR within
-    256 u of the block point, on the target's side of it (or within 64 u of it), in the
-    follower's / target's ATTACHED cells; `Admit` judges it (owned / off-limits / load-door
-    destination bar / picks / verdicts); `RetargetExcursionLeg` (`LootScan.cpp:27`, moved out of
-    `LootNearby`'s excursion branch unchanged so both share it) makes the door the next leg. The
-    item stays GATED. The door leg's ARRIVAL runs the same `Lockpick::Step` (the same
-    snapshot / simulation / ch.12 v2 IdleLockPick / Unlock); an open door leg has nothing to
-    transfer (`Service.cpp:775`: Holding, no StripCorpse), and the EMPTIED correction skips door
-    legs (`Service.cpp:483`). RE-ADMIT: the engine Unlock sends `TESLockChangedEvent` (1.6.1170
-    0x2D92E0 id 19512 / 1.5.97 id 19110, source holder +0x6E0 on both); `GateSink` now sinks it
-    (`Sinks.cpp:221`, registered `:281`) and re-admits through M1's own `ReadmitNear` for a DOOR
-    that reads unlocked (never a chest). Never a door leg for a target that is itself a door (no
-    chains). **What breaks:** dropping the door filter in the lock-changed sink (every picked chest
-    re-admits the gates around it); letting StripCorpse run on a door leg (a spurious "nothing to
-    take" + blocklist); letting the EMPTIED correction see a door leg (it abandons it at once);
-    allowing a door-behind-a-door dispatch (a gated door leg would redispatch itself).
+    at M1's GATED verdict (no actor in front): `Service.cpp:976`, right after `MarkGated`, calls
+    `Lockpick::DispatchGateDoor` (`Lockpick.cpp:890`): the nearest LOCKED, enabled DOOR within
+    256 u of the block point S, ON THE WAY to the target (at most 128 u, about one door width, off
+    the S->T line and not more than 64 u behind S), in the follower's / target's ATTACHED cells
+    (an exterior door across a cell border is missed: backlog MFO-B117); `Admit` judges it (owned /
+    off-limits / load-door destination bar `LoadDoorBar` `:477` / picks / verdicts).
+    **F-L3 (the NPC door Activate unlocks with no skill check): the leg aims at a POINT 96 u in
+    front of the door on the follower's side, never at the door ref**: `RetargetExcursionLeg`
+    (`LootScan.cpp:27`, moved out of `LootNearby`'s excursion branch unchanged so both share it)
+    with `a_point` -> `APMFBridge::ClaimLootTravelToPoint` (`apmf/Excursion.cpp:498`, ch.19
+    kTravel_ToPosition, ABI >= 11, re-points the slot's EXISTING ch.19 leg; Harbinger places and
+    deletes its own XMarker; radius 64, so he parks 96..160 u from the door, inside kArrivalDist).
+    On the MFO-package road a point leg is REFUSED (the package takes a ref and MFO's only XMarker
+    is the #73 evict marker), logged, the item stays GATED. The leg's TARGET stays the door ref, so
+    the arrival runs the same `Lockpick::Step` on it (snapshot / simulation / ch.12 v2 IdleLockPick
+    / Unlock). The point leg's destination is Harbinger's marker, so M2 reads it as NOT ours: MFO's
+    own M1 block timer and distance arrival govern it. The item stays GATED until the re-admit.
+    ARRIVAL (`Service.cpp:763`): Step also runs while `Lockpick::HasJob` (`:860`) is true for the
+    ref, so a job whose Unlock landed reaches its PICKED line and cleanup instead of being swept.
+    An open door leg has nothing to transfer (`Service.cpp:778`: Holding, no StripCorpse); if no
+    MFO pick or key opened it (`ConsumeOpenedByUs` `:865`), a WARN `F-L3: door unlocked without a
+    pick` (principle 7). The EMPTIED correction skips door legs (`Service.cpp:483`). RE-ADMIT: the
+    engine Unlock sends `TESLockChangedEvent` (1.6.1170 0x2D92E0 id 19512 / 1.5.97 id 19110, source
+    holder +0x6E0 on both); `GateSink` sinks it (`Sinks.cpp:221`, registered `:281`) and re-admits
+    through M1's own `ReadmitNear` for a DOOR that reads unlocked (never a chest). Never a door leg
+    for a target that is itself a door (no chains). The load-door bar and engage-on-sight's
+    town/inn filter share ONE location-type table and classifier (`native/LocationTypes.h`
+    `Classify`: fight site / civilised / untagged, innermost first); the bar refuses a destination
+    that is civilised, has no location, or has no location type (fail closed). **What breaks:**
+    aiming the door leg at the door ref (F-L3); dropping the door filter in the lock-changed sink
+    (every picked chest re-admits the gates around it); letting StripCorpse run on a door leg (a
+    spurious "nothing to take" + blocklist); letting the EMPTIED correction see a door leg (it
+    abandons it at once); allowing a door-behind-a-door dispatch (a gated door leg would
+    redispatch itself); gating Step on IsLocked alone (a finished pick is swept as "abandoned").
+    Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B117 (adjacent-cell door), MFO-B118
+    (Service.cpp split plan).
 - **Loot scan is MULTI-CELL** (`LootNearby` `logistics/LootScan.cpp:21`; cell set built at `:134`):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs

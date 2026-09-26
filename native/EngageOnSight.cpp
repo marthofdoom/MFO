@@ -6,6 +6,7 @@
 #include "EngageOnSight.h"
 #include "apmf/APMFBridge.h"      // ch.21 entry table (CombatEntryOffered / RequestCombatEntry / ...)
 #include "Config.h"
+#include "LocationTypes.h"        // IsCivilised: the shared location-type table (LP-M2)
 #include "Confidence.h"           // LeashRadius (the enemy must be inside it, from the player) / OfFacing
 #include "MainThread.h"
 #include "Sightline.h"            // MeasureNow -- the SEES test, on the main thread
@@ -222,65 +223,11 @@ namespace MFO::EngageOnSight {
         }
 
         // MAIN THREAD. TOWN / INN FILTER (marth 2026-09-25: "filter out enemies in Inns or
-        // Towns, UNLESS the player is in a battle"). A location is CIVILISED when, walking
-        // from the innermost location out through parentLoc, a civilised keyword is met
-        // BEFORE a hostile-place one. Hostile-place = LocTypeClearable / LocTypeDungeon: a
-        // bandit mine or the Ratway under Riften is a fight site even though its parent is
-        // a town, and the innermost tag decides. Civilised = every Skyrim.esm LocType that
-        // marks a lived-in place (erring toward civilised, per marth): Inn, City, Town,
-        // Settlement, Habitation, HabitationHasInn, Dwelling, House, PlayerHouse, Store,
-        // Guild, Temple, Castle, Barracks, Jail, StewardsDwelling, Farm, Mine, LumberMill,
-        // OrcStronghold. NOT the LocTypeHold* family: those tag a whole hold, wilderness
-        // included. Resolved ONCE by FormID in Skyrim.esm (EditorIDs are not reliably kept;
-        // the same road as logistics' InPlayerHome); a keyword that does not resolve is
-        // simply absent from the set. FormIDs verified against Skyrim.esm's KYWD records.
+        // Towns, UNLESS the player is in a battle"). The keyword table, the innermost-first rule
+        // and their reasoning moved UNCHANGED to LocationTypes.h (LP-M2 closing round), shared
+        // with the lockpick load-door bar so the two never disagree on a lived-in place.
         bool IsCivilised(const RE::BGSLocation* a_loc) {
-            struct Kw { RE::FormID id; bool civil; };
-            static const std::vector<std::pair<const RE::BGSKeyword*, bool>> s_kws = [] {
-                constexpr Kw kList[] = {
-                    { 0x000F5E80, false },   // LocTypeClearable
-                    { 0x000130DB, false },   // LocTypeDungeon
-                    { 0x0001CB87, true },    // LocTypeInn
-                    { 0x00013168, true },    // LocTypeCity
-                    { 0x00013166, true },    // LocTypeTown
-                    { 0x00013167, true },    // LocTypeSettlement
-                    { 0x00039793, true },    // LocTypeHabitation
-                    { 0x000A6E84, true },    // LocTypeHabitationHasInn
-                    { 0x000130DC, true },    // LocTypeDwelling
-                    { 0x0001CB85, true },    // LocTypeHouse
-                    { 0x000FC1A3, true },    // LocTypePlayerHouse
-                    { 0x0001CB86, true },    // LocTypeStore
-                    { 0x0001CD5A, true },    // LocTypeGuild
-                    { 0x0001CD56, true },    // LocTypeTemple
-                    { 0x0001CD57, true },    // LocTypeCastle
-                    { 0x0001CD55, true },    // LocTypeBarracks
-                    { 0x0001CD59, true },    // LocTypeJail
-                    { 0x000504F9, true },    // LocTypeStewardsDwelling
-                    { 0x00018EF0, true },    // LocTypeFarm
-                    { 0x00018EF1, true },    // LocTypeMine
-                    { 0x00018EF2, true },    // LocTypeLumberMill
-                    { 0x000130E9, true },    // LocTypeOrcStronghold
-                };
-                std::vector<std::pair<const RE::BGSKeyword*, bool>> v;
-                auto* dh = RE::TESDataHandler::GetSingleton();
-                for (const auto& k : kList) {
-                    auto* kw = dh ? dh->LookupForm<RE::BGSKeyword>(k.id & 0x00FFFFFF, "Skyrim.esm") : nullptr;
-                    if (kw) v.emplace_back(kw, k.civil);
-                }
-                spdlog::info("[engage-on-sight] town/inn filter: {} of {} Skyrim.esm location keywords resolved",
-                             v.size(), std::size(kList));
-                return v;
-            }();
-            int guard = 0;
-            for (auto* loc = a_loc; loc && guard < 8; loc = loc->parentLoc, ++guard) {
-                for (const auto& [kw, civil] : s_kws) {
-                    if (!civil && loc->HasKeyword(kw)) return false;   // a fight site, innermost first
-                }
-                for (const auto& [kw, civil] : s_kws) {
-                    if (civil && loc->HasKeyword(kw)) return true;
-                }
-            }
-            return false;
+            return LocationTypes::Classify(a_loc) == LocationTypes::Kind::kCivilised;
         }
 
         // MAIN THREAD ONLY (posted). The highActorHandles walk (resized by the main
