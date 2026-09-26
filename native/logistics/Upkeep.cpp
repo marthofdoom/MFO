@@ -394,6 +394,9 @@ namespace MFO::Logistics {
             // stays in the pack, not handed to the player.
             if (IsStockGear(a_follower->GetFormID(), obj->GetFormID())) continue;
             if (!Config::g_lootSpecialItems.load() && socketed(data.second.get())) continue;
+            // LOTD: a relic he carries for the museum's deposit trip is deposited, not
+            // handed to the player (only when the trip can actually happen).
+            if (Lotd::KeepForDeposit(a_follower, a_state, obj)) continue;
             if (!shed) { shed = obj; shedCount = data.first; }   // first off-role, one per tick
         }
         if (!shed) return false;   // nothing off-role in the pack

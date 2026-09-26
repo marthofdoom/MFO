@@ -7,6 +7,10 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **New option: Legacy of the Dragonborn awareness.** Off by default, and only shown when LOTD is installed. Turn it on and followers know what your museum still needs. LOTD's own shipping message shows once when you turn it on.
+- **New loot gambit: Loot museum items.** It appears on the board while the option is on. A follower takes the relics the museum still needs and nothing it already has, counting what you and the other followers carry and what is already on its way.
+- **Followers ship museum items for you.** A follower with that gambit, carrying needed relics, walks to a nearby Museum Shipments crate, hands them over with a proper give animation and puts them in. LOTD delivers them to the museum as usual. It needs Harbinger with the idle-at-a-target channel (ABI v17). Without it the gambit does nothing.
+- **A relic the museum needs is never sold or dropped.** Selling, making room for better gear and trading up ammo all leave it alone. Items you gave a follower are never shipped.
 - **The walk-to-loot gait setting works on Harbinger's travel road.** With Harbinger 0.9.8 or newer, a loot trip walks, jogs, runs or fast-walks as the setting says. A changed setting applies from the next trip leg. MFO's own travel packages (Harbinger absent) are unchanged until that road's gait is proven.
 - **Loot trips on Harbinger's road now listen to why a walk stopped.** Arrived means loot now. A vanished target means the next item at once. Blocked by someone standing in the way means the item goes later in his list. Blocked by a gate means the item is skipped until the gate changes. MFO no longer runs its own blocked timer on that road.
 - **A follower sent back to the same item walks again.** Before, a second trip to an item whose first walk had ended never started.

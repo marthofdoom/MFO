@@ -1,6 +1,7 @@
 #pragma once
 #include "PCH.h"
 #include <chrono>
+#include "State.h"   // FollowerState (KeepForDeposit reads his gambit table)
 
 // logistics/Lotd.h -- LOTD AWARENESS (feat/mfo-lotd, ClickUp 86e3edghj, rounds L1-L3).
 // Legacy of the Dragonborn has no DLL: its whole interface is data + Papyrus. MFO
@@ -47,6 +48,14 @@ namespace MFO::Lotd {
     bool DepositTick(RE::Actor* a_follower, Clock::time_point a_now);
     // End this follower's trip now (combat, dismissal). Idempotent, worker road.
     void EndDeposit(RE::FormID a_follower, const char* a_why);
-    // Economy: this base is a relic THIS follower covers for the museum -> never sell it.
+    // The owner-independent backstop (the pump, every lap): ends a trip whose owner is
+    // no longer being serviced (logistics off, dead, unloaded, dismissed, stalled) and
+    // enforces the trip's maximum. Worker road.
+    void SweepTrip();
+    // Economy / SwapUp: this base is a relic THIS follower covers for the museum ->
+    // never sell it, never drop it (sell list, swap-up drops, the ammo ladder).
     bool HoldFromSale(RE::FormID a_follower, RE::TESBoundObject* a_base);
+    // ShedOffRoleWeapon: HoldFromSale AND his table holds an enabled act.loot_museum
+    // AND the deposit can run -> keep it for the crate, do not hand it to the player.
+    bool KeepForDeposit(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_base);
 }

@@ -55,6 +55,7 @@
 // RemoveItem into the SOURCE container (the LootAmmo trade that has shipped for
 // months) -- no world drop, no 3D, so no MainThread::Post hop is needed.
 #include "Logistics_internal.h"
+#include "Lotd.h"          // LOTD: HoldFromSale -- a needed relic is never sold or dropped
 #include <cmath>          // std::ceil: the gambit's N is a float param
 #include <limits>         // std::numeric_limits: the "short of the target" cutoff
 
@@ -349,6 +350,7 @@ namespace MFO::Logistics {
                 s.special = AmmoIsSpecial(am, entry);
                 s.pinned  = s.worn || s.special || IsStockGear(fid, obj->GetFormID()) ||
                             IsPlayerPick(fid, obj->GetFormID()) ||
+                            Lotd::HoldFromSale(fid, obj) ||   // LOTD: a needed relic is never sold or dropped
                             IsQuestObjectInstance(entry) || Catalog::IsExcluded(obj->GetFormID());
                 out.push_back(s);
             }
@@ -551,7 +553,8 @@ namespace MFO::Logistics {
                 const std::int32_t value = entry ? entry->GetValue() : 0;
                 if (value > a_incomingValue) continue;   // never drop more worth than it makes room for
                 if (IsStockGear(fid, obj->GetFormID()) || IsQuestObjectInstance(entry) ||
-                    Catalog::IsExcluded(obj->GetFormID()) || IsPlayerPick(fid, obj->GetFormID()))
+                    Catalog::IsExcluded(obj->GetFormID()) || IsPlayerPick(fid, obj->GetFormID()) ||
+                    Lotd::HoldFromSale(fid, obj))   // LOTD: a needed relic is never dropped
                     continue;
                 if (meo && entry && entry->extraLists) {
                     bool uid = false;
