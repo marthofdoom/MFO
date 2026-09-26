@@ -129,7 +129,11 @@ namespace MFO::Sightline {
         // frame runs it) and refuses anything without loaded 3D: a raycast
         // against an unloaded ref answers nothing and asks the havok world
         // about geometry that is not there.
-        void Measure(RE::FormID a_viewer, const std::vector<RE::FormID>& a_targets) {
+        // a_changeOnly (MeasureNow's caller): log a verdict only when it CHANGES or the
+        // pair was never measured -- not again merely because the entry went stale, which
+        // a probe slower than kFreshSeconds (a big party's service period) would hit on
+        // every measurement.
+        void Measure(RE::FormID a_viewer, const std::vector<RE::FormID>& a_targets, bool a_changeOnly = false) {
             auto* vf = RE::TESForm::LookupByID<RE::Actor>(a_viewer);
             if (!vf || vf->IsDead() || !vf->Is3DLoaded()) return;
 
@@ -163,7 +167,8 @@ namespace MFO::Sightline {
                 // Transition-only logging (#22j): a stable verdict at pump
                 // cadence would be a 7.5 Hz flood per follower-foe pair.
                 const bool fresh = Since(e.at) <= kFreshSeconds;
-                if (!fresh || e.los != los) {
+                const bool never = e.at.time_since_epoch().count() == 0;
+                if (a_changeOnly ? (never || e.los != los) : (!fresh || e.los != los)) {
                     spdlog::info("[los] {:08X} -> {:08X}: {}", a_viewer, tid,
                                  los ? "VISIBLE" : "OCCLUDED");
                 }
@@ -214,7 +219,7 @@ namespace MFO::Sightline {
         // must not answer for a measurement that did not happen.
         if (!vf || vf->IsDead() || !vf->Is3DLoaded()) return Verdict::Unknown;
         if (!tf || tf->IsDead() || !tf->Is3DLoaded()) return Verdict::Unknown;
-        Measure(a_viewer, { a_target });
+        Measure(a_viewer, { a_target }, /*a_changeOnly=*/true);
         return Check(a_viewer, a_target);
     }
 

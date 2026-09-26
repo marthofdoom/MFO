@@ -1482,36 +1482,47 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
 MFO's adoption of Harbinger ch.21 (ClickUp 86e3errnu). Not a Gambit record (not in the board list,
 not editable); `bEngageOnSight` (default OFF) is its only control. Contract, threads and the no-loop
 rule in the header. Called only from the Scheduler hook above.
-- `Service` (`:173`, WORKER) in order: (1) his ch.21 entry (`APMFBridge::CombatEntryStateOf`):
-  Standing -> return true (pending); Ended (`:184`) -> the target joins `givenUp`, the pin is
-  cleared only if `Targeting::Current` is still that target, `ForgetCombatEntry`. (2) gates:
-  toggle (silent), VR, `bAutoRetreat` OFF, `CombatEntryOffered()` false (Harbinger absent / < v14 /
-  seat refused: INERT, no direct road), player `IsSneaking()` unless `bEngageOnSightSneaking`, the
-  retreat cooldown, `Confidence::Of < kRetreatConfidence`; each stand-down is a transition line,
-  floored 5 s per follower (`Status`). (3) the newest landed probe (only the one answering his last
-  post, consumed once): drop given-up targets a later probe no longer lists (`:257`); if it chose a
-  VISIBLE target not given up -> `RequestCombatEntry` (`:266`), on Filed pin the same target via
-  `Targeting::CommandEx` when `Targeting::Commandable()`, `Logistics::ReleaseTravelOnCombat`
-  (`:275`, his loot trip ends), ONE `[engage-on-sight] ... ENGAGE` line (who, target, distance from
-  him and from the player, leash, sightline, candidates, ch.21 handle, pin outcome, confidence),
-  return true. (4) `PostProbe` (`:157`): at most one per 0.3 s per follower, leash =
-  `Confidence::LeashRadius(f)` read on the worker.
-- `RunProbe` (`:110`, MAIN THREAD via `MainThread::Post`; VR: Post is a no-op, never lands):
-  walks `highActorHandles` (NiPointer held) for enemies = not him / the player / a teammate, alive,
-  enabled, 3D-loaded, within the leash OF THE PLAYER, `IsHostileToActor(player) ||
-  IsHostileToActor(him)`; sorts nearest-to-him first; measures `Sightline::MeasureNow` for at most
-  3 non-given-up candidates, first VISIBLE wins. Writes the result under `g_probeMx` (a leaf),
-  generation-checked against `ClearTransientState` (`g_gen`), older posts never overwrite newer.
-- `Forget` (`:304`) from `Followers::ReleaseHeldState` (`Followers.cpp:375`, worker): release the
+- `Service` (`:269`, WORKER) in order: (1) his ch.21 entry (`APMFBridge::CombatEntryStateOf`):
+  Standing -> return true (pending); Ended (`:280`) -> the target joins `givenUp`, the pin this
+  gambit filed (`Note::pinned`) is released via `ReleaseOwnPin` (`:130`) only if Targeting still
+  holds that target, `ForgetCombatEntry`. (2) gates: toggle OFF (silent; also the KILL SWITCH for
+  the pin it filed, `:294` -- the entries are released by the bridge sweep), VR, `bAutoRetreat`
+  OFF, `CombatEntryOffered()` false (Harbinger absent / < v14 / seat refused: INERT, no direct
+  road), player `IsSneaking()` unless `bEngageOnSightSneaking`, `ToldToWait` (`:145`, DESIGN
+  DEFAULT pending marth: `kWaitingForPlayer` > 0 or a Sandbox package), the retreat cooldown.
+  Each stand-down is a transition line with a STABLE key (live values go in a printed detail),
+  floored 5 s per follower (`Status`). (3) the newest landed probe (only the one answering his
+  last post, consumed once): given-up targets the probe reports GONE are dropped (`:351`); if it
+  chose a VISIBLE target not given up, the IN-COMBAT confidence estimate
+  `Confidence::OfFacing(f, candidates)` (`:363`) must reach the retreat floor, then
+  `RequestCombatEntry` (`:372`); on Filed pin the same target via `Targeting::CommandEx` when
+  `Targeting::Commandable()`, `Logistics::ReleaseTravelOnCombat` (`:385`, his loot trip ends),
+  ONE `[engage-on-sight] ... ENGAGE` line, return true. (4) `PostProbe` (`:250`): at most one per
+  0.3 s per follower; seq from the GLOBAL monotonic `g_seq` (`:75`, never reset: a probe in flight
+  across `Forget` is always older than any later post); leash = `Confidence::LeashRadius(f)` on
+  the worker; the "gone" radius = the FIXED `g_leashMax`.
+- `RunProbe` (`:193`, MAIN THREAD via `MainThread::Post`; VR: Post is a no-op, never lands):
+  walks `highActorHandles` (NiPointer held) for candidates = not him / the player / a teammate,
+  alive, enabled, 3D-loaded, within the leash OF THE PLAYER, and `IsEnemy` (`:170`): not commanded
+  by the player or a teammate; not restrained / bleeding out / on an IgnoreCombat package;
+  `IsHostileToActor(player) || IsHostileToActor(him)` (DESIGN DEFAULT (ii) pending marth: hostile
+  to him alone counts); a CRIME-FACTION actor only when its `currentCombatTarget` is the player or
+  a teammate. No ghost check (`IsGhost` is an unverified id call: backlog MFO-B111). Sorts nearest
+  to him first; `Sightline::MeasureNow` on at most 3 non-given-up candidates, first VISIBLE wins;
+  reports which given-up targets are GONE (dead / disabled / unloaded / unresolvable / no longer
+  hostile by the bare engine read / past `g_leashMax` from the player). Writes under `g_probeMx`
+  (a leaf), generation-checked (`g_gen`), older posts never overwrite newer.
+- `Forget` (`:415`) from `Followers::ReleaseHeldState` (`Followers.cpp:375`, worker): release the
   entry, drop his notes.
 - **What breaks:** a `highActorHandles` walk or a sightline measure on the worker (§0.30 / §0.47,
-  #74); treating `Sightline::Verdict::Unknown` as seen (the gambit would start fights through walls
-  on a cold cache — SEES means VISIBLE, never the fail-open read the combat selector uses);
-  clearing a given-up target on anything but a later probe that does not list it (the engine gave
-  up: re-requesting it is the loop Harbinger's INTEGRATION forbids); reading the leash from the
-  follower instead of the player; adding an MFO direct `StartCombat` road for Harbinger absent (the
-  brief: inert, no direct road); dropping the retreat gates (a follower who starts a fight must be
-  able to break it off, and one under the floor would engage and flee in a loop).
+  #74); treating `Sightline::Verdict::Unknown` as seen (fights through walls on a cold cache);
+  engaging on `IsHostileToActor` alone (a bounty makes every guard "hostile": a hold-wide crime --
+  the SEV-2 of the 1c50696 review); pruning a given-up target on the confidence-scaled leash (a
+  shrinking leash forgets a target still standing there: a loop); a per-follower seq reset by
+  `Forget` (blind after re-hire, then one stale engage); gating on the vitality-only `Of()` (he
+  engages a pack and retreats at once); reading the leash from the follower instead of the player;
+  an MFO direct `StartCombat` road for Harbinger absent (the brief: inert). Open deferred findings:
+  `Docs/REVIEW-BACKLOG.md` MFO-B111.
 
 ### Gait.cpp / Gait.h — travel-package speed byte (low risk)
 `Apply()` (`:8`) copies `Config::g_travelGait` onto the loot-travel packages'
@@ -1846,9 +1857,11 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   by design (cold/stale/VR → Unknown). **Every `Check` must have a `Want` seeding
   its pair** or the gate is inert; the seeders are Evaluator (combat foes),
   Actuation_Direct F7 (auto-cast fan), and Logistics (OOC hostile).
-- `MeasureNow` (`Sightline.cpp:209`, decl `Sightline.h:68`, MAIN THREAD ONLY, NEW 2026-09-25) = a
+- `MeasureNow` (`Sightline.cpp:214`, decl `Sightline.h:68`, MAIN THREAD ONLY, NEW 2026-09-25) = a
   synchronous `Measure` for a caller already on the main thread (the engage-on-sight probe,
-  `EngageOnSight.cpp` `RunProbe`); writes the cache, returns the verdict; Unknown on VR or an
+  `EngageOnSight.cpp` `RunProbe`); writes the cache, returns the verdict, and logs `[los]` only
+  when the verdict CHANGES (`Measure`'s `a_changeOnly`: a slow probe would otherwise re-log on
+  every stale entry); Unknown on VR or an
   unresolvable / dead / unloaded pair (it does not let an older cache entry answer). Not throttled:
   its one caller bounds itself (<= 3 per probe, one probe per 0.3 s per follower).
 - `TeammateInFireLine` (`:149`) → `cast/Direct.cpp:1171`, `Packages.cpp:990`. Reads
@@ -1859,6 +1872,10 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   **two copies; a math fix must hit both.**
 
 ### CombatSense.h / Confidence.h / Temperament.h (header-only)
+- `Confidence::Vitality` / `FoeMultiplier` / `OfFacing` (`Confidence.h:26/:35/:69`, 2026-09-25): `Of()`
+  now reads its vitality term and fight multiplier through the first two (same arithmetic);
+  `OfFacing(f, n)` = the `Of()` he would read fighting n foes, with no engine combat read -- the
+  engage-on-sight gate. A change to either helper moves `Of()` and the estimate together.
 - `CombatSense::FoeCount(Actor*)` (`:15`) — canonical live-foe count from the
   follower's own combat group, under `BSReadLockGuard(combatGroup->lock)`. Consumed
   by `Confidence.h:48`, `Evaluator.cpp:81`, `Scheduler.cpp:276`. A semantic change

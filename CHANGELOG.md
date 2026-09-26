@@ -11,7 +11,9 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **It needs Harbinger 0.9.9 or newer.** Without it the option does nothing.
 - **It only works while Auto-retreat is on.** A follower who starts a fight can still fall back. He also holds off while his last retreat is cooling down or while he is too hurt to fight.
 - **He does not start fights while you sneak.** A second option lets him.
-- **No endless re-tries.** If the game refuses the fight, or the fight ends with the enemy still in view, he leaves that enemy alone until it has left his view.
+- **He never starts a fight with guards or townsfolk.** Anyone whose attack would be a crime is left alone unless they are already fighting you or a follower. Your summons and thralls, and enemies who are tied up, bleeding out or scripted to ignore fights are left alone too.
+- **A follower you told to wait stays put.**
+- **No endless re-tries.** If the game refuses the fight, or the fight ends with the enemy still around, he leaves that enemy alone until it dies, leaves, stops being hostile or is far from you.
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 

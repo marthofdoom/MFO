@@ -420,14 +420,14 @@ namespace MFO::APMFBridge {
     // Harbinger calls the engine's own Actor::StartCombat(target) ONCE, on the game thread,
     // one frame after the claim is applied (Harbinger INTEGRATION.md "Starting a fight").
     // MFO's only client is the hidden "nearest visible enemy" out-of-combat gambit
-    // (Scheduler.cpp ServiceEngageOnSight, ClickUp 86e3errnu); there is NO MFO direct road:
+    // (EngageOnSight.cpp, called from the Scheduler's party-OOC branch; ClickUp 86e3errnu); there is NO MFO direct road:
     // Harbinger absent or older than v14 = the gambit is inert.
     // THE CLAIM ENDS ON HARBINGER'S SIDE: engine refused / entry not attempted / combat
     // ended / owner or target dead, disabled, unloaded, unresolvable. IsClaimLive turns
     // false; Tick()'s sweep marks the entry ENDED and Releases the handle (a no-op on a dead
     // claim; FIFO-cancels a still-pending one). MFO never Repoints it: a new target is a
     // NEW request, and an ended entry is only ever forgotten, never re-filed by this table
-    // (the Scheduler's per-target suppression is the no-loop rule).
+    // (EngageOnSight's per-follower given-up set is the no-loop rule).
     // Worker-safe (the tick's AddTask worker); takes g_mx.
     enum class EntryResult {
         Filed,        // a NEW entry claim was filed; *a_outHandle carries it

@@ -6,7 +6,7 @@
 #include "EngageOnSight.h"
 #include "apmf/APMFBridge.h"      // ch.21 entry table (CombatEntryOffered / RequestCombatEntry / ...)
 #include "Config.h"
-#include "Confidence.h"           // LeashRadius (the enemy must be inside it, from the player) / Of
+#include "Confidence.h"           // LeashRadius (the enemy must be inside it, from the player) / OfFacing
 #include "MainThread.h"
 #include "Sightline.h"            // MeasureNow -- the SEES test, on the main thread
 #include "Targeting.h"            // the ch.20 pin (or the latch) for the same target
@@ -45,7 +45,7 @@ namespace MFO::EngageOnSight {
         // Written by the main-thread probe, read by the worker. A real lock (#4:
         // cross-thread); a LEAF -- nothing is called while it is held.
         struct ProbeResult {
-            std::uint32_t seq = 0;                  // the worker's post sequence this answers
+            std::uint32_t seq = 0;                  // the post sequence this answers (g_seq)
             std::vector<RE::FormID> candidates;     // every enemy in the leash, nearest (to him) first
             RE::FormID chosen   = 0;                // nearest non-given-up candidate measured VISIBLE
             float      dSelf    = 0.0f;             // chosen: distance from him
@@ -53,24 +53,42 @@ namespace MFO::EngageOnSight {
             float      leash    = 0.0f;             // the leash the probe used
             int        measured = 0;                // sightline measurements made
             int        occluded = 0;                // of those, OCCLUDED (or unknown)
+            // Given-up targets this probe found GONE: unresolvable, dead, disabled,
+            // unloaded, no longer hostile to the player or him (the bare engine read), or
+            // farther from the player than the FIXED ceiling fLeashMax. Never keyed on the
+            // confidence-scaled leash (review of 1c50696, SEV-3: a follower whose leash
+            // shrank would forget a refused target still standing there, and loop).
+            std::vector<RE::FormID> gone;
         };
         std::mutex                                   g_probeMx;
         std::unordered_map<RE::FormID, ProbeResult>  g_probes;   // guarded by g_probeMx
         // Session generation: a probe posted before a revert/load that lands after it
         // writes nothing (ClearTransientState bumps it inside the StopPump bracket).
         std::atomic<std::uint32_t>                   g_gen{ 1 };
+        // ONE monotonic post sequence for every follower, worker-only, NEVER reset (review
+        // of 1c50696, SEV-3). A per-follower counter restarted at 0 when Forget erased his
+        // note, so a probe still in flight from before landed with a HIGHER seq than his
+        // new posts: the mirror's newer-wins guard then rejected every fresh result (he
+        // was blind) until his counter caught up and matched the stale one, which then
+        // engaged. With one monotonic counter a stale probe is always OLDER than any post
+        // made after Forget: it can neither block a fresh result nor equal his latest post.
+        std::uint32_t                                g_seq = 0;
 
         // ── WORKER STATE (worker-only, no lock -- #4) ────────────────────────────
         struct Note {
-            std::uint32_t postedSeq   = 0;          // last probe this follower posted
+            std::uint32_t postedSeq   = 0;          // last probe this follower posted (a g_seq value)
             std::uint32_t consumedSeq = 0;          // last probe result acted on
             Clock::time_point lastPost{};
             // Given-up targets -> the postedSeq current when the entry ended. A target
-            // leaves this map only when a probe posted AFTER that (seq > value) lands
-            // without it among the candidates.
+            // leaves this map only when a probe posted AFTER that (seq > value) reports it
+            // GONE (ProbeResult::gone).
             std::unordered_map<RE::FormID, std::uint32_t> givenUp;
-            std::string       status;               // last status line (transition key)
+            std::string       status;               // last status KEY (stable text, no live values)
             Clock::time_point statusAt{};
+            // The target this gambit pinned through Targeting on its last engage (0 =
+            // none). Released (if Targeting still holds that target) when the entry ends
+            // and on the bEngageOnSight kill switch (review of 1c50696).
+            RE::FormID        pinned = 0;
         };
         std::unordered_map<RE::FormID, Note> g_notes;
 
@@ -84,15 +102,18 @@ namespace MFO::EngageOnSight {
             return std::chrono::duration<float>(a_now - a_t).count();
         }
 
-        // Transition-only status line, floored per follower. An EMPTY status resets
-        // the key silently (the toggle off is not news).
-        void Status(Note& a_note, RE::Actor* a_f, RE::FormID a_id, const std::string& a_status, Clock::time_point a_now) {
-            if (a_status == a_note.status) return;
-            if (a_status.empty()) { a_note.status.clear(); return; }
+        // Transition-only status line, floored per follower. a_key is STABLE text (the
+        // transition key: no live value in it, or every changing number would be a
+        // "transition"); a_detail carries the live values and is printed, never compared.
+        // An EMPTY key resets silently (the toggle off is not news).
+        void Status(Note& a_note, RE::Actor* a_f, RE::FormID a_id, const char* a_key, Clock::time_point a_now,
+                    const std::string& a_detail = {}) {
+            if (a_note.status == a_key) return;
+            if (!*a_key) { a_note.status.clear(); return; }
             if (SecsSince(a_note.statusAt, a_now) < kStatusFloorSecs) return;   // keep the old key: re-tried next lap
-            a_note.status   = a_status;
+            a_note.status   = a_key;
             a_note.statusAt = a_now;
-            spdlog::info("[engage-on-sight] {} ({:08X}): {}", NameOf(a_f), a_id, a_status);
+            spdlog::info("[engage-on-sight] {} ({:08X}): {}{}", NameOf(a_f), a_id, a_key, a_detail);
         }
 
         const char* PinOutcomeName(Targeting::CommandOutcome a_o) {
@@ -104,11 +125,73 @@ namespace MFO::EngageOnSight {
             }
         }
 
+        // The pin this gambit filed, released if Targeting still holds it on that target
+        // (once he fought, his own gambits may have moved it: then it is theirs).
+        bool ReleaseOwnPin(Note& a_note, RE::FormID a_id) {
+            const RE::FormID t = a_note.pinned;
+            a_note.pinned = 0;
+            if (!t) return false;
+            if (auto cur = Targeting::Current(a_id).get(); cur && cur->GetFormID() == t) {
+                Targeting::Clear(a_id);
+                return true;
+            }
+            return false;
+        }
+
+        // DESIGN DEFAULT (i), pending marth (review of 1c50696): a follower TOLD TO WAIT
+        // does not engage. Vanilla "wait here" sets the WaitingForPlayer actor value (the
+        // one MFO's [follower] state line already reads); a follower idling on a Sandbox
+        // package is the other "wait" shape. One branch; plain data reads on the worker.
+        bool ToldToWait(RE::Actor* a_f) {
+            if (auto* avo = a_f->AsActorValueOwner();
+                avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f)
+                return true;
+            const auto* pkg = a_f->GetCurrentPackage();
+            return pkg && pkg->packData.packType.get() == RE::PACKAGE_PROCEDURE_TYPE::kSandbox;
+        }
+
+        // MAIN THREAD. The ENEMY test (review of 1c50696, SEV-2). Actor::IsHostileToActor
+        // alone is the engine's "would attack" predicate (aggression x faction reaction,
+        // disassembled AE 0x679F10 by the reviewer): with a bounty, as a stage-4 vampire or
+        // a werewolf it names every guard and townsperson, and starting that fight is a
+        // hold-wide crime. So, in this order:
+        //   (b) a COMMANDED actor whose commander is the player or a teammate (a summon,
+        //       a thrall) is never an enemy;
+        //   (c) a restrained or bleeding-out actor, or one running an IgnoreCombat
+        //       package, is not one to start a fight with. (A GHOST check is NOT here:
+        //       Actor::IsGhost is an id call, RELOCATION_ID(36286, 37275), with no row in
+        //       VerifiedAddresses.h -- backlogged as MFO-B111.);
+        //   then hostile to the player OR to him (design default (ii) below);
+        //   (a) an actor with a CRIME FACTION (guards, townsfolk: anyone whose attack is a
+        //       crime) counts only when it is ALREADY fighting the party: its
+        //       currentCombatTarget resolves to the player or a teammate.
+        // DESIGN DEFAULT (ii), pending marth: hostile to HIM alone (not to the player)
+        // still counts -- the spec says "hostile to the player/party", and he is party.
+        bool IsEnemy(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc) {
+            if (a->IsCommandedActor()) {
+                auto cmd = a->GetCommandingActor();   // HOLD the NiPointer
+                if (cmd && (cmd->IsPlayerRef() || cmd->IsPlayerTeammate())) return false;
+            }
+            if (const auto* st = a->AsActorState()) {
+                if (st->GetLifeState() == RE::ACTOR_LIFE_STATE::kRestrained || st->IsBleedingOut()) return false;
+            }
+            if (const auto* pkg = a->GetCurrentPackage();
+                pkg && pkg->packData.packFlags.any(RE::PACKAGE_DATA::GeneralFlag::kIgnoreCombat))
+                return false;
+            if (!a->IsHostileToActor(a_pc) && !a->IsHostileToActor(a_self)) return false;
+            if (a->GetCrimeFaction()) {
+                auto  tp = a->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+                auto* t  = tp.get();
+                if (!t || !(t->IsPlayerRef() || t->IsPlayerTeammate())) return false;
+            }
+            return true;
+        }
+
         // MAIN THREAD ONLY (posted). The highActorHandles walk (resized by the main
         // thread, §0.30) and the sightline measurement (a physics query, §0.30) both
         // run here. Everything crosses back as FormIDs.
         void RunProbe(RE::FormID a_id, std::uint32_t a_seq, std::uint32_t a_gen, float a_leash,
-                      const std::vector<RE::FormID>& a_givenUp) {
+                      float a_goneRadius, const std::vector<RE::FormID>& a_givenUp) {
             if (g_gen.load(std::memory_order_relaxed) != a_gen) return;
             auto* self = RE::TESForm::LookupByID<RE::Actor>(a_id);
             auto* pc   = RE::PlayerCharacter::GetSingleton();
@@ -125,7 +208,7 @@ namespace MFO::EngageOnSight {
                 if (a->IsPlayerRef() || a->IsPlayerTeammate()) continue;
                 if (a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) continue;
                 if (a->GetPosition().GetDistance(pcPos) > a_leash) continue;   // the leash is from the PLAYER
-                if (!a->IsHostileToActor(pc) && !a->IsHostileToActor(self)) continue;
+                if (!IsEnemy(a, self, pc)) continue;
                 found.emplace_back(a->GetPosition().GetDistance(selfPos), a->GetFormID());
             }
             std::sort(found.begin(), found.end());
@@ -146,25 +229,38 @@ namespace MFO::EngageOnSight {
                 r.dPlayer = t ? t->GetPosition().GetDistance(pcPos) : 0.0f;
                 break;
             }
+            // Given-up targets that are GONE (see ProbeResult::gone). Hostility here is the
+            // bare engine read, not IsEnemy: a target stays given up while the engine still
+            // calls it hostile, whatever the filters make of it.
+            for (const RE::FormID fid : a_givenUp) {
+                auto* g = RE::TESForm::LookupByID<RE::Actor>(fid);
+                const bool gone = !g || g->IsDead() || g->IsDisabled() || !g->Is3DLoaded() ||
+                                  g->GetPosition().GetDistance(pcPos) > a_goneRadius ||
+                                  (!g->IsHostileToActor(pc) && !g->IsHostileToActor(self));
+                if (gone) r.gone.push_back(fid);
+            }
 
             std::lock_guard lk(g_probeMx);
             if (g_gen.load(std::memory_order_relaxed) != a_gen) return;
             auto& slot = g_probes[a_id];
-            if (slot.seq >= a_seq && slot.seq != 0) return;   // an older post landing late
+            if (slot.seq >= a_seq) return;   // an older post landing late (seq starts at 1)
             slot = std::move(r);
         }
 
         void PostProbe(Note& a_note, RE::FormID a_id, float a_leash, Clock::time_point a_now) {
             if (SecsSince(a_note.lastPost, a_now) < kProbeFloorSecs) return;
             a_note.lastPost = a_now;
-            const std::uint32_t seq = ++a_note.postedSeq;
+            const std::uint32_t seq = ++g_seq;   // global and monotonic (see g_seq)
+            a_note.postedSeq = seq;
             const std::uint32_t gen = g_gen.load(std::memory_order_relaxed);
+            // The FIXED "gone" radius: the leash ceiling, read now (the MCM may change it).
+            const float goneRadius = Config::g_leashMax.load();
             std::vector<RE::FormID> givenUp;
             givenUp.reserve(a_note.givenUp.size());
             for (const auto& [fid, s] : a_note.givenUp) givenUp.push_back(fid);
             // Capture by value: FormIDs and numbers only (the frame re-resolves).
-            MainThread::Post([a_id, seq, gen, a_leash, givenUp = std::move(givenUp)]() {
-                RunProbe(a_id, seq, gen, a_leash, givenUp);
+            MainThread::Post([a_id, seq, gen, a_leash, goneRadius, givenUp = std::move(givenUp)]() {
+                RunProbe(a_id, seq, gen, a_leash, goneRadius, givenUp);
             });
         }
 
@@ -183,22 +279,25 @@ namespace MFO::EngageOnSight {
             if (st == APMFBridge::EntryState::Standing) return true;   // pending: his lap, no logistics
             if (st == APMFBridge::EntryState::Ended) {
                 note.givenUp[et] = note.postedSeq;
-                // The recipe drops both handles. Clear the pin only if it is still OURS
-                // (still on this target): once he fought, his gambits may have moved it.
-                bool pinCleared = false;
-                if (auto cur = Targeting::Current(a_id).get(); cur && cur->GetFormID() == et) {
-                    Targeting::Clear(a_id);
-                    pinCleared = true;
-                }
+                // The recipe drops both handles. Release the pin only if it is still OURS.
+                const bool pinCleared = note.pinned == et && ReleaseOwnPin(note, a_id);
                 APMFBridge::ForgetCombatEntry(a_id);
                 spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} is over -- target given up until it "
-                             "leaves his candidates{}", NameOf(a_f), a_id, et,
-                             pinCleared ? "; its pin released" : "");
+                             "dies, unloads, stops being hostile or is past fLeashMax from you{}",
+                             NameOf(a_f), a_id, et, pinCleared ? "; its pin released" : "");
             }
         }
 
-        // 2) GATES. Off is silent; every other stand-down is a transition line.
-        if (!Config::g_engageOnSight.load()) { Status(note, a_f, a_id, {}, now); return false; }
+        // 2) GATES. Off is silent (and releases the pin this gambit filed: the kill
+        //    switch; the entry claims are released by the bridge's sweep). Every other
+        //    stand-down is a transition line with a STABLE key.
+        if (!Config::g_engageOnSight.load()) {
+            if (note.pinned && ReleaseOwnPin(note, a_id))
+                spdlog::info("[engage-on-sight] {} ({:08X}): bEngageOnSight off -- released the pin it filed",
+                             NameOf(a_f), a_id);
+            Status(note, a_f, a_id, "", now);
+            return false;
+        }
         if (REL::Module::IsVR()) {
             Status(note, a_f, a_id, "inert: VR (Harbinger serves no ch.21 there, and MFO has no direct road)", now);
             return false;
@@ -219,18 +318,14 @@ namespace MFO::EngageOnSight {
                 return false;
             }
         }
+        if (ToldToWait(a_f)) {
+            Status(note, a_f, a_id, "standing down: told to wait (WaitingForPlayer set, or on a sandbox package)", now);
+            return false;
+        }
         if (a_retreatCooling) {
             Status(note, a_f, a_id, "standing down: auto-retreat cooldown", now);
             return false;
         }
-        const float conf = Confidence::Of(a_f);
-        if (conf < a_minConfidence) {
-            Status(note, a_f, a_id, fmt::format("standing down: confidence {:.2f} is under the retreat floor "
-                                                "{:.2f} (he would only start a fight to flee it)",
-                                                conf, a_minConfidence), now);
-            return false;
-        }
-        Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
 
         // 3) THE NEWEST PROBE RESULT (the one answering his last post), once.
         ProbeResult r;
@@ -247,21 +342,32 @@ namespace MFO::EngageOnSight {
         if (have) {
             note.consumedSeq = r.seq;
             // A given-up target leaves the set once a probe posted AFTER it was given up
-            // no longer lists it (out of the leash, dead, disabled, unloaded, no longer
-            // hostile). Seeing it again is a FRESH sighting.
+            // reports it GONE. Seeing it again after that is a FRESH sighting.
             for (auto it = note.givenUp.begin(); it != note.givenUp.end();) {
-                const bool listed = std::find(r.candidates.begin(), r.candidates.end(), it->first) != r.candidates.end();
-                if (r.seq > it->second && !listed) {
-                    spdlog::info("[engage-on-sight] {} ({:08X}): {:08X} left his candidates -- no longer given up",
-                                 NameOf(a_f), a_id, it->first);
+                const bool gone = std::find(r.gone.begin(), r.gone.end(), it->first) != r.gone.end();
+                if (r.seq > it->second && gone) {
+                    spdlog::info("[engage-on-sight] {} ({:08X}): {:08X} is gone (dead, unloaded, no longer hostile "
+                                 "or past fLeashMax) -- no longer given up", NameOf(a_f), a_id, it->first);
                     it = note.givenUp.erase(it);
                 } else {
                     ++it;
                 }
             }
-            if (r.chosen && !note.givenUp.contains(r.chosen)) {
+            if (!r.chosen) {
+                Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
+            } else if (!note.givenUp.contains(r.chosen)) {
+                // The confidence gate on the IN-COMBAT estimate (review of 1c50696): the Of()
+                // he would read once fighting as many foes as the probe counted -- so he never
+                // starts a fight he would at once retreat from.
+                const int   foes = static_cast<int>(r.candidates.size());
+                const float conf = Confidence::OfFacing(a_f, foes);
                 auto* t = RE::TESForm::LookupByID<RE::Actor>(r.chosen);
-                if (t && !t->IsDead() && !t->IsDisabled()) {
+                if (conf < a_minConfidence) {
+                    Status(note, a_f, a_id, "standing down: his in-combat confidence estimate is under the retreat "
+                                            "floor (he would start a fight only to flee it)", now,
+                           fmt::format(" -- estimate {:.2f} against {} foe(s), floor {:.2f}", conf, foes,
+                                       a_minConfidence));
+                } else if (t && !t->IsDead() && !t->IsDisabled()) {
                     std::uint32_t h = 0;
                     switch (APMFBridge::RequestCombatEntry(a_id, r.chosen, &h)) {
                     case APMFBridge::EntryResult::Filed: {
@@ -269,14 +375,19 @@ namespace MFO::EngageOnSight {
                         // entry has made it a combat-group target). Through Targeting, so there is
                         // ONE pin per follower and his foe gambits re-point it once he fights.
                         const char* pin = "off (bCommandTarget)";
-                        if (Targeting::Commandable())
-                            pin = PinOutcomeName(Targeting::CommandEx(a_id, t->GetHandle()));
+                        if (Targeting::Commandable()) {
+                            const auto o = Targeting::CommandEx(a_id, t->GetHandle());
+                            pin = PinOutcomeName(o);
+                            if (o == Targeting::CommandOutcome::Changed || o == Targeting::CommandOutcome::Unchanged)
+                                note.pinned = r.chosen;
+                        }
                         // Preempt logistics the way player combat does: his loot trip ends now.
                         Logistics::ReleaseTravelOnCombat(a_f);
+                        Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
                         spdlog::info("[engage-on-sight] {} ({:08X}) ENGAGE {} ({:08X}): nearest visible enemy, "
                                      "{:.0f}u from him, {:.0f}u from you (leash {:.0f}u), sightline=VISIBLE "
                                      "({} measured, {} not visible), {} candidate(s); ch.21 entry h={}; "
-                                     "ch.20 pin: {}; confidence {:.2f}",
+                                     "ch.20 pin: {}; in-combat confidence estimate {:.2f}",
                                      NameOf(a_f), a_id, NameOf(t), r.chosen, r.dSelf, r.dPlayer, r.leash,
                                      r.measured, r.occluded, r.candidates.size(), h, pin, conf);
                         engaged = true;
@@ -303,7 +414,7 @@ namespace MFO::EngageOnSight {
 
     void Forget(RE::FormID a_id) {
         APMFBridge::ForgetCombatEntry(a_id);
-        g_notes.erase(a_id);
+        g_notes.erase(a_id);   // g_seq is NOT reset: a probe still in flight stays older than any new post
         std::lock_guard lk(g_probeMx);
         g_probes.erase(a_id);
     }

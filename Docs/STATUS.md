@@ -25,6 +25,12 @@ Read it as history and this block as current.
   his loot trip. New files `native/EngageOnSight.{h,cpp}`, `native/apmf/CombatEntry.cpp`. **Open question for
   marth: engage while the player sneaks?** (default no; its own toggle). The MCM cannot grey the toggle out at
   runtime without a Papyrus property, so "unavailable" is the help text plus the `[engage-on-sight] ... inert` log.
+  REVIEW ROUND 1 (on 1c50696): enemy test filters crime-faction actors not already fighting the party, player/teammate-
+  commanded actors, restrained / bleeding-out / IgnoreCombat actors (ghost check backlogged MFO-B111); given-up targets
+  are released only when GONE (dead / unloaded / not hostile / past fLeashMax); one global probe sequence (no stale
+  engage after re-hire); gate on the in-combat confidence estimate; the kill switch releases its pin; `[los]` from the
+  probe logs on change only. DESIGN DEFAULTS pending marth: (i) a follower told to wait (WaitingForPlayer or a sandbox
+  package) does not engage; (ii) an actor hostile only to the follower still counts.
   FIELD CHECKS: `[engage-on-sight] <name> (<id>) ENGAGE ...` once per engage; APMF `[ch.21] ... ENTERED` with
   `Target is a combat-group target: yes`, then `[ch.20] ... FIRST SOURCE DENY`; after a fight `entry on ... is over
   -- target given up`, and no second ENGAGE on that target while it stays in view.
