@@ -45,6 +45,8 @@ Read it as history and this block as current.
   `[target-pin] ... ENDED` and a fresh `PIN` on the next foe. On Harbinger 0.9.8 (ABI v12): every
   other facet still works and targeting runs on the latch.
 
+- **2026-09-25 v2.0.14 RELEASED (GitHub, tag `v2.0.14`, stamp `325e6a9`, CI 36209693967, DLL sha256 `80a5b73e…`). NOT on Nexus yet: marth tests first.**
+  Contents: wave-1 + wave-2 subsystem-folder splits (proven identical); foe gambits target through Harbinger ch.20 (MFO requests ABI 10, pin route at >= 13; own target write retired when the pin is available); auto-retreat fix (main-thread StopCombat, no self-cancel, per-follower holds, main-thread foe probe, STAY 10 s unpaused or fully healed). Pairs with Harbinger v0.9.9.
 - **2026-09-24 v2.0.13 RELEASED (GitHub, tag `v2.0.13`, manifest `e6401d4`, stamp `dc0ae75`, CI 36085950743, DLL sha256 `ddf5526c…`). NOT on Nexus yet: marth tests first.**
   Contents: CommonLib now our MIT fork `mit-3.7` (F1: exact id match, startup self-check, 55 verified rows, fails closed on unknown builds), summons stay up (one cast per spell, respects the list's summon cap incl. perk bonus + skip-cap flag, never dismissed by MFO; Deck-confirmed), loot M1 (emptied-target move-on, Movement Blocked 3 s -> actor block reorders / static block gates until an open/close/activate/cell-attach event), LOTD shipping crates never looted (base 0x1772A7), CJK font in the menus, locked form lookup. Pairs with Harbinger v0.9.8 (ABI v12, tag `v0.9.8`, DLL `8dfb63da…`, esl `78a3e6a4…` unchanged). MEO v1.0.18 (Japanese gem pouch names) cut alongside.
   NEXT: wave-1 subsystem-folder split (round-2 review running), then batch L remainder (M2 leg state, leash, ammo swap-up, lockpicking, LOTD), batch L play session.
