@@ -33,6 +33,10 @@ Read it as history and this block as current.
   (`RETARGET ... same ref, its last leg had ended` when it is the same ref). A `Movement Blocked held ... Harbinger still
   reads leg state` warn is a Harbinger-side miss: report it.
 
+- **2026-09-26 branch `feat/mfo-engage-range` (off `main` `53d61c0`; NOT merged, NOT deployed; tier B).** MCM slider +
+  INI key `fEngageOnSightRange` (default 2000, 500-4000, step 100): an engage-on-sight candidate must also be within
+  min(leash, range) of the FOLLOWER (the reaction distance); the leash-from-player test is unchanged. The ENGAGE line
+  logs `range`.
 - **2026-09-25 branch `feat/mfo-ooc-engage` (off `main` `94ce807`; NOT merged, NOT deployed; tier A, awaiting its
   Opus 5.5 review). ClickUp 86e3errnu, batch L.** The hidden out-of-combat gambit "nearest visible enemy", MFO's
   adoption of Harbinger ch.21 `kIntent_CombatEntry` (ABI v14, Harbinger 0.9.9). MCM `bEngageOnSight` (default OFF)

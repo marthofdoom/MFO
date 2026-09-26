@@ -15,6 +15,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **A follower moved mid-trip carries on cleanly, with or without a teleport mod.** Fast travel, a door, a mod's teleport or any other sudden jump to your side ends the trip leg, and he picks the next item near him. The item is not marked as failed. Nothing changes unless he really jumps.
 - **New option: followers engage enemies on sight.** Off by default. Turn it on and a follower who can see an enemy near you starts the fight with the nearest one, even in the middle of a loot run. His own gambits take over from there.
 - **It needs Harbinger 0.9.9 or newer.** Without it the option does nothing.
+- **New slider: how far they react.** Engage on sight range is the farthest a follower will spot and charge an enemy, measured from him. Default 2000 units, about 29 m. The leash from you still caps it.
 - **It only works while Auto-retreat is on.** A follower who starts a fight can still fall back. He also holds off while his last retreat is cooling down or while he is too hurt for the enemies that would join the fight.
 - **He does not start fights while you sneak.** A second option lets him.
 - **He never starts a fight with guards or townsfolk.** Anyone whose attack would be a crime is left alone unless they are already fighting you or a follower. Your summons and thralls, and enemies who are tied up, bleeding out or scripted to ignore fights are left alone too.

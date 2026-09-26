@@ -66,6 +66,7 @@ namespace MFO::EngageOnSight {
             float      dSelf    = 0.0f;             // chosen: distance from him
             float      dPlayer  = 0.0f;             // chosen: distance from the player
             float      leash    = 0.0f;             // the leash the probe used
+            float      range    = 0.0f;             // the effective reaction distance: min(leash, fEngageOnSightRange)
             int        measured = 0;                // sightline measurements made
             int        occluded = 0;                // of those, OCCLUDED (or unknown)
             // Given-up targets this probe found GONE: unresolvable, dead, disabled,
@@ -285,7 +286,7 @@ namespace MFO::EngageOnSight {
         // MAIN THREAD ONLY (posted). The highActorHandles walk (resized by the main
         // thread, §0.30) and the sightline measurement (a physics query, §0.30) both
         // run here. Everything crosses back as FormIDs.
-        void RunProbe(RE::FormID a_id, std::uint32_t a_seq, std::uint32_t a_gen, float a_leash,
+        void RunProbe(RE::FormID a_id, std::uint32_t a_seq, std::uint32_t a_gen, float a_leash, float a_range,
                       float a_goneRadius, const std::vector<RE::FormID>& a_givenUp) {
             if (g_gen.load(std::memory_order_relaxed) != a_gen) return;
             auto* self = RE::TESForm::LookupByID<RE::Actor>(a_id);
@@ -302,6 +303,9 @@ namespace MFO::EngageOnSight {
             ProbeResult r;
             r.seq   = a_seq;
             r.leash = a_leash;
+            // REACTION DISTANCE (fEngageOnSightRange, marth 2026-09-26): how far from HIM he
+            // spots and charges, capped by the leash. The leash-from-PLAYER test below stays.
+            r.range = std::min(a_leash, a_range);
             r.civilStandDown = !pcFighting && IsCivilised(pc->GetCurrentLocation());
 
             std::vector<std::pair<float, RE::FormID>> found;
@@ -313,6 +317,7 @@ namespace MFO::EngageOnSight {
                 if (a->IsPlayerRef() || a->IsPlayerTeammate()) continue;
                 if (a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) continue;
                 if (a->GetPosition().GetDistance(pcPos) > a_leash) continue;   // the leash is from the PLAYER
+                if (a->GetPosition().GetDistance(selfPos) > r.range) continue;  // the reaction distance is from HIM
                 if (!IsEnemy(a, self, pc)) continue;
                 if (!pcFighting && IsCivilised(a->GetCurrentLocation())) { ++r.civilSkipped; continue; }
                 found.emplace_back(a->GetPosition().GetDistance(selfPos), a->GetFormID());
@@ -382,8 +387,9 @@ namespace MFO::EngageOnSight {
             givenUp.reserve(a_note.givenUp.size());
             for (const auto& [fid, s] : a_note.givenUp) givenUp.push_back(fid);
             // Capture by value: FormIDs and numbers only (the frame re-resolves).
-            MainThread::Post([a_id, seq, gen, a_leash, goneRadius, givenUp = std::move(givenUp)]() {
-                RunProbe(a_id, seq, gen, a_leash, goneRadius, givenUp);
+            const float range = Config::g_engageOnSightRange.load();   // read now (the MCM may change it)
+            MainThread::Post([a_id, seq, gen, a_leash, range, goneRadius, givenUp = std::move(givenUp)]() {
+                RunProbe(a_id, seq, gen, a_leash, range, goneRadius, givenUp);
             });
         }
 
@@ -520,10 +526,10 @@ namespace MFO::EngageOnSight {
                         Logistics::ReleaseTravelOnCombat(a_f);
                         Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
                         spdlog::info("[engage-on-sight] {} ({:08X}) ENGAGE {} ({:08X}): nearest visible enemy, "
-                                     "{:.0f}u from him, {:.0f}u from you (leash {:.0f}u), sightline=VISIBLE "
+                                     "{:.0f}u from him (range {:.0f}u), {:.0f}u from you (leash {:.0f}u), sightline=VISIBLE "
                                      "({} measured, {} not visible), {} candidate(s), {} would join; ch.21 entry "
                                      "h={}; ch.20 pin: {}; in-combat confidence estimate {:.2f}",
-                                     NameOf(a_f), a_id, NameOf(t), r.chosen, r.dSelf, r.dPlayer, r.leash,
+                                     NameOf(a_f), a_id, NameOf(t), r.chosen, r.dSelf, r.range, r.dPlayer, r.leash,
                                      r.measured, r.occluded, r.candidates.size(), foes, h, pin, conf);
                         engaged = true;
                         break;
