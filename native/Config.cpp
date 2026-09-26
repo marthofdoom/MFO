@@ -195,6 +195,8 @@ namespace MFO::Config {
             else if (a_key == "bMageApparelStrictSchool") setB(g_mageApparelStrictSchool);
             else if (a_key == "bMeoAwareGems")      setB(g_meoAwareGems);
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
+            else if (a_key == "bEngageOnSight")     setB(g_engageOnSight);          // default OFF
+            else if (a_key == "bEngageOnSightSneaking") setB(g_engageOnSightSneaking);   // default OFF
             else if (a_key == "bMagicLoadout")      setB(g_magicLoadout);
             else if (a_key == "bMageDaggersOnly")   setB(g_mageDaggersOnly);
             else if (a_key == "bBeastHeadFix")       setB(g_beastHeadFix);   // #62 default ON, debug kill-switch
@@ -339,6 +341,8 @@ namespace MFO::Config {
             g_mageApparelStrictSchool = false;  // #21 strict top-2-school apparel filter -- OFF (value-driven default)
             g_meoAwareGems       = false;   // effect-aware gem optimization -- OFF (conservation still always runs)
             g_autoRetreat        = true;
+            g_engageOnSight      = false;   // hidden OOC gambit "nearest visible enemy" -- OFF by default
+            g_engageOnSightSneaking = false;   // ...and not while the player sneaks, unless asked
             g_magicLoadout       = true;
             g_mageDaggersOnly    = true;
             g_rapportToasts      = true;
@@ -398,6 +402,7 @@ namespace MFO::Config {
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
             { "bLootSpecialItems", "1" },
             { "bEconomy", "1" },               { "bAutoRetreat", "1" },
+            { "bEngageOnSight", "0" },         { "bEngageOnSightSneaking", "0" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
             { "bHmsRedistribute", "1" },       { "fHmsSkewMax", "20.000000" },
             { "bMageWearRobes", "1" },         { "bMageApparelStrictSchool", "0" },

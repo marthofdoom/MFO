@@ -57,6 +57,16 @@ namespace MFO::Sightline {
     // frame later -- callers read Check(), never a return value.
     void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets);
 
+    // MAIN THREAD ONLY. Measure viewer -> target NOW -- the same two-stage Measure
+    // that Want() posts (engine HasLineOfSight, then MFO's own ray on a CLEAR) --
+    // write the cache, and return the verdict (Check() right after). For a caller
+    // that is ALREADY running on the main thread inside a MainThread::Post (the
+    // engage-on-sight probe, EngageOnSight.cpp), where a Want() would only queue
+    // the measurement another frame out. Not throttled: the caller bounds its own
+    // cost. Returns Unknown on VR (HasLineOfSight has no VR id; the pump never
+    // runs there anyway) and when either actor is unresolvable, dead or unloaded.
+    Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target);
+
     // LINE OF FIRE (concentration streams). True when the PLAYER or any
     // active teammate -- other than the caster and the intended target --
     // stands within ~a body's width of the caster->target segment. Pure

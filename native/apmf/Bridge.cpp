@@ -892,6 +892,9 @@ namespace MFO::APMFBridge {
         // ch.20 target pins: notice a pin Harbinger ended (IsClaimLive false) so the
         // next gambit pass re-picks instead of believing a dead pin (apmf/Excursion.cpp).
         SweepTargetPinsLocked(api, now);
+        // ch.21 combat entries: notice an entry Harbinger ended, so the engage-on-sight
+        // gambit records its target as given up (no re-request loop) and may pick again.
+        SweepCombatEntriesLocked(api);
         // Computed once per sweep, not per-facet-per-follower: same inputs
         // (Config::g_suppressWindow, Followers::g_active.size()) for every claim
         // checked below, and Tick() already holds g_mx for the whole loop.
@@ -1078,6 +1081,7 @@ namespace MFO::APMFBridge {
         }
         g_owned.clear();
         ClearTargetPinsLocked();   // ch.20 pins: APMF drops them at its own kPreLoadGame; stale Release is a no-op
+        ClearCombatEntriesLocked();   // ch.21 entries: same (never saved on APMF's side either)
         g_equipAuthRefused.clear();
         g_selectOverflow.clear();
         g_selectRefused.clear();

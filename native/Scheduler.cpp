@@ -19,6 +19,7 @@
 #include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
+#include "EngageOnSight.h" // the hidden OOC gambit "nearest visible enemy" (party-OOC branch)
 #include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
 #include <unordered_set>   // T#78: MFO-OFF one-time-release latch (g_mfoDisabledSwept)
 
@@ -470,6 +471,7 @@ namespace MFO::Scheduler {
 
     void ClearTransientState() {
         g_retreatNotes.clear();
+        EngageOnSight::ClearTransientState();   // its per-follower notes + the probe mirror
         g_serviceClock   = 0.0;
         g_serviceClockAt = {};
         g_mfoDisabledSwept.clear();   // T#78: revert/load re-arms the OFF-edge release
@@ -774,6 +776,22 @@ namespace MFO::Scheduler {
                 auto* pc = RE::PlayerCharacter::GetSingleton();
                 const float dPlayer = pc ? f->GetPosition().GetDistance(pc->GetPosition()) : 0.0f;
                 if (ServiceRetreat(f, id, dPlayer, pc != nullptr)) {
+                    g_lastTickMs = std::chrono::duration<double, std::milli>(
+                                       std::chrono::steady_clock::now() - t0).count();
+                    return;
+                }
+            }
+
+            // ENGAGE ON SIGHT (ClickUp 86e3errnu): the hidden OOC gambit "nearest visible
+            // enemy" (EngageOnSight.h). After the retreat (a retreating follower never
+            // starts a fight) and BEFORE logistics: on a lap it engages (or while its
+            // Harbinger ch.21 entry is pending) it preempts logistics the way player
+            // combat does -- his loot trip was ended inside Service. The retreat cooldown
+            // and the retreat floor are passed from here so they have ONE definition.
+            {
+                const auto& rn = g_retreatNotes[id];
+                const bool cooling = rn.rearmLaps > 0 || now < rn.rearmAt;
+                if (EngageOnSight::Service(f, id, cooling, kRetreatConfidence)) {
                     g_lastTickMs = std::chrono::duration<double, std::milli>(
                                        std::chrono::steady_clock::now() - t0).count();
                     return;

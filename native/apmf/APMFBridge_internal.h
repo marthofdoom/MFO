@@ -373,6 +373,12 @@ namespace MFO::APMFBridge {
         // ClearTargetPinsLocked: ClearTransientState's teardown. Both need g_mx HELD.
         void SweepTargetPinsLocked(const APMF_API::APMF_API_v2* api, std::chrono::steady_clock::time_point now);
         void ClearTargetPinsLocked();
+        // ch.21 COMBAT ENTRY table (apmf/CombatEntry.cpp, file-local, guarded by g_mx).
+        // SweepCombatEntriesLocked: Tick()'s liveness pass (marks an entry Harbinger ended;
+        // releases every entry when bEngageOnSight is flipped off).
+        // ClearCombatEntriesLocked: ClearTransientState's teardown. Both need g_mx HELD.
+        void SweepCombatEntriesLocked(const APMF_API::APMF_API_v2* api);
+        void ClearCombatEntriesLocked();
 
         inline void EraseIfEmpty(std::unordered_map<RE::FormID, Owned>::iterator it) {
             const auto& o = it->second;

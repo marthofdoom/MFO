@@ -57,6 +57,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/Auto.cpp
     cast/Hands.cpp
     Scheduler.cpp
+    EngageOnSight.cpp
     logistics/Upkeep.cpp
     logistics/Sinks.cpp
     logistics/Service.cpp
@@ -85,6 +86,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/CastClaims.cpp
     apmf/Equip.cpp
     apmf/Excursion.cpp
+    apmf/CombatEntry.cpp
     apmf/SpellAllowList.cpp
     imgui_impl_win32.cpp
 )

@@ -787,6 +787,21 @@ namespace MFO::Config {
     // floor (Scheduler.cpp kRetreatCooldown* / kRetreatStayMax). bAutoRetreat.
     inline std::atomic<bool>  g_autoRetreat{ true };
 
+    // ENGAGE ON SIGHT (ClickUp 86e3errnu, 2026-09-25): the hidden, built-in
+    // out-of-combat gambit "nearest visible enemy". Not a Gambit record, not in
+    // the board list, not editable. While the party is out of combat (logistics
+    // included) a follower who SEES a foe (Sightline VISIBLE) inside the leash
+    // (Confidence::LeashRadius, measured from the player) enters combat against
+    // the nearest one through Harbinger ch.21 (kIntent_CombatEntry, ABI v14).
+    // No MFO direct road: Harbinger absent / older than v14 = inert. Runs only
+    // while g_autoRetreat is ON (a follower who starts a fight can break it
+    // off). EngageOnSight.cpp. bEngageOnSight (default OFF).
+    inline std::atomic<bool>  g_engageOnSight{ false };
+    // Whether the gambit also fires while the PLAYER is sneaking (marth's open
+    // question -- default NOT: a sneaking player is choosing not to fight yet).
+    // bEngageOnSightSneaking (default OFF).
+    inline std::atomic<bool>  g_engageOnSightSneaking{ false };
+
     // MAGIC LOADOUT (v1.0.29). A magic-user follower -- anyone with at least
     // one ENABLED cast gambit; role is GAMBIT-DRIVEN here, never skill-guessed
     // -- loots the gear a mage actually wants: enchanted apparel that boosts

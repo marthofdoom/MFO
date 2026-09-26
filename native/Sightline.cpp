@@ -206,6 +206,18 @@ namespace MFO::Sightline {
         });
     }
 
+    Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target) {
+        if (!a_viewer || !a_target || REL::Module::IsVR()) return Verdict::Unknown;
+        auto* vf = RE::TESForm::LookupByID<RE::Actor>(a_viewer);
+        auto* tf = RE::TESForm::LookupByID<RE::Actor>(a_target);
+        // Measure() skips these without writing, and an older cache entry for the pair
+        // must not answer for a measurement that did not happen.
+        if (!vf || vf->IsDead() || !vf->Is3DLoaded()) return Verdict::Unknown;
+        if (!tf || tf->IsDead() || !tf->Is3DLoaded()) return Verdict::Unknown;
+        Measure(a_viewer, { a_target });
+        return Check(a_viewer, a_target);
+    }
+
     void ClearTransientState() {
         std::lock_guard lk(g_mx);
         g_cache.clear();
