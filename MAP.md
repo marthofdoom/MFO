@@ -1444,8 +1444,8 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   leaves him defenceless at the player's side (the SEV-2 of the 7580bea review); timing STAY
   on the wall clock lets a pause spend it; judging STAY by an out-of-combat `Of()` or by a
   frozen `fightConf` benches a foe-count retreat; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
-  StopCombat lands (same self-cancel). The Confidence formula is untouched (its v2 is a
-  separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B108 and MFO-B110.
+  StopCombat lands (same self-cancel). The Confidence formula is v2 since
+  feat/mfo-confidence-v2 (weighted foe load + HP trend; section 3, CombatSense.h / Confidence.h). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B108 and MFO-B110.
   **ch.22 RE-ENTRY DENY (feat/mfo-reentry-leash 2026-09-25, Harbinger >= v15; `apmf/ReentryDeny.cpp`).**
   `RetreatFill` claims the deny instead of posting its StopCombat (`Packages.cpp:2194/:2253`, an
   in-place edit, the file did not grow); the bridge sweep posts the SINGLE StopCombat on the first
@@ -1927,15 +1927,48 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   **two copies; a math fix must hit both.**
 
 ### CombatSense.h / Confidence.h / Temperament.h (header-only)
-- `Confidence::Vitality` / `FoeMultiplier` / `OfFacing` (`Confidence.h:26/:35/:69`, 2026-09-25): `Of()`
-  now reads its vitality term and fight multiplier through the first two (same arithmetic);
-  `OfFacing(f, n)` = the `Of()` he would read fighting n foes, with no engine combat read -- the
-  engage-on-sight gate. A change to either helper moves `Of()` and the estimate together.
-- `CombatSense::FoeCount(Actor*)` (`:15`) — canonical live-foe count from the
+- **CONFIDENCE v2 (feat/mfo-confidence-v2, 2026-09-26, ClickUp 86e3erv94).** `Of()` (`Confidence.h:162`)
+  = `Vitality` (`:50`) x `TrendFactor` (`:143/:147`) x, in combat, `FoeMultiplier(load)` (`:63`,
+  `0.90 / (1 + 0.25 L)` clamped 0.15..0.90; an empty group in combat counts L = 1). The load is
+  `CombatSense::FoeLoad` (`CombatSense.h:65`): the SAME foes `FoeCount` counts (same group, lock,
+  filters), each weighted by `FoeWeight` (`:45`) = sqrt(level ratio x foe current HP / his max HP),
+  clamped 0.5..2.0 (mudcrab 0.5, even foe 1.0, dragon 2.0). The trend is a per-follower ring of
+  (service clock, HealthPct) samples (`NoteHealth` `:107`, pushed once per own unpaused service at
+  `Scheduler.cpp:698`, decimated to >= 0.25 s, 32 entries; `HpLossRate` `:122` = net loss over
+  max(5 s, 2.5 x the newest gap), needs >= 1 s of span; a > 10 s gap or a backwards clock restarts
+  it; `ClearTrend` `:153` on revert at `Scheduler.cpp:524`). Trend = time-to-death / 20 s in
+  [0.30, 1]. Map + ring are behind ONE leaf mutex (`detail::g_trendLock`): never call anything under
+  it, never take it with a combat-group lock held (`Of` reads the trend BEFORE `FoeLoad`).
+  `OfFacing(f, n)` (`:178`) = `Vitality x Trend x FoeMultiplier(n)` with each probe foe counted EVEN
+  (1.0): the engage-on-sight gate. TARGET BEHAVIOURS (offline harness, retreat floor 0.25, leash
+  512..4000; before -> after): 5 mudcrabs at full HP 0.22 RETREAT -> 0.55 (leash 2444); 5 even foes
+  at full HP 0.22 RETREAT -> 0.40; 10 even foes at full HP 0.15 -> 0.26 (count alone no longer
+  retreats a full-health follower, a pack that is also HURTING him does); an even duel at full HP
+  0.77 -> 0.72; two even foes 0.63 -> 0.60; a dragon duel at full HP 0.77 -> 0.60; a dragon duel
+  lost at 4%/s now retreats at ~59% HP, at 2%/s at ~38% (v1: ~21% whatever the rate); an even
+  duel lost at 3%/s at ~44%, holding (0%/s) at ~24% (v1 ~21%); out of combat and not losing HP the
+  loot leash is exactly v1's. **What breaks:** `Of()` feeds the loot leash (`LeashRadius` via
+  `TeleportCompat::View`), the PickFoe chase cap and AUTO fan-out (`ChaseRadius`), the retreat
+  fill gate and its `fightConf` (`Scheduler.cpp:1050`, `:373/:440`), the ch.23 pursuit leash
+  radius, and engage-on-sight (`OfFacing` + `LeashRadius`), so ANY change to the multiplier, the
+  weight clamp or the trend constants moves all of them together. Calling `Of()` with a
+  combat-group read lock held nests the lock (the Evaluator deadlock note at `Evaluator.cpp:222`).
+  Moving `NoteHealth` below an early return starves the ring for that path (the trend then reads
+  1); a flat trend window shorter than the service period (N x 133 ms) reads no trend at large
+  rosters (principle 9). The trend is NOT save-scoped. The `[sense]` line (`Scheduler.cpp:985`,
+  3 s / follower) prints `own= foes= load= hpLoss= trend=` for tuning; `own=0` with `foes=0` on the
+  combat table is a follower who has no combat group while the PARTY fights (not a stale tally:
+  his `Of()` is then the out-of-combat read, vitality x trend).
+- `Confidence::Vitality` / `FoeMultiplier` / `OfFacing` (2026-09-25; v2 above): `Of()` reads its
+  vitality term and fight multiplier through the first two; `OfFacing(f, n)` = the `Of()` he would
+  read fighting n even foes, with no engine combat read -- the engage-on-sight gate. A change to
+  either helper moves `Of()` and the estimate together.
+- `CombatSense::FoeCount(Actor*)` (`:16`) — canonical live-foe count from the
   follower's own combat group, under `BSReadLockGuard(combatGroup->lock)`. Consumed
-  by `Confidence.h:48`, `Evaluator.cpp:81`, `Scheduler.cpp:276`. A semantic change
-  shifts confidence + auto-retreat + the foe-count gambit at once (no recompile
-  firewall). **Note:** `Confidence.h` is the combat/loot **leash** primitive
+  by `Evaluator.cpp:81`, `Scheduler.cpp:276` (the party gate, the equip-range gate, the retreat
+  log's foes=). `Confidence` reads `FoeLoad` (same filters) since v2. A semantic change to the
+  filters must hit BOTH (`FoeCount` and `FoeLoad`) or confidence and the foe-count gambit
+  diverge. **Note:** `Confidence.h` is the combat/loot **leash** primitive
   (`Of`/`LeashRadius`/`ChaseRadius`) — misfiled under "progression" by directory
   adjacency; zero relationship to perks/PRGN.
 - `Confidence::LeashRadius` CONSUMERS (2026-09-25): the loot leash (logistics) and, IN COMBAT, the
