@@ -367,6 +367,13 @@ namespace MFO::APMFBridge {
         }
 
         // Drop the map entry once EVERY claim is gone. Caller holds g_mx.
+        // ch.20 TARGET PIN table (apmf/Excursion.cpp, file-local, guarded by g_mx).
+        // SweepTargetPinsLocked: Tick()'s once-per-pump liveness pass (marks a pin
+        // Harbinger ended; releases every pin when bCommandTarget is flipped off).
+        // ClearTargetPinsLocked: ClearTransientState's teardown. Both need g_mx HELD.
+        void SweepTargetPinsLocked(const APMF_API::APMF_API_v2* api, std::chrono::steady_clock::time_point now);
+        void ClearTargetPinsLocked();
+
         inline void EraseIfEmpty(std::unordered_map<RE::FormID, Owned>::iterator it) {
             const auto& o = it->second;
             if (o.targetHandle == APMF_API::kInvalidHandle &&

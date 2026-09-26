@@ -33,12 +33,24 @@ namespace MFO::Targeting {
     void InstallHook();
 
     // Latch a follower onto a target. MAIN THREAD. Held until cleared, and
-    // re-asserted by the hook every combat update.
+    // re-asserted by the hook every combat update. (Pin route: PINNED through
+    // Harbinger ch.20 instead -- see PinRoute() below.)
     // Returns TRUE only when the latch actually CHANGED. A gambit that keeps
     // winning re-commands the same foe every tick, and the hook already
     // re-asserts continuously -- so an unchanged command is a no-op and should
     // not be reported as an action.
     bool Command(RE::FormID a_follower, RE::ActorHandle a_target);
+
+    // The same call, with the outcome spelled out, for callers that must report it
+    // truthfully (the Attack / power-attack verbs). Command() == (CommandEx == Changed).
+    enum class CommandOutcome {
+        Changed,       // latched / pinned a new choice
+        Unchanged,     // already latched / pinned (or pending) on this foe
+        Suppressed,    // pin route: Harbinger ended the pin on this foe and it is not
+                       // re-pinned yet (APMFBridge::PinResult::Suppressed) -- NOTHING is held
+        Unavailable,   // pin route: bCommandTarget off, or no foe / invalid params
+    };
+    CommandOutcome CommandEx(RE::FormID a_follower, RE::ActorHandle a_target);
     void Clear(RE::FormID a_follower);
     void ClearAll();
 
@@ -49,6 +61,18 @@ namespace MFO::Targeting {
     RE::ActorHandle Current(RE::FormID a_follower);
 
     bool IsHooked();
+
+    // THE PIN ROUTE (Harbinger ch.20 kIntent_TargetPin, ABI v13). With Harbinger present
+    // at ABI >= 13, Command/Clear/ClearAll/Current route to APMFBridge's pin table instead
+    // of the latch, and the hook writes NO target for any actor (it still drives
+    // CombatStyle). The latch is the degrade for Harbinger absent / older than v13 / the
+    // ch.20 seat not installed (first pin refused synchronously) -- never for a pin that
+    // Harbinger ENDED, which is not re-pinned onto the same foe until the choice moves.
+    bool PinRoute();
+
+    // Can MFO command a target right now? Pin route: bCommandTarget. Latch route: the
+    // hook is installed (the old IsHooked() gate the Attack / power-attack verbs used).
+    bool Commandable();
 
     // Probe instrumentation (§0.14's decisive measurement).
     struct Stats {

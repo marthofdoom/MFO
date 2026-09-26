@@ -7,6 +7,9 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **With a Harbinger that has the target pin (ABI v13), Harbinger holds the foe your gambit picks.** An Attack, power attack or offensive spell gambit now tells Harbinger which foe to fight, and Harbinger answers the game's own target choice with it. MFO no longer writes the target itself when that Harbinger is installed. Without it, or with an older Harbinger, MFO steers the target the old way.
+- **A lost or dead foe lets go by itself.** When the foe dies, is lost, unloads, or the follower dies, Harbinger ends the pin. The follower's gambits then pick again in their normal order. A foe that was only lost for a moment is pinned again once the gambit can see it and still wants it.
+- **Gambits no longer pick a foe that is too far away to be loaded.** Harbinger cannot hold a foe like that, and the follower could not reach it anyway.
 - **A losing follower runs back to you.** Auto-retreat used to cancel itself. Pulling the follower out of the fight often ended the whole fight on paper, and MFO then called the retreat off half a second later. Now a retreat ends when he reaches you, when no enemy near him is still fighting, or after 30 seconds.
 - **He fights at your side, not back out there.** A follower who reaches you while the fight is still going badly for him stays by you for a few seconds instead of walking straight back in. If the enemies come to him he fights them beside you. He is never held out of a fight at your side.
 - **More than one follower can retreat at once.** With Harbinger installed each follower retreats on his own. Without it only one can retreat at a time, as before.

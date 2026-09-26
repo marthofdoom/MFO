@@ -375,6 +375,47 @@ namespace MFO::APMFBridge {
     // combat ended). No-op if the follower holds no combat-target claim.
     void RefreshCombatTarget(RE::FormID a_follower);
 
+    // ── ch.20 TARGET PIN (ABI v13, kIntent_TargetPin): MFO's foe choice, HELD ──────
+    // Harbinger answers the engine's own combat-target selector (vtable slot 6) with the
+    // pinned foe, so the engine's pick never reaches the follower. This is the EXECUTING
+    // twin of ClaimCombatTarget above (ch.6 stays arbitration-only and unchanged).
+    // Only Targeting.cpp calls these: Targeting::Command / Clear / ClearAll / Current
+    // route here when Targeting's pin route is on (see Targeting.h), so every foe-target
+    // caller is converted at that one choke point. Worker-safe (the tick's AddTask
+    // worker, the same thread every other claim in this file is filed from); takes g_mx.
+    //
+    // THE PIN ENDS ON HARBINGER'S SIDE (target lost / dead / disabled / unloaded /
+    // unresolvable, or the follower dead): IsClaimLive turns false. (An OUTRANKED claim
+    // is NOT ended -- Harbinger's Poll ends only the winner -- so it stays live.)
+    // Tick()'s sweep marks it ENDED and Releases the handle (a no-op on a dead claim;
+    // FIFO-cancels a still-pending one, so no orphan can survive a false judgement).
+    // THE NO-LOOP RULE: when the gambit re-chooses an ended pin's foe, MFO re-pins it only
+    // if that pin had gone LIVE -- MFO's foe selector skips dead / disabled / lost /
+    // unloaded foes, so being re-chosen means MFO sees it trackable again. A pin that
+    // never went live returns Suppressed until the gambit chooses a DIFFERENT foe (a fresh
+    // choice) or the pin is released (INTEGRATION.md "How the pin ends").
+    enum class PinResult {
+        Pinned,       // a NEW pin was filed (first pin, a changed target, or a re-pin)
+        Unchanged,    // already pinned (or pending) on this target: not an action
+        Suppressed,   // an ended pin that never went live, on this same target: not re-pinned
+        Invalid,      // no follower / no target / self-target: nothing filed
+        SeatAbsent,   // APMF absent, ABI < 13, or a synchronous refusal (= ch.20 seat not
+                      // installed -- the only synchronous refusal MFO's valid params can hit)
+    };
+    // True when APMF is present at ABI >= 13 -- two of ch.20's three availability gates.
+    // The third (the seat is installed) is only observable as a synchronous refusal of
+    // the first pin (APMF ControlMap::EnqueueRequest), reported as PinResult::SeatAbsent.
+    bool TargetPinOffered();
+    PinResult PinTarget(RE::FormID a_follower, RE::FormID a_target, RE::ActorHandle a_targetHandle);
+    // Release this follower's pin (live or ended) and forget it. No-op when none.
+    void ReleaseTargetPin(RE::FormID a_follower);
+    void ReleaseAllTargetPins();
+    // The pinned foe while the pin stands (live, or filed and not yet drained); an
+    // EMPTY handle when there is none or Harbinger ended it.
+    RE::ActorHandle PinnedTarget(RE::FormID a_follower);
+    // Pins currently standing (not ended) -- the Diagnostics targeting line.
+    std::size_t TargetPinCount();
+
     // Worker-safe. Once-per-pump sweep: release each claim not refreshed within its
     // expiry window (offense-cast backstop; combat-target = combat-end detector).
     // offense-cast/combat-target/weapon-order-equipment/heal-cast all use the
