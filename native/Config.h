@@ -810,6 +810,11 @@ namespace MFO::Config {
     // question -- default NOT: a sneaking player is choosing not to fight yet).
     // bEngageOnSightSneaking (default OFF).
     inline std::atomic<bool>  g_engageOnSightSneaking{ false };
+    // The REACTION distance (marth 2026-09-26): an engage-on-sight candidate must be
+    // within min(leash-from-player, this) of the FOLLOWER -- how far he spots and
+    // charges. The leash-from-player test on the enemy stays as it is.
+    // fEngageOnSightRange (default 2000 units, MCM 500-4000 step 100).
+    inline std::atomic<float> g_engageOnSightRange{ 2000.0f };
 
     // MAGIC LOADOUT (v1.0.29). A magic-user follower -- anyone with at least
     // one ENABLED cast gambit; role is GAMBIT-DRIVEN here, never skill-guessed

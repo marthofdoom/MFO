@@ -1446,6 +1446,38 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   frozen `fightConf` benches a foe-count retreat; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
   StopCombat lands (same self-cancel). The Confidence formula is untouched (its v2 is a
   separate round). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B108 and MFO-B110.
+  **ch.22 RE-ENTRY DENY (feat/mfo-reentry-leash 2026-09-25, Harbinger >= v15; `apmf/ReentryDeny.cpp`).**
+  `RetreatFill` claims the deny instead of posting its StopCombat (`Packages.cpp:2194/:2253`, an
+  in-place edit, the file did not grow); the bridge sweep posts the SINGLE StopCombat on the first
+  LIVE read. TRAVEL re-entry (`:451`) reads `RetreatReentryDenyStateOf`: PENDING = nothing (the
+  sweep posts it), LIVE = a WARN and NO StopCombat (a ch.21 entry passes by contract, anything else
+  is a Harbinger DENY MISSED), NONE / ENDED = the shipped per-re-entry StopCombat, DEGRADED = the
+  same StopCombat NAMED as a degrade (below). The deny is released at TRAVEL -> STAY (`:425-435`;
+  a deny still PENDING there -- a fast arrival -- gets the retreat's own StopCombat posted once as
+  it is released, review of 497b6cd SEV-4 #1) and in `finish` (`:390`); Harbinger absent / < v15 /
+  seat refused = the shipped behaviour exactly (the capability-absent road).
+  **DEGRADE, not capability-absent (review of 497b6cd SEV-4 #2; marth's policy call PENDING):** a
+  deny Harbinger serves but NEVER applies (not live after 15 unpaused sweeps) is a Harbinger apply
+  failure. It is WARNed ("ch.22 deny never went live (Harbinger apply failure): degraded to
+  per-re-entry StopCombat for this retreat"), its StopCombat is posted then, and that retreat keeps
+  the per-re-entry StopCombat, logged as DEGRADED. If marth rules otherwise, this is the one branch
+  to change (`ReentryDeny.cpp` `Act::StopNeverLive` + the Scheduler's `Degraded` case).
+  **What breaks:** keeping the deny in STAY (benches him: the 7580bea SEV-2); releasing a PENDING
+  deny at arrival without that one StopCombat (a fast arrival is never disengaged); re-issuing
+  StopCombat under a LIVE deny (masks a DENY MISSED); a window shorter than `kRetreatTimeout` (keep
+  `kRetreatDenyWindowSecs` in step, `ReentryDeny.cpp:58`).
+- **IN-COMBAT LEASH (Harbinger ch.23, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5ve /
+  86e3erv94; `apmf/PursuitLeash.cpp`).** Combat table, right after the auto-retreat block
+  (`:1058-1065`): a non-retreating follower gets `ServicePursuitLeash(id,
+  Confidence::LeashRadius(f))` (anchor the player); a retreating one `ReleasePursuitLeash`. Also
+  released in the retreat exit of the combat table (`:1015`) and the party-OOC teardown (`:755`).
+  RADIUS = `LeashRadius`, the confidence tenet's distance FROM THE PLAYER (fLeashMin 512 ..
+  fLeashMax 4000 by `Of()`), because ch.23's radius is measured from the anchor; `ChaseRadius` is
+  measured from the follower (PickFoe's cap) and stays where it is. Stable: Repoint only on a
+  band-sized change (`PursuitLeash.cpp:51-52`). Harbinger absent / < v16 = no in-combat leash, as
+  before. **What breaks:** calling it before `ServiceRetreat` or from the party-OOC branch (a leash
+  outside the fight / over a retreat); dropping the release in the party-OOC teardown (the leash
+  outlives the fight until dismissal or load).
 - **ENGAGE-ON-SIGHT HOOK (ClickUp 86e3errnu, feat/mfo-ooc-engage 2026-09-25).** In the party-OOC
   branch, AFTER the `ServiceRetreat` block and BEFORE `Logistics::ServiceFollower` (`:785-799`):
   `EngageOnSight::Service(f, id, cooling, kRetreatConfidence)` (`:794`), `cooling` = this
@@ -1508,7 +1540,9 @@ rule in the header. Called only from the Scheduler hook above.
   the worker; the "gone" radius = the FIXED `g_leashMax`.
 - `RunProbe` (`:288`, MAIN THREAD via `MainThread::Post`; VR: Post is a no-op, never lands):
   walks `highActorHandles` (NiPointer held) for candidates = not him / the player / a teammate,
-  alive, enabled, 3D-loaded, within the leash OF THE PLAYER, and `IsEnemy` (`:206`): not commanded
+  alive, enabled, 3D-loaded, within the leash OF THE PLAYER, within the REACTION distance OF HIM
+  (`min(leash, fEngageOnSightRange)`, `ProbeResult::range`, default 2000u, MCM 500-4000; feat/mfo-engage-range
+  2026-09-26; logged in the ENGAGE line), and `IsEnemy` (`:206`): not commanded
   by the player or a teammate, nor by a crime-faction commander unless it or the commander is
   fighting the party (`FightingParty` `:180`); not restrained / bleeding out / on an IgnoreCombat package;
   `IsHostileToActor(player) || IsHostileToActor(him)` (hostile to him alone counts: CONFIRMED by
@@ -1904,6 +1938,12 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   firewall). **Note:** `Confidence.h` is the combat/loot **leash** primitive
   (`Of`/`LeashRadius`/`ChaseRadius`) — misfiled under "progression" by directory
   adjacency; zero relationship to perks/PRGN.
+- `Confidence::LeashRadius` CONSUMERS (2026-09-25): the loot leash (logistics) and, IN COMBAT, the
+  Harbinger ch.23 pursuit leash radius around the player (`Scheduler.cpp:1065` ->
+  `apmf/PursuitLeash.cpp`, Repointed on a band-sized change). `ChaseRadius` stays the follower-
+  centred PickFoe cap (`Evaluator.cpp`) + AUTO fan-out; it is NOT the ch.23 radius. A change to
+  `LeashRadius` or the fLeashMin/fLeashMax dials now also moves how far a follower may pursue in
+  combat when Harbinger >= v16 is installed.
 - `Temperament(FormID)` (`:22`) — deterministic per-follower scalar (Knuth hash).
   Consumed by Actuation/Scheduler for cadence deviation (`cast/CastOn.cpp:1080`,
   `Scheduler.cpp:394,685`). No state/save impact; changing the hash silently
@@ -1944,10 +1984,11 @@ module. Module layout:
     MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`).
   - `logistics/Sinks.cpp` (299) = `BeastHeadSink:52`, `ContainerSink:129`, `GateSink:208`
     (anonymous namespace), `RegisterSinks:250`, `SweepBeastHeadsOnLoad:274`.
-  - `logistics/LootTake.cpp` (840), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (934),
-    `logistics/LootEquipment.cpp` (526), `logistics/Economy.cpp` (1169),
-    `logistics/EquipAuthority.cpp` (761), `logistics/Cast.cpp` (268): see the bullets below.
-  - `logistics/Logistics_internal.h` (849) = shared state/types/declarations;
+  - `logistics/LootTake.cpp` (786), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (934),
+    `logistics/LootEquipment.cpp` (571), `logistics/Economy.cpp` (1044),
+    `logistics/EquipAuthority.cpp` (816), `logistics/Cast.cpp` (268),
+    `logistics/SwapUp.cpp` (612, THE SWAP-UP RULE, 2026-09-25): see the bullets below.
+  - `logistics/Logistics_internal.h` (938) = shared state/types/declarations;
     `logistics/LootTravel_internal.h` (562) = the loot TRAVEL substrate (`TravelIntent`,
     `g_travelSlots:91`, stall/sticky/gate/actor-block state, `SortLootCandidates`, scan
     timing), included by `Logistics_internal.h` at the block's old position (NOT
@@ -1977,10 +2018,79 @@ module. Module layout:
   `TopTwoSchoolMask:108`, `LearnCarriedTomes:137`, school name/keyword helpers.
 - #21 economy (was `Logistics_Economy.cpp`, wave-2 split into two): `logistics/Economy.cpp`
   (mage-apparel scoring, `VendorTrades:193`, `UnlockCollegeTomes:232`,
-  `BuildBuyThresholds:298`, `EconomyProbe:435`, public buy helpers `MageApparelBuyKey:1129`
+  `BuildBuyThresholds:298`, `EconomyProbe:451`, public buy helpers `MageApparelBuyKey:1003`
   et al) and `logistics/EquipAuthority.cpp` (`ComputeOwnedGearPick:44`,
   `EquipBestOwnedGear:132`, `EquipAuthorityLive:341`, `LiveBoundWeapons:370`,
   `RefreshEquipDeclaration:391`).
+- **THE SWAP-UP RULE (`logistics/SwapUp.cpp`, 2026-09-25, `feat/mfo-swapup-ammo`, ClickUp
+  86e3ebfu3; marth: "swap up needs to work in looting and shopping ... lower arrows are worthless
+  when better ones are available, lowest removed first, or slated for sale when obsolete").** ONE
+  rule, loot + shop, declarations in `logistics/Logistics_internal.h` (the SWAP-UP block at the
+  end). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B114** (the ammo peek ignores carry weight),
+  **MFO-B115** (`ComputeKeepSet` inside the loot peek), **MFO-B116** (`VendorTrades(null)` on a
+  `TESAmmo` keyword form) -- read them before editing. Two halves:
+  - **Keep set (weapons + armor):** `ComputeKeepSet:69` = the old EconomyProbe keep block MOVED
+    VERBATIM (best weapon per class bucket incl. the dual-wield runner-up, worn + best
+    `ArmorScore` per logical slot, `bestBySlot` for the force-sell) -- the armor half's
+    `bEconomyBuyGear` gate read once into `KeepSet::armorJudged`, plus (round 1) the loot judge's
+    MAGE BACKUP sidearm (`BuildEquipmentContext(actor, &state)`'s `wantBackup` / `daggersOnly`,
+    best by attack damage) so a looted backup dagger is never sold and re-looted.
+    `BuildEquipmentContext` gained a state-taking overload for this (`LootEquipment.cpp`; the
+    one-arg form forwards `g_svc`). Consumers: EconomyProbe's sell list and the LOOT drop:
+    `PlanRoomForSwapUp:509` plans, for an upgrade `LootEquipment` picked that does not fit the
+    carry weight, the SUPERSEDED gear to drop -- only under `bEconomy` (the drop is the loot-time
+    twin of the sale), outside the keep set, WEAP or rated ARMO only, unworn, NOT ENCHANTED, value
+    <= the upgrade's `GetGoldValue`, not `IsStockGear` / quest / `Catalog::IsExcluded` /
+    `IsPlayerPick`, no MEO unique id while MEO is present -- least valuable first, exact copies,
+    all or nothing; `CommitSwapUpDrops:591` runs only after `AcquireEquip` put the upgrade in his
+    inventory (`HeldCount:584` before/after; a miss logs `[swapup] ... did not arrive ... NOT
+    made`).
+  - **Ammo:** ranked by `TESAmmo` DAMAGE, instance VALUE breaking a tie (`AmmoRankAbove`), within
+    one kind (`AmmoIsBolt`), judged ONLY for the kind the follower USES (`UsesAmmoKind:308`: his
+    ranged role, a caster only with an equip-ranged gambit -- a gambit for the kind is NOT use,
+    the seeded "arrows below 10" sits on everyone). Non-playable (bound) ammo is never ranked or
+    moved; SPECIAL rounds (`AmmoIsSpecial:300`: projectile explosion, or an enchanted instance)
+    never count toward the target and are never obsolete. `AmmoKeepTarget:322` = max(
+    `kAmmoKeepFloor` 50, the `cond.self_out_of_arrows/bolts` N), 0 = not judged.
+    `AmmoCutoff:358`: best-first running count; the stack reaching the target is the CUTOFF, every
+    unpinned stack ranked strictly below it is obsolete (`AmmoObsolete`); pinned = worn / special
+    / stock / player pick / quest / excluded. Consumers: `LootAmmo` (`LootTake.cpp:73`, RESTOCK: >=
+    worst held; target 0 when he does not use the kind = plain restock, no shed) and
+    `LootEquipment` (UPGRADE, strictly above `AmmoUpgradeBar:385`, lowest priority after gear) via
+    `SwapUpAmmoFrom:410` -- plans over the COMBINED pool (held + body), never takes a body stack
+    the rule calls obsolete on landing, takes best-first under `FitsCarryWeight`, then sheds
+    `ObsoleteHeldAmmo:372` (recomputed once, post-take) back into the body, lowest first; logs
+    `[swapup]`. EconomyProbe offers obsolete rows (`Economy.cpp:785`, tag `SELL (obsolete ammo)`,
+    unit price floored at 1g: Papyrus skips a 0 unit and iron x 0.30 rounds to 0).
+    `BuildBuyThresholds` fills the APPENDED `BuyThresholds::ammoUpgrade / ammoWantBolt /
+    ammoBarDmg / ammoUpgradeQty / ammoBarValue` (under `bEconomyBuyGear`, `doRanged`) ->
+    `PlanBuy`'s AMMO SWAP-UP pass (`TradeBridge.cpp:341`, AFTER the gear pass, before tomes): the
+    best-ranked non-special ammo above the bar, up to the quantity minus what the supply pass
+    already planned above the bar, never past a line's remaining stock, spend <= a QUARTER of the
+    remaining purse. The ch.17 declaration's ammo (`EquipAuthority.cpp:584`, rule 2): (a) a
+    PLAYER AMMO PICK -- recorded in `g_playerPicks` when, under enforcement with Ammo owned by the
+    last declaration, a worn ammo that declaration did not carry appears (only the PlayerMenu path
+    gets through) -- is declared while owned and pinned by `HeldAmmo`; (b) a worn special / bound
+    round stays; (c) else the best ordinary stack, over a different worn stack only with >=
+    `kAmmoDeclareMin` (20) rounds (MFO-B44: an owned Ammo category pins the archer to the
+    declared stack; 20 ~ one fight's volley), else the worn stack.
+  **MFO-B36 SHAPE (CLOSED):** one candidate never evicts for more than itself -- each consumer
+  plans once over one pool (the shed recomputes once; the relief frees one candidate's weight;
+  `PlanBuy` respects `plan[] < avail`). The literal B36 (MEO's gem swap-up) is fixed on main
+  since loot M1.
+  **THREADING:** worker only (ServiceFollower / EconomyProbe; `PlanBuy` on the VM thread reads
+  only forms). Moves are container -> container `RemoveItem` into the SOURCE (the shipped
+  LootAmmo trade), never a world drop -- no 3D, no `MainThread::Post`. `g_playerPicks` stays
+  worker-serial (the declaration). Loose ammo (route 2b, `LootScan.cpp`) is NOT covered: picked
+  up whole by `ActivateRef` with no shed; the remainder sells or sheds on the next container loot.
+  **What breaks:** judging ammo across kinds or by value before damage splits loot, sell, buy and
+  the declaration; judging a kind the follower does not use sells a melee follower's arrows
+  (the seeded gambit); making a pinned (worn / special / player pick / signature / quest) stack
+  obsolete sells or drops it; dropping `kAmmoKeepFloor` toward the gambit N lets a handful of
+  better arrows retire a whole quiver; taking a body stack the combined plan calls obsolete
+  re-creates the take-then-shed walk-back loop; committing the loot drop before the upgrade
+  lands loses gear on a failed acquire; any keep-set edit changes the sell list AND the loot drop
+  at once (by design -- never fork the set); `BuyThresholds` is append-only.
 - **WEAPON / ARMOR STYLE BY PERKS (2026-09-13, marth: "highest skill wins, most
   perked style within a category wins, strongly prefers").** THE decision is
   `ComputeWeaponRoles` (`logistics/Gear.cpp:398`): the melee CLASS is still the
@@ -1996,9 +2106,9 @@ module. Module layout:
   compares on the in-role melee weapon): `BuildEquipmentContext:26`
   (`EquipmentContext::baseScore` + `roles`), `LooseEquipmentQualifies:175`,
   `LootEquipment:222` (`bestWeapScore`), the economy keep buckets 1H/2H
-  (`logistics/Economy.cpp:559` `keepRoles`), `BuildBuyThresholds:391` →
+  (`logistics/SwapUp.cpp` `ComputeKeepSet:69` `keepRoles`), `BuildBuyThresholds:391` →
   `TradeBridge::BuyThresholds::meleeBaseScore`/`preferKinds` → `PlanBuy`
-  (`TradeBridge.cpp:234` via public `Logistics::WeaponBuyScore:993`).
+  (`TradeBridge.cpp:234` via public `Logistics::WeaponBuyScore:904`).
   Armor: see the ARMOR CLASS BY SKILL + PERKS entry below (2026-09-14) —
   `ArmorClassSuits` no longer gates anything; `ArmorScore` is the judge.
   **THREADING — the perk-style MIRROR:** `TallyStyleVotes` is main-thread-only, so
@@ -2034,7 +2144,7 @@ module. Module layout:
   `roles.offHand == 2 && meleeTargetClass == OneHand`; `offHandBaseScore` = the
   SECOND-best owned in-class one-hander's `WeaponScore` (0 with fewer than two
   owned; a stack of >= 2 of one form counts twice — it covers both hands).
-  KEEP (`logistics/Economy.cpp` `keepSecond1H`, the weapon keep buckets): bucket
+  KEEP (`logistics/SwapUp.cpp` `ComputeKeepSet` `keepSecond1H`, the weapon keep buckets): bucket
   1 also keeps its runner-up form UNLESS the best form is a stack >= 2 (then
   `PickOffHandWeapon` takes the second copy and the runner-up is junk). BUY
   (`BuildBuyThresholds` → `TradeBridge::BuyThresholds` APPENDED `wantOffHand` /
@@ -2096,7 +2206,7 @@ module. Module layout:
   `ArmorPref` (`logistics/Logistics_internal.h:382`) carries the two multipliers + the
   inputs; scans compute it ONCE (`EquipmentContext::armorPref`,
   `BuildEquipmentContext` `logistics/LootEquipment.cpp:27`; `keepPref`
-  `logistics/Economy.cpp:653`; `armorPref` in `EquipBestOwnedGear` and
+  `logistics/SwapUp.cpp` `ComputeKeepSet`; `armorPref` in `EquipBestOwnedGear` and
   `BuildBuyThresholds`). **CONSUMERS — ALL of them, by design ONE score:**
   `ArmorIsBetter` (`logistics/Gear.cpp:154`, candidate score vs worn score per
   slot; the `ArmorClassSuits` early-out is DELETED — `ArmorClassSuits:303` is kept
@@ -2227,7 +2337,7 @@ module. Module layout:
   what MFO decides elsewhere): hands = `a_holdRight/a_holdLeft` (Actuation's `ForcedHold`
   ledger) and nothing else (a two-hander/bow in the right empties the left; never a weapon not
   held — a stowed bow beside a held sword is not simultaneously wearable); AMMO only under a
-  bow/crossbow HOLD (worn of the matching kind, else best carried by damage; bolts for a
+  bow/crossbow HOLD (a player ammo pick, else the swap-up rule's best stack if >= 20 rounds or worn, else the worn one -- THE SWAP-UP RULE, 2026-09-25; bolts for a
   crossbow) — the archer AI's own ammo equips pass in the unowned category; the SHIELD is NOT
   DECLARED (v9): `roles.offHand==2` → the Shield category is DENIED (THE FIELD FIX, now without
   owning a hand); 1 → Actuation's direct `EquipShieldOnMain` (an unowned-category equip the seat
@@ -2346,9 +2456,10 @@ module. Module layout:
   head compare must stay ONE comparison (per-bit Hair AND Circlet against two
   `GetWornArmor` reads can double-judge the same worn helmet).
 - **Loot side (was `Logistics_Loot.cpp`, wave-2 split into three):**
-  `logistics/LootTake.cpp` (per-category looters `LootAmmo:58`, `LootPotions:147`,
-  `LootGold:244`, `LootValuables:448`; source policy `PlayerIsConsidering:592`,
-  `TierReleased:642`, `LootHere:723`, `HasLoot:743`, `NavmeshReach:807`),
+  `logistics/LootTake.cpp` (per-category looters `LootAmmo:73` -- a wrapper over
+  `SwapUpAmmoFrom` since 2026-09-25, `LootPotions:90`,
+  `LootGold:187`, `LootValuables:391`; source policy `PlayerIsConsidering:535`,
+  `TierReleased:585`, `LootHere:666`, `HasLoot:686`, `NavmeshReach:750`),
   `logistics/Gear.cpp` (the armor judge `ArmorPrefFor:43`, `ArmorScore:65`,
   `LogArmorClassIfChanged:78`, `ArmorClassSuits:136`, `ArmorIsBetter:154`/`:195`,
   `CarriesSlotArmorAtLeast:215`, `KeepHeadClear:270`, `StyleVotesFor:356`,
@@ -2407,13 +2518,13 @@ module. Module layout:
   of this section.)
   **GOLD + LOOSE GEMS FOLD INTO VALUABLES (2026-09-05):** `Category::Valuables`
   (`logistics/Logistics_internal.h:505`) now also matches gold — `LootValuables`
-  (`logistics/LootTake.cpp:448`) peeks/takes gold by calling `LootGold` (`logistics/LootTake.cpp:244`)
+  (`logistics/LootTake.cpp:391`) peeks/takes gold by calling `LootGold` (`logistics/LootTake.cpp:187`)
   directly rather than re-deriving a gold count (never `Actor::GetGoldAmount`,
   which null-derefs — `LootGold` sums `Gold001`/OCF-coin off `GetInventory`).
   The route-2b loose-ref whitelist inside `LootNearby` (`logistics/LootScan.cpp:21`) accepts a
   loose `Gold001` ref for `Category::Valuables` the same as it always has for
   `Category::Gold`, AND a loose value-dense MISC ref (a dropped gem etc.) for
-  `Category::Valuables`, gated by the same `IsValuableMisc` (`logistics/LootTake.cpp:421`,
+  `Category::Valuables`, gated by the same `IsValuableMisc` (`logistics/LootTake.cpp:364`,
   value/weight ratio vs `Config::g_valuablesRatio` — `Config.h:586`) the
   container take already uses — a loose ref qualifies iff a container holding
   it would have been looted. `act.loot_gold` is UNCHANGED, still a gold-only
@@ -2437,10 +2548,10 @@ module. Module layout:
   **[L] CONTRACT (2026-09-23):** `r.looting = JustLooted || WalkingLootLeg` —
   `WalkingLootLeg` (`logistics/Upkeep.cpp`) = live slot in `Walking` phase AND
   `Forms::IsTravelPackage(GetCurrentPackage())`; dispatched-not-adopted is dark.
-  `EconomyProbe:488` (follower-side sell-candidate/buy-needs state built ONCE
+  `EconomyProbe:451` (follower-side sell-candidate/buy-needs state built ONCE
   per call, ~583-909; only the per-vendor VEND-filter pass + chest/gold read
   stay inside the `for (auto& h : living)` loop, ~911-968 -- 2026-09 perf fix),
-  public buy helpers (`MageApparelBuyKey:1066` et al).
+  public buy helpers (`MageApparelBuyKey:1003` et al).
 - (pre-wave-2 duplicate bullets for `Logistics_Loot.cpp` / `Logistics_internal.h` removed
   2026-09-25: the current layout, with every file:line, is the wave-2 module list at the top
   of this section.)
@@ -3814,12 +3925,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
   function by `tools/splitcheck`; before it: one `APMFBridge.cpp`).** Other subsystems include
   ONLY `apmf/APMFBridge.h`. `APMF_API.h` (the byte-shared ABI header) stays at `native/`.
-  - `apmf/Bridge.cpp` (1089) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
+  - `apmf/Bridge.cpp` (1095) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
     `g_mx`/`g_owned` (`:51-52`) + refusal sets, `FacetExpiry` (`:163`), the shared claim helpers
     `EnsureClaimLocked` (`:174`), `ReleaseClaimLocked` (`:200`), `CastHeartbeatInterval` (`:241`),
     `EnsureCastClaimLocked` (`:280`), the idle-hand floor `ReconcileHandFloorLocked` (`:672`),
     `Acquire` (`:813`, requests ABI 10) / `Available` (`:853`) / `MaybeWarnAbsence` (`:871`), the expiry sweep
-    `Tick` (`:887`) and `ClearTransientState` (`:1042`).
+    `Tick` (`:887`) and `ClearTransientState` (`:1046`).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
     `ClaimOffenseCast` `:83`, `RefreshOwnedCastOnHand` `:215`, `ReleaseCastClaimOnHand` `:311`,
     `ReleaseOffenseCast` `:326`) and heal (`ClaimHealCast` `:351`, `RefreshHealCastClaim` `:433`).
@@ -3879,14 +3990,52 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     Standing / Invalid / SeatAbsent). `EntryEndedLocked` (`:58`) = the pin table's judgement
     (IsClaimLive false once seen live, or never seen live after 15 UNPAUSED sweeps) -> Release ALWAYS,
     marked ENDED, logged once. `CombatEntryStateOf` (`:150`) / `ForgetCombatEntry` (`:159`, Release +
-    erase; Release stops no fight). `SweepCombatEntriesLocked` (`:85`, from `Tick` `Bridge.cpp:897`;
+    erase; Release stops no fight). `SweepCombatEntriesLocked` (`:85`, from `Tick` `Bridge.cpp:901`;
     also the `bEngageOnSight`-off kill switch) and `ClearCombatEntriesLocked` (`:103`, from
-    `ClearTransientState` `Bridge.cpp:1084`), declared in `APMFBridge_internal.h`.
+    `ClearTransientState` `Bridge.cpp:1088`), declared in `APMFBridge_internal.h`.
     **What breaks:** Repointing an ended entry (a silent no-op on a dead handle), or re-filing the
     same target from here (the no-loop rule lives in EngageOnSight's given-up set, keyed on the
     ENDED state this table reports — erasing an entry when it ends instead of marking it loses that
     signal); dropping a handle without Release; a synchronous refusal meaning anything but "seat not
     installed" (keep the Invalid pre-filter, or the gambit goes inert for the session on a bad param).
+  - `apmf/ReentryDeny.cpp` (235, NEW, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5v9) = the
+    **ch.22 COMBAT RE-ENTRY DENY** table (ABI v15 `kIntent_CombatReentryDeny`), the retreat's half of
+    Harbinger's recipe "StopCombat once + deny re-entry". File-local `g_denies` under its OWN
+    `g_denyMx` (never `g_mx`). `ClaimRetreatReentryDeny` (`:93`, from `Packages::RetreatFill` both
+    roads, `Packages.cpp:2194/:2253`) files `RequestEx(follower, 22, kOwnBasis, {fval =
+    kRetreatDenyWindowSecs 35})` (`:58`: TRAVEL's 30 s timeout + 5 s for the timeout being seen on
+    his own service); true = filed, and RetreatFill then does NOT post its StopCombat. On filing it
+    also `ForgetCombatEntry`s any standing ch.21 entry of his (engage-on-sight's), so a still-queued
+    entry is FIFO-cancelled and cannot pull him through the deny (review of 497b6cd SEV-5).
+    `SweepReentryDenies` (`:161`, from `Tick` `Bridge.cpp:892`, BEFORE `g_mx`): first `IsClaimLive`
+    true -> `Packages::RetreatReengage(fid, "engage (ch.22 deny live)")` (the single StopCombat, the
+    retreat's generation-checked main-thread road); live then not -> ENDED BY HARBINGER (logged,
+    kept as Ended); never live after 15 unpaused sweeps -> the DEGRADE WARN, Release, Degraded, and
+    the StopCombat posted then (a DEGRADE of this retreat, not the capability-absent road; marth's
+    call pending); `!Packages::IsRetreating` -> released.
+    `RetreatReentryDenyStateOf` (`:132`: None / Pending / Live / Ended / Degraded) steers the
+    Scheduler's TRAVEL re-entry and arrival. `ReleaseRetreatReentryDeny` (`:140`, idempotent) from
+    the Scheduler (`finish` `:390`, TRAVEL -> STAY `:430`) and `Followers::ReleaseHeldState`
+    (`:403`); `ClearReentryDenies` (`:227`) from `ClearTransientState` (`Bridge.cpp:1089`).
+    **What breaks:** posting the StopCombat at the claim (before live) re-opens the gap the recipe
+    closes; releasing on the first never-live read throws the request away; holding the deny into
+    STAY benches him at the player's side ("engaged at your side" needs the engine's StartCombat to
+    pass: the 7580bea SEV-2); taking `g_mx` inside this table or calling `RetreatReengage` under
+    `g_denyMx` (the sweep posts after dropping it); a window shorter than TRAVEL's own bound (the
+    deny would end under a travelling retreat and the re-entry StopCombat would come back mid-walk).
+  - `apmf/PursuitLeash.cpp` (182, NEW, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5ve /
+    86e3erv94) = the **ch.23 IN-COMBAT PURSUIT LEASH** table (ABI v16 `kIntent_PursuitLeash`). File-
+    local `g_leashes` under its OWN `g_leashMx`. `ServicePursuitLeash` (`:85`, from the Scheduler's
+    combat table `Scheduler.cpp:1065`) files `{target = 0x14 the player, fval = radius}` once, then
+    Repoints ONLY when the wanted radius leaves the band max(`kRepointFloor` 256 u, `kRepointFrac`
+    20 %) around the claimed one (`:51-52`). `SweepPursuitLeashes` (`:143`, from `Tick` before
+    `g_mx`): a claim that ended (was live, now not) or never went live (15 unpaused sweeps) is logged,
+    Released and kept ENDED (not re-filed until the fight's end); a retreating follower's leash is
+    released. `ReleasePursuitLeash` (`:128`) from the Scheduler (party-OOC teardown `:755`, retreat
+    `:1015`/`:1064`) and `ReleaseHeldState` (`Followers.cpp:404`); `ClearPursuitLeashes` (`:174`).
+    **What breaks:** a per-service Repoint (churns Harbinger's arbitration every 133 ms x N);
+    re-filing an ENDED claim within a fight (a loop against an outranking leash); feeding it
+    `ChaseRadius` (measured from the follower, not the anchor); keeping it through a retreat.
   - `apmf/SpellAllowList.cpp` (308) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
     `AppendDenyExemptForms` (`:126`), `PublishSpellAllowList` (`:162`), `ReleaseSpellAllowList`
     (`:284`).
@@ -5309,7 +5458,7 @@ Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`
 (native `GetInventory`/`GetGoldAmount` CTD on merchant chests). `RegisterFuncs()`
 (`:365`) ← `plugin.cpp:422`, registers **10 Papyrus natives** on class `MFO_Trade`
 (`:209-218`) called by the shipped `MFO_Trade.pex` — renaming/re-signing any breaks
-trading silently. `VendorTrade` (`:223`) ← `logistics/Economy.cpp` (`EconomyProbe:435`). `SellRow`/`NeedCat::
+trading silently. `VendorTrade` (`:223`) ← `logistics/Economy.cpp` (`EconomyProbe:451`). `SellRow`/`NeedCat::
 Kind` (`TradeBridge.h:25,35`) are the wire vocabulary with Logistics. Cross-save
 safety: per-chest in-flight guard (`:250`) + `ClearTransientState`'s `g_nextToken +=
 1'000'000` jump (`:282` ← `Serialization.cpp:612`) so a resumed stale token can't name

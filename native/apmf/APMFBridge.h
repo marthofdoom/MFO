@@ -451,6 +451,37 @@ namespace MFO::APMFBridge {
     // Release STOPS NOTHING (Harbinger's contract): the fight is the engine's.
     void ForgetCombatEntry(RE::FormID a_follower);
 
+    // ── ch.22 COMBAT RE-ENTRY DENY (ABI v15, kIntent_CombatReentryDeny): the retreat ──────
+    // apmf/ReentryDeny.cpp. Harbinger's recipe "retreat = StopCombat once + deny re-entry":
+    // the retreat claims the deny, the handle stays PENDING until IsClaimLive reads true, and
+    // ONLY THEN is the single StopCombat posted (Packages::RetreatReengage, the retreat's own
+    // main-thread road) by Tick()'s sweep. Worker-safe; its own mutex (never g_mx).
+    // ClaimRetreatReentryDeny: true = filed (the caller must NOT post its own StopCombat --
+    // the sweep does, on live); false = Harbinger absent, ABI < 15, or the seat refused
+    // (session-stable) -> the caller keeps the shipped immediate StopCombat.
+    enum class DenyState {
+        None,      // no deny for this follower (never claimed, or released)
+        Pending,   // filed, not yet read live (StopCombat not posted yet)
+        Live,      // read live at least once and not ended (StopCombat posted)
+        Ended,     // Harbinger ended it (window elapsed / owner dead) after it was live
+        Degraded,  // it NEVER went live (a Harbinger apply failure): this retreat is DEGRADED to
+                   // the per-re-entry StopCombat (review of 497b6cd SEV-4 #2; marth's policy call pending)
+    };
+    bool      ClaimRetreatReentryDeny(RE::FormID a_follower);
+    DenyState RetreatReentryDenyStateOf(RE::FormID a_follower);
+    // Release (if held) and forget. No-op when none, so every retreat end may call it.
+    void      ReleaseRetreatReentryDeny(RE::FormID a_follower, const char* a_why);
+
+    // ── ch.23 PURSUIT LEASH (ABI v16, kIntent_PursuitLeash): the in-combat leash ──────────
+    // apmf/PursuitLeash.cpp. Anchor = the player, radius = what the Scheduler passes
+    // (Confidence::LeashRadius). ServicePursuitLeash files the claim on the first call and
+    // Repoints it ONLY when the radius leaves a band around the claimed one (no per-tick
+    // churn); an ended / never-live claim is not re-filed until ReleasePursuitLeash (the
+    // fight's end). No-op when Harbinger is absent, ABI < 16, or the seat refused.
+    // Worker-safe; its own mutex (never g_mx).
+    void ServicePursuitLeash(RE::FormID a_follower, float a_radius);
+    void ReleasePursuitLeash(RE::FormID a_follower, const char* a_why);
+
     // Worker-safe. Once-per-pump sweep: release each claim not refreshed within its
     // expiry window (offense-cast backstop; combat-target = combat-end detector).
     // offense-cast/combat-target/weapon-order-equipment/heal-cast all use the

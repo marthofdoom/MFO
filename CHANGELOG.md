@@ -15,12 +15,22 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **A follower moved mid-trip carries on cleanly, with or without a teleport mod.** Fast travel, a door, a mod's teleport or any other sudden jump to your side ends the trip leg, and he picks the next item near him. The item is not marked as failed. Nothing changes unless he really jumps.
 - **New option: followers engage enemies on sight.** Off by default. Turn it on and a follower who can see an enemy near you starts the fight with the nearest one, even in the middle of a loot run. His own gambits take over from there.
 - **It needs Harbinger 0.9.9 or newer.** Without it the option does nothing.
+- **New slider: how far they react.** Engage on sight range is the farthest a follower will spot and charge an enemy, measured from him. Default 2000 units, about 29 m. The leash from you still caps it.
 - **It only works while Auto-retreat is on.** A follower who starts a fight can still fall back. He also holds off while his last retreat is cooling down or while he is too hurt for the enemies that would join the fight.
 - **He does not start fights while you sneak.** A second option lets him.
 - **He never starts a fight with guards or townsfolk.** Anyone whose attack would be a crime is left alone unless they are already fighting you or a follower. Your summons and thralls, and enemies who are tied up, bleeding out or scripted to ignore fights are left alone too.
 - **A follower you told to wait stays put.** So does one whose gambit list has a Wait rule that is winning.
 - **No fights started in towns, inns, houses or other lived-in places.** Unless you are already fighting, followers do not start a fight while you are in one, or with an enemy standing in one. A dungeon under a town still counts as a dungeon.
 - **No endless re-tries.** If the game refuses the fight, or the fight ends with the enemy still around, he leaves that enemy alone until it dies, leaves, stops being hostile or is far from you.
+- **Followers swap up while looting and shopping, arrows and bolts included.** Ammo is ranked by damage, then by value. Only the kind a follower shoots is judged: arrows for a bow, bolts for a crossbow. A follower keeps his best rounds up to his "arrows below" number, and never fewer than 50. Anything weaker than that is obsolete. The weakest goes first. Enchanted and elemental ammo, and ammo you gave him, is never dropped or sold.
+- **A follower drops obsolete arrows into the body when he loots better ones.** He no longer picks up arrows he would drop straight back.
+- **A follower sells obsolete arrows and bolts at a vendor, and buys better ones.** An archer with a stock of iron buys steel or better after his gear, with at most a quarter of what is left in his purse. The iron sells on the next visit.
+- **A follower with the Loot equipment gambit also takes better ammo of his kind from a body.**
+- **A better weapon or armor piece that is too heavy to carry is still taken when dropping gear he already replaced makes room.** This needs the economy on. The least valuable replaced gear goes back into the body first, and only once the new piece is in his pack. Nothing worth more than the new piece is dropped. Worn gear, enchanted gear, his own signature gear, quest items, gear you put on him, and gear that may hold gems are never dropped.
+- **With Harbinger's equip authority, an archer MFO holds on his bow gets his best arrows, when he has at least 20 of them.** Arrows you hand him through the trade menu stay on. Before, he kept whatever arrows he last had equipped.
+- **A mage no longer sells the backup dagger he just looted.**
+- **A retreating follower stays out of the fight on the way back.** With a Harbinger that has the re-entry deny (its next release after 0.9.9), the game cannot pull him back into combat while he walks to you. MFO takes him out of the fight once, the moment Harbinger holds the door shut. Enemies can still hit him on the way. Once he reaches you he fights again if the enemies come to him. Older Harbinger or none: the retreat works as before.
+- **Followers do not chase too far from you in a fight.** With a Harbinger that has the pursuit leash (its next release after 0.9.9), a follower who is farther from you than his confidence leash does not run after a foe that would take him farther still. A confident follower ranges wide. A hurt or outnumbered one stays close. He still fights whatever comes to him. Older Harbinger or none: no change.
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 

@@ -333,6 +333,11 @@ namespace MFO::Packages {
     // (Rapport::QuashAllyPair's road), which re-validates the actor and that
     // the same retreat is still live before calling. RetreatReengage posts
     // another -- the Scheduler calls it ONLY on a re-entry into combat.
+    // HARBINGER ch.22 (ABI >= 15, apmf/ReentryDeny.cpp): when RetreatFill's
+    // APMFBridge::ClaimRetreatReentryDeny files the re-entry deny, RetreatFill
+    // posts NO StopCombat; the bridge sweep calls RetreatReengage ONCE when the
+    // claim first reads live (the recipe), and the Scheduler posts no re-entry
+    // StopCombat while that deny is live.
     //
     // The legacy fill is SAVE-SERIALIZED like the loot fill (#55): the
     // Scheduler MUST RetreatClear on arrival-stay end / timeout / no live foes,

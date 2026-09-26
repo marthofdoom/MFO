@@ -449,6 +449,19 @@
           }
         },
         {
+          "id": "fEngageOnSightRange:General",
+          "text": "Engage on sight: range (units)",
+          "type": "slider",
+          "help": "The farthest a follower will spot and charge an enemy, measured from him (~70 units = 1m, so 2000 is about 29m). The leash from you still caps it. Only matters when Engage enemies on sight is ON.",
+          "valueOptions": {
+            "min": 500.0,
+            "max": 4000.0,
+            "step": 100.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 2000.0
+          }
+        },
+        {
           "id": "bMagicLoadout:General",
           "text": "Magic loadout (school gear + backup)",
           "type": "toggle",

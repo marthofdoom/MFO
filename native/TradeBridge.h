@@ -117,6 +117,19 @@ namespace MFO::TradeBridge {
         // (EquipmentContext::wantOffHand / offHandBaseScore).
         bool          wantOffHand      = false;
         float         offHandBaseScore = 0.0f;
+        // -- APPENDED 2026-09-25 (THE SWAP-UP RULE, ammo; 86e3ebfu3; append-only) --
+        // Worker-computed by Logistics::AmmoUpgradeBar (logistics/SwapUp.cpp) under
+        // bEconomyBuyGear, for a ranged follower's OWN kind (bolts for a crossbow).
+        // ammoBarDmg: the damage of the weakest ammo tier he still relies on; a buy
+        // must be STRICTLY above it. ammoUpgradeQty: how many rounds above the bar
+        // carry his whole keep target -- the most PlanBuy's AMMO SWAP-UP pass buys.
+        bool          ammoUpgrade    = false;
+        bool          ammoWantBolt   = false;
+        float         ammoBarDmg     = 0.0f;
+        std::int32_t  ammoUpgradeQty = 0;
+        // Round 1 (review of 4f23c30): the rank is damage, VALUE breaking a tie, so
+        // the bar is the pair (ammoBarDmg, ammoBarValue).
+        std::int32_t  ammoBarValue   = 0;
     };
 
     // THE rated-armor score, shared with Logistics::ArmorScore (loot / keep /

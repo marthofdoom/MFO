@@ -338,6 +338,51 @@ namespace MFO::TradeBridge {
                 }
             }
 
+            // ── AMMO SWAP-UP (THE SWAP-UP RULE, 86e3ebfu3; logistics/SwapUp.cpp) ──
+            // marth: "an archer should be willing to sell iron for better arrows".
+            // AFTER the gear pass (review round 1 on 4f23c30: gear upgrades come
+            // first). The best-ranked ammo of his kind (damage, VALUE breaking a tie)
+            // STRICTLY above the weakest tier he relies on (b.ammoBarDmg/Value), up to
+            // b.ammoUpgradeQty rounds (what carries his whole keep target). Special
+            // rounds (an explosion projectile) are never an upgrade. Units the SUPPLY
+            // pass already planned above the bar count toward the quantity, and never
+            // more of a stock line than it still has (plan[] < avail -- the MFO-B36
+            // shape: one copy is never planned twice). Spend is held to a QUARTER of
+            // the purse left after gear. The obsolete stacks this purchase creates
+            // sell on the next visit.
+            if (b.ammoUpgrade && b.ammoUpgradeQty > 0) {
+                const std::int32_t kind = b.ammoWantBolt ? NeedCat::kBolts : NeedCat::kArrows;
+                auto aboveBar = [&](float dmg, int val) {
+                    return dmg > b.ammoBarDmg || (dmg == b.ammoBarDmg && val > b.ammoBarValue);
+                };
+                std::int32_t already = 0;
+                std::size_t best = SIZE_MAX; float bestDmg = 0.0f; int bestVal = 0; int bestAvail = 0;
+                for (auto& c : cands) {
+                    if (c.kind != kind) continue;
+                    auto* am = c.f->As<RE::TESAmmo>();
+                    if (!am || am->GetRuntimeData().data.flags.all(RE::AMMO_DATA::Flag::kNonPlayable) ||
+                        Logistics::AmmoIsSpecialBase(am)) continue;
+                    const float dmg = am->GetRuntimeData().data.damage;
+                    if (!aboveBar(dmg, c.value)) continue;
+                    already += plan[c.idx];
+                    const int left = c.avail - plan[c.idx];
+                    if (left <= 0) continue;
+                    if (best == SIZE_MAX || dmg > bestDmg || (dmg == bestDmg && c.value > bestVal)) {
+                        best = c.idx; bestDmg = dmg; bestVal = c.value; bestAvail = left;
+                    }
+                }
+                if (best != SIZE_MAX && bestVal > 0) {
+                    std::int64_t qty = static_cast<std::int64_t>(b.ammoUpgradeQty) - already;
+                    qty = std::min<std::int64_t>(qty, bestAvail);
+                    qty = std::min<std::int64_t>(qty, (o->budget / 4) / bestVal);
+                    if (qty > 0) {
+                        plan[best]  += static_cast<std::int32_t>(qty);
+                        o->budget   -= static_cast<std::int32_t>(qty) * bestVal;
+                        o->buySpent += static_cast<std::int32_t>(qty) * bestVal;
+                    }
+                }
+            }
+
             // ── SPELL TOMES (Feature B): every qualifying tome, re-checking the
             //    reserve rule against the shrinking purse. A tome buys iff its spell
             //    is in a top-2 school (b.eligibleSchools) and the follower does not
