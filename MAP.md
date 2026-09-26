@@ -1944,10 +1944,11 @@ module. Module layout:
     MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`).
   - `logistics/Sinks.cpp` (299) = `BeastHeadSink:52`, `ContainerSink:129`, `GateSink:208`
     (anonymous namespace), `RegisterSinks:250`, `SweepBeastHeadsOnLoad:274`.
-  - `logistics/LootTake.cpp` (840), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (934),
-    `logistics/LootEquipment.cpp` (526), `logistics/Economy.cpp` (1169),
-    `logistics/EquipAuthority.cpp` (761), `logistics/Cast.cpp` (268): see the bullets below.
-  - `logistics/Logistics_internal.h` (849) = shared state/types/declarations;
+  - `logistics/LootTake.cpp` (786), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (934),
+    `logistics/LootEquipment.cpp` (571), `logistics/Economy.cpp` (1044),
+    `logistics/EquipAuthority.cpp` (816), `logistics/Cast.cpp` (268),
+    `logistics/SwapUp.cpp` (612, THE SWAP-UP RULE, 2026-09-25): see the bullets below.
+  - `logistics/Logistics_internal.h` (938) = shared state/types/declarations;
     `logistics/LootTravel_internal.h` (562) = the loot TRAVEL substrate (`TravelIntent`,
     `g_travelSlots:91`, stall/sticky/gate/actor-block state, `SortLootCandidates`, scan
     timing), included by `Logistics_internal.h` at the block's old position (NOT
@@ -1973,10 +1974,79 @@ module. Module layout:
   `TopTwoSchoolMask:108`, `LearnCarriedTomes:137`, school name/keyword helpers.
 - #21 economy (was `Logistics_Economy.cpp`, wave-2 split into two): `logistics/Economy.cpp`
   (mage-apparel scoring, `VendorTrades:193`, `UnlockCollegeTomes:232`,
-  `BuildBuyThresholds:298`, `EconomyProbe:435`, public buy helpers `MageApparelBuyKey:1129`
+  `BuildBuyThresholds:298`, `EconomyProbe:451`, public buy helpers `MageApparelBuyKey:1003`
   et al) and `logistics/EquipAuthority.cpp` (`ComputeOwnedGearPick:44`,
   `EquipBestOwnedGear:132`, `EquipAuthorityLive:341`, `LiveBoundWeapons:370`,
   `RefreshEquipDeclaration:391`).
+- **THE SWAP-UP RULE (`logistics/SwapUp.cpp`, 2026-09-25, `feat/mfo-swapup-ammo`, ClickUp
+  86e3ebfu3; marth: "swap up needs to work in looting and shopping ... lower arrows are worthless
+  when better ones are available, lowest removed first, or slated for sale when obsolete").** ONE
+  rule, loot + shop, declarations in `logistics/Logistics_internal.h` (the SWAP-UP block at the
+  end). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B114** (the ammo peek ignores carry weight),
+  **MFO-B115** (`ComputeKeepSet` inside the loot peek), **MFO-B116** (`VendorTrades(null)` on a
+  `TESAmmo` keyword form) -- read them before editing. Two halves:
+  - **Keep set (weapons + armor):** `ComputeKeepSet:69` = the old EconomyProbe keep block MOVED
+    VERBATIM (best weapon per class bucket incl. the dual-wield runner-up, worn + best
+    `ArmorScore` per logical slot, `bestBySlot` for the force-sell) -- the armor half's
+    `bEconomyBuyGear` gate read once into `KeepSet::armorJudged`, plus (round 1) the loot judge's
+    MAGE BACKUP sidearm (`BuildEquipmentContext(actor, &state)`'s `wantBackup` / `daggersOnly`,
+    best by attack damage) so a looted backup dagger is never sold and re-looted.
+    `BuildEquipmentContext` gained a state-taking overload for this (`LootEquipment.cpp`; the
+    one-arg form forwards `g_svc`). Consumers: EconomyProbe's sell list and the LOOT drop:
+    `PlanRoomForSwapUp:509` plans, for an upgrade `LootEquipment` picked that does not fit the
+    carry weight, the SUPERSEDED gear to drop -- only under `bEconomy` (the drop is the loot-time
+    twin of the sale), outside the keep set, WEAP or rated ARMO only, unworn, NOT ENCHANTED, value
+    <= the upgrade's `GetGoldValue`, not `IsStockGear` / quest / `Catalog::IsExcluded` /
+    `IsPlayerPick`, no MEO unique id while MEO is present -- least valuable first, exact copies,
+    all or nothing; `CommitSwapUpDrops:591` runs only after `AcquireEquip` put the upgrade in his
+    inventory (`HeldCount:584` before/after; a miss logs `[swapup] ... did not arrive ... NOT
+    made`).
+  - **Ammo:** ranked by `TESAmmo` DAMAGE, instance VALUE breaking a tie (`AmmoRankAbove`), within
+    one kind (`AmmoIsBolt`), judged ONLY for the kind the follower USES (`UsesAmmoKind:308`: his
+    ranged role, a caster only with an equip-ranged gambit -- a gambit for the kind is NOT use,
+    the seeded "arrows below 10" sits on everyone). Non-playable (bound) ammo is never ranked or
+    moved; SPECIAL rounds (`AmmoIsSpecial:300`: projectile explosion, or an enchanted instance)
+    never count toward the target and are never obsolete. `AmmoKeepTarget:322` = max(
+    `kAmmoKeepFloor` 50, the `cond.self_out_of_arrows/bolts` N), 0 = not judged.
+    `AmmoCutoff:358`: best-first running count; the stack reaching the target is the CUTOFF, every
+    unpinned stack ranked strictly below it is obsolete (`AmmoObsolete`); pinned = worn / special
+    / stock / player pick / quest / excluded. Consumers: `LootAmmo` (`LootTake.cpp:73`, RESTOCK: >=
+    worst held; target 0 when he does not use the kind = plain restock, no shed) and
+    `LootEquipment` (UPGRADE, strictly above `AmmoUpgradeBar:385`, lowest priority after gear) via
+    `SwapUpAmmoFrom:410` -- plans over the COMBINED pool (held + body), never takes a body stack
+    the rule calls obsolete on landing, takes best-first under `FitsCarryWeight`, then sheds
+    `ObsoleteHeldAmmo:372` (recomputed once, post-take) back into the body, lowest first; logs
+    `[swapup]`. EconomyProbe offers obsolete rows (`Economy.cpp:785`, tag `SELL (obsolete ammo)`,
+    unit price floored at 1g: Papyrus skips a 0 unit and iron x 0.30 rounds to 0).
+    `BuildBuyThresholds` fills the APPENDED `BuyThresholds::ammoUpgrade / ammoWantBolt /
+    ammoBarDmg / ammoUpgradeQty / ammoBarValue` (under `bEconomyBuyGear`, `doRanged`) ->
+    `PlanBuy`'s AMMO SWAP-UP pass (`TradeBridge.cpp:341`, AFTER the gear pass, before tomes): the
+    best-ranked non-special ammo above the bar, up to the quantity minus what the supply pass
+    already planned above the bar, never past a line's remaining stock, spend <= a QUARTER of the
+    remaining purse. The ch.17 declaration's ammo (`EquipAuthority.cpp:584`, rule 2): (a) a
+    PLAYER AMMO PICK -- recorded in `g_playerPicks` when, under enforcement with Ammo owned by the
+    last declaration, a worn ammo that declaration did not carry appears (only the PlayerMenu path
+    gets through) -- is declared while owned and pinned by `HeldAmmo`; (b) a worn special / bound
+    round stays; (c) else the best ordinary stack, over a different worn stack only with >=
+    `kAmmoDeclareMin` (20) rounds (MFO-B44: an owned Ammo category pins the archer to the
+    declared stack; 20 ~ one fight's volley), else the worn stack.
+  **MFO-B36 SHAPE (CLOSED):** one candidate never evicts for more than itself -- each consumer
+  plans once over one pool (the shed recomputes once; the relief frees one candidate's weight;
+  `PlanBuy` respects `plan[] < avail`). The literal B36 (MEO's gem swap-up) is fixed on main
+  since loot M1.
+  **THREADING:** worker only (ServiceFollower / EconomyProbe; `PlanBuy` on the VM thread reads
+  only forms). Moves are container -> container `RemoveItem` into the SOURCE (the shipped
+  LootAmmo trade), never a world drop -- no 3D, no `MainThread::Post`. `g_playerPicks` stays
+  worker-serial (the declaration). Loose ammo (route 2b, `LootScan.cpp`) is NOT covered: picked
+  up whole by `ActivateRef` with no shed; the remainder sells or sheds on the next container loot.
+  **What breaks:** judging ammo across kinds or by value before damage splits loot, sell, buy and
+  the declaration; judging a kind the follower does not use sells a melee follower's arrows
+  (the seeded gambit); making a pinned (worn / special / player pick / signature / quest) stack
+  obsolete sells or drops it; dropping `kAmmoKeepFloor` toward the gambit N lets a handful of
+  better arrows retire a whole quiver; taking a body stack the combined plan calls obsolete
+  re-creates the take-then-shed walk-back loop; committing the loot drop before the upgrade
+  lands loses gear on a failed acquire; any keep-set edit changes the sell list AND the loot drop
+  at once (by design -- never fork the set); `BuyThresholds` is append-only.
 - **WEAPON / ARMOR STYLE BY PERKS (2026-09-13, marth: "highest skill wins, most
   perked style within a category wins, strongly prefers").** THE decision is
   `ComputeWeaponRoles` (`logistics/Gear.cpp:398`): the melee CLASS is still the
@@ -1992,9 +2062,9 @@ module. Module layout:
   compares on the in-role melee weapon): `BuildEquipmentContext:26`
   (`EquipmentContext::baseScore` + `roles`), `LooseEquipmentQualifies:175`,
   `LootEquipment:222` (`bestWeapScore`), the economy keep buckets 1H/2H
-  (`logistics/Economy.cpp:559` `keepRoles`), `BuildBuyThresholds:391` →
+  (`logistics/SwapUp.cpp` `ComputeKeepSet:69` `keepRoles`), `BuildBuyThresholds:391` →
   `TradeBridge::BuyThresholds::meleeBaseScore`/`preferKinds` → `PlanBuy`
-  (`TradeBridge.cpp:234` via public `Logistics::WeaponBuyScore:993`).
+  (`TradeBridge.cpp:234` via public `Logistics::WeaponBuyScore:904`).
   Armor: see the ARMOR CLASS BY SKILL + PERKS entry below (2026-09-14) —
   `ArmorClassSuits` no longer gates anything; `ArmorScore` is the judge.
   **THREADING — the perk-style MIRROR:** `TallyStyleVotes` is main-thread-only, so
@@ -2030,7 +2100,7 @@ module. Module layout:
   `roles.offHand == 2 && meleeTargetClass == OneHand`; `offHandBaseScore` = the
   SECOND-best owned in-class one-hander's `WeaponScore` (0 with fewer than two
   owned; a stack of >= 2 of one form counts twice — it covers both hands).
-  KEEP (`logistics/Economy.cpp` `keepSecond1H`, the weapon keep buckets): bucket
+  KEEP (`logistics/SwapUp.cpp` `ComputeKeepSet` `keepSecond1H`, the weapon keep buckets): bucket
   1 also keeps its runner-up form UNLESS the best form is a stack >= 2 (then
   `PickOffHandWeapon` takes the second copy and the runner-up is junk). BUY
   (`BuildBuyThresholds` → `TradeBridge::BuyThresholds` APPENDED `wantOffHand` /
@@ -2092,7 +2162,7 @@ module. Module layout:
   `ArmorPref` (`logistics/Logistics_internal.h:382`) carries the two multipliers + the
   inputs; scans compute it ONCE (`EquipmentContext::armorPref`,
   `BuildEquipmentContext` `logistics/LootEquipment.cpp:27`; `keepPref`
-  `logistics/Economy.cpp:653`; `armorPref` in `EquipBestOwnedGear` and
+  `logistics/SwapUp.cpp` `ComputeKeepSet`; `armorPref` in `EquipBestOwnedGear` and
   `BuildBuyThresholds`). **CONSUMERS — ALL of them, by design ONE score:**
   `ArmorIsBetter` (`logistics/Gear.cpp:154`, candidate score vs worn score per
   slot; the `ArmorClassSuits` early-out is DELETED — `ArmorClassSuits:303` is kept
@@ -2223,7 +2293,7 @@ module. Module layout:
   what MFO decides elsewhere): hands = `a_holdRight/a_holdLeft` (Actuation's `ForcedHold`
   ledger) and nothing else (a two-hander/bow in the right empties the left; never a weapon not
   held — a stowed bow beside a held sword is not simultaneously wearable); AMMO only under a
-  bow/crossbow HOLD (worn of the matching kind, else best carried by damage; bolts for a
+  bow/crossbow HOLD (a player ammo pick, else the swap-up rule's best stack if >= 20 rounds or worn, else the worn one -- THE SWAP-UP RULE, 2026-09-25; bolts for a
   crossbow) — the archer AI's own ammo equips pass in the unowned category; the SHIELD is NOT
   DECLARED (v9): `roles.offHand==2` → the Shield category is DENIED (THE FIELD FIX, now without
   owning a hand); 1 → Actuation's direct `EquipShieldOnMain` (an unowned-category equip the seat
@@ -2342,9 +2412,10 @@ module. Module layout:
   head compare must stay ONE comparison (per-bit Hair AND Circlet against two
   `GetWornArmor` reads can double-judge the same worn helmet).
 - **Loot side (was `Logistics_Loot.cpp`, wave-2 split into three):**
-  `logistics/LootTake.cpp` (per-category looters `LootAmmo:58`, `LootPotions:147`,
-  `LootGold:244`, `LootValuables:448`; source policy `PlayerIsConsidering:592`,
-  `TierReleased:642`, `LootHere:723`, `HasLoot:743`, `NavmeshReach:807`),
+  `logistics/LootTake.cpp` (per-category looters `LootAmmo:73` -- a wrapper over
+  `SwapUpAmmoFrom` since 2026-09-25, `LootPotions:90`,
+  `LootGold:187`, `LootValuables:391`; source policy `PlayerIsConsidering:535`,
+  `TierReleased:585`, `LootHere:666`, `HasLoot:686`, `NavmeshReach:750`),
   `logistics/Gear.cpp` (the armor judge `ArmorPrefFor:43`, `ArmorScore:65`,
   `LogArmorClassIfChanged:78`, `ArmorClassSuits:136`, `ArmorIsBetter:154`/`:195`,
   `CarriesSlotArmorAtLeast:215`, `KeepHeadClear:270`, `StyleVotesFor:356`,
@@ -2403,13 +2474,13 @@ module. Module layout:
   of this section.)
   **GOLD + LOOSE GEMS FOLD INTO VALUABLES (2026-09-05):** `Category::Valuables`
   (`logistics/Logistics_internal.h:505`) now also matches gold — `LootValuables`
-  (`logistics/LootTake.cpp:448`) peeks/takes gold by calling `LootGold` (`logistics/LootTake.cpp:244`)
+  (`logistics/LootTake.cpp:391`) peeks/takes gold by calling `LootGold` (`logistics/LootTake.cpp:187`)
   directly rather than re-deriving a gold count (never `Actor::GetGoldAmount`,
   which null-derefs — `LootGold` sums `Gold001`/OCF-coin off `GetInventory`).
   The route-2b loose-ref whitelist inside `LootNearby` (`logistics/LootScan.cpp:21`) accepts a
   loose `Gold001` ref for `Category::Valuables` the same as it always has for
   `Category::Gold`, AND a loose value-dense MISC ref (a dropped gem etc.) for
-  `Category::Valuables`, gated by the same `IsValuableMisc` (`logistics/LootTake.cpp:421`,
+  `Category::Valuables`, gated by the same `IsValuableMisc` (`logistics/LootTake.cpp:364`,
   value/weight ratio vs `Config::g_valuablesRatio` — `Config.h:586`) the
   container take already uses — a loose ref qualifies iff a container holding
   it would have been looted. `act.loot_gold` is UNCHANGED, still a gold-only
@@ -2433,10 +2504,10 @@ module. Module layout:
   **[L] CONTRACT (2026-09-23):** `r.looting = JustLooted || WalkingLootLeg` —
   `WalkingLootLeg` (`logistics/Upkeep.cpp`) = live slot in `Walking` phase AND
   `Forms::IsTravelPackage(GetCurrentPackage())`; dispatched-not-adopted is dark.
-  `EconomyProbe:488` (follower-side sell-candidate/buy-needs state built ONCE
+  `EconomyProbe:451` (follower-side sell-candidate/buy-needs state built ONCE
   per call, ~583-909; only the per-vendor VEND-filter pass + chest/gold read
   stay inside the `for (auto& h : living)` loop, ~911-968 -- 2026-09 perf fix),
-  public buy helpers (`MageApparelBuyKey:1066` et al).
+  public buy helpers (`MageApparelBuyKey:1003` et al).
 - (pre-wave-2 duplicate bullets for `Logistics_Loot.cpp` / `Logistics_internal.h` removed
   2026-09-25: the current layout, with every file:line, is the wave-2 module list at the top
   of this section.)
@@ -5234,7 +5305,7 @@ Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`
 (native `GetInventory`/`GetGoldAmount` CTD on merchant chests). `RegisterFuncs()`
 (`:365`) ← `plugin.cpp:422`, registers **10 Papyrus natives** on class `MFO_Trade`
 (`:209-218`) called by the shipped `MFO_Trade.pex` — renaming/re-signing any breaks
-trading silently. `VendorTrade` (`:223`) ← `logistics/Economy.cpp` (`EconomyProbe:435`). `SellRow`/`NeedCat::
+trading silently. `VendorTrade` (`:223`) ← `logistics/Economy.cpp` (`EconomyProbe:451`). `SellRow`/`NeedCat::
 Kind` (`TradeBridge.h:25,35`) are the wire vocabulary with Logistics. Cross-save
 safety: per-chest in-flight guard (`:250`) + `ClearTransientState`'s `g_nextToken +=
 1'000'000` jump (`:282` ← `Serialization.cpp:612`) so a resumed stale token can't name

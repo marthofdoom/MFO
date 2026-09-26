@@ -21,6 +21,13 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **A follower you told to wait stays put.** So does one whose gambit list has a Wait rule that is winning.
 - **No fights started in towns, inns, houses or other lived-in places.** Unless you are already fighting, followers do not start a fight while you are in one, or with an enemy standing in one. A dungeon under a town still counts as a dungeon.
 - **No endless re-tries.** If the game refuses the fight, or the fight ends with the enemy still around, he leaves that enemy alone until it dies, leaves, stops being hostile or is far from you.
+- **Followers swap up while looting and shopping, arrows and bolts included.** Ammo is ranked by damage, then by value. Only the kind a follower shoots is judged: arrows for a bow, bolts for a crossbow. A follower keeps his best rounds up to his "arrows below" number, and never fewer than 50. Anything weaker than that is obsolete. The weakest goes first. Enchanted and elemental ammo, and ammo you gave him, is never dropped or sold.
+- **A follower drops obsolete arrows into the body when he loots better ones.** He no longer picks up arrows he would drop straight back.
+- **A follower sells obsolete arrows and bolts at a vendor, and buys better ones.** An archer with a stock of iron buys steel or better after his gear, with at most a quarter of what is left in his purse. The iron sells on the next visit.
+- **A follower with the Loot equipment gambit also takes better ammo of his kind from a body.**
+- **A better weapon or armor piece that is too heavy to carry is still taken when dropping gear he already replaced makes room.** This needs the economy on. The least valuable replaced gear goes back into the body first, and only once the new piece is in his pack. Nothing worth more than the new piece is dropped. Worn gear, enchanted gear, his own signature gear, quest items, gear you put on him, and gear that may hold gems are never dropped.
+- **With Harbinger's equip authority, an archer MFO holds on his bow gets his best arrows, when he has at least 20 of them.** Arrows you hand him through the trade menu stay on. Before, he kept whatever arrows he last had equipped.
+- **A mage no longer sells the backup dagger he just looted.**
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 

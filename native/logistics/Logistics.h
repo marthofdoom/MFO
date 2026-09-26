@@ -55,6 +55,11 @@ namespace MFO::Logistics {
     // Arrow vs bolt, catalog-first with an IsBolt() fallback (runtime IsBolt() alone
     // is unreliable). Shared so the buy side classifies uncatalogued ammo too.
     bool AmmoIsBolt(RE::TESAmmo* a_ammo);
+    // THE SWAP-UP RULE (logistics/SwapUp.cpp): a SPECIAL round -- its projectile
+    // carries an explosion (elemental arrows, exploding bolts) -- is outside the
+    // damage ladder, so the buy side's ammo swap-up never buys it as an upgrade.
+    // Pure form read (VM-thread safe).
+    bool AmmoIsSpecialBase(const RE::TESAmmo* a_ammo);
 
     // ── #21 economy GEAR/TOME buy helpers (reuse the loot judge on the VM side) ──
     // The economy buy plan (TradeBridge::PlanBuy) runs on the Papyrus/VM thread

@@ -50,85 +50,31 @@ namespace MFO::Logistics {
         // handle re-resolved at act time, so a container mutation never happens
         // mid-iteration of the world's ref list.
 
-        // Take all ammo of one class (arrows OR bolts) from the source. No bow
-        // gate -- the gambit's condition decides whether to gather at all.
+        // Take ammo of one class (arrows OR bolts) from the source. No bow gate --
+        // the gambit's condition decides whether to gather at all.
         // a_peek: read-only "does this source hold anything I'd take?" -- return
         // true on the first match WITHOUT transferring. Used to skip walking to a
         // body that hasn't got what the gambit wants (marth).
+        // THE SWAP-UP RULE (86e3ebfu3, logistics/SwapUp.cpp): the take and the
+        // shed are the shared rule's. RESTOCK eligibility is unchanged (at-or-above
+        // his worst held ammo; only STRICTLY worse is passed over -- this action is
+        // gated by the gambit's own count condition, so it fires while he is short),
+        // best-first under the carry weight. What changed is the TRADE: the old
+        // count-neutral "give back one worst arrow per better arrow taken" (marth
+        // #35) is now the rule's shed -- once he holds his keep target, every stack
+        // strictly below the cutoff tier goes back into the body, lowest first
+        // (marth 2026-09-24: "lower arrows are worthless when better ones are
+        // available, lowest removed first"), and a body stack the rule would call
+        // obsolete on landing is never taken (the peek agrees with the take, so he
+        // never walks back to the junk he shed). The kind is judged ONLY when he
+        // actually uses it (UsesAmmoKind -- review round 1 on 4f23c30: the seeded
+        // "arrows below 10" rule sits on every follower); otherwise the target is 0
+        // and this is the plain restock, with no shed.
         bool LootAmmo(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
                       bool a_peek) {
-            // Collect first, mutate after -- RemoveItem dispatches
-            // TESContainerChangedEvent synchronously, so touching an inventory
-            // mid-walk is the #2 landmine.
-            struct Ammo { RE::TESBoundObject* obj; std::int32_t count; float dmg; };
-            std::vector<Ammo> body;
-            for (auto& [obj, data] : a_src->GetInventory()) {
-                if (!obj || data.first <= 0) continue;
-                if (auto* am = obj->As<RE::TESAmmo>(); am && AmmoIsBolt(am) == a_wantBolt)
-                    body.push_back({ obj, static_cast<std::int32_t>(data.first),
-                                     am->GetRuntimeData().data.damage });
-            }
-            if (body.empty()) return false;
-
-            // The follower's OWN matching ammo, and its WORST damage. With none held
-            // this is a pure restock (worstHeld = -1 -> every body arrow is "better",
-            // nothing to shed). Held junk turns it into a TRADE.
-            std::vector<Ammo> held;
-            float worstHeld = std::numeric_limits<float>::max();
-            for (auto& [obj, data] : a_follower->GetInventory()) {
-                if (!obj || data.first <= 0) continue;
-                if (auto* am = obj->As<RE::TESAmmo>(); am && AmmoIsBolt(am) == a_wantBolt) {
-                    const float d = am->GetRuntimeData().data.damage;
-                    held.push_back({ obj, static_cast<std::int32_t>(data.first), d });
-                    worstHeld = std::min(worstHeld, d);
-                }
-            }
-            if (held.empty()) worstHeld = -1.0f;
-
-            // PEEK: the eligibility check must agree with the TAKE below, or the
-            // follower walks back to a corpse holding only the junk it just shed and
-            // takes nothing, forever (Fable). RESTOCK, not upgrade-only: this action
-            // is gated by the gambit's own count condition ("arrows < N"), so it only
-            // fires WHILE the follower is short -- it must accept same-tier ammo (>=
-            // worst held), or a low archer stands over corpses full of the very arrows
-            // he's firing and never restocks. The condition self-limits the quantity
-            // (it stops firing once the follower is back above N), exactly like the
-            // potion path. Only STRICTLY worse ammo is passed over.
-            if (a_peek) {
-                for (auto& b : body) if (b.dmg >= worstHeld) return true;
-                return false;
-            }
-
-            // TAKE the body arrows at-or-above the follower's worst, best-first (so
-            // the carry-weight gate drops iron, never ebony). Track the weakest we
-            // actually took, so the shed below never gives back something as good.
-            std::sort(body.begin(), body.end(), [](const Ammo& a, const Ammo& b) { return a.dmg > b.dmg; });
-            std::int32_t taken = 0;
-            float minTaken = std::numeric_limits<float>::max();
-            for (auto& b : body) {
-                if (b.dmg < worstHeld) break;   // strictly worse -> never downgrade
-                if (!FitsCarryWeight(a_follower, b.obj->GetWeight() * b.count)) continue;
-                a_src->RemoveItem(b.obj, b.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
-                taken   += b.count;
-                minTaken = std::min(minTaken, b.dmg);
-            }
-            if (taken == 0) return false;
-
-            // TRADE (marth #35): give the follower's WORST arrows back to the body,
-            // one per better arrow taken -- capped at `taken` (<= better available)
-            // and only ever shedding arrows strictly worse than the weakest we took.
-            // Empty-handed followers shed nothing (held is empty), so it stays a
-            // clean restock; a junk stack gets upgraded count-neutral.
-            std::sort(held.begin(), held.end(), [](const Ammo& a, const Ammo& b) { return a.dmg < b.dmg; });
-            std::int32_t toShed = taken;
-            for (auto& h : held) {
-                if (toShed <= 0) break;
-                if (h.dmg >= minTaken) break;   // worst-first: nothing worse remains
-                const std::int32_t n = std::min(toShed, h.count);
-                a_follower->RemoveItem(h.obj, n, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_src);
-                toShed -= n;
-            }
-            return true;
+            const bool uses  = g_svc && UsesAmmoKind(g_svc, ComputeWeaponRoles(a_follower, *g_svc), a_wantBolt);
+            const int target = AmmoKeepTarget(g_svc, a_wantBolt, uses);
+            return SwapUpAmmoFrom(a_follower, a_src, a_wantBolt, target, /*a_upgradeOnly*/ false, a_peek);
         }
 
         // Is this alchemy item a POTION the follower would drink? Any potion --
