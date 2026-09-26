@@ -72,6 +72,10 @@ Read it as history and this block as current.
   `BuyThresholds` fields); the ch.17 ammo declaration picks the best stack. Out-of-boundary touches:
   `native/CMakeLists.txt` (new source), `native/TradeBridge.h/.cpp` (the buy pass). MFO-B36 was already
   fixed on main by loot M1.
+  ROUND 1 (tier-B review of `4f23c30`, nothing above SEV-3; coordinator decisions 1-7): ammo player picks +
+  special (explosion/enchanted) ammo pinned, value breaks a damage tie, a kind judged only when used, loot drop
+  gated on bEconomy / never enchanted / value <= the upgrade / committed after the acquire, ammo buy after gear at
+  a quarter purse, declaration needs >= 20 rounds to swap (B44), mage backup kept. Backlog MFO-B111..B113; B36 closed.
   FIELD CHECKS: `[swapup] ... RESTOCK|UPGRADE arrows took N ... dropped obsolete [...]`; `[sell] ... SELL
   (obsolete ammo)` and the `[econ] ... offered [...]` rows naming the old arrows; `bought plan` naming a
   better arrow; `[swapup] ... dropped superseded [...] to carry '<item>'` only when overweight.

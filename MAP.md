@@ -1860,11 +1860,11 @@ module. Module layout:
     MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`).
   - `logistics/Sinks.cpp` (299) = `BeastHeadSink:52`, `ContainerSink:129`, `GateSink:208`
     (anonymous namespace), `RegisterSinks:250`, `SweepBeastHeadsOnLoad:274`.
-  - `logistics/LootTake.cpp` (783), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (934),
-    `logistics/LootEquipment.cpp` (547), `logistics/Economy.cpp` (1043),
-    `logistics/EquipAuthority.cpp` (773), `logistics/Cast.cpp` (268),
-    `logistics/SwapUp.cpp` (508, THE SWAP-UP RULE, 2026-09-25): see the bullets below.
-  - `logistics/Logistics_internal.h` (906) = shared state/types/declarations;
+  - `logistics/LootTake.cpp` (786), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (934),
+    `logistics/LootEquipment.cpp` (571), `logistics/Economy.cpp` (1044),
+    `logistics/EquipAuthority.cpp` (816), `logistics/Cast.cpp` (268),
+    `logistics/SwapUp.cpp` (612, THE SWAP-UP RULE, 2026-09-25): see the bullets below.
+  - `logistics/Logistics_internal.h` (938) = shared state/types/declarations;
     `logistics/LootTravel_internal.h` (562) = the loot TRAVEL substrate (`TravelIntent`,
     `g_travelSlots:91`, stall/sticky/gate/actor-block state, `SortLootCandidates`, scan
     timing), included by `Logistics_internal.h` at the block's old position (NOT
@@ -1898,52 +1898,71 @@ module. Module layout:
   86e3ebfu3; marth: "swap up needs to work in looting and shopping ... lower arrows are worthless
   when better ones are available, lowest removed first, or slated for sale when obsolete").** ONE
   rule, loot + shop, declarations in `logistics/Logistics_internal.h` (the SWAP-UP block at the
-  end). Two halves:
-  - **Keep set (weapons + armor):** `ComputeKeepSet:61` = the old EconomyProbe keep block MOVED
+  end). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B111** (the ammo peek ignores carry weight),
+  **MFO-B112** (`ComputeKeepSet` inside the loot peek), **MFO-B113** (`VendorTrades(null)` on a
+  `TESAmmo` keyword form) -- read them before editing. Two halves:
+  - **Keep set (weapons + armor):** `ComputeKeepSet:69` = the old EconomyProbe keep block MOVED
     VERBATIM (best weapon per class bucket incl. the dual-wield runner-up, worn + best
-    `ArmorScore` per logical slot, `bestBySlot` for the force-sell) -- one edit: the armor half's
-    `bEconomyBuyGear` gate is read once into `KeepSet::armorJudged`. Consumers: EconomyProbe's sell
-    list (unchanged behaviour) and `MakeRoomForSwapUp:429` (LOOT): an upgrade `LootEquipment`
-    picked that does not fit the carry weight is still taken when dropping SUPERSEDED gear
-    (outside the keep set, WEAP or rated ARMO only, unworn, not `IsStockGear` / quest /
-    `Catalog::IsExcluded` / `IsPlayerPick`, no MEO unique id while MEO is present) frees the
-    weight -- least valuable first, exact copies, ALL OR NOTHING; the peek runs it dry so peek
-    and take agree.
-  - **Ammo:** ranked by `TESAmmo` DAMAGE within one kind (`AmmoIsBolt`); non-playable (bound)
-    ammo is never ranked or moved. `AmmoKeepTarget:261` = max(`kAmmoKeepFloor` 50, the
-    `cond.self_out_of_arrows/bolts` N), 0 = not judged (not his ranged kind and no gambit for
-    the kind). `AmmoCutoff:300`: best-first running count; the stack reaching the target is the
-    CUTOFF tier, every unpinned stack STRICTLY below it is obsolete (`AmmoObsolete`); pinned =
-    worn / stock / quest / excluded. Consumers: `LootAmmo` (`LootTake.cpp:71`, RESTOCK: >= worst
-    held) and `LootEquipment` (UPGRADE, strictly above `AmmoUpgradeBar:324`, a ranged follower's
-    own kind, lowest priority after gear) both via `SwapUpAmmoFrom:348` -- plans over the
-    COMBINED pool (held + body) and never takes a body stack the rule calls obsolete on landing,
-    takes best-first under `FitsCarryWeight`, then sheds `ObsoleteHeldAmmo:312` (recomputed once
-    from the post-take inventory) back into the body, lowest first; logs `[swapup]`.
-    EconomyProbe offers `ObsoleteHeldAmmo` rows (`OBSOLETE AMMO` block, tag `SELL (obsolete
-    ammo)`, unit price floored at 1g because Papyrus skips a 0 unit and iron x 0.30 rounds to 0).
+    `ArmorScore` per logical slot, `bestBySlot` for the force-sell) -- the armor half's
+    `bEconomyBuyGear` gate read once into `KeepSet::armorJudged`, plus (round 1) the loot judge's
+    MAGE BACKUP sidearm (`BuildEquipmentContext(actor, &state)`'s `wantBackup` / `daggersOnly`,
+    best by attack damage) so a looted backup dagger is never sold and re-looted.
+    `BuildEquipmentContext` gained a state-taking overload for this (`LootEquipment.cpp`; the
+    one-arg form forwards `g_svc`). Consumers: EconomyProbe's sell list and the LOOT drop:
+    `PlanRoomForSwapUp:509` plans, for an upgrade `LootEquipment` picked that does not fit the
+    carry weight, the SUPERSEDED gear to drop -- only under `bEconomy` (the drop is the loot-time
+    twin of the sale), outside the keep set, WEAP or rated ARMO only, unworn, NOT ENCHANTED, value
+    <= the upgrade's `GetGoldValue`, not `IsStockGear` / quest / `Catalog::IsExcluded` /
+    `IsPlayerPick`, no MEO unique id while MEO is present -- least valuable first, exact copies,
+    all or nothing; `CommitSwapUpDrops:591` runs only after `AcquireEquip` put the upgrade in his
+    inventory (`HeldCount:584` before/after; a miss logs `[swapup] ... did not arrive ... NOT
+    made`).
+  - **Ammo:** ranked by `TESAmmo` DAMAGE, instance VALUE breaking a tie (`AmmoRankAbove`), within
+    one kind (`AmmoIsBolt`), judged ONLY for the kind the follower USES (`UsesAmmoKind:308`: his
+    ranged role, a caster only with an equip-ranged gambit -- a gambit for the kind is NOT use,
+    the seeded "arrows below 10" sits on everyone). Non-playable (bound) ammo is never ranked or
+    moved; SPECIAL rounds (`AmmoIsSpecial:300`: projectile explosion, or an enchanted instance)
+    never count toward the target and are never obsolete. `AmmoKeepTarget:322` = max(
+    `kAmmoKeepFloor` 50, the `cond.self_out_of_arrows/bolts` N), 0 = not judged.
+    `AmmoCutoff:358`: best-first running count; the stack reaching the target is the CUTOFF, every
+    unpinned stack ranked strictly below it is obsolete (`AmmoObsolete`); pinned = worn / special
+    / stock / player pick / quest / excluded. Consumers: `LootAmmo` (`LootTake.cpp:73`, RESTOCK: >=
+    worst held; target 0 when he does not use the kind = plain restock, no shed) and
+    `LootEquipment` (UPGRADE, strictly above `AmmoUpgradeBar:385`, lowest priority after gear) via
+    `SwapUpAmmoFrom:410` -- plans over the COMBINED pool (held + body), never takes a body stack
+    the rule calls obsolete on landing, takes best-first under `FitsCarryWeight`, then sheds
+    `ObsoleteHeldAmmo:372` (recomputed once, post-take) back into the body, lowest first; logs
+    `[swapup]`. EconomyProbe offers obsolete rows (`Economy.cpp:785`, tag `SELL (obsolete ammo)`,
+    unit price floored at 1g: Papyrus skips a 0 unit and iron x 0.30 rounds to 0).
     `BuildBuyThresholds` fills the APPENDED `BuyThresholds::ammoUpgrade / ammoWantBolt /
-    ammoBarDmg / ammoUpgradeQty` (under `bEconomyBuyGear`, `doRanged`) -> `PlanBuy`'s AMMO
-    SWAP-UP pass (`TradeBridge.cpp:227`, after the supply quota pass): best damage above the bar,
-    up to the quantity minus what the supply pass already planned above the bar, never past a
-    line's remaining stock, spend <= half the remaining purse. The ch.17 declaration's ammo
-    (`RefreshEquipDeclaration` rule 2) = the best playable stack by damage, the worn stack on a
-    tie, a worn bound arrow kept as is (was "worn, else best").
-  **MFO-B36 SHAPE:** one candidate never evicts for more than itself -- each consumer plans once
-  over one pool (the shed recomputes once; the relief frees one candidate's weight; `PlanBuy`
-  respects `plan[] < avail`). (The literal B36, MEO's gem swap-up, is fixed on main since loot
-  M1, `MEOBridge.cpp` `--avail[loot]`.)
-  **THREADING:** worker only (ServiceFollower / EconomyProbe). Moves are container -> container
-  `RemoveItem` into the SOURCE (the shipped LootAmmo trade), never a world drop -- no 3D, no
-  `MainThread::Post`. Loose ammo (route 2b, `LootScan.cpp`) is NOT covered: it is picked up
-  whole by `ActivateRef` with no shed; the obsolete remainder sells or sheds on the next
-  container loot.
-  **What breaks:** judging ammo across kinds (arrows vs bolts) or by value instead of damage
-  splits loot, sell, buy and the declaration; making a pinned (worn / signature / quest) stack
+    ammoBarDmg / ammoUpgradeQty / ammoBarValue` (under `bEconomyBuyGear`, `doRanged`) ->
+    `PlanBuy`'s AMMO SWAP-UP pass (`TradeBridge.cpp:341`, AFTER the gear pass, before tomes): the
+    best-ranked non-special ammo above the bar, up to the quantity minus what the supply pass
+    already planned above the bar, never past a line's remaining stock, spend <= a QUARTER of the
+    remaining purse. The ch.17 declaration's ammo (`EquipAuthority.cpp:584`, rule 2): (a) a
+    PLAYER AMMO PICK -- recorded in `g_playerPicks` when, under enforcement with Ammo owned by the
+    last declaration, a worn ammo that declaration did not carry appears (only the PlayerMenu path
+    gets through) -- is declared while owned and pinned by `HeldAmmo`; (b) a worn special / bound
+    round stays; (c) else the best ordinary stack, over a different worn stack only with >=
+    `kAmmoDeclareMin` (20) rounds (MFO-B44: an owned Ammo category pins the archer to the
+    declared stack; 20 ~ one fight's volley), else the worn stack.
+  **MFO-B36 SHAPE (CLOSED):** one candidate never evicts for more than itself -- each consumer
+  plans once over one pool (the shed recomputes once; the relief frees one candidate's weight;
+  `PlanBuy` respects `plan[] < avail`). The literal B36 (MEO's gem swap-up) is fixed on main
+  since loot M1.
+  **THREADING:** worker only (ServiceFollower / EconomyProbe; `PlanBuy` on the VM thread reads
+  only forms). Moves are container -> container `RemoveItem` into the SOURCE (the shipped
+  LootAmmo trade), never a world drop -- no 3D, no `MainThread::Post`. `g_playerPicks` stays
+  worker-serial (the declaration). Loose ammo (route 2b, `LootScan.cpp`) is NOT covered: picked
+  up whole by `ActivateRef` with no shed; the remainder sells or sheds on the next container loot.
+  **What breaks:** judging ammo across kinds or by value before damage splits loot, sell, buy and
+  the declaration; judging a kind the follower does not use sells a melee follower's arrows
+  (the seeded gambit); making a pinned (worn / special / player pick / signature / quest) stack
   obsolete sells or drops it; dropping `kAmmoKeepFloor` toward the gambit N lets a handful of
   better arrows retire a whole quiver; taking a body stack the combined plan calls obsolete
-  re-creates the take-then-shed walk-back loop; any keep-set edit changes the sell list AND the
-  loot drop at once (by design -- never fork the set); `BuyThresholds` is append-only.
+  re-creates the take-then-shed walk-back loop; committing the loot drop before the upgrade
+  lands loses gear on a failed acquire; any keep-set edit changes the sell list AND the loot drop
+  at once (by design -- never fork the set); `BuyThresholds` is append-only.
 - **WEAPON / ARMOR STYLE BY PERKS (2026-09-13, marth: "highest skill wins, most
   perked style within a category wins, strongly prefers").** THE decision is
   `ComputeWeaponRoles` (`logistics/Gear.cpp:398`): the melee CLASS is still the
@@ -1959,7 +1978,7 @@ module. Module layout:
   compares on the in-role melee weapon): `BuildEquipmentContext:26`
   (`EquipmentContext::baseScore` + `roles`), `LooseEquipmentQualifies:175`,
   `LootEquipment:222` (`bestWeapScore`), the economy keep buckets 1H/2H
-  (`logistics/SwapUp.cpp` `ComputeKeepSet:61` `keepRoles`), `BuildBuyThresholds:391` →
+  (`logistics/SwapUp.cpp` `ComputeKeepSet:69` `keepRoles`), `BuildBuyThresholds:391` →
   `TradeBridge::BuyThresholds::meleeBaseScore`/`preferKinds` → `PlanBuy`
   (`TradeBridge.cpp:234` via public `Logistics::WeaponBuyScore:904`).
   Armor: see the ARMOR CLASS BY SKILL + PERKS entry below (2026-09-14) —
@@ -2190,7 +2209,7 @@ module. Module layout:
   what MFO decides elsewhere): hands = `a_holdRight/a_holdLeft` (Actuation's `ForcedHold`
   ledger) and nothing else (a two-hander/bow in the right empties the left; never a weapon not
   held — a stowed bow beside a held sword is not simultaneously wearable); AMMO only under a
-  bow/crossbow HOLD (the best playable carried by damage, the worn stack on a tie -- THE SWAP-UP RULE, 2026-09-25; bolts for a
+  bow/crossbow HOLD (a player ammo pick, else the swap-up rule's best stack if >= 20 rounds or worn, else the worn one -- THE SWAP-UP RULE, 2026-09-25; bolts for a
   crossbow) — the archer AI's own ammo equips pass in the unowned category; the SHIELD is NOT
   DECLARED (v9): `roles.offHand==2` → the Shield category is DENIED (THE FIELD FIX, now without
   owning a hand); 1 → Actuation's direct `EquipShieldOnMain` (an unowned-category equip the seat
@@ -2309,7 +2328,7 @@ module. Module layout:
   head compare must stay ONE comparison (per-bit Hair AND Circlet against two
   `GetWornArmor` reads can double-judge the same worn helmet).
 - **Loot side (was `Logistics_Loot.cpp`, wave-2 split into three):**
-  `logistics/LootTake.cpp` (per-category looters `LootAmmo:71` -- a wrapper over
+  `logistics/LootTake.cpp` (per-category looters `LootAmmo:73` -- a wrapper over
   `SwapUpAmmoFrom` since 2026-09-25, `LootPotions:90`,
   `LootGold:187`, `LootValuables:391`; source policy `PlayerIsConsidering:535`,
   `TierReleased:585`, `LootHere:666`, `HasLoot:686`, `NavmeshReach:750`),
