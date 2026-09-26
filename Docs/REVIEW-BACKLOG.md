@@ -771,3 +771,9 @@ Raised against 4f23c30 (`feat/mfo-swapup-ammo`, tier-B review), 2026-09-25. Find
 
 ### MFO-B116 (SEV-4) -- swap-up: VendorTrades(null) on a TESAmmo keyword form
 Raised against 4f23c30 (`feat/mfo-swapup-ammo`, tier-B review), 2026-09-25. Finding (as relayed): "VendorTrades(null) on TESAmmo". The obsolete-ammo sell rows pass `obj->As<RE::BGSKeywordForm>()`; on a layout where `TESAmmo` does not derive from `BGSKeywordForm` (the VR branch of `RE/T/TESAmmo.h`) that is null and `VendorTrades` refuses the row (unless the merchant-perk bypass is on), so obsolete ammo silently never sells there. Fix shape: log the refusal once, or read the ammo's keywords through the runtime's own layout.
+
+### MFO-B117 (SEV-4) -- lockpick doors: an exterior door in an adjacent cell is missed
+Raised against c6fc73d (`feat/mfo-lockpick-doors`, tier-A review), 2026-09-26. Coordinator's framing of the reviewer's SEV-4 #3: "the adjacent-cell exterior miss". `DispatchGateDoor` (`native/logistics/Lockpick.cpp`) searches only the follower's and the target's ATTACHED parent cells for the locked door. Outdoors, a door standing just across a cell border from both (the stall point near the border) is not seen, so the item stays GATED under M1's normal re-admit instead of getting a door leg. Fix shape: also walk the attached cell that contains the block point S (or the player's, as `FindActorBlocker` does).
+
+### MFO-B118 (SEV-5) -- Service.cpp needs its split plan
+Raised against c6fc73d (`feat/mfo-lockpick-doors`, tier-A review), 2026-09-26. `native/logistics/Service.cpp` is past the ~1500-line plan-a-split mark (about 1880 lines after LP-M2; the 1462-line `ServiceFollower` is one function). CLAUDE.md: the next brief touching it proposes the split, done as its own round with `tools/splitcheck`. Not done here (scope rule 1).

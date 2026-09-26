@@ -207,9 +207,27 @@ namespace MFO::Logistics {
         }
         class GateSink final : public RE::BSTEventSink<RE::TESOpenCloseEvent>,
                                public RE::BSTEventSink<RE::TESActivateEvent>,
-                               public RE::BSTEventSink<RE::TESCellAttachDetachEvent> {
+                               public RE::BSTEventSink<RE::TESCellAttachDetachEvent>,
+                               public RE::BSTEventSink<RE::TESLockChangedEvent> {
         public:
             static GateSink* GetSingleton() { static GateSink s; return &s; }
+            // LP-M2: a DOOR's lock changed (the engine Unlock -- MFO's lockpick door leg, the
+            // player's pick or key, a spell, a script -- tail-calls the dispatch: 1.6.1170
+            // 0x2D92E0 id 19512 / 1.5.97 id 19110 build {NiPointer<TESObjectREFR>} and send it
+            // through ScriptEventSourceHolder +0x6E0, both runtimes read). A door that just
+            // unlocked may be what gated the item. DOORS ONLY: a chest's lock never opens a
+            // path (and a picked chest must not re-admit the gates around it). No actor filter
+            // (the event carries none): MFO's own unlock of a gate door is exactly the signal.
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESLockChangedEvent* a_ev,
+                                                  RE::BSTEventSource<RE::TESLockChangedEvent>*) override {
+                if (!a_ev || g_gateCount.load(std::memory_order_relaxed) == 0)
+                    return RE::BSEventNotifyControl::kContinue;
+                auto* r    = a_ev->lockedObject.get();
+                auto* base = r ? r->GetBaseObject() : nullptr;
+                if (base && base->Is(RE::FormType::Door) && !r->IsLocked())
+                    ReadmitNear(r, "door UNLOCKED near it");
+                return RE::BSEventNotifyControl::kContinue;
+            }
             RE::BSEventNotifyControl ProcessEvent(const RE::TESOpenCloseEvent* a_ev,
                                                   RE::BSTEventSource<RE::TESOpenCloseEvent>*) override {
                 if (a_ev && g_gateCount.load(std::memory_order_relaxed) > 0 && !ByFollower(a_ev->activeRef.get()))
@@ -260,6 +278,7 @@ namespace MFO::Logistics {
         holder->AddEventSink<RE::TESOpenCloseEvent>(GateSink::GetSingleton());
         holder->AddEventSink<RE::TESActivateEvent>(GateSink::GetSingleton());
         holder->AddEventSink<RE::TESCellAttachDetachEvent>(GateSink::GetSingleton());
+        holder->AddEventSink<RE::TESLockChangedEvent>(GateSink::GetSingleton());   // LP-M2: a gate door unlocked
         spdlog::info("[logistics] player-looted waiver + beast-head equip + loot gate sinks installed");
     }
 

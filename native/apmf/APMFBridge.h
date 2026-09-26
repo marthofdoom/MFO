@@ -657,6 +657,14 @@ namespace MFO::APMFBridge {
     // because a refusal means APMF will do nothing whatsoever and "no looting" is
     // not an acceptable answer to it. Logged once per refusal reason class.
     bool ClaimLootTravel(RE::FormID a_follower, RE::FormID a_destRef, int a_slot, float a_radius);
+    // LP-M2 (F-L3): RE-POINT this slot's EXISTING ch.19 leg to a WORLD POINT (ABI >= 11,
+    // kTravel_ToPosition; Harbinger places and deletes its own XMarker there). Used for the
+    // lockpick door leg so the path ends IN FRONT of a locked door and never enters its portal
+    // (the engine's NPC door Activate unlocks without a skill check). False when the slot has
+    // no ch.19 leg or APMF is below v11: the door leg is then not dispatched. The leg's
+    // destination is Harbinger's marker, so ReadLootTravelLeg reads it as NOT ours (dest 0):
+    // MFO's own M1 block timer and distance arrival govern the door leg. Takes g_mx.
+    bool ClaimLootTravelToPoint(RE::FormID a_follower, const RE::NiPoint3& a_point, int a_slot, float a_radius);
 
     // Worker-safe. TRUE while a_slot holds a live ch.19 loot-travel claim. This is
     // what makes the A/B switch safe to flip mid-session: the road is chosen only at

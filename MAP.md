@@ -1548,7 +1548,7 @@ rule in the header. Called only from the Scheduler hook above.
   `IsHostileToActor(player) || IsHostileToActor(him)` (hostile to him alone counts: CONFIRMED by
   marth, "yes, there will be fights without player involvement"); a CRIME-FACTION actor only when its `currentCombatTarget` is the player or
   a teammate. No ghost check (`IsGhost` is an unverified id call: backlog MFO-B111). TOWN / INN
-  FILTER (marth 2026-09-25), off while `pc->IsInCombat()`: `IsCivilised` (`:236`) walks the location chain
+  FILTER (marth 2026-09-25), off while `pc->IsInCombat()`: `IsCivilised` (`:229`, now `LocationTypes::Classify` in `native/LocationTypes.h`, shared with the lockpick load-door bar) walks the location chain
   innermost-first -- a LocTypeClearable / LocTypeDungeon tag first = a fight site (not civilised),
   a civilised LocType first = civilised (20 Skyrim.esm keywords resolved once by FormID; the
   LocTypeHold* family is excluded because it tags wilderness). Player's location civilised -> the
@@ -1994,8 +1994,8 @@ module. Module layout:
     timing), included by `Logistics_internal.h` at the block's old position (NOT
     self-contained; never include it directly).
   - `logistics/Logistics.h` (232) = the public API (unchanged, moved whole).
-  - `logistics/Lockpick.cpp` (828, NEW LP-M1 2026-09-25) = follower LOCKPICKING of chests: see the
-    LOCKPICK entry below. Declared in `Logistics_internal.h` (`namespace Lockpick`, `:846`).
+  - `logistics/Lockpick.cpp` (956, NEW LP-M1 2026-09-25, doors LP-M2 2026-09-26) = follower LOCKPICKING of chests: see the
+    LOCKPICK entry below. Declared in `Logistics_internal.h` (`namespace Lockpick`, `:847`).
   Wave 2 added declarations to `Logistics_internal.h` for helpers that were file-local only
   by position: `EquipTorch`, `HealExcludedWeapon`, `ShedOffRoleWeapon`,
   `MarkJustLooted`, `IsDrinkablePotion`, `IsCoinLoot`, `IsSoulGemItem`, `IsIngredientItem`,
@@ -2745,7 +2745,8 @@ anonymous-namespace copy — that silently forks the instance).
     `[loot] GATED <ref> re-admitted -- <why>`): `GateSink` (`logistics/Sinks.cpp:208`, main
     thread, registered in `RegisterSinks`) on `TESOpenCloseEvent` or an ACTI/DOOR
     `TESActivateEvent` within 2048 u of S or T, on the gated ref's own
-    `TESCellAttachDetachEvent` (per-reference event), a full 64-entry table (memory bound,
+    `TESCellAttachDetachEvent` (per-reference event), a DOOR's `TESLockChangedEvent` when it reads
+    unlocked (LP-M2, see LOCKPICK DOORS), a full 64-entry table (memory bound,
     logged) and `ClearGates` on revert. **NO TIMER** (marth: "only re-admit when the block
     actually clears"); an actor jam never becomes a gate (above). Open/close and activate
     events whose `activeRef` / `actionRef` is a teammate or tracked follower are IGNORED
@@ -2823,24 +2824,25 @@ anonymous-namespace copy — that silently forks the instance).
   `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
   `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-
   the-lock. Pieces:
-  - **Gate** `Lockpick::Admit` (`Lockpick.cpp:486`, called by the scan `LootScan.cpp:377` after the
+  - **Gate** `Lockpick::Admit` (`Lockpick.cpp:535`, called by the scan `LootScan.cpp:377` after the
     owner / off-limits bars): refuses (logged once per follower+lock+reason) owned, offlimits,
-    notChest (doors are LP-M2), creature (no `ActorTypeNPC` race keyword: `IdleLockPick` is a
+    notChestOrDoor, doorIntoLivedIn (a LOAD door whose destination is owned / a player home /
+    crime to enter / a lived-in location, `LoadDoorBar` `:472`), creature (no `ActorTypeNPC` race keyword: `IdleLockPick` is a
     humanoid clip), requiresKey without the key, noPicks, a standing failed verdict (`g_fail`:
     simFail (threshold = B, the breaks the lock needs) / noSweetSpot (skill rise only) / tooLong / idleEnded /
     unlockFailed, lifted when his lockpick count exceeds the threshold or his skill rises),
-    and the session-wide INERT cases (`InertReason` `:463`: no main-thread pump / Harbinger absent,
+    and the session-wide INERT cases (`InertReason` `:512`: no main-thread pump / Harbinger absent,
     below ABI v17 or its v2 idle refused / the `Lockpick.Unlock` self-check row refused).
   - **Routing:** an admitted LOCKED candidate is never drained in place: both act-loop branches
     of `LootNearby` send it down the excursion path like a loose ref (`LootScan.cpp:551`, `:664`),
     and `LootHere` (`LootTake.cpp:706`) refuses any locked ref, so NO transfer path can loot through
     a lock any more (StripCorpse goes through LootHere).
-  - **Arrival** (`Service.cpp:760`, before StripCorpse): `Lockpick::Step` (`Lockpick.cpp:529`) is a
+  - **Arrival** (`Service.cpp:760`, before StripCorpse): `Lockpick::Step` (`Lockpick.cpp:588`) is a
     per-follower job: SNAPSHOT (one `MainThread::Post`: lock level, key, picks, clamped skill,
     `Progression::LockpickEntryPointsFor` (`Progression.cpp:1036`, the NARROW progression query:
     EP59/63/65 through `HandleEntryPoint` with the menu's own args and seeds; EP62 is inert in the
     engine and not evaluated), every GMST / INI setting by name -- a missing one REFUSES) ->
-    SIMULATE (`Simulate` `:269`, seeded per follower+lock, UNCAPPED on picks so it yields B, the
+    SIMULATE (`Simulate` `:270`, seeded per follower+lock, UNCAPPED on picks so it yields B, the
     breaks the lock needs; engine formulas + the one modelled constant `kBindReactSec`; the
     searcher strides half + 2*partial (clamped to the pick range's ends) then INFERS the distance
     from the lock angle) -> a KNOWN FAILURE IS NEVER STARTED: sweet <= 0 (noSweetSpot) or
@@ -2851,12 +2853,12 @@ anonymous-namespace copy — that silently forks the instance).
     cadence (`kIdleClipSec` 5.6 s, from the last play, for the whole window; never on a pick
     break mid-clip) -> at the window's end ONE `MainThread::Post` that RE-VALIDATES (follower
     alive; chest enabled, loaded, still locked; else a logged skip, nothing written), removes the
-    B broken picks from the FOLLOWER, then calls the engine Unlock `UnlockOnMain` (`:170`,
+    B broken picks from the FOLLOWER, then calls the engine Unlock `UnlockOnMain` (`:171`,
     `REL::RelocationID(19821, 20226)`, row `Lockpick.Unlock`, `SeatVerified`) -> the next step
     sees the ref unlocked -> kProceed -> the transfer. EVERY pick timer (snapshot / never-live /
     window / unlock / stale floors) runs on the Scheduler's UNPAUSED service clock
     (`Scheduler::ServiceClock`, `Scheduler.cpp:496`), so a menu never ages or abandons a pick.
-  - **Lifecycle:** `SweepStale` (`:791`, top of `ServiceFollower` `Service.cpp:192`) abandons a job
+  - **Lifecycle:** `SweepStale` (`:850`, top of `ServiceFollower` `Service.cpp:192`) abandons a job
     whose slot no longer targets its lock or whose arrival step stopped for `kStaleFloorSec` (3 s unpaused);
     `Abort` from `ReleaseTravelOnCombat` / `OnFollowerRemoved` (`Upkeep.cpp:603` / `:623`); `Clear`
     from `ClearTransientState` (`Upkeep.cpp:598`). An abandoned pick releases the hold and consumes
@@ -2872,6 +2874,43 @@ anonymous-namespace copy — that silently forks the instance).
     excursion ended (ch.1 would keep him frozen: the sweep and the combat Abort are the only
     releases). Crime: #22e stays absolute (owned / offlimits refused twice: scan + judge); MFO
     never calls TrespassAlarm and never Activates a locked ref.
+  - **DOORS (LP-M2, 2026-09-26, `feat/mfo-lockpick-doors`).** A locked door on a loot route is found
+    at M1's GATED verdict (no actor in front): `Service.cpp:976`, right after `MarkGated`, calls
+    `Lockpick::DispatchGateDoor` (`Lockpick.cpp:890`): the nearest LOCKED, enabled DOOR within
+    256 u of the block point S, ON THE WAY to the target (at most 128 u, about one door width, off
+    the S->T line and not more than 64 u behind S), in the follower's / target's ATTACHED cells
+    (an exterior door across a cell border is missed: backlog MFO-B117); `Admit` judges it (owned /
+    off-limits / load-door destination bar `LoadDoorBar` `:477` / picks / verdicts).
+    **F-L3 (the NPC door Activate unlocks with no skill check): the leg aims at a POINT 96 u in
+    front of the door on the follower's side, never at the door ref**: `RetargetExcursionLeg`
+    (`LootScan.cpp:27`, moved out of `LootNearby`'s excursion branch unchanged so both share it)
+    with `a_point` -> `APMFBridge::ClaimLootTravelToPoint` (`apmf/Excursion.cpp:498`, ch.19
+    kTravel_ToPosition, ABI >= 11, re-points the slot's EXISTING ch.19 leg; Harbinger places and
+    deletes its own XMarker; radius 64, so he parks 96..160 u from the door, inside kArrivalDist).
+    On the MFO-package road a point leg is REFUSED (the package takes a ref and MFO's only XMarker
+    is the #73 evict marker), logged, the item stays GATED. The leg's TARGET stays the door ref, so
+    the arrival runs the same `Lockpick::Step` on it (snapshot / simulation / ch.12 v2 IdleLockPick
+    / Unlock). The point leg's destination is Harbinger's marker, so M2 reads it as NOT ours: MFO's
+    own M1 block timer and distance arrival govern it. The item stays GATED until the re-admit.
+    ARRIVAL (`Service.cpp:763`): Step also runs while `Lockpick::HasJob` (`:860`) is true for the
+    ref, so a job whose Unlock landed reaches its PICKED line and cleanup instead of being swept.
+    An open door leg has nothing to transfer (`Service.cpp:778`: Holding, no StripCorpse); if no
+    MFO pick or key opened it (`ConsumeOpenedByUs` `:865`), a WARN `F-L3: door unlocked without a
+    pick` (principle 7). The EMPTIED correction skips door legs (`Service.cpp:483`). RE-ADMIT: the
+    engine Unlock sends `TESLockChangedEvent` (1.6.1170 0x2D92E0 id 19512 / 1.5.97 id 19110, source
+    holder +0x6E0 on both); `GateSink` sinks it (`Sinks.cpp:221`, registered `:281`) and re-admits
+    through M1's own `ReadmitNear` for a DOOR that reads unlocked (never a chest). Never a door leg
+    for a target that is itself a door (no chains). The load-door bar and engage-on-sight's
+    town/inn filter share ONE location-type table and classifier (`native/LocationTypes.h`
+    `Classify`: fight site / civilised / untagged, innermost first); the bar refuses a destination
+    that is civilised, has no location, or has no location type (fail closed). **What breaks:**
+    aiming the door leg at the door ref (F-L3); dropping the door filter in the lock-changed sink
+    (every picked chest re-admits the gates around it); letting StripCorpse run on a door leg (a
+    spurious "nothing to take" + blocklist); letting the EMPTIED correction see a door leg (it
+    abandons it at once); allowing a door-behind-a-door dispatch (a gated door leg would
+    redispatch itself); gating Step on IsLocked alone (a finished pick is swept as "abandoned").
+    Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B117 (adjacent-cell door), MFO-B118
+    (Service.cpp split plan).
 - **Loot scan is MULTI-CELL** (`LootNearby` `logistics/LootScan.cpp:21`; cell set built at `:134`):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs

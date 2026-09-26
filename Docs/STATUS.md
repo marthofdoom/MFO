@@ -44,6 +44,20 @@ Read it as history and this block as current.
   retreat"), **marth's policy call on that degrade is pending**; the deny claim also releases any standing ch.21 entry
   (FIFO-cancel) so it cannot punch through. Extra field check: `arrived with the ch.22 deny still PENDING` should be rare.
 
+- **2026-09-26 branch `feat/mfo-lockpick-doors` (off `main` `92e8932`; NOT merged, NOT deployed). LP-M2: locked DOORS on a loot route, batch L, tier A. ClickUp 86e3edgha.**
+  At M1's GATED verdict (no actor in front) a locked door within 256 u of the block becomes the next leg; the same
+  judge / simulation / IdleLockPick / Unlock picks it; the Unlock's lock-changed event re-admits the gate (GateSink).
+  Load doors into owned / player-home / lived-in / untagged places are refused (the location-type table is shared
+  with engage-on-sight, `native/LocationTypes.h`). The door leg walks to a POINT 96 u in front of the door (Harbinger
+  ch.19 ABI >= 11 only; on MFO's own travel package the door leg is refused and logged), never at the door itself.
+  FIELD CHECKS: a locked unowned dungeon door between the follower and an item: `[loot] ... GATED` then
+  `[lockpick] ... GATED by LOCKED DOOR ... door leg dispatched to a point 96 u in front of it`,
+  `[loot-road] ... RETARGET road=CH19 dest=POINT(...)`, the pick lines (`seeded outcome: OPENS`, `PICKED`),
+  `[loot] GATED <item> re-admitted -- door UNLOCKED near it`, and he walks through to the item. A plain portcullis:
+  `GATED ... with no locked door within 256 u` (M1 unchanged). An owned locked door: one `REFUSED (owned)`, no pick.
+  **F-L3: NO `[lockpick] ... F-L3: door unlocked without a pick` WARN** (it means the door opened with no MFO pick or
+  key: possibly the engine's NPC door activate) and no bounty. The engage-on-sight startup line is now
+  `[location-types] N of 22 Skyrim.esm location keywords resolved`.
 - **2026-09-26 branch `feat/mfo-lockpick` (off `main` `53d61c0`; NOT merged, NOT deployed). Follower lockpicking of CHESTS, LP-R0 + LP-M1, batch L, tier A. ClickUp 86e3edgha.**
   NEW `logistics/Lockpick.cpp` (MAP section 4 LOCKPICK entry). Needs Harbinger ABI v17 (ch.12 Idle v2, unreleased at
   c0f0e43); below it locked chests are skipped (no loot through a lock on any road). A seeded outcome that would fail is

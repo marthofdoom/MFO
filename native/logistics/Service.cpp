@@ -480,6 +480,7 @@ namespace MFO::Logistics {
                            auto t = tr.target.get();
                            auto* r = t.get();
                            if (!r || r->IsDisabled() || r->IsMarkedForDeletion() || LooseRef(r) ||
+                               Lockpick::IsDoor(r) ||   // LP-M2: a door leg carries no loot
                                HasLoot(a_follower, r, tr.cat, tr.want))
                                return false;
                            skippedRef = r->GetFormID();
@@ -756,7 +757,10 @@ namespace MFO::Logistics {
                     // picked here first -- snapshot, simulation, ch.1 + ch.12 v2
                     // IdleLockPick for the simulated seconds, then the engine Unlock --
                     // and only an open lock reaches the transfer below.
-                    if (tref->IsLocked()) {
+                    // A job already running for this ref is driven to its end even once the
+                    // ref reads unlocked (its posted Unlock landed: the PICKED line and the
+                    // job's own cleanup run in Step's kUnlocking phase).
+                    if (tref->IsLocked() || Lockpick::HasJob(id, tref->GetFormID())) {
                         const auto pick = Lockpick::Step(a_follower, tref, now,
                             tr.startTime + std::chrono::seconds(static_cast<int>(Config::g_excursionMax.load())));
                         if (pick == Lockpick::StepResult::kHold) return;   // the pick IS this tick's action
@@ -767,6 +771,22 @@ namespace MFO::Logistics {
                             return;
                         }
                         // kProceed: open now -> the transfer below
+                    }
+                    // A DOOR leg (LP-M2) has nothing to transfer: once it is open (picked,
+                    // keyed, or unlocked by someone else meanwhile) the leg is done, the gate
+                    // re-admits on the lock-changed event, and the Holding scan re-picks the item.
+                    if (Lockpick::IsDoor(tref)) {
+                        // F-L3 OBSERVABLE (principle 7): a door leg that finds its door open
+                        // with no MFO pick or key having run means something else unlocked it
+                        // -- possibly the engine's NPC door Activate (unlocks with no skill
+                        // check). Said loudly, never a silent pass.
+                        if (!Lockpick::ConsumeOpenedByUs(id, tref->GetFormID()))
+                            spdlog::warn("[lockpick] {:08X}: F-L3: door unlocked without a pick -- door leg "
+                                         "{:08X} arrived and the door was already unlocked (no MFO pick or key "
+                                         "ran for it). Report this with the log.", id, tref->GetFormID());
+                        tr.phase = TravelPhase::Holding;
+                        tr.lingerUntil = now + BatchLingerDur();
+                        return;
                     }
                     // Take EVERYTHING his gambits want in this one visit, not just
                     // the category the trip was for -- else gold trips strand the
@@ -951,6 +971,11 @@ namespace MFO::Logistics {
                     stealAbandon    = true;   // skip the stall/deadline blame path below
                     tr.phase        = TravelPhase::Holding;
                     tr.lingerUntil  = now + BatchLingerDur();
+                    // LP-M2 (logistics/Lockpick.cpp): a LOCKED DOOR at the block becomes the
+                    // next leg (pick, unlock -> its lock-changed event re-admits the gate).
+                    if (!ab.id && Lockpick::DispatchGateDoor(a_follower, slot, tref,
+                                                             blockPos ? *blockPos : a_follower->GetPosition(), now))
+                        skipWhy = "GATED by a LOCKED DOOR (door leg dispatched)";
                     // no return -- fall into Holding (the next reachable item, same tick)
                 } else if (!gone && tref && apmfLeg && tr.legEngaged) {
                     // The hold is real for this leg: the 0x49 override has been

@@ -11,7 +11,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **He never starts a lock he would fail.** If the lock needs more picks than he carries, he leaves it alone and spends nothing. He tries again once he carries more picks or his skill goes up.
 - **Owned chests stay off limits.** A follower never picks a lock that would be a crime.
 - **It needs the next Harbinger release (API v17).** Without it, or with an older Harbinger, followers skip locked chests. They no longer loot through a lock.
-- **Doors are not picked yet.** Only chests and other containers.
+- **Followers pick locked doors that block a loot trip.** When a locked door stops a follower on his way to an item, he walks to it, picks it with the same animation and odds, and carries on to the item. Owned doors, and doors into houses, shops, inns or other lived-in places, are left alone.
 - **The walk-to-loot gait setting works on Harbinger's travel road.** With Harbinger 0.9.8 or newer, a loot trip walks, jogs, runs or fast-walks as the setting says. A changed setting applies from the next trip leg. MFO's own travel packages (Harbinger absent) are unchanged until that road's gait is proven.
 - **Loot trips on Harbinger's road now listen to why a walk stopped.** Arrived means loot now. A vanished target means the next item at once. Blocked by someone standing in the way means the item goes later in his list. Blocked by a gate means the item is skipped until the gate changes. MFO no longer runs its own blocked timer on that road.
 - **A follower sent back to the same item walks again.** Before, a second trip to an item whose first walk had ended never started.
