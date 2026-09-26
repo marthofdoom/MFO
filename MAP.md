@@ -1474,6 +1474,10 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
 serialized** — nothing outlives the session. Callers `Config.cpp:378`,
 `plugin.cpp:284` (needs the second call because the first `Read()` precedes
 `Forms::Resolve`, so the package is null). Writes MFO's own packages, not base NPCs.
+Covers ONLY the legacy travel packages (`g_travelPackage..3`), and the runtime write is still
+unproven in the field (86e3dh44v). The CH19 road carries the same setting as ch.19 speed bits
+(`apmf/Excursion.cpp` `ClaimLootTravel`, APMF ABI >= 12; loot M2). The ch.9 road's
+`g_apmfLootTravelPackage0..3` are not written until the legacy proof lands.
 
 ### MainThread.cpp / MainThread.h — the real main-thread pump
 Hooks the player's `Update` vfunc (idx `0x0AD`, `:68`) and drains a cross-thread
@@ -2541,6 +2545,46 @@ anonymous-namespace copy — that silently forks the instance).
     shared false gate (R2). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B88, MFO-B90** (SEV-5, the
     CH19 episode log line) and **MFO-B89** (SEV-5, move the gate code into its own module in
     the wave-2 Logistics split) -- read before editing.
+- **LOOT ROUND M2 (2026-09-25, `fix/mfo-loot-m2`; design `_research/loot-batch-design-2026-09-24.md`
+  sections 4-6, ClickUp 86e3dh44v + 86e3dpn66). CH19 loot legs read Harbinger's own verdict.**
+  - **LEG STATE READ** (`logistics/Service.cpp:~427`, the Walking arm, right after the route
+    label): `APMFBridge::ReadLootTravelLeg(slot, leg19)` (`apmf/Excursion.cpp:494`, APMF ABI >= 12
+    `GetTravelLegState`; the slot's handle/dest/follower copied under `g_mx`, the call made
+    outside it). `ours` = ownerHandle is our handle (or 0 before APMF composes) AND destForm is
+    our destination AND the seq is not the one read just BEFORE our own latest RequestEx /
+    Repoint (`LootTravelLeg::staleSeq`, `NoteStaleSeqLocked` `Excursion.cpp:102`), so the
+    previous leg's end never speaks for the new one. `ch19State` false (APMF < v12, no ch.19 leg)
+    = every road keeps MFO's own observations exactly as M1 left them.
+  - **Reactions:** `kLeg_Arrived` = an arrival whatever MFO's own 200 u test says
+    (`Service.cpp:~598`, the arrival branch, dibs/sneak holds included); `kLeg_DestGone` = `gone`
+    (`:~556`, transient skip + next item the same tick, `skipWhy` "DESTINATION GONE");
+    `kLeg_Blocked` = M1's ONE reaction (`:~749`): blocker actor from Harbinger
+    (`blocker`/`blockerKind`) -> REORDER via `g_actorDefer`; none -> `MarkGated` with the
+    STALL point (`MarkGated`'s new optional `a_blockPos`, `logistics/LootTravel_internal.h:~417`).
+    Every other end (combat-cancelled, stuck-timeout, actor-gone, failed, released) is LOGGED
+    only; MFO's existing guard decides as before.
+  - **MFO's Movement Blocked timer** runs only when `ch19State` is false: road 1 (ch.9), the
+    legacy alias road, and a CH19 leg on an APMF below v12. On a v12 CH19 leg Movement Blocked
+    holds the leg (no guard, no stall) and waits for Harbinger's BLOCKED; one warn per leg if it
+    outlives 2 x `kBlockedGate` with Harbinger still reading the leg live (never acted on:
+    principle 7, the excursion cap still bounds it).
+  - **Same-ref re-dispatch** (`ClaimLootTravel` `Excursion.cpp:~430`): a same dest+radius call is
+    a no-op only while the leg is still running; on an ENDED leg (v12 read) it Repoints, which
+    Harbinger's `ApplyRepoint` -> `OnOwnerChanged` turns into a fresh leg. Without that, a
+    deferred item's turn (actor-block reorder) or a dibs revisit to the same ref never walked
+    and re-read the old end every tick.
+  - **Logs:** `[loot] <id> leg-><ref>: CH19 leg ended <STATE> (<s> in that state, seq N, gait G
+    [, blocked Xs at (x,y,z), blocker <kind> <id>]) -- <reaction>`, once per seq
+    (`TravelIntent::ch19SeqLogged`). `[loot-road] DISPATCH/RETARGET road=CH19 ... gait=G` (-1 =
+    APMF < v12, no gait bits).
+  - **What breaks:** dropping the `staleSeq` test re-reads a previous leg's end as the new
+    leg's (a BLOCKED loops the reorder, an ARRIVED loots from afar); dropping the same-ref
+    ended test strands a re-dispatched item forever; running MFO's own MB timer on a v12 CH19
+    leg double-judges the block (two verdicts, two reorders); reading the state under `g_mx`
+    from Service.cpp is unnecessary (the bridge copies); treating any state as ours without the
+    destForm test acts on another destination's end. Principle 7: the ends M2 does not react to
+    are logged, not guessed at. `Service.cpp` is 1718 lines (past the ~1500 plan-a-split mark,
+    under the 2500 backstop): the next brief touching it should propose its split.
 - **Loot scan is MULTI-CELL** (`LootNearby` `logistics/LootScan.cpp:21`; cell set built at `:134`):
   follower's + player's + live travel-target's ATTACHED parent cells, all anchored
   to refs in hand — **never** `TES::ForEachReferenceInRange`/worldspace derefs
@@ -3593,18 +3637,20 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   - `apmf/Equip.cpp` (274) = equipment: the ch.15 weapon-order claim (`ClaimEquipment` `:37`,
     `WeaponHandActive` `:65`) and the ch.17 authority (`EquipAuthoritySupported` `:89`,
     `ClaimEquipAuthority` `:111`, `DeclareEquipScope` `:196`, `DeclareEquipSet` `:246`).
-  - `apmf/Excursion.cpp` (470) = the per-combat / per-excursion facets: `ClaimCombatTarget`
-    (`:92`), the **ch.20 TARGET PIN** table (below), `OfferPackage` (`:309`), the ch.19 loot-travel
-    legs (`LootTravelLeg` `:54`, `ClaimLootTravel` `:330`, `ReleaseLootTravelFor` `:434`) and
-    `ClaimCombatActionDeny` (`:450`, with its file-local `EnsureIvalClaimLocked` `:65`).
+  - `apmf/Excursion.cpp` (578) = the per-combat / per-excursion facets: `ClaimCombatTarget`
+    (`:138`), the **ch.20 TARGET PIN** table (below), `OfferPackage` (`:355`), the ch.19 loot-travel
+    legs (`LootTravelLeg` `:54`, the v12 leg-state helpers `LegStateApi` `:73` / `ReadLegInfo` /
+    `LegEnded` `:96` / `NoteStaleSeqLocked` `:102`, `ClaimLootTravel` `:376`, `ReadLootTravelLeg`
+    `:494`, `ReleaseLootTravelFor` `:542`) and `ClaimCombatActionDeny` (`:558`, with its file-local
+    `EnsureIvalClaimLocked` `:111`).
   - **ch.20 TARGET PIN (ABI v13 `kIntent_TargetPin`, feat/mfo-target-pin 2026-09-25).** File-local
-    `g_pins` (`Excursion.cpp:145`, guarded by `g_mx`), one `TargetPinClaim` per follower.
-    `TargetPinOffered` (`:183`) = APMF present AND ABI >= 13. `PinTarget` (`:188`) files
+    `g_pins` (`Excursion.cpp:191`, guarded by `g_mx`), one `TargetPinClaim` per follower.
+    `TargetPinOffered` (`:229`) = APMF present AND ABI >= 13. `PinTarget` (`:234`) files
     `RequestEx(follower, kIntent_TargetPin, kOwnBasis, {form = foe})`; a CHANGED foe is Release +
     fresh RequestEx (not Repoint: a Repoint onto a handle Harbinger just ended is a silent no-op
     and the sweep would then blame the NEW foe); returns `PinResult` (Pinned / Unchanged /
-    Suppressed / Invalid / SeatAbsent). `PinEndedLocked` (`:154`) = `IsClaimLive` false after the
-    pin was seen live, or, never seen live, after `kPinNeverLiveSweeps` (15, `:134`) UNPAUSED
+    Suppressed / Invalid / SeatAbsent). `PinEndedLocked` (`:200`) = `IsClaimLive` false after the
+    pin was seen live, or, never seen live, after `kPinNeverLiveSweeps` (15, `:180`) UNPAUSED
     sweeps and never while `UI::GameIsPaused()` (APMF drains only on its PlayerCharacter::Update
     seat, which a pausing menu stops) → **Release(handle) ALWAYS** (no-op on a dead claim,
     FIFO-cancels a pending one: no orphan), marked ENDED, logged once. Harbinger ends a pin on
@@ -3613,11 +3659,11 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     re-chooses an ended pin's foe it is re-pinned only if that pin had gone LIVE (the selector
     skips dead / disabled / lost / 3D-unloaded foes, so being re-chosen = trackable again); an
     ended pin that never went live is `Suppressed` until the gambit chooses a DIFFERENT foe.
-    `ReleaseTargetPin` (`:250`), `ReleaseAllTargetPins` (`:261`), `PinnedTarget` (`:266`, empty
+    `ReleaseTargetPin` (`:296`), `ReleaseAllTargetPins` (`:307`), `PinnedTarget` (`:312`, empty
     once ended — feeds `Targeting::Current`, so the retarget hesitation does not stall on a dead
-    pin), `TargetPinCount` (`:276`, the Diagnostics targeting line), `SweepTargetPinsLocked`
-    (`:283`, called from `Tick` `Bridge.cpp:894`; counts unpaused sweeps; also the
-    `bCommandTarget`-off kill switch) and `ClearTargetPinsLocked` (`:301`, from
+    pin), `TargetPinCount` (`:322`, the Diagnostics targeting line), `SweepTargetPinsLocked`
+    (`:329`, called from `Tick` `Bridge.cpp:894`; counts unpaused sweeps; also the
+    `bCommandTarget`-off kill switch) and `ClearTargetPinsLocked` (`:347`, from
     `ClearTransientState` `Bridge.cpp:1080`). Only `Targeting.cpp` / `Diagnostics.cpp` call these.
     **What breaks:** judging a never-live pin on wall time, or while paused (a menu then ages a
     pending claim into a false "ended"); dropping a handle without `Release` (an orphan claim
@@ -4509,6 +4555,14 @@ basis, and ends the leg on arrival / the actor entering combat / the destination
   an APMF older than 0.9.5 (ABI v9) returns null and MFO runs with NO APMF facets at all.
 - **Logs:** every road-1/road-2 DISPATCH / RETARGET / RELEASE line carries the `[loot-road]`
   prefix and `road=MFOPKG|CH19`; RELEASE lines carry the `why=` from `LootTravelClear/EvictIf`.
+- **GAIT on road 2 (loot M2, 86e3dh44v):** `ClaimLootTravel` passes `Config::g_travelGait`
+  (`iTravelGait`, 0..3 = Walk/Jog/Run/FastWalk) as `kTravel_SpeedSet | gait << 3` on every
+  RequestEx/Repoint, ONLY when APMF's `abiVersion >= 12` (an older APMF stores unknown bits
+  silently). APMF writes it into ITS leg package when the leg starts; a gait change reaches the
+  next fresh leg, not one already walking. Road 1 (MFO's own ch.9 packages,
+  `g_apmfLootTravelPackage0..3`) is NOT covered: `Gait::Apply` still writes only the legacy
+  packages, and extending it waits on the FIELD 1 legacy gait proof (design section 5).
+- **Leg state (ABI v12):** see LOOT ROUND M2 in section 4.
 
 ### Packages.cpp — APMF LOOT-TRAVEL (ch.9 0x49 route, PASS B, the Cicero fix)
 `LootTravelFill/Retarget/Clear/EvictIf` (`:1380-1710`, see the OPTION A entry above) now ROUTE

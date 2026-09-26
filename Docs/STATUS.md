@@ -6,12 +6,29 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-23 UTC (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-09-25 UTC (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
+
+- **2026-09-25 branch `fix/mfo-loot-m2` (off `main` `94ce807`; NOT merged, NOT deployed). Loot round M2, batch L, tier A (consumes Harbinger ABI v12 `GetTravelLegState`). ClickUp 86e3dh44v, 86e3dpn66.**
+  CH19 loot legs read Harbinger's leg state (APMF ABI >= 12; MFO still requests 10): ARRIVED = loot now, DESTINATION GONE =
+  next item the same tick, BLOCKED = M1's reaction (Harbinger's blocker actor -> reorder, none -> GATED at the stall point).
+  MFO's own Movement Blocked timer now runs only on road 1, the legacy road, and CH19 on APMF < v12. A same-ref re-dispatch
+  re-points an ENDED leg (it used to be a no-op, so the leg never restarted). Gait: `iTravelGait` goes to ch.19 as
+  `kTravel_SpeedSet` + speed bits (ABI >= 12 only). **Road 1 gait NOT done:** the FIELD 1 legacy gait proof (Harbinger
+  off, Walk, ~89 u/s) is not on record, so `Gait::Apply` is unchanged and the MCM "(not working yet)" label (outside this
+  branch) should now read "works on Harbinger's road only". 86e3dpn66 (CH19 label, 3 s engage window) was already fixed
+  by M1 on main; M2 adds the per-leg end-reason line.
+  FIELD CHECKS: `[loot-road] DISPATCH road=CH19 ... gait=0` with `iTravelGait=0` and a visibly walking follower (APMF
+  `[travel-gait]` shows the running copy); one `[loot] ... CH19 leg ended ARRIVED ...` per leg then `arrived -- looted`
+  the same second; at a lever portcullis `CH19 leg ended BLOCKED ... blocker none (static block)` then `GATED` and
+  `next item` in the same line family, no MFO `Movement Blocked` verdict and no `NOT ENGAGED` / `STOLEN` on that leg; two
+  followers jammed: `blocker a teammate` then `ACTOR-BLOCKED ... REORDER`, and the deferred item walked again later
+  (`RETARGET ... same ref, its last leg had ended` when it is the same ref). A `Movement Blocked held ... Harbinger still
+  reads leg state` warn is a Harbinger-side miss: report it.
 
 - **2026-09-25 branch `fix/mfo-retreat` (off `main` `97ac782`; NOT merged, NOT deployed). ClickUp 86e3erv94 (batch L), tier A.**
   Auto-retreat fixes (assessment: scratchpad `agentlogs/assess-confidence-leash.md`): (1) every retreat StopCombat is now
