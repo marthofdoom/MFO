@@ -86,6 +86,14 @@ namespace MFO::Logistics {
             // ACQUIRE PROBE (route 2b) readback: after an Activate dispatch at a
             // LOOSE ref, the NEXT tick observes what the engine actually did
             // (dispatch is asynchronous -- Papyrus.h -- so same-tick reads lie).
+            // TELEPORT RECOGNITION (86e3ec824): his position, his distance to the
+            // player, and when, at the previous excursion tick -- so a jump to the
+            // player's side (AFT on the draw, a door, any MoveTo) is recognised and
+            // the leg ends cleanly (TeleportCompat::LooksTeleported). Zero obsAt =
+            // no observation yet. Worker-only, NOT serialized.
+            RE::NiPoint3        obsPos{};
+            float               obsPlayerDist = 0.0f;
+            Clock::time_point   obsAt{};
             bool                acquirePending = false;
             RE::FormID          acquireRefID = 0;   // the loose ref, for the log (its handle may die)
             RE::FormID          acquireBase  = 0;   // its base object -- the inventory-delta key

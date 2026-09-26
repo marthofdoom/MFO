@@ -67,6 +67,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/Gear.cpp
     logistics/LootScan.cpp
     logistics/LootEquipment.cpp
+    logistics/TeleportCompat.cpp
     Loadout.cpp
     Papyrus.cpp
     TradeBridge.cpp

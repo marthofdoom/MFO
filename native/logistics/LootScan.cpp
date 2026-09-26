@@ -4,6 +4,7 @@
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "Logistics_internal.h"
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
+#include "TeleportCompat.h"    // follower-teleport mod leash clamp (86e3ec824)
 
 namespace MFO::Logistics {
 
@@ -100,7 +101,12 @@ namespace MFO::Logistics {
             // FROM THE PLAYER -- bold when safe (leash -> max, ranges out),
             // cautious when hurt/fighting (leash -> min, stays close). Measured to
             // the PLAYER, while the scan radius above is measured to the FOLLOWER.
-            const float leash = Confidence::LeashRadius(a_follower);
+            // TELEPORT-MOD CLAMP (86e3ec824): while a detected follower-teleport
+            // mod's condition holds (AFT: the player's weapon drawn) the leash is
+            // capped under its teleport distance, so no trip is ever planned past
+            // where that mod yanks him back. Unclamped it IS LeashRadius.
+            const TeleportCompat::LeashView leashView = TeleportCompat::View(a_follower);
+            const float leash = leashView.leash;
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const RE::NiPoint3 playerPos = pc ? pc->GetPosition() : origin;
 
@@ -494,7 +500,7 @@ namespace MFO::Logistics {
             // player from furniture pre-marker). Arm's-reach grabs are
             // unaffected -- they need no travel, so they are outside this guard.
             const bool followerBeyondLeash =
-                origin.GetDistance(playerPos) > leash * 1.15f;
+                origin.GetDistance(playerPos) > leashView.release;   // leash x1.15, teleport-capped
 
             // Act after the walk. Re-resolve each handle at act time (#2). Perf
             // pass: an IN-REACH source is drained in place (StripCorpse -- every
