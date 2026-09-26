@@ -2,7 +2,8 @@
 // logistics/TeleportCompat.h -- FOLLOWER-TELEPORT MOD COMPATIBILITY for the loot
 // leash (ClickUp 86e3ec824, 2026-09-25). The "accepted" route: MFO never hooks or
 // fights another DLL. It DETECTS a known follower-teleport mod, reads that mod's
-// own INI distances, and keeps its loot trips inside them while the mod's
+// own INI distances, and never PLANS a loot trip past them (mid-trip: best-effort,
+// teleport recognition as the backstop) while the mod's
 // teleport condition holds.
 //
 // Known mod (primary source: the installed LoreRim list, 1.7.0):

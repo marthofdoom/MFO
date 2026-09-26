@@ -2437,16 +2437,26 @@ anonymous-namespace copy — that silently forks the instance).
   follower-teleport mod's condition holds (Automatic Follower Teleporter NG: the PLAYER's weapon
   drawn, not with `bOnlyAllowTeleportOnCombatStart`, not mounted with `bNoTeleportOnHorse`) the leash
   is capped at D-350 and the release at D-150, D = min(fDrawDistance, fDrawnDistance) read from that
-  mod's own INI. Two extra Walking branches in `ServiceFollower` (before the M1 EMPTIED correction):
-  **TELEPORTED** (`TeleportCompat::LooksTeleported` on the per-slot `obsPos/obsPlayerDist/obsAt`
-  record in `TravelIntent`, refreshed every excursion tick) and **target past the teleport-safe
-  leash** (clamp only). Both drop to Holding with NO blocklist, NO gate, NO stall/steal strike, and
-  re-plan the same tick. **What breaks:** reading `Confidence::LeashRadius` directly at a loot
+  mod's own INI. SELECTION never plans past the clamp (the guarantee); the mid-trip release under
+  the clamp is BEST-EFFORT (a follower can cross the 150 u band between two ~1 s ticks and be
+  teleported first), with teleport recognition as the backstop. Extra Walking branch in
+  `ServiceFollower` (before the M1 EMPTIED correction): **target past the teleport-safe leash**
+  (clamp only).
+  **GENERIC TELEPORT RECOGNITION (separate from the AFT clamp; runs on EVERY install):** Walking
+  branch **TELEPORTED** (`TeleportCompat::LooksTeleported` on the per-slot `obsPos/obsPlayerDist/
+  obsAt` record in `TravelIntent`, refreshed every excursion tick; a MOUNTED follower is excluded
+  via his own `IsOnMount`, an extra-list read under its lock on the worker). A follower moved
+  mid-leg by fast travel, a door, MoveTo or any mod re-plans cleanly instead of stalling or
+  striking. Without a teleport mod it changes behaviour ONLY for a real position jump.
+  Best-effort for large parties: the per-follower observation interval is 1.06-1.9 s, so a short
+  teleport seen over a long interval can fall under the 700 u/s floor. Both branches drop to
+  Holding with NO blocklist, NO gate, NO stall/steal strike, and re-plan the same tick. **What breaks:** reading `Confidence::LeashRadius` directly at a loot
   consumer again bypasses the clamp (AFT then yanks drawn-weapon trips back); making the
   TELEPORTED branch blame the ref (MarkTravelFailed/strike) poisons reachable loot after every
   draw; dropping the select/release gap (350 vs 150) re-creates arm/release churn under the clamp;
-  lowering the recognition thresholds (800 u, 900 u/s, lands <= max(1000, fBehindOffset+550) after
-  closing >= 600) risks a sprint reading as a teleport. Detection is lazy (`std::call_once` on the
+  lowering the recognition thresholds (800 u, 700 u/s -- an NPC sprint over >= 1.06 s is under
+  755 u/s --, lands <= max(1000, fBehindOffset+550) after closing >= 600) risks a sprint reading as
+  a teleport. Detection is lazy (`std::call_once` on the
   first View), immutable afterwards; `GetModuleHandleA` is the Targeting.cpp extern (no windows.h).
   Simple Follower Framework was checked (DLL strings, INI, .psc): no teleport -- logged, not clamped.
   **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `logistics/Service.cpp:~628`) detects an EXTERNAL package

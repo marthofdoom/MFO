@@ -11,8 +11,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **Loot trips on Harbinger's road now listen to why a walk stopped.** Arrived means loot now. A vanished target means the next item at once. Blocked by someone standing in the way means the item goes later in his list. Blocked by a gate means the item is skipped until the gate changes. MFO no longer runs its own blocked timer on that road.
 - **A follower sent back to the same item walks again.** Before, a second trip to an item whose first walk had ended never started.
 - **The loot log says why each Harbinger trip leg ended, once per leg.**
-- **Loot trips respect Automatic Follower Teleporter.** When that mod is installed, MFO reads its distances at startup and logs them. While your weapon is drawn, a loot trip stays under its teleport distance, so the follower is never yanked back mid-trip. Sheathed, the normal leash returns.
-- **A follower teleported to you mid-trip carries on cleanly.** The trip leg ends and he picks the next item near him. The item is not marked as failed.
+- **Loot trips respect Automatic Follower Teleporter.** When that mod is installed, MFO reads its distances and logs them. While your weapon is drawn, MFO never plans a loot trip past its teleport distance, and it ends a trip that drifts toward it. A trip that crosses it anyway can still be teleported. Sheathed, the normal leash returns.
+- **A follower moved mid-trip carries on cleanly, with or without a teleport mod.** Fast travel, a door, a mod's teleport or any other sudden jump to your side ends the trip leg, and he picks the next item near him. The item is not marked as failed. Nothing changes unless he really jumps.
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 

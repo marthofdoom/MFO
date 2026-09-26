@@ -21,20 +21,30 @@ namespace MFO::Logistics::TeleportCompat {
 
         // Selection sits this far under the teleport distance; the mid-trip release
         // sits kReleaseMargin under it. The 200 u band between them is the clamped
-        // leash's hysteresis (the unclamped x1.15 plays the same role), and the
-        // release margin is what one ~1 s logistics tick of running covers less the
-        // arrival reach, so MFO ends the leg before the teleporter's next check.
+        // leash's hysteresis (the unclamped x1.15 plays the same role). SELECTION is
+        // the guarantee: no trip is ever PLANNED past the clamp. The mid-trip release
+        // is BEST-EFFORT: a follower who crosses the 150 u band between two ~1 s
+        // logistics ticks can still reach the teleport distance before MFO sees him
+        // there, and the teleporter may then act first. Teleport recognition
+        // (LooksTeleported) is the backstop that ends that leg cleanly.
         constexpr float kSelectMargin  = 350.0f;
         constexpr float kReleaseMargin = 150.0f;
         constexpr float kLeashFloor    = 64.0f;    // Config's own fLeashMin floor
         constexpr float kHysteresis    = 1.15f;    // the excursion driver's leash margin
 
-        // Teleport recognition thresholds (LooksTeleported). A follower's fastest
-        // gait (sprint) is well under the speed floor, so a leg-sized jump at this
-        // rate is not a walk; "landed near the player after being far" names the
-        // teleporters' shape (AFT lands fBehindOffset = 450 behind him).
+        // Teleport recognition thresholds (LooksTeleported). GENERIC: it runs on every
+        // install, teleport mod or not. A follower's per-excursion observation interval
+        // is 1.06-1.9 s (round-robin pump x 1 s logistics gate; larger parties sit at
+        // the long end), so an NPC sprint covering kJumpMin takes >= 1.06 s, i.e.
+        // under 755 u/s -- the 700 u/s floor still separates gaits from a jump, while
+        // a real teleport observed across a 1.9 s interval clears it only if it
+        // moved >= 1330 u. Recognition is therefore BEST-EFFORT for large parties
+        // (a short teleport seen over a long interval can read as a walk); the
+        // "landed near the player after being far" test names the teleporters'
+        // shape (AFT lands fBehindOffset = 450 behind him). A MOUNTED follower is
+        // excluded by the caller (a horse gallop is not a teleport).
         constexpr float kJumpMin      = 800.0f;    // u moved between two observations
-        constexpr float kJumpSpeedMin = 900.0f;    // u/s implied by that move
+        constexpr float kJumpSpeedMin = 700.0f;    // u/s implied by that move
         constexpr float kClosedMin    = 600.0f;    // u closer to the player than before
         constexpr float kLandNearMin  = 1000.0f;   // u from the player after the jump
 
@@ -60,9 +70,14 @@ namespace MFO::Logistics::TeleportCompat {
             return s.substr(i);
         }
 
-        bool ParseBool(const std::string& v, bool a_fallback) {
+        std::string Lower(const std::string& v) {
             std::string l;
             for (char c : v) l += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            return l;
+        }
+
+        bool ParseBool(const std::string& v, bool a_fallback) {
+            const std::string l = Lower(v);
             if (l == "true" || l == "1")  return true;
             if (l == "false" || l == "0") return false;
             return a_fallback;
@@ -93,11 +108,19 @@ namespace MFO::Logistics::TeleportCompat {
                 }
                 line = Trim(line);
                 if (line.empty() || line[0] == ';' || line[0] == '#') continue;
-                if (line[0] == '[') { section = line; continue; }
-                if (section != "[Teleport]") continue;
+                if (line[0] == '[') {
+                    // "[Teleport]  ; comment" -> "teleport" (case-insensitive, like the
+                    // Windows profile API).
+                    const auto close = line.find(']');
+                    section = Lower(Trim(line.substr(1, close == std::string::npos ? std::string::npos
+                                                                                     : close - 1)));
+                    continue;
+                }
+                if (section != "teleport") continue;
                 const auto eq = line.find('=');
                 if (eq == std::string::npos) continue;
-                const std::string key = Trim(line.substr(0, eq));
+                const std::string keyRaw = Trim(line.substr(0, eq));
+                const std::string key    = Lower(keyRaw);
                 std::string       val = Trim(line.substr(eq + 1));
                 if (const auto c = val.find_first_of(";#"); c != std::string::npos) val = Trim(val.substr(0, c));
                 auto num = [&](float& a_out) {
@@ -105,19 +128,24 @@ namespace MFO::Logistics::TeleportCompat {
                     const float f = std::strtof(val.c_str(), &end);
                     if (end == val.c_str() || !(f > 0.0f)) {
                         spdlog::warn("[teleport-compat] AFT {} = '{}' unparsable -- keeping {:.0f}",
-                                     key, val, a_out);
+                                     keyRaw, val, a_out);
                         return;
                     }
                     a_out = f;
                     ++read;
                 };
-                if      (key == "fDrawDistance")                   num(d.drawDistance);
-                else if (key == "fDrawnDistance")                  num(d.drawnDistance);
-                else if (key == "fBehindOffset")                   num(d.behindOffset);
-                else if (key == "bNoTeleportOnHorse")              { d.noTeleportHorse = ParseBool(val, d.noTeleportHorse); ++read; }
-                else if (key == "bOnlyAllowTeleportOnCombatStart") { d.onlyCombatStart = ParseBool(val, d.onlyCombatStart); ++read; }
+                if      (key == "fdrawdistance")                   num(d.drawDistance);
+                else if (key == "fdrawndistance")                  num(d.drawnDistance);
+                else if (key == "fbehindoffset")                   num(d.behindOffset);
+                else if (key == "bnoteleportonhorse")              { d.noTeleportHorse = ParseBool(val, d.noTeleportHorse); ++read; }
+                else if (key == "bonlyallowteleportoncombatstart") { d.onlyCombatStart = ParseBool(val, d.onlyCombatStart); ++read; }
             }
-            spdlog::info("[teleport-compat] read {} ({} key(s))", kPath, read);
+            if (read == 0)
+                spdlog::warn("[teleport-compat] read {} but found 0 known [Teleport] keys -- using AFT's "
+                             "built-in defaults (fDrawDistance {:.0f}, fDrawnDistance {:.0f})",
+                             kPath, d.drawDistance, d.drawnDistance);
+            else
+                spdlog::info("[teleport-compat] read {} ({} key(s))", kPath, read);
         }
 
         void Detect() {

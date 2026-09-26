@@ -340,10 +340,15 @@ namespace MFO::Logistics {
             const RE::NiPoint3 fposNow = a_follower->GetPosition();
             const float toPlayer = pc ? fposNow.GetDistance(pc->GetPosition()) : 0.0f;
             const bool outOfLeash = pc && toPlayer > leashView.release;
-            // TELEPORT RECOGNITION (86e3ec824): a teleport that happened anyway
-            // (AFT on the draw from past fDrawDistance, a door, any other MoveTo).
-            // Compared against the previous excursion tick's observation, which
-            // is then refreshed every tick whatever the phase.
+            // TELEPORT RECOGNITION (86e3ec824) -- GENERIC, on every install: a
+            // follower moved mid-leg by AFT (the draw from past fDrawDistance), fast
+            // travel, a door, or any other mod's MoveTo re-plans cleanly instead of
+            // stalling or striking. Without a teleport mod it changes behaviour ONLY
+            // for a real position jump. Compared against the previous excursion
+            // tick's observation, which is then refreshed every tick whatever the
+            // phase. A MOUNTED follower is excluded (a gallop is not a teleport);
+            // IsOnMount reads his extra list under its lock, on this worker, the
+            // same class of read as TeleportCompat's player IsOnMount.
             bool  teleported = false;
             float tpJump = 0.0f, tpDt = 0.0f, tpPrevDist = 0.0f;
             if (pc) {
@@ -351,7 +356,8 @@ namespace MFO::Logistics {
                     tpDt       = std::chrono::duration<float>(now - tr.obsAt).count();
                     tpJump     = tr.obsPos.GetDistance(fposNow);
                     tpPrevDist = tr.obsPlayerDist;
-                    teleported = TeleportCompat::LooksTeleported(tr.obsPos, tr.obsPlayerDist, tpDt,
+                    teleported = !a_follower->IsOnMount() &&
+                                 TeleportCompat::LooksTeleported(tr.obsPos, tr.obsPlayerDist, tpDt,
                                                                  fposNow, toPlayer);
                 }
                 tr.obsPos        = fposNow;
@@ -363,7 +369,8 @@ namespace MFO::Logistics {
                 if (outOfLeash && leashView.clamped && !a_follower->IsInCombat() && !overCap && !inHome)
                     spdlog::info("[loot] {:08X} left the TELEPORT-SAFE leash: {:.0f} u from the player > "
                                  "{:.0f} (capped under {}'s {:.0f} while his weapon is drawn) -- excursion ends "
-                                 "before that mod teleports him", id, toPlayer, leashView.release,
+                                 "(best-effort: that mod may already have teleported him; recognition is the "
+                                 "backstop)", id, toPlayer, leashView.release,
                                  TeleportCompat::DetectedName(), leashView.teleportAt);
                 Packages::LootTravelClear(a_follower->IsInCombat() ? "combat"
                                           : (overCap ? "excursion cap"
@@ -414,7 +421,7 @@ namespace MFO::Logistics {
                              "{:.1f}s, {:.0f} -> {:.0f} u from the player (teleport mod: {}; weapon-drawn clamp {}). "
                              "Leg ended cleanly: no stall, no strike, no blocklist; re-planning inside the leash",
                              id, skippedRef, tpJump, tpDt, tpPrevDist, toPlayer, TeleportCompat::DetectedName(),
-                             leashView.clamped ? "ON" : "off");
+                             leashView.clamped ? "ON -- the clamp did NOT prevent this teleport" : "off");
                 skipWhy         = "TELEPORTED to the player (leg ended cleanly)";
                 tr.blockedSince = {};
                 tr.stolenSince  = {};
