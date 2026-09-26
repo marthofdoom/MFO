@@ -2429,6 +2429,26 @@ anonymous-namespace copy — that silently forks the instance).
   backstop `logistics/Service.cpp:187-252`, see the PLAYER-COMBAT LOOT INTERRUPT note
   above; cap/leash/dismissal/revert). Leash hysteresis guards
   (`followerBeyondLeash` in `LootNearby`, ×1.15 in `ServiceFollower`) prevent the ~1/sec claim/evict churn.
+  **LEASH ENFORCEMENT + TELEPORT-MOD CLAMP (86e3ec824, 2026-09-25).** The leash is enforced at
+  SELECTION (`LootNearby`: `dLeash` player->ref, `walkLimit`, the churn guard) AND MID-TRIP
+  (`ServiceFollower` excursion driver `outOfLeash`, follower->player > release, ~1 s cadence -> "left
+  leash"). Both now read ONE snapshot, `TeleportCompat::View(f)` (`logistics/TeleportCompat.h`):
+  unclamped it is exactly `Confidence::LeashRadius` / ×1.15 as before. While a detected
+  follower-teleport mod's condition holds (Automatic Follower Teleporter NG: the PLAYER's weapon
+  drawn, not with `bOnlyAllowTeleportOnCombatStart`, not mounted with `bNoTeleportOnHorse`) the leash
+  is capped at D-350 and the release at D-150, D = min(fDrawDistance, fDrawnDistance) read from that
+  mod's own INI. Two extra Walking branches in `ServiceFollower` (before the M1 EMPTIED correction):
+  **TELEPORTED** (`TeleportCompat::LooksTeleported` on the per-slot `obsPos/obsPlayerDist/obsAt`
+  record in `TravelIntent`, refreshed every excursion tick) and **target past the teleport-safe
+  leash** (clamp only). Both drop to Holding with NO blocklist, NO gate, NO stall/steal strike, and
+  re-plan the same tick. **What breaks:** reading `Confidence::LeashRadius` directly at a loot
+  consumer again bypasses the clamp (AFT then yanks drawn-weapon trips back); making the
+  TELEPORTED branch blame the ref (MarkTravelFailed/strike) poisons reachable loot after every
+  draw; dropping the select/release gap (350 vs 150) re-creates arm/release churn under the clamp;
+  lowering the recognition thresholds (800 u, 900 u/s, lands <= max(1000, fBehindOffset+550) after
+  closing >= 600) risks a sprint reading as a teleport. Detection is lazy (`std::call_once` on the
+  first View), immutable afterwards; `GetModuleHandleA` is the Targeting.cpp extern (no windows.h).
+  Simple Follower Framework was checked (DLL strings, INI, .psc): no teleport -- logged, not clamped.
   **Theft guard (RC#4):** the Walking driver (`ServiceFollower`, `logistics/Service.cpp:~628`) detects an EXTERNAL package
   holding a claimed follower (scene/framework; onTravelPkg=false mid-walk), pauses
   the stall/deadline clocks (`stolenSince`, `kStealGrace=10s` `logistics/LootTravel_internal.h`) and re-asserts

@@ -14,6 +14,7 @@
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
 #include "apmf/APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
 #include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
+#include "TeleportCompat.h" // follower-teleport mod leash clamp + teleport recognition (86e3ec824)
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -330,14 +331,45 @@ namespace MFO::Logistics {
             // in-leash target) where a bare check would release then instantly
             // re-fill to the same corpse and oscillate. The margin ends the batch
             // only once he is clearly past the leash.
-            const bool outOfLeash = pc &&
-                a_follower->GetPosition().GetDistance(pc->GetPosition())
-                    > Confidence::LeashRadius(a_follower) * 1.15f;
+            // TELEPORT-MOD CLAMP (86e3ec824): while a detected follower-teleport
+            // mod's condition holds (AFT: the player's weapon drawn) the release
+            // distance is also capped under that mod's teleport distance, so MFO
+            // ends the trip before the other mod yanks him. Unclamped this is
+            // exactly LeashRadius x1.15, as before.
+            const TeleportCompat::LeashView leashView = TeleportCompat::View(a_follower);
+            const RE::NiPoint3 fposNow = a_follower->GetPosition();
+            const float toPlayer = pc ? fposNow.GetDistance(pc->GetPosition()) : 0.0f;
+            const bool outOfLeash = pc && toPlayer > leashView.release;
+            // TELEPORT RECOGNITION (86e3ec824): a teleport that happened anyway
+            // (AFT on the draw from past fDrawDistance, a door, any other MoveTo).
+            // Compared against the previous excursion tick's observation, which
+            // is then refreshed every tick whatever the phase.
+            bool  teleported = false;
+            float tpJump = 0.0f, tpDt = 0.0f, tpPrevDist = 0.0f;
+            if (pc) {
+                if (tr.obsAt.time_since_epoch().count() != 0) {
+                    tpDt       = std::chrono::duration<float>(now - tr.obsAt).count();
+                    tpJump     = tr.obsPos.GetDistance(fposNow);
+                    tpPrevDist = tr.obsPlayerDist;
+                    teleported = TeleportCompat::LooksTeleported(tr.obsPos, tr.obsPlayerDist, tpDt,
+                                                                 fposNow, toPlayer);
+                }
+                tr.obsPos        = fposNow;
+                tr.obsPlayerDist = toPlayer;
+                tr.obsAt         = now;
+            }
             const bool inHome = !Config::g_lootInPlayerHomes.load() && InPlayerHome();
             if (a_follower->IsInCombat() || overCap || outOfLeash || inHome) {
+                if (outOfLeash && leashView.clamped && !a_follower->IsInCombat() && !overCap && !inHome)
+                    spdlog::info("[loot] {:08X} left the TELEPORT-SAFE leash: {:.0f} u from the player > "
+                                 "{:.0f} (capped under {}'s {:.0f} while his weapon is drawn) -- excursion ends "
+                                 "before that mod teleports him", id, toPlayer, leashView.release,
+                                 TeleportCompat::DetectedName(), leashView.teleportAt);
                 Packages::LootTravelClear(a_follower->IsInCombat() ? "combat"
                                           : (overCap ? "excursion cap"
-                                          : (inHome ? "player home" : "left leash")),
+                                          : (inHome ? "player home"
+                                          : (leashView.clamped ? "left leash (teleport-mod clamp)"
+                                                               : "left leash"))),
                                           a_follower, slot);
                 tr = TravelIntent{};
                 // fall through to a normal eval this tick (combat table / follow).
@@ -370,6 +402,50 @@ namespace MFO::Logistics {
                 tr.phase = TravelPhase::Holding;
                 tr.lingerUntil = now + BatchLingerDur();
                 return;
+            } else if (tr.phase == TravelPhase::Walking && teleported) {
+                // ── TELEPORTED MID-LEG (86e3ec824). Something moved him to the
+                // player's side in one tick. The leg is over, and it is nobody's
+                // FAILURE: not the ref's (no blocklist, no gate), not the walk's (no
+                // stall strike, no steal strike). End it cleanly and re-plan from
+                // where he stands now, inside the current (possibly clamped) leash.
+                auto t = tr.target.get();
+                skippedRef = t ? t->GetFormID() : 0u;
+                spdlog::warn("[loot] {:08X} leg->{:08X}: TELEPORTED to the player mid-leg -- jumped {:.0f} u in "
+                             "{:.1f}s, {:.0f} -> {:.0f} u from the player (teleport mod: {}; weapon-drawn clamp {}). "
+                             "Leg ended cleanly: no stall, no strike, no blocklist; re-planning inside the leash",
+                             id, skippedRef, tpJump, tpDt, tpPrevDist, toPlayer, TeleportCompat::DetectedName(),
+                             leashView.clamped ? "ON" : "off");
+                skipWhy         = "TELEPORTED to the player (leg ended cleanly)";
+                tr.blockedSince = {};
+                tr.stolenSince  = {};
+                tr.phase        = TravelPhase::Holding;
+                tr.lingerUntil  = now + BatchLingerDur();
+                // no return -- fall into Holding (the next item inside the leash, same tick)
+            } else if (tr.phase == TravelPhase::Walking && leashView.clamped && pc && [&] {
+                           // ── TARGET PAST THE TELEPORT-SAFE LEASH (86e3ec824). The
+                           // player drew his weapon (or walked off) while this leg's
+                           // TARGET lies beyond the clamped release distance from
+                           // him: walking there would cross the teleport mod's
+                           // distance. Re-plan to an item inside the clamp instead
+                           // of walking into the yank. Not a failure: no blocklist,
+                           // no strike -- the ref is fine once the weapon is sheathed.
+                           auto t = tr.target.get();
+                           auto* r = t.get();
+                           if (!r || r->GetPosition().GetDistance(pc->GetPosition()) <= leashView.release)
+                               return false;
+                           skippedRef = r->GetFormID();
+                           return true;
+                       }()) {
+                spdlog::info("[loot] {:08X} leg->{:08X}: target lies past the TELEPORT-SAFE leash ({:.0f} u, "
+                             "{} active while his weapon is drawn, teleports past {:.0f}) -- re-planning inside it",
+                             id, skippedRef, leashView.release, TeleportCompat::DetectedName(),
+                             leashView.teleportAt);
+                skipWhy         = "past the teleport-safe leash (weapon drawn)";
+                tr.blockedSince = {};
+                tr.stolenSince  = {};
+                tr.phase        = TravelPhase::Holding;
+                tr.lingerUntil  = now + BatchLingerDur();
+                // no return -- fall into Holding (the next item inside the clamp, same tick)
             } else if (tr.phase == TravelPhase::Walking && [&] {
                            // ── EMPTIED-TARGET CORRECTION (loot M1, marth: "a smooth
                            // correction if they aren't first to the item where it
