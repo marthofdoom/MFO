@@ -1415,4 +1415,29 @@ namespace MFO::APMFBridge {
     // Release every claim and clear the map. kPreLoadGame / revert, AFTER the pump is
     // drained (so no worker tick races the map).
     void ClearTransientState();
+
+    // ── LOTD MUSEUM DEPOSIT (feat/mfo-lotd, ClickUp 86e3edghj L3) -- apmf/Deposit.cpp ──
+    // The three facet claims ONE deposit trip rides, keyed by follower: ch.19 travel to
+    // the crate, ch.1 hold while the idle plays, ch.12 Idle v2 (IdleGive AT the crate).
+    // logistics/Lotd.cpp owns the trip and runs at most one at a time. Worker road; own
+    // mutex (never g_mx). Nothing is saved.
+    //
+    // DepositSupported: APMF present AND abiVersion >= 17. An APMF older than v17 does
+    // NOT refuse an idle form (it plays the v1 IdleForceDefaultState instead), so the
+    // whole deposit is inert below it. v17 implies the v12 leg state + v6 IsClaimLive.
+    bool DepositSupported();
+    std::uint32_t DepositApiVersion();   // 0 when APMF is absent (for the once-log)
+    // ch.19 walk to a_crate (a loaded reference). False = refused (logged).
+    bool ClaimDepositTravel(RE::FormID a_follower, RE::FormID a_crate, float a_radius);
+    // The deposit leg's v12 state, same contract as ReadLootTravelLeg (`ours` = this
+    // trip's claim and crate, not the leg that stood before our RequestEx).
+    bool ReadDepositLeg(RE::FormID a_follower, LootLegState& a_out);
+    // ch.1 hold + ch.12 v2 idle a_idle at a_target. False = the idle was refused (logged).
+    bool ClaimDepositIdle(RE::FormID a_follower, RE::FormID a_idle, RE::FormID a_target);
+    // 0 = no idle claim / not yet published, 1 = live, 2 = Harbinger ENDED it.
+    int  DepositIdleStatus(RE::FormID a_follower);
+    // Release this trip's idle, hold and walk (in that order). Idempotent.
+    void ReleaseDeposit(RE::FormID a_follower);
+    // Revert / load (pump drained): release every deposit claim and forget them.
+    void ClearDepositClaims();
 }

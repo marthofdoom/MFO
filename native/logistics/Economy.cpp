@@ -10,6 +10,7 @@
 // helpers shared with TradeBridge::PlanBuy (see Logistics.h).
 #include "Logistics_internal.h"
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
+#include "Lotd.h"                // LOTD: never sell a relic the museum still needs
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
 #include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
@@ -656,6 +657,9 @@ namespace MFO::Logistics {
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
+                // LOTD (feat/mfo-lotd, marth 2026-09-24: "museum items cannot be sold if
+                // needed"): a relic THIS follower is covering for the museum never sells.
+                if (Lotd::HoldFromSale(fid, obj)) { sdiag(obj, "museum"); continue; }
                 auto* weap = obj->As<RE::TESObjectWEAP>();
                 auto* armo = obj->As<RE::TESObjectARMO>();
                 if (!weap && !armo) {

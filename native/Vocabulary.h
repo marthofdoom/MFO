@@ -212,6 +212,14 @@ namespace MFO::Vocab {
     // specific category already covers. Grabbed and dibs-protected like other
     // looted goods -- selling them is a separate existing/future path.
     inline constexpr const char* kActLootValuables      = "act.loot_valuables";
+    // LOTD awareness (feat/mfo-lotd, ClickUp 86e3edghj, marth 2026-09-24): "Loot
+    // museum items". Takes the relics the Legacy of the Dragonborn museum still
+    // NEEDS and, with the same rule, SHIPS them: a follower carrying needed items
+    // near an enabled Museum Shipments crate walks to it and deposits them
+    // (logistics/Lotd.cpp). Offered on the board only while LOTD is detected AND
+    // bLootLOTD is on; inert without Harbinger ABI v17. APPENDED -- a frozen
+    // serialization string (#10) like every opcode above.
+    inline constexpr const char* kActLootMuseum         = "act.loot_museum";
 
     // A cheap actor-value-percentage read. Reads THE NAMED actor's state
     // (INVARIANTS #15 -- say whose).

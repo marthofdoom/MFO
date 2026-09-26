@@ -503,7 +503,8 @@ namespace MFO::Logistics {
         // APPEND-ONLY (marth CLAUDE.md hard rule): existing ordinals are
         // frozen, new categories go at the end.
         enum class Category { Arrows, Bolts, Potions, Equipment, Gold, Jewelry, SoulGems, Lockpicks,
-                               Ingredients, Valuables };
+                               Ingredients, Valuables,
+                               Museum };   // LOTD (logistics/Lotd.cpp) -- Valuables-tier dibs
 
         // Category label for the [loot] diagnostic. Naming the scanned category is
         // the ONLY way to read the composition line: "empty=36" is meaningless
@@ -521,6 +522,7 @@ namespace MFO::Logistics {
             case Category::Lockpicks: return "lockpicks";
             case Category::Ingredients: return "ingredients";
             case Category::Valuables: return "valuables";
+            case Category::Museum:    return "museum";
             default:                  return "?";
             }
         }
@@ -558,7 +560,7 @@ namespace MFO::Logistics {
         inline bool IsDibsTierLootOp(const std::string& a_op) {
             return a_op == Vocab::kActLootEquipment || a_op == Vocab::kActLootGold  ||
                    a_op == Vocab::kActLootJewelry   || a_op == Vocab::kActLootSoulGems ||
-                   a_op == Vocab::kActLootValuables;
+                   a_op == Vocab::kActLootValuables || a_op == Vocab::kActLootMuseum;
         }
 
         // Every opcode that names a LOOT action (as opposed to drink/torch/cast,
@@ -572,7 +574,7 @@ namespace MFO::Logistics {
                    a_op == Vocab::kActLootEquipment      || a_op == Vocab::kActLootGold     ||
                    a_op == Vocab::kActLootJewelry        || a_op == Vocab::kActLootSoulGems ||
                    a_op == Vocab::kActLootLockpicks      || a_op == Vocab::kActLootIngredients ||
-                   a_op == Vocab::kActLootValuables;
+                   a_op == Vocab::kActLootValuables      || a_op == Vocab::kActLootMuseum;
         }
 
 }
@@ -888,6 +890,10 @@ namespace MFO::Logistics {
 
     // defined in logistics/EquipAuthority.cpp, called by EconomyProbe
     bool IsPlayerPick(RE::FormID a_follower, RE::FormID a_form);
+
+    // defined in logistics/Lotd.cpp (LOTD awareness): the Category::Museum looter,
+    // called through LootHere / HasLoot like every other category's.
+    bool LootMuseum(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false);
 
     // ── THE SWAP-UP RULE (86e3ebfu3, 2026-09-25), defined in logistics/SwapUp.cpp
     // (full doc there). ONE rule shared by the loot side and the economy: what a

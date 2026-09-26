@@ -2036,6 +2036,10 @@ module. Module layout:
   - `logistics/Logistics.h` (232) = the public API (unchanged, moved whole).
   - `logistics/Lockpick.cpp` (956, NEW LP-M1 2026-09-25, doors LP-M2 2026-09-26) = follower LOCKPICKING of chests: see the
     LOCKPICK entry below. Declared in `Logistics_internal.h` (`namespace Lockpick`, `:847`).
+  - `logistics/Lotd.cpp` (1243) + `logistics/Lotd.h` = LOTD awareness (feat/mfo-lotd, 2026-09-25):
+    detection, the museum snapshot, the "Loot museum items" gambit and its deposit trip. Its own
+    public header (plugin.cpp, Diagnostics.cpp, Board_FieldKit.cpp include it). See the LOTD section
+    below.
   Wave 2 added declarations to `Logistics_internal.h` for helpers that were file-local only
   by position: `EquipTorch`, `HealExcludedWeapon`, `ShedOffRoleWeapon`,
   `MarkJustLooted`, `IsDrinkablePotion`, `IsCoinLoot`, `IsSoulGemItem`, `IsIngredientItem`,
@@ -3066,6 +3070,97 @@ never strips naked). The rated-armor branch (2026-09-14) is THE armor wear decis
 highest `ArmorScore` owned piece that strictly beats the worn score — see ARMOR CLASS
 BY SKILL + PERKS above.
 
+### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
+**OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives
+over-count), MFO-B123 (a reload before arrival can ship one duplicate), MFO-B124 (the ledger floor leaks
+for the session), MFO-B125 (the same base in two crates), MFO-B126 (a kept relic auto-equipped, never
+shipped).** Read them before editing.
+ClickUp 86e3edghj, rounds L1-L3, design `_research/lotd-design-2026-09-24.md`. LOTD has no DLL;
+MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (local to
+`LegacyoftheDragonborn.esm`) is verified against the installed 6.9.0 and 6.10.0 ESMs and listed at
+`Lotd.cpp:57-69`; IdleGive is Skyrim.esm `0x0B5E20`.
+- **L1 detection** `Detect:888` ← `plugin.cpp:379` (kDataLoaded, AFTER `APMFBridge::Acquire`):
+  loaded plugin + QUST `0x138793` + CONT `0x1772A7` + `DBM_VersionMajor >= 6`, else logged
+  (absent / LOUD unsupported layout) and everything stays inert. Writes GLOB `MFO_LOTDDetected`
+  (`Forms::kLotdDetectedGlob` 0x903) at kDataLoaded AND `OnPostLoad:944` (GLOB values are
+  save-persisted); the MCM `hiddenToggle` (`groupControl 1`, `"MFO.esp|903"`) hides `bLootLOTD`
+  when it is 0. `Enabled()` = detected && `Config::g_lootLOTD`.
+- **L1 snapshot** `RebuildSnapshot:277`, MAIN THREAD ONLY (a Papyrus VM read):
+  `FindBoundObject(quest, "DBM_MuseumAPI")` → `SectionDisplayLists{,2,3,4}` /
+  `SectionDisplayItems{,2,3,4}` FormList arrays → one `Slot` per display (a group FLST = one slot,
+  open only while EVERY sub-display is disabled) with its accepted inventory bases (FLST
+  alternatives expanded; `DBM_ExcludeList` / `DBM_ProtectedItems` and non-inventory types
+  dropped). Pairing is by INDEX (`Entries:243` keeps nulls, editor forms then script-added, the same
+  order for both lists). Published as an immutable `shared_ptr` under `g_snapMx`. Triggers:
+  `OnPostLoad` (direct), `ModEventSink` (`MCMRefresh`, `DBM DisplayListUpdate`,
+  `DBM DisplaySortComplete`; posts only, rate-limited 5 s), the worker asking with no snapshot,
+  the toggle-on edge. Passive `[lotd] snapshot` / `[lotd] needs` lines are the L1 field check.
+- **Supply, split by thread (round 2, the threading carve-out).** MAIN: `RefreshMainSupplyOnMain:465`
+  counts the PLAYER, DropoffCrate `0x1772AA` and the display drop-off `0x07EF00` (`noInit`) and the
+  in-transit ledger, prunes the ledger, and publishes an immutable `MainSupply` under `g_mainMx`
+  (requested by the worker every 2 s, `RequestMainSupply:512`; also run at post-load and after each
+  transfer). WORKER: `FreshNeeds:537` (2 s memo) reads ONLY the follower inventories itself, and has
+  NO answer (nothing looted, shipped or held) until a main copy for the current snapshot exists.
+  Greedy cover (`Uncovered:519`). `UncoveredExcluding:591` = what THIS follower covers (only
+  LOWER-id followers count before him, so two holders never both keep or both ship one relic).
+- **The in-transit ledger is a FLOOR (principle 9).** An entry (base, count, the DropoffCrate
+  count read at the deposit, the crate) stays until DropoffCrate holds baseline + count (ARRIVED) or
+  no open slot accepts the base (displayed); never a timer. Session-only (MFO-B119).
+- **L2 gambit** `act.loot_museum` (`Vocabulary.h`, APPENDED) → `Service.cpp:1228` → `RunGambit:1004`
+  (deposit if possible, else `LootNearby(Category::Museum)`); `Category::Museum` APPENDED
+  (`Logistics_internal.h`, Valuables-tier dibs via `TierReleased`'s default path, dibs-deferred in
+  `IsDibsTierLootOp`); the looter `Logistics::LootMuseum:1215` (via `LootHere`/`HasLoot`,
+  `LootTake.cpp`); StripCorpse + RunExcursionScan map the op (`LootScan.cpp`). Player storage /
+  museum halls are skipped UNCONDITIONALLY for this category (`LootScan.cpp:343`); loose world
+  refs are never museum candidates (the display refs are item-shaped refs in museum cells).
+  Board: listed in `kActsLogi`, skipped by the picker unless `GambitOffered()`
+  (`Board_FieldKit.cpp:576`).
+- **A needed relic is never sold or dropped.** `HoldFromSale:1189` (whenever awareness is on,
+  Harbinger or not) ← the Economy sell list (`Economy.cpp:662`), SwapUp's ammo ladder (`HeldAmmo`
+  pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:557`).
+  `KeepForDeposit:1198` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
+  `ShedOffRoleWeapon` (`Upkeep.cpp:399`): an off-role relic weapon is deposited, not handed to you.
+- **L3 deposit** (automatic with the gambit; ONE trip at a time, `g_trip` under `g_tripMx`):
+  `RunGambit` starts it when the follower carries `Shippable:608` items (not worn, quest, stock
+  gear or `IsPlayerPick`) and `NearestCrate:651` finds an enabled, 3D-loaded outgoing crate within
+  3000 u (inside his leash, not in DBMQA `0x1252E1`, not on cooldown), and no container / barter
+  menu is open. `DepositTick:1066` ← `Service.cpp:312` owns his tick:
+  Walking (ch.19 via `APMFBridge::ClaimDepositTravel`, v12 leg state `ReadDepositLeg`, distance
+  backstop) → on arrival `ArriveOnMain:806` (MAIN) reads the crate script's state (`CrateState:696`:
+  `DBM_MuseumShipmentsScript` `currentState`) and ACTIVATES it only if it is not already `ready` /
+  `waitingtoship` (TRAP (a); re-activating a WaitingtoShip crate re-arms LOTD's 5 h clock), then
+  `ClaimDepositIdle` (ch.1 hold + ch.12 v2 IdleGive at the crate; a SYNCHRONOUS refusal latches the
+  deposit OFF for the session, `g_depositLatched`) → Giving: NO TRANSFER until the idle is SEEN LIVE
+  (`DepositIdleStatus` 1) and still live >= 1 s later on a later tick (the never-live grace never
+  counts; 2 = Harbinger ended it → the trip ends) → `TransferOnMain:826` (MAIN) refuses under an open
+  container / barter menu and unless the crate CONFIRMS `ready` / `waitingtoship`, re-reads every
+  item (NOT `IsPlayerPick`: `g_playerPicks` is worker-only, Shippable filtered it), reads the crate
+  count back, fills the ledger floor, and reports `g_transferResult` → Settling: a SKIPPED or empty
+  transfer (2) ends the trip as a FAIL with the crate cooldown (never a silent DONE loop); a move (1)
+  waits 2.5 s → `EndTripLocked` releases all three claims.
+- **Trip ends:** combat (`ReleaseTravelOnCombat` → `EndDeposit`), dismissal (`OnFollowerRemoved`),
+  awareness off, crate gone, a non-arrived leg end, the player leaving his leash, 90 s — and the
+  OWNER-INDEPENDENT backstop `SweepTrip:1172` ← the pump (`Diagnostics.cpp:937`, every lap): logistics
+  off, the owner dead / unloaded / no longer active, not ticked for 10 s, or past 90 s.
+- **Shipping intro** (marth: "Trigger the message when LOTD awareness is triggered on. Pick a box
+  and initialize through it"): `OnConfigRead:959` ← `Diagnostics.cpp:166` (MCM close) sees the
+  OFF→ON edge (a load with it already on is not an edge, `OnPostLoad`) and posts
+  `InitShippingOnMain:716`: while `DBMMuseumShipmentsFirst` (`0x1772A8`) == 0 and no intro is
+  already in flight (`IntroPending`, so it can never show twice), activate the nearest / the
+  persistent placeable crate `0x1772AB` THROUGH A LOADED FOLLOWER (never the player: a player
+  activation opens the crate, and a sneaking player's picks a placeable one up). No follower loaded
+  → the first deposit trip shows it instead (and ships on a later trip).
+- **Inert without Harbinger ABI v17** (`HarbingerReady:632`, logged once): no museum loot, no
+  deposit (the no-sell rule and the L1 snapshot still run).
+- **What breaks:** the snapshot, `CrateState`, the player / museum-container counts, the
+  ActivateRef and the transfer must stay MAIN-thread; the display/item pairing must stay
+  index-aligned with nulls kept, or relics map to the wrong display; the transfer must stay behind
+  BOTH the live-idle gate and the crate's Ready read; the deposit must never ship a quest instance
+  (LOTD's crate ships quest items too, trap (b)); the deposit claims must be released on every end
+  (a Harbinger travel slot is 1 of 8, and `SweepTrip` is what catches an owner nobody services);
+  the ledger must stay a floor; `act.loot_museum` / `Category::Museum` are append-only; `bLootLOTD`
+  is an MCM persistence key.
+
 ### Loadout.cpp / Loadout.h — the equip/spell-in-hand ledger (NOT serialized)
 Puts a gambit spell in a follower's hand, records displaced gear as **transient
 debt**, hands it back on hit/combat-end/dismissal. Reconstructed from live state on
@@ -4003,6 +4098,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   - `apmf/Equip.cpp` (274) = equipment: the ch.15 weapon-order claim (`ClaimEquipment` `:37`,
     `WeaponHandActive` `:65`) and the ch.17 authority (`EquipAuthoritySupported` `:89`,
     `ClaimEquipAuthority` `:111`, `DeclareEquipScope` `:196`, `DeclareEquipSet` `:246`).
+  - `apmf/Deposit.cpp` (234) = the LOTD deposit trip's three claims (feat/mfo-lotd), keyed by
+    follower, own mutex `s_mx` (never `g_mx`): `DepositSupported:99` (ABI >= 17: an older APMF
+    ignores an idle form and plays the v1 idle, silently), `ClaimDepositTravel:106` (ch.19, its OWN
+    claim, not a loot slot), `ReadDepositLeg:140` (the loot M2 `ours` rule), `ClaimDepositIdle:168`
+    (ch.1 hold + ch.12 v2 `form`=IDLE `target`=crate), `DepositIdleStatus:203` (IsClaimLive, 3 s
+    never-live grace), `ReleaseDeposit:219`, `ClearDepositClaims:228` (← `Lotd::ClearTransientState`).
   - `apmf/Excursion.cpp` (578) = the per-combat / per-excursion facets: `ClaimCombatTarget`
     (`:138`), the **ch.20 TARGET PIN** table (below), `OfferPackage` (`:355`), the ch.19 loot-travel
     legs (`LootTravelLeg` `:54`, the v12 leg-state helpers `LegStateApi` `:73` / `ReadLegInfo` /
@@ -5786,6 +5887,8 @@ NearestAlly=2, `:37`) is serialized as the raw `subject` byte (read `cast/Fire.c
 carried as `subjectActorForm`, NOT an enum value, precisely to keep the enum frozen).
 `Pct`/`HealthPct`/etc. (`:214`) use permanent+temporary AV — changing the max formula
 re-times every "HP below X%" rule + Confidence.
+`kActLootMuseum` ("act.loot_museum", LOTD, 2026-09-25) is the newest APPENDED opcode; it is wired
+in Service.cpp / LootScan.cpp / Board (`logistics/Lotd.cpp` section).
 
 ### Config.cpp / Config.h
 ~90 `g_*` atomics read across 22 files (cross-thread-safe by design). INI-only
@@ -5833,6 +5936,7 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 | `CombatStyle::InstallEquipGate` (CheckShouldEquip 0x0F) | `plugin.cpp:301` | 30 template vtables |
 | `Rapport::RegisterSinks` (TESDeath, TESCombat) | `plugin.cpp:302` → `Rapport.cpp:521` | sinks LAST |
 | `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:303` → `logistics/Sinks.cpp:250` | direction filter mandatory |
+| `Lotd::RegisterSinks` (SKSE ModCallbackEvent: LOTD's MCMRefresh / DBM DisplayListUpdate / DisplaySortComplete) | `plugin.cpp:389` → `logistics/Lotd.cpp:784` | only when LOTD is detected; the sink only QUEUES a main-thread snapshot rebuild |
 | `MEOBridge::RegisterSink` (TESEquip) | `plugin.cpp:298` → `MEOBridge.cpp:75` | optional |
 | `Diagnostics::Install` (TESSpellCast, TESHit, MenuOpenClose, + Probe crosshair) | `plugin.cpp:341` → `Diagnostics.cpp` `Install()` | + the worker pump; prints the `[atk-obs] frameworks` line |
 | `[atk-obs]` `BSAnimationGraphEvent` sinks (per follower slot, on his own graphs) | `Diagnostics.cpp` `AtkPostAttach` ← `AtkService` (worker) → `MainThread::Post` | whenever managed + `Is3DLoaded()`, every 2 s (`kAtkAttachMs`), in or out of combat, deduped; counters/dumps fight-scoped; observation only, `bAttackObserve` |

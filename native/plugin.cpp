@@ -20,6 +20,7 @@
 #include "CombatStyle.h"
 #include "Packages.h"
 #include "logistics/Logistics.h"
+#include "logistics/Lotd.h"   // LOTD awareness: detection, sinks, post-load snapshot (feat/mfo-lotd)
 #include "Gait.h"
 #include "MEOBridge.h"
 #include "apmf/APMFBridge.h"
@@ -375,6 +376,7 @@ namespace {
             MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
             MFO::APMFBridge::Acquire();     // APMF cast-selection API (Phase 3); nullptr if APMF absent (degrades)
+            MFO::Lotd::Detect();            // LOTD awareness: detect Legacy of the Dragonborn (after Forms + APMF)
             MFO::Diagnostics::RefreshFatalModules();   // [fatal]: every plugin DLL is loaded now -- resolve APMF.dll's range
             MFO::Followers::ResolveQuirks();
             MFO::MainThread::Install();      // the main-thread pump (§0.37) -- the only real
@@ -384,6 +386,7 @@ namespace {
             MFO::CombatStyle::InstallEquipGate();  // T#75: equip orders own the hands, likewise
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
             MFO::Logistics::RegisterSinks();   // the player-looted waiver sink (§4.8.3)
+            MFO::Lotd::RegisterSinks();        // LOTD: the museum's SKSE ModEvents -> snapshot rebuild
             MFO::MEOBridge::RegisterSink();  // equip sink: flush follower gem moves onto worn loot
             MFO::Diagnostics::Install();
             MFO::Board::Install();           // Field Kit overlay: swapchain-vtable Present/Resize
@@ -474,6 +477,7 @@ namespace {
             MFO::ProgAllocator::OnPostLoad();   // progression: start level poll + queue guarded reapply
                                                 // (after the co-save load — ARCHITECTURE §9)
             MFO::Board::SetHud(MFO::Config::g_showHud.load());
+            MFO::Lotd::OnPostLoad(a_msg->type == SKSE::MessagingInterface::kNewGame);   // GLOB + museum snapshot
             MFO::Diagnostics::StartPump();
             MFO::Diagnostics::DumpReport("load");
             break;

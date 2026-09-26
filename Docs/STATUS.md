@@ -31,6 +31,24 @@ Read it as history and this block as current.
   (tier B, SEV-4): the trend rate divides by max(span, 5 s), so a lone burst or a fresh ring reads as spread over 5 s.
   Backlog MFO-B117 (ring not erased on dismissal), MFO-B118 (`OfFacing` ignores foe weight). Field check: engage-on-sight's
   stand-down line now reads "under the engage bar ... bar 0.40".
+- **2026-09-26 branch `feat/mfo-lotd` (off `main` `53d61c0`, main `707d3a7` merged in; NOT merged to main, NOT
+  deployed; tier A, round 2 after the Opus 5.5 review of `7452ccb`). Batch L, ClickUp 86e3edghj (rounds L1-L3).** LOTD
+  awareness: `logistics/Lotd.cpp` + `Lotd.h`, `apmf/Deposit.cpp`; MCM `bLootLOTD` (hidden unless LOTD is detected, GLOB
+  `MFO_LOTDDetected` 0x903); the APPENDED gambit `act.loot_museum` ("Loot museum items") loots what the museum still
+  needs and, automatically, deposits it: Harbinger ch.19 walk to the nearest enabled Museum Shipments crate, ch.1 hold,
+  ch.12 v2 IdleGive at the crate, the transfer on the main thread only after the idle is SEEN live and the crate script
+  reads Ready. A needed relic is never sold or dropped (Economy, SwapUp drops, the ammo ladder, the off-role shed). Inert
+  without Harbinger ABI v17; the deposit latches off for the session on a synchronous ch.12 v2 refusal.
+  Round 2 (review of 7452ccb): idle-live gate, crate state read via the VM (no re-activation of a Ready /
+  WaitingtoShip crate), in-transit ledger as a floor until arrival in DropoffCrate, the player's and the museum
+  containers' counts taken on MAIN only, owner-independent `Lotd::SweepTrip` in the pump, IsPlayerPick excluded,
+  intro once. Backlog MFO-B117..B119.
+  FIELD CHECKS: `[lotd] detected Legacy of the Dragonborn v6.9.0`; `[lotd] snapshot #1 (post-load): N sections ... M
+  OPEN`; `[lotd] needs (snapshot #1)`; toggle on -> `[lotd] shipping intro (awareness turned on): activated crate` and
+  LOTD's message ONCE; a deposit: `DEPOSIT trip -> crate`, `crate ... was 'firstactivation' -- activated` (or `is
+  'ready' -- not re-activated`), APMF `[ch.12] ... ANIMATION CONFIRMED` for IdleGive, `DEPOSITED N item(s)`, later `in
+  transit: ... ARRIVED in DropoffCrate`. Principle 5: the VM reads, the crate activation and IdleGive must be SEEN.
+
 - **2026-09-25 branch `feat/mfo-reentry-leash` (off `main` `53d61c0`; NOT merged, NOT deployed; tier A, awaiting its
   Opus 5.5 review). Batch L, ClickUp 86e3ex5v9 / 86e3ex5ve (the MFO halves) + 86e3erv94.** MFO adopts Harbinger ch.22
   `kIntent_CombatReentryDeny` in the retreat and ch.23 `kIntent_PursuitLeash` as the in-combat leash. `native/APMF_API.h`

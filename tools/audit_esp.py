@@ -72,6 +72,8 @@ REQUIRED = {
     # (the weapon-scoring axis) is each record's whole point.
     0x833: ('CSTY', "MFO_MeleeStyle",       ['EDID', 'CSGD']),
     0x834: ('CSTY', "MFO_RangedStyle",      ['EDID', 'CSGD']),
+    # LOTD awareness: the detected flag the DLL writes and the MCM hiddenToggle reads.
+    0x903: ('GLOB', "MFO_LOTDDetected",     ['EDID', 'FNAM', 'FLTV']),
 }
 
 # Quests that are start-game-enabled but NOT run-once must appear in the SEQ or

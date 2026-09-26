@@ -94,9 +94,14 @@ FID_APMF_RETREAT_PACKAGE = OWN | 0x83A
 # the APMF ANIMATED HEAL packages (make_apmf_heal_packages() / native/Packages.cpp
 # HealAnimFill) -- the opt-in bHealAnimPackage route, removed in favor of a new
 # executor. Ids stay retired, never recycled (INVARIANTS #41).
-NEXT_OBJECT_ID     = 0x903         # first never-used local id (0x836-0x839 = APMF loot-travel packages,
+# LOTD AWARENESS (feat/mfo-lotd, ClickUp 86e3edghj): the DLL writes 1 here at
+# kDataLoaded and at every load when Legacy of the Dragonborn is detected, 0
+# otherwise. The MCM hiddenToggle reads it (GlobalValue "MFO.esp|903") and hides
+# the bLootLOTD control when LOTD is absent. Nothing else reads it.
+FID_LOTD_DETECTED_GLOB = OWN | 0x903
+NEXT_OBJECT_ID     = 0x904         # first never-used local id (0x836-0x839 = APMF loot-travel packages,
                                    # 0x83A = APMF retreat package, 0x83B/0x83C = retired (see above),
-                                   # 0x900-0x902 = P7 travel packages)
+                                   # 0x900-0x902 = P7 travel packages, 0x903 = MFO_LOTDDetected)
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -343,7 +348,17 @@ def make_glob():
     # + `evp` (or wait for the engine's own package re-evaluation).
     body = subrec('EDID', zstr("MFO_ProbeSelect")) + subrec('FNAM', b's')
     body += subrec('FLTV', struct.pack('<f', 0.0))
-    return group('GLOB', record('GLOB', FID_PROBE_GLOB, 0, body))
+    return record('GLOB', FID_PROBE_GLOB, 0, body)
+
+
+def make_lotd_glob():
+    # LOTD awareness: the "Legacy of the Dragonborn is installed" flag the MCM's
+    # hiddenToggle reads. Same short-GLOB shape as make_glob above (EDID + FNAM
+    # 's' + FLTV), default 0.0. The DLL owns its value (SetValue at kDataLoaded
+    # and every load -- a GLOB value is save-persisted).
+    body = subrec('EDID', zstr("MFO_LOTDDetected")) + subrec('FNAM', b's')
+    body += subrec('FLTV', struct.pack('<f', 0.0))
+    return record('GLOB', FID_LOTD_DETECTED_GLOB, 0, body)
 
 
 # ── KYWD ────────────────────────────────────────────────────────────────────
@@ -1730,9 +1745,11 @@ def main():
     data = make_tes4(NEXT_OBJECT_ID)
     data += make_kywd()
     # GLOB between KYWD and MGEF -- vanilla top-group order (KYWD .. GLOB ..
-    # MGEF), and only emitted when something references it (PoC probes).
-    if POC_ENABLED:
-        data += make_glob()
+    # MGEF). ONE group: the PoC probe switchboard (only when the probes are
+    # built) and the LOTD-detected flag (always), in FormID order.
+    globs = make_glob() if POC_ENABLED else b''
+    globs += make_lotd_glob()
+    data += group('GLOB', globs)
     data += make_mgef()
     data += make_spel()
     data += make_qust()
@@ -1817,6 +1834,7 @@ def main():
     print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
     print(f"  CSTY  0x{FID_MELEE_STYLE & 0xFFF:03X}        MFO_MeleeStyle (equip_melee stance -- default ON)")
     print(f"  CSTY  0x{FID_RANGED_STYLE & 0xFFF:03X}        MFO_RangedStyle (equip_ranged stance -- default ON)")
+    print(f"  GLOB  0x{FID_LOTD_DETECTED_GLOB & 0xFFF:03X}        MFO_LOTDDetected (the DLL sets 1 when LOTD is detected; MCM hiddenToggle)")
     if POC_ENABLED:
         print(f"  GLOB  0x{FID_PROBE_GLOB & 0xFFF:03X}        MFO_ProbeSelect (console: set MFO_ProbeSelect to N; 0 = all probes off)")
         for idx, sp, label, (tkind, tval) in POC_PROBES:

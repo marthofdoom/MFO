@@ -69,6 +69,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/LootScan.cpp
     logistics/LootEquipment.cpp
     logistics/TeleportCompat.cpp
+    logistics/Lotd.cpp
     logistics/SwapUp.cpp
     logistics/Lockpick.cpp
     Loadout.cpp
@@ -93,6 +94,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/ReentryDeny.cpp
     apmf/PursuitLeash.cpp
     apmf/SpellAllowList.cpp
+    apmf/Deposit.cpp
     imgui_impl_win32.cpp
 )
 

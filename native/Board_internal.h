@@ -255,6 +255,9 @@ namespace MFO::Board {
         { Vocab::kActLootLockpicks,      "Loot lockpicks" },
         { Vocab::kActLootIngredients,    "Loot ingredients" },
         { Vocab::kActLootValuables,      "Loot valuables + gold (to sell)" },
+        // LOTD awareness: listed only while LOTD is detected and bLootLOTD is on
+        // (Board_FieldKit.cpp's picker skips it otherwise -- Lotd::GambitOffered).
+        { Vocab::kActLootMuseum,         "Loot museum items" },
         { Vocab::kActEquipTorch,         "Equip torch" },
         // Cast in logistics (mage update): out-of-combat casting -- self-buffs,
         // candlelight, out-of-combat heals. Same opcodes as combat; the

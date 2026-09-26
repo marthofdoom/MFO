@@ -19,6 +19,7 @@
 #include "CombatStyle.h"
 #include "progression/ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
 #include "MainThread.h"      // [atk-obs]: graph sink attach/detach is main-thread work (#62-class)
+#include "logistics/Lotd.h"   // LOTD awareness: the toggle-on intro after an MCM re-read
 
 // Two Win32 symbols, declared by hand. <windows.h> is BANNED outside Board.cpp
 // (it #defines GetObject and hijacks BGSDefaultObjectManager::GetObject<T>,
@@ -162,6 +163,7 @@ namespace MFO::Diagnostics {
                         PumpTickGate gate(epoch);   // shared body shape; drains with StopPump
                         if (!gate) return;
                         Config::Read();
+                        Lotd::OnConfigRead();   // LOTD awareness turned ON -> the shipping intro
                         // Re-apply settings mirrored into derived UI state --
                         // the raw atomics are live, but g_showHud only reaches
                         // the board's g_hud through SetHud. Without this a HUD
@@ -932,6 +934,7 @@ namespace MFO::Diagnostics {
                         HbStage("Actuation::SelfCastReconcile");  Actuation::SelfCastReconcile();     // release self-cast channels when their rule goes stale (dispel lingering buffs)
                         HbStage("Actuation::TargetCastReconcile"); Actuation::TargetCastReconcile();  // release on-target direct-force streams (heal/damage re-flow; dispel lingering ward)
                         HbStage("APMFBridge::Tick");              APMFBridge::Tick();                 // Phase 3: auto-release APMF owned-cast claims (spell+target) once the gambit stops firing (no-op without APMF)
+                        HbStage("Lotd::SweepTrip");               Lotd::SweepTrip();                  // LOTD: end an orphaned deposit trip whatever its owner is doing
                         HbStage("APMFBridge::MaybeWarnAbsence");  APMFBridge::MaybeWarnAbsence();     // gentle corner-toast reminder (~10 min cadence) when APMF is absent; no-op the instant it's present
                         HbStage("Loadout::Tick");                 Loadout::Tick();   // hand back stowed two-handers
                         HbStage("AtkObserveTick");                AtkObserveTick();  // [atk-obs] passive attack-event probe: slots, fights, idle-in-reach, dumps

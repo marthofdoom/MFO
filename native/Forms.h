@@ -67,6 +67,10 @@ namespace MFO::Forms {
     // runtime -- the rev-4 crash cell. Route is DLL-gated (bCastSelf) pending a
     // deck-confirmed production run.
     inline constexpr RE::FormID kCastPackageSelf  = 0x835;
+    // LOTD AWARENESS (feat/mfo-lotd): GLOB MFO_LOTDDetected. logistics/Lotd.cpp
+    // writes 1 when Legacy of the Dragonborn is detected (0 otherwise) at
+    // kDataLoaded and every load; the MCM hiddenToggle reads it ("MFO.esp|903").
+    inline constexpr RE::FormID kLotdDetectedGlob = 0x903;
     // APMF LOOT-TRAVEL (ch.9 0x49 route, APMFBridge::OfferPackage): ONE package
     // per concurrent loot slot (kMaxLootSlots), mirroring kTravelPackage{,1,2,3}'s
     // per-slot shape but with a RUNTIME-HANDLE Location input (PLDT type 0, "Near

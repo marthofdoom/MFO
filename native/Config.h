@@ -699,6 +699,15 @@ namespace MFO::Config {
     // engine-protected regardless of this toggle. bLootSpecialItems.
     inline std::atomic<bool>  g_lootSpecialItems{ true };
 
+    // LOTD AWARENESS (feat/mfo-lotd, ClickUp 86e3edghj). Default OFF. Meaningful
+    // only when Legacy of the Dragonborn is DETECTED (logistics/Lotd.cpp; the MCM
+    // control is hidden otherwise, via the MFO_LOTDDetected GLOB). ON: MFO reads
+    // what the museum still needs, the "Loot museum items" gambit is offered on the
+    // board, a needed relic a follower carries is never sold, and turning it on
+    // shows LOTD's own Museum Shipments intro (one crate is initialised through).
+    // bLootLOTD.
+    inline std::atomic<bool>  g_lootLOTD{ false };
+
     // #21 FOLLOWER ECONOMY. Default ON. When on, a follower standing at a merchant
     // sells its junk (Phase 2) and buys supplies it's short on (Phase 3), via the
     // MFO_Trade Papyrus bridge. OFF makes the econ scan a DRY RUN -- it logs the
