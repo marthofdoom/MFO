@@ -387,6 +387,7 @@ namespace MFO::Scheduler {
             // stuck follower look like a successful retreat).
             const float moved = a_f->GetPosition().GetDistance(Packages::RetreatStartPos(a_id));
             const auto  finish = [&](const char* a_why) {
+                APMFBridge::ReleaseRetreatReentryDeny(a_id, a_why);   // ch.22 (no-op when none)
                 Packages::RetreatClear(a_why, a_f);
                 note.phase = RetreatPhase::None;
                 StartRetreatCooldown(note, now);
@@ -418,6 +419,10 @@ namespace MFO::Scheduler {
                     note.phase       = RetreatPhase::Stay;
                     note.stayAt      = now;
                     note.stayClockAt = g_serviceClock;
+                    // ch.22: the deny covers TRAVEL only. STAY must never bench him --
+                    // "engaged at your side" below needs the engine's combat entry to pass
+                    // (the SEV-2 of the 7580bea review), so the deny ends at arrival.
+                    APMFBridge::ReleaseRetreatReentryDeny(a_id, "arrived: STAY");
                     // fall through to the STAY checks on this same lap
                 } else if (inCombat) {
                     // TRAVEL RE-ENTRY: one more main-thread StopCombat, ONLY on
@@ -426,9 +431,27 @@ namespace MFO::Scheduler {
                     if (note.outOfCombatSeen) {
                         note.outOfCombatSeen = false;
                         ++note.reentries;
-                        spdlog::info("[retreat] {:08X}: re-entered combat mid-retreat (#{}, confidence={:.2f}) "
-                                     "-- StopCombat posted to main", a_id, note.reentries, note.fightConf);
-                        Packages::RetreatReengage(a_id, "re-entered combat");
+                        // ch.22 (apmf/ReentryDeny.cpp): while the deny is PENDING its sweep
+                        // posts the StopCombat once live; while it is LIVE the engine cannot
+                        // put him back in, so a re-entry is a declared ch.21 entry (passes by
+                        // contract) or a Harbinger DENY MISSED -- said loudly, NOT papered over
+                        // with another StopCombat (principle 7). No deny / an ENDED one: the
+                        // shipped per-re-entry StopCombat, unchanged.
+                        const auto deny = APMFBridge::RetreatReentryDenyStateOf(a_id);
+                        if (deny == APMFBridge::DenyState::Live) {
+                            spdlog::warn("[retreat] {:08X}: re-entered combat mid-retreat (#{}) UNDER A LIVE ch.22 "
+                                         "deny -- NOT re-issuing StopCombat. A ch.21 entry passes by contract; "
+                                         "otherwise APMF's log shows '[ch.22] ... DENY MISSED' (report it).",
+                                         a_id, note.reentries);
+                        } else if (deny == APMFBridge::DenyState::Pending) {
+                            spdlog::info("[retreat] {:08X}: re-entered combat mid-retreat (#{}) with the ch.22 deny "
+                                         "still PENDING -- its StopCombat is posted once it reads live",
+                                         a_id, note.reentries);
+                        } else {
+                            spdlog::info("[retreat] {:08X}: re-entered combat mid-retreat (#{}, confidence={:.2f}) "
+                                         "-- StopCombat posted to main", a_id, note.reentries, note.fightConf);
+                            Packages::RetreatReengage(a_id, "re-entered combat");
+                        }
                     }
                 }
                 if (note.phase == RetreatPhase::Travel && secs > kRetreatTimeout) {
@@ -716,6 +739,7 @@ namespace MFO::Scheduler {
                 // erased here.
                 g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
                 g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
+                APMFBridge::ReleasePursuitLeash(id, "combat ended");   // ch.23: the in-combat leash ends with the fight
 
                 // v1.0.30: the cast-control latch dies with the fight. The [cast]
                 // sink no longer clears it on a successful cast (the latch must
@@ -975,6 +999,7 @@ namespace MFO::Scheduler {
                 f->GetPosition().GetDistance(pc->GetPosition()) : 0.0f;
 
             if (ServiceRetreat(f, id, dPlayer, pc != nullptr)) {
+                APMFBridge::ReleasePursuitLeash(id, "retreating");   // ch.23: the retreat has its own road
                 // While falling back, do NOT run the gambit table: a cast rule
                 // would fill the COMMAND alias (also priority 60) on the same
                 // actor and fight the retreat travel for the alias. A retreating
@@ -1016,6 +1041,15 @@ namespace MFO::Scheduler {
                 }
             }
         }
+
+        // ── IN-COMBAT LEASH (Harbinger ch.23, ABI v16; apmf/PursuitLeash.cpp) ──
+        // Anchor = the player, radius = Confidence::LeashRadius (the tenet's "how far from
+        // the PLAYER he is willing to be"). Filed on the first combat-table service that is
+        // not a retreat, Repointed only on a band-sized change, released on retreat start
+        // (a fill on THIS lap included), the party-OOC teardown, dismissal and load. No-op
+        // when Harbinger is absent or older than v16 (MFO had no in-combat leash before).
+        if (Packages::IsRetreating(id)) APMFBridge::ReleasePursuitLeash(id, "retreat started");
+        else                            APMFBridge::ServicePursuitLeash(id, Confidence::LeashRadius(f));
 
         if (it->second.combat().empty()) {
             // #65: no combat gambits, but a class override is still a valid STYLE

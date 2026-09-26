@@ -398,6 +398,10 @@ namespace MFO::Followers {
         // The retreat-probe alias -- identical claim model, identical serialized
         // tail.
         Packages::RetreatEvictIf(id);
+        // Harbinger ch.22 (the retreat's re-entry deny) and ch.23 (the in-combat leash):
+        // runtime-only claims, released so neither outlives him. Idempotent no-ops when none.
+        APMFBridge::ReleaseRetreatReentryDeny(id, "dismissed");
+        APMFBridge::ReleasePursuitLeash(id, "dismissed");
         // The Composed Forced Cast (OPT-IN bHealAnimPackage): runtime-only (no
         // serialized tail), but a dismissed follower's live heal-cast claim +
         // MFO-executed-cast bound must be released so neither outlives him. Both
