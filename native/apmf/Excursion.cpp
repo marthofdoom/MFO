@@ -56,8 +56,54 @@ namespace MFO::APMFBridge {
             RE::FormID       follower = 0;
             RE::FormID       dest     = 0;
             float            radius   = 0.0f;
+            // loot M2 (ABI v12): the leg-state seq read just BEFORE our latest
+            // RequestEx/Repoint. A state still carrying it is the previous leg's
+            // (APMF applies the call on its next Drain), never this leg's end.
+            std::uint32_t    staleSeq = 0;
+            bool             hasStale = false;
         };
         LootTravelLeg g_lootTravelLeg[Packages::kMaxLootSlots]{};   // guarded by g_mx
+
+        // ── ch.19 LEG STATE (loot M2, ABI v12) ──────────────────────────────────
+        // The first ABI with APMF_API_v12::GetTravelLegState, the BLOCKED end and
+        // the gait bits. Below it APMF stores unknown TravelFlags bits without a
+        // word, so the gait bits are never sent there (a masked no-op otherwise).
+        constexpr std::uint32_t kTravelLegStateAbi = 12;
+
+        const APMF_API::APMF_API_v12* LegStateApi(const APMF_API::APMF_API_v2* a_api) {
+            if (!a_api || a_api->abiVersion < kTravelLegStateAbi) return nullptr;
+            auto* v12 = reinterpret_cast<const APMF_API::APMF_API_v12*>(a_api);
+            return v12->GetTravelLegState ? v12 : nullptr;
+        }
+
+        // One snapshot read; false when there is no v12 slot. The caller's size is
+        // sizeof(APMF_TravelLegInfo) = 72 = kTravelLegInfoV12Size (the header's own
+        // static_asserts pin both), so APMF fills every field this build knows.
+        bool ReadLegInfo(const APMF_API::APMF_API_v2* a_api, RE::FormID a_actor,
+                         APMF_API::APMF_TravelLegInfo& a_info) {
+            static_assert(sizeof(APMF_API::APMF_TravelLegInfo) >= APMF_API::kTravelLegInfoV12Size,
+                          "loot M2 reads the v12 leg-state prefix");
+            auto* v12 = LegStateApi(a_api);
+            if (!v12 || a_actor == 0) return false;
+            a_info      = APMF_API::APMF_TravelLegInfo{};
+            a_info.size = static_cast<std::uint32_t>(sizeof(APMF_API::APMF_TravelLegInfo));
+            v12->GetTravelLegState(a_actor, &a_info);
+            return true;
+        }
+
+        // An ENDED leg: APMF dropped its package offer and the claim does nothing
+        // until it is re-pointed or released.
+        bool LegEnded(std::uint32_t a_state) {
+            return a_state >= APMF_API::kLeg_Arrived && a_state <= APMF_API::kLeg_Released;
+        }
+
+        // Record the seq that stands BEFORE a RequestEx/Repoint on `a_leg` (g_mx held;
+        // APMF's read takes only its own mirror mutex and never calls back into MFO).
+        void NoteStaleSeqLocked(const APMF_API::APMF_API_v2* a_api, RE::FormID a_actor, LootTravelLeg& a_leg) {
+            APMF_API::APMF_TravelLegInfo info{};
+            a_leg.hasStale = ReadLegInfo(a_api, a_actor, info);
+            a_leg.staleSeq = a_leg.hasStale ? info.seq : 0;
+        }
 
         // ival twin of EnsureClaimLocked, for kIntent_CombatAction's param.ival
         // (a category bitmask) rather than a param.form. Same create / re-point-in-
@@ -366,7 +412,18 @@ namespace MFO::APMFBridge {
         APMF_API::APMF_Param p{};
         p.form = a_destRef;                            // REQUIRED: the destination REFERENCE
         p.fval = a_radius;                             // arrival radius; APMF clamps to [50,512]
-        p.ival = static_cast<std::int32_t>(APMF_API::kTravel_ReleaseOnTargetDead);   // names ch.19's v1 default
+        std::uint32_t flags = APMF_API::kTravel_ReleaseOnTargetDead;   // names ch.19's v1 default
+        // GAIT (loot M2, 86e3dh44v): the walk-to-loot gait setting (iTravelGait,
+        // clamped 0..3 at parse = the engine's PreferredSpeed Walk/Jog/Run/FastWalk)
+        // as ch.19's speed bits, so APMF writes it into ITS leg package. ONLY at
+        // ABI >= 12: an older APMF stores the bits and runs at its authored speed
+        // without a word, which would be a silent no-op.
+        const bool gaitBits = LegStateApi(api) != nullptr;
+        const int  gait     = std::clamp(Config::g_travelGait.load(), 0, 3);
+        if (gaitBits)
+            flags |= APMF_API::kTravel_SpeedSet |
+                     ((static_cast<std::uint32_t>(gait) << 3) & APMF_API::kTravel_SpeedMask);
+        p.ival = static_cast<std::int32_t>(flags);
         // posX/Y/Z stay ZERO -- a non-zero position REFUSES the claim (a package
         // location carries a form or a handle, never coordinates).
 
@@ -377,15 +434,34 @@ namespace MFO::APMFBridge {
             // arrived, or APMF abandoned it) is STARTED FRESH by the same call. No
             // release/re-claim churn either way. Repoint is an ABI v3 slot and this
             // claim cannot exist below v10, so the v3 cast is unconditional here.
-            if (leg.dest == a_destRef && leg.radius == a_radius) return true;   // cheap no-op
+            //
+            // loot M2: the SAME destination is a cheap no-op only while the leg is
+            // still running. If APMF already ENDED it (arrived, blocked, ...), a
+            // re-dispatch to the same ref (a deferred item's turn, a dibs revisit)
+            // must re-point to start a fresh leg, or the follower never walks and
+            // the ended state is re-read forever. Without the v12 read (APMF < 12)
+            // the no-op stays as it was.
+            bool sameEnded = false;
+            if (leg.dest == a_destRef && leg.radius == a_radius) {
+                APMF_API::APMF_TravelLegInfo info{};
+                sameEnded = ReadLegInfo(api, leg.follower, info) && LegEnded(info.state) &&
+                            info.destForm == a_destRef &&
+                            (info.ownerHandle == leg.handle || info.ownerHandle == APMF_API::kInvalidHandle);
+                if (!sameEnded) return true;   // cheap no-op
+            }
+            NoteStaleSeqLocked(api, leg.follower, leg);
             reinterpret_cast<const APMF_API::APMF_API_v3*>(api)->Repoint(leg.handle, &p);
             leg.dest   = a_destRef;
             leg.radius = a_radius;
             spdlog::info("[loot-road] {:08X}: RETARGET road=CH19 dest={:08X} slot={} radius={:.0f} "
-                         "handle={} (re-pointed in place)",
-                         a_follower, a_destRef, a_slot, a_radius, leg.handle);
+                         "handle={} gait={} (re-pointed in place{})",
+                         a_follower, a_destRef, a_slot, a_radius, leg.handle,
+                         gaitBits ? gait : -1, sameEnded ? "; same ref, its last leg had ended" : "");
             return true;
         }
+
+        LootTravelLeg fresh{};
+        NoteStaleSeqLocked(api, a_follower, fresh);
 
         const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_Travel, kOwnBasis, &p);
         if (h == APMF_API::kInvalidHandle) {
@@ -406,8 +482,40 @@ namespace MFO::APMFBridge {
         leg.follower = a_follower;
         leg.dest     = a_destRef;
         leg.radius   = a_radius;
-        spdlog::info("[loot-road] {:08X}: DISPATCH road=CH19 dest={:08X} slot={} radius={:.0f} handle={}",
-                     a_follower, a_destRef, a_slot, a_radius, h);
+        leg.staleSeq = fresh.staleSeq;
+        leg.hasStale = fresh.hasStale;
+        spdlog::info("[loot-road] {:08X}: DISPATCH road=CH19 dest={:08X} slot={} radius={:.0f} handle={} "
+                     "gait={}{}",
+                     a_follower, a_destRef, a_slot, a_radius, h, gaitBits ? gait : -1,
+                     gaitBits ? "" : " (APMF < v12: no gait bits, APMF's authored speed)");
+        return true;
+    }
+
+    bool ReadLootTravelLeg(int a_slot, LootLegState& a_out) {
+        a_out = LootLegState{};
+        if (a_slot < 0 || a_slot >= Packages::kMaxLootSlots) return false;
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        if (!LegStateApi(api)) return false;
+        LootTravelLeg leg;
+        {
+            std::scoped_lock lock(g_mx);
+            leg = g_lootTravelLeg[a_slot];
+        }
+        if (leg.handle == APMF_API::kInvalidHandle) return false;
+        APMF_API::APMF_TravelLegInfo info{};
+        if (!ReadLegInfo(api, leg.follower, info)) return false;
+        a_out.state       = info.state;
+        a_out.seq         = info.seq;
+        a_out.msInState   = info.msInState;
+        a_out.blockedMs   = info.blockedMs;
+        a_out.speed       = info.speed;
+        a_out.blockerKind = info.blockerKind;
+        a_out.blocker     = info.blocker;
+        a_out.dest        = info.destForm;
+        a_out.stall       = RE::NiPoint3{ info.stallX, info.stallY, info.stallZ };
+        a_out.ours = info.destForm == leg.dest &&
+                     (info.ownerHandle == leg.handle || info.ownerHandle == APMF_API::kInvalidHandle) &&
+                     !(leg.hasStale && info.seq == leg.staleSeq);
         return true;
     }
 

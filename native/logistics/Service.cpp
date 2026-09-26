@@ -424,6 +424,51 @@ namespace MFO::Logistics {
                 // "legacy alias route" because only the ch.9 flag was consulted.
                 const bool  ch19Leg = APMFBridge::HasLootTravelLeg(slot);
                 const char* route   = ch19Leg ? "CH19 route" : (apmfLeg ? "APMF ch.9 route" : "legacy alias route");
+                // ── loot M2: HARBINGER'S OWN WORD ON A CH19 LEG (ABI v12 GetTravelLegState).
+                // APMF ends a leg (arrived, blocked, destination gone, ...) but never
+                // releases MFO's claim, so without this read an ended leg looked like a
+                // package theft. `ch19State` false = nothing to read (APMF < v12, or no
+                // ch.19 leg): every road then keeps MFO's own observations, unchanged.
+                // `ours` also rejects the state that stood before our latest
+                // RequestEx/Repoint (APMFBridge.h), so a previous leg's end never
+                // speaks for this one.
+                APMFBridge::LootLegState leg19{};
+                const bool ch19State = ch19Leg && APMFBridge::ReadLootTravelLeg(slot, leg19);
+                const bool ch19Mine  = ch19State && leg19.ours && tref && leg19.dest == tref->GetFormID();
+                const bool ch19Ended = ch19Mine && leg19.state >= APMF_API::kLeg_Arrived &&
+                                       leg19.state <= APMF_API::kLeg_Released;
+                const bool ch19Arrived  = ch19Mine && leg19.state == APMF_API::kLeg_Arrived;
+                const bool ch19Blocked  = ch19Mine && leg19.state == APMF_API::kLeg_Blocked;
+                const bool ch19DestGone = ch19Mine && leg19.state == APMF_API::kLeg_DestGone;
+                if (ch19Ended && (!tr.ch19SeqLoggedSet || tr.ch19SeqLogged != leg19.seq)) {
+                    // Each END once (seq changes on every state change and never repeats).
+                    tr.ch19SeqLogged    = leg19.seq;
+                    tr.ch19SeqLoggedSet = true;
+                    static constexpr const char* kEnd[] = { "none", "pending", "walking", "ARRIVED",
+                        "BLOCKED", "COMBAT-CANCELLED", "DESTINATION GONE", "STUCK-TIMEOUT (2 min)",
+                        "ACTOR GONE", "FAILED", "RELEASED" };
+                    static constexpr const char* kBlk[] = { "none (static block)", "the player",
+                        "a teammate", "an actor" };
+                    const char* reaction =
+                        ch19Arrived  ? "arrival -- take the loot, next item at once" :
+                        ch19Blocked  ? (leg19.blockerKind != APMF_API::kBlocker_None
+                                           ? "actor block -- REORDER, next item at once"
+                                           : "static block -- GATED, next item at once") :
+                        ch19DestGone ? "transient skip, next item at once" :
+                                       "MFO's own observation decides (no M2 reaction for this end)";
+                    std::string blk;
+                    if (ch19Blocked)
+                        blk = fmt::format(", blocked {:.1f}s at ({:.0f},{:.0f},{:.0f}), blocker {} {:08X}",
+                                          leg19.blockedMs / 1000.0f, leg19.stall.x, leg19.stall.y,
+                                          leg19.stall.z,
+                                          leg19.blockerKind < std::size(kBlk) ? kBlk[leg19.blockerKind] : "?",
+                                          leg19.blocker);
+                    spdlog::info("[loot] {:08X} leg->{:08X}: CH19 leg ended {} ({:.1f}s in that state, seq {}, "
+                                 "gait {}{}) -- {}",
+                                 id, tref->GetFormID(), leg19.state < std::size(kEnd) ? kEnd[leg19.state] : "?",
+                                 leg19.msInState / 1000.0f, leg19.seq,
+                                 leg19.speed <= 3 ? static_cast<int>(leg19.speed) : -1, blk, reaction);
+                }
                 // loot M1 actor-block REORDER: the deferred item was dispatched again,
                 // i.e. its turn came -> the reorder is done.
                 if (auto dit = g_actorDefer.find(id);
@@ -506,7 +551,13 @@ namespace MFO::Logistics {
                     tr.lastPos    = fpos;
                     tr.progressAt = now;
                 }
-                const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion();
+                // loot M2: Harbinger's DESTINATION GONE (deleted, disabled, died during
+                // travel) is `gone` too: the same transient skip, next item this tick.
+                const bool gone = !tref || tref->IsDisabled() || tref->IsMarkedForDeletion() || ch19DestGone;
+                if (ch19DestGone) {
+                    skippedRef = tref->GetFormID();
+                    skipWhy    = "DESTINATION GONE (Harbinger ch.19)";
+                }
 
                 // ARRIVAL is checked BEFORE the stall/deadline giveup: a follower
                 // standing ON the corpse has ARRIVED, not "stalled walking" -- and
@@ -541,7 +592,10 @@ namespace MFO::Logistics {
                             arrivalDist = grown;
                     }
                 }
-                if (!gone && dist <= arrivalDist) {
+                // loot M2: Harbinger's ARRIVED (inside its arrival radius) is an arrival
+                // whatever MFO's own distance test says; its leg has ended, so waiting
+                // for MFO's radius would only leave him standing with no package.
+                if (!gone && (dist <= arrivalDist || ch19Arrived)) {
                     // REACHED it -> this body is provably reachable: clear any stall
                     // strike so a merely-transient earlier block (boxed in by an actor,
                     // a door) never accumulates toward the sticky verdict. Only bodies
@@ -692,15 +746,59 @@ namespace MFO::Logistics {
                     tr.blockedSince = now;   // onset (or a new leg under a lingering MB)
                     tr.blockedLeg   = tr.legStart;
                 }
-                if (mbNow && !gone && tref) {
-                    const float held = std::chrono::duration<float>(now - tr.blockedSince).count();
+                // loot M2: on a CH19 leg with Harbinger's leg state (ch19State) the
+                // BLOCKED verdict is HARBINGER'S (its ch.19 Poll, 3 s of running game
+                // time, blocker found at the verdict). MFO's own timer stays ONLY for
+                // road 1 (ch.9), the legacy alias road, and a CH19 leg on an APMF
+                // below v12 (no verdict there to wait for). Both then share ONE
+                // reaction below: an actor in front = REORDER, none = GATED.
+                bool                 blockVerdict = false;
+                float                held         = 0.0f;
+                ActorBlocker         ab{};
+                RE::NiPoint3         stallPos{};
+                const RE::NiPoint3*  blockPos     = nullptr;
+                if (ch19Blocked && !gone && tref) {
+                    blockVerdict = true;
+                    held         = leg19.blockedMs / 1000.0f;
+                    stallPos     = leg19.stall;
+                    if (stallPos.x != 0.0f || stallPos.y != 0.0f || stallPos.z != 0.0f)
+                        blockPos = &stallPos;   // where it stalled, not where he drifted since
+                    if (leg19.blockerKind != APMF_API::kBlocker_None && leg19.blocker) {
+                        ab.id = leg19.blocker;
+                        // blockerPos feeds the reorder (items toward the blocker sort
+                        // later): the blocker's own position now, else the stall point.
+                        const RE::NiPoint3 from = blockPos ? stallPos : a_follower->GetPosition();
+                        auto* b = RE::TESForm::LookupByID<RE::Actor>(ab.id);
+                        ab.pos  = b ? b->GetPosition() : from;
+                        ab.dist = ab.pos.GetDistance(from);
+                    }
+                } else if (mbNow && !gone && tref) {
+                    held = std::chrono::duration<float>(now - tr.blockedSince).count();
+                    if (ch19State) {
+                        // Harbinger owns this verdict: stay walking, no guard, no stall.
+                        // Not masked: a Movement Blocked that outlives Harbinger's 3 s by
+                        // another 3 s while it still reads the leg as live is said once.
+                        if (now - tr.blockedSince >= 2 * kBlockedGate && tr.ch19MbWarnedLeg != tr.legStart) {
+                            tr.ch19MbWarnedLeg = tr.legStart;
+                            spdlog::warn("[loot] {:08X} leg->{:08X}: Movement Blocked held {:.1f}s on a CH19 leg "
+                                         "and Harbinger still reads leg state {} (not BLOCKED). MFO waits for "
+                                         "Harbinger's verdict (its own timer is off on a v12 CH19 leg); the "
+                                         "excursion cap still bounds it. Once per leg.",
+                                         id, tref->GetFormID(), held, leg19.state);
+                        }
+                        return;
+                    }
                     if (now - tr.blockedSince < kBlockedGate)
                         return;   // a blip: still walking, no guard, no stall verdict
+                    blockVerdict = true;
+                    ab = FindActorBlocker(a_follower, tref);
+                }
+                if (blockVerdict) {
                     // ACTOR or GATE (review R2, marth): a living actor right in front
                     // of him is a jam, not a gate -> REORDER his list (the item stays
                     // valid, goes later, the way away from the blocker first); no
                     // GATED verdict, no cone, nothing shared with other followers.
-                    if (const auto ab = FindActorBlocker(a_follower, tref); ab.id) {
+                    if (ab.id) {
                         g_actorDefer[id] = ActorDefer{ tref->GetFormID(), ab.id, ab.pos };
                         spdlog::info("[loot] {:08X} target {:08X} ACTOR-BLOCKED -- Movement Blocked {:.1f}s, "
                                      "actor {:08X} {:.0f} u in front: REORDER (item kept, later in his list, "
@@ -708,7 +806,7 @@ namespace MFO::Logistics {
                                      held, ab.id, ab.dist);
                         skipWhy = "ACTOR-BLOCKED (reordered, not dropped)";
                     } else {
-                        MarkGated(a_follower, tref, held, now);
+                        MarkGated(a_follower, tref, held, now, blockPos);
                         skipWhy = "GATED (Movement Blocked, no actor in front)";
                     }
                     skippedRef      = tref->GetFormID();
