@@ -31,6 +31,7 @@
 #include "Sightline.h"    // LoS + line-of-fire gate on the OOC hostile-FF direct fallback
 #include "Followers.h"    // #62 on-load beast-head sweep iterates g_active (main thread)
 #include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the loot-waiver sink
+#include "PlayerGiven.h"  // batch L: the player -> follower transfer record rides this sink
 #include <functional>     // #62 self-reposting on-load sweep closure
 #include <memory>         // std::shared_ptr for that closure
 #include "TradeBridge.h"  // #21 econ bridge: MFO_Trade Papyrus round-trip (Phase 0 self-test)
@@ -133,6 +134,7 @@ namespace MFO::Logistics {
             RE::BSEventNotifyControl ProcessEvent(const RE::TESContainerChangedEvent* a_event,
                                                   RE::BSTEventSource<RE::TESContainerChangedEvent>*) override {
                 if (!a_event) return RE::BSEventNotifyControl::kContinue;
+                PlayerGiven::OnContainerChanged(*a_event);   // batch L: player -> follower record (own gate)
                 // Logistics off -> the waiver map is never read, so do no work.
                 if (!Config::g_logistics.load()) return RE::BSEventNotifyControl::kContinue;
 

@@ -120,12 +120,100 @@ namespace MFO::APMFBridge {
         // MagicCaster.h (slot 01 vs slot 0A), the same verification APMFBridge.cpp's
         // idle-hand floor note already rests on.
         //
-        // `a_outPotions` (may be null) receives how many of the appended forms were
-        // COMBAT POTIONS, so the overflow error below can say whether a follower lost
-        // the gate to his own alchemy hoard rather than leaving the field to guess.
+        // COMBAT POTIONS are NOT appended to `out`: they go to `a_potions` as
+        // candidates, because they are the one part of the list that may be TRIMMED
+        // to fit (SelectPotions below; field 2026-09-26: Serana carried 35-46 potions,
+        // needed 38-50 forms and lost the whole gate). Everything else is appended.
+        struct PotionCand {
+            RE::FormID    form = 0;
+            std::uint64_t cat  = 0;   // (recover bit, archetype, primary AV) of the costliest effect
+            int           prio = 3;   // 0 RESTORE Health, 1 Magicka, 2 Stamina, 3 everything else
+            float         mag  = 0.0f;
+            std::uint32_t dur  = 0;
+            std::int32_t  gold = 0;
+        };
+
+        PotionCand MakePotionCand(RE::AlchemyItem* a_al) {
+            PotionCand c;
+            c.form = a_al->GetFormID();
+            c.gold = a_al->GetGoldValue();
+            const auto* eff  = a_al->GetCostliestEffectItem();
+            const auto* mgef = eff ? eff->baseEffect : nullptr;
+            if (!eff || !mgef) return c;   // cat 0: an effect-less potion is its own category
+            const auto arch = mgef->data.archetype;
+            const auto av   = mgef->data.primaryAV;
+            // RESTORE vs FORTIFY (review round 3): both can be a ValueModifier on the
+            // same AV. A fortify carries the MGEF kRecover flag (the value returns when
+            // the effect ends; fork RE/E/EffectSetting.h, EffectSettingData::Flag::
+            // kRecover = 1 << 1); a restore does not -- the same "non-recover"
+            // test the potion catalog classifies restores by. So the recover bit is part
+            // of the category, and only a non-recover effect can take restore priority.
+            const bool recover = mgef->data.flags.any(RE::EffectSetting::EffectSettingData::Flag::kRecover);
+            c.cat = (static_cast<std::uint64_t>(recover ? 1u : 0u) << 63) |
+                    (static_cast<std::uint64_t>(static_cast<std::uint32_t>(arch)) << 32) |
+                    static_cast<std::uint32_t>(av);
+            c.mag = eff->GetMagnitude();
+            c.dur = eff->GetDuration();
+            using Arch = RE::EffectArchetypes::ArchetypeID;
+            if (!recover && (arch == Arch::kValueModifier || arch == Arch::kDualValueModifier)) {
+                if (av == RE::ActorValue::kHealth) c.prio = 0;
+                else if (av == RE::ActorValue::kMagicka) c.prio = 1;
+                else if (av == RE::ActorValue::kStamina) c.prio = 2;
+            }
+            return c;
+        }
+
+        // THE POTION TRIM (marth 2026-09-27: "keep the best available potion in each
+        // category within the 32 cap", no limit raise). All of them when they fit.
+        // Otherwise: a CATEGORY is the costliest effect's (archetype, primary AV), so
+        // Restore Health, Fortify One-handed and Resist Fire are three categories;
+        // BEST inside one = magnitude, then duration, then value. Kept round-robin by
+        // rank -- every category's best first, then every category's second best --
+        // until the budget is spent; inside a rank the restore Health / Magicka /
+        // Stamina categories come first, then by the category best's value. A potion
+        // left off the list is one his AI cannot choose in combat (APMF denies what
+        // the allow-set does not name); MFO's own drink gambits equip a potion
+        // directly (ActorEquipManager) and are not on this channel.
+        std::vector<RE::FormID> SelectPotions(std::vector<PotionCand> a_cands, std::size_t a_budget) {
+            std::vector<RE::FormID> kept;
+            if (a_cands.size() <= a_budget) {
+                for (const auto& c : a_cands) kept.push_back(c.form);
+                return kept;
+            }
+            std::unordered_map<std::uint64_t, std::vector<PotionCand>> byCat;
+            for (const auto& c : a_cands) byCat[c.cat].push_back(c);
+            std::vector<std::vector<PotionCand>*> order;
+            for (auto& [cat, v] : byCat) {
+                std::sort(v.begin(), v.end(), [](const PotionCand& a, const PotionCand& b) {
+                    if (a.mag != b.mag) return a.mag > b.mag;
+                    if (a.dur != b.dur) return a.dur > b.dur;
+                    if (a.gold != b.gold) return a.gold > b.gold;
+                    return a.form < b.form;
+                });
+                order.push_back(&v);
+            }
+            std::sort(order.begin(), order.end(), [](const auto* a, const auto* b) {
+                const auto& x = a->front();
+                const auto& y = b->front();
+                if (x.prio != y.prio) return x.prio < y.prio;
+                if (x.gold != y.gold) return x.gold > y.gold;
+                return x.cat < y.cat;
+            });
+            for (std::size_t rank = 0; kept.size() < a_budget; ++rank) {
+                bool any = false;
+                for (auto* v : order) {
+                    if (rank >= v->size()) continue;
+                    any = true;
+                    if (kept.size() >= a_budget) break;
+                    kept.push_back((*v)[rank].form);
+                }
+                if (!any) break;
+            }
+            return kept;
+        }
+
         void AppendDenyExemptForms(RE::Actor* a_actor, std::vector<RE::FormID>& out,
-                                   std::uint32_t* a_outPotions = nullptr) {
-            if (a_outPotions) *a_outPotions = 0;
+                                   std::vector<PotionCand>& a_potions) {
             if (!a_actor) return;
             const auto add = [&out](RE::FormID f) { if (f != 0) out.push_back(f); };
             for (auto& [obj, data] : a_actor->GetInventory()) {
@@ -138,10 +226,8 @@ namespace MFO::APMFBridge {
                 if (auto* sc = obj->As<RE::ScrollItem>()) { add(sc->GetFormID()); continue; }
                 // Combat potions: not food, not poison. See the block doc above --
                 // this is the v1.0.32 regression, guarded rather than re-paid for.
-                if (auto* al = obj->As<RE::AlchemyItem>(); al && !al->IsFood() && !al->IsPoison()) {
-                    add(al->GetFormID());
-                    if (a_outPotions) ++*a_outPotions;
-                }
+                if (auto* al = obj->As<RE::AlchemyItem>(); al && !al->IsFood() && !al->IsPoison())
+                    a_potions.push_back(MakePotionCand(al));
             }
             const auto castable = [](const RE::SpellItem* s) {
                 if (!s) return false;
@@ -169,8 +255,9 @@ namespace MFO::APMFBridge {
         // engine reads, and holding a leaf lock across them would be gratuitous.
         // The proxies come from the map and are appended under the lock below.
         std::vector<RE::FormID> list = a_spells;
-        std::uint32_t potionCount = 0;
-        AppendDenyExemptForms(RE::TESForm::LookupByID<RE::Actor>(a_follower), list, &potionCount);
+        std::vector<PotionCand> potions;
+        AppendDenyExemptForms(RE::TESForm::LookupByID<RE::Actor>(a_follower), list, potions);
+        std::uint32_t potionCount = 0;   // potions KEPT on the list (set below)
 
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
@@ -189,19 +276,21 @@ namespace MFO::APMFBridge {
         // DENIED, which on this channel would silently disarm the follower. So a
         // list that does not fit means NO GATE for this follower at all, said once
         // per follower per overflow streak, and the cast-time deny carries the load
-        // exactly as it did before this gate existed.
+        // exactly as it did before this gate existed. POTIONS are the exception by
+        // design (SelectPotions: the best of each category is kept in the budget the
+        // other forms leave), so this path now fires only when the NON-potion forms
+        // alone (gambit spells, staves, scrolls, powers, proxies) do not fit.
         if (list.size() > APMF_API::kMaxSpellAllowList) {
             if (g_selectOverflow.insert(a_follower).second)
-                spdlog::error("[cast-select] {:08X}: allow-list needs {} forms, over kMaxSpellAllowList {} "
-                              "-- the gate is NOT claimed for this follower (a truncated list would DENY "
-                              "the excess and disarm him, and could deny his POTIONS). {} gambit spell(s) "
-                              "+ {} combat potion(s) + the deny-exempt staves/scrolls/powers + live "
-                              "proxies. MFO's cast-time deny still applies, so nothing is muted -- but "
-                              "the candidate-refusal gate is INERT for this follower until the list fits "
-                              "(a large alchemy hoard is the usual cause; see Docs/REVIEW-BACKLOG.md "
-                              "MFO-B65).",
+                spdlog::error("[cast-select] {:08X}: allow-list needs {} forms WITHOUT any potion, over "
+                              "kMaxSpellAllowList {} -- the gate is NOT claimed for this follower (a "
+                              "truncated list would DENY the excess and disarm him). {} gambit spell(s) "
+                              "+ the deny-exempt staves/scrolls/powers + live proxies ({} combat "
+                              "potion(s) carried, none fit). MFO's cast-time deny still applies, so "
+                              "nothing is muted -- but the candidate-refusal gate is INERT for this "
+                              "follower until the list fits (see Docs/REVIEW-BACKLOG.md MFO-B65).",
                               a_follower, list.size(), APMF_API::kMaxSpellAllowList, a_spells.size(),
-                              potionCount);
+                              potions.size());
             // Release inside the lock we already hold, not through the public
             // function (which would re-lock).
             if (o.selectHandle != APMF_API::kInvalidHandle) {
@@ -213,6 +302,13 @@ namespace MFO::APMFBridge {
             return false;
         }
         g_selectOverflow.erase(a_follower);
+        {
+            const auto kept = SelectPotions(potions, APMF_API::kMaxSpellAllowList - list.size());
+            potionCount = static_cast<std::uint32_t>(kept.size());
+            list.insert(list.end(), kept.begin(), kept.end());
+            std::sort(list.begin(), list.end());
+            list.erase(std::unique(list.begin(), list.end()), list.end());
+        }
 
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api) {   // raced Acquire/unload between the check above and here
@@ -274,10 +370,12 @@ namespace MFO::APMFBridge {
             if (!forms.empty()) forms += ' ';
             forms += std::format("{:08X}", f);
         }
-        spdlog::info("[cast-select] {:08X}: allow-list {} n={} ({} gambit + {} potion + exempt/proxy) "
-                     "[{}] -- gate-only ch.8 claim {}, so the AI may ONLY equip or charge these",
+        spdlog::info("[cast-select] {:08X}: allow-list {} n={} ({} gambit + {} of {} potion(s){} + "
+                     "exempt/proxy) [{}] -- gate-only ch.8 claim {}, so the AI may ONLY equip or charge these",
                      a_follower, freshClaim ? "CLAIMED" : "updated", list.size(), a_spells.size(),
-                     potionCount, forms, o.selectHandle);
+                     potionCount, potions.size(),
+                     potionCount < potions.size() ? ", trimmed to the best of each category by the cap" : "",
+                     forms, o.selectHandle);
         return true;
     }
 

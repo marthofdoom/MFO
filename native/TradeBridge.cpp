@@ -70,7 +70,7 @@ namespace MFO::TradeBridge {
                 }
             }
             if (auto* am = a_form->As<RE::TESAmmo>()) {
-                // Catalog-first, then the shared IsBolt() fallback -- so uncatalogued
+                // Catalog-first, then the shared kNonBolt-flag fallback -- so uncatalogued
                 // vendor ammo still classifies and gets bought (P5).
                 return Logistics::AmmoIsBolt(am) ? NeedCat::kBolts : NeedCat::kArrows;
             }

@@ -461,16 +461,33 @@ per concern:
 - `cast/CastOn.cpp` (1387) = `CastOn` (`:110`, the AI-first hybrid of one spell at one target)
   + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:116`)
   + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1363`/`:1379`).
-- `cast/Equip.cpp` (1001) = THE WEAPON HOLD: `EquipWeapon` (`:336`, **PERK-DRIVEN since
+- `cast/Equip.cpp` (1050) = THE WEAPON HOLD: `EquipWeapon` (`:350`, **PERK-DRIVEN since
   2026-09-13 — see "COMBAT PICK + DUAL WIELD BY PERKS" below**) with its anon helpers
-  `WeaponRolesFor` (`:96`), `IsOneHandMelee` (`:104`), `PickOffHandWeapon` (`:114`), `PickShield`
-  (`:131`), `EquipShieldOnMain` (`:151`), `EquipLeftHeld` (`:186`), `RecordLeftHold` (`:245`),
-  `DeclareFromLedger` (`:288`) + the off-hand top-up cadence `g_offHandRetryAt`/`kOffHandRetry`
-  (`:331-332`); the T#76 force-hold ledger `g_forcedWeapon`/`g_forcedMx` (`:41`/`:47`) +
-  `LogLeftHandReadback` (`:607`), `ForcedHoldFor` (`:621`), `ReleaseForcedWeapon` (`:629`),
-  `YieldForcedLeftHand` (`:767`), `ReconcileForcedWeapon` (`:798`), `ClearForcedWeapons`
-  (`:884`); and the FWPN co-save, WHOLE in this file (`CoSaveForcedWeapons` `:899`,
-  `CoLoadForcedWeapons` `:934`).
+  `WeaponRolesFor` (`:97`), `IsOneHandMelee` (`:105`), `IsMuseumRelic` (`:122`, LOTD, batch L),
+  `PickOffHandWeapon` (`:127`), `PickShield` (`:145`), `EquipShieldOnMain` (`:165`), `EquipLeftHeld`
+  (`:200`), `RecordLeftHold`, `DeclareFromLedger` (`:302`) + the off-hand top-up cadence
+  `g_offHandRetryAt`/`kOffHandRetry` (`:345-346`); the T#76 force-hold ledger `g_forcedWeapon`/`g_forcedMx`
+  (`:42`/`:48`) + `LogLeftHandReadback` (`:656`), `ForcedHoldFor` (`:670`), `ReleaseForcedWeapon` (`:678`),
+  `YieldForcedLeftHand` (`:816`), `ReconcileForcedWeapon` (`:847`), `ClearForcedWeapons`
+  (`:933`); and the FWPN co-save, WHOLE in this file (`CoSaveForcedWeapons` `:948`,
+  `CoLoadForcedWeapons` `:983`).
+  **LOTD MUSEUM RELICS (batch L, field 2026-09-26: Cicero fought six hours with a looted relic
+  two-hander).** `IsMuseumRelic` = `Lotd::HoldFromSale(id, w)` (worker road: the needs cache is
+  worker-only; EquipWeapon runs on the Scheduler's worker tick). The pick loop keeps relics in a
+  SEPARATE pool used only when no other eligible weapon of the category is carried (logged
+  `only a museum relic ... using it until the deposit`); `PickOffHandWeapon` skips relics outright (the
+  left is optional); and a HELD relic does not satisfy the "already holding" NoOp while another eligible
+  weapon of the category is carried (`relicWithAlternative`), so an AI-equipped relic or an old FWPN
+  relic hold is replaced by the next equip lap. A relic the PLAYER put on him in the trade / gift menu
+  (`PlayerGiven::IsPlayerEquipped`) is NOT a "museum relic" here: it competes in the ordinary pool and a
+  held one is never swapped out (review of 93613c4). A held relic is swapped ONLY with positive proof
+  (round 3): `PlayerGiven::IsAiEquipped` or an MFO FWPN hold naming it (`ForcedHoldFor`); otherwise
+  (every worn relic after a load) it stays. OPEN: MFO-B127 (a one-lap relic pick while the needs
+  cache is unanswerable), MFO-B128 (a relic in one hand with a non-relic in the other satisfies). The shared `eligible` lambda is the pick's old filter
+  (staff / non-playable / category / mage daggers), unchanged. **What breaks:** calling
+  `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
+  field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
+  keeps a relic out of the declared set (MFO-B126).
 - `cast/Direct.cpp` (1317) = the DIRECT-DELIVERY road: the apply substrate (`ConcProxy` `:181`,
   `DeliverySpell` `:255`, dispel/sustain, `ApplySelfEffect` `:356`, `ApplyTargetEffect` `:462`,
   charge-for-time) and the per-follower streams `CastSelfDirect` (`:628`) / `SelfCastReconcile`
@@ -870,6 +887,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `>=` last-equal-wins loop, same inventory order → the same weapon as before. The melee CLASS is
   NOT a filter here (the pick still spans 1H+2H by score, as it always did; `roles.melee` is the
   higher SKILL, so a two-handed-by-skill follower carrying only one-handers still draws one).
+  A LOTD museum relic is out of the pool unless it is the only weapon of the category (batch L,
+  see the `cast/Equip.cpp` nav entry above).
   Ranged never has a preferred kind. **THE LEFT HAND:** when the right-hand pick is a one-hander
   (`IsOneHandMelee` `:1668` = the four `IsOneHanded*` tests) and `roles.offHand` votes: `2` →
   `PickOffHandWeapon` (`:1678`, SAME `WeaponScore`, excludes the right hand's ONLY copy — count ≥ 2
@@ -1543,9 +1562,16 @@ rule in the header. Called only from the Scheduler hook above.
   walks `highActorHandles` (NiPointer held) for candidates = not him / the player / a teammate,
   alive, enabled, 3D-loaded, within the leash OF THE PLAYER, within the REACTION distance OF HIM
   (`min(leash, fEngageOnSightRange)`, `ProbeResult::range`, default 2000u, MCM 500-4000; feat/mfo-engage-range
-  2026-09-26; logged in the ENGAGE line), and `IsEnemy` (`:206`): not commanded
+  2026-09-26; logged in the ENGAGE line), and `IsEnemy` (`:229`): not commanded
   by the player or a teammate, nor by a crime-faction commander unless it or the commander is
-  fighting the party (`FightingParty` `:180`); not restrained / bleeding out / on an IgnoreCombat package;
+  fighting the party (`FightingParty` `:189`); not restrained / bleeding out / on an IgnoreCombat package;
+  **not UNAGGRESSIVE** (batch L, field 2026-09-26: followers killed elk, deer, rabbits and foxes):
+  `AggressionOf` (`:217`, the Aggression actor value, same read as `ToldToWait`) == 0 is skipped
+  BEFORE the hostility test UNLESS `FightingParty` (marth: "If I attack a deer it's marked"); the skips
+  are counted (`ProbeResult::unaggressiveSkipped`, in the "armed" status and the ENGAGE line, which
+  also carries the target's aggression and "(unaggressive, but fighting the party: counts)").
+  Engage-on-sight ONLY: the in-combat target pickers (`Evaluator.cpp`) are deliberately untouched
+  (marth's call);
   `IsHostileToActor(player) || IsHostileToActor(him)` (hostile to him alone counts: CONFIRMED by
   marth, "yes, there will be fights without player involvement"); a CRIME-FACTION actor only when its `currentCombatTarget` is the player or
   a teammate. No ghost check (`IsGhost` is an unverified id call: backlog MFO-B111). TOWN / INN
@@ -2090,7 +2116,8 @@ module. Module layout:
     inventory (`HeldCount:584` before/after; a miss logs `[swapup] ... did not arrive ... NOT
     made`).
   - **Ammo:** ranked by `TESAmmo` DAMAGE, instance VALUE breaking a tie (`AmmoRankAbove`), within
-    one kind (`AmmoIsBolt`), judged ONLY for the kind the follower USES (`UsesAmmoKind:308`: his
+    one kind (`AmmoIsBolt`; its fallback is the `GetRuntimeData()` kNonBolt flag, never `IsBolt()`,
+    batch L), judged ONLY for the kind the follower USES (`UsesAmmoKind:308`: his
     ranged role, a caster only with an equip-ranged gambit -- a gambit for the kind is NOT use,
     the seeded "arrows below 10" sits on everyone). Non-playable (bound) ammo is never ranked or
     moved; SPECIAL rounds (`AmmoIsSpecial:300`: projectile explosion, or an enchanted instance)
@@ -2729,10 +2756,17 @@ anonymous-namespace copy — that silently forks the instance).
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
 - Pure reads (evaluator + economy, shared classifiers): `PotionRestores` (`logistics/Upkeep.cpp:44`),
-  `AmmoIsBolt`, `CountPotions`/`ArrowCount`/`BoltCount` (`logistics/Upkeep.cpp:144-158`) →
+  `AmmoIsBolt` (`:101`), `CountPotions`/`ArrowCount`/`BoltCount` (`logistics/Upkeep.cpp:150-164`) →
   `Evaluator.cpp:397-409` + `TradeBridge.cpp:52-71` (buy side shares them so bought
-  supply matches looted). `ComputeWeakPotionFloor` (`logistics/Upkeep.cpp:116`) ← `plugin.cpp:288`
-  (after `Catalog::Load`).
+  supply matches looted). `ComputeWeakPotionFloor` (`logistics/Upkeep.cpp:122`) ← `plugin.cpp:288`
+  (after `Catalog::Load`). **`AmmoIsBolt`'s uncatalogued fallback reads
+  `GetRuntimeData().data.flags.none(kNonBolt)` — NEVER `TESAmmo::IsBolt()` /
+  `IgnoresNormalWeaponResistance()`** (batch L, field 2026-09-26): the fork's out-of-line bodies read the
+  DIRECT `data` member, which on our SE+AE+VR build is the header's `#else` layout (0xB0, inside
+  TESWeightForm, not 0x110): the "flags" it tested were the low byte of the weight float, so with no
+  patcher catalog bow users bought and looted bolts. Every TESAmmo member read in `native/` goes through
+  `GetRuntimeData()` (SwapUp, TradeBridge; the `[arrowprobe]` diagnostic in `LootScan.cpp` now calls
+  `AmmoIsBolt`). The fork fix is a separate brief (STATUS).
 - **Alias/travel:** `g_travelSlots` (`logistics/LootTravel_internal.h:91`, `kMaxLootSlots=4`) maps follower→loot
   alias pair. Travel fill is **engine-serialized**; every exit path MUST call
   `Packages::LootTravelClear` (this follower's own combat via `ReleaseTravelOnCombat`
@@ -3141,11 +3175,39 @@ never strips naked). The rated-armor branch (2026-09-14) is THE armor wear decis
 highest `ArmorScore` owned piece that strictly beats the worn score — see ARMOR CLASS
 BY SKILL + PERKS above.
 
+### logistics/PlayerGiven.cpp / PlayerGiven.h — THE PLAYER-GIVEN RECORD (batch L review round; NOT serialized)
+The signal MFO lacked: which items the PLAYER gave a follower or put on him (`IsPlayerPick` covers worn
+ARMO / ammo only, under APMF enforcement). The container half has NO sink of its own: `Sinks.cpp`'s
+logistics `ContainerSink::ProcessEvent` calls `PlayerGiven::OnContainerChanged` first (before its logistics
+gate; ONE `TESContainerChangedEvent` sink for logistics, coordinator 2026-09-27). `TESContainerChangedEvent`
+(fork `RE/T/TESContainerChangedEvent.h`: `oldContainer` / `newContainer` / `baseObj` FormIDs) with
+`oldContainer == 0x14` and `newContainer` a tracked follower (`Followers::IsTrackedFast`) -> GIVEN. Its own
+`EquipSink` (`RegisterSinks`, `plugin.cpp` after `Lotd::RegisterSinks`): `TESEquipEvent` (fork
+`RE/T/TESEquipEvent.h`: `actor`, `baseObject`, `equipped`) on a tracked follower while `ContainerMenu` or
+`GiftMenu` is open (the game is paused: his AI cannot equip then) -> EQUIPPED, an in-menu unequip clears
+that bit; an in-menu equip that MFO's own FWPN hold names (`Actuation::ForcedHoldFor`) is NOT recorded
+(MFO's equip landing in the menu; round 3). With NO menu open, an equip of a relic `Lotd::SeenUnwornKept`
+(MFO saw it UNWORN in his pack as a kept relic) that no MFO hold names and that is not the player's ->
+AI-EQUIPPED (`IsAiEquipped`), the POSITIVE PROOF the worn-relic ship and the relic swap require (review
+round 3: the record is not saved, so after a load both fail closed). AI-EQUIPPED is not a player bit.
+Inputs are read at event time and the WRITE is queued (AddTask under `PumpTickGate`, the ContainerSink
+pattern), so nothing queued before a revert lands after the clear. A transfer OUT of a
+follower with a record posts `RecountOnMain` (MainThread::Post; VR no-op = the record stays, fail closed),
+which drops the entry once no copy is left. Table `g_rec` (follower -> base -> bits) under `g_mx`: every
+query (`IsPlayerGiven` = either bit, `IsPlayerEquipped`) is safe from the worker and the main thread.
+Cleared by `Logistics::ClearTransientState` (revert). Consumers: `Lotd` `Shippable` / `TransferOnMain` (never
+ship a given item), `KeptOffRoleWorn` (a worn relic ships only when NOT given, and only with
+`PlayerGiven::Installed()`), `cast/Equip.cpp` `IsMuseumRelic` (a player-equipped relic stays his pick).
+**What breaks:** reading `g_rec` without `g_mx`; recording follower -> follower or MFO's own transfers as
+given (only `oldContainer == player` counts); dropping an entry on the leave event without the recount (a
+stack that is only partly moved out keeps copies the player gave). Known limit: a load forgets the record.
+
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives
 over-count), MFO-B123 (a reload before arrival can ship one duplicate), MFO-B124 (the ledger floor leaks
-for the session), MFO-B125 (the same base in two crates), MFO-B126 (a kept relic auto-equipped, never
-shipped).** Read them before editing.
+for the session), MFO-B125 (the same base in two crates). MFO-B126 (a kept relic auto-equipped, never
+shipped) is RESOLVED in batch L (see "worn kept relic" below and the `cast/Equip.cpp` nav entry).** Read
+them before editing.
 ClickUp 86e3edghj, rounds L1-L3, design `_research/lotd-design-2026-09-24.md`. LOTD has no DLL;
 MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (local to
 `LegacyoftheDragonborn.esm`) is verified against the installed 6.9.0 and 6.10.0 ESMs and listed at
@@ -3194,9 +3256,34 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:545`).
   `KeepForDeposit:1227` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
   `ShedOffRoleWeapon` (`Upkeep.cpp:399`): an off-role relic weapon is deposited, not handed to you.
+- **A needed relic is never sold or dropped.** `HoldFromSale:1265` (whenever awareness is on,
+  Harbinger or not) ← the Economy sell list (`Economy.cpp:662`), SwapUp's ammo ladder (`HeldAmmo`
+  pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:557`).
+  `KeepForDeposit:1281` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
+  `ShedOffRoleWeapon` (`Upkeep.cpp:412`): an off-role relic weapon is deposited, not handed to you.
+  It is also never the combat pick while another weapon of its category is carried
+  (`cast/Equip.cpp` `IsMuseumRelic`, batch L).
+- **Worn kept relic (MFO-B126, batch L).** `ShedOffRoleWeapon` CLEARS the follower's record on entry
+  (`Upkeep.cpp:301`, so the post-battle dwell and no-role early returns leave nothing stale) and, after
+  a full walk with an in-role weapon, hands `NoteKeptForDeposit:1285` the relics it kept, the
+  in-role weapon bases it saw (`g_keptForDeposit`, worker-only `KeptRecord`) and the kept relics seen
+  UNWORN (the STICKY `g_keptSeenUnworn`, pruned to what is still kept on each full walk; read by
+  `SeenUnwornKept:1298` for PlayerGiven's AI-equip proof). `Shippable` admits a WORN relic only through
+  `KeptOffRoleWorn:633`: `PlayerGiven::Installed()`, NOT `IsPlayerGiven`, `PlayerGiven::IsAiEquipped`
+  (positive proof his AI put it on; false after a load, so it fails closed), in the kept set, no MFO
+  hold names it (`Actuation::ForcedHoldFor`), and one of the recorded in-role weapons is STILL carried
+  (the never-disarm guard at ship time). His own AI equipped it in an unowned hand (the
+  ch.17 declaration owns a hand only under a hold, so it cannot refuse that equip without the F6
+  freeze), and the shed would have dropped it worn or not. `ShipItem::worn` carries it to
+  `TransferOnMain:876`, which re-checks `IsPlayerGiven`, UNEQUIPS each worn HAND first
+  (`ActorEquipManager::UnequipObject` with a nullptr extraList and the hand's slot: nullptr for
+  `ExtraWorn`, `LeftHandSlot()` for `ExtraWornLeft`; the shape of every other UnequipObject in the tree,
+  round 3) and then removes it. Cleared in
+  `ClearTransientState`. **What breaks:** admitting worn relics outside the kept set, or without the
+  PlayerGiven check, ships the player's own choice.
 - **L3 deposit** (automatic with the gambit; ONE trip at a time, `g_trip` under `g_tripMx`):
-  `RunGambit` starts it when the follower carries `Shippable:608` items (not worn, quest, stock
-  gear or `IsPlayerPick`) and `NearestCrate:651` finds an enabled, 3D-loaded outgoing crate within
+  `RunGambit` starts it when the follower carries `Shippable:647` items (not worn [but see the worn kept relic above], quest, stock
+  gear, `IsPlayerPick` or `PlayerGiven::IsPlayerGiven`) and `NearestCrate:651` finds an enabled, 3D-loaded outgoing crate within
   3000 u (inside his leash, not in DBMQA `0x1252E1`, not on cooldown), and no container / barter
   menu is open. `DepositTick:1066` ← `Service.cpp:312` owns his tick:
   Walking (ch.19 via `APMFBridge::ClaimDepositTravel`, v12 leg state `ReadDepositLeg`, distance
@@ -3206,7 +3293,7 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   `ClaimDepositIdle` (ch.1 hold + ch.12 v2 IdleGive at the crate; a SYNCHRONOUS refusal latches the
   deposit OFF for the session, `g_depositLatched`) → Giving: NO TRANSFER until the idle is SEEN LIVE
   (`DepositIdleStatus` 1) and still live >= 1 s later on a later tick (the never-live grace never
-  counts; 2 = Harbinger ended it → the trip ends) → `TransferOnMain:826` (MAIN) refuses under an open
+  counts; 2 = Harbinger ended it → the trip ends) → `TransferOnMain:869` (MAIN) refuses under an open
   container / barter menu and unless the crate CONFIRMS `ready` / `waitingtoship`, re-reads every
   item (NOT `IsPlayerPick`: `g_playerPicks` is worker-only, Shippable filtered it), reads the crate
   count back, fills the ledger floor, and reports `g_transferResult` → Settling: a SKIPPED or empty
@@ -4285,9 +4372,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     **What breaks:** a per-service Repoint (churns Harbinger's arbitration every 133 ms x N);
     re-filing an ENDED claim within a fight (a loop against an outranking leash); feeding it
     `ChaseRadius` (measured from the follower, not the anchor); keeping it through a retreat.
-  - `apmf/SpellAllowList.cpp` (308) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
-    `AppendDenyExemptForms` (`:126`), `PublishSpellAllowList` (`:162`), `ReleaseSpellAllowList`
-    (`:284`).
+  - `apmf/SpellAllowList.cpp` (398) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
+    `MakePotionCand` (`:136`) + `SelectPotions` (`:169`, the potion trim, batch L),
+    `AppendDenyExemptForms` (`:207`), `PublishSpellAllowList` (`:240`), `ReleaseSpellAllowList`
+    (`:374`).
   - `apmf/APMFBridge_internal.h` (402, NEW in wave 1) = the claim state the families share, all
     of it from the old file's anonymous namespace: `CastClaim` (`:80`), `Owned` (`:208`), the
     `extern` `g_apmf`/`g_mx`/`g_owned`/refusal sets (defined in `apmf/Bridge.cpp`),
@@ -4595,10 +4683,21 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   CLAIMED n=N (... + N potion + ...)` line prints the potion count, so a log identifies a missing class
   by subtraction. **Kill switch if anything about the gate misbehaves: `bApmfSpellAllowList=0`** (INI,
   default 1) — the cast-time deny then carries the load exactly as before the gate existed.
-  **THE COST OF THE POTION EXEMPTION, stated:** it spends the 32-form budget, so a follower with a large
-  alchemy hoard can push the list past `kMaxSpellAllowList` and lose the gate entirely (fail-open, loudly
-  logged, never a mute). That trade is deliberate — a denied healing potion is far worse than an inert
-  gate.
+  **THE COST OF THE POTION EXEMPTION, stated:** it spends the 32-form budget. **Since batch L (marth
+  2026-09-27: "keep the best available potion in each category within the 32 cap", no limit raise; field:
+  Serana carried 35-46 potions, needed 38-50 forms and lost the gate)** potions are collected apart
+  (`PotionCand`) and TRIMMED to the budget the other forms leave: all of them when they fit, else
+  `SelectPotions` keeps each CATEGORY's best (category = the costliest effect's (MGEF `kRecover` bit,
+  archetype, primary AV): Restore Health and Fortify Health are separate, and only a NON-recover
+  Health / Magicka / Stamina value modifier takes restore priority, round 3;
+  best = magnitude, then duration, then value) round-robin by rank, restore Health / Magicka / Stamina
+  first inside a rank. A potion left off is one his AI cannot pick in combat (APMF denies what the set
+  does not name); MFO's drink gambits equip potions directly and are not on this channel. The gate is
+  refused (fail-open, loud) only when the NON-potion forms alone exceed 32. The `[cast-select] ...
+  allow-list` line reads `K of N potion(s), trimmed to the best of each category by the cap`.
+  **What breaks:** trimming anything but potions (a truncated spell / staff / scroll / power list
+  disarms him); a category key that merges restore and fortify of one AV (their archetypes differ on
+  purpose).
   **OPEN BACKLOG — read before editing:** `MFO-B65` (the ALCH specifics + the budget consequence).
 - **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** offense-cast =
   PER-CAST, TTL-bounded (`kIntent_Cast`, PER-HAND now — see above; refreshed each winning cast

@@ -15,6 +15,7 @@
 #include "apmf/APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
 #include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
 #include "Lotd.h"          // LOTD awareness: the deposit trip's lifecycle edges (feat/mfo-lotd)
+#include "PlayerGiven.h"   // the player-given record is session state, cleared on revert
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -104,7 +105,12 @@ namespace MFO::Logistics {
         switch (Catalog::AmmoKind(a_ammo->GetFormID())) {
         case Catalog::Ammo::kArrow: return false;
         case Catalog::Ammo::kBolt:  return true;
-        default:                    return a_ammo->IsBolt();
+        // NOT TESAmmo::IsBolt() (field 2026-09-26): the fork's out-of-line IsBolt reads the
+        // DIRECT `data` member, which on our SE+AE+VR build is the header's #else layout
+        // (0xB0, inside TESWeightForm) instead of 0x110 -- the "flags" it tested were the
+        // low byte of the weight float, so with no patcher catalog bow users bought and
+        // looted bolts. GetRuntimeData() relocates to the real DATA (0x110 SE/AE, 0x100 VR).
+        default:                    return a_ammo->GetRuntimeData().data.flags.none(RE::AMMO_DATA::Flag::kNonBolt);
         }
     }
 
@@ -289,6 +295,11 @@ namespace MFO::Logistics {
     bool ShedOffRoleWeapon(RE::Actor* a_follower, const FollowerState& a_state) {
         using WT = RE::WEAPON_TYPE;
 
+        // MFO-B126 (review of 93613c4, SEV-3): the kept-for-deposit set is only as good
+        // as THIS pass. Clear it first, so every early return below (the post-battle
+        // dwell, no role) leaves it empty; the full walk re-notes it at its end.
+        Lotd::NoteKeptForDeposit(a_follower->GetFormID(), {}, {});
+
         // POST-BATTLE GATE (the field fix): only shed AFTER a fight, never during
         // one. The Scheduler runs this path out of PARTY combat, and ALSO for a
         // follower whose own IsInCombat() reads false inside a party fight (the
@@ -380,11 +391,14 @@ namespace MFO::Logistics {
         };
 
         RE::TESBoundObject* shed = nullptr; std::int32_t shedCount = 0; int inRoleWeapons = 0;
+        std::vector<RE::FormID> keptForDeposit;   // MFO-B126: handed to Lotd after the walk
+        std::vector<RE::FormID> inRoleBases;      // ... with the in-role weapons Lotd re-checks at ship time
+        std::vector<RE::FormID> keptUnworn;       // ... and the kept relics seen UNWORN (round 3: AI-equip proof)
         for (auto& [obj, data] : a_follower->GetInventory()) {
             if (!obj || data.first <= 0) continue;
             auto* w = obj->As<RE::TESObjectWEAP>();
             if (!w || w->IsStaff()) continue;
-            if (inRole(w)) { ++inRoleWeapons; continue; }
+            if (inRole(w)) { ++inRoleWeapons; inRoleBases.push_back(obj->GetFormID()); continue; }
             // Fists that are NOT valid for fighting are still never shed: the
             // Unarmed record is the engine's, not a weapon anyone can drop.
             if (WeaponClassOf(w->GetWeaponType()) == WepClass::Other) continue;
@@ -396,9 +410,22 @@ namespace MFO::Logistics {
             if (!Config::g_lootSpecialItems.load() && socketed(data.second.get())) continue;
             // LOTD: a relic he carries for the museum's deposit trip is deposited, not
             // handed to the player (only when the trip can actually happen).
-            if (Lotd::KeepForDeposit(a_follower, a_state, obj)) continue;
+            if (Lotd::KeepForDeposit(a_follower, a_state, obj)) {
+                keptForDeposit.push_back(obj->GetFormID());
+                // Seen UNWORN: at least one instance of the base is not worn.
+                const auto* e = data.second.get();
+                const bool anyWorn = e && e->IsWorn();
+                if (!anyWorn || data.first > 1) keptUnworn.push_back(obj->GetFormID());
+                continue;
+            }
             if (!shed) { shed = obj; shedCount = data.first; }   // first off-role, one per tick
         }
+        // MFO-B126: the kept relics ship even if his AI has since equipped one -- but
+        // only with an in-role weapon left (the never-disarm guard below, same count;
+        // Lotd re-checks that one of these in-role weapons is still carried at ship time).
+        if (inRoleWeapons > 0)
+            Lotd::NoteKeptForDeposit(a_follower->GetFormID(), std::move(keptForDeposit), std::move(inRoleBases),
+                                     std::move(keptUnworn));
         if (!shed) return false;   // nothing off-role in the pack
         // The fists verdict is what decides the never-disarm guard when the only
         // other "weapon" is the Unarmed record, so log it where it matters --
@@ -601,6 +628,7 @@ namespace MFO::Logistics {
         g_lastBlocklistReassess = {};
         Lockpick::Clear();    // LP-M1: pick jobs, verdicts and their Harbinger holds are per-session
         Lotd::ClearTransientState();   // LOTD: the deposit trip + its claims, the needs cache, the ledger
+        PlayerGiven::ClearTransientState();   // batch L: the player-given / player-put-on record
     }
 
     void ReleaseTravelOnCombat(RE::Actor* a_follower) {

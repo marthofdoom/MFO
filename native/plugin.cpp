@@ -21,6 +21,7 @@
 #include "Packages.h"
 #include "logistics/Logistics.h"
 #include "logistics/Lotd.h"   // LOTD awareness: detection, sinks, post-load snapshot (feat/mfo-lotd)
+#include "logistics/PlayerGiven.h"   // the player-given / player-put-on record (batch L)
 #include "Gait.h"
 #include "MEOBridge.h"
 #include "apmf/APMFBridge.h"
@@ -387,6 +388,7 @@ namespace {
             MFO::Rapport::RegisterSinks();  // sinks LAST, or they fire against unresolved forms
             MFO::Logistics::RegisterSinks();   // the player-looted waiver sink (§4.8.3)
             MFO::Lotd::RegisterSinks();        // LOTD: the museum's SKSE ModEvents -> snapshot rebuild
+            MFO::PlayerGiven::RegisterSinks(); // player -> follower transfers + menu equips (never shipped)
             MFO::MEOBridge::RegisterSink();  // equip sink: flush follower gem moves onto worn loot
             MFO::Diagnostics::Install();
             MFO::Board::Install();           // Field Kit overlay: swapchain-vtable Present/Resize

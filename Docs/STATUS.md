@@ -44,6 +44,42 @@ Read it as history and this block as current.
   state); the loose-ammo scan reads HeldAmmo once per scan. The engine's `ExtraDroppedItemList` does NOT record the
   player's own drops (RE in MAP / agent log), so the session-scoped drop record stays: a drop made before a reload
   is not remembered after it. Backlog MFO-B129 (loose museum over-take within one needs window).
+- **2026-09-27 branch `fix/mfo-batchL-field` (off `main` `c7aab6e`; NOT merged, NOT deployed; tier B). Batch L field
+  fixes 1-3 from the 2026-09-26 Tuxborn diagnosis.** (1) Engage-on-sight no longer charges wildlife: `IsEnemy` skips an
+  actor whose Aggression actor value is 0 unless it is already fighting the party (marth: "If I attack a deer it's
+  marked"); the skips and the target's aggression are in the `[engage-on-sight]` armed / ENGAGE lines. The in-combat
+  pickers (`Evaluator.cpp`) are untouched (marth's call, pending). (2) A LOTD museum relic is never the combat pick
+  while another weapon of its category is carried (`cast/Equip.cpp` `IsMuseumRelic`; field: Cicero fought with a relic
+  two-hander for six hours); a held relic no longer satisfies the equip rule then, and the off-hand pick skips relics.
+  MFO-B126 closed: a WORN off-role relic the shed kept for the deposit now ships (`Lotd::NoteKeptForDeposit`,
+  `Shippable`), unless an MFO hold names it. REVIEW ROUND (93613c4: SEV-2 no weapon player-pick signal, 2 SEV-3):
+  new `logistics/PlayerGiven.cpp` records player -> follower transfers (via the logistics ContainerSink) and equips made
+  while the ContainerMenu / GiftMenu is open (TESEquipEvent), mutex-guarded, dropped when the item leaves him,
+  cleared on revert, NOT saved (a load forgets it). A player-given item is never shipped; a worn relic ships only
+  when not given and an in-role weapon is still carried at ship time; a player-equipped relic stays in his hand;
+  the transfer unequips a worn instance before removing it. Backlog MFO-B127 / MFO-B128.
+  ROUND 3 (0742e20: SEV-2 a reload loses the record): a worn relic ships, and a held relic is swapped, only with
+  POSITIVE proof his own AI put it on (`PlayerGiven::IsAiEquipped`: a non-menu equip of a kept relic MFO had seen
+  unworn in his pack) or, for the swap, an MFO hold naming it. After a load both fail closed. The transfer unequips
+  per hand with a nullptr extraList; an in-menu equip MFO's own hold names is not recorded as the player's; the
+  potion category separates restore from fortify (MGEF kRecover). Backlog MFO-B130 / MFO-B131. The co-save record
+  for gifts is pending marth's decision (not built). (3) Arrows vs bolts: `AmmoIsBolt`'s uncatalogued fallback reads the
+  kNonBolt flag through `GetRuntimeData()` instead of `TESAmmo::IsBolt()` (field: bow users bought and looted bolts,
+  no patcher catalog on Tuxborn); the `[arrowprobe]` diagnostic too. FIELD CHECKS: no `ENGAGE` on elk / deer /
+  rabbit / fox (the armed line reads "N unaggressive ... skipped"); hitting a deer first still ENGAGEs with
+  "(unaggressive, but fighting the party: counts)"; Cicero's melee gambit picks a sword over a looted relic; no
+  bolts bought or looted by a bow user; giving a follower an item logs `[player-given] ... given by the player` and
+  a relic you gave or put on him is never deposited.
+  Plus (separate commit, marth's queued item): the ch.8 potion allow-list keeps the BEST potion of EACH category
+  within the 32-form cap when he carries more (`apmf/SpellAllowList.cpp` `SelectPotions`; no limit raise). Field
+  check: Serana's `[cast-select] ... allow-list` line reads `K of N potion(s), trimmed to the best of each
+  category by the cap` instead of `the gate is NOT claimed`.
+- **OPEN (fork, needs its own brief): fork `TESAmmo::IsBolt` / `IgnoresNormalWeaponResistance` read the wrong
+  layout: a fork fix brief is needed.** `_commonlib/mit-3.7-fork` `src/RE/T/TESAmmo.cpp` reads the direct `data`
+  member; with SE+AE+VR all enabled the header's `#else` branch places it at 0xB0 (inside TESWeightForm) instead of
+  0x110, so both return a flag bit of the weight float. The fix is to read `GetRuntimeData().data.flags`. MFO no
+  longer calls either (batch L); do not add a call until the fork is fixed. The fork was NOT edited.
+
 - **2026-09-26 branch `feat/mfo-confidence-v2` (off `main` `92e8932`; NOT merged, NOT deployed; tier B+, a shared
   primitive). Batch L, ClickUp 86e3erv94 (the Confidence half of the assessment's "STILL OPEN").** `Confidence::Of` v2 =
   vitality x HP-loss TREND x, in combat, a fight multiplier on the WEIGHTED foe load (`CombatSense::FoeLoad`: each foe

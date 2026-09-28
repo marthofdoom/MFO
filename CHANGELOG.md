@@ -11,6 +11,13 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **Loose arrows and bolts follow the trade-up rule.** A follower passes over a loose stack worse than anything he carries, the same as in a chest.
 - **Loose items are safe to leave around.** A follower never takes a museum display, anything in your home or the museum halls, anything you dropped, a quest item, or anything owned. In a town, inn, house or shop he takes a loose item only when neither the item nor the room has an owner. The log names the reason once for each item he leaves.
 - **Followers pick up COIN coin purses.** With Coins of Interesting Natures installed, a follower with a gold or valuables loot gambit harvests the coin purses he finds. COIN's regional coins in chests and on bodies count as gold loot too.
+- **Followers leave wildlife alone.** Engage on sight no longer sends a follower after elk, deer, rabbits, foxes or any other animal that never attacks. If you attack one first, he joins in.
+- **Museum relics stay in the pack.** A follower no longer fights with a relic he is carrying for the museum while he has another weapon of that kind. If the relic is his only one, he uses it until he ships it.
+- **A relic a follower picked up and put on himself still gets shipped.** Only relics he would have dropped anyway, and only while he still carries a weapon he can fight with.
+- **Anything you give a follower is never shipped to the museum.** MFO now remembers what you hand over or put on him in the trade or gift menu, until he no longer carries it. A relic you put on him stays in his hand. The record lasts until you load a save.
+- **A follower carrying lots of potions keeps MFO's spell control.** Before, too many potions switched off MFO's say over which spells he picks in combat. Now he keeps the best potion of each kind for his own combat drinking and the control stays on.
+- **Bow users stop buying and looting bolts.** Arrows and bolts are told apart correctly again without the ItemCatalog patcher.
+
 - **A follower who is losing now runs back to you.** Confidence watches how fast he is losing health. A duel he is losing badly sends him back well before he is nearly dead.
 - **Strong enemies count for more, weak ones for less.** A dragon weighs about four times a mudcrab. A pack of mudcrabs no longer sends a healthy follower running.
 - **A crowd alone no longer forces a retreat at full health.** Five even enemies keep him fighting while he holds his own. If the pack starts hurting him, he falls back.

@@ -83,6 +83,13 @@ namespace MFO::EngageOnSight {
             int  civilSkipped   = 0;
             // The chosen target plus the candidates that would plausibly join (kJoinRadius).
             int  joiners        = 0;
+            // UNAGGRESSIVE FILTER (field 2026-09-26): actors in range skipped because their
+            // Aggression actor value is 0 (wildlife: elk, deer, rabbits, foxes) and they
+            // are not fighting the party; the chosen target's Aggression and whether it
+            // was admitted as unaggressive-but-fighting-the-party, for the log lines.
+            int   unaggressiveSkipped = 0;
+            float chosenAggression    = 0.0f;
+            bool  chosenUnaggressiveFighting = false;
         };
         std::mutex                                   g_probeMx;
         std::unordered_map<RE::FormID, ProbeResult>  g_probes;   // guarded by g_probeMx
@@ -205,7 +212,21 @@ namespace MFO::EngageOnSight {
         //       currentCombatTarget resolves to the player or a teammate.
         // Hostile to HIM alone (not to the player) still counts -- CONFIRMED by marth
         // 2026-09-25: "yes, there will be fights without player involvement".
-        bool IsEnemy(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc) {
+        // The Aggression actor value (0 Unaggressive, 1 Aggressive, 2 Very Aggressive,
+        // 3 Frenzied). Same read as ToldToWait. Main thread.
+        float AggressionOf(RE::Actor* a) {
+            auto* avo = a->AsActorValueOwner();
+            return avo ? avo->GetActorValue(RE::ActorValue::kAggression) : 0.0f;
+        }
+
+        // UNAGGRESSIVE (field 2026-09-26): an actor whose Aggression is 0 (Unaggressive:
+        // elk, deer, rabbits, foxes) is not an enemy, whatever IsHostileToActor says: the
+        // field log had followers charging and killing prey. Checked BEFORE the hostility
+        // test; a_unaggressive counts the skips for the log. EXCEPT one already FIGHTING
+        // THE PARTY (FightingParty: its currentCombatTarget is the player or a teammate --
+        // marth 2026-09-26: "If I attack a deer it's marked"): that one still counts, and
+        // the ENGAGE line says so.
+        bool IsEnemy(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc, int& a_unaggressive) {
             if (a->IsCommandedActor()) {
                 auto cmd = a->GetCommandingActor();   // HOLD the NiPointer
                 if (cmd && (cmd->IsPlayerRef() || cmd->IsPlayerTeammate())) return false;
@@ -217,6 +238,7 @@ namespace MFO::EngageOnSight {
             if (const auto* pkg = a->GetCurrentPackage();
                 pkg && pkg->packData.packFlags.any(RE::PACKAGE_DATA::GeneralFlag::kIgnoreCombat))
                 return false;
+            if (AggressionOf(a) <= 0.0f && !FightingParty(a)) { ++a_unaggressive; return false; }
             if (!a->IsHostileToActor(a_pc) && !a->IsHostileToActor(a_self)) return false;
             if (a->GetCrimeFaction() && !FightingParty(a)) return false;
             return true;
@@ -265,7 +287,7 @@ namespace MFO::EngageOnSight {
                 if (a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) continue;
                 if (a->GetPosition().GetDistance(pcPos) > a_leash) continue;   // the leash is from the PLAYER
                 if (a->GetPosition().GetDistance(selfPos) > r.range) continue;  // the reaction distance is from HIM
-                if (!IsEnemy(a, self, pc)) continue;
+                if (!IsEnemy(a, self, pc, r.unaggressiveSkipped)) continue;
                 if (!pcFighting && IsCivilised(a->GetCurrentLocation())) { ++r.civilSkipped; continue; }
                 found.emplace_back(a->GetPosition().GetDistance(selfPos), a->GetFormID());
             }
@@ -282,6 +304,8 @@ namespace MFO::EngageOnSight {
                 r.chosen  = fid;
                 r.dSelf   = d;
                 r.dPlayer = t ? t->GetPosition().GetDistance(pcPos) : 0.0f;
+                r.chosenAggression = t ? AggressionOf(t) : 0.0f;
+                r.chosenUnaggressiveFighting = t && r.chosenAggression <= 0.0f && FightingParty(t);
                 break;
             }
             // THE JOIN ESTIMATE (kJoinRadius): the chosen target + every other non-given-up
@@ -442,7 +466,11 @@ namespace MFO::EngageOnSight {
                     Status(note, a_f, a_id, "standing down: the enemies in view are in a town/inn, player not fighting",
                            now, fmt::format(" -- {} skipped", r.civilSkipped));
                 else
-                    Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
+                    Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now,
+                           r.unaggressiveSkipped > 0
+                               ? fmt::format(" -- {} unaggressive (Aggression 0) actor(s) in range skipped",
+                                             r.unaggressiveSkipped)
+                               : std::string{});
             } else if (!note.givenUp.contains(r.chosen)) {
                 // The confidence gate on the IN-COMBAT estimate (review of 1c50696): the Of()
                 // he would read once fighting as many foes as the probe counted, against the
@@ -476,9 +504,13 @@ namespace MFO::EngageOnSight {
                         spdlog::info("[engage-on-sight] {} ({:08X}) ENGAGE {} ({:08X}): nearest visible enemy, "
                                      "{:.0f}u from him (range {:.0f}u), {:.0f}u from you (leash {:.0f}u), sightline=VISIBLE "
                                      "({} measured, {} not visible), {} candidate(s), {} would join; ch.21 entry "
-                                     "h={}; ch.20 pin: {}; in-combat confidence estimate {:.2f}",
+                                     "h={}; ch.20 pin: {}; in-combat confidence estimate {:.2f}; target aggression "
+                                     "{:.0f}{}, {} unaggressive (Aggression 0) skipped",
                                      NameOf(a_f), a_id, NameOf(t), r.chosen, r.dSelf, r.range, r.dPlayer, r.leash,
-                                     r.measured, r.occluded, r.candidates.size(), foes, h, pin, conf);
+                                     r.measured, r.occluded, r.candidates.size(), foes, h, pin, conf,
+                                     r.chosenAggression,
+                                     r.chosenUnaggressiveFighting ? " (unaggressive, but fighting the party: counts)" : "",
+                                     r.unaggressiveSkipped);
                         engaged = true;
                         break;
                     }
