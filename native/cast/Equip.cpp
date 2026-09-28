@@ -404,9 +404,17 @@ namespace MFO::Actuation {
             // restored by the FWPN co-save). The pick below then replaces it (the
             // "DIFFERENT weapon may still be locked" release handles an old lock). A
             // relic that is his ONLY weapon of the category still satisfies.
+            // ROUND 3 (positive proof): swap only a relic that HIS AI put on
+            // (PlayerGiven::IsAiEquipped) or that an MFO hold names (an FWPN hold from
+            // before the fix). Anything else -- including every worn relic after a
+            // load, since the record is not saved -- is left in his hand (fails closed).
+            const auto heldHold = ForcedHoldFor(a_follower->GetFormID());
             const auto relicWithAlternative = [&](RE::TESForm* a_held) {
                 auto* hw = a_held ? a_held->As<RE::TESObjectWEAP>() : nullptr;
                 if (!hw || !IsMuseumRelic(a_follower, hw)) return false;
+                const RE::FormID hb = hw->GetFormID();
+                if (!PlayerGiven::IsAiEquipped(a_follower->GetFormID(), hb) &&
+                    heldHold.first != hb && heldHold.second != hb) return false;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();

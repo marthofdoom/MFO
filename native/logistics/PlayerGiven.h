@@ -12,7 +12,12 @@
 //   EQUIPPED  a TESEquipEvent (equipped) on such a follower fired while the
 //             ContainerMenu or GiftMenu is open. The game is paused in those menus,
 //             so his AI cannot equip then: it is the player's hand. An UNEQUIP in
-//             the menu clears the bit (the player changed his mind).
+//             the menu clears the bit (the player changed his mind). An equip that
+//             MFO's own FWPN hold names is NOT recorded (MFO's equip landing in a menu).
+//   AI-EQUIPPED  an equip with NO such menu open of a relic MFO had seen UNWORN in
+//             his pack as a kept relic (Lotd::SeenUnwornKept), not held by MFO and not
+//             the player's: the positive proof the worn-relic ship and the relic swap
+//             require. NOT a player bit (IsPlayerGiven ignores it).
 //
 // An entry is dropped when the base LEAVES his inventory (a TESContainerChangedEvent
 // out of him -> a MAIN-thread recount next frame; nothing is dropped on VR, where
@@ -37,4 +42,9 @@ namespace MFO::PlayerGiven {
     // The player put this base on him in the ContainerMenu / GiftMenu (and has not
     // taken it off there since).
     bool IsPlayerEquipped(RE::FormID a_follower, RE::FormID a_base);
+    // POSITIVE PROOF his own AI put this relic on (review round 3): an equip with no
+    // trade / gift menu open, of a base Lotd::SeenUnwornKept (MFO saw it unworn in his
+    // pack as a kept relic), not named by an MFO hold, not the player's. Not saved:
+    // after a load it is false until the AI equips it again (fails closed).
+    bool IsAiEquipped(RE::FormID a_follower, RE::FormID a_base);
 }

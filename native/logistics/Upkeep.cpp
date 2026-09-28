@@ -393,6 +393,7 @@ namespace MFO::Logistics {
         RE::TESBoundObject* shed = nullptr; std::int32_t shedCount = 0; int inRoleWeapons = 0;
         std::vector<RE::FormID> keptForDeposit;   // MFO-B126: handed to Lotd after the walk
         std::vector<RE::FormID> inRoleBases;      // ... with the in-role weapons Lotd re-checks at ship time
+        std::vector<RE::FormID> keptUnworn;       // ... and the kept relics seen UNWORN (round 3: AI-equip proof)
         for (auto& [obj, data] : a_follower->GetInventory()) {
             if (!obj || data.first <= 0) continue;
             auto* w = obj->As<RE::TESObjectWEAP>();
@@ -409,14 +410,22 @@ namespace MFO::Logistics {
             if (!Config::g_lootSpecialItems.load() && socketed(data.second.get())) continue;
             // LOTD: a relic he carries for the museum's deposit trip is deposited, not
             // handed to the player (only when the trip can actually happen).
-            if (Lotd::KeepForDeposit(a_follower, a_state, obj)) { keptForDeposit.push_back(obj->GetFormID()); continue; }
+            if (Lotd::KeepForDeposit(a_follower, a_state, obj)) {
+                keptForDeposit.push_back(obj->GetFormID());
+                // Seen UNWORN: at least one instance of the base is not worn.
+                const auto* e = data.second.get();
+                const bool anyWorn = e && e->IsWorn();
+                if (!anyWorn || data.first > 1) keptUnworn.push_back(obj->GetFormID());
+                continue;
+            }
             if (!shed) { shed = obj; shedCount = data.first; }   // first off-role, one per tick
         }
         // MFO-B126: the kept relics ship even if his AI has since equipped one -- but
         // only with an in-role weapon left (the never-disarm guard below, same count;
         // Lotd re-checks that one of these in-role weapons is still carried at ship time).
         if (inRoleWeapons > 0)
-            Lotd::NoteKeptForDeposit(a_follower->GetFormID(), std::move(keptForDeposit), std::move(inRoleBases));
+            Lotd::NoteKeptForDeposit(a_follower->GetFormID(), std::move(keptForDeposit), std::move(inRoleBases),
+                                     std::move(keptUnworn));
         if (!shed) return false;   // nothing off-role in the pack
         // The fists verdict is what decides the never-disarm guard when the only
         // other "weapon" is the Unarmed record, so log it where it matters --

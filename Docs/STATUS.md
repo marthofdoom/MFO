@@ -26,7 +26,13 @@ Read it as history and this block as current.
   while the ContainerMenu / GiftMenu is open (TESEquipEvent), mutex-guarded, dropped when the item leaves him,
   cleared on revert, NOT saved (a load forgets it). A player-given item is never shipped; a worn relic ships only
   when not given and an in-role weapon is still carried at ship time; a player-equipped relic stays in his hand;
-  the transfer unequips a worn instance before removing it. Backlog MFO-B127 / MFO-B128. (3) Arrows vs bolts: `AmmoIsBolt`'s uncatalogued fallback reads the
+  the transfer unequips a worn instance before removing it. Backlog MFO-B127 / MFO-B128.
+  ROUND 3 (0742e20: SEV-2 a reload loses the record): a worn relic ships, and a held relic is swapped, only with
+  POSITIVE proof his own AI put it on (`PlayerGiven::IsAiEquipped`: a non-menu equip of a kept relic MFO had seen
+  unworn in his pack) or, for the swap, an MFO hold naming it. After a load both fail closed. The transfer unequips
+  per hand with a nullptr extraList; an in-menu equip MFO's own hold names is not recorded as the player's; the
+  potion category separates restore from fortify (MGEF kRecover). Backlog MFO-B130 / MFO-B131. The co-save record
+  for gifts is pending marth's decision (not built). (3) Arrows vs bolts: `AmmoIsBolt`'s uncatalogued fallback reads the
   kNonBolt flag through `GetRuntimeData()` instead of `TESAmmo::IsBolt()` (field: bow users bought and looted bolts,
   no patcher catalog on Tuxborn); the `[arrowprobe]` diagnostic too. FIELD CHECKS: no `ENGAGE` on elk / deer /
   rabbit / fox (the armed line reads "N unaggressive ... skipped"); hitting a deer first still ENGAGEs with

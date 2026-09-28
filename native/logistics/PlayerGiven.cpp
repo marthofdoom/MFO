@@ -5,6 +5,8 @@
 #include "Followers.h"    // IsTrackedFast: the locked roster mirror, safe from any thread (#74)
 #include "MainThread.h"   // the leave recount runs on the main thread
 #include "Diagnostics.h"  // PumpTickGate / CurrentPumpEpoch: queued writes drain with StopPump / PausePump
+#include "Lotd.h"         // SeenUnwornKept: the AI-equip mark's positive proof (worker road)
+#include "cast/Actuation.h"   // ForcedHoldFor: an in-menu equip MFO's own hold names is not the player's
 
 #include <atomic>
 #include <cstdint>
@@ -19,6 +21,8 @@ namespace MFO::PlayerGiven {
         constexpr RE::FormID   kPlayerID = 0x14;
         constexpr std::uint8_t kGiven    = 1;   // moved player -> him
         constexpr std::uint8_t kEquipped = 2;   // put on him with the trade / gift menu open
+        constexpr std::uint8_t kAiEquipped = 4; // HIS AI put on a kept relic MFO saw unworn (no menu open)
+        constexpr std::uint8_t kPlayerBits = kGiven | kEquipped;
 
         std::atomic<bool> g_installed{ false };
         std::mutex g_mx;
@@ -78,7 +82,7 @@ namespace MFO::PlayerGiven {
             for (auto& [obj, cnt] : a->GetInventoryCounts(
                      [a_base](RE::TESBoundObject& x) { return x.GetFormID() == a_base; }, false))
                 have += cnt;
-            if (have <= 0) ClearBits(a_follower, a_base, kGiven | kEquipped, "left his inventory -- record dropped");
+            if (have <= 0) ClearBits(a_follower, a_base, kGiven | kEquipped | kAiEquipped, "left his inventory -- record dropped");
         }
 
         bool GiveMenuOpen() {
@@ -108,10 +112,36 @@ namespace MFO::PlayerGiven {
                                                   RE::BSTEventSource<RE::TESEquipEvent>*) override {
                 if (!a_ev || !a_ev->actor || !a_ev->baseObject) return RE::BSEventNotifyControl::kContinue;
                 const RE::FormID id = a_ev->actor->GetFormID();
-                if (!Followers::IsTrackedFast(id) || !GiveMenuOpen()) return RE::BSEventNotifyControl::kContinue;
+                if (!Followers::IsTrackedFast(id)) return RE::BSEventNotifyControl::kContinue;
                 const RE::FormID base = a_ev->baseObject;
+                if (!GiveMenuOpen()) {
+                    // NO MENU: the AI-equip mark (review round 3, POSITIVE proof for the
+                    // worn-relic ship and the relic swap). Only an equip of a base MFO had
+                    // seen UNWORN in his pack as a kept relic, and not one MFO's own hold
+                    // names (MFO's last-resort relic pick). Decided in the queued body on
+                    // the worker, where both of those are read.
+                    if (a_ev->equipped)
+                        Queue([id, base]() {
+                            if (!Lotd::SeenUnwornKept(id, base)) return;
+                            const auto [hr, hl] = Actuation::ForcedHoldFor(id);
+                            if (hr == base || hl == base) return;
+                            if (Bits(id, base) & kPlayerBits) return;
+                            Mark(id, base, kAiEquipped, "put on by his own AI (a kept relic MFO saw unworn in his pack)");
+                        });
+                    return RE::BSEventNotifyControl::kContinue;
+                }
                 if (a_ev->equipped)
-                    Queue([id, base]() { Mark(id, base, kEquipped, "put on him by the player (trade / gift menu open)"); });
+                    Queue([id, base]() {
+                        // MFO's OWN equip landing while the menu is open (review round 3):
+                        // a weapon MFO holds is named by its FWPN ledger, which the worker
+                        // wrote before the equip was posted -- not the player's choice. The
+                        // relic logic reads only weapons, so this is the case that matters;
+                        // any other MFO equip mislabelled here only fails closed (never shipped).
+                        const auto [hr, hl] = Actuation::ForcedHoldFor(id);
+                        if (hr == base || hl == base) return;
+                        ClearBits(id, base, kAiEquipped, "now the player's choice (trade / gift menu open)");
+                        Mark(id, base, kEquipped, "put on him by the player (trade / gift menu open)");
+                    });
                 else
                     Queue([id, base]() { ClearBits(id, base, kEquipped, "taken off him by the player (trade / gift menu open)"); });
                 return RE::BSEventNotifyControl::kContinue;
@@ -152,6 +182,7 @@ namespace MFO::PlayerGiven {
     }
 
     bool Installed() { return g_installed.load(); }
-    bool IsPlayerGiven(RE::FormID a_follower, RE::FormID a_base) { return Bits(a_follower, a_base) != 0; }
+    bool IsPlayerGiven(RE::FormID a_follower, RE::FormID a_base) { return (Bits(a_follower, a_base) & kPlayerBits) != 0; }
+    bool IsAiEquipped(RE::FormID a_follower, RE::FormID a_base) { return (Bits(a_follower, a_base) & kAiEquipped) != 0; }
     bool IsPlayerEquipped(RE::FormID a_follower, RE::FormID a_base) { return (Bits(a_follower, a_base) & kEquipped) != 0; }
 }

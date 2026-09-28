@@ -126,8 +126,8 @@ namespace MFO::APMFBridge {
         // needed 38-50 forms and lost the whole gate). Everything else is appended.
         struct PotionCand {
             RE::FormID    form = 0;
-            std::uint64_t cat  = 0;   // (archetype, primary AV) of the costliest effect
-            int           prio = 3;   // 0 restore Health, 1 Magicka, 2 Stamina, 3 everything else
+            std::uint64_t cat  = 0;   // (recover bit, archetype, primary AV) of the costliest effect
+            int           prio = 3;   // 0 RESTORE Health, 1 Magicka, 2 Stamina, 3 everything else
             float         mag  = 0.0f;
             std::uint32_t dur  = 0;
             std::int32_t  gold = 0;
@@ -142,12 +142,20 @@ namespace MFO::APMFBridge {
             if (!eff || !mgef) return c;   // cat 0: an effect-less potion is its own category
             const auto arch = mgef->data.archetype;
             const auto av   = mgef->data.primaryAV;
-            c.cat = (static_cast<std::uint64_t>(static_cast<std::uint32_t>(arch)) << 32) |
+            // RESTORE vs FORTIFY (review round 3): both can be a ValueModifier on the
+            // same AV. A fortify carries the MGEF kRecover flag (the value returns when
+            // the effect ends; fork RE/E/EffectSetting.h, EffectSettingData::Flag::
+            // kRecover = 1 << 1); a restore does not -- the same "non-recover"
+            // test the potion catalog classifies restores by. So the recover bit is part
+            // of the category, and only a non-recover effect can take restore priority.
+            const bool recover = mgef->data.flags.any(RE::EffectSetting::EffectSettingData::Flag::kRecover);
+            c.cat = (static_cast<std::uint64_t>(recover ? 1u : 0u) << 63) |
+                    (static_cast<std::uint64_t>(static_cast<std::uint32_t>(arch)) << 32) |
                     static_cast<std::uint32_t>(av);
             c.mag = eff->GetMagnitude();
             c.dur = eff->GetDuration();
             using Arch = RE::EffectArchetypes::ArchetypeID;
-            if (arch == Arch::kValueModifier || arch == Arch::kDualValueModifier) {
+            if (!recover && (arch == Arch::kValueModifier || arch == Arch::kDualValueModifier)) {
                 if (av == RE::ActorValue::kHealth) c.prio = 0;
                 else if (av == RE::ActorValue::kMagicka) c.prio = 1;
                 else if (av == RE::ActorValue::kStamina) c.prio = 2;

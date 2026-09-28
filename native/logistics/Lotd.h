@@ -65,6 +65,13 @@ namespace MFO::Lotd {
     // unowned hand, which the shed would have dropped anyway -- but only when it is NOT
     // player-given (PlayerGiven), no MFO hold names it, and one of those in-role weapons
     // is still carried at ship time. Worker road.
+    // a_keptUnworn = the kept relics seen UNWORN this pass (a subset of a_kept): added
+    // to a STICKY per-follower set (pruned to what is still kept on each full pass) --
+    // the positive proof PlayerGiven's AI-equip mark needs (MFO saw it unworn in his
+    // pack as a kept relic before anything equipped it).
     void NoteKeptForDeposit(RE::FormID a_follower, std::vector<RE::FormID> a_kept,
-                            std::vector<RE::FormID> a_inRole);
+                            std::vector<RE::FormID> a_inRole, std::vector<RE::FormID> a_keptUnworn = {});
+    // Was this base seen UNWORN in his pack as a kept relic (since it was last not
+    // kept)? Worker road (PlayerGiven's queued equip body).
+    bool SeenUnwornKept(RE::FormID a_follower, RE::FormID a_base);
 }

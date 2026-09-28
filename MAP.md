@@ -480,7 +480,9 @@ per concern:
   weapon of the category is carried (`relicWithAlternative`), so an AI-equipped relic or an old FWPN
   relic hold is replaced by the next equip lap. A relic the PLAYER put on him in the trade / gift menu
   (`PlayerGiven::IsPlayerEquipped`) is NOT a "museum relic" here: it competes in the ordinary pool and a
-  held one is never swapped out (review of 93613c4). OPEN: MFO-B127 (a one-lap relic pick while the needs
+  held one is never swapped out (review of 93613c4). A held relic is swapped ONLY with positive proof
+  (round 3): `PlayerGiven::IsAiEquipped` or an MFO FWPN hold naming it (`ForcedHoldFor`); otherwise
+  (every worn relic after a load) it stays. OPEN: MFO-B127 (a one-lap relic pick while the needs
   cache is unanswerable), MFO-B128 (a relic in one hand with a non-relic in the other satisfies). The shared `eligible` lambda is the pick's old filter
   (staff / non-playable / category / mage daggers), unchanged. **What breaks:** calling
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
@@ -3112,8 +3114,13 @@ gate; ONE `TESContainerChangedEvent` sink for logistics, coordinator 2026-09-27)
 `EquipSink` (`RegisterSinks`, `plugin.cpp` after `Lotd::RegisterSinks`): `TESEquipEvent` (fork
 `RE/T/TESEquipEvent.h`: `actor`, `baseObject`, `equipped`) on a tracked follower while `ContainerMenu` or
 `GiftMenu` is open (the game is paused: his AI cannot equip then) -> EQUIPPED, an in-menu unequip clears
-that bit. Inputs are read at event time and the WRITE is queued (AddTask under `PumpTickGate`, the
-ContainerSink pattern), so nothing queued before a revert lands after the clear. A transfer OUT of a
+that bit; an in-menu equip that MFO's own FWPN hold names (`Actuation::ForcedHoldFor`) is NOT recorded
+(MFO's equip landing in the menu; round 3). With NO menu open, an equip of a relic `Lotd::SeenUnwornKept`
+(MFO saw it UNWORN in his pack as a kept relic) that no MFO hold names and that is not the player's ->
+AI-EQUIPPED (`IsAiEquipped`), the POSITIVE PROOF the worn-relic ship and the relic swap require (review
+round 3: the record is not saved, so after a load both fail closed). AI-EQUIPPED is not a player bit.
+Inputs are read at event time and the WRITE is queued (AddTask under `PumpTickGate`, the ContainerSink
+pattern), so nothing queued before a revert lands after the clear. A transfer OUT of a
 follower with a record posts `RecountOnMain` (MainThread::Post; VR no-op = the record stays, fail closed),
 which drops the entry once no copy is left. Table `g_rec` (follower -> base -> bits) under `g_mx`: every
 query (`IsPlayerGiven` = either bit, `IsPlayerEquipped`) is safe from the worker and the main thread.
@@ -3179,16 +3186,20 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   (`cast/Equip.cpp` `IsMuseumRelic`, batch L).
 - **Worn kept relic (MFO-B126, batch L).** `ShedOffRoleWeapon` CLEARS the follower's record on entry
   (`Upkeep.cpp:301`, so the post-battle dwell and no-role early returns leave nothing stale) and, after
-  a full walk with an in-role weapon, hands `NoteKeptForDeposit:1274` the relics it kept plus the
-  in-role weapon bases it saw (`g_keptForDeposit`, worker-only `KeptRecord`). `Shippable` admits a WORN
-  relic only through `KeptOffRoleWorn:627`: `PlayerGiven::Installed()` and NOT `IsPlayerGiven`, in the
-  kept set, no MFO hold names it (`Actuation::ForcedHoldFor`), and one of the recorded in-role weapons
-  is STILL carried (the never-disarm guard at ship time). His own AI equipped it in an unowned hand (the
+  a full walk with an in-role weapon, hands `NoteKeptForDeposit:1285` the relics it kept, the
+  in-role weapon bases it saw (`g_keptForDeposit`, worker-only `KeptRecord`) and the kept relics seen
+  UNWORN (the STICKY `g_keptSeenUnworn`, pruned to what is still kept on each full walk; read by
+  `SeenUnwornKept:1298` for PlayerGiven's AI-equip proof). `Shippable` admits a WORN relic only through
+  `KeptOffRoleWorn:633`: `PlayerGiven::Installed()`, NOT `IsPlayerGiven`, `PlayerGiven::IsAiEquipped`
+  (positive proof his AI put it on; false after a load, so it fails closed), in the kept set, no MFO
+  hold names it (`Actuation::ForcedHoldFor`), and one of the recorded in-role weapons is STILL carried
+  (the never-disarm guard at ship time). His own AI equipped it in an unowned hand (the
   ch.17 declaration owns a hand only under a hold, so it cannot refuse that equip without the F6
   freeze), and the shed would have dropped it worn or not. `ShipItem::worn` carries it to
-  `TransferOnMain:869`, which re-checks `IsPlayerGiven`, UNEQUIPS each worn instance first
-  (`ActorEquipManager::UnequipObject` with that instance's `ExtraDataList`, `LeftHandSlot()` for an
-  `ExtraWornLeft` one; parity with HealExcludedWeapon / KeepHeadClear) and then removes it. Cleared in
+  `TransferOnMain:876`, which re-checks `IsPlayerGiven`, UNEQUIPS each worn HAND first
+  (`ActorEquipManager::UnequipObject` with a nullptr extraList and the hand's slot: nullptr for
+  `ExtraWorn`, `LeftHandSlot()` for `ExtraWornLeft`; the shape of every other UnequipObject in the tree,
+  round 3) and then removes it. Cleared in
   `ClearTransientState`. **What breaks:** admitting worn relics outside the kept set, or without the
   PlayerGiven check, ships the player's own choice.
 - **L3 deposit** (automatic with the gambit; ONE trip at a time, `g_trip` under `g_tripMx`):
@@ -4597,7 +4608,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   2026-09-27: "keep the best available potion in each category within the 32 cap", no limit raise; field:
   Serana carried 35-46 potions, needed 38-50 forms and lost the gate)** potions are collected apart
   (`PotionCand`) and TRIMMED to the budget the other forms leave: all of them when they fit, else
-  `SelectPotions` keeps each CATEGORY's best (category = the costliest effect's (archetype, primary AV);
+  `SelectPotions` keeps each CATEGORY's best (category = the costliest effect's (MGEF `kRecover` bit,
+  archetype, primary AV): Restore Health and Fortify Health are separate, and only a NON-recover
+  Health / Magicka / Stamina value modifier takes restore priority, round 3;
   best = magnitude, then duration, then value) round-robin by rank, restore Health / Magicka / Stamina
   first inside a rank. A potion left off is one his AI cannot pick in combat (APMF denies what the set
   does not name); MFO's drink gambits equip potions directly and are not on this channel. The gate is
