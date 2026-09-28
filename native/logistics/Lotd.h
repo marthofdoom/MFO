@@ -55,6 +55,9 @@ namespace MFO::Lotd {
     // Economy / SwapUp: this base is a relic THIS follower covers for the museum ->
     // never sell it, never drop it (sell list, swap-up drops, the ammo ladder).
     bool HoldFromSale(RE::FormID a_follower, RE::TESBoundObject* a_base);
+    // Loose-loot bar (86e3f9pkg): a_ref is a museum DISPLAY ref named by the slot table
+    // (the current snapshot; false before the first snapshot or without LOTD). Any thread.
+    bool IsDisplayRef(RE::FormID a_ref);
     // ShedOffRoleWeapon: HoldFromSale AND his table holds an enabled act.loot_museum
     // AND the deposit can run -> keep it for the crate, do not hand it to the player.
     bool KeepForDeposit(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_base);

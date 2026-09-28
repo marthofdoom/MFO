@@ -110,6 +110,10 @@ namespace MFO::Lotd {
             std::uint32_t                  seq = 0;
             std::vector<Slot>              slots;
             std::unordered_set<RE::FormID> bases;   // union of every slot's accepted bases
+            // EVERY display ref the slot table names (a slot with no inventory item
+            // included): the loose-loot bar (IsDisplayRef, 86e3f9pkg) -- a displayed
+            // relic is an ENABLED item ref, lootable-shaped.
+            std::unordered_set<RE::FormID> displays;
         };
         std::mutex                        g_snapMx;
         std::shared_ptr<const Snapshot>   g_snap;          // guarded by g_snapMx
@@ -356,12 +360,14 @@ namespace MFO::Lotd {
                             for (std::size_t k = 0; k < sub.size(); ++k) {
                                 auto* ref = sub[k] ? sub[k]->As<RE::TESObjectREFR>() : nullptr;
                                 if (!ref) continue;
+                                snap->displays.insert(ref->GetFormID());
                                 slot.displays.push_back(ref->GetFormID());
                                 AddAccepted(itemGroup ? (k < subItems.size() ? subItems[k] : nullptr) : item,
                                             slot.accepted, exclude, protectd);
                             }
                             ++groupSlots;
                         } else if (auto* ref = d ? d->As<RE::TESObjectREFR>() : nullptr) {
+                            snap->displays.insert(ref->GetFormID());
                             slot.displays.push_back(ref->GetFormID());
                             AddAccepted(item, slot.accepted, exclude, protectd);
                         }
@@ -1203,6 +1209,12 @@ namespace MFO::Lotd {
         if (why) EndTripLocked(now, why, false, false);
     }
 
+    bool IsDisplayRef(RE::FormID a_ref) {
+        if (!a_ref || !g_detected.load()) return false;
+        auto snap = CurrentSnapshot();
+        return snap && snap->displays.count(a_ref) != 0;
+    }
+
     bool HoldFromSale(RE::FormID a_follower, RE::TESBoundObject* a_base) {
         if (!a_base || !Enabled()) return false;
         auto& needs = FreshNeeds(Clock::now());
@@ -1257,5 +1269,20 @@ namespace MFO::Logistics {
         }
         if (moved) needs.uncoveredExcl.clear();   // his holdings changed
         return moved;
+    }
+
+    // The route-2b twin of LootMuseum (86e3f9pkg): a LOOSE world item qualifies iff a
+    // container holding it would have been looted by LootMuseum -- the base is still
+    // needed after ALL supply, it is not a quest item, and an artifact only under
+    // bLootSpecialItems. The source bar (displays, the museum halls, player storage,
+    // ownership, civilised places) is LooseRefBarred's, applied by the scan to every
+    // loose category alike. The pickup is the arrival ActivateRef on MAIN.
+    bool LooseMuseumQualifies(RE::TESObjectREFR* a_ref, RE::TESBoundObject* a_base) {
+        if (!a_ref || !a_base || !Lotd::Enabled() || !APMFBridge::DepositSupported()) return false;
+        auto& needs = Lotd::FreshNeeds(Clock::now());
+        if (!needs.snap) return false;
+        auto it = needs.uncoveredAll.find(a_base->GetFormID());
+        if (it == needs.uncoveredAll.end() || it->second <= 0) return false;
+        return !LooseSpecialItemBlocked(a_ref, a_base->GetFormID());
     }
 }

@@ -152,6 +152,17 @@ namespace MFO::Logistics {
         // take, not their first (the QuickLoot-IE case). Bounded LRU.
         inline std::unordered_map<RE::FormID, Clock::time_point> g_playerLooted;
 
+        // Loose world refs the PLAYER dropped this session (86e3f9pkg): never a loose-loot
+        // candidate (LooseRefBarred). Stamped by the container-change sink (old = player,
+        // new = none, the dropped ref's handle) through the worker queue under PumpTickGate,
+        // read by the scan on the same worker (both through logistics/Sinks.cpp's
+        // NotePlayerDropped / PlayerDroppedRef). Bounded LRU. SESSION-scoped by the pump
+        // epoch it was written under: a revert bumps the epoch, and the first access after
+        // it drops the old save's entries (a dynamic FF id is reused across saves). A drop
+        // before a reload is not remembered after it -- a known limit, not a mask.
+        inline std::unordered_map<RE::FormID, Clock::time_point> g_playerDropped;
+        inline std::uint64_t                                     g_playerDroppedEpoch = 0;
+
         // Evict the oldest entry when a bounded map is over cap. n <= kLruCap and
         // inserts are rare, so the O(n) scan is cheaper than carrying a deque.
         inline void EvictOldest(std::unordered_map<RE::FormID, Clock::time_point>& a_map) {
@@ -839,6 +850,13 @@ namespace MFO::Logistics {
     // defined in logistics/LootTake.cpp, called by logistics/LootScan.cpp
     bool IsDrinkablePotion(RE::AlchemyItem* a_alc);
     bool IsCoinLoot(RE::TESBoundObject* a_obj);
+    bool IsCoinModCoin(const RE::TESForm* a_obj);                                   // COIN's coin list (86e3f9pkg)
+    bool IsCoinPurseFlora(RE::TESObjectREFR* a_ref, RE::TESBoundObject* a_base);    // an un-harvested COIN purse
+    std::int32_t CoinCount(RE::Actor* a_actor);                                     // Gold001 + coin items
+    const char* LooseRefBarred(RE::TESObjectREFR* a_ref);                           // the loose-item source bar
+    // defined in logistics/Sinks.cpp: the player-drop record (worker only).
+    void NotePlayerDropped(RE::FormID a_ref);
+    bool PlayerDroppedRef(RE::FormID a_ref);
     bool IsSoulGemItem(RE::TESBoundObject* a_obj);
     bool IsIngredientItem(RE::TESBoundObject* a_obj);
     bool RefInPlayerStorage(RE::TESObjectREFR* a_ref);
@@ -894,6 +912,8 @@ namespace MFO::Logistics {
     // defined in logistics/Lotd.cpp (LOTD awareness): the Category::Museum looter,
     // called through LootHere / HasLoot like every other category's.
     bool LootMuseum(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false);
+    // The route-2b twin: a LOOSE ref whose base the museum still needs (86e3f9pkg).
+    bool LooseMuseumQualifies(RE::TESObjectREFR* a_ref, RE::TESBoundObject* a_base);
 
     // ── THE SWAP-UP RULE (86e3ebfu3, 2026-09-25), defined in logistics/SwapUp.cpp
     // (full doc there). ONE rule shared by the loot side and the economy: what a

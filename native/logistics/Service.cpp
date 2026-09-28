@@ -404,6 +404,35 @@ namespace MFO::Logistics {
                 tr.acquirePending = false;
                 auto aptr = tr.target.get();
                 auto* aref = aptr.get();
+                // COIN PURSE readback (86e3f9pkg, principle 5): the first field log must
+                // PROVE an NPC harvest credits the follower -- harvested flag + his coin
+                // before/after. A harvest that credited nothing is said loudly (WARN),
+                // never counted as a take.
+                if (tr.acquireFlora) {
+                    tr.acquireFlora = false;
+                    const bool harvested = aref &&
+                        (aref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kHarvested) != 0;
+                    const std::int32_t coinPost = CoinCount(a_follower);
+                    const std::int32_t gained   = coinPost - tr.acquirePre;
+                    if (gained > 0) {
+                        spdlog::info("[acquire] {:08X}: HARVESTED coin purse {:08X} -- harvested={} coin {} -> {} ({:+})",
+                                     id, tr.acquireRefID, harvested ? 1 : 0, tr.acquirePre, coinPost, gained);
+                        MarkJustLooted(id, now);   // [L] glyph: CONFIRMED credit
+                    } else {
+                        spdlog::warn("[acquire] {:08X}: coin purse {:08X} NOT credited -- harvested={} coin {} -> {} "
+                                     "(an NPC harvest {} -- the purse is left)",
+                                     id, tr.acquireRefID, harvested ? 1 : 0, tr.acquirePre, coinPost,
+                                     harvested ? "landed but its produce did not reach him"
+                                               : "did not happen");
+                        // Reached but not acquired: straight to the sticky window (the
+                        // Activate-failed verdict), never a 25 s re-walk loop.
+                        MarkTravelSticky(tr.acquireRefID, now);
+                    }
+                    MarkTravelFailed(tr.acquireRefID, now);
+                    tr.phase = TravelPhase::Holding;
+                    tr.lingerUntil = now + BatchLingerDur();
+                    return;
+                }
                 const bool refGone = !aref || aref->IsDeleted() || aref->IsDisabled();
                 std::int32_t post = 0;
                 for (auto& [obj, n] : a_follower->GetInventoryCounts())
@@ -715,9 +744,17 @@ namespace MFO::Logistics {
                         auto* base = tref->GetBaseObject();
                         const char* iname = tref->GetDisplayFullName();
                         const auto icount = tref->extraList.GetCount();
+                        // A COIN PURSE is FLORA (86e3f9pkg): the activation HARVESTS it and
+                        // the produce (a leveled list of coins) lands in the activator. The
+                        // before-count is therefore his COIN, not the flora base.
+                        const bool flora = base && base->Is(RE::FormType::Flora);
                         std::int32_t pre = 0;
-                        for (auto& [obj, n] : a_follower->GetInventoryCounts())
-                            if (obj && base && obj->GetFormID() == base->GetFormID()) { pre = n; break; }
+                        if (flora) {
+                            pre = CoinCount(a_follower);
+                        } else {
+                            for (auto& [obj, n] : a_follower->GetInventoryCounts())
+                                if (obj && base && obj->GetFormID() == base->GetFormID()) { pre = n; break; }
+                        }
                         // NATIVE activate on the MAIN THREAD (loose-loot fix, marth:
                         // "it's simple -- check other looting mods"). The VM
                         // ObjectReference.Activate dispatch returned false for EVERY
@@ -750,12 +787,18 @@ namespace MFO::Logistics {
                             return;
                         }
                         MainThread::Post(doActivate);
-                        spdlog::info("[acquire] {:08X}: ACTIVATE (native/main-thread) ref {:08X} ('{}' x{})",
-                                     id, tref->GetFormID(), iname ? iname : "?", icount);
+                        if (flora)
+                            spdlog::info("[acquire] {:08X}: HARVEST (native/main-thread) coin purse {:08X} ('{}', "
+                                         "flora {:08X}) -- his coin before = {}",
+                                         id, tref->GetFormID(), iname ? iname : "?", base->GetFormID(), pre);
+                        else
+                            spdlog::info("[acquire] {:08X}: ACTIVATE (native/main-thread) ref {:08X} ('{}' x{})",
+                                         id, tref->GetFormID(), iname ? iname : "?", icount);
                         tr.acquirePending = true;
                         tr.acquireRefID   = tref->GetFormID();
                         tr.acquireBase    = base ? base->GetFormID() : 0;
                         tr.acquirePre     = pre;
+                        tr.acquireFlora   = flora;
                         return;   // the activate IS this tick's action; readback next tick
                     }
                     // ── LOCKPICK (LP-M1, logistics/Lockpick.cpp): a LOCKED chest is

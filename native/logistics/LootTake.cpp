@@ -14,6 +14,8 @@
 // Logistics_internal.h.
 #include "Logistics_internal.h"
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
+#include "LocationTypes.h"     // LooseRefBarred: the civilised-place bar (86e3f9pkg)
+#include "Lotd.h"              // LooseRefBarred: the LOTD museum display-ref bar (86e3f9pkg)
 
 namespace MFO::Logistics {
 
@@ -175,7 +177,90 @@ namespace MFO::Logistics {
                     std::string_view(ed) == "OCF_MiscTreasure_Coin")          // loose coins
                     return true;
             }
-            return false;
+            return IsCoinModCoin(a_obj);
+        }
+
+        // COIN (Coins of Interesting Natures, 86e3f9pkg) -- the NON-OCF coin rule. COIN
+        // swaps Septims for regional coins (Drakr, Nchuark, Mallari, ...): MISC value 0,
+        // weight 0, whose ONLY keyword is VendorNoSale (Skyrim.esm 000FF9FB) -- which is
+        // NOT a coin signal (every quest item carries it), so the keyword is deliberately
+        // not used. The authoritative list is COIN's own FLST DES_DefaultCoinsList (local
+        // 0xBE7 in the ESL-flagged C.O.I.N.esp; verified in the installed plugin: Gold001
+        // plus the 13 regional coins COIN injects into Update.esm's ID space). DETECTED
+        // PROCEDURALLY: the plugin is looked up by name and the list by its local ID, so
+        // no load-order index is written anywhere; COIN absent -> an empty set, inert.
+        // A coin is gold loot (LootGold / the Gold and Valuables loose branches), held for
+        // the player like every other coin item.
+        bool IsCoinModCoin(const RE::TESForm* a_obj) {
+            static const std::unordered_set<RE::FormID> s_coins = [] {
+                std::unordered_set<RE::FormID> s;
+                auto* dh = RE::TESDataHandler::GetSingleton();
+                constexpr std::string_view kCoinPlugin = "C.O.I.N.esp";
+                if (!dh || !dh->LookupModByName(kCoinPlugin)) {
+                    spdlog::info("[loot] COIN coin rule: {} not loaded -- inert (OCF + Gold001 only)", kCoinPlugin);
+                    return s;
+                }
+                auto* list = dh->LookupForm<RE::BGSListForm>(0xBE7, kCoinPlugin);   // DES_DefaultCoinsList
+                if (!list) {
+                    spdlog::warn("[loot] COIN coin rule: {} is loaded but its coin list (local 0xBE7) did not "
+                                 "resolve as a FormList -- regional coins are NOT gold loot", kCoinPlugin);
+                    return s;
+                }
+                auto add = [&](const RE::TESForm* f) {
+                    if (f && f->Is(RE::FormType::Misc)) s.insert(f->GetFormID());
+                };
+                for (auto* f : list->forms) add(f);
+                if (list->scriptAddedTempForms)
+                    for (const auto id : *list->scriptAddedTempForms) add(RE::TESForm::LookupByID(id));
+                spdlog::info("[loot] COIN coin rule: {} coin items from {}'s DES_DefaultCoinsList {:08X} are gold loot",
+                             s.size(), kCoinPlugin, list->GetFormID());
+                return s;
+            }();
+            return a_obj && !s_coins.empty() && s_coins.count(a_obj->GetFormID()) != 0;
+        }
+
+        // A COIN PURSE on the ground (COIN ships its purses as FLORA: harvesting one yields a
+        // leveled list of coins). Admitted for the Gold / Valuables loose branches when the
+        // ref is NOT yet harvested (kHarvested, REFR record flag 1 << 13) and its produce
+        // resolves -- through any nesting of leveled lists -- to Gold001 or a coin item
+        // (IsCoinLoot). Pure form reads; the per-base verdict is cached (worker only).
+        // Acquired by the route-2b arrival ActivateRef on MAIN, like every loose item.
+        bool IsCoinPurseFlora(RE::TESObjectREFR* a_ref, RE::TESBoundObject* a_base) {
+            auto* flora = a_base ? a_base->As<RE::TESFlora>() : nullptr;
+            if (!a_ref || !flora) return false;
+            if ((a_ref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kHarvested) != 0) return false;
+            static std::unordered_map<RE::FormID, bool> s_verdict;   // worker only (the scan)
+            if (auto it = s_verdict.find(flora->GetFormID()); it != s_verdict.end()) return it->second;
+            bool coin = false;
+            // Depth-bounded walk (a malformed cyclic list must not hang the worker).
+            std::vector<std::pair<RE::TESForm*, int>> stack{ { flora->produceItem, 0 } };
+            while (!stack.empty() && !coin) {
+                auto [f, depth] = stack.back();
+                stack.pop_back();
+                if (!f) continue;
+                if (auto* ll = f->As<RE::TESLevItem>()) {
+                    if (depth >= 4) continue;
+                    for (const auto& e : ll->entries) stack.emplace_back(e.form, depth + 1);
+                    continue;
+                }
+                auto* bo = f->As<RE::TESBoundObject>();   // non-const: IsCoinLoot's signature
+                coin = bo && (bo->GetFormID() == 0x0000000F || IsCoinLoot(bo));
+            }
+            s_verdict[flora->GetFormID()] = coin;
+            if (coin)
+                spdlog::info("[loot] coin purse flora {:08X} '{}' -> gold loot (its produce resolves to coin)",
+                             flora->GetFormID(), flora->GetName() ? flora->GetName() : "?");
+            return coin;
+        }
+
+        // The follower's coin: Gold001 + every coin item (IsCoinLoot). The harvest proof
+        // (principle 5): logged before and after a coin-purse harvest.
+        std::int32_t CoinCount(RE::Actor* a_actor) {
+            std::int32_t n = 0;
+            if (!a_actor) return 0;
+            for (auto& [obj, c] : a_actor->GetInventoryCounts())
+                if (obj && c > 0 && (obj->GetFormID() == 0x0000000F || IsCoinLoot(obj))) n += c;
+            return n;
         }
 
         // Take all the gold on a corpse/container. Gold001 is the one hardcoded
@@ -204,8 +289,8 @@ namespace MFO::Logistics {
                 if (t.obj->GetFormID() != kGold001) {
                     static std::unordered_set<RE::FormID> s_seen;
                     if (s_seen.insert(t.obj->GetFormID()).second)
-                        spdlog::info("[loot] coin item {:08X} '{}' x{} -> follower (OCF-classified; "
-                                     "converts to gold when it reaches the player)",
+                        spdlog::info("[loot] coin item {:08X} '{}' x{} -> follower (coin-classified: OCF or COIN; "
+                                     "held for the player; an OCF purse converts to gold when it reaches him)",
                                      t.obj->GetFormID(),
                                      t.obj->GetName() ? t.obj->GetName() : "?", t.count);
                 }
@@ -534,6 +619,39 @@ namespace MFO::Logistics {
             if (s_bases.empty()) return false;
             auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
             return base && s_bases.count(base->GetFormID()) != 0;
+        }
+
+        // THE LOOSE-ITEM SOURCE BAR (86e3f9pkg, batch L: crime safety). A loose world item
+        // passed its category's eligibility test (the route-2b switch in LootNearby); this
+        // decides whether it may be taken from WHERE it lies. nullptr = allowed, else the
+        // reason (the scan logs it once per ref). UNCONDITIONAL -- no toggle opens any of
+        // these, bLootInPlayerHomes included (that toggle is about the player's containers;
+        // a loose item in a home is the player's own decoration):
+        //   1. a LOTD museum DISPLAY ref (Lotd::IsDisplayRef: every display the museum's
+        //      slot table names, patches included) -- a displayed relic is an enabled item
+        //      ref, lootable-shaped;
+        //   2. player storage / player homes / the museum halls (RefInPlayerStorage:
+        //      LocTypePlayerHouse location or a Player / PlayerFaction-owned cell -- every
+        //      LOTD display cell carries both, verified in the installed ESM);
+        //   3. an item the PLAYER dropped this session (the container-change sink's record);
+        //   4. a quest-flagged item (the engine's own ref-level check);
+        //   5. OWNED or OFF-LIMITS (never steal): any ref owner, or a crime to activate;
+        //   6. a CIVILISED place (LocationTypes::Classify) whose cell has an owner -- in a
+        //      town, inn, house, shop, ... only an unowned item in an unowned cell is fair.
+        // Worker only (the scan). Pure reads.
+        const char* LooseRefBarred(RE::TESObjectREFR* a_ref) {
+            if (!a_ref) return "no ref";
+            if (Lotd::IsDisplayRef(a_ref->GetFormID())) return "a LOTD museum display";
+            if (RefInPlayerStorage(a_ref)) return "player storage / player home (museum halls included)";
+            if (PlayerDroppedRef(a_ref->GetFormID())) return "the player dropped it";
+            if (IsQuestObjectRef(a_ref)) return "a quest item";
+            if (a_ref->GetOwner()) return "owned (never steal)";
+            if (a_ref->IsOffLimits()) return "off-limits (a crime to take)";
+            if (LocationTypes::Classify(a_ref->GetCurrentLocation()) == LocationTypes::Kind::kCivilised) {
+                auto* cell = a_ref->GetParentCell();
+                if (cell && cell->GetOwner()) return "in a civilised place and the cell is owned";
+            }
+            return nullptr;
         }
         bool PlayerIsConsidering(RE::FormID a_sourceID) {
             if (auto* ui = RE::UI::GetSingleton();

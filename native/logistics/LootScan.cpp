@@ -273,9 +273,12 @@ namespace MFO::Logistics {
                                     lootable = loose = true;
                                 break;
                             case Category::Gold:
-                                // Gold001 OR an OCF coin/purse -- same test
-                                // LootGold runs per inventory item.
-                                if (base->GetFormID() == kGold001Ref || IsCoinLoot(base))
+                                // Gold001 OR a coin item (OCF / COIN's list) --
+                                // same test LootGold runs per inventory item --
+                                // OR an un-harvested COIN coin PURSE (a FLORA ref,
+                                // harvested by the arrival ActivateRef; 86e3f9pkg).
+                                if (base->GetFormID() == kGold001Ref || IsCoinLoot(base) ||
+                                    IsCoinPurseFlora(ref, base))
                                     lootable = loose = true;
                                 break;
                             case Category::Valuables:
@@ -287,7 +290,8 @@ namespace MFO::Logistics {
                                 // is quest/catalog-gated like its container
                                 // form (LootValuables); gold is not, matching
                                 // LootGold.
-                                if (base->GetFormID() == kGold001Ref || IsCoinLoot(base)) {
+                                if (base->GetFormID() == kGold001Ref || IsCoinLoot(base) ||
+                                    IsCoinPurseFlora(ref, base)) {
                                     lootable = loose = true;
                                 } else if (IsValuableMisc(base) &&
                                            !LooseSpecialItemBlocked(ref, base->GetFormID())) {
@@ -362,12 +366,43 @@ namespace MFO::Logistics {
                                         lootable = loose = true;
                                 }
                                 break;
+                            case Category::Museum:
+                                // LOTD (86e3f9pkg, marth: "people would see loose LoTD
+                                // items ignored"): a loose relic the museum still needs,
+                                // by the same want LootMuseum takes from a container
+                                // (logistics/Lotd.cpp LooseMuseumQualifies).
+                                if (LooseMuseumQualifies(ref, base))
+                                    lootable = loose = true;
+                                break;
                             default: break;
                             }
                         }
                     }
                     if (!lootable) return RE::BSContainer::ForEachResult::kContinue;
                     ++dLootable;
+
+                    // THE LOOSE-ITEM SOURCE BAR (86e3f9pkg, crime safety): the item is
+                    // eligible for its category; may it be taken from where it LIES?
+                    // Museum displays, player storage / homes / the museum halls, a
+                    // player drop, a quest item, owned / off-limits, a civilised place
+                    // with an owned cell -- LooseRefBarred (LootTake.cpp) has the list.
+                    // Unconditional (no toggle opens it). Each ref's reason is logged
+                    // ONCE (worker-only set, cleared at a cap).
+                    if (loose) {
+                        if (const char* why = LooseRefBarred(ref)) {
+                            static std::unordered_set<RE::FormID> s_barLogged;
+                            if (s_barLogged.size() > 4096) s_barLogged.clear();
+                            if (s_barLogged.insert(ref->GetFormID()).second) {
+                                auto* lb = ref->GetBaseObject();
+                                spdlog::info("[loot] {:08X} cat={}: loose ref {:08X} ('{}' {:08X}) SKIPPED -- {}",
+                                             a_follower->GetFormID(), CatName(a_cat), ref->GetFormID(),
+                                             ref->GetDisplayFullName() ? ref->GetDisplayFullName() : "?",
+                                             lb ? lb->GetFormID() : 0u, why);
+                            }
+                            ++dOffLimits;
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        }
+                    }
 
                     // #66 (the reported bug): LOTD drop-off / income / sell boxes
                     // in TOWNS and INNS -- ALWAYS skipped, regardless of the
