@@ -146,7 +146,10 @@ namespace MFO::Actuation {
             return best;
         }
 
-        // The best carried shield by armor rating, or nullptr.
+        // The best carried shield by armor rating, or nullptr. A museum relic shield is
+        // never picked (museum priority, 2026-09-28: the IsMuseumRelic rule for the off
+        // hand -- the shield is optional, so there is no fallback to it), unless the
+        // PLAYER gave it / put it on him (PlayerGiven, as IsMuseumRelic).
         RE::TESObjectARMO* PickShield(RE::Actor* a_follower) {
             RE::TESObjectARMO* best = nullptr; float bestAr = 0.0f;
             for (auto& [obj, data] : a_follower->GetInventory()) {
@@ -154,6 +157,9 @@ namespace MFO::Actuation {
                 auto* a = obj->As<RE::TESObjectARMO>();
                 if (!a || !a->IsShield()) continue;
                 if ((a->GetFormFlags() & (1u << 2)) != 0) continue;   // non-playable
+                if (Lotd::HoldFromSale(a_follower->GetFormID(), a) &&
+                    !PlayerGiven::IsPlayerGiven(a_follower->GetFormID(), a->GetFormID()))
+                    continue;                                           // LOTD: carried for the museum
                 const float ar = a->GetArmorRating();
                 if (!best || ar >= bestAr) { bestAr = ar; best = a; }
             }

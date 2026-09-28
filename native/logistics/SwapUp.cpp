@@ -321,7 +321,7 @@ namespace MFO::Logistics {
         }
 
         int AmmoKeepTarget(const FollowerState* a_state, bool a_wantBolt, bool a_usesKind) {
-            if (!a_usesKind) return 0;   // not his kind: never judged, never shed or sold
+            if (!a_usesKind) return 0;   // not his kind: never judged or shed (with NO weapon of the kind, EconomyProbe sells it: the off-kind pass)
             const char* cond = a_wantBolt ? Vocab::kCondSelfOutOfBolts : Vocab::kCondSelfOutOfArrows;
             float want = 0.0f;
             if (a_state) {

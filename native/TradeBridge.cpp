@@ -25,10 +25,43 @@ namespace MFO::TradeBridge {
             bool                 probeOnly = true;
             BuyThresholds        buy{};      // #21 gear/tome buy thresholds (worker-computed)
             std::string          buyPlan;    // names PlanBuy chose ("Falkreath Helmet x1, ...") for the [econ] report line
+            std::uint64_t        sig = 0;       // NO EMPTY TRADES: TradeSignature at dispatch
+            float                daysAt = 0.0f; // RE::Calendar days passed at dispatch
         };
 
         std::mutex                                    g_mtx;
         std::unordered_map<std::int32_t, TradeOrder>  g_orders;
+
+        // NO EMPTY TRADES (see TradeBridge.h). Guarded by g_mtx; session state, never
+        // saved, cleared with the orders. g_chestGold: each vendor chest's barter gold as
+        // the LAST report there read it. g_emptyMemo: per (follower, vendor), the last
+        // result was EMPTY -- its signature (TradeSignature folded with that report's
+        // chest gold) and the game day it happened.
+        struct EmptyMemo { std::uint64_t sig = 0; float day = 0.0f; bool logged = false; };
+        std::unordered_map<RE::FormID, std::int32_t>     g_chestGold;
+        std::unordered_map<std::uint64_t, EmptyMemo>     g_emptyMemo;
+        std::unordered_map<std::uint64_t, std::uint64_t> g_staticSkipLogged;   // pair -> the reason sig last logged
+
+        std::uint64_t PairKey(RE::FormID a_follower, RE::FormID a_vendor) {
+            return (static_cast<std::uint64_t>(a_follower) << 32) | a_vendor;
+        }
+        std::uint64_t Mix(std::uint64_t a_h, std::uint64_t a_v) {   // hash_combine-style 64-bit fold
+            a_h ^= a_v + 0x9E3779B97F4A7C15ull + (a_h << 6) + (a_h >> 2);
+            return a_h;
+        }
+        // The vendor restock cadence: GMST iDaysToRespawnVendor (Skyrim.esm 0x0123C00E,
+        // value 2 in the shipped master), read by name. Unreadable -> the master's 2,
+        // said once.
+        float RestockDays() {
+            auto* gsc = RE::GameSettingCollection::GetSingleton();
+            auto* st  = gsc ? gsc->GetSetting("iDaysToRespawnVendor") : nullptr;
+            if (st) return static_cast<float>(std::max(1, st->GetSInt()));
+            static std::atomic<bool> s_warned{ false };
+            if (!s_warned.exchange(true))
+                spdlog::warn("[econ] GMST iDaysToRespawnVendor unreadable -- the empty-trade backoff uses Skyrim.esm's "
+                             "value, 2 game days");
+            return 2.0f;
+        }
         std::atomic<std::int32_t>                     g_nextToken{ 1 };
 
         TradeOrder* Find(std::int32_t a_token) {   // caller holds g_mtx
@@ -445,6 +478,24 @@ namespace MFO::TradeBridge {
                 spdlog::info("[econ] token {} -- Papyrus found no usable chest (aborted)", a_token);
                 return;
             }
+            {
+                // NO EMPTY TRADES: file the result. The chest's gold is the last-seen value
+                // for every later signature there; an EMPTY result is remembered for this
+                // (follower, vendor) against what was offered, anything else forgets it.
+                const auto fpp = o.follower.get();
+                const auto vpp = o.vendor.get();
+                auto* fp = fpp.get();
+                auto* vp = vpp.get();
+                std::scoped_lock lk(g_mtx);
+                g_chestGold[o.chestId] = a_vendorGold;
+                if (fp && vp) {
+                    const auto key = PairKey(fp->GetFormID(), vp->GetFormID());
+                    if (a_soldCount == 0 && a_boughtCount == 0)
+                        g_emptyMemo[key] = EmptyMemo{ Mix(o.sig, static_cast<std::uint64_t>(a_vendorGold)), o.daysAt, false };
+                    else
+                        g_emptyMemo.erase(key);
+                }
+            }
             auto* fol = o.follower.get().get();
             auto* ven = o.vendor.get().get();
             const char* verb = o.probeOnly ? "WOULD" : "did";
@@ -490,7 +541,8 @@ namespace MFO::TradeBridge {
     bool VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
-                     std::int32_t a_budget, const BuyThresholds& a_buy) {
+                     std::int32_t a_budget, const BuyThresholds& a_buy,
+                     std::uint64_t a_sig, float a_daysNow) {
         auto* q = Forms::g_tradeQuest;
         if (!q || !q->IsRunning()) return false;
         if (!a_follower || !a_chest)  return false;
@@ -528,6 +580,8 @@ namespace MFO::TradeBridge {
             o.needs     = std::move(a_needs);
             o.budget    = a_budget;
             o.buy       = a_buy;
+            o.sig       = a_sig;
+            o.daysAt    = a_daysNow;
             o.probeOnly = !Config::g_economy.load();
             g_orders[token] = std::move(o);
         }
@@ -540,9 +594,76 @@ namespace MFO::TradeBridge {
         return true;
     }
 
+    std::uint64_t TradeSignature(std::int32_t a_purse, const std::vector<NeedCat>& a_needs,
+                                 const std::vector<SellRow>& a_sell) {
+        std::uint64_t h = 0xCBF29CE484222325ull;
+        h = Mix(h, static_cast<std::uint32_t>(a_purse));
+        h = Mix(h, a_needs.size());
+        for (const auto& n : a_needs)
+            h = Mix(h, (static_cast<std::uint64_t>(static_cast<std::uint32_t>(n.kind)) << 32) |
+                           static_cast<std::uint32_t>(n.quota));
+        h = Mix(h, a_sell.size());
+        for (const auto& r : a_sell) {
+            h = Mix(h, r.obj ? r.obj->GetFormID() : 0u);
+            h = Mix(h, (static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.count)) << 32) |
+                           static_cast<std::uint32_t>(r.value));
+        }
+        return h;
+    }
+
+    bool SkipTrade(RE::FormID a_follower, RE::FormID a_vendor, RE::FormID a_chest, std::uint64_t a_sig,
+                   float a_daysNow, bool a_buyWishes, const std::vector<SellRow>& a_sell,
+                   const std::vector<NeedCat>& a_needs, std::string& a_why) {
+        a_why.clear();
+        const float restock = RestockDays();
+        std::scoped_lock lk(g_mtx);
+        const auto gIt = g_chestGold.find(a_chest);
+        const bool goldKnown = gIt != g_chestGold.end();
+        const std::int32_t gold = goldKnown ? gIt->second : -1;
+        const auto key = PairKey(a_follower, a_vendor);
+        // (a) the last trade here was empty and nothing changed since.
+        if (auto mIt = g_emptyMemo.find(key); mIt != g_emptyMemo.end()) {
+            auto& m = mIt->second;
+            const std::uint64_t sigNow = Mix(a_sig, static_cast<std::uint64_t>(gold));
+            if (sigNow != m.sig) {
+                g_emptyMemo.erase(mIt);   // something changed: trade again
+            } else if (a_daysNow >= m.day + restock) {
+                g_emptyMemo.erase(mIt);   // the vendor has restocked since: trade again
+            } else {
+                if (m.logged) return true;   // said once per memo
+                m.logged = true;
+                a_why = std::format("the last trade here moved nothing and nothing changed since (purse, needs, "
+                                    "{} sell row(s), chest gold {}) -- next try after the vendor restock "
+                                    "(iDaysToRespawnVendor = {:.0f} game days: day {:.1f}) or any change",
+                                    a_sell.size(), gold, restock, m.day + restock);
+                return true;
+            }
+        }
+        // (b) nothing to buy and no offered row the chest's last-seen gold can pay for.
+        if (!a_buyWishes && a_needs.empty() && goldKnown) {
+            const bool affordable = std::any_of(a_sell.begin(), a_sell.end(),
+                                                [gold](const SellRow& r) { return r.count > 0 && r.value <= gold; });
+            if (!affordable) {
+                const std::uint64_t reason = Mix(a_sig, static_cast<std::uint64_t>(gold));
+                auto& last = g_staticSkipLogged[key];
+                if (last == reason) return true;   // said once per (pair, signature)
+                last = reason;
+                a_why = a_sell.empty()
+                            ? std::string("nothing to sell and nothing to buy")
+                            : std::format("nothing to buy, and the chest's last-seen gold ({}) pays for none of the "
+                                          "{} sell row(s)", gold, a_sell.size());
+                return true;
+            }
+        }
+        return false;
+    }
+
     void ClearTransientState() {
         std::scoped_lock lk(g_mtx);
         g_orders.clear();
+        g_chestGold.clear();
+        g_emptyMemo.clear();
+        g_staticSkipLogged.clear();
         // Cross-save token guard (Fable audit #3): a RunTrade suspended in a save
         // resumes with its OLD token; jump the counter far past any value the next
         // session could reissue, so the stale token can never name a fresh order

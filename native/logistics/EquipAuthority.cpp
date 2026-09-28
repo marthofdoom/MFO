@@ -4,6 +4,8 @@
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "Logistics_internal.h"
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
+#include "Lotd.h"               // HoldFromSale: a museum-needed relic is never MFO's armor choice
+#include "PlayerGiven.h"        // ... unless the PLAYER gave it / put it on him
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
 #include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
@@ -31,6 +33,22 @@ namespace MFO::Logistics {
             // different follower. Worker-serial like g_lastDeclared.
             struct HandedPick { RE::FormID follower = 0; RE::FormID pick = 0; bool set = false; };
             HandedPick g_handedPick;
+
+            // MUSEUM-NEEDED ITEMS TAKE PRIORITY OVER EQUIPMENT (marth 2026-09-28): a
+            // relic this follower covers for the museum (Lotd::HoldFromSale, the same
+            // "never sell" test the economy and cast/Equip.cpp IsMuseumRelic read) is
+            // never MFO's armor choice -- not the judged pick, not a declared worn
+            // piece, not a "player put on" record -- unless the PLAYER gave it to him or
+            // put it on him (PlayerGiven, SAVED 'PGIV'): the player's choice stands, as
+            // in IsMuseumRelic. With Armor always an OWNED category, leaving it out of
+            // the declared set is what makes APMF's seat refuse its re-equip (the
+            // engine's OutfitApply, SPID, MEO External), in and out of combat; a worn
+            // one ships through the deposit (Lotd.cpp WornRelicShippable), which
+            // unequips it at the crate. False whenever LOTD awareness is off. Worker.
+            bool RelicOffBody(RE::FormID a_follower, RE::TESBoundObject* a_obj) {
+                return a_obj && Lotd::HoldFromSale(a_follower, a_obj) &&
+                       !PlayerGiven::IsPlayerGiven(a_follower, a_obj->GetFormID());
+            }
         }
 
         // THE PICK, factored out of EquipBestOwnedGear VERBATIM (feat/mfo-equip-
@@ -72,6 +90,7 @@ namespace MFO::Logistics {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar) continue;
+                    if (RelicOffBody(a_follower->GetFormID(), obj)) continue;   // museum relic: never the choice
                     const int slot = MageClothingSlot(ar);
                     if (slot < 0) continue;
                     int t = 0; std::int32_t m = 0;
@@ -112,6 +131,7 @@ namespace MFO::Logistics {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || IsCreatureArmor(ar)) continue;
+                    if (RelicOffBody(a_follower->GetFormID(), obj)) continue;   // museum relic: never the choice
                     // #3 NO IsExcluded skip here: a follower MAY wear an artifact it
                     // already owns (a legit upgrade) -- equip stays permissive, matching
                     // the mage-clothing branch above. Looting/selling/shedding an
@@ -703,6 +723,10 @@ namespace MFO::Logistics {
                     if (!ar || ar->IsShield() || ar == pick) continue;
                     const RE::FormID f = ar->GetFormID();
                     if (lastHas(f) || picks.count(f)) continue;
+                    // A museum relic left out of the set (RelicOffBody) is not a player
+                    // pick just because it is worn and undeclared: the player's own
+                    // relic dressing is PlayerGiven's record, which RelicOffBody honours.
+                    if (RelicOffBody(id, obj)) continue;
                     picks.insert(f);
                     spdlog::info("[equip-auth] {:08X}: player put on '{}' -- kept", id,
                                  ar->GetName() ? ar->GetName() : "?");
@@ -731,13 +755,64 @@ namespace MFO::Logistics {
             decl.Add(pick);
 
             // 5. EVERYTHING ELSE WORN that is apparel, minus what the pick displaces.
-            //    Shields are never declared (rule 3: an unowned category).
+            //    Shields are never declared (rule 3: an unowned category). A museum
+            //    relic is never declared (RelicOffBody): Armor is owned, so the seat
+            //    refuses its re-equip; worn now, it ships at the next deposit.
             for (auto& [obj, data] : inv) {
                 if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                 auto* ar = obj->As<RE::TESObjectARMO>();
                 if (!ar || ar->IsShield()) continue;
                 if (pick && ar != pick && SlotsOverlap(ar, pick)) continue;
+                if (RelicOffBody(id, obj)) {
+                    // Once per (follower, relic) per session: the field proof of item 3.
+                    static std::unordered_set<std::uint64_t> s_relicLogged;   // worker-serial like g_lastDeclared
+                    if (s_relicLogged.insert((static_cast<std::uint64_t>(id) << 32) | ar->GetFormID()).second)
+                        spdlog::info("[equip-auth] {:08X}: museum relic '{}' is worn -- kept OUT of the declared set "
+                                     "(its re-equip is refused; it ships at the next deposit)", id,
+                                     ar->GetName() ? ar->GetName() : "?");
+                    continue;
+                }
                 decl.Add(ar);
+            }
+
+            // 5b. A PIECE STRIPPED OFF HIM STAYS DECLARED (field 2026-09-28, Jesper's
+            //     set 6 / set 7 flip-flop, 24 declarations in bursts). Every ~5 s SPID's
+            //     outfit re-apply and the engine's OutfitApply UNEQUIPPED his declared
+            //     robes AND gauntlets (unequips are not governed: APMF_API.h
+            //     kEquipAuth_DenyUnequip is reserved) while their own outfit pieces were
+            //     refused. Rule 5 declares only what is WORN and the mage judge corrects
+            //     ONE slot per tick, so the next declaration named the robes WITHOUT the
+            //     stripped gauntlets (set 6), and the one after put the gauntlets back
+            //     (set 7): two sets, two enforce passes, per strip. So a piece the LAST
+            //     declaration carried stays in it while he still owns it, it is not worn,
+            //     NO worn ARMO covers any of its biped slots (the slot really is bare --
+            //     not a piece the player or MFO's own pick put there instead), it does not
+            //     overlap this tick's pick, and it is not a museum relic. The set then
+            //     compares equal and the MFO-B63 drift re-send (below) re-equips the whole
+            //     set in one pass. It never adds a piece MFO did not already decide: only
+            //     last-declared keys. The rest of MFO-B63 part 1 (best-per-slot) is still
+            //     open.
+            if (last) {
+                for (const auto& k : *last) {
+                    auto* ar = RE::TESForm::LookupByID<RE::TESObjectARMO>(k.first);
+                    if (!ar || ar->IsShield() || ar == pick) continue;
+                    if (std::any_of(decl.entries.begin(), decl.entries.end(),
+                                    [&](const APMF_API::APMF_EquipEntry& e) { return e.form == ar->GetFormID(); }))
+                        continue;
+                    const auto iit = inv.find(ar);
+                    if (iit == inv.end() || iit->second.first <= 0) continue;             // no longer his
+                    if (iit->second.second && iit->second.second->IsWorn()) continue;     // worn: rule 5's
+                    if (pick && SlotsOverlap(ar, pick)) continue;                         // the pick replaces it
+                    if (RelicOffBody(id, ar)) continue;
+                    bool covered = false;
+                    for (auto& [obj, data] : inv) {
+                        if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
+                        auto* w = obj->As<RE::TESObjectARMO>();
+                        if (w && w != ar && SlotsOverlap(w, ar)) { covered = true; break; }
+                    }
+                    if (covered) continue;
+                    decl.Add(ar);
+                }
             }
 
             // SEND ONLY ON CHANGE.
