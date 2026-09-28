@@ -2049,7 +2049,7 @@ REVIEW-BACKLOG **MFO-B19**). Cross-module state/types/small helpers live as `inl
 members of `namespace MFO::Logistics` in `logistics/Logistics_internal.h` (ONE instance
 across the TUs); big cross-module helpers are declared there and defined in their home
 module. Module layout:
-  - `logistics/Service.cpp` (1620) = the per-follower TICK: `ServiceFollower:157` (one
+  - `logistics/Service.cpp` (2012, past ~1500: MFO-B118) = the per-follower TICK: `ServiceFollower:160` (one
     1462-line function: the travel backstop `:187-252`, the arrival / theft-guard / movement-
     blocked legs `~357-907`, the gambit dispatch loop `:978`, the OOC cast block `~1047-1437`
     — concentration direct-force `~1124`, FF fallback `~1408` — the gem reconcile `:1606`),
@@ -2077,7 +2077,7 @@ module. Module layout:
   - `logistics/Logistics.h` (232) = the public API (unchanged, moved whole).
   - `logistics/Lockpick.cpp` (956, NEW LP-M1 2026-09-25, doors LP-M2 2026-09-26) = follower LOCKPICKING of chests: see the
     LOCKPICK entry below. Declared in `Logistics_internal.h` (`namespace Lockpick`, `:847`).
-  - `logistics/Lotd.cpp` (1243) + `logistics/Lotd.h` = LOTD awareness (feat/mfo-lotd, 2026-09-25):
+  - `logistics/Lotd.cpp` (1641, past ~1500: plan a split round) + `logistics/Lotd.h` = LOTD awareness (feat/mfo-lotd, 2026-09-25):
     detection, the museum snapshot, the "Loot museum items" gambit and its deposit trip. Its own
     public header (plugin.cpp, Diagnostics.cpp, Board_FieldKit.cpp include it). See the LOTD section
     below.
@@ -2151,7 +2151,12 @@ module. Module layout:
     the rule calls obsolete on landing, takes best-first under `FitsCarryWeight`, then sheds
     `ObsoleteHeldAmmo:372` (recomputed once, post-take) back into the body, lowest first; logs
     `[swapup]`. EconomyProbe offers obsolete rows (`Economy.cpp:785`, tag `SELL (obsolete ammo)`,
-    unit price floored at 1g: Papyrus skips a 0 unit and iron x 0.30 rounds to 0).
+    unit price floored at 1g: Papyrus skips a 0 unit and iron x 0.30 rounds to 0). **OFF-KIND AMMO
+    (2026-09-28, `Economy.cpp:822`, tag `SELL (off-kind ammo: no weapon fires it)`):** a kind he does
+    not use AND has no weapon for (no crossbow for bolts, no bow for arrows) sells every unpinned
+    stack, keeping only the best N an enabled "<kind> below N" rule asks for (`ObsoleteHeldAmmo` at N)
+    so the unchanged buy side never re-buys what this sells. Carrying such a weapon keeps the rule
+    above as it was. Loot / buy judges unchanged.
     `BuildBuyThresholds` fills the APPENDED `BuyThresholds::ammoUpgrade / ammoWantBolt /
     ammoBarDmg / ammoUpgradeQty / ammoBarValue` (under `bEconomyBuyGear`, `doRanged`) ->
     `PlanBuy`'s AMMO SWAP-UP pass (`TradeBridge.cpp:341`, AFTER the gear pass, before tomes): the
@@ -2518,6 +2523,27 @@ module. Module layout:
   against `7857446`): MFO-B44 (owning Ammo under a bow hold pins the archer to one ammo stack —
   marth's call), MFO-B45 (scope and set are two enqueues; a Drain between them is a one-frame
   self-healing mismatch), MFO-B46 (the `abiVersion < 9` warn is unreachable belt-and-braces).
+- **MUSEUM RELICS AND THE DECLARATION (`fix/mfo-museum-priority`, 2026-09-28; marth "needed museum
+  items take priority over equipment").** `RelicOffBody` (`logistics/EquipAuthority.cpp:48`) =
+  `Lotd::HoldFromSale` and NOT `PlayerGiven::IsPlayerGiven`. Such a piece is never the judged pick
+  (`ComputeOwnedGearPick`, both branches — so the APMF-absent legacy `EquipBestOwnedGear` never wears
+  one either), never declared by rule 5, never recorded as a rule-4b player pick. Armor is always
+  OWNED, so APMF's seat refuses its re-equip (OutfitApply / SPID / MEO External), in and out of
+  combat; a worn one ships at the next deposit (`Lotd.cpp WornRelicShippable`), logged once:
+  `[equip-auth] <id>: museum relic '<name>' is worn -- kept OUT of the declared set`. **NOT DONE —
+  HARBINGER API GAP (item 7 STOP):** the v9 scope is CATEGORY masks + a declared WORN set the enforce
+  pass EQUIPS, so a relic WEAPON or SHIELD in a hand MFO does not own (no ForcedHold) cannot be refused
+  without owning the hand (the F6 freeze / a blanket lock), and a hybrid's melee/ranged pair cannot be
+  declared as permitted alternatives. Needs a per-item DENY list and/or a permitted-not-equipped
+  alternative set per owned category. `cast/Equip.cpp PickShield` skips relic shields (IsMuseumRelic's
+  rule for the off hand).
+- **RULE 5b — A PIECE STRIPPED OFF HIM STAYS DECLARED (same branch; Jesper's set 6 / set 7
+  flip-flop).** SPID's outfit re-apply + the engine's OutfitApply UNEQUIP declared pieces every ~5 s
+  (unequips are ungoverned, `kEquipAuth_DenyUnequip` reserved); pick + worn then lost the not-worn piece
+  for a tick. A LAST-declared ARMO he still owns, not worn, whose biped slots no worn ARMO covers, not
+  overlapping this tick's pick and not a relic, stays in the set, so it compares equal and the MFO-B63
+  drift re-send re-equips the whole set in one pass. Only last-declared keys: it never adds a piece MFO
+  did not decide. MFO-B63 part 1 (best-per-slot) stays open.
 - **THE HEAD SLOT IS THREE BIPED BITS (2026-09-14, field fix; branch
   `fix/mfo-deck-0914-helmet-offhand-verdict-meo`).** FIELD (Deck log, Fable, ROOT
   CAUSE CONFIRMED): vanilla helmets (Imperial Light Helmet `00013EDB`, Elven Helmet
@@ -3277,8 +3303,8 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
 - **The in-transit ledger is a FLOOR (principle 9).** An entry (base, count, the DropoffCrate
   count read at the deposit, the crate) stays until DropoffCrate holds baseline + count (ARRIVED) or
   no open slot accepts the base (displayed); never a timer. Session-only (MFO-B119).
-- **L2 gambit** `act.loot_museum` (`Vocabulary.h`, APPENDED) → `Service.cpp:1228` → `RunGambit:1004`
-  (deposit if possible, else `LootNearby(Category::Museum)`); `Category::Museum` APPENDED
+- **L2 gambit** `act.loot_museum` (`Vocabulary.h`, APPENDED) → `Service.cpp:1397` → `RunGambit:1231`
+  (`LootNearby(Category::Museum)`; the deposit is `PriorityDeposit`'s, above); `Category::Museum` APPENDED
   (`Logistics_internal.h`, Valuables-tier dibs via `TierReleased`'s default path, dibs-deferred in
   `IsDibsTierLootOp`); the looter `Logistics::LootMuseum:1244` (via `LootHere`/`HasLoot`,
   `LootTake.cpp`); StripCorpse + RunExcursionScan map the op (`LootScan.cpp`). Player storage /
@@ -3320,27 +3346,59 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   round 3) and then removes it. Cleared in
   `ClearTransientState`. **What breaks:** admitting worn relics outside the kept set, or without the
   PlayerGiven check, ships the player's own choice.
-- **L3 deposit** (automatic with the gambit; ONE trip at a time, `g_trip` under `g_tripMx`):
-  `RunGambit` starts it when the follower carries `Shippable:647` items (not worn [but see the worn kept relic above], quest, stock
-  gear, `IsPlayerPick` or `PlayerGiven::IsPlayerGiven`) and `NearestCrate:651` finds an enabled, 3D-loaded outgoing crate within
-  3000 u (inside his leash, not in DBMQA `0x1252E1`, not on cooldown), and no container / barter
-  menu is open. `DepositTick:1066` ← `Service.cpp:312` owns his tick:
+- **MUSEUM PRIORITY (`fix/mfo-museum-priority`, marth 2026-09-28).** The deposit START is
+  `PriorityDeposit:1256` ← `Service.cpp:372`, checked EVERY service tick right after `DepositTick`
+  (`Service.cpp:346`), ahead of the excursion driver and the rule loop (so board order and the pass-0
+  dibs deferral no longer decide it; `RunGambit:1231` is the museum LOOT only). Conditions: an enabled
+  `act.loot_museum` rule, `Shippable` non-empty, an outgoing crate INSIDE HIS LEASH (crate → player <=
+  `TeleportCompat::View(f).leash`; no fixed range), no combat (his or the player's). It yields ONLY to
+  combat and HEALS (`Lotd::DepositGate::healWants`, Service's lambda: a heal cast in flight, or a
+  logistics rule whose condition holds now and that drinks a health potion he has or casts a spell with
+  a beneficial Health effect); sneaking and menus no longer hold it. A running loot excursion is ENDED
+  through its own clear path (`gate.yieldExcursion`: `Packages::LootTravelClear("museum deposit")` + a
+  reset slot) EXCEPT a leg fetching a MUSEUM item (`cat == Museum`, Walking or its pickup still being
+  read back): the deposit waits for it (`[lotd] ... museum deposit HELD -- ...`, once per reason / 30 s).
+  **SEVERAL TRIPS AT ONCE:** `g_trips` (follower → `Trip`, under `g_tripMx`); each trip carries its own
+  `transfer` result (`shared_ptr<atomic<int>>`, handed to `TransferOnMain`); cooldowns are per
+  (follower, crate) (`g_crateCooldown` keyed `Pair()`), never crate-wide. **LEASH IS BOSS:** released
+  when the player is beyond the leash from HIM or from the CRATE, at the leash itself (the excursion's
+  ×1.15 is a re-fill hysteresis the deposit does not need: a release sets the follower cooldown).
+  **ARRIVAL:** the leg's ARRIVED, or a BLOCKED stop within INTERACTION REACH (`WithinReach:828`:
+  INI `fActivatePickLength:Interface` read on MAIN by `ReadActivateReach:846`, measured to the crate's
+  near face = distance minus the crate base's smaller horizontal OBND half-extent) or inside the crate's
+  GROWN ARRIVAL RADIUS — the loot road's grown grab REUSED (`GrabRadiusFor` / `NotePathFail`,
+  `LootTravel_internal.h`, keyed by the crate ref: 200 u + 100 u per failed walk, cap 600, cleared by a
+  delivered trip), which is also the distance backstop (never below the old 175 u). A BLOCKED stop
+  outside both FAILS loudly, widens the radius, and gives THIS follower a 10 s retry; 3 BLOCKED in a row
+  at that crate = the 120 s pair cooldown. The field case: the Riften crate 11099DB7 wears LOTD's own
+  `CollisionMarker` (LegacyoftheDragonborn.esm REFR 0x084197, Obstacle flag, enable-parented to the
+  crate), whose navmesh cut stops every walk at 186-187 u. **WORN RELICS SHIP** (`WornRelicShippable:702`,
+  marth "an item the museum still needs must not stay worn or held"): whoever put it on him, except the
+  player (PlayerGiven), an MFO hold, or a weapon with no other non-relic weapon carried; the transfer
+  unequips it. Trip heal yield: Walking only, `kYieldCooldown` 3 s, no crate cooldown.
+- **L3 deposit** (automatic with the gambit; per follower, several at once — see MUSEUM PRIORITY above):
+  `PriorityDeposit` starts it when the follower carries `Shippable:726` items (worn only through
+  `WornRelicShippable`, never quest, stock gear, `IsPlayerPick` or `PlayerGiven::IsPlayerGiven`) and
+  `NearestCrate:775` finds an enabled, 3D-loaded outgoing crate inside his leash (not in DBMQA
+  `0x1252E1`, not on this follower's cooldown). `DepositTick:1337` ← `Service.cpp:346` owns his tick:
   Walking (ch.19 via `APMFBridge::ClaimDepositTravel`, v12 leg state `ReadDepositLeg`, distance
-  backstop) → on arrival `ArriveOnMain:806` (MAIN) reads the crate script's state (`CrateState:696`:
+  backstop) → on arrival `ArriveOnMain:999` (MAIN) reads the crate script's state (`CrateState:871`:
   `DBM_MuseumShipmentsScript` `currentState`) and ACTIVATES it only if it is not already `ready` /
   `waitingtoship` (TRAP (a); re-activating a WaitingtoShip crate re-arms LOTD's 5 h clock), then
   `ClaimDepositIdle` (ch.1 hold + ch.12 v2 IdleGive at the crate; a SYNCHRONOUS refusal latches the
   deposit OFF for the session, `g_depositLatched`) → Giving: NO TRANSFER until the idle is SEEN LIVE
   (`DepositIdleStatus` 1) and still live >= 1 s later on a later tick (the never-live grace never
-  counts; 2 = Harbinger ended it → the trip ends) → `TransferOnMain:869` (MAIN) refuses under an open
+  counts; 2 = Harbinger ended it → the trip ends) → `TransferOnMain:1019` (MAIN) refuses under an open
   container / barter menu and unless the crate CONFIRMS `ready` / `waitingtoship`, re-reads every
   item (NOT `IsPlayerPick`: `g_playerPicks` is worker-only, Shippable filtered it), reads the crate
-  count back, fills the ledger floor, and reports `g_transferResult` → Settling: a SKIPPED or empty
-  transfer (2) ends the trip as a FAIL with the crate cooldown (never a silent DONE loop); a move (1)
-  waits 2.5 s → `EndTripLocked` releases all three claims.
+  count back, fills the ledger floor, and reports the trip's own `transfer` result → Settling: a SKIPPED or empty
+  transfer (2) ends the trip as a FAIL with the pair cooldown (never a silent DONE loop); a move (1)
+  waits 2.5 s → `EndTripLocked:942` releases all three claims.
 - **Trip ends:** combat (`ReleaseTravelOnCombat` → `EndDeposit`), dismissal (`OnFollowerRemoved`),
-  awareness off, crate gone, a non-arrived leg end, the player leaving his leash, 90 s — and the
-  OWNER-INDEPENDENT backstop `SweepTrip:1172` ← the pump (`Diagnostics.cpp:937`, every lap): logistics
+  awareness off, crate gone, a non-arrived leg end (BLOCKED outside reach / the grown radius: 10 s retry,
+  3 in a row = 120 s), the player beyond the leash (from him or the crate), a heal rule wanting the tick
+  (Walking only), 90 s — and the
+  OWNER-INDEPENDENT backstop `SweepTrip:1520` (every trip) ← the pump (`Diagnostics.cpp:937`, every lap): logistics
   off, the owner dead / unloaded / no longer active, not ticked for 10 s, or past 90 s.
 - **Shipping intro** (marth: "Trigger the message when LOTD awareness is triggered on. Pick a box
   and initialize through it"): `OnConfigRead:959` ← `Diagnostics.cpp:166` (MCM close) sees the
@@ -5877,6 +5935,18 @@ a fresh order.
   sellFraction)`, `sellFraction = 1/(fBarterMax-(fBarterMax-fBarterMin)*speech/100)`
   (0.30→0.50 over Speech 0→100). BUY stays base value. (Per-perk `kModSellPrices`
   boosts are NOT applied — needs a CI-verified EPFD read; flagged.)
+- **NO EMPTY TRADES (`fix/mfo-museum-priority`, 2026-09-28; field: 159 dispatches, 156 empty).**
+  `TradeSignature:597` (purse, needs, sell rows) and `SkipTrade:614` ← `logistics/Economy.cpp:943`,
+  right before `VendorTrade`. `ReportTrade:465` files every result under `g_mtx`: the chest's gold
+  becomes its LAST-SEEN gold (`g_chestGold`), an EMPTY result (sold 0, bought 0) is remembered per
+  (follower, vendor) with the signature folded with that gold and the game day (`g_emptyMemo`), any
+  other result forgets it. Skip (a): same signature (incl. the chest's current last-seen gold, so
+  another follower's trade there is a change) until `iDaysToRespawnVendor` game days (Skyrim.esm GMST
+  0x0123C00E, 2; read by name) after the empty trade. Skip (b): no needs, no buy wishes (purse 0 or no
+  gear / apparel / tome buying) and no sell row the last-seen gold pays for. A skip stamps no
+  `g_econTrade` window, so the `[T]` glyph stays dark. Log: `[econ] <id> @ '<vendor>': trade SKIPPED --
+  <why>` once per memo / reason. Session state, cleared by `ClearTransientState`; the 10 natives and
+  their signatures are untouched (`VendorTrade` is native-only and gained two defaulted params).
 
 ### Diagnostics.cpp / Diagnostics.h — event sinks + THE WORKER PUMP ⚠️ RACE LINCHPIN
 Owns the one persistent sleeper thread driving the per-follower tick, four event

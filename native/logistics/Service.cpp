@@ -1394,7 +1394,7 @@ namespace MFO::Logistics {
             else if (op == Vocab::kActLootLockpicks)      acted = LootNearby(a_follower, Category::Lockpicks, now);
             else if (op == Vocab::kActLootIngredients)    acted = LootNearby(a_follower, Category::Ingredients, now);
             else if (op == Vocab::kActLootValuables)      acted = LootNearby(a_follower, Category::Valuables, now);
-            else if (op == Vocab::kActLootMuseum)         acted = Lotd::RunGambit(a_follower, now);   // LOTD: deposit, else loot
+            else if (op == Vocab::kActLootMuseum)         acted = Lotd::RunGambit(a_follower, now);   // LOTD: museum loot (the deposit is PriorityDeposit, above)
             else if (op == Vocab::kActEquipTorch)         acted = EquipTorch(a_follower);   // #35: torch is upkeep
             else if (op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
                      op == Vocab::kActCastPlayer) {
