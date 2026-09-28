@@ -157,6 +157,11 @@ namespace MFO::Logistics {
         return DrinkBest(a_follower, a_which);
     }
 
+    // MUSEUM PRIORITY (review F1): when the rule loop last REALLY fired a heal for a
+    // follower (worker-serial like g_nextTick). A steady-clock stamp read against a 4 s
+    // window, so a stale entry after a load or a reused FormID expires on its own.
+    static std::unordered_map<RE::FormID, Clock::time_point> g_healFiredAt;
+
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
         // #78: per-follower MFO master switch. The Scheduler already gates the
@@ -314,34 +319,23 @@ namespace MFO::Logistics {
 
         // LOTD MUSEUM DEPOSIT (logistics/Lotd.cpp): while THIS follower is on a deposit
         // trip it owns his logistics tick, exactly as a loot excursion does below.
-        // MUSEUM PRIORITY (marth 2026-09-28): it yields only to combat and to HEALS --
-        // "a heal rule that wants to fire" = a logistics rule whose condition holds NOW
-        // and that restores Health: act.drink_health_potion with a health potion to
-        // drink, or a cast rule whose spell carries a beneficial Health effect (the
-        // cast/Direct.cpp IsHealEffect read: primaryAV Health, not detrimental, not
-        // hostile) -- or a heal cast already in flight (APMFBridge::IsHealCastActive).
-        // Pure reads (Eval::Evaluate is the evaluator's pure scan); asked lazily.
+        // MUSEUM PRIORITY (marth 2026-09-28): it yields only to combat and to HEALS that
+        // ACTUALLY happen (review F1 on f2c8e2b: a heal rule whose condition holds but
+        // whose action does nothing -- an AUTO heal with nobody hurt, an unknown spell,
+        // an effect already on, no target, a Held claim -- must not starve the deposit).
+        // So the test is not "a heal rule matches" but "a heal is in flight"
+        // (APMFBridge::IsHealCastActive) or "the rule loop really fired a heal within
+        // kHealYieldWindow" (g_healFiredAt, stamped at the loop's tail below from the
+        // rule that ACTED). kHealYieldWindow = 4 s, sized from the real cadence
+        // (principle 9): a heal rule that still holds re-fires at most every 3 s (the
+        // OOC cast pacing window's floor, g_logiCastUntil's clamp below) + one ~1 s
+        // logistics tick (kLogisticsInterval); a self-paced or potion heal re-fires on
+        // the very next tick. No copy of the loop's skip logic.
+        constexpr auto kHealYieldWindow = std::chrono::seconds(4);
         const auto healWants = [&]() -> bool {
             if (APMFBridge::IsHealCastActive(id)) return true;
-            for (int start = 0;;) {
-                const auto c = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
-                if (c.ruleIndex < 0) return false;
-                start = c.ruleIndex + 1;
-                const auto& op = c.actionOpcode;
-                if (op == Vocab::kActDrinkHealthPotion) {
-                    if (CountPotions(a_follower, RE::ActorValue::kHealth) > 0) return true;
-                    continue;
-                }
-                if (op != Vocab::kActCastSelf && op != Vocab::kActCastTarget && op != Vocab::kActCastPlayer) continue;
-                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(c.actionParam);
-                if (!sp) continue;
-                for (auto* eff : sp->effects) {
-                    auto* mgef = eff ? eff->baseEffect : nullptr;
-                    if (mgef && mgef->data.primaryAV == RE::ActorValue::kHealth && !mgef->IsDetrimental() &&
-                        !mgef->IsHostile())
-                        return true;
-                }
-            }
+            const auto it = g_healFiredAt.find(id);
+            return it != g_healFiredAt.end() && now - it->second < kHealYieldWindow;
         };
         if (Lotd::DepositTick(a_follower, now, healWants)) return;
         // MUSEUM DEPOSIT = TOP PRIORITY when a crate is inside his leash (marth
@@ -349,25 +343,30 @@ namespace MFO::Logistics {
         // and the rule loop, so the board order and the pass-0 dibs deferral no longer
         // decide it. A running loot excursion is ENDED through its own clear path
         // (Packages::LootTravelClear + a reset slot, exactly the hard-interrupt shape
-        // below), EXCEPT a leg fetching a MUSEUM item (walking to it, or its pickup still
-        // being read back): the deposit waits for that item to land. With no crate in his
-        // leash (or no relic to ship) nothing here changes the tick.
+        // below) -- only AFTER the deposit walk is claimed (review SEV-4: never end his
+        // excursion for a trip Harbinger then refuses) -- EXCEPT a leg fetching a MUSEUM
+        // item (walking to it, or its pickup still being read back): the deposit waits
+        // for that item to land. With no crate in his leash (or no relic to ship)
+        // nothing here changes the tick.
         {
             Lotd::DepositGate gate;
             gate.healWants = healWants;
-            gate.yieldExcursion = [&]() -> bool {
+            gate.excursionBlocks = [&]() -> bool {
                 const int slot = SlotIndexOf(id);
-                if (slot < 0) return true;
+                if (slot < 0) return false;
+                const TravelIntent& tr = g_travelSlots[slot];
+                return tr.active && tr.cat == Category::Museum &&
+                       (tr.phase == TravelPhase::Walking || tr.acquirePending);   // a museum item on its way in
+            };
+            gate.endExcursion = [&]() {
+                const int slot = SlotIndexOf(id);
+                if (slot < 0) return;
                 TravelIntent& tr = g_travelSlots[slot];
-                if (tr.active && tr.cat == Category::Museum &&
-                    (tr.phase == TravelPhase::Walking || tr.acquirePending))
-                    return false;   // a museum item on its way in: let it land first
                 spdlog::info("[loot] {:08X} excursion ({}) ENDED for the museum deposit (top priority)", id,
                              CatName(tr.cat));
                 Packages::LootTravelClear("museum deposit", a_follower, slot);
                 tr = TravelIntent{};
                 g_actorDefer.erase(id);   // loot M1: a reorder lives one excursion
-                return true;
             };
             if (Lotd::PriorityDeposit(a_follower, a_state, now, gate)) return;
         }
@@ -1892,6 +1891,24 @@ namespace MFO::Logistics {
         if (acted) {
             g_idleCycles.erase(id);   // productive -> not idle
             spdlog::info("[logistics] {:08X} rule {} fired: {}", id, fired, label);
+            // MUSEUM PRIORITY, review F1: stamp a heal that REALLY fired (the rule
+            // that acted drinks a health potion, or casts a spell with a beneficial
+            // Health effect), so the deposit yields to heals that happen, never to a
+            // heal rule that only matches.
+            if (fired >= 0 && static_cast<std::size_t>(fired) < a_state.logistics().size()) {
+                const auto& g = a_state.logistics()[static_cast<std::size_t>(fired)];
+                bool heal = g.actionOpcode == Vocab::kActDrinkHealthPotion;
+                if (!heal && (g.actionOpcode == Vocab::kActCastSelf || g.actionOpcode == Vocab::kActCastTarget ||
+                              g.actionOpcode == Vocab::kActCastPlayer)) {
+                    if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm))
+                        for (auto* eff : sp->effects) {
+                            auto* mgef = eff ? eff->baseEffect : nullptr;
+                            if (mgef && mgef->data.primaryAV == RE::ActorValue::kHealth && !mgef->IsDetrimental() &&
+                                !mgef->IsHostile()) { heal = true; break; }
+                        }
+                }
+                if (heal) g_healFiredAt[id] = now;
+            }
         } else {
             // IDLE this tick. After a few idle ticks with no excursion running,
             // wipe the travel blocklist so previously-skipped bodies (the 340u/382u

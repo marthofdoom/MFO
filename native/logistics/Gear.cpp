@@ -711,8 +711,8 @@ namespace MFO::Logistics {
             const bool declaredArmor = equipIt && a_item->As<RE::TESObjectARMO>() != nullptr &&
                                        EquipAuthorityLive(a_follower->GetFormID());
             if (declaredArmor) {
-                spdlog::info("[equip] {:08X}: '{}' declared -- APMF equip authority carries the equip "
-                             "(no direct EquipObject)", a_follower->GetFormID(),
+                spdlog::info("[equip] {:08X}: '{}' left to the APMF equip declaration (no direct EquipObject; "
+                             "a refused claim is logged by [equip-auth])", a_follower->GetFormID(),
                              a_item->GetName() ? a_item->GetName() : "?");
             } else if (equipIt) {
                 // #62 EQUIP ON THE MAIN THREAD. Capture FormIDs (never the worker's

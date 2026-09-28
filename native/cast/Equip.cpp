@@ -146,10 +146,10 @@ namespace MFO::Actuation {
             return best;
         }
 
-        // The best carried shield by armor rating, or nullptr. A museum relic shield is
-        // never picked (museum priority, 2026-09-28: the IsMuseumRelic rule for the off
-        // hand -- the shield is optional, so there is no fallback to it), unless the
-        // PLAYER gave it / put it on him (PlayerGiven, as IsMuseumRelic).
+        // The best carried shield by armor rating, or nullptr. A museum relic shield he
+        // can ship is never picked (museum priority, 2026-09-28: the IsMuseumRelic rule
+        // for the off hand -- the shield is optional, so there is no fallback to it),
+        // unless the PLAYER gave it / put it on him (PlayerGiven, as IsMuseumRelic).
         RE::TESObjectARMO* PickShield(RE::Actor* a_follower) {
             RE::TESObjectARMO* best = nullptr; float bestAr = 0.0f;
             for (auto& [obj, data] : a_follower->GetInventory()) {
@@ -157,7 +157,11 @@ namespace MFO::Actuation {
                 auto* a = obj->As<RE::TESObjectARMO>();
                 if (!a || !a->IsShield()) continue;
                 if ((a->GetFormFlags() & (1u << 2)) != 0) continue;   // non-playable
-                if (Lotd::HoldFromSale(a_follower->GetFormID(), a) &&
+                // Only while the relic can be SHIPPED (review SEV-4 on f2c8e2b): an
+                // enabled act.loot_museum rule and a runnable deposit (KeepForDeposit),
+                // else the shield is his to use. g_followers is worker-serial here (#4).
+                if (const auto fit = g_followers.find(a_follower->GetFormID());
+                    fit != g_followers.end() && Lotd::KeepForDeposit(a_follower, fit->second, a) &&
                     !PlayerGiven::IsPlayerGiven(a_follower->GetFormID(), a->GetFormID()))
                     continue;                                           // LOTD: carried for the museum
                 const float ar = a->GetArmorRating();
@@ -476,12 +480,17 @@ namespace MFO::Actuation {
                         // Claim-or-keep here as well as in the OOC service, so a
                         // follower first seen IN combat (a load mid-fight) is
                         // claimed on his first equip lap, not at combat end.
-                        // NO DECLINE-FALLBACK (marth 2026-09-28): supported = the declaration
-                        // is the only road, claimed or REFUSED (a refusal is logged loudly by
-                        // RefreshEquipDeclaration); the direct equips are APMF-ABSENT only.
+                        // NO DECLINE-FALLBACK (marth 2026-09-28, "MFO's fallback is
+                        // deprecated"): supported = the declaration is the only road. A
+                        // REFUSED claim (the equip seat not installed, or refused while
+                        // installed -- RefreshEquipDeclaration logs which) means MFO stays
+                        // out: no top-up at all, direct or declared, shield included. The
+                        // direct equips are for a wholly ABSENT authority only.
                         const bool authority = APMFBridge::EquipAuthoritySupported();
-                        if (authority) APMFBridge::ClaimEquipAuthority(id);
-                        if (roles.offHand == 2) {
+                        const bool claimed   = authority && APMFBridge::ClaimEquipAuthority(id);
+                        if (authority && !claimed) {
+                            // MFO stays out (the refusal is logged by RefreshEquipDeclaration).
+                        } else if (roles.offHand == 2) {
                             if (auto* w = PickOffHandWeapon(a_follower, roles, daggerMelee, rightW)) {
                                 const char* whyNot = nullptr;
                                 bool held = false;
@@ -611,10 +620,17 @@ namespace MFO::Actuation {
                     // NO DECLINE-FALLBACK (marth 2026-09-28): a REFUSED claim does not
                     // re-enable the direct equip below; only an ABSENT authority does.
                     authority = APMFBridge::EquipAuthoritySupported();
-                    if (authority) APMFBridge::ClaimEquipAuthority(id);
-                    if (oldLeft)   // the LEFT slot, as every left-hand unequip (F4 parity)
+                    const bool claimed = authority && APMFBridge::ClaimEquipAuthority(id);
+                    // NEVER UNEQUIP WHAT CANNOT BE REPLACED (review F2 on f2c8e2b): with the
+                    // authority supported but the claim REFUSED, no declaration will put the
+                    // new pick on, so the old holds are left in his hands (the refusal is
+                    // logged by RefreshEquipDeclaration).
+                    const bool canReplace = !authority || claimed;
+                    if (!canReplace)   // MFO stays out: no unequip, no ledger, no direct equip
+                        return { Result::NoOp, "equip authority refused (MFO leaves the hands to the engine)", true };
+                    if (oldLeft && canReplace)   // the LEFT slot, as every left-hand unequip (F4 parity)
                         mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, Loadout::LeftHandSlot(), true, true);
-                    if (oldForced)
+                    if (oldForced && canReplace)
                         mgr->UnequipObject(a_follower, oldForced, nullptr, 1, nullptr, true, true);
                     if (!authority)
                         mgr->EquipObject(a_follower, best, nullptr, 1, nullptr, true, true);

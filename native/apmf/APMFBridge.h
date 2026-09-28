@@ -1419,7 +1419,7 @@ namespace MFO::APMFBridge {
     // ── LOTD MUSEUM DEPOSIT (feat/mfo-lotd, ClickUp 86e3edghj L3) -- apmf/Deposit.cpp ──
     // The three facet claims ONE deposit trip rides, keyed by follower: ch.19 travel to
     // the crate, ch.1 hold while the idle plays, ch.12 Idle v2 (IdleGive AT the crate).
-    // logistics/Lotd.cpp owns the trip and runs at most one at a time. Worker road; own
+    // logistics/Lotd.cpp owns the trips, one per follower, several at once. Worker road; own
     // mutex (never g_mx). Nothing is saved.
     //
     // DepositSupported: APMF present AND abiVersion >= 17. An APMF older than v17 does

@@ -44,10 +44,13 @@ namespace MFO::Logistics {
             // the declared set is what makes APMF's seat refuse its re-equip (the
             // engine's OutfitApply, SPID, MEO External), in and out of combat; a worn
             // one ships through the deposit (Lotd.cpp WornRelicShippable), which
-            // unequips it at the crate. False whenever LOTD awareness is off. Worker.
-            bool RelicOffBody(RE::FormID a_follower, RE::TESBoundObject* a_obj) {
-                return a_obj && Lotd::HoldFromSale(a_follower, a_obj) &&
-                       !PlayerGiven::IsPlayerGiven(a_follower, a_obj->GetFormID());
+            // unequips it at the crate. ONLY while the relic can actually be shipped
+            // (review SEV-4 on f2c8e2b: otherwise a relic is dead weight he may neither
+            // wear nor deposit): Lotd::KeepForDeposit = HoldFromSale AND an enabled
+            // act.loot_museum rule AND the deposit can run (Harbinger v17). Worker.
+            bool RelicOffBody(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_obj) {
+                return a_follower && a_obj && Lotd::KeepForDeposit(a_follower, a_state, a_obj) &&
+                       !PlayerGiven::IsPlayerGiven(a_follower->GetFormID(), a_obj->GetFormID());
             }
         }
 
@@ -90,7 +93,7 @@ namespace MFO::Logistics {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar) continue;
-                    if (RelicOffBody(a_follower->GetFormID(), obj)) continue;   // museum relic: never the choice
+                    if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
                     const int slot = MageClothingSlot(ar);
                     if (slot < 0) continue;
                     int t = 0; std::int32_t m = 0;
@@ -131,7 +134,7 @@ namespace MFO::Logistics {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || IsCreatureArmor(ar)) continue;
-                    if (RelicOffBody(a_follower->GetFormID(), obj)) continue;   // museum relic: never the choice
+                    if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
                     // #3 NO IsExcluded skip here: a follower MAY wear an artifact it
                     // already owns (a legit upgrade) -- equip stays permissive, matching
                     // the mage-clothing branch above. Looting/selling/shedding an
@@ -187,7 +190,7 @@ namespace MFO::Logistics {
                              old && old->GetFullName() ? old->GetFullName() : "(bare)", typeTag(old),
                              old ? old->GetArmorRating() : 0.0f, old ? ArmorScore(armorPref, old) : 0.0f,
                              armorPref.heavyClass ? "HEAVY" : "LIGHT", armorPref.heavyBias, armorPref.lightBias,
-                             declared ? " | declared (APMF equip authority)" : "");
+                             declared ? " | left to the APMF equip declaration" : "");
             }
             if (useMageApparel) {
                 // THRASH GUARD for the authoritative mage correction: only OUT OF
@@ -360,12 +363,13 @@ namespace MFO::Logistics {
             }
         }
 
-        // NO DECLINE-FALLBACK (marth 2026-09-28, approved): with Harbinger present and the
-        // authority supported, MFO's equips go through the declaration ONLY. A REFUSED
-        // claim (APMF's equip seat not installed, a refusal streak) no longer hands the
-        // follower back to MFO's direct equips: the legacy path is the APMF-ABSENT degrade
-        // (EquipAuthoritySupported() false: no APMF, ABI < 9, or bApmfEquipAuthority off),
-        // never a decline. RefreshEquipDeclaration logs the refusal loudly.
+        // NO DECLINE-FALLBACK (marth 2026-09-28: "MFO's fallback is deprecated"): with
+        // Harbinger present and the authority supported, MFO's equips go through the
+        // declaration ONLY. A REFUSED claim -- the equip seat not installed (the engine
+        // then equips as in vanilla) or refused with the seat installed (an ERROR) -- no
+        // longer hands the follower back to MFO's direct equips. The whole-APMF-absent
+        // legacy degrade (EquipAuthoritySupported() false: no APMF, ABI < 9, or
+        // bApmfEquipAuthority off) is unchanged. RefreshEquipDeclaration logs each case.
         bool EquipAuthorityLive(RE::FormID a_follower) {
             (void)a_follower;
             return APMFBridge::EquipAuthoritySupported();
@@ -438,11 +442,24 @@ namespace MFO::Logistics {
                 // per refusal streak per follower (principle 7): the bridge's own
                 // warning line predates this rule and still says the direct paths run --
                 // they do not.
-                if (s_refusalLogged.insert(id).second)
-                    spdlog::error("[equip-auth] {:08X}: Harbinger REFUSED the equip-authority claim -- MFO makes NO "
-                                  "direct equips for him (no decline-fallback; the legacy path is for an ABSENT "
-                                  "Harbinger only). Nothing MFO picks is equipped until the claim is taken. See "
-                                  "APMF.log for why it refused.", id);
+                // Two cases, told apart by what the bridge knows (APMF_API.h v8: a
+                // kIntent_EquipAuthority claim is refused while the equip seat is NOT
+                // installed; IsEquipAuthorityEnforced() true proves the seat installed):
+                //  * seat not installed: Harbinger neither equips nor blocks, so the
+                //    ENGINE equips as in vanilla and MFO stays out (marth 2026-09-28:
+                //    "MFO's fallback is deprecated") -- WARN;
+                //  * seat installed, claim refused anyway: the loud ERROR.
+                // Neither case makes an MFO equip or unequip.
+                if (s_refusalLogged.insert(id).second) {
+                    if (APMFBridge::IsEquipAuthorityEnforced())
+                        spdlog::error("[equip-auth] {:08X}: Harbinger REFUSED the equip-authority claim although its "
+                                      "equip seat is installed and enforcing -- MFO makes NO equips for him (no "
+                                      "decline-fallback). Nothing MFO picks is equipped until the claim is taken. See "
+                                      "APMF.log for why it refused.", id);
+                    else
+                        spdlog::warn("[equip-auth] {:08X}: Harbinger's equip seat is not installed -- MFO leaves "
+                                     "equipment to the engine (no MFO equips or unequips for him)", id);
+                }
                 g_lastDeclared.erase(id);
                 return;
             }
@@ -521,8 +538,27 @@ namespace MFO::Logistics {
             if (left)           owned |= APMF_API::kEquipCat_Left;
             if (rightRanged)    owned |= APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left | APMF_API::kEquipCat_Ammo;
             if (rightTwoHanded) owned |= APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left;
-            const std::uint32_t denied = (roles.offHand == 2 && Config::g_weaponStyleControl.load())
-                                           ? static_cast<std::uint32_t>(APMF_API::kEquipCat_Shield) : 0u;
+            // SHIELD DENIED FOR A FOLLOWER WHO DOES NOT USE ONE (marth 2026-09-28: "stop
+            // Jesper from equipping a shield"). The same WeaponRoles the combat judge
+            // reads (cast/Equip.cpp: a shield goes on only for roles.offHand == 1 with a
+            // one-hand melee weapon): the Shield CATEGORY is denied -- nothing declared,
+            // nothing forced, no hand owned -- when
+            //   * the perks vote dual wield (roles.offHand == 2, under bWeaponStyleControl:
+            //     the original field fix, unchanged), or
+            //   * he has no ONE-HAND melee role (roles.melee is TwoHand or Other: an
+            //     archer or a two-hander never fights with a shield), or
+            //   * he is a caster (IsCasterFollower) with no shield perk vote
+            //     (roles.offHand != 1): a mage's free hand is for spells (Jesper).
+            // A one-hand fighter with shield votes, or with no off-hand vote at all, is
+            // unaffected. APMF_API.h v9 Categorize: only an ARMO with the shield biped
+            // bit competes for Shield (field: cat=Shield+Left), so a left-hand weapon
+            // (Left), a torch (Light+Left) and a spell (not a governed type) are never
+            // refused by it.
+            const bool noShieldUser =
+                (roles.offHand == 2 && Config::g_weaponStyleControl.load()) ||
+                roles.melee != WepClass::OneHand ||
+                (IsCasterFollower(a_state) && roles.offHand != 1);
+            const std::uint32_t denied = noShieldUser ? static_cast<std::uint32_t>(APMF_API::kEquipCat_Shield) : 0u;
             // THE HAND (ABI v8): a ONE-HAND weapon names its hand -- the ledger's
             // right/left -- so APMF itself places a dual-wielder's off-hand weapon
             // in the LEFT (the v7 slot-less pass put it in the right and evicted
@@ -745,7 +781,7 @@ namespace MFO::Logistics {
                     // A museum relic left out of the set (RelicOffBody) is not a player
                     // pick just because it is worn and undeclared: the player's own
                     // relic dressing is PlayerGiven's record, which RelicOffBody honours.
-                    if (RelicOffBody(id, obj)) continue;
+                    if (RelicOffBody(a_follower, a_state, obj)) continue;
                     picks.insert(f);
                     spdlog::info("[equip-auth] {:08X}: player put on '{}' -- kept", id,
                                  ar->GetName() ? ar->GetName() : "?");
@@ -782,7 +818,7 @@ namespace MFO::Logistics {
                 auto* ar = obj->As<RE::TESObjectARMO>();
                 if (!ar || ar->IsShield()) continue;
                 if (pick && ar != pick && SlotsOverlap(ar, pick)) continue;
-                if (RelicOffBody(id, obj)) {
+                if (RelicOffBody(a_follower, a_state, obj)) {
                     // Once per (follower, relic) per session: the field proof of item 3.
                     static std::unordered_set<std::uint64_t> s_relicLogged;   // worker-serial like g_lastDeclared
                     if (s_relicLogged.insert((static_cast<std::uint64_t>(id) << 32) | ar->GetFormID()).second)
@@ -792,46 +828,6 @@ namespace MFO::Logistics {
                     continue;
                 }
                 decl.Add(ar);
-            }
-
-            // 5b. A PIECE STRIPPED OFF HIM STAYS DECLARED (field 2026-09-28, Jesper's
-            //     set 6 / set 7 flip-flop, 24 declarations in bursts). Every ~5 s SPID's
-            //     outfit re-apply and the engine's OutfitApply UNEQUIPPED his declared
-            //     robes AND gauntlets (unequips are not governed: APMF_API.h
-            //     kEquipAuth_DenyUnequip is reserved) while their own outfit pieces were
-            //     refused. Rule 5 declares only what is WORN and the mage judge corrects
-            //     ONE slot per tick, so the next declaration named the robes WITHOUT the
-            //     stripped gauntlets (set 6), and the one after put the gauntlets back
-            //     (set 7): two sets, two enforce passes, per strip. So a piece the LAST
-            //     declaration carried stays in it while he still owns it, it is not worn,
-            //     NO worn ARMO covers any of its biped slots (the slot really is bare --
-            //     not a piece the player or MFO's own pick put there instead), it does not
-            //     overlap this tick's pick, and it is not a museum relic. The set then
-            //     compares equal and the MFO-B63 drift re-send (below) re-equips the whole
-            //     set in one pass. It never adds a piece MFO did not already decide: only
-            //     last-declared keys. The rest of MFO-B63 part 1 (best-per-slot) is still
-            //     open.
-            if (last) {
-                for (const auto& k : *last) {
-                    auto* ar = RE::TESForm::LookupByID<RE::TESObjectARMO>(k.first);
-                    if (!ar || ar->IsShield() || ar == pick) continue;
-                    if (std::any_of(decl.entries.begin(), decl.entries.end(),
-                                    [&](const APMF_API::APMF_EquipEntry& e) { return e.form == ar->GetFormID(); }))
-                        continue;
-                    const auto iit = inv.find(ar);
-                    if (iit == inv.end() || iit->second.first <= 0) continue;             // no longer his
-                    if (iit->second.second && iit->second.second->IsWorn()) continue;     // worn: rule 5's
-                    if (pick && SlotsOverlap(ar, pick)) continue;                         // the pick replaces it
-                    if (RelicOffBody(id, ar)) continue;
-                    bool covered = false;
-                    for (auto& [obj, data] : inv) {
-                        if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
-                        auto* w = obj->As<RE::TESObjectARMO>();
-                        if (w && w != ar && SlotsOverlap(w, ar)) { covered = true; break; }
-                    }
-                    if (covered) continue;
-                    decl.Add(ar);
-                }
             }
 
             // SEND ONLY ON CHANGE.

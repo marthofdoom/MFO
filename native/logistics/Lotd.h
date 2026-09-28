@@ -44,14 +44,16 @@ namespace MFO::Lotd {
     // The act.loot_museum dispatch: loot museum items. True = it acted. (The deposit
     // is PriorityDeposit's since the museum-priority round, 2026-09-28.)
     bool RunGambit(RE::Actor* a_follower, Clock::time_point a_now);
-    // MUSEUM DEPOSIT = TOP PRIORITY (marth 2026-09-28). The two things only the service
-    // tick knows, asked LAZILY (after the cheap checks pass): does a heal rule want the
-    // tick, and may a running loot excursion yield (the callback ends it through the
-    // loot road's own clear path and returns true; false = it is fetching a museum item,
-    // the deposit waits for it to land). Empty = "no" / "nothing to yield".
+    // MUSEUM DEPOSIT = TOP PRIORITY (marth 2026-09-28). What only the service tick knows,
+    // asked LAZILY (after the cheap checks pass): healWants = a heal is in flight or the
+    // rule loop REALLY fired one moments ago; excursionBlocks = his loot leg is fetching
+    // a museum item (the deposit waits for it to land); endExcursion = end his running
+    // loot excursion through the loot road's own clear path, called only AFTER the
+    // deposit walk was claimed. Empty = "no" / nothing to end.
     struct DepositGate {
         std::function<bool()> healWants;
-        std::function<bool()> yieldExcursion;
+        std::function<bool()> excursionBlocks;
+        std::function<void()> endExcursion;
     };
     // Checked on EVERY service tick right after DepositTick, ahead of the excursion
     // driver and the rule loop: a follower with an enabled act.loot_museum rule who

@@ -40,7 +40,8 @@ namespace MFO::TradeBridge {
         struct EmptyMemo { std::uint64_t sig = 0; float day = 0.0f; bool logged = false; };
         std::unordered_map<RE::FormID, std::int32_t>     g_chestGold;
         std::unordered_map<std::uint64_t, EmptyMemo>     g_emptyMemo;
-        std::unordered_map<std::uint64_t, std::uint64_t> g_staticSkipLogged;   // pair -> the reason sig last logged
+        struct StaticSkip { std::uint64_t reason = 0; float day = 0.0f; };
+        std::unordered_map<std::uint64_t, StaticSkip>    g_staticSkip;   // pair -> skip (b): the reason sig + the game day it began
 
         std::uint64_t PairKey(RE::FormID a_follower, RE::FormID a_vendor) {
             return (static_cast<std::uint64_t>(a_follower) << 32) | a_vendor;
@@ -644,10 +645,21 @@ namespace MFO::TradeBridge {
             const bool affordable = std::any_of(a_sell.begin(), a_sell.end(),
                                                 [gold](const SellRow& r) { return r.count > 0 && r.value <= gold; });
             if (!affordable) {
+                // RESTOCK EXPIRY (review F5 on f2c8e2b): the chest's gold is only
+                // refreshed by a report, so a skip must expire on its own -- at the
+                // vendor restock (iDaysToRespawnVendor game days after the skip began)
+                // one trade goes through and its report re-reads the gold.
                 const std::uint64_t reason = Mix(a_sig, static_cast<std::uint64_t>(gold));
-                auto& last = g_staticSkipLogged[key];
-                if (last == reason) return true;   // said once per (pair, signature)
-                last = reason;
+                auto& last = g_staticSkip[key];
+                if (last.reason == reason) {
+                    if (a_daysNow >= last.day + restock) {
+                        g_staticSkip.erase(key);
+                        return false;   // restocked: trade once, the report refreshes the gold
+                    }
+                    return true;   // said once per (pair, signature)
+                }
+                last.reason = reason;
+                last.day    = a_daysNow;
                 a_why = a_sell.empty()
                             ? std::string("nothing to sell and nothing to buy")
                             : std::format("nothing to buy, and the chest's last-seen gold ({}) pays for none of the "
@@ -663,7 +675,7 @@ namespace MFO::TradeBridge {
         g_orders.clear();
         g_chestGold.clear();
         g_emptyMemo.clear();
-        g_staticSkipLogged.clear();
+        g_staticSkip.clear();
         // Cross-save token guard (Fable audit #3): a RunTrade suspended in a save
         // resumes with its OLD token; jump the counter far past any value the next
         // session could reissue, so the stale token can never name a fresh order

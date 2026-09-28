@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <atomic>
 #include <format>
 #include <memory>
@@ -683,21 +684,64 @@ namespace MFO::Lotd {
             return false;
         }
 
+        // POSITIVE PROOF for the worn-relic ship (review F4 on f2c8e2b): the needed relics
+        // MFO has SEEN UNWORN in this follower's pack this session, per follower (worker
+        // only; cleared on revert; pruned to what he still carries). A relic seen unworn
+        // and worn later, that the PLAYER did not give him or put on him in the trade /
+        // gift menu (PlayerGiven records every such menu equip of a relic, SAVED 'PGIV'),
+        // was put on OUTSIDE the menu -- his AI, the engine's OutfitApply, SPID -- which
+        // is exactly what ships. A relic never seen unworn (worn since a load, or the
+        // player's dressing from before PlayerGiven existed) does NOT ship: a missing
+        // PlayerGiven record is not proof. Refreshed at most every kUnwornScan per
+        // follower (the needs cache's own 2 s TTL).
+        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_relicSeenUnworn;
+        std::unordered_map<RE::FormID, Clock::time_point>              g_relicScanAt;
+        constexpr auto kUnwornScan = std::chrono::seconds(2);
+
+        void NoteUnwornRelics(RE::Actor* a_follower, Needs& a_n, Clock::time_point a_now) {
+            if (!a_follower || !a_n.snap) return;
+            const RE::FormID fid = a_follower->GetFormID();
+            auto& at = g_relicScanAt[fid];
+            if (at.time_since_epoch().count() != 0 && a_now - at < kUnwornScan) return;
+            at = a_now;
+            auto& seen = g_relicSeenUnworn[fid];
+            std::unordered_set<RE::FormID> carried;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0 || !a_n.snap->bases.count(obj->GetFormID())) continue;
+                carried.insert(obj->GetFormID());
+                auto* e = data.second.get();
+                if (!e || !e->IsWorn() || data.first > 1) seen.insert(obj->GetFormID());   // an unworn instance exists
+            }
+            std::erase_if(seen, [&carried](RE::FormID b) { return !carried.count(b); });
+        }
+
+        // The "kind" a weapon fights as, for the never-disarm test (review F4): a bow, a
+        // crossbow, or melee. A relic launcher needs another launcher of ITS kind (so the
+        // off-kind ammo sale can never then sell his arrows); a relic melee weapon needs
+        // another melee weapon. Staves and non-playable creature gear are no kind.
+        int WeaponKindOf(const RE::TESObjectWEAP* a_w) {
+            if (!a_w || a_w->IsStaff() || (a_w->GetFormFlags() & (1u << 2)) != 0) return -1;
+            if (a_w->IsBow()) return 1;
+            if (a_w->IsCrossbow()) return 2;
+            return 0;
+        }
+
         // MUSEUM-NEEDED ITEMS TAKE PRIORITY OVER EQUIPMENT (marth 2026-09-28: "needed
         // museum items take priority over equipment"; "an item the museum still needs
         // must not stay worn or held"). A WORN relic ships -- the transfer unequips it
-        // at the crate (TransferOnMain) -- whoever put it on him, EXCEPT:
+        // at the crate (TransferOnMain) -- when there is POSITIVE PROOF it is not the
+        // player's dressing, EXCEPT:
         //   * the PLAYER: given or put on in the trade / gift menu (PlayerGiven, SAVED
         //     'PGIV'); without PlayerGiven installed that cannot be told, so nothing
         //     worn ships (fail closed);
+        //   * no positive proof: the off-role kept relic his AI equipped
+        //     (KeptOffRoleWorn, PlayerGiven::IsAiEquipped), or a relic MFO saw UNWORN
+        //     in his pack this session (g_relicSeenUnworn above);
         //   * an MFO hold names it: the combat pick chose it because he carries no
         //     other weapon of its category (cast/Equip.cpp IsMuseumRelic), so it is
         //     his weapon until an alternative exists;
-        //   * a WEAPON with no other non-relic weapon carried (never disarm him).
-        // This supersedes the positive-proof rule (PlayerGiven::IsAiEquipped) that the
-        // off-role KeptOffRoleWorn path still keeps: field 2026-09-28 caught relics the
-        // engine's OutfitApply put on (Adelinda's Elven Mace, Cicero's Ebony Dagger,
-        // Jesper's Dawnguard Shield) that no "AI equipped a kept relic" mark covers.
+        //   * a WEAPON with no other non-relic weapon OF ITS KIND carried (never disarm
+        //     him; never leave him without the launcher his ammo is for).
         // IsPlayerPick / stock gear / quest are filtered by Shippable itself. Worker.
         bool WornRelicShippable(RE::Actor* a_follower, RE::TESBoundObject* a_base,
                                 const RE::TESObjectREFR::InventoryItemMap& a_inv) {
@@ -705,14 +749,21 @@ namespace MFO::Lotd {
             const RE::FormID bid = a_base->GetFormID();
             if (KeptOffRoleWorn(fid, bid, a_inv)) return true;
             if (!PlayerGiven::Installed() || PlayerGiven::IsPlayerGiven(fid, bid)) return false;
+            const bool proof = PlayerGiven::IsAiEquipped(fid, bid) ||
+                               [&] { const auto it = g_relicSeenUnworn.find(fid);
+                                     return it != g_relicSeenUnworn.end() && it->second.count(bid) != 0; }();
+            if (!proof) return false;
             const auto [holdR, holdL] = Actuation::ForcedHoldFor(fid);
             if (holdR == bid || holdL == bid) return false;
-            if (!a_base->As<RE::TESObjectWEAP>()) return true;   // armor / shield / other: ships
+            auto* rw = a_base->As<RE::TESObjectWEAP>();
+            if (!rw) return true;   // armor / shield / other: ships
+            const int kind = WeaponKindOf(rw);
+            if (kind < 0) return true;   // a relic staff is no weapon kind he fights with
             for (const auto& [obj, data] : a_inv) {
                 if (!obj || data.first <= 0 || obj == a_base) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
-                if (!w || (w->GetFormFlags() & (1u << 2)) != 0) continue;   // non-playable (creature gear)
-                if (HoldFromSale(fid, obj)) continue;                        // another relic is no alternative
+                if (!w || WeaponKindOf(w) != kind) continue;
+                if (HoldFromSale(fid, obj)) continue;   // another relic is no alternative
                 return true;
             }
             return false;
@@ -840,6 +891,25 @@ namespace MFO::Lotd {
             return pick > 0.0f && d <= pick + half;
         }
 
+        // SAME FLOOR (review F6 on f2c8e2b): a reach / grown-radius arrival never counts
+        // through a floor or a ceiling. His feet must be within the crate's OWN HEIGHT of
+        // its base (the base record's OBND z-extent -- 109 u for LOTD's outgoing crate,
+        // 0x1772A7 OBND z 0..109): a follower on the crate's floor stands at its base
+        // (the field stops were 1 u and 0 u off it), while anything a full crate-height
+        // above or below it is on a stair landing, a balcony or another storey, where
+        // the pick ray would have to pass through the floor. 64 u when the record
+        // carries no height. The loot road's grown grab is NOT changed (reported).
+        bool SameFloor(RE::Actor* a_follower, RE::TESObjectREFR* a_crate, float* a_dz, float* a_limit) {
+            float h = 0.0f;
+            if (auto* b = a_crate->GetBaseObject())
+                h = static_cast<float>(b->boundData.boundMax.z - b->boundData.boundMin.z);
+            const float limit = h > 0.0f ? h : 64.0f;
+            const float dz = a_follower->GetPosition().z - a_crate->GetPosition().z;
+            if (a_dz) *a_dz = dz;
+            if (a_limit) *a_limit = limit;
+            return std::abs(dz) <= limit;
+        }
+
         // MAIN THREAD (Detect / OnPostLoad): the activation pick length, read by name from
         // the INI setting collection (Lockpick.cpp's road). Missing -> 0 and one loud line:
         // a BLOCKED stop is then never counted as arrived (never a guessed constant).
@@ -948,8 +1018,13 @@ namespace MFO::Lotd {
             const float      secs  = std::chrono::duration<float>(a_now - it->second.start).count();
             APMFBridge::ReleaseDeposit(fid);
             Clock::duration fcd = a_followerCd;
-            if (fcd == Clock::duration::zero())
-                fcd = a_ok ? Clock::duration(kCooldownOk) : Clock::duration(kCooldownFail);
+            if (fcd == Clock::duration::zero()) {
+                // A BLOCKED retry is the follower's own retry too (review SEV-5: the log
+                // said 10 s while kCooldownFail held him 30 s).
+                fcd = a_ok ? Clock::duration(kCooldownOk)
+                           : (a_crateCd == CrateCd::Retry ? Clock::duration(kBlockedRetry)
+                                                          : Clock::duration(kCooldownFail));
+            }
             g_followerCooldown[fid] = a_now + fcd;
             if (a_crateCd == CrateCd::Full)  g_crateCooldown[Pair(fid, crate)] = a_now + kCrateCooldown;
             if (a_crateCd == CrateCd::Retry) g_crateCooldown[Pair(fid, crate)] = a_now + kBlockedRetry;
@@ -1214,6 +1289,8 @@ namespace MFO::Lotd {
         g_needs = Needs{};
         g_keptForDeposit.clear();
         g_keptSeenUnworn.clear();
+        g_relicSeenUnworn.clear();
+        g_relicScanAt.clear();
         g_needsLoggedSeq = 0;
         g_rebuildQueued.store(false);
         g_mainQueued.store(false);
@@ -1270,67 +1347,82 @@ namespace MFO::Lotd {
         // menus no longer hold it: a game-pausing menu stops this tick anyway, and the
         // transfer itself still refuses under a container / barter menu (TransferOnMain).
         auto* pc = RE::PlayerCharacter::GetSingleton();
-        if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) return false;
+        if (!pc || a_follower->IsInCombat() || pc->IsInCombat()) return false;
         auto& needs = FreshNeeds(a_now);
         if (!needs.snap) return false;
-        const auto items = Shippable(a_follower, needs);
-        if (items.empty()) return false;
+        // Positive proof for the worn-relic ship (review F4): the needed relics seen
+        // UNWORN in his pack, recorded whether or not a crate is near.
+        NoteUnwornRelics(a_follower, needs, a_now);
+        // LEASH IS BOSS at the start too (review SEV-4): never start a trip while he
+        // himself is already outside it (the crate test alone let that through).
+        const float leashNow = Logistics::TeleportCompat::View(a_follower).leash;
+        if (a_follower->GetPosition().GetDistance(pc->GetPosition()) > leashNow) return false;
 
+        // The cheap crate lookup first (review SEV-5), the inventory walk after it.
         float dist = 0.0f, leash = 0.0f;
         RE::TESObjectREFR* crate = nullptr;
         {
             std::scoped_lock lock(g_tripMx);
             crate = NearestCrate(a_follower, a_now, &dist, &leash);
-            if (!crate) return false;   // none inside his leash: behaviour unchanged
-            if (!ShippingInitialised()) {
-                // The intro was never shown (no follower was loaded when the toggle went
-                // on, or it was on before this build): show it now through THIS crate --
-                // ONCE (IntroPending) -- and ship on a later trip: a crate whose
-                // OnActivate is still showing its message box would not take the items yet.
-                if (!IntroPending()) {
-                    const auto cid = crate->GetFormID();
-                    MainThread::Post([fid, cid]() { InitShippingOnMain(fid, cid, "first deposit"); });
-                }
-                g_followerCooldown[fid] = a_now + std::chrono::seconds(5);
-                return false;
-            }
         }
-        const RE::FormID crateId = crate->GetFormID();
-        // The two callbacks run OUTSIDE g_tripMx: the excursion yield goes through the
-        // loot road (Packages::LootTravelClear), which must never nest under this lock.
-        if (a_gate.healWants && a_gate.healWants()) {
-            GateLog(fid, a_now, std::format("a heal rule wants to fire (crate {:08X} {:.0f} u away)", crateId, dist));
+        if (!crate) return false;   // none inside his leash: behaviour unchanged
+        const auto items = Shippable(a_follower, needs);
+        if (items.empty()) return false;
+        if (!ShippingInitialised()) {
+            // The intro was never shown (no follower was loaded when the toggle went
+            // on, or it was on before this build): show it now through THIS crate --
+            // ONCE (IntroPending) -- and ship on a later trip: a crate whose
+            // OnActivate is still showing its message box would not take the items yet.
+            if (!IntroPending()) {
+                const auto cid = crate->GetFormID();
+                MainThread::Post([fid, cid]() { InitShippingOnMain(fid, cid, "first deposit"); });
+            }
+            std::scoped_lock lock(g_tripMx);
+            g_followerCooldown[fid] = a_now + std::chrono::seconds(5);
             return false;
         }
-        // A loot excursion yields -- unless it is fetching a MUSEUM item; then the
-        // deposit waits for that item to land (the callback says which, and ends a
-        // yielding excursion through the loot road's own clear path).
-        if (a_gate.yieldExcursion && !a_gate.yieldExcursion()) {
+        const RE::FormID crateId = crate->GetFormID();
+        // The callbacks run OUTSIDE g_tripMx: ending the excursion goes through the loot
+        // road (Packages::LootTravelClear), which must never nest under this lock.
+        if (a_gate.healWants && a_gate.healWants()) {
+            GateLog(fid, a_now, std::format("a heal is in flight or just fired (crate {:08X} {:.0f} u away)",
+                                            crateId, dist));
+            return false;
+        }
+        // A loot excursion fetching a MUSEUM item: the deposit waits for it to land.
+        if (a_gate.excursionBlocks && a_gate.excursionBlocks()) {
             GateLog(fid, a_now, std::format("his loot leg is fetching a museum item; the deposit waits for it to "
                                             "land (crate {:08X} {:.0f} u away)", crateId, dist));
             return false;
         }
-        std::scoped_lock lock(g_tripMx);
-        if (g_trips.count(fid)) return false;
-        if (!APMFBridge::ClaimDepositTravel(fid, crateId, kCrateRadius)) {
-            g_followerCooldown[fid] = a_now + kCooldownFail;   // refused: logged in the bridge
-            return false;
+        std::size_t running = 0;
+        {
+            std::scoped_lock lock(g_tripMx);
+            if (g_trips.count(fid)) return false;
+            // CLAIM FIRST (review SEV-4): his loot excursion is ended only once the
+            // deposit walk is ours, so a refused claim never costs him the excursion.
+            if (!APMFBridge::ClaimDepositTravel(fid, crateId, kCrateRadius)) {
+                g_followerCooldown[fid] = a_now + kCooldownFail;   // refused: logged in the bridge
+                return false;
+            }
+            Trip t;
+            t.follower = fid;
+            t.crate    = crateId;
+            t.phase    = Phase::Walking;
+            t.start    = a_now;
+            t.lastTick = a_now;
+            g_trips[fid] = std::move(t);
+            running = g_trips.size();
         }
-        Trip t;
-        t.follower = fid;
-        t.crate    = crateId;
-        t.phase    = Phase::Walking;
-        t.start    = a_now;
-        t.lastTick = a_now;
-        g_trips[fid] = std::move(t);
         g_gateLog.erase(fid);
+        if (a_gate.endExcursion) a_gate.endExcursion();   // no-op without a running excursion
         std::string what;
         for (const auto& i : items)
             what += std::format("{}{}'{}' x{}", what.empty() ? "" : ", ", i.worn ? "WORN " : "",
                                 NameOf(RE::TESForm::LookupByID(i.base)), i.count);
         spdlog::info("[lotd] {:08X}: DEPOSIT trip (PRIORITY) -> crate {:08X} ({:.0f} u; crate {:.0f} u from the "
-                     "player, leash {:.0f}; {} trip(s) running) carrying {}", fid, crate->GetFormID(), dist,
-                     pc ? pc->GetPosition().GetDistance(crate->GetPosition()) : 0.0f, leash, g_trips.size(), what);
+                     "player, leash {:.0f}; {} trip(s) running) carrying {}", fid, crateId, dist,
+                     pc->GetPosition().GetDistance(crate->GetPosition()), leash, running, what);
         return true;
     }
 
@@ -1399,12 +1491,20 @@ namespace MFO::Lotd {
                     // per-pair cooldown only after kBlockedStreakMax BLOCKED ends in a row.
                     float d = 0.0f, reach = 0.0f;
                     const float grown = Logistics::GrabRadiusFor(cid);
-                    if (WithinReach(a_follower, crate, &d, &reach)) {
+                    float dz = 0.0f, dzLimit = 0.0f;
+                    const bool sameFloor = SameFloor(a_follower, crate, &dz, &dzLimit);
+                    if (!sameFloor) {
+                        d = a_follower->GetPosition().GetDistance(crate->GetPosition());
+                        spdlog::warn("[lotd] {:08X}: walk to crate {:08X} ended BLOCKED at {:.0f} u on ANOTHER FLOOR "
+                                     "(dz {:+.0f} u, limit {:.0f}) -- never counted as arrived", fid, cid, d, dz,
+                                     dzLimit);
+                    }
+                    if (sameFloor && WithinReach(a_follower, crate, &d, &reach)) {
                         arrived = true;
                         spdlog::info("[lotd] {:08X}: walk to crate {:08X} ended BLOCKED at {:.0f} u -- within reach "
                                      "({:.0f} u = fActivatePickLength {:.0f} + the crate's near-face half-extent): "
                                      "counted as ARRIVED", fid, cid, d, reach, g_activateReach.load());
-                    } else if (d <= grown) {
+                    } else if (sameFloor && d <= grown) {
                         arrived = true;
                         spdlog::info("[lotd] {:08X}: walk to crate {:08X} ended BLOCKED at {:.0f} u -- inside its "
                                      "grown arrival radius ({:.0f} u): counted as ARRIVED", fid, cid, d, grown);
@@ -1440,9 +1540,14 @@ namespace MFO::Lotd {
             // the old 175 u below it. A follower who already stands inside it when the trip
             // starts arrives on this first tick, with no walk. The crate itself is always
             // inside the leash (NearestCrate + the release above): the leash stays boss.
-            if (!arrived && a_follower->GetPosition().GetDistance(crate->GetPosition()) <=
-                                std::max(kCrateRadius + kArriveSlack, Logistics::GrabRadiusFor(cid)))
-                arrived = true;
+            // The part past the old 175 u counts only on the crate's floor (SameFloor,
+            // review F6); the old 175 u backstop is unchanged.
+            if (!arrived) {
+                const float dNow = a_follower->GetPosition().GetDistance(crate->GetPosition());
+                if (dNow <= kCrateRadius + kArriveSlack ||
+                    (dNow <= Logistics::GrabRadiusFor(cid) && SameFloor(a_follower, crate, nullptr, nullptr)))
+                    arrived = true;
+            }
             if (!arrived) return true;
 
             // TRAP (a): activate the crate only if it has not been (ArriveOnMain reads
