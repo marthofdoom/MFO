@@ -430,10 +430,11 @@ namespace MFO::Logistics {
                         ++dOffLimits;
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
-                    // A MERCHANT'S VENDOR CHEST (batch L crime safety): unowned in the data,
-                    // so the ownership bars below miss it (IsMerchantContainer, LootTake.cpp).
-                    // Unconditional; logged once per chest per load.
-                    if (!loose && IsMerchantContainer(ref)) {
+                    // A FACTION'S VENDOR / STOLEN-GOODS / EVIDENCE CONTAINER (batch L crime
+                    // safety): a vendor chest is unowned in the data, so the ownership bars
+                    // below miss it (IsFactionServiceContainer, LootTake.cpp).
+                    // Unconditional; logged once per container per load.
+                    if (!loose && IsFactionServiceContainer(ref)) {
                         ++dOffLimits;
                         return RE::BSContainer::ForEachResult::kContinue;
                     }

@@ -870,7 +870,7 @@ namespace MFO::Logistics {
     bool IsIngredientItem(RE::TESBoundObject* a_obj);
     bool RefInPlayerStorage(RE::TESObjectREFR* a_ref);
     bool IsLOTDDropOff(RE::TESObjectREFR* a_ref);
-    bool IsMerchantContainer(RE::TESObjectREFR* a_ref);   // a faction's vendor chest (VENC): never a source
+    bool IsFactionServiceContainer(RE::TESObjectREFR* a_ref);   // a faction's VENC / STOL / PLCN container: never a source
 
     // defined in logistics/Lockpick.cpp (LP-M1, follower lockpicking of chests; replaces the
     // old LockPickable). Worker-only; see that file's banner.

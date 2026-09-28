@@ -2536,7 +2536,7 @@ module. Module layout:
   `SwapUpAmmoFrom` since 2026-09-25, `LootPotions:95`,
   `LootGold:287`, `LootValuables:491`; the coin rules `IsCoinLoot:153` / `IsCoinModCoin:194` /
   `IsCoinPurseFlora:239` / `CoinCount:270`; source policy `RefInPlayerStorage:582`,
-  `IsLOTDDropOff:614`, the vendor-chest bar `IsMerchantContainer:647`, the loose-item bar `LooseRefBarred:700`, `PlayerIsConsidering:716`,
+  `IsLOTDDropOff:614`, the faction-container bar `IsFactionServiceContainer:651`, the loose-item bar `LooseRefBarred:713`, `PlayerIsConsidering:729`,
   `TierReleased:724`, `LootHere:782`, `HasLoot:808`, `NavmeshReach:873`, `LooseRef:888`),
   `logistics/Gear.cpp` (the armor judge `ArmorPrefFor:43`, `ArmorScore:65`,
   `LogArmorClassIfChanged:78`, `ArmorClassSuits:136`, `ArmorIsBetter:154`/`:195`,
@@ -2572,15 +2572,16 @@ module. Module layout:
   `PickUpObject`/AddTask (crash4 class); the whitelist only decides
   ELIGIBILITY. Nothing was deliberately excluded from the generalization —
   every `Category` ordinal now has a loose-ref path.
-  **VENDOR-CHEST BAR (batch L, `fix/mfo-vendor-readmit`, crime safety; field 2026-09-26: followers
-  walked at DLC1VendorChestFlorentiusRef 0200F82C 7+ times).** `IsMerchantContainer`
-  (`LootTake.cpp:647`): every loaded `TESFaction`'s `vendorData.merchantContainer` (VENC), a
-  ref -> faction map rebuilt per load on the pump epoch (worker only), each excluded chest logged
-  once per load. WHY the ownership bars missed it: vendor chests are UNOWNED in the data (the
+  **FACTION-CONTAINER BAR: vendor / stolen goods / evidence (batch L, `fix/mfo-vendor-readmit`, crime safety; field 2026-09-26: followers
+  walked at DLC1VendorChestFlorentiusRef 0200F82C 7+ times).** `IsFactionServiceContainer`
+  (`LootTake.cpp:651`): every loaded `TESFaction`'s `vendorData.merchantContainer` (VENC, vendor),
+  `crimeData.factionStolenContainer` (STOL, stolen goods) and `crimeData.factionPlayerInventoryContainer`
+  (PLCN, evidence / jail inventory), a ref -> {faction, kind} map rebuilt per load on the pump epoch
+  (worker only), each excluded container logged once per load with its faction and kind. WHY the ownership bars missed it: vendor chests are UNOWNED in the data (the
   installed Dawnguard.esm REFR has no XOWN and its cell DLC1DawnguardHQ01 none either), so
   `GetOwner()` is null and `IsOffLimits()` false; the faction's VENC is the only link. Applied at
   every path: the container scan (`LootScan.cpp`, after `IsLOTDDropOff`), `LooseRefBarred` (and so
-  the ARRIVAL re-check), `Lockpick::Admit` (`vendorChest`) and a belt in `LootHere` (every transfer,
+  the ARRIVAL re-check), `Lockpick::Admit` (`factionServiceContainer`) and a belt in `LootHere` (every transfer,
   `StripCorpse` included). **What breaks:** reading it off the worker (unlocked statics); keying it
   on a FormID list instead of the factions.
   **LOOSE LOOT, BATCH L (86e3f9pkg, 2026-09-27, `feat/mfo-loose-loot`, tier A crime safety):**
@@ -2592,7 +2593,7 @@ module. Module layout:
   `LooseMuseumQualifies` (`logistics/Lotd.cpp:1280`: the same uncovered-need want as
   `LootMuseum`, plus `LooseSpecialItemBlocked`; inert unless `Lotd::Enabled()` and the deposit
   can run, exactly like `LootMuseum`). (2) **THE LOOSE-ITEM SOURCE BAR** `LooseRefBarred`
-  (`logistics/LootTake.cpp:700`), run on EVERY loose candidate of EVERY category right after
+  (`logistics/LootTake.cpp:713`), run on EVERY loose candidate of EVERY category right after
   `++dLootable` in `LootNearby`, UNCONDITIONAL (no toggle, `bLootInPlayerHomes` included): a
   LOTD display ref (`Lotd::IsDisplayRef`, the snapshot's `displays` set: every display ref the
   slot table names, patches included); `RefInPlayerStorage` (every LOTD display cell, DBMDG* /
@@ -2601,7 +2602,7 @@ module. Module layout:
   The 6 other refs the API VMAD names are NOT displays: the placeable ShipmentCrate001-005 in the
   DBMQA holding cell, and 0x060F21BB `SnowElfWayshrine`, a quest-enabled STAT in Skyrim.esm
   exterior cell 0x37EE6); a ref the PLAYER dropped this session (`PlayerDroppedRef`, below);
-  `IsQuestObjectRef`; a merchant's vendor chest (`IsMerchantContainer`, below); any `GetOwner()` or `IsOffLimits()`; and ANY OWNED CELL whatever the
+  `IsQuestObjectRef`; a faction's vendor / stolen-goods / evidence container (`IsFactionServiceContainer`, below); any `GetOwner()` or `IsOffLimits()`; and ANY OWNED CELL whatever the
   location type (closing round; the reason names a civilised place via `LocationTypes::Classify`).
   Disassembly (AE `TESObjectREFR::GetOwner`, id 20194 @0x2F9E40): GetOwner already falls back
   to the parent cell's owner for item / flora bases (not for activator / door / furniture), so
@@ -2991,7 +2992,7 @@ anonymous-namespace copy — that silently forks the instance).
   the-lock. Pieces:
   - **Gate** `Lockpick::Admit` (`Lockpick.cpp:523`, called by the scan `LootScan.cpp:488` after the
     owner / off-limits bars): refuses (logged once per follower+lock+reason) owned, offlimits,
-    vendorChest (`IsMerchantContainer`, batch L),
+    factionServiceContainer (`IsFactionServiceContainer`, batch L),
     notChestOrDoor, doorIntoLivedIn (a LOAD door whose destination is owned / a player home /
     crime to enter / a lived-in location, `LoadDoorBar` `:472`), creature (no `ActorTypeNPC` race keyword: `IdleLockPick` is a
     humanoid clip), requiresKey without the key, noPicks, a standing failed verdict (`g_fail`:
