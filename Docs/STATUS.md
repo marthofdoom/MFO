@@ -21,12 +21,18 @@ Read it as history and this block as current.
   while another weapon of its category is carried (`cast/Equip.cpp` `IsMuseumRelic`; field: Cicero fought with a relic
   two-hander for six hours); a held relic no longer satisfies the equip rule then, and the off-hand pick skips relics.
   MFO-B126 closed: a WORN off-role relic the shed kept for the deposit now ships (`Lotd::NoteKeptForDeposit`,
-  `Shippable`), unless an MFO hold names it. (3) Arrows vs bolts: `AmmoIsBolt`'s uncatalogued fallback reads the
+  `Shippable`), unless an MFO hold names it. REVIEW ROUND (93613c4: SEV-2 no weapon player-pick signal, 2 SEV-3):
+  new `logistics/PlayerGiven.cpp` records player -> follower transfers (TESContainerChangedEvent) and equips made
+  while the ContainerMenu / GiftMenu is open (TESEquipEvent), mutex-guarded, dropped when the item leaves him,
+  cleared on revert, NOT saved (a load forgets it). A player-given item is never shipped; a worn relic ships only
+  when not given and an in-role weapon is still carried at ship time; a player-equipped relic stays in his hand;
+  the transfer unequips a worn instance before removing it. Backlog MFO-B127 / MFO-B128. (3) Arrows vs bolts: `AmmoIsBolt`'s uncatalogued fallback reads the
   kNonBolt flag through `GetRuntimeData()` instead of `TESAmmo::IsBolt()` (field: bow users bought and looted bolts,
   no patcher catalog on Tuxborn); the `[arrowprobe]` diagnostic too. FIELD CHECKS: no `ENGAGE` on elk / deer /
   rabbit / fox (the armed line reads "N unaggressive ... skipped"); hitting a deer first still ENGAGEs with
   "(unaggressive, but fighting the party: counts)"; Cicero's melee gambit picks a sword over a looted relic; no
-  bolts bought or looted by a bow user.
+  bolts bought or looted by a bow user; giving a follower an item logs `[player-given] ... given by the player` and
+  a relic you gave or put on him is never deposited.
 - **OPEN (fork, needs its own brief): fork `TESAmmo::IsBolt` / `IgnoresNormalWeaponResistance` read the wrong
   layout: a fork fix brief is needed.** `_commonlib/mit-3.7-fork` `src/RE/T/TESAmmo.cpp` reads the direct `data`
   member; with SE+AE+VR all enabled the header's `#else` branch places it at 0xB0 (inside TESWeightForm) instead of

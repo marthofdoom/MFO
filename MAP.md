@@ -463,7 +463,7 @@ per concern:
   + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1363`/`:1379`).
 - `cast/Equip.cpp` (1050) = THE WEAPON HOLD: `EquipWeapon` (`:350`, **PERK-DRIVEN since
   2026-09-13 — see "COMBAT PICK + DUAL WIELD BY PERKS" below**) with its anon helpers
-  `WeaponRolesFor` (`:97`), `IsOneHandMelee` (`:105`), `IsMuseumRelic` (`:118`, LOTD, batch L),
+  `WeaponRolesFor` (`:97`), `IsOneHandMelee` (`:105`), `IsMuseumRelic` (`:122`, LOTD, batch L),
   `PickOffHandWeapon` (`:127`), `PickShield` (`:145`), `EquipShieldOnMain` (`:165`), `EquipLeftHeld`
   (`:200`), `RecordLeftHold`, `DeclareFromLedger` (`:302`) + the off-hand top-up cadence
   `g_offHandRetryAt`/`kOffHandRetry` (`:345-346`); the T#76 force-hold ledger `g_forcedWeapon`/`g_forcedMx`
@@ -478,7 +478,10 @@ per concern:
   `only a museum relic ... using it until the deposit`); `PickOffHandWeapon` skips relics outright (the
   left is optional); and a HELD relic does not satisfy the "already holding" NoOp while another eligible
   weapon of the category is carried (`relicWithAlternative`), so an AI-equipped relic or an old FWPN
-  relic hold is replaced by the next equip lap. The shared `eligible` lambda is the pick's old filter
+  relic hold is replaced by the next equip lap. A relic the PLAYER put on him in the trade / gift menu
+  (`PlayerGiven::IsPlayerEquipped`) is NOT a "museum relic" here: it competes in the ordinary pool and a
+  held one is never swapped out (review of 93613c4). OPEN: MFO-B127 (a one-lap relic pick while the needs
+  cache is unanswerable), MFO-B128 (a relic in one hand with a non-relic in the other satisfies). The shared `eligible` lambda is the pick's old filter
   (staff / non-playable / category / mage daggers), unchanged. **What breaks:** calling
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
   field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
@@ -3099,6 +3102,24 @@ never strips naked). The rated-armor branch (2026-09-14) is THE armor wear decis
 highest `ArmorScore` owned piece that strictly beats the worn score — see ARMOR CLASS
 BY SKILL + PERKS above.
 
+### logistics/PlayerGiven.cpp / PlayerGiven.h — THE PLAYER-GIVEN RECORD (batch L review round; NOT serialized)
+The signal MFO lacked: which items the PLAYER gave a follower or put on him (`IsPlayerPick` covers worn
+ARMO / ammo only, under APMF enforcement). Two `ScriptEventSourceHolder` sinks, registered at kDataLoaded
+(`plugin.cpp`, after `Lotd::RegisterSinks`): `TESContainerChangedEvent` (fork `RE/T/TESContainerChangedEvent.h`:
+`oldContainer` / `newContainer` / `baseObj` FormIDs) with `oldContainer == 0x14` and `newContainer` a
+tracked follower (`Followers::IsTrackedFast`) -> GIVEN; `TESEquipEvent` (fork `RE/T/TESEquipEvent.h`: `actor`,
+`baseObject`, `equipped`) on a tracked follower while `ContainerMenu` or `GiftMenu` is open (the game is
+paused: his AI cannot equip then) -> EQUIPPED, an in-menu unequip clears that bit. A transfer OUT of a
+follower with a record posts `RecountOnMain` (MainThread::Post; VR no-op = the record stays, fail closed),
+which drops the entry once no copy is left. Table `g_rec` (follower -> base -> bits) under `g_mx`: every
+query (`IsPlayerGiven` = either bit, `IsPlayerEquipped`) is safe from the worker and the main thread.
+Cleared by `Logistics::ClearTransientState` (revert). Consumers: `Lotd` `Shippable` / `TransferOnMain` (never
+ship a given item), `KeptOffRoleWorn` (a worn relic ships only when NOT given, and only with
+`PlayerGiven::Installed()`), `cast/Equip.cpp` `IsMuseumRelic` (a player-equipped relic stays his pick).
+**What breaks:** reading `g_rec` without `g_mx`; recording follower -> follower or MFO's own transfers as
+given (only `oldContainer == player` counts); dropping an entry on the leave event without the recount (a
+stack that is only partly moved out keeps copies the player gave). Known limit: a load forgets the record.
+
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives
 over-count), MFO-B123 (a reload before arrival can ship one duplicate), MFO-B124 (the ledger floor leaks
@@ -3145,25 +3166,30 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   refs are never museum candidates (the display refs are item-shaped refs in museum cells).
   Board: listed in `kActsLogi`, skipped by the picker unless `GambitOffered()`
   (`Board_FieldKit.cpp:576`).
-- **A needed relic is never sold or dropped.** `HoldFromSale:1227` (whenever awareness is on,
+- **A needed relic is never sold or dropped.** `HoldFromSale:1265` (whenever awareness is on,
   Harbinger or not) ← the Economy sell list (`Economy.cpp:662`), SwapUp's ammo ladder (`HeldAmmo`
   pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:557`).
-  `KeepForDeposit:1241` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
-  `ShedOffRoleWeapon` (`Upkeep.cpp:405`): an off-role relic weapon is deposited, not handed to you.
+  `KeepForDeposit:1281` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
+  `ShedOffRoleWeapon` (`Upkeep.cpp:412`): an off-role relic weapon is deposited, not handed to you.
   It is also never the combat pick while another weapon of its category is carried
   (`cast/Equip.cpp` `IsMuseumRelic`, batch L).
-- **Worn kept relic (MFO-B126, batch L).** After its walk `ShedOffRoleWeapon` hands the relics it
-  kept to `NoteKeptForDeposit:1236` (REPLACES the follower's set in `g_keptForDeposit`, worker-only;
-  empty when he has no in-role weapon — the never-disarm guard's count). `Shippable` admits a WORN
-  relic only through `KeptOffRoleWorn:617` (in that set AND no MFO hold names it,
-  `Actuation::ForcedHoldFor`): his own AI equipped it in an unowned hand (the ch.17 declaration owns
-  a hand only under a hold, so it cannot refuse that equip without the F6 freeze), and the shed would
-  have dropped it worn or not. `ShipItem::worn` carries it to `TransferOnMain`, which then does not
-  skip the worn instance. Cleared in `ClearTransientState`. **What breaks:** admitting worn relics
-  outside the kept set ships the player's own dressing (the manual-override rule).
+- **Worn kept relic (MFO-B126, batch L).** `ShedOffRoleWeapon` CLEARS the follower's record on entry
+  (`Upkeep.cpp:301`, so the post-battle dwell and no-role early returns leave nothing stale) and, after
+  a full walk with an in-role weapon, hands `NoteKeptForDeposit:1274` the relics it kept plus the
+  in-role weapon bases it saw (`g_keptForDeposit`, worker-only `KeptRecord`). `Shippable` admits a WORN
+  relic only through `KeptOffRoleWorn:627`: `PlayerGiven::Installed()` and NOT `IsPlayerGiven`, in the
+  kept set, no MFO hold names it (`Actuation::ForcedHoldFor`), and one of the recorded in-role weapons
+  is STILL carried (the never-disarm guard at ship time). His own AI equipped it in an unowned hand (the
+  ch.17 declaration owns a hand only under a hold, so it cannot refuse that equip without the F6
+  freeze), and the shed would have dropped it worn or not. `ShipItem::worn` carries it to
+  `TransferOnMain:869`, which re-checks `IsPlayerGiven`, UNEQUIPS each worn instance first
+  (`ActorEquipManager::UnequipObject` with that instance's `ExtraDataList`, `LeftHandSlot()` for an
+  `ExtraWornLeft` one; parity with HealExcludedWeapon / KeepHeadClear) and then removes it. Cleared in
+  `ClearTransientState`. **What breaks:** admitting worn relics outside the kept set, or without the
+  PlayerGiven check, ships the player's own choice.
 - **L3 deposit** (automatic with the gambit; ONE trip at a time, `g_trip` under `g_tripMx`):
-  `RunGambit` starts it when the follower carries `Shippable:630` items (not worn [but see the worn kept relic above], quest, stock
-  gear or `IsPlayerPick`) and `NearestCrate:651` finds an enabled, 3D-loaded outgoing crate within
+  `RunGambit` starts it when the follower carries `Shippable:647` items (not worn [but see the worn kept relic above], quest, stock
+  gear, `IsPlayerPick` or `PlayerGiven::IsPlayerGiven`) and `NearestCrate:651` finds an enabled, 3D-loaded outgoing crate within
   3000 u (inside his leash, not in DBMQA `0x1252E1`, not on cooldown), and no container / barter
   menu is open. `DepositTick:1066` ← `Service.cpp:312` owns his tick:
   Walking (ch.19 via `APMFBridge::ClaimDepositTravel`, v12 leg state `ReadDepositLeg`, distance
@@ -3173,7 +3199,7 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   `ClaimDepositIdle` (ch.1 hold + ch.12 v2 IdleGive at the crate; a SYNCHRONOUS refusal latches the
   deposit OFF for the session, `g_depositLatched`) → Giving: NO TRANSFER until the idle is SEEN LIVE
   (`DepositIdleStatus` 1) and still live >= 1 s later on a later tick (the never-live grace never
-  counts; 2 = Harbinger ended it → the trip ends) → `TransferOnMain:850` (MAIN) refuses under an open
+  counts; 2 = Harbinger ended it → the trip ends) → `TransferOnMain:869` (MAIN) refuses under an open
   container / barter menu and unless the crate CONFIRMS `ready` / `waitingtoship`, re-reads every
   item (NOT `IsPlayerPick`: `g_playerPicks` is worker-only, Shippable filtered it), reads the crate
   count back, fills the ledger floor, and reports `g_transferResult` → Settling: a SKIPPED or empty

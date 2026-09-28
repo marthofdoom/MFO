@@ -807,5 +807,15 @@ was needed in `EquipAuthority.cpp`; owning an unheld hand there to refuse the AI
 AI in an unowned hand) the backlog's second fix shape: `ShedOffRoleWeapon` reports the relics it kept
 (`Lotd::NoteKeptForDeposit`, only with an in-role weapon left), and `Shippable` / `TransferOnMain` ship such a relic
 even when WORN, unless an MFO hold names it. The shed would have dropped it worn or not, so this is not the player's
-dressing.
+dressing. Review round on 93613c4 (SEV-2: no weapon player-pick signal): the new `logistics/PlayerGiven.cpp` records
+player -> follower transfers and in-menu equips; a player-given item is never shipped (worn or not), a worn relic ships
+only when NOT given and one of the in-role weapons is still carried at ship time, the kept set is cleared on every shed
+entry, a player-equipped relic is never swapped out of his hand, and the transfer unequips a worn instance before the
+RemoveItem. Residuals: MFO-B127, MFO-B128.
 Raised against 5b88bcd (`feat/mfo-lotd`, tier-A re-review round 2), 2026-09-26. Reviewer's finding (verbatim from the review log): "KeepForDeposit + AI self-equip -> worn -> never shipped." `ShedOffRoleWeapon` now leaves a needed relic weapon in the pack (`KeepForDeposit`); if the follower's own AI equips it, `Shippable` skips it as worn (the manual-override rule), so it neither goes to the player nor to the crate. Fix shape: exclude a relic from the engine's equip choice while it is kept for the deposit, or ship a worn relic that MFO (not the player) left in the pack.
+
+### MFO-B127 (SEV-4) -- batch L: a relic can be picked for one lap while the LOTD needs cache is unanswerable
+Raised against 93613c4 (`fix/mfo-batchL-field`, tier-B review), 2026-09-27. Reviewer's finding (verbatim from the review log `agentlogs/review-mfo-batchL-field.md`): "HoldFromSale transient false on snapshot swap". `Lotd::FreshNeeds` returns an EMPTY `Needs` while a new snapshot has no main-thread supply copy yet (a rebuild, a load, a LOTD ModEvent), so `HoldFromSale` reads false for that window and `cast/Equip.cpp` `IsMuseumRelic` lets a relic into the ordinary pick pool. If the relic wins that lap it is force-held until the gambit releases it; the next lap's `relicWithAlternative` then swaps it back out, so it is transient, but it is a real equip flicker. Fix shape: a three-state answer from Lotd (relic / not a relic / not answerable yet) and an equip pick that keeps the last answer (or skips HoldFromSale-uncertain weapons) while unanswerable.
+
+### MFO-B128 (SEV-4) -- batch L: a relic in one hand with a non-relic in the other still satisfies the equip rule
+Raised against 93613c4 (`fix/mfo-batchL-field`, tier-B review), 2026-09-27. Reviewer's finding (verbatim from the review log): "right-relic+left-nonrelic satisfies". `EquipWeapon`'s "already holding" test is per hand and ORed: a relic in the right (or left) hand with an eligible NON-relic in the other hand satisfies the rule, so the relic hand is not swapped out and the off-hand top-up only runs with an empty left. The mixed-hands residual of MFO-B126's equip half. Fix shape: when either held hand is a relic with an alternative, run the pick for that hand (the right via the normal pick, the left via `PickOffHandWeapon`) instead of the satisfied NoOp.

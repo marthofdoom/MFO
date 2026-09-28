@@ -9,7 +9,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 - **Followers leave wildlife alone.** Engage on sight no longer sends a follower after elk, deer, rabbits, foxes or any other animal that never attacks. If you attack one first, he joins in.
 - **Museum relics stay in the pack.** A follower no longer fights with a relic he is carrying for the museum while he has another weapon of that kind. If the relic is his only one, he uses it until he ships it.
-- **A relic a follower picked up and put on himself still gets shipped.** Only relics he would have dropped anyway. Items you put on him are never shipped.
+- **A relic a follower picked up and put on himself still gets shipped.** Only relics he would have dropped anyway, and only while he still carries a weapon he can fight with.
+- **Anything you give a follower is never shipped to the museum.** MFO now remembers what you hand over or put on him in the trade or gift menu, until he no longer carries it. A relic you put on him stays in his hand. The record lasts until you load a save.
 - **Bow users stop buying and looting bolts.** Arrows and bolts are told apart correctly again without the ItemCatalog patcher.
 
 - **A follower who is losing now runs back to you.** Confidence watches how fast he is losing health. A duel he is losing badly sends him back well before he is nearly dead.

@@ -12,6 +12,7 @@
                           // (ComputeWeaponRoles / WeaponScore) -- not in Logistics.h, and that
                           // header was outside the change's boundary. First non-Logistics include.
 #include "logistics/Lotd.h"   // HoldFromSale: a museum relic is never the combat pick while another weapon serves
+#include "logistics/PlayerGiven.h"   // IsPlayerEquipped: a relic the player put on him stays his pick (batch L review)
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
 #include <limits>         // rank preemption: kNoRule sentinel (numeric_limits<int>::max)
 
@@ -115,8 +116,12 @@ namespace MFO::Actuation {
         // worker-only needs cache (Lotd.cpp FreshNeeds); EquipWeapon and its helpers run
         // on the Scheduler's worker tick (worker-serial with the logistics service, the
         // same road SwapUp calls it from). False whenever LOTD awareness is off.
+        // A relic the PLAYER put on him in the trade / gift menu (PlayerGiven, review of
+        // 93613c4 SEV-3) is NOT excluded: the player's choice to fight with it stands, so
+        // it competes in the ordinary pool and a held one is never swapped out.
         bool IsMuseumRelic(RE::Actor* a_follower, RE::TESObjectWEAP* a_w) {
-            return a_w && Lotd::HoldFromSale(a_follower->GetFormID(), a_w);
+            return a_w && Lotd::HoldFromSale(a_follower->GetFormID(), a_w) &&
+                   !PlayerGiven::IsPlayerEquipped(a_follower->GetFormID(), a_w->GetFormID());
         }
 
         // Best carried one-hander for the LEFT hand by the SAME WeaponScore, that

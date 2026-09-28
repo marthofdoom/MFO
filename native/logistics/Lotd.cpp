@@ -35,6 +35,8 @@
 #include "TeleportCompat.h"     // the confidence leash (the crate must be inside it, like a loot target)
 #include "apmf/APMFBridge.h"    // the deposit trip's Harbinger claims (apmf/Deposit.cpp)
 #include "cast/Actuation.h"      // ForcedHoldFor: a worn kept relic under an MFO hold is not shipped (MFO-B126)
+#include "Loadout.h"             // LeftHandSlot: a worn LEFT-hand relic is unequipped from that slot before the transfer
+#include "PlayerGiven.h"         // a player-given item is never shipped (batch L review round)
 
 #include <algorithm>
 #include <cctype>
@@ -176,8 +178,13 @@ namespace MFO::Lotd {
         };
         Needs g_needs;   // worker only
         // MFO-B126: per follower, the off-role relics ShedOffRoleWeapon kept for the
-        // deposit on its last pass (NoteKeptForDeposit). Worker only, like g_needs.
-        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_keptForDeposit;
+        // deposit on its last pass and the in-role weapons he carried then
+        // (NoteKeptForDeposit). Worker only, like g_needs.
+        struct KeptRecord {
+            std::unordered_set<RE::FormID> kept;
+            std::vector<RE::FormID>        inRole;
+        };
+        std::unordered_map<RE::FormID, KeptRecord> g_keptForDeposit;
         std::uint32_t g_needsLoggedSeq = 0;
 
         // ── the TRIP (one deposit at a time, worker road + dismissal edge) ──────
@@ -611,14 +618,24 @@ namespace MFO::Lotd {
         // kept, MFO-B126); the main-thread transfer honours it instead of skipping.
         struct ShipItem { RE::FormID base; std::int32_t count; bool worn = false; };
 
-        // MFO-B126: a WORN relic ships only when the shed kept it (off-role, in-role
-        // weapon present) and no MFO hold names it (a hold is a gambit's choice: the
-        // relic was his only weapon of that category). Worker.
-        bool KeptOffRoleWorn(RE::FormID a_follower, RE::FormID a_base) {
+        // MFO-B126: a WORN relic ships only when the shed kept it (off-role) on its last
+        // pass, it is NOT player-given (and the record is installed at all: without it a
+        // player's weapon cannot be told apart, so nothing worn ships), no MFO hold names
+        // it (a hold is a gambit's choice: the relic was his only weapon of that
+        // category), and he STILL carries one of the in-role weapons that pass saw (the
+        // never-disarm guard, re-checked at ship time against a_inv). Worker.
+        bool KeptOffRoleWorn(RE::FormID a_follower, RE::FormID a_base, const RE::TESObjectREFR::InventoryItemMap& a_inv) {
+            if (!PlayerGiven::Installed() || PlayerGiven::IsPlayerGiven(a_follower, a_base)) return false;
             const auto it = g_keptForDeposit.find(a_follower);
-            if (it == g_keptForDeposit.end() || !it->second.count(a_base)) return false;
+            if (it == g_keptForDeposit.end() || !it->second.kept.count(a_base)) return false;
             const auto [holdR, holdL] = Actuation::ForcedHoldFor(a_follower);
-            return holdR != a_base && holdL != a_base;
+            if (holdR == a_base || holdL == a_base) return false;
+            for (const RE::FormID r : it->second.inRole) {
+                if (r == a_base) continue;
+                for (const auto& [obj, data] : a_inv)
+                    if (obj && obj->GetFormID() == r && data.first > 0) return true;
+            }
+            return false;
         }
 
         // The relics this follower carries that the museum needs FROM HIM: never worn
@@ -633,16 +650,18 @@ namespace MFO::Lotd {
             const auto fid = a_follower->GetFormID();
             const auto& excl = UncoveredExcluding(a_n, fid);
             if (excl.empty()) return out;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
+            const auto inv = a_follower->GetInventory();
+            for (auto& [obj, data] : inv) {
                 if (!obj || data.first <= 0) continue;
                 auto it = excl.find(obj->GetFormID());
                 if (it == excl.end() || it->second <= 0) continue;
                 auto* e = data.second.get();
                 if (e && e->IsQuestObject()) continue;
                 const bool worn = e && e->IsWorn();
-                if (worn && !KeptOffRoleWorn(fid, obj->GetFormID())) continue;
+                if (worn && !KeptOffRoleWorn(fid, obj->GetFormID(), inv)) continue;
                 if (Logistics::IsStockGear(fid, obj->GetFormID())) continue;
                 if (Logistics::IsPlayerPick(fid, obj->GetFormID())) continue;
+                if (PlayerGiven::IsPlayerGiven(fid, obj->GetFormID())) continue;   // marth: never ship what you gave him
                 out.push_back({ obj->GetFormID(), std::min<std::int32_t>(data.first, it->second), worn });
             }
             return out;
@@ -882,15 +901,34 @@ namespace MFO::Lotd {
             for (const auto& it : a_items) {
                 auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(it.base);
                 if (!obj) continue;
+                // The player-given record is mutex-guarded (PlayerGiven.cpp): re-checked here.
+                if (PlayerGiven::IsPlayerGiven(a_follower, it.base)) continue;
                 std::int32_t have = 0;
                 bool hold = false;
+                // The worn instance(s) of a planned WORN ship (MFO-B126): unequipped below,
+                // before the RemoveItem, from the hand each is worn in (parity with
+                // HealExcludedWeapon / KeepHeadClear, which unequip before they remove).
+                std::vector<std::pair<RE::ExtraDataList*, bool>> wornLists;   // (list, left hand)
                 for (auto& [o, d] : f->GetInventory([&](RE::TESBoundObject& x) { return x.GetFormID() == it.base; })) {
                     have += d.first;
-                    if (auto* e = d.second.get(); e && ((e->IsWorn() && !it.worn) || e->IsQuestObject())) hold = true;
+                    auto* e = d.second.get();
+                    if (!e) continue;
+                    if ((e->IsWorn() && !it.worn) || e->IsQuestObject()) hold = true;
+                    if (it.worn && e->extraLists)
+                        for (auto* xl : *e->extraLists) {
+                            if (!xl) continue;
+                            if (xl->HasType(RE::ExtraDataType::kWornLeft)) wornLists.emplace_back(xl, true);
+                            else if (xl->HasType(RE::ExtraDataType::kWorn)) wornLists.emplace_back(xl, false);
+                        }
                 }
                 // IsPlayerPick is NOT re-checked here: g_playerPicks is an unlocked WORKER-only
                 // map (EquipAuthority.cpp); Shippable filtered it on the worker.
                 if (hold || have <= 0) continue;
+                if (!wornLists.empty()) {
+                    if (auto* eq = RE::ActorEquipManager::GetSingleton())
+                        for (const auto& [xl, left] : wornLists)
+                            eq->UnequipObject(f, obj, xl, 1, left ? Loadout::LeftHandSlot() : nullptr);
+                }
                 const std::int32_t before = countIn(c, it.base, false);
                 f->RemoveItem(obj, std::min(it.count, have), RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, c);
                 const std::int32_t delta = countIn(c, it.base, false) - before;
@@ -1233,9 +1271,11 @@ namespace MFO::Lotd {
         return it != excl.end() && it->second > 0;
     }
 
-    void NoteKeptForDeposit(RE::FormID a_follower, std::vector<RE::FormID> a_bases) {
-        if (a_bases.empty()) { g_keptForDeposit.erase(a_follower); return; }
-        g_keptForDeposit[a_follower] = std::unordered_set<RE::FormID>(a_bases.begin(), a_bases.end());
+    void NoteKeptForDeposit(RE::FormID a_follower, std::vector<RE::FormID> a_kept, std::vector<RE::FormID> a_inRole) {
+        if (a_kept.empty()) { g_keptForDeposit.erase(a_follower); return; }
+        auto& rec  = g_keptForDeposit[a_follower];
+        rec.kept   = std::unordered_set<RE::FormID>(a_kept.begin(), a_kept.end());
+        rec.inRole = std::move(a_inRole);
     }
 
     bool KeepForDeposit(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_base) {
