@@ -31,9 +31,10 @@ namespace MFO::Catalog {
     bool CuresDisease(RE::FormID a_potion);   // kDisease or kBoth
 
     // Arrow-vs-bolt from the record's real flag. Runtime TESAmmo::IsBolt() is
-    // unreliable in practice (vanilla arrows report IsBolt()==true here), which
-    // made the follower reject every arrow; the catalog gets it right. kUnknown
-    // when uncatalogued -> caller falls back to IsBolt().
+    // unreliable in practice (vanilla arrows report IsBolt()==true here: the fork's
+    // IsBolt reads the wrong layout offset), which made the follower reject every
+    // arrow; the catalog gets it right. kUnknown when uncatalogued -> the caller
+    // (Logistics::AmmoIsBolt) reads the kNonBolt flag through GetRuntimeData().
     enum class Ammo { kUnknown, kArrow, kBolt };
     Ammo AmmoKind(RE::FormID a_ammo);
 

@@ -58,4 +58,10 @@ namespace MFO::Lotd {
     // ShedOffRoleWeapon: HoldFromSale AND his table holds an enabled act.loot_museum
     // AND the deposit can run -> keep it for the crate, do not hand it to the player.
     bool KeepForDeposit(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_base);
+    // ShedOffRoleWeapon, after its walk (MFO-B126): the off-role relics KeepForDeposit
+    // kept in the pack THIS pass, REPLACING the follower's set (empty when he has no
+    // in-role weapon: the never-disarm guard). Such a relic ships even when WORN -- his
+    // own AI equipped it in an unowned hand, which the shed would have dropped anyway;
+    // it is not the player's dressing. Never while an MFO hold names it. Worker road.
+    void NoteKeptForDeposit(RE::FormID a_follower, std::vector<RE::FormID> a_bases);
 }

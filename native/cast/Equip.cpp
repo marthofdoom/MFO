@@ -11,6 +11,7 @@
 #include "logistics/Logistics_internal.h" // 2026-09-13: EquipWeapon consumes THE weapon-style decision
                           // (ComputeWeaponRoles / WeaponScore) -- not in Logistics.h, and that
                           // header was outside the change's boundary. First non-Logistics include.
+#include "logistics/Lotd.h"   // HoldFromSale: a museum relic is never the combat pick while another weapon serves
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
 #include <limits>         // rank preemption: kNoRule sentinel (numeric_limits<int>::max)
 
@@ -106,6 +107,18 @@ namespace MFO::Actuation {
                            a_w->IsOneHandedAxe()   || a_w->IsOneHandedMace());
         }
 
+        // LOTD MUSEUM RELIC (field 2026-09-26, MFO-B126): a weapon base this follower
+        // covers for the museum (Lotd::HoldFromSale -- the Economy / SwapUp "never sell"
+        // test). It is carried to be DEPOSITED, not fought with: Cicero's looted relic
+        // two-hander out-scored his swords and every melee gambit force-held it until the
+        // deposit, six hours of game time later. WORKER ROAD: HoldFromSale reads the
+        // worker-only needs cache (Lotd.cpp FreshNeeds); EquipWeapon and its helpers run
+        // on the Scheduler's worker tick (worker-serial with the logistics service, the
+        // same road SwapUp calls it from). False whenever LOTD awareness is off.
+        bool IsMuseumRelic(RE::Actor* a_follower, RE::TESObjectWEAP* a_w) {
+            return a_w && Lotd::HoldFromSale(a_follower->GetFormID(), a_w);
+        }
+
         // Best carried one-hander for the LEFT hand by the SAME WeaponScore, that
         // is NOT the right hand's only instance (a different form, or a second
         // copy: count >= 2 -- with ONE copy the engine would MOVE it out of the
@@ -121,6 +134,7 @@ namespace MFO::Actuation {
                 if ((w->GetFormFlags() & (1u << 2)) != 0) continue;   // non-playable: invisible on a humanoid
                 if (a_daggerMelee && w->GetWeaponType() != RE::WEAPON_TYPE::kOneHandDagger) continue;
                 if (w == a_right && data.first < 2) continue;         // the right hand's only copy
+                if (IsMuseumRelic(a_follower, w)) continue;           // LOTD: carried for the museum (no fallback: the left is optional)
                 const float score = Logistics::WeaponScore(a_roles, w);
                 if (!best || score >= bestScore) { bestScore = score; best = w; }
             }
@@ -367,7 +381,37 @@ namespace MFO::Actuation {
             // melee<->ranged thrash of GAMBIT_FLOWS D4.
             RE::TESForm* const heldRight = a_follower->GetEquippedObject(false);
             RE::TESForm* const heldLeft  = a_follower->GetEquippedObject(true);
-            if (holdsCategory(heldRight) || holdsCategory(heldLeft)) {
+            // THE PICK'S ELIGIBILITY (shared by the pick loop below and the relic test
+            // here): no staff, no NON-PLAYABLE (record-header flag bit 2) creature/
+            // automaton gear -- it fires but is INVISIBLE on a humanoid (same check as
+            // Logistics' IsCreatureWeapon; loot never stocks these, but a player-given
+            // stray must not win the combat equip either) -- the rule's category, and
+            // daggers only for a base MAGE's melee (see holdsCategory above).
+            const auto eligible = [a_ranged, daggerMelee](RE::TESObjectWEAP* w) {
+                if (!w || w->IsStaff()) return false;
+                if ((w->GetFormFlags() & (1u << 2)) != 0) return false;
+                if ((w->IsBow() || w->IsCrossbow()) != a_ranged) return false;
+                return !daggerMelee || w->GetWeaponType() == RE::WEAPON_TYPE::kOneHandDagger;
+            };
+            // LOTD (MFO-B126): a held MUSEUM RELIC does not satisfy the rule while he
+            // carries another eligible weapon of the category -- whoever put it in the
+            // hand (his own AI in an unowned hand, or an MFO hold from before this fix
+            // restored by the FWPN co-save). The pick below then replaces it (the
+            // "DIFFERENT weapon may still be locked" release handles an old lock). A
+            // relic that is his ONLY weapon of the category still satisfies.
+            const auto relicWithAlternative = [&](RE::TESForm* a_held) {
+                auto* hw = a_held ? a_held->As<RE::TESObjectWEAP>() : nullptr;
+                if (!hw || !IsMuseumRelic(a_follower, hw)) return false;
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* w = obj->As<RE::TESObjectWEAP>();
+                    if (w && w != hw && eligible(w) && !IsMuseumRelic(a_follower, w)) return true;
+                }
+                return false;
+            };
+            const bool rightSatisfies = holdsCategory(heldRight) && !relicWithAlternative(heldRight);
+            const bool leftSatisfies  = holdsCategory(heldLeft) && !relicWithAlternative(heldLeft);
+            if (rightSatisfies || leftSatisfies) {
                 // ── OFF-HAND TOP-UP on the satisfied lap (2026-09-13) ─────────
                 // Melee, style control ON, a one-hander in the RIGHT hand, no
                 // WEAPON in the left. Cheap reads first; the inventory walk only
@@ -449,23 +493,28 @@ namespace MFO::Actuation {
             // THE PICK: WeaponScore inside the ordered class (banner above). Ranged
             // never has a preferred kind, so a bow/crossbow pick is plain damage.
             const Logistics::WeaponRoles roles = WeaponRolesFor(a_follower);
+            // LOTD (field 2026-09-26): a museum relic competes only in its own pool,
+            // used when NOTHING else of the category is carried.
             RE::TESObjectWEAP* best = nullptr; float bestScore = 0.0f;
+            RE::TESObjectWEAP* bestRelic = nullptr; float bestRelicScore = 0.0f;
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
-                if (!w || w->IsStaff()) continue;
-                // NON-PLAYABLE (record-header flag bit 2) is creature/automaton
-                // gear -- fires but is INVISIBLE on a humanoid (same check as
-                // Logistics' IsCreatureWeapon). Loot never stocks these, but a
-                // player-given stray must not win the combat equip either.
-                if ((w->GetFormFlags() & (1u << 2)) != 0) continue;
-                if ((w->IsBow() || w->IsCrossbow()) != a_ranged) continue;
-                // base MAGE melee = daggers only (see holdsCategory above).
-                if (daggerMelee && w->GetWeaponType() != RE::WEAPON_TYPE::kOneHandDagger) continue;
+                if (!eligible(w)) continue;   // staff / non-playable / category / mage daggers (above)
                 // `>=` on the float score orders EXACTLY as the old `>=` on the
                 // uint16 damage did when no kind is preferred (last equal wins).
                 const float score = Logistics::WeaponScore(roles, w);
+                if (IsMuseumRelic(a_follower, w)) {
+                    if (score >= bestRelicScore) { bestRelicScore = score; bestRelic = w; }
+                    continue;
+                }
                 if (score >= bestScore) { bestScore = score; best = w; }
+            }
+            if (!best && bestRelic) {
+                best = bestRelic;
+                spdlog::info("[equip] {:08X}: only a museum relic ('{}') is carried for this category -- "
+                             "using it until the deposit", a_follower->GetFormID(),
+                             bestRelic->GetFullName() ? bestRelic->GetFullName() : "?");
             }
             if (!best) return { Result::FailedSkill, a_ranged ? "no ranged weapon carried"
                                                               : "no melee weapon carried",

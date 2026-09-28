@@ -798,4 +798,14 @@ Raised against 5b88bcd (`feat/mfo-lotd`, tier-A re-review round 2), 2026-09-26. 
 Raised against 5b88bcd (`feat/mfo-lotd`, tier-A re-review round 2), 2026-09-26. Reviewer's finding (verbatim from the review log): "Same-base double deposit baseline -> early release". Two deposits of one base (two crates, or one crate twice) each record a DropoffCrate baseline at their own deposit time; the first arrival can satisfy the second entry's `baseline + count` test and release it while its items are still in transit, so a follower can collect (and ship) one more copy. Fix shape: key arrival on the sum of every pending entry of that base.
 
 ### MFO-B126 (SEV-4) -- LOTD: an off-role relic kept for the deposit can be auto-equipped and then never shipped
+**RESOLVED 2026-09-27, branch `fix/mfo-batchL-field` (batch L field fix 2, carve-out (b)).** Both halves: (MFO pick)
+`cast/Equip.cpp` `EquipWeapon` keeps relics (`Lotd::HoldFromSale`) out of the pick unless nothing else of the category
+is carried, `PickOffHandWeapon` skips them, and a HELD relic does not satisfy the equip rule while an alternative is
+carried, so an old FWPN relic hold or an AI-equipped relic is replaced on the next equip lap. The ch.17 declaration's
+hands come only from that hold ledger, so the declared set never names a relic when an alternative exists (no change
+was needed in `EquipAuthority.cpp`; owning an unheld hand there to refuse the AI's equip is the F6 freeze). (Engine
+AI in an unowned hand) the backlog's second fix shape: `ShedOffRoleWeapon` reports the relics it kept
+(`Lotd::NoteKeptForDeposit`, only with an in-role weapon left), and `Shippable` / `TransferOnMain` ship such a relic
+even when WORN, unless an MFO hold names it. The shed would have dropped it worn or not, so this is not the player's
+dressing.
 Raised against 5b88bcd (`feat/mfo-lotd`, tier-A re-review round 2), 2026-09-26. Reviewer's finding (verbatim from the review log): "KeepForDeposit + AI self-equip -> worn -> never shipped." `ShedOffRoleWeapon` now leaves a needed relic weapon in the pack (`KeepForDeposit`); if the follower's own AI equips it, `Shippable` skips it as worn (the manual-override rule), so it neither goes to the player nor to the crate. Fix shape: exclude a relic from the engine's equip choice while it is kept for the deposit, or ship a worn relic that MFO (not the player) left in the pack.

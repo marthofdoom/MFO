@@ -52,8 +52,9 @@ namespace MFO::Logistics {
     // buy side applies the same "ignore low power" rule as looting.
     float PotionLootFloor();
 
-    // Arrow vs bolt, catalog-first with an IsBolt() fallback (runtime IsBolt() alone
-    // is unreliable). Shared so the buy side classifies uncatalogued ammo too.
+    // Arrow vs bolt, catalog-first with a GetRuntimeData() kNonBolt fallback (runtime
+    // TESAmmo::IsBolt() reads the wrong layout offset). Shared so the buy side
+    // classifies uncatalogued ammo too.
     bool AmmoIsBolt(RE::TESAmmo* a_ammo);
     // THE SWAP-UP RULE (logistics/SwapUp.cpp): a SPECIAL round -- its projectile
     // carries an explosion (elemental arrows, exploding bolts) -- is outside the

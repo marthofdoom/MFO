@@ -13,6 +13,26 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-27 branch `fix/mfo-batchL-field` (off `main` `c7aab6e`; NOT merged, NOT deployed; tier B). Batch L field
+  fixes 1-3 from the 2026-09-26 Tuxborn diagnosis.** (1) Engage-on-sight no longer charges wildlife: `IsEnemy` skips an
+  actor whose Aggression actor value is 0 unless it is already fighting the party (marth: "If I attack a deer it's
+  marked"); the skips and the target's aggression are in the `[engage-on-sight]` armed / ENGAGE lines. The in-combat
+  pickers (`Evaluator.cpp`) are untouched (marth's call, pending). (2) A LOTD museum relic is never the combat pick
+  while another weapon of its category is carried (`cast/Equip.cpp` `IsMuseumRelic`; field: Cicero fought with a relic
+  two-hander for six hours); a held relic no longer satisfies the equip rule then, and the off-hand pick skips relics.
+  MFO-B126 closed: a WORN off-role relic the shed kept for the deposit now ships (`Lotd::NoteKeptForDeposit`,
+  `Shippable`), unless an MFO hold names it. (3) Arrows vs bolts: `AmmoIsBolt`'s uncatalogued fallback reads the
+  kNonBolt flag through `GetRuntimeData()` instead of `TESAmmo::IsBolt()` (field: bow users bought and looted bolts,
+  no patcher catalog on Tuxborn); the `[arrowprobe]` diagnostic too. FIELD CHECKS: no `ENGAGE` on elk / deer /
+  rabbit / fox (the armed line reads "N unaggressive ... skipped"); hitting a deer first still ENGAGEs with
+  "(unaggressive, but fighting the party: counts)"; Cicero's melee gambit picks a sword over a looted relic; no
+  bolts bought or looted by a bow user.
+- **OPEN (fork, needs its own brief): fork `TESAmmo::IsBolt` / `IgnoresNormalWeaponResistance` read the wrong
+  layout: a fork fix brief is needed.** `_commonlib/mit-3.7-fork` `src/RE/T/TESAmmo.cpp` reads the direct `data`
+  member; with SE+AE+VR all enabled the header's `#else` branch places it at 0xB0 (inside TESWeightForm) instead of
+  0x110, so both return a flag bit of the weight float. The fix is to read `GetRuntimeData().data.flags`. MFO no
+  longer calls either (batch L); do not add a call until the fork is fixed. The fork was NOT edited.
+
 - **2026-09-26 branch `feat/mfo-confidence-v2` (off `main` `92e8932`; NOT merged, NOT deployed; tier B+, a shared
   primitive). Batch L, ClickUp 86e3erv94 (the Confidence half of the assessment's "STILL OPEN").** `Confidence::Of` v2 =
   vitality x HP-loss TREND x, in combat, a fight multiplier on the WEIGHTED foe load (`CombatSense::FoeLoad`: each foe

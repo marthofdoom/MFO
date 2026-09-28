@@ -178,7 +178,9 @@ namespace MFO::Logistics {
         // the patcher) -- runtime TESAmmo::IsBolt() proved unreliable: vanilla
         // Iron/Steel/Ancient Nord arrows report IsBolt()==true here, so the arrow
         // gambit rejected every arrow on a corpse (deck arrowprobe, 000C5684).
-        // Uncatalogued ammo falls back to IsBolt() (mod still runs with no patcher).
+        // Uncatalogued ammo falls back to the kNonBolt flag read through
+        // GetRuntimeData() (mod still runs with no patcher) -- never IsBolt(), whose
+        // fork body reads the wrong layout offset (field 2026-09-26).
         // AmmoIsBolt is defined in the PUBLIC namespace (declared in Logistics.h) so
         // the economy buy side shares it; anon-namespace callers resolve it there.
 

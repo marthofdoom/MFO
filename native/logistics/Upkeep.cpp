@@ -104,7 +104,12 @@ namespace MFO::Logistics {
         switch (Catalog::AmmoKind(a_ammo->GetFormID())) {
         case Catalog::Ammo::kArrow: return false;
         case Catalog::Ammo::kBolt:  return true;
-        default:                    return a_ammo->IsBolt();
+        // NOT TESAmmo::IsBolt() (field 2026-09-26): the fork's out-of-line IsBolt reads the
+        // DIRECT `data` member, which on our SE+AE+VR build is the header's #else layout
+        // (0xB0, inside TESWeightForm) instead of 0x110 -- the "flags" it tested were the
+        // low byte of the weight float, so with no patcher catalog bow users bought and
+        // looted bolts. GetRuntimeData() relocates to the real DATA (0x110 SE/AE, 0x100 VR).
+        default:                    return a_ammo->GetRuntimeData().data.flags.none(RE::AMMO_DATA::Flag::kNonBolt);
         }
     }
 
@@ -380,6 +385,7 @@ namespace MFO::Logistics {
         };
 
         RE::TESBoundObject* shed = nullptr; std::int32_t shedCount = 0; int inRoleWeapons = 0;
+        std::vector<RE::FormID> keptForDeposit;   // MFO-B126: handed to Lotd after the walk
         for (auto& [obj, data] : a_follower->GetInventory()) {
             if (!obj || data.first <= 0) continue;
             auto* w = obj->As<RE::TESObjectWEAP>();
@@ -396,9 +402,13 @@ namespace MFO::Logistics {
             if (!Config::g_lootSpecialItems.load() && socketed(data.second.get())) continue;
             // LOTD: a relic he carries for the museum's deposit trip is deposited, not
             // handed to the player (only when the trip can actually happen).
-            if (Lotd::KeepForDeposit(a_follower, a_state, obj)) continue;
+            if (Lotd::KeepForDeposit(a_follower, a_state, obj)) { keptForDeposit.push_back(obj->GetFormID()); continue; }
             if (!shed) { shed = obj; shedCount = data.first; }   // first off-role, one per tick
         }
+        // MFO-B126: the kept relics ship even if his AI has since equipped one -- but
+        // only with an in-role weapon left (the never-disarm guard below, same count).
+        Lotd::NoteKeptForDeposit(a_follower->GetFormID(),
+                                 inRoleWeapons > 0 ? std::move(keptForDeposit) : std::vector<RE::FormID>{});
         if (!shed) return false;   // nothing off-role in the pack
         // The fists verdict is what decides the never-disarm guard when the only
         // other "weapon" is the Unarmed record, so log it where it matters --

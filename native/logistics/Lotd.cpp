@@ -34,6 +34,7 @@
 #include "MainThread.h"
 #include "TeleportCompat.h"     // the confidence leash (the crate must be inside it, like a loot target)
 #include "apmf/APMFBridge.h"    // the deposit trip's Harbinger claims (apmf/Deposit.cpp)
+#include "cast/Actuation.h"      // ForcedHoldFor: a worn kept relic under an MFO hold is not shipped (MFO-B126)
 
 #include <algorithm>
 #include <cctype>
@@ -174,6 +175,9 @@ namespace MFO::Lotd {
             std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, std::int32_t>> uncoveredExcl;
         };
         Needs g_needs;   // worker only
+        // MFO-B126: per follower, the off-role relics ShedOffRoleWeapon kept for the
+        // deposit on its last pass (NoteKeptForDeposit). Worker only, like g_needs.
+        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_keptForDeposit;
         std::uint32_t g_needsLoggedSeq = 0;
 
         // ── the TRIP (one deposit at a time, worker road + dismissal edge) ──────
@@ -603,10 +607,24 @@ namespace MFO::Lotd {
             return a_n.uncoveredExcl.emplace(a_follower, Uncovered(a_n, std::move(supply))).first->second;
         }
 
-        struct ShipItem { RE::FormID base; std::int32_t count; };
+        // worn: the planned instance is WORN and ships anyway (an off-role relic the shed
+        // kept, MFO-B126); the main-thread transfer honours it instead of skipping.
+        struct ShipItem { RE::FormID base; std::int32_t count; bool worn = false; };
+
+        // MFO-B126: a WORN relic ships only when the shed kept it (off-role, in-role
+        // weapon present) and no MFO hold names it (a hold is a gambit's choice: the
+        // relic was his only weapon of that category). Worker.
+        bool KeptOffRoleWorn(RE::FormID a_follower, RE::FormID a_base) {
+            const auto it = g_keptForDeposit.find(a_follower);
+            if (it == g_keptForDeposit.end() || !it->second.count(a_base)) return false;
+            const auto [holdR, holdL] = Actuation::ForcedHoldFor(a_follower);
+            return holdR != a_base && holdL != a_base;
+        }
 
         // The relics this follower carries that the museum needs FROM HIM: never worn
-        // (wearing it is the manual override), never an item the PLAYER gave or put on
+        // (wearing it is the manual override) -- EXCEPT an off-role relic the shed kept
+        // for the deposit and his own AI then equipped (KeptOffRoleWorn above: the shed
+        // would have dropped it worn or not) -- never an item the PLAYER gave or put on
         // him (IsPlayerPick, Economy's own check), never quest-flagged (LOTD's crate
         // ships quest items too -- trap (b)), never his own stock gear.
         std::vector<ShipItem> Shippable(RE::Actor* a_follower, Needs& a_n) {
@@ -620,10 +638,12 @@ namespace MFO::Lotd {
                 auto it = excl.find(obj->GetFormID());
                 if (it == excl.end() || it->second <= 0) continue;
                 auto* e = data.second.get();
-                if (e && (e->IsWorn() || e->IsQuestObject())) continue;
+                if (e && e->IsQuestObject()) continue;
+                const bool worn = e && e->IsWorn();
+                if (worn && !KeptOffRoleWorn(fid, obj->GetFormID())) continue;
                 if (Logistics::IsStockGear(fid, obj->GetFormID())) continue;
                 if (Logistics::IsPlayerPick(fid, obj->GetFormID())) continue;
-                out.push_back({ obj->GetFormID(), std::min<std::int32_t>(data.first, it->second) });
+                out.push_back({ obj->GetFormID(), std::min<std::int32_t>(data.first, it->second), worn });
             }
             return out;
         }
@@ -866,7 +886,7 @@ namespace MFO::Lotd {
                 bool hold = false;
                 for (auto& [o, d] : f->GetInventory([&](RE::TESBoundObject& x) { return x.GetFormID() == it.base; })) {
                     have += d.first;
-                    if (auto* e = d.second.get(); e && (e->IsWorn() || e->IsQuestObject())) hold = true;
+                    if (auto* e = d.second.get(); e && ((e->IsWorn() && !it.worn) || e->IsQuestObject())) hold = true;
                 }
                 // IsPlayerPick is NOT re-checked here: g_playerPicks is an unlocked WORKER-only
                 // map (EquipAuthority.cpp); Shippable filtered it on the worker.
@@ -997,6 +1017,7 @@ namespace MFO::Lotd {
             g_main.reset();
         }
         g_needs = Needs{};
+        g_keptForDeposit.clear();
         g_needsLoggedSeq = 0;
         g_rebuildQueued.store(false);
         g_mainQueued.store(false);
@@ -1210,6 +1231,11 @@ namespace MFO::Lotd {
         const auto& excl = UncoveredExcluding(needs, a_follower);
         auto it = excl.find(a_base->GetFormID());
         return it != excl.end() && it->second > 0;
+    }
+
+    void NoteKeptForDeposit(RE::FormID a_follower, std::vector<RE::FormID> a_bases) {
+        if (a_bases.empty()) { g_keptForDeposit.erase(a_follower); return; }
+        g_keptForDeposit[a_follower] = std::unordered_set<RE::FormID>(a_bases.begin(), a_bases.end());
     }
 
     bool KeepForDeposit(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_base) {

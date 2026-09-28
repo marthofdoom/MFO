@@ -7,6 +7,11 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Followers leave wildlife alone.** Engage on sight no longer sends a follower after elk, deer, rabbits, foxes or any other animal that never attacks. If you attack one first, he joins in.
+- **Museum relics stay in the pack.** A follower no longer fights with a relic he is carrying for the museum while he has another weapon of that kind. If the relic is his only one, he uses it until he ships it.
+- **A relic a follower picked up and put on himself still gets shipped.** Only relics he would have dropped anyway. Items you put on him are never shipped.
+- **Bow users stop buying and looting bolts.** Arrows and bolts are told apart correctly again without the ItemCatalog patcher.
+
 - **A follower who is losing now runs back to you.** Confidence watches how fast he is losing health. A duel he is losing badly sends him back well before he is nearly dead.
 - **Strong enemies count for more, weak ones for less.** A dragon weighs about four times a mudcrab. A pack of mudcrabs no longer sends a healthy follower running.
 - **A crowd alone no longer forces a retreat at full health.** Five even enemies keep him fighting while he holds his own. If the pack starts hurting him, he falls back.

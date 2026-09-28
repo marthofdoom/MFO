@@ -472,7 +472,7 @@ namespace MFO::Logistics {
                                     if (auto* am = obj ? obj->As<RE::TESAmmo>() : nullptr)
                                         ad += std::format(" [{} x{} isBolt={}]",
                                             am->GetFullName() ? am->GetFullName() : "?",
-                                            data.first, am->IsBolt() ? 1 : 0);
+                                            data.first, AmmoIsBolt(am) ? 1 : 0);   // not TESAmmo::IsBolt (wrong layout, see Upkeep.cpp)
                                 }
                                 if (!ad.empty())
                                     spdlog::info("[arrowprobe] {:08X} EMPTY-verdict body {:08X} "
