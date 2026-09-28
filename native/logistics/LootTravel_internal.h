@@ -98,6 +98,10 @@ namespace MFO::Logistics {
             RE::FormID          acquireRefID = 0;   // the loose ref, for the log (its handle may die)
             RE::FormID          acquireBase  = 0;   // its base object -- the inventory-delta key
             std::int32_t        acquirePre   = 0;   // follower's count of base BEFORE dispatch
+            // A COIN PURSE harvest (86e3f9pkg): the ref is FLORA, so it persists (harvested,
+            // not gone) and the produce lands as COIN, not as the base -- acquirePre then
+            // holds his coin count (CoinCount) and the readback proves the credit.
+            bool                acquireFlora = false;
         };
         // P7 MULTI-SLOT: up to kMaxLootSlots concurrent loot excursions, one per
         // slot. Slot i maps to the loot quest's alias PAIR (actor 2*i, target

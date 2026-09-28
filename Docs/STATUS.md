@@ -13,6 +13,37 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-27 branch `feat/mfo-loose-loot` (off `main` `c7aab6e`; NOT merged, NOT deployed; tier A: crime safety).
+  Batch L, ClickUp 86e3f9pkg (+ the field finding "followers still skipping bags on coins", diag-field0926 F4).**
+  (0) Loose arrows / bolts now run THE SWAP-UP RULE (`LooseAmmoQualifies`, the take side extracted verbatim from
+  `SwapUpAmmoFrom` into `SwapUpAmmoTakeSet`): a loose stack strictly worse than his worst held ammo is passed over.
+  (1) The route-2b loose whitelist in `LootNearby` gains `Category::Museum` (`LooseMuseumQualifies`, `Lotd.cpp`: the
+  same uncovered-need want `LootMuseum` takes from a container). Every other category already had a loose branch.
+  (2) THE LOOSE-ITEM SOURCE BAR (`LooseRefBarred`, `LootTake.cpp`), unconditional, applied to every loose candidate
+  of every category: a LOTD museum DISPLAY ref (the snapshot's display-ref set, `Lotd::IsDisplayRef`), player storage /
+  homes / the museum halls (`RefInPlayerStorage`; every LOTD display cell is LocTypePlayerHouse + PlayerFaction-owned in
+  the installed ESM), a ref the PLAYER dropped this session (container-change sink, epoch-scoped), a quest item, owned /
+  off-limits, and a civilised place (`LocationTypes::Classify`) whose cell has an owner. Logged once per ref.
+  (3) COIN: `IsCoinLoot` also matches COIN's `DES_DefaultCoinsList` (C.O.I.N.esp local 0xBE7, ESL; Gold001 + 13
+  regional coins), so regional coins in containers are gold loot; the Gold / Valuables loose branches admit an
+  un-harvested coin-purse FLORA ref whose produce resolves to coin (`IsCoinPurseFlora`), harvested by the same arrival
+  `ActivateRef` on MAIN. VendorNoSale (000FF9FB), the coins' only keyword, is deliberately NOT a coin signal.
+  FIELD CHECKS: `[loot] COIN coin rule: 14 coin items ...` once at the first loot scan; `[loot] coin purse flora
+  XXXXXXXX 'Coin Purse' -> gold loot`; then the PROOF pair `[acquire] ...: HARVEST (native/main-thread) coin purse ...
+  his coin before = N` and `[acquire] ...: HARVESTED coin purse ... harvested=1 coin N -> M (+k)`. A WARN `coin purse
+  ... NOT credited` means an NPC harvest does not credit the follower (principle 5: report it, do not paper over it).
+  Loose museum relic: `[acquire] ... ACTIVATE` then `TOOK`, with a `Loot museum items` rule on and LOTD awareness on.
+  Bar: `[loot] ... loose ref ... SKIPPED -- <reason>` once per ref (walk through the museum, a home, Whiterun's market:
+  every skip must name a reason, and no display / home item / shop stock may ever be taken). Drop an item and confirm
+  `[loot] player dropped XXXXXXXX -- never a loose-loot candidate` and that nobody picks it up.
+  CLOSING ROUND (after the tier-A review of `ea518ef`, clean on theft safety): the bar now refuses a loose ref in ANY
+  owned cell (not only civilised ones; GetOwner already falls back to the cell for items, per AE disassembly); the
+  SAME bar re-runs at ARRIVAL before the ActivateRef (`[acquire] ... skipped at ARRIVAL -- <why>`), plus "already
+  harvested" for a purse; the FIRST `harvested=1` purse with no coin gained logs an `[error]` and LATCHES the
+  coin-purse road off for the process; COIN's coin set is rebuilt per load (script-added list entries are save
+  state); the loose-ammo scan reads HeldAmmo once per scan. The engine's `ExtraDroppedItemList` does NOT record the
+  player's own drops (RE in MAP / agent log), so the session-scoped drop record stays: a drop made before a reload
+  is not remembered after it. Backlog MFO-B129 (loose museum over-take within one needs window).
 - **2026-09-26 branch `feat/mfo-confidence-v2` (off `main` `92e8932`; NOT merged, NOT deployed; tier B+, a shared
   primitive). Batch L, ClickUp 86e3erv94 (the Confidence half of the assessment's "STILL OPEN").** `Confidence::Of` v2 =
   vitality x HP-loss TREND x, in combat, a fight multiplier on the WEIGHTED foe load (`CombatSense::FoeLoad`: each foe

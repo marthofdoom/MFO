@@ -409,32 +409,15 @@ namespace MFO::Logistics {
             return a_outQty > 0;
         }
 
-        bool SwapUpAmmoFrom(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
-                            int a_target, bool a_upgradeOnly, bool a_peek) {
-            if (!a_follower || !a_src) return false;
-            // Collect first, mutate after -- RemoveItem dispatches
-            // TESContainerChangedEvent synchronously, so touching an inventory
-            // mid-walk is the #2 landmine.
-            std::vector<AmmoStack> body;
-            for (auto& [obj, data] : a_src->GetInventory()) {
-                if (!obj || data.first <= 0) continue;
-                auto* am = obj->As<RE::TESAmmo>();
-                if (!am || AmmoIsBolt(am) != a_wantBolt || !AmmoSwapEligible(am)) continue;
-                auto* entry = data.second.get();
-                if (IsQuestObjectInstance(entry)) continue;   // quest ammo stays where it is
-                AmmoStack s;
-                s.obj = obj; s.count = static_cast<std::int32_t>(data.first); s.dmg = AmmoDamage(am);
-                s.value   = entry ? entry->GetValue() : 0;
-                s.special = AmmoIsSpecial(am, entry);
-                s.pinned  = s.special;   // a special round is never obsolete, here or once held
-                // The UPGRADE road buys into the damage ladder only; a special round
-                // is the restock road's (or the player's) business.
-                if (a_upgradeOnly && s.special) continue;
-                body.push_back(s);
-            }
-            if (body.empty()) return false;
-
-            std::vector<AmmoStack> held = HeldAmmo(a_follower, a_wantBolt);
+        // THE RULE's TAKE SIDE (moved verbatim out of SwapUpAmmoFrom, 86e3f9pkg, so a LOOSE
+        // ammo ref is judged by the same rule as a stack in a body -- LooseAmmoQualifies):
+        // which of a_body's stacks the rule keeps. Empty = take nothing.
+        std::vector<AmmoStack> SwapUpAmmoTakeSet(RE::Actor* a_follower, bool a_wantBolt, int a_target,
+                                                 bool a_upgradeOnly, const std::vector<AmmoStack>& body,
+                                                 const std::vector<AmmoStack>* a_held) {
+            // a_held: the caller's HeldAmmo(a_follower, a_wantBolt), when it already has one
+            // (the loose scan reads it once per scan, not once per loose ref).
+            std::vector<AmmoStack> held = a_held ? *a_held : HeldAmmo(a_follower, a_wantBolt);
             // ELIGIBILITY (what this call may take):
             //  * RESTOCK (the arrows/bolts gambit, a_upgradeOnly=false): at-or-above
             //    his WORST held ordinary ammo -- a low archer restocks the very arrows
@@ -446,7 +429,7 @@ namespace MFO::Logistics {
             bool     strict = false;
             if (a_upgradeOnly) {
                 std::int32_t qty = 0;
-                if (!AmmoUpgradeBar(a_follower, a_wantBolt, a_target, floorRank, qty)) return false;
+                if (!AmmoUpgradeBar(a_follower, a_wantBolt, a_target, floorRank, qty)) return {};
                 strict = true;
             } else {
                 for (const auto& h : held) {
@@ -473,6 +456,57 @@ namespace MFO::Logistics {
                 }
                 if (ok && !AmmoObsolete(b, cutoff)) take.push_back(b);
             }
+            return take;
+        }
+
+        // The route-2b twin of the RESTOCK take (86e3f9pkg): a LOOSE ammo ref (a_ammo its
+        // base, already of the wanted class) qualifies iff SwapUpAmmoTakeSet would take it
+        // out of a body -- at-or-above his worst held ordinary ammo and not obsolete the
+        // moment it landed. a_target is the caller's AmmoKeepTarget (computed once per scan,
+        // exactly as LootAmmo computes it). A loose ref has no InventoryEntryData: its value
+        // is the base's (GetGoldValue, the same InventoryEntryData read of a plain item) and
+        // "special" is the base's explosion projectile; an enchanted loose round (ExtraEnchantment
+        // on the ref) is not read -- see MAP. The SHED half does not run for a loose pickup
+        // (there is no body to drop into); obsolete held ammo goes at the next vendor.
+        bool LooseAmmoQualifies(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, RE::TESAmmo* a_ammo,
+                                bool a_wantBolt, int a_target, const std::vector<AmmoStack>& a_held) {
+            if (!a_follower || !a_ref || !a_ammo || !AmmoSwapEligible(a_ammo)) return false;
+            AmmoStack s;
+            s.obj     = a_ammo;
+            s.count   = std::max<std::int32_t>(1, static_cast<std::int32_t>(a_ref->extraList.GetCount()));
+            s.dmg     = AmmoDamage(a_ammo);
+            s.value   = a_ammo->GetGoldValue();
+            s.special = AmmoIsSpecialBase(a_ammo);
+            s.pinned  = s.special;
+            return !SwapUpAmmoTakeSet(a_follower, a_wantBolt, a_target, false, { s }, &a_held).empty();
+        }
+
+        bool SwapUpAmmoFrom(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
+                            int a_target, bool a_upgradeOnly, bool a_peek) {
+            if (!a_follower || !a_src) return false;
+            // Collect first, mutate after -- RemoveItem dispatches
+            // TESContainerChangedEvent synchronously, so touching an inventory
+            // mid-walk is the #2 landmine.
+            std::vector<AmmoStack> body;
+            for (auto& [obj, data] : a_src->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* am = obj->As<RE::TESAmmo>();
+                if (!am || AmmoIsBolt(am) != a_wantBolt || !AmmoSwapEligible(am)) continue;
+                auto* entry = data.second.get();
+                if (IsQuestObjectInstance(entry)) continue;   // quest ammo stays where it is
+                AmmoStack s;
+                s.obj = obj; s.count = static_cast<std::int32_t>(data.first); s.dmg = AmmoDamage(am);
+                s.value   = entry ? entry->GetValue() : 0;
+                s.special = AmmoIsSpecial(am, entry);
+                s.pinned  = s.special;   // a special round is never obsolete, here or once held
+                // The UPGRADE road buys into the damage ladder only; a special round
+                // is the restock road's (or the player's) business.
+                if (a_upgradeOnly && s.special) continue;
+                body.push_back(s);
+            }
+            if (body.empty()) return false;
+
+            std::vector<AmmoStack> take = SwapUpAmmoTakeSet(a_follower, a_wantBolt, a_target, a_upgradeOnly, body);
             if (a_peek) return !take.empty();
             if (take.empty()) return false;
 
