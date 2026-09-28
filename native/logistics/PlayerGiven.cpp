@@ -4,6 +4,7 @@
 #include "PlayerGiven.h"
 #include "Followers.h"    // IsTrackedFast: the locked roster mirror, safe from any thread (#74)
 #include "MainThread.h"   // the leave recount runs on the main thread
+#include "Diagnostics.h"  // PumpTickGate / CurrentPumpEpoch: queued writes drain with StopPump / PausePump
 
 #include <atomic>
 #include <cstdint>
@@ -85,24 +86,19 @@ namespace MFO::PlayerGiven {
             return ui && (ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME) || ui->IsMenuOpen(RE::GiftMenu::MENU_NAME));
         }
 
-        class ContainerSink final : public RE::BSTEventSink<RE::TESContainerChangedEvent> {
-        public:
-            static ContainerSink* GetSingleton() { static ContainerSink s; return &s; }
-
-            RE::BSEventNotifyControl ProcessEvent(const RE::TESContainerChangedEvent* a_ev,
-                                                  RE::BSTEventSource<RE::TESContainerChangedEvent>*) override {
-                if (!a_ev || !a_ev->baseObj) return RE::BSEventNotifyControl::kContinue;
-                const RE::FormID from = a_ev->oldContainer;
-                const RE::FormID to   = a_ev->newContainer;
-                if (from == kPlayerID && to && Followers::IsTrackedFast(to)) {
-                    Mark(to, a_ev->baseObj, kGiven, "given by the player -- never shipped");
-                } else if (from && from != kPlayerID && Bits(from, a_ev->baseObj)) {
-                    const RE::FormID base = a_ev->baseObj;
-                    MainThread::Post([from, base]() { RecountOnMain(from, base); });
-                }
-                return RE::BSEventNotifyControl::kContinue;
-            }
-        };
+        // The sinks QUEUE (Sinks.cpp's ContainerSink pattern, #1/#4): the decision's
+        // inputs are read at event time (the direction, the roster mirror, the open
+        // menu), the table is written in an AddTask body under PumpTickGate, so a write
+        // queued before a revert never lands after ClearTransientState.
+        template <class F>
+        void Queue(F&& a_fn) {
+            const auto epoch = Diagnostics::CurrentPumpEpoch();
+            SKSE::GetTaskInterface()->AddTask([epoch, fn = std::forward<F>(a_fn)]() {
+                Diagnostics::PumpTickGate gate(epoch);
+                if (!gate) return;
+                fn();
+            });
+        }
 
         class EquipSink final : public RE::BSTEventSink<RE::TESEquipEvent> {
         public:
@@ -113,13 +109,27 @@ namespace MFO::PlayerGiven {
                 if (!a_ev || !a_ev->actor || !a_ev->baseObject) return RE::BSEventNotifyControl::kContinue;
                 const RE::FormID id = a_ev->actor->GetFormID();
                 if (!Followers::IsTrackedFast(id) || !GiveMenuOpen()) return RE::BSEventNotifyControl::kContinue;
+                const RE::FormID base = a_ev->baseObject;
                 if (a_ev->equipped)
-                    Mark(id, a_ev->baseObject, kEquipped, "put on him by the player (trade / gift menu open)");
+                    Queue([id, base]() { Mark(id, base, kEquipped, "put on him by the player (trade / gift menu open)"); });
                 else
-                    ClearBits(id, a_ev->baseObject, kEquipped, "taken off him by the player (trade / gift menu open)");
+                    Queue([id, base]() { ClearBits(id, base, kEquipped, "taken off him by the player (trade / gift menu open)"); });
                 return RE::BSEventNotifyControl::kContinue;
             }
         };
+    }
+
+    void OnContainerChanged(const RE::TESContainerChangedEvent& a_ev) {
+        if (!a_ev.baseObj) return;
+        const RE::FormID from = a_ev.oldContainer;
+        const RE::FormID to   = a_ev.newContainer;
+        const RE::FormID base = a_ev.baseObj;
+        if (from == kPlayerID && to && Followers::IsTrackedFast(to)) {
+            Queue([to, base]() { Mark(to, base, kGiven, "given by the player -- never shipped"); });
+        } else if (from && from != kPlayerID && Bits(from, base)) {
+            // Left a follower with a record: recount on the MAIN thread next frame.
+            MainThread::Post([from, base]() { RecountOnMain(from, base); });
+        }
     }
 
     void RegisterSinks() {
@@ -129,10 +139,11 @@ namespace MFO::PlayerGiven {
                          "(nothing is recorded as given; LOTD then never ships a worn relic)");
             return;
         }
-        holder->AddEventSink<RE::TESContainerChangedEvent>(ContainerSink::GetSingleton());
+        // The container half has NO sink of its own: Sinks.cpp's ContainerSink calls
+        // OnContainerChanged (one TESContainerChangedEvent sink for all of logistics).
         holder->AddEventSink<RE::TESEquipEvent>(EquipSink::GetSingleton());
         g_installed.store(true);
-        spdlog::info("[player-given] container + equip sinks installed");
+        spdlog::info("[player-given] equip sink installed (container transfers via the logistics ContainerSink)");
     }
 
     void ClearTransientState() {

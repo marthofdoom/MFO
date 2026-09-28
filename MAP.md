@@ -3104,12 +3104,16 @@ BY SKILL + PERKS above.
 
 ### logistics/PlayerGiven.cpp / PlayerGiven.h — THE PLAYER-GIVEN RECORD (batch L review round; NOT serialized)
 The signal MFO lacked: which items the PLAYER gave a follower or put on him (`IsPlayerPick` covers worn
-ARMO / ammo only, under APMF enforcement). Two `ScriptEventSourceHolder` sinks, registered at kDataLoaded
-(`plugin.cpp`, after `Lotd::RegisterSinks`): `TESContainerChangedEvent` (fork `RE/T/TESContainerChangedEvent.h`:
-`oldContainer` / `newContainer` / `baseObj` FormIDs) with `oldContainer == 0x14` and `newContainer` a
-tracked follower (`Followers::IsTrackedFast`) -> GIVEN; `TESEquipEvent` (fork `RE/T/TESEquipEvent.h`: `actor`,
-`baseObject`, `equipped`) on a tracked follower while `ContainerMenu` or `GiftMenu` is open (the game is
-paused: his AI cannot equip then) -> EQUIPPED, an in-menu unequip clears that bit. A transfer OUT of a
+ARMO / ammo only, under APMF enforcement). The container half has NO sink of its own: `Sinks.cpp`'s
+logistics `ContainerSink::ProcessEvent` calls `PlayerGiven::OnContainerChanged` first (before its logistics
+gate; ONE `TESContainerChangedEvent` sink for logistics, coordinator 2026-09-27). `TESContainerChangedEvent`
+(fork `RE/T/TESContainerChangedEvent.h`: `oldContainer` / `newContainer` / `baseObj` FormIDs) with
+`oldContainer == 0x14` and `newContainer` a tracked follower (`Followers::IsTrackedFast`) -> GIVEN. Its own
+`EquipSink` (`RegisterSinks`, `plugin.cpp` after `Lotd::RegisterSinks`): `TESEquipEvent` (fork
+`RE/T/TESEquipEvent.h`: `actor`, `baseObject`, `equipped`) on a tracked follower while `ContainerMenu` or
+`GiftMenu` is open (the game is paused: his AI cannot equip then) -> EQUIPPED, an in-menu unequip clears
+that bit. Inputs are read at event time and the WRITE is queued (AddTask under `PumpTickGate`, the
+ContainerSink pattern), so nothing queued before a revert lands after the clear. A transfer OUT of a
 follower with a record posts `RecountOnMain` (MainThread::Post; VR no-op = the record stays, fail closed),
 which drops the entry once no copy is left. Table `g_rec` (follower -> base -> bits) under `g_mx`: every
 query (`IsPlayerGiven` = either bit, `IsPlayerEquipped`) is safe from the worker and the main thread.

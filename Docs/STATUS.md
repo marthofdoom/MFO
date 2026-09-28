@@ -22,7 +22,7 @@ Read it as history and this block as current.
   two-hander for six hours); a held relic no longer satisfies the equip rule then, and the off-hand pick skips relics.
   MFO-B126 closed: a WORN off-role relic the shed kept for the deposit now ships (`Lotd::NoteKeptForDeposit`,
   `Shippable`), unless an MFO hold names it. REVIEW ROUND (93613c4: SEV-2 no weapon player-pick signal, 2 SEV-3):
-  new `logistics/PlayerGiven.cpp` records player -> follower transfers (TESContainerChangedEvent) and equips made
+  new `logistics/PlayerGiven.cpp` records player -> follower transfers (via the logistics ContainerSink) and equips made
   while the ContainerMenu / GiftMenu is open (TESEquipEvent), mutex-guarded, dropped when the item leaves him,
   cleared on revert, NOT saved (a load forgets it). A player-given item is never shipped; a worn relic ships only
   when not given and an in-role weapon is still carried at ship time; a player-equipped relic stays in his hand;

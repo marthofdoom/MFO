@@ -19,11 +19,16 @@
 // MainThread::Post is a no-op: fail closed, the item stays "given"), and every entry
 // on revert (ClearTransientState). NOT SERIALIZED: a load forgets it.
 //
-// THREAD: the sinks run on whatever thread dispatches the event; the table is under
-// its own mutex, so every query is safe from the worker and the main thread alike.
+// THREAD: the sinks read their inputs at event time and QUEUE the write (AddTask under
+// PumpTickGate, Sinks.cpp's pattern); the leave recount runs on the main thread. The
+// table is under its own mutex, so every query is safe from the worker and the main
+// thread alike.
 namespace MFO::PlayerGiven {
 
-    void RegisterSinks();              // kDataLoaded, main thread, once (after form resolution)
+    void RegisterSinks();              // kDataLoaded, main thread, once (after form resolution): the equip sink
+    // The container half: called from Sinks.cpp's ContainerSink::ProcessEvent (ONE
+    // TESContainerChangedEvent sink for logistics), before its logistics gate.
+    void OnContainerChanged(const RE::TESContainerChangedEvent& a_ev);
     void ClearTransientState();        // revert (pump drained)
     bool Installed();                  // the sinks are registered (a worn relic ships only then)
 
