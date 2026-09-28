@@ -74,7 +74,9 @@ namespace MFO::Lotd {
         constexpr const char* kApiScript = "DBM_MuseumAPI";
 
         // ── tunables (design §5) ──────────────────────────────────────────────
-        constexpr float kCrateRange     = 3000.0f;   // a crate this close to the follower counts
+        // NEAR (museum priority, marth 2026-09-28): a crate counts when it is inside the
+        // follower's PERMITTED LEASH from the player (TeleportCompat::View(f).leash, the
+        // leash every loot trip uses) -- no fixed range of its own any more.
         constexpr float kCrateRadius    = 100.0f;    // ch.19 arrival radius (APMF clamps to [50,512])
         constexpr float kArriveSlack    = 75.0f;     // distance backstop when no leg state is read
         constexpr auto  kTripMax        = std::chrono::seconds(90);
@@ -85,7 +87,14 @@ namespace MFO::Lotd {
         constexpr auto  kRebuildMinGap  = std::chrono::seconds(5);
         constexpr auto  kCooldownOk     = std::chrono::seconds(10);
         constexpr auto  kCooldownFail   = std::chrono::seconds(30);
-        constexpr auto  kCrateCooldown  = std::chrono::seconds(120);
+        constexpr auto  kCrateCooldown  = std::chrono::seconds(120);   // per (follower, crate), never crate-wide
+        // A BLOCKED walk that ends OUTSIDE interaction reach is retried by that
+        // follower after kBlockedRetry (a door swung shut, an NPC or a knocked-over
+        // cart in the lane clears in seconds); only kBlockedStreakMax BLOCKED ends in a
+        // row at the same crate earn the full kCrateCooldown. Each end is logged WARN.
+        constexpr auto  kBlockedRetry     = std::chrono::seconds(10);
+        constexpr int   kBlockedStreakMax = 3;
+        constexpr auto  kYieldCooldown    = std::chrono::seconds(3);   // a trip ended to let a heal fire
 
         // ── detection (main thread writes once at kDataLoaded; atomics for readers) ──
         std::atomic<bool>       g_detected{ false };
@@ -195,10 +204,12 @@ namespace MFO::Lotd {
         std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_keptSeenUnworn;
         std::uint32_t g_needsLoggedSeq = 0;
 
-        // ── the TRIP (one deposit at a time, worker road + dismissal edge) ──────
+        // ── the TRIPS (one per follower, several at once; worker road + dismissal edge) ──
+        // marth 2026-09-28: "Several followers may deposit at the same time." The
+        // Harbinger claims were always keyed by follower (apmf/Deposit.cpp s_claims);
+        // the single global trip was MFO's own limit and is gone.
         enum class Phase { Walking, Giving, Settling };
         struct Trip {
-            bool              active   = false;
             RE::FormID        follower = 0;
             RE::FormID        crate    = 0;
             Phase             phase    = Phase::Walking;
@@ -207,21 +218,41 @@ namespace MFO::Lotd {
             Clock::time_point idleAt{};     // the give idle was claimed
             Clock::time_point liveAt{};     // the give idle was first SEEN live (0 = not yet)
             Clock::time_point settleFrom{}; // the transfer was posted
+            // THIS trip's posted transfer outcome (was one global atomic when one trip
+            // ran at a time): 0 = not run yet, 1 = moved something, 2 = skipped / moved
+            // nothing (-> a FAIL end with the crate cooldown, never a silent DONE loop).
+            // Shared with the main-thread TransferOnMain it is posted to.
+            std::shared_ptr<std::atomic<int>> transfer = std::make_shared<std::atomic<int>>(0);
         };
+        // (follower, crate): failure cooldowns and the BLOCKED streak are per pair, so
+        // one follower's failed walk never locks the crate for everyone else.
+        using PairKey = std::uint64_t;
+        PairKey Pair(RE::FormID a_follower, RE::FormID a_crate) {
+            return (static_cast<std::uint64_t>(a_follower) << 32) | a_crate;
+        }
         std::mutex g_tripMx;
-        Trip       g_trip;   // guarded by g_tripMx
+        std::unordered_map<RE::FormID, Trip> g_trips;   // guarded by g_tripMx; key = follower
         std::unordered_map<RE::FormID, Clock::time_point> g_followerCooldown;   // guarded by g_tripMx
-        std::unordered_map<RE::FormID, Clock::time_point> g_crateCooldown;      // guarded by g_tripMx
+        std::unordered_map<PairKey, Clock::time_point>    g_crateCooldown;      // guarded by g_tripMx; per (follower, crate)
+        std::unordered_map<PairKey, int>                  g_blockedStreak;      // guarded by g_tripMx; BLOCKED ends in a row
+        // Throttle for the priority gate's "why not now" lines (worker only): the last
+        // reason logged per follower and when, so a held-off deposit says so once, not
+        // every tick.
+        std::unordered_map<RE::FormID, std::pair<std::string, Clock::time_point>> g_gateLog;
+        // Interaction reach for a BLOCKED leg that stopped short of the crate:
+        // the engine's activation pick length, INI 'fActivatePickLength:Interface'
+        // (engine default 180; the setting name is in the 1.6.1170 executable's
+        // setting table). Read on the MAIN thread at Detect / OnPostLoad (the
+        // Lockpick.cpp:215 INISettingCollection road); 0 = unreadable, and then a
+        // short BLOCKED stop is never counted as arrived (logged once, loud).
+        std::atomic<float> g_activateReach{ 0.0f };
         // A SYNCHRONOUS ch.12 v2 refusal ([Idle] bIdleV2=0, runtime, self-check) does not
         // change within a process: latch the deposit OFF instead of a walk-refuse loop.
         std::atomic<bool> g_depositLatched{ false };
         // The shipping intro is in flight (steady ms until which no second activation is
         // posted), so it can never show twice.
         std::atomic<std::int64_t> g_introPendingUntilMs{ 0 };
-        // The posted transfer's outcome, read by the trip's Settling phase: 0 = not run
-        // yet, 1 = moved something, 2 = skipped / moved nothing (-> a FAIL end with the
-        // crate cooldown, so he never walks, gives and ships nothing on a loop).
-        std::atomic<int> g_transferResult{ 0 };
+        // (The posted transfer's outcome is per trip now: Trip::transfer.)
 
         std::int64_t SteadyMs() {
             return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -652,10 +683,44 @@ namespace MFO::Lotd {
             return false;
         }
 
-        // The relics this follower carries that the museum needs FROM HIM: never worn
-        // (wearing it is the manual override) -- EXCEPT an off-role relic the shed kept
-        // for the deposit and his own AI then equipped (KeptOffRoleWorn above: the shed
-        // would have dropped it worn or not) -- never an item the PLAYER gave or put on
+        // MUSEUM-NEEDED ITEMS TAKE PRIORITY OVER EQUIPMENT (marth 2026-09-28: "needed
+        // museum items take priority over equipment"; "an item the museum still needs
+        // must not stay worn or held"). A WORN relic ships -- the transfer unequips it
+        // at the crate (TransferOnMain) -- whoever put it on him, EXCEPT:
+        //   * the PLAYER: given or put on in the trade / gift menu (PlayerGiven, SAVED
+        //     'PGIV'); without PlayerGiven installed that cannot be told, so nothing
+        //     worn ships (fail closed);
+        //   * an MFO hold names it: the combat pick chose it because he carries no
+        //     other weapon of its category (cast/Equip.cpp IsMuseumRelic), so it is
+        //     his weapon until an alternative exists;
+        //   * a WEAPON with no other non-relic weapon carried (never disarm him).
+        // This supersedes the positive-proof rule (PlayerGiven::IsAiEquipped) that the
+        // off-role KeptOffRoleWorn path still keeps: field 2026-09-28 caught relics the
+        // engine's OutfitApply put on (Adelinda's Elven Mace, Cicero's Ebony Dagger,
+        // Jesper's Dawnguard Shield) that no "AI equipped a kept relic" mark covers.
+        // IsPlayerPick / stock gear / quest are filtered by Shippable itself. Worker.
+        bool WornRelicShippable(RE::Actor* a_follower, RE::TESBoundObject* a_base,
+                                const RE::TESObjectREFR::InventoryItemMap& a_inv) {
+            const RE::FormID fid = a_follower->GetFormID();
+            const RE::FormID bid = a_base->GetFormID();
+            if (KeptOffRoleWorn(fid, bid, a_inv)) return true;
+            if (!PlayerGiven::Installed() || PlayerGiven::IsPlayerGiven(fid, bid)) return false;
+            const auto [holdR, holdL] = Actuation::ForcedHoldFor(fid);
+            if (holdR == bid || holdL == bid) return false;
+            if (!a_base->As<RE::TESObjectWEAP>()) return true;   // armor / shield / other: ships
+            for (const auto& [obj, data] : a_inv) {
+                if (!obj || data.first <= 0 || obj == a_base) continue;
+                auto* w = obj->As<RE::TESObjectWEAP>();
+                if (!w || (w->GetFormFlags() & (1u << 2)) != 0) continue;   // non-playable (creature gear)
+                if (HoldFromSale(fid, obj)) continue;                        // another relic is no alternative
+                return true;
+            }
+            return false;
+        }
+
+        // The relics this follower carries that the museum needs FROM HIM: a WORN one
+        // only through WornRelicShippable above (never the player's choice, never his
+        // only weapon, never an MFO hold), never an item the PLAYER gave or put on
         // him (IsPlayerPick, Economy's own check), never quest-flagged (LOTD's crate
         // ships quest items too -- trap (b)), never his own stock gear.
         std::vector<ShipItem> Shippable(RE::Actor* a_follower, Needs& a_n) {
@@ -672,7 +737,7 @@ namespace MFO::Lotd {
                 auto* e = data.second.get();
                 if (e && e->IsQuestObject()) continue;
                 const bool worn = e && e->IsWorn();
-                if (worn && !KeptOffRoleWorn(fid, obj->GetFormID(), inv)) continue;
+                if (worn && !WornRelicShippable(a_follower, obj, inv)) continue;
                 if (Logistics::IsStockGear(fid, obj->GetFormID())) continue;
                 if (Logistics::IsPlayerPick(fid, obj->GetFormID())) continue;
                 if (PlayerGiven::IsPlayerGiven(fid, obj->GetFormID())) continue;   // marth: never ship what you gave him
@@ -700,42 +765,95 @@ namespace MFO::Lotd {
             return false;
         }
 
-        // The nearest enabled, loaded outgoing crate within kCrateRange of the
-        // follower (and inside his leash from the player), never a placeable crate
-        // still parked in the DBMQA holding cell, never one on cooldown. WORKER: walks
-        // only ATTACHED cells anchored on the follower and the player (LootNearby's
-        // crash4-safe shape).
-        RE::TESObjectREFR* NearestCrate(RE::Actor* a_follower, Clock::time_point a_now, float* a_dist) {
+        // The nearest (to the follower) enabled, loaded outgoing crate INSIDE HIS LEASH:
+        // the crate is within TeleportCompat::View(f).leash of the PLAYER (museum
+        // priority, marth 2026-09-28: "near" = the permitted leash, the same leash every
+        // loot trip uses -- no fixed range). Never a placeable crate still parked in the
+        // DBMQA holding cell, never one on cooldown FOR THIS FOLLOWER (per pair). WORKER:
+        // walks only ATTACHED cells anchored on the follower and the player
+        // (LootNearby's crash4-safe shape). a_leash receives the leash used (for the log).
+        RE::TESObjectREFR* NearestCrate(RE::Actor* a_follower, Clock::time_point a_now, float* a_dist,
+                                        float* a_leash = nullptr) {
             const RE::FormID base = g_outgoingBase.load();
-            if (!base || !a_follower) return nullptr;
-            const RE::FormID holding = g_holdingCell.load();
             auto* pc = RE::PlayerCharacter::GetSingleton();
+            if (!base || !a_follower || !pc) return nullptr;
+            const RE::FormID fid = a_follower->GetFormID();
+            const RE::FormID holding = g_holdingCell.load();
             const auto fpos = a_follower->GetPosition();
-            const auto ppos = pc ? pc->GetPosition() : fpos;
+            const auto ppos = pc->GetPosition();
             const float leash = Logistics::TeleportCompat::View(a_follower).leash;
+            if (a_leash) *a_leash = leash;
             RE::TESObjectREFR* best = nullptr;
-            float bestD = kCrateRange;
+            float bestD = 0.0f;
             std::unordered_set<RE::TESObjectCELL*> seen;
             for (auto* anchor : { static_cast<RE::TESObjectREFR*>(a_follower), static_cast<RE::TESObjectREFR*>(pc) }) {
                 auto* cell = anchor ? anchor->GetParentCell() : nullptr;
                 if (!cell || !cell->IsAttached() || !seen.insert(cell).second) continue;
-                cell->ForEachReferenceInRange(fpos, kCrateRange, [&](RE::TESObjectREFR& r) {
+                cell->ForEachReferenceInRange(ppos, leash, [&](RE::TESObjectREFR& r) {
                     auto* b = r.GetBaseObject();
                     if (!b || b->GetFormID() != base) return RE::BSContainer::ForEachResult::kContinue;
                     if (r.IsDisabled() || !r.Is3DLoaded()) return RE::BSContainer::ForEachResult::kContinue;
                     if (auto* pcell = r.GetParentCell(); pcell && pcell->GetFormID() == holding)
                         return RE::BSContainer::ForEachResult::kContinue;
-                    if (auto it = g_crateCooldown.find(r.GetFormID()); it != g_crateCooldown.end() && a_now < it->second)
+                    if (auto it = g_crateCooldown.find(Pair(fid, r.GetFormID()));
+                        it != g_crateCooldown.end() && a_now < it->second)
                         return RE::BSContainer::ForEachResult::kContinue;
-                    if (pc && ppos.GetDistance(r.GetPosition()) > leash)
+                    if (ppos.GetDistance(r.GetPosition()) > leash)
                         return RE::BSContainer::ForEachResult::kContinue;
                     const float d = fpos.GetDistance(r.GetPosition());
-                    if (d < bestD) { bestD = d; best = &r; }
+                    if (!best || d < bestD) { bestD = d; best = &r; }
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
             }
             if (a_dist) *a_dist = bestD;
             return best;
+        }
+
+        // INTERACTION REACH for a BLOCKED leg (item 2, field 2026-09-28): the Riften
+        // "Museum Shipments" crate 11099DB7 wears LOTD's OWN collision box --
+        // LegacyoftheDragonborn.esm REFR 0x084197, base Skyrim.esm STAT 0x21
+        // 'CollisionMarker' (base flags Obstacle | IsMarker), a ~70 u box enable-
+        // parented to the crate and 29 u from its centre -- whose Obstacle flag cuts the
+        // navmesh around it, so the walk ends BLOCKED at 186-187 u every time (two of
+        // three attempts on the same triangle 0x000F20C5#695), 11 u past the old 175 u
+        // test. A BLOCKED stop counts as ARRIVED only when the crate is within the
+        // engine's ACTIVATION reach of him: 'fActivatePickLength:Interface' (the pick
+        // ray's length, g_activateReach) measured to the crate's NEAR FACE, i.e. his
+        // distance to the crate's origin minus the crate base's SMALLER horizontal OBND
+        // half-extent (conservative: the near face is at least that close; the outgoing
+        // crate's OBND is 83 x 138 u, so 41 u). The ref's scale is not applied (the
+        // placed crates carry none). No line-of-sight test: MFO's Sightline cache is
+        // actor-to-actor only (MeasureNow resolves both ends as actors), and the crate's
+        // own collision box would stand between him and it anyway. Worker (form reads).
+        bool WithinReach(RE::Actor* a_follower, RE::TESObjectREFR* a_crate, float* a_dist, float* a_reach) {
+            const float pick = g_activateReach.load();
+            const float d = a_follower->GetPosition().GetDistance(a_crate->GetPosition());
+            float half = 0.0f;
+            if (auto* b = a_crate->GetBaseObject()) {
+                const auto& bd = b->boundData;
+                const float hx = 0.5f * static_cast<float>(bd.boundMax.x - bd.boundMin.x);
+                const float hy = 0.5f * static_cast<float>(bd.boundMax.y - bd.boundMin.y);
+                half = std::max(0.0f, std::min(hx, hy));
+            }
+            if (a_dist) *a_dist = d;
+            if (a_reach) *a_reach = pick + half;
+            return pick > 0.0f && d <= pick + half;
+        }
+
+        // MAIN THREAD (Detect / OnPostLoad): the activation pick length, read by name from
+        // the INI setting collection (Lockpick.cpp's road). Missing -> 0 and one loud line:
+        // a BLOCKED stop is then never counted as arrived (never a guessed constant).
+        void ReadActivateReach() {
+            auto* ini = RE::INISettingCollection::GetSingleton();
+            auto* st  = ini ? ini->GetSetting("fActivatePickLength:Interface") : nullptr;
+            const float v = st ? st->GetFloat() : 0.0f;
+            const float was = g_activateReach.exchange(v);
+            if (v <= 0.0f)
+                spdlog::warn("[lotd] 'fActivatePickLength:Interface' is unreadable -- a deposit walk that ends "
+                             "BLOCKED short of the crate is NOT counted as arrived (it fails as before)");
+            else if (was != v)
+                spdlog::info("[lotd] interaction reach for a BLOCKED deposit walk: fActivatePickLength = {:.0f} u "
+                             "(+ the crate's near-face half-extent)", v);
         }
 
         bool ShippingInitialised() {
@@ -813,22 +931,40 @@ namespace MFO::Lotd {
                          act->GetFormID());
         }
 
-        // ── the trip (worker; g_tripMx held by the callers that touch g_trip) ────
-        void EndTripLocked(Clock::time_point a_now, const char* a_why, bool a_ok, bool a_crateCooldown) {
-            if (!g_trip.active) return;
-            const auto fid = g_trip.follower;
-            const auto crate = g_trip.crate;
+        // ── the trips (worker; g_tripMx held by the callers that touch g_trips) ──
+        // How an unsuccessful end treats the (follower, crate) pair: nothing, the short
+        // BLOCKED retry, or the full kCrateCooldown. The follower cooldown is separate.
+        enum class CrateCd { None, Retry, Full };
+
+        // End a_follower's trip (if any): release the three claims, set the cooldowns,
+        // log, forget it. a_followerCd overrides the follower cooldown (zero = the
+        // default kCooldownOk / kCooldownFail).
+        void EndTripLocked(RE::FormID a_follower, Clock::time_point a_now, const char* a_why, bool a_ok,
+                           CrateCd a_crateCd, Clock::duration a_followerCd = Clock::duration::zero()) {
+            const auto it = g_trips.find(a_follower);
+            if (it == g_trips.end()) return;
+            const RE::FormID fid   = a_follower;
+            const RE::FormID crate = it->second.crate;
+            const float      secs  = std::chrono::duration<float>(a_now - it->second.start).count();
             APMFBridge::ReleaseDeposit(fid);
-            g_followerCooldown[fid] = a_now + (a_ok ? kCooldownOk : kCooldownFail);
-            if (a_crateCooldown) g_crateCooldown[crate] = a_now + kCrateCooldown;
-            const auto secs = std::chrono::duration<float>(a_now - g_trip.start).count();
-            if (a_ok)
+            Clock::duration fcd = a_followerCd;
+            if (fcd == Clock::duration::zero())
+                fcd = a_ok ? Clock::duration(kCooldownOk) : Clock::duration(kCooldownFail);
+            g_followerCooldown[fid] = a_now + fcd;
+            if (a_crateCd == CrateCd::Full)  g_crateCooldown[Pair(fid, crate)] = a_now + kCrateCooldown;
+            if (a_crateCd == CrateCd::Retry) g_crateCooldown[Pair(fid, crate)] = a_now + kBlockedRetry;
+            const char* cdNote = "";
+            if (a_crateCd == CrateCd::Full)  cdNote = " -- this follower skips that crate for 120 s";
+            if (a_crateCd == CrateCd::Retry) cdNote = " -- this follower retries that crate in 10 s";
+            if (a_ok) {
+                g_blockedStreak.erase(Pair(fid, crate));
                 spdlog::info("[lotd] {:08X}: deposit trip DONE at crate {:08X} ({:.1f} s) -- released walk, hold, idle",
                              fid, crate, secs);
-            else
-                spdlog::warn("[lotd] {:08X}: deposit trip ENDED at crate {:08X} after {:.1f} s: {}", fid, crate, secs,
-                             a_why);
-            g_trip = Trip{};
+            } else {
+                spdlog::warn("[lotd] {:08X}: deposit trip ENDED at crate {:08X} after {:.1f} s: {}{}", fid, crate, secs,
+                             a_why, cdNote);
+            }
+            g_trips.erase(it);
         }
 
         const char* LegName(std::uint32_t a_s) {
@@ -880,25 +1016,26 @@ namespace MFO::Lotd {
         // ships everything in it) first -- a crate still in FirstActivation would keep
         // the items forever. What moved is read back from the crate and entered in the
         // ledger with the DropoffCrate baseline its arrival is measured against.
-        void TransferOnMain(RE::FormID a_follower, RE::FormID a_crate, std::vector<ShipItem> a_items) {
+        void TransferOnMain(RE::FormID a_follower, RE::FormID a_crate, std::vector<ShipItem> a_items,
+                            std::shared_ptr<std::atomic<int>> a_result) {
             auto* f = RE::TESForm::LookupByID<RE::Actor>(a_follower);
             auto* c = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_crate);
             if (!f || !c || c->IsDisabled()) {
                 spdlog::warn("[lotd] {:08X}: transfer skipped -- follower or crate {:08X} no longer resolves",
                              a_follower, a_crate);
-                g_transferResult.store(2);
+                a_result->store(2);
                 return;
             }
             if (InventoryMenuOpen()) {
                 spdlog::warn("[lotd] {:08X}: transfer skipped -- a container / barter menu is open", a_follower);
-                g_transferResult.store(2);
+                a_result->store(2);
                 return;
             }
             const std::string st = CrateState(c);
             if (st != "ready" && st != "waitingtoship") {
                 spdlog::warn("[lotd] {:08X}: transfer skipped -- crate {:08X} is '{}', not Ready (its activation has "
                              "not run)", a_follower, a_crate, st.empty() ? "unreadable" : st);
-                g_transferResult.store(2);
+                a_result->store(2);
                 return;
             }
             auto* drop = ById<RE::TESObjectREFR>(g_dropoffRef);
@@ -962,7 +1099,7 @@ namespace MFO::Lotd {
             else
                 spdlog::warn("[lotd] {:08X}: transfer into crate {:08X} moved NOTHING ({} planned item(s))",
                              a_follower, a_crate, a_items.size());
-            g_transferResult.store(moved > 0 ? 1 : 2);
+            a_result->store(moved > 0 ? 1 : 2);
             RefreshMainSupplyOnMain();   // the ledger and the player's counts changed: republish now
         }
     }
@@ -1015,6 +1152,7 @@ namespace MFO::Lotd {
         if (dh)
             if (auto* g = dh->LookupForm<RE::TESGlobal>(Forms::kLotdDetectedGlob, Forms::kPlugin))
                 g->value = g_detected.load() ? 1.0f : 0.0f;
+        if (g_detected.load()) ReadActivateReach();   // main thread (kDataLoaded)
     }
 
     void RegisterSinks() {
@@ -1034,6 +1172,7 @@ namespace MFO::Lotd {
         // is not an edge.
         g_lastEnabled.store(Enabled());
         if (!g_detected.load()) return;
+        ReadActivateReach();   // main thread; an INI edit / setini between loads is picked up
         // Main thread already: read now. On a new game the API script may not be bound
         // yet; LOTD's MCMRefresh (all patches registered) triggers the real read.
         RebuildSnapshot(a_newGame ? "new game" : "post-load");
@@ -1054,9 +1193,10 @@ namespace MFO::Lotd {
     void ClearTransientState() {
         {
             std::scoped_lock lock(g_tripMx);
-            g_trip = Trip{};
+            g_trips.clear();
             g_followerCooldown.clear();
             g_crateCooldown.clear();
+            g_blockedStreak.clear();
         }
         APMFBridge::ClearDepositClaims();
         {
@@ -1078,7 +1218,7 @@ namespace MFO::Lotd {
         g_rebuildQueued.store(false);
         g_mainQueued.store(false);
         g_introPendingUntilMs.store(0);
-        g_transferResult.store(0);
+        g_gateLog.clear();
         // g_depositLatched is NOT reset: a synchronous ch.12 v2 refusal is process-stable.
     }
 
@@ -1089,107 +1229,219 @@ namespace MFO::Lotd {
     // ═════════════════════════ worker road ═══════════════════════════════════
 
     bool RunGambit(RE::Actor* a_follower, Clock::time_point a_now) {
+        // Museum priority (marth 2026-09-28): the DEPOSIT no longer starts here. It is
+        // PriorityDeposit's, checked every service tick right after DepositTick, ahead of
+        // the excursion driver and this rule loop, so board order and the pass-0 dibs
+        // deferral no longer decide it (and a heal rule the loop has not reached yet can
+        // still hold it off). This gambit's own work is the museum LOOT.
         if (!a_follower || !Enabled() || !HarbingerReady()) return false;
-        const auto fid = a_follower->GetFormID();
         auto& needs = FreshNeeds(a_now);
         if (!needs.snap) return false;
-
-        // ── start a deposit trip? ──
-        bool tryDeposit = !g_depositLatched.load();
-        {
-            std::scoped_lock lock(g_tripMx);
-            if (g_trip.active) tryDeposit = false;   // one trip at a time
-            if (auto it = g_followerCooldown.find(fid); it != g_followerCooldown.end() && a_now < it->second)
-                tryDeposit = false;
-        }
-        auto* pc = RE::PlayerCharacter::GetSingleton();
-        if (tryDeposit && (Logistics::SlotIndexOf(fid) >= 0 || a_follower->IsInCombat() ||
-                           (pc && pc->IsInCombat()) || Logistics::PlayerActivelyStealthing() || InventoryMenuOpen()))
-            tryDeposit = false;
-        if (tryDeposit) {
-            const auto items = Shippable(a_follower, needs);
-            if (!items.empty()) {
-                std::scoped_lock lock(g_tripMx);
-                float dist = 0.0f;
-                if (auto* crate = NearestCrate(a_follower, a_now, &dist)) {
-                    if (!ShippingInitialised()) {
-                        // The intro was never shown (no follower was loaded when the
-                        // toggle went on, or it was on before this build): show it now
-                        // through THIS crate -- ONCE (IntroPending) -- and ship on a later
-                        // trip: a crate whose OnActivate is still showing its message box
-                        // would not take the items yet.
-                        if (!IntroPending()) {
-                            const auto cid = crate->GetFormID();
-                            MainThread::Post([fid, cid]() { InitShippingOnMain(fid, cid, "first deposit"); });
-                        }
-                        g_followerCooldown[fid] = a_now + std::chrono::seconds(5);
-                        return true;
-                    }
-                    if (APMFBridge::ClaimDepositTravel(fid, crate->GetFormID(), kCrateRadius)) {
-                        g_trip          = Trip{};
-                        g_trip.active   = true;
-                        g_trip.follower = fid;
-                        g_trip.crate    = crate->GetFormID();
-                        g_trip.phase    = Phase::Walking;
-                        g_trip.start    = a_now;
-                        g_trip.lastTick = a_now;
-                        std::string what;
-                        for (const auto& i : items)
-                            what += std::format("{}'{}' x{}", what.empty() ? "" : ", ",
-                                                NameOf(RE::TESForm::LookupByID(i.base)), i.count);
-                        spdlog::info("[lotd] {:08X}: DEPOSIT trip -> crate {:08X} ({:.0f} u) carrying {}", fid,
-                                     crate->GetFormID(), dist, what);
-                        return true;
-                    }
-                    g_followerCooldown[fid] = a_now + kCooldownFail;   // refused: logged in the bridge
-                }
-            }
-        }
-
-        // ── else loot museum items (Category::Museum through the loot machinery) ──
         return Logistics::LootNearby(a_follower, Logistics::Category::Museum, a_now);
     }
 
-    bool DepositTick(RE::Actor* a_follower, Clock::time_point a_now) {
+    namespace {
+        // The priority gate's "why not now" line, once per reason change or every 30 s
+        // (worker only). Never on the silent reasons (no rule, nothing to ship, no crate
+        // in leash, cooldowns, combat): those are the ordinary idle state.
+        void GateLog(RE::FormID a_follower, Clock::time_point a_now, const std::string& a_why) {
+            auto& [last, at] = g_gateLog[a_follower];
+            if (last == a_why && a_now - at < std::chrono::seconds(30)) return;
+            last = a_why;
+            at   = a_now;
+            spdlog::info("[lotd] {:08X}: museum deposit HELD -- {}", a_follower, a_why);
+        }
+    }
+
+    bool PriorityDeposit(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now,
+                         const DepositGate& a_gate) {
+        if (!a_follower || !Enabled() || !HarbingerReady() || !DepositCanRun()) return false;
+        const auto fid = a_follower->GetFormID();
+        const bool hasGambit = std::any_of(a_state.logistics().begin(), a_state.logistics().end(),
+                                           [](const Gambit& g) { return g.enabled && g.actionOpcode == Vocab::kActLootMuseum; });
+        if (!hasGambit) return false;
+        {
+            std::scoped_lock lock(g_tripMx);
+            if (g_trips.count(fid)) return false;   // DepositTick owns him
+            if (auto it = g_followerCooldown.find(fid); it != g_followerCooldown.end() && a_now < it->second)
+                return false;
+        }
+        // It YIELDS ONLY to combat (his or the player's) and to heals. Sneaking and open
+        // menus no longer hold it: a game-pausing menu stops this tick anyway, and the
+        // transfer itself still refuses under a container / barter menu (TransferOnMain).
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) return false;
+        auto& needs = FreshNeeds(a_now);
+        if (!needs.snap) return false;
+        const auto items = Shippable(a_follower, needs);
+        if (items.empty()) return false;
+
+        float dist = 0.0f, leash = 0.0f;
+        RE::TESObjectREFR* crate = nullptr;
+        {
+            std::scoped_lock lock(g_tripMx);
+            crate = NearestCrate(a_follower, a_now, &dist, &leash);
+            if (!crate) return false;   // none inside his leash: behaviour unchanged
+            if (!ShippingInitialised()) {
+                // The intro was never shown (no follower was loaded when the toggle went
+                // on, or it was on before this build): show it now through THIS crate --
+                // ONCE (IntroPending) -- and ship on a later trip: a crate whose
+                // OnActivate is still showing its message box would not take the items yet.
+                if (!IntroPending()) {
+                    const auto cid = crate->GetFormID();
+                    MainThread::Post([fid, cid]() { InitShippingOnMain(fid, cid, "first deposit"); });
+                }
+                g_followerCooldown[fid] = a_now + std::chrono::seconds(5);
+                return false;
+            }
+        }
+        const RE::FormID crateId = crate->GetFormID();
+        // The two callbacks run OUTSIDE g_tripMx: the excursion yield goes through the
+        // loot road (Packages::LootTravelClear), which must never nest under this lock.
+        if (a_gate.healWants && a_gate.healWants()) {
+            GateLog(fid, a_now, std::format("a heal rule wants to fire (crate {:08X} {:.0f} u away)", crateId, dist));
+            return false;
+        }
+        // A loot excursion yields -- unless it is fetching a MUSEUM item; then the
+        // deposit waits for that item to land (the callback says which, and ends a
+        // yielding excursion through the loot road's own clear path).
+        if (a_gate.yieldExcursion && !a_gate.yieldExcursion()) {
+            GateLog(fid, a_now, std::format("his loot leg is fetching a museum item; the deposit waits for it to "
+                                            "land (crate {:08X} {:.0f} u away)", crateId, dist));
+            return false;
+        }
+        std::scoped_lock lock(g_tripMx);
+        if (g_trips.count(fid)) return false;
+        if (!APMFBridge::ClaimDepositTravel(fid, crateId, kCrateRadius)) {
+            g_followerCooldown[fid] = a_now + kCooldownFail;   // refused: logged in the bridge
+            return false;
+        }
+        Trip t;
+        t.follower = fid;
+        t.crate    = crateId;
+        t.phase    = Phase::Walking;
+        t.start    = a_now;
+        t.lastTick = a_now;
+        g_trips[fid] = std::move(t);
+        g_gateLog.erase(fid);
+        std::string what;
+        for (const auto& i : items)
+            what += std::format("{}{}'{}' x{}", what.empty() ? "" : ", ", i.worn ? "WORN " : "",
+                                NameOf(RE::TESForm::LookupByID(i.base)), i.count);
+        spdlog::info("[lotd] {:08X}: DEPOSIT trip (PRIORITY) -> crate {:08X} ({:.0f} u; crate {:.0f} u from the "
+                     "player, leash {:.0f}; {} trip(s) running) carrying {}", fid, crate->GetFormID(), dist,
+                     pc ? pc->GetPosition().GetDistance(crate->GetPosition()) : 0.0f, leash, g_trips.size(), what);
+        return true;
+    }
+
+    bool DepositTick(RE::Actor* a_follower, Clock::time_point a_now, const std::function<bool()>& a_healWants) {
         if (!a_follower) return false;
         const auto fid = a_follower->GetFormID();
         std::scoped_lock lock(g_tripMx);
-        if (!g_trip.active || g_trip.follower != fid) return false;
-        g_trip.lastTick = a_now;
+        const auto tit = g_trips.find(fid);
+        if (tit == g_trips.end()) return false;
+        Trip& trip = tit->second;
+        trip.lastTick = a_now;
 
         auto* pc = RE::PlayerCharacter::GetSingleton();
-        if (!Enabled())                                   { EndTripLocked(a_now, "LOTD awareness off", false, false); return false; }
-        if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) { EndTripLocked(a_now, "combat", false, false); return false; }
-        if (a_follower->IsDead() || !a_follower->Is3DLoaded()) { EndTripLocked(a_now, "follower gone", false, false); return false; }
-        auto* crate = RE::TESForm::LookupByID<RE::TESObjectREFR>(g_trip.crate);
+        if (!Enabled())                                   { EndTripLocked(fid, a_now, "LOTD awareness off", false, CrateCd::None); return false; }
+        if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) { EndTripLocked(fid, a_now, "combat", false, CrateCd::None); return false; }
+        if (a_follower->IsDead() || !a_follower->Is3DLoaded()) { EndTripLocked(fid, a_now, "follower gone", false, CrateCd::None); return false; }
+        auto* crate = RE::TESForm::LookupByID<RE::TESObjectREFR>(trip.crate);
         if (!crate || crate->IsDisabled() || !crate->Is3DLoaded()) {
-            EndTripLocked(a_now, "crate unloaded or disabled", false, true);
+            EndTripLocked(fid, a_now, "crate unloaded or disabled", false, CrateCd::Full);
             return false;
         }
-        if (a_now - g_trip.start > kTripMax) { EndTripLocked(a_now, "timed out (90 s)", false, true); return false; }
-        // The loot driver's leash rule: a trip never outlasts the player walking off.
-        if (pc && a_follower->GetPosition().GetDistance(pc->GetPosition()) >
-                      Logistics::TeleportCompat::View(a_follower).release) {
-            EndTripLocked(a_now, "the player left his leash", false, false);
-            return false;
+        if (a_now - trip.start > kTripMax) { EndTripLocked(fid, a_now, "timed out (90 s)", false, CrateCd::Full); return false; }
+        // LEASH IS BOSS (marth 2026-09-28): released as soon as the player is beyond the
+        // leash -- from HIM or from the CRATE he is walking to -- at the leash itself, not
+        // the loot excursion's x1.15 release. That hysteresis exists for the excursion's
+        // re-fill loop (release, then instantly re-pick the same corpse); here a release
+        // sets the follower cooldown and the start refuses a crate outside the leash, so
+        // the band cannot oscillate faster than kCooldownFail.
+        if (pc) {
+            const float leash = Logistics::TeleportCompat::View(a_follower).leash;
+            const float toF = a_follower->GetPosition().GetDistance(pc->GetPosition());
+            const float toC = crate->GetPosition().GetDistance(pc->GetPosition());
+            if (toF > leash || toC > leash) {
+                EndTripLocked(fid, a_now, std::format("the player left his leash ({:.0f} u from him, {:.0f} u from "
+                                                      "the crate; leash {:.0f})", toF, toC, leash).c_str(),
+                              false, CrateCd::None);
+                return false;
+            }
         }
 
-        const RE::FormID cid = g_trip.crate;
-        switch (g_trip.phase) {
+        const RE::FormID cid = trip.crate;
+        switch (trip.phase) {
         case Phase::Walking: {
+            // It yields to HEALS (marth): while he is still walking, a heal rule that
+            // wants to fire ends the trip (no crate cooldown, a short follower one) and
+            // the rule loop runs the heal this tick; PriorityDeposit re-starts it once no
+            // heal wants the tick. Never mid-give: the idle and the transfer are seconds.
+            if (a_healWants && a_healWants()) {
+                EndTripLocked(fid, a_now, "yields to a heal rule (restarts once no heal wants the tick)", false,
+                              CrateCd::None, kYieldCooldown);
+                return false;
+            }
             bool arrived = false;
             APMFBridge::LootLegState leg;
             if (APMFBridge::ReadDepositLeg(fid, leg) && leg.ours) {
                 if (leg.state == APMF_API::kLeg_Arrived) {
                     arrived = true;
-                } else if (leg.state >= APMF_API::kLeg_Blocked && leg.state <= APMF_API::kLeg_Released) {
-                    EndTripLocked(a_now, std::format("the walk ended: {}", LegName(leg.state)).c_str(), false, true);
+                } else if (leg.state == APMF_API::kLeg_Blocked) {
+                    // A BLOCKED walk that stopped within INTERACTION REACH of the crate
+                    // (WithinReach: the activation pick length to the crate's near face)
+                    // or inside the crate's GROWN arrival radius (the loot road's grown-grab
+                    // treatment, below) is an arrival. One that stopped short of both
+                    // FAILS, loudly, and widens that radius for the next walk
+                    // (NotePathFail): a short retry for THIS follower (a transient block --
+                    // an NPC, a door, knocked-over clutter -- clears in seconds), the full
+                    // per-pair cooldown only after kBlockedStreakMax BLOCKED ends in a row.
+                    float d = 0.0f, reach = 0.0f;
+                    const float grown = Logistics::GrabRadiusFor(cid);
+                    if (WithinReach(a_follower, crate, &d, &reach)) {
+                        arrived = true;
+                        spdlog::info("[lotd] {:08X}: walk to crate {:08X} ended BLOCKED at {:.0f} u -- within reach "
+                                     "({:.0f} u = fActivatePickLength {:.0f} + the crate's near-face half-extent): "
+                                     "counted as ARRIVED", fid, cid, d, reach, g_activateReach.load());
+                    } else if (d <= grown) {
+                        arrived = true;
+                        spdlog::info("[lotd] {:08X}: walk to crate {:08X} ended BLOCKED at {:.0f} u -- inside its "
+                                     "grown arrival radius ({:.0f} u): counted as ARRIVED", fid, cid, d, grown);
+                    } else {
+                        Logistics::NotePathFail(cid);   // the loot road's grown grab: the next walk arrives from further out
+                        const int streak = ++g_blockedStreak[Pair(fid, cid)];
+                        const bool full = streak >= kBlockedStreakMax;
+                        if (full) g_blockedStreak.erase(Pair(fid, cid));
+                        EndTripLocked(fid, a_now,
+                                      std::format("the walk ended: BLOCKED at {:.0f} u, outside reach ({:.0f} u){} and "
+                                                  "the grown arrival radius ({:.0f} u, now {:.0f}) (BLOCKED {} in a row "
+                                                  "at this crate)", d, reach,
+                                                  g_activateReach.load() > 0.0f ? "" : " [reach unreadable]", grown,
+                                                  Logistics::GrabRadiusFor(cid), streak)
+                                          .c_str(),
+                                      false, full ? CrateCd::Full : CrateCd::Retry);
+                        return false;
+                    }
+                } else if (leg.state > APMF_API::kLeg_Blocked && leg.state <= APMF_API::kLeg_Released) {
+                    if (leg.state == APMF_API::kLeg_StuckTimeout) Logistics::NotePathFail(cid);   // a walked stall: widen too
+                    EndTripLocked(fid, a_now, std::format("the walk ended: {}", LegName(leg.state)).c_str(), false,
+                                  CrateCd::Full);
                     return false;
                 }
             }
             // Distance backstop (a leg read that is not ours yet, or never arrives
-            // inside the radius on uneven ground).
-            if (!arrived && a_follower->GetPosition().GetDistance(crate->GetPosition()) <= kCrateRadius + kArriveSlack)
+            // inside the radius on uneven ground), at the crate's GROWN ARRIVAL RADIUS --
+            // the loot road's grown-grab treatment (marth 2026-09-28: "I'd give drop-offs
+            // the same extending range treatment we used for looting before"), REUSED, not
+            // copied: Logistics::GrabRadiusFor / NotePathFail (LootTravel_internal.h), keyed
+            // by the crate ref like a corpse, kArrivalDist (200 u) + 100 u per failed walk
+            // to it, capped at kGrabRadiusMax (600 u), cleared by a delivered trip. Never
+            // the old 175 u below it. A follower who already stands inside it when the trip
+            // starts arrives on this first tick, with no walk. The crate itself is always
+            // inside the leash (NearestCrate + the release above): the leash stays boss.
+            if (!arrived && a_follower->GetPosition().GetDistance(crate->GetPosition()) <=
+                                std::max(kCrateRadius + kArriveSlack, Logistics::GrabRadiusFor(cid)))
                 arrived = true;
             if (!arrived) return true;
 
@@ -1205,11 +1457,11 @@ namespace MFO::Lotd {
                 spdlog::warn("[lotd] the museum DEPOSIT is OFF for this session: Harbinger refused the ch.12 v2 give "
                              "idle synchronously (APMF.log names why: [Idle] bIdleV2=0, runtime, self-check). Museum "
                              "looting continues; nothing is shipped.");
-                EndTripLocked(a_now, "the give idle was refused (see APMF.log)", false, false);
+                EndTripLocked(fid, a_now, "the give idle was refused (see APMF.log)", false, CrateCd::None);
                 return false;
             }
-            g_trip.phase  = Phase::Giving;
-            g_trip.idleAt = a_now;
+            trip.phase  = Phase::Giving;
+            trip.idleAt = a_now;
             spdlog::info("[lotd] {:08X}: at crate {:08X} ({:.0f} u) -- IdleGive requested", fid, cid,
                          a_follower->GetPosition().GetDistance(crate->GetPosition()));
             return true;
@@ -1221,36 +1473,39 @@ namespace MFO::Lotd {
             // play it) ends the trip; the never-live grace never counts as live.
             const int st = APMFBridge::DepositIdleStatus(fid);
             if (st == 2) {
-                EndTripLocked(a_now, "Harbinger ended the give idle before the hand-over (see APMF.log)", false, true);
+                EndTripLocked(fid, a_now, "Harbinger ended the give idle before the hand-over (see APMF.log)", false,
+                              CrateCd::Full);
                 return false;
             }
             if (st != 1) return true;   // not published yet (the bridge's grace turns into 2 on its own)
-            if (g_trip.liveAt == Clock::time_point{}) { g_trip.liveAt = a_now; return true; }
-            if (a_now - g_trip.liveAt < kGiveAfter) return true;
+            if (trip.liveAt == Clock::time_point{}) { trip.liveAt = a_now; return true; }
+            if (a_now - trip.liveAt < kGiveAfter) return true;
             if (InventoryMenuOpen()) return true;   // wait it out (kTripMax still bounds the trip)
             auto& needs = FreshNeeds(a_now);
             auto items = Shippable(a_follower, needs);
             if (items.empty()) {
-                EndTripLocked(a_now, "nothing left to ship", true, false);
+                EndTripLocked(fid, a_now, "nothing left to ship", true, CrateCd::None);
                 return false;
             }
-            g_transferResult.store(0);
-            MainThread::Post([fid, cid, items = std::move(items)]() mutable {
-                TransferOnMain(fid, cid, std::move(items));
+            trip.transfer->store(0);
+            MainThread::Post([fid, cid, items = std::move(items), result = trip.transfer]() mutable {
+                TransferOnMain(fid, cid, std::move(items), std::move(result));
             });
             g_needs.at = {};   // the transfer changes the supply: re-read next time
-            g_trip.phase      = Phase::Settling;
-            g_trip.settleFrom = a_now;
+            trip.phase      = Phase::Settling;
+            trip.settleFrom = a_now;
             return true;
         }
         case Phase::Settling: {
-            const int r = g_transferResult.load();
+            const int r = trip.transfer->load();
             if (r == 2) {   // skipped or moved nothing: FAIL + crate cooldown (never a silent DONE loop)
-                EndTripLocked(a_now, "the transfer was skipped or moved nothing (see the transfer line)", false, true);
+                EndTripLocked(fid, a_now, "the transfer was skipped or moved nothing (see the transfer line)", false,
+                              CrateCd::Full);
                 return false;
             }
-            if (r == 0 || a_now - g_trip.settleFrom < kIdleSettle) return true;   // not run yet / idle still playing
-            EndTripLocked(a_now, "", true, false);
+            if (r == 0 || a_now - trip.settleFrom < kIdleSettle) return true;   // not run yet / idle still playing
+            Logistics::g_grabGrow.erase(cid);   // delivered -> stale grow verdict (the loot road's rule)
+            EndTripLocked(fid, a_now, "", true, CrateCd::None);
             return false;
         }
         }
@@ -1259,25 +1514,28 @@ namespace MFO::Lotd {
 
     void EndDeposit(RE::FormID a_follower, const char* a_why) {
         std::scoped_lock lock(g_tripMx);
-        if (g_trip.active && g_trip.follower == a_follower)
-            EndTripLocked(Clock::now(), a_why, false, false);
+        EndTripLocked(a_follower, Clock::now(), a_why, false, CrateCd::None);
     }
 
     void SweepTrip() {
         std::scoped_lock lock(g_tripMx);
-        if (!g_trip.active) return;
+        if (g_trips.empty()) return;
         const auto now = Clock::now();
-        const char* why = nullptr;
-        auto* f = RE::TESForm::LookupByID<RE::Actor>(g_trip.follower);
-        if (!Enabled())                                        why = "LOTD awareness off";
-        else if (!Config::g_logistics.load())                  why = "logistics off";
-        else if (!f || f->IsDead() || !f->Is3DLoaded())        why = "follower dead or unloaded";
-        else if (now - g_trip.start > kTripMax)                why = "timed out (90 s)";
-        else if (now - g_trip.lastTick > kTripStall)           why = "the follower is no longer serviced";
-        else if (auto ids = Followers::ActiveSnapshot();
-                 ids && std::find(ids->begin(), ids->end(), g_trip.follower) == ids->end())
-                                                               why = "no longer an active follower";
-        if (why) EndTripLocked(now, why, false, false);
+        const auto ids = Followers::ActiveSnapshot();
+        std::vector<std::pair<RE::FormID, const char*>> ends;
+        for (const auto& [fid, trip] : g_trips) {
+            const char* why = nullptr;
+            auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
+            if (!Enabled())                                        why = "LOTD awareness off";
+            else if (!Config::g_logistics.load())                  why = "logistics off";
+            else if (!f || f->IsDead() || !f->Is3DLoaded())        why = "follower dead or unloaded";
+            else if (now - trip.start > kTripMax)                  why = "timed out (90 s)";
+            else if (now - trip.lastTick > kTripStall)             why = "the follower is no longer serviced";
+            else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end())
+                                                                   why = "no longer an active follower";
+            if (why) ends.emplace_back(fid, why);
+        }
+        for (const auto& [fid, why] : ends) EndTripLocked(fid, now, why, false, CrateCd::None);
     }
 
     bool IsDisplayRef(RE::FormID a_ref) {

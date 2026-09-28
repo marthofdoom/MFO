@@ -1,6 +1,7 @@
 #pragma once
 #include "PCH.h"
 #include <chrono>
+#include <functional>
 #include "State.h"   // FollowerState (KeepForDeposit reads his gambit table)
 
 // logistics/Lotd.h -- LOTD AWARENESS (feat/mfo-lotd, ClickUp 86e3edghj, rounds L1-L3).
@@ -40,12 +41,30 @@ namespace MFO::Lotd {
     bool GambitOffered();              // the board lists "Loot museum items" (== Enabled())
 
     // ── worker road (the per-follower service tick) ──────────────────────────
-    // The act.loot_museum dispatch: start a deposit trip when this follower carries
-    // needed relics and a crate is near, else loot museum items. True = it acted.
+    // The act.loot_museum dispatch: loot museum items. True = it acted. (The deposit
+    // is PriorityDeposit's since the museum-priority round, 2026-09-28.)
     bool RunGambit(RE::Actor* a_follower, Clock::time_point a_now);
+    // MUSEUM DEPOSIT = TOP PRIORITY (marth 2026-09-28). The two things only the service
+    // tick knows, asked LAZILY (after the cheap checks pass): does a heal rule want the
+    // tick, and may a running loot excursion yield (the callback ends it through the
+    // loot road's own clear path and returns true; false = it is fetching a museum item,
+    // the deposit waits for it to land). Empty = "no" / "nothing to yield".
+    struct DepositGate {
+        std::function<bool()> healWants;
+        std::function<bool()> yieldExcursion;
+    };
+    // Checked on EVERY service tick right after DepositTick, ahead of the excursion
+    // driver and the rule loop: a follower with an enabled act.loot_museum rule who
+    // carries needed relics (Shippable) and has an outgoing crate inside his leash starts
+    // a deposit trip, whatever the board order or the dibs deferral. Yields only to
+    // combat (his or the player's) and heals. True = a trip started (the caller returns).
+    bool PriorityDeposit(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now,
+                         const DepositGate& a_gate);
     // Drive this follower's deposit trip, if he is on one. True = the trip owns this
-    // tick (the caller returns). Called at the top of the logistics tick.
-    bool DepositTick(RE::Actor* a_follower, Clock::time_point a_now);
+    // tick (the caller returns). Called at the top of the logistics tick. a_healWants:
+    // while he is still walking, a heal rule that wants to fire ends the trip.
+    bool DepositTick(RE::Actor* a_follower, Clock::time_point a_now,
+                     const std::function<bool()>& a_healWants = {});
     // End this follower's trip now (combat, dismissal). Idempotent, worker road.
     void EndDeposit(RE::FormID a_follower, const char* a_why);
     // The owner-independent backstop (the pump, every lap): ends a trip whose owner is

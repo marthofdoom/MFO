@@ -314,7 +314,63 @@ namespace MFO::Logistics {
 
         // LOTD MUSEUM DEPOSIT (logistics/Lotd.cpp): while THIS follower is on a deposit
         // trip it owns his logistics tick, exactly as a loot excursion does below.
-        if (Lotd::DepositTick(a_follower, now)) return;
+        // MUSEUM PRIORITY (marth 2026-09-28): it yields only to combat and to HEALS --
+        // "a heal rule that wants to fire" = a logistics rule whose condition holds NOW
+        // and that restores Health: act.drink_health_potion with a health potion to
+        // drink, or a cast rule whose spell carries a beneficial Health effect (the
+        // cast/Direct.cpp IsHealEffect read: primaryAV Health, not detrimental, not
+        // hostile) -- or a heal cast already in flight (APMFBridge::IsHealCastActive).
+        // Pure reads (Eval::Evaluate is the evaluator's pure scan); asked lazily.
+        const auto healWants = [&]() -> bool {
+            if (APMFBridge::IsHealCastActive(id)) return true;
+            for (int start = 0;;) {
+                const auto c = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
+                if (c.ruleIndex < 0) return false;
+                start = c.ruleIndex + 1;
+                const auto& op = c.actionOpcode;
+                if (op == Vocab::kActDrinkHealthPotion) {
+                    if (CountPotions(a_follower, RE::ActorValue::kHealth) > 0) return true;
+                    continue;
+                }
+                if (op != Vocab::kActCastSelf && op != Vocab::kActCastTarget && op != Vocab::kActCastPlayer) continue;
+                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(c.actionParam);
+                if (!sp) continue;
+                for (auto* eff : sp->effects) {
+                    auto* mgef = eff ? eff->baseEffect : nullptr;
+                    if (mgef && mgef->data.primaryAV == RE::ActorValue::kHealth && !mgef->IsDetrimental() &&
+                        !mgef->IsHostile())
+                        return true;
+                }
+            }
+        };
+        if (Lotd::DepositTick(a_follower, now, healWants)) return;
+        // MUSEUM DEPOSIT = TOP PRIORITY when a crate is inside his leash (marth
+        // 2026-09-28). Checked EVERY service tick HERE -- ahead of the excursion driver
+        // and the rule loop, so the board order and the pass-0 dibs deferral no longer
+        // decide it. A running loot excursion is ENDED through its own clear path
+        // (Packages::LootTravelClear + a reset slot, exactly the hard-interrupt shape
+        // below), EXCEPT a leg fetching a MUSEUM item (walking to it, or its pickup still
+        // being read back): the deposit waits for that item to land. With no crate in his
+        // leash (or no relic to ship) nothing here changes the tick.
+        {
+            Lotd::DepositGate gate;
+            gate.healWants = healWants;
+            gate.yieldExcursion = [&]() -> bool {
+                const int slot = SlotIndexOf(id);
+                if (slot < 0) return true;
+                TravelIntent& tr = g_travelSlots[slot];
+                if (tr.active && tr.cat == Category::Museum &&
+                    (tr.phase == TravelPhase::Walking || tr.acquirePending))
+                    return false;   // a museum item on its way in: let it land first
+                spdlog::info("[loot] {:08X} excursion ({}) ENDED for the museum deposit (top priority)", id,
+                             CatName(tr.cat));
+                Packages::LootTravelClear("museum deposit", a_follower, slot);
+                tr = TravelIntent{};
+                g_actorDefer.erase(id);   // loot M1: a reorder lives one excursion
+                return true;
+            };
+            if (Lotd::PriorityDeposit(a_follower, a_state, now, gate)) return;
+        }
 
         // ── BATCH EXCURSION driver. While THIS follower is on a loot excursion
         // (claimed at priority 60), drive it: walk to the current target, grab it
