@@ -16,6 +16,7 @@
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 #include "LocationTypes.h"     // LooseRefBarred: the civilised-place bar (86e3f9pkg)
 #include "Lotd.h"              // LooseRefBarred: the LOTD museum display-ref bar (86e3f9pkg)
+#include "Diagnostics.h"       // CurrentPumpEpoch: IsCoinModCoin's per-load rebuild (86e3f9pkg)
 
 namespace MFO::Logistics {
 
@@ -191,32 +192,42 @@ namespace MFO::Logistics {
         // no load-order index is written anywhere; COIN absent -> an empty set, inert.
         // A coin is gold loot (LootGold / the Gold and Valuables loose branches), held for
         // the player like every other coin item.
+        // PER LOAD, not per process (closing round): the list's editor entries are fixed, but
+        // scriptAddedTempForms is SAVE state (a COIN script may AddForm at runtime), so the set is
+        // rebuilt whenever the pump epoch changes (a load / revert bumps it). The list itself is
+        // resolved once. Worker only (the loot scan and the loot takes).
         bool IsCoinModCoin(const RE::TESForm* a_obj) {
-            static const std::unordered_set<RE::FormID> s_coins = [] {
-                std::unordered_set<RE::FormID> s;
+            constexpr std::string_view kCoinPlugin = "C.O.I.N.esp";
+            static const RE::BGSListForm* s_list = [&]() -> const RE::BGSListForm* {
                 auto* dh = RE::TESDataHandler::GetSingleton();
-                constexpr std::string_view kCoinPlugin = "C.O.I.N.esp";
                 if (!dh || !dh->LookupModByName(kCoinPlugin)) {
                     spdlog::info("[loot] COIN coin rule: {} not loaded -- inert (OCF + Gold001 only)", kCoinPlugin);
-                    return s;
+                    return nullptr;
                 }
                 auto* list = dh->LookupForm<RE::BGSListForm>(0xBE7, kCoinPlugin);   // DES_DefaultCoinsList
-                if (!list) {
+                if (!list)
                     spdlog::warn("[loot] COIN coin rule: {} is loaded but its coin list (local 0xBE7) did not "
                                  "resolve as a FormList -- regional coins are NOT gold loot", kCoinPlugin);
-                    return s;
-                }
-                auto add = [&](const RE::TESForm* f) {
-                    if (f && f->Is(RE::FormType::Misc)) s.insert(f->GetFormID());
-                };
-                for (auto* f : list->forms) add(f);
-                if (list->scriptAddedTempForms)
-                    for (const auto id : *list->scriptAddedTempForms) add(RE::TESForm::LookupByID(id));
-                spdlog::info("[loot] COIN coin rule: {} coin items from {}'s DES_DefaultCoinsList {:08X} are gold loot",
-                             s.size(), kCoinPlugin, list->GetFormID());
-                return s;
+                return list;
             }();
-            return a_obj && !s_coins.empty() && s_coins.count(a_obj->GetFormID()) != 0;
+            if (!s_list || !a_obj) return false;
+            static std::unordered_set<RE::FormID> s_coins;
+            static std::uint64_t                  s_epoch = ~0ull;
+            if (const auto epoch = MFO::Diagnostics::CurrentPumpEpoch(); epoch != s_epoch) {
+                s_epoch = epoch;
+                s_coins.clear();
+                auto add = [&](const RE::TESForm* f) {
+                    if (f && f->Is(RE::FormType::Misc)) s_coins.insert(f->GetFormID());
+                };
+                for (auto* f : s_list->forms) add(f);
+                std::size_t added = 0;
+                if (s_list->scriptAddedTempForms)
+                    for (const auto id : *s_list->scriptAddedTempForms) { add(RE::TESForm::LookupByID(id)); ++added; }
+                spdlog::info("[loot] COIN coin rule: {} coin items from {}'s DES_DefaultCoinsList {:08X} are gold loot "
+                             "({} script-added; rebuilt for this load)",
+                             s_coins.size(), kCoinPlugin, s_list->GetFormID(), added);
+            }
+            return s_coins.count(a_obj->GetFormID()) != 0;
         }
 
         // A COIN PURSE on the ground (COIN ships its purses as FLORA: harvesting one yields a
@@ -228,6 +239,7 @@ namespace MFO::Logistics {
         bool IsCoinPurseFlora(RE::TESObjectREFR* a_ref, RE::TESBoundObject* a_base) {
             auto* flora = a_base ? a_base->As<RE::TESFlora>() : nullptr;
             if (!a_ref || !flora) return false;
+            if (g_coinFloraLatched) return false;   // a proven non-credit latched the road OFF
             if ((a_ref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kHarvested) != 0) return false;
             static std::unordered_map<RE::FormID, bool> s_verdict;   // worker only (the scan)
             if (auto it = s_verdict.find(flora->GetFormID()); it != s_verdict.end()) return it->second;
@@ -636,9 +648,14 @@ namespace MFO::Logistics {
         //   3. an item the PLAYER dropped this session (the container-change sink's record);
         //   4. a quest-flagged item (the engine's own ref-level check);
         //   5. OWNED or OFF-LIMITS (never steal): any ref owner, or a crime to activate;
-        //   6. a CIVILISED place (LocationTypes::Classify) whose cell has an owner -- in a
-        //      town, inn, house, shop, ... only an unowned item in an unowned cell is fair.
-        // Worker only (the scan). Pure reads.
+        //   6. ANY OWNED CELL, whatever the location type (closing round of 86e3f9pkg; a
+        //      player-owned cell is already barred as storage by 2). Disassembly (AE
+        //      TESObjectREFR::GetOwner, id 20194): GetOwner already falls back to the parent
+        //      cell's owner for an item / flora ref (it skips the fallback only for
+        //      activator / door / furniture bases), so this explicit test is the belt that
+        //      holds whatever the base type. In a civilised place (LocationTypes::Classify)
+        //      the reason says so, which is where the log is read for theft.
+        // Worker only (the scan, and the arrival re-check in Service.cpp). Pure reads.
         const char* LooseRefBarred(RE::TESObjectREFR* a_ref) {
             if (!a_ref) return "no ref";
             if (Lotd::IsDisplayRef(a_ref->GetFormID())) return "a LOTD museum display";
@@ -647,9 +664,10 @@ namespace MFO::Logistics {
             if (IsQuestObjectRef(a_ref)) return "a quest item";
             if (a_ref->GetOwner()) return "owned (never steal)";
             if (a_ref->IsOffLimits()) return "off-limits (a crime to take)";
-            if (LocationTypes::Classify(a_ref->GetCurrentLocation()) == LocationTypes::Kind::kCivilised) {
-                auto* cell = a_ref->GetParentCell();
-                if (cell && cell->GetOwner()) return "in a civilised place and the cell is owned";
+            if (auto* cell = a_ref->GetParentCell(); cell && cell->GetOwner()) {
+                return LocationTypes::Classify(a_ref->GetCurrentLocation()) == LocationTypes::Kind::kCivilised
+                    ? "in a civilised place and the cell is owned"
+                    : "the cell is owned";
             }
             return nullptr;
         }

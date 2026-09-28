@@ -413,8 +413,11 @@ namespace MFO::Logistics {
         // ammo ref is judged by the same rule as a stack in a body -- LooseAmmoQualifies):
         // which of a_body's stacks the rule keeps. Empty = take nothing.
         std::vector<AmmoStack> SwapUpAmmoTakeSet(RE::Actor* a_follower, bool a_wantBolt, int a_target,
-                                                 bool a_upgradeOnly, const std::vector<AmmoStack>& body) {
-            std::vector<AmmoStack> held = HeldAmmo(a_follower, a_wantBolt);
+                                                 bool a_upgradeOnly, const std::vector<AmmoStack>& body,
+                                                 const std::vector<AmmoStack>* a_held) {
+            // a_held: the caller's HeldAmmo(a_follower, a_wantBolt), when it already has one
+            // (the loose scan reads it once per scan, not once per loose ref).
+            std::vector<AmmoStack> held = a_held ? *a_held : HeldAmmo(a_follower, a_wantBolt);
             // ELIGIBILITY (what this call may take):
             //  * RESTOCK (the arrows/bolts gambit, a_upgradeOnly=false): at-or-above
             //    his WORST held ordinary ammo -- a low archer restocks the very arrows
@@ -466,7 +469,7 @@ namespace MFO::Logistics {
         // on the ref) is not read -- see MAP. The SHED half does not run for a loose pickup
         // (there is no body to drop into); obsolete held ammo goes at the next vendor.
         bool LooseAmmoQualifies(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, RE::TESAmmo* a_ammo,
-                                bool a_wantBolt, int a_target) {
+                                bool a_wantBolt, int a_target, const std::vector<AmmoStack>& a_held) {
             if (!a_follower || !a_ref || !a_ammo || !AmmoSwapEligible(a_ammo)) return false;
             AmmoStack s;
             s.obj     = a_ammo;
@@ -475,7 +478,7 @@ namespace MFO::Logistics {
             s.value   = a_ammo->GetGoldValue();
             s.special = AmmoIsSpecialBase(a_ammo);
             s.pinned  = s.special;
-            return !SwapUpAmmoTakeSet(a_follower, a_wantBolt, a_target, false, { s }).empty();
+            return !SwapUpAmmoTakeSet(a_follower, a_wantBolt, a_target, false, { s }, &a_held).empty();
         }
 
         bool SwapUpAmmoFrom(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,

@@ -163,6 +163,13 @@ namespace MFO::Logistics {
         inline std::unordered_map<RE::FormID, Clock::time_point> g_playerDropped;
         inline std::uint64_t                                     g_playerDroppedEpoch = 0;
 
+        // COIN-PURSE ROAD LATCH (86e3f9pkg closing round, carve-out b): set on the FIRST real
+        // proof that an NPC harvest does not credit the follower (the readback saw the purse
+        // HARVESTED and his coin did not rise). From then on IsCoinPurseFlora admits nothing
+        // for the rest of the process -- a loud refusal ([error] line), never a silent walk-
+        // harvest-nothing loop. Worker only (the scan and the readback run on it).
+        inline bool g_coinFloraLatched = false;
+
         // Evict the oldest entry when a bounded map is over cap. n <= kLruCap and
         // inserts are rare, so the O(n) scan is cheaper than carrying a deque.
         inline void EvictOldest(std::unordered_map<RE::FormID, Clock::time_point>& a_map) {
@@ -1000,10 +1007,12 @@ namespace MFO::Logistics {
                          int a_target, bool a_upgradeOnly, bool a_peek);
     // The rule's take side, shared by SwapUpAmmoFrom and the loose-ammo branch (86e3f9pkg).
     std::vector<AmmoStack> SwapUpAmmoTakeSet(RE::Actor* a_follower, bool a_wantBolt, int a_target,
-                                             bool a_upgradeOnly, const std::vector<AmmoStack>& a_body);
+                                             bool a_upgradeOnly, const std::vector<AmmoStack>& a_body,
+                                             const std::vector<AmmoStack>* a_held = nullptr);
     // Route 2b: a LOOSE ammo ref qualifies iff the RESTOCK take would take it (86e3f9pkg).
+    // a_held = HeldAmmo(a_follower, a_wantBolt), read once per scan by the caller.
     bool  LooseAmmoQualifies(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, RE::TESAmmo* a_ammo,
-                             bool a_wantBolt, int a_target);
+                             bool a_wantBolt, int a_target, const std::vector<AmmoStack>& a_held);
     // The ch.17 declaration's minimum stack: a better stack is declared over the
     // worn one only when it holds at least this many rounds (MFO-B44, see
     // RefreshEquipDeclaration rule 2).

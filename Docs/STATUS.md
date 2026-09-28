@@ -36,6 +36,14 @@ Read it as history and this block as current.
   Bar: `[loot] ... loose ref ... SKIPPED -- <reason>` once per ref (walk through the museum, a home, Whiterun's market:
   every skip must name a reason, and no display / home item / shop stock may ever be taken). Drop an item and confirm
   `[loot] player dropped XXXXXXXX -- never a loose-loot candidate` and that nobody picks it up.
+  CLOSING ROUND (after the tier-A review of `ea518ef`, clean on theft safety): the bar now refuses a loose ref in ANY
+  owned cell (not only civilised ones; GetOwner already falls back to the cell for items, per AE disassembly); the
+  SAME bar re-runs at ARRIVAL before the ActivateRef (`[acquire] ... skipped at ARRIVAL -- <why>`), plus "already
+  harvested" for a purse; the FIRST `harvested=1` purse with no coin gained logs an `[error]` and LATCHES the
+  coin-purse road off for the process; COIN's coin set is rebuilt per load (script-added list entries are save
+  state); the loose-ammo scan reads HeldAmmo once per scan. The engine's `ExtraDroppedItemList` does NOT record the
+  player's own drops (RE in MAP / agent log), so the session-scoped drop record stays: a drop made before a reload
+  is not remembered after it. Backlog MFO-B129 (loose museum over-take within one needs window).
 - **2026-09-26 branch `feat/mfo-confidence-v2` (off `main` `92e8932`; NOT merged, NOT deployed; tier B+, a shared
   primitive). Batch L, ClickUp 86e3erv94 (the Confidence half of the assessment's "STILL OPEN").** `Confidence::Of` v2 =
   vitality x HP-loss TREND x, in combat, a fight multiplier on the WEIGHTED foe load (`CombatSense::FoeLoad`: each foe

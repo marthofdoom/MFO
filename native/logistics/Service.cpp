@@ -418,12 +418,19 @@ namespace MFO::Logistics {
                         spdlog::info("[acquire] {:08X}: HARVESTED coin purse {:08X} -- harvested={} coin {} -> {} ({:+})",
                                      id, tr.acquireRefID, harvested ? 1 : 0, tr.acquirePre, coinPost, gained);
                         MarkJustLooted(id, now);   // [L] glyph: CONFIRMED credit
+                    } else if (harvested) {
+                        // PROVEN: the engine harvested the purse for him and his coin did not
+                        // rise. Latch the flora road OFF for the session (carve-out b).
+                        g_coinFloraLatched = true;
+                        spdlog::error("[acquire] {:08X}: coin purse {:08X} HARVESTED but NOT credited -- coin {} -> {}. "
+                                      "An NPC harvest does not reach the follower: the coin-purse road is LATCHED OFF "
+                                      "for this session (regional coins in containers are unaffected)",
+                                      id, tr.acquireRefID, tr.acquirePre, coinPost);
+                        MarkTravelSticky(tr.acquireRefID, now);
                     } else {
-                        spdlog::warn("[acquire] {:08X}: coin purse {:08X} NOT credited -- harvested={} coin {} -> {} "
-                                     "(an NPC harvest {} -- the purse is left)",
-                                     id, tr.acquireRefID, harvested ? 1 : 0, tr.acquirePre, coinPost,
-                                     harvested ? "landed but its produce did not reach him"
-                                               : "did not happen");
+                        spdlog::warn("[acquire] {:08X}: coin purse {:08X} NOT credited -- harvested=0 coin {} -> {} "
+                                     "(the activation did not harvest it -- the purse is left)",
+                                     id, tr.acquireRefID, tr.acquirePre, coinPost);
                         // Reached but not acquired: straight to the sticky window (the
                         // Activate-failed verdict), never a 25 s re-walk loop.
                         MarkTravelSticky(tr.acquireRefID, now);
@@ -748,6 +755,23 @@ namespace MFO::Logistics {
                         // the produce (a leveled list of coins) lands in the activator. The
                         // before-count is therefore his COIN, not the flora base.
                         const bool flora = base && base->Is(RE::FormType::Flora);
+                        // ARRIVAL RE-CHECK (closing round, SEV-5): the ref's situation may have
+                        // changed during the walk (the player took it, its cell's owner, a quest
+                        // flag). The same source bar as the scan, and for a purse: still NOT
+                        // harvested (someone -- the player -- may have harvested it mid-leg, which
+                        // would turn the readback into a false "not credited" verdict).
+                        const char* arrivalBar = LooseRefBarred(tref);
+                        if (!arrivalBar && flora &&
+                            (tref->GetFormFlags() & RE::TESObjectREFR::RecordFlags::kHarvested) != 0)
+                            arrivalBar = "already harvested on arrival";
+                        if (arrivalBar) {
+                            spdlog::info("[acquire] {:08X}: loose ref {:08X} skipped at ARRIVAL -- {}",
+                                         id, tref->GetFormID(), arrivalBar);
+                            MarkTravelFailed(tref->GetFormID(), now);
+                            tr.phase = TravelPhase::Holding;
+                            tr.lingerUntil = now + BatchLingerDur();
+                            return;
+                        }
                         std::int32_t pre = 0;
                         if (flora) {
                             pre = CoinCount(a_follower);

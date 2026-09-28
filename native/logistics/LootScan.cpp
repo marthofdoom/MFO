@@ -211,6 +211,7 @@ namespace MFO::Logistics {
             // The ammo keep target for the Arrows / Bolts loose branch (86e3f9pkg), built
             // lazily once per scan exactly as LootAmmo computes it (-1 = not yet).
             int              ammoTarget = -1;
+            std::vector<AmmoStack> ammoHeld;   // HeldAmmo, read with ammoTarget (once per scan)
 
             auto scanOne =
                 [&](RE::TESObjectREFR& a_ref) {
@@ -282,8 +283,9 @@ namespace MFO::Logistics {
                                         const bool uses = g_svc && UsesAmmoKind(
                                             g_svc, ComputeWeaponRoles(a_follower, *g_svc), wantBolt);
                                         ammoTarget = AmmoKeepTarget(g_svc, wantBolt, uses);
+                                        ammoHeld   = HeldAmmo(a_follower, wantBolt);   // once per scan
                                     }
-                                    if (LooseAmmoQualifies(a_follower, ref, ammo, wantBolt, ammoTarget))
+                                    if (LooseAmmoQualifies(a_follower, ref, ammo, wantBolt, ammoTarget, ammoHeld))
                                         lootable = loose = true;
                                 }
                                 break;
