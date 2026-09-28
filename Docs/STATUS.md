@@ -15,6 +15,8 @@ Read it as history and this block as current.
 
 - **2026-09-27 branch `feat/mfo-loose-loot` (off `main` `c7aab6e`; NOT merged, NOT deployed; tier A: crime safety).
   Batch L, ClickUp 86e3f9pkg (+ the field finding "followers still skipping bags on coins", diag-field0926 F4).**
+  (0) Loose arrows / bolts now run THE SWAP-UP RULE (`LooseAmmoQualifies`, the take side extracted verbatim from
+  `SwapUpAmmoFrom` into `SwapUpAmmoTakeSet`): a loose stack strictly worse than his worst held ammo is passed over.
   (1) The route-2b loose whitelist in `LootNearby` gains `Category::Museum` (`LooseMuseumQualifies`, `Lotd.cpp`: the
   same uncovered-need want `LootMuseum` takes from a container). Every other category already had a loose branch.
   (2) THE LOOSE-ITEM SOURCE BAR (`LooseRefBarred`, `LootTake.cpp`), unconditional, applied to every loose candidate
