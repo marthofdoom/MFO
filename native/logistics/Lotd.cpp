@@ -660,6 +660,17 @@ namespace MFO::Lotd {
         // kept, MFO-B126); the main-thread transfer honours it instead of skipping.
         struct ShipItem { RE::FormID base; std::int32_t count; bool worn = false; };
 
+        // How many copies of one inventory entry are WORN: one per extra list carrying
+        // ExtraWorn (right / body) or ExtraWornLeft (left hand) -- the same reads
+        // TransferOnMain unequips by (review R2-4: a stack is shipped copy by copy).
+        std::int32_t WornCopies(RE::InventoryEntryData* a_e) {
+            std::int32_t n = 0;
+            if (!a_e || !a_e->extraLists) return 0;
+            for (auto* xl : *a_e->extraLists)
+                if (xl && (xl->HasType(RE::ExtraDataType::kWorn) || xl->HasType(RE::ExtraDataType::kWornLeft))) ++n;
+            return n;
+        }
+
         // MFO-B126: a WORN relic ships only when the shed kept it (off-role) on its last
         // pass, there is POSITIVE PROOF his own AI put it on (PlayerGiven::IsAiEquipped:
         // an equip with no trade / gift menu open of a relic MFO had seen unworn in his
@@ -694,7 +705,12 @@ namespace MFO::Lotd {
         // player's dressing from before PlayerGiven existed) does NOT ship: a missing
         // PlayerGiven record is not proof. Refreshed at most every kUnwornScan per
         // follower (the needs cache's own 2 s TTL).
-        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_relicSeenUnworn;
+        // PER COPY (review R2-4 on 56c032b): only an UNWORN copy is proof. The record is
+        // base -> the most copies seen while NONE of them was worn; a worn copy has proof
+        // only when every copy he carries now was seen that way (count <= the record),
+        // so a second copy that arrived later, or a stack seen only with one copy on,
+        // proves nothing about the worn one.
+        std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, std::int32_t>> g_relicSeenUnworn;
         std::unordered_map<RE::FormID, Clock::time_point>              g_relicScanAt;
         constexpr auto kUnwornScan = std::chrono::seconds(2);
 
@@ -710,9 +726,12 @@ namespace MFO::Lotd {
                 if (!obj || data.first <= 0 || !a_n.snap->bases.count(obj->GetFormID())) continue;
                 carried.insert(obj->GetFormID());
                 auto* e = data.second.get();
-                if (!e || !e->IsWorn() || data.first > 1) seen.insert(obj->GetFormID());   // an unworn instance exists
+                if (!e || !e->IsWorn()) {   // every copy unworn right now
+                    auto& n = seen[obj->GetFormID()];
+                    n = std::max<std::int32_t>(n, static_cast<std::int32_t>(data.first));
+                }
             }
-            std::erase_if(seen, [&carried](RE::FormID b) { return !carried.count(b); });
+            std::erase_if(seen, [&carried](const auto& kv) { return !carried.count(kv.first); });
         }
 
         // The "kind" a weapon fights as, for the never-disarm test (review F4): a bow, a
@@ -749,9 +768,14 @@ namespace MFO::Lotd {
             const RE::FormID bid = a_base->GetFormID();
             if (KeptOffRoleWorn(fid, bid, a_inv)) return true;
             if (!PlayerGiven::Installed() || PlayerGiven::IsPlayerGiven(fid, bid)) return false;
+            std::int32_t carried = 0;
+            for (const auto& [obj, data] : a_inv)
+                if (obj == a_base) carried = static_cast<std::int32_t>(data.first);
             const bool proof = PlayerGiven::IsAiEquipped(fid, bid) ||
                                [&] { const auto it = g_relicSeenUnworn.find(fid);
-                                     return it != g_relicSeenUnworn.end() && it->second.count(bid) != 0; }();
+                                     if (it == g_relicSeenUnworn.end()) return false;
+                                     const auto b = it->second.find(bid);
+                                     return b != it->second.end() && carried > 0 && carried <= b->second; }();
             if (!proof) return false;
             const auto [holdR, holdL] = Actuation::ForcedHoldFor(fid);
             if (holdR == bid || holdL == bid) return false;
@@ -787,12 +811,18 @@ namespace MFO::Lotd {
                 if (it == excl.end() || it->second <= 0) continue;
                 auto* e = data.second.get();
                 if (e && e->IsQuestObject()) continue;
-                const bool worn = e && e->IsWorn();
-                if (worn && !WornRelicShippable(a_follower, obj, inv)) continue;
                 if (Logistics::IsStockGear(fid, obj->GetFormID())) continue;
                 if (Logistics::IsPlayerPick(fid, obj->GetFormID())) continue;
                 if (PlayerGiven::IsPlayerGiven(fid, obj->GetFormID())) continue;   // marth: never ship what you gave him
-                out.push_back({ obj->GetFormID(), std::min<std::int32_t>(data.first, it->second), worn });
+                // COPY BY COPY (review R2-4): the UNWORN copies ship first, as not worn;
+                // a worn copy only for the need left over, and only with proof for it.
+                const std::int32_t need   = it->second;
+                const std::int32_t wornN  = std::min<std::int32_t>(WornCopies(e), static_cast<std::int32_t>(data.first));
+                const std::int32_t unworn = static_cast<std::int32_t>(data.first) - wornN;
+                const std::int32_t first  = std::min(unworn, need);
+                if (first > 0) out.push_back({ obj->GetFormID(), first, false });
+                const std::int32_t rest = std::min(need - first, wornN);
+                if (rest > 0 && WornRelicShippable(a_follower, obj, inv)) out.push_back({ obj->GetFormID(), rest, true });
             }
             return out;
         }
@@ -1137,11 +1167,13 @@ namespace MFO::Lotd {
                 // round 3: never hand a live ExtraDataList to a QUEUED unequip that the
                 // RemoveItem right after may free).
                 bool wornRight = false, wornLeft = false;
+                std::int32_t wornCopies = 0;   // review R2-4: an unworn item moves only unworn copies
                 for (auto& [o, d] : f->GetInventory([&](RE::TESBoundObject& x) { return x.GetFormID() == it.base; })) {
                     have += d.first;
                     auto* e = d.second.get();
                     if (!e) continue;
-                    if ((e->IsWorn() && !it.worn) || e->IsQuestObject()) hold = true;
+                    if (e->IsQuestObject()) hold = true;
+                    wornCopies += WornCopies(e);
                     if (it.worn && e->extraLists)
                         for (auto* xl : *e->extraLists) {
                             if (!xl) continue;
@@ -1152,6 +1184,10 @@ namespace MFO::Lotd {
                 // IsPlayerPick is NOT re-checked here: g_playerPicks is an unlocked WORKER-only
                 // map (EquipAuthority.cpp); Shippable filtered it on the worker.
                 if (hold || have <= 0) continue;
+                // A NOT-worn item moves only the unworn copies (no unequip); plain copies
+                // carry no extra list, so RemoveItem with a null list takes them first.
+                const std::int32_t movable = it.worn ? have : have - wornCopies;
+                if (movable <= 0) continue;
                 if (wornRight || wornLeft) {
                     if (auto* eq = RE::ActorEquipManager::GetSingleton()) {
                         if (wornRight) eq->UnequipObject(f, obj, nullptr, 1, nullptr);
@@ -1159,7 +1195,7 @@ namespace MFO::Lotd {
                     }
                 }
                 const std::int32_t before = countIn(c, it.base, false);
-                f->RemoveItem(obj, std::min(it.count, have), RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, c);
+                f->RemoveItem(obj, std::min(it.count, movable), RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, c);
                 const std::int32_t delta = countIn(c, it.base, false) - before;
                 if (delta <= 0) continue;
                 moved += delta;

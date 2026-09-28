@@ -539,25 +539,32 @@ namespace MFO::Logistics {
             if (rightRanged)    owned |= APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left | APMF_API::kEquipCat_Ammo;
             if (rightTwoHanded) owned |= APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left;
             // SHIELD DENIED FOR A FOLLOWER WHO DOES NOT USE ONE (marth 2026-09-28: "stop
-            // Jesper from equipping a shield"). The same WeaponRoles the combat judge
-            // reads (cast/Equip.cpp: a shield goes on only for roles.offHand == 1 with a
-            // one-hand melee weapon): the Shield CATEGORY is denied -- nothing declared,
+            // Jesper from equipping a shield"; pure casters, archers and two-handers do
+            // not take up shields, a follower who DOES fight one-hander + shield keeps
+            // his). Decided from the combat judge's OWN data (cast/Equip.cpp EquipWeapon:
+            // the WeaponRoles, and its base-MAGE rule `baseClass == 3 &&
+            // bMageDaggersOnly` that makes a mage's melee a dagger sidearm, not a
+            // fighting style). The Shield CATEGORY is denied -- nothing declared,
             // nothing forced, no hand owned -- when
             //   * the perks vote dual wield (roles.offHand == 2, under bWeaponStyleControl:
             //     the original field fix, unchanged), or
             //   * he has no ONE-HAND melee role (roles.melee is TwoHand or Other: an
             //     archer or a two-hander never fights with a shield), or
-            //   * he is a caster (IsCasterFollower) with no shield perk vote
-            //     (roles.offHand != 1): a mage's free hand is for spells (Jesper).
+            //   * he is a PURE CASTER: base class Mage (combatClassOverride 3, what
+            //     Followers::GetBaseClass reads) under bMageDaggersOnly, with no shield
+            //     perk vote (roles.offHand != 1) -- Jesper. A caster with any other base
+            //     class and a one-hand weapon (a spellsword) is NOT denied (review R2-3).
             // A one-hand fighter with shield votes, or with no off-hand vote at all, is
             // unaffected. APMF_API.h v9 Categorize: only an ARMO with the shield biped
             // bit competes for Shield (field: cat=Shield+Left), so a left-hand weapon
             // (Left), a torch (Light+Left) and a spell (not a governed type) are never
-            // refused by it.
+            // refused by it. Economy's worn-shield force-sell keeps its original
+            // dual-wield scope (Economy.cpp deniedWorn).
+            const bool pureCaster = a_state.combatClassOverride == 3 && Config::g_mageDaggersOnly.load() &&
+                                    roles.offHand != 1;
             const bool noShieldUser =
                 (roles.offHand == 2 && Config::g_weaponStyleControl.load()) ||
-                roles.melee != WepClass::OneHand ||
-                (IsCasterFollower(a_state) && roles.offHand != 1);
+                roles.melee != WepClass::OneHand || pureCaster;
             const std::uint32_t denied = noShieldUser ? static_cast<std::uint32_t>(APMF_API::kEquipCat_Shield) : 0u;
             // THE HAND (ABI v8): a ONE-HAND weapon names its hand -- the ledger's
             // right/left -- so APMF itself places a dual-wielder's off-hand weapon

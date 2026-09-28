@@ -363,6 +363,20 @@ namespace MFO::Actuation {
     }
 
         Outcome EquipWeapon(RE::Actor* a_follower, bool a_ranged) {
+            // MFO STAYS OUT UNDER A REFUSED CLAIM (marth 2026-09-28, "MFO's fallback is
+            // deprecated"; review R2-1 on 56c032b). With the APMF equip authority
+            // supported but the claim REFUSED (seat not installed, or refused while
+            // installed -- RefreshEquipDeclaration logs which), the equip rule does
+            // NOTHING: no unequip, no ledger, no direct equip, no top-up -- and it is
+            // NOT "satisfied" either. A transparent NoOp here would be read by the
+            // Scheduler (Scheduler.cpp `satisfiedEquip = isEquip && result == NoOp`) as
+            // the H2 hand claim, arming wantStance / equipHeld and MFO's own equip gate
+            // against the AI's spell and staff re-arms. FailedOther + transparent is the
+            // "not satisfied, not an activity" outcome: the scan records the reason and
+            // moves on, and no hand claim, stance or equip gate is set.
+            if (APMFBridge::EquipAuthoritySupported() &&
+                !APMFBridge::ClaimEquipAuthority(a_follower->GetFormID()))
+                return { Result::FailedOther, "equip authority refused (MFO leaves the hands to the engine)", true };
             // BOTH HANDS decide "already holding" (T#75). The old guard read only
             // the RIGHT hand -- but a caster keeps a SPELL there, so the melee
             // weapon her off-hand still held was invisible to it and a
@@ -627,7 +641,7 @@ namespace MFO::Actuation {
                     // logged by RefreshEquipDeclaration).
                     const bool canReplace = !authority || claimed;
                     if (!canReplace)   // MFO stays out: no unequip, no ledger, no direct equip
-                        return { Result::NoOp, "equip authority refused (MFO leaves the hands to the engine)", true };
+                        return { Result::FailedOther, "equip authority refused (MFO leaves the hands to the engine)", true };
                     if (oldLeft && canReplace)   // the LEFT slot, as every left-hand unequip (F4 parity)
                         mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, Loadout::LeftHandSlot(), true, true);
                     if (oldForced && canReplace)

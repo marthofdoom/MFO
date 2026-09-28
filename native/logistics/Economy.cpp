@@ -759,8 +759,14 @@ namespace MFO::Logistics {
                 // `gemHold` and `Catalog::IsExcluded` (artifacts / quest items) all
                 // run and all still stop the sale. Only an ordinary, gemless,
                 // non-signature, non-excluded shield on a dual-wielding follower goes.
+                // Kept on its ORIGINAL scope (review R2-3 on 56c032b): the declaration now
+                // also denies Shield for archers, two-handers and pure casters, and this
+                // force-sell must not sell a shield they are wearing -- only the dual
+                // wielder's (roles.offHand == 2 under bWeaponStyleControl), whose off
+                // hand is a weapon by decision (marth 2026-09-22 "Let them sell").
                 const bool deniedWorn =
                     armo && armo->IsShield() && data.second && data.second->IsWorn() &&
+                    keepRoles.offHand == 2 && Config::g_weaponStyleControl.load() &&
                     APMFBridge::EquipAuthorityDenies(fid, APMF_API::kEquipCat_Shield);
                 // Force-sell also covers BLACKLISTED apparel (marth's annoyance list) --
                 // never keep/wear it; sell it even while worn (RemoveItem unequips it).

@@ -158,9 +158,12 @@ namespace MFO::Logistics {
     }
 
     // MUSEUM PRIORITY (review F1): when the rule loop last REALLY fired a heal for a
-    // follower (worker-serial like g_nextTick). A steady-clock stamp read against a 4 s
+    // follower (worker-serial like g_nextTick). A steady-clock stamp read against a 6 s
     // window, so a stale entry after a load or a reused FormID expires on its own.
     static std::unordered_map<RE::FormID, Clock::time_point> g_healFiredAt;
+    // ... and when a heal-rule CONDITION match last ended his deposit trip (review
+    // R2-2): suppresses further match-yields until a heal really fires.
+    static std::unordered_map<RE::FormID, Clock::time_point> g_healMatchYieldAt;
 
     void ServiceFollower(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower) return;
@@ -323,21 +326,64 @@ namespace MFO::Logistics {
         // ACTUALLY happen (review F1 on f2c8e2b: a heal rule whose condition holds but
         // whose action does nothing -- an AUTO heal with nobody hurt, an unknown spell,
         // an effect already on, no target, a Held claim -- must not starve the deposit).
-        // So the test is not "a heal rule matches" but "a heal is in flight"
-        // (APMFBridge::IsHealCastActive) or "the rule loop really fired a heal within
-        // kHealYieldWindow" (g_healFiredAt, stamped at the loop's tail below from the
-        // rule that ACTED). kHealYieldWindow = 4 s, sized from the real cadence
-        // (principle 9): a heal rule that still holds re-fires at most every 3 s (the
-        // OOC cast pacing window's floor, g_logiCastUntil's clamp below) + one ~1 s
-        // logistics tick (kLogisticsInterval); a self-paced or potion heal re-fires on
-        // the very next tick. No copy of the loop's skip logic.
-        constexpr auto kHealYieldWindow = std::chrono::seconds(4);
+        // START: a heal is in flight (APMFBridge::IsHealCastActive) or the rule loop
+        // REALLY fired one within kHealYieldWindow (g_healFiredAt, stamped at the loop's
+        // tail from the rule that ACTED). kHealYieldWindow = 6 s (review R2-2), sized
+        // from the real cadence (principle 9): a heal rule that still holds re-fires at
+        // most every 3 s (the OOC cast pacing window's floor, g_logiCastUntil's clamp
+        // below), and the loop that re-fires it runs on the ~1 s logistics cadence
+        // (kLogisticsInterval) behind a ~133 ms round-robin pump, so the next real fire
+        // can land up to two service ticks after the floor: 3 s + 2 x 1 s = 5 s, rounded
+        // up to 6 s.
+        constexpr auto kHealYieldWindow = std::chrono::seconds(6);
         const auto healWants = [&]() -> bool {
             if (APMFBridge::IsHealCastActive(id)) return true;
             const auto it = g_healFiredAt.find(id);
             return it != g_healFiredAt.end() && now - it->second < kHealYieldWindow;
         };
-        if (Lotd::DepositTick(a_follower, now, healWants)) return;
+        // DURING A TRIP (Walking) the rule loop does not run, so no heal can be stamped:
+        // there a heal rule's CONDITION matching (review R2-2) pulls him back -- a
+        // logistics rule that drinks a health potion he has, or casts a spell with a
+        // beneficial Health effect (the cast/Direct.cpp IsHealEffect read). Only the
+        // condition is read (Eval::Evaluate, the evaluator's pure scan), never the loop's
+        // skip logic. So an idle-matching heal cannot churn the trip (end, restart, end),
+        // a match-yield that the loop then answers with NO real heal suppresses further
+        // match-yields until a heal really fires or kTripMatchQuiet (90 s, one trip's
+        // maximum, Lotd.cpp kTripMax) passes.
+        constexpr auto kTripMatchQuiet = std::chrono::seconds(90);
+        const auto healRuleMatches = [&]() -> bool {
+            for (int start = 0;;) {
+                const auto c = Eval::Evaluate(a_follower, a_state, Table::Logistics, start);
+                if (c.ruleIndex < 0) return false;
+                start = c.ruleIndex + 1;
+                const auto& op = c.actionOpcode;
+                if (op == Vocab::kActDrinkHealthPotion) {
+                    if (CountPotions(a_follower, RE::ActorValue::kHealth) > 0) return true;
+                    continue;
+                }
+                if (op != Vocab::kActCastSelf && op != Vocab::kActCastTarget && op != Vocab::kActCastPlayer) continue;
+                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(c.actionParam);
+                if (!sp) continue;
+                for (auto* eff : sp->effects) {
+                    auto* mgef = eff ? eff->baseEffect : nullptr;
+                    if (mgef && mgef->data.primaryAV == RE::ActorValue::kHealth && !mgef->IsDetrimental() &&
+                        !mgef->IsHostile())
+                        return true;
+                }
+            }
+        };
+        const auto tripHealWants = [&]() -> bool {
+            if (healWants()) return true;
+            if (!healRuleMatches()) return false;
+            if (const auto y = g_healMatchYieldAt.find(id); y != g_healMatchYieldAt.end()) {
+                const auto f = g_healFiredAt.find(id);
+                const bool firedSince = f != g_healFiredAt.end() && f->second >= y->second;
+                if (!firedSince && now - y->second < kTripMatchQuiet) return false;   // the last match-yield healed nobody
+            }
+            g_healMatchYieldAt[id] = now;
+            return true;
+        };
+        if (Lotd::DepositTick(a_follower, now, tripHealWants)) return;
         // MUSEUM DEPOSIT = TOP PRIORITY when a crate is inside his leash (marth
         // 2026-09-28). Checked EVERY service tick HERE -- ahead of the excursion driver
         // and the rule loop, so the board order and the pass-0 dibs deferral no longer
