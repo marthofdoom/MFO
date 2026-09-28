@@ -813,7 +813,8 @@ namespace MFO::Logistics {
     // declaration names exactly what that pass would wear.
     RE::TESBoundObject* ComputeOwnedGearPick(RE::Actor* a_follower, const FollowerState& a_state,
                                              ArmorPref& a_outPref, bool& a_outMageMode);
-    // Supported AND claimed: the per-follower switch the direct equip sites read.
+    // The APMF equip authority is SUPPORTED (APMF present, ABI >= 9, bApmfEquipAuthority):
+    // the direct equip sites stay out, claimed or refused (no decline-fallback, 2026-09-28).
     bool EquipAuthorityLive(RE::FormID a_follower);
     // Rebuild the declared worn set and SEND it iff it changed (never a forced
     // re-issue, F3). a_holdRight/a_holdLeft: Actuation's ForcedHold ledger (ABI

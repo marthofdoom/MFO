@@ -759,8 +759,14 @@ namespace MFO::Logistics {
                 // `gemHold` and `Catalog::IsExcluded` (artifacts / quest items) all
                 // run and all still stop the sale. Only an ordinary, gemless,
                 // non-signature, non-excluded shield on a dual-wielding follower goes.
+                // Kept on its ORIGINAL scope (review R2-3 on 56c032b): the declaration now
+                // also denies Shield for archers, two-handers and pure casters, and this
+                // force-sell must not sell a shield they are wearing -- only the dual
+                // wielder's (roles.offHand == 2 under bWeaponStyleControl), whose off
+                // hand is a weapon by decision (marth 2026-09-22 "Let them sell").
                 const bool deniedWorn =
                     armo && armo->IsShield() && data.second && data.second->IsWorn() &&
+                    keepRoles.offHand == 2 && Config::g_weaponStyleControl.load() &&
                     APMFBridge::EquipAuthorityDenies(fid, APMF_API::kEquipCat_Shield);
                 // Force-sell also covers BLACKLISTED apparel (marth's annoyance list) --
                 // never keep/wear it; sell it even while worn (RemoveItem unequips it).
@@ -799,8 +805,50 @@ namespace MFO::Logistics {
             // (0.30) rounds to 0 -- the very stack marth named would never sell.
             // So an obsolete ammo row sells for at least 1g a unit (at most <1g per
             // arrow above the speech-scaled price).
+            // Does he carry a weapon that fires this kind (a crossbow for bolts, a bow for
+            // arrows)? Any count, worn or not.
+            const auto carriesLauncherFor = [a_follower](bool a_bolt) {
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* w = obj->As<RE::TESObjectWEAP>();
+                    if (w && (a_bolt ? w->IsCrossbow() : w->IsBow())) return true;
+                }
+                return false;
+            };
             for (const bool bolt : { false, true }) {
-                const int target = AmmoKeepTarget(&a_state, bolt, UsesAmmoKind(&a_state, keepRoles, bolt));
+                const bool usesKind = UsesAmmoKind(&a_state, keepRoles, bolt);
+                // OFF-KIND AMMO SELLS (marth 2026-09-28; field: Adelinda, a bow user,
+                // carried 158 bolts that were never offered): a follower who carries NO
+                // weapon of this ammo kind (no crossbow for bolts, no bow for arrows)
+                // sells it: every stack HeldAmmo does not pin (worn / special / signature /
+                // player-picked / quest / excluded / museum stays). One who carries such a
+                // weapon keeps the swap-up rule below unchanged, used or not. Sell side
+                // only: the loot and buy judges (AmmoKeepTarget's callers) are untouched.
+                // So that the UNCHANGED buy side (an enabled "<kind> below N" rule buys up
+                // to N whatever he carries -- the seeded arrows rule sits on every
+                // follower) and this sale never trade the same rounds back and forth, he
+                // keeps the best N such a rule asks for and sells the lower tiers
+                // (ObsoleteHeldAmmo at target N, the swap-up ladder's own cut); with no
+                // such rule, everything unpinned sells.
+                if (!usesKind && !carriesLauncherFor(bolt)) {
+                    const char* cond = bolt ? Vocab::kCondSelfOutOfBolts : Vocab::kCondSelfOutOfArrows;
+                    float ruleN = 0.0f;
+                    for (const auto& g : a_state.logistics())
+                        if (g.enabled && g.conditionOpcode == cond) ruleN = std::max(ruleN, g.conditionParam);
+                    const int keepN = static_cast<int>(std::ceil(ruleN));
+                    std::vector<AmmoStack> offKind = keepN > 0 ? ObsoleteHeldAmmo(a_follower, bolt, keepN)
+                                                               : HeldAmmo(a_follower, bolt);
+                    for (const auto& s : offKind) {
+                        if (s.pinned || s.count <= 0) continue;
+                        const auto unit = std::max<std::int32_t>(
+                            1, static_cast<std::int32_t>(std::lround(s.value * sellFraction)));
+                        sellCandidates.push_back(SellCandidate{
+                            s.obj, s.count, unit, false, s.obj->As<RE::BGSKeywordForm>(),
+                            "SELL (off-kind ammo: no weapon fires it)" });
+                    }
+                    continue;
+                }
+                const int target = AmmoKeepTarget(&a_state, bolt, usesKind);
                 if (target <= 0) continue;
                 for (const auto& s : ObsoleteHeldAmmo(a_follower, bolt, target)) {
                     const auto unit = std::max<std::int32_t>(
@@ -888,12 +936,29 @@ namespace MFO::Logistics {
                     sell.push_back(TradeBridge::SellRow{ c.obj, c.count, c.price, c.jewelry });
                 }
 
+                // NO EMPTY TRADES (marth 2026-09-28; TradeBridge::SkipTrade): never
+                // dispatch again to a vendor whose last trade with him moved nothing
+                // while nothing changed (purse, needs, sell rows, the chest's last-seen
+                // gold) until the vendor restocks, and never when there is nothing to buy
+                // and no row that gold can pay for. A skip stamps NOTHING: no g_econTrade
+                // window, so the [T] glyph (IsTrading) stays dark; the next vendor is tried.
+                const std::uint64_t sig = TradeBridge::TradeSignature(purse, needs, sell);
+                auto* cal = RE::Calendar::GetSingleton();
+                const float daysNow = cal ? cal->GetDaysPassed() : 0.0f;
+                const bool buyWishes = purse > 0 && (buy.buyGear || buy.buyMageApparel || buy.buyTomes);
+                if (std::string why; TradeBridge::SkipTrade(fid, vendor->GetFormID(), chest->GetFormID(), sig, daysNow,
+                                                            buyWishes, sell, needs, why)) {
+                    if (!why.empty())
+                        spdlog::info("[econ] {:08X} @ '{}': trade SKIPPED -- {}", fid,
+                                     vendor->GetName() ? vendor->GetName() : "?", why);
+                    continue;
+                }
                 // Only burn the cooldown + stop scanning if a trade ACTUALLY
                 // dispatched (Fable audit #8): a chest already busy with another
                 // follower's order, or the bridge being down, must not cost this
                 // follower its 8 s window -- try the next vendor / next scan.
                 if (TradeBridge::VendorTrade(a_follower, vendor, chest,
-                                             std::move(sell), needs, purse, buy)) {
+                                             std::move(sell), needs, purse, buy, sig, daysNow)) {
                     g_econTrade[fid] = a_now + std::chrono::seconds(8);
                     break;
                 }

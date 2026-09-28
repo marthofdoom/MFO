@@ -4,6 +4,8 @@
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "Logistics_internal.h"
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
+#include "Lotd.h"               // HoldFromSale: a museum-needed relic is never MFO's armor choice
+#include "PlayerGiven.h"        // ... unless the PLAYER gave it / put it on him
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
 #include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
@@ -31,6 +33,61 @@ namespace MFO::Logistics {
             // different follower. Worker-serial like g_lastDeclared.
             struct HandedPick { RE::FormID follower = 0; RE::FormID pick = 0; bool set = false; };
             HandedPick g_handedPick;
+
+            // MUSEUM-NEEDED ITEMS TAKE PRIORITY OVER EQUIPMENT (marth 2026-09-28): a
+            // relic this follower covers for the museum (Lotd::HoldFromSale, the same
+            // "never sell" test the economy and cast/Equip.cpp IsMuseumRelic read) is
+            // never MFO's armor choice -- not the judged pick, not a declared worn
+            // piece, not a "player put on" record -- unless the PLAYER gave it to him or
+            // put it on him (PlayerGiven, SAVED 'PGIV'): the player's choice stands, as
+            // in IsMuseumRelic. With Armor always an OWNED category, leaving it out of
+            // the declared set is what makes APMF's seat refuse its re-equip (the
+            // engine's OutfitApply, SPID, MEO External), in and out of combat; a worn
+            // one ships through the deposit (Lotd.cpp WornRelicShippable), which
+            // unequips it at the crate. ONLY while the relic can actually be shipped
+            // (review SEV-4 on f2c8e2b: otherwise a relic is dead weight he may neither
+            // wear nor deposit): Lotd::KeepForDeposit = HoldFromSale AND an enabled
+            // act.loot_museum rule AND the deposit can run (Harbinger v17). Worker.
+            bool RelicOffBody(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_obj) {
+                return a_follower && a_obj && Lotd::KeepForDeposit(a_follower, a_state, a_obj) &&
+                       !PlayerGiven::IsPlayerGiven(a_follower->GetFormID(), a_obj->GetFormID());
+            }
+
+            // THE MAGE JUDGE'S PER-SLOT BEST, factored out of ComputeOwnedGearPick's mage
+            // branch VERBATIM (2026-09-28, Jesper's set 6 / set 7 flip) so the APMF
+            // declaration can declare the WHOLE set while the legacy single pick stays as
+            // it was. Per logical slot (MageClothingSlot: 0 head / circlet, 1 body, 2
+            // hands, 3 feet, 4 ring, 5 amulet -- jewelry included), the best OWNED piece by
+            // MageApparelBuyKey (rating-0 clothing and jewelry only: rated armor is not a
+            // candidate; tier, then the value metric -- TESForm::GetGoldValue, the engine's
+            // InventoryEntryData value of the base form, its own enchantment included --
+            // FormID tiebreak so two equal pieces never flip). Worker.
+            struct MageSlotBest { RE::TESBoundObject* obj = nullptr; int tier = -1; std::int32_t metric = -1; };
+            void MageBestPerSlot(RE::Actor* a_follower, const FollowerState& a_state, MageSlotBest (&a_out)[6]) {
+                const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
+                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                const bool allowVillain  = IsNecromancerFollower(a_state);
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* ar = obj->As<RE::TESObjectARMO>();
+                    if (!ar) continue;
+                    if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
+                    const int slot = MageClothingSlot(ar);
+                    if (slot < 0) continue;
+                    int t = 0; std::int32_t m = 0;
+                    // The currently-WORN piece is always its slot's incumbent candidate,
+                    // ranked with allowVillain=true (restores the pre-authoritative
+                    // asymmetry): a player-equipped villain/necromancer robe on a
+                    // non-necromancer stays eligible instead of being excluded from
+                    // candidacy, force-replaced by a lesser common piece, and then sold.
+                    const bool worn = (WornInLogicalSlot(a_follower, slot) == obj);
+                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain || worn, t, m)) continue;
+                    auto& b = a_out[slot];
+                    if (!b.obj || t > b.tier || (t == b.tier && m > b.metric) ||
+                        (t == b.tier && m == b.metric && obj->GetFormID() > b.obj->GetFormID()))
+                        b = { obj, t, m };
+                }
+            }
         }
 
         // THE PICK, factored out of EquipBestOwnedGear VERBATIM (feat/mfo-equip-
@@ -62,31 +119,8 @@ namespace MFO::Logistics {
                 // Ranked by the SAME MEO-aware judge as loot/buy. The worn piece is
                 // itself a candidate, so a worn BEST never downgrades (no-op), and
                 // equipping a replacement auto-unequips the lesser -> never strips naked.
-                const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
-                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
-                const bool allowVillain  = IsNecromancerFollower(a_state);
-
-                struct BestPer { RE::TESBoundObject* obj = nullptr; int tier = -1; std::int32_t metric = -1; };
-                BestPer bestSlot[6];
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
-                    auto* ar = obj->As<RE::TESObjectARMO>();
-                    if (!ar) continue;
-                    const int slot = MageClothingSlot(ar);
-                    if (slot < 0) continue;
-                    int t = 0; std::int32_t m = 0;
-                    // The currently-WORN piece is always its slot's incumbent candidate,
-                    // ranked with allowVillain=true (restores the pre-authoritative
-                    // asymmetry): a player-equipped villain/necromancer robe on a
-                    // non-necromancer stays eligible instead of being excluded from
-                    // candidacy, force-replaced by a lesser common piece, and then sold.
-                    const bool worn = (WornInLogicalSlot(a_follower, slot) == obj);
-                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain || worn, t, m)) continue;
-                    auto& b = bestSlot[slot];
-                    if (!b.obj || t > b.tier || (t == b.tier && m > b.metric) ||
-                        (t == b.tier && m == b.metric && obj->GetFormID() > b.obj->GetFormID()))
-                        b = { obj, t, m };
-                }
+                MageSlotBest bestSlot[6];
+                MageBestPerSlot(a_follower, a_state, bestSlot);
                 // First slot whose worn piece isn't the computed best -> one
                 // authoritative correction per tick (converges over ticks, no thrash).
                 for (int slot = 0; slot < 6; ++slot) {
@@ -112,6 +146,7 @@ namespace MFO::Logistics {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || IsCreatureArmor(ar)) continue;
+                    if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
                     // #3 NO IsExcluded skip here: a follower MAY wear an artifact it
                     // already owns (a legit upgrade) -- equip stays permissive, matching
                     // the mage-clothing branch above. Looting/selling/shedding an
@@ -167,7 +202,7 @@ namespace MFO::Logistics {
                              old && old->GetFullName() ? old->GetFullName() : "(bare)", typeTag(old),
                              old ? old->GetArmorRating() : 0.0f, old ? ArmorScore(armorPref, old) : 0.0f,
                              armorPref.heavyClass ? "HEAVY" : "LIGHT", armorPref.heavyBias, armorPref.lightBias,
-                             declared ? " | declared (APMF equip authority)" : "");
+                             declared ? " | left to the APMF equip declaration" : "");
             }
             if (useMageApparel) {
                 // THRASH GUARD for the authoritative mage correction: only OUT OF
@@ -340,8 +375,16 @@ namespace MFO::Logistics {
             }
         }
 
+        // NO DECLINE-FALLBACK (marth 2026-09-28: "MFO's fallback is deprecated"): with
+        // Harbinger present and the authority supported, MFO's equips go through the
+        // declaration ONLY. A REFUSED claim -- the equip seat not installed (the engine
+        // then equips as in vanilla) or refused with the seat installed (an ERROR) -- no
+        // longer hands the follower back to MFO's direct equips. The whole-APMF-absent
+        // legacy degrade (EquipAuthoritySupported() false: no APMF, ABI < 9, or
+        // bApmfEquipAuthority off) is unchanged. RefreshEquipDeclaration logs each case.
         bool EquipAuthorityLive(RE::FormID a_follower) {
-            return APMFBridge::EquipAuthoritySupported() && APMFBridge::IsEquipAuthorityClaimed(a_follower);
+            (void)a_follower;
+            return APMFBridge::EquipAuthoritySupported();
         }
 
         void ForgetEquipDeclaration(RE::FormID a_follower) {
@@ -401,13 +444,38 @@ namespace MFO::Logistics {
                 return;
             }
             bool fresh = false;
+            static std::unordered_set<RE::FormID> s_refusalLogged;   // worker-serial like g_lastDeclared
             if (!APMFBridge::ClaimEquipAuthority(id, &fresh)) {
-                // APMF REFUSED (its equip seat is not installed): the bridge logged
-                // it once; IsEquipAuthorityClaimed is false, so every direct equip
-                // path runs for this follower exactly as without APMF (F1/F5).
+                // APMF REFUSED (its equip seat is not installed, or the channel is
+                // unavailable). NO DECLINE-FALLBACK (marth 2026-09-28): MFO does NOT
+                // switch to its direct equips for him (EquipAuthorityLive stays true
+                // while supported; Actuation's authority likewise), so nothing MFO
+                // decides is equipped until Harbinger takes the claim. Said LOUDLY, once
+                // per refusal streak per follower (principle 7): the bridge's own
+                // warning line predates this rule and still says the direct paths run --
+                // they do not.
+                // Two cases, told apart by what the bridge knows (APMF_API.h v8: a
+                // kIntent_EquipAuthority claim is refused while the equip seat is NOT
+                // installed; IsEquipAuthorityEnforced() true proves the seat installed):
+                //  * seat not installed: Harbinger neither equips nor blocks, so the
+                //    ENGINE equips as in vanilla and MFO stays out (marth 2026-09-28:
+                //    "MFO's fallback is deprecated") -- WARN;
+                //  * seat installed, claim refused anyway: the loud ERROR.
+                // Neither case makes an MFO equip or unequip.
+                if (s_refusalLogged.insert(id).second) {
+                    if (APMFBridge::IsEquipAuthorityEnforced())
+                        spdlog::error("[equip-auth] {:08X}: Harbinger REFUSED the equip-authority claim although its "
+                                      "equip seat is installed and enforcing -- MFO makes NO equips for him (no "
+                                      "decline-fallback). Nothing MFO picks is equipped until the claim is taken. See "
+                                      "APMF.log for why it refused.", id);
+                    else
+                        spdlog::warn("[equip-auth] {:08X}: Harbinger's equip seat is not installed -- MFO leaves "
+                                     "equipment to the engine (no MFO equips or unequips for him)", id);
+                }
                 g_lastDeclared.erase(id);
                 return;
             }
+            s_refusalLogged.erase(id);   // taken: a later refusal is a new streak and is said again
             // F2: a handle minted since the last declaration (first claim, a
             // re-mint after APMF forgot the old one, the toggle's OFF->ON, a New
             // Game) carries NO set on APMF's side -- the change detector must not
@@ -482,8 +550,34 @@ namespace MFO::Logistics {
             if (left)           owned |= APMF_API::kEquipCat_Left;
             if (rightRanged)    owned |= APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left | APMF_API::kEquipCat_Ammo;
             if (rightTwoHanded) owned |= APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left;
-            const std::uint32_t denied = (roles.offHand == 2 && Config::g_weaponStyleControl.load())
-                                           ? static_cast<std::uint32_t>(APMF_API::kEquipCat_Shield) : 0u;
+            // SHIELD DENIED FOR A FOLLOWER WHO DOES NOT USE ONE (marth 2026-09-28: "stop
+            // Jesper from equipping a shield"; pure casters, archers and two-handers do
+            // not take up shields, a follower who DOES fight one-hander + shield keeps
+            // his). Decided from the combat judge's OWN data (cast/Equip.cpp EquipWeapon:
+            // the WeaponRoles, and its base-MAGE rule `baseClass == 3 &&
+            // bMageDaggersOnly` that makes a mage's melee a dagger sidearm, not a
+            // fighting style). The Shield CATEGORY is denied -- nothing declared,
+            // nothing forced, no hand owned -- when
+            //   * the perks vote dual wield (roles.offHand == 2, under bWeaponStyleControl:
+            //     the original field fix, unchanged), or
+            //   * he has no ONE-HAND melee role (roles.melee is TwoHand or Other: an
+            //     archer or a two-hander never fights with a shield), or
+            //   * he is a PURE CASTER: base class Mage (combatClassOverride 3, what
+            //     Followers::GetBaseClass reads) under bMageDaggersOnly, with no shield
+            //     perk vote (roles.offHand != 1) -- Jesper. A caster with any other base
+            //     class and a one-hand weapon (a spellsword) is NOT denied (review R2-3).
+            // A one-hand fighter with shield votes, or with no off-hand vote at all, is
+            // unaffected. APMF_API.h v9 Categorize: only an ARMO with the shield biped
+            // bit competes for Shield (field: cat=Shield+Left), so a left-hand weapon
+            // (Left), a torch (Light+Left) and a spell (not a governed type) are never
+            // refused by it. Economy's worn-shield force-sell keeps its original
+            // dual-wield scope (Economy.cpp deniedWorn).
+            const bool pureCaster = a_state.combatClassOverride == 3 && Config::g_mageDaggersOnly.load() &&
+                                    roles.offHand != 1;
+            const bool noShieldUser =
+                (roles.offHand == 2 && Config::g_weaponStyleControl.load()) ||
+                roles.melee != WepClass::OneHand || pureCaster;
+            const std::uint32_t denied = noShieldUser ? static_cast<std::uint32_t>(APMF_API::kEquipCat_Shield) : 0u;
             // THE HAND (ABI v8): a ONE-HAND weapon names its hand -- the ledger's
             // right/left -- so APMF itself places a dual-wielder's off-hand weapon
             // in the LEFT (the v7 slot-less pass put it in the right and evicted
@@ -641,7 +735,37 @@ namespace MFO::Logistics {
             //    (F9). Consumed from EquipBestOwnedGear's hand-off when that pass
             //    ran this tick, else computed here (F10).
             RE::TESObjectARMO* pick = nullptr;
-            if (a_judgeArmor) {
+            // THE MAGE SET (2026-09-28, Jesper's set 6 / set 7 flip; marth: "mage rules
+            // are clothing items, not armor, and most expensive wins"). For a mage-apparel
+            // follower the OOC road declares the WHOLE per-slot best set at once
+            // (MageBestPerSlot: every logical slot with an owned best, jewelry included,
+            // the existing ranking unchanged) instead of the mage judge's ONE correction
+            // per tick plus "everything else worn". THE FLIP CAME FROM THAT PAIR: the
+            // engine's OutfitApply / SPID strip unequipped robes AND gauntlets, the judge
+            // re-picked one slot per tick, and rule 5 only re-declared what was WORN, so
+            // tick 1 declared the robes without the stripped gauntlets and tick 2 put
+            // them back. The set is now a function of what he OWNS, not of what is worn,
+            // so a strip cannot change it; the MFO-B63 drift re-send (below) behaves as on
+            // main. No piece is kept because it WAS declared. Built in body-first order;
+            // a best that overlaps a piece already chosen is skipped (never two items for
+            // one slot). The legacy (APMF-absent) EquipBestOwnedGear single pick is
+            // unchanged, and the combat road (a_judgeArmor false) still declares worn.
+            const bool mageSetMode = a_judgeArmor && !Config::g_dollsMode.load() &&
+                                     IsCasterFollower(a_state) && Config::g_mageWearRobes.load();
+            std::vector<RE::TESObjectARMO*> mageSet;
+            if (mageSetMode) {
+                MageSlotBest bestSlot[6];
+                MageBestPerSlot(a_follower, a_state, bestSlot);
+                for (const int slot : { 1, 0, 2, 3, 4, 5 }) {
+                    auto* b = bestSlot[slot].obj ? bestSlot[slot].obj->As<RE::TESObjectARMO>() : nullptr;
+                    if (!b) continue;
+                    if (std::any_of(mageSet.begin(), mageSet.end(),
+                                    [&](RE::TESObjectARMO* c) { return SlotsOverlap(c, b); }))
+                        continue;
+                    mageSet.push_back(b);
+                }
+            }
+            if (a_judgeArmor && !mageSetMode) {
                 RE::TESBoundObject* pickObj = nullptr;
                 if (g_handedPick.set && g_handedPick.follower == id) {
                     pickObj = resolve(g_handedPick.pick);
@@ -695,14 +819,26 @@ namespace MFO::Logistics {
                 const auto it = inv.find(pick);
                 return it != inv.end() && it->second.second && it->second.second->IsWorn();
             }();
-            const bool mayRecordPlayerPick = APMFBridge::IsEquipAuthorityEnforced() && (!pick || pickWorn);
+            const auto wornNow = [&](RE::TESObjectARMO* a_ar) {
+                const auto it = inv.find(a_ar);
+                return it != inv.end() && it->second.second && it->second.second->IsWorn();
+            };
+            // Mage set: MFO is contesting a slot until EVERY set piece is on him.
+            const bool mageSetLanded = std::all_of(mageSet.begin(), mageSet.end(), wornNow);
+            const bool mayRecordPlayerPick = APMFBridge::IsEquipAuthorityEnforced() &&
+                                             (mageSetMode ? mageSetLanded : (!pick || pickWorn));
             if (mayRecordPlayerPick) {
                 for (auto& [obj, data] : inv) {
                     if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || ar->IsShield() || ar == pick) continue;
+                    if (std::find(mageSet.begin(), mageSet.end(), ar) != mageSet.end()) continue;
                     const RE::FormID f = ar->GetFormID();
                     if (lastHas(f) || picks.count(f)) continue;
+                    // A museum relic left out of the set (RelicOffBody) is not a player
+                    // pick just because it is worn and undeclared: the player's own
+                    // relic dressing is PlayerGiven's record, which RelicOffBody honours.
+                    if (RelicOffBody(a_follower, a_state, obj)) continue;
                     picks.insert(f);
                     spdlog::info("[equip-auth] {:08X}: player put on '{}' -- kept", id,
                                  ar->GetName() ? ar->GetName() : "?");
@@ -728,15 +864,51 @@ namespace MFO::Logistics {
                 }
                 // Rated judge: ArmorIsBetter already demands a strictly higher score than the worn piece.
             }
+            if (mageSetMode && !picks.empty()) {
+                // Mage judge: the player's worn piece stands against a set piece that
+                // only TIES it on (tier, metric) -- the same rule as the single pick.
+                const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
+                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                for (auto& b : mageSet) {
+                    int bt = 0; std::int32_t bm = 0;
+                    const bool bRanks = MageApparelBuyKey(b, top2, schoolPrimary, IsNecromancerFollower(a_state), bt, bm);
+                    for (auto& [obj, data] : inv) {
+                        if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
+                        auto* ar = obj->As<RE::TESObjectARMO>();
+                        if (!ar || ar == b || !picks.count(ar->GetFormID()) || !SlotsOverlap(ar, b)) continue;
+                        int wt = 0; std::int32_t wm = 0;
+                        MageApparelBuyKey(ar, top2, schoolPrimary, true, wt, wm);
+                        const bool strictlyBetter = bRanks && (bt > wt || (bt == wt && bm > wm));
+                        if (!strictlyBetter) { b = ar; break; }   // the player's piece stands in that slot
+                    }
+                }
+            }
             decl.Add(pick);
+            for (auto* b : mageSet) decl.Add(b);
 
-            // 5. EVERYTHING ELSE WORN that is apparel, minus what the pick displaces.
-            //    Shields are never declared (rule 3: an unowned category).
+            // 5. EVERYTHING ELSE WORN that is apparel, minus what the pick (or the mage
+            //    set) displaces. For a mage set this is only what no set piece covers:
+            //    pieces outside the dress-up slots, and slots he owns no clothing for.
+            //    Shields are never declared (rule 3: an unowned category). A museum
+            //    relic is never declared (RelicOffBody): Armor is owned, so the seat
+            //    refuses its re-equip; worn now, it ships at the next deposit.
             for (auto& [obj, data] : inv) {
                 if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                 auto* ar = obj->As<RE::TESObjectARMO>();
                 if (!ar || ar->IsShield()) continue;
                 if (pick && ar != pick && SlotsOverlap(ar, pick)) continue;
+                if (std::any_of(mageSet.begin(), mageSet.end(),
+                                [&](RE::TESObjectARMO* c) { return c != ar && SlotsOverlap(ar, c); }))
+                    continue;
+                if (RelicOffBody(a_follower, a_state, obj)) {
+                    // Once per (follower, relic) per session: the field proof of item 3.
+                    static std::unordered_set<std::uint64_t> s_relicLogged;   // worker-serial like g_lastDeclared
+                    if (s_relicLogged.insert((static_cast<std::uint64_t>(id) << 32) | ar->GetFormID()).second)
+                        spdlog::info("[equip-auth] {:08X}: museum relic '{}' is worn -- kept OUT of the declared set "
+                                     "(its re-equip is refused; it ships at the next deposit)", id,
+                                     ar->GetName() ? ar->GetName() : "?");
+                    continue;
+                }
                 decl.Add(ar);
             }
 

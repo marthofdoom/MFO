@@ -139,20 +139,18 @@ namespace MFO::APMFBridge {
         p.ival = static_cast<std::int32_t>(APMF_API::kEquipAuth_None);
         o.equipAuthHandle = api->RequestEx(a_follower, APMF_API::kIntent_EquipAuthority, kOwnBasis, &p);
         if (o.equipAuthHandle == APMF_API::kInvalidHandle) {
-            // APMF present at v7 and it REFUSED the claim (F1/F5, Fable round 2:
-            // APMF is being changed to refuse exactly when its #17a equip seat is
-            // NOT installed -- INI off, a site-verify refusal, VR). There is then
-            // nothing on APMF's side that could perform or deny an equip, so
-            // MFO's OWN equip paths are the right ones: every caller reads
-            // `false` here (and IsEquipAuthorityClaimed false) as "the authority
-            // is not live for this follower" and runs its direct equips exactly
-            // as without APMF. Logged once per refusal streak so the field log
-            // shows which followers are on which path.
+            // APMF present and it REFUSED the claim (APMF_API.h v8: refused while
+            // its #17a equip seat is NOT installed -- INI off, a site-verify refusal,
+            // VR). NO DECLINE-FALLBACK (marth 2026-09-28, "MFO's fallback is
+            // deprecated"): callers make NO direct equips for this follower -- the
+            // engine equips as in vanilla when the seat is absent. What the refusal
+            // means for MFO (seat not installed vs refused while installed) is said
+            // by RefreshEquipDeclaration's [equip-auth] line. Logged here once per
+            // refusal streak, neutrally.
             if (g_equipAuthRefused.insert(a_follower).second) {
                 spdlog::warn("[equip-auth] {:08X}: APMF refused the kIntent_EquipAuthority claim "
-                             "(RequestEx returned kInvalidHandle; APMF's equip seat is not installed "
-                             "or the channel is unavailable) -- MFO keeps its own equips for this "
-                             "follower (the direct paths run, as without APMF)",
+                             "(RequestEx returned kInvalidHandle) -- see the follower's next "
+                             "[equip-auth] line for what MFO does",
                              a_follower);
             }
             EraseIfEmpty(g_owned.find(a_follower));

@@ -159,10 +159,35 @@ namespace MFO::TradeBridge {
     // Returns true only if an order was actually dispatched. False = the bridge is
     // unavailable, the chest already has a live order (per-chest guard), or the
     // dispatch failed -- so the caller must NOT burn its trade cooldown.
+    // a_sig / a_daysNow: the NO-EMPTY-TRADES memo's inputs (TradeSignature below and
+    // RE::Calendar days passed, both read by the caller on the worker); carried in the
+    // order so ReportTrade can file an empty result against exactly what was offered.
     bool VendorTrade(RE::Actor* a_follower, RE::Actor* a_vendor,
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
-                     std::int32_t a_budget, const BuyThresholds& a_buy = {});
+                     std::int32_t a_budget, const BuyThresholds& a_buy = {},
+                     std::uint64_t a_sig = 0, float a_daysNow = 0.0f);
+
+    // ── NO EMPTY TRADES (marth 2026-09-28; field: 159 dispatches, 156 moved nothing --
+    // Jesper at Brand-Shei's chest, gold 1, three sell rows, every ~20 s for 5 min) ──
+    // Per (follower, vendor), an order whose report moved NOTHING (sold 0, bought 0) is
+    // remembered with its SIGNATURE: the purse, the needs, the offered sell rows (form,
+    // count, unit price) and the vendor chest's gold as last seen by ANY report there.
+    // TradeSignature hashes the first three; the chest's last-seen gold is folded in by
+    // SkipTrade, so another follower's trade that changes the chest's gold is a change.
+    std::uint64_t TradeSignature(std::int32_t a_purse, const std::vector<NeedCat>& a_needs,
+                                 const std::vector<SellRow>& a_sell);
+    // Worker, before VendorTrade. True = do NOT dispatch (a_why says why, for the log):
+    //  (a) the last result for this pair was empty and the signature is unchanged, until
+    //      the vendor's restock -- iDaysToRespawnVendor game days (Skyrim.esm GMST
+    //      0x0123C00E, 2) after that empty trade, read by name at runtime;
+    //  (b) there is nothing to buy (a_buyWishes false and a_needs empty) and no sell row
+    //      the chest's last-seen gold can pay for (unknown gold never skips).
+    // A skipped dispatch sets nothing (the [T] glyph's IsTrading window is only stamped
+    // by a real dispatch).
+    bool SkipTrade(RE::FormID a_follower, RE::FormID a_vendor, RE::FormID a_chest, std::uint64_t a_sig,
+                   float a_daysNow, bool a_buyWishes, const std::vector<SellRow>& a_sell,
+                   const std::vector<NeedCat>& a_needs, std::string& a_why);
 
     // Drop any pending orders (revert/quit). Token map is transient state.
     void ClearTransientState();

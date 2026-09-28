@@ -7,6 +7,16 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Museum drop-offs come first.** A follower with the Loot museum items gambit who carries relics the museum needs heads for a Museum Shipments crate as soon as one is inside his leash. He stops a loot run for it, unless he is fetching a museum item. Then he drops that off too. Only combat and heals come first.
+- **Several followers can drop off at once.** Each follower runs his own trip. A failed walk only holds back that follower at that crate.
+- **The leash is the limit for drop-offs.** A follower only walks to a crate inside his leash, and turns back as soon as you move out of it.
+- **Blocked crates still get their delivery.** A follower whose walk stops within reach of the crate hands it over from where he stands, as long as he is on the crate's floor. Each failed walk lets him deliver from a little further out next time, like looting. The Riften crate's own collision box stopped every walk 11 units short.
+- **Relics are not for wearing.** A follower with the Loot museum items gambit no longer puts on armor or a shield the museum still needs, and outfit refreshes can no longer put relic armor on him. A relic the game or his own AI put on him is shipped at the next drop-off. A relic you gave him stays, and so does his only bow, crossbow or melee weapon.
+- **Followers sell ammo they cannot fire.** Bolts with no crossbow, or arrows with no bow, go to the vendor. A follower keeps as many as his own ammo gambit asks for.
+- **No more empty trips to the vendor.** After a visit that sold and bought nothing, a follower leaves that vendor alone until something changes or the vendor restocks. He also skips a vendor who cannot afford anything he offers when he has nothing to buy, until the vendor restocks.
+- **Mages and archers keep their hands off shields.** A follower who fights with a two-hander or a bow, or a pure mage with no shield perks, no longer equips a shield. Spellswords and sword-and-board fighters keep theirs.
+- **Mages no longer swap their clothes back and forth.** A mage follower wears his best piece for every clothing and jewelry slot at once. When an outfit refresh strips them, they all go back on together.
+- **MFO no longer takes over equipment when Harbinger turns its equip control down.** If Harbinger's equip control is not installed, the game equips the follower as usual. MFO never strips a weapon it cannot replace.
 - **MFO keeps its last five logs.** At launch MFO.log moves to MFO.log.1, the older ones move up to MFO.log.5 and the oldest is dropped. A crash or freeze session's log now survives a few relaunches. A log that cannot be moved is noted in the new log and startup goes on.
 - **Loot museum items picks up loose relics too.** A relic the museum still needs, lying on a table or a shelf, is looted the same as one in a chest. Every other loot gambit already took loose items.
 - **Loose arrows and bolts follow the trade-up rule.** A follower passes over a loose stack worse than anything he carries, the same as in a chest.
