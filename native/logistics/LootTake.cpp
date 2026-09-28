@@ -633,6 +633,47 @@ namespace MFO::Logistics {
             return base && s_bases.count(base->GetFormID()) != 0;
         }
 
+        // A MERCHANT'S VENDOR CHEST (batch L crime safety, field 2026-09-26: followers walked
+        // at DLC1VendorChestFlorentiusRef 0200F82C, under the floor of Fort Dawnguard, 7+
+        // times). Vendor chests are NOT owned in the data: the installed Dawnguard.esm REFR
+        // has no XOWN and its cell DLC1DawnguardHQ01 has none either, so GetOwner() is null
+        // (the AE GetOwner cell fallback finds nothing) and IsOffLimits() is false -- the
+        // only link is the faction's VENC, TESFaction::vendorData.merchantContainer (fork
+        // TESFaction.h FACTION_VENDOR_DATA +0x28, read the same way by Economy.cpp). So the
+        // set is found PROCEDURALLY: every loaded TESFaction's merchantContainer ref, no
+        // FormID written anywhere. Rebuilt per load (pump epoch, as IsCoinModCoin), since the
+        // pointer is faction state a script can move. Each excluded ref is logged once per
+        // load, with its faction. Worker only (the scan, the lock gate, the transfers).
+        bool IsMerchantContainer(RE::TESObjectREFR* a_ref) {
+            static std::unordered_map<RE::FormID, RE::FormID> s_chests;   // chest ref -> faction
+            static std::unordered_set<RE::FormID>             s_logged;
+            static std::uint64_t                              s_epoch = ~0ull;
+            if (const auto epoch = MFO::Diagnostics::CurrentPumpEpoch(); epoch != s_epoch) {
+                s_epoch = epoch;
+                s_chests.clear();
+                s_logged.clear();
+                if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+                    for (auto* fac : dh->GetFormArray<RE::TESFaction>()) {
+                        auto* chest = fac ? fac->vendorData.merchantContainer : nullptr;
+                        if (chest) s_chests.emplace(chest->GetFormID(), fac->GetFormID());
+                    }
+                }
+                spdlog::info("[loot] vendor-chest bar: {} merchant containers (every faction's VENC) are never "
+                             "loot sources (rebuilt for this load)", s_chests.size());
+            }
+            if (!a_ref) return false;
+            const auto it = s_chests.find(a_ref->GetFormID());
+            if (it == s_chests.end()) return false;
+            if (s_logged.insert(it->first).second) {
+                auto* fac = RE::TESForm::LookupByID(it->second);
+                spdlog::info("[loot] {:08X} ('{}') EXCLUDED -- the merchant container of faction {:08X} ({}): "
+                             "a vendor's stock, never loot, lock or loose source",
+                             it->first, a_ref->GetDisplayFullName() ? a_ref->GetDisplayFullName() : "?",
+                             it->second, fac && fac->GetFormEditorID() ? fac->GetFormEditorID() : "?");
+            }
+            return true;
+        }
+
         // THE LOOSE-ITEM SOURCE BAR (86e3f9pkg, batch L: crime safety). A loose world item
         // passed its category's eligibility test (the route-2b switch in LootNearby); this
         // decides whether it may be taken from WHERE it lies. nullptr = allowed, else the
@@ -662,6 +703,7 @@ namespace MFO::Logistics {
             if (RefInPlayerStorage(a_ref)) return "player storage / player home (museum halls included)";
             if (PlayerDroppedRef(a_ref->GetFormID())) return "the player dropped it";
             if (IsQuestObjectRef(a_ref)) return "a quest item";
+            if (IsMerchantContainer(a_ref)) return "a merchant's vendor chest";
             if (a_ref->GetOwner()) return "owned (never steal)";
             if (a_ref->IsOffLimits()) return "off-limits (a crime to take)";
             if (auto* cell = a_ref->GetParentCell(); cell && cell->GetOwner()) {
@@ -786,6 +828,8 @@ namespace MFO::Logistics {
             // first by the excursion's lockpick step (logistics/Lockpick.cpp), never looted
             // shut.
             if (a_ref && a_ref->IsLocked()) return false;
+            // Nor out of a merchant's vendor chest (batch L crime safety; the scan bars it first).
+            if (a_ref && IsMerchantContainer(a_ref)) return false;
             switch (a_cat) {
             case Category::Arrows:    return LootAmmo(a_follower, a_ref, false);
             case Category::Bolts:     return LootAmmo(a_follower, a_ref, true);

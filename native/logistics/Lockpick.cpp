@@ -114,13 +114,14 @@ namespace MFO::Logistics::Lockpick {
         enum class Reason : std::uint8_t {
             kNone, kOwned, kOffLimits, kNotChest, kRequiresKey, kNoPicks, kCreature,
             kNoHarbinger, kNoMainThread, kUnlockSeat, kSimFail, kTooLong, kNotLocked,
-            kGone, kSettings, kIdleEnded, kUnlockFailed, kNoTime, kNoSweetSpot, kDoorInto,
+            kGone, kSettings, kIdleEnded, kUnlockFailed, kNoTime, kNoSweetSpot, kDoorInto, kVendor,
         };
         const char* ReasonName(Reason a_r) {
             switch (a_r) {
             case Reason::kNone:         return "none";
             case Reason::kOwned:        return "owned";
             case Reason::kOffLimits:    return "offlimits";
+            case Reason::kVendor:       return "vendorChest";
             case Reason::kNotChest:     return "notChestOrDoor";
             case Reason::kRequiresKey:  return "requiresKey";
             case Reason::kNoPicks:      return "noPicks";
@@ -527,6 +528,8 @@ namespace MFO::Logistics::Lockpick {
         // the judge's verdict never depends on the call order (and logs its reason).
         if (a_ref->GetOwner()) { LogRefusal(fid, a_ref, Reason::kOwned, ""); return false; }
         if (a_ref->IsOffLimits()) { LogRefusal(fid, a_ref, Reason::kOffLimits, ""); return false; }
+        // Batch L: a merchant's vendor chest is unowned in the data; never picked.
+        if (IsMerchantContainer(a_ref)) { LogRefusal(fid, a_ref, Reason::kVendor, ""); return false; }
         auto* base = a_ref->GetBaseObject();
         const bool door = base && base->Is(RE::FormType::Door);
         if (!base || (!door && !base->Is(RE::FormType::Container))) {
@@ -936,6 +939,9 @@ namespace MFO::Logistics::Lockpick {
                          a_target->GetFormID(), kGateDoorReach, kGateDoorLane);
             return false;
         }
+        // Batch L: this door IS the gate (M1's record) -- whether or not he may pick it -- so only
+        // its own open/close/activate re-admits the item, never any other door, lever or chest.
+        RecordGateRef(a_target->GetFormID(), door->GetFormID());
         if (!Admit(a_follower, door, a_now)) return false;   // logged once, with its reason
         // The stand-off point: kDoorStandOff from the door toward S (xy), at S's floor.
         const RE::NiPoint3 D = door->GetPosition();

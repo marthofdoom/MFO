@@ -430,6 +430,13 @@ namespace MFO::Logistics {
                         ++dOffLimits;
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
+                    // A MERCHANT'S VENDOR CHEST (batch L crime safety): unowned in the data,
+                    // so the ownership bars below miss it (IsMerchantContainer, LootTake.cpp).
+                    // Unconditional; logged once per chest per load.
+                    if (!loose && IsMerchantContainer(ref)) {
+                        ++dOffLimits;
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
                     // #66 (home storage): also skip containers in the player's OWN
                     // space -- LOTD museum halls + every vanilla/Hearthfire/mod
                     // player home (RefInPlayerStorage: LocTypePlayerHouse location

@@ -357,6 +357,9 @@ namespace MFO::Logistics {
             RE::NiPoint3      targetPos{};
             Clock::time_point since{};
             std::unordered_set<RE::FormID> logged;   // GATED-BEHIND lines already printed
+            // The ref known to be the gate, when one is (batch L: LP-M2's locked door at the
+            // block, RecordGateRef). 0 = unknown: a Movement Blocked stall names no object.
+            RE::FormID        gate = 0;
         };
         inline std::mutex              g_gateMx;
         inline std::vector<GateRecord> g_gates;   // guarded by g_gateMx
@@ -398,6 +401,36 @@ namespace MFO::Logistics {
                        (p.GetDistance(g.blockPos) <= kGateEventRadius ||
                         p.GetDistance(g.targetPos) <= kGateEventRadius);
             });
+        }
+        // Open/close and activate re-admit (batch L, field 2026-09-26: the PLAYER opening the
+        // chest 0201150F re-admitted five gated items). The sink never passes a container. A
+        // record that names its gate re-admits on THAT ref only (wherever it is); a record
+        // without one re-admits only on a gate-like ref (a_gateLike: a DOOR, or a lever-like
+        // ACTIVATOR -- Sinks.cpp GateLikeRef) within kGateEventRadius, as ReadmitNear.
+        inline void ReadmitOnGateEvent(RE::TESObjectREFR* a_ref, bool a_gateLike, const char* a_why) {
+            if (!a_ref) return;
+            const RE::FormID   id    = a_ref->GetFormID();
+            const RE::FormID   space = SpaceKey(a_ref);
+            const RE::NiPoint3 p     = a_ref->GetPosition();
+            std::lock_guard lk(g_gateMx);
+            EraseGatesIf(a_why, id, [&](const GateRecord& g) {
+                if (g.gate) return g.gate == id;
+                return a_gateLike && space && g.space == space &&
+                       (p.GetDistance(g.blockPos) <= kGateEventRadius ||
+                        p.GetDistance(g.targetPos) <= kGateEventRadius);
+            });
+        }
+        // LP-M2's door finder names the gate: the locked door at the block of a_target's record.
+        inline void RecordGateRef(RE::FormID a_target, RE::FormID a_gate) {
+            if (!a_target || !a_gate) return;
+            std::lock_guard lk(g_gateMx);
+            for (auto& g : g_gates) {
+                if (g.target != a_target || g.gate == a_gate) continue;
+                g.gate = a_gate;
+                spdlog::info("[loot] GATED {:08X}: its gate is {:08X} -- only that ref's open/close/activate "
+                             "re-admits it (plus a door unlocking near it, or its cell re-attaching)",
+                             a_target, a_gate);
+            }
         }
         inline void ClearGates() {
             std::lock_guard lk(g_gateMx);

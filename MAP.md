@@ -2048,7 +2048,7 @@ module. Module layout:
     `ShedOffRoleWeapon:288`, `IsLooting:512`, `WalkingLootLeg:553`, the lifecycle hooks
     (`NoteInCombat:564`, `ClearTransientState:568`, `OnFollowerRemoved:613`) and the
     MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`).
-  - `logistics/Sinks.cpp` (359) = `BeastHeadSink:52`, `ContainerSink:129`, `GateSink:249`
+  - `logistics/Sinks.cpp` (388) = `BeastHeadSink:52`, `ContainerSink:129`, `GateLikeRef:260`, `GateSink:274`
     (anonymous namespace), the player-drop record `NotePlayerDropped:220` / `PlayerDroppedRef:228`
     (86e3f9pkg), `RegisterSinks:309`, `SweepBeastHeadsOnLoad:334`.
   - `logistics/LootTake.cpp` (906), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (1027),
@@ -2536,7 +2536,7 @@ module. Module layout:
   `SwapUpAmmoFrom` since 2026-09-25, `LootPotions:95`,
   `LootGold:287`, `LootValuables:491`; the coin rules `IsCoinLoot:153` / `IsCoinModCoin:194` /
   `IsCoinPurseFlora:239` / `CoinCount:270`; source policy `RefInPlayerStorage:582`,
-  `IsLOTDDropOff:614`, the loose-item bar `LooseRefBarred:659`, `PlayerIsConsidering:674`,
+  `IsLOTDDropOff:614`, the vendor-chest bar `IsMerchantContainer:647`, the loose-item bar `LooseRefBarred:700`, `PlayerIsConsidering:716`,
   `TierReleased:724`, `LootHere:782`, `HasLoot:808`, `NavmeshReach:873`, `LooseRef:888`),
   `logistics/Gear.cpp` (the armor judge `ArmorPrefFor:43`, `ArmorScore:65`,
   `LogArmorClassIfChanged:78`, `ArmorClassSuits:136`, `ArmorIsBetter:154`/`:195`,
@@ -2572,6 +2572,17 @@ module. Module layout:
   `PickUpObject`/AddTask (crash4 class); the whitelist only decides
   ELIGIBILITY. Nothing was deliberately excluded from the generalization —
   every `Category` ordinal now has a loose-ref path.
+  **VENDOR-CHEST BAR (batch L, `fix/mfo-vendor-readmit`, crime safety; field 2026-09-26: followers
+  walked at DLC1VendorChestFlorentiusRef 0200F82C 7+ times).** `IsMerchantContainer`
+  (`LootTake.cpp:647`): every loaded `TESFaction`'s `vendorData.merchantContainer` (VENC), a
+  ref -> faction map rebuilt per load on the pump epoch (worker only), each excluded chest logged
+  once per load. WHY the ownership bars missed it: vendor chests are UNOWNED in the data (the
+  installed Dawnguard.esm REFR has no XOWN and its cell DLC1DawnguardHQ01 none either), so
+  `GetOwner()` is null and `IsOffLimits()` false; the faction's VENC is the only link. Applied at
+  every path: the container scan (`LootScan.cpp`, after `IsLOTDDropOff`), `LooseRefBarred` (and so
+  the ARRIVAL re-check), `Lockpick::Admit` (`vendorChest`) and a belt in `LootHere` (every transfer,
+  `StripCorpse` included). **What breaks:** reading it off the worker (unlocked statics); keying it
+  on a FormID list instead of the factions.
   **LOOSE LOOT, BATCH L (86e3f9pkg, 2026-09-27, `feat/mfo-loose-loot`, tier A crime safety):**
   (0) The Arrows / Bolts loose branch now also runs THE SWAP-UP RULE (`LooseAmmoQualifies`,
   `SwapUp.cpp:471`, keep target computed once per scan like `LootAmmo`): a loose stack is taken
@@ -2581,7 +2592,7 @@ module. Module layout:
   `LooseMuseumQualifies` (`logistics/Lotd.cpp:1280`: the same uncovered-need want as
   `LootMuseum`, plus `LooseSpecialItemBlocked`; inert unless `Lotd::Enabled()` and the deposit
   can run, exactly like `LootMuseum`). (2) **THE LOOSE-ITEM SOURCE BAR** `LooseRefBarred`
-  (`logistics/LootTake.cpp:659`), run on EVERY loose candidate of EVERY category right after
+  (`logistics/LootTake.cpp:700`), run on EVERY loose candidate of EVERY category right after
   `++dLootable` in `LootNearby`, UNCONDITIONAL (no toggle, `bLootInPlayerHomes` included): a
   LOTD display ref (`Lotd::IsDisplayRef`, the snapshot's `displays` set: every display ref the
   slot table names, patches included); `RefInPlayerStorage` (every LOTD display cell, DBMDG* /
@@ -2590,7 +2601,7 @@ module. Module layout:
   The 6 other refs the API VMAD names are NOT displays: the placeable ShipmentCrate001-005 in the
   DBMQA holding cell, and 0x060F21BB `SnowElfWayshrine`, a quest-enabled STAT in Skyrim.esm
   exterior cell 0x37EE6); a ref the PLAYER dropped this session (`PlayerDroppedRef`, below);
-  `IsQuestObjectRef`; any `GetOwner()` or `IsOffLimits()`; and ANY OWNED CELL whatever the
+  `IsQuestObjectRef`; a merchant's vendor chest (`IsMerchantContainer`, below); any `GetOwner()` or `IsOffLimits()`; and ANY OWNED CELL whatever the
   location type (closing round; the reason names a civilised place via `LocationTypes::Classify`).
   Disassembly (AE `TESObjectREFR::GetOwner`, id 20194 @0x2F9E40): GetOwner already falls back
   to the parent cell's owner for item / flora bases (not for activator / door / furniture), so
@@ -2889,9 +2900,16 @@ anonymous-namespace copy — that silently forks the instance).
     the same block"** = same interior cell / worldspace, inside the 45-degree xy cone from
     the stuck position S toward the gated target T, `64 u <= |SI| <= |ST| + 1024 u`,
     `|I.z - T.z| <= 256 u` (rationale in the header comment). **Re-admit** (each logged
-    `[loot] GATED <ref> re-admitted -- <why>`): `GateSink` (`logistics/Sinks.cpp:249`, main
+    `[loot] GATED <ref> re-admitted -- <why>`): `GateSink` (`logistics/Sinks.cpp:274`, main
     thread, registered in `RegisterSinks`) on `TESOpenCloseEvent` or an ACTI/DOOR
-    `TESActivateEvent` within 2048 u of S or T, on the gated ref's own
+    `TESActivateEvent` through `ReadmitOnGateEvent` (`LootTravel_internal.h:410`; batch L,
+    field 2026-09-26: the player opening a CHEST re-admitted five gates): NEVER a container's
+    open/close; a record that names its gate (`GateRecord::gate`, set by `RecordGateRef` `:424`
+    when LP-M2's door finder finds the locked door at the block) re-admits on THAT ref only; a
+    record without one re-admits only on a `GateLikeRef` (`Sinks.cpp:260`: a DOOR, or an ACTI
+    with WerewolfCanActivate 00100769 / ActivatorLever 0006DEAD and no ExtraPrimitive -- the
+    installed-ESM survey: every lever / chain / bar / button / portcullis / puzzle mechanism,
+    no weapon rack, plaque or mannequin/trigger) within 2048 u of S or T; on the gated ref's own
     `TESCellAttachDetachEvent` (per-reference event), a DOOR's `TESLockChangedEvent` when it reads
     unlocked (LP-M2, see LOCKPICK DOORS), a full 64-entry table (memory bound,
     logged) and `ClearGates` on revert. **NO TIMER** (marth: "only re-admit when the block
@@ -2971,8 +2989,9 @@ anonymous-namespace copy — that silently forks the instance).
   `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
   `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-
   the-lock. Pieces:
-  - **Gate** `Lockpick::Admit` (`Lockpick.cpp:535`, called by the scan `LootScan.cpp:377` after the
+  - **Gate** `Lockpick::Admit` (`Lockpick.cpp:523`, called by the scan `LootScan.cpp:488` after the
     owner / off-limits bars): refuses (logged once per follower+lock+reason) owned, offlimits,
+    vendorChest (`IsMerchantContainer`, batch L),
     notChestOrDoor, doorIntoLivedIn (a LOAD door whose destination is owned / a player home /
     crime to enter / a lived-in location, `LoadDoorBar` `:472`), creature (no `ActorTypeNPC` race keyword: `IdleLockPick` is a
     humanoid clip), requiresKey without the key, noPicks, a standing failed verdict (`g_fail`:
@@ -3045,7 +3064,7 @@ anonymous-namespace copy — that silently forks the instance).
     MFO pick or key opened it (`ConsumeOpenedByUs` `:865`), a WARN `F-L3: door unlocked without a
     pick` (principle 7). The EMPTIED correction skips door legs (`Service.cpp:483`). RE-ADMIT: the
     engine Unlock sends `TESLockChangedEvent` (1.6.1170 0x2D92E0 id 19512 / 1.5.97 id 19110, source
-    holder +0x6E0 on both); `GateSink` sinks it (`Sinks.cpp:262`, registered `:322`) and re-admits
+    holder +0x6E0 on both); `GateSink` sinks it (`Sinks.cpp:287`, registered `:351`) and re-admits
     through M1's own `ReadmitNear` for a DOOR that reads unlocked (never a chest). Never a door leg
     for a target that is itself a door (no chains). The load-door bar and engage-on-sight's
     town/inn filter share ONE location-type table and classifier (`native/LocationTypes.h`
@@ -3112,7 +3131,7 @@ anonymous-namespace copy — that silently forks the instance).
   verdict); grab paths never consult the blocklist. Weakening (d) or removing the
   walk-skip re-opens the frozen-Erik churn loop; removing (a)'s sort key stalls
   followers on unreachable-first ordering again.
-- **Sinks** (`RegisterSinks` `logistics/Sinks.cpp:309` ← `plugin.cpp:297`; + `GateSink`, the loot-M1
+- **Sinks** (`RegisterSinks` `logistics/Sinks.cpp:338` ← `plugin.cpp:297`; + `GateSink`, the loot-M1
   GATED re-admit on `TESOpenCloseEvent` / `TESActivateEvent` / `TESCellAttachDetachEvent`, see
   LOOT ROUND M1 above): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
