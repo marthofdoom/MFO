@@ -2547,12 +2547,20 @@ module. Module layout:
   Economy's `deniedWorn` force-sell keeps its ORIGINAL dual-wield scope (`keepRoles.offHand == 2`
   under `bWeaponStyleControl`), so a worn shield of an archer / two-hander / pure caster is never sold
   by it (review R2-3); the deny only stops the NEXT equip.
-- **JESPER'S SET 6 / SET 7 FLIP-FLOP stays OPEN (MFO-B63 part 1).** The cause (field0928b): SPID's
-  outfit re-apply and the engine's OutfitApply UNEQUIP his declared robes and gauntlets every ~5 s
-  (unequips are ungoverned); the mage judge re-picks ONE slot per tick, so the set alternates. A rule
-  that kept stripped pieces declared was built and REMOVED (review F3 on f2c8e2b): it re-dressed every
-  player / script / scene unequip every 3 s. A flip-flop is better than fighting the player. The fix is
-  best-per-slot (MFO-B63 part 1), its own brief.
+- **THE MAGE SET (same branch, 2026-09-28; Jesper's set 6 / set 7 flip-flop FIXED).** Cause: the
+  engine's OutfitApply / SPID strip unequipped his declared robes AND gauntlets every ~5 s (unequips are
+  ungoverned); the mage judge re-picked ONE slot per tick and rule 5 only re-declared what was WORN, so the
+  set alternated. Fix: for a mage-apparel follower (`IsCasterFollower` + `bMageWearRobes`, not dolls) the
+  OOC road declares the WHOLE per-slot best set at once -- `MageBestPerSlot` (`EquipAuthority.cpp:66`,
+  factored VERBATIM out of `ComputeOwnedGearPick`'s mage branch: MageClothingSlot 0-5 incl. ring/amulet/
+  circlet, `MageApparelBuyKey` tier then value (`GetGoldValue`), FormID tiebreak), built body-first, an
+  overlapping best skipped. The set depends on what he OWNS, not on what is worn, so a strip cannot change
+  it; the MFO-B63 drift re-send behaves as on main. Rule 5 then only adds worn pieces no set piece covers.
+  A worn player pick stands against a set piece that only ties it (the mage judge's rule). The legacy
+  single pick (`EquipBestOwnedGear`, APMF absent) and the combat road (declares worn) are unchanged. A
+  first attempt (rule 5b, keeping last-declared pieces) was removed in review F3: it re-dressed every
+  player / script unequip. **What breaks:** declaring a best that overlaps another re-creates the
+  two-items-for-one-slot displacement loop; letting the set depend on worn state re-creates the flip.
 - **THE HEAD SLOT IS THREE BIPED BITS (2026-09-14, field fix; branch
   `fix/mfo-deck-0914-helmet-offhand-verdict-meo`).** FIELD (Deck log, Fable, ROOT
   CAUSE CONFIRMED): vanilla helmets (Imperial Light Helmet `00013EDB`, Elven Helmet
@@ -4532,13 +4540,13 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `EquipAuthorityOwns(fid, cats)` = a claim stands, a declaration has gone out on it, and the
   last SENT `owned` overlaps `cats` — THE gate for a direct path writing into a held hand
   (`Logistics::EquipTorch` on `kEquipCat_Left`). `DeclareEquipSet(fid,
-  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **OPEN BACKLOG: MFO-B133, MFO-B134 (Gear.cpp's weapon
+  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **OPEN BACKLOG: MFO-B133, MFO-B135 (the refused-claim NoOp reads as a satisfied equip), MFO-B134 (Gear.cpp's weapon
   equip hop and EquipTorch still equip directly under a refused claim) -- read before editing.** **A REFUSED CLAIM NO LONGER FALLS BACK
   (`fix/mfo-museum-priority`, marth 2026-09-28 "MFO's fallback is deprecated", SUPERSEDES F1/F5 of
   `c66dc80`):** with the authority SUPPORTED, a refused claim means MFO stays out of the equipment: no
-  direct equip, no unequip, no declaration. `cast/Equip.cpp EquipWeapon` returns FailedOther +
-  transparent at its top (review R2-1: a transparent NoOp is the Scheduler's `satisfiedEquip`, which
-  would arm the hand claim / stance / MFO's equip gate); the old-hold unequip gate stays as a backstop. `EquipAuthorityLive` = supported.
+  direct equip, no unequip (`cast/Equip.cpp` returns a transparent NoOp before the old-hold unequips;
+  the top-up and the shield equip are skipped), no declaration. KNOWN (MFO-B135, not fixed by marth's
+  call: MFO requires Harbinger): the Scheduler reads that transparent NoOp as a satisfied equip. `EquipAuthorityLive` = supported.
   `RefreshEquipDeclaration` says which case, once per refusal streak: the equip seat NOT installed
   (APMF_API.h v8: a claim is refused exactly then; `IsEquipAuthorityEnforced()` false) -> WARN
   "Harbinger's equip seat is not installed -- MFO leaves equipment to the engine"; refused while the

@@ -52,6 +52,42 @@ namespace MFO::Logistics {
                 return a_follower && a_obj && Lotd::KeepForDeposit(a_follower, a_state, a_obj) &&
                        !PlayerGiven::IsPlayerGiven(a_follower->GetFormID(), a_obj->GetFormID());
             }
+
+            // THE MAGE JUDGE'S PER-SLOT BEST, factored out of ComputeOwnedGearPick's mage
+            // branch VERBATIM (2026-09-28, Jesper's set 6 / set 7 flip) so the APMF
+            // declaration can declare the WHOLE set while the legacy single pick stays as
+            // it was. Per logical slot (MageClothingSlot: 0 head / circlet, 1 body, 2
+            // hands, 3 feet, 4 ring, 5 amulet -- jewelry included), the best OWNED piece by
+            // MageApparelBuyKey (rating-0 clothing and jewelry only: rated armor is not a
+            // candidate; tier, then the value metric -- TESForm::GetGoldValue, the engine's
+            // InventoryEntryData value of the base form, its own enchantment included --
+            // FormID tiebreak so two equal pieces never flip). Worker.
+            struct MageSlotBest { RE::TESBoundObject* obj = nullptr; int tier = -1; std::int32_t metric = -1; };
+            void MageBestPerSlot(RE::Actor* a_follower, const FollowerState& a_state, MageSlotBest (&a_out)[6]) {
+                const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
+                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                const bool allowVillain  = IsNecromancerFollower(a_state);
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* ar = obj->As<RE::TESObjectARMO>();
+                    if (!ar) continue;
+                    if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
+                    const int slot = MageClothingSlot(ar);
+                    if (slot < 0) continue;
+                    int t = 0; std::int32_t m = 0;
+                    // The currently-WORN piece is always its slot's incumbent candidate,
+                    // ranked with allowVillain=true (restores the pre-authoritative
+                    // asymmetry): a player-equipped villain/necromancer robe on a
+                    // non-necromancer stays eligible instead of being excluded from
+                    // candidacy, force-replaced by a lesser common piece, and then sold.
+                    const bool worn = (WornInLogicalSlot(a_follower, slot) == obj);
+                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain || worn, t, m)) continue;
+                    auto& b = a_out[slot];
+                    if (!b.obj || t > b.tier || (t == b.tier && m > b.metric) ||
+                        (t == b.tier && m == b.metric && obj->GetFormID() > b.obj->GetFormID()))
+                        b = { obj, t, m };
+                }
+            }
         }
 
         // THE PICK, factored out of EquipBestOwnedGear VERBATIM (feat/mfo-equip-
@@ -83,32 +119,8 @@ namespace MFO::Logistics {
                 // Ranked by the SAME MEO-aware judge as loot/buy. The worn piece is
                 // itself a candidate, so a worn BEST never downgrades (no-op), and
                 // equipping a replacement auto-unequips the lesser -> never strips naked.
-                const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
-                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
-                const bool allowVillain  = IsNecromancerFollower(a_state);
-
-                struct BestPer { RE::TESBoundObject* obj = nullptr; int tier = -1; std::int32_t metric = -1; };
-                BestPer bestSlot[6];
-                for (auto& [obj, data] : a_follower->GetInventory()) {
-                    if (!obj || data.first <= 0) continue;
-                    auto* ar = obj->As<RE::TESObjectARMO>();
-                    if (!ar) continue;
-                    if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
-                    const int slot = MageClothingSlot(ar);
-                    if (slot < 0) continue;
-                    int t = 0; std::int32_t m = 0;
-                    // The currently-WORN piece is always its slot's incumbent candidate,
-                    // ranked with allowVillain=true (restores the pre-authoritative
-                    // asymmetry): a player-equipped villain/necromancer robe on a
-                    // non-necromancer stays eligible instead of being excluded from
-                    // candidacy, force-replaced by a lesser common piece, and then sold.
-                    const bool worn = (WornInLogicalSlot(a_follower, slot) == obj);
-                    if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain || worn, t, m)) continue;
-                    auto& b = bestSlot[slot];
-                    if (!b.obj || t > b.tier || (t == b.tier && m > b.metric) ||
-                        (t == b.tier && m == b.metric && obj->GetFormID() > b.obj->GetFormID()))
-                        b = { obj, t, m };
-                }
+                MageSlotBest bestSlot[6];
+                MageBestPerSlot(a_follower, a_state, bestSlot);
                 // First slot whose worn piece isn't the computed best -> one
                 // authoritative correction per tick (converges over ticks, no thrash).
                 for (int slot = 0; slot < 6; ++slot) {
@@ -723,7 +735,37 @@ namespace MFO::Logistics {
             //    (F9). Consumed from EquipBestOwnedGear's hand-off when that pass
             //    ran this tick, else computed here (F10).
             RE::TESObjectARMO* pick = nullptr;
-            if (a_judgeArmor) {
+            // THE MAGE SET (2026-09-28, Jesper's set 6 / set 7 flip; marth: "mage rules
+            // are clothing items, not armor, and most expensive wins"). For a mage-apparel
+            // follower the OOC road declares the WHOLE per-slot best set at once
+            // (MageBestPerSlot: every logical slot with an owned best, jewelry included,
+            // the existing ranking unchanged) instead of the mage judge's ONE correction
+            // per tick plus "everything else worn". THE FLIP CAME FROM THAT PAIR: the
+            // engine's OutfitApply / SPID strip unequipped robes AND gauntlets, the judge
+            // re-picked one slot per tick, and rule 5 only re-declared what was WORN, so
+            // tick 1 declared the robes without the stripped gauntlets and tick 2 put
+            // them back. The set is now a function of what he OWNS, not of what is worn,
+            // so a strip cannot change it; the MFO-B63 drift re-send (below) behaves as on
+            // main. No piece is kept because it WAS declared. Built in body-first order;
+            // a best that overlaps a piece already chosen is skipped (never two items for
+            // one slot). The legacy (APMF-absent) EquipBestOwnedGear single pick is
+            // unchanged, and the combat road (a_judgeArmor false) still declares worn.
+            const bool mageSetMode = a_judgeArmor && !Config::g_dollsMode.load() &&
+                                     IsCasterFollower(a_state) && Config::g_mageWearRobes.load();
+            std::vector<RE::TESObjectARMO*> mageSet;
+            if (mageSetMode) {
+                MageSlotBest bestSlot[6];
+                MageBestPerSlot(a_follower, a_state, bestSlot);
+                for (const int slot : { 1, 0, 2, 3, 4, 5 }) {
+                    auto* b = bestSlot[slot].obj ? bestSlot[slot].obj->As<RE::TESObjectARMO>() : nullptr;
+                    if (!b) continue;
+                    if (std::any_of(mageSet.begin(), mageSet.end(),
+                                    [&](RE::TESObjectARMO* c) { return SlotsOverlap(c, b); }))
+                        continue;
+                    mageSet.push_back(b);
+                }
+            }
+            if (a_judgeArmor && !mageSetMode) {
                 RE::TESBoundObject* pickObj = nullptr;
                 if (g_handedPick.set && g_handedPick.follower == id) {
                     pickObj = resolve(g_handedPick.pick);
@@ -777,12 +819,20 @@ namespace MFO::Logistics {
                 const auto it = inv.find(pick);
                 return it != inv.end() && it->second.second && it->second.second->IsWorn();
             }();
-            const bool mayRecordPlayerPick = APMFBridge::IsEquipAuthorityEnforced() && (!pick || pickWorn);
+            const auto wornNow = [&](RE::TESObjectARMO* a_ar) {
+                const auto it = inv.find(a_ar);
+                return it != inv.end() && it->second.second && it->second.second->IsWorn();
+            };
+            // Mage set: MFO is contesting a slot until EVERY set piece is on him.
+            const bool mageSetLanded = std::all_of(mageSet.begin(), mageSet.end(), wornNow);
+            const bool mayRecordPlayerPick = APMFBridge::IsEquipAuthorityEnforced() &&
+                                             (mageSetMode ? mageSetLanded : (!pick || pickWorn));
             if (mayRecordPlayerPick) {
                 for (auto& [obj, data] : inv) {
                     if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || ar->IsShield() || ar == pick) continue;
+                    if (std::find(mageSet.begin(), mageSet.end(), ar) != mageSet.end()) continue;
                     const RE::FormID f = ar->GetFormID();
                     if (lastHas(f) || picks.count(f)) continue;
                     // A museum relic left out of the set (RelicOffBody) is not a player
@@ -814,9 +864,31 @@ namespace MFO::Logistics {
                 }
                 // Rated judge: ArmorIsBetter already demands a strictly higher score than the worn piece.
             }
+            if (mageSetMode && !picks.empty()) {
+                // Mage judge: the player's worn piece stands against a set piece that
+                // only TIES it on (tier, metric) -- the same rule as the single pick.
+                const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
+                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                for (auto& b : mageSet) {
+                    int bt = 0; std::int32_t bm = 0;
+                    const bool bRanks = MageApparelBuyKey(b, top2, schoolPrimary, IsNecromancerFollower(a_state), bt, bm);
+                    for (auto& [obj, data] : inv) {
+                        if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
+                        auto* ar = obj->As<RE::TESObjectARMO>();
+                        if (!ar || ar == b || !picks.count(ar->GetFormID()) || !SlotsOverlap(ar, b)) continue;
+                        int wt = 0; std::int32_t wm = 0;
+                        MageApparelBuyKey(ar, top2, schoolPrimary, true, wt, wm);
+                        const bool strictlyBetter = bRanks && (bt > wt || (bt == wt && bm > wm));
+                        if (!strictlyBetter) { b = ar; break; }   // the player's piece stands in that slot
+                    }
+                }
+            }
             decl.Add(pick);
+            for (auto* b : mageSet) decl.Add(b);
 
-            // 5. EVERYTHING ELSE WORN that is apparel, minus what the pick displaces.
+            // 5. EVERYTHING ELSE WORN that is apparel, minus what the pick (or the mage
+            //    set) displaces. For a mage set this is only what no set piece covers:
+            //    pieces outside the dress-up slots, and slots he owns no clothing for.
             //    Shields are never declared (rule 3: an unowned category). A museum
             //    relic is never declared (RelicOffBody): Armor is owned, so the seat
             //    refuses its re-equip; worn now, it ships at the next deposit.
@@ -825,6 +897,9 @@ namespace MFO::Logistics {
                 auto* ar = obj->As<RE::TESObjectARMO>();
                 if (!ar || ar->IsShield()) continue;
                 if (pick && ar != pick && SlotsOverlap(ar, pick)) continue;
+                if (std::any_of(mageSet.begin(), mageSet.end(),
+                                [&](RE::TESObjectARMO* c) { return c != ar && SlotsOverlap(ar, c); }))
+                    continue;
                 if (RelicOffBody(a_follower, a_state, obj)) {
                     // Once per (follower, relic) per session: the field proof of item 3.
                     static std::unordered_set<std::uint64_t> s_relicLogged;   // worker-serial like g_lastDeclared
