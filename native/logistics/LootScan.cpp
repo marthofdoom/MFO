@@ -208,6 +208,9 @@ namespace MFO::Logistics {
             // change ref-to-ref within this one scan -- see BuildEquipmentContext.
             bool             equipCtxBuilt = false;
             EquipmentContext equipCtx;
+            // The ammo keep target for the Arrows / Bolts loose branch (86e3f9pkg), built
+            // lazily once per scan exactly as LootAmmo computes it (-1 = not yet).
+            int              ammoTarget = -1;
 
             auto scanOne =
                 [&](RE::TESObjectREFR& a_ref) {
@@ -268,9 +271,21 @@ namespace MFO::Logistics {
                             switch (a_cat) {
                             case Category::Arrows:
                             case Category::Bolts:
+                                // + THE SWAP-UP RULE (86e3f9pkg): a loose stack is
+                                // taken iff LootAmmo's restock take would take it out
+                                // of a body (LooseAmmoQualifies, SwapUp.cpp); the
+                                // keep target is computed once per scan, as LootAmmo does.
                                 if (auto* ammo = base->As<RE::TESAmmo>();
-                                    ammo && AmmoIsBolt(ammo) == (a_cat == Category::Bolts))
-                                    lootable = loose = true;
+                                    ammo && AmmoIsBolt(ammo) == (a_cat == Category::Bolts)) {
+                                    const bool wantBolt = a_cat == Category::Bolts;
+                                    if (ammoTarget < 0) {
+                                        const bool uses = g_svc && UsesAmmoKind(
+                                            g_svc, ComputeWeaponRoles(a_follower, *g_svc), wantBolt);
+                                        ammoTarget = AmmoKeepTarget(g_svc, wantBolt, uses);
+                                    }
+                                    if (LooseAmmoQualifies(a_follower, ref, ammo, wantBolt, ammoTarget))
+                                        lootable = loose = true;
+                                }
                                 break;
                             case Category::Gold:
                                 // Gold001 OR a coin item (OCF / COIN's list) --

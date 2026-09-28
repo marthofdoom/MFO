@@ -2022,12 +2022,13 @@ module. Module layout:
     `ShedOffRoleWeapon:288`, `IsLooting:512`, `WalkingLootLeg:553`, the lifecycle hooks
     (`NoteInCombat:564`, `ClearTransientState:568`, `OnFollowerRemoved:613`) and the
     MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`).
-  - `logistics/Sinks.cpp` (299) = `BeastHeadSink:52`, `ContainerSink:129`, `GateSink:208`
-    (anonymous namespace), `RegisterSinks:250`, `SweepBeastHeadsOnLoad:274`.
-  - `logistics/LootTake.cpp` (786), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (934),
+  - `logistics/Sinks.cpp` (359) = `BeastHeadSink:52`, `ContainerSink:129`, `GateSink:249`
+    (anonymous namespace), the player-drop record `NotePlayerDropped:220` / `PlayerDroppedRef:228`
+    (86e3f9pkg), `RegisterSinks:309`, `SweepBeastHeadsOnLoad:334`.
+  - `logistics/LootTake.cpp` (888), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (1025),
     `logistics/LootEquipment.cpp` (571), `logistics/Economy.cpp` (1044),
     `logistics/EquipAuthority.cpp` (816), `logistics/Cast.cpp` (268),
-    `logistics/SwapUp.cpp` (612, THE SWAP-UP RULE, 2026-09-25): see the bullets below.
+    `logistics/SwapUp.cpp` (646, THE SWAP-UP RULE, 2026-09-25): see the bullets below.
   - `logistics/Logistics_internal.h` (938) = shared state/types/declarations;
     `logistics/LootTravel_internal.h` (562) = the loot TRAVEL substrate (`TravelIntent`,
     `g_travelSlots:91`, stall/sticky/gate/actor-block state, `SortLootCandidates`, scan
@@ -2100,7 +2101,12 @@ module. Module layout:
     / stock / player pick / quest / excluded. Consumers: `LootAmmo` (`LootTake.cpp:73`, RESTOCK: >=
     worst held; target 0 when he does not use the kind = plain restock, no shed) and
     `LootEquipment` (UPGRADE, strictly above `AmmoUpgradeBar:385`, lowest priority after gear) via
-    `SwapUpAmmoFrom:410` -- plans over the COMBINED pool (held + body), never takes a body stack
+    `SwapUpAmmoFrom:481` -- plans over the COMBINED pool (held + body) through its take side
+    `SwapUpAmmoTakeSet:415` (extracted verbatim 86e3f9pkg so the loose-ammo branch shares it:
+    `LooseAmmoQualifies:468` judges ONE loose stack by the RESTOCK take, value = the base's
+    `GetGoldValue`, special = the base's explosion projectile; an enchanted loose round's
+    ExtraEnchantment is not read, and no shed runs for a loose pickup -- there is no body),
+    never takes a body stack
     the rule calls obsolete on landing, takes best-first under `FitsCarryWeight`, then sheds
     `ObsoleteHeldAmmo:372` (recomputed once, post-take) back into the body, lowest first; logs
     `[swapup]`. EconomyProbe offers obsolete rows (`Economy.cpp:785`, tag `SELL (obsolete ammo)`,
@@ -2499,15 +2505,17 @@ module. Module layout:
   head compare must stay ONE comparison (per-bit Hair AND Circlet against two
   `GetWornArmor` reads can double-judge the same worn helmet).
 - **Loot side (was `Logistics_Loot.cpp`, wave-2 split into three):**
-  `logistics/LootTake.cpp` (per-category looters `LootAmmo:73` -- a wrapper over
-  `SwapUpAmmoFrom` since 2026-09-25, `LootPotions:90`,
-  `LootGold:187`, `LootValuables:391`; source policy `PlayerIsConsidering:535`,
-  `TierReleased:585`, `LootHere:666`, `HasLoot:686`, `NavmeshReach:750`),
+  `logistics/LootTake.cpp` (per-category looters `LootAmmo:75` -- a wrapper over
+  `SwapUpAmmoFrom` since 2026-09-25, `LootPotions:95`,
+  `LootGold:275`, `LootValuables:479`; the coin rules `IsCoinLoot:152` / `IsCoinModCoin:194` /
+  `IsCoinPurseFlora:228` / `CoinCount:258`; source policy `RefInPlayerStorage:570`,
+  `IsLOTDDropOff:602`, the loose-item bar `LooseRefBarred:642`, `PlayerIsConsidering:656`,
+  `TierReleased:706`, `LootHere:764`, `HasLoot:790`, `NavmeshReach:855`, `LooseRef:870`),
   `logistics/Gear.cpp` (the armor judge `ArmorPrefFor:43`, `ArmorScore:65`,
   `LogArmorClassIfChanged:78`, `ArmorClassSuits:136`, `ArmorIsBetter:154`/`:195`,
   `CarriesSlotArmorAtLeast:215`, `KeepHeadClear:270`, `StyleVotesFor:356`,
   `ComputeWeaponRoles:398`, `AcquireEquip:640`), `logistics/LootScan.cpp`
-  (`LootNearby:21`, `StripCorpse:826`, `RunExcursionScan:890`). `LootEquipment` itself
+  (`LootNearby:71`, `StripCorpse:915`, `RunExcursionScan:980`). `LootEquipment` itself
   lives in `logistics/LootEquipment.cpp` (see below).
   **ROUTE 2b GENERALIZED TO EVERY CATEGORY (2026-09-06):** the loose-ref
   whitelist inside `LootNearby` (`:~1988`, a `switch (a_cat)` now, was an
@@ -2537,6 +2545,48 @@ module. Module layout:
   `PickUpObject`/AddTask (crash4 class); the whitelist only decides
   ELIGIBILITY. Nothing was deliberately excluded from the generalization —
   every `Category` ordinal now has a loose-ref path.
+  **LOOSE LOOT, BATCH L (86e3f9pkg, 2026-09-27, `feat/mfo-loose-loot`, tier A crime safety):**
+  (0) The Arrows / Bolts loose branch now also runs THE SWAP-UP RULE (`LooseAmmoQualifies`,
+  `SwapUp.cpp:468`, keep target computed once per scan like `LootAmmo`): a loose stack is taken
+  iff the restock take would take it out of a body (strictly worse than his worst held, or
+  obsolete on landing, is passed over).
+  (1) `Category::Museum` gets its loose branch (`LootScan.cpp:384`) through
+  `LooseMuseumQualifies` (`logistics/Lotd.cpp:1280`: the same uncovered-need want as
+  `LootMuseum`, plus `LooseSpecialItemBlocked`; inert unless `Lotd::Enabled()` and the deposit
+  can run, exactly like `LootMuseum`). (2) **THE LOOSE-ITEM SOURCE BAR** `LooseRefBarred`
+  (`logistics/LootTake.cpp:642`), run on EVERY loose candidate of EVERY category right after
+  `++dLootable` in `LootNearby`, UNCONDITIONAL (no toggle, `bLootInPlayerHomes` included): a
+  LOTD display ref (`Lotd::IsDisplayRef`, the snapshot's `displays` set: every display ref the
+  slot table names, patches included); `RefInPlayerStorage` (every LOTD display cell, DBMDG* /
+  DBMGuildhouse / DBMDGStoreroom, is LocTypePlayerHouse and PlayerFaction-owned in the installed
+  6.9 ESM; the ESM's 2099 display refs sit in those cells except 5 in the DBMQA holding cell and
+  one in 0x37EE6, both covered by the display-ref set); a ref the PLAYER dropped this session
+  (`PlayerDroppedRef`, below); `IsQuestObjectRef`; any `GetOwner()` or `IsOffLimits()`; and a
+  CIVILISED place (`LocationTypes::Classify` of the ref's location) whose parent CELL has an
+  owner. The reason is logged ONCE per ref (`[loot] ... loose ref ... SKIPPED -- <why>`,
+  worker-only set, cleared past 4096). (3) **COIN** (Coins of Interesting Natures): `IsCoinLoot`
+  (`LootTake.cpp:152`) falls through to `IsCoinModCoin:194` = membership of COIN's FLST
+  `DES_DefaultCoinsList` (`C.O.I.N.esp`, ESL, local 0xBE7: Gold001 + 13 regional coins COIN
+  injects into Update.esm's ID space 0x1DE5012..24), resolved once by plugin name + local ID
+  (no load-order index); COIN absent -> inert. The coins' only keyword, VendorNoSale 000FF9FB,
+  is deliberately NOT a coin signal (quest items carry it). The Gold / Valuables loose branches
+  also admit `IsCoinPurseFlora:228`: an un-harvested (`kHarvested` 1<<13 clear) FLORA ref whose
+  `produceItem` resolves through nested LVLIs (depth 4) to Gold001 or a coin (per-base verdict
+  cached). Its acquire is the SAME arrival `ActivateRef` on MAIN (`Service.cpp`, the loose
+  branch): `acquireFlora` (`LootTravel_internal.h`) makes the arrival log `HARVEST ... his coin
+  before = N` (`CoinCount:258`) and the readback (`Service.cpp:411`) log `HARVESTED ... coin N ->
+  M` or WARN `NOT credited` + sticky (principle 5/7: an NPC harvest crediting the follower is
+  INFERRED until that line is seen). **Player drops:** `ContainerSink` (`Sinks.cpp:129`) records
+  `oldContainer == player && newContainer == 0 && reference` through the gated worker queue into
+  `g_playerDropped` (`Logistics_internal.h`, LRU 256) via `NotePlayerDropped:220` /
+  `PlayerDroppedRef:228`; the map is scoped by the pump epoch (a revert bumps it, the first
+  access after drops the old save's entries), so no `ClearTransientState` line was needed.
+  **What breaks:** the bar must stay AFTER eligibility and BEFORE the candidate push (a loose
+  ref has no `HasLoot` peek to stop it); removing any bar row re-opens theft (owned / civilised)
+  or the museum-display / home-decor hole; `IsCoinModCoin` must never key on VendorNoSale;
+  the flora readback must stay on the coin count, never the flora base (it never enters an
+  inventory); the drop record must stay a QUEUED worker write (sinks never touch a worker map
+  inline, #1/#4).
 - `logistics/LootEquipment.cpp` (526; was `Logistics_Loot_Equipment.cpp`, NEW 2026-09-06) — split out of
   `Logistics_Loot.cpp` purely to stay under the 2500-line hard rule (pure
   mechanical move, no logic change). Owns the equipment judge:
@@ -2786,7 +2836,7 @@ anonymous-namespace copy — that silently forks the instance).
     the same block"** = same interior cell / worldspace, inside the 45-degree xy cone from
     the stuck position S toward the gated target T, `64 u <= |SI| <= |ST| + 1024 u`,
     `|I.z - T.z| <= 256 u` (rationale in the header comment). **Re-admit** (each logged
-    `[loot] GATED <ref> re-admitted -- <why>`): `GateSink` (`logistics/Sinks.cpp:208`, main
+    `[loot] GATED <ref> re-admitted -- <why>`): `GateSink` (`logistics/Sinks.cpp:249`, main
     thread, registered in `RegisterSinks`) on `TESOpenCloseEvent` or an ACTI/DOOR
     `TESActivateEvent` within 2048 u of S or T, on the gated ref's own
     `TESCellAttachDetachEvent` (per-reference event), a DOOR's `TESLockChangedEvent` when it reads
@@ -2942,7 +2992,7 @@ anonymous-namespace copy — that silently forks the instance).
     MFO pick or key opened it (`ConsumeOpenedByUs` `:865`), a WARN `F-L3: door unlocked without a
     pick` (principle 7). The EMPTIED correction skips door legs (`Service.cpp:483`). RE-ADMIT: the
     engine Unlock sends `TESLockChangedEvent` (1.6.1170 0x2D92E0 id 19512 / 1.5.97 id 19110, source
-    holder +0x6E0 on both); `GateSink` sinks it (`Sinks.cpp:221`, registered `:281`) and re-admits
+    holder +0x6E0 on both); `GateSink` sinks it (`Sinks.cpp:262`, registered `:322`) and re-admits
     through M1's own `ReadmitNear` for a DOOR that reads unlocked (never a chest). Never a door leg
     for a target that is itself a door (no chains). The load-door bar and engage-on-sight's
     town/inn filter share ONE location-type table and classifier (`native/LocationTypes.h`
@@ -3009,15 +3059,17 @@ anonymous-namespace copy — that silently forks the instance).
   verdict); grab paths never consult the blocklist. Weakening (d) or removing the
   walk-skip re-opens the frozen-Erik churn loop; removing (a)'s sort key stalls
   followers on unreachable-first ordering again.
-- **Sinks** (`RegisterSinks` `logistics/Sinks.cpp:250` ← `plugin.cpp:297`; + `GateSink`, the loot-M1
+- **Sinks** (`RegisterSinks` `logistics/Sinks.cpp:309` ← `plugin.cpp:297`; + `GateSink`, the loot-M1
   GATED re-admit on `TESOpenCloseEvent` / `TESActivateEvent` / `TESCellAttachDetachEvent`, see
   LOOT ROUND M1 above): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
   PlayerID()`, `ContainerSink` in `logistics/Sinks.cpp`) or it re-fires on its own removal (MAO infinite-credit loop);
-  only QUEUES to the worker. `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
+  only QUEUES to the worker. Its one other branch (86e3f9pkg) runs BEFORE that filter: an item
+  leaving the player into the world (`newContainer == 0`, a ref handle) is queued to
+  `NotePlayerDropped` and the sink returns (a drop is never a take). `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
   → `KeepHeadClear`; since 2026-09-14 it also emits the passive `[armor-obs]` line
   (`logistics/Sinks.cpp:60`) for every rated-ARMO equip/unequip on a tracked follower
-  BEFORE its own equipped-only / toggle gates (pure reads, `Followers::IsTrackedFast`). `SweepBeastHeadsOnLoad` (`logistics/Sinks.cpp:274`) ← `plugin.cpp:360`.
+  BEFORE its own equipped-only / toggle gates (pure reads, `Followers::IsTrackedFast`). `SweepBeastHeadsOnLoad` (`logistics/Sinks.cpp:334`) ← `plugin.cpp:360`.
 - `OnFollowerRemoved` (`logistics/Upkeep.cpp:613`) ← `Followers.cpp:306` (dismissal alias eviction).
 - Hardcoded base FormIDs (stable): Gold `0x0F`, Lockpick `0x0A`, player `0x14`,
   house loc types, PlayerFaction — resolved/used throughout.
@@ -3109,16 +3161,19 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
 - **L2 gambit** `act.loot_museum` (`Vocabulary.h`, APPENDED) → `Service.cpp:1228` → `RunGambit:1004`
   (deposit if possible, else `LootNearby(Category::Museum)`); `Category::Museum` APPENDED
   (`Logistics_internal.h`, Valuables-tier dibs via `TierReleased`'s default path, dibs-deferred in
-  `IsDibsTierLootOp`); the looter `Logistics::LootMuseum:1215` (via `LootHere`/`HasLoot`,
+  `IsDibsTierLootOp`); the looter `Logistics::LootMuseum:1244` (via `LootHere`/`HasLoot`,
   `LootTake.cpp`); StripCorpse + RunExcursionScan map the op (`LootScan.cpp`). Player storage /
-  museum halls are skipped UNCONDITIONALLY for this category (`LootScan.cpp:343`); loose world
-  refs are never museum candidates (the display refs are item-shaped refs in museum cells).
+  museum halls are skipped UNCONDITIONALLY for this category's containers. LOOSE relics ARE
+  museum candidates since 86e3f9pkg (`LooseMuseumQualifies:1280`), behind the loose-item
+  source bar (`LooseRefBarred`: display refs via `Lotd::IsDisplayRef:1212` = the snapshot's
+  `displays` set, player storage / the museum halls, ownership, civilised places; see the
+  route-2b "LOOSE LOOT, BATCH L" note in the Logistics family section).
   Board: listed in `kActsLogi`, skipped by the picker unless `GambitOffered()`
   (`Board_FieldKit.cpp:576`).
-- **A needed relic is never sold or dropped.** `HoldFromSale:1189` (whenever awareness is on,
+- **A needed relic is never sold or dropped.** `HoldFromSale:1218` (whenever awareness is on,
   Harbinger or not) ← the Economy sell list (`Economy.cpp:662`), SwapUp's ammo ladder (`HeldAmmo`
-  pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:557`).
-  `KeepForDeposit:1198` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
+  pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:542`).
+  `KeepForDeposit:1227` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
   `ShedOffRoleWeapon` (`Upkeep.cpp:399`): an off-role relic weapon is deposited, not handed to you.
 - **L3 deposit** (automatic with the gambit; ONE trip at a time, `g_trip` under `g_tripMx`):
   `RunGambit` starts it when the follower carries `Shippable:608` items (not worn, quest, stock
@@ -5935,7 +5990,7 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 | `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:300` | 14 + 1 vtables |
 | `CombatStyle::InstallEquipGate` (CheckShouldEquip 0x0F) | `plugin.cpp:301` | 30 template vtables |
 | `Rapport::RegisterSinks` (TESDeath, TESCombat) | `plugin.cpp:302` → `Rapport.cpp:521` | sinks LAST |
-| `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:303` → `logistics/Sinks.cpp:250` | direction filter mandatory |
+| `Logistics::RegisterSinks` (TESContainerChanged, TESEquip) | `plugin.cpp:303` → `logistics/Sinks.cpp:309` | direction filter mandatory |
 | `Lotd::RegisterSinks` (SKSE ModCallbackEvent: LOTD's MCMRefresh / DBM DisplayListUpdate / DisplaySortComplete) | `plugin.cpp:389` → `logistics/Lotd.cpp:784` | only when LOTD is detected; the sink only QUEUES a main-thread snapshot rebuild |
 | `MEOBridge::RegisterSink` (TESEquip) | `plugin.cpp:298` → `MEOBridge.cpp:75` | optional |
 | `Diagnostics::Install` (TESSpellCast, TESHit, MenuOpenClose, + Probe crosshair) | `plugin.cpp:341` → `Diagnostics.cpp` `Install()` | + the worker pump; prints the `[atk-obs] frameworks` line |

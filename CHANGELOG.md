@@ -7,6 +7,10 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Loot museum items picks up loose relics too.** A relic the museum still needs, lying on a table or a shelf, is looted the same as one in a chest. Every other loot gambit already took loose items.
+- **Loose arrows and bolts follow the trade-up rule.** A follower passes over a loose stack worse than anything he carries, the same as in a chest.
+- **Loose items are safe to leave around.** A follower never takes a museum display, anything in your home or the museum halls, anything you dropped, a quest item, or anything owned. In a town, inn, house or shop he takes a loose item only when neither the item nor the room has an owner. The log names the reason once for each item he leaves.
+- **Followers pick up COIN coin purses.** With Coins of Interesting Natures installed, a follower with a gold or valuables loot gambit harvests the coin purses he finds. COIN's regional coins in chests and on bodies count as gold loot too.
 - **A follower who is losing now runs back to you.** Confidence watches how fast he is losing health. A duel he is losing badly sends him back well before he is nearly dead.
 - **Strong enemies count for more, weak ones for less.** A dragon weighs about four times a mudcrab. A pack of mudcrabs no longer sends a healthy follower running.
 - **A crowd alone no longer forces a retreat at full health.** Five even enemies keep him fighting while he holds his own. If the pack starts hurting him, he falls back.

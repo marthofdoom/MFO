@@ -998,6 +998,12 @@ namespace MFO::Logistics {
     // back into a_src, lowest first. a_peek: would it take anything (no move)?
     bool  SwapUpAmmoFrom(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
                          int a_target, bool a_upgradeOnly, bool a_peek);
+    // The rule's take side, shared by SwapUpAmmoFrom and the loose-ammo branch (86e3f9pkg).
+    std::vector<AmmoStack> SwapUpAmmoTakeSet(RE::Actor* a_follower, bool a_wantBolt, int a_target,
+                                             bool a_upgradeOnly, const std::vector<AmmoStack>& a_body);
+    // Route 2b: a LOOSE ammo ref qualifies iff the RESTOCK take would take it (86e3f9pkg).
+    bool  LooseAmmoQualifies(RE::Actor* a_follower, RE::TESObjectREFR* a_ref, RE::TESAmmo* a_ammo,
+                             bool a_wantBolt, int a_target);
     // The ch.17 declaration's minimum stack: a better stack is declared over the
     // worn one only when it holds at least this many rounds (MFO-B44, see
     // RefreshEquipDeclaration rule 2).
