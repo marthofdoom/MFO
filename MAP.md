@@ -4507,12 +4507,16 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `EquipAuthorityOwns(fid, cats)` = a claim stands, a declaration has gone out on it, and the
   last SENT `owned` overlaps `cats` — THE gate for a direct path writing into a held hand
   (`Logistics::EquipTorch` on `kEquipCat_Left`). `DeclareEquipSet(fid,
-  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **A REFUSED CLAIM IS NOT FAIL-CLOSED (F1/F5, Fable round 2 on
-  `c66dc80`):** APMF refuses a ch.17 claim exactly when its #17a equip seat is not installed, and
-  then nothing on APMF's side can perform or deny an equip — so a refusal means "MFO keeps its
-  own equips": `IsEquipAuthorityClaimed` stays false and every direct path runs as without APMF
-  (Actuation's `authority=false`, `AcquireEquip`'s `EquipAuthorityLive` false,
-  `RefreshEquipDeclaration` returns without sending). `spdlog::warn` once per streak. Only a
+  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **A REFUSED CLAIM NO LONGER FALLS BACK
+  (`fix/mfo-museum-priority` e056be5, marth 2026-09-28, SUPERSEDES F1/F5 of `c66dc80`):** APMF refuses a
+  ch.17 claim when its #17a equip seat is not installed. MFO then makes NO direct equips for that
+  follower: `EquipAuthorityLive` = `EquipAuthoritySupported()` (claimed or refused), Actuation's
+  `authority` = supported (the claim is attempted, its result no longer gates), and
+  `RefreshEquipDeclaration` logs `spdlog::error` "Harbinger REFUSED the equip-authority claim -- MFO
+  makes NO direct equips" once per refusal streak and returns without sending. The legacy direct
+  paths run ONLY when the authority is unsupported (APMF absent, ABI < 9, `bApmfEquipAuthority` off).
+  The bridge's own once-per-streak warn text (`apmf/Equip.cpp`) still says the direct paths run —
+  stale, outside that branch's boundary. Only a
   DECLARATION on a live claim fails closed (`DeclareEquipSet` false). `ClaimEquipAuthority(fid,
   bool* a_outFresh)`: a STANDING `RequestEx(kIntent_EquipAuthority, kOwnBasis, ival =
   kEquipAuth_None)` on `Owned::equipAuthHandle` — kept if live, but **RE-VALIDATED (F2)**: a kept
