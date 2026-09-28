@@ -55,7 +55,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (4 records)** | `Serialization.cpp`, `Serialization.h`, `State.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1` (`Serialization.h`). FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; and a cap-saturated skill with a FRACTIONAL natural can display one integer lower after the v7 hold-time floor, REVIEW-BACKLOG MFO-B13), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
+| **Co-save (5 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1` (`Serialization.h`). PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; and a cap-saturated skill with a FRACTIONAL natural can display one integer lower after the v7 hold-time floor, REVIEW-BACKLOG MFO-B13), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -117,7 +117,7 @@ The single source of truth for ordering. Everything below depends on it.
 independent co-save records. `State.h` defines the authoritative in-memory
 state (`g_followers`, `Gambit`, `FollowerState`).
 
-**Four records (`Serialization.h`), each with its own version + reader:**
+**Five records (`Serialization.h`), each with its own version + reader:**
 - **`'FLWR'` / `kSchemaVersion=5`** (`Serialization.h:8,134`) — per-follower
   `{rapport, rank, combatClassOverride(v4), mfoEnabled(v5), tables[Combat,Logistics][], overrides[]}`.
   Written `SaveCallback` `Serialization.cpp:86`; read by `LoadCallback` `:569`
@@ -170,6 +170,19 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   (since `1ac3c6b`, F4, the loader names the slot from the LIVE hands: left slot
   when the form is held left, default when right, both for a same-form dual
   hold). `kMaxForcedWeapons` 64 is a PAIR cap now (REVIEW-BACKLOG MFO-B20).
+- **`'PGIV'` / `kPlayerGivenVersion=1`** (`Serialization.h:154-155`, ClickUp 86e3faccn, 2026-09-27) --
+  the LOTD museum relics the PLAYER gave a follower or put on him in the trade / gift menu. Owner
+  `logistics/PlayerGiven.cpp` (`CoSave:201` / `CoLoad:244`, written last in `SaveCallback`
+  `Serialization.cpp:275`, dispatched `:642`). Layout v1: `u32 followerCount`, per follower
+  `{u32 followerFormID, u32 entryCount, per entry {u32 baseFormID, u8 bits}}`; bits 0x1 GIVEN,
+  0x2 EQUIPPED; the session-only AI-equip mark 0x4 is never written and is masked off on read.
+  CoSave snapshots `g_rec` under `g_mx` and writes from the copy; 0xFF follower / base ids are skipped
+  (#9). CoLoad bounds both counts at 4096 (#11), `ResolveFormID`s the follower and each base and
+  DROPS an unresolvable one or a base whose form no longer looks up (its plugin gone, #8), and
+  repopulates `g_rec` under `g_mx`. A save without the record never reaches CoLoad: the record stays
+  empty. Cleared by `PlayerGiven::ClearRecord` in `ResetAllState` (`Serialization.cpp:735`, after
+  `ProgAllocator::ClearAll`, well after `StopPump` `:706` and `MainThread::Clear`) and, belt and
+  braces, at the top of `LoadCallback` (`:579`). Fifth independent record.
 
 **Ingestion discipline (INVARIANTS #8–#12), all enforced here:** every persisted
 FormID passes `ResolveFormID` or is DROPPED (`:367,447,511`); runtime `0xFF` IDs
@@ -190,12 +203,12 @@ redirected to logistics (#35, `:486`); an empty board is backfilled with
 `Followers::ApplyDefaultKit` (`:559`); over-cap gambits are fully *consumed* but
 not stored (`:491`, #22f) or the stream desyncs.
 
-**`ResetAllState()` (`:680`) — the teardown-order contract (⚠️).** RevertCallback
+**`ResetAllState()` (`:700`) — the teardown-order contract (⚠️).** RevertCallback
 and the load window both funnel here. Order is load-bearing:
-`Diagnostics::StopPump()` **first** (`:686`, drains the worker) → `MainThread::Clear`
+`Diagnostics::StopPump()` **first** (`:706`, drains the worker) → `MainThread::Clear`
 → `g_followers.clear()` → `Followers::g_active.clear()` → each subsystem's
 `ClearTransientState`/`ClearAll` (Followers, Scheduler, Logistics, +`ClearStockGear`,
-ProgAllocator, Loadout, Targeting, CasterConsent, CombatStyle, Sightline, Board,
+ProgAllocator, +`PlayerGiven::ClearRecord` (PGIV, `:735`, 86e3faccn), Loadout, Targeting, CasterConsent, CombatStyle, Sightline, Board,
 Packages `ReleaseAll("revert")` (`:733`), Papyrus, TradeBridge, MEOBridge, Probe, Rapport)
 → `Board::SetHud(false)`. **What breaks:** move any clear out, or run it while the
 pump is live, and you race a worker insert (UB). `Packages::ReleaseAll` here
@@ -482,7 +495,8 @@ per concern:
   (`PlayerGiven::IsPlayerEquipped`) is NOT a "museum relic" here: it competes in the ordinary pool and a
   held one is never swapped out (review of 93613c4). A held relic is swapped ONLY with positive proof
   (round 3): `PlayerGiven::IsAiEquipped` or an MFO FWPN hold naming it (`ForcedHoldFor`); otherwise
-  (every worn relic after a load) it stays. OPEN: MFO-B127 (a one-lap relic pick while the needs
+  (every AI-equipped relic after a load) it stays. A relic the player GAVE him (`IsPlayerGiven`, saved in
+  PGIV) is never swapped out, whatever holds it (86e3faccn). OPEN: MFO-B127 (a one-lap relic pick while the needs
   cache is unanswerable), MFO-B128 (a relic in one hand with a non-relic in the other satisfies). The shared `eligible` lambda is the pick's old filter
   (staff / non-playable / category / mage daggers), unchanged. **What breaks:** calling
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
@@ -2048,9 +2062,9 @@ module. Module layout:
     `ShedOffRoleWeapon:288`, `IsLooting:512`, `WalkingLootLeg:553`, the lifecycle hooks
     (`NoteInCombat:564`, `ClearTransientState:568`, `OnFollowerRemoved:613`) and the
     MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`).
-  - `logistics/Sinks.cpp` (359) = `BeastHeadSink:52`, `ContainerSink:129`, `GateSink:249`
-    (anonymous namespace), the player-drop record `NotePlayerDropped:220` / `PlayerDroppedRef:228`
-    (86e3f9pkg), `RegisterSinks:309`, `SweepBeastHeadsOnLoad:334`.
+  - `logistics/Sinks.cpp` (320) = `BeastHeadSink:52`, `ContainerSink:130`, `GateSink:210`
+    (anonymous namespace), `RegisterSinks:270`, `SweepBeastHeadsOnLoad:295`. (The 86e3f9pkg
+    player-drop record is GONE, 86e3faccn: what the player drops is fair game.)
   - `logistics/LootTake.cpp` (906), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (1027),
     `logistics/LootEquipment.cpp` (571), `logistics/Economy.cpp` (1044),
     `logistics/EquipAuthority.cpp` (816), `logistics/Cast.cpp` (268),
@@ -2589,8 +2603,7 @@ module. Module layout:
   and all but DBMGuildhouse are PlayerFaction-owned; every real display ref sits in those cells.
   The 6 other refs the API VMAD names are NOT displays: the placeable ShipmentCrate001-005 in the
   DBMQA holding cell, and 0x060F21BB `SnowElfWayshrine`, a quest-enabled STAT in Skyrim.esm
-  exterior cell 0x37EE6); a ref the PLAYER dropped this session (`PlayerDroppedRef`, below);
-  `IsQuestObjectRef`; any `GetOwner()` or `IsOffLimits()`; and ANY OWNED CELL whatever the
+  exterior cell 0x37EE6); `IsQuestObjectRef`; any `GetOwner()` or `IsOffLimits()`; and ANY OWNED CELL whatever the
   location type (closing round; the reason names a civilised place via `LocationTypes::Classify`).
   Disassembly (AE `TESObjectREFR::GetOwner`, id 20194 @0x2F9E40): GetOwner already falls back
   to the parent cell's owner for item / flora bases (not for activator / door / furniture), so
@@ -2612,26 +2625,17 @@ module. Module layout:
   M` or, on the FIRST `harvested=1` with no coin gained, an `[error]` that LATCHES the flora road
   OFF for the process (`g_coinFloraLatched`, `Logistics_internal.h`; `IsCoinPurseFlora` then
   admits nothing); `harvested=0` is a WARN + sticky (principle 5/7: an NPC harvest crediting the
-  follower is INFERRED until that line is seen). **Player drops:** `ContainerSink` (`Sinks.cpp:129`) records
-  `oldContainer == player && newContainer == 0 && reference` through the gated worker queue into
-  `g_playerDropped` (`Logistics_internal.h`, LRU 256) via `NotePlayerDropped:220` /
-  `PlayerDroppedRef:228`; the map is scoped by the pump epoch (a revert bumps it, the first
-  access after drops the old save's entries), so no `ClearTransientState` line was needed.
-  SESSION-ONLY, and the engine's `ExtraDroppedItemList` does NOT replace it (closing-round RE,
-  AE 1.6.1170.0 + SE 1.5.97): the list's only builder (AE 0x160D80 / SE 0x115DB0, type 0x39) is
-  reached from a drop-registration helper (AE 0x2FD480 / SE 0x2A9A10) that also writes the
-  dropped ref's `ExtraItemDropper` (0x38) and runs on the ACTOR-side drop paths; a direct-call
-  walk from `PlayerCharacter::DropObject` (AE vtable slot 0xCD, 0x765EC0) reaches neither. On load,
-  `TESObjectREFR::InitLoadGame` (vtable slot 0x10, AE 0x2DAAD0) -> AE 0x173970 REBUILDS a
-  dropper's 0x39 list from each loaded ref's 0x38. So the player's manual drops are not in that
-  list; they live in `PlayerCharacter`'s runtime `droppedRefList` (layout-dependent, its
-  serialization unverified). Details: agent log `mfo-loose-loot.md`.
+  follower is INFERRED until that line is seen). **Player drops are FAIR GAME** (marth 2026-09-27,
+  ClickUp 86e3faccn: "What you drop on the ground is fair game."): the 86e3f9pkg session
+  player-drop record (`g_playerDropped` / `NotePlayerDropped` / `PlayerDroppedRef`) and its
+  `ContainerSink` branch are removed, and `LooseRefBarred` no longer has a drop row. (The RE that
+  the engine's `ExtraDroppedItemList` does not record the player's manual drops is in agent log
+  `mfo-loose-loot.md`.)
   **What breaks:** the bar must stay AFTER eligibility and BEFORE the candidate push (a loose
   ref has no `HasLoot` peek to stop it); removing any bar row re-opens theft (owned / civilised)
   or the museum-display / home-decor hole; `IsCoinModCoin` must never key on VendorNoSale;
   the flora readback must stay on the coin count, never the flora base (it never enters an
-  inventory); the drop record must stay a QUEUED worker write (sinks never touch a worker map
-  inline, #1/#4).
+  inventory).
   **Open backlog:** MFO-B129 (a loose museum relic can be over-taken within one 2 s needs window).
 - `logistics/LootEquipment.cpp` (526; was `Logistics_Loot_Equipment.cpp`, NEW 2026-09-06) — split out of
   `Logistics_Loot.cpp` purely to stay under the 2500-line hard rule (pure
@@ -3117,9 +3121,8 @@ anonymous-namespace copy — that silently forks the instance).
   LOOT ROUND M1 above): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
   PlayerID()`, `ContainerSink` in `logistics/Sinks.cpp`) or it re-fires on its own removal (MAO infinite-credit loop);
-  only QUEUES to the worker. Its one other branch (86e3f9pkg) runs BEFORE that filter: an item
-  leaving the player into the world (`newContainer == 0`, a ref handle) is queued to
-  `NotePlayerDropped` and the sink returns (a drop is never a take). `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
+  only QUEUES to the worker. It first calls `PlayerGiven::OnContainerChanged` (own gate; the
+  86e3f9pkg player-drop branch is gone, 86e3faccn). `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
   → `KeepHeadClear`; since 2026-09-14 it also emits the passive `[armor-obs]` line
   (`logistics/Sinks.cpp:60`) for every rated-ARMO equip/unequip on a tracked follower
   BEFORE its own equipped-only / toggle gates (pure reads, `Followers::IsTrackedFast`). `SweepBeastHeadsOnLoad` (`logistics/Sinks.cpp:334`) ← `plugin.cpp:360`.
@@ -3175,32 +3178,47 @@ never strips naked). The rated-armor branch (2026-09-14) is THE armor wear decis
 highest `ArmorScore` owned piece that strictly beats the worn score — see ARMOR CLASS
 BY SKILL + PERKS above.
 
-### logistics/PlayerGiven.cpp / PlayerGiven.h — THE PLAYER-GIVEN RECORD (batch L review round; NOT serialized)
-The signal MFO lacked: which items the PLAYER gave a follower or put on him (`IsPlayerPick` covers worn
-ARMO / ammo only, under APMF enforcement). The container half has NO sink of its own: `Sinks.cpp`'s
-logistics `ContainerSink::ProcessEvent` calls `PlayerGiven::OnContainerChanged` first (before its logistics
-gate; ONE `TESContainerChangedEvent` sink for logistics, coordinator 2026-09-27). `TESContainerChangedEvent`
+### logistics/PlayerGiven.cpp / PlayerGiven.h — THE PLAYER-GIVEN RELIC RECORD (batch L; SAVED: 'PGIV' v1)
+The signal MFO lacked: which LOTD museum RELICS the PLAYER gave a follower or put on him (`IsPlayerPick`
+covers worn ARMO / ammo only, under APMF enforcement, and is untouched). **Relics only** (marth 2026-09-27,
+ClickUp 86e3faccn: "What you drop on the ground is fair game. As well as regular items given to followers.
+Relics however should be recorded."): GIVEN and EQUIPPED are recorded only when `Lotd::MayBeRelic:1289`
+says the base is one (the snapshot's `bases`, i.e. any base the slot table accepts, needed now or not,
+decided at the time of the gift / equip in the queued body; TRUE while LOTD is detected but no snapshot is
+read yet, fail closed; FALSE without LOTD). A non-relic gift is not recorded, and nothing it feeds blocks
+a non-relic: every consumer is a relic path (below). The container half has NO sink of its own:
+`Sinks.cpp`'s logistics `ContainerSink::ProcessEvent` calls `PlayerGiven::OnContainerChanged:158` first
+(before its logistics gate; ONE `TESContainerChangedEvent` sink for logistics). `TESContainerChangedEvent`
 (fork `RE/T/TESContainerChangedEvent.h`: `oldContainer` / `newContainer` / `baseObj` FormIDs) with
-`oldContainer == 0x14` and `newContainer` a tracked follower (`Followers::IsTrackedFast`) -> GIVEN. Its own
-`EquipSink` (`RegisterSinks`, `plugin.cpp` after `Lotd::RegisterSinks`): `TESEquipEvent` (fork
-`RE/T/TESEquipEvent.h`: `actor`, `baseObject`, `equipped`) on a tracked follower while `ContainerMenu` or
-`GiftMenu` is open (the game is paused: his AI cannot equip then) -> EQUIPPED, an in-menu unequip clears
-that bit; an in-menu equip that MFO's own FWPN hold names (`Actuation::ForcedHoldFor`) is NOT recorded
-(MFO's equip landing in the menu; round 3). With NO menu open, an equip of a relic `Lotd::SeenUnwornKept`
-(MFO saw it UNWORN in his pack as a kept relic) that no MFO hold names and that is not the player's ->
-AI-EQUIPPED (`IsAiEquipped`), the POSITIVE PROOF the worn-relic ship and the relic swap require (review
-round 3: the record is not saved, so after a load both fail closed). AI-EQUIPPED is not a player bit.
-Inputs are read at event time and the WRITE is queued (AddTask under `PumpTickGate`, the ContainerSink
-pattern), so nothing queued before a revert lands after the clear. A transfer OUT of a
-follower with a record posts `RecountOnMain` (MainThread::Post; VR no-op = the record stays, fail closed),
-which drops the entry once no copy is left. Table `g_rec` (follower -> base -> bits) under `g_mx`: every
-query (`IsPlayerGiven` = either bit, `IsPlayerEquipped`) is safe from the worker and the main thread.
-Cleared by `Logistics::ClearTransientState` (revert). Consumers: `Lotd` `Shippable` / `TransferOnMain` (never
-ship a given item), `KeptOffRoleWorn` (a worn relic ships only when NOT given, and only with
-`PlayerGiven::Installed()`), `cast/Equip.cpp` `IsMuseumRelic` (a player-equipped relic stays his pick).
-**What breaks:** reading `g_rec` without `g_mx`; recording follower -> follower or MFO's own transfers as
-given (only `oldContainer == player` counts); dropping an entry on the leave event without the recount (a
-stack that is only partly moved out keeps copies the player gave). Known limit: a load forgets the record.
+`oldContainer == 0x14` and `newContainer` a tracked follower (`Followers::IsTrackedFast`) -> GIVEN (relic).
+Its own `EquipSink:110` (`RegisterSinks:176`, `plugin.cpp` after `Lotd::RegisterSinks`): `TESEquipEvent`
+(fork `RE/T/TESEquipEvent.h`: `actor`, `baseObject`, `equipped`) on a tracked follower while `ContainerMenu`
+or `GiftMenu` is open (the game is paused: his AI cannot equip then) -> EQUIPPED (relic), an in-menu unequip
+clears that bit; an in-menu equip that MFO's own FWPN hold names (`Actuation::ForcedHoldFor`) is NOT
+recorded (MFO's equip landing in the menu; round 3). With NO menu open, an equip of a relic
+`Lotd::SeenUnwornKept` (MFO saw it UNWORN in his pack as a kept relic) that no MFO hold names and that is not
+the player's -> AI-EQUIPPED (`IsAiEquipped`), the POSITIVE PROOF the worn-relic ship and the relic swap
+require. AI-EQUIPPED is not a player bit and is NOT saved (after a load both fail closed). Inputs are read at
+event time and the WRITE is queued (AddTask under `PumpTickGate`, the ContainerSink pattern), so nothing
+queued before a revert lands after the clear. A transfer OUT of a follower with a record posts
+`RecountOnMain:81` (MainThread::Post; VR no-op = the record stays, fail closed), which drops the entry once
+no copy is left. Table `g_rec` (follower -> base -> bits) under `g_mx`: every query (`IsPlayerGiven:298` =
+either player bit, `IsPlayerEquipped`) is safe from the worker and the main thread. **SAVED** in the fifth
+co-save record `'PGIV'` v1 (`CoSave:201` / `CoLoad:244`; layout in the co-save section above): only the
+player bits, so after a reload a relic the player gave (worn or not) still never ships and is never swapped
+out. Cleared by `ClearRecord:190` from `ResetAllState` (its own call after `ProgAllocator::ClearAll`, like
+`ClearStockGear`; no longer from `Logistics::ClearTransientState`) and at the top of `LoadCallback`.
+Consumers (all relic paths): `Lotd` `Shippable` / `TransferOnMain` (never ship a given relic),
+`KeptOffRoleWorn` (a worn relic ships only when NOT given, and only with `PlayerGiven::Installed()`),
+`cast/Equip.cpp` `IsMuseumRelic` (a player-equipped relic stays his pick) and `relicWithAlternative`
+(a player-given relic is never swapped out, whatever holds it; 86e3faccn).
+**What breaks:** reading `g_rec` without `g_mx`, or holding `g_mx` across a `WriteRecordData`; recording
+follower -> follower or MFO's own transfers as given (only `oldContainer == player` counts); dropping an
+entry on the leave event without the recount (a stack that is only partly moved out keeps copies the player
+gave); changing the PGIV v1 layout without a version bump and a kept v1 reader (#12); writing the AI-equip
+bit (it is session-only proof); recording non-relics (marth's ruling: regular gifts are fair game).
+**Open backlog:** MFO-B130 (menu read off-main), MFO-B131 (a stale entry after a fast leave; now saved), MFO-B132
+(a gift before LOTD's first snapshot is recorded whatever it is; inert).
 
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives
@@ -3269,7 +3287,8 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   in-role weapon bases it saw (`g_keptForDeposit`, worker-only `KeptRecord`) and the kept relics seen
   UNWORN (the STICKY `g_keptSeenUnworn`, pruned to what is still kept on each full walk; read by
   `SeenUnwornKept:1298` for PlayerGiven's AI-equip proof). `Shippable` admits a WORN relic only through
-  `KeptOffRoleWorn:633`: `PlayerGiven::Installed()`, NOT `IsPlayerGiven`, `PlayerGiven::IsAiEquipped`
+  `KeptOffRoleWorn:633`: `PlayerGiven::Installed()`, NOT `IsPlayerGiven` (SAVED since 86e3faccn, so a
+  given relic stays protected after a reload), `PlayerGiven::IsAiEquipped`
   (positive proof his AI put it on; false after a load, so it fails closed), in the kept set, no MFO
   hold names it (`Actuation::ForcedHoldFor`), and one of the recorded in-role weapons is STILL carried
   (the never-disarm guard at ship time). His own AI equipped it in an unowned hand (the

@@ -20,6 +20,7 @@
 #include "Probe.h"
 #include "Board.h"
 #include "progression/ProgAllocator.h"
+#include "logistics/PlayerGiven.h"   // 86e3faccn: the 'PGIV' player-given relic record
 #include <unordered_set>   // T#69: stock-gear per-follower sets (kRecStock)
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
@@ -267,10 +268,15 @@ namespace MFO {
         // same isolation contract. Persists the force-equip locks so a load can
         // clear stale ones (Actuation owns the layout + bounds).
         Actuation::CoSaveForcedWeapons(a_intfc);
+
+        // 86e3faccn (kRecPlayerGiven/'PGIV') -- a FIFTH independent record, same
+        // isolation contract: the museum relics the player gave a follower or put on
+        // him (PlayerGiven owns the layout, bounds and the lock).
+        PlayerGiven::CoSave(a_intfc);
     }
 
     namespace {
-        // Per-record READERS. Each of the four records is loaded by its own
+        // Per-record READERS. Each record is loaded by its own
         // function so that a short read / implausible count inside one record
         // aborts THAT record only: the `return`s below leave the helper, and
         // LoadCallback's dispatch loop continues to the next record
@@ -570,6 +576,7 @@ namespace MFO {
         g_followers.clear();
         Logistics::ClearStockGear();   // T#69: defence in depth -- RevertCallback already
                                         // cleared it, same belt-and-braces as g_followers above
+        PlayerGiven::ClearRecord();    // 86e3faccn: same belt-and-braces for 'PGIV'
 
         std::uint32_t type = 0, version = 0, length = 0;
         std::uint32_t loaded = 0, droppedActor = 0, disabledRules = 0,
@@ -620,6 +627,19 @@ namespace MFO {
                     continue;
                 }
                 Actuation::CoLoadForcedWeapons(a_intfc, version);
+                continue;
+            }
+            if (type == kRecPlayerGiven) {
+                // 86e3faccn: same independence contract. A newer record skips (never
+                // aborts); an old save without it simply never reaches here (empty).
+                if (version > kPlayerGivenVersion) {
+                    spdlog::error("[cosave] PLAYER-GIVEN SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
+                                  "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
+                                  version, kPlayerGivenVersion);
+                    g_sawNewerSave.store(true);
+                    continue;
+                }
+                PlayerGiven::CoLoad(a_intfc, version);
                 continue;
             }
             if (type != kRecFollowers) {
@@ -708,6 +728,11 @@ namespace MFO {
         // contract as stock gear. ClearAll also orphans the level-poll chain
         // (generation bump) so a stale tick never runs against the next save.
         ProgAllocator::ClearAll();
+        // 86e3faccn: the player-given relic record IS serialized too (kRecPlayerGiven)
+        // -- same contract as stock gear: its own call, after StopPump (its queued
+        // writes are PumpTickGate'd; its main-thread recounts were dropped by
+        // MainThread::Clear above). A load right after this repopulates it.
+        PlayerGiven::ClearRecord();
         // The equip ledger describes a LIVE loadout. On revert the world is
         // about to be replaced, so there is nothing to give back -- but the
         // ledger must not survive to re-equip gear into the next save (#16).

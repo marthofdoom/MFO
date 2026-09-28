@@ -820,6 +820,10 @@ player -> follower transfers and in-menu equips; a player-given item is never sh
 only when NOT given and one of the in-role weapons is still carried at ship time, the kept set is cleared on every shed
 entry, a player-equipped relic is never swapped out of his hand, and the transfer unequips a worn instance before the
 RemoveItem. Residuals: MFO-B127, MFO-B128.
+**Ruling 2026-09-27 (ClickUp 86e3faccn, branch `fix/mfo-relic-given-cosave`):** marth: "What you drop on the ground is
+fair game. As well as regular items given to followers. Relics however should be recorded." The player-given record
+now covers museum relics only and is SAVED (co-save record 'PGIV' v1), so the round-3 reload limit ("after a load a
+given relic is forgotten") is closed for gifts; the AI-equip positive proof stays session-only by design.
 Raised against 5b88bcd (`feat/mfo-lotd`, tier-A re-review round 2), 2026-09-26. Reviewer's finding (verbatim from the review log): "KeepForDeposit + AI self-equip -> worn -> never shipped." `ShedOffRoleWeapon` now leaves a needed relic weapon in the pack (`KeepForDeposit`); if the follower's own AI equips it, `Shippable` skips it as worn (the manual-override rule), so it neither goes to the player nor to the crate. Fix shape: exclude a relic from the engine's equip choice while it is kept for the deposit, or ship a worn relic that MFO (not the player) left in the pack.
 
 ### MFO-B129 (SEV-5) -- LOTD: a loose museum relic can be over-taken within one needs window
@@ -835,3 +839,14 @@ Raised against 0742e20 (`fix/mfo-batchL-field`, tier-B re-review), 2026-09-27. R
 
 ### MFO-B131 (SEV-5) -- player-given: a queued mark can land after its item has already left
 Raised against 0742e20 (`fix/mfo-batchL-field`, tier-B re-review), 2026-09-27. Reviewer's finding (verbatim from the review log): "Mark-queue vs leave Bits race fails closed". The GIVEN / EQUIPPED marks are queued (AddTask), while the leave event reads `Bits` inline: an item that arrives and leaves before the queued mark lands skips the recount, so a stale "given" entry stays until revert. Fails closed (a stale entry only ever blocks a ship or keeps a relic in hand). Fix shape: queue the leave check through the same AddTask queue (ordered after the mark), or recount on the next arrival.
+**Update 2026-09-27 (86e3faccn, `fix/mfo-relic-given-cosave`):** the record is now relics only and SAVED ('PGIV'), so a
+stale entry of this kind is written to the co-save and survives a reload (it is still dropped by the next leave of
+that base, and still fails closed). Still open.
+
+### MFO-B132 (SEV-5) -- player-given: a gift before LOTD's first snapshot is recorded whatever it is
+Raised by the author of `fix/mfo-relic-given-cosave` (86e3faccn), 2026-09-27, as a known limit for the tier-A review.
+`Lotd::MayBeRelic` answers TRUE while LOTD is detected but no snapshot has been read (a new game before LOTD's
+MCMRefresh, or a failed VM read), so a gift in that window is recorded and saved even when it is not a relic. It is
+inert: every consumer (`Shippable`, `TransferOnMain`, `KeptOffRoleWorn`, `IsMuseumRelic`, `relicWithAlternative`)
+only asks about relics. Cost: a few extra PGIV entries until the item leaves him. Fix shape: re-test the entries
+against the snapshot when it arrives (or at save time) and drop the non-relics.

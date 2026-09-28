@@ -152,17 +152,6 @@ namespace MFO::Logistics {
         // take, not their first (the QuickLoot-IE case). Bounded LRU.
         inline std::unordered_map<RE::FormID, Clock::time_point> g_playerLooted;
 
-        // Loose world refs the PLAYER dropped this session (86e3f9pkg): never a loose-loot
-        // candidate (LooseRefBarred). Stamped by the container-change sink (old = player,
-        // new = none, the dropped ref's handle) through the worker queue under PumpTickGate,
-        // read by the scan on the same worker (both through logistics/Sinks.cpp's
-        // NotePlayerDropped / PlayerDroppedRef). Bounded LRU. SESSION-scoped by the pump
-        // epoch it was written under: a revert bumps the epoch, and the first access after
-        // it drops the old save's entries (a dynamic FF id is reused across saves). A drop
-        // before a reload is not remembered after it -- a known limit, not a mask.
-        inline std::unordered_map<RE::FormID, Clock::time_point> g_playerDropped;
-        inline std::uint64_t                                     g_playerDroppedEpoch = 0;
-
         // COIN-PURSE ROAD LATCH (86e3f9pkg closing round, carve-out b): set on the FIRST real
         // proof that an NPC harvest does not credit the follower (the readback saw the purse
         // HARVESTED and his coin did not rise). From then on IsCoinPurseFlora admits nothing
@@ -863,9 +852,6 @@ namespace MFO::Logistics {
     bool IsCoinPurseFlora(RE::TESObjectREFR* a_ref, RE::TESBoundObject* a_base);    // an un-harvested COIN purse
     std::int32_t CoinCount(RE::Actor* a_actor);                                     // Gold001 + coin items
     const char* LooseRefBarred(RE::TESObjectREFR* a_ref);                           // the loose-item source bar
-    // defined in logistics/Sinks.cpp: the player-drop record (worker only).
-    void NotePlayerDropped(RE::FormID a_ref);
-    bool PlayerDroppedRef(RE::FormID a_ref);
     bool IsSoulGemItem(RE::TESBoundObject* a_obj);
     bool IsIngredientItem(RE::TESBoundObject* a_obj);
     bool RefInPlayerStorage(RE::TESObjectREFR* a_ref);

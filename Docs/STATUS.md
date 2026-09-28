@@ -6,13 +6,29 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-26 UTC (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-09-27 UTC (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-27 branch `fix/mfo-relic-given-cosave` (off `main` `35adef5`; NOT merged, NOT deployed; tier A: CO-SAVE).
+  ClickUp 86e3faccn, marth's ruling: "What you drop on the ground is fair game. As well as regular items given to
+  followers. Relics however should be recorded."** (1) Drops: the 86e3f9pkg session player-drop record
+  (`g_playerDropped`, `NotePlayerDropped`, `PlayerDroppedRef`, the `ContainerSink` drop branch) and its
+  `LooseRefBarred` row are removed. (2) Gifts: `PlayerGiven` records GIVEN / EQUIPPED only for a museum relic
+  (`Lotd::MayBeRelic`: any base the LOTD slot table accepts, at the time of the gift; fail closed before the first
+  snapshot). Every consumer is a relic path, so nothing blocks a non-relic gift. (3) NEW co-save record `'PGIV'` v1
+  (fifth record; FLWR / MSTK / PRGN / FWPN untouched): per follower the base FormIDs + player bits (GIVEN 0x1,
+  EQUIPPED 0x2) of the relics the player gave. ResolveFormID on load, unresolvable dropped, a save without it loads
+  empty. Cleared by `PlayerGiven::ClearRecord` in `ResetAllState` after `ProgAllocator::ClearAll` (was in
+  `Logistics::ClearTransientState`). (4) A player-given relic is never swapped out of his hand (`relicWithAlternative`
+  guard); the AI-equip positive proof is unchanged and still session-only. FIELD CHECKS: drop an item near a follower
+  with a matching loose loot gambit: he may pick it up (no `player dropped` line exists any more). Give a follower a
+  needed relic: `[player-given] ... museum relic given by the player -- never shipped`; save, reload:
+  `[cosave] saved N player-given relic(s)` then `[cosave] loaded N player-given relic(s)`, and the relic is not
+  shipped at the next crate. Give an ordinary item: no `[player-given]` line.
 - **2026-09-27 branch `feat/mfo-loose-loot` (off `main` `c7aab6e`; NOT merged, NOT deployed; tier A: crime safety).
   Batch L, ClickUp 86e3f9pkg (+ the field finding "followers still skipping bags on coins", diag-field0926 F4).**
   (0) Loose arrows / bolts now run THE SWAP-UP RULE (`LooseAmmoQualifies`, the take side extracted verbatim from
@@ -34,8 +50,8 @@ Read it as history and this block as current.
   ... NOT credited` means an NPC harvest does not credit the follower (principle 5: report it, do not paper over it).
   Loose museum relic: `[acquire] ... ACTIVATE` then `TOOK`, with a `Loot museum items` rule on and LOTD awareness on.
   Bar: `[loot] ... loose ref ... SKIPPED -- <reason>` once per ref (walk through the museum, a home, Whiterun's market:
-  every skip must name a reason, and no display / home item / shop stock may ever be taken). Drop an item and confirm
-  `[loot] player dropped XXXXXXXX -- never a loose-loot candidate` and that nobody picks it up.
+  every skip must name a reason, and no display / home item / shop stock may ever be taken). (SUPERSEDED by
+  `fix/mfo-relic-given-cosave`, 86e3faccn: player drops are fair game; the drop record and its bar are removed.)
   CLOSING ROUND (after the tier-A review of `ea518ef`, clean on theft safety): the bar now refuses a loose ref in ANY
   owned cell (not only civilised ones; GetOwner already falls back to the cell for items, per AE disassembly); the
   SAME bar re-runs at ARRIVAL before the ActivateRef (`[acquire] ... skipped at ARRIVAL -- <why>`), plus "already
