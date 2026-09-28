@@ -33,6 +33,10 @@ Read it as history and this block as current.
   "(unaggressive, but fighting the party: counts)"; Cicero's melee gambit picks a sword over a looted relic; no
   bolts bought or looted by a bow user; giving a follower an item logs `[player-given] ... given by the player` and
   a relic you gave or put on him is never deposited.
+  Plus (separate commit, marth's queued item): the ch.8 potion allow-list keeps the BEST potion of EACH category
+  within the 32-form cap when he carries more (`apmf/SpellAllowList.cpp` `SelectPotions`; no limit raise). Field
+  check: Serana's `[cast-select] ... allow-list` line reads `K of N potion(s), trimmed to the best of each
+  category by the cap` instead of `the gate is NOT claimed`.
 - **OPEN (fork, needs its own brief): fork `TESAmmo::IsBolt` / `IgnoresNormalWeaponResistance` read the wrong
   layout: a fork fix brief is needed.** `_commonlib/mit-3.7-fork` `src/RE/T/TESAmmo.cpp` reads the direct `data`
   member; with SE+AE+VR all enabled the header's `#else` branch places it at 0xB0 (inside TESWeightForm) instead of

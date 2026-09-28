@@ -4278,9 +4278,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     **What breaks:** a per-service Repoint (churns Harbinger's arbitration every 133 ms x N);
     re-filing an ENDED claim within a fight (a loop against an outranking leash); feeding it
     `ChaseRadius` (measured from the follower, not the anchor); keeping it through a retreat.
-  - `apmf/SpellAllowList.cpp` (308) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
-    `AppendDenyExemptForms` (`:126`), `PublishSpellAllowList` (`:162`), `ReleaseSpellAllowList`
-    (`:284`).
+  - `apmf/SpellAllowList.cpp` (398) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
+    `MakePotionCand` (`:136`) + `SelectPotions` (`:169`, the potion trim, batch L),
+    `AppendDenyExemptForms` (`:207`), `PublishSpellAllowList` (`:240`), `ReleaseSpellAllowList`
+    (`:374`).
   - `apmf/APMFBridge_internal.h` (402, NEW in wave 1) = the claim state the families share, all
     of it from the old file's anonymous namespace: `CastClaim` (`:80`), `Owned` (`:208`), the
     `extern` `g_apmf`/`g_mx`/`g_owned`/refusal sets (defined in `apmf/Bridge.cpp`),
@@ -4588,10 +4589,19 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   CLAIMED n=N (... + N potion + ...)` line prints the potion count, so a log identifies a missing class
   by subtraction. **Kill switch if anything about the gate misbehaves: `bApmfSpellAllowList=0`** (INI,
   default 1) — the cast-time deny then carries the load exactly as before the gate existed.
-  **THE COST OF THE POTION EXEMPTION, stated:** it spends the 32-form budget, so a follower with a large
-  alchemy hoard can push the list past `kMaxSpellAllowList` and lose the gate entirely (fail-open, loudly
-  logged, never a mute). That trade is deliberate — a denied healing potion is far worse than an inert
-  gate.
+  **THE COST OF THE POTION EXEMPTION, stated:** it spends the 32-form budget. **Since batch L (marth
+  2026-09-27: "keep the best available potion in each category within the 32 cap", no limit raise; field:
+  Serana carried 35-46 potions, needed 38-50 forms and lost the gate)** potions are collected apart
+  (`PotionCand`) and TRIMMED to the budget the other forms leave: all of them when they fit, else
+  `SelectPotions` keeps each CATEGORY's best (category = the costliest effect's (archetype, primary AV);
+  best = magnitude, then duration, then value) round-robin by rank, restore Health / Magicka / Stamina
+  first inside a rank. A potion left off is one his AI cannot pick in combat (APMF denies what the set
+  does not name); MFO's drink gambits equip potions directly and are not on this channel. The gate is
+  refused (fail-open, loud) only when the NON-potion forms alone exceed 32. The `[cast-select] ...
+  allow-list` line reads `K of N potion(s), trimmed to the best of each category by the cap`.
+  **What breaks:** trimming anything but potions (a truncated spell / staff / scroll / power list
+  disarms him); a category key that merges restore and fortify of one AV (their archetypes differ on
+  purpose).
   **OPEN BACKLOG — read before editing:** `MFO-B65` (the ALCH specifics + the budget consequence).
 - **Claim lifecycles (arbitration records, `g_owned` mutex-guarded — worker+main):** offense-cast =
   PER-CAST, TTL-bounded (`kIntent_Cast`, PER-HAND now — see above; refreshed each winning cast

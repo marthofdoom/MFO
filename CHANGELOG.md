@@ -11,6 +11,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **Museum relics stay in the pack.** A follower no longer fights with a relic he is carrying for the museum while he has another weapon of that kind. If the relic is his only one, he uses it until he ships it.
 - **A relic a follower picked up and put on himself still gets shipped.** Only relics he would have dropped anyway, and only while he still carries a weapon he can fight with.
 - **Anything you give a follower is never shipped to the museum.** MFO now remembers what you hand over or put on him in the trade or gift menu, until he no longer carries it. A relic you put on him stays in his hand. The record lasts until you load a save.
+- **A follower carrying lots of potions keeps MFO's spell control.** Before, too many potions switched off MFO's say over which spells he picks in combat. Now he keeps the best potion of each kind for his own combat drinking and the control stays on.
 - **Bow users stop buying and looting bolts.** Arrows and bolts are told apart correctly again without the ItemCatalog patcher.
 
 - **A follower who is losing now runs back to you.** Confidence watches how fast he is losing health. A duel he is losing badly sends him back well before he is nearly dead.
