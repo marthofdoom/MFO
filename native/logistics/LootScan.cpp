@@ -430,6 +430,14 @@ namespace MFO::Logistics {
                         ++dOffLimits;
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
+                    // A FACTION'S VENDOR / STOLEN-GOODS / EVIDENCE CONTAINER (batch L crime
+                    // safety): a vendor chest is unowned in the data, so the ownership bars
+                    // below miss it (IsFactionServiceContainer, LootTake.cpp).
+                    // Unconditional; logged once per container per load.
+                    if (!loose && IsFactionServiceContainer(ref)) {
+                        ++dOffLimits;
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    }
                     // #66 (home storage): also skip containers in the player's OWN
                     // space -- LOTD museum halls + every vanilla/Hearthfire/mod
                     // player home (RefInPlayerStorage: LocTypePlayerHouse location

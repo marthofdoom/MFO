@@ -633,6 +633,60 @@ namespace MFO::Logistics {
             return base && s_bases.count(base->GetFormID()) != 0;
         }
 
+        // A FACTION'S SERVICE CONTAINER (batch L crime safety, field 2026-09-26: followers walked
+        // at DLC1VendorChestFlorentiusRef 0200F82C, under the floor of Fort Dawnguard, 7+
+        // times). Vendor chests are NOT owned in the data: the installed Dawnguard.esm REFR
+        // has no XOWN and its cell DLC1DawnguardHQ01 has none either, so GetOwner() is null
+        // (the AE GetOwner cell fallback finds nothing) and IsOffLimits() is false -- the
+        // only link is the faction record. Same crime class, same link: a faction's crime
+        // containers. So the set is found PROCEDURALLY from every loaded TESFaction (fork
+        // TESFaction.h at fde0f3ae; no FormID written anywhere):
+        //   vendor        vendorData.merchantContainer              (VENC; Economy.cpp reads it too)
+        //   stolen goods  crimeData.factionStolenContainer          (STOL)
+        //   evidence      crimeData.factionPlayerInventoryContainer (PLCN: the jail's
+        //                 confiscated-inventory chest)
+        // Rebuilt per load (pump epoch, as IsCoinModCoin), since the pointers are faction
+        // state a script can move. Each excluded ref is logged once per load, with its faction
+        // and kind. Worker only (the scan, the lock gate, the transfers).
+        bool IsFactionServiceContainer(RE::TESObjectREFR* a_ref) {
+            struct Svc { RE::FormID faction; const char* kind; };
+            static std::unordered_map<RE::FormID, Svc> s_chests;   // container ref -> first faction + kind
+            static std::unordered_set<RE::FormID>      s_logged;
+            static std::uint64_t                       s_epoch = ~0ull;
+            if (const auto epoch = MFO::Diagnostics::CurrentPumpEpoch(); epoch != s_epoch) {
+                s_epoch = epoch;
+                s_chests.clear();
+                s_logged.clear();
+                std::size_t nVendor = 0, nStolen = 0, nEvidence = 0;
+                auto add = [&](RE::TESObjectREFR* a_c, RE::TESFaction* a_fac, const char* a_kind, std::size_t& a_n) {
+                    if (a_c && s_chests.emplace(a_c->GetFormID(), Svc{ a_fac->GetFormID(), a_kind }).second) ++a_n;
+                };
+                if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+                    for (auto* fac : dh->GetFormArray<RE::TESFaction>()) {
+                        if (!fac) continue;
+                        add(fac->vendorData.merchantContainer, fac, "vendor", nVendor);
+                        add(fac->crimeData.factionStolenContainer, fac, "stolen goods", nStolen);
+                        add(fac->crimeData.factionPlayerInventoryContainer, fac, "evidence", nEvidence);
+                    }
+                }
+                spdlog::info("[loot] faction-container bar: {} containers are never loot sources ({} vendor, {} "
+                             "stolen goods, {} evidence; every faction's VENC / STOL / PLCN; rebuilt for this load)",
+                             s_chests.size(), nVendor, nStolen, nEvidence);
+            }
+            if (!a_ref) return false;
+            const auto it = s_chests.find(a_ref->GetFormID());
+            if (it == s_chests.end()) return false;
+            if (s_logged.insert(it->first).second) {
+                auto* fac = RE::TESForm::LookupByID(it->second.faction);
+                spdlog::info("[loot] {:08X} ('{}') EXCLUDED -- the {} container of faction {:08X} ({}): "
+                             "never a loot, lock or loose source",
+                             it->first, a_ref->GetDisplayFullName() ? a_ref->GetDisplayFullName() : "?",
+                             it->second.kind, it->second.faction,
+                             fac && fac->GetFormEditorID() ? fac->GetFormEditorID() : "?");
+            }
+            return true;
+        }
+
         // THE LOOSE-ITEM SOURCE BAR (86e3f9pkg, batch L: crime safety). A loose world item
         // passed its category's eligibility test (the route-2b switch in LootNearby); this
         // decides whether it may be taken from WHERE it lies. nullptr = allowed, else the
@@ -663,6 +717,7 @@ namespace MFO::Logistics {
             if (Lotd::IsDisplayRef(a_ref->GetFormID())) return "a LOTD museum display";
             if (RefInPlayerStorage(a_ref)) return "player storage / player home (museum halls included)";
             if (IsQuestObjectRef(a_ref)) return "a quest item";
+            if (IsFactionServiceContainer(a_ref)) return "a faction's vendor / stolen-goods / evidence container";
             if (a_ref->GetOwner()) return "owned (never steal)";
             if (a_ref->IsOffLimits()) return "off-limits (a crime to take)";
             if (auto* cell = a_ref->GetParentCell(); cell && cell->GetOwner()) {
@@ -787,6 +842,8 @@ namespace MFO::Logistics {
             // first by the excursion's lockpick step (logistics/Lockpick.cpp), never looted
             // shut.
             if (a_ref && a_ref->IsLocked()) return false;
+            // Nor out of a faction's vendor / stolen-goods / evidence container (batch L; the scan bars it first).
+            if (a_ref && IsFactionServiceContainer(a_ref)) return false;
             switch (a_cat) {
             case Category::Arrows:    return LootAmmo(a_follower, a_ref, false);
             case Category::Bolts:     return LootAmmo(a_follower, a_ref, true);

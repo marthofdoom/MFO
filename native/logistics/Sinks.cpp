@@ -207,6 +207,29 @@ namespace MFO::Logistics {
             auto* a = a_by ? a_by->As<RE::Actor>() : nullptr;
             return a && (a->IsPlayerTeammate() || Followers::IsTrackedFast(a->GetFormID()));
         }
+        // Batch L (field 2026-09-26: the PLAYER opening TreasUpperChest 0201150F, a CONT,
+        // re-admitted five gated items as "door/gate OPENED"). Which refs may stand for a gate
+        // when M1's record names none: a DOOR; or an ACTIVATOR carrying WerewolfCanActivate
+        // (Skyrim.esm 00100769) or ActivatorLever (0006DEAD) -- a survey of the installed
+        // Skyrim / Dawnguard / Dragonborn ESMs found those on every lever, pull chain, pull
+        // bar, button, portcullis and puzzle-door mechanism, and on no weapon rack, plaque,
+        // potion rack or mannequin / trigger activator. A trigger box (ExtraPrimitive) never
+        // counts. Containers never reach this (the sink drops them); furniture and every
+        // other type are not gate-like.
+        bool GateLikeRef(RE::TESObjectREFR* a_ref) {
+            auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
+            if (!base) return false;
+            if (base->Is(RE::FormType::Door)) return true;
+            if (!base->Is(RE::FormType::Activator)) return false;
+            if (a_ref->extraList.HasType(RE::ExtraDataType::kPrimitive)) return false;   // a trigger box
+            auto* kwf = base->As<RE::BGSKeywordForm>();
+            return kwf && (kwf->HasKeywordID(0x00100769) ||    // WerewolfCanActivate
+                           kwf->HasKeywordID(0x0006DEAD));     // ActivatorLever
+        }
+        bool IsContainerRef(RE::TESObjectREFR* a_ref) {
+            auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
+            return base && base->Is(RE::FormType::Container);
+        }
         class GateSink final : public RE::BSTEventSink<RE::TESOpenCloseEvent>,
                                public RE::BSTEventSink<RE::TESActivateEvent>,
                                public RE::BSTEventSink<RE::TESCellAttachDetachEvent>,
@@ -232,9 +255,13 @@ namespace MFO::Logistics {
             }
             RE::BSEventNotifyControl ProcessEvent(const RE::TESOpenCloseEvent* a_ev,
                                                   RE::BSTEventSource<RE::TESOpenCloseEvent>*) override {
-                if (a_ev && g_gateCount.load(std::memory_order_relaxed) > 0 && !ByFollower(a_ev->activeRef.get()))
-                    ReadmitNear(a_ev->ref.get(), a_ev->opened ? "door/gate OPENED near it"
-                                                              : "door/gate CLOSED near it");
+                if (!a_ev || g_gateCount.load(std::memory_order_relaxed) == 0 || ByFollower(a_ev->activeRef.get()))
+                    return RE::BSEventNotifyControl::kContinue;
+                // Batch L: a container opening or closing is never a gate signal.
+                auto* r = a_ev->ref.get();
+                if (r && !IsContainerRef(r))
+                    ReadmitOnGateEvent(r, GateLikeRef(r), a_ev->opened ? "door/gate OPENED near it"
+                                                                       : "door/gate CLOSED near it");
                 return RE::BSEventNotifyControl::kContinue;
             }
             // A lever portcullis may animate without SetOpen (no open/close
@@ -247,7 +274,7 @@ namespace MFO::Logistics {
                 auto* r    = a_ev->objectActivated.get();
                 auto* base = r ? r->GetBaseObject() : nullptr;
                 if (base && (base->Is(RE::FormType::Activator) || base->Is(RE::FormType::Door)))
-                    ReadmitNear(r, "lever/door ACTIVATED near it");
+                    ReadmitOnGateEvent(r, GateLikeRef(r), "lever/door ACTIVATED near it");   // batch L
                 return RE::BSEventNotifyControl::kContinue;
             }
             // Fired PER REFERENCE: the gated item's own cell attached again (the
