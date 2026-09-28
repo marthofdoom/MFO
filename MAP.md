@@ -2524,26 +2524,32 @@ module. Module layout:
   marth's call), MFO-B45 (scope and set are two enqueues; a Drain between them is a one-frame
   self-healing mismatch), MFO-B46 (the `abiVersion < 9` warn is unreachable belt-and-braces).
 - **MUSEUM RELICS AND THE DECLARATION (`fix/mfo-museum-priority`, 2026-09-28; marth "needed museum
-  items take priority over equipment").** `RelicOffBody` (`logistics/EquipAuthority.cpp:48`) =
-  `Lotd::HoldFromSale` and NOT `PlayerGiven::IsPlayerGiven`. Such a piece is never the judged pick
-  (`ComputeOwnedGearPick`, both branches — so the APMF-absent legacy `EquipBestOwnedGear` never wears
-  one either), never declared by rule 5, never recorded as a rule-4b player pick. Armor is always
-  OWNED, so APMF's seat refuses its re-equip (OutfitApply / SPID / MEO External), in and out of
-  combat; a worn one ships at the next deposit (`Lotd.cpp WornRelicShippable`), logged once:
-  `[equip-auth] <id>: museum relic '<name>' is worn -- kept OUT of the declared set`. **NOT DONE —
-  HARBINGER API GAP (item 7 STOP):** the v9 scope is CATEGORY masks + a declared WORN set the enforce
-  pass EQUIPS, so a relic WEAPON or SHIELD in a hand MFO does not own (no ForcedHold) cannot be refused
-  without owning the hand (the F6 freeze / a blanket lock), and a hybrid's melee/ranged pair cannot be
-  declared as permitted alternatives. Needs a per-item DENY list and/or a permitted-not-equipped
-  alternative set per owned category. `cast/Equip.cpp PickShield` skips relic shields (IsMuseumRelic's
-  rule for the off hand).
-- **RULE 5b — A PIECE STRIPPED OFF HIM STAYS DECLARED (same branch; Jesper's set 6 / set 7
-  flip-flop).** SPID's outfit re-apply + the engine's OutfitApply UNEQUIP declared pieces every ~5 s
-  (unequips are ungoverned, `kEquipAuth_DenyUnequip` reserved); pick + worn then lost the not-worn piece
-  for a tick. A LAST-declared ARMO he still owns, not worn, whose biped slots no worn ARMO covers, not
-  overlapping this tick's pick and not a relic, stays in the set, so it compares equal and the MFO-B63
-  drift re-send re-equips the whole set in one pass. Only last-declared keys: it never adds a piece MFO
-  did not decide. MFO-B63 part 1 (best-per-slot) stays open.
+  items take priority over equipment").** `RelicOffBody` (`logistics/EquipAuthority.cpp:51`) =
+  `Lotd::KeepForDeposit` (HoldFromSale AND an enabled act.loot_museum rule AND a runnable deposit --
+  review SEV-4: never dead weight he may neither wear nor ship) and NOT `PlayerGiven::IsPlayerGiven`.
+  Such a piece is never the judged pick (`ComputeOwnedGearPick`, both branches -- so the APMF-absent
+  legacy `EquipBestOwnedGear` never wears one either), never declared by rule 5, never recorded as a
+  rule-4b player pick. Armor is always OWNED, so APMF's seat refuses its re-equip (OutfitApply / SPID /
+  MEO External), in and out of combat: an ITEM-level deny inside a category MFO already owns, no new
+  category. A worn one ships at the next deposit (`Lotd.cpp WornRelicShippable`, positive proof
+  required), logged once: `[equip-auth] <id>: museum relic '<name>' is worn -- kept OUT of the
+  declared set`. Relic WEAPONS and SHIELDS are not denied (that would need Right / Left / Shield
+  owned; item 7 dropped by marth); worn ones ship through the same deposit path. `cast/Equip.cpp
+  PickShield` skips a relic shield under the same KeepForDeposit gate.
+- **SHIELD DENIED FOR A NON-SHIELD USER (same branch, marth "stop Jesper from equipping a shield").**
+  `denied = Shield` (`EquipAuthority.cpp:557` `noShieldUser`) when: `roles.offHand == 2` under
+  `bWeaponStyleControl` (unchanged), OR `roles.melee != OneHand` (archer / two-hander / no melee), OR
+  `IsCasterFollower` with `roles.offHand != 1`. A one-hand fighter with shield votes or no vote is
+  unaffected. Category DENY only (nothing declared or forced, no hand owned). v9 Categorize: only an
+  ARMO with the shield biped bit competes for Shield, so a left-hand weapon, a torch and a spell pass.
+  **Ripple:** Economy's `deniedWorn` force-sell now also sells a WORN non-relic shield of such a
+  follower (marth's 2026-09-22 "Let them sell" ruling covers it; relics are held by HoldFromSale first).
+- **JESPER'S SET 6 / SET 7 FLIP-FLOP stays OPEN (MFO-B63 part 1).** The cause (field0928b): SPID's
+  outfit re-apply and the engine's OutfitApply UNEQUIP his declared robes and gauntlets every ~5 s
+  (unequips are ungoverned); the mage judge re-picks ONE slot per tick, so the set alternates. A rule
+  that kept stripped pieces declared was built and REMOVED (review F3 on f2c8e2b): it re-dressed every
+  player / script / scene unequip every 3 s. A flip-flop is better than fighting the player. The fix is
+  best-per-slot (MFO-B63 part 1), its own brief.
 - **THE HEAD SLOT IS THREE BIPED BITS (2026-09-14, field fix; branch
   `fix/mfo-deck-0914-helmet-offhand-verdict-meo`).** FIELD (Deck log, Fable, ROOT
   CAUSE CONFIRMED): vanilla helmets (Imperial Light Helmet `00013EDB`, Elven Helmet
@@ -3347,17 +3353,21 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   `ClearTransientState`. **What breaks:** admitting worn relics outside the kept set, or without the
   PlayerGiven check, ships the player's own choice.
 - **MUSEUM PRIORITY (`fix/mfo-museum-priority`, marth 2026-09-28).** The deposit START is
-  `PriorityDeposit:1256` ← `Service.cpp:372`, checked EVERY service tick right after `DepositTick`
+  `PriorityDeposit:1333` ← `Service.cpp:371`, checked EVERY service tick right after `DepositTick`
   (`Service.cpp:346`), ahead of the excursion driver and the rule loop (so board order and the pass-0
   dibs deferral no longer decide it; `RunGambit:1231` is the museum LOOT only). Conditions: an enabled
   `act.loot_museum` rule, `Shippable` non-empty, an outgoing crate INSIDE HIS LEASH (crate → player <=
   `TeleportCompat::View(f).leash`; no fixed range), no combat (his or the player's). It yields ONLY to
-  combat and HEALS (`Lotd::DepositGate::healWants`, Service's lambda: a heal cast in flight, or a
-  logistics rule whose condition holds now and that drinks a health potion he has or casts a spell with
-  a beneficial Health effect); sneaking and menus no longer hold it. A running loot excursion is ENDED
-  through its own clear path (`gate.yieldExcursion`: `Packages::LootTravelClear("museum deposit")` + a
-  reset slot) EXCEPT a leg fetching a MUSEUM item (`cat == Museum`, Walking or its pickup still being
-  read back): the deposit waits for it (`[lotd] ... museum deposit HELD -- ...`, once per reason / 30 s).
+  combat and HEALS THAT HAPPEN (`Lotd::DepositGate::healWants`, `Service.cpp:335`: a heal cast in
+  flight (`IsHealCastActive`), or the rule loop REALLY fired a heal within 4 s -- `g_healFiredAt`,
+  stamped at the loop tail (`Service.cpp:1910`) from the rule that ACTED; 4 s = the OOC cast pacing
+  floor 3 s + one 1 s tick; review F1: a heal rule that only MATCHES never starves the deposit);
+  sneaking and menus no longer hold it. He must himself be inside the leash. A running loot excursion is
+  ENDED through its own clear path (`gate.endExcursion`: `Packages::LootTravelClear("museum deposit")` +
+  a reset slot) only AFTER `ClaimDepositTravel` succeeded, EXCEPT a leg fetching a MUSEUM item
+  (`gate.excursionBlocks`: `cat == Museum`, Walking or its pickup still being read back): the deposit
+  waits for it (`[lotd] ... museum deposit HELD -- ...`, once per reason / 30 s). The crate lookup runs
+  before the `Shippable` inventory walk.
   **SEVERAL TRIPS AT ONCE:** `g_trips` (follower → `Trip`, under `g_tripMx`); each trip carries its own
   `transfer` result (`shared_ptr<atomic<int>>`, handed to `TransferOnMain`); cooldowns are per
   (follower, crate) (`g_crateCooldown` keyed `Pair()`), never crate-wide. **LEASH IS BOSS:** released
@@ -3368,14 +3378,19 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   near face = distance minus the crate base's smaller horizontal OBND half-extent) or inside the crate's
   GROWN ARRIVAL RADIUS — the loot road's grown grab REUSED (`GrabRadiusFor` / `NotePathFail`,
   `LootTravel_internal.h`, keyed by the crate ref: 200 u + 100 u per failed walk, cap 600, cleared by a
-  delivered trip), which is also the distance backstop (never below the old 175 u). A BLOCKED stop
-  outside both FAILS loudly, widens the radius, and gives THIS follower a 10 s retry; 3 BLOCKED in a row
-  at that crate = the 120 s pair cooldown. The field case: the Riften crate 11099DB7 wears LOTD's own
+  delivered trip), which is also the distance backstop (never below the old 175 u). Reach and grown
+  arrivals count only ON THE CRATE'S FLOOR (`SameFloor:902`: |dz| <= the crate base's OBND height, 109 u
+  for LOTD's crate; review F6), logged `ended BLOCKED ... on ANOTHER FLOOR` otherwise; the loot road's
+  own grown grab is unchanged. A BLOCKED stop outside both FAILS loudly, widens the radius, and gives
+  THIS follower a 10 s retry (follower AND pair cooldown); 3 BLOCKED in a row at that crate = the 120 s
+  pair cooldown. The field case: the Riften crate 11099DB7 wears LOTD's own
   `CollisionMarker` (LegacyoftheDragonborn.esm REFR 0x084197, Obstacle flag, enable-parented to the
-  crate), whose navmesh cut stops every walk at 186-187 u. **WORN RELICS SHIP** (`WornRelicShippable:702`,
-  marth "an item the museum still needs must not stay worn or held"): whoever put it on him, except the
-  player (PlayerGiven), an MFO hold, or a weapon with no other non-relic weapon carried; the transfer
-  unequips it. Trip heal yield: Walking only, `kYieldCooldown` 3 s, no crate cooldown.
+  crate), whose navmesh cut stops every walk at 186-187 u. **WORN RELICS SHIP** (`WornRelicShippable:746`,
+  marth "an item the museum still needs must not stay worn or held") only with POSITIVE PROOF it is not
+  the player's dressing (review F4): the off-role kept relic (`KeptOffRoleWorn`), `IsAiEquipped`, or MFO
+  SAW it UNWORN in his pack this session (`NoteUnwornRelics:701`, every 2 s from `PriorityDeposit`) and
+  PlayerGiven records no menu gift / equip. Never an MFO hold, never a weapon without another non-relic
+  weapon OF ITS KIND (bow / crossbow / melee: his only launcher never ships). The transfer unequips it. Trip heal yield: Walking only, `kYieldCooldown` 3 s, no crate cooldown.
 - **L3 deposit** (automatic with the gambit; per follower, several at once — see MUSEUM PRIORITY above):
   `PriorityDeposit` starts it when the follower carries `Shippable:726` items (worn only through
   `WornRelicShippable`, never quest, stock gear, `IsPlayerPick` or `PlayerGiven::IsPlayerGiven`) and
@@ -4508,15 +4523,15 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   last SENT `owned` overlaps `cats` — THE gate for a direct path writing into a held hand
   (`Logistics::EquipTorch` on `kEquipCat_Left`). `DeclareEquipSet(fid,
   vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **A REFUSED CLAIM NO LONGER FALLS BACK
-  (`fix/mfo-museum-priority` e056be5, marth 2026-09-28, SUPERSEDES F1/F5 of `c66dc80`):** APMF refuses a
-  ch.17 claim when its #17a equip seat is not installed. MFO then makes NO direct equips for that
-  follower: `EquipAuthorityLive` = `EquipAuthoritySupported()` (claimed or refused), Actuation's
-  `authority` = supported (the claim is attempted, its result no longer gates), and
-  `RefreshEquipDeclaration` logs `spdlog::error` "Harbinger REFUSED the equip-authority claim -- MFO
-  makes NO direct equips" once per refusal streak and returns without sending. The legacy direct
-  paths run ONLY when the authority is unsupported (APMF absent, ABI < 9, `bApmfEquipAuthority` off).
-  The bridge's own once-per-streak warn text (`apmf/Equip.cpp`) still says the direct paths run —
-  stale, outside that branch's boundary. Only a
+  (`fix/mfo-museum-priority`, marth 2026-09-28 "MFO's fallback is deprecated", SUPERSEDES F1/F5 of
+  `c66dc80`):** with the authority SUPPORTED, a refused claim means MFO stays out of the equipment: no
+  direct equip, no unequip (`cast/Equip.cpp` returns a transparent NoOp before the old-hold unequips;
+  the top-up and the shield equip are skipped), no declaration. `EquipAuthorityLive` = supported.
+  `RefreshEquipDeclaration` says which case, once per refusal streak: the equip seat NOT installed
+  (APMF_API.h v8: a claim is refused exactly then; `IsEquipAuthorityEnforced()` false) -> WARN
+  "Harbinger's equip seat is not installed -- MFO leaves equipment to the engine"; refused while the
+  seat is installed and enforcing -> ERROR. The whole-APMF-absent legacy degrade (authority
+  unsupported) is unchanged. The bridge's own line (`apmf/Equip.cpp`) is neutral and points at it. Only a
   DECLARATION on a live claim fails closed (`DeclareEquipSet` false). `ClaimEquipAuthority(fid,
   bool* a_outFresh)`: a STANDING `RequestEx(kIntent_EquipAuthority, kOwnBasis, ival =
   kEquipAuth_None)` on `Owned::equipAuthHandle` — kept if live, but **RE-VALIDATED (F2)**: a kept
@@ -5947,7 +5962,9 @@ a fresh order.
   other result forgets it. Skip (a): same signature (incl. the chest's current last-seen gold, so
   another follower's trade there is a change) until `iDaysToRespawnVendor` game days (Skyrim.esm GMST
   0x0123C00E, 2; read by name) after the empty trade. Skip (b): no needs, no buy wishes (purse 0 or no
-  gear / apparel / tome buying) and no sell row the last-seen gold pays for. A skip stamps no
+  gear / apparel / tome buying) and no sell row the last-seen gold pays for; it EXPIRES at the vendor
+  restock (the game day it began + `iDaysToRespawnVendor`), when one trade goes through and its report
+  re-reads the chest's gold (review F5). A skip stamps no
   `g_econTrade` window, so the `[T]` glyph stays dark. Log: `[econ] <id> @ '<vendor>': trade SKIPPED --
   <why>` once per memo / reason. Session state, cleared by `ClearTransientState`; the 10 natives and
   their signatures are untouched (`VendorTrade` is native-only and gained two defaulted params).
