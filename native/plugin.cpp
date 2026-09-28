@@ -56,28 +56,51 @@ namespace {
     // MRO documents the same trick. Fall back to log_directory() if the
     // redirect target is not writable (e.g. running outside MO2).
     // LOG ROTATION (2026-09-21): the previous session's MFO.log becomes
-    // MFO.log.1 BEFORE the sink truncates the live file, overwriting an older
-    // .1. One generation is enough: the case this exists for is a session that
+    // MFO.log.1 BEFORE the sink truncates the live file (now five
+    // generations, see below). The case this exists for is a session that
     // ended in a freeze or a hard crash, followed by a relaunch to check -- the
     // relaunch used to truncate the only evidence (the 2026-09-21 freeze
     // session was lost exactly that way). Same path resolution as the sink:
     // rotate wherever the sink is about to open. std::filesystem::rename
     // replaces an existing target on Windows (MoveFileEx REPLACE_EXISTING),
     // and under MO2/USVFS the rename is redirected like the write is.
-    // Returns 1 rotated, 0 nothing to rotate, -1 rename failed (reported after
-    // the logger is up -- the sink still opens, so no line is lost either way).
-    int RotateLog(const std::filesystem::path& a_live) {
+    // FIVE GENERATIONS (2026-09-28): MFO.log -> .1 -> .2 -> .3 -> .4 -> .5, the
+    // oldest dropped. One generation lost a Deck crash session's log.
+    // Shift oldest first (.4 -> .5 replaces .5, then .3 -> .4, ...), then the
+    // live file -> .1. A failed step is recorded and skipped, never fatal: the
+    // sink still opens either way.
+    // `live` is 1 rotated, 0 nothing to rotate, -1 the live rename failed.
+    // Failures are reported after the logger is up, so no line is lost.
+    constexpr int kLogGenerations = 5;
+    struct LogRotation {
+        int                      live = 0;
+        std::vector<std::string> failed;
+    };
+    LogRotation RotateLog(const std::filesystem::path& a_live) {
+        LogRotation r;
         std::error_code ec;
-        if (!std::filesystem::exists(a_live, ec) || ec) return 0;
-        std::filesystem::path prev = a_live;
-        prev += ".1";
-        std::filesystem::rename(a_live, prev, ec);
-        return ec ? -1 : 1;
+        auto gen = [&](int n) {
+            std::filesystem::path p = a_live;
+            p += "." + std::to_string(n);
+            return p;
+        };
+        for (int n = kLogGenerations - 1; n >= 1; --n) {
+            const auto from = gen(n);
+            ec.clear();
+            if (!std::filesystem::exists(from, ec) || ec) continue;
+            std::filesystem::rename(from, gen(n + 1), ec);
+            if (ec) r.failed.push_back(from.filename().string() + ": " + ec.message());
+        }
+        ec.clear();
+        if (!std::filesystem::exists(a_live, ec) || ec) return r;
+        std::filesystem::rename(a_live, gen(1), ec);
+        r.live = ec ? -1 : 1;
+        return r;
     }
 
     void SetupLog() {
         std::shared_ptr<spdlog::sinks::basic_file_sink_mt> sink;
-        int                   rotated = 0;
+        LogRotation           rotated;
         std::filesystem::path logPath;
 
         try {
@@ -129,9 +152,12 @@ namespace {
         spdlog::set_default_logger(std::move(log));
         spdlog::set_pattern("[%H:%M:%S.%e] [%l] %v");
 
-        if (rotated > 0)
-            spdlog::info("[startup] rotated the previous MFO.log to MFO.log.1 ({})", logPath.string());
-        else if (rotated < 0)
+        for (const auto& f : rotated.failed)
+            spdlog::warn("[startup] could not shift an older MFO.log generation ({}) -- skipped", f);
+        if (rotated.live > 0)
+            spdlog::info("[startup] rotated the previous MFO.log to MFO.log.1, keeping {} generations ({})",
+                         kLogGenerations, logPath.string());
+        else if (rotated.live < 0)
             spdlog::warn("[startup] could not rotate the previous MFO.log to MFO.log.1 ({}) -- it was truncated",
                          logPath.string());
     }

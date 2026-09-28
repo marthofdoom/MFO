@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **MFO keeps its last five logs.** At launch MFO.log moves to MFO.log.1, the older ones move up to MFO.log.5 and the oldest is dropped. A crash or freeze session's log now survives a few relaunches. A log that cannot be moved is noted in the new log and startup goes on.
 - **Loot museum items picks up loose relics too.** A relic the museum still needs, lying on a table or a shelf, is looted the same as one in a chest. Every other loot gambit already took loose items.
 - **Loose arrows and bolts follow the trade-up rule.** A follower passes over a loose stack worse than anything he carries, the same as in a chest.
 - **Loose items are safe to leave around.** A follower never takes a museum display, anything in your home or the museum halls, a quest item, or anything owned. In a town, inn, house or shop he takes a loose item only when neither the item nor the room has an owner. The log names the reason once for each item he leaves.
