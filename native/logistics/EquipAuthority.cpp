@@ -360,8 +360,15 @@ namespace MFO::Logistics {
             }
         }
 
+        // NO DECLINE-FALLBACK (marth 2026-09-28, approved): with Harbinger present and the
+        // authority supported, MFO's equips go through the declaration ONLY. A REFUSED
+        // claim (APMF's equip seat not installed, a refusal streak) no longer hands the
+        // follower back to MFO's direct equips: the legacy path is the APMF-ABSENT degrade
+        // (EquipAuthoritySupported() false: no APMF, ABI < 9, or bApmfEquipAuthority off),
+        // never a decline. RefreshEquipDeclaration logs the refusal loudly.
         bool EquipAuthorityLive(RE::FormID a_follower) {
-            return APMFBridge::EquipAuthoritySupported() && APMFBridge::IsEquipAuthorityClaimed(a_follower);
+            (void)a_follower;
+            return APMFBridge::EquipAuthoritySupported();
         }
 
         void ForgetEquipDeclaration(RE::FormID a_follower) {
@@ -421,13 +428,25 @@ namespace MFO::Logistics {
                 return;
             }
             bool fresh = false;
+            static std::unordered_set<RE::FormID> s_refusalLogged;   // worker-serial like g_lastDeclared
             if (!APMFBridge::ClaimEquipAuthority(id, &fresh)) {
-                // APMF REFUSED (its equip seat is not installed): the bridge logged
-                // it once; IsEquipAuthorityClaimed is false, so every direct equip
-                // path runs for this follower exactly as without APMF (F1/F5).
+                // APMF REFUSED (its equip seat is not installed, or the channel is
+                // unavailable). NO DECLINE-FALLBACK (marth 2026-09-28): MFO does NOT
+                // switch to its direct equips for him (EquipAuthorityLive stays true
+                // while supported; Actuation's authority likewise), so nothing MFO
+                // decides is equipped until Harbinger takes the claim. Said LOUDLY, once
+                // per refusal streak per follower (principle 7): the bridge's own
+                // warning line predates this rule and still says the direct paths run --
+                // they do not.
+                if (s_refusalLogged.insert(id).second)
+                    spdlog::error("[equip-auth] {:08X}: Harbinger REFUSED the equip-authority claim -- MFO makes NO "
+                                  "direct equips for him (no decline-fallback; the legacy path is for an ABSENT "
+                                  "Harbinger only). Nothing MFO picks is equipped until the claim is taken. See "
+                                  "APMF.log for why it refused.", id);
                 g_lastDeclared.erase(id);
                 return;
             }
+            s_refusalLogged.erase(id);   // taken: a later refusal is a new streak and is said again
             // F2: a handle minted since the last declaration (first claim, a
             // re-mint after APMF forgot the old one, the toggle's OFF->ON, a New
             // Game) carries NO set on APMF's side -- the change detector must not

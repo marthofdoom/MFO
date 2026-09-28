@@ -476,8 +476,11 @@ namespace MFO::Actuation {
                         // Claim-or-keep here as well as in the OOC service, so a
                         // follower first seen IN combat (a load mid-fight) is
                         // claimed on his first equip lap, not at combat end.
-                        const bool authority = APMFBridge::EquipAuthoritySupported() &&
-                                               APMFBridge::ClaimEquipAuthority(id);
+                        // NO DECLINE-FALLBACK (marth 2026-09-28): supported = the declaration
+                        // is the only road, claimed or REFUSED (a refusal is logged loudly by
+                        // RefreshEquipDeclaration); the direct equips are APMF-ABSENT only.
+                        const bool authority = APMFBridge::EquipAuthoritySupported();
+                        if (authority) APMFBridge::ClaimEquipAuthority(id);
                         if (roles.offHand == 2) {
                             if (auto* w = PickOffHandWeapon(a_follower, roles, daggerMelee, rightW)) {
                                 const char* whyNot = nullptr;
@@ -605,7 +608,10 @@ namespace MFO::Actuation {
                     // hand. The shield is always direct (v9: never owned). Without the authority:
                     // byte-identical to before (right force-equipped here,
                     // EquipLeftHeld below).
-                    authority = APMFBridge::EquipAuthoritySupported() && APMFBridge::ClaimEquipAuthority(id);
+                    // NO DECLINE-FALLBACK (marth 2026-09-28): a REFUSED claim does not
+                    // re-enable the direct equip below; only an ABSENT authority does.
+                    authority = APMFBridge::EquipAuthoritySupported();
+                    if (authority) APMFBridge::ClaimEquipAuthority(id);
                     if (oldLeft)   // the LEFT slot, as every left-hand unequip (F4 parity)
                         mgr->UnequipObject(a_follower, oldLeft, nullptr, 1, Loadout::LeftHandSlot(), true, true);
                     if (oldForced)
