@@ -3286,7 +3286,7 @@ bit (it is session-only proof); recording non-relics (marth's ruling: regular gi
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives
 over-count), MFO-B123 (a reload before arrival can ship one duplicate), MFO-B124 (the ledger floor leaks
-for the session), MFO-B125 (the same base in two crates), MFO-B133 (museum priority: two log-wording
+for the session), MFO-B125 (the same base in two crates), MFO-B137 (relic ship: unworn-copies-first RemoveItem unverified), MFO-B138 (mid-trip heal match: one wasted yield per 90 s), MFO-B133 (museum priority: two log-wording
 nits -- the other-floor BLOCKED line's reach 0, and the seat-absent WARN in observe-only mode). MFO-B126 (a
 kept relic auto-equipped, never shipped) is RESOLVED in batch L (see "worn kept relic" below and the `cast/Equip.cpp` nav entry).** Read
 them before editing.
@@ -4540,7 +4540,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `EquipAuthorityOwns(fid, cats)` = a claim stands, a declaration has gone out on it, and the
   last SENT `owned` overlaps `cats` — THE gate for a direct path writing into a held hand
   (`Logistics::EquipTorch` on `kEquipCat_Left`). `DeclareEquipSet(fid,
-  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **OPEN BACKLOG: MFO-B133, MFO-B135 (the refused-claim NoOp reads as a satisfied equip), MFO-B134 (Gear.cpp's weapon
+  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **OPEN BACKLOG: MFO-B136 (mage set re-sends a never-wearable piece every 3 s), MFO-B139 (shield deny misses a mage on class Auto), MFO-B133, MFO-B135 (the refused-claim NoOp reads as a satisfied equip), MFO-B134 (Gear.cpp's weapon
   equip hop and EquipTorch still equip directly under a refused claim) -- read before editing.** **A REFUSED CLAIM NO LONGER FALLS BACK
   (`fix/mfo-museum-priority`, marth 2026-09-28 "MFO's fallback is deprecated", SUPERSEDES F1/F5 of
   `c66dc80`):** with the authority SUPPORTED, a refused claim means MFO stays out of the equipment: no
