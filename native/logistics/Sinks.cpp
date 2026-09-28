@@ -144,23 +144,6 @@ namespace MFO::Logistics {
                 // encodes "the waiver keys on TAKING, never on looking" -- a
                 // QuickLoot glance opens no menu and moves no item, so it fires
                 // nothing here.
-                // PLAYER DROP RECORD (86e3f9pkg): an item leaving the player into the
-                // WORLD (no new container, a ref handle for the dropped item) is the
-                // player's -- a loose-loot scan must never pick it up (LooseRefBarred).
-                // Queued to the worker like the waiver below (g_playerDropped is worker-
-                // owned, read by the scan); no inline map touch from a sink (#1/#4).
-                if (a_event->oldContainer == PlayerID() && a_event->newContainer == 0 && a_event->reference) {
-                    auto dropped = a_event->reference.get();
-                    if (const RE::FormID dropID = dropped ? dropped->GetFormID() : 0) {
-                        const auto dropEpoch = MFO::Diagnostics::CurrentPumpEpoch();
-                        SKSE::GetTaskInterface()->AddTask([dropID, dropEpoch]() {
-                            MFO::Diagnostics::PumpTickGate gate(dropEpoch);
-                            if (!gate) return;
-                            NotePlayerDropped(dropID);
-                        });
-                    }
-                    return RE::BSEventNotifyControl::kContinue;
-                }
                 if (a_event->newContainer != PlayerID()) return RE::BSEventNotifyControl::kContinue;
                 const RE::FormID srcID = a_event->oldContainer;
                 if (srcID == 0) return RE::BSEventNotifyControl::kContinue;   // spawned into player, no source
@@ -206,30 +189,6 @@ namespace MFO::Logistics {
             }
         };
 
-    }
-
-    // ── the PLAYER-DROP record (86e3f9pkg; see g_playerDropped). Worker only: the
-    // sink's gated AddTask writes, the loot scan reads. An entry from an older pump
-    // epoch belongs to a previous save and is dropped on the first access after it.
-    namespace {
-        void DropStalePlayerDrops() {
-            const auto epoch = MFO::Diagnostics::CurrentPumpEpoch();
-            if (g_playerDroppedEpoch == epoch) return;
-            g_playerDropped.clear();
-            g_playerDroppedEpoch = epoch;
-        }
-    }
-    void NotePlayerDropped(RE::FormID a_ref) {
-        if (!a_ref) return;
-        DropStalePlayerDrops();
-        if (!g_playerDropped.count(a_ref))
-            spdlog::info("[loot] player dropped {:08X} -- never a loose-loot candidate this session", a_ref);
-        g_playerDropped[a_ref] = Clock::now();
-        EvictOldest(g_playerDropped);
-    }
-    bool PlayerDroppedRef(RE::FormID a_ref) {
-        DropStalePlayerDrops();
-        return a_ref && g_playerDropped.count(a_ref) != 0;
     }
 
     // ── GATED re-admit sink (loot M1). The gate records, the "behind the same

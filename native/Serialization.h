@@ -139,6 +139,21 @@ namespace MFO {
     inline constexpr std::uint32_t kRecForcedWeapon  = 'FWPN';
     inline constexpr std::uint32_t kForcedWeaponVersion = 1;
 
+    // ClickUp 86e3faccn (marth 2026-09-27: "Relics however should be recorded"): a
+    // FIFTH independent record -- the LOTD museum relics the PLAYER gave a follower or
+    // put on him in the trade / gift menu (logistics/PlayerGiven.cpp owns the layout,
+    // bounds and the lock). Without it a reload forgot the gift, and a given relic could
+    // ship to the museum or be swapped out of his hand.
+    //   v1 - u32 followerCount; per follower {u32 followerFormID, u32 entryCount,
+    //        per entry {u32 baseFormID, u8 bits}}. bits: 0x1 = GIVEN (moved player ->
+    //        him), 0x2 = EQUIPPED (put on him with the ContainerMenu / GiftMenu open).
+    //        The session-only AI-equip mark (0x4) is never written and is masked off on
+    //        read. Every FormID is ResolveFormID'd on load; an unresolvable follower or
+    //        base (its plugin gone) DROPS the entry (#8); 0xFF ids are never written (#9).
+    //        A save without the record loads with an empty record.
+    inline constexpr std::uint32_t kRecPlayerGiven     = 'PGIV';
+    inline constexpr std::uint32_t kPlayerGivenVersion = 1;
+
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY
     // shipped version FOREVER.
     //

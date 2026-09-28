@@ -401,8 +401,8 @@ namespace MFO::Logistics {
                     // THE LOOSE-ITEM SOURCE BAR (86e3f9pkg, crime safety): the item is
                     // eligible for its category; may it be taken from where it LIES?
                     // Museum displays, player storage / homes / the museum halls, a
-                    // player drop, a quest item, owned / off-limits, a civilised place
-                    // with an owned cell -- LooseRefBarred (LootTake.cpp) has the list.
+                    // quest item, owned / off-limits, a civilised place with an owned
+                    // cell (what the player drops is fair game: marth 2026-09-27) -- LooseRefBarred (LootTake.cpp) has the list.
                     // Unconditional (no toggle opens it). Each ref's reason is logged
                     // ONCE (worker-only set, cleared at a cap).
                     if (loose) {

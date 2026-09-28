@@ -631,8 +631,9 @@ namespace MFO::Lotd {
         // MFO-B126: a WORN relic ships only when the shed kept it (off-role) on its last
         // pass, there is POSITIVE PROOF his own AI put it on (PlayerGiven::IsAiEquipped:
         // an equip with no trade / gift menu open of a relic MFO had seen unworn in his
-        // pack as kept -- review round 3; the record is not saved, so after a load this
-        // fails closed and nothing worn ships), it is NOT player-given, no MFO hold
+        // pack as kept -- review round 3; that mark is not saved, so after a load this
+        // fails closed and nothing worn ships), it is NOT player-given (a relic the
+        // player gave is SAVED, 'PGIV', 86e3faccn: never shipped after a reload), no MFO hold
         // names it (a hold is a gambit's choice: the relic was his only weapon of that
         // category), and he STILL carries one of the in-role weapons that pass saw (the
         // never-disarm guard, re-checked at ship time against a_inv). Worker.
@@ -1283,6 +1284,12 @@ namespace MFO::Lotd {
         if (!a_ref || !g_detected.load()) return false;
         auto snap = CurrentSnapshot();
         return snap && snap->displays.count(a_ref) != 0;
+    }
+
+    bool MayBeRelic(RE::FormID a_base) {
+        if (!a_base || !g_detected.load()) return false;
+        auto snap = CurrentSnapshot();
+        return !snap || snap->bases.count(a_base) != 0;
     }
 
     bool HoldFromSale(RE::FormID a_follower, RE::TESBoundObject* a_base) {

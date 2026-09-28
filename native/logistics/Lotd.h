@@ -58,6 +58,11 @@ namespace MFO::Lotd {
     // Loose-loot bar (86e3f9pkg): a_ref is a museum DISPLAY ref named by the slot table
     // (the current snapshot; false before the first snapshot or without LOTD). Any thread.
     bool IsDisplayRef(RE::FormID a_ref);
+    // PlayerGiven (ClickUp 86e3faccn): may a_base be a museum RELIC -- any base the
+    // slot table accepts, needed now or not (the museum's needs change; a gift is
+    // protected for good)? False without LOTD. TRUE while LOTD is detected but no
+    // snapshot is read yet (unknown: fail closed -- the gift is recorded). Any thread.
+    bool MayBeRelic(RE::FormID a_base);
     // ShedOffRoleWeapon: HoldFromSale AND his table holds an enabled act.loot_museum
     // AND the deposit can run -> keep it for the crate, do not hand it to the player.
     bool KeepForDeposit(RE::Actor* a_follower, const FollowerState& a_state, RE::TESBoundObject* a_base);

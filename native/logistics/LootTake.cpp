@@ -645,22 +645,23 @@ namespace MFO::Logistics {
         //   2. player storage / player homes / the museum halls (RefInPlayerStorage:
         //      LocTypePlayerHouse location or a Player / PlayerFaction-owned cell -- every
         //      LOTD display cell carries both, verified in the installed ESM);
-        //   3. an item the PLAYER dropped this session (the container-change sink's record);
-        //   4. a quest-flagged item (the engine's own ref-level check);
-        //   5. OWNED or OFF-LIMITS (never steal): any ref owner, or a crime to activate;
-        //   6. ANY OWNED CELL, whatever the location type (closing round of 86e3f9pkg; a
+        //   3. a quest-flagged item (the engine's own ref-level check);
+        //   4. OWNED or OFF-LIMITS (never steal): any ref owner, or a crime to activate;
+        //   5. ANY OWNED CELL, whatever the location type (closing round of 86e3f9pkg; a
         //      player-owned cell is already barred as storage by 2). Disassembly (AE
         //      TESObjectREFR::GetOwner, id 20194): GetOwner already falls back to the parent
         //      cell's owner for an item / flora ref (it skips the fallback only for
         //      activator / door / furniture bases), so this explicit test is the belt that
         //      holds whatever the base type. In a civilised place (LocationTypes::Classify)
         //      the reason says so, which is where the log is read for theft.
+        // NOT barred: an item the PLAYER dropped on the ground. marth 2026-09-27: "What you
+        // drop on the ground is fair game." (The session player-drop record that barred it
+        // is gone, ClickUp 86e3faccn.)
         // Worker only (the scan, and the arrival re-check in Service.cpp). Pure reads.
         const char* LooseRefBarred(RE::TESObjectREFR* a_ref) {
             if (!a_ref) return "no ref";
             if (Lotd::IsDisplayRef(a_ref->GetFormID())) return "a LOTD museum display";
             if (RefInPlayerStorage(a_ref)) return "player storage / player home (museum halls included)";
-            if (PlayerDroppedRef(a_ref->GetFormID())) return "the player dropped it";
             if (IsQuestObjectRef(a_ref)) return "a quest item";
             if (a_ref->GetOwner()) return "owned (never steal)";
             if (a_ref->IsOffLimits()) return "off-limits (a crime to take)";

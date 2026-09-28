@@ -406,13 +406,16 @@ namespace MFO::Actuation {
             // relic that is his ONLY weapon of the category still satisfies.
             // ROUND 3 (positive proof): swap only a relic that HIS AI put on
             // (PlayerGiven::IsAiEquipped) or that an MFO hold names (an FWPN hold from
-            // before the fix). Anything else -- including every worn relic after a
-            // load, since the record is not saved -- is left in his hand (fails closed).
+            // before the fix). Anything else -- including every AI-equipped relic
+            // after a load, since the AI-equip mark is not saved -- is left in his
+            // hand (fails closed). A relic the PLAYER gave him (PlayerGiven, SAVED in
+            // 'PGIV' since 86e3faccn) is never swapped out, whatever holds it.
             const auto heldHold = ForcedHoldFor(a_follower->GetFormID());
             const auto relicWithAlternative = [&](RE::TESForm* a_held) {
                 auto* hw = a_held ? a_held->As<RE::TESObjectWEAP>() : nullptr;
                 if (!hw || !IsMuseumRelic(a_follower, hw)) return false;
                 const RE::FormID hb = hw->GetFormID();
+                if (PlayerGiven::IsPlayerGiven(a_follower->GetFormID(), hb)) return false;
                 if (!PlayerGiven::IsAiEquipped(a_follower->GetFormID(), hb) &&
                     heldHold.first != hb && heldHold.second != hb) return false;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
