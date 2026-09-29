@@ -532,11 +532,11 @@ namespace MFO::Actuation {
         // Rate limit for the read-back warns (NOT LANDED / NOT ATTACHED): true when that
         // warn for (caster, spell) may print now, at most once per 5 s per line kind;
         // a_suppressed gets how many were held back since the last print. MAIN THREAD
-        // (the apply lambdas); cast/Direct.cpp, cleared with [heal-obs] on load.
+        // (the apply lambdas); cast/HealObs.cpp, cleared with [heal-obs] on load.
         enum class ReadbackWarn : std::uint8_t { NotLanded, NotAttached };
         bool ReadbackWarnDue(RE::FormID a_caster, RE::FormID a_spell, ReadbackWarn a_kind,
                              std::uint32_t& a_suppressed);
-        // The [heal-obs] follow-up sweep (cast/Direct.cpp). WORKER, called from
+        // The [heal-obs] follow-up sweep (cast/HealObs.cpp). WORKER, called from
         // TargetCastReconcile every pump tick.
         void HealObsSweep();
 
