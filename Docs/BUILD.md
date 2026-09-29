@@ -15,7 +15,7 @@ written**.
 1. Write **one** milestone's change only.
 2. **Fable review reports** before the push (#45a — see below).
 3. `git push` → watch CI green; fix compile errors and repush.
-4. `./release.sh` → install → **run that milestone's slice of the test matrix
+4. `./release.sh --run <run-id>` → install → **run that milestone's slice of the test matrix
    in-game**.
 5. **Only then start the next build.**
 
@@ -78,7 +78,14 @@ its failure mode), or `ENGINE_NOTES.md` (if it is an engine fact).
 - **`./release.sh` is the only way a build reaches the game.** Ad-hoc copying
   cost MRO a session where the running game and the archive disagreed.
 - **Two-phase**: `./release.sh X.Y.Z` stamps and pushes; after CI is green,
-  `./release.sh` verifies, packages and tags.
+  `./release.sh --run <run-id>` verifies, packages and tags.
+- **The CI run is picked by hand, every time (2026-09-29).** Phase 2 never
+  guesses: parallel branch builds make "the newest green run" another branch's
+  DLL. A bare `./release.sh` lists the last green `native` runs with branch,
+  sha and a mark on the ones whose `native/` tree matches HEAD. The chosen run
+  must be `completed/success`, have HEAD's `native/` tree and still hold the
+  `MFO-dll` artifact, or the release stops before anything is written.
+  `./release.sh --run <run-id> --dry-run` runs exactly those checks and stops.
 - **Releases and tags are immutable. Bump VERSION instead.**
 - **Version granularity (marth):** a **patch** (`0.4.1`) is for review fixes on
   a build just cut. **Minor corrections found in testing do NOT earn their own

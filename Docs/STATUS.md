@@ -2393,9 +2393,11 @@ deny to one hand (the equip slot is per-SET, disasm-confirmed), then the intelli
   headSha/tree match. (INVARIANTS #44; verify-ci-green memory.)
 - **ESP is generated** by `python3 MFO_GenerateESP.py out` (Linux, no Creation
   Kit). ESP changes = edit the generator + regen. (ARCHITECTURE §8.)
-- **Release** = two-phase `release.sh` (see its header). Phase 1 stamps+pushes→CI;
-  phase 2 (after green) regens ESP, runs `audit_esp.py`, pulls the green DLL,
-  packages `releases/vX/`.
+- **Release** = two-phase `release.sh` (see its header / `--help`). Phase 1 stamps+pushes→CI;
+  phase 2 (`./release.sh --run <run-id>`, after green) verifies that run (green, same
+  `native/` tree as HEAD, `MFO-dll` present), regens ESP, runs `audit_esp.py`, pulls that
+  run's DLL, packages `releases/vX/`. A bare `./release.sh` lists the green runs to pick from;
+  `--dry-run` stops after the checks.
 - **Deploy** = unzip the package over `/mnt/gaming/modlists/custom-modlist/mods/MFO/`
   only (keep `meta.ini`), force a syncthing rescan, then poll the deck until its
   DLL sha256 matches the packaged one. (deploy-workflow memory has the exact
