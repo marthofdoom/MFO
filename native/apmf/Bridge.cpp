@@ -654,17 +654,24 @@ namespace MFO::APMFBridge {
         // floor at kOwnBasis is therefore how supersession is expressed, not an
         // omission -- do NOT give it its own basis constant.
         //
-        // IT DOES NOT DENY MFO'S OWN DIRECT FORCE -- re-verified 2026-09-08
-        // against the PINNED CommonLibSSE-NG (3.7.0 @ c4ab853d,
-        // include/RE/M/MagicCaster.h), not inherited from the earlier claim.
-        // `CastSpellImmediate` is vtable slot 01 (:46) and `CheckCast` is slot 0A
-        // (:55) -- two different virtuals, and APMF's gates hook CheckCast (0x0A)
-        // and CheckShouldEquip (0x0F), which is the AI's own deliberation, never
-        // the immediate-cast entry. So the APMF-ABSENT / legacy / concentration
-        // direct-force paths (Actuation_Direct.cpp's
-        // GetMagicCaster(kInstant)->CastSpellImmediate) pass a floored hand
-        // untouched. What the floor closes is the AI's deliberation on that hand,
-        // which is exactly and only what it claims to do. Weapons are untouched
+        // MFO'S OWN DIRECT FORCE AND THE INSTANT CASTER -- CORRECTED 2026-09-29
+        // (feat/mfo-animheal-p0). This note used to say the floor cannot deny MFO's
+        // direct force because `CastSpellImmediate` (vtable slot 01) never reaches
+        // `CheckCast` (slot 0A). The call itself does not, but a CONCENTRATION spell
+        // it starts keeps channelling on the caster's INSTANT caster, and that
+        // channel's cast tick calls CheckCast through the vtable every tick and
+        // interrupts itself on a NO (AE 34407 / SE 33629; Harbinger RE on both
+        // runtimes, scratchpad agentlogs/apmf-animheal-p1.md). Harbinger names that
+        // caster `hand=?` (kInstant -> Hand::kUnknown). Field 2026-09-21 and
+        // 2026-09-28: `[t2c] ... CheckCast DENIED ... hand=?` 7 to 9 ms after MFO's
+        // own direct Healing Hands, and 48 denies of MFO's ConcProxy forms. Before
+        // Harbinger fix/apmf-cast-instant-caster (d41ed43), kUnknown fell to an
+        // ACTOR-WIDE ch.8b read, so any MFO cast claim standing on the actor could deny
+        // the instant caster. From d41ed43 on, the instant caster is gated by the ch.8
+        // allow-list alone (MFO lists its ConcProxy forms there, SpellAllowList.cpp),
+        // and this floor -- a ch.8b HAND claim -- has no say over it. What the floor
+        // closes is the AI's deliberation on the floored hand, which is exactly and
+        // only what it claims to do. Weapons are untouched
         // too -- the 0x0F seat is installed on the spell/staff selector vtables
         // only (APMF core/EquipGate.cpp's own "weapon/fist item classes have no
         // concrete header class to hook"), so a spellsword's off-hand steel is

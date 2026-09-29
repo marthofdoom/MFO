@@ -495,6 +495,32 @@ namespace MFO::Actuation {
         };
         extern std::unordered_map<std::uint64_t, BeneficialRecast> g_beneficialRecast;
 
+        // READ-BACK (feat/mfo-animheal-p0, 1m(a)). Is an ActiveEffect OF THIS FORM (the
+        // form actually cast: the spell, or its ConcProxy) on a_target right now? The
+        // same list walk SustainConcentrationEffect makes. MAIN THREAD only.
+        inline bool SpellEffectPresentOn(RE::Actor* a_target, const RE::MagicItem* a_form) {
+            auto* mt = a_target ? a_target->AsMagicTarget() : nullptr;
+            if (!mt || !a_form) return false;
+            auto* list = mt->GetActiveEffectList();
+            if (!list) return false;
+            for (auto* ae : *list)
+                if (ae && ae->spell == a_form) return true;
+            return false;
+        }
+        // Does a_spell carry any effect with an authored duration? Only such a spell
+        // leaves an ActiveEffect to read back; an instant (duration 0) fire-and-forget
+        // heal applies and is gone in the same call, so its landing is not decidable on
+        // the apply tick (the [heal-obs] HP read ~1 s later answers it instead).
+        inline bool HasDurationEffect(const RE::SpellItem* a_spell) {
+            if (!a_spell) return false;
+            for (auto* eff : a_spell->effects)
+                if (eff && eff->effectItem.duration > 0) return true;
+            return false;
+        }
+        // The [heal-obs] follow-up sweep (cast/Direct.cpp). WORKER, called from
+        // TargetCastReconcile every pump tick.
+        void HealObsSweep();
+
         inline std::uint64_t RecastKey(RE::FormID a_caster, RE::FormID a_spell) {
             return (static_cast<std::uint64_t>(a_caster) << 32) | a_spell;
         }

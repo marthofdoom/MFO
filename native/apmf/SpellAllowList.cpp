@@ -109,16 +109,27 @@ namespace MFO::APMFBridge {
         //     and never cast, and a heavily-modded follower's ability list alone
         //     would exhaust the 32-form budget and fail the whole gate open.
         //
-        // NOT ENUMERATED, with the proof rather than a hope: MFO's OWN ConcProxy
-        // delivery-spell pool (Actuation_Direct.cpp). Those are IFormFactory-created
-        // 0xFF SpellItems that are never added to any actor's spell list, so
-        // CombatInventory can never build a candidate for one and t2a can never see
-        // one; and the road that casts them is GetMagicCaster(kInstant)->
-        // CastSpellImmediate (MagicCaster vtable slot 01) while APMF's gates hook
-        // CheckCast (slot 0A) and CheckShouldEquip (slot 0F) -- so t2c never sees
-        // one either. Verified against pinned CommonLibSSE-NG include/RE/M/
-        // MagicCaster.h (slot 01 vs slot 0A), the same verification APMFBridge.cpp's
-        // idle-hand floor note already rests on.
+        //   * MFO's OWN ConcProxy forms (cast/Direct.cpp: the delivery-flipped 0xFF
+        //     copies a concentration Self heal is cast through at an ally), appended in
+        //     PublishSpellAllowList from Actuation::ConcProxyForms(). CORRECTED
+        //     2026-09-29 (feat/mfo-animheal-p0): this block used to say those forms
+        //     NEVER reach t2c because CastSpellImmediate is vtable slot 01 and CheckCast
+        //     slot 0A. The call itself does not consult CheckCast, but the concentration
+        //     CHANNEL it leaves running on the instant caster does: MagicCaster's update
+        //     in the casting state calls its cast tick (AE 34407 / SE 33629), which calls
+        //     CheckCast through the vtable (+0x50 = slot 0A) every tick and interrupts
+        //     the channel on a NO (Harbinger RE, both runtimes, scratchpad
+        //     agentlogs/apmf-animheal-p1.md). Field 2026-09-28: Harbinger denied MFO's
+        //     proxies FF0011D8 / FF0021AF 48 times with `hand=?` (the instant caster),
+        //     ALL 48 with "ch.8 select DENY" -- they were not on this list. From
+        //     Harbinger fix/apmf-cast-instant-caster (d41ed43) on, the instant caster is
+        //     gated by this ch.8 allow-list ALONE, so listing them is what admits MFO's
+        //     own direct concentration heals. They are MFO's only, never on any actor's
+        //     spell list, so no AI can select one: naming them opens nothing else.
+        //     They are minted at runtime (IFormFactory, one per stream slot, kept for
+        //     the session, re-minted after a load), so every minted slot form is listed
+        //     (at most ConcProxy::kSlotCount = 6, in practice one per party healer); a
+        //     form minted after this lap's publish is listed on the next lap.
         //
         // COMBAT POTIONS are NOT appended to `out`: they go to `a_potions` as
         // candidates, because they are the one part of the list that may be TRIMMED
@@ -259,6 +270,11 @@ namespace MFO::APMFBridge {
         AppendDenyExemptForms(RE::TESForm::LookupByID<RE::Actor>(a_follower), list, potions);
         std::uint32_t potionCount = 0;   // potions KEPT on the list (set below)
 
+        // MFO's own ConcProxy forms (see the block above AppendDenyExemptForms): its
+        // direct concentration heals channel them on the instant caster, which
+        // Harbinger gates by this list. An atomic read, taken before g_mx.
+        for (const auto f : Actuation::ConcProxyForms()) list.push_back(f);
+
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
         // APMF's OWN delivery-flip PROXIES for this follower's live cast claims.
@@ -285,7 +301,7 @@ namespace MFO::APMFBridge {
                 spdlog::error("[cast-select] {:08X}: allow-list needs {} forms WITHOUT any potion, over "
                               "kMaxSpellAllowList {} -- the gate is NOT claimed for this follower (a "
                               "truncated list would DENY the excess and disarm him). {} gambit spell(s) "
-                              "+ the deny-exempt staves/scrolls/powers + live proxies ({} combat "
+                              "+ the deny-exempt staves/scrolls/powers + live proxies + MFO's ConcProxy forms ({} combat "
                               "potion(s) carried, none fit). MFO's cast-time deny still applies, so "
                               "nothing is muted -- but the candidate-refusal gate is INERT for this "
                               "follower until the list fits (see Docs/REVIEW-BACKLOG.md MFO-B65).",

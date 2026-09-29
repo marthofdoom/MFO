@@ -183,6 +183,11 @@ namespace MFO::Actuation {
             struct Slot { RE::SpellItem* form = nullptr; RE::FormID source = 0; RE::FormID owner = 0; };
             constexpr std::size_t kSlotCount = 6;   // concurrent self-delivery conc streams (party healers)
             Slot g_slot[kSlotCount];
+            // The minted forms' FormIDs, readable from ANY thread (feat/mfo-animheal-p0,
+            // 1m(c)): the job worker publishes them on the follower's ch.8 allow-list
+            // (APMFBridge::PublishSpellAllowList) while only the main thread touches
+            // g_slot. Written when a slot's form is created, cleared by Reset.
+            std::atomic<RE::FormID> g_slotFormId[kSlotCount]{};
 
             void Configure(RE::SpellItem* a_p, RE::SpellItem* a_src) {
                 a_p->data          = a_src->data;                                 // castingType/cost/etc.
@@ -208,6 +213,7 @@ namespace MFO::Actuation {
                         auto* f = RE::IFormFactory::GetConcreteFormFactoryByType<RE::SpellItem>();
                         s.form = f ? static_cast<RE::SpellItem*>(f->Create()) : nullptr;
                         if (!s.form) return nullptr;
+                        g_slotFormId[&s - g_slot].store(s.form->GetFormID(), std::memory_order_release);
                     }
                     Configure(s.form, a_src); s.source = sid; s.owner = a_owner;
                     spdlog::info("[cast] proxy slot ACQUIRE owner {:08X} src {:08X} form {:08X}",
@@ -242,6 +248,7 @@ namespace MFO::Actuation {
                     if (s.form) s.form->effects.clear();   // drop borrowed source Effect*
                     s = {};
                 }
+                for (auto& id : g_slotFormId) id.store(0, std::memory_order_release);
             }
         }
 
@@ -396,6 +403,12 @@ namespace MFO::Actuation {
                 auto* inst = a->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                const bool  heal     = SpellHealsHealth(sp);
+                const float hpBefore = Vocab::HealthPct(a);   // [heal-obs]: read BEFORE the cast
+                // READ-BACK (feat/mfo-animheal-p0, 1m(a), principle 7): the apply is
+                // reported as landed only when an effect of it is on the recipient after
+                // the cast. See ApplyTargetEffect for the full reasoning.
+                HealAttach attach = HealAttach::Instant;
                 if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
                     // THE REAL EFFECT with a synthesized duration (marth's
                     // ruling -- see SustainConcentrationEffect): attach once,
@@ -406,16 +419,30 @@ namespace MFO::Actuation {
                     const float window =
                         CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
                             ? kConcHealCap : kConcSelfUtilityCap;
+                    attach = HealAttach::Present;   // the live effect was found and re-armed
                     if (!SustainConcentrationEffect(a, sp, window)) {
                         inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);   // attach ONCE
-                        SustainConcentrationEffect(a, sp, window);                      // then pin it
-                        // Evidence line: ONCE per stream if the engine honors the
-                        // pinned duration; repeating every beat = sustain refused.
-                        spdlog::info("[cast] {:08X} conc effect ATTACHED on self "
-                                     "(spell {:08X}, window {:.0f}s)", a_id, a_spellID, window);
+                        if (SustainConcentrationEffect(a, sp, window)) {               // then pin it
+                            // Evidence line: ONCE per stream if the engine honors the
+                            // pinned duration; repeating every beat = sustain refused.
+                            spdlog::info("[cast] {:08X} conc effect ATTACHED on self "
+                                         "(spell {:08X}, window {:.0f}s)", a_id, a_spellID, window);
+                        } else {
+                            attach = HealAttach::Absent;
+                        }
                     }
                 } else {
                     inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
+                    if (HasDurationEffect(sp))
+                        attach = SpellEffectPresentOn(a, sp) ? HealAttach::Present : HealAttach::Absent;
+                }
+                if (attach == HealAttach::Absent &&
+                    CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense) {
+                    spdlog::warn("[cast] {:08X} {} SELF-CAST {} ({:08X}) -- NOT LANDED: no effect of it on "
+                                 "him after the cast; no magicka spent", a_id, a->GetName() ? a->GetName() : "?",
+                                 sp->GetName() ? sp->GetName() : "?", a_spellID);
+                    if (heal) HealObsNote(a, a, sp, sp, "direct self", hpBefore, attach);
+                    return;
                 }
                 const float cost  = sp->CalculateMagickaCost(a);
                 // #6: clamp to the current pool so a deduct never drives magicka
@@ -431,7 +458,10 @@ namespace MFO::Actuation {
                              a_id, a->GetName() ? a->GetName() : "?",
                              sp->GetName() ? sp->GetName() : "?", a_spellID, before, after, cost,
                              a_chargeSec, spend);
-                if (SpellHealsHealth(sp)) NoteHealLanded(a_id, a_id, a_spellID);   // [bleed] attribution
+                if (heal) {
+                    NoteHealLanded(a_id, a_id, a_spellID);   // [bleed] attribution
+                    HealObsNote(a, a, sp, sp, "direct self", hpBefore, attach);
+                }
             });
         }
 
@@ -497,6 +527,27 @@ namespace MFO::Actuation {
                 auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                const bool  heal     = SpellHealsHealth(sp);
+                const float hpBefore = Vocab::HealthPct(tgt);   // [heal-obs]: read BEFORE the cast
+                // READ-BACK (feat/mfo-animheal-p0, 1m(a), principle 7). "effect applied" /
+                // "conc effect ATTACHED" used to print unconditionally, while Harbinger
+                // refused 48 of MFO's own ConcProxy casts on the instant caster (field
+                // 2026-09-28, `hand=?`). The apply now reports landed only when an effect
+                // OF THE FORM CAST (the spell or its proxy) is on the recipient after the
+                // cast. DECIDABLE ON THIS TICK for a concentration attach and for any spell
+                // with a duration effect: CastSpellImmediate adds the ActiveEffect inside
+                // the call -- field-proven by the pin itself, since the second
+                // SustainConcentrationEffect just below finds and pins the new effect on
+                // this same tick (an unpinned concentration effect has duration 0 and dies
+                // within a frame, so the next beat would re-ATTACH; the 09-28 logs print
+                // ATTACHED once per stream). NOT decidable for an instant fire-and-forget
+                // heal (duration 0: applied and gone inside the call), which keeps its
+                // charge and is answered by the [heal-obs] HP read ~1 s later. A beneficial
+                // apply that did not land spends NO magicka and logs NOT LANDED; an
+                // offensive one keeps its old charge (a resisted hit still costs the
+                // caster) but no longer prints ATTACHED.
+                HealAttach attach = HealAttach::Instant;
+                RE::SpellItem* castForm = sp;
                 if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
                     // FORCED CONCENTRATION = THE REAL EFFECT with a synthesized
                     // duration (marth's ruling -- see SustainConcentrationEffect):
@@ -512,24 +563,45 @@ namespace MFO::Actuation {
                     bool needsProxy = false;
                     RE::SpellItem* castSp = DeliverySpell(sp, caster, tgt, needsProxy);
                     if (needsProxy && !castSp) return;   // proxy slots full / VR -> SKIP
+                    castForm = castSp;
                     const float window =
                         CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
                             ? kConcHealCap : kConcUtilityHold;
+                    attach = HealAttach::Present;   // the live effect was found and re-armed
                     if (!SustainConcentrationEffect(tgt, castSp, window)) {
                         // The KNOWN-WORKING FORCE -- caster casts (proxy of) sp AT tgt.
                         inst->CastSpellImmediate(castSp, false, tgt, 1.0f, false, 0.0f, caster);
-                        SustainConcentrationEffect(tgt, castSp, window);
-                        // Evidence line: ONCE per stream if the engine honors the
-                        // pinned duration; repeating every beat = sustain refused.
-                        spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
-                                     "(spell {:08X}{}, window {:.0f}s)",
-                                     a_casterID, a_targetID, a_spellID,
-                                     castSp != sp ? " self->target proxy" : "", window);
+                        if (SustainConcentrationEffect(tgt, castSp, window)) {
+                            // Evidence line: ONCE per stream if the engine honors the
+                            // pinned duration; repeating every beat = sustain refused.
+                            spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
+                                         "(spell {:08X}{}, window {:.0f}s)",
+                                         a_casterID, a_targetID, a_spellID,
+                                         castSp != sp ? " self->target proxy" : "", window);
+                        } else {
+                            attach = HealAttach::Absent;
+                            spdlog::warn("[cast] {:08X} conc effect NOT ATTACHED on {:08X} (spell {:08X}{}) -- "
+                                         "the cast left no effect of {:08X} on the recipient",
+                                         a_casterID, a_targetID, a_spellID,
+                                         castSp != sp ? " self->target proxy" : "", castSp->GetFormID());
+                        }
                     }
                 } else {
                     // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
                     // (Baseline: an FF Self spell force-cast here lands on tgt.)
                     inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
+                    if (HasDurationEffect(sp))
+                        attach = SpellEffectPresentOn(tgt, sp) ? HealAttach::Present : HealAttach::Absent;
+                }
+                if (attach == HealAttach::Absent &&
+                    CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense) {
+                    spdlog::warn("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X} -- NOT LANDED: no effect of "
+                                 "{:08X} on the recipient after the cast; no magicka spent",
+                                 a_casterID, caster->GetName() ? caster->GetName() : "?",
+                                 sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
+                                 castForm->GetFormID());
+                    if (heal) HealObsNote(caster, tgt, sp, castForm, "direct stream", hpBefore, attach);
+                    return;
                 }
                 // ── CONCENTRATION DOUBLE-CHARGE: OPEN, deliberately UNCHANGED ─────
                 // Concurrency-wave verdict (representative of all three Apply* paths):
@@ -564,7 +636,10 @@ namespace MFO::Actuation {
                              a_casterID, caster->GetName() ? caster->GetName() : "?",
                              sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
                              before, after, cost, a_chargeSec, spend);
-                if (SpellHealsHealth(sp)) NoteHealLanded(a_targetID, a_casterID, a_spellID);   // [bleed]
+                if (heal) {
+                    NoteHealLanded(a_targetID, a_casterID, a_spellID);   // [bleed]
+                    HealObsNote(caster, tgt, sp, castForm, "direct stream", hpBefore, attach);
+                }
             });
         }
 
@@ -984,6 +1059,7 @@ namespace MFO::Actuation {
 
     namespace {
         void ResetCanActState();   // fix/mfo-can-act -- defined with its state at the end of this file
+        void ResetHealObs();       // feat/mfo-animheal-p0 -- likewise
     }
 
     void ClearSelfCasts() {
@@ -1005,6 +1081,7 @@ namespace MFO::Actuation {
             g_summon.clear();
         }
         ResetCanActState();           // fix/mfo-can-act: the [bleed] ledgers
+        ResetHealObs();               // feat/mfo-animheal-p0: [heal-obs] is session-scoped
     }
 
     // F3-7 (deploy-gate review 2026-09-07). Drop ONE follower's APMF-refusal log
@@ -1298,6 +1375,7 @@ namespace MFO::Actuation {
     }
 
     void TargetCastReconcile() {
+        HealObsSweep();   // feat/mfo-animheal-p0: the [heal-obs] follow-ups (cheap when none are due)
         if (g_targetCast.empty()) return;
         const auto now = SelfClock::now();
         // Same release window as SelfCastReconcile: out-wait the worst-case
@@ -1606,6 +1684,151 @@ namespace MFO::Actuation {
                          a_target->GetFormID(), why, dist, reach);
         }
         return true;
+    }
+
+    // ── [heal-obs] + the ConcProxy allow-list forms (feat/mfo-animheal-p0) ─────────
+    namespace {
+        struct HealObs {
+            RE::FormID            caster = 0, target = 0, spell = 0, castForm = 0;
+            const char*           road   = "?";       // a string literal (static storage)
+            float                 hpBefore = 0.0f, dist = 0.0f;
+            Sightline::Verdict    los    = Sightline::Verdict::Unknown;
+            HealAttach            attach = HealAttach::Instant;
+            bool                  conc   = false;
+            bool                  claim  = false;     // MFO held a ch.8b cast claim at the apply
+            SelfClock::time_point at{}, due{};
+        };
+        // Written on the MAIN thread (HealObsNote), drained on the WORKER (HealObsSweep):
+        // a real cross-thread list, so a mutex.
+        std::mutex                                        g_healObsMx;
+        std::vector<HealObs>                              g_healObsPending;
+        std::unordered_map<std::uint64_t, SelfClock::time_point> g_healObsLast;   // rate limit
+        constexpr float kHealObsDelaySec = 1.0f;   // HP / effect re-read ~1 s after the apply
+        constexpr float kHealObsEverySec = 3.0f;   // one observation per (caster, recipient) per 3 s
+
+        void ResetHealObs() {
+            std::lock_guard lk(g_healObsMx);
+            g_healObsPending.clear();
+            g_healObsLast.clear();
+        }
+
+        const char* AttachName(HealAttach a) {
+            switch (a) {
+            case HealAttach::Present: return "present";
+            case HealAttach::Absent:  return "ABSENT";
+            default:                  return "instant";
+            }
+        }
+    }
+
+    void HealObsNote(RE::Actor* a_caster, RE::Actor* a_target, RE::SpellItem* a_spell,
+                     RE::SpellItem* a_castForm, const char* a_road, float a_hpBefore,
+                     HealAttach a_attach) {
+        if (!a_caster || !a_target || !a_spell) return;
+        const auto now = SelfClock::now();
+        const auto key = (static_cast<std::uint64_t>(a_caster->GetFormID()) << 32) | a_target->GetFormID();
+        HealObs o;
+        o.caster   = a_caster->GetFormID();
+        o.target   = a_target->GetFormID();
+        o.spell    = a_spell->GetFormID();
+        o.castForm = a_castForm ? a_castForm->GetFormID() : o.spell;
+        o.road     = a_road ? a_road : "?";
+        o.hpBefore = a_hpBefore;
+        o.dist     = a_caster == a_target ? 0.0f
+                                          : a_caster->GetPosition().GetDistance(a_target->GetPosition());
+        o.los      = a_caster == a_target ? Sightline::Verdict::Visible
+                                          : Sightline::Check(o.caster, o.target);
+        o.attach   = a_attach;
+        o.conc     = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+        o.claim    = APMFBridge::IsHealCastActive(o.caster) || APMFBridge::IsOwnedCastActive(o.caster);
+        o.at       = now;
+        o.due      = now + std::chrono::duration_cast<SelfClock::duration>(
+                               std::chrono::duration<float>(kHealObsDelaySec));
+        std::lock_guard lk(g_healObsMx);
+        auto& last = g_healObsLast[key];
+        if (last.time_since_epoch().count() != 0 &&
+            std::chrono::duration<float>(now - last).count() < kHealObsEverySec)
+            return;
+        last = now;
+        g_healObsPending.push_back(o);
+    }
+
+    void HealObsSweep() {
+        std::vector<HealObs> due;
+        {
+            std::lock_guard lk(g_healObsMx);
+            if (g_healObsPending.empty()) return;
+            const auto now = SelfClock::now();
+            for (auto it = g_healObsPending.begin(); it != g_healObsPending.end();) {
+                if (it->due <= now) { due.push_back(*it); it = g_healObsPending.erase(it); }
+                else ++it;
+            }
+        }
+        for (const auto& o : due) {
+            // WORKER-side registry read (worker-serial, #4): is MFO's own stream for this
+            // (caster, spell, recipient) still registered? A stopped channel on a live
+            // stream is the masked-failure shape; one on a released stream is expected.
+            const char* stream = "none";
+            if (o.conc) {
+                if (o.caster == o.target) {
+                    const auto it = g_selfCast.find(o.caster);
+                    stream = (it != g_selfCast.end() && it->second.spell == o.spell) ? "live" : "released";
+                } else {
+                    stream = TargetStreamLive(o.caster, o.spell, o.target) ? "live" : "released";
+                }
+            }
+            MainThread::Post([o, stream] {
+                auto* caster = RE::TESForm::LookupByID<RE::Actor>(o.caster);
+                auto* target = RE::TESForm::LookupByID<RE::Actor>(o.target);
+                auto* form   = RE::TESForm::LookupByID<RE::MagicItem>(o.castForm);
+                if (!caster || !target) return;
+                const float hpAfter = Vocab::HealthPct(target);
+                const bool  present = form && SpellEffectPresentOn(target, form);
+                // A concentration heal channels on the caster's INSTANT caster. Harbinger's
+                // CheckCast deny there interrupts it on its next cast tick (AE 34407 / SE
+                // 33629, apmf-animheal-p1), so this is the visible face of its verdict.
+                const char* channel = "n/a";
+                int         st      = -1;
+                if (o.conc) {
+                    auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                    st = inst ? static_cast<int>(inst->state.get()) : -1;
+                    channel = (inst && inst->currentSpell && inst->currentSpell->GetFormID() == o.castForm &&
+                               inst->state.get() == RE::MagicCaster::State::kCasting)
+                                  ? "running" : "stopped";
+                }
+                const auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(o.spell);
+                const bool  lasting = o.conc || HasDurationEffect(spell);
+                // LOUD when the apply was logged as landed but the recipient carries no
+                // effect of it now, or a live stream's channel is not running.
+                const bool gone = lasting && !present && (!o.conc || std::string_view(stream) == "live");
+                const bool cut  = o.conc && std::string_view(stream) == "live" &&
+                                  std::string_view(channel) == "stopped";
+                const auto line = std::format(
+                    "[heal-obs] {:08X} -> {:08X} {} ({:08X}{}) road={} dist={:.0f} LoS={} hp {:.0f}% -> "
+                    "{:.0f}% after {:.1f}s | effect at apply={} now={} | channel={} (state {}) stream={} | "
+                    "MFO ch.8b claim at apply={}",
+                    o.caster, o.target, spell && spell->GetName() ? spell->GetName() : "?", o.spell,
+                    o.castForm != o.spell ? std::format(" via {:08X}", o.castForm) : std::string{},
+                    o.road, o.dist, Sightline::VerdictName(o.los), o.hpBefore * 100.0f, hpAfter * 100.0f,
+                    std::chrono::duration<float>(SelfClock::now() - o.at).count(),
+                    AttachName(o.attach), lasting ? (present ? "present" : "ABSENT") : "instant",
+                    channel, st, stream, o.claim ? "yes" : "no");
+                if (gone || cut)
+                    spdlog::warn("{} *** HEAL NOT LANDING: {} ***", line,
+                                 gone ? "logged as applied, but the recipient carries no effect of it"
+                                      : "the stream is live but its channel is not running (a CheckCast "
+                                        "deny on the instant caster interrupts it)");
+                else
+                    spdlog::info("{}", line);
+            });
+        }
+    }
+
+    std::vector<RE::FormID> ConcProxyForms() {
+        std::vector<RE::FormID> out;
+        for (const auto& id : ConcProxy::g_slotFormId)
+            if (const auto f = id.load(std::memory_order_acquire); f != 0) out.push_back(f);
+        return out;
     }
 
 }

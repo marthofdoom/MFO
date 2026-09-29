@@ -295,6 +295,30 @@ namespace MFO::Actuation {
     // CastAuto's heal gate makes (SpellHealsHealth), public for logistics.
     bool HealsHealth(RE::SpellItem* a_spell);
 
+    // ── [heal-obs] (feat/mfo-animheal-p0, phase 0a) ─────────────────────────────
+    // A passive, rate-limited observation of ONE heal apply, so "denied but logged as
+    // applied" cannot hide (principle 7). Called on the MAIN thread by every direct
+    // heal apply right after its CastSpellImmediate: it records the road, caster,
+    // recipient, distance, the Sightline verdict, the recipient's HP BEFORE the cast
+    // (a_hpBefore, read by the caller before casting), whether the effect was present
+    // right after the cast (a_attach), and whether MFO held a ch.8b cast claim on the
+    // caster (Harbinger's pre-d41ed43 actor-wide fallback). About 1 s later the worker
+    // sweep (HealObsSweep) posts a main-thread read of the recipient's HP, whether the
+    // effect is STILL present, and -- for a concentration stream -- whether the
+    // caster's instant channel is still running, then logs ONE line. At most one
+    // observation per (caster, recipient) every 3 s. No behaviour change.
+    enum class HealAttach : std::uint8_t { Present, Absent, Instant };
+    void HealObsNote(RE::Actor* a_caster, RE::Actor* a_target, RE::SpellItem* a_spell,
+                     RE::SpellItem* a_castForm, const char* a_road, float a_hpBefore,
+                     HealAttach a_attach);
+
+    // MFO's own ConcProxy forms (the delivery-flipped 0xFF copies, minted at runtime,
+    // kept for the session, re-minted after a load): every one minted so far. ANY
+    // thread (an atomic mirror). Published on the follower's ch.8 allow-list so
+    // Harbinger's instant-caster gate admits MFO's own direct concentration heals
+    // (feat/mfo-animheal-p0, 1m(c)).
+    std::vector<RE::FormID> ConcProxyForms();
+
     // Per-tick reconcile for the forced self-cast channels: RELEASES a channel
     // when its rule goes stale (or the follower unloads) by dispelling any
     // lingering ward/buff effect so it cannot persist as a stuck gameplay effect.

@@ -95,6 +95,13 @@ namespace MFO::Actuation {
                 auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                const bool  heal     = !a_hostile && SpellHealsHealth(sp);
+                const float hpBefore = Vocab::HealthPct(target);   // [heal-obs]: read BEFORE the cast
+                // READ-BACK (feat/mfo-animheal-p0, 1m(a)): the same rule as
+                // ApplyTargetEffect (cast/Direct.cpp) -- landed only when an effect of the
+                // spell is on the recipient after the cast; decidable on this tick for a
+                // concentration attach and any duration effect, not for an instant heal.
+                HealAttach attach = HealAttach::Instant;
                 if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
                     // FORCED CONCENTRATION under AUTO: ONE sustained REAL effect per
                     // fanned target (the 6s/4s window bridges the fCastCooldown re-fan).
@@ -109,15 +116,29 @@ namespace MFO::Actuation {
                     const float window =
                         CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal
                             ? kConcHealCap : kConcUtilityHold;
+                    attach = HealAttach::Present;   // the live effect was found and re-armed
                     if (!SustainConcentrationEffect(target, sp, window)) {
                         inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
-                        SustainConcentrationEffect(target, sp, window);
-                        spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
-                                     "(AUTO, spell {:08X}, window {:.0f}s)",
-                                     a_casterID, a_targetID, a_spellID, window);
+                        if (SustainConcentrationEffect(target, sp, window)) {
+                            spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
+                                         "(AUTO, spell {:08X}, window {:.0f}s)",
+                                         a_casterID, a_targetID, a_spellID, window);
+                        } else {
+                            attach = HealAttach::Absent;
+                        }
                     }
                 } else {
                     inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
+                    if (HasDurationEffect(sp))
+                        attach = SpellEffectPresentOn(target, sp) ? HealAttach::Present : HealAttach::Absent;
+                }
+                if (attach == HealAttach::Absent && !a_hostile) {
+                    spdlog::warn("[cast] {:08X} {} AUTO BENEFICIAL {} ({:08X}) -> {:08X} -- NOT LANDED: no "
+                                 "effect of it on the recipient after the cast; no magicka spent",
+                                 a_casterID, caster->GetName() ? caster->GetName() : "?",
+                                 sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID);
+                    if (heal) HealObsNote(caster, target, sp, sp, "AUTO", hpBefore, attach);
+                    return;
                 }
                 const float cost  = sp->CalculateMagickaCost(caster);
                 // #6: clamp to the current pool so a deduct never drives magicka
@@ -133,7 +154,10 @@ namespace MFO::Actuation {
                              a_hostile ? "HOSTILE" : "BENEFICIAL",
                              sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
                              before, after, cost);
-                if (!a_hostile && SpellHealsHealth(sp)) NoteHealLanded(a_targetID, a_casterID, a_spellID);   // [bleed]
+                if (heal) {
+                    NoteHealLanded(a_targetID, a_casterID, a_spellID);   // [bleed]
+                    HealObsNote(caster, target, sp, sp, "AUTO", hpBefore, attach);
+                }
             });
         }
 
