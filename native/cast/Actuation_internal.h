@@ -517,6 +517,25 @@ namespace MFO::Actuation {
                 if (eff && eff->effectItem.duration > 0) return true;
             return false;
         }
+        // Does a cast of a_form put its ActiveEffect on the recipient INSIDE the
+        // CastSpellImmediate call, so the read-back may decide on the apply tick?
+        // Only kSelf and kTargetActor (fix of the 22d735d review, SEV-2). An Aimed or
+        // TargetLocation spell LAUNCHES A PROJECTILE and its effect arrives frames
+        // later; kTouch is unproven either way. Those are undecidable now: they keep
+        // their charge and the [heal-obs] read ~1 s later answers them.
+        inline bool DeliveryAppliesInCall(const RE::MagicItem* a_form) {
+            if (!a_form) return false;
+            const auto d = a_form->GetDelivery();
+            return d == RE::MagicSystem::Delivery::kSelf ||
+                   d == RE::MagicSystem::Delivery::kTargetActor;
+        }
+        // Rate limit for the read-back warns (NOT LANDED / NOT ATTACHED): true when that
+        // warn for (caster, spell) may print now, at most once per 5 s per line kind;
+        // a_suppressed gets how many were held back since the last print. MAIN THREAD
+        // (the apply lambdas); cast/Direct.cpp, cleared with [heal-obs] on load.
+        enum class ReadbackWarn : std::uint8_t { NotLanded, NotAttached };
+        bool ReadbackWarnDue(RE::FormID a_caster, RE::FormID a_spell, ReadbackWarn a_kind,
+                             std::uint32_t& a_suppressed);
         // The [heal-obs] follow-up sweep (cast/Direct.cpp). WORKER, called from
         // TargetCastReconcile every pump tick.
         void HealObsSweep();

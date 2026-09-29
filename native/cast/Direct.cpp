@@ -14,6 +14,8 @@
                             // above is HEAL-ONLY by design, so offense/buff concentration needs
                             // its OWN direct claim call here rather than a widened Try() gate.
 #include <unordered_set>    // fix/mfo-can-act: NoteRefusedApply's once-per-down latch
+#include <map>            // feat/mfo-animheal-p0 fix: ReadbackWarnDue gate (tuple key)
+#include <tuple>
 
 namespace MFO::Actuation {
 
@@ -428,19 +430,23 @@ namespace MFO::Actuation {
                             spdlog::info("[cast] {:08X} conc effect ATTACHED on self "
                                          "(spell {:08X}, window {:.0f}s)", a_id, a_spellID, window);
                         } else {
-                            attach = HealAttach::Absent;
+                            // Only a delivery that applies inside the call is decidable
+                            // now (DeliveryAppliesInCall); any other keeps its charge.
+                            attach = DeliveryAppliesInCall(sp) ? HealAttach::Absent : HealAttach::Instant;
                         }
                     }
                 } else {
                     inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
-                    if (HasDurationEffect(sp))
+                    if (HasDurationEffect(sp) && DeliveryAppliesInCall(sp))
                         attach = SpellEffectPresentOn(a, sp) ? HealAttach::Present : HealAttach::Absent;
                 }
                 if (attach == HealAttach::Absent &&
                     CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense) {
-                    spdlog::warn("[cast] {:08X} {} SELF-CAST {} ({:08X}) -- NOT LANDED: no effect of it on "
-                                 "him after the cast; no magicka spent", a_id, a->GetName() ? a->GetName() : "?",
-                                 sp->GetName() ? sp->GetName() : "?", a_spellID);
+                    if (std::uint32_t held = 0; ReadbackWarnDue(a_id, a_spellID, ReadbackWarn::NotLanded, held))
+                        spdlog::warn("[cast] {:08X} {} SELF-CAST {} ({:08X}) -- NOT LANDED: no effect of it on "
+                                     "him after the cast; no magicka spent (+{} held in 5s)", a_id,
+                                     a->GetName() ? a->GetName() : "?",
+                                     sp->GetName() ? sp->GetName() : "?", a_spellID, held);
                     if (heal) HealObsNote(a, a, sp, sp, "direct self", hpBefore, attach);
                     return;
                 }
@@ -534,13 +540,20 @@ namespace MFO::Actuation {
                 // refused 48 of MFO's own ConcProxy casts on the instant caster (field
                 // 2026-09-28, `hand=?`). The apply now reports landed only when an effect
                 // OF THE FORM CAST (the spell or its proxy) is on the recipient after the
-                // cast. DECIDABLE ON THIS TICK for a concentration attach and for any spell
-                // with a duration effect: CastSpellImmediate adds the ActiveEffect inside
-                // the call -- field-proven by the pin itself, since the second
-                // SustainConcentrationEffect just below finds and pins the new effect on
-                // this same tick (an unpinned concentration effect has duration 0 and dies
-                // within a frame, so the next beat would re-ATTACH; the 09-28 logs print
-                // ATTACHED once per stream). NOT decidable for an instant fire-and-forget
+                // cast. Decided ON THIS TICK only when the form cast has a kSelf or
+                // kTargetActor delivery (DeliveryAppliesInCall): an Aimed/TargetLocation
+                // spell launches a projectile whose effect arrives frames later, so it is
+                // undecidable now, keeps its charge and [heal-obs] answers it. Within
+                // those deliveries: a spell with a duration effect is read back directly.
+                // The CONCENTRATION attach relies on the second SustainConcentrationEffect
+                // finding the new effect on this same tick -- that premise is UNPROVEN
+                // (review of 22d735d, SEV-3): the 09-28 "ATTACHED once per stream" lines
+                // printed unconditionally then, and a channel CastSpellImmediate leaves
+                // running on the instant caster keeps its effect alive either way. Its
+                // FALSIFIER is in Docs/STATUS.md's field plan: `conc effect NOT ATTACHED`
+                // followed ~1 s later by [heal-obs] `effect at apply=ABSENT now=present`
+                // with `channel=running` means the effect arrives after the call, not
+                // inside it. NOT decidable for an instant fire-and-forget
                 // heal (duration 0: applied and gone inside the call), which keeps its
                 // charge and is answered by the [heal-obs] HP read ~1 s later. A beneficial
                 // apply that did not land spends NO magicka and logs NOT LANDED; an
@@ -578,28 +591,37 @@ namespace MFO::Actuation {
                                          "(spell {:08X}{}, window {:.0f}s)",
                                          a_casterID, a_targetID, a_spellID,
                                          castSp != sp ? " self->target proxy" : "", window);
+                        } else if (!DeliveryAppliesInCall(castSp)) {
+                            // A projectile delivery lands frames later: undecidable
+                            // now, keep the charge, [heal-obs] answers it.
+                            attach = HealAttach::Instant;
                         } else {
                             attach = HealAttach::Absent;
-                            spdlog::warn("[cast] {:08X} conc effect NOT ATTACHED on {:08X} (spell {:08X}{}) -- "
-                                         "the cast left no effect of {:08X} on the recipient",
-                                         a_casterID, a_targetID, a_spellID,
-                                         castSp != sp ? " self->target proxy" : "", castSp->GetFormID());
+                            if (std::uint32_t held = 0; ReadbackWarnDue(a_casterID, castSp->GetFormID(),
+                                                                    ReadbackWarn::NotAttached, held))
+                                spdlog::warn("[cast] {:08X} conc effect NOT ATTACHED on {:08X} (spell {:08X}{}) -- "
+                                             "the cast left no effect of {:08X} on the recipient (+{} held in 5s)",
+                                             a_casterID, a_targetID, a_spellID,
+                                             castSp != sp ? " self->target proxy" : "", castSp->GetFormID(),
+                                             held);
                         }
                     }
                 } else {
                     // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
                     // (Baseline: an FF Self spell force-cast here lands on tgt.)
                     inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
-                    if (HasDurationEffect(sp))
+                    if (HasDurationEffect(sp) && DeliveryAppliesInCall(sp))
                         attach = SpellEffectPresentOn(tgt, sp) ? HealAttach::Present : HealAttach::Absent;
                 }
                 if (attach == HealAttach::Absent &&
                     CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense) {
-                    spdlog::warn("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X} -- NOT LANDED: no effect of "
-                                 "{:08X} on the recipient after the cast; no magicka spent",
-                                 a_casterID, caster->GetName() ? caster->GetName() : "?",
-                                 sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
-                                 castForm->GetFormID());
+                    if (std::uint32_t held = 0; ReadbackWarnDue(a_casterID, castForm->GetFormID(),
+                                                                ReadbackWarn::NotLanded, held))
+                        spdlog::warn("[cast] {:08X} {} FORCE-CAST {} ({:08X}) at {:08X} -- NOT LANDED: no effect of "
+                                     "{:08X} on the recipient after the cast; no magicka spent (+{} held in 5s)",
+                                     a_casterID, caster->GetName() ? caster->GetName() : "?",
+                                     sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
+                                     castForm->GetFormID(), held);
                     if (heal) HealObsNote(caster, tgt, sp, castForm, "direct stream", hpBefore, attach);
                     return;
                 }
@@ -1705,11 +1727,18 @@ namespace MFO::Actuation {
         std::unordered_map<std::uint64_t, SelfClock::time_point> g_healObsLast;   // rate limit
         constexpr float kHealObsDelaySec = 1.0f;   // HP / effect re-read ~1 s after the apply
         constexpr float kHealObsEverySec = 3.0f;   // one observation per (caster, recipient) per 3 s
+        // Read-back warn rate limit (ReadbackWarnDue): per (caster, spell), last print +
+        // how many were held back since. Written on main; cleared by ResetHealObs, so
+        // it shares g_healObsMx (a leaf lock, nothing is taken inside it).
+        struct WarnGate { SelfClock::time_point last{}; std::uint32_t held = 0; };
+        std::map<std::tuple<RE::FormID, RE::FormID, ReadbackWarn>, WarnGate> g_readbackWarn;
+        constexpr float kReadbackWarnEverySec = 5.0f;
 
         void ResetHealObs() {
             std::lock_guard lk(g_healObsMx);
             g_healObsPending.clear();
             g_healObsLast.clear();
+            g_readbackWarn.clear();
         }
 
         const char* AttachName(HealAttach a) {
@@ -1719,6 +1748,22 @@ namespace MFO::Actuation {
             default:                  return "instant";
             }
         }
+    }
+
+    bool ReadbackWarnDue(RE::FormID a_caster, RE::FormID a_spell, ReadbackWarn a_kind,
+                         std::uint32_t& a_suppressed) {
+        const auto now = SelfClock::now();
+        std::lock_guard lk(g_healObsMx);
+        auto& g = g_readbackWarn[{ a_caster, a_spell, a_kind }];
+        if (g.last.time_since_epoch().count() != 0 &&
+            std::chrono::duration<float>(now - g.last).count() < kReadbackWarnEverySec) {
+            ++g.held;
+            return false;
+        }
+        a_suppressed = g.held;
+        g.held = 0;
+        g.last = now;
+        return true;
     }
 
     void HealObsNote(RE::Actor* a_caster, RE::Actor* a_target, RE::SpellItem* a_spell,

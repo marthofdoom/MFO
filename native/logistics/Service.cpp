@@ -1834,8 +1834,11 @@ namespace MFO::Logistics {
                             start = choice.ruleIndex + 1; continue;
                         }
                     }
+                    // onMain: false on the VR inline fallback below, where doCast runs on
+                    // the WORKER -- [heal-obs] (GetPosition, main-thread reads) is skipped there.
+                    const bool onMain = MainThread::IsInstalled();
                     auto doCast = [casterID = id, tgtID = tgt->GetFormID(),
-                                   spID = sp->GetFormID()] {
+                                   spID = sp->GetFormID(), onMain] {
                         auto* f = RE::TESForm::LookupByID<RE::Actor>(casterID);
                         auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
                         auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
@@ -1863,14 +1866,15 @@ namespace MFO::Logistics {
                             Actuation::NoteHealLanded(tgtID, casterID, spID);   // [bleed]
                             // An OOC fire-and-forget heal: no read-back here (it prints no
                             // "applied" line), the [heal-obs] HP read ~1 s later answers it.
-                            Actuation::HealObsNote(f, t, s, s, "OOC FF", hpBefore,
-                                                   Actuation::HealAttach::Instant);
+                            if (onMain)
+                                Actuation::HealObsNote(f, t, s, s, "OOC FF", hpBefore,
+                                                       Actuation::HealAttach::Instant);
                         }
                     };
                     // VR has no pump (Post is a documented no-op there): fall back
                     // to the old inline call rather than silently casting nothing.
-                    if (MainThread::IsInstalled()) MainThread::Post(doCast);
-                    else                           doCast();
+                    if (onMain) MainThread::Post(doCast);
+                    else        doCast();
                     acted = true;   // optimistic, same as the posted self/target applies
                 } else {
                     // FF HOSTILE at a FOE -> the animated alias-0 foe package. For a

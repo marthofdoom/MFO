@@ -100,7 +100,8 @@ namespace MFO::Actuation {
                 // READ-BACK (feat/mfo-animheal-p0, 1m(a)): the same rule as
                 // ApplyTargetEffect (cast/Direct.cpp) -- landed only when an effect of the
                 // spell is on the recipient after the cast; decidable on this tick for a
-                // concentration attach and any duration effect, not for an instant heal.
+                // concentration attach and any duration effect, not for an instant heal,
+                // and only for a kSelf / kTargetActor delivery (DeliveryAppliesInCall).
                 HealAttach attach = HealAttach::Instant;
                 if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
                     // FORCED CONCENTRATION under AUTO: ONE sustained REAL effect per
@@ -124,19 +125,22 @@ namespace MFO::Actuation {
                                          "(AUTO, spell {:08X}, window {:.0f}s)",
                                          a_casterID, a_targetID, a_spellID, window);
                         } else {
-                            attach = HealAttach::Absent;
+                            // Only a delivery that applies inside the call is decidable
+                            // now (DeliveryAppliesInCall); any other keeps its charge.
+                            attach = DeliveryAppliesInCall(sp) ? HealAttach::Absent : HealAttach::Instant;
                         }
                     }
                 } else {
                     inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
-                    if (HasDurationEffect(sp))
+                    if (HasDurationEffect(sp) && DeliveryAppliesInCall(sp))
                         attach = SpellEffectPresentOn(target, sp) ? HealAttach::Present : HealAttach::Absent;
                 }
                 if (attach == HealAttach::Absent && !a_hostile) {
-                    spdlog::warn("[cast] {:08X} {} AUTO BENEFICIAL {} ({:08X}) -> {:08X} -- NOT LANDED: no "
-                                 "effect of it on the recipient after the cast; no magicka spent",
-                                 a_casterID, caster->GetName() ? caster->GetName() : "?",
-                                 sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID);
+                    if (std::uint32_t held = 0; ReadbackWarnDue(a_casterID, a_spellID, ReadbackWarn::NotLanded, held))
+                        spdlog::warn("[cast] {:08X} {} AUTO BENEFICIAL {} ({:08X}) -> {:08X} -- NOT LANDED: no "
+                                     "effect of it on the recipient after the cast; no magicka spent (+{} held in 5s)",
+                                     a_casterID, caster->GetName() ? caster->GetName() : "?",
+                                     sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID, held);
                     if (heal) HealObsNote(caster, target, sp, sp, "AUTO", hpBefore, attach);
                     return;
                 }
