@@ -550,6 +550,19 @@ namespace MFO::Scheduler {
                                  "absent / older than v16 / the claim ended): nothing holds him",
                                  a_id, wn, CombatSense::ReachText(scan.worstRead), scan.unreachable);
                 }
+                // Review U2: a pin / latch made BEFORE the flyer took off is not released by
+                // the gates (they only stop NEW latches). On the hold's entry edge, clear it
+                // when it names a foe airborne out of his reach, through the one existing
+                // release road (Targeting::Clear: the ch.20 pin on either route + the latch).
+                if (auto cur = Targeting::Current(a_id).get(); cur) {
+                    CombatSense::ReachRead crr;
+                    if (CombatSense::OutOfMeleeReach(a_f, cur.get(), 0.0f, &crr)) {
+                        Targeting::Clear(a_id);
+                        spdlog::info("[reach] {:08X}: target pin on '{}' cleared (flying, {}) -- he holds, "
+                                     "not latched on a foe he cannot reach",
+                                     a_id, cur->GetName() ? cur->GetName() : "?", CombatSense::ReachText(crr));
+                    }
+                }
             } else {
                 g_reachHold.erase(a_id);
                 const char* why = !meleeOnly            ? "no longer melee-only"
@@ -589,6 +602,9 @@ namespace MFO::Scheduler {
     double        LastTickMs()       { return g_lastTickMs.load(); }
     std::uint32_t TicksThisSession() { return g_ticks.load(); }
     double        ServiceClock()     { return g_serviceClock; }   // worker-only (#4), like its writer
+    float ReachHoldSlack(RE::FormID a_follower) {                 // worker-only (#4), like g_reachHold
+        return g_reachHold.contains(a_follower) ? -CombatSense::kReachHoldBand : 0.0f;
+    }
 
     void Tick() {
         const auto now = std::chrono::steady_clock::now();

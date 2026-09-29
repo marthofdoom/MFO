@@ -108,9 +108,8 @@ namespace MFO::CombatSense {
     //    foe BELOW (he stands on a ledge over it) is out of reach when its top is more than
     //    `reach` under his feet: -dz > foeHeight + reach. `reach` = Config::g_meleeReach
     //    (fMeleeReach, 200 u) -- the SAME number the power-attack gate calls "adjacent"
-    //    (cast/Fire.cpp). Heights = Actor::GetHeight() (the live capsule height the
-    //    Sightline samples read, Sightline.cpp CustomRayConfirmsOcclusion), with the same
-    //    nominal-humanoid fallback (120) on a nonsense read. A human follower (~128) gets
+    //    (cast/Fire.cpp). Heights = BodyHeight below (field reads only, never the
+    //    engine's bound virtuals), with the nominal-humanoid fallback (120) Sightline uses. A human follower (~128) gets
     //    a line ~330 u over his feet: a dragon hovering low enough to be hit is in reach,
     //    one circling overhead is not.
     //  * Horizontal distance is deliberately NOT part of it: running closes that.
@@ -134,19 +133,27 @@ namespace MFO::CombatSense {
         }
     }
 
-    // Actor::GetHeight()'s arithmetic WITHOUT its write: CommonLib's GetHeight stores the
-    // value into the high process's cachedActorHeight when that is still 0, and this runs
-    // on the job worker, so read the cache when it is set and otherwise compute the same
-    // bounds x base-height product without storing it.
+    // Body height from FIELD READS ONLY -- no engine call, safe on the job worker and
+    // inside the combat group's read lock. NOT Actor::GetHeight(): its bound virtuals
+    // (Actor vtable 0x73 / 0x74, 1.6.1170 0x14065EF30 / 0x14065F010) walk currentProcess
+    // and WRITE process-global statics (0x1431994F0..F8) before copying out, which races
+    // the main thread (review U1 on 0f9ac10); CommonLib's GetHeight also writes the cache.
+    //   1. the high process's cachedActorHeight when the engine has set it
+    //      (AIProcess::GetCachedHeight / InHighProcess: member reads of high / processLevel);
+    //   2. else the base form's OBND z-extent (TESBoundObject::boundData, static record
+    //      data) x TESObjectREFR::GetBaseHeight (refScale x the NPC's race height: member
+    //      reads, fork src/RE/T/TESObjectREFR.cpp:135, TESNPC.cpp:125);
+    //   3. else kNominalBodyHeight (an NPC_ record whose OBND is zero).
     inline float BodyHeight(RE::Actor* a_actor) {
         if (!a_actor) return kNominalBodyHeight;
         float h = 0.0f;
         if (auto* proc = a_actor->GetActorRuntimeData().currentProcess; proc && proc->InHighProcess())
             h = proc->GetCachedHeight();
         if (!(std::isfinite(h) && h > 1.0f)) {
-            const auto mn = a_actor->GetBoundMin();
-            const auto mx = a_actor->GetBoundMax();
-            h = a_actor->GetBaseHeight() * (mx.z - mn.z);
+            if (const auto* base = a_actor->GetObjectReference()) {
+                const auto& bd = base->boundData;
+                h = static_cast<float>(bd.boundMax.z - bd.boundMin.z) * a_actor->GetBaseHeight();
+            }
         }
         return (std::isfinite(h) && h > 1.0f) ? h : kNominalBodyHeight;
     }

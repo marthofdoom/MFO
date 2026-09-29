@@ -10,6 +10,7 @@
 #include "Sightline.h"   // LoS preference in PickFoe (worker-safe cached read)
 #include "CombatSense.h" // OutOfMeleeReach -- the melee-only reach gate (fix/mfo-unreachable-flyer)
 #include "cast/Actuation.h" // MeleeOnly -- has MFO declared him melee, with nothing ranged in hand
+#include "Scheduler.h"   // ReachHoldSlack -- the reach hold's hysteresis line (review U3)
 
 namespace MFO::Eval {
 
@@ -204,8 +205,11 @@ namespace MFO::Eval {
         // that is airborne out of his melee reach (CombatSense::OutOfMeleeReach) is not a
         // candidate: he picks a reachable foe if there is one, and the target pin follows
         // that choice. Other actions (casts, equips, drinks) are never gated.
+        // a_reachSlack = Scheduler::ReachHoldSlack (-64 u while the reach hold holds him),
+        // so the picker reads the SAME line as the ch.23 hold and Fire (review U3).
         RE::ActorHandle PickFoe(RE::Actor* a_self, RE::Actor* a_player,
-                                const std::string& a_op, float a_param, bool a_reachGate) {
+                                const std::string& a_op, float a_param, bool a_reachGate,
+                                float a_reachSlack) {
             RE::ActorHandle best;
             if (!a_self) return best;
 
@@ -246,7 +250,7 @@ namespace MFO::Eval {
                 if (!tgt->IsHostileToActor(a_self)) return best;   // don't act in a brawl
                 if (a_reachGate) {
                     CombatSense::ReachRead rr;
-                    if (CombatSense::OutOfMeleeReach(a_self, tgt, 0.0f, &rr)) {
+                    if (CombatSense::OutOfMeleeReach(a_self, tgt, a_reachSlack, &rr)) {
                         LogReachSkip(a_self, tgt->GetHandle(), rr, {});
                         return best;
                     }
@@ -414,7 +418,7 @@ namespace MFO::Eval {
                     // rule would otherwise have chosen.
                     if (a_reachGate) {
                         CombatSense::ReachRead rr;
-                        if (CombatSense::OutOfMeleeReach(a_self, foe, 0.0f, &rr, selfHeight)) {
+                        if (CombatSense::OutOfMeleeReach(a_self, foe, a_reachSlack, &rr, selfHeight)) {
                             if (!reachSkipped) { reachSkipped = t.targetHandle; reachSkippedRead = rr; }
                             continue;
                         }
@@ -593,7 +597,8 @@ namespace MFO::Eval {
                                    g.actionOpcode == Vocab::kActPowerAttack;
                 if (swing && meleeOnly < 0) meleeOnly = Actuation::MeleeOnly(a_follower) ? 1 : 0;
                 chosen = PickFoe(a_follower, player, g.conditionOpcode, g.conditionParam,
-                                 swing && meleeOnly == 1);
+                                 swing && meleeOnly == 1,
+                                 Scheduler::ReachHoldSlack(a_follower->GetFormID()));
                 if (!chosen) continue;
             } else if (IsAllySelector(g.conditionOpcode)) {
                 // Same shape, ally side: true iff a wounded teammate is found,

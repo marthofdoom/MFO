@@ -4,6 +4,7 @@
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
 #include "Runtime.h"      // CastPathsVerified(): the ONE exact-version gate the cast paths share
+#include "Scheduler.h"    // ReachHoldSlack -- the reach gates read the hold's line (review U3)
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
@@ -205,7 +206,8 @@ namespace MFO::Actuation {
             // nothing. TRANSPARENT: the scan falls to the rules below (the power-attack
             // gate's no-melee-weapon shape).
             if (CombatSense::ReachRead rr; MeleeOnly(a_follower) &&
-                                           CombatSense::OutOfMeleeReach(a_follower, foe, 0.0f, &rr))
+                                           CombatSense::OutOfMeleeReach(a_follower, foe,
+                                               Scheduler::ReachHoldSlack(a_follower->GetFormID()), &rr))
                 return { Result::FailedSkill, UnreachableReason(foe, rr), true };
 
             // A commanded Attack directive gets the SAME APMF combat-target arbitration
@@ -382,7 +384,8 @@ namespace MFO::Actuation {
             // REACH GATE (fix/mfo-unreachable-flyer), the Attack verb's: no CLOSE on a foe
             // airborne out of a melee-only follower's reach. Before any latch, transparent.
             if (CombatSense::ReachRead rr; MeleeOnly(a_follower) &&
-                                           CombatSense::OutOfMeleeReach(a_follower, foe, 0.0f, &rr))
+                                           CombatSense::OutOfMeleeReach(a_follower, foe,
+                                               Scheduler::ReachHoldSlack(a_follower->GetFormID()), &rr))
                 return { Result::FailedSkill, UnreachableReason(foe, rr), true };
 
             // RANGE GATE. GetDistance is a pure read of already-loaded actor data
