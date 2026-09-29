@@ -8,6 +8,8 @@
 #include "Config.h"      // g_sharedRadius -- "ally" locality
 #include "Confidence.h"  // ChaseRadius -- the combat chase cap (#22)
 #include "Sightline.h"   // LoS preference in PickFoe (worker-safe cached read)
+#include "CombatSense.h" // OutOfMeleeReach -- the melee-only reach gate (fix/mfo-unreachable-flyer)
+#include "cast/Actuation.h" // MeleeOnly -- has MFO declared him melee, with nothing ranged in hand
 
 namespace MFO::Eval {
 
@@ -162,6 +164,30 @@ namespace MFO::Eval {
                          a_self->GetFormID(), a_count, a_foe);
         }
 
+        // [reach] THE MELEE-ONLY SKIP (fix/mfo-unreachable-flyer): a foe the reach gate
+        // took out of this rule's candidates. Throttled per follower (5 s, the brawl /
+        // LoS lines' cadence), called OUTSIDE the combat-group lock. a_picked = the foe
+        // the rule chose instead (empty = none in reach for this rule).
+        void LogReachSkip(RE::Actor* a_self, RE::ActorHandle a_foe, const CombatSense::ReachRead& a_rr,
+                          RE::ActorHandle a_picked) {
+            static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_next;
+            const auto now = std::chrono::steady_clock::now();
+            auto& nxt = s_next[a_self->GetFormID()];
+            if (nxt.time_since_epoch().count() != 0 && now < nxt) return;
+            nxt = now + std::chrono::seconds(5);
+            auto fp = a_foe.get();
+            auto pp = a_picked.get();
+            const char* fn = (fp && fp->GetName()) ? fp->GetName() : "?";
+            if (pp) {
+                spdlog::info("[reach] {:08X}: '{}' unreachable (flying, {}) -- skipped, attacking '{}' instead",
+                             a_self->GetFormID(), fn, CombatSense::ReachText(a_rr),
+                             pp->GetName() ? pp->GetName() : "?");
+            } else {
+                spdlog::info("[reach] {:08X}: '{}' unreachable (flying, {}) -- skipped, no foe in reach "
+                             "for this rule", a_self->GetFormID(), fn, CombatSense::ReachText(a_rr));
+            }
+        }
+
         // Pick a foe from the follower's OWN COMBAT GROUP.
         //
         // Not a world sweep. The engine already tracks who is in this fight, so
@@ -172,8 +198,14 @@ namespace MFO::Eval {
         //
         // Returns an empty handle when there is no candidate, which reads as
         // "condition false" and the rule falls through.
+        //
+        // a_reachGate (fix/mfo-unreachable-flyer): the rule's action is a SWING (Attack /
+        // Power attack) and the follower is MELEE-ONLY (Actuation::MeleeOnly), so a foe
+        // that is airborne out of his melee reach (CombatSense::OutOfMeleeReach) is not a
+        // candidate: he picks a reachable foe if there is one, and the target pin follows
+        // that choice. Other actions (casts, equips, drinks) are never gated.
         RE::ActorHandle PickFoe(RE::Actor* a_self, RE::Actor* a_player,
-                                const std::string& a_op, float a_param) {
+                                const std::string& a_op, float a_param, bool a_reachGate) {
             RE::ActorHandle best;
             if (!a_self) return best;
 
@@ -212,6 +244,13 @@ namespace MFO::Eval {
                     if (!trackable) return best;
                 }
                 if (!tgt->IsHostileToActor(a_self)) return best;   // don't act in a brawl
+                if (a_reachGate) {
+                    CombatSense::ReachRead rr;
+                    if (CombatSense::OutOfMeleeReach(a_self, tgt, 0.0f, &rr)) {
+                        LogReachSkip(a_self, tgt->GetHandle(), rr, {});
+                        return best;
+                    }
+                }
                 const float d  = a_self->GetPosition().GetDistance(tgt->GetPosition());
                 const bool  ok = (a_op == Vocab::kCondFoeWithinRange) ? (d <= a_param)
                                                                       : (d > a_param);
@@ -256,6 +295,10 @@ namespace MFO::Eval {
             // out removes the nesting entirely -- and the cap is per-follower, not
             // per-candidate, so this is also strictly less work.
             const float chaseCap = Confidence::ChaseRadius(a_self);
+            // The reach gate's own height read, once and before the lock (pure reads).
+            const float selfHeight = a_reachGate ? CombatSense::BodyHeight(a_self) : 0.0f;
+            RE::ActorHandle          reachSkipped;   // the first foe the reach gate skipped
+            CombatSense::ReachRead   reachSkippedRead;
 
             // The group is shared mutable engine state; read it under its own
             // lock, and do NOTHING but read inside.
@@ -365,6 +408,18 @@ namespace MFO::Eval {
                         if (!IsWeakTo(foe, RE::ActorValue::kResistShock)) continue;
                     }
 
+                    // MELEE-ONLY REACH GATE (a_reachGate): a swing rule of a melee-only
+                    // follower never names a foe airborne out of his reach. Checked after
+                    // the selector's own gates, so the [reach] line only names a foe this
+                    // rule would otherwise have chosen.
+                    if (a_reachGate) {
+                        CombatSense::ReachRead rr;
+                        if (CombatSense::OutOfMeleeReach(a_self, foe, 0.0f, &rr, selfHeight)) {
+                            if (!reachSkipped) { reachSkipped = t.targetHandle; reachSkippedRead = rr; }
+                            continue;
+                        }
+                    }
+
                     // Every gate passed -- a real candidate. Queue its LoS
                     // measurement (runs on the MAIN thread next frame, #72:
                     // collect ids here, act after the lock) and read the
@@ -393,6 +448,7 @@ namespace MFO::Eval {
             // Held fire in a brawl: the only "foes" were non-hostile and nothing
             // real was selected. Log outside the group lock (throttled).
             if (nonHostile > 0 && !best) LogBrawlSkip(a_self, lastNH, nonHostile);
+            if (reachSkipped) LogReachSkip(a_self, reachSkipped, reachSkippedRead, best);
             return best;
         }
 
@@ -517,6 +573,9 @@ namespace MFO::Eval {
         if (!a_follower) return out;
 
         auto* player = RE::PlayerCharacter::GetSingleton();
+        // fix/mfo-unreachable-flyer: Actuation::MeleeOnly, read at most once per scan and
+        // only when a swing rule with a foe selector is reached (-1 = not read yet).
+        int meleeOnly = -1;
 
         const auto& list = a_table == Table::Combat ? a_state.combat()
                                                      : a_state.logistics();
@@ -530,7 +589,11 @@ namespace MFO::Eval {
                 // candidate means no target means the rule cannot run, so it
                 // falls through to the next one -- which is the whole reason
                 // "Foe: lowest HP -> Attack" can sit above "Always -> Wait".
-                chosen = PickFoe(a_follower, player, g.conditionOpcode, g.conditionParam);
+                const bool swing = g.actionOpcode == Vocab::kActAttack ||
+                                   g.actionOpcode == Vocab::kActPowerAttack;
+                if (swing && meleeOnly < 0) meleeOnly = Actuation::MeleeOnly(a_follower) ? 1 : 0;
+                chosen = PickFoe(a_follower, player, g.conditionOpcode, g.conditionParam,
+                                 swing && meleeOnly == 1);
                 if (!chosen) continue;
             } else if (IsAllySelector(g.conditionOpcode)) {
                 // Same shape, ally side: true iff a wounded teammate is found,

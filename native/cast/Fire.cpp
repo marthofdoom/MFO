@@ -101,6 +101,45 @@ namespace MFO::Actuation {
         return player;
     }
 
+    bool MeleeOnly(RE::Actor* a_follower) {
+        if (!a_follower) return false;
+        const auto isMeleeWeapon = [](const RE::TESObjectWEAP* a_w) {
+            const auto wt = a_w->GetWeaponType();
+            return wt != RE::WEAPON_TYPE::kBow && wt != RE::WEAPON_TYPE::kCrossbow &&
+                   wt != RE::WEAPON_TYPE::kStaff;
+        };
+        // Anything in hand that reaches past a swing: he is not melee-only right now.
+        for (const bool left : { false, true }) {
+            auto* obj = a_follower->GetEquippedObject(left);
+            if (!obj) continue;
+            if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                if (!isMeleeWeapon(w)) return false;
+            } else if (auto* sp = obj->As<RE::SpellItem>()) {
+                const auto d = sp->GetDelivery();
+                if (d != RE::MagicSystem::Delivery::kSelf && d != RE::MagicSystem::Delivery::kTouch) return false;
+            }
+        }
+        // Declared melee: base class Melee (1 == CombatStyle::Stance::Melee, the #65 ordinal) ...
+        const auto id = a_follower->GetFormID();
+        if (Followers::GetBaseClass(id) == 1) return true;
+        // ... or a standing act.equip_melee force-hold.
+        const auto [holdR, holdL] = ForcedHoldFor(id);
+        for (const RE::FormID h : { holdR, holdL }) {
+            if (auto* w = h ? RE::TESForm::LookupByID<RE::TESObjectWEAP>(h) : nullptr; w && isMeleeWeapon(w))
+                return true;
+        }
+        return false;
+    }
+
+    // The reach gate's reason text (Attack / Power attack): a transparent refusal that
+    // latches nothing, so the scan falls to the rules below.
+    namespace {
+        std::string UnreachableReason(RE::Actor* a_foe, const CombatSense::ReachRead& a_rr) {
+            return std::format("'{}' unreachable (flying, {}) -- not latched",
+                               a_foe->GetName() ? a_foe->GetName() : "?", CombatSense::ReachText(a_rr));
+        }
+    }
+
     Outcome Fire(RE::Actor* a_follower, const Eval::Choice& a_choice) {
         // No rule matched -> NO ENGINE CALL AT ALL. Not a no-op command, not a
         // neutral order: nothing (§4.4's do-nothing guarantee, which is what
@@ -158,6 +197,16 @@ namespace MFO::Actuation {
             auto ptr = a_choice.target.get();
             auto* foe = ptr.get();
             if (!foe) return { Result::FailedOther, "chosen foe no longer resolves", true };
+
+            // REACH GATE (fix/mfo-unreachable-flyer): a melee-only follower never latches
+            // a foe that is airborne out of his melee reach (CombatSense::OutOfMeleeReach).
+            // PickFoe already skips one for a swing rule; this is the same answer at the
+            // action, checked BEFORE the APMF claim and the latch so a refusal mutates
+            // nothing. TRANSPARENT: the scan falls to the rules below (the power-attack
+            // gate's no-melee-weapon shape).
+            if (CombatSense::ReachRead rr; MeleeOnly(a_follower) &&
+                                           CombatSense::OutOfMeleeReach(a_follower, foe, 0.0f, &rr))
+                return { Result::FailedSkill, UnreachableReason(foe, rr), true };
 
             // A commanded Attack directive gets the SAME APMF combat-target arbitration
             // a cast directive already gets (ch.6 plumbing, no new APMF work): claim (or
@@ -330,6 +379,11 @@ namespace MFO::Actuation {
             // blocks (GAMBIT_FLOWS §3.6). Checked BEFORE any latch so a rejected
             // (bow-held) power attack mutates NOTHING and falls through cleanly.
             if (!melee) return { Result::FailedSkill, "no melee weapon drawn for a power attack", true };
+            // REACH GATE (fix/mfo-unreachable-flyer), the Attack verb's: no CLOSE on a foe
+            // airborne out of a melee-only follower's reach. Before any latch, transparent.
+            if (CombatSense::ReachRead rr; MeleeOnly(a_follower) &&
+                                           CombatSense::OutOfMeleeReach(a_follower, foe, 0.0f, &rr))
+                return { Result::FailedSkill, UnreachableReason(foe, rr), true };
 
             // RANGE GATE. GetDistance is a pure read of already-loaded actor data
             // (the kCondFoeWithinRange path reads distance the same way on this

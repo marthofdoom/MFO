@@ -481,6 +481,10 @@ namespace MFO::APMFBridge {
     // Worker-safe; its own mutex (never g_mx).
     void ServicePursuitLeash(RE::FormID a_follower, float a_radius);
     void ReleasePursuitLeash(RE::FormID a_follower, const char* a_why);
+    // fix/mfo-unreachable-flyer: does a ch.23 claim stand for him right now (filed, not
+    // ENDED)? The Scheduler's [reach] hold line reads it, so "holding by the player" is
+    // never claimed when no leash can hold him (principle 7). Read-only; takes g_leashMx.
+    bool PursuitLeashStanding(RE::FormID a_follower);
 
     // ── LOCKPICK HOLD (LP-M1, ClickUp 86e3edgha): ch.1 + ch.12 Idle v2 (ABI v17) ──
     // The pick window's two claims, filed together when a follower standing at a locked
