@@ -487,7 +487,8 @@ namespace MFO::Actuation {
                 // heal below it, and `lastFired`/`[eval] fired` never lies on a
                 // no-op tick.
                 commitPreempt();   // the claim happens inside CastSelfDirect
-                switch (CastSelfDirect(a_follower, spell)) {
+                // fix/mfo-can-act: the firing rule's stop spec (FiringHealStopPct).
+                switch (CastSelfDirect(a_follower, spell, FiringHealStopPct(a_follower, a_follower))) {
                 case SelfCast::Applied:
                     // TASK 2: hold the lock (LEFT -- handPlan resolved above) --
                     // a claimed (heal/instant) or concentration self-cast is
@@ -1321,6 +1322,12 @@ namespace MFO::Actuation {
                     // a_target through as-is; CastSpellImmediate accepts null).
                     auto* t  = tid ? RE::TESForm::LookupByID<RE::Actor>(tid) : nullptr;
                     if (!f || !sp || (tid && !t)) return;
+                    // fix/mfo-can-act: the caster may have gone down since the worker
+                    // decided -- re-checked right before the apply; no cast, no deduct.
+                    if (const char* why = CannotActReason(f)) {
+                        NoteRefusedApply(fid, "legacy force", why, spid, tid);
+                        return;
+                    }
                     auto* caster = f->GetMagicCaster(src);
                     if (!caster) caster = f->GetMagicCaster(CS::kInstant);
                     if (!caster) return;   // F4: no caster -> no cast, no deduct

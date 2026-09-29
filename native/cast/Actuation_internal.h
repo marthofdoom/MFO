@@ -206,6 +206,20 @@ namespace MFO::Actuation {
         // "ally selector or not" once, at the single write site.
         inline float g_firingAllyThreshold = -1.0f;
 
+        // THE FIRING RULE'S HP GATE (fix/mfo-can-act, "run to the gambit's specs"):
+        // the Vocab opcode constant of the firing rule's condition when it is one of
+        // the three HP-below gates (kCondSelfHpBelow / kCondPlayerHpBelow /
+        // kCondAllyHpBelow -- static storage, never a pointer into the Choice), else
+        // nullptr; and its param. Written by Fire at its single write site, reset by
+        // its FiringScope on every exit, exactly like g_firingRule. Read by the heal
+        // stream call sites (CastOn's self fork, ConcentrationCast,
+        // RestorationCastDirect) through FiringHealStopPct.
+        inline const char* g_firingHpGate  = nullptr;
+        inline float       g_firingHpParam = 0.0f;
+        inline std::uint32_t FiringHealStopPct(RE::Actor* a_caster, RE::Actor* a_target) {
+            return g_firingHpGate ? HealStopPct(g_firingHpGate, g_firingHpParam, a_caster, a_target) : 0;
+        }
+
         struct CastLock {
             RE::FormID spell  = 0;
             RE::FormID target = 0;
@@ -425,8 +439,21 @@ namespace MFO::Actuation {
             SelfClock::time_point    paidThrough{};
             float                    window = 0.0f;
             bool                     timed  = false;
+            // THE GAMBIT'S STOP SPEC (fix/mfo-can-act): a heal stream ends when the
+            // recipient reaches this whole percent -- the threshold of the rule that
+            // is feeding it (HealStopPct, Actuation.h); 0 = full (kHealFullPct).
+            // Re-stamped on every CastTargetDirect call, so it is always the latest
+            // feeding rule's line.
+            std::uint32_t            stopPct = 0;
         };
         extern std::unordered_map<RE::FormID, TargetCastState> g_targetCast;   // cast/Direct.cpp
+
+        // The heal release line for a stream's stopPct: 0 (or >= full) -> kHealFullPct,
+        // else stopPct / 100, never above kHealFullPct. (fix/mfo-can-act)
+        inline float HealStopLine(std::uint32_t a_stopPct) {
+            return a_stopPct == 0 ? kHealFullPct
+                                  : std::min(static_cast<float>(a_stopPct) / 100.0f, kHealFullPct);
+        }
 
         // ── THE REAL EFFECT, WITH A SYNTHESIZED DURATION (marth's ruling) ────
         // "Shouldn't you be using the ACTUAL spell effect? It seems like you

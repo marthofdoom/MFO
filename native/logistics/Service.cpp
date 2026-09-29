@@ -63,6 +63,14 @@ namespace MFO::Logistics {
         }
 
         bool DrinkBest(RE::Actor* a_follower, RE::ActorValue a_which) {
+            // CAN HE ACT (fix/mfo-can-act)? A bleeding-out / downed / paralysed
+            // follower drinks nothing. Checked here, in the same synchronous call as
+            // the EquipObject below (this road is not MainThread::Post'd), so it is
+            // "right before the apply". Refused = no potion consumed, logged once.
+            if (const char* why = Actuation::CannotActReason(a_follower)) {
+                Actuation::NoteRefusedApply(a_follower->GetFormID(), "drink", why, 0, a_follower->GetFormID());
+                return false;
+            }
             // COOLDOWN: a restore potion works over its duration; do not chain-
             // drink the stack while the first is still active (M5).
             const auto key = drinkKey(a_follower->GetFormID(), a_which);
@@ -134,6 +142,8 @@ namespace MFO::Logistics {
             // Equipping a potion on an actor consumes it -- the documented Tier A
             // path. One unit; the engine removes it from the pack.
             mgr->EquipObject(a_follower, best, nullptr, 1);
+            if (a_which == RE::ActorValue::kHealth)   // [bleed] attribution (fix/mfo-can-act)
+                Actuation::NoteHealLanded(a_follower->GetFormID(), a_follower->GetFormID(), best->GetFormID());
             // Gate this AV for the potion's own duration (min one logistics
             // interval), so the next tick does not drink the rest of the stack.
             float dur = 1.0f;
@@ -278,6 +288,13 @@ namespace MFO::Logistics {
         auto& due = g_nextTick[id];
         if (due.time_since_epoch().count() != 0 && now < due) return;
         due = now + kLogisticsInterval;
+
+        // CAN HE ACT (fix/mfo-can-act)? A follower who is bleeding out, down,
+        // knocked down, paralysed or in a kill move takes NO logistics action this
+        // tick -- no cast, no drink, no loot step, no deposit, no declaration. The
+        // global travel backstop above has already run (it is keyed to no follower).
+        // Every road below re-checks nothing else, so this is the one gate.
+        if (Actuation::CannotActReason(a_follower)) return;
 
         // APMF EQUIP AUTHORITY (feat/mfo-equip-authority, 2026-09-15): the OOC
         // road of the declaration. CLAIM on the first service (the claim alone
@@ -1523,7 +1540,16 @@ namespace MFO::Logistics {
                         static_cast<Vocab::Subject>(choice.subject) == Vocab::Subject::Self &&
                         !p.get();
                     if (autoPick) {
-                        acted = (Actuation::CastAuto(a_follower, sp->GetFormID()).result ==
+                        // THE GAMBIT'S SPEC (fix/mfo-can-act): the firing rule's own
+                        // HP-below line, exactly as the combat Fire passes it (Fire.cpp
+                        // autoPick), so an OOC AUTO heal both picks and STOPS by the
+                        // rule; 1.0 (= full) when the condition is not an HP gate.
+                        float healThreshold = 1.0f;
+                        if (choice.conditionOpcode == Vocab::kCondSelfHpBelow   ||
+                            choice.conditionOpcode == Vocab::kCondPlayerHpBelow ||
+                            choice.conditionOpcode == Vocab::kCondAllyHpBelow)
+                            healThreshold = choice.conditionParam;
+                        acted = (Actuation::CastAuto(a_follower, sp->GetFormID(), healThreshold).result ==
                                  Actuation::Result::Fired);
                         if (acted) break;
                         start = choice.ruleIndex + 1; continue;
@@ -1594,7 +1620,12 @@ namespace MFO::Logistics {
                     // stream at an ally is never LoS-gated, so skip the raycast there.
                     if (tgt->IsHostileToActor(a_follower))
                         Sightline::Want(id, { tgt->GetFormID() });
-                    const auto r = Actuation::CastTargetDirect(a_follower, sp, tgt);
+                    // THE GAMBIT'S STOP SPEC (fix/mfo-can-act): a heal stream ends at
+                    // this rule's own HP line (Actuation::HealStopPct; 0 = full).
+                    const auto r = Actuation::CastTargetDirect(
+                        a_follower, sp, tgt,
+                        Actuation::HealStopPct(choice.conditionOpcode, choice.conditionParam,
+                                               a_follower, tgt));
                     // HELD OFF -- its OWN outcome now (Fable SEV-2, 2026-09-06),
                     // not a delivery wearing Applied's clothes. ComposedCast::Try
                     // held this spell off because a DIFFERENT spell's live claim
@@ -1775,7 +1806,10 @@ namespace MFO::Logistics {
                     // does NOT count as this tick's action -- otherwise an "always ->
                     // cast_self" would break the scan every tick and starve
                     // loot/drink. Only a real Applied is the action.
-                    const auto r = Actuation::CastSelfDirect(a_follower, sp);
+                    const auto r = Actuation::CastSelfDirect(
+                        a_follower, sp,
+                        Actuation::HealStopPct(choice.conditionOpcode, choice.conditionParam,
+                                               a_follower, a_follower));   // fix/mfo-can-act
                     if (r == Actuation::SelfCast::Applied) {
                         acted = true;
                     } else {
@@ -1808,12 +1842,29 @@ namespace MFO::Logistics {
                     if (avo && avo->GetActorValue(RE::ActorValue::kMagicka) < cost) {
                         start = choice.ruleIndex + 1; continue;   // can't afford it
                     }
+                    // NORMAL REACH FOR A HEAL on someone else (fix/mfo-can-act, marth
+                    // 2026-09-29): as far as the player's own cast of the spell, with
+                    // line of sight (Actuation::HealInReach). Out of reach -> next rule.
+                    if (tgt != a_follower && Actuation::HealsHealth(sp)) {
+                        Sightline::Want(id, { tgt->GetFormID() });
+                        if (!Actuation::HealInReach(a_follower, tgt, sp)) {
+                            start = choice.ruleIndex + 1; continue;
+                        }
+                    }
                     auto doCast = [casterID = id, tgtID = tgt->GetFormID(),
                                    spID = sp->GetFormID()] {
                         auto* f = RE::TESForm::LookupByID<RE::Actor>(casterID);
                         auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
                         auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
                         if (!f || !t || !s) return;
+                        // fix/mfo-can-act: re-checked right before the apply -- the
+                        // caster can act, and a heal on someone else is still in reach
+                        // with line of sight. Refused = no cast, no deduct.
+                        if (const char* why = Actuation::CannotActReason(f)) {
+                            Actuation::NoteRefusedApply(casterID, "OOC cast", why, spID, tgtID);
+                            return;
+                        }
+                        if (Actuation::RefuseHealApplyOnMain(f, t, s, "OOC cast")) return;
                         auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                         if (!caster) return;   // F4: no caster -> no cast, no deduct
                         auto* mavo = f->AsActorValueOwner();
@@ -1824,6 +1875,7 @@ namespace MFO::Logistics {
                         if (mavo && spend > 0.0f)
                             mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                                     RE::ActorValue::kMagicka, -spend);
+                        if (Actuation::HealsHealth(s)) Actuation::NoteHealLanded(tgtID, casterID, spID);   // [bleed]
                     };
                     // VR has no pump (Post is a documented no-op there): fall back
                     // to the old inline call rather than silently casting nothing.
@@ -1872,6 +1924,12 @@ namespace MFO::Logistics {
                                 auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
                                 auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
                                 if (!f || !t || !s) return;
+                                // fix/mfo-can-act: the caster may have gone down since the
+                                // worker decided -- no cast, no deduct.
+                                if (const char* why = Actuation::CannotActReason(f)) {
+                                    Actuation::NoteRefusedApply(casterID, "OOC hostile FF", why, spID, tgtID);
+                                    return;
+                                }
                                 auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                                 if (!caster) return;
                                 auto* mavo = f->AsActorValueOwner();

@@ -771,6 +771,17 @@ namespace MFO::Scheduler {
         // trend that includes this lap. Cadence = his service period (Confidence.h).
         Confidence::NoteHealth(id, Vocab::HealthPct(f), g_serviceClock);
 
+        // CAN HE ACT? (fix/mfo-can-act, field 0928c: a bleeding-out Jesper kept firing
+        // instant heals.) Read ONCE per service, plain member loads (CannotActReason,
+        // cast/Actuation.h). Bookkeeping above and below keeps running; the ACTION
+        // roads skip: every combat rule is passed over transparently in the scan below
+        // (its condition still counts, so held equips and cast loans are kept, not
+        // released), and Logistics::ServiceFollower returns before it acts. His live
+        // heal/offense streams are ended by the reconciles ("caster-down"). The passive
+        // [bleed] line logs his life-state transitions (down / up).
+        Actuation::NoteLifeState(f);
+        const char* const cannotAct = Actuation::CannotActReason(f);
+
         // T#78: THE PER-FOLLOWER MFO MASTER SWITCH. When OFF, MFO leaves this
         // follower completely untouched -- no combat gambits, no logistics /
         // economy, no cast / equip / loot -- so he behaves as a vanilla /
@@ -1303,6 +1314,22 @@ namespace MFO::Scheduler {
             // failure paths self-release internally). Only a tick where NO
             // cast condition held releases the loan, after the loop.
             if (isCast) castSeen = true;
+
+            // HE CANNOT ACT (fix/mfo-can-act): bleeding out, down, knocked down,
+            // paralysed or in a kill move. The rule is passed over TRANSPARENTLY and
+            // never reaches Fire -- no cast, drink, latch or swing. Its condition DID
+            // hold, so it is treated like the suppression-window stop above: a cast
+            // rule keeps the loan (castSeen, set just above), an equip rule keeps its
+            // hold (equipHeld), so a knockdown does not strip a weapon or a claim that
+            // his next standing lap needs. The skip-chain line is deduped, so a stable
+            // down logs once.
+            if (cannotAct) {
+                if (isEquip) equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                chain += std::format("{}{}(cannot act: {})", chain.empty() ? "" : ",",
+                                     choice.ruleIndex, cannotAct);
+                start = choice.ruleIndex + 1;
+                continue;
+            }
 
             // ── FLAIR #5: RETARGET HESITATION ────────────────────────────────
             // A switch of an existing latch must win twice: first winning

@@ -166,7 +166,10 @@ namespace MFO::Actuation {
         // failure mode of that mistake harmless instead: an unranked (kNoRule) lock,
         // which outranks nothing and is preemptable by anything.
         struct FiringScope {
-            ~FiringScope() { g_firingRule = kNoRule; g_firingAllyThreshold = -1.0f; }
+            ~FiringScope() {
+                g_firingRule = kNoRule; g_firingAllyThreshold = -1.0f;
+                g_firingHpGate = nullptr; g_firingHpParam = 0.0f;   // fix/mfo-can-act
+            }
         } firingScope;
         g_firingRule = a_choice.ruleIndex;
         // Only an ALLY selector's param is an ally-HP threshold. Every other
@@ -176,6 +179,16 @@ namespace MFO::Actuation {
         g_firingAllyThreshold = (a_choice.conditionOpcode == Vocab::kCondAllyHpBelow)
                                     ? a_choice.conditionParam
                                     : -1.0f;
+        // THE GAMBIT'S STOP SPEC (fix/mfo-can-act): which HP-below gate, if any, the
+        // firing rule carries -- a heal stream it starts ends at that line.
+        for (const char* gate : { Vocab::kCondSelfHpBelow, Vocab::kCondPlayerHpBelow,
+                                  Vocab::kCondAllyHpBelow }) {
+            if (a_choice.conditionOpcode == gate) {
+                g_firingHpGate  = gate;
+                g_firingHpParam = a_choice.conditionParam;
+                break;
+            }
+        }
 
         const auto& op = a_choice.actionOpcode;
 
