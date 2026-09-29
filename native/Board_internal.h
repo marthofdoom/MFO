@@ -173,6 +173,7 @@ namespace MFO::Board {
         { Vocab::kCondFoeAttackingMeRanged,"Foe attacking me: ranged", ParamKind::None },
         { Vocab::kCondFoeIsUndead,   "Foe is undead",        ParamKind::None    },
         { Vocab::kCondFoeIsDragon,   "Foe is dragon",        ParamKind::None    },
+        { Vocab::kCondFoeIsMechanical,"Foe is mechanical",   ParamKind::None    },
         { Vocab::kCondFoeIsCaster,   "Foe is a spellcaster", ParamKind::None    },
         { Vocab::kCondFoeIsRanged,   "Foe is ranged",        ParamKind::None    },
         { Vocab::kCondFoeWeakerThanMe, "Foe is weaker than me", ParamKind::None },
