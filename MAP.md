@@ -502,13 +502,15 @@ per concern:
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
   field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
   keeps a relic out of the declared set (MFO-B126).
-- `cast/Direct.cpp` (1611, past ~1500 since fix/mfo-can-act: plan a split, the CAN-ACT block
-  `:1389-1611` is the natural cut; MFO-B152) = the DIRECT-DELIVERY road: the apply substrate (`ConcProxy` `:181`,
-  `DeliverySpell` `:255`, dispel/sustain, `ApplySelfEffect` `:359`, `ApplyTargetEffect` `:473`,
-  charge-for-time) and the per-follower streams `CastSelfDirect` (`:648`) / `SelfCastReconcile`
-  (`:869`) / `ClearSelfCasts` (`:997`) / `CastTargetDirect` (`:1043`) / `TargetCastReconcile`
-  (`:1309`) / `TargetStreamLive` (`:1398`), plus `IsRestorationSpell` (`:637`) and
-  `SpellHealsHealth` (`:622`), and the CAN-ACT block (see "CAN-ACT" below): `NoteRefusedApply`,
+- `cast/Direct.cpp` (1879, past ~1500 since fix/mfo-can-act: plan a split -- the CAN-ACT block
+  `:1488-` and the [heal-obs] block `:1711-1879` are the natural cuts; MFO-B152) = the DIRECT-DELIVERY
+  road: the apply substrate (`ConcProxy` `:184`, its minted-form mirror `g_slotFormId` and the public
+  `ConcProxyForms` `:1872`, `DeliverySpell` `:265`, dispel/sustain, `ApplySelfEffect` `:366`,
+  `ApplyTargetEffect` `:507`,
+  charge-for-time) and the per-follower streams `CastSelfDirect` (`:743`) / `SelfCastReconcile`
+  (`:963`) / `ClearSelfCasts` (`:1087`) / `CastTargetDirect` (`:1134`) / `TargetCastReconcile`
+  (`:1399`) / `TargetStreamLive` (`:1484`), plus `IsRestorationSpell` (`:732`) and
+  `SpellHealsHealth` (`:717`), and the CAN-ACT block (see "CAN-ACT" below): `NoteRefusedApply`,
   `NoteHealLanded`, `NoteLifeState`, `HealReach`, `HealInReach`, `HealsHealth`,
   `RefuseHealApplyOnMain`. The self registry `g_selfCast` (`:63`) is file-local; the target
   registry `g_targetCast` (`:130`) went extern in wave 1 (`CastAuto` reads it).
@@ -698,6 +700,59 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   still promises an animated hand cast (backlog `MFO-B48`). **What breaks if you change this:** re-routing any heal-kind spell
   back through `Try` re-creates the frozen follower unless the floor gate below holds; a self target
   reaching `CastOn` with `bCastSelf` OFF keeps its old road on purpose (`a_target != a_follower`).
+- **[heal-obs] + APPLY READ-BACK + MFO'S CONCPROXY ON THE ALLOW-LIST (`feat/mfo-animheal-p0`,
+  2026-09-29; design scratchpad `animheal-design.md` phases 0a + 1m).** Field 0928c: Harbinger denied
+  MFO's own ConcProxy forms 48 times on the INSTANT caster (`hand=?`) while MFO printed `effect applied` /
+  `conc effect ATTACHED` unconditionally.
+  * **Read-back (1m a).** `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:366` / `:507`) and
+    `ApplyEffectFromTo` (`cast/Auto.cpp:77`) report an apply as landed only when an ActiveEffect of the
+    FORM CAST (the spell, or its ConcProxy) is on the recipient after `CastSpellImmediate`
+    (`SpellEffectPresentOn` / `HasDurationEffect` / `DeliveryAppliesInCall`, `cast/Actuation_internal.h`).
+    Decided on the apply tick ONLY when the form cast's delivery is kSelf or kTargetActor
+    (`DeliveryAppliesInCall`; review of 22d735d, SEV-2): an Aimed / TargetLocation spell launches a
+    projectile whose effect lands frames later, and kTouch is unproven, so those are undecidable now, keep
+    their charge and `[heal-obs]` answers them. Within those deliveries: any spell with a duration effect,
+    and a concentration attach, whose premise (the second `SustainConcentrationEffect` finds the new effect
+    on this same tick) is **UNPROVEN** (review SEV-3: the 09-28 ATTACHED lines printed unconditionally, and
+    the channel `CastSpellImmediate` leaves running keeps its effect alive either way). Falsifier, in
+    `Docs/STATUS.md`'s field plan: `conc effect NOT ATTACHED` followed ~1 s later by `[heal-obs]` `effect at
+    apply=ABSENT now=present` with `channel=running`. NOT decidable for an instant fire-and-forget heal,
+    which keeps its charge and is answered by `[heal-obs]`. A beneficial apply that did not land logs
+    `NOT LANDED ... no magicka spent` and returns before the deduct; an offensive one keeps its charge (a
+    resisted hit still costs) but prints `conc effect NOT ATTACHED`, never ATTACHED. Both warns are rate
+    limited per (caster, spell, line) to one per 5 s with a held count (`ReadbackWarnDue`,
+    `cast/Direct.cpp`). The VR inline fallback of the OOC FF heal (`logistics/Service.cpp`) runs on the
+    worker and skips `HealObsNote` there.
+  * **`[heal-obs]` (0a).** `HealObsNote` (MAIN, every direct heal apply: self stream, target stream, AUTO,
+    the OOC FF heal in `logistics/Service.cpp`) queues one observation per (caster, recipient) per 3 s
+    (road, distance, the Sightline verdict, HP before, effect at apply, whether MFO held a ch.8b claim);
+    `HealObsSweep` (WORKER, top of `TargetCastReconcile`) posts a main-thread read ~1 s later: HP after,
+    effect still present, and for a concentration heal the caster's INSTANT channel (state 6 kCasting on
+    the cast form = running) plus whether MFO's stream is still registered. A lasting effect that is
+    gone, or a live stream whose channel stopped, is a `warn` with `*** HEAL NOT LANDING ***`. Harbinger's
+    own verdict is not visible to MFO; the channel state is its visible consequence (a CheckCast deny on
+    the instant caster interrupts the channel on its next tick, AE 34407 / SE 33629). The claim road is
+    unreachable for heals today, so it carries no `[heal-obs]` yet (phase 2).
+  * **ConcProxy forms on the ch.8 allow-list (1m c).** `PublishSpellAllowList`
+    (`apmf/SpellAllowList.cpp:276`) appends `Actuation::ConcProxyForms()` -- every minted slot form (an
+    atomic mirror, readable on the worker; at most 6). From Harbinger `fix/apmf-cast-instant-caster`
+    (d41ed43) the instant caster is gated by the ch.8 allow-list alone, so this is what admits MFO's own
+    direct concentration heals in combat. A form minted after a lap's publish is listed on the next lap
+    (the first beat of a session's first proxy stream can still be interrupted). The two comments that
+    said this road never reaches CheckCast are corrected (`apmf/SpellAllowList.cpp`, the floor note in
+    `apmf/Bridge.cpp`). MFO's OWN CheckCast hook (`CasterConsent.cpp`, ActorMagicCaster vtable[0]) is
+    on the same vtable and so also sees these channel ticks; 0928c has zero `HARD-ABORTED` lines, so no
+    MFO self-deny was observed, and the claim road's Harbinger proxy passes MFO's consent through
+    `ClientCastClaimed` (a live claim early-passes).
+  **What breaks if you change this:** removing the read-back re-opens the masked failure; deducting on an
+  undecidable instant heal is the pre-branch behaviour and stays; deciding a projectile delivery on the
+  apply tick makes every aimed buff free with a false NOT LANDED; dropping `ConcProxyForms` from the
+  allow-list makes Harbinger (d41ed43+) interrupt every in-combat direct concentration heal at an ally.
+  **OPEN BACKLOG, read before editing:** `Docs/REVIEW-BACKLOG.md` MFO-B154 (every follower lists all
+  proxies), MFO-B155 (a proxy minted between publishes is unlisted a lap), MFO-B156 (HealObsNote work
+  before its rate limit), MFO-B157 (offensive `effect applied` after NOT ATTACHED), MFO-B158 (AUTO conc
+  reads `stream=released`), MFO-B159 (kNoDuration MGEF false Absent), MFO-B160 (Auto.cpp's "never a
+  projectile" comment).
 - **CAN-ACT + NORMAL HEAL REACH (`fix/mfo-can-act`, field 0928c, 2026-09-29).**
   Field: a BLEEDING-OUT Jesper (HP ~0, magicka full) fired rule 0's instant Close Greater Wounds at
   himself, Serana and the player and streamed Fast Healing at a downed Serana, reviving both. No road
@@ -4661,8 +4716,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     read only by the Scheduler's `[reach]` hold line.
   - `apmf/SpellAllowList.cpp` (398) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
     `MakePotionCand` (`:136`) + `SelectPotions` (`:169`, the potion trim, batch L),
-    `AppendDenyExemptForms` (`:207`), `PublishSpellAllowList` (`:240`), `ReleaseSpellAllowList`
-    (`:374`).
+    `AppendDenyExemptForms` (`:207`), `PublishSpellAllowList` (`:240`; appends MFO's own ConcProxy
+    forms at `:276`, feat/mfo-animheal-p0), `ReleaseSpellAllowList`.
   - `apmf/APMFBridge_internal.h` (402, NEW in wave 1) = the claim state the families share, all
     of it from the old file's anonymous namespace: `CastClaim` (`:80`), `Owned` (`:208`), the
     `extern` `g_apmf`/`g_mx`/`g_owned`/refusal sets (defined in `apmf/Bridge.cpp`),

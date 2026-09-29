@@ -1834,8 +1834,11 @@ namespace MFO::Logistics {
                             start = choice.ruleIndex + 1; continue;
                         }
                     }
+                    // onMain: false on the VR inline fallback below, where doCast runs on
+                    // the WORKER -- [heal-obs] (GetPosition, main-thread reads) is skipped there.
+                    const bool onMain = MainThread::IsInstalled();
                     auto doCast = [casterID = id, tgtID = tgt->GetFormID(),
-                                   spID = sp->GetFormID()] {
+                                   spID = sp->GetFormID(), onMain] {
                         auto* f = RE::TESForm::LookupByID<RE::Actor>(casterID);
                         auto* t = RE::TESForm::LookupByID<RE::Actor>(tgtID);
                         auto* s = RE::TESForm::LookupByID<RE::SpellItem>(spID);
@@ -1852,18 +1855,26 @@ namespace MFO::Logistics {
                         if (!caster) return;   // F4: no caster -> no cast, no deduct
                         auto* mavo = f->AsActorValueOwner();
                         const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                        const float hpBefore = Vocab::HealthPct(t);   // [heal-obs] (feat/mfo-animheal-p0)
                         caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
                         const float c     = s->CalculateMagickaCost(f);
                         const float spend = mavo ? std::min(c, pool) : 0.0f;   // never negative
                         if (mavo && spend > 0.0f)
                             mavo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                                     RE::ActorValue::kMagicka, -spend);
-                        if (Actuation::HealsHealth(s)) Actuation::NoteHealLanded(tgtID, casterID, spID);   // [bleed]
+                        if (Actuation::HealsHealth(s)) {
+                            Actuation::NoteHealLanded(tgtID, casterID, spID);   // [bleed]
+                            // An OOC fire-and-forget heal: no read-back here (it prints no
+                            // "applied" line), the [heal-obs] HP read ~1 s later answers it.
+                            if (onMain)
+                                Actuation::HealObsNote(f, t, s, s, "OOC FF", hpBefore,
+                                                       Actuation::HealAttach::Instant);
+                        }
                     };
                     // VR has no pump (Post is a documented no-op there): fall back
                     // to the old inline call rather than silently casting nothing.
-                    if (MainThread::IsInstalled()) MainThread::Post(doCast);
-                    else                           doCast();
+                    if (onMain) MainThread::Post(doCast);
+                    else        doCast();
                     acted = true;   // optimistic, same as the posted self/target applies
                 } else {
                     // FF HOSTILE at a FOE -> the animated alias-0 foe package. For a

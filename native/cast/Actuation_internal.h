@@ -495,6 +495,51 @@ namespace MFO::Actuation {
         };
         extern std::unordered_map<std::uint64_t, BeneficialRecast> g_beneficialRecast;
 
+        // READ-BACK (feat/mfo-animheal-p0, 1m(a)). Is an ActiveEffect OF THIS FORM (the
+        // form actually cast: the spell, or its ConcProxy) on a_target right now? The
+        // same list walk SustainConcentrationEffect makes. MAIN THREAD only.
+        inline bool SpellEffectPresentOn(RE::Actor* a_target, const RE::MagicItem* a_form) {
+            auto* mt = a_target ? a_target->AsMagicTarget() : nullptr;
+            if (!mt || !a_form) return false;
+            auto* list = mt->GetActiveEffectList();
+            if (!list) return false;
+            for (auto* ae : *list)
+                if (ae && ae->spell == a_form) return true;
+            return false;
+        }
+        // Does a_spell carry any effect with an authored duration? Only such a spell
+        // leaves an ActiveEffect to read back; an instant (duration 0) fire-and-forget
+        // heal applies and is gone in the same call, so its landing is not decidable on
+        // the apply tick (the [heal-obs] HP read ~1 s later answers it instead).
+        inline bool HasDurationEffect(const RE::SpellItem* a_spell) {
+            if (!a_spell) return false;
+            for (auto* eff : a_spell->effects)
+                if (eff && eff->effectItem.duration > 0) return true;
+            return false;
+        }
+        // Does a cast of a_form put its ActiveEffect on the recipient INSIDE the
+        // CastSpellImmediate call, so the read-back may decide on the apply tick?
+        // Only kSelf and kTargetActor (fix of the 22d735d review, SEV-2). An Aimed or
+        // TargetLocation spell LAUNCHES A PROJECTILE and its effect arrives frames
+        // later; kTouch is unproven either way. Those are undecidable now: they keep
+        // their charge and the [heal-obs] read ~1 s later answers them.
+        inline bool DeliveryAppliesInCall(const RE::MagicItem* a_form) {
+            if (!a_form) return false;
+            const auto d = a_form->GetDelivery();
+            return d == RE::MagicSystem::Delivery::kSelf ||
+                   d == RE::MagicSystem::Delivery::kTargetActor;
+        }
+        // Rate limit for the read-back warns (NOT LANDED / NOT ATTACHED): true when that
+        // warn for (caster, spell) may print now, at most once per 5 s per line kind;
+        // a_suppressed gets how many were held back since the last print. MAIN THREAD
+        // (the apply lambdas); cast/Direct.cpp, cleared with [heal-obs] on load.
+        enum class ReadbackWarn : std::uint8_t { NotLanded, NotAttached };
+        bool ReadbackWarnDue(RE::FormID a_caster, RE::FormID a_spell, ReadbackWarn a_kind,
+                             std::uint32_t& a_suppressed);
+        // The [heal-obs] follow-up sweep (cast/Direct.cpp). WORKER, called from
+        // TargetCastReconcile every pump tick.
+        void HealObsSweep();
+
         inline std::uint64_t RecastKey(RE::FormID a_caster, RE::FormID a_spell) {
             return (static_cast<std::uint64_t>(a_caster) << 32) | a_spell;
         }

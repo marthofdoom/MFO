@@ -13,6 +13,20 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-29 branch `feat/mfo-animheal-p0` (off `main` `815c833`; NOT merged, NOT deployed; tier B + threading
+  carve-out). [heal-obs] passive heal observation + the apply READ-BACK + MFO's ConcProxy forms on the ch.8 allow-list
+  (MAP.md §2 cast/ "[heal-obs] + APPLY READ-BACK").** A direct heal/buff apply reports landed only when an effect of the
+  form cast is on the recipient after `CastSpellImmediate`, decided on the apply tick only for a kSelf / kTargetActor
+  delivery; a beneficial apply that did not land logs `NOT LANDED ... no magicka spent` (rate limited, one per
+  (caster, spell) per 5 s with a `+N held` count). FIELD PLAN: (1) every direct heal prints one `[heal-obs]` line ~1 s
+  after the apply (HP before/after, effect at apply/now, channel, stream); `*** HEAL NOT LANDING ***` is the failure.
+  (2) An aimed buff (Courage / Rally at an ally) prints NO `NOT LANDED` and is charged. (3) **FALSIFIER of the
+  UNPROVEN concentration premise** (the second `SustainConcentrationEffect` finds the new effect on the apply tick):
+  a `conc effect NOT ATTACHED` (or a self/target `NOT LANDED` on a concentration spell) followed ~1 s later by
+  `[heal-obs] ... effect at apply=ABSENT now=present` with `channel=running` means the effect arrives AFTER the call,
+  the premise is false, and that stream's first beat went unbilled; report it, do not paper over it. (4) The first
+  proxy stream after a load may show `channel=stopped stream=live` once (MFO-B155, a form minted between publishes);
+  an `AUTO` line reading `stream=released` is expected (MFO-B158).
 - **2026-09-27 branch `fix/mfo-relic-given-cosave` (off `main` `35adef5`; NOT merged, NOT deployed; tier A: CO-SAVE).
   ClickUp 86e3faccn, marth's ruling: "What you drop on the ground is fair game. As well as regular items given to
   followers. Relics however should be recorded."** (1) Drops: the 86e3f9pkg session player-drop record
