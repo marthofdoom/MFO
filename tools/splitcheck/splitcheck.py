@@ -875,13 +875,18 @@ class Cmp:
         starts = ends.get(t)
         if not starts:
             return False
+        refs = self.proc_refs(img, p)
+        return any(o in refs for o in starts if o != t)
+
+    def proc_refs(self, img, p):
+        """Every address-field target of proc p (cached)."""
         k = (id(img), p["rva"])
         refs = self._prefs.get(k)
         if refs is None:
             refs = {tt for ins in self.disasm(img, p["rva"], p["size"])
                     for _o, _s, _k, tt in self.fields(img, ins)}
             self._prefs[k] = refs
-        return any(o in refs for o in starts if o != t)
+        return refs
 
     def state_split_ok(self, var, layout_changed=True):
         """A MUTABLE variable with per-TU copies is still the same state only if
@@ -990,7 +995,25 @@ class Cmp:
     def toks(self, img, f, kind, tgt):
         if f["rva"] <= tgt < f["rva"] + f["size"] and kind in ("rel", "rip", "imgrel"):
             return [("local", frozenset(), tgt - f["rva"], tgt)]
-        return img.resolve(tgt)
+        out = img.resolve(tgt)
+        if img.readonly_data(tgt):
+            # ONE PAST THE END of a sized named read-only object O is O's loop
+            # bound only when f also references O's START; otherwise the
+            # target is whatever begins there (an unnamed literal the linker
+            # placed right after O) and must be compared by its own content,
+            # never waved through by O's name (selftest N7 on the cast/Direct
+            # pair: "APMF.dll" sat right after SKSE::RUNTIME_SSE_1_6_629)
+            refs = None
+            keep = []
+            for c in out:
+                if c[0] == "sym" and c[2] > 0 and img.data_size.get(c[3] - c[2]) == c[2]:
+                    if refs is None:
+                        refs = self.proc_refs(img, f)
+                    if (c[3] - c[2]) not in refs:
+                        continue
+                keep.append(c)
+            out = keep
+        return out
 
     def same_target(self, la, lb, depth):
         for ta in la:

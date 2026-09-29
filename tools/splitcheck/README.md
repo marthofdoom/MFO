@@ -174,7 +174,12 @@ kept apart.
    (twins by TU), RTTI by class name, differently-named callees by structural
    identity. **Read-only data** (a section neither code nor writable): a
    reference to a named object's start, inside a named object of known PDB
-   size, or one past its end (a loop bound) compares by name. Anything else is
+   size, or one past its end (a loop bound) compares by name. One past the end
+   counts as a loop bound only when the same function also references the
+   object's START; otherwise it is whatever begins there (an unnamed literal the
+   linker placed right after the object) and is compared by content (selftest
+   N7 on the cast/Direct pair: `"APMF.dll"` sat right after
+   `SKSE::RUNTIME_SSE_1_6_629`, and its change passed by that name before). Anything else is
    compared by CONTENT, never a fixed length: a string literal (named `??_C` or
    unnamed, UTF-8 accepted) as its whole NUL-terminated byte string (a
    source-path literal may change its file name); other unnamed data from the
