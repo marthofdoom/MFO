@@ -53,7 +53,7 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondPlayerHpBelow = "cond.player_hp_pct_below";
 
     // FOE SELECTORS. These are conditions that also CHOOSE A TARGET -- the FFXII
-    // shape, where "Foe: lowest HP" is one clause, not two. Candidates come from
+    // shape, where "Foe: Lowest HP" is one clause, not two. Candidates come from
     // the follower's own combat group, never a world sweep: the engine already
     // knows who is in this fight, and a swept list could name someone the
     // follower is not engaged with.
@@ -70,7 +70,7 @@ namespace MFO::Vocab {
     // World gates -- no param.
     inline constexpr const char* kCondIsInterior  = "cond.is_interior";
     inline constexpr const char* kCondIsNight     = "cond.is_night";
-    // "When dark" -- a no-param SELF/environment condition, same shape as
+    // "In the dark" -- a no-param SELF/environment condition, same shape as
     // kCondAlways (no threshold, no foe target). Composite of the two gates
     // above (interior OR night) so a player who wants "cast Magelight when
     // it's dark" -- dungeons AND outdoor night both -- doesn't have to author
@@ -110,7 +110,7 @@ namespace MFO::Vocab {
     // ELEMENTAL WEAKNESS selectors -- choose the nearest foe whose resistance to
     // this element is NEGATIVE (an active weakness: race trait, ability, or a
     // -resist effect). Read from the actor's own resist actor-value, never a
-    // name (§4.8.2). "Foe: weak to fire -> Cast Flames" is the FFXII play.
+    // name (§4.8.2). "Foe: Weak to fire -> Cast Flames" is the FFXII play.
     inline constexpr const char* kCondFoeWeakFire        = "cond.foe_weak_fire";
     inline constexpr const char* kCondFoeWeakFrost       = "cond.foe_weak_frost";
     inline constexpr const char* kCondFoeWeakShock       = "cond.foe_weak_shock";

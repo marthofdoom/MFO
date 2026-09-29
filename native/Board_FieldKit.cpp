@@ -609,7 +609,7 @@ namespace MFO::Board {
                                                             ImGuiTableColumnFlags_WidthStretch);
                             ImGui::TableSetupColumn("Spell",ImGuiTableColumnFlags_WidthStretch);
                             // #68: who a Cast-on-target row hits (Self / player
-                            // by name / Nearest ally / a specific follower).
+                            // by name / Ally: Nearest / a specific follower).
                             ImGui::TableSetupColumn("Target",ImGuiTableColumnFlags_WidthStretch);
                             ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 96);
                             ImGui::TableHeadersRow();
@@ -915,7 +915,7 @@ namespace MFO::Board {
 
                                         // Option list, rebuilt fresh each frame the
                                         // popup is open: Self, the player by name,
-                                        // Nearest ally, then every OTHER active
+                                        // Ally: Nearest, then every OTHER active
                                         // follower by name. form==0 means "use kind
                                         // (the Subject enum)"; form!=0 means "this
                                         // SPECIFIC follower" and kind is ignored.

@@ -41,7 +41,7 @@ approved. The "gambits" are just illustrative compositions of it.
 
 ## Shipped vocabulary (the BASIC tier, already unlocked)
 
-**Conditions:** `always`; self HP/MP/SP % below; player HP % below; foe
+**Conditions:** `always`; Self: HP / Magicka / Stamina below; Player: HP below; foe
 selectors `nearest` / `lowest-HP` / `HP-%-below`; potion-count & out-of-arrows
 (logistics). **Actions:** `wait`; cast self; cast target; attack (UpdateCombat
 hook); drink health/stamina/magicka potion (now fires in the combat table too);
@@ -61,30 +61,30 @@ Only marth-approved rows. Each is described *only* by its condition and action;
 the tag points at the primitive(s) it needs from the build list below.
 
 ### Expressible with shipped vocab (no code)
-- Self HP % below → cast self (a heal the follower knows)
-- Foe HP % below → attack
+- Self: HP below → cast self (a heal the follower knows)
+- Foe: HP below → attack
 - Foe lowest HP → attack
 - Foe nearest → cast at foe
 - Self HP/SP/MP % below → drink health/stamina/magicka potion
-- Player HP % below → cast at player
+- Player: HP below → cast at player
 - Always → wait
 
 ### Approved, needs new vocabulary
-- Ally HP % below → cast at that ally  *(needs `ally_hp_pct_below` selector)*
+- Ally: HP below → cast at that ally  *(needs `ally_hp_pct_below` selector)*
 - Self MP % above → cast at nearest foe  *(needs `self_mp_pct_above`)*
 - Foe beyond range → equip ranged weapon  *(needs `foe_beyond_range`, `act.equip_ranged`)*
 - Foe within range → equip melee weapon  *(needs `foe_within_range`, `act.equip_melee`)*
 - Interior & night & not already lit → equip torch  *(needs `is_interior`, `is_night`, `self_torch_equipped`, `act.equip_torch`)*
 - Foe highest HP → attack  *(needs `foe_highest_hp`)*
-- Foe attacking the player → attack  *(needs `foe_attacking_player`)*
-- Foe attacking me → attack  *(needs `foe_attacking_me`)*
+- Foe: Targeting player → attack  *(needs `foe_attacking_player`)*
+- Foe: Targeting me → attack  *(needs `foe_attacking_me`)*
 - Foe count ≥ N in radius → cast self (ward/AoE)  *(needs `foe_count_ge`)*
-- Foe is undead → cast at foe  *(needs `foe_is_undead`)*
-- Foe is dragon → cast at foe  *(needs `foe_is_dragon`)*
+- Foe: Undead → cast at foe  *(needs `foe_is_undead`)*
+- Foe: Dragon → cast at foe  *(needs `foe_is_dragon`)*
 - **Foe weak to fire/frost/shock → cast matching element at foe**  *(needs `foe_weak_to_element`; marth: this is the INTERMEDIATE form of the kind-selectors — prefer it over "is undead → fire")*
-- **Foe is ranged → attack**  *(needs `foe_ranged`; marth's reframe of "interrupt the caster" — the discriminator is ranged, not caster)*
+- **Foe: Ranged → attack**  *(needs `foe_ranged`; marth's reframe of "interrupt the caster" — the discriminator is ranged, not caster)*
 - Foe already has my damage-over-time effect → attack next foe  *(needs `target_has_effect` as a selector exclusion)*
-- Self HP % below & foe within range → flee  *(needs `act.flee`, Tier B package)*
+- Self: HP below & foe within range → flee  *(needs `act.flee`, Tier B package)*
 - Foe within range & I hold a bow → keep distance from foe  *(needs `act.keep_distance`, Tier B package)*
 - Self has a disease → cast cure/restore (self)  *(needs `self_has_debuff`; marth: only if followers can contract diseases — verify first)*
 

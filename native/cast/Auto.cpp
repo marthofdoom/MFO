@@ -240,7 +240,7 @@ namespace MFO::Actuation {
     // and fans the cast out, one direct effect-application per member, each
     // paying the spell's full magicka cost (N targets = N x cost), reserve-
     // floored and paced by fCastCooldown so it neither thrashes nor spikes.
-    // A MANUAL pick (Player / Nearest ally / a specific follower) or a
+    // A MANUAL pick (Player / Ally: Nearest / a specific follower) or a
     // selector-chosen target still takes the single-target CastOn path
     // unchanged -- AUTO only fills the "nobody obvious" default.
     //

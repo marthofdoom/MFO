@@ -72,7 +72,7 @@ namespace MFO::Eval {
         //   * a staff in either hand, or
         //   * a spell in either hand whose delivery is not Self or Touch (Aimed,
         //     Target Actor, Target Location -- a touch spell is a melee reach).
-        // "Foe is a spellcaster" (FoeIsCaster) is unchanged: any spell in hand.
+        // "Foe: Spellcaster" (FoeIsCaster) is unchanged: any spell in hand.
         bool FoeIsRanged(RE::Actor* a_foe) {
             if (!a_foe) return false;
             for (const bool left : { false, true }) {
@@ -592,7 +592,7 @@ namespace MFO::Eval {
                 // A foe selector is TRUE exactly when it finds someone. No
                 // candidate means no target means the rule cannot run, so it
                 // falls through to the next one -- which is the whole reason
-                // "Foe: lowest HP -> Attack" can sit above "Always -> Wait".
+                // "Foe: Lowest HP -> Attack" can sit above "Always -> Wait".
                 const bool swing = g.actionOpcode == Vocab::kActAttack ||
                                    g.actionOpcode == Vocab::kActPowerAttack;
                 if (swing && meleeOnly < 0) meleeOnly = Actuation::MeleeOnly(a_follower) ? 1 : 0;
@@ -619,7 +619,7 @@ namespace MFO::Eval {
             }
 
             // A PLAYER-targeting condition names the PLAYER as the target, so
-            // "Player HP % below -> Cast on target" heals YOU, not the follower
+            // "Player: HP below -> Cast on target" heals YOU, not the follower
             // (Fable RC#6: subjectSelector was never authored, so Subject::Player was
             // dead and the cast fell back to Self). Self/other conditions leave the
             // target empty and the action resolves its own subject as before.

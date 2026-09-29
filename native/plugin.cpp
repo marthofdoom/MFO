@@ -296,7 +296,7 @@ namespace {
                              chosen->GetFormID(), bestCost);
             }
 
-            // rule 1: Foe: lowest HP -> Attack. The FFXII opener, and the
+            // rule 1: Foe: Lowest HP -> Attack. The FFXII opener, and the
             // reason the whole targeting mechanism exists. Costs nothing when
             // out of combat: no combat group means no candidate means the rule
             // is simply false and the tick falls through.

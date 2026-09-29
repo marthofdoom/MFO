@@ -37,10 +37,10 @@ never interleave: combat runs in combat, logistics runs out of it.
 ### The combat table
 
 ```
-1.  Ally: HP < 40%          ->  Cast Fast Healing
-2.  Foe: weak to fire       ->  Cast Flames
-3.  Self: magicka < 20%     ->  Drink magicka potion
-4.  Foe: lowest HP          ->  Attack
+1.  Ally: HP below 40%      ->  Cast Fast Healing
+2.  Foe: Weak to fire       ->  Cast Flames
+3.  Self: Magicka below 20% ->  Drink magicka potion
+4.  Foe: Lowest HP          ->  Attack
 ```
 
 Top-down, first match wins, **one action per tick**. A follower cannot heal
