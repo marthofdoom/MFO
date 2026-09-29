@@ -5,6 +5,12 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **Followers give way to each other when looting.** Two followers who block each other in a narrow hallway no longer both give up and walk back to you with the loot left behind. The follower with the higher rapport keeps going and tries their item again right away. The other one waits where they are, keeps their item, and tries it again once the first has passed or finished their trip. Equal rapport is settled the same way every time.
+- **A follower in the way is waited for.** When a looting follower is blocked by a companion who is not looting, they wait for that companion to move off, then try the same item again. The player and other NPCs still send a follower to their other items first, as before.
+- **New log lines.** MFO.log says who yields to whom, with both rapports and where it happened, and when the waiting follower resumes and why.
+
 ## v2.0.15 -- Followers pick locks and ship relics to the museum
 
 - **NEWEST HARBINGER REQUIRED: use Harbinger 0.9.10.** Lockpicking, museum drop-offs, the fight leash and staying out of the fight during a retreat all need it. MFO still runs with Harbinger 0.9.5 or newer. Those features just stay off.

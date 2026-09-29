@@ -3215,6 +3215,45 @@ anonymous-namespace copy — that silently forks the instance).
     destForm test acts on another destination's end. Principle 7: the ends M2 does not react to
     are logged, not guessed at. `Service.cpp` is 1718 lines (past the ~1500 plan-a-split mark,
     under the 2500 backstop): the next brief touching it should propose its split.
+- **LOOT GIVE-WAY (field 0929, `feat/mfo-loot-giveway`; marth: "the winner is the highest rapport
+  follower").** At the ACTOR-BLOCKED verdict (M1 timer or M2 CH19 BLOCKED, one shared reaction,
+  `logistics/Service.cpp:1151`), a blocker that is one of OUR followers (`Followers::IsTracked`) is
+  resolved as a PAIR; the player and every other NPC keep the M1 REORDER. State: `g_giveWay`
+  (`logistics/LootTravel_internal.h:570`, worker-only, not serialized, erased with `g_actorDefer`
+  at both of its sites and on revert `logistics/Upkeep.cpp:626`).
+  - **Both on an excursion:** higher `FollowerState::rapport` (`GiveWayRapport`, the worker reads
+    `g_followers` exactly as Scheduler does, #4) keeps the way; tie = LOWER FormID
+    (`GiveWayOutranks`). The winner re-dispatches the SAME item at once (`RetargetExcursionLeg`,
+    a same-ref Repoint on the ended CH19 leg) and returns walking. The loser YIELDS: Holding,
+    no scan, no new leg, item kept. Each follower decides at its own verdict with the same total
+    order, so they agree without a shared record.
+  - **Blocker is a follower NOT on an excursion:** the looter yields whatever the rapport (MFO
+    never moves a follower that is not looting; a re-walk into a standing one only re-blocks).
+  - **Hold ends on real state only** (`GiveWayEnded`, `LootTravel_internal.h:597`, checked each
+    Holding tick at `Service.cpp:1451`): the player in combat; the winner dead / disabled /
+    unloaded / in another interior cell; a looting winner's excursion ended, its `legStart`
+    changed or its phase flipped; a non-looting winner started its own excursion; the winner
+    more than `kActorBlockReach` (200 u) xy or `kActorBlockZ` from HIS block point. Then the
+    item is re-dispatched (validity: resolves, not GATED/failed, still `HasLoot`), else the
+    scan takes the next item. No timer: the excursion cap, his own combat and the leash end
+    the whole excursion; `GiveWay::excursion` (his `startTime`) drops a record from an
+    earlier excursion.
+  - **Physical deadlock break:** a winner blocked AGAIN by the loser that is still yielding to
+    it (the yield never moves it) turns the loser's hold into the M1 REORDER (its item kept,
+    items away from the winner first) and the winner walks on.
+  - **Logs:** `[loot] X keeps the way over Y (rapport a > b) at (x,y,z) -- retrying R at once`,
+    `[loot] X yields to Y (rapport a < b) at (x,y,z) -- holding, R kept ...` (a non-looting
+    blocker says so), `[loot] X resumes after giving way to Y (<why>, held Ns) -- retrying R`,
+    `[loot] Y stops yielding to X: it stands in his way ...`.
+  - **What breaks:** gating or reordering on a follower block again brings back the 0929
+    hallway (both give up); making the yield a timer instead of live winner state re-opens
+    principle 9; giving the yield its own movement fabricates intent (principle 4); dropping
+    the `excursion` tie lets a stale yield freeze a later excursion; dropping the deadlock
+    break lets a winner re-walk into a standing loser until the cap. On the ch.9 / legacy
+    alias roads (MFO's own MB timer) a yield sets Holding but MFO's travel package still
+    points at the item, so the loser keeps pressing until the winner passes (unproven in
+    the field; CH19 is the road that ran). `Service.cpp` is 2225 lines after this change:
+    past the ~1500 plan-a-split mark, the next brief touching it should propose its split.
 - **LOCKPICK READY GATE (field 0928c, `fix/mfo-field-0928c`). OPEN BACKLOG: MFO-B140 (a sheathe vs a
   "draw with the player" framework), MFO-B143 (every pick is now >= 3.5 s).** `Phase::kReady` sits between the
   snapshot and the Harbinger hold: a pick never STARTS while he or the player is in combat or while

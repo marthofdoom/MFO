@@ -547,6 +547,82 @@ namespace MFO::Logistics {
         struct ActorDefer { RE::FormID item = 0; RE::FormID blocker = 0; RE::NiPoint3 blockerPos{}; };
         inline std::unordered_map<RE::FormID, ActorDefer> g_actorDefer;
 
+        // ── LOOT GIVE-WAY (field 0929, marth: "the winner is the highest rapport
+        // follower"). Two of our followers jammed in a thin hallway each REORDERed
+        // against the other and both went back to follow with the loot left. At a
+        // leg's ACTOR-BLOCKED verdict whose blocker is one of OUR followers
+        // (Followers::IsTracked), the jam is resolved as a PAIR instead of a reorder:
+        //   * both on a loot excursion: the higher RAPPORT (FollowerState::rapport)
+        //     keeps the way and re-dispatches its item at once; the lower one YIELDS.
+        //     Equal rapport: the LOWER FormID keeps the way (deterministic, and both
+        //     followers compute the same answer at their own verdicts).
+        //   * the blocker is a follower NOT on a loot excursion: there is no pair to
+        //     resolve (MFO never moves a follower that is not looting, and a re-walk
+        //     into a standing follower only blocks again), so the looter yields.
+        //   * the player / any other NPC: the M1 REORDER, unchanged.
+        // A YIELD is a hold, never movement: the excursion stays up, no new leg, no
+        // scan, the item is kept. It ends on REAL state only (GiveWayEnded), then the
+        // item is re-dispatched. No timer: the excursion cap, his own combat, the
+        // leash and the player's combat (the driver's hard interrupts and the global
+        // backstop) end the whole excursion, and the record with it (`excursion`
+        // ties the record to the excursion it was made in).
+        // Worker-only, no lock, NOT serialized; erased with g_actorDefer.
+        struct GiveWay {
+            RE::FormID          winner = 0;
+            RE::ObjectRefHandle item;                // his item, retried on resume
+            RE::FormID          itemId = 0;          // for the log (the handle may die)
+            RE::NiPoint3        blockPos{};          // where HIS leg was blocked
+            Clock::time_point   excursion{};         // his TravelIntent::startTime at the yield
+            bool                winnerLooting = false;   // the winner had an excursion at the yield
+            Clock::time_point   winnerLeg{};         // its legStart then
+            bool                winnerWalking = false;   // its phase then
+            Clock::time_point   since{};             // log only
+        };
+        inline std::unordered_map<RE::FormID, GiveWay> g_giveWay;
+
+        // MFO's own rapport for a tracked follower (0 without a record). The job
+        // worker is the serial pump domain g_followers lives in (#4), exactly like
+        // Scheduler's own g_followers.find before it calls ServiceFollower.
+        inline std::uint32_t GiveWayRapport(RE::FormID a_id) {
+            const auto it = g_followers.find(a_id);
+            return it != g_followers.end() ? it->second.rapport : 0u;
+        }
+        // Does a keep the way over b? Higher rapport; tie -> lower FormID.
+        inline bool GiveWayOutranks(RE::FormID a, std::uint32_t ra, RE::FormID b, std::uint32_t rb) {
+            return ra != rb ? ra > rb : a < b;
+        }
+        // nullptr = still yielding; else why the hold ends. Every test is live state:
+        // the winner's own excursion record, its position against HIS block point,
+        // its cell, and the player's combat.
+        inline const char* GiveWayEnded(RE::Actor* a_f, const GiveWay& a_g) {
+            if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && pc->IsInCombat())
+                return "the player is in combat";
+            auto* w = RE::TESForm::LookupByID<RE::Actor>(a_g.winner);
+            if (!w || w->IsDead() || w->IsDisabled() || w->IsMarkedForDeletion() || !w->Is3DLoaded())
+                return "it is gone (dead, disabled or unloaded)";
+            auto* wc = w->GetParentCell();
+            auto* fc = a_f->GetParentCell();
+            if (wc != fc && ((wc && wc->IsInteriorCell()) || (fc && fc->IsInteriorCell())))
+                return "it left the cell";
+            const int ws = SlotIndexOf(a_g.winner);
+            if (a_g.winnerLooting) {
+                if (ws < 0) return "its excursion ended";
+                const TravelIntent& wt = g_travelSlots[ws];
+                if (wt.legStart != a_g.winnerLeg) return "it started a new leg";
+                if ((wt.phase == TravelPhase::Walking) != a_g.winnerWalking) return "its leg ended";
+            } else if (ws >= 0) {
+                return "it started its own loot leg";
+            }
+            // Passed the block point: outside the same reach / height the blocker
+            // test uses, so a follower that would no longer be found as the blocker
+            // is no longer waited for.
+            const RE::NiPoint3 P = w->GetPosition();
+            const float dx = P.x - a_g.blockPos.x, dy = P.y - a_g.blockPos.y;
+            if (std::sqrt(dx * dx + dy * dy) > kActorBlockReach || std::fabs(P.z - a_g.blockPos.z) > kActorBlockZ)
+                return "it is clear of the block point";
+            return nullptr;
+        }
+
         // THE candidate order (review R1). Every key -- failed/gated, the actor-
         // block tier, the distance -- is taken ONCE per candidate before the sort,
         // so a main-thread gate erase mid-sort cannot flip a key between two

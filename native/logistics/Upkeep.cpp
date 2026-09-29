@@ -623,6 +623,7 @@ namespace MFO::Logistics {
         g_grabGrow.clear();   // grown-grab radii are per-session verdicts
         ClearGates();         // loot M1: GATED records are per-session skips
         g_actorDefer.clear(); // loot M1: actor-block reorder records
+        g_giveWay.clear();    // loot give-way: yield records (field 0929)
         g_idleCycles.clear();
         g_lastBlocklistReassess = {};
         Lockpick::Clear();    // LP-M1: pick jobs, verdicts and their Harbinger holds are per-session

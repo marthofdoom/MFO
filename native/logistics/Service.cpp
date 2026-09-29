@@ -430,6 +430,7 @@ namespace MFO::Logistics {
                 Packages::LootTravelClear("museum deposit", a_follower, slot);
                 tr = TravelIntent{};
                 g_actorDefer.erase(id);   // loot M1: a reorder lives one excursion
+                g_giveWay.erase(id);      // give-way: a yield lives one excursion too
             };
             if (Lotd::PriorityDeposit(a_follower, a_state, now, gate)) return;
         }
@@ -440,7 +441,10 @@ namespace MFO::Logistics {
         // he hoovers a batch instead of returning to the player after each corpse.
         // Release only on combat, the excursion cap, leaving the leash, or the
         // batch running dry (after a short dibs linger).
-        if (SlotIndexOf(id) < 0) g_actorDefer.erase(id);   // loot M1: a reorder lives one excursion
+        if (SlotIndexOf(id) < 0) {   // a reorder / a yield lives one excursion
+            g_actorDefer.erase(id);   // loot M1
+            g_giveWay.erase(id);      // loot give-way (field 0929)
+        }
         if (const int slot = SlotIndexOf(id); slot >= 0) {
             TravelIntent& tr = g_travelSlots[slot];
             auto* pc = RE::PlayerCharacter::GetSingleton();
@@ -704,7 +708,7 @@ namespace MFO::Logistics {
                     const char* reaction =
                         ch19Arrived  ? "arrival (MFO's distance test takes the loot; if he drifted away, the leg restarts)" :
                         ch19Blocked  ? (leg19.blockerKind != APMF_API::kBlocker_None
-                                           ? "actor block -- REORDER, next item at once"
+                                           ? "actor block -- REORDER (a follower: GIVE-WAY), see the next line"
                                            : "static block -- GATED, next item at once") :
                         ch19DestGone ? "transient skip, next item at once" :
                                        "MFO's own observation decides (no M2 reaction for this end)";
@@ -1144,7 +1148,69 @@ namespace MFO::Logistics {
                     // of him is a jam, not a gate -> REORDER his list (the item stays
                     // valid, goes later, the way away from the blocker first); no
                     // GATED verdict, no cone, nothing shared with other followers.
-                    if (ab.id) {
+                    // LOOT GIVE-WAY (field 0929; LootTravel_internal.h GiveWay): when the
+                    // actor is one of OUR followers the jam is a PAIR. Higher rapport
+                    // (tie: lower FormID) against a looting follower keeps the way and
+                    // re-dispatches this item at once; otherwise he YIELDS (Holding, no
+                    // scan, item kept) until GiveWayEnded. Player / NPC: REORDER below.
+                    const bool followerBlock = ab.id && ab.id != id && Followers::IsTracked(ab.id);
+                    const RE::NiPoint3 atPos = blockPos ? *blockPos : a_follower->GetPosition();
+                    if (followerBlock) {
+                        const std::uint32_t rMe = GiveWayRapport(id), rB = GiveWayRapport(ab.id);
+                        const int  bs       = SlotIndexOf(ab.id);
+                        const bool bLooting = bs >= 0;
+                        if (bLooting && GiveWayOutranks(id, rMe, ab.id, rB)) {
+                            // The loser may already be yielding to HIM and standing in his
+                            // way (a yield never moves it): its hold cannot clear the way,
+                            // so it ends as the M1 REORDER (its item kept, the items away
+                            // from him first) and he walks on.
+                            if (auto lw = g_giveWay.find(ab.id); lw != g_giveWay.end() && lw->second.winner == id) {
+                                g_actorDefer[ab.id] = ActorDefer{ lw->second.itemId, id, a_follower->GetPosition() };
+                                spdlog::info("[loot] {:08X} stops yielding to {:08X}: it stands in his way (he was "
+                                             "blocked by it again at ({:.0f},{:.0f},{:.0f})) -- REORDER instead "
+                                             "(item {:08X} kept, items away from him first)",
+                                             ab.id, id, atPos.x, atPos.y, atPos.z, lw->second.itemId);
+                                g_giveWay.erase(lw);
+                            }
+                            spdlog::info("[loot] {:08X} keeps the way over {:08X} (rapport {} {} {}) at "
+                                         "({:.0f},{:.0f},{:.0f}) -- retrying {:08X} at once",
+                                         id, ab.id, rMe, rMe == rB ? "=" : ">", rB, atPos.x, atPos.y, atPos.z,
+                                         tref->GetFormID());
+                            tr.blockedSince = {};
+                            tr.stolenSince  = {};
+                            if (RetargetExcursionLeg(a_follower, slot, tref, tr.cat, tr.want, dist, now))
+                                return;   // a fresh leg to the same item, still walking
+                            spdlog::warn("[loot] {:08X} keeps the way but the re-dispatch to {:08X} was refused "
+                                         "-- REORDER instead", id, tref->GetFormID());
+                            g_actorDefer[id] = ActorDefer{ tref->GetFormID(), ab.id, ab.pos };
+                            skipWhy = "ACTOR-BLOCKED (kept the way, re-dispatch refused: reordered)";
+                        } else {
+                            GiveWay gw;
+                            gw.winner        = ab.id;
+                            gw.item          = tref->GetHandle();
+                            gw.itemId        = tref->GetFormID();
+                            gw.blockPos      = atPos;
+                            gw.excursion     = tr.startTime;
+                            gw.winnerLooting = bLooting;
+                            gw.winnerLeg     = bLooting ? g_travelSlots[bs].legStart : Clock::time_point{};
+                            gw.winnerWalking = bLooting && g_travelSlots[bs].phase == TravelPhase::Walking;
+                            gw.since         = now;
+                            g_giveWay[id]    = gw;
+                            g_actorDefer.erase(id);   // a yield replaces any reorder of this excursion
+                            if (bLooting)
+                                spdlog::info("[loot] {:08X} yields to {:08X} (rapport {} {} {}{}) at "
+                                             "({:.0f},{:.0f},{:.0f}) -- holding, {:08X} kept, no new leg, until "
+                                             "its leg moves on", id, ab.id, rMe, rMe == rB ? "=" : "<", rB,
+                                             rMe == rB ? ", tie: lower FormID keeps the way" : "",
+                                             atPos.x, atPos.y, atPos.z, tref->GetFormID());
+                            else
+                                spdlog::info("[loot] {:08X} yields to {:08X} (it is not looting, rapport {} vs {}: "
+                                             "nothing to give way, MFO does not move it) at ({:.0f},{:.0f},{:.0f}) "
+                                             "-- holding, {:08X} kept, no new leg, until it moves off",
+                                             id, ab.id, rMe, rB, atPos.x, atPos.y, atPos.z, tref->GetFormID());
+                            skipWhy = "ACTOR-BLOCKED by a follower (yielding, item kept)";
+                        }
+                    } else if (ab.id) {
                         g_actorDefer[id] = ActorDefer{ tref->GetFormID(), ab.id, ab.pos };
                         spdlog::info("[loot] {:08X} target {:08X} ACTOR-BLOCKED -- Movement Blocked {:.1f}s, "
                                      "actor {:08X} {:.0f} u in front: REORDER (item kept, later in his list, "
@@ -1381,6 +1447,38 @@ namespace MFO::Logistics {
                     PlayerActivelyStealthing()) {
                     noteNext("pending (holding: container menu open / player sneaking)");
                     return;   // hold, retry next tick
+                }
+                // LOOT GIVE-WAY (field 0929): he is YIELDING to a follower. No scan,
+                // no new leg until the hold ends on real state (GiveWayEnded), then
+                // his item goes first. A record from an earlier excursion is dropped.
+                if (auto gw = g_giveWay.find(id); gw != g_giveWay.end()) {
+                    if (gw->second.excursion != tr.startTime) {
+                        g_giveWay.erase(gw);
+                    } else if (const char* why = GiveWayEnded(a_follower, gw->second); !why) {
+                        noteNext(std::format("none -- holding, giving way to {:08X}", gw->second.winner).c_str());
+                        return;   // still yielding
+                    } else {
+                        const GiveWay g = gw->second;
+                        g_giveWay.erase(gw);
+                        auto  iptr = g.item.get();
+                        auto* ir   = iptr.get();
+                        const char* bad =
+                            !ir || ir->IsDisabled() || ir->IsMarkedForDeletion() ? "it is gone" :
+                            TravelFailedRecently(g.itemId, now)                  ? "it is skipped now (failed or GATED)" :
+                            (!LooseRef(ir) && !ir->IsLocked() && !Lockpick::IsDoor(ir) &&
+                             !HasLoot(a_follower, ir, tr.cat, tr.want))          ? "it is empty now" : nullptr;
+                        const float gsec = std::chrono::duration<float>(now - g.since).count();
+                        if (!bad && RetargetExcursionLeg(a_follower, slot, ir, tr.cat, tr.want,
+                                                         a_follower->GetPosition().GetDistance(ir->GetPosition()), now)) {
+                            spdlog::info("[loot] {:08X} resumes after giving way to {:08X} ({}, held {:.1f}s) -- "
+                                         "retrying {:08X}", id, g.winner, why, gsec, g.itemId);
+                            return;   // walking to his item again
+                        }
+                        spdlog::info("[loot] {:08X} resumes after giving way to {:08X} ({}, held {:.1f}s) -- "
+                                     "{:08X} {}, next item", id, g.winner, why, gsec, g.itemId,
+                                     bad ? bad : "re-dispatch refused");
+                        // fall through: the scan takes the next item
+                    }
                 }
                 if (RunExcursionScan(a_follower, a_state, now)) {
                     // Retargeted (phase now Walking) or grabbed a cluster corpse
