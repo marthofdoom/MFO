@@ -115,6 +115,7 @@ namespace MFO::Logistics::Lockpick {
             kNone, kOwned, kOffLimits, kNotChest, kRequiresKey, kNoPicks, kCreature,
             kNoHarbinger, kNoMainThread, kUnlockSeat, kSimFail, kTooLong, kNotLocked,
             kGone, kSettings, kIdleEnded, kUnlockFailed, kNoTime, kNoSweetSpot, kDoorInto, kFactionContainer,
+            kNotReady,
         };
         const char* ReasonName(Reason a_r) {
             switch (a_r) {
@@ -139,6 +140,7 @@ namespace MFO::Logistics::Lockpick {
             case Reason::kNoTime:       return "noTime";
             case Reason::kNoSweetSpot:  return "noSweetSpot";
             case Reason::kDoorInto:     return "doorDestinationBarred";
+            case Reason::kNotReady:     return "combatOrWeaponDrawn";
             }
             return "?";
         }
@@ -416,7 +418,16 @@ namespace MFO::Logistics::Lockpick {
         std::unordered_map<std::uint64_t, Snap> g_snaps;   // by ticket; guarded by g_snapMx
         std::uint64_t g_nextTicket = 1;                    // worker-only
 
-        enum class Phase : std::uint8_t { kSnapshot, kPicking, kUnlocking };
+        enum class Phase : std::uint8_t { kSnapshot, kReady, kPicking, kUnlocking };
+        // READY GATE (field 0928c, B): a pick never STARTS while the follower or the
+        // party (the player) is in combat, or while his weapon is drawn. A drawn weapon
+        // out of combat is sheathed first through the tree's existing sheathe road
+        // (Actor::DrawWeaponMagicHands(false), MainThread::Post'd, only out of combat --
+        // cast/Equip.cpp's stand-down re-arm); combat is waited out. Bounded by
+        // kReadyFloorSec of UNPAUSED service clock (a sheathe is ~1 s; the arrival step
+        // runs on the ~1 s logistics cadence), then refused as notReady -- transient,
+        // the caller blocklists the ref for a short while, never a standing verdict.
+        constexpr double kReadyFloorSec = 5.0;
         // Every time below is on the Scheduler's UNPAUSED service clock (Scheduler::ServiceClock).
         struct Job {
             RE::FormID    ref = 0;
@@ -436,6 +447,9 @@ namespace MFO::Logistics::Lockpick {
             float         skill = 0.0f;
             std::int32_t  picksHeld = 0;
             SimOut        sim{};
+            double        readyAt = 0.0;       // kReady entered (the ready gate's floor)
+            bool          waitLogged = false;
+            bool          sheathePosted = false;
         };
         std::unordered_map<RE::FormID, Job> g_jobs;
         // LP-M2 F-L3: the last lock THIS follower's own job opened (picked or keyed), read and
@@ -726,6 +740,40 @@ namespace MFO::Logistics::Lockpick {
                                                         "excursion cap", j.window, left, cap));
                 EndJob(fid, nullptr);
                 return StepResult::kRefused;
+            }
+            j.phase   = Phase::kReady;
+            j.readyAt = clk;
+            // no return: the ready gate below runs on this same step (unchanged timing when ready)
+        }
+
+        if (j.phase == Phase::kReady) {
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            const bool combat = a_follower->IsInCombat() || (pc && pc->IsInCombat());
+            const auto* ast   = a_follower->AsActorState();
+            const bool drawn  = ast && ast->IsWeaponDrawn();
+            if (combat || drawn) {
+                if (!j.waitLogged) {
+                    j.waitLogged = true;
+                    spdlog::info("[lockpick] {:08X}: {:08X} pick WAITS -- {}{}", fid, rid,
+                                 combat ? (a_follower->IsInCombat() ? "he is in combat" : "the party is in combat")
+                                        : "his weapon is drawn",
+                                 (!combat && drawn) ? "; sheathing it first" : "; waiting it out");
+                }
+                if (drawn && !combat && !j.sheathePosted) {
+                    j.sheathePosted = true;
+                    MainThread::Post([fid]() {
+                        auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
+                        if (f && !f->IsInCombat()) f->DrawWeaponMagicHands(false);   // the stand-down road
+                    });
+                }
+                if (clk - j.readyAt > kReadyFloorSec) {
+                    LogRefusal(fid, a_ref, Reason::kNotReady,
+                               std::format(" -- {} for {:.0f}s of running game; retried on a later pass",
+                                           combat ? "combat" : "weapon still drawn", kReadyFloorSec));
+                    EndJob(fid, nullptr);
+                    return StepResult::kRefused;
+                }
+                return StepResult::kHold;
             }
             switch (APMFBridge::ClaimLockpickHold(fid, kIdleLockPick, rid)) {
             case APMFBridge::PickHoldResult::Filed:

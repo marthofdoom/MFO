@@ -37,7 +37,11 @@ namespace MFO::TradeBridge {
         // the LAST report there read it. g_emptyMemo: per (follower, vendor), the last
         // result was EMPTY -- its signature (TradeSignature folded with that report's
         // chest gold) and the game day it happened.
-        struct EmptyMemo { std::uint64_t sig = 0; float day = 0.0f; bool logged = false; };
+        // sig = TradeSignature alone (purse, needs, sell rows); gold = the chest's gold that
+        // empty report read. Kept APART (field 0928c, Gunmar): folding the gold into the
+        // signature let ANOTHER follower's trade at the same chest (which moves its gold)
+        // reopen this follower's own empty memo, and he walked up to trade nothing again.
+        struct EmptyMemo { std::uint64_t sig = 0; std::int32_t gold = -1; float day = 0.0f; bool logged = false; };
         std::unordered_map<RE::FormID, std::int32_t>     g_chestGold;
         std::unordered_map<std::uint64_t, EmptyMemo>     g_emptyMemo;
         struct StaticSkip { std::uint64_t reason = 0; float day = 0.0f; };
@@ -64,6 +68,7 @@ namespace MFO::TradeBridge {
             return 2.0f;
         }
         std::atomic<std::int32_t>                     g_nextToken{ 1 };
+        std::atomic<std::int32_t>                     g_sessionFirstToken{ 1 };   // the first token this session issues
 
         TradeOrder* Find(std::int32_t a_token) {   // caller holds g_mtx
             auto it = g_orders.find(a_token);
@@ -471,7 +476,26 @@ namespace MFO::TradeBridge {
             {
                 std::scoped_lock lk(g_mtx);
                 auto it = g_orders.find(a_token);
-                if (it == g_orders.end()) { spdlog::warn("[econ] ReportTrade: unknown token {}", a_token); return; }
+                if (it == g_orders.end()) {
+                    // A token from BEFORE this session's first one is a RunTrade stack that
+                    // was saved mid-run and resumed after a load (field 0928c: 1000159 at
+                    // 19:56:26, 48 s after kDataLoaded). Its order died with that session
+                    // (ClearTransientState): GetVendorChest answered none, the resumed stack
+                    // aborted, nothing traded. Anything newer is an order this session lost
+                    // (the 30 s reap in VendorTrade): that one stays a warning.
+                    // Outside [this session's first token, the next one) = not issued this
+                    // session. (A counter restarts per PROCESS, so a stale token from a save
+                    // made in an earlier process can also land INSIDE a later session's range
+                    // -- reported, not changed here.)
+                    if (a_token < g_sessionFirstToken.load() || a_token >= g_nextToken.load())
+                        spdlog::info("[econ] ReportTrade: token {} is from a trade saved mid-run before the last "
+                                     "load -- its order is gone, nothing was traded (the resumed script aborted)",
+                                     a_token);
+                    else
+                        spdlog::warn("[econ] ReportTrade: unknown token {} (issued this session; its order was reaped "
+                                     "or never stored)", a_token);
+                    return;
+                }
                 o = std::move(it->second);
                 g_orders.erase(it);
             }
@@ -492,7 +516,7 @@ namespace MFO::TradeBridge {
                 if (fp && vp) {
                     const auto key = PairKey(fp->GetFormID(), vp->GetFormID());
                     if (a_soldCount == 0 && a_boughtCount == 0)
-                        g_emptyMemo[key] = EmptyMemo{ Mix(o.sig, static_cast<std::uint64_t>(a_vendorGold)), o.daysAt, false };
+                        g_emptyMemo[key] = EmptyMemo{ o.sig, a_vendorGold, o.daysAt, false };
                     else
                         g_emptyMemo.erase(key);
                 }
@@ -625,9 +649,16 @@ namespace MFO::TradeBridge {
         // (a) the last trade here was empty and nothing changed since.
         if (auto mIt = g_emptyMemo.find(key); mIt != g_emptyMemo.end()) {
             auto& m = mIt->second;
-            const std::uint64_t sigNow = Mix(a_sig, static_cast<std::uint64_t>(gold));
-            if (sigNow != m.sig) {
-                g_emptyMemo.erase(mIt);   // something changed: trade again
+            // The chest's gold matters to HIM only through his sell rows (the vendor's gold
+            // pays for what he sells; his purse pays for what he buys). So a changed gold
+            // reopens the memo only when it now pays for one of his rows that the gold of
+            // his empty trade could not.
+            const bool goldOpensARow = goldKnown && gold != m.gold &&
+                std::any_of(a_sell.begin(), a_sell.end(), [&](const SellRow& r) {
+                    return r.count > 0 && r.value <= gold && r.value > m.gold;
+                });
+            if (a_sig != m.sig || goldOpensARow) {
+                g_emptyMemo.erase(mIt);   // HIS side changed, or the chest can now pay for a row: trade again
             } else if (a_daysNow >= m.day + restock) {
                 g_emptyMemo.erase(mIt);   // the vendor has restocked since: trade again
             } else {
@@ -681,6 +712,7 @@ namespace MFO::TradeBridge {
         // session could reissue, so the stale token can never name a fresh order
         // (GetVendorChest -> none -> the resumed stack aborts safe).
         g_nextToken.fetch_add(1'000'000);
+        g_sessionFirstToken.store(g_nextToken.load());
     }
 
 }

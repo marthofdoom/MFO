@@ -303,6 +303,12 @@ namespace MFO::Logistics {
                 bool operator==(const SentDecl&) const = default;
             };
             std::unordered_map<RE::FormID, SentDecl> g_lastDeclared;
+            // The worn pieces the LAST build withheld as museum relics (RelicOffBody),
+            // per follower, worker-serial like g_lastDeclared (field 0928c, Cicero's
+            // Dawnguard Helmet): when the relic verdict flips back, that piece is worn
+            // and absent from the last set -- which rule 4b would otherwise read as the
+            // PLAYER putting it on. MFO withheld it itself; it is never a player pick.
+            std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_lastWithheld;
 
             // MFO-B63: WHEN the last declaration actually went out, per follower.
             // APMF exposes no "the enforcement pass ran" query -- its pass is a
@@ -389,9 +395,12 @@ namespace MFO::Logistics {
 
         void ForgetEquipDeclaration(RE::FormID a_follower) {
             g_lastDeclared.erase(a_follower); g_playerPicks.erase(a_follower); g_lastDeclSentAt.erase(a_follower);
+            g_lastWithheld.erase(a_follower);
         }
         void ResendEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); }   // MFO-B41: the change detector only
-        void ClearEquipDeclarations() { g_lastDeclared.clear(); g_playerPicks.clear(); g_lastDeclSentAt.clear(); }
+        void ClearEquipDeclarations() {
+            g_lastDeclared.clear(); g_playerPicks.clear(); g_lastDeclSentAt.clear(); g_lastWithheld.clear();
+        }
 
         bool IsPlayerPick(RE::FormID a_follower, RE::FormID a_form) {
             const auto it = g_playerPicks.find(a_follower);
@@ -835,6 +844,9 @@ namespace MFO::Logistics {
                     if (std::find(mageSet.begin(), mageSet.end(), ar) != mageSet.end()) continue;
                     const RE::FormID f = ar->GetFormID();
                     if (lastHas(f) || picks.count(f)) continue;
+                    // MFO withheld it itself on the last build (a relic verdict that has
+                    // since flipped back): not the player's choice.
+                    if (const auto w = g_lastWithheld.find(id); w != g_lastWithheld.end() && w->second.count(f)) continue;
                     // A museum relic left out of the set (RelicOffBody) is not a player
                     // pick just because it is worn and undeclared: the player's own
                     // relic dressing is PlayerGiven's record, which RelicOffBody honours.
@@ -892,6 +904,7 @@ namespace MFO::Logistics {
             //    Shields are never declared (rule 3: an unowned category). A museum
             //    relic is never declared (RelicOffBody): Armor is owned, so the seat
             //    refuses its re-equip; worn now, it ships at the next deposit.
+            std::unordered_set<RE::FormID> withheldNow;   // -> g_lastWithheld after this build
             for (auto& [obj, data] : inv) {
                 if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                 auto* ar = obj->As<RE::TESObjectARMO>();
@@ -901,6 +914,7 @@ namespace MFO::Logistics {
                                 [&](RE::TESObjectARMO* c) { return c != ar && SlotsOverlap(ar, c); }))
                     continue;
                 if (RelicOffBody(a_follower, a_state, obj)) {
+                    withheldNow.insert(ar->GetFormID());
                     // Once per (follower, relic) per session: the field proof of item 3.
                     static std::unordered_set<std::uint64_t> s_relicLogged;   // worker-serial like g_lastDeclared
                     if (s_relicLogged.insert((static_cast<std::uint64_t>(id) << 32) | ar->GetFormID()).second)
@@ -911,6 +925,9 @@ namespace MFO::Logistics {
                 }
                 decl.Add(ar);
             }
+            // Every build, sent or not: what 4b must not read as the player's next tick.
+            if (withheldNow.empty()) g_lastWithheld.erase(id);
+            else                     g_lastWithheld[id] = std::move(withheldNow);
 
             // SEND ONLY ON CHANGE.
             // SEND ONLY ON CHANGE -- no forced re-issue (F3, Fable round 2): a

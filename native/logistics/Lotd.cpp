@@ -191,6 +191,10 @@ namespace MFO::Lotd {
             std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, std::int32_t>> uncoveredExcl;
         };
         Needs g_needs;   // worker only
+        // Coverage roster (field 0928c A2): per follower, his relic counts as last read
+        // while he was in the active snapshot. Worker only, cleared on revert.
+        std::unordered_map<RE::FormID, CountMap> g_retainedSupply;
+        std::size_t                              g_retainedLogged = 0;
         // MFO-B126: per follower, the off-role relics ShedOffRoleWeapon kept for the
         // deposit on its last pass and the in-role weapons he carried then
         // (NoteKeptForDeposit). Worker only, like g_needs.
@@ -615,15 +619,52 @@ namespace MFO::Lotd {
                 if (SlotOpen(snap->slots[i])) n.open.push_back(i);
             n.fixedSupply = ms->fixed;
             std::int32_t sFollowers = 0;
+            // COVERAGE FOLLOWS THE PARTY, NOT THE PROCESS LIST (field 0928c, A2). The
+            // active snapshot is Followers::Refresh's rebuild from the HIGH process list:
+            // a follower left behind in another cell drops out of it after three missed
+            // sweeps and comes back when he catches up (Serana, 4 times in one session).
+            // Rebuilding coverage from that snapshot made her relics vanish from supply
+            // for those seconds, so a HIGHER-id follower (Jesper, via UncoveredExcluding)
+            // became the coverer of her Novice Robes' slot and had his own robes stripped,
+            // then restored -- and Cicero's Dawnguard Helmet the same way through Adelinda.
+            // So: an active follower's relic counts are read now and REMEMBERED
+            // (g_retainedSupply); a follower who is out of the snapshot but still a
+            // follower (Followers::IsEligibleFollower: teammate, not dead / disabled / a
+            // dismissed custom follower) keeps counting with his last-read counts. His
+            // inventory is never read while he is outside the high process list (the
+            // unloaded-inventory read is exactly what the snapshot avoided), and it cannot
+            // change there without him. A follower who is no longer eligible is dropped.
+            // Not a timer: membership is the engine's own teammate state.
+            std::unordered_set<RE::FormID> activeNow;
             if (auto ids = Followers::ActiveSnapshot()) {
-                std::vector<RE::FormID> sorted(ids->begin(), ids->end());
-                std::sort(sorted.begin(), sorted.end());
-                for (auto fid : sorted) {
+                for (auto fid : *ids) {
                     CountMap m;
                     AddCounts(RE::TESForm::LookupByID<RE::Actor>(fid), *snap, m, false);
-                    sFollowers += Sum(m);
-                    n.followerSupply.emplace_back(fid, std::move(m));
+                    g_retainedSupply[fid] = std::move(m);
+                    activeNow.insert(fid);
                 }
+            }
+            std::vector<RE::FormID> sorted;
+            for (auto it = g_retainedSupply.begin(); it != g_retainedSupply.end();) {
+                if (!activeNow.count(it->first)) {
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first);
+                    if (!a || !Followers::IsEligibleFollower(a)) { it = g_retainedSupply.erase(it); continue; }
+                }
+                sorted.push_back(it->first);
+                ++it;
+            }
+            std::sort(sorted.begin(), sorted.end());
+            for (auto fid : sorted) {
+                const CountMap& m = g_retainedSupply[fid];
+                sFollowers += Sum(m);
+                n.followerSupply.emplace_back(fid, m);
+            }
+            if (sorted.size() > activeNow.size() && g_retainedLogged != sorted.size() - activeNow.size()) {
+                g_retainedLogged = sorted.size() - activeNow.size();
+                spdlog::info("[lotd] needs: {} follower(s) out of the loaded roster still count toward museum "
+                             "coverage (last-read relic counts, still teammates)", g_retainedLogged);
+            } else if (sorted.size() == activeNow.size()) {
+                g_retainedLogged = 0;
             }
             CountMap all = n.fixedSupply;
             for (auto& [fid, m] : n.followerSupply)
@@ -1323,6 +1364,8 @@ namespace MFO::Lotd {
             g_main.reset();
         }
         g_needs = Needs{};
+        g_retainedSupply.clear();
+        g_retainedLogged = 0;
         g_keptForDeposit.clear();
         g_keptSeenUnworn.clear();
         g_relicSeenUnworn.clear();
