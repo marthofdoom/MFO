@@ -52,10 +52,18 @@ namespace MFO::Sightline {
     Verdict Check(RE::FormID a_viewer, RE::FormID a_target);
 
     // Ask the main thread to (re)measure viewer -> each target. Callable from
-    // any thread; rate-limited per viewer so the evaluator's per-rule calls at
-    // 7.5 Hz cannot flood the frame queue. The results land in the cache a
+    // any thread; rate-limited per (viewer, target) pair (0.3 s, per pair since
+    // 2026-09-29 so one caller's batch never drops another's) so the evaluator's
+    // per-rule calls at 7.5 Hz cannot flood the frame queue. The results land in the cache a
     // frame later -- callers read Check(), never a return value.
     void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets);
+
+    // Check() with a caller-chosen trust window instead of kFreshSeconds: the
+    // last measured verdict if it is younger than a_maxAgeSeconds, else Unknown.
+    // For a caller that must not read an OLD Occluded as Unknown-passes merely
+    // because its own re-measure is one service period out (PickAlly's heal
+    // pick, field 2026-09-29). Any thread, same leaf lock as Check().
+    Verdict CheckWithin(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds);
 
     // MAIN THREAD ONLY. Measure viewer -> target NOW -- the same two-stage Measure
     // that Want() posts (engine HasLineOfSight, then MFO's own ray on a CLEAR) --
