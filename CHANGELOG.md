@@ -13,8 +13,9 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **No lockpicking mid-fight.** A follower never starts picking a lock while he or you are in combat. With his weapon out, he puts it away first.
 - **Followers finally sell ammo.** Arrows and bolts now pass the vendor's check. Before, every blacksmith turned them down.
 - **Fewer empty trips to the vendor.** Another follower's trade no longer sends a follower back to a vendor who still cannot pay for anything he offers.
-- **Foe is ranged covers casters at range.** It now means a bow, a crossbow, a staff, or a spell cast from a distance. Foe is a spellcaster stays the same.
-- **New condition: Foe is mechanical.** Picks the nearest Dwemer construct: spiders, spheres, centurions and the like. Ghosts, skeletons and ash spawn do not count.
+- **Foe: Ranged covers casters at range.** It now means a bow, a crossbow, a staff, or a spell cast from a distance. Foe: Spellcaster stays the same.
+- **New condition: Foe: Mechanical.** Picks the nearest Dwemer construct: spiders, spheres, centurions and the like. Ghosts, skeletons and ash spawn do not count.
+- **Gambit labels read one way now.** Every condition that starts with a subject is written the same: Foe: Dragon, Foe: Targeting me, Ally: HP below, Self: Magicka below. The % sign left the labels, since the value already shows it. Cast at foe/ally is now Cast on target, and Dark is In the dark. Your gambits keep working (only the text changed).
 
 - **Museum drop-offs come first.** A follower with the Loot museum items gambit who carries relics the museum needs heads for a Museum Shipments crate as soon as one is inside his leash. He stops a loot run for it, unless he is fetching a museum item. Then he drops that off too. Only combat and heals come first.
 - **Several followers can drop off at once.** Each follower runs his own trip. A failed walk only holds back that follower at that crate.

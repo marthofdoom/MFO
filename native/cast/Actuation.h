@@ -75,7 +75,7 @@ namespace MFO::Actuation {
     // Player/NearestAlly -> the PLAYER fallback (a_outIsFallbackPlayer marks that
     // last rung so a caller's range check can WAIVE it). Public so BOTH the
     // combat Fire path and the out-of-combat Logistics cast_target path resolve a
-    // manual target identically -- a logistics "Cast at foe/ally, Target=Nearest
+    // manual target identically -- a logistics "Cast on target, Target=Ally: Nearest
     // ally" rule fires instead of being silently dropped. Main-thread / worker.
     RE::Actor* ResolveCastTarget(RE::Actor* a_follower, const Eval::Choice& a_choice,
                                  bool& a_outIsFallbackPlayer);

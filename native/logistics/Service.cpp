@@ -1532,10 +1532,10 @@ namespace MFO::Logistics {
                         tgt = p.get();
                     } else {
                         // NOT auto, and no selector target this tick: a MANUAL pick
-                        // (Target = Nearest ally / a named follower / Player).
+                        // (Target = Ally: Nearest / a named follower / Player).
                         // Resolve it through the SAME ladder the combat Fire path
                         // uses (Actuation::ResolveCastTarget) so a logistics "Cast
-                        // at foe/ally, Target = Nearest ally" rule actually FIRES out
+                        // on target, Target = Ally: Nearest" rule actually FIRES out
                         // of combat instead of being silently dropped (Wave 3 #9 /
                         // review SEV-2). A foe selector that found nobody OOC already
                         // routed through the AUTO branch above (Self + no-actor +

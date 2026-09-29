@@ -252,7 +252,7 @@ namespace MFO::Actuation {
             if (cmd != Targeting::CommandOutcome::Changed) {
                 return { Result::NoOp, "already on that target" };
             }
-            // Log the foe's HP% too, so "Foe: lowest HP -> Attack" is legible in
+            // Log the foe's HP% too, so "Foe: Lowest HP -> Attack" is legible in
             // the log -- confirms the SELECTOR actually picked the weakest foe.
             return { Result::Fired,
                      std::format("target {} ({}% hp)",
@@ -297,7 +297,7 @@ namespace MFO::Actuation {
             // nature and fans the cast out (CastAuto). It engages ONLY when
             // nothing more specific named a target -- no explicit subject actor,
             // no selector/condition target this tick. A MANUAL pick (Player /
-            // Nearest ally / a specific follower) or a selector that chose a foe
+            // Ally: Nearest / a specific follower) or a selector that chose a foe
             // keeps the single-target ladder path below, unchanged.
             auto tp = a_choice.target.get();
             const bool autoPick =

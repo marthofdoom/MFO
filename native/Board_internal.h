@@ -230,7 +230,7 @@ namespace MFO::Board {
         { Vocab::kCondSelfOutOfArrows,     "Arrows below",          ParamKind::Count   },
         { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
         { Vocab::kCondSelfCarryWeightAbove,"Self: Carry weight above",  ParamKind::Percent },
-        // Ally-health support targeting in LOGISTICS: "Ally HP % below -> Cast
+        // Ally-health support targeting in LOGISTICS: "Ally: HP below -> Cast
         // heal on ally" for out-of-combat heals. The ally selector (incl. the
         // player, PickAlly) is table-agnostic in the evaluator, so this is pure
         // UI exposure -- no evaluator change needed to run it in the logi scan.
