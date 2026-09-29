@@ -242,6 +242,47 @@ namespace MFO::Scheduler {
         // table live" line: inserted on the first own-OOC party-combat service,
         // erased with the other per-fight state in the party-OOC branch.
         std::unordered_set<RE::FormID> g_partyCombatNoted;
+        // POST-FIGHT STALL PROBE (field 2026-09-29), PASSIVE: no behaviour reads it.
+        // Followers stood 10-20 s after fights while the PLAYER stayed combat-
+        // flagged (a Bandit Chief no follower engaged) and party combat was ON.
+        // While party combat is ON and a follower's OWN combat is OFF, one
+        // [stall-probe] line per follower every kStallProbeS: how far and how fast
+        // they moved since the last sample (position deltas, no engine call), their
+        // running package and its procedure type, and the player's combat flag and
+        // combat target. For the next field session to name the mechanism. The
+        // sample is dropped when they fight again or the party fight ends.
+        struct StallSample {
+            std::chrono::steady_clock::time_point at{};
+            RE::NiPoint3                          pos{};
+        };
+        std::unordered_map<RE::FormID, StallSample> g_stallProbe;
+        constexpr float kStallProbeS = 2.0f;
+
+        void StallProbe(RE::Actor* a_f, RE::FormID a_id) {
+            const auto now = std::chrono::steady_clock::now();
+            const auto pos = a_f->GetPosition();
+            auto [it, fresh] = g_stallProbe.try_emplace(a_id, StallSample{ now, pos });
+            if (fresh) return;   // the first sample is the baseline
+            const float dt = std::chrono::duration<float>(now - it->second.at).count();
+            if (dt < kStallProbeS) return;
+            const float moved = pos.GetDistance(it->second.pos);
+            it->second = StallSample{ now, pos };
+            const auto* pkg  = a_f->GetCurrentPackage();
+            auto*       pc   = RE::PlayerCharacter::GetSingleton();
+            // The player's target: a plain handle member (Actor runtime data 0xFC),
+            // resolved the same way Targeting / Rapport resolve a follower's.
+            RE::NiPointer<RE::Actor> tgt;
+            if (pc) tgt = pc->GetActorRuntimeData().currentCombatTarget.get();
+            const float dPlayer = pc ? pos.GetDistance(pc->GetPosition()) : -1.0f;
+            spdlog::info("[stall-probe] {:08X} '{}': party combat ON, own combat OFF -- moved {:.0f} u in {:.1f}s "
+                         "({:.0f} u/s) dPlayer={:.0f} pkg={:08X} proc={} | player inCombat={} target={:08X} '{}'{}",
+                         a_id, a_f->GetName() ? a_f->GetName() : "?", moved, dt, moved / dt, dPlayer,
+                         pkg ? pkg->GetFormID() : 0u,
+                         pkg ? static_cast<int>(pkg->packData.packType.underlying()) : -1,
+                         pc && pc->IsInCombat() ? 1 : 0, tgt ? tgt->GetFormID() : 0u,
+                         tgt && tgt->GetName() ? tgt->GetName() : "",
+                         tgt ? (tgt->IsDead() ? " (dead)" : "") : "");
+        }
         // Once-per-fight latch for the "[eval] ... combat table: N rules, none
         // matched" line (2026-09-21, Deck/Fable): a follower whose every
         // condition is false has an EMPTY skip-chain, and the no-action chain
@@ -585,6 +626,7 @@ namespace MFO::Scheduler {
         g_meleeClampTrueAt.clear();   // T#76 hysteresis dwell
         g_partyCombat = false;        // party-combat substrate: no phantom OFF edge in the next world
         g_partyCombatNoted.clear();
+        g_stallProbe.clear();                   // [stall-probe] samples are session state
         g_noneMatchedNoted.clear();
         g_equipRangeUndecidableNoted.clear();   // MFO-B55 once-per-fight note
         g_reachHold.clear();                    // fix/mfo-unreachable-flyer: the leash hold
@@ -869,6 +911,7 @@ namespace MFO::Scheduler {
                 // Idempotent out of combat (uncontended erase-miss when unowned).
                 CombatStyle::Clear(id);
                 g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
+                g_stallProbe.erase(id);        // [stall-probe]: the party fight is over
                 g_noneMatchedNoted.erase(id);  // and the once-per-fight "none matched" line
                 g_equipRangeUndecidableNoted.erase(id);   // MFO-B55: and the once-per-fight undecidable note
                 // T#76: the equip force-hold dies with the fight too -- combat end is
@@ -1002,6 +1045,8 @@ namespace MFO::Scheduler {
         };
         if (!ownCombat && g_partyCombatNoted.insert(id).second)
             spdlog::info("[sched] {:08X}: party combat, own combat=0 -- combat table live", id);
+        if (ownCombat) g_stallProbe.erase(id);   // [stall-probe]: only while own combat is OFF
+        else           StallProbe(f, id);
 
         // OWNED MODEL: keep this follower's APMF combat-target claim (if any) alive for
         // the WHOLE fight. Refreshes the expiry timestamp only (no create, no re-point)
