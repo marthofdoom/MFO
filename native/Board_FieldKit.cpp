@@ -930,7 +930,7 @@ namespace MFO::Board {
                                         // Cast-on-self action). The manual picks below still target
                                         // exactly who you choose.
                                         static const std::string kAutoLbl = "Auto (infer from spell)";
-                                        static const std::string kAllyLbl = "Ally: nearest";
+                                        static const std::string kAllyLbl = "Ally: Nearest";
                                         std::vector<TargetOpt> opts;
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::Self,        0, &kAutoLbl });
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::Player,      0, &who->playerName });
