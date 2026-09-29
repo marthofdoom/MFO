@@ -211,8 +211,9 @@ Read it as history and this block as current.
   MFO's own Movement Blocked timer now runs only on road 1, the legacy road, and CH19 on APMF < v12. A same-ref re-dispatch
   re-points an ENDED leg (it used to be a no-op, so the leg never restarted). Gait: `iTravelGait` goes to ch.19 as
   `kTravel_SpeedSet` + speed bits (ABI >= 12 only). **Road 1 gait NOT done:** the FIELD 1 legacy gait proof (Harbinger
-  off, Walk, ~89 u/s) is not on record, so `Gait::Apply` is unchanged and the MCM "(not working yet)" label (outside this
-  branch) should now read "works on Harbinger's road only". 86e3dpn66 (CH19 label, 3 s engage window) was already fixed
+  off, Walk, ~89 u/s) is not on record, so `Gait::Apply` is unchanged. (Update 2026-09-29, `fix/mfo-field-0929`: the MCM
+  "(not working yet)" label is gone; the options are now Walk / Jog / Run mapped to engine bytes by `GaitEngineFromSetting`.
+  CAVEAT: the road 1 legacy gait proof, Harbinger absent, is still not on record.) 86e3dpn66 (CH19 label, 3 s engage window) was already fixed
   by M1 on main; M2 adds the per-leg end-reason line.
   FIELD CHECKS: `[loot-road] DISPATCH road=CH19 ... gait=0` with `iTravelGait=0` and a visibly walking follower (APMF
   `[travel-gait]` shows the running copy); one `[loot] ... CH19 leg ended ARRIVED ...` per leg then `arrived -- looted`

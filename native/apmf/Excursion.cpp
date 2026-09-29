@@ -417,9 +417,10 @@ namespace MFO::APMFBridge {
         p.form = a_destRef;                            // REQUIRED: the destination REFERENCE
         p.fval = a_radius;                             // arrival radius; APMF clamps to [50,512]
         std::uint32_t flags = APMF_API::kTravel_ReleaseOnTargetDead;   // names ch.19's v1 default
-        // GAIT (loot M2, 86e3dh44v): the walk-to-loot gait setting (iTravelGait,
-        // clamped 0..3 at parse = the engine's PreferredSpeed Walk/Jog/Run/FastWalk)
-        // as ch.19's speed bits, so APMF writes it into ITS leg package. ONLY at
+        // GAIT (loot M2, 86e3dh44v): the walk-to-loot gait (Config::g_travelGait, the
+        // ENGINE PreferredSpeed byte 0..3 = Walk/Jog/Run/FastWalk, mapped at parse from
+        // the MCM option iTravelGait by GaitEngineFromSetting) as ch.19's speed bits,
+        // so APMF writes it into ITS leg package. ONLY at
         // ABI >= 12: an older APMF stores the bits and runs at its authored speed
         // without a word, which would be a silent no-op.
         const bool gaitBits = LegStateApi(api) != nullptr;

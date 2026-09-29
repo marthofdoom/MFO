@@ -1850,8 +1850,14 @@ namespace MFO::Actuation {
                 // expired before this read-back HAS landed. Loud only when none of the
                 // three holds for a lasting effect on a live apply (a released
                 // stream's effect is expected to be gone).
-                const bool hpRose = hpAfter > o.hpBefore + 0.005f;
-                const bool landed = o.attach == HealAttach::Present || present || hpRose;
+                // A LIVE STREAM is judged on NOW only: effect present now, or HP rose.
+                // "Present at apply" says nothing about a stream MFO still holds live
+                // whose effect is gone and whose HP did not move (it stopped healing),
+                // so that shape stays loud. Every other road keeps "present at apply".
+                const bool liveStream = o.conc && std::string_view(stream) == "live";
+                const bool hpRose     = hpAfter > o.hpBefore + 0.005f;
+                const bool atApply    = !liveStream && o.attach == HealAttach::Present;
+                const bool landed     = atApply || present || hpRose;
                 const bool gone   = lasting && !landed && (!o.conc || std::string_view(stream) == "live");
                 // THE CHANNEL ONLY COUNTS WHERE A CHANNEL IS EXPECTED. Both direct roads
                 // ("direct self", "direct stream") keep the effect alive themselves
@@ -1877,7 +1883,7 @@ namespace MFO::Actuation {
                     AttachName(o.attach), lasting ? (present ? "present" : "ABSENT") : "instant",
                     channel, st, stream, o.claim ? "yes" : "no",
                     !landed ? "NO"
-                    : o.attach == HealAttach::Present || present ? (hpRose ? "effect+hp" : "effect")
+                    : atApply || present ? (hpRose ? "effect+hp" : "effect")
                                                                  : "hp");
                 if (gone || cut)
                     spdlog::warn("{} *** HEAL NOT LANDING: {} ***", line,
