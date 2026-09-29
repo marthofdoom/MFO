@@ -646,16 +646,15 @@
         },
         {
           "id": "iTravelGait:General",
-          "text": "Walk-to-loot gait (not working yet)",
+          "text": "Walk-to-loot gait",
           "type": "enum",
-          "help": "Not working yet. Followers run on loot trips no matter what this says. A fix is planned.",
+          "help": "How fast followers move on loot trips. Walk, Jog or Run, slowest to fastest. Default Run.",
           "valueOptions": {
             "sourceType": "ModSettingInt",
             "options": [
               "Walk",
               "Jog",
-              "Run",
-              "Fast walk"
+              "Run"
             ],
             "defaultValue": 2
           }

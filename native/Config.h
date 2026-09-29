@@ -888,9 +888,14 @@ namespace MFO::Config {
     // it the byte is inert (measured: 4,386/4,502 flagless vanilla PACKs carry
     // an inert 2). Applied to the live TESPackage record by Gait::Apply(),
     // which runs at the end of every Config::Read() -- NOT read per-tick, so
-    // it is derived engine state, not a live atomic. Default 2 (Run) = the
-    // shipped ESP byte, so an absent key changes nothing. iTravelGait.
-    inline std::atomic<int>   g_travelGait{ 2 };
+    // it is derived engine state, not a live atomic. iTravelGait.
+    // THIS ATOMIC IS THE ENGINE BYTE; THE INI VALUE IS THE MCM OPTION (field
+    // 2026-09-29): the stored iTravelGait is 0=Walk 1=Jog 2=Run in speed order,
+    // mapped at parse to engine Walk / FastWalk / Jog (Config.cpp's
+    // GaitEngineFromSetting, which carries the why and the legacy-value rule).
+    // Default: MCM "Run" (stored 2) = engine Jog (1). Engine Run is no longer
+    // reachable from the MCM.
+    inline std::atomic<int>   g_travelGait{ 1 };   // engine Jog = MCM "Run" (the default)
 
     // NAVMESH GATE (units). Before dispatching a walk, MFO checks the nearest
     // navmesh vertex to the loot ref; if it's farther than this, the ref is

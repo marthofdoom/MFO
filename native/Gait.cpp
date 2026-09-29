@@ -32,7 +32,10 @@ namespace MFO::Gait {
         }
 
         if (had != want) {
-            static constexpr const char* kNames[] = { "Walk", "Jog", "Run", "FastWalk" };
+            // Engine byte, then the MCM label that selects it (Config.cpp's
+            // GaitEngineFromSetting). Engine Run is no longer offered in the MCM.
+            static constexpr const char* kNames[] = { "Walk, MCM Walk", "Jog, MCM Run",
+                                                      "Run, not offered", "FastWalk, MCM Jog" };
             spdlog::info("[gait] travel package preferredSpeed {} -> {} ({})",
                          std::to_underlying(had), gait, kNames[gait]);
         }
