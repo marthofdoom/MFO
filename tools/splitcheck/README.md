@@ -83,7 +83,13 @@ Exit codes. `linecheck`: 0 PASS, 1 FAIL. `splitcheck`: 0 = `PASS` (byte
 identical) or `PASS-PROVEN`; 3 = `PASS-EXPLAINED-UNPROVEN` (explained classes
 only, no proof given: NOT mergeable for a split); 1 = `FAIL`.
 `cosave_roundtrip`: 0 = every save identical (and the self-test saw its
-planted change), else 1. `selftest`: 0 = every case behaved, 1 = a hole.
+planted change), else 1. `selftest`: 0 = every case behaved, 1 = a hole. A
+case whose structure the pair does not have is `N/A` (not applicable, no
+candidate), never a pass and never a hole; only N13, N15, N17, N18 and N18b
+may report it, and the summary names them. N17 runs whenever a public-only
+guard is read by two procs in the split's TUs, N18 / N18b whenever a loop
+bound in the split's TUs lands on a mutable per-TU copy: exactly the shapes
+the two rules below excuse inside a split.
 
 `--strict` disables every explained class. `--strict --copies-ok` (what
 `--proof` runs on the proof pair) still accepts only identical per-TU copies of
@@ -123,10 +129,27 @@ a reference inside an inline site belongs to the innermost inlined function
 optimizer left outside its site's ranges goes to the one other function that
 reads the same copy, is inlined into that proc, and is inlined by the
 enclosing function's own body; an unwind funclet's reference is its parent's
-when the parent's body reads that copy. The same mapping and sharing rules
-then apply, plus: an owner reading more guard copies in B than any
-same-named owner in A FAILs (its static's state is split, or it now shares
-another static's guard; selftest N13).
+when the parent's body reads that copy. A guard's copies are read from the
+module records AND from the PUBLICS: the guard of an external-linkage (inline)
+function's static is one object program-wide, and when every caller inlines
+that function no module has a record of it, only its public
+`?$TSS0@?1??<Owner>@...`. The public also names the OWNER, so a reference to
+that copy from the owner itself or from a proc that inlines it is the owner's,
+wherever the optimizer put it (a mangled owner that is not plain identifiers
+keeps the positional rule). The same mapping and sharing rules then apply,
+plus: an owner reading more guard copies in B than any same-named owner in A
+FAILs (its static's state is split, or it now shares another static's guard;
+selftest N13, and N17 for a public-only guard).
+
+**One-past-the-end loop bounds.** A `lea` of the address right after a named
+object O whose PDB size is known, in a proc that also references O's START, is
+O's loop bound (`for (p = O; p != O + n; ++p)`), not a reader of whatever the
+linker placed at that address (the read-only data rule, applied to readers).
+Only the address computation is excluded: a load, store or memory compare at
+that address, or a `lea` of it in a proc that never references O, is still a
+reader (selftest N18 / N18b). Cost: a proc that genuinely passes the address
+of an object that happens to sit right after an array it also loops over is
+not seen as that object's reader.
 
 `--tu-map FILE` lists which new TUs each old
 TU became (`old.cpp<TAB>new/a.cpp new/b.cpp`); it is how file-local twins are

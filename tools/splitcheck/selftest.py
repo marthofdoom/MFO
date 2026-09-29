@@ -42,6 +42,16 @@ Every *_DIR holds MFO.dll + MFO.pdb (a CI `MFO-dll` artifact). Cases:
       another function (its body changed)                   -> must FAIL (only in B)
   N16 a literal referenced right after a referenced ""
       changed in B0 ("" compares only its NUL)              -> --proof must FAIL
+  N17 a guard known only by its public (owner inlined by every
+      caller): one split proc's references pointed at another
+      guard copy of the same name in B (/O2)               -> must FAIL as a STATE split
+  N18 the one-past-the-end loop-bound `lea` of an array that
+      lands on a mutable per-TU copy turned into a `mov` (a real
+      load of that copy) in B (/O2)                        -> must FAIL as a STATE split
+  N18b a `lea` of that copy in another split proc, one that never
+      references the array                                 -> must FAIL as a STATE split
+  N13, N15, N17, N18, N18b report N/A (not applicable) when the pair has no
+  candidate structure: never a pass, never a hole.
   N11 A0's build record names B's commit                    -> --proof must REFUSE (provenance)
   N11b a DLL that is not the one its build record hashes    -> --proof must REFUSE (provenance)
 A planted copy gets a build record describing IT (same commit, its own SHA-256),
@@ -181,9 +191,12 @@ def main():
     os.makedirs(work, exist_ok=True)
     results = []
 
-    def record(case, ok, detail):
-        results.append((case, ok, detail))
-        print(f"{'OK  ' if ok else 'HOLE'} {case}: {detail}", flush=True)
+    def record(case, ok, detail, na=False):
+        # na: NOT APPLICABLE -- the pair has none of the structure the case
+        # plants into (a STRUCTURAL absence, not a tool failure); only the cases
+        # documented as such may use it, and the summary lists them
+        results.append((case, ok or na, detail, na))
+        print(f"{'N/A ' if na else 'OK  ' if ok else 'HOLE'} {case}: {detail}", flush=True)
 
     # ---- P0 control -----------------------------------------------------------
     r = run_sc(args.b, args.b, work, args.tu_map)
@@ -691,7 +704,9 @@ def main():
             if plan:
                 break
         if plan is None:
-            record("N13 a $TSS guard shared by two moved functions' statics", False, "no candidate")
+            record("N13 a $TSS guard shared by two moved functions' statics", False,
+                   "not applicable (no candidate): no two procs in one split TU read two different "
+                   "same-named guard copies", na=True)
         else:
             p1, c1, p2, i2, c2 = plan
             dst = copy_build(args.b, os.path.join(work, "n13"))
@@ -768,7 +783,8 @@ def main():
                 break
         if cand is None:
             record("N15 a funclet of an outlined function with its body changed", False,
-                   f"no candidate ({len(outl)} outlined-function funclets in P1)")
+                   f"not applicable (no candidate): {len(outl)} funclet(s) of an outlined function only in B "
+                   f"with a direct call/jmp in P1", na=True)
         else:
             f, ins, old, new = cand
             dst = copy_build(args.b, os.path.join(work, "n15"))
@@ -826,6 +842,116 @@ def main():
                    f"{r['result']} (exit {r['_exit']}), \"\" at {t:#x}, literal {s[:30]!r} at +{u - t} first letter "
                    f"case-flipped")
 
+        # N17: an inline function's static whose guard is known only by its
+        # PUBLIC (every caller inlined the owner, so no module stream has a
+        # record of it) SPLIT: in the branch /O2 build, every reference one
+        # split proc makes to that guard is pointed at another guard copy of
+        # the same name, so the owner's inline copies no longer share one guard
+        # (the static is initialised twice, the second instance on its own).
+        # The inliners differ from main by inlining (proven by /Od), so only
+        # the owner-keyed state check can see this -- in the same run where
+        # the real pair's public-only guard must pass (P1).
+        pub_only = {}
+        known = {r_ for _n, r_, _m in B.datas}
+        for g, r_, o in B.guard_pubs:
+            if o and r_ not in known:
+                pub_only[r_] = (g, o)
+        gref = {}
+        for p in sorted(B.procs, key=lambda p: p["name"]):
+            if p.get("mod") not in split_b or SC.FUNCLET.match(p["name"]):
+                continue
+            for ins in cmpb.disasm(B, p["rva"], p["size"]):
+                for o in ins.operands:
+                    if o.type == X.X86_OP_MEM and o.mem.base == X.X86_REG_RIP \
+                            and ins.address + ins.size + o.mem.disp in pub_only:
+                        gref.setdefault(ins.address + ins.size + o.mem.disp, {}).setdefault(
+                            p["rva"], (p, []))[1].append(ins)
+        plan = None
+        for c, procs in sorted(gref.items()):
+            if len(procs) < 2:
+                continue
+            g, owner = pub_only[c]
+            p2, ins2 = procs[max(procs)]
+            others = sorted((r_ for n, r_, m in B.datas if SC.norm(n) == g and r_ != c),
+                            key=lambda r_: (not any(m == p2.get("mod") for n, rr, m in B.datas if rr == r_), r_))
+            if others:
+                plan = (c, g, owner, p2, ins2, others[0], len(procs))
+                break
+        if plan is None:
+            record("N17 an always-inlined owner's public-only $TSS guard split", False,
+                   "not applicable (no candidate): no public-only guard read by two procs in the split's TUs",
+                   na=True)
+        else:
+            c, g, owner, p2, ins2, x, n = plan
+            dst = copy_build(args.b, os.path.join(work, "n17"))
+            for i in ins2:
+                patch_dll(dst, i.address + i.disp_offset, (x - (i.address + i.size)).to_bytes(4, "little", signed=True))
+            r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+            hit = [y for y in r["data_differing"] if SC.norm(SC.untag(y[0])) == g and "STATE" in y[1]]
+            record("N17 an always-inlined owner's public-only $TSS guard split",
+                   r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                   f"{r['result']}, {owner[:40]}'s guard {g} at {c:#x} (public only, {n} inliners): "
+                   f"{p2['name'][:40]} ({p2.get('mod')}) {len(ins2)} ref(s) -> {x:#x}; "
+                   f"reported as state split: {bool(hit)}")
+
+        # N18 / N18b: the one-past-the-end loop-bound rule (a `lea` of the
+        # address right after a named array O, in a proc that also references
+        # O's start, is O's loop bound, not a reader of the per-TU copy the
+        # linker placed there) must not hide a GENUINE access to that copy.
+        # N18: the bound `lea` turned into a `mov` (a load FROM the copy).
+        # N18b: a `lea` in another split proc, one that never references O,
+        # pointed at the copy. Both in the branch /O2 build, with --proof.
+        mut = {}
+        for n, r_, _m in B.datas:
+            mut.setdefault(SC.norm(n), []).append(r_)
+        copies = {r_: v for v, rs in mut.items() if len(rs) > 1 and "`" not in v and not SC.GUARD.fullmatch(v)
+                  and B.sec_of(rs[0]) != ".text" and any(not B.is_const_data(q) for q in rs) for r_ in rs}
+        bound = None
+        leas = []
+        for p in sorted(B.procs, key=lambda p: p["name"]):
+            if p.get("mod") not in split_b or SC.FUNCLET.match(p["name"]):
+                continue
+            for ins in cmpb.disasm(B, p["rva"], p["size"]):
+                if ins.mnemonic != "lea" or ins.operands[1].type != X.X86_OP_MEM \
+                        or ins.operands[1].mem.base != X.X86_REG_RIP:
+                    continue
+                t = ins.address + ins.size + ins.operands[1].mem.disp
+                leas.append((p, ins, t))
+                if bound is None and t in copies and cmpb.loop_bound(B, p, t):
+                    bound = (p, ins, t, copies[t])
+        if bound is None:
+            for lab in ("N18 a genuine load at an array's one-past-the-end address",
+                        "N18b a genuine lea of a per-TU copy right after an array the proc never uses"):
+                record(lab, False, "not applicable (no candidate): no loop bound in the split's TUs lands on "
+                                   "a mutable per-TU copy", na=True)
+        else:
+            p, ins, t, var = bound
+            k = next(i for i in range(min(3, ins.size)) if ins.bytes[i] == 0x8D)
+            dst = copy_build(args.b, os.path.join(work, "n18"))
+            patch_dll(dst, ins.address + k, b"\x8b")               # lea r, [rip+t] -> mov r, [rip+t]
+            r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+            hit = [y for y in r["data_differing"] if SC.norm(SC.untag(y[0])) == var and "STATE" in y[1]]
+            record("N18 a genuine load at an array's one-past-the-end address",
+                   r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                   f"{r['result']}, {p['name'][:40]} +{ins.address - p['rva']:#x}: lea -> mov of {t:#x} "
+                   f"({var[:40]} copy); reported as state split: {bool(hit)}")
+            q = next(((pq, iq) for pq, iq, tq in leas
+                      if pq["rva"] != p["rva"] and tq not in copies and not cmpb.loop_bound(B, pq, t)), None)
+            if q is None:
+                record("N18b a genuine lea of a per-TU copy right after an array the proc never uses", False,
+                       "not applicable (no candidate): no other split proc with a RIP lea", na=True)
+            else:
+                pq, iq = q
+                dst = copy_build(args.b, os.path.join(work, "n18b"))
+                patch_dll(dst, iq.address + iq.disp_offset,
+                          (t - (iq.address + iq.size)).to_bytes(4, "little", signed=True))
+                r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+                hit = [y for y in r["data_differing"] if SC.norm(SC.untag(y[0])) == var and "STATE" in y[1]]
+                record("N18b a genuine lea of a per-TU copy right after an array the proc never uses",
+                       r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                       f"{r['result']}, {pq['name'][:40]} +{iq.address - pq['rva']:#x} lea now of {t:#x} "
+                       f"({var[:40]} copy); reported as state split: {bool(hit)}")
+
         # N11: the four builds do not pair up -- the proof must refuse
         info_b, _p = SC.read_build_info(os.path.join(args.b, "MFO.dll"))
         dst = copy_build(args.a0, os.path.join(work, "n11"))
@@ -872,8 +998,11 @@ def main():
         record("N9 tail byte of a named const aggregate >16 bytes", r["result"] == "FAIL" and hit,
                f"{r['result']}, {n} ({sz} bytes) byte {last} flipped; reported: {hit}")
 
-    bad = [c for c, ok, _d in results if not ok]
-    print(f"\n{len(results) - len(bad)}/{len(results)} cases behaved as required" + (f"; HOLES: {bad}" if bad else ""))
+    bad = [c for c, ok, _d, _na in results if not ok]
+    na = [c.split()[0] for c, _ok, _d, n in results if n]
+    print(f"\n{len(results) - len(bad) - len(na)}/{len(results)} cases behaved as required"
+          + (f", {len(na)} not applicable to this pair ({', '.join(na)})" if na else "")
+          + (f"; HOLES: {bad}" if bad else ""))
     return 1 if bad else 0
 
 
