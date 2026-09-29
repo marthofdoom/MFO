@@ -778,6 +778,13 @@ Raised against 4f23c30 (`feat/mfo-swapup-ammo`, tier-B review), 2026-09-25. Find
 Raised against 4f23c30 (`feat/mfo-swapup-ammo`, tier-B review), 2026-09-25. Finding (as relayed): "the ComputeKeepSet peek cost". When a gear upgrade does not fit, `LootEquipment`'s peek calls `PlanRoomForSwapUp`, which builds the whole keep set (inventory walks, `ComputeWeaponRoles`, `ArmorPrefFor`, and since round 1 `BuildEquipmentContext`) once per candidate body during a scan. Only on the over-weight path. Fix shape: build the keep set once per `LootNearby` call (like the lazily built `EquipmentContext`) and pass it down.
 
 ### MFO-B116 (SEV-4) -- swap-up: VendorTrades(null) on a TESAmmo keyword form
+**RESOLVED 2026-09-28, branch `fix/mfo-field-0928c`.** Not a VR-only edge: CommonLib is built with SE + AE + VR
+all on (the fork's CMakeLists `ENABLE_SKYRIM_*` default ON, the port passes none), and in that configuration
+`TESAmmo`'s C++ class derives only `TESValueForm` (`RE/T/TESAmmo.h` #else branch), so `As<BGSKeywordForm>()`
+(FormTraits' `is_convertible` static cast) is NULL for EVERY ammo form and every ammo sell row was refused
+'vendor-filter' (field 0928c: Adelinda's bolts, 148 refusals at four blacksmiths). EconomyProbe's ammo rows now
+read `TESAmmo::AsKeywordForm()` (runtime offset 0xF8 SE/AE, 0xE8 VR). `LootTake.cpp:171` / `Sinks.cpp:225` still
+use `As<BGSKeywordForm>()` and may meet ammo -- not changed (outside the branch's boundary).
 Raised against 4f23c30 (`feat/mfo-swapup-ammo`, tier-B review), 2026-09-25. Finding (as relayed): "VendorTrades(null) on TESAmmo". The obsolete-ammo sell rows pass `obj->As<RE::BGSKeywordForm>()`; on a layout where `TESAmmo` does not derive from `BGSKeywordForm` (the VR branch of `RE/T/TESAmmo.h`) that is null and `VendorTrades` refuses the row (unless the merchant-perk bypass is on), so obsolete ammo silently never sells there. Fix shape: log the refusal once, or read the ammo's keywords through the runtime's own layout.
 
 ### MFO-B117 (SEV-4) -- lockpick doors: an exterior door in an adjacent cell is missed
