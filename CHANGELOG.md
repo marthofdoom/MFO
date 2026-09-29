@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Melee followers stop chasing dragons in the sky.** A melee follower no longer picks or runs after a foe flying out of his reach. He attacks a foe he can reach if there is one. If every foe is up in the air, he stays close to you (with Harbinger installed) until one comes down or lands. A dragon hovering low enough to hit still counts, and so do netch, wispmothers and other floating creatures.
 - **Followers stop swapping relics when a companion falls behind.** A follower left in another room still counts toward the museum. His companions no longer strip their own gear to cover for him.
 - **No more "player put on" for a relic MFO took off.** A relic MFO takes off and later allows again is not mistaken for your choice.
 - **No lockpicking mid-fight.** A follower never starts picking a lock while he or you are in combat. With his weapon out, he puts it away first.

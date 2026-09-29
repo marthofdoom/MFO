@@ -40,4 +40,10 @@ namespace MFO::Scheduler {
     // lockpick step (logistics/Lockpick.cpp) so a menu or a pause never ages a pick.
     double ServiceClock();
 
+    // fix/mfo-unreachable-flyer (review U3): the melee-reach slack for this follower --
+    // -CombatSense::kReachHoldBand while the Scheduler's reach hold holds him, else 0. The
+    // Evaluator's swing-rule gate and Fire's Attack / Power attack gate pass it, so the
+    // picker, the action and the ch.23 leash hold all read ONE line. WORKER ONLY (#4).
+    float ReachHoldSlack(RE::FormID a_follower);
+
 }

@@ -314,6 +314,15 @@ namespace MFO::Actuation {
     // erasing it then makes the next OOC tick declare Armor-only on its own.
     std::pair<RE::FormID, RE::FormID> ForcedHoldFor(RE::FormID a_follower);
 
+    // MELEE-ONLY (fix/mfo-unreachable-flyer, cast/Fire.cpp): MFO has DECLARED him melee --
+    // base class Melee (#65 combatClassOverride 1, the resting stance), or an
+    // act.equip_melee force-hold standing in either hand (ForcedHoldFor: the hold the ch.17
+    // hand claim is declared from) -- AND nothing in his hands reaches past a swing (no
+    // bow / crossbow / staff, no spell whose delivery is not Self or Touch). Read by the
+    // reach gates: Evaluator PickFoe (swing rules), Fire's Attack / Power attack, and the
+    // Scheduler's ch.23 leash hold. Worker-serial (GetBaseClass reads g_followers, #4).
+    bool MeleeOnly(RE::Actor* a_follower);
+
     // Per-tick reconcile from the combat scan: KEEP the force-hold iff the
     // feature is on AND an equip gambit of the forced weapon's OWN category held
     // this tick (a_wantStance: 0=none/condition-false, 1=melee, 2=ranged);

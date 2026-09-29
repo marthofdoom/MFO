@@ -551,6 +551,21 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   then latch (reject = transparent fall-through, mutates nothing). Foe = PickFoe's
   target (the specific blocking foe for `kCondFoeBlocking`). Without the gate it
   swung at air whenever any foe blocked.
+- **MELEE-ONLY REACH GATE (fix/mfo-unreachable-flyer, field 0928c: Cicero vs an airborne
+  Alduin).** `Actuation::MeleeOnly` (`cast/Fire.cpp:105`, decl `cast/Actuation.h:324`) = nothing in
+  hand reaches past a swing (no bow / crossbow / staff, no spell whose delivery is not Self/Touch)
+  AND MFO declared him melee: base class Melee (`GetBaseClass == 1`) or an act.equip_melee
+  force-hold (`ForcedHoldFor`). Attack (`:202`) and Power attack (`:384`) return a TRANSPARENT
+  `FailedSkill` "'X' unreachable (flying, dz N > reach M) -- not latched" BEFORE the APMF claim /
+  latch when `CombatSense::OutOfMeleeReach` says the foe is airborne out of reach (geometry in
+  §3 CombatSense), at the line `Scheduler::ReachHoldSlack` gives (-64 u while the reach hold holds
+  him, review U3), so the picker, the action and the leash read one line. Same answer as `PickFoe`'s
+  swing-rule gate (§8 Evaluator). **What breaks:**
+  moving the gate below `ClaimCombatTarget` / `CommandEx` (a refused swing would still claim or
+  pin); making it opaque (a lower rule could never fire while a flyer is the choice); widening
+  `MeleeOnly` to base class alone (a melee-class follower holding a Firebolt or a bow would be
+  benched from a flyer he CAN hit). Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B145
+  (MeleeOnly misses Auto-class melee; observe-only bow flicker), MFO-B146 (dragon origin vs body).
 - `Outcome.transparent` (`cast/Actuation.h:38`) is the fall-through contract the
   scheduler reads (`Scheduler.cpp:521`); default false = "wall" = safe. Flipping it
   changes suppression + hand-claim + spellsword fallback.
@@ -1511,6 +1526,28 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   before. **What breaks:** calling it before `ServiceRetreat` or from the party-OOC branch (a leash
   outside the fight / over a retreat); dropping the release in the party-OOC teardown (the leash
   outlives the fight until dismissal or load).
+- **REACH HOLD (fix/mfo-unreachable-flyer, marth "hold by you").** The leash call is
+  `ServiceLeashWithReachHold` (`Scheduler.cpp:527`, called `:1161`): HOLD = `Actuation::MeleeOnly`
+  AND >= 1 live hostile foe airborne out of reach AND no foe within `ChaseRadius` in reach
+  (`CombatSense::ScanMeleeReach`; the flyer count ignores kTargetLost / unloaded 3D so a flicker
+  cannot flip it). Holding -> radius `Config::g_leashMin` (fLeashMin) instead of `LeashRadius`;
+  otherwise exactly the old radius. Hysteresis: while holding the flyer must come
+  `kReachHoldBand` (64 u) lower to end it; `ReachHoldSlack` (`:605`, declared `Scheduler.h`) hands
+  that same slack to the picker and Fire's gates (review U3). On the hold's ENTRY edge a pin /
+  latch that names a foe airborne out of reach is released through `Targeting::Clear` and logged
+  `[reach] X: target pin on 'Y' cleared (flying, ...)` (review U2: a pin from before take-off is not
+  touched by the gates). State `g_reachHold` (`:262`): erased at the party-OOC teardown (`:838`),
+  cleared in `ClearTransientState` (`:590`); NO expiry. Transition lines only:
+  `[reach] X: 'Alduin' unreachable (flying, dz N > reach M), no foe in reach (k airborne) --
+  holding by the player (ch.23 leash radius R)` / `[reach] X: hold ended (why) -- ch.23 leash
+  back to the confidence radius R`; a WARN instead of "holding" when
+  `APMFBridge::PursuitLeashStanding` says no ch.23 claim stands (principle 7). **What breaks:**
+  computing `ChaseRadius` inside the scan (nested group lock, #23); a hold timer (principle 9);
+  dropping the band (a bobbing flyer Repoints ch.23 every service); a new travel/move command for
+  the hold (the leash IS the hold); a gate that stops passing `ReachHoldSlack` (the picker and the
+  leash disagree inside the band again). Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B145,
+  MFO-B147 (not erased on dismissal mid-fight), MFO-B148 (Scheduler.cpp size: ~1790 lines, needs its
+  split brief).
 - **ENGAGE-ON-SIGHT HOOK (ClickUp 86e3errnu, feat/mfo-ooc-engage 2026-09-25).** In the party-OOC
   branch, AFTER the `ServiceRetreat` block and BEFORE `Logistics::ServiceFollower` (`:785-799`):
   `EngageOnSight::Service(f, id, cooling, kEngageConfidence)` (`:846`; the bar = `kRetreatConfidence`
@@ -2018,6 +2055,23 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   diverge. **Note:** `Confidence.h` is the combat/loot **leash** primitive
   (`Of`/`LeashRadius`/`ChaseRadius`) — misfiled under "progression" by directory
   adjacency; zero relationship to perks/PRGN.
+- **`CombatSense` MELEE REACH (fix/mfo-unreachable-flyer, `CombatSense.h:87-228`).**
+  `IsAirborne` (`:124`) = ActorState FLY_STATE TakeOff / Cruising / Hovering / Action (NOT None,
+  Perching, Landing; never `IsFlying()` alone, which counts Landing). FLY_STATE = ActorState1 bits
+  18-20 via `AsActorState()` (0xB8 SE / 0xC0 AE), verified in both unpacked binaries (1.6.1170
+  inlined IsFlying `[actor+0xC8] & 0x1C0000, cmp 0x140000`; 1.5.97 `[actor+0xC0] >> 18 & 7, cmp 5`):
+  one path. `OutOfMeleeReach` (`:175`) = airborne AND foe above: `dz > selfHeight + fMeleeReach`,
+  foe below: `-dz > foeHeight + fMeleeReach` (+ slack); horizontal distance ignored.
+  `BodyHeight` (`:147`) = FIELD READS ONLY: the high process's cachedActorHeight if set, else the
+  base form's OBND z-extent x `GetBaseHeight`, else 120. NEVER `Actor::GetHeight` or the bound
+  virtuals 0x73/0x74: their bodies walk currentProcess and write process-global statics (1.6.1170
+  0x1431994F0..F8), which races the main thread (review U1 on 0f9ac10). `ScanMeleeReach` (`:203`)
+  takes the combat-group read lock and calls no engine code inside it.
+  **What breaks:** a change to `fMeleeReach` moves this line AND the power-attack gate together;
+  dropping Landing/Perching from the exclusion benches a melee follower from a landing dragon;
+  calling `ScanMeleeReach` with any group lock held (nested read lock); any engine call (a vfunc, an
+  engine-address function) in `BodyHeight` / `OutOfMeleeReach` (they run on the worker and inside the
+  group lock). Open deferred finding: `Docs/REVIEW-BACKLOG.md` MFO-B146.
 - `Confidence::LeashRadius` CONSUMERS (2026-09-25): the loot leash (logistics) and, IN COMBAT, the
   Harbinger ch.23 pursuit leash radius around the player (`Scheduler.cpp:1065` ->
   `apmf/PursuitLeash.cpp`, Repointed on a band-sized change). `ChaseRadius` stays the follower-
@@ -4535,6 +4589,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     **What breaks:** a per-service Repoint (churns Harbinger's arbitration every 133 ms x N);
     re-filing an ENDED claim within a fight (a loop against an outranking leash); feeding it
     `ChaseRadius` (measured from the follower, not the anchor); keeping it through a retreat.
+    `PursuitLeashStanding` (`:142`, fix/mfo-unreachable-flyer) = a filed, not-ENDED claim exists;
+    read only by the Scheduler's `[reach]` hold line.
   - `apmf/SpellAllowList.cpp` (398) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
     `MakePotionCand` (`:136`) + `SelectPotions` (`:169`, the potion trim, batch L),
     `AppendDenyExemptForms` (`:207`), `PublishSpellAllowList` (`:240`), `ReleaseSpellAllowList`
@@ -6233,6 +6289,16 @@ false (fail-closed). **Threading landmine:** `ChaseRadius` is hoisted OUT of the
 `combatGroup->lock` (`:203`) to avoid a nested read-lock deadlock — do not move it back
 in. Player-HP special-case gated to `kCondPlayerHpBelow`+`kActCastTarget` only (`:474`,
 un-gating was friendly-fire).
+**Melee-only reach gate (fix/mfo-unreachable-flyer):** `PickFoe(..., a_reachGate, a_reachSlack)` (`:210`) skips a
+foe `CombatSense::OutOfMeleeReach` calls airborne out of reach, on BOTH paths (the target-relative
+range early return `:251`, the group scan `:419`, after the selector's own gates, self height read
+before the lock). `Evaluate` passes the gate only for Attack / Power attack rules and reads
+`Actuation::MeleeOnly` at most once per scan (`:582`, `:596`), slack = `Scheduler::ReachHoldSlack`: casts / equips / drinks are NEVER
+gated (an ungated equip_melee keeps the ch.17 hand hold, so the bow deny is untouched). Throttled
+line `LogReachSkip` (`:172`, 5 s/follower): `[reach] X: 'Alduin' unreachable (flying, dz N > reach
+M) -- skipped, attacking 'Y' instead | no foe in reach for this rule`. **What breaks:** gating the
+equip rules (releases the melee hold -> the engine re-arms the denied bow); gating by base class
+alone (see Fire.cpp's MeleeOnly note).
 
 ### Vocabulary.h — the serialized opcode contract ⚠️
 The gambit opcode **strings are a frozen co-save contract (#10)** — written verbatim

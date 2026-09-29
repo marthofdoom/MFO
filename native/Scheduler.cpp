@@ -255,6 +255,11 @@ namespace MFO::Scheduler {
         // Erased in the party-OOC branch with the other per-fight latches;
         // cleared on revert.
         std::unordered_set<RE::FormID> g_equipRangeUndecidableNoted;
+        // fix/mfo-unreachable-flyer: melee-only followers HOLDING by the player because
+        // every foe of theirs is airborne out of reach (ReachHoldRadius below). Worker-
+        // only like its neighbours; erased on the fight's end (party-OOC branch) and on
+        // revert. No expiry: the hold ends only when the scan says so (principle 9).
+        std::unordered_set<RE::FormID> g_reachHold;
 
         // The dials. Fill: confidence below 0.25 (a follower who by the
         // leash tenet WANTS to be at the player's side) while >400u away from
@@ -510,6 +515,64 @@ namespace MFO::Scheduler {
             return true;
         }
 
+        // fix/mfo-unreachable-flyer: the ch.23 leash service with the REACH HOLD. HOLD =
+        // Actuation::MeleeOnly AND >= 1 foe airborne out of his melee reach AND no foe the
+        // picker could give him in reach (CombatSense::ScanMeleeReach; its chase cap is
+        // computed here, before the scan takes the group lock, #23). Holding -> radius
+        // fLeashMin around the player (the existing leash, no new movement); otherwise the
+        // confidence radius, exactly as before. While holding, a flyer must come
+        // kReachHoldBand LOWER than the entry line to end it (hysteresis), so a flyer
+        // bobbing on the line cannot Repoint ch.23 every service. Transition lines only;
+        // the picker's own [reach] skip line repeats at 5 s while it lasts.
+        void ServiceLeashWithReachHold(RE::Actor* a_f, RE::FormID a_id) {
+            const bool wasHolding = g_reachHold.contains(a_id);
+            const bool meleeOnly  = Actuation::MeleeOnly(a_f);
+            CombatSense::ReachScan scan;
+            if (meleeOnly) {
+                const float cap = Confidence::ChaseRadius(a_f);
+                scan = CombatSense::ScanMeleeReach(a_f, cap, wasHolding ? -CombatSense::kReachHoldBand : 0.0f);
+            }
+            const bool hold = meleeOnly && scan.unreachable > 0 && scan.reachable == 0;
+            const float radius = hold ? Config::g_leashMin.load() : Confidence::LeashRadius(a_f);
+            APMFBridge::ServicePursuitLeash(a_id, radius);
+            if (hold == wasHolding) return;
+            if (hold) {
+                g_reachHold.insert(a_id);
+                auto wp = scan.worst.get();
+                const char* wn = (wp && wp->GetName()) ? wp->GetName() : "?";
+                if (APMFBridge::PursuitLeashStanding(a_id)) {
+                    spdlog::info("[reach] {:08X}: '{}' unreachable (flying, {}), no foe in reach ({} airborne) -- "
+                                 "holding by the player (ch.23 leash radius {:.0f})",
+                                 a_id, wn, CombatSense::ReachText(scan.worstRead), scan.unreachable, radius);
+                } else {
+                    spdlog::warn("[reach] {:08X}: '{}' unreachable (flying, {}), no foe in reach ({} airborne) -- "
+                                 "should hold by the player, but NO ch.23 pursuit leash stands for him (Harbinger "
+                                 "absent / older than v16 / the claim ended): nothing holds him",
+                                 a_id, wn, CombatSense::ReachText(scan.worstRead), scan.unreachable);
+                }
+                // Review U2: a pin / latch made BEFORE the flyer took off is not released by
+                // the gates (they only stop NEW latches). On the hold's entry edge, clear it
+                // when it names a foe airborne out of his reach, through the one existing
+                // release road (Targeting::Clear: the ch.20 pin on either route + the latch).
+                if (auto cur = Targeting::Current(a_id).get(); cur) {
+                    CombatSense::ReachRead crr;
+                    if (CombatSense::OutOfMeleeReach(a_f, cur.get(), 0.0f, &crr)) {
+                        Targeting::Clear(a_id);
+                        spdlog::info("[reach] {:08X}: target pin on '{}' cleared (flying, {}) -- he holds, "
+                                     "not latched on a foe he cannot reach",
+                                     a_id, cur->GetName() ? cur->GetName() : "?", CombatSense::ReachText(crr));
+                    }
+                }
+            } else {
+                g_reachHold.erase(a_id);
+                const char* why = !meleeOnly            ? "no longer melee-only"
+                                : scan.reachable > 0    ? "a foe is in reach"
+                                                        : "no airborne foe out of reach";
+                spdlog::info("[reach] {:08X}: hold ended ({}) -- ch.23 leash back to the confidence radius {:.0f}",
+                             a_id, why, radius);
+            }
+        }
+
     }
 
     void ClearTransientState() {
@@ -524,6 +587,7 @@ namespace MFO::Scheduler {
         g_partyCombatNoted.clear();
         g_noneMatchedNoted.clear();
         g_equipRangeUndecidableNoted.clear();   // MFO-B55 once-per-fight note
+        g_reachHold.clear();                    // fix/mfo-unreachable-flyer: the leash hold
         g_recent.clear();
         g_combatEnteredAt.clear();
         g_proposedTarget.clear();
@@ -538,6 +602,9 @@ namespace MFO::Scheduler {
     double        LastTickMs()       { return g_lastTickMs.load(); }
     std::uint32_t TicksThisSession() { return g_ticks.load(); }
     double        ServiceClock()     { return g_serviceClock; }   // worker-only (#4), like its writer
+    float ReachHoldSlack(RE::FormID a_follower) {                 // worker-only (#4), like g_reachHold
+        return g_reachHold.contains(a_follower) ? -CombatSense::kReachHoldBand : 0.0f;
+    }
 
     void Tick() {
         const auto now = std::chrono::steady_clock::now();
@@ -768,6 +835,7 @@ namespace MFO::Scheduler {
                 g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
                 g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
                 APMFBridge::ReleasePursuitLeash(id, "combat ended");   // ch.23: the in-combat leash ends with the fight
+                g_reachHold.erase(id);   // fix/mfo-unreachable-flyer: and its reach hold (no line: the fight is over)
 
                 // v1.0.30: the cast-control latch dies with the fight. The [cast]
                 // sink no longer clears it on a successful cast (the latch must
@@ -1085,8 +1153,12 @@ namespace MFO::Scheduler {
         // not a retreat, Repointed only on a band-sized change, released on retreat start
         // (a fill on THIS lap included), the party-OOC teardown, dismissal and load. No-op
         // when Harbinger is absent or older than v16 (MFO had no in-combat leash before).
+        // REACH HOLD (fix/mfo-unreachable-flyer, marth "hold by you"): a melee-only follower
+        // whose every foe is airborne out of his reach gets the MINIMUM radius (fLeashMin)
+        // instead, so the engine's range-keeping around a flyer cannot walk him off the
+        // party; the confidence radius comes back when a foe is in reach again.
         if (Packages::IsRetreating(id)) APMFBridge::ReleasePursuitLeash(id, "retreat started");
-        else                            APMFBridge::ServicePursuitLeash(id, Confidence::LeashRadius(f));
+        else                            ServiceLeashWithReachHold(f, id);
 
         if (it->second.combat().empty()) {
             // #65: no combat gambits, but a class override is still a valid STYLE

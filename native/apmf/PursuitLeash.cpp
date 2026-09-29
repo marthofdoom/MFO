@@ -139,6 +139,12 @@ namespace MFO::APMFBridge {
         spdlog::info("[leash] {:08X}: ch.23 pursuit leash released ({})", a_follower, a_why);
     }
 
+    bool PursuitLeashStanding(RE::FormID a_follower) {
+        std::scoped_lock lock(g_leashMx);
+        const auto it = g_leashes.find(a_follower);
+        return it != g_leashes.end() && !it->second.ended && it->second.handle != APMF_API::kInvalidHandle;
+    }
+
     // Tick()'s pass (declared in APMFBridge_internal.h). Takes g_leashMx itself; g_mx NOT held.
     void SweepPursuitLeashes() {
         const auto* api = LeashApi();
