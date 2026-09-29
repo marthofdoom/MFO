@@ -22,7 +22,7 @@ gambits onto a record keyed to the player, and `bAllowSummons` gets toggled.
 
 ```bash
 cd /mnt/gaming/modlists/Projects/marth-follower-overhaul
-./release.sh                     # cuts releases/vX.Y.Z/ from the latest green CI run
+./release.sh --run <run-id>      # cuts releases/vX.Y.Z/ from that green CI run (bare ./release.sh lists them)
 rm -f /mnt/gaming/modlists/custom-modlist/overwrite/SKSE/Plugins/MFO.log   # start clean
 ```
 

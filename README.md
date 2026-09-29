@@ -257,9 +257,12 @@ C++ lives in `native/`. The DLL is built by GitHub Actions on
 cross-build, so **CI is the only compiler that ever sees this code.** `git
 push` is the build button.
 
-Releases are cut with `./release.sh`, which refuses a dirty tree, refuses if
-`native/` has drifted from the last green CI run, and records commit, run id
-and artifact hashes in a manifest. vcpkg registry baselines are **pinned
+Releases are cut with `./release.sh`: `./release.sh X.Y.Z` stamps and pushes,
+then `./release.sh --run <run-id>` packages the DLL from exactly that green
+`native` CI run (a bare `./release.sh` lists the recent green runs with branch
+and sha; `--dry-run` runs the checks only). It refuses a dirty tree, refuses a
+run that is not green or whose `native/` tree differs from HEAD's, and records
+commit, run id and artifact hashes in a manifest. vcpkg registry baselines are **pinned
 deliberately** — bump them on purpose, never float them.
 
 ## Licence

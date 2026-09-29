@@ -1,21 +1,153 @@
 #!/usr/bin/env bash
 # Cut a release. Builds are archived under releases/vX.Y.Z/ PERMANENTLY.
 #
-# Usage:
-#   ./release.sh            release the version currently in VERSION
-#   ./release.sh 0.2.0      PHASE 1: stamp + commit + push, then wait for CI
+# Usage (also ./release.sh --help):
+#   ./release.sh 0.2.0              PHASE 1: stamp + commit + push, then wait for CI
+#   ./release.sh --run <run-id>     PHASE 2: release the version in VERSION, taking
+#                                   the DLL from exactly that green 'native' CI run
+#   ./release.sh --run <run-id> --dry-run
+#                                   phase 2's checks only (stamp, run, artifact);
+#                                   writes, packages and tags nothing
+#   ./release.sh                    lists the last green 'native' runs and stops
 #
 # Release folders and tags are IMMUTABLE — bump VERSION for every build you
 # want to keep. Nothing is ever overwritten or deleted. This is the ONLY way a
 # build reaches the game: MRO lost a session to a hand-copied DLL where the
 # running game and the archive disagreed about what was live.
 #
-# The DLL comes from the latest GREEN CI run, never a local build — there is
-# no local MSVC by design, so CI is the only compiler that ever sees this code.
+# The DLL comes from a GREEN CI run the operator names with --run, never a
+# local build — there is no local MSVC by design, so CI is the only compiler
+# that ever sees this code. The run is never guessed: with parallel branch
+# builds "the newest green run" is often another branch's DLL.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 GH="${GH:-$HOME/.local/bin/gh}"
+ARTIFACT="MFO-dll"
+DLL_NAME="MFO.dll"
+
+usage() {
+    cat <<EOF
+Usage:
+  ./release.sh <X.Y.Z>                   PHASE 1: stamp VERSION, native/CMakeLists.txt and
+                                         the MCM version readout, commit, push. Wait for CI.
+  ./release.sh --run <run-id>            PHASE 2: verify, package and tag the version in
+                                         VERSION, with the DLL from that 'native' CI run.
+  ./release.sh --run <run-id> --dry-run  PHASE 2 checks only. Nothing is written or tagged.
+  ./release.sh                           list the last green 'native' runs, then stop.
+  ./release.sh --help                    this text.
+
+--run <run-id> (or --run=<run-id>) is REQUIRED for phase 2. The run must be a
+'native' workflow run that completed with 'success', whose commit has the SAME
+native/ tree as HEAD, and that still holds the ${ARTIFACT} artifact. Anything
+else stops the release. Pick the id from the list printed by a bare ./release.sh
+(or: gh run list --workflow=native --status=success).
+EOF
+}
+
+RUN_SEL=""
+DRY_RUN=0
+POS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --run)     [[ $# -ge 2 && -n "$2" ]] || { echo "ERROR: --run needs a run id." >&2; exit 1; }
+                   RUN_SEL="$2"; shift 2 ;;
+        --run=*)   RUN_SEL="${1#--run=}"; shift ;;
+        --dry-run) DRY_RUN=1; shift ;;
+        -h|--help) usage; exit 0 ;;
+        -*)        echo "ERROR: unknown option '$1'." >&2; usage >&2; exit 1 ;;
+        *)         POS+=("$1"); shift ;;
+    esac
+done
+if [[ ${#POS[@]} -gt 1 ]]; then
+    echo "ERROR: too many arguments: ${POS[*]}" >&2; usage >&2; exit 1
+fi
+if [[ ${#POS[@]} -eq 1 && ( -n "$RUN_SEL" || "$DRY_RUN" -eq 1 ) ]]; then
+    echo "ERROR: --run / --dry-run belong to phase 2; phase 1 (./release.sh ${POS[0]}) takes no options." >&2
+    exit 1
+fi
+
+# Print the last green 'native' runs so the operator can pick one for --run.
+# The mark says which of them built the native/ tree HEAD has.
+list_green_runs() {
+    local head_tree
+    head_tree="$(git rev-parse HEAD:native)"
+    echo "Last green 'native' runs, newest first (HEAD $(git rev-parse --short HEAD), native tree ${head_tree:0:8}):" >&2
+    printf '  %-12s %-9s %-20s  %-40s %s\n' RUN SHA CREATED BRANCH "" >&2
+    $GH run list --workflow=native --status=success --limit 8 \
+        --json databaseId,headBranch,headSha,createdAt \
+        -q '.[] | [(.databaseId|tostring), .headSha, .createdAt, .headBranch] | join("|")' |
+    while IFS='|' read -r id sha created branch; do
+        local tree mark=""
+        tree="$(git rev-parse -q --verify "${sha}:native" 2>/dev/null || true)"
+        if [[ -z "$tree" ]]; then
+            mark="(commit not fetched here)"
+        elif [[ "$tree" == "$head_tree" ]]; then
+            mark="<- native/ matches HEAD"
+        fi
+        printf '  %-12s %-9s %-20s  %-40s %s\n' "$id" "${sha:0:8}" "$created" "$branch" "$mark" >&2
+    done
+}
+
+# Resolve --run into RUN_ID + RUN_SHA, refusing anything that is not a green
+# 'native' run of exactly HEAD's native/ tree with the DLL artifact still there.
+select_run() {
+    if [[ -z "$RUN_SEL" ]]; then
+        echo "ERROR: phase 2 needs the CI run to take the DLL from:  ./release.sh --run <run-id>" >&2
+        echo "       It is never picked automatically: with parallel branch builds the newest" >&2
+        echo "       green run is often another branch's DLL." >&2
+        list_green_runs
+        exit 1
+    fi
+    if [[ ! "$RUN_SEL" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: --run takes a numeric run id, got '${RUN_SEL}'." >&2
+        exit 1
+    fi
+    local info wf status concl branch created
+    if ! info="$($GH run view "$RUN_SEL" --json workflowName,status,conclusion,headBranch,headSha,createdAt \
+            -q '[.workflowName, .status, .conclusion, .headBranch, .headSha, .createdAt] | join("|")')"; then
+        echo "ERROR: gh could not read run ${RUN_SEL}." >&2
+        exit 1
+    fi
+    IFS='|' read -r wf status concl branch RUN_SHA created <<<"$info"
+    echo "CI run:   ${RUN_SEL}  branch ${branch}  sha ${RUN_SHA}  (${wf}, ${status}/${concl:-none}, ${created})"
+    if [[ "$wf" != "native" ]]; then
+        echo "ERROR: run ${RUN_SEL} is workflow '${wf}', not 'native'." >&2
+        exit 1
+    fi
+    if [[ "$status" != "completed" || "$concl" != "success" ]]; then
+        echo "ERROR: run ${RUN_SEL} is ${status}/${concl:-none}, not completed/success." >&2
+        exit 1
+    fi
+    # Compare the native/ TREE, not the commit sha. The DLL is a function of
+    # native/ alone, so a docs- or script-only commit since the run is harmless
+    # — but any drift in native/ means the artifact is not this code.
+    # Comparing shas instead would force a pointless rebuild every time this very
+    # file changed.
+    local head_tree run_tree
+    head_tree="$(git rev-parse HEAD:native)"
+    run_tree="$(git rev-parse -q --verify "${RUN_SHA}:native" 2>/dev/null || echo unknown)"
+    if [[ "$run_tree" != "$head_tree" ]]; then
+        echo "ERROR: run ${RUN_SEL} did not build HEAD's native/ tree." >&2
+        echo "       run ${RUN_SEL} built ${RUN_SHA:0:8} on ${branch} (native tree ${run_tree:0:8})" >&2
+        echo "       HEAD is $(git rev-parse --short HEAD) (native tree ${head_tree:0:8})" >&2
+        [[ "$run_tree" == unknown ]] && echo "       (${RUN_SHA:0:8} is not in this clone: git fetch origin, then retry)" >&2
+        echo "       Pick a run that built this code, or you will ship a DLL that is not it." >&2
+        exit 1
+    fi
+    local names
+    if ! names="$($GH api "repos/{owner}/{repo}/actions/runs/${RUN_SEL}/artifacts?per_page=100" \
+            -q '.artifacts[] | select(.expired | not) | .name')"; then
+        echo "ERROR: gh could not list the artifacts of run ${RUN_SEL}." >&2
+        exit 1
+    fi
+    if ! grep -qxF "$ARTIFACT" <<<"$names"; then
+        echo "ERROR: run ${RUN_SEL} has no unexpired '${ARTIFACT}' artifact (has: ${names//$'\n'/, })." >&2
+        exit 1
+    fi
+    RUN_ID="$RUN_SEL"
+    echo "CI run ${RUN_ID} verified: green, native/ tree matches HEAD, ${ARTIFACT} present."
+}
 
 # TWO-PHASE, deliberately. Stamping the version touches native/CMakeLists.txt,
 # which changes the native/ tree -- and the DLL we ship must come from a CI run
@@ -24,10 +156,10 @@ GH="${GH:-$HOME/.local/bin/gh}"
 # DLL whose version header does not match the zip, or skipping the check that
 # catches exactly that.
 #
-#   ./release.sh 0.2.0   -> phase 1: stamp, commit, push. Wait for CI.
-#   ./release.sh         -> phase 2: verify + package + tag.
-if [[ $# -ge 1 ]]; then
-    NEWVER="$1"
+#   ./release.sh 0.2.0          -> phase 1: stamp, commit, push. Wait for CI.
+#   ./release.sh --run <id>     -> phase 2: verify + package + tag.
+if [[ ${#POS[@]} -eq 1 ]]; then
+    NEWVER="${POS[0]}"
     if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
         echo "ERROR: commit your work before bumping the version." >&2
         git status --short >&2
@@ -43,9 +175,13 @@ if [[ $# -ge 1 ]]; then
     git commit -q -m "Bump version to ${NEWVER}"
     git push -q origin main
     echo "Stamped ${NEWVER} and pushed. CI is rebuilding native/."
-    echo "When it is green:  ./release.sh"
+    echo "When it is green:  ./release.sh --run <run-id>   (a bare ./release.sh lists the green runs)"
     exit 0
 fi
+
+# Phase 2 without --run: list the green runs to pick from and stop, before any
+# other check, so the list is always one bare ./release.sh away.
+[[ -n "$RUN_SEL" ]] || select_run
 
 VER="$(cat VERSION)"
 DEST="releases/v${VER}"
@@ -86,6 +222,17 @@ if [[ "$STAMPED" != "$VER" ]]; then
     exit 1
 fi
 
+# 1b. The CI run the DLL comes from, named by the operator (--run). Checked
+#     BEFORE anything below regenerates or writes a file, so a wrong or missing
+#     run stops the release with nothing touched.
+select_run
+if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo
+    echo "DRY RUN: every phase 2 check passed for v${VER} with run ${RUN_ID}."
+    echo "         Nothing was generated, downloaded, packaged or tagged."
+    exit 0
+fi
+
 # 2. ESP + SEQ, always regenerated so a zip can never carry a stale plugin.
 python3 MFO_GenerateESP.py out >/dev/null
 python3 tools/audit_esp.py          # PASS is a merge gate; a FAIL stops the release
@@ -104,31 +251,17 @@ fi
 [[ -f out/Scripts/MFO_Trade.pex ]] || { echo "ERROR: out/Scripts/MFO_Trade.pex missing." >&2; exit 1; }
 echo
 
-# 3. DLL from the latest green CI run, with its provenance recorded.
-RUN_ID="$($GH run list --workflow=native --status=success --limit 1 --json databaseId -q '.[0].databaseId')"
-if [[ -z "$RUN_ID" ]]; then
-    echo "ERROR: no successful 'native' run to take a DLL from." >&2
-    exit 1
-fi
-# Compare the native/ TREE, not the commit sha. The DLL is a function of
-# native/ alone, so a docs- or script-only commit since the last green run is
-# harmless — but any drift in native/ means the artifact is not this code.
-# Comparing shas instead would force a pointless rebuild every time this very
-# file changed.
-RUN_SHA="$($GH run view "$RUN_ID" --json headSha -q '.headSha')"
-HEAD_TREE="$(git rev-parse HEAD:native)"
-RUN_TREE="$(git rev-parse "${RUN_SHA}:native" 2>/dev/null || echo unknown)"
-if [[ "$RUN_TREE" != "$HEAD_TREE" ]]; then
-    echo "ERROR: native/ has changed since the last green CI run." >&2
-    echo "       run $RUN_ID built ${RUN_SHA:0:8} (native tree ${RUN_TREE:0:8})" >&2
-    echo "       HEAD is $(git rev-parse --short HEAD) (native tree ${HEAD_TREE:0:8})" >&2
-    echo "       Push and wait for CI, or you will ship a DLL that is not this code." >&2
-    exit 1
-fi
-
+# 3. DLL from the CI run chosen and verified in 1b, provenance recorded below.
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-$GH run download "$RUN_ID" -n MFO-dll -D "$STAGE/dll"
+if ! $GH run download "$RUN_ID" -n "$ARTIFACT" -D "$STAGE/dll"; then
+    echo "ERROR: could not download artifact ${ARTIFACT} of run ${RUN_ID}." >&2
+    exit 1
+fi
+if [[ ! -f "$STAGE/dll/$DLL_NAME" ]]; then
+    echo "ERROR: ${DLL_NAME} is not in artifact ${ARTIFACT} of run ${RUN_ID}." >&2
+    exit 1
+fi
 
 # 4. Stage in Data/ layout — zip root IS the virtual Data folder, so MO2
 #    installs it with zero manual placement.
@@ -186,7 +319,7 @@ cp "$ZIP" "$DEST/"
 {
     echo "MFO v${VER}"
     echo "commit:   $(git rev-parse HEAD)"
-    echo "ci run:   $RUN_ID"
+    echo "ci run:   $RUN_ID (${RUN_SHA})"
     echo "dll:      $(sha256sum "$STAGE/pkg/SKSE/Plugins/MFO.dll" | cut -d' ' -f1)"
     echo "esp:      $(sha256sum "$STAGE/pkg/MFO.esp" | cut -d' ' -f1)"
     echo "built:    $(date -u +%Y-%m-%dT%H:%M:%SZ)"
