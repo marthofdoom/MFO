@@ -728,8 +728,16 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     (road, distance, the Sightline verdict, HP before, effect at apply, whether MFO held a ch.8b claim);
     `HealObsSweep` (WORKER, top of `TargetCastReconcile`) posts a main-thread read ~1 s later: HP after,
     effect still present, and for a concentration heal the caster's INSTANT channel (state 6 kCasting on
-    the cast form = running) plus whether MFO's stream is still registered. A lasting effect that is
-    gone, or a live stream whose channel stopped, is a `warn` with `*** HEAL NOT LANDING ***`. Harbinger's
+    the cast form = running) plus whether MFO's stream is still registered. **Verdict since
+    `fix/mfo-field-0929`** (13/13 field warns were false): LANDED = effect present at apply, OR present now,
+    OR HP rose (> 0.5 pt), printed as `landed=effect|hp|effect+hp|NO`. EXCEPT a LIVE stream (`conc` and
+    `stream=live`): judged on NOW only (present now or HP rose), so a stream MFO still holds that stopped healing
+    stays loud (`Direct.cpp` `liveStream` / `atApply`, review F2). A short effect that expired before the
+    read-back with HP up has landed. `HEAL NOT LANDING` = a lasting effect with none of the three on a live
+    apply. The channel only counts on a road that does NOT sustain the effect itself: both `direct` roads re-arm
+    it every beat (`SustainConcentrationEffect`), so `channel=stopped (state 0)` there is normal and is only
+    printed (this also quiets MFO-B155's "first proxy stream after a load" shape on those roads, where the
+    effect still lands). No current road needs the channel, so `cut` is dormant until one does. Harbinger's
     own verdict is not visible to MFO; the channel state is its visible consequence (a CheckCast deny on
     the instant caster interrupts the channel on its next tick, AE 34407 / SE 33629). The claim road is
     unreachable for heals today, so it carries no `[heal-obs]` yet (phase 2).
@@ -752,7 +760,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   proxies), MFO-B155 (a proxy minted between publishes is unlisted a lap), MFO-B156 (HealObsNote work
   before its rate limit), MFO-B157 (offensive `effect applied` after NOT ATTACHED), MFO-B158 (AUTO conc
   reads `stream=released`), MFO-B159 (kNoDuration MGEF false Absent), MFO-B160 (Auto.cpp's "never a
-  projectile" comment).
+  projectile" comment), MFO-B163 (`hpRose` can be met by natural regen).
 - **CAN-ACT + NORMAL HEAL REACH (`fix/mfo-can-act`, field 0928c, 2026-09-29).**
   Field: a BLEEDING-OUT Jesper (HP ~0, magicka full) fired rule 0's instant Close Greater Wounds at
   himself, Serana and the player and streamed Fast Healing at a downed Serana, reviving both. No road
@@ -797,7 +805,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     (`cast/Direct.cpp:1211`, transparent Declined + a 5 s deduped `[cast] ... out of reach` line), the
     OOC FF heal (`logistics/Service.cpp:1833`), the ALLY SELECTOR (`Evaluator.cpp` `PickAlly:476`: for a
     `Cast at foe/ally` rule whose spell heals, only allies in reach are candidates, so "Ally HP below X"
-    names the most-hurt ally it can actually heal; review C2) and every main-thread heal apply above.
+    names the most-hurt ally it can actually heal; review C2; since `fix/mfo-field-0929` an ally measured
+    Occluded in the last `kHealLosTrustS` = 3 s (`Evaluator.cpp:480`, sized above the per-follower service
+    period) is skipped too via `Sightline::CheckWithin`, and none in sight = no pick, the rule falls through.
+    `IncumbentTargetLost` does NOT mirror this LoS test, open backlog MFO-B162) and every main-thread heal apply above.
   * **`[bleed]`** (`NoteLifeState` / `NoteHealLanded`): a transition-only line per life-state change
     (DOWN / UP with HP, and on UP the last MFO heal or potion that landed on him and how many landed
     while down), 1 s rate limit with a flips counter. Ledgers cleared in `ClearSelfCasts`.
@@ -865,13 +876,31 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   its condition to go false. **Rank is CARRIED, not inferred:** `Actuation::Fire` records the winning rule's
   index in `g_firingRule` (`cast/Actuation_internal.h:197`) — the single entry point into every actuation in the family —
   `HoldCastLock` stamps it into `CastLock::owningRule` (`cast/Actuation_internal.h:257`) when a hand is claimed, and `CanPreemptHand`
-  (`cast/Hands.cpp:431`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
+  (`cast/Hands.cpp:472`) compares the two directly. Lower index == higher priority; strictly lower may take the hand,
   EQUAL is the incumbent itself (`IsOwnRetarget`, `cast/Hands.cpp:521` — a rule re-aiming its own cast, which fails
   `HandFree`'s incumbent match on `target`), higher is held off. `ResolveCastHand` keeps those two on
   SEPARATE predicates (`mine` vs `outranks`): a self-retarget displaces nothing and records no preempt flag,
   so it can never release its own claim through the preemption path (which for a heal would tear down
   ComposedCast's bookkeeping) or log "rule 3 outranks rule 3". Preemption's one safety condition is **never
   mid-charge**, reusing `CastInFlightOnHand` rather than inventing a second notion of busy.
+  **...but only the charge ALREADY RUNNING (field 2026-09-29, `fix/mfo-field-0929`).** A lower offense whose claim
+  stands re-charges back to back, so the caster was never idle on the lap the heal above it looked (Jesper: rule 1
+  Fast Healing held off by rule 7 Incinerate 14:30:00.1 to 14:30:09.9 while two allies went down). The first
+  mid-charge refusal stamps the asker as the hand's waiter (`CastLock::waiterRule` / `waitSince` / `waitLast`,
+  `cast/Actuation_internal.h:273`; a higher asker replaces a lower waiter, an unrenewed wait ends at
+  `FacetExpiry()`, a DIFFERENT rule taking the hand in `HoldCastLock` clears it). The hand then goes to the waiter at
+  the **charge boundary** (the incumbent FIRED since `waitSince`, `ComposedCast::ObservedFiring` over exactly that
+  span, so at most one lap of the NEW charge is lost) or at the **wait cap** (`kInFlightHoldCap`, APMF's cast TTL, for
+  a fire the watch could not see). **URGENT HEAL** (`ResolveCastHand`'s `a_urgentHeal`, decided in `cast/CastOn.cpp:324`:
+  the spell heals Health and the recipient is bleeding out / essential down or under `min(g_firingAllyThreshold,
+  kHealFull)`, else under kHealFull) takes the hand from a lower-ranked OFFENSE incumbent at once, mid-charge
+  included (marth's ruling); a lower-ranked HEAL incumbent stays protected mid-charge. `PreemptHand`'s `[eval] ...
+  PREEMPTED` line now names the reason (`g_preemptWhy`: idle / CHARGE BOUNDARY / WAIT CAP / URGENT HEAL).
+  **What breaks:** stamping the waiter on the incumbent's OWN laps (it must be CanPreemptHand, i.e. the asker) turns
+  the boundary into a tenure; reading `ObservedFiring` with a 0 window reads the latch (true for any past fire) and
+  preempts every charge; dropping the Offense test lets one heal throw away another mid-charge.
+  **Open backlog:** MFO-B161 (an urgent preempt then a downstream refusal discards a mid-charge offense),
+  MFO-B164 (drain skew on the boundary), MFO-B165 (SpellHealsHealth urgent edge on a hostile conc spell).
   **A self-retarget carries TWO bounds, and never-mid-charge is NOT the load-bearing one:** it protects a
   cast only from the moment charging BEGINS, and the claim-to-first-charge window is 2.3-4.5 s with the
   caster reading `kNone` throughout. `IncumbentTargetLost` (`cast/Hands.cpp:470`) is the bound that matters —
@@ -1500,7 +1529,13 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   has every foe-keyed rule fall through transparently (the Evaluator reads HIS
   group, `Evaluator.cpp:176`) and is logged once per fight `[sched] <id>: party
   combat, own combat=0 -- combat table live` (`:574`, latch `g_partyCombatNoted`,
-  erased in the party-OOC branch). GATE 2 (`:451`, `MFO-B60` fixed, item G) — the
+  erased in the party-OOC branch). **`[stall-probe]` (PASSIVE, `fix/mfo-field-0929`, `StallProbe`
+  `Scheduler.cpp:261`, called at `:1049`):** while party combat is ON and the follower's own combat is OFF,
+  one line per follower per 2 s: distance moved and u/s (position deltas), dPlayer, running
+  package + `packData.packType`, and the player's combat flag + `currentCombatTarget` (handle resolve). Engine
+  reads on the worker: `GetCurrentPackage`, the player's `currentCombatTarget` handle, `IsInCombat` (same worker
+  precedents as `Scheduler.cpp:429` / Targeting); no engine writes.
+  Sample dropped on own combat, the party-OOC teardown and revert. Nothing reads it. GATE 2 (`:451`, `MFO-B60` fixed, item G) — the
   WHOLE party-OOC teardown (the ready-beat / proposal / per-fight latches — NOT the
   retreat since 86e3erv94, see the AUTO-RETREAT DRIVER entry below — `CasterConsent::Clear`, `ClearCastLock`, `CombatStyle::Clear`,
   `ReleaseForcedWeapon`, the dwell erase) sits behind `++g_outOfCombatTicks[id] >= 2`
@@ -1772,7 +1807,20 @@ rule in the header. Called only from the Scheduler hook above.
 
 ### Gait.cpp / Gait.h — travel-package speed byte (low risk)
 `Apply()` (`:8`) copies `Config::g_travelGait` onto the loot-travel packages'
-`preferredSpeed` + re-asserts the `0x2000` enable flag. **PACK data is NOT
+`preferredSpeed` + re-asserts the `0x2000` enable flag.
+**`g_travelGait` is the ENGINE byte; the INI `iTravelGait` is the MCM OPTION (field 2026-09-29, marth "just
+walk, jog, and run").** The engine's speeds run Walk(0) < FastWalk(3) < Jog(1) < Run(2) and each LOOKED one step
+faster than its name, so the MCM offers three options in speed order named for what the player sees:
+0 Walk = engine Walk, 1 Jog = engine FastWalk, 2 Run = engine Jog (default). Engine Run is not offered.
+Mapped at parse by `GaitEngineFromSetting` (`Config.cpp:62`); legacy stored values keep their LABEL, and a
+legacy 3 ("Fast walk") keeps its engine value and is patched 3 -> 1 in the MCM store by `EnsureMcmDefaults`
+(`Config.cpp:494`, at kInputLoaded, before MCM Helper reads it) as an IN-PLACE ONE-BYTE write (in|out, no
+truncation; only `[General]` `iTravelGait = 3`; BOM-aware offsets; each byte read back as `3` first). A failed
+patch logs `MCM self-heal FAILED` at error and leaves the `3`, which the parse maps the same. **Never** turn it
+back into a truncate-and-rewrite: a failed write there empties the user's whole MCM store. **What breaks:** feeding the
+INI value straight to the package or to APMF ch.19 (`apmf/Excursion.cpp`, `apmf/Deposit.cpp` read
+`g_travelGait` = engine byte) reintroduces the old labels; adding a 4th MCM option without a value map is
+impossible (MCM Helper enums have `options`/`shortNames` only, value = index). **PACK data is NOT
 serialized** — nothing outlives the session. Callers `Config.cpp:378`,
 `plugin.cpp:284` (needs the second call because the first `Read()` precedes
 `Forms::Resolve`, so the package is null). Writes MFO's own packages, not base NPCs.
@@ -2100,7 +2148,12 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   53029/53829) inside `MainThread::Post` (§0.30 crash class off-worker). `Check`
   (decl `Sightline.h:52`, worker-safe cache read) → `cast/Roads.cpp:48,70`,
   `cast/Direct.cpp:1169`, `cast/Auto.cpp:552`, `Evaluator.cpp:320`.
-  `Want` (decl `Sightline.h:58`) → `Evaluator.cpp:330`, `cast/Auto.cpp:490` (F7 auto-cast),
+  **Repost throttle is PER (viewer, target) PAIR since `fix/mfo-field-0929`** (`Want`, `Sightline.cpp:217`):
+  it was one stamp per viewer, so the first batch in a 0.3 s window dropped every other caller's (the heal
+  pick's ally batch lost to the foe selectors for seconds, its Occluded aged into Unknown, Unknown passed).
+  `CheckWithin` (`:209`) = `Check` with a caller-chosen age (PickAlly's heal pick, 3 s).
+  Open backlog: MFO-B166 (total main-thread measurement now scales with distinct targets per viewer).
+  `Want` (decl `Sightline.h:59`) → `Evaluator.cpp:330`, `cast/Auto.cpp:490` (F7 auto-cast),
   `logistics/Service.cpp:1424` (OOC hostile cast — seeds the `Check` at `:1321`; added to
   close the 2026-08-18 review SEV-3 "Check without a Want → Unknown always passes"
   inert wall-gate). `g_mx` is a strict LEAF (nothing called while held). Fail-open
@@ -5616,7 +5669,7 @@ basis, and ends the leg on arrival / the actor entering combat / the destination
 - **Logs:** every road-1/road-2 DISPATCH / RETARGET / RELEASE line carries the `[loot-road]`
   prefix and `road=MFOPKG|CH19`; RELEASE lines carry the `why=` from `LootTravelClear/EvictIf`.
 - **GAIT on road 2 (loot M2, 86e3dh44v):** `ClaimLootTravel` passes `Config::g_travelGait`
-  (`iTravelGait`, 0..3 = Walk/Jog/Run/FastWalk) as `kTravel_SpeedSet | gait << 3` on every
+  (the ENGINE byte 0..3 = Walk/Jog/Run/FastWalk, mapped from the MCM option `iTravelGait`) as `kTravel_SpeedSet | gait << 3` on every
   RequestEx/Repoint, ONLY when APMF's `abiVersion >= 12` (an older APMF stores unknown bits
   silently). APMF writes it into ITS leg package when the leg starts; a gait change reaches the
   next fresh leg, not one already walking. Road 1 (MFO's own ch.9 packages,

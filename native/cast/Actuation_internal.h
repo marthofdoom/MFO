@@ -255,6 +255,24 @@ namespace MFO::Actuation {
             // uid for it). Bounded by the claim's own TTL and one hand, and
             // self-correcting on the next claim; not worth a second identity here.
             int owningRule = kNoRule;
+            // A STRICTLY HIGHER-RANKED RULE WAITING FOR THIS HAND (field 2026-09-29).
+            // Stamped by CanPreemptHand when it refuses a higher-ranked asker only
+            // because the incumbent is mid-charge. The mid-charge protection covers
+            // the charge that was ALREADY RUNNING when the wait began, nothing after
+            // it: once the incumbent has fired since `waitSince` (ComposedCast::
+            // ObservedFiring), whatever it is charging now started while this rule
+            // was waiting, and the hand goes to the waiter. Without this a lower
+            // offense that re-charges back to back never shows the caster idle and
+            // starves a heal above it (Jesper, 14:30:00-14:30:09.9: rule 1 Fast
+            // Healing held off by rule 7 Incinerate for ~10 s). `waitLast` ends a
+            // wait the asker stopped renewing (FacetExpiry, the same staleness
+            // window the lock itself uses), so a stale stamp never licenses a
+            // preemption. Reset with the lock (PreemptHand / ClearCastLockHand) and
+            // whenever a DIFFERENT rule takes the hand (HoldCastLock). Worker-serial
+            // like every other field here (#4).
+            int waiterRule = kNoRule;
+            std::chrono::steady_clock::time_point waitSince{};
+            std::chrono::steady_clock::time_point waitLast{};
         };
         struct FollowerCastLocks { CastLock hand[kHandCount]; };
         inline std::unordered_map<RE::FormID, FollowerCastLocks> g_castLock;
@@ -373,9 +391,13 @@ namespace MFO::Actuation {
         void ClearCastLockHand(RE::FormID a_follower, std::size_t a_hand);
         RE::FormID CastProxyOnHand(RE::FormID a_follower, std::size_t a_hand);
         void PreemptHand(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_wantedSpell);
+        // a_urgentHeal (field 2026-09-29): the asker is a HEAL whose recipient is
+        // down or under the rule's threshold. It may take a hand from a
+        // lower-ranked OFFENSE incumbent at once, mid-charge included (marth's
+        // ruling: a heal near the top must take the hand at once). CastOn decides it.
         std::optional<Outcome> ResolveCastHand(RE::Actor* a_follower, Loadout::HandPick a_pick,
                                                RE::FormID a_spell, RE::FormID a_target,
-                                               HandPlan& a_out);
+                                               HandPlan& a_out, bool a_urgentHeal = false);
 
         // ── WAVE-1 SPLIT (2026-09-24): FILE-LOCAL -> SHARED, BODIES UNCHANGED ──────
         // The subsystem-folder split cut Actuation.cpp and Actuation_Direct.cpp by

@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **A heal takes the hand at once.** A heal rule near the top of the list no longer waits behind an attack spell lower down. If the ally is down or under the rule's threshold, the follower drops the attack mid-charge and heals. Any other higher rule gets the hand as soon as the attack in progress fires (before, a follower who kept recasting Incinerate never let the heal above it through).
+- **Heals pick an ally they can see.** An Ally HP below rule with a heal skips an ally behind a wall and heals the most hurt ally in sight. If nobody hurt is in sight, the rule passes to the next one. Before, the follower kept picking the ally behind the wall and every cast was refused.
+- **Walk-to-loot gait works, and reads right.** The MCM offers Walk, Jog and Run, slowest to fastest, named for what you see in game. Run is the default. The old sprint is gone (it looked like a sprint, not a run). A saved Fast walk becomes Jog, which is the same speed.
+- **Fewer false alarms in the log.** The [heal-obs] line no longer calls a heal missed when it landed. A heal counts as landed if its effect was on the ally, or their health went up.
+- **New log line: [stall-probe].** While the party fights and a follower is not in combat themselves, MFO.log notes every 2 seconds how far they moved, their AI package, and what you are fighting. It changes nothing. It is there to explain followers standing around after a fight.
+
 ## v2.0.15 -- Followers pick locks and ship relics to the museum
 
 - **NEWEST HARBINGER REQUIRED: use Harbinger 0.9.10.** Lockpicking, museum drop-offs, the fight leash and staying out of the fight during a retreat all need it. MFO still runs with Harbinger 0.9.5 or newer. Those features just stay off.

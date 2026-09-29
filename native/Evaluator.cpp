@@ -473,6 +473,12 @@ namespace MFO::Eval {
         // instead of an out-of-reach one it would decline every lap. nullptr = no
         // reach filter (every other action). The candidates are Want()ed so the LoS
         // cache is warm next lap (Unknown passes, as everywhere).
+        // How long PickAlly's heal pick trusts a measured Occluded (see its use).
+        // Sized from the cadence (principle 9): above the per-follower service
+        // period (133 ms x party, ~1.3 s for ten) plus the frame the measurement
+        // waits for, so the re-measure always lands inside it.
+        constexpr float kHealLosTrustS = 3.0f;
+
         RE::ActorHandle PickAlly(RE::Actor* a_self, RE::Actor* a_player, float a_param,
                                  RE::SpellItem* a_healSpell = nullptr) {
             RE::ActorHandle best;
@@ -492,6 +498,20 @@ namespace MFO::Eval {
                 if (a_healSpell) {
                     sightWant.push_back(ally->GetFormID());
                     if (!Actuation::HealInReach(a_self, ally, a_healSpell)) return;
+                    // A RECENT OCCLUDED STILL COUNTS (field 2026-09-29). HealInReach
+                    // reads the 1 s cache, and past it an Occluded ages into Unknown,
+                    // which passes. The re-measure this lap's Want asks for lands a
+                    // service period later (133 ms x party, over 1 s for a big party),
+                    // so between the two the heal named an ally it could not see and
+                    // the main thread refused it (Jesper -> Herd, "no line of sight",
+                    // 14:30:09.97 / 11.58 / 19.70). The last verdict is trusted for
+                    // kHealLosTrustS here instead: an ally who steps into view is
+                    // re-measured Visible on the next lap (the Want above), and one
+                    // that is never re-measured (unloaded) falls back to Unknown after
+                    // it. Self never reaches this (a_self is excluded above).
+                    if (Sightline::CheckWithin(a_self->GetFormID(), ally->GetFormID(), kHealLosTrustS) ==
+                        Sightline::Verdict::Occluded)
+                        return;
                 }
                 lowest = hp; best = ally->GetHandle();
             };

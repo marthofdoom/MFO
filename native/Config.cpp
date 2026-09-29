@@ -42,6 +42,32 @@ namespace MFO::Config {
             }
         }
 
+        // WALK-TO-LOOT GAIT: MCM OPTION -> ENGINE BYTE (field 2026-09-29, marth:
+        // "just walk, jog, and run"). The engine's PKDT preferredSpeed values are
+        // 0=Walk 1=Jog 2=Run 3=FastWalk, fastest last in the order Walk < FastWalk
+        // < Jog < Run, and in the field each one LOOKED one step faster than its
+        // name: engine FastWalk read as a jog, engine Jog read as a run, engine
+        // Run read as a sprint. So the MCM offers three options, in speed order,
+        // named for what the player sees:
+        //   0 "Walk" -> engine Walk     (0)
+        //   1 "Jog"  -> engine FastWalk (3)
+        //   2 "Run"  -> engine Jog      (1)
+        // Engine Run (the sprint) is no longer offered. The INI key iTravelGait
+        // is unchanged. LEGACY stored values keep their LABEL: an old 0/1/2 was
+        // shown as Walk/Jog/Run and reads as Walk/Jog/Run here. An old 3 ("Fast
+        // walk") keeps its ENGINE value (FastWalk, now shown as Jog); the MCM
+        // enum has no fourth option, so EnsureMcmDefaults also rewrites a stored
+        // 3 to 1 before MCM Helper reads the store. g_travelGait (every consumer:
+        // Gait::Apply, the loot / deposit legs to APMF ch.19) stays the engine byte.
+        int GaitEngineFromSetting(int a_setting) {
+            switch (a_setting) {
+            case 0:  return 0;   // Walk -> engine Walk
+            case 1:  return 3;   // Jog  -> engine FastWalk
+            case 2:  return 1;   // Run  -> engine Jog
+            default: return 3;   // legacy 3 "Fast walk" -> engine FastWalk (shown as Jog)
+            }
+        }
+
         std::string Trim(std::string s) {
             const auto b = s.find_first_not_of(" \t\r\n");
             if (b == std::string::npos) return {};
@@ -209,7 +235,16 @@ namespace MFO::Config {
             else if (a_key == "fBatchLinger")        setF(g_batchLinger,     0.0f, 15.0f);
             else if (a_key == "fExcursionMax")       setF(g_excursionMax,    5.0f, 300.0f);
             else if (a_key == "fNavmeshGate")        setF(g_navmeshGate,     0.0f, 2048.0f);
-            else if (a_key == "iTravelGait")         setI(g_travelGait, 0, 3);   // 0=Walk 1=Jog 2=Run 3=FastWalk
+            else if (a_key == "iTravelGait") {
+                // The STORED value is the MCM option (0=Walk 1=Jog 2=Run, speed
+                // order, 2026-09-29) and g_travelGait is the ENGINE byte, so this
+                // is the one place the two meet -- see GaitEngineFromSetting.
+                if (!ParseInt(a_val, i))
+                    spdlog::warn("[config] {}: unparseable value for {} ('{}') -- keeping default",
+                                 a_src, a_key, a_val);
+                else
+                    g_travelGait.store(GaitEngineFromSetting(std::clamp(i, 0, 3)));
+            }
             else if (a_key == "fLeashMin")          setF(g_leashMin,       64.0f, 8192.0f);
             else if (a_key == "fLeashMax")          setF(g_leashMax,       64.0f, 8192.0f);
             else if (a_key == "fChaseMin")          setF(g_chaseMin,       64.0f, 8192.0f);
@@ -356,7 +391,7 @@ namespace MFO::Config {
             g_batchLinger        = 1.5f;
             g_excursionMax       = 60.0f;
             g_navmeshGate        = 300.0f;
-            g_travelGait         = 2;   // Run -- matches the shipped ESP byte
+            g_travelGait         = GaitEngineFromSetting(2);   // MCM "Run" = engine Jog (1), see GaitEngineFromSetting
             g_leashMin           = 512.0f;
             g_leashMax           = 4000.0f;
             g_chaseMin           = 600.0f;
@@ -372,9 +407,10 @@ namespace MFO::Config {
     // update can't be hand-seeded. Ensure every MCM ModSetting key exists here
     // before MCM Helper reads, appending any missing one with its default. All MFO
     // ModSettings live under [General], so appending at EOF keeps them in-section.
-    // Runs ONCE at load (kDataLoaded). If the store is absent (fresh install) MCM
-    // Helper creates it complete, so there is nothing to do. Degrades to prior
-    // behavior on ANY I/O error -- never worse than today.
+    // Runs at kInputLoaded (before MCM Helper reads) and again, idempotently, at
+    // kDataLoaded. If the store is absent (fresh install) MCM Helper creates it
+    // complete, so there is nothing to do. Degrades to prior behavior on ANY I/O
+    // error -- never worse than today.
     //
     // KEEP kMcmDefaults IN SYNC with out/MCM/Settings/MFO.ini -- it is the sixth
     // place a new toggle is wired (atomic, parse+reset, both inis, config.json).
@@ -431,9 +467,10 @@ namespace MFO::Config {
         ss << in.rdbuf();
         in.close();
         std::string text = ss.str();
-        if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF &&
-            static_cast<unsigned char>(text[1]) == 0xBB &&
-            static_cast<unsigned char>(text[2]) == 0xBF)
+        const bool hadBom = text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF &&
+                            static_cast<unsigned char>(text[1]) == 0xBB &&
+                            static_cast<unsigned char>(text[2]) == 0xBF;
+        if (hadBom)
             text.erase(0, 3);   // strip MCM Helper's UTF-8 BOM before scanning
 
         // PRESENT = some line begins (after leading ws) with the exact key token
@@ -453,6 +490,87 @@ namespace MFO::Config {
             }
             return false;
         };
+
+        // GAIT OPTION MIGRATION (2026-09-29). The walk-to-loot gait enum lost its
+        // fourth option ("Fast walk", stored 3), and an MCM enum value with no
+        // option behind it is not valid. A stored 3 becomes 1 ("Jog"), which is the
+        // SAME engine gait (FastWalk, see GaitEngineFromSetting), so nothing the
+        // follower does changes. Runs before MCM Helper reads the store (the first
+        // call is at kInputLoaded).
+        // IN-PLACE ONE-BYTE PATCH, never a rewrite: `iTravelGait = 3` -> `= 1` is the
+        // same length, so the file is opened in|out WITHOUT truncation and only the
+        // digit's byte is overwritten. Nothing else in the store is touched, and no
+        // failure can empty or shorten it. Matched only under [General] (where MCM
+        // Helper keeps every MFO ModSetting), only the exact key, only a bare `3`
+        // (optionally followed by whitespace, CR or an inline comment). Offsets count
+        // the UTF-8 BOM. Each byte is read back as '3' before it is written. On ANY
+        // failure the error is logged loudly and the store keeps its `3` (a byte
+        // written before the failure is a valid `1`), which the native parse
+        // already maps to the same engine gait.
+        {
+            const std::size_t        bomOff = hadBom ? 3 : 0;
+            std::vector<std::size_t> digits;   // FILE offsets of each stored '3'
+            bool                     inGeneral = false;
+            std::size_t              pos = 0;
+            while (pos < text.size()) {
+                auto eol = text.find('\n', pos);
+                if (eol == std::string::npos) eol = text.size();
+                const std::string_view lv(text.data() + pos, eol - pos);
+                const auto             b = lv.find_first_not_of(" \t\r");
+                if (b != std::string_view::npos) {
+                    if (lv[b] == '[') {
+                        const auto close = lv.find(']', b);
+                        std::string name;
+                        if (close != std::string_view::npos)
+                            name = Trim(std::string(lv.substr(b + 1, close - b - 1)));
+                        for (auto& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        inGeneral = name == "general";
+                    } else if (inGeneral && lv.substr(b, 11) == "iTravelGait") {
+                        auto i = b + 11;
+                        while (i < lv.size() && (lv[i] == ' ' || lv[i] == '\t')) ++i;
+                        if (i < lv.size() && lv[i] == '=') {
+                            ++i;
+                            while (i < lv.size() && (lv[i] == ' ' || lv[i] == '\t')) ++i;
+                            if (i < lv.size() && lv[i] == '3') {
+                                auto r = i + 1;
+                                while (r < lv.size() && (lv[r] == ' ' || lv[r] == '\t' || lv[r] == '\r')) ++r;
+                                if (r == lv.size() || lv[r] == ';' || lv[r] == '#')
+                                    digits.push_back(bomOff + pos + i);
+                            }
+                        }
+                    }
+                }
+                pos = eol + 1;
+            }
+            if (!digits.empty()) {
+                std::fstream f(kMCMPath, std::ios::in | std::ios::out | std::ios::binary);   // no trunc
+                bool         ok      = static_cast<bool>(f);
+                std::size_t  patched = 0;
+                for (const auto off : digits) {
+                    if (!ok) break;
+                    f.seekg(static_cast<std::streamoff>(off));
+                    const auto cur = f.get();
+                    if (!f.good() || cur != '3') { ok = false; break; }   // file moved under us
+                    f.seekp(static_cast<std::streamoff>(off));
+                    f.put('1');
+                    f.flush();
+                    if (!f.good()) { ok = false; break; }
+                    text[off - bomOff] = '1';
+                    ++patched;
+                }
+                f.close();
+                if (f.fail()) ok = false;
+                if (ok)
+                    spdlog::info("[config] MCM self-heal: iTravelGait 3 (the retired 'Fast walk') -> 1 "
+                                 "('Jog', the same engine gait), patched in place");
+                else
+                    spdlog::error("[config] MCM self-heal FAILED: could not patch iTravelGait 3 -> 1 in {} "
+                                  "({} of {} byte(s) written, the rest still read 3). The store was not "
+                                  "truncated or rewritten; the native parse maps 3 to the same gait, but "
+                                  "MCM Helper will show no option for it",
+                                  kMCMPath, patched, digits.size());
+            }
+        }
 
         std::string add;
         int n = 0;

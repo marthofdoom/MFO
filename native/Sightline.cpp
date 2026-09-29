@@ -16,9 +16,20 @@ namespace MFO::Sightline {
         // through a doorway is not "occluded" for a whole fight.
         constexpr float kFreshSeconds = 1.0f;
 
-        // Per-viewer floor between Post()s. PickFoe runs once per RULE per
+        // Per-PAIR floor between measurements. PickFoe runs once per RULE per
         // tick, so one follower with five foe selectors would otherwise queue
         // five identical measurement batches into the same frame.
+        // PER PAIR, NOT PER VIEWER (field 2026-09-29). The floor used to be one
+        // stamp per viewer, so whichever batch posted first in a window DROPPED
+        // every other batch that viewer asked for in the same 0.3 s -- the foe
+        // selectors, CastAuto and the heal pick (PickAlly) all want different
+        // targets from the same viewer on the same lap. The heal pick's ally
+        // batch lost that race for seconds at a time (Jesper -> Herd measured at
+        // 14:30:04.2, then not again until the apply at 14:30:09.9), its verdict
+        // aged past kFreshSeconds into Unknown, Unknown passes, and the heal rule
+        // named an occluded ally that the main thread then refused. Keyed per
+        // pair, a batch only skips the targets measured in the last 0.3 s, so no
+        // caller can starve another and the cost per pair is unchanged.
         constexpr float kRepostSeconds = 0.3f;
 
         struct Entry {
@@ -33,7 +44,7 @@ namespace MFO::Sightline {
         // the combat-group lock the caller may be inside.
         std::mutex g_mx;
         std::unordered_map<std::uint64_t, Entry> g_cache;
-        std::unordered_map<RE::FormID, Clock::time_point> g_lastPost;
+        std::unordered_map<std::uint64_t, Clock::time_point> g_lastPost;   // Key(viewer, target)
 
         constexpr std::uint64_t Key(RE::FormID a_viewer, RE::FormID a_target) {
             return (static_cast<std::uint64_t>(a_viewer) << 32) | a_target;
@@ -157,9 +168,9 @@ namespace MFO::Sightline {
                 // (catch a tent/cloth the engine saw through) -- it never
                 // overturns an OCCLUDED, and it fails OPEN (VISIBLE stands) when
                 // it cannot run. Both discrete and concentration casts reach
-                // this only through Want()'s per-viewer repost throttle
-                // (kRepostSeconds), so the pick is bounded to one batch per
-                // ~0.3 s per caster -- NOT the 133 ms pump tick.
+                // this only through Want()'s repost throttle (kRepostSeconds,
+                // per viewer/target pair since 2026-09-29), so the pick is
+                // bounded to once per ~0.3 s per pair -- NOT the 133 ms pump tick.
                 if (los && CustomRayConfirmsOcclusion(vf, tf)) los = false;
 
                 std::lock_guard lk(g_mx);
@@ -195,13 +206,30 @@ namespace MFO::Sightline {
         return it->second.los ? Verdict::Visible : Verdict::Occluded;
     }
 
+    Verdict CheckWithin(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds) {
+        std::lock_guard lk(g_mx);
+        const auto it = g_cache.find(Key(a_viewer, a_target));
+        if (it == g_cache.end()) return Verdict::Unknown;
+        if (Since(it->second.at) > a_maxAgeSeconds) return Verdict::Unknown;
+        return it->second.los ? Verdict::Visible : Verdict::Occluded;
+    }
+
     void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets) {
         if (!a_viewer || a_targets.empty()) return;
         {
             std::lock_guard lk(g_mx);
-            auto& last = g_lastPost[a_viewer];
-            if (Since(last) < kRepostSeconds) return;
-            last = Clock::now();
+            // Bounded: a long session meets many foes. Stamps older than the
+            // floor carry no information, so drop them when the map grows.
+            if (g_lastPost.size() > 1024)
+                std::erase_if(g_lastPost, [](const auto& kv) { return Since(kv.second) >= kRepostSeconds; });
+            const auto now = Clock::now();
+            std::erase_if(a_targets, [&](RE::FormID t) {
+                auto& last = g_lastPost[Key(a_viewer, t)];
+                if (Since(last) < kRepostSeconds) return true;   // measured (or queued) just now
+                last = now;
+                return false;
+            });
+            if (a_targets.empty()) return;
         }
         // Post OUTSIDE our lock (leaf-mutex discipline; MainThread has its own
         // queue mutex). Capture by value: FormIDs, never handles or pointers,

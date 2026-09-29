@@ -312,6 +312,25 @@ namespace MFO::Actuation {
                 spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
             const bool offenseSpell =
                 !selfOrConc && CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Offense;
+            // URGENT HEAL (field 2026-09-29, marth's ruling "a heal near the top must
+            // take the hand at once"): a heal whose recipient is DOWN (bleedout /
+            // essential down, ActorState::IsBleedingOut) or under the rule's own
+            // threshold may take a hand from a lower-ranked OFFENSE incumbent even
+            // mid-charge (CanPreemptHand). The threshold is the ally selector's
+            // (g_firingAllyThreshold, PickAlly's own clamp); any other heal rule's
+            // condition already held to reach here, so "hurt at all" (kHealFull) is
+            // its bar. Only rank decides WHETHER the heal outranks the incumbent;
+            // this only decides whether it must wait for the charge boundary.
+            bool urgentHeal = false;
+            if (!offenseSpell && SpellHealsHealth(spell)) {
+                RE::Actor* recipient = (!a_target || a_target == a_follower) ? a_follower : a_target;
+                const auto* st   = recipient ? recipient->AsActorState() : nullptr;
+                const bool  down = st && st->IsBleedingOut();
+                const float bar  = g_firingAllyThreshold >= 0.0f
+                                       ? std::min(g_firingAllyThreshold, Vocab::kHealFull)
+                                       : Vocab::kHealFull;
+                urgentHeal = recipient && !recipient->IsDead() && (down || Vocab::HealthPct(recipient) < bar);
+            }
             HandPlan handPlan;
             // ONE lambda, because the in-flight gate below may have to run this a
             // SECOND time: if the claim its hand-pin was based on turns out to be
@@ -321,7 +340,7 @@ namespace MFO::Actuation {
             auto resolveHands = [&]() -> std::optional<Outcome> {
                 if (!offenseSpell)
                     return ResolveCastHand(a_follower, Loadout::HandPick::Left, a_spellID,
-                                           lockTargetKey, handPlan);
+                                           lockTargetKey, handPlan, urgentHeal);
                 const auto pick = Loadout::PlanCastHand(a_follower, spell,
                                                         APMFBridge::WeaponHandActive(a_follower));
                 return ResolveCastHand(a_follower, pick, a_spellID, lockTargetKey, handPlan);

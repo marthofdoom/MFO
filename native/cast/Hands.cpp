@@ -65,6 +65,15 @@ namespace MFO::Actuation {
         lock.spell = a_spell; lock.target = a_target;
         lock.lastSeen = std::chrono::steady_clock::now();
         lock.claimGoneAt = {};   // fresh hold == fresh cast: reset F8's cap window
+        // A waiter was waiting on the OLD owner's charge. A different rule taking
+        // the hand ends that wait (the new owner is judged afresh). The SAME rule
+        // re-holding (a re-claim after its claim lapsed) keeps it: the waiter is
+        // still waiting on the same rule's casts. See CastLock::waiterRule.
+        if (lock.owningRule != g_firingRule) {
+            lock.waiterRule = kNoRule;
+            lock.waitSince  = {};
+            lock.waitLast   = {};
+        }
         // RANK, carried not inferred: the rule Fire() is acting for owns this
         // hand until it lets go. See CastLock::owningRule.
         lock.owningRule = g_firingRule;
@@ -286,6 +295,12 @@ namespace MFO::Actuation {
         // the span those two bracket, not a single measured quantity.
         constexpr auto kInFlightHoldCap = std::chrono::milliseconds(APMFBridge::kHealCastTtlMs);
 
+        // WHY CanPreemptHand last said yes on each hand (field 2026-09-29), for
+        // PreemptHand's [eval] line, which runs later in the same Fire() (CastOn's
+        // commitPreempt). Worker-serial (#4). String literals only.
+        const char* g_preemptWhy[kHandCount] = { "the caster was idle between casts",
+                                                 "the caster was idle between casts" };
+
         // Is hand `a_hand`'s lock still LIVE, i.e. is the follower still
         // genuinely occupied on THAT hand right now? "release on completion,
         // on claim release/TTL expiry" (marth): a live APMF cast claim on that
@@ -428,15 +443,85 @@ namespace MFO::Actuation {
         // running the incumbent's cast: only the idle window BETWEEN casts is
         // takeable. That reuses CastInFlightOnHand rather than inventing a second
         // notion of "busy" -- there is one such notion in this file and this is it.
-        bool CanPreemptHand(RE::Actor* a_follower, std::size_t a_hand, const CastLock& a_lock) {
+        //
+        // ...EXCEPT THAT "NEVER MID-CHARGE" ONLY COVERS THE CHARGE ALREADY RUNNING
+        // (field 2026-09-29). A lower-ranked offense whose claim stands re-charges
+        // back to back, so the caster is almost never idle on the lap a higher
+        // rule looks, and the heal above it starved for ~10 s (Jesper: rule 1 Fast
+        // Healing held off by rule 7 Incinerate, 14:30:00.1 to 14:30:09.9, while
+        // two allies went down). So the first refusal STAMPS the asker as the
+        // hand's waiter (CastLock::waiterRule), and the hand goes to it as soon as
+        // the charge that was running then is over:
+        //   * BOUNDARY -- the incumbent has FIRED since the wait began
+        //     (ComposedCast::ObservedFiring over exactly that span). Whatever it
+        //     is charging now started while a higher rule was waiting, and is not
+        //     protected. At most one lap of that new charge is lost, never the
+        //     charge the protection was for.
+        //   * CAP -- the wait has lasted kInFlightHoldCap (APMF's cast TTL, the
+        //     longest one cast may stand, see its doc). A fire the watch could not
+        //     see (an unlearned proxy) must not starve the waiter forever.
+        //   * URGENT HEAL (a_urgentHeal, decided by CastOn) -- the asker is a heal
+        //     whose recipient is DOWN or under the rule's threshold, and the
+        //     incumbent is an OFFENSE spell. It takes the hand at once, mid-charge
+        //     included: marth's ruling, "a heal near the top must take the hand at
+        //     once". A lower-ranked HEAL incumbent is still protected mid-charge
+        //     (throwing one heal away for another is not what the ruling asks).
+        // Rank is still the carried index and nothing else. There is no tenure:
+        // the waiter never waits on a timer of its own, only on the incumbent's
+        // charge (or the cap that bounds a stuck one).
+        bool CanPreemptHand(RE::Actor* a_follower, std::size_t a_hand, CastLock& a_lock,
+                            bool a_urgentHeal) {
             const auto fid = a_follower ? a_follower->GetFormID() : 0;
             if (fid == 0) return false;
             // RANK, COMPARED -- not inferred from arrival order. Strictly higher
             // (lower index) only: an equal index is the incumbent ITSELF (see
             // IsOwnRetarget below), and a lower rank is held off exactly as before.
             if (g_firingRule >= a_lock.owningRule) return false;
-            return !CastInFlightOnHand(a_follower, a_hand, a_lock.spell,
-                                       CastProxyOnHand(fid, a_hand));  // never mid-charge
+            if (!CastInFlightOnHand(a_follower, a_hand, a_lock.spell, CastProxyOnHand(fid, a_hand))) {
+                g_preemptWhy[a_hand] = "the caster was idle between casts";
+                return true;
+            }
+            if (a_urgentHeal) {
+                auto* inc = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
+                if (inc && CasterConsent::ClassifySpell(inc) == CasterConsent::SpellKind::Offense) {
+                    g_preemptWhy[a_hand] = "URGENT HEAL: the recipient is down or under the rule's threshold, "
+                                           "so the heal takes the hand from a lower-ranked offense at once, "
+                                           "mid-charge included (marth's ruling)";
+                    return true;
+                }
+            }
+            // Mid-charge. Stamp (or renew) this rule as the hand's waiter. A higher-
+            // ranked asker replaces a lower-ranked waiter, and a wait nobody renewed
+            // inside FacetExpiry() is over and starts again from now.
+            const auto now   = std::chrono::steady_clock::now();
+            const bool stale = a_lock.waiterRule == kNoRule ||
+                               now - a_lock.waitLast >
+                                   std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                       APMFBridge::FacetExpiry());
+            if (stale || g_firingRule < a_lock.waiterRule) {
+                a_lock.waiterRule = g_firingRule;
+                a_lock.waitSince  = now;
+            }
+            if (a_lock.waiterRule == g_firingRule) a_lock.waitLast = now;
+            if (a_lock.waiterRule != g_firingRule) return false;   // a higher rule is already waiting
+            const auto waited = std::chrono::duration_cast<std::chrono::milliseconds>(now - a_lock.waitSince);
+            if (waited.count() > 0) {
+                const std::int32_t apmfHand = (a_hand == kHandLeft) ? APMFBridge::kApmfHandLeft
+                                                                    : APMFBridge::kApmfHandRight;
+                if (ComposedCast::ObservedFiring(fid, apmfHand, a_lock.spell,
+                                                 static_cast<std::uint32_t>(waited.count()))) {
+                    g_preemptWhy[a_hand] = "CHARGE BOUNDARY: the incumbent fired after this rule began waiting, "
+                                           "so the charge running now started while a higher-ranked rule "
+                                           "waited for the hand";
+                    return true;
+                }
+            }
+            if (waited >= kInFlightHoldCap) {
+                g_preemptWhy[a_hand] = "WAIT CAP: this rule has waited one full cast TTL for the hand and no "
+                                       "incumbent fire was observed, longer than one charge can take";
+                return true;
+            }
+            return false;   // the charge that was running when the wait began is protected
         }
 
         // ── IS THE INCUMBENT'S TARGET STILL A TARGET? (review finding, 2026-09-08) ──
@@ -572,9 +657,10 @@ namespace MFO::Actuation {
             return;
         entry.first = a_wantedSpell; entry.second = now;
         spdlog::info("[eval] {:08X} cast gambit PREEMPTED the {} hand -- rule {} (spell {:08X}) "
-                     "outranks rule {} (spell {:08X}) in the gambit list and the caster was idle "
-                     "between casts, so the incumbent's claim on that hand was released. {}",
+                     "outranks rule {} (spell {:08X}) in the gambit list and {}, so the incumbent's "
+                     "claim on that hand was released. {}",
                      fid, HandName(a_hand), g_firingRule, a_wantedSpell, lostRule, lostSpell,
+                     g_preemptWhy[a_hand],
                      dualIncumbent
                          ? "The incumbent was a DUAL cast holding both hands as ONE claim, so both "
                            "hands were freed -- a dual cast cannot be half-released."
@@ -611,7 +697,7 @@ namespace MFO::Actuation {
     // not a wall for the rules below it).
     std::optional<Outcome> ResolveCastHand(RE::Actor* a_follower, Loadout::HandPick a_pick,
                                            RE::FormID a_spell, RE::FormID a_target,
-                                           HandPlan& a_out) {
+                                           HandPlan& a_out, bool a_urgentHeal) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         // Both hands are resolved UP FRONT now (F8/F9, 2026-09-08) instead of
         // inside each case, because the incumbent test below has to see both
@@ -680,7 +766,7 @@ namespace MFO::Actuation {
         };
         auto outranks = [&](std::size_t h) {
             return lockIt != g_castLock.end() &&
-                   CanPreemptHand(a_follower, h, lockIt->second.hand[h]);
+                   CanPreemptHand(a_follower, h, lockIt->second.hand[h], a_urgentHeal);
         };
 
         // ── HOLDING A RE-AIM STILL HAS TO KEEP THE CLAIM ALIVE ──────────────

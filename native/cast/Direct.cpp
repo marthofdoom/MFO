@@ -1843,21 +1843,48 @@ namespace MFO::Actuation {
                 }
                 const auto* spell = RE::TESForm::LookupByID<RE::SpellItem>(o.spell);
                 const bool  lasting = o.conc || HasDurationEffect(spell);
-                // LOUD when the apply was logged as landed but the recipient carries no
-                // effect of it now, or a live stream's channel is not running.
-                const bool gone = lasting && !present && (!o.conc || std::string_view(stream) == "live");
-                const bool cut  = o.conc && std::string_view(stream) == "live" &&
+                // THE VERDICT (field 2026-09-29: 13 of 13 "HEAL NOT LANDING" lines were
+                // false). LANDED = the effect was on the recipient at the apply, OR it
+                // is on them now, OR their HP rose. A short effect (Close Greater
+                // Wounds: present at apply, gone 1 s later, hp 16% -> 100%) that
+                // expired before this read-back HAS landed. Loud only when none of the
+                // three holds for a lasting effect on a live apply (a released
+                // stream's effect is expected to be gone).
+                // A LIVE STREAM is judged on NOW only: effect present now, or HP rose.
+                // "Present at apply" says nothing about a stream MFO still holds live
+                // whose effect is gone and whose HP did not move (it stopped healing),
+                // so that shape stays loud. Every other road keeps "present at apply".
+                const bool liveStream = o.conc && std::string_view(stream) == "live";
+                const bool hpRose     = hpAfter > o.hpBefore + 0.005f;
+                const bool atApply    = !liveStream && o.attach == HealAttach::Present;
+                const bool landed     = atApply || present || hpRose;
+                const bool gone   = lasting && !landed && (!o.conc || std::string_view(stream) == "live");
+                // THE CHANNEL ONLY COUNTS WHERE A CHANNEL IS EXPECTED. Both direct roads
+                // ("direct self", "direct stream") keep the effect alive themselves
+                // (SustainConcentrationEffect re-arms it each beat), so the instant
+                // caster idling at state 0 between beats is normal there, not a cut
+                // (field: every "channel=stopped (state 0)" line on the direct road had
+                // the effect present and most had HP rising). The state is still
+                // printed. No road that reaches this today relies on a running channel,
+                // so `cut` fires only for a road that does not sustain the effect
+                // itself, and only when nothing else says the heal landed.
+                const bool sustainsItself = std::string_view(o.road).starts_with("direct");
+                const bool cut  = o.conc && !sustainsItself && !landed &&
+                                  std::string_view(stream) == "live" &&
                                   std::string_view(channel) == "stopped";
                 const auto line = std::format(
                     "[heal-obs] {:08X} -> {:08X} {} ({:08X}{}) road={} dist={:.0f} LoS={} hp {:.0f}% -> "
                     "{:.0f}% after {:.1f}s | effect at apply={} now={} | channel={} (state {}) stream={} | "
-                    "MFO ch.8b claim at apply={}",
+                    "MFO ch.8b claim at apply={} | landed={}",
                     o.caster, o.target, spell && spell->GetName() ? spell->GetName() : "?", o.spell,
                     o.castForm != o.spell ? std::format(" via {:08X}", o.castForm) : std::string{},
                     o.road, o.dist, Sightline::VerdictName(o.los), o.hpBefore * 100.0f, hpAfter * 100.0f,
                     std::chrono::duration<float>(SelfClock::now() - o.at).count(),
                     AttachName(o.attach), lasting ? (present ? "present" : "ABSENT") : "instant",
-                    channel, st, stream, o.claim ? "yes" : "no");
+                    channel, st, stream, o.claim ? "yes" : "no",
+                    !landed ? "NO"
+                    : atApply || present ? (hpRose ? "effect+hp" : "effect")
+                                                                 : "hp");
                 if (gone || cut)
                     spdlog::warn("{} *** HEAL NOT LANDING: {} ***", line,
                                  gone ? "logged as applied, but the recipient carries no effect of it"
