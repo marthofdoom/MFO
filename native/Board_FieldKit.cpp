@@ -849,7 +849,7 @@ namespace MFO::Board {
                                             ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
                                             ImGui::Separator();
                                             if (who->knownSpells.empty() && who->teachableSpells.empty())
-                                                ImGui::TextDisabled("no spells known, no spellbooks carried");
+                                                ImGui::TextDisabled("No spells known, no spellbooks carried");
                                             for (int k = 0; k < (int)who->knownSpells.size(); ++k) {
                                                 const auto& sp = who->knownSpells[k];
                                                 const bool curSel = sp.id == rv.spell;
@@ -873,7 +873,7 @@ namespace MFO::Board {
                                                     const bool armed = (s_teachArmed == t.book);
                                                     if (armed) ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
                                                     const std::string lbl = armed
-                                                        ? (t.name + "  -- teach? DESTROYS the book")
+                                                        ? (t.name + "  Teach? This DESTROYS the book.")
                                                         : (t.name + "  (spellbook)");
                                                     ImGui::PushID((int)t.book);   // dup names -> unique IDs
                                                     if (ImGui::Selectable(lbl.c_str(), false,
@@ -999,7 +999,7 @@ namespace MFO::Board {
                         // ── FULL-WIDTH READ-ONLY SUMMARY (Deck legibility) ──
                         if (!rules.empty()) {
                             ImGui::Spacing();
-                            ImGui::TextDisabled("Full rules (read-only) -- top wins");
+                            ImGui::TextDisabled("Full rules (read-only). Top wins.");
                             ImGui::Separator();
                             ImGui::PushTextWrapPos(0.0f);
                             for (int i = 0; i < (int)rules.size(); ++i) {
@@ -1052,7 +1052,7 @@ namespace MFO::Board {
                             QueueEdit({ EditKind::Add, sel, selTable, 0u, 0 });
                         ImGui::EndDisabled();
                         if (full) { ImGui::SameLine();
-                            ImGui::TextDisabled("all %d slots used -- more unlock with rapport", slots); }
+                            ImGui::TextDisabled("All %d slots used. More unlock with rapport.", slots); }
 
                         ImGui::Spacing();
                         ImGui::TextDisabled("Highlight a slot and press [A]/E to open its list. "

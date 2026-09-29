@@ -160,19 +160,19 @@ namespace MFO::Board {
         { Vocab::kCondSelfMpBelow,   "Self Magicka % below", ParamKind::Percent },
         { Vocab::kCondSelfSpBelow,   "Self Stamina % below", ParamKind::Percent },
         { Vocab::kCondPlayerHpBelow, "Player HP % below",    ParamKind::Percent },
-        { Vocab::kCondFoeLowestHp,   "Foe: lowest HP %",     ParamKind::None    },
-        { Vocab::kCondFoeHpBelow,    "Foe: HP % below",      ParamKind::Percent },
-        { Vocab::kCondFoeHighestHp,  "Foe: highest HP %",    ParamKind::None    },
-        { Vocab::kCondFoeHighestLevel,"Foe: highest level",  ParamKind::None    },
-        { Vocab::kCondFoeAny,        "Foe: nearest",         ParamKind::None    },
-        { Vocab::kCondFoeWithinRange,"Foe targeted within range", ParamKind::Distance},
-        { Vocab::kCondFoeBeyondRange,"Foe targeted beyond range", ParamKind::Distance},
-        { Vocab::kCondFoeAttackingPlayer,"Foe attacking player", ParamKind::None },
-        { Vocab::kCondFoeAttackingMe,"Foe attacking me",     ParamKind::None    },
-        { Vocab::kCondFoeAttackingMeMelee, "Foe attacking me: melee",  ParamKind::None },
-        { Vocab::kCondFoeAttackingMeRanged,"Foe attacking me: ranged", ParamKind::None },
+        { Vocab::kCondFoeLowestHp,   "Foe with lowest HP",     ParamKind::None    },
+        { Vocab::kCondFoeHpBelow,    "Foe HP % below",      ParamKind::Percent },
+        { Vocab::kCondFoeHighestHp,  "Foe with highest HP",    ParamKind::None    },
+        { Vocab::kCondFoeHighestLevel,"Foe with highest level",  ParamKind::None    },
+        { Vocab::kCondFoeAny,        "Foe nearest to me",         ParamKind::None    },
+        { Vocab::kCondFoeWithinRange,"Target foe within", ParamKind::Distance},
+        { Vocab::kCondFoeBeyondRange,"Target foe beyond", ParamKind::Distance},
+        { Vocab::kCondFoeAttackingPlayer,"Foe is attacking player", ParamKind::None },
+        { Vocab::kCondFoeAttackingMe,"Foe is attacking me",     ParamKind::None    },
+        { Vocab::kCondFoeAttackingMeMelee, "Foe is attacking me (melee)",  ParamKind::None },
+        { Vocab::kCondFoeAttackingMeRanged,"Foe is attacking me (ranged)", ParamKind::None },
         { Vocab::kCondFoeIsUndead,   "Foe is undead",        ParamKind::None    },
-        { Vocab::kCondFoeIsDragon,   "Foe is dragon",        ParamKind::None    },
+        { Vocab::kCondFoeIsDragon,   "Foe is a dragon",        ParamKind::None    },
         { Vocab::kCondFoeIsMechanical,"Foe is mechanical",   ParamKind::None    },
         { Vocab::kCondFoeIsCaster,   "Foe is a spellcaster", ParamKind::None    },
         { Vocab::kCondFoeIsRanged,   "Foe is ranged",        ParamKind::None    },
@@ -180,9 +180,9 @@ namespace MFO::Board {
         { Vocab::kCondFoeStrongerThanMe,"Foe is stronger than me", ParamKind::None },
         { Vocab::kCondFoeBlocking,   "Foe is blocking",      ParamKind::None    },
         { Vocab::kCondFoeFleeing,    "Foe is fleeing",       ParamKind::None    },
-        { Vocab::kCondFoeWeakFire,   "Foe: weak to fire",    ParamKind::None    },
-        { Vocab::kCondFoeWeakFrost,  "Foe: weak to frost",   ParamKind::None    },
-        { Vocab::kCondFoeWeakShock,  "Foe: weak to shock",   ParamKind::None    },
+        { Vocab::kCondFoeWeakFire,   "Foe is weak to fire",    ParamKind::None    },
+        { Vocab::kCondFoeWeakFrost,  "Foe is weak to frost",   ParamKind::None    },
+        { Vocab::kCondFoeWeakShock,  "Foe is weak to shock",   ParamKind::None    },
         { Vocab::kCondFoeCountAtLeast,"Foe count at least",  ParamKind::Count   },
         { Vocab::kCondSelfHpAbove,   "Self HP % above",      ParamKind::Percent },
         { Vocab::kCondSelfMpAbove,   "Self Magicka % above", ParamKind::Percent },
@@ -201,12 +201,12 @@ namespace MFO::Board {
         { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
         { Vocab::kCondIsInterior,    "In an interior",       ParamKind::None    },
         { Vocab::kCondIsNight,       "At night",             ParamKind::None    },
-        { Vocab::kCondDark,          "Dark",                 ParamKind::None    },
+        { Vocab::kCondDark,          "In the dark",                 ParamKind::None    },
     };
     inline constexpr VocabEntry kActsCombat[] = {
         { Vocab::kActWait,              "Wait" },
         { Vocab::kActCastSelf,          "Cast on self" },
-        { Vocab::kActCastTarget,        "Cast at foe/ally" },
+        { Vocab::kActCastTarget,        "Cast on target" },
         // cast_player is LOGISTICS-ONLY for now: in combat CastOn's package/grace
         // path delivers a self-delivery buff to the follower, not the player
         // (Fable, 2026-08-06). Combat player-casts are a follow-up.
@@ -237,7 +237,7 @@ namespace MFO::Board {
         { Vocab::kCondAllyHpBelow,         "Ally HP % below",       ParamKind::Percent },
         { Vocab::kCondIsInterior,          "In an interior",        ParamKind::None    },
         { Vocab::kCondIsNight,             "At night",              ParamKind::None    },
-        { Vocab::kCondDark,                "Dark",                  ParamKind::None    },
+        { Vocab::kCondDark,                "In the dark",                  ParamKind::None    },
     };
     inline constexpr VocabEntry kActsLogi[] = {
         { Vocab::kActDrinkHealthPotion,  "Drink health potion" },
@@ -255,7 +255,7 @@ namespace MFO::Board {
         { Vocab::kActLootSoulGems,       "Loot soul gems" },
         { Vocab::kActLootLockpicks,      "Loot lockpicks" },
         { Vocab::kActLootIngredients,    "Loot ingredients" },
-        { Vocab::kActLootValuables,      "Loot valuables + gold (to sell)" },
+        { Vocab::kActLootValuables,      "Loot valuables and gold (to sell)" },
         // LOTD awareness: listed only while LOTD is detected and bLootLOTD is on
         // (Board_FieldKit.cpp's picker skips it otherwise -- Lotd::GambitOffered).
         { Vocab::kActLootMuseum,         "Loot museum items" },
@@ -264,7 +264,7 @@ namespace MFO::Board {
         // candlelight, out-of-combat heals. Same opcodes as combat; the
         // logistics scan dispatches them through Actuation::Fire.
         { Vocab::kActCastSelf,           "Cast on self" },
-        { Vocab::kActCastTarget,         "Cast at foe/ally" },
+        { Vocab::kActCastTarget,         "Cast on target" },
         { Vocab::kActCastPlayer,         "Cast on player" },
         { Vocab::kActWait,               "Wait" },   // gate lower rules, e.g. "carry weight > 90% -> Wait"
     };
