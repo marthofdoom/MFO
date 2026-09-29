@@ -257,6 +257,13 @@ A concentration **stream** (one per follower, in `g_targetCast` / `g_selfCast`, 
 - **Heal-to-full at 99.95%** (`kHealFullPct` = `Vocab::kHealFull` = 0.9995): a heal stream ends
   early when the recipient (or the follower, self-heal) is at `HealthPct >= 0.9995`; the random
   cap is the backstop. This is the resolved answer to "stop at full": **yes for healing.**
+  **SUPERSEDED IN PART (`fix/mfo-can-act`, 2026-09-29, marth: "run to the gambit's specs"):** the
+  stream now stores the feeding rule's HP line (`stopPct`, `Actuation::HealStopPct`) and ends at
+  `HealStopLine(stopPct)` = that line (Self / Player / Ally HP below X on the matching recipient),
+  released as `heal-spec N%`. Full (99.95%) is still the stop for a rule with no HP gate. The same
+  branch ends a stream whose CASTER cannot act (`caster-down`), re-checks `CanAct` on the main thread
+  in every apply, and limits a heal on another actor to the spell's normal reach with line of sight.
+  MAP.md cast/ "CAN-ACT" has the sites.
 
 **THE "AT-OR-BELOW-100 NEVER STOPS" BOUNDARY BUG (marth's root-cause).** A heal gambit condition
 is "target HP below X%". At **X = 100** the effective test never fails — `HealthPct` asymptotes
