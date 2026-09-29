@@ -239,8 +239,11 @@ namespace MFO::Config {
                 // The STORED value is the MCM option (0=Walk 1=Jog 2=Run, speed
                 // order, 2026-09-29) and g_travelGait is the ENGINE byte, so this
                 // is the one place the two meet -- see GaitEngineFromSetting.
-                setI(g_travelGait, 0, 3);
-                g_travelGait.store(GaitEngineFromSetting(g_travelGait.load()));
+                if (!ParseInt(a_val, i))
+                    spdlog::warn("[config] {}: unparseable value for {} ('{}') -- keeping default",
+                                 a_src, a_key, a_val);
+                else
+                    g_travelGait.store(GaitEngineFromSetting(std::clamp(i, 0, 3)));
             }
             else if (a_key == "fLeashMin")          setF(g_leashMin,       64.0f, 8192.0f);
             else if (a_key == "fLeashMax")          setF(g_leashMax,       64.0f, 8192.0f);
