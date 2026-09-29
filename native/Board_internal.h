@@ -187,7 +187,7 @@ namespace MFO::Board {
         { Vocab::kCondSelfHpAbove,   "Self HP above",      ParamKind::Percent },
         { Vocab::kCondSelfMpAbove,   "Self Magicka above", ParamKind::Percent },
         { Vocab::kCondSelfSpAbove,   "Self Stamina above", ParamKind::Percent },
-        { Vocab::kCondAllyHpBelow,   "Ally HP below",      ParamKind::Percent },
+        { Vocab::kCondAllyHpBelow,   "Ally: HP below",      ParamKind::Percent },
         // SUPPLY-STATE conditions (#10). Mirrors kCondsLogi -- lets a combat
         // gambit react to what the follower is CARRYING, not just health bars:
         // "Arrows below 5 -> Equip melee weapon", "Health potions below 2 ->
@@ -234,7 +234,7 @@ namespace MFO::Board {
         // heal on ally" for out-of-combat heals. The ally selector (incl. the
         // player, PickAlly) is table-agnostic in the evaluator, so this is pure
         // UI exposure -- no evaluator change needed to run it in the logi scan.
-        { Vocab::kCondAllyHpBelow,         "Ally HP below",       ParamKind::Percent },
+        { Vocab::kCondAllyHpBelow,         "Ally: HP below",       ParamKind::Percent },
         { Vocab::kCondIsInterior,          "In an interior",        ParamKind::None    },
         { Vocab::kCondIsNight,             "At night",              ParamKind::None    },
         { Vocab::kCondDark,                "In the dark",                  ParamKind::None    },
