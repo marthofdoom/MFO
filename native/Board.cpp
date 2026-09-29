@@ -1096,7 +1096,7 @@ namespace MFO::Board {
                     if (auto* pc = RE::PlayerCharacter::GetSingleton())
                         v.subjectName = pc->GetName() ? pc->GetName() : "Player";
                     break;
-                case Vocab::Subject::NearestAlly: v.subjectName = "Nearest ally"; break;
+                case Vocab::Subject::NearestAlly: v.subjectName = "Ally: nearest"; break;
                 case Vocab::Subject::Self:
                 default:                          v.subjectName = "Auto"; break;   // #68: subject 0 = Auto ladder, not self
                 }
