@@ -3044,6 +3044,13 @@ anonymous-namespace copy — that silently forks the instance).
   (`DrawWeaponMagicHands(false)`, MainThread::Post'd); combat is waited out. Bounded by
   `kReadyFloorSec` (5 s, unpaused service clock), then refused `combatOrWeaponDrawn` (transient).
   Logs `[lockpick] <id>: <ref> pick WAITS -- <why>` once per job.
+  **CONFIRMATION WINDOW (Harbinger idle-confirm review, SEV-3.4):** the unlock waits until the idle
+  claim has stayed live `max(window, kIdleConfirmSec = 3.5 s)` on the unpaused service clock
+  (Harbinger ends an unconfirmed idle ~3.0-3.3 s after the play; +0.2 s for its drain to publish).
+  The same rule gates the museum deposit's transfer (`Lotd.cpp kGiveConfirmSec`, 3.5 s unpaused,
+  replacing 1 s of wall time). **An idle ended by combat or across a pause** (wall time vs unpaused
+  clock between two steps) is a retry cooldown (the caller's transient blocklist), not the standing
+  `kIdleEnded` verdict; any other end stays standing.
 - **LOCKPICK, chests (LP-M1, 2026-09-25, `feat/mfo-lockpick`; ClickUp 86e3edgha; design
   `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
   `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-

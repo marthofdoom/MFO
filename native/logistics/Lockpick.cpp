@@ -428,6 +428,17 @@ namespace MFO::Logistics::Lockpick {
         // runs on the ~1 s logistics cadence), then refused as notReady -- transient,
         // the caller blocklists the ref for a short while, never a standing verdict.
         constexpr double kReadyFloorSec = 5.0;
+        // NO ANIMATION, NO PICK (Harbinger idle-confirm review, SEV-3.4): Harbinger's ch.12
+        // ENDS an idle claim it has not CONFIRMED playing about 3.0-3.3 s after the play
+        // (its kConfirmWaitMs 3000, measured in world-tick time; the ~0.3 s spread is its
+        // own drain). So a pick whose simulated window is shorter than that could unlock
+        // before the verdict. The unlock waits until the claim has stayed live for at least
+        // kIdleConfirmSec on the UNPAUSED service clock from MFO's first live read (which is
+        // at or after the play): 3.0 s + 0.3 s (the measured spread) + 0.2 s for the end to
+        // be published by Harbinger's per-frame drain and read by this step's
+        // LockpickHoldStateOf, which runs BEFORE the unlock on the same step.
+        // Harbinger's ABI has no "confirmed" query; outlasting the window is the proof.
+        constexpr double kIdleConfirmSec = 3.5;
         // Every time below is on the Scheduler's UNPAUSED service clock (Scheduler::ServiceClock).
         struct Job {
             RE::FormID    ref = 0;
@@ -448,6 +459,9 @@ namespace MFO::Logistics::Lockpick {
             std::int32_t  picksHeld = 0;
             SimOut        sim{};
             double        readyAt = 0.0;       // kReady entered (the ready gate's floor)
+            // WALL time of the last step, beside lastStep's unpaused clock: a gap between
+            // the two is a pause (menu, load) that happened between two steps.
+            std::chrono::steady_clock::time_point lastWall{};
             bool          waitLogged = false;
             bool          sheathePosted = false;
         };
@@ -646,7 +660,14 @@ namespace MFO::Logistics::Lockpick {
         // The UNPAUSED service clock: the caller runs only on unpaused services, and the
         // clock itself advances only while the game runs (Scheduler.cpp g_serviceClock).
         const double clk = Scheduler::ServiceClock();
+        // A pause since the last step (wall time ran on, the unpaused clock did not):
+        // what a menu pause looks like to a pick. Read before lastStep / lastWall move.
+        const auto wallNow = std::chrono::steady_clock::now();
+        const bool pausedSinceLast =
+            j.lastWall.time_since_epoch().count() != 0 &&
+            std::chrono::duration<double>(wallNow - j.lastWall).count() - (clk - j.lastStep) > 1.0;
         j.lastStep = clk;
+        j.lastWall = wallNow;
 
         if (j.phase == Phase::kSnapshot) {
             Snap s{};
@@ -810,9 +831,20 @@ namespace MFO::Logistics::Lockpick {
                            std::format(" -- the idle claim ended {} (after {} replay(s)); nothing spent",
                                        j.liveAt < 0.0 ? "before it was ever live" : "during the pick window",
                                        j.replays));
-                // A standing verdict, so a refused idle is not re-walked to every blocklist
-                // cycle: retried when his picks or skill rise (or after a load).
-                g_fail[PairKey(fid, rid)] = FailVerdict{ Reason::kIdleEnded, j.picksHeld, j.skill };
+                // TRANSIENT (Harbinger idle-confirm review, SEV-4): an idle ended while he or
+                // the player is in combat, or across a pause (a menu) since the last step, is
+                // not a verdict on this lock -- no standing entry, only the caller's transient
+                // blocklist (a retry cooldown). Anything else (the engine never took the idle,
+                // or Harbinger ended it unconfirmed) stays a standing verdict, so a lock whose
+                // idle cannot play is not re-walked every blocklist cycle: retried when his
+                // picks or skill rise (or after a load).
+                auto* pcI = RE::PlayerCharacter::GetSingleton();
+                const bool transient = a_follower->IsInCombat() || (pcI && pcI->IsInCombat()) || pausedSinceLast;
+                if (transient)
+                    spdlog::info("[lockpick] {:08X}: {:08X} idle ended by {} -- a retry cooldown, not a verdict", fid,
+                                 rid, pausedSinceLast ? "a pause" : "combat");
+                else
+                    g_fail[PairKey(fid, rid)] = FailVerdict{ Reason::kIdleEnded, j.picksHeld, j.skill };
                 EndJob(fid, nullptr);   // holdFiled stays true: EndJob forgets the bridge's ended entry
                 return StepResult::kRefused;
             }
@@ -822,7 +854,9 @@ namespace MFO::Logistics::Lockpick {
                 j.lastPlay = 0.0;
             }
             const double elapsed = clk - j.liveAt;
-            if (elapsed < j.window) {
+            // The pick window, but never shorter than Harbinger's confirmation window
+            // (kIdleConfirmSec): an unconfirmed idle is ended -- and read above -- first.
+            if (elapsed < std::max<double>(j.window, kIdleConfirmSec)) {
                 // ONE replay per clip length from the last play, for the whole window (the clip is
                 // one-shot). Never on a pick break: a Repoint mid-clip would cut the clip.
                 if (elapsed - j.lastPlay >= kIdleClipSec) {

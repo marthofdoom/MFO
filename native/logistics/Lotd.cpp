@@ -37,6 +37,7 @@
 #include "cast/Actuation.h"      // ForcedHoldFor: a worn kept relic under an MFO hold is not shipped (MFO-B126)
 #include "Loadout.h"             // LeftHandSlot: a worn LEFT-hand relic is unequipped from that slot before the transfer
 #include "PlayerGiven.h"         // a player-given item is never shipped (batch L review round)
+#include "Scheduler.h"           // ServiceClock(): the UNPAUSED clock the give idle's confirmation window runs on
 
 #include <algorithm>
 #include <cctype>
@@ -82,7 +83,18 @@ namespace MFO::Lotd {
         constexpr float kArriveSlack    = 75.0f;     // distance backstop when no leg state is read
         constexpr auto  kTripMax        = std::chrono::seconds(90);
         constexpr auto  kTripStall      = std::chrono::seconds(10);   // owner not ticked this long -> orphaned
-        constexpr auto  kGiveAfter      = std::chrono::milliseconds(1000);   // the reach, then the transfer
+        // NO ANIMATION, NO TRANSFER (Harbinger idle-confirm review, SEV-3.4): Harbinger's
+        // ch.12 ENDS an idle claim it has not CONFIRMED playing about 3.0-3.3 s after the
+        // play (its kConfirmWaitMs 3000, measured in world-tick time; the ~0.3 s spread is
+        // its own drain). The transfer therefore waits until the give idle has stayed live
+        // for kGiveConfirmSec on the UNPAUSED service clock (Scheduler::ServiceClock, so a
+        // menu never ages it, as world ticks do not) from MFO's first live read, which is at
+        // or after the play: 3.0 s + 0.3 s (the measured spread) + 0.2 s for the end to be
+        // published by Harbinger's per-frame drain and read by DepositIdleStatus, which the
+        // Giving step reads BEFORE it transfers. Was 1 s of wall time (kGiveAfter), which
+        // shipped relics under an IdleGive that never played. Harbinger's ABI has no
+        // "confirmed" query; outlasting the window is the proof.
+        constexpr double kGiveConfirmSec = 3.5;
         constexpr auto  kIdleSettle     = std::chrono::milliseconds(2500);   // after the transfer: the rest of IdleGive's clip
         constexpr auto  kNeedsTtl       = std::chrono::seconds(2);
         constexpr auto  kRebuildMinGap  = std::chrono::seconds(5);
@@ -221,7 +233,7 @@ namespace MFO::Lotd {
             Clock::time_point start{};
             Clock::time_point lastTick{};   // the owner's last DepositTick (SweepTrip's stall test)
             Clock::time_point idleAt{};     // the give idle was claimed
-            Clock::time_point liveAt{};     // the give idle was first SEEN live (0 = not yet)
+            double            liveClk = -1.0;   // the give idle was first SEEN live, unpaused service clock (-1 = not yet)
             Clock::time_point settleFrom{}; // the transfer was posted
             // THIS trip's posted transfer outcome (was one global atomic when one trip
             // ran at a time): 0 = not run yet, 1 = moved something, 2 = skipped / moved
@@ -1652,7 +1664,7 @@ namespace MFO::Lotd {
         }
         case Phase::Giving: {
             // NO ANIMATION, NO TRANSFER: the give idle must be SEEN live, and still be
-            // live at a LATER tick at least kGiveAfter on, before anything moves. A claim
+            // live at a LATER tick at least kGiveConfirmSec on, before anything moves. A claim
             // Harbinger ends (the engine refused the idle, the NPC is in no state to
             // play it) ends the trip; the never-live grace never counts as live.
             const int st = APMFBridge::DepositIdleStatus(fid);
@@ -1662,8 +1674,9 @@ namespace MFO::Lotd {
                 return false;
             }
             if (st != 1) return true;   // not published yet (the bridge's grace turns into 2 on its own)
-            if (trip.liveAt == Clock::time_point{}) { trip.liveAt = a_now; return true; }
-            if (a_now - trip.liveAt < kGiveAfter) return true;
+            const double clk = Scheduler::ServiceClock();
+            if (trip.liveClk < 0.0) { trip.liveClk = clk; return true; }
+            if (clk - trip.liveClk < kGiveConfirmSec) return true;   // Harbinger's confirmation window
             if (InventoryMenuOpen()) return true;   // wait it out (kTripMax still bounds the trip)
             auto& needs = FreshNeeds(a_now);
             auto items = Shippable(a_follower, needs);
