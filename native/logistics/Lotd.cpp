@@ -207,6 +207,7 @@ namespace MFO::Lotd {
         // while he was in the active snapshot. Worker only, cleared on revert.
         std::unordered_map<RE::FormID, CountMap> g_retainedSupply;
         std::size_t                              g_retainedLogged = 0;
+        std::unordered_set<RE::FormID>           g_retainedPersistent;   // recorded while loaded (F1)
         // MFO-B126: per follower, the off-role relics ShedOffRoleWeapon kept for the
         // deposit on its last pass and the in-role weapons he carried then
         // (NoteKeptForDeposit). Worker only, like g_needs.
@@ -650,17 +651,55 @@ namespace MFO::Lotd {
             std::unordered_set<RE::FormID> activeNow;
             if (auto ids = Followers::ActiveSnapshot()) {
                 for (auto fid : *ids) {
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
                     CountMap m;
-                    AddCounts(RE::TESForm::LookupByID<RE::Actor>(fid), *snap, m, false);
+                    AddCounts(a, *snap, m, false);
                     g_retainedSupply[fid] = std::move(m);
                     activeNow.insert(fid);
+                    // Read WHILE he is in the snapshot (the loaded road every consumer here
+                    // already uses): only a PERSISTENT ref may be looked up again once he
+                    // has left it (review F1 on 73119b8, the threading carve-out).
+                    if (a && a->IsPersistent()) g_retainedPersistent.insert(fid);
+                    else                        g_retainedPersistent.erase(fid);
                 }
             }
+            // RETAINED = a follower TRAVELLING WITH US who is only momentarily out of the
+            // loaded list (review F5 on 73119b8). Out of the snapshot he keeps counting only
+            // while ALL of these hold, else he drops out of coverage exactly as before:
+            //  * his ref is PERSISTENT (F1): the main thread never frees a persistent ref, so
+            //    the worker may resolve it while his cell detaches; a non-persistent teammate
+            //    (script-made, no alias) is not looked up at all once he is out;
+            //  * Followers::IsEligibleFollower (teammate, not dead / disabled / a dismissed
+            //    custom follower -- flags and actor values, no 3D, no process);
+            //  * he is NOT told to wait (actor value WaitingForPlayer <= 0: a follower left
+            //    waiting in another hold would otherwise cover his relics forever and a
+            //    present follower's duplicate would sell);
+            //  * he is where the party is: the player's parent cell when the player is
+            //    inside, else the same worldspace (TESObjectREFR::parentCell and the cell's
+            //    own runtime worldSpace -- plain member reads, no engine call).
+            auto* pcR = RE::PlayerCharacter::GetSingleton();
+            auto* pcCell = pcR ? pcR->GetParentCell() : nullptr;
+            const bool pcExterior = pcCell && pcCell->IsExteriorCell();
+            RE::TESWorldSpace* pcWorld = pcExterior ? pcCell->GetRuntimeData().worldSpace : nullptr;
+            const auto travelling = [&](RE::Actor* a_a) {
+                if (!Followers::IsEligibleFollower(a_a)) return false;
+                auto* avo = a_a->AsActorValueOwner();
+                if (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) return false;
+                auto* cell = a_a->GetParentCell();
+                if (!cell || !pcCell) return false;
+                if (!pcExterior) return cell == pcCell;
+                return cell->IsExteriorCell() && cell->GetRuntimeData().worldSpace == pcWorld;
+            };
             std::vector<RE::FormID> sorted;
             for (auto it = g_retainedSupply.begin(); it != g_retainedSupply.end();) {
                 if (!activeNow.count(it->first)) {
+                    if (!g_retainedPersistent.count(it->first)) { it = g_retainedSupply.erase(it); continue; }
                     auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first);
-                    if (!a || !Followers::IsEligibleFollower(a)) { it = g_retainedSupply.erase(it); continue; }
+                    if (!a || !travelling(a)) {
+                        g_retainedPersistent.erase(it->first);
+                        it = g_retainedSupply.erase(it);
+                        continue;
+                    }
                 }
                 sorted.push_back(it->first);
                 ++it;
@@ -674,7 +713,8 @@ namespace MFO::Lotd {
             if (sorted.size() > activeNow.size() && g_retainedLogged != sorted.size() - activeNow.size()) {
                 g_retainedLogged = sorted.size() - activeNow.size();
                 spdlog::info("[lotd] needs: {} follower(s) out of the loaded roster still count toward museum "
-                             "coverage (last-read relic counts, still teammates)", g_retainedLogged);
+                             "coverage (last-read relic counts: persistent teammates, not waiting, in the "
+                             "party's cell / worldspace)", g_retainedLogged);
             } else if (sorted.size() == activeNow.size()) {
                 g_retainedLogged = 0;
             }
@@ -1377,6 +1417,7 @@ namespace MFO::Lotd {
         }
         g_needs = Needs{};
         g_retainedSupply.clear();
+        g_retainedPersistent.clear();
         g_retainedLogged = 0;
         g_keptForDeposit.clear();
         g_keptSeenUnworn.clear();

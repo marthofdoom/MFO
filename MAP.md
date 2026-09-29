@@ -3038,10 +3038,13 @@ anonymous-namespace copy — that silently forks the instance).
     destForm test acts on another destination's end. Principle 7: the ends M2 does not react to
     are logged, not guessed at. `Service.cpp` is 1718 lines (past the ~1500 plan-a-split mark,
     under the 2500 backstop): the next brief touching it should propose its split.
-- **LOCKPICK READY GATE (field 0928c, `fix/mfo-field-0928c`).** `Phase::kReady` sits between the
+- **LOCKPICK READY GATE (field 0928c, `fix/mfo-field-0928c`). OPEN BACKLOG: MFO-B140 (a sheathe vs a
+  "draw with the player" framework), MFO-B143 (every pick is now >= 3.5 s).** `Phase::kReady` sits between the
   snapshot and the Harbinger hold: a pick never STARTS while he or the player is in combat or while
   his weapon is drawn. A drawn weapon out of combat is sheathed through the stand-down road
-  (`DrawWeaponMagicHands(false)`, MainThread::Post'd); combat is waited out. Bounded by
+  (`DrawWeaponMagicHands(false)`, MainThread::Post'd); combat is waited out. A pause between two
+  steps = wall time minus the unpaused clock > `kPauseGapSec` (5 s: the unpaused clock advances at
+  most 0.532 s per pump advance, so a 1-2 s hitch alone opens a ~1 s gap; review F2). Bounded by
   `kReadyFloorSec` (5 s, unpaused service clock), then refused `combatOrWeaponDrawn` (transient).
   Logs `[lockpick] <id>: <ref> pick WAITS -- <why>` once per job.
   **CONFIRMATION WINDOW (Harbinger idle-confirm review, SEV-3.4):** the unlock waits until the idle
@@ -3339,8 +3342,12 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   **COVERAGE FOLLOWS THE PARTY, NOT THE PROCESS LIST (field 0928c, `fix/mfo-field-0928c`):** an
   active follower's relic counts are read and remembered in `g_retainedSupply`; a follower out of
   the active snapshot (left behind in another cell: Refresh drops him after 3 missed sweeps) keeps
-  counting with those last-read counts while `Followers::IsEligibleFollower` holds (teammate, not
-  dead / disabled / a dismissed custom follower), never re-reading his inventory. Before it,
+  counting with those last-read counts only while he is TRAVELLING WITH US: his ref was PERSISTENT
+  when last loaded (`g_retainedPersistent`; a non-persistent ref is never looked up once out -- the
+  main thread may free it, review F1 on 73119b8), `Followers::IsEligibleFollower`, NOT waiting
+  (WaitingForPlayer <= 0), and in the player's parent cell (player inside) or worldspace (player
+  outside) (review F5). He is never re-read. **OPEN BACKLOG: MFO-B144** (a failed send can let 4b
+  record a flipped-back relic as a player pick), **MFO-B143** (the confirmation window's extra dwell). Before it,
   Serana's drop-outs made Jesper the coverer of her robes' slot and stripped his own.
   **What breaks:** rebuilding coverage from the active snapshot alone re-creates that churn; reading
   an unloaded follower's inventory on the worker is the read the snapshot exists to avoid.
@@ -6247,7 +6254,7 @@ in Service.cpp / LootScan.cpp / Board (`logistics/Lotd.cpp` section). `kCondFoeI
 DLC2AshSpawnKeyword), in `IsFoeSelector`, Board `kCondsCombat` after "Foe is dragon".
 `kCondFoeIsRanged` keeps its string; its meaning WIDENED (field 0928c): a bow / crossbow, a staff in
 either hand, or a spell in either hand whose delivery is not Self or Touch. "Foe attacking me:
-ranged" follows it; "Foe attacking me: melee" already excluded every caster and staff, so it is
+ranged" follows it (MFO-B141, recorded: consistent with marth's intent); "Foe attacking me: melee" already excluded every caster and staff, so it is
 unchanged, and the Scheduler's attacking-me exemption from target sizing covers all three as before.
 
 ### Config.cpp / Config.h

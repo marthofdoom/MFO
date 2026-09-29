@@ -663,9 +663,15 @@ namespace MFO::Logistics::Lockpick {
         // A pause since the last step (wall time ran on, the unpaused clock did not):
         // what a menu pause looks like to a pick. Read before lastStep / lastWall move.
         const auto wallNow = std::chrono::steady_clock::now();
+        // > kPauseGapSec (review F2 on 73119b8): the unpaused clock advances at most
+        // 0.532 s per pump advance, so a 1-2 s hitch (a cell load while walking, an
+        // autosave stall) alone opens a gap of a second or more; only a gap well past any
+        // realistic hitch is a PAUSE. The tree has no record of a pause that happened
+        // BETWEEN two steps (UI::GameIsPaused reads only the present), so the gap is it.
+        constexpr double kPauseGapSec = 5.0;
         const bool pausedSinceLast =
             j.lastWall.time_since_epoch().count() != 0 &&
-            std::chrono::duration<double>(wallNow - j.lastWall).count() - (clk - j.lastStep) > 1.0;
+            std::chrono::duration<double>(wallNow - j.lastWall).count() - (clk - j.lastStep) > kPauseGapSec;
         j.lastStep = clk;
         j.lastWall = wallNow;
 
