@@ -182,6 +182,34 @@ def tag_of(name):
     return name.split(TAG, 1)[1] if TAG in name else None
 
 
+# the PUBLIC of a thread-safe-static guard: ?$TSS0@?1??DrawConcCap@Actuation@MFO@@YAM...@Z@4HA
+GUARD_PUB = re.compile(r"^\?(\$TSS\d+)@\?\d+\?\?(.+)$")
+
+
+def guard_owner(pub):
+    """(guard name, owner) of a $TSSn guard's S_PUB32, else None. The owner is
+    the function whose local static the guard initialises, read from the
+    mangled name (its name path, innermost first, up to "@@") as the qual_key
+    an inline site or a procedure of that function carries; None when the path
+    holds anything but plain identifiers (a template, an operator, a ctor, a
+    back-reference), so such a guard keeps the positional attribution. Only
+    external-linkage owners (inline / COMDAT functions) have one: their guard
+    is ONE object program-wide, and when every caller inlines the owner no
+    module stream carries an S_LDATA32 record of it, only this public."""
+    m = GUARD_PUB.match(pub)
+    if not m:
+        return None
+    path = m.group(2).split("@@", 1)[0]
+    parts = []
+    for c in path.split("@"):
+        if re.fullmatch(r"\?A0x[0-9a-f]{8}|\?A0x", c):
+            continue                      # the anonymous namespace (norm drops it)
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", c):
+            return m.group(1), None
+        parts.append(c)
+    return m.group(1), (qual_key("::".join(reversed(parts))) if parts else None)
+
+
 def module_key(path):
     """`...\\CMakeFiles\\MFO.dir\\cast\\Fire.cpp.obj` -> `cast/Fire.cpp`."""
     p = path.replace("\\", "/")
@@ -224,6 +252,7 @@ class Image:
         self.data_size = {}       # rva -> byte size of a named variable (from its PDB type)
         self.data_const = {}      # rva -> its PDB type is const-qualified (arrays: the element)
         self.constants = {}       # S_CONSTANT name -> value (constexprs folded out of storage)
+        self.guard_pubs = []      # ($TSSn, rva, owner qual_key or None) from S_PUB32 (guard_owner)
         self._load_ids(pdb)
         self._load_pdb(pdb)
         self.sym_rvas = sorted(self.names_at)
@@ -466,6 +495,10 @@ class Image:
                 self.proc_at[rva] = max(self.proc_at.get(rva, 0), size)
             elif kind in ("S_GDATA32", "S_LDATA32", "S_GTHREAD32", "S_LTHREAD32", "S_PUB32"):
                 raw_names.append((rva, name, cur_mod))
+                if kind == "S_PUB32":
+                    g = guard_owner(name)
+                    if g:
+                        self.guard_pubs.append((g[0], rva, g[1]))
                 if kind in ("S_GDATA32", "S_LDATA32"):
                     self.datas.append((name, rva, cur_mod))
                     ti = re.search(r"type = (0x[0-9A-F]+)", body)
@@ -699,6 +732,8 @@ class Cmp:
         self._ue_active = set()
         self._named_ok = {}
         self._live = {}
+        self._prefs = {}        # (image, proc rva) -> every address field target (loop_bound)
+        self._ends = {}         # image -> {end address: start rvas} of sized named data
 
     def copy_readers(self, img, var):
         """Who touches each definition (copy) of variable `var` (norm'd name) in
@@ -714,6 +749,21 @@ class Cmp:
             return self._live[key]
         spans = sorted((r, r + (img.data_size.get(r) or max(1, img.struct_extent(r))))
                        for n, r, _m in img.datas if norm(n) == var)
+        owner_of = {}
+        if GUARD.fullmatch(var):
+            # a guard known only by its PUBLIC (an inline function's static whose
+            # owner every caller inlined: no module record) is a copy too, and a
+            # public names the guard's OWNER (guard_owner)
+            have = {a for a, _b in spans}
+            for g, r, o in img.guard_pubs:
+                if g != var:
+                    continue
+                if r not in have:
+                    spans.append((r, r + 4))
+                    have.add(r)
+                if o:
+                    owner_of[r] = o
+            spans.sort()
         starts = [a for a, _b in spans]
 
         def copy_of(t):
@@ -759,12 +809,22 @@ class Cmp:
                         cover = [(b - a, n) for a, b, n in ranges if a <= off < b]
                         body[(norm(p["name"]), p.get("mod"))].add(c)
                         me = min(cover)[1] if cover else qual_key(p["name"])
-                        bare.append((p, c, me))
+                        own = owner_of.get(c)
+                        pin = bool(own) and (qual_key(p["name"]) == own or
+                                             bool(img.inl_all.get(p["key"], {}).get(own)))
+                        if pin:
+                            me = own
+                        bare.append((p, c, me, pin))
                         by_copy[c].add(me)
             inl_of = defaultdict(set)       # what a function's out-of-line body inlines
             for p in img.procs:
                 inl_of[qual_key(p["name"])].update(img.inl_all.get(p["key"], ()))
-            for p, c, me in bare:
+            for p, c, me, pin in bare:
+                if pin:
+                    # the copy's public names its owner, and this proc IS that
+                    # owner or inlines it: the reference is the owner's
+                    readers[(me, p.get("mod"))].add(c)
+                    continue
                 inl = img.inl_all.get(p["key"], {})
                 others = sorted(o for o in by_copy[c] if o != me and inl.get(o) and o in inl_of.get(me, ()))
                 readers[(others[0] if len(others) == 1 else me, p.get("mod"))].add(c)
@@ -778,10 +838,13 @@ class Cmp:
             if own.search(p["name"]):
                 continue
             for ins in self.disasm(img, p["rva"], p["size"]):
-                for _o, _s, _k, t in self.fields(img, ins):
+                for _o, _s, k, t in self.fields(img, ins):
                     c = copy_of(t)
-                    if c is not None:
-                        readers[(norm(untag(p["name"])), p.get("mod"))].add(c)
+                    if c is None:
+                        continue
+                    if t == c and k == "rip" and ins.mnemonic == "lea" and self.loop_bound(img, p, t):
+                        continue
+                    readers[(norm(untag(p["name"])), p.get("mod"))].add(c)
         for r in img.relocs:
             v = int.from_bytes(img.data[r:r + 8], "little") - img.base
             c = copy_of(v)
@@ -791,6 +854,34 @@ class Cmp:
                 readers[("data:" + norm(nm), img.mod_of.get(nm))].add(c)
         self._live[key] = dict(readers)
         return self._live[key]
+
+    def loop_bound(self, img, p, t):
+        """A `lea` of address t in proc p is the ONE-PAST-THE-END loop bound of
+        a named object O, not a use of whatever the linker placed at t, when O
+        (PDB type size known, same section) ends exactly at t and p also
+        references O's START (the loop's begin pointer). Mirrors the read-only
+        data rule in Image.resolve. Only an address computation qualifies: a
+        load, store or memory compare at t (`mov`, `cmp [t]`...) touches the
+        object at t and always counts as its reader, and so does a `lea` of t
+        in a proc that never references O (selftest N18 / N18b)."""
+        ends = self._ends.get(id(img))
+        if ends is None:
+            ends = defaultdict(set)
+            for _n, r, _m in img.datas:
+                sz = img.data_size.get(r)
+                if sz and img.sec_of(r) == img.sec_of(r + sz):
+                    ends[r + sz].add(r)
+            self._ends[id(img)] = ends
+        starts = ends.get(t)
+        if not starts:
+            return False
+        k = (id(img), p["rva"])
+        refs = self._prefs.get(k)
+        if refs is None:
+            refs = {tt for ins in self.disasm(img, p["rva"], p["size"])
+                    for _o, _s, _k, tt in self.fields(img, ins)}
+            self._prefs[k] = refs
+        return any(o in refs for o in starts if o != t)
 
     def state_split_ok(self, var, layout_changed=True):
         """A MUTABLE variable with per-TU copies is still the same state only if
