@@ -487,8 +487,7 @@ namespace MFO::Actuation {
                 // heal below it, and `lastFired`/`[eval] fired` never lies on a
                 // no-op tick.
                 commitPreempt();   // the claim happens inside CastSelfDirect
-                // fix/mfo-can-act: the firing rule's stop spec (FiringHealStopPct).
-                switch (CastSelfDirect(a_follower, spell, FiringHealStopPct(a_follower, a_follower))) {
+                switch (CastSelfDirect(a_follower, spell)) {
                 case SelfCast::Applied:
                     // TASK 2: hold the lock (LEFT -- handPlan resolved above) --
                     // a claimed (heal/instant) or concentration self-cast is

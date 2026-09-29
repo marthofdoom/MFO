@@ -1540,16 +1540,7 @@ namespace MFO::Logistics {
                         static_cast<Vocab::Subject>(choice.subject) == Vocab::Subject::Self &&
                         !p.get();
                     if (autoPick) {
-                        // THE GAMBIT'S SPEC (fix/mfo-can-act): the firing rule's own
-                        // HP-below line, exactly as the combat Fire passes it (Fire.cpp
-                        // autoPick), so an OOC AUTO heal both picks and STOPS by the
-                        // rule; 1.0 (= full) when the condition is not an HP gate.
-                        float healThreshold = 1.0f;
-                        if (choice.conditionOpcode == Vocab::kCondSelfHpBelow   ||
-                            choice.conditionOpcode == Vocab::kCondPlayerHpBelow ||
-                            choice.conditionOpcode == Vocab::kCondAllyHpBelow)
-                            healThreshold = choice.conditionParam;
-                        acted = (Actuation::CastAuto(a_follower, sp->GetFormID(), healThreshold).result ==
+                        acted = (Actuation::CastAuto(a_follower, sp->GetFormID()).result ==
                                  Actuation::Result::Fired);
                         if (acted) break;
                         start = choice.ruleIndex + 1; continue;
@@ -1620,12 +1611,7 @@ namespace MFO::Logistics {
                     // stream at an ally is never LoS-gated, so skip the raycast there.
                     if (tgt->IsHostileToActor(a_follower))
                         Sightline::Want(id, { tgt->GetFormID() });
-                    // THE GAMBIT'S STOP SPEC (fix/mfo-can-act): a heal stream ends at
-                    // this rule's own HP line (Actuation::HealStopPct; 0 = full).
-                    const auto r = Actuation::CastTargetDirect(
-                        a_follower, sp, tgt,
-                        Actuation::HealStopPct(choice.conditionOpcode, choice.conditionParam,
-                                               a_follower, tgt));
+                    const auto r = Actuation::CastTargetDirect(a_follower, sp, tgt);
                     // HELD OFF -- its OWN outcome now (Fable SEV-2, 2026-09-06),
                     // not a delivery wearing Applied's clothes. ComposedCast::Try
                     // held this spell off because a DIFFERENT spell's live claim
@@ -1806,10 +1792,7 @@ namespace MFO::Logistics {
                     // does NOT count as this tick's action -- otherwise an "always ->
                     // cast_self" would break the scan every tick and starve
                     // loot/drink. Only a real Applied is the action.
-                    const auto r = Actuation::CastSelfDirect(
-                        a_follower, sp,
-                        Actuation::HealStopPct(choice.conditionOpcode, choice.conditionParam,
-                                               a_follower, a_follower));   // fix/mfo-can-act
+                    const auto r = Actuation::CastSelfDirect(a_follower, sp);
                     if (r == Actuation::SelfCast::Applied) {
                         acted = true;
                     } else {

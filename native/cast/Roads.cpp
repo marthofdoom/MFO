@@ -145,8 +145,7 @@ namespace MFO::Actuation {
                 // (channel paced, nothing applied) is TRANSPARENT so it does not
                 // starve the rules below it, and the fired log never lies.
                 if (Config::g_castSelf.load()) {
-                    switch (CastSelfDirect(a_follower, a_spell,
-                                           FiringHealStopPct(a_follower, a_follower))) {   // fix/mfo-can-act
+                    switch (CastSelfDirect(a_follower, a_spell)) {
                     case SelfCast::Applied:
                         HoldCastLock(id, kHandLeft, a_spell->GetFormID(), 0);   // TASK 2
                         return { Result::Fired, "self-cast (direct trigger)" };
@@ -215,8 +214,7 @@ namespace MFO::Actuation {
             // (the ffWatch analog); bounding lives in TargetCastReconcile
             // (hostile 1-4 s Temperament, heal 6 s, utility 4 s + ward dispel)
             // -- release + re-stream while the rule wins, never a stop.
-            switch (CastTargetDirect(a_follower, a_spell, a_target,
-                                     FiringHealStopPct(a_follower, a_target))) {   // fix/mfo-can-act: the rule's stop spec
+            switch (CastTargetDirect(a_follower, a_spell, a_target)) {
             case SelfCast::Applied:
                 // Exclusive control while the rule governs: keep the consent
                 // latch armed so the slider denies COMPETING AI spells and the
@@ -271,8 +269,7 @@ namespace MFO::Actuation {
         Outcome RestorationCastDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                                       RE::Actor* a_target) {
             const auto id = a_follower->GetFormID();
-            switch (CastTargetDirect(a_follower, a_spell, a_target,
-                                     FiringHealStopPct(a_follower, a_target))) {   // fix/mfo-can-act: the rule's stop spec
+            switch (CastTargetDirect(a_follower, a_spell, a_target)) {
             case SelfCast::Applied:
                 CasterConsent::Want(id, a_spell->GetFormID());
                 HoldCastLock(id, kHandLeft, a_spell->GetFormID(), a_target->GetFormID());   // TASK 2

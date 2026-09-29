@@ -13,7 +13,6 @@
                             // non-heal (Offense/Buff) CONCENTRATION stream -- ComposedCast::Try
                             // above is HEAL-ONLY by design, so offense/buff concentration needs
                             // its OWN direct claim call here rather than a widened Try() gate.
-#include <cmath>            // fix/mfo-can-act: std::ceil in HealStopPct
 #include <unordered_set>    // fix/mfo-can-act: NoteRefusedApply's once-per-down latch
 
 namespace MFO::Actuation {
@@ -58,7 +57,6 @@ namespace MFO::Actuation {
             SelfClock::time_point paidThrough{};
             float                 window = 0.0f;
             bool                  timed  = false;
-            std::uint32_t         stopPct = 0;   // the gambit's stop spec (TargetCastState's twin)
         };
         std::unordered_map<RE::FormID, SelfCastState> g_selfCast;   // worker-serial
 
@@ -835,7 +833,6 @@ namespace MFO::Actuation {
         } else {
             it->second.lastFired = now;   // rule still winning -> keep the channel open
         }
-        it->second.stopPct = a_stopPct;   // fix/mfo-can-act: the feeding rule's stop spec
 
         // SELF-PACE the beat. Callers refresh this every service/combat tick
         // while the rule wins. CADENCE CONTRACT (kConcApplyPeriod): a
@@ -927,8 +924,9 @@ namespace MFO::Actuation {
             bool magickaDry = false;
             // CASTER DOWN (fix/mfo-can-act): a caster who cannot act (bleedout, down,
             // knocked down, paralysed, kill move -- CannotActReason) owns no live
-            // stream. A true END: dispel + interrupt, like heal-full.
-            const bool casterDown = !gone && !CanAct(a);
+            // stream. A true END: dispel + interrupt, like heal-full. A knock that is
+            // only QUEUED does not end it (review C3: a_countPendingKnock=false).
+            const bool casterDown = !gone && CannotActReason(a, false) != nullptr;
             if (!gone) {
                 if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.spell)) {
                     kind = CasterConsent::ClassifySpell(sp);
@@ -938,11 +936,9 @@ namespace MFO::Actuation {
                         // still-wanted buff as a fresh burst.
                         if (std::chrono::duration<float>(now - sc.started).count() >= sc.cap)
                             concCapped = true;
-                        // Self-HEAL stops at the feeding rule's own line (fix/mfo-can-act,
-                        // "run to the gambit's specs": HealStopLine(sc.stopPct)); a rule
-                        // with no HP gate keeps the old stop at ~full own HP.
+                        // Self-HEAL stops early at ~full own HP (marth: heal to 100%).
                         if (kind == CasterConsent::SpellKind::Heal && a &&
-                            Vocab::HealthPct(a) >= HealStopLine(sc.stopPct))
+                            Vocab::HealthPct(a) >= kHealFullPct)
                             healedFull = true;
                         // MAGICKA-OUT STOP: end the channel the moment the caster can't
                         // afford the next beat, instead of re-applying for free at 0.
@@ -956,23 +952,19 @@ namespace MFO::Actuation {
             if (gone || stale || concCapped || healedFull || magickaDry || casterDown) {
                 // RELEASE. DISPEL (+ interrupt the channel, in SelfCastEndActor) a
                 // lingering STICKY buff on any release, AND a momentary stream's
-                // SUSTAINED effect when it truly ENDED (stale / heal-full / heal-spec /
-                // magicka-out / caster-down).
+                // SUSTAINED effect when it truly ENDED (stale / heal-full / magicka-out /
+                // caster-down).
                 // A plain CAP-only release re-streams next tick (fresh random cap),
                 // keeping a wanted self buff/heal continuous across bursts (self has no
                 // proxy slot to orphan). There is NO equip to undo.
-                const bool spec = healedFull && HealStopLine(sc.stopPct) < kHealFullPct;
                 const char* reason = casterDown ? "caster-down"
-                                   : healedFull ? (spec ? "heal-spec" : "heal-full")
+                                   : healedFull ? "heal-full"
                                    : magickaDry ? "magicka-out"
                                    : (a && !stale && !concCapped) ? "gone"
                                    : concCapped ? "cap" : "stale";
                 if (casterDown)
                     spdlog::info("[cast] {:08X} self-stream RELEASE ({}: {}) spell {:08X}",
-                                 id, reason, CannotActReason(a), sc.spell);
-                else if (spec)
-                    spdlog::info("[cast] {:08X} self-stream RELEASE ({} {}%) spell {:08X}",
-                                 id, reason, sc.stopPct, sc.spell);
+                                 id, reason, CannotActReason(a, false), sc.spell);
                 else
                     spdlog::info("[cast] {:08X} self-stream RELEASE ({}) spell {:08X}", id, reason, sc.spell);
                 // CHARGE FOR TIME: settle the seconds the effect ran past the last
@@ -1012,7 +1004,7 @@ namespace MFO::Actuation {
             std::lock_guard lk(g_summonMx);   // main-written verdicts / last casts
             g_summon.clear();
         }
-        ResetCanActState();           // fix/mfo-can-act: [bleed] ledgers + the touch-reach read
+        ResetCanActState();           // fix/mfo-can-act: the [bleed] ledgers
     }
 
     // F3-7 (deploy-gate review 2026-09-07). Drop ONE follower's APMF-refusal log
@@ -1279,7 +1271,6 @@ namespace MFO::Actuation {
         } else {
             it->second.lastFired = now;   // rule still winning -> keep the channel open
         }
-        it->second.stopPct = a_stopPct;   // fix/mfo-can-act: the feeding rule's stop spec
 
         // SELF-PACE the beat. CADENCE CONTRACT (kConcApplyPeriod): a
         // CONCENTRATION spell's cost is authored PER SECOND and the engine
@@ -1332,15 +1323,14 @@ namespace MFO::Actuation {
             // needed HEAL is release-only -- the next winning tick re-streams it with
             // a FRESH random cap (varied human bursts), so it FLOWS while wounded.
             const bool capped = std::chrono::duration<float>(now - tc.started).count() >= tc.cap;
-            // HEAL ends at the FEEDING RULE'S OWN LINE (fix/mfo-can-act, marth
-            // 2026-09-29: "run to the gambit's specs") -- tc.stopPct, the threshold of
-            // the rule that is feeding the stream (HealStopPct); a rule with no HP gate
-            // keeps the old ~full recipient HP stop. A true END-of-stream, dispel + stop.
+            // HEAL also ends EARLY at ~full recipient HP (marth: "heal always to
+            // 100%") -- a true END-of-stream, dispel + stop.
             const bool healedFull = tc.kind == CasterConsent::SpellKind::Heal && t &&
-                                    Vocab::HealthPct(t) >= HealStopLine(tc.stopPct);
+                                    Vocab::HealthPct(t) >= kHealFullPct;
             // CASTER DOWN (fix/mfo-can-act): a caster who cannot act owns no live
             // stream (CannotActReason) -- a true end: dispel, interrupt, free the slot.
-            const bool casterDown = f && !CanAct(f);
+            // A knock that is only QUEUED does not end it (review C3).
+            const bool casterDown = f && CannotActReason(f, false) != nullptr;
             // MAGICKA-OUT STOP (marth: "a held cast should stop when magicka runs").
             // The moment the CASTER can't afford the next beat's cost, END the stream
             // (a true end-of-stream, dispel) instead of re-applying for free at 0 --
@@ -1363,19 +1353,15 @@ namespace MFO::Actuation {
                 // stream next tick (new slot, new channel) -- this both guarantees the
                 // channel always stops (no runaway) and avoids orphaning an owned
                 // proxy slot whose stream was erased. Breadcrumb names the reason.
-                const bool spec = healedFull && HealStopLine(tc.stopPct) < kHealFullPct;
                 const char* reason = casterDown  ? "caster-down"
-                                   : healedFull  ? (spec ? "heal-spec" : "heal-full")
+                                   : healedFull  ? "heal-full"
                                    : magickaDry  ? "magicka-out"
                                    : gone        ? "gone"
                                    : stale       ? "stale"
                                                  : "cap";
                 if (casterDown)
                     spdlog::info("[cast] {:08X} stream RELEASE ({}: {}) tgt {:08X} spell {:08X}",
-                                 id, reason, CannotActReason(f), tc.target, tc.spell);
-                else if (spec)
-                    spdlog::info("[cast] {:08X} stream RELEASE ({} {}%) tgt {:08X} spell {:08X}",
-                                 id, reason, tc.stopPct, tc.target, tc.spell);
+                                 id, reason, CannotActReason(f, false), tc.target, tc.spell);
                 else
                     spdlog::info("[cast] {:08X} stream RELEASE ({}) tgt {:08X} spell {:08X}",
                                  id, reason, tc.target, tc.spell);
@@ -1400,8 +1386,8 @@ namespace MFO::Actuation {
         return it != g_targetCast.end() && it->second.spell == a_spell && it->second.target == a_target;
     }
 
-    // ── fix/mfo-can-act: the refusal log, the [bleed] line, the heal reach, the
-    // gambit's stop spec. See Actuation.h for each contract. ─────────────────────
+    // ── fix/mfo-can-act: the refusal log, the [bleed] line and the heal reach.
+    // See Actuation.h for each contract. ─────────────────────────────────────────
     namespace {
         // NoteRefusedApply's once-per-down-episode latch. Written on the main thread
         // (and the worker, for a potion), erased on the worker (NoteLifeState) -> mutex.
@@ -1432,22 +1418,27 @@ namespace MFO::Actuation {
         std::unordered_map<RE::FormID, LifeNote> g_life;
         constexpr float kBleedLineMinGapSec = 1.0f;
 
-        // fMagicDefaultTouchDistance, read once per session from the game settings
-        // (a plain map lookup over settings that stop changing after the data load;
-        // the job worker reads it after the first load, and ClearSelfCasts re-arms the
-        // read on every revert/load). 256 = the static Setting's value in both
-        // executables (1.6.1170 Setting @0x142007A30, 1.5.97 @0x141DE47D0), used only
-        // if the setting is missing entirely.
-        std::atomic<float> g_touchReach{ -1.0f };
-        float TouchReach() {
-            float v = g_touchReach.load(std::memory_order_relaxed);
-            if (v > 0.0f) return v;
-            auto* gsc = RE::GameSettingCollection::GetSingleton();
-            auto* s   = gsc ? gsc->GetSetting("fMagicDefaultTouchDistance") : nullptr;
-            v = (s && s->GetFloat() > 0.0f) ? s->GetFloat() : 256.0f;
-            g_touchReach.store(v, std::memory_order_relaxed);
-            return v;
+        // The reach of an AIMED heal, from its record: the spell's own Range (SPIT)
+        // when set, else the longest projectile range of its effects
+        // (EffectSetting::data.projectileBase->data.range), else 0 (= none known).
+        // Plain field reads, worker-safe.
+        float AimedReachOf(const RE::SpellItem* a_spell) {
+            if (!a_spell) return 0.0f;
+            if (a_spell->data.range > 0.0f) return a_spell->data.range;
+            float proj = 0.0f;
+            for (auto* eff : a_spell->effects) {
+                auto* base = eff ? eff->baseEffect : nullptr;
+                auto* p    = base ? base->data.projectileBase : nullptr;
+                if (p && p->data.range > proj) proj = p->data.range;
+            }
+            return proj;
         }
+
+        // HEAL OTHER, Skyrim.esm 0x00012FD2 (the base game's own aimed ally heal:
+        // Fire and Forget, Target Actor, Range 0, projectile 0x00012FDC with range
+        // 10000 -- the same in Mysticism's override; read from Skyrim.esm and
+        // MysticismMagic.esp 2026-09-29). Skyrim.esm is always load index 00.
+        constexpr RE::FormID kHealOther = 0x00012FD2;
 
         const char* LifeName(RE::ACTOR_LIFE_STATE a_s) {
             switch (a_s) {
@@ -1476,7 +1467,6 @@ namespace MFO::Actuation {
                 std::lock_guard lk(g_healLandedMx);
                 g_healLanded.clear();
             }
-            g_touchReach.store(-1.0f, std::memory_order_relaxed);   // re-read after the new data load
         }
         const char* FormName(RE::FormID a_id) {
             auto* f = a_id ? RE::TESForm::LookupByID(a_id) : nullptr;
@@ -1564,21 +1554,20 @@ namespace MFO::Actuation {
 
     float HealReach(RE::SpellItem* a_spell) {
         if (!a_spell) return 0.0f;
+        float reach = 0.0f;
         switch (a_spell->data.delivery) {
         case RE::MagicSystem::Delivery::kSelf:
         case RE::MagicSystem::Delivery::kTouch:
-            return TouchReach();
+            // marth 2026-09-29 (option B): a Self / Touch heal delivered to an ALLY
+            // reaches as far as Heal Other, the aimed ally heal. (A self-heal on the
+            // caster never asks: HealInReach / RefuseHealApplyOnMain pass self.)
+            reach = AimedReachOf(RE::TESForm::LookupByID<RE::SpellItem>(kHealOther));
+            break;
         default:
+            reach = AimedReachOf(a_spell);
             break;
         }
-        if (a_spell->data.range > 0.0f) return a_spell->data.range;
-        float proj = 0.0f;
-        for (auto* eff : a_spell->effects) {
-            auto* base = eff ? eff->baseEffect : nullptr;
-            auto* p    = base ? base->data.projectileBase : nullptr;
-            if (p && p->data.range > proj) proj = p->data.range;
-        }
-        return proj > 0.0f ? proj : std::numeric_limits<float>::max();
+        return reach > 0.0f ? reach : std::numeric_limits<float>::max();
     }
 
     bool HealInReach(RE::Actor* a_caster, RE::Actor* a_target, RE::SpellItem* a_spell) {
@@ -1617,21 +1606,6 @@ namespace MFO::Actuation {
                          a_target->GetFormID(), why, dist, reach);
         }
         return true;
-    }
-
-    std::uint32_t HealStopPct(std::string_view a_condOpcode, float a_condParam,
-                              RE::Actor* a_caster, RE::Actor* a_target) {
-        if (!a_caster || !a_target) return 0;
-        bool applies = false;
-        if (a_condOpcode == Vocab::kCondSelfHpBelow)        applies = a_target == a_caster;
-        else if (a_condOpcode == Vocab::kCondPlayerHpBelow) applies = a_target->IsPlayerRef();
-        else if (a_condOpcode == Vocab::kCondAllyHpBelow)   applies = a_target != a_caster;
-        if (!applies) return 0;
-        const float line = std::min(a_condParam, Vocab::kHealFull);
-        if (line <= 0.0f) return 0;
-        // Rounded UP (less a float hair so 0.30f reads 30, not 31): never below the line.
-        const auto pct = static_cast<std::uint32_t>(std::ceil(line * 100.0f - 1.0e-3f));
-        return std::clamp<std::uint32_t>(pct, 1u, 100u);
     }
 
 }

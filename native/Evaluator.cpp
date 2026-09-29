@@ -465,7 +465,16 @@ namespace MFO::Eval {
         // gambit should be able to name the player, so a low-health player is a
         // valid pick alongside the follower's teammates. The follower themselves
         // is still excluded here (ally != self) -- self is a separate subject.
-        RE::ActorHandle PickAlly(RE::Actor* a_self, RE::Actor* a_player, float a_param) {
+        //
+        // a_healSpell (fix/mfo-can-act, review C2): when the rule's action is a HEAL
+        // cast, only allies inside that spell's normal reach with line of sight
+        // (Actuation::HealInReach, the same test CastAuto's picker makes) are
+        // candidates, so the rule names the most-hurt ally it can actually heal
+        // instead of an out-of-reach one it would decline every lap. nullptr = no
+        // reach filter (every other action). The candidates are Want()ed so the LoS
+        // cache is warm next lap (Unknown passes, as everywhere).
+        RE::ActorHandle PickAlly(RE::Actor* a_self, RE::Actor* a_player, float a_param,
+                                 RE::SpellItem* a_healSpell = nullptr) {
             RE::ActorHandle best;
             if (!a_self) return best;
             const auto selfPos = a_self->GetPosition();
@@ -473,18 +482,25 @@ namespace MFO::Eval {
             // HEAL boundary fix: clamp the TOP so a "heal ally below 100%" pick does
             // not chase a topped-off ally forever (see Vocab::kHealFull).
             float lowest = std::min(a_param, Vocab::kHealFull);   // strictly under this
+            std::vector<RE::FormID> sightWant;
             auto consider = [&](RE::Actor* ally) {
                 if (!ally || ally == a_self) return;
                 if (ally->IsDead() || ally->IsDisabled()) return;
                 if (selfPos.GetDistance(ally->GetPosition()) > radius) return;
                 const float hp = Vocab::HealthPct(ally);
-                if (hp < lowest) { lowest = hp; best = ally->GetHandle(); }
+                if (hp >= lowest) return;
+                if (a_healSpell) {
+                    sightWant.push_back(ally->GetFormID());
+                    if (!Actuation::HealInReach(a_self, ally, a_healSpell)) return;
+                }
+                lowest = hp; best = ally->GetHandle();
             };
             for (const auto& h : Followers::g_active) {
                 auto ptr = h.get();   // HOLD the NiPointer (Targeting rule)
                 consider(ptr.get());
             }
             consider(a_player);   // the player is an ally candidate too
+            if (!sightWant.empty()) Sightline::Want(a_self->GetFormID(), std::move(sightWant));
             return best;
         }
 
@@ -603,7 +619,15 @@ namespace MFO::Eval {
             } else if (IsAllySelector(g.conditionOpcode)) {
                 // Same shape, ally side: true iff a wounded teammate is found,
                 // and that teammate becomes the target (Cast at ally / Heal Other).
-                chosen = PickAlly(a_follower, player, g.conditionParam);
+                // fix/mfo-can-act (review C2): a HEAL cast picks only among allies
+                // in the spell's reach (PickAlly's a_healSpell).
+                RE::SpellItem* healSpell = nullptr;
+                if (g.actionOpcode == Vocab::kActCastTarget) {   // the one action that casts AT the picked ally
+                    if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm);
+                        sp && Actuation::HealsHealth(sp))
+                        healSpell = sp;
+                }
+                chosen = PickAlly(a_follower, player, g.conditionParam, healSpell);
                 if (!chosen) continue;
                 // An ally selector names a wounded teammate/PLAYER as the target.
                 // Attack/PowerAttack force-write the combat target with no

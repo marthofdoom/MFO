@@ -212,7 +212,12 @@ namespace MFO::Actuation {
     //    7 `shr r,0xe` sites each).
     // Not in it: stagger (a stagger does not stop a cast in the engine either) and
     // disabled / not loaded (every caller already handles those).
-    inline const char* CannotActReason(const RE::Actor* a_actor) {
+    // a_countPendingKnock (review C3 on 91b17a3): false = a knock that is only
+    // QUEUED (kQueued / kWaitForTaskQueue, momentary, may never become a knockdown)
+    // does not count. The stream reconciles pass false, so a queued knock may skip a
+    // lap (the scan / apply gates use the default) but never dispels, interrupts or
+    // frees a live heal stream.
+    inline const char* CannotActReason(const RE::Actor* a_actor, bool a_countPendingKnock = true) {
         if (!a_actor) return "gone";
         if (const auto* st = a_actor->AsActorState()) {
             switch (st->GetLifeState()) {
@@ -226,7 +231,16 @@ namespace MFO::Actuation {
             case RE::ACTOR_LIFE_STATE::kDead:           return "dead";
             default:                                    return "not alive";
             }
-            if (st->GetKnockState() != RE::KNOCK_STATE_ENUM::kNormal) return "knocked down";
+            switch (st->GetKnockState()) {
+            case RE::KNOCK_STATE_ENUM::kNormal:
+                break;
+            case RE::KNOCK_STATE_ENUM::kQueued:
+            case RE::KNOCK_STATE_ENUM::kWaitForTaskQueue:
+                if (a_countPendingKnock) return "knock queued";
+                break;
+            default:
+                return "knocked down";
+            }
         }
         if (a_actor->GetActorRuntimeData().boolBits.all(RE::Actor::BOOL_BITS::kParalyzed))
             return "paralysed";
@@ -259,10 +273,12 @@ namespace MFO::Actuation {
     //    EffectSetting::data.projectileBase->data.range) -- vanilla and Mysticism
     //    Healing Hands / Heal Other carry Range 0 and projectile 0x12FDC, range 10000;
     //    else no cap of its own (the candidate radius still applies).
-    //  * Self / Touch: the engine's touch distance, GMST fMagicDefaultTouchDistance
-    //    (256 u in both executables' static Setting). A Self spell reaches nobody but
-    //    its caster when the player casts it; MFO still places Self heals on others
-    //    (ConcProxy, AUTO), so on another actor it is laid on by touch.
+    //  * Self / Touch (marth 2026-09-29, option B): the reach of HEAL OTHER
+    //    (Skyrim.esm 0x00012FD2), the aimed ally heal, by the same rule -- Range 0,
+    //    projectile range 10000 in Skyrim.esm and in Mysticism's override. A Self
+    //    spell reaches nobody but its caster when the player casts it; MFO places Self
+    //    heals on allies (ConcProxy, AUTO) and they reach as far as Heal Other would.
+    //    A self-heal on the caster himself is never reach-checked.
     // HealReach returns the reach in units (a very large number = no cap of its own).
     float HealReach(RE::SpellItem* a_spell);
     // WORKER: in reach = distance <= HealReach AND the Sightline cache does not say
@@ -278,25 +294,6 @@ namespace MFO::Actuation {
     // Does a_spell restore Health (any beneficial Health effect)? The same read
     // CastAuto's heal gate makes (SpellHealsHealth), public for logistics.
     bool HealsHealth(RE::SpellItem* a_spell);
-
-    // ── THE GAMBIT'S STOP SPEC FOR A HEAL (marth 2026-09-29: "run to the gambit's
-    // specs") ────────────────────────────────────────────────────────────────────
-    // A heal stream (CastTargetDirect / CastSelfDirect) used to end only at 99.95%
-    // ("heal-full") or when its rule went stale ~2 s after the condition turned
-    // false. It now ends when the recipient reaches the threshold of the rule that
-    // started it -- the same test that rule's condition makes (Evaluator
-    // ConditionTrue / PickAlly: "HP below min(param, kHealFull)"):
-    //   Self HP below X   and the heal is on the caster  -> X
-    //   Player HP below X and the heal is on the player  -> X
-    //   Ally HP below X   and the heal is on that ally   -> X
-    //   any other condition (Always, When dark, a foe gate, an HP gate about
-    //   someone else)                                     -> 0 = full (kHealFull),
-    // the reading the code already gives a rule with no HP gate (CastAuto's
-    // ceiling 1.0 clamped to kHealFull). Returned as a whole percent, rounded UP so
-    // the stream never stops below the condition's own line (a stop below it would
-    // re-start a fresh stream on the next lap). 0 = full.
-    std::uint32_t HealStopPct(std::string_view a_condOpcode, float a_condParam,
-                              RE::Actor* a_caster, RE::Actor* a_target);
 
     // Per-tick reconcile for the forced self-cast channels: RELEASES a channel
     // when its rule goes stale (or the follower unloads) by dispelling any
