@@ -181,19 +181,18 @@ leash and walk-to-loot.
 
 ## Requirements
 
-- **Skyrim Special Edition / Anniversary Edition**, on a version SKSE and
-  Address Library support. **VR is not supported. Anniversary Edition (1.6.x)
-  is recommended:** the *walk-to-it* behaviours — walking to loot, *Flee to
-  player*, and *Auto-retreat* — ride a native alias fill that is only verified
-  on AE, so on Special Edition (1.5.97) they are inactive (loot is picked up at
-  arm's reach; flee/retreat do nothing). **Cast-control gambits are AE-only
-  too.** On Special Edition MFO declines cast control and the follower's own AI
-  casts instead, which still looks and works like normal spellcasting. Attack,
-  drink, equip, restocking, looting itself, and the merchant economy work on SE
-  and AE alike.
+- **Skyrim Anniversary Edition 1.6.1170 or Special Edition 1.5.97.** VR is not
+  supported. Both versions get the full feature set: walking to loot, *Flee to
+  player*, *Auto-retreat* and cast control have worked on 1.5.97 since v2.0.9.
+  At startup MFO checks every game address it uses against a table made by hand
+  for these two versions. On any other version its hooks stay off and the log
+  says so.
 - **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)** — the control-layer
   framework MFO drives followers through. Install it for the full feature set.
-  Without it MFO degrades to its older paths and says so in the log.
+  This version wants Harbinger 0.9.10 (lockpicking, museum drop-offs, the fight
+  leash and the retreat's combat hold need it). MFO still runs with Harbinger
+  0.9.5 or newer, and without it MFO degrades to its older paths and says so in
+  the log.
 - **SKSE64**
 - **Address Library for SKSE Plugins**
 - **SkyUI** and **MCM Helper** (version 9 or newer) — the settings menu

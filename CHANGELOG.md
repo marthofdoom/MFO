@@ -5,13 +5,13 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
-## Unreleased
+## v2.0.15 -- Followers pick locks and ship relics to the museum
 
+- **NEWEST HARBINGER REQUIRED: use Harbinger 0.9.10.** Lockpicking, museum drop-offs, the fight leash and staying out of the fight during a retreat all need it. MFO still runs with Harbinger 0.9.5 or newer. Those features just stay off.
 - **A downed follower does nothing.** A follower who is bleeding out, knocked down, paralysed or stuck in a kill move no longer casts, drinks, loots or runs any gambit. Before, Jesper could lie in bleedout and still throw instant heals at himself and the rest of the party. A heal he was channeling stops the moment he goes down. His rules run again once he is back on his feet.
 - **Healing a downed ally still works.** A follower who can act can still heal a friend who is down.
 - **Heals have their normal reach.** A heal on someone else reaches as far as your own cast of that spell would, and needs line of sight. Healing Hands and Heal Other reach across a room. A self spell like Fast Healing or Close Wounds cast on an ally reaches as far as Heal Other. Before, a follower healed anyone within 3000 units, through walls. An Ally HP below rule with a heal picks the most hurt ally he can reach, not one he can't.
 - **New log line: [bleed].** MFO.log notes when a follower goes down and when he gets back up, with his health, and which MFO heal or potion landed on him last.
-
 - **Melee followers stop chasing dragons in the sky.** A melee follower no longer picks or runs after a foe flying out of his reach. He attacks a foe he can reach if there is one. If every foe is up in the air, he stays close to you (with Harbinger installed) until one comes down or lands. A dragon hovering low enough to hit still counts, and so do netch, wispmothers and other floating creatures.
 - **Followers stop swapping relics when a companion falls behind.** A follower left in another room still counts toward the museum. His companions no longer strip their own gear to cover for him.
 - **No more "player put on" for a relic MFO took off.** A relic MFO takes off and later allows again is not mistaken for your choice.
@@ -21,7 +21,6 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **Foe: Ranged covers casters at range.** It now means a bow, a crossbow, a staff, or a spell cast from a distance. Foe: Spellcaster stays the same.
 - **New condition: Foe: Mechanical.** Picks the nearest Dwemer construct: spiders, spheres, centurions and the like. Ghosts, skeletons and ash spawn do not count.
 - **Gambit labels read one way now.** Every condition that starts with a subject is written the same: Foe: Dragon, Foe: Targeting me, Ally: HP below, Self: Magicka below. The % sign left the labels, since the value already shows it. Cast at foe/ally is now Cast on target, and Dark is In the dark. Your gambits keep working (only the text changed).
-
 - **Museum drop-offs come first.** A follower with the Loot museum items gambit who carries relics the museum needs heads for a Museum Shipments crate as soon as one is inside his leash. He stops a loot run for it, unless he is fetching a museum item. Then he drops that off too. Only combat and heals come first.
 - **Several followers can drop off at once.** Each follower runs his own trip. A failed walk only holds back that follower at that crate.
 - **The leash is the limit for drop-offs.** A follower only walks to a crate inside his leash, and turns back as soon as you move out of it.
@@ -44,7 +43,6 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **A museum relic you give a follower is never shipped.** MFO remembers each relic you hand over or put on him in the trade or gift menu, until he no longer carries it. A relic you gave him stays in his hand. The record is kept in the save, so it survives a reload. Ordinary items you give him are fair game and are not recorded.
 - **A follower carrying lots of potions keeps MFO's spell control.** Before, too many potions switched off MFO's say over which spells he picks in combat. Now he keeps the best potion of each kind for his own combat drinking and the control stays on.
 - **Bow users stop buying and looting bolts.** Arrows and bolts are told apart correctly again without the ItemCatalog patcher.
-
 - **A follower who is losing now runs back to you.** Confidence watches how fast he is losing health. A duel he is losing badly sends him back well before he is nearly dead.
 - **Strong enemies count for more, weak ones for less.** A dragon weighs about four times a mudcrab. A pack of mudcrabs no longer sends a healthy follower running.
 - **A crowd alone no longer forces a retreat at full health.** Five even enemies keep him fighting while he holds his own. If the pack starts hurting him, he falls back.
@@ -53,11 +51,11 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **Followers pick locks on chests.** A follower out looting walks to a locked chest, picks it with the lock picking animation and then loots it. His odds come from his own Lockpicking skill and perks, worked out the way the game's own lock picking works. Picks he breaks come out of his own pack.
 - **He never starts a lock he would fail.** If the lock needs more picks than he carries, he leaves it alone and spends nothing. He tries again once he carries more picks or his skill goes up.
 - **Owned chests stay off limits.** A follower never picks a lock that would be a crime.
-- **It needs the next Harbinger release (API v17).** Without it, or with an older Harbinger, followers skip locked chests. They no longer loot through a lock.
+- **It needs Harbinger 0.9.10 (API v17).** Without it, or with an older Harbinger, followers skip locked chests. They no longer loot through a lock.
 - **Followers pick locked doors that block a loot trip.** When a locked door stops a follower on his way to an item, he walks to it, picks it with the same animation and odds, and carries on to the item. Owned doors, and doors into houses, shops, inns or other lived-in places, are left alone.
 - **New option: Legacy of the Dragonborn awareness.** Off by default, and only shown when LOTD is installed. Turn it on and followers know what your museum still needs. LOTD's own shipping message shows once when you turn it on.
 - **New loot gambit: Loot museum items.** It appears on the board while the option is on. A follower takes the relics the museum still needs and nothing it already has, counting what you and the other followers carry and what is already on its way.
-- **Followers ship museum items for you.** A follower with that gambit, carrying needed relics, walks to a nearby Museum Shipments crate, hands them over with a proper give animation and puts them in. LOTD delivers them to the museum as usual. It needs Harbinger with the idle-at-a-target channel (ABI v17). Without it the gambit does nothing.
+- **Followers ship museum items for you.** A follower with that gambit, carrying needed relics, walks to a nearby Museum Shipments crate, hands them over with a proper give animation and puts them in. LOTD delivers them to the museum as usual. It needs Harbinger 0.9.10 (API v17). Without it the gambit does nothing.
 - **A relic the museum needs is never sold or dropped.** Selling, making room for better gear and trading up ammo all leave it alone. Relics you gave a follower are never shipped.
 - **The walk-to-loot gait setting works on Harbinger's travel road.** With Harbinger 0.9.8 or newer, a loot trip walks, jogs, runs or fast-walks as the setting says. A changed setting applies from the next trip leg. MFO's own travel packages (Harbinger absent) are unchanged until that road's gait is proven.
 - **Loot trips on Harbinger's road now listen to why a walk stopped.** Arrived means loot now. A vanished target means the next item at once. Blocked by someone standing in the way means the item goes later in his list. Blocked by a gate means the item is skipped until the gate changes. MFO no longer runs its own blocked timer on that road.
@@ -81,8 +79,9 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **A better weapon or armor piece that is too heavy to carry is still taken when dropping gear he already replaced makes room.** This needs the economy on. The least valuable replaced gear goes back into the body first, and only once the new piece is in his pack. Nothing worth more than the new piece is dropped. Worn gear, enchanted gear, his own signature gear, quest items, gear you put on him, and gear that may hold gems are never dropped.
 - **With Harbinger's equip authority, an archer MFO holds on his bow gets his best arrows, when he has at least 20 of them.** Arrows you hand him through the trade menu stay on. Before, he kept whatever arrows he last had equipped.
 - **A mage no longer sells the backup dagger he just looted.**
-- **A retreating follower stays out of the fight on the way back.** With a Harbinger that has the re-entry deny (its next release after 0.9.9), the game cannot pull him back into combat while he walks to you. MFO takes him out of the fight once, the moment Harbinger holds the door shut. Enemies can still hit him on the way. Once he reaches you he fights again if the enemies come to him. Older Harbinger or none: the retreat works as before.
-- **Followers do not chase too far from you in a fight.** With a Harbinger that has the pursuit leash (its next release after 0.9.9), a follower who is farther from you than his confidence leash does not run after a foe that would take him farther still. A confident follower ranges wide. A hurt or outnumbered one stays close. He still fights whatever comes to him. Older Harbinger or none: no change.
+- **A retreating follower stays out of the fight on the way back.** With Harbinger 0.9.10, the game cannot pull him back into combat while he walks to you. MFO takes him out of the fight once, the moment Harbinger holds the door shut. Enemies can still hit him on the way. Once he reaches you he fights again if the enemies come to him. Older Harbinger or none: the retreat works as before.
+- **Followers do not chase too far from you in a fight.** With Harbinger 0.9.10, a follower who is farther from you than his confidence leash does not run after a foe that would take him farther still. A confident follower ranges wide. A hurt or outnumbered one stays close. He still fights whatever comes to him. Older Harbinger or none: no change.
+- **Not all of this has been played yet.** Lockpicking, museum drop-offs, loose loot, engage on sight, retreat and the fight leash ran in a test session. The fixes made after it (downed followers, heal reach, flying foes, relic swaps, ammo sales, the new gambit labels) have not been tested in game yet.
 
 ## v2.0.14 -- Followers fight the foe you picked and fall back when losing
 
