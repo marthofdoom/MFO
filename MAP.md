@@ -502,18 +502,21 @@ per concern:
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
   field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
   keeps a relic out of the declared set (MFO-B126).
-- `cast/Direct.cpp` (1317) = the DIRECT-DELIVERY road: the apply substrate (`ConcProxy` `:181`,
-  `DeliverySpell` `:255`, dispel/sustain, `ApplySelfEffect` `:356`, `ApplyTargetEffect` `:462`,
-  charge-for-time) and the per-follower streams `CastSelfDirect` (`:628`) / `SelfCastReconcile`
-  (`:848`) / `ClearSelfCasts` (`:954`) / `CastTargetDirect` (`:999`) / `TargetCastReconcile`
-  (`:1237`) / `TargetStreamLive` (`:1312`), plus `IsRestorationSpell` (`:617`) and
-  `SpellHealsHealth` (`:602`). The self registry `g_selfCast` (`:60`) is file-local; the target
-  registry `g_targetCast` (`:127`) went extern in wave 1 (`CastAuto` reads it).
+- `cast/Direct.cpp` (1611, past ~1500 since fix/mfo-can-act: plan a split, the CAN-ACT block
+  `:1389-1611` is the natural cut; MFO-B152) = the DIRECT-DELIVERY road: the apply substrate (`ConcProxy` `:181`,
+  `DeliverySpell` `:255`, dispel/sustain, `ApplySelfEffect` `:359`, `ApplyTargetEffect` `:473`,
+  charge-for-time) and the per-follower streams `CastSelfDirect` (`:648`) / `SelfCastReconcile`
+  (`:869`) / `ClearSelfCasts` (`:997`) / `CastTargetDirect` (`:1043`) / `TargetCastReconcile`
+  (`:1309`) / `TargetStreamLive` (`:1398`), plus `IsRestorationSpell` (`:637`) and
+  `SpellHealsHealth` (`:622`), and the CAN-ACT block (see "CAN-ACT" below): `NoteRefusedApply`,
+  `NoteHealLanded`, `NoteLifeState`, `HealReach`, `HealInReach`, `HealsHealth`,
+  `RefuseHealApplyOnMain`. The self registry `g_selfCast` (`:63`) is file-local; the target
+  registry `g_targetCast` (`:130`) went extern in wave 1 (`CastAuto` reads it).
 - `cast/Summon.cpp` (369) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
   `CastSummonOnce` (`:305`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
   `g_summonMx`/`g_summon`/`g_summonPosted` (`:68-69`, `:79`) is extern (ClearSelfCasts clears it).
-- `cast/Auto.cpp` (575) = the AUTO fan-out `CastAuto` (`:269`) with its pacing `g_autoCast` (`:22`)
-  and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:154`), and
+- `cast/Auto.cpp` (613) = the AUTO fan-out `CastAuto` (`:280`) with its pacing `g_autoCast` (`:22`)
+  and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:165`), and
   `IsSummonSpell` (`:227`, public; it lives here because `CastAuto` inlines it).
 - `cast/Hands.cpp` (919) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:78`), the liveness ladder (`ClaimLiveOnHand` `:90`,
@@ -695,6 +698,60 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   still promises an animated hand cast (backlog `MFO-B48`). **What breaks if you change this:** re-routing any heal-kind spell
   back through `Try` re-creates the frozen follower unless the floor gate below holds; a self target
   reaching `CastOn` with `bCastSelf` OFF keeps its old road on purpose (`a_target != a_follower`).
+- **CAN-ACT + NORMAL HEAL REACH (`fix/mfo-can-act`, field 0928c, 2026-09-29).**
+  Field: a BLEEDING-OUT Jesper (HP ~0, magicka full) fired rule 0's instant Close Greater Wounds at
+  himself, Serana and the player and streamed Fast Healing at a downed Serana, reviving both. No road
+  asked whether the CASTER could act. Three rulings (marth): a downed caster does nothing (healing a
+  downed ally is fine); a heal on an ally has the spell's normal reach with line of sight. (A third
+  change, stopping a heal stream at the rule's HP line, was REVERTED on the branch at marth's call:
+  "for most healing gambits we do want to full". Streams still end at `kHealFullPct`; the rule's HP
+  condition decides who and when, not where it stops.)
+  * **`Actuation::CannotActReason` / `CanAct`** (`cast/Actuation.h:220`, inline): nullptr, or a static
+    reason. Plain member loads only (life state + knock state from `AsActorState()`, `boolBits
+    kParalyzed`, `IsInKillMove()`), each verified against the fork and BOTH executables (the comment
+    there has the sites). Cannot act = life state other than alive / reanimated (bleedout,
+    essential-down, unconscious, restrained, dying, dead, recycle), knock state other than normal,
+    paralysed, kill move. `IsInRagdollState` is deliberately NOT used (a relocated call). A knock that
+    is only QUEUED (kQueued / kWaitForTaskQueue) counts for the scan and the apply gates but NOT for
+    ending a stream (`a_countPendingKnock=false` in the reconciles, review C3).
+  * **Worker gates.** `Scheduler.cpp:783` reads it once per service after `NoteHealth` (and calls
+    `NoteLifeState`); the combat scan passes every rule over TRANSPARENTLY at `:1326` with
+    `(cannot act: why)` in the deduped skip-chain, keeping `castSeen` / `equipHeld` exactly like the
+    suppression-window stop (a knockdown must not strip a held weapon or a cast loan).
+    `logistics/Service.cpp:297` returns from `ServiceFollower` after the global travel backstop and the
+    cadence gate, before it acts. NOT gated: `EngageOnSight::Service` (it already skips a bleeding-out
+    foe, not the follower; out of the brief) and the auto-retreat driver (marth 2026-09-29, review C6: a
+    downed follower may keep his retreat, "still downed and crawling during retreat"; MFO-B153).
+  * **Main-thread re-gates, right before each apply** (no cast, no magicka, `[bleed] ... apply
+    REFUSED` once per caster until he can act, `NoteRefusedApply`): `ApplyEffectFromTo`
+    (`cast/Auto.cpp:89`), `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:365` / `:481`),
+    the legacy force `doCast` (`cast/CastOn.cpp:1327`), `SummonOnMain` (`cast/Summon.cpp:285`, verdict
+    Failed), the two OOC `doCast`s (`logistics/Service.cpp:1846` / `:1912`), and the drink
+    (`DrinkBest`, `logistics/Service.cpp:70`: not posted, so the check sits in the same synchronous call
+    as its `EquipObject`).
+  * **Streams.** `SelfCastReconcile` / `TargetCastReconcile` end a live stream whose CASTER cannot act
+    (`RELEASE (caster-down: why)`, dispel + interrupt + slot free, like heal-full).
+  * **Normal reach for a heal on another actor** (`HealReach` / `HealInReach` / `RefuseHealApplyOnMain`,
+    `cast/Direct.cpp`, end of file): Aimed / TargetActor / TargetLocation = SPIT range, else the longest
+    effect projectile range, else no cap of its own; Self / Touch on an ALLY = Heal Other's reach by the
+    same rule (Skyrim.esm 0x00012FD2: Range 0, projectile 0x12FDC range 10000; marth 2026-09-29 option
+    B). A self-heal on the caster is never reach-checked. Worker: distance + `Sightline::Check != Occluded` (the caller `Want`s);
+    main: distance + `Sightline::MeasureNow`. Applied at `CastAuto`'s concentration most-hurt probe +
+    hysteresis and its beneficial heal fan (`cast/Auto.cpp:339` / `:360` / `:560`; `fSharedRadius` stays
+    the outer bound, a non-heal buff keeps the radius alone), `CastTargetDirect` for heal kinds
+    (`cast/Direct.cpp:1211`, transparent Declined + a 5 s deduped `[cast] ... out of reach` line), the
+    OOC FF heal (`logistics/Service.cpp:1833`), the ALLY SELECTOR (`Evaluator.cpp` `PickAlly:476`: for a
+    `Cast at foe/ally` rule whose spell heals, only allies in reach are candidates, so "Ally HP below X"
+    names the most-hurt ally it can actually heal; review C2) and every main-thread heal apply above.
+  * **`[bleed]`** (`NoteLifeState` / `NoteHealLanded`): a transition-only line per life-state change
+    (DOWN / UP with HP, and on UP the last MFO heal or potion that landed on him and how many landed
+    while down), 1 s rate limit with a flips counter. Ledgers cleared in `ClearSelfCasts`.
+  **What breaks if you change this:** reading `IsInRagdollState` or any vfunc in `CannotActReason` puts an
+  engine call on the worker and inside the combat group lock; dropping the `castSeen` / `equipHeld` stamp in
+  the scan skip releases holds and claims on every knockdown; deleting a main-thread re-gate re-opens the
+  decision-to-apply window the field showed. **Open backlog: MFO-B149 (latches kept through a long
+  bleedout), MFO-B150 (a main-thread reach refusal leaves the stream registered a lap or two), MFO-B152
+  (file sizes); MFO-B151 is moot; MFO-B153 records the retreat decision.**
 - `CastOn` (`cast/CastOn.cpp:110`) escalation, IN EXECUTION ORDER: runtime gate `Runtime::CastPathsVerified()` (`cast/CastOn.cpp:140`, AE bucket or exactly 1.5.97 — see RUNTIME GATES above) →
   no target (`:146`) → spell lookup (`:148`) → #68 out-of-range skip (`:167`) → competence gate `HasSpell` (`:230`) → magicka reserve (`:268-280`) → range/competence/reserve →
   **the Task 2 firing-spell gambit lock, PER-HAND now (`ResolveCastHand`, feat/per-hand-
@@ -1345,6 +1402,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
 first, runs the combat table while the PARTY fights and the logistics table when
 it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worker.
+- **CAN-ACT (`fix/mfo-can-act`, 2026-09-29; the cast/ "CAN-ACT" entry has the whole mechanism).** Right
+  after `Confidence::NoteHealth` the service calls `Actuation::NoteLifeState` (the `[bleed]` line) and
+  reads `CannotActReason` once (`:783`); the combat scan passes each rule over transparently at `:1326`
+  while he cannot act, keeping `castSeen` / `equipHeld` as the suppression-window stop does. The file
+  is 1816 lines (past ~1500: plan a split).
 - `Tick()` (`:252`) — caller `Diagnostics.cpp:931`. `Packages::Pump()` must stay
   first + unconditional. Reads `g_followers` — safe only because StopPump
   brackets the load window. Retreating follower `return`s before the gambit table
@@ -2103,6 +2165,12 @@ REVIEW-BACKLOG **MFO-B19**). Cross-module state/types/small helpers live as `inl
 members of `namespace MFO::Logistics` in `logistics/Logistics_internal.h` (ONE instance
 across the TUs); big cross-module helpers are declared there and defined in their home
 module. Module layout:
+  - **CAN-ACT GATE (`fix/mfo-can-act`, 2026-09-29):** `ServiceFollower` returns at `:297` (after the
+    global travel backstop and the cadence gate, before `ClaimEquipAuthority`) when
+    `Actuation::CannotActReason` says he cannot act; `DrinkBest` refuses at `:70`; the OOC FF heal checks
+    normal reach at `:1833`; both OOC `doCast`s re-check on the main thread (`:1846`, `:1912`). The OOC
+    AUTO heal is still FANNED to anyone below full as before (marth 2026-09-29, review C7), subject only to
+    CanAct and the normal reach. See the cast/ "CAN-ACT" entry. The file is 2116 lines now (MFO-B152).
   - `logistics/Service.cpp` (2012, past ~1500: MFO-B118) = the per-follower TICK: `ServiceFollower:160` (one
     1462-line function: the travel backstop `:187-252`, the arrival / theft-guard / movement-
     blocked legs `~357-907`, the gambit dispatch loop `:978`, the OOC cast block `~1047-1437`

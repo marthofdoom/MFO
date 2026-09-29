@@ -177,6 +177,124 @@ namespace MFO::Actuation {
     // Worker-serial, same registry discipline as CastTargetDirect.
     bool TargetStreamLive(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target);
 
+    // ── CAN THIS ACTOR ACT? (fix/mfo-can-act, field 0928c, 2026-09-29) ──────────
+    // Field 2026-09-28 21:06-21:07 (MFO.log.1): Jesper, BLEEDING OUT (HP ~0, stamina
+    // ~0, magicka full), fired rule 0's instant Close Greater Wounds on himself,
+    // Serana and the player, and streamed Fast Healing at a downed Serana, reviving
+    // both within seconds. No cast or drink road asked whether the CASTER could act.
+    // marth: healing a downed ally is fine, from a caster who CAN act.
+    //
+    // Returns nullptr when a_actor can act, else a short static reason. Every read is
+    // a PLAIN MEMBER LOAD (no vfunc, no relocated call), so it is safe on the job
+    // worker, inside the combat group's lock and on the main thread alike. Verified
+    // against the fork at fde0f3ae (registry baseline 038638a) and BOTH unpacked
+    // executables:
+    //  * LIFE STATE = ActorState1 bits 21-24 (include/RE/A/ActorState.h:114, reached
+    //    through AsActorState(): the ActorState base 0xB8 SE / 0xC0 1.6.629+). The
+    //    engine reads the same field: 1.5.97 `[actor+0xC0] >> 21 & 0xF` compared to
+    //    2 / 3 / 6 / 8 (26 sites), 1.6.1170 `[actor+0xC8] & 0x1E00000` compared to
+    //    0x400000 / 0x600000 / 0xC00000 / 0xE00000 / 0x1000000 (144 sites) -- dead,
+    //    unconscious, restrained, essential-down, bleedout. Anything but kAlive and
+    //    kReanimate (a raised thrall acts) is "cannot act": dying, dead, unconscious,
+    //    restrained, recycle, essential-down, bleedout (ActorState::IsBleedingOut is
+    //    exactly the last two).
+    //  * KNOCK STATE = ActorState1 bits 25-27 (:115). Anything but kNormal (queued,
+    //    explode / out + their lead-ins, down, get-up, wait-for-task-queue) is a
+    //    knockdown or ragdoll in progress. 1.5.97 `>> 25 & 7` (4 sites), 1.6.1170
+    //    `& 0xE000000` (6 sites). Actor::IsInRagdollState is NOT used: it is a
+    //    relocated engine call (RELOCATION_ID 36492 / 37491, Actor.cpp:813), not a
+    //    field read, and would need its own self-check row.
+    //  * PARALYSED = Actor boolBits bit 31 kParalyzed (Actor.h:186; runtime data
+    //    0xE0 SE / 0xE8 AE, Actor.h:699). Both executables read bit 31 of exactly
+    //    that dword (30 sites each: `mov r,[r+0xE0|0xE8]; shr r,0x1f`).
+    //  * KILL MOVE = Actor boolFlags bit 14 kIsInKillMove through the fork's own
+    //    inline Actor::IsInKillMove() (Actor.h:585; boolFlags 0x1FC SE / 0x204 AE,
+    //    7 `shr r,0xe` sites each).
+    // Not in it: stagger (a stagger does not stop a cast in the engine either) and
+    // disabled / not loaded (every caller already handles those).
+    // a_countPendingKnock (review C3 on 91b17a3): false = a knock that is only
+    // QUEUED (kQueued / kWaitForTaskQueue, momentary, may never become a knockdown)
+    // does not count. The stream reconciles pass false, so a queued knock may skip a
+    // lap (the scan / apply gates use the default) but never dispels, interrupts or
+    // frees a live heal stream.
+    inline const char* CannotActReason(const RE::Actor* a_actor, bool a_countPendingKnock = true) {
+        if (!a_actor) return "gone";
+        if (const auto* st = a_actor->AsActorState()) {
+            switch (st->GetLifeState()) {
+            case RE::ACTOR_LIFE_STATE::kAlive:
+            case RE::ACTOR_LIFE_STATE::kReanimate:      break;
+            case RE::ACTOR_LIFE_STATE::kBleedout:       return "bleedout";
+            case RE::ACTOR_LIFE_STATE::kEssentialDown:  return "essential down";
+            case RE::ACTOR_LIFE_STATE::kUnconcious:     return "unconscious";
+            case RE::ACTOR_LIFE_STATE::kRestrained:     return "restrained";
+            case RE::ACTOR_LIFE_STATE::kDying:          return "dying";
+            case RE::ACTOR_LIFE_STATE::kDead:           return "dead";
+            default:                                    return "not alive";
+            }
+            switch (st->GetKnockState()) {
+            case RE::KNOCK_STATE_ENUM::kNormal:
+                break;
+            case RE::KNOCK_STATE_ENUM::kQueued:
+            case RE::KNOCK_STATE_ENUM::kWaitForTaskQueue:
+                if (a_countPendingKnock) return "knock queued";
+                break;
+            default:
+                return "knocked down";
+            }
+        }
+        if (a_actor->GetActorRuntimeData().boolBits.all(RE::Actor::BOOL_BITS::kParalyzed))
+            return "paralysed";
+        if (a_actor->IsInKillMove()) return "kill move";
+        return nullptr;
+    }
+    inline bool CanAct(const RE::Actor* a_actor) { return CannotActReason(a_actor) == nullptr; }
+
+    // MAIN-THREAD REFUSAL LOG. A cast / drink apply that re-checked CanAct on the main
+    // thread (the state can change between the worker's decision and the post) and
+    // found the caster down logs ONCE per caster until he can act again (NoteLifeState
+    // re-arms it). No magicka is spent on a refused apply. Any thread (mutex).
+    void NoteRefusedApply(RE::FormID a_caster, const char* a_road, const char* a_why,
+                          RE::FormID a_spell, RE::FormID a_target);
+
+    // [bleed] -- a passive, transition-only log of a follower's LIFE STATE (down /
+    // up), with HP, and on the way up which MFO heal (or MFO potion) landed on him
+    // last. Worker, called once per own service from the Scheduler. Re-arms the
+    // NoteRefusedApply line when he can act again. NoteHealLanded records an MFO
+    // heal the moment it is applied (main thread, or the worker for a potion; mutex).
+    void NoteLifeState(RE::Actor* a_follower);
+    void NoteHealLanded(RE::FormID a_target, RE::FormID a_caster, RE::FormID a_spell);
+
+    // ── NORMAL REACH FOR A HEAL ON ANOTHER ACTOR (marth 2026-09-29) ─────────────
+    // A heal on an ally reaches only as far as the player's own cast of that spell
+    // would, with line of sight -- not the flat fSharedRadius (3000 u) with none.
+    // The reach, from the spell's own record (plain field reads, worker-safe):
+    //  * Aimed / Target Actor / Target Location: the spell's own Range (SPIT) when
+    //    set; else the projectile range of its effects (the longest
+    //    EffectSetting::data.projectileBase->data.range) -- vanilla and Mysticism
+    //    Healing Hands / Heal Other carry Range 0 and projectile 0x12FDC, range 10000;
+    //    else no cap of its own (the candidate radius still applies).
+    //  * Self / Touch (marth 2026-09-29, option B): the reach of HEAL OTHER
+    //    (Skyrim.esm 0x00012FD2), the aimed ally heal, by the same rule -- Range 0,
+    //    projectile range 10000 in Skyrim.esm and in Mysticism's override. A Self
+    //    spell reaches nobody but its caster when the player casts it; MFO places Self
+    //    heals on allies (ConcProxy, AUTO) and they reach as far as Heal Other would.
+    //    A self-heal on the caster himself is never reach-checked.
+    // HealReach returns the reach in units (a very large number = no cap of its own).
+    float HealReach(RE::SpellItem* a_spell);
+    // WORKER: in reach = distance <= HealReach AND the Sightline cache does not say
+    // Occluded (Unknown passes: the fail-open every other LoS gate here takes; the
+    // caller Want()s the pair). Always true for a_target == a_caster.
+    bool HealInReach(RE::Actor* a_caster, RE::Actor* a_target, RE::SpellItem* a_spell);
+    // MAIN THREAD, right before an apply: true = REFUSE this heal on a_target (the
+    // caster is beyond HealReach or Sightline::MeasureNow, a synchronous LoS measure,
+    // says Occluded); logs the refusal (deduped per caster/target, 5 s). False for a
+    // spell that does not restore Health (HealsHealth) and for a_target == a_caster.
+    bool RefuseHealApplyOnMain(RE::Actor* a_caster, RE::Actor* a_target,
+                               RE::SpellItem* a_spell, const char* a_road);
+    // Does a_spell restore Health (any beneficial Health effect)? The same read
+    // CastAuto's heal gate makes (SpellHealsHealth), public for logistics.
+    bool HealsHealth(RE::SpellItem* a_spell);
+
     // Per-tick reconcile for the forced self-cast channels: RELEASES a channel
     // when its rule goes stale (or the follower unloads) by dispelling any
     // lingering ward/buff effect so it cannot persist as a stuck gameplay effect.

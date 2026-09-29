@@ -279,6 +279,14 @@ namespace MFO::Actuation {
             // 4. CAST ONCE, by the caster, on the direct road: CastSpellImmediate
             //    (kInstant) on the caster, magicka deducted by hand (it spends
             //    none), clamped to the pool.
+            //    fix/mfo-can-act: first, can he act NOW (right before the apply)? A
+            //    downed caster conjures nothing and spends nothing; Failed, so the
+            //    worker re-asks after the verdict ages out.
+            if (const char* why = CannotActReason(f)) {
+                setVerdict(SummonVerdict::Failed);
+                NoteRefusedApply(a_id, "summon", why, a_spellID, a_id);
+                return;
+            }
             auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
             auto* avo    = f->AsActorValueOwner();
             const float pool = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;

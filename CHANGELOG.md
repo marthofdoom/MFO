@@ -7,6 +7,11 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **A downed follower does nothing.** A follower who is bleeding out, knocked down, paralysed or stuck in a kill move no longer casts, drinks, loots or runs any gambit. Before, Jesper could lie in bleedout and still throw instant heals at himself and the rest of the party. A heal he was channeling stops the moment he goes down. His rules run again once he is back on his feet.
+- **Healing a downed ally still works.** A follower who can act can still heal a friend who is down.
+- **Heals have their normal reach.** A heal on someone else reaches as far as your own cast of that spell would, and needs line of sight. Healing Hands and Heal Other reach across a room. A self spell like Fast Healing or Close Wounds cast on an ally reaches as far as Heal Other. Before, a follower healed anyone within 3000 units, through walls. An Ally HP below rule with a heal picks the most hurt ally he can reach, not one he can't.
+- **New log line: [bleed].** MFO.log notes when a follower goes down and when he gets back up, with his health, and which MFO heal or potion landed on him last.
+
 - **Melee followers stop chasing dragons in the sky.** A melee follower no longer picks or runs after a foe flying out of his reach. He attacks a foe he can reach if there is one. If every foe is up in the air, he stays close to you (with Harbinger installed) until one comes down or lands. A dragon hovering low enough to hit still counts, and so do netch, wispmothers and other floating creatures.
 - **Followers stop swapping relics when a companion falls behind.** A follower left in another room still counts toward the museum. His companions no longer strip their own gear to cover for him.
 - **No more "player put on" for a relic MFO took off.** A relic MFO takes off and later allows again is not mistaken for your choice.

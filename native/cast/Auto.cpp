@@ -81,6 +81,16 @@ namespace MFO::Actuation {
                 auto* target = RE::TESForm::LookupByID<RE::Actor>(a_targetID);
                 auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
                 if (!caster || !target || !sp) return;
+                // fix/mfo-can-act: re-check, right before the apply, that the CASTER
+                // can act (field 0928c: a bleeding-out Jesper fanned Close Greater
+                // Wounds at himself and two downed allies) and, for a heal on someone
+                // else, its normal reach + a synchronous LoS measure. Refused = no
+                // cast, no magicka (the deduct below never runs).
+                if (const char* why = CannotActReason(caster)) {
+                    NoteRefusedApply(a_casterID, "AUTO", why, a_spellID, a_targetID);
+                    return;
+                }
+                if (RefuseHealApplyOnMain(caster, target, sp, "AUTO")) return;
                 auto* avo  = caster->AsActorValueOwner();
                 auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
@@ -123,6 +133,7 @@ namespace MFO::Actuation {
                              a_hostile ? "HOSTILE" : "BENEFICIAL",
                              sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
                              before, after, cost);
+                if (!a_hostile && SpellHealsHealth(sp)) NoteHealLanded(a_targetID, a_casterID, a_spellID);   // [bleed]
             });
         }
 
@@ -314,9 +325,19 @@ namespace MFO::Actuation {
                 const auto  selfPos = a_follower->GetPosition();
                 RE::Actor*  neediest = nullptr;
                 float       lowest   = ceiling;   // only members strictly under the ceiling
+                // NORMAL REACH (fix/mfo-can-act, marth 2026-09-29): a heal on someone
+                // else reaches only as far as the player's own cast of the spell, with
+                // line of sight (HealInReach) -- not the whole fSharedRadius with none.
+                // The radius stays the outer party bound. Candidates are Want()ed so
+                // the LoS cache is warm next lap (Unknown passes, as everywhere).
+                std::vector<RE::FormID> sightWant;
                 auto probe = [&](RE::Actor* m) {
                     if (!m || m->IsDead() || m->IsDisabled() || !m->Is3DLoaded()) return;
                     if (selfPos.GetDistance(m->GetPosition()) > radius) return;
+                    if (m != a_follower) {
+                        sightWant.push_back(m->GetFormID());
+                        if (!HealInReach(a_follower, m, spell)) return;
+                    }
                     const float hp = Vocab::HealthPct(m);
                     if (hp < lowest) { lowest = hp; neediest = m; }
                 };
@@ -327,13 +348,16 @@ namespace MFO::Actuation {
                     for (const RE::FormID fid : *snap)
                         probe(RE::TESForm::LookupByID<RE::Actor>(fid));
                 probe(RE::PlayerCharacter::GetSingleton());
+                if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant));
                 // Prefer the CURRENT stream's recipient if it is still hurt and no one
-                // else is dramatically worse (the hysteresis above).
+                // else is dramatically worse (the hysteresis above) -- and still in
+                // reach (fix/mfo-can-act).
                 RE::Actor* target = neediest;
                 if (auto it = g_targetCast.find(id);
                     it != g_targetCast.end() && it->second.spell == a_spellID) {
                     if (auto* cur = RE::TESForm::LookupByID<RE::Actor>(it->second.target);
                         cur && !cur->IsDead() && Vocab::HealthPct(cur) < ceiling &&
+                        HealInReach(a_follower, cur, spell) &&
                         (!neediest || Vocab::HealthPct(cur) - lowest <= kHealSwitchMargin))
                         target = cur;   // keep serving the current recipient
                 }
@@ -460,6 +484,7 @@ namespace MFO::Actuation {
             // post-lock use is FormID-only (LookupByID at apply time).
             std::vector<RE::FormID> targets;
             float radius = 0.0f;
+            int   outOfReach = 0;   // fix/mfo-can-act: hurt allies a heal could not reach
             if (hostile) {
                 radius = Confidence::ChaseRadius(a_follower);
                 auto& rt = a_follower->GetActorRuntimeData();
@@ -506,6 +531,10 @@ namespace MFO::Actuation {
                 // those who actually need it (player and followers alike, below).
                 const bool heal = (kind == CasterConsent::SpellKind::Heal) ||
                                   SpellHealsHealth(spell);
+                // NORMAL REACH for a HEAL on someone else (fix/mfo-can-act, marth
+                // 2026-09-29): HealInReach, the radius stays the outer bound; a
+                // non-heal buff (Candlelight) keeps the radius alone. Want()ed below.
+                std::vector<RE::FormID> sightWant;
                 auto consider = [&](RE::Actor* ally) {
                     if (!ally) return;
                     // SEV-3: a conc-Self spell only lands on the caster under AUTO
@@ -526,6 +555,10 @@ namespace MFO::Actuation {
                     // STRICTLY below full -- a topped-off ally (>= 99.95%) is skipped,
                     // else the fan re-heals a full party forever (see Vocab::kHealFull).
                     if (heal && Vocab::HealthPct(ally) >= std::min(a_healThreshold, Vocab::kHealFull)) return;
+                    if (heal && ally != a_follower) {
+                        sightWant.push_back(ally->GetFormID());
+                        if (!HealInReach(a_follower, ally, spell)) { ++outOfReach; return; }
+                    }
                     // F2/F3: skip anyone already carrying a duration buff from
                     // this spell (an instant heal leaves no effect and re-fires),
                     // so an all-covered party fans to nobody -> transparent NoOp.
@@ -540,11 +573,15 @@ namespace MFO::Actuation {
                     for (const RE::FormID fid : *snap)
                         consider(RE::TESForm::LookupByID<RE::Actor>(fid));
                 consider(RE::PlayerCharacter::GetSingleton());
+                if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant));
             }
 
             if (targets.empty())
                 return { Result::NoOp,
-                         hostile ? "auto-cast: no enemies in range" : "auto-cast: nobody needs it", true };
+                         hostile ? "auto-cast: no enemies in range"
+                         : outOfReach ? std::format("auto-cast: {} in need, none in the spell's reach", outOfReach)
+                                      : std::string("auto-cast: nobody needs it"),
+                         true };
 
             int fired = 0, skipped = 0;
             for (const auto tgtID : targets) {
@@ -565,11 +602,12 @@ namespace MFO::Actuation {
             if (suppressible)
                 g_beneficialRecast[recastKey] = { now, JitteredRecastWindow(authoredDur) };
             spdlog::info("[cast] {:08X} {} AUTO {} {} ({:08X}) -- fanned to {} target(s), {} skipped "
-                         "(radius {:.0f}, cost {:.0f} each)",
+                         "(radius {:.0f}, cost {:.0f} each){}",
                          id, a_follower->GetName() ? a_follower->GetName() : "?",
                          hostile ? "HOSTILE" : "BENEFICIAL",
                          spell->GetName() ? spell->GetName() : "?", a_spellID,
-                         fired, skipped, radius, cost);
+                         fired, skipped, radius, cost,
+                         outOfReach ? std::format(", {} out of reach", outOfReach) : std::string{});
             return { Result::Fired, "auto-cast fan-out" };
     }
 }
