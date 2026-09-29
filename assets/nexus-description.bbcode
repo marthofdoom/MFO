@@ -1,18 +1,29 @@
-
-[center][b][size=4]This is an extremely complicated mod, there are likely still some issues I haven't found, but I have found no game breaking issues after more than 40 hours of testing. Also I'm stuck on steamdeck for the next few weeks so please upload your own pics and videos![/size]
-[/b]
-[/center]
+[center][/center]
 [line]
 
 MFO lets you decide what your followers do on their own. You give each follower a short list of rules and they act on them, in a fight and out of it. It's the gambit system from Final Fantasy XII, rebuilt on Skyrim's own AI.
 
 A rule is just [b][Condition] -> [Action][/b]. An enemy drops below 30% health, so power attack. You're out of health potions, so drink one when you get the chance. It's dark, so cast Candlelight. You stack the rules top to bottom and the first one that fits is the one that runs. From rules you write, followers can cast, attack, heal, drink potions, restock, loot, walk over to loot, and trade at merchants.
 
+[size=5][b]Highlights[/b][/size]
+
+[b]Casters cast what you gave them.[/b] A mage casts the spell you set in his gambit, on the target the rule picked. He never picks up a spell you didn't give him. Heals top the target off and stop. A summon is cast once, and when it dies he calls it back.
+
+[b]Followers walk to the loot.[/b] He walks over to a body or a chest, loots it and comes back. A closed gate doesn't stall him. He skips what's behind it until the way opens. If someone else empties the chest first, he goes straight to the next one. How far he ranges depends on how confident he is.
+
+[b]Followers run their own economy.[/b] They sell their junk and buy better weapons, armor, arrows and spell tomes with their own gold. They keep the best item for each slot and don't hoard. (Off in the MCM if you want them to leave their gear alone. Selling and buying need powerofthree's Papyrus Extender.)
+
+[b]Followers fight the foe you picked.[/b] An attack or offensive spell gambit tells the game which foe to fight, and the follower holds it. When that foe dies or is lost, the gambits pick again.
+
+[b]Followers stock your museum.[/b] With Legacy of the Dragonborn installed, turn on LOTD awareness in the MCM and give a follower the Loot museum items gambit. He takes the relics your museum still needs and nothing it already has, from chests, bodies and shelves. He counts what you and the other followers already carry, so nobody doubles up. When he's carrying some, he walks to a nearby Museum Shipments crate and puts them in, and LOTD delivers them as usual. He never sells or drops a relic the museum needs, and a relic you gave him yourself stays with him.
+
+[b]They play nice with other mods.[/b] MFO runs on Harbinger, my framework that lets several mods drive the same follower without fighting over him. So a follower another mod keeps on a tight leash (a Cicero, a custom follower) still loots, casts and retreats.
+
 [size=5][b]How to use it[/b][/size]
 
-You get a power called [b]Field Orders[/b]. Use it to open the board, pick a follower, and build their list. Each follower keeps two separate lists, one for combat and one for logistics like looting and trading, and you write both in game with a controller or a mouse. The board shows a plain-language summary of every rule. What a follower can be told to do depends on their own skills and spells, so a mage opens up cast rules a plain warrior won't have.
+You get a power called [b]Field Orders[/b]. Use it to open the board, pick a follower, and build their list. Each follower keeps two separate lists, one for combat and one for logistics like looting and trading, and you write both in game with a controller or a mouse. The board shows a plain-language summary of every rule, and when a rule doesn't fire it tells you why, so a list that isn't working is easy to read instead of a mystery. What a follower can be told to do depends on their own skills and spells, so a mage opens up cast rules a plain warrior won't have.
 
-The behaviours are toggles and sliders in the MCM ([b]Mod Configuration -> marth's Follower Overhaul[/b]), and most of them are on out of the box. A follower still does nothing until you write rules for it, so start by giving one a couple of gambits and go from there.
+The bigger behaviours are toggles and sliders in the MCM ([b]Mod Configuration -> marth Follower Overhaul[/b]). Everything ships off or conservative, so nothing happens until you turn it on. Start small, add a rule at a time, and watch how the follower reacts.
 
 [size=5][b]Requirements[/b][/size]
 
@@ -20,12 +31,12 @@ The behaviours are toggles and sliders in the MCM ([b]Mod Configuration -> marth
 [*]SKSE64[/*]
 [*]Address Library for SKSE Plugins[/*]
 [*]SkyUI[/*]
+[*][url=https://www.nexusmods.com/skyrimspecialedition/mods/190663]Harbinger - AI Package Management Framework[/url]. The newest Harbinger is required. Update it along with MFO every release.[/*]
 [*]MCM Helper (version 9 or newer)[/*]
 [*]powerofthree's Papyrus Extender, only for the optional follower economy (selling and buying). Everything else runs without it.[/*]
-[*]No DLC required.[/*]
+[*]No DLC required. VR is not supported.[/*]
 [/list]
-
-This needs Anniversary Edition (1.6.x). Skyrim SE 1.5.x and VR are not supported.
+At the moment, 1.6.1170 and 1.5.97 are supported!
 
 [size=5][b]Install[/b][/size]
 
@@ -47,7 +58,7 @@ Yes. Followers are found by teammate status, not a list, and item categories (po
 It's recommended but not required. Without it MFO uses a shipped catalog. With it the catalog is rebuilt from the mods you actually run.
 
 [b]Why won't my follower cast the spell I set?[/b]
-Competence is not permission. If he doesn't have the magicka or the skill, the rule fails and the next one is tried.
+Competence is not permission. If he doesn't have the magicka or the skill, the rule fails and the next one is tried. The board tells you why, so a list that doesn't work is legible instead of a mystery.
 
 [b]Can I turn things off or tune it?[/b]
 Yes. Everything ships off or conservative. Looting, the economy, auto-retreat, the confidence leash, dibs timing, and the rest are MCM toggles and sliders.
@@ -55,14 +66,14 @@ Yes. Everything ships off or conservative. Looting, the economy, auto-retreat, t
 [b]Is it safe to add mid-playthrough?[/b]
 Yes. All the state lives in the SKSE co-save and reverts cleanly, so you can add or remove MFO whenever.
 
-[b]How can I develop an add-on?[/b]
-You don't need C++. An add-on is a normal ESP or ESL that declares its content in records MFO reads at game load, so there's no DLL to write and nothing to patch in MFO itself. The follower progression add-on is the worked example. The full API is written up in ADDON-API.md in the [url=https://github.com/marthofdoom/MFO]GitHub repo[/url].
 
 [size=5][b]Roadmap[/b][/size]
 
-[b]Town errands are next.[/b] Followers heading into town on their own business, walking to merchants and doors and buying the gear and supplies they want while they're there. It extends the walk-to-loot movement to full town navigation.
+[b]Town Update[/b]: Followers will take care of their own business in town/city areas. Initial release will have followers able to travel to and enter shops and stores they have business at, and then sandbox in the nearby Inn, joining you when you leave, or travelling to you if you enter combat.
 
-[b]Deeper interop.[/b] Compatibility contracts with follower levelling and equipment-visibility mods as their APIs allow.
+[b]Class Update[/b] (MFO and Progression Update): This is expanded from my initial Assassin update plans, which included Steal gambits, and custom combat packages which would allow followers to sneak attack, etc. That will still be a part of it, but I'll also be making a class system add-on based off Fire Emblem's general class mechanics. The three initial classes (Mage, Ranged, Melee) will branch to more specialized classes (rogue, assassin, ranger, barbarian, knight, etc.) available upon mastery of the previous ones. Mastering two or more of those second level classes will unlock third level hybrid classes, with mastery of the appropriate hybrid classes unlocking Master Classes. A mastered class will give a permanent passive bonus to the follower, while the equipped class also bestows its own passive bonus (a larger version of the earned passive).
+
+[b]Roster Management Add-on:[/b] Manage your followers in any town, recalling and dismissing any formerly recruited followers in any town/city flagged location. TBD: Setting additional follower settings like home (I'd really rather not, as this is well covered in other mods, but I'm still getting ideas for this one).
 
 [size=5][b]Credits[/b][/size]
 
@@ -71,7 +82,6 @@ You don't need C++. An add-on is a normal ESP or ESL that declares its content i
 [*][url=https://github.com/CharmedBaryon/CommonLibSSE-NG]CommonLibSSE-NG[/url], [url=https://github.com/Mutagen-Modding/Synthesis]Synthesis[/url] and Mutagen, SKSE, and Dear ImGui, the frameworks MFO is built on.[/*]
 [*]The board fonts, [b]Cinzel[/b] and [b]EB Garamond[/b], are under the SIL Open Font License 1.1.[/*]
 [/list]
-
 [size=5][b]Permissions[/b][/size]
 
 [list]
