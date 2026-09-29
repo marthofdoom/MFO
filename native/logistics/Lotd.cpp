@@ -37,6 +37,7 @@
 #include "cast/Actuation.h"      // ForcedHoldFor: a worn kept relic under an MFO hold is not shipped (MFO-B126)
 #include "Loadout.h"             // LeftHandSlot: a worn LEFT-hand relic is unequipped from that slot before the transfer
 #include "PlayerGiven.h"         // a player-given item is never shipped (batch L review round)
+#include "Scheduler.h"           // ServiceClock(): the UNPAUSED clock the give idle's confirmation window runs on
 
 #include <algorithm>
 #include <cctype>
@@ -82,7 +83,18 @@ namespace MFO::Lotd {
         constexpr float kArriveSlack    = 75.0f;     // distance backstop when no leg state is read
         constexpr auto  kTripMax        = std::chrono::seconds(90);
         constexpr auto  kTripStall      = std::chrono::seconds(10);   // owner not ticked this long -> orphaned
-        constexpr auto  kGiveAfter      = std::chrono::milliseconds(1000);   // the reach, then the transfer
+        // NO ANIMATION, NO TRANSFER (Harbinger idle-confirm review, SEV-3.4): Harbinger's
+        // ch.12 ENDS an idle claim it has not CONFIRMED playing about 3.0-3.3 s after the
+        // play (its kConfirmWaitMs 3000, measured in world-tick time; the ~0.3 s spread is
+        // its own drain). The transfer therefore waits until the give idle has stayed live
+        // for kGiveConfirmSec on the UNPAUSED service clock (Scheduler::ServiceClock, so a
+        // menu never ages it, as world ticks do not) from MFO's first live read, which is at
+        // or after the play: 3.0 s + 0.3 s (the measured spread) + 0.2 s for the end to be
+        // published by Harbinger's per-frame drain and read by DepositIdleStatus, which the
+        // Giving step reads BEFORE it transfers. Was 1 s of wall time (kGiveAfter), which
+        // shipped relics under an IdleGive that never played. Harbinger's ABI has no
+        // "confirmed" query; outlasting the window is the proof.
+        constexpr double kGiveConfirmSec = 3.5;
         constexpr auto  kIdleSettle     = std::chrono::milliseconds(2500);   // after the transfer: the rest of IdleGive's clip
         constexpr auto  kNeedsTtl       = std::chrono::seconds(2);
         constexpr auto  kRebuildMinGap  = std::chrono::seconds(5);
@@ -191,6 +203,11 @@ namespace MFO::Lotd {
             std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, std::int32_t>> uncoveredExcl;
         };
         Needs g_needs;   // worker only
+        // Coverage roster (field 0928c A2): per follower, his relic counts as last read
+        // while he was in the active snapshot. Worker only, cleared on revert.
+        std::unordered_map<RE::FormID, CountMap> g_retainedSupply;
+        std::size_t                              g_retainedLogged = 0;
+        std::unordered_set<RE::FormID>           g_retainedPersistent;   // recorded while loaded (F1)
         // MFO-B126: per follower, the off-role relics ShedOffRoleWeapon kept for the
         // deposit on its last pass and the in-role weapons he carried then
         // (NoteKeptForDeposit). Worker only, like g_needs.
@@ -217,7 +234,7 @@ namespace MFO::Lotd {
             Clock::time_point start{};
             Clock::time_point lastTick{};   // the owner's last DepositTick (SweepTrip's stall test)
             Clock::time_point idleAt{};     // the give idle was claimed
-            Clock::time_point liveAt{};     // the give idle was first SEEN live (0 = not yet)
+            double            liveClk = -1.0;   // the give idle was first SEEN live, unpaused service clock (-1 = not yet)
             Clock::time_point settleFrom{}; // the transfer was posted
             // THIS trip's posted transfer outcome (was one global atomic when one trip
             // ran at a time): 0 = not run yet, 1 = moved something, 2 = skipped / moved
@@ -615,15 +632,91 @@ namespace MFO::Lotd {
                 if (SlotOpen(snap->slots[i])) n.open.push_back(i);
             n.fixedSupply = ms->fixed;
             std::int32_t sFollowers = 0;
+            // COVERAGE FOLLOWS THE PARTY, NOT THE PROCESS LIST (field 0928c, A2). The
+            // active snapshot is Followers::Refresh's rebuild from the HIGH process list:
+            // a follower left behind in another cell drops out of it after three missed
+            // sweeps and comes back when he catches up (Serana, 4 times in one session).
+            // Rebuilding coverage from that snapshot made her relics vanish from supply
+            // for those seconds, so a HIGHER-id follower (Jesper, via UncoveredExcluding)
+            // became the coverer of her Novice Robes' slot and had his own robes stripped,
+            // then restored -- and Cicero's Dawnguard Helmet the same way through Adelinda.
+            // So: an active follower's relic counts are read now and REMEMBERED
+            // (g_retainedSupply); a follower who is out of the snapshot but still a
+            // follower (Followers::IsEligibleFollower: teammate, not dead / disabled / a
+            // dismissed custom follower) keeps counting with his last-read counts. His
+            // inventory is never read while he is outside the high process list (the
+            // unloaded-inventory read is exactly what the snapshot avoided), and it cannot
+            // change there without him. A follower who is no longer eligible is dropped.
+            // Not a timer: membership is the engine's own teammate state.
+            std::unordered_set<RE::FormID> activeNow;
             if (auto ids = Followers::ActiveSnapshot()) {
-                std::vector<RE::FormID> sorted(ids->begin(), ids->end());
-                std::sort(sorted.begin(), sorted.end());
-                for (auto fid : sorted) {
+                for (auto fid : *ids) {
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
                     CountMap m;
-                    AddCounts(RE::TESForm::LookupByID<RE::Actor>(fid), *snap, m, false);
-                    sFollowers += Sum(m);
-                    n.followerSupply.emplace_back(fid, std::move(m));
+                    AddCounts(a, *snap, m, false);
+                    g_retainedSupply[fid] = std::move(m);
+                    activeNow.insert(fid);
+                    // Read WHILE he is in the snapshot (the loaded road every consumer here
+                    // already uses): only a PERSISTENT ref may be looked up again once he
+                    // has left it (review F1 on 73119b8, the threading carve-out).
+                    if (a && a->IsPersistent()) g_retainedPersistent.insert(fid);
+                    else                        g_retainedPersistent.erase(fid);
                 }
+            }
+            // RETAINED = a follower TRAVELLING WITH US who is only momentarily out of the
+            // loaded list (review F5 on 73119b8). Out of the snapshot he keeps counting only
+            // while ALL of these hold, else he drops out of coverage exactly as before:
+            //  * his ref is PERSISTENT (F1): the main thread never frees a persistent ref, so
+            //    the worker may resolve it while his cell detaches; a non-persistent teammate
+            //    (script-made, no alias) is not looked up at all once he is out;
+            //  * Followers::IsEligibleFollower (teammate, not dead / disabled / a dismissed
+            //    custom follower -- flags and actor values, no 3D, no process);
+            //  * he is NOT told to wait (actor value WaitingForPlayer <= 0: a follower left
+            //    waiting in another hold would otherwise cover his relics forever and a
+            //    present follower's duplicate would sell);
+            //  * he is where the party is: the player's parent cell when the player is
+            //    inside, else the same worldspace (TESObjectREFR::parentCell and the cell's
+            //    own runtime worldSpace -- plain member reads, no engine call).
+            auto* pcR = RE::PlayerCharacter::GetSingleton();
+            auto* pcCell = pcR ? pcR->GetParentCell() : nullptr;
+            const bool pcExterior = pcCell && pcCell->IsExteriorCell();
+            RE::TESWorldSpace* pcWorld = pcExterior ? pcCell->GetRuntimeData().worldSpace : nullptr;
+            const auto travelling = [&](RE::Actor* a_a) {
+                if (!Followers::IsEligibleFollower(a_a)) return false;
+                auto* avo = a_a->AsActorValueOwner();
+                if (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) return false;
+                auto* cell = a_a->GetParentCell();
+                if (!cell || !pcCell) return false;
+                if (!pcExterior) return cell == pcCell;
+                return cell->IsExteriorCell() && cell->GetRuntimeData().worldSpace == pcWorld;
+            };
+            std::vector<RE::FormID> sorted;
+            for (auto it = g_retainedSupply.begin(); it != g_retainedSupply.end();) {
+                if (!activeNow.count(it->first)) {
+                    if (!g_retainedPersistent.count(it->first)) { it = g_retainedSupply.erase(it); continue; }
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(it->first);
+                    if (!a || !travelling(a)) {
+                        g_retainedPersistent.erase(it->first);
+                        it = g_retainedSupply.erase(it);
+                        continue;
+                    }
+                }
+                sorted.push_back(it->first);
+                ++it;
+            }
+            std::sort(sorted.begin(), sorted.end());
+            for (auto fid : sorted) {
+                const CountMap& m = g_retainedSupply[fid];
+                sFollowers += Sum(m);
+                n.followerSupply.emplace_back(fid, m);
+            }
+            if (sorted.size() > activeNow.size() && g_retainedLogged != sorted.size() - activeNow.size()) {
+                g_retainedLogged = sorted.size() - activeNow.size();
+                spdlog::info("[lotd] needs: {} follower(s) out of the loaded roster still count toward museum "
+                             "coverage (last-read relic counts: persistent teammates, not waiting, in the "
+                             "party's cell / worldspace)", g_retainedLogged);
+            } else if (sorted.size() == activeNow.size()) {
+                g_retainedLogged = 0;
             }
             CountMap all = n.fixedSupply;
             for (auto& [fid, m] : n.followerSupply)
@@ -1323,6 +1416,9 @@ namespace MFO::Lotd {
             g_main.reset();
         }
         g_needs = Needs{};
+        g_retainedSupply.clear();
+        g_retainedPersistent.clear();
+        g_retainedLogged = 0;
         g_keptForDeposit.clear();
         g_keptSeenUnworn.clear();
         g_relicSeenUnworn.clear();
@@ -1609,7 +1705,7 @@ namespace MFO::Lotd {
         }
         case Phase::Giving: {
             // NO ANIMATION, NO TRANSFER: the give idle must be SEEN live, and still be
-            // live at a LATER tick at least kGiveAfter on, before anything moves. A claim
+            // live at a LATER tick at least kGiveConfirmSec on, before anything moves. A claim
             // Harbinger ends (the engine refused the idle, the NPC is in no state to
             // play it) ends the trip; the never-live grace never counts as live.
             const int st = APMFBridge::DepositIdleStatus(fid);
@@ -1619,8 +1715,9 @@ namespace MFO::Lotd {
                 return false;
             }
             if (st != 1) return true;   // not published yet (the bridge's grace turns into 2 on its own)
-            if (trip.liveAt == Clock::time_point{}) { trip.liveAt = a_now; return true; }
-            if (a_now - trip.liveAt < kGiveAfter) return true;
+            const double clk = Scheduler::ServiceClock();
+            if (trip.liveClk < 0.0) { trip.liveClk = clk; return true; }
+            if (clk - trip.liveClk < kGiveConfirmSec) return true;   // Harbinger's confirmation window
             if (InventoryMenuOpen()) return true;   // wait it out (kTripMax still bounds the trip)
             auto& needs = FreshNeeds(a_now);
             auto items = Shippable(a_follower, needs);

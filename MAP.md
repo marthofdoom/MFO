@@ -2111,8 +2111,13 @@ module. Module layout:
   when better ones are available, lowest removed first, or slated for sale when obsolete").** ONE
   rule, loot + shop, declarations in `logistics/Logistics_internal.h` (the SWAP-UP block at the
   end). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B114** (the ammo peek ignores carry weight),
-  **MFO-B115** (`ComputeKeepSet` inside the loot peek), **MFO-B116** (`VendorTrades(null)` on a
-  `TESAmmo` keyword form) -- read them before editing. Two halves:
+  **MFO-B115** (`ComputeKeepSet` inside the loot peek); **MFO-B116** (`VendorTrades(null)` on a
+  `TESAmmo` keyword form) is RESOLVED on `fix/mfo-field-0928c` -- read them before editing.
+  **AMMO KEYWORDS:** CommonLib is built with SE + AE + VR on, and then TESAmmo's C++ class derives
+  only TESValueForm (`RE/T/TESAmmo.h` #else), so `As<BGSKeywordForm>()` is NULL for every ammo form;
+  EconomyProbe's ammo rows read `TESAmmo::AsKeywordForm()` (`AmmoKeywords`, Economy.cpp) instead.
+  `LootTake.cpp:171` and `Sinks.cpp:225` still call `As<BGSKeywordForm>()` on items that may be
+  ammo (outside that branch's boundary). Two halves:
   - **Keep set (weapons + armor):** `ComputeKeepSet:69` = the old EconomyProbe keep block MOVED
     VERBATIM (best weapon per class bucket incl. the dual-wield runner-up, worn + best
     `ArmorScore` per logical slot, `bestBySlot` for the force-sell) -- the armor half's
@@ -3033,6 +3038,22 @@ anonymous-namespace copy — that silently forks the instance).
     destForm test acts on another destination's end. Principle 7: the ends M2 does not react to
     are logged, not guessed at. `Service.cpp` is 1718 lines (past the ~1500 plan-a-split mark,
     under the 2500 backstop): the next brief touching it should propose its split.
+- **LOCKPICK READY GATE (field 0928c, `fix/mfo-field-0928c`). OPEN BACKLOG: MFO-B140 (a sheathe vs a
+  "draw with the player" framework), MFO-B143 (every pick is now >= 3.5 s).** `Phase::kReady` sits between the
+  snapshot and the Harbinger hold: a pick never STARTS while he or the player is in combat or while
+  his weapon is drawn. A drawn weapon out of combat is sheathed through the stand-down road
+  (`DrawWeaponMagicHands(false)`, MainThread::Post'd); combat is waited out. A pause between two
+  steps = wall time minus the unpaused clock > `kPauseGapSec` (5 s: the unpaused clock advances at
+  most 0.532 s per pump advance, so a 1-2 s hitch alone opens a ~1 s gap; review F2). Bounded by
+  `kReadyFloorSec` (5 s, unpaused service clock), then refused `combatOrWeaponDrawn` (transient).
+  Logs `[lockpick] <id>: <ref> pick WAITS -- <why>` once per job.
+  **CONFIRMATION WINDOW (Harbinger idle-confirm review, SEV-3.4):** the unlock waits until the idle
+  claim has stayed live `max(window, kIdleConfirmSec = 3.5 s)` on the unpaused service clock
+  (Harbinger ends an unconfirmed idle ~3.0-3.3 s after the play; +0.2 s for its drain to publish).
+  The same rule gates the museum deposit's transfer (`Lotd.cpp kGiveConfirmSec`, 3.5 s unpaused,
+  replacing 1 s of wall time). **An idle ended by combat or across a pause** (wall time vs unpaused
+  clock between two steps) is a retry cooldown (the caller's transient blocklist), not the standing
+  `kIdleEnded` verdict; any other end stays standing.
 - **LOCKPICK, chests (LP-M1, 2026-09-25, `feat/mfo-lockpick`; ClickUp 86e3edgha; design
   `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
   `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-
@@ -3318,6 +3339,18 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   NO answer (nothing looted, shipped or held) until a main copy for the current snapshot exists.
   Greedy cover (`Uncovered:519`). `UncoveredExcluding:591` = what THIS follower covers (only
   LOWER-id followers count before him, so two holders never both keep or both ship one relic).
+  **COVERAGE FOLLOWS THE PARTY, NOT THE PROCESS LIST (field 0928c, `fix/mfo-field-0928c`):** an
+  active follower's relic counts are read and remembered in `g_retainedSupply`; a follower out of
+  the active snapshot (left behind in another cell: Refresh drops him after 3 missed sweeps) keeps
+  counting with those last-read counts only while he is TRAVELLING WITH US: his ref was PERSISTENT
+  when last loaded (`g_retainedPersistent`; a non-persistent ref is never looked up once out -- the
+  main thread may free it, review F1 on 73119b8), `Followers::IsEligibleFollower`, NOT waiting
+  (WaitingForPlayer <= 0), and in the player's parent cell (player inside) or worldspace (player
+  outside) (review F5). He is never re-read. **OPEN BACKLOG: MFO-B144** (a failed send can let 4b
+  record a flipped-back relic as a player pick), **MFO-B143** (the confirmation window's extra dwell). Before it,
+  Serana's drop-outs made Jesper the coverer of her robes' slot and stripped his own.
+  **What breaks:** rebuilding coverage from the active snapshot alone re-creates that churn; reading
+  an unloaded follower's inventory on the worker is the read the snapshot exists to avoid.
 - **The in-transit ledger is a FLOOR (principle 9).** An entry (base, count, the DropoffCrate
   count read at the deposit, the crate) stays until DropoffCrate holds baseline + count (ARRIVED) or
   no open slot accepts the base (displayed); never a timer. Session-only (MFO-B119).
@@ -5978,10 +6011,14 @@ a fresh order.
   `TradeSignature:597` (purse, needs, sell rows) and `SkipTrade:614` ← `logistics/Economy.cpp:943`,
   right before `VendorTrade`. `ReportTrade:465` files every result under `g_mtx`: the chest's gold
   becomes its LAST-SEEN gold (`g_chestGold`), an EMPTY result (sold 0, bought 0) is remembered per
-  (follower, vendor) with the signature folded with that gold and the game day (`g_emptyMemo`), any
-  other result forgets it. Skip (a): same signature (incl. the chest's current last-seen gold, so
-  another follower's trade there is a change) until `iDaysToRespawnVendor` game days (Skyrim.esm GMST
-  0x0123C00E, 2; read by name) after the empty trade. Skip (b): no needs, no buy wishes (purse 0 or no
+  (follower, vendor) with its signature and, APART from it, that report's chest gold and the game day
+  (`g_emptyMemo`), any other result forgets it. Skip (a): same signature until `iDaysToRespawnVendor`
+  game days (Skyrim.esm GMST 0x0123C00E, 2; read by name) after the empty trade; a changed chest gold
+  (another follower's trade there) reopens it ONLY when the new gold pays for one of HIS sell rows the
+  memo's gold could not (field 0928c, Gunmar). `ReportTrade`'s "unknown token" is INFO for a token
+  outside [this session's first token, the next one) -- a RunTrade saved mid-run and resumed after a
+  load -- and WARN otherwise. The token counter restarts per process, so a stale token from an older
+  process can land inside a later session's range (pre-existing, reported, not changed). Skip (b): no needs, no buy wishes (purse 0 or no
   gear / apparel / tome buying) and no sell row the last-seen gold pays for; it EXPIRES at the vendor
   restock (the game day it began + `iDaysToRespawnVendor`), when one trade goes through and its report
   re-reads the chest's gold (review F5). A skip stamps no
@@ -6210,8 +6247,15 @@ NearestAlly=2, `:37`) is serialized as the raw `subject` byte (read `cast/Fire.c
 carried as `subjectActorForm`, NOT an enum value, precisely to keep the enum frozen).
 `Pct`/`HealthPct`/etc. (`:214`) use permanent+temporary AV — changing the max formula
 re-times every "HP below X%" rule + Confidence.
-`kActLootMuseum` ("act.loot_museum", LOTD, 2026-09-25) is the newest APPENDED opcode; it is wired
-in Service.cpp / LootScan.cpp / Board (`logistics/Lotd.cpp` section).
+`kActLootMuseum` ("act.loot_museum", LOTD, 2026-09-25) is an APPENDED opcode; it is wired
+in Service.cpp / LootScan.cpp / Board (`logistics/Lotd.cpp` section). `kCondFoeIsMechanical`
+("cond.foe_is_mechanical", field 0928c) is the newest APPENDED condition: Evaluator
+`FoeIsMechanical` (race ActorTypeDwarven, not ActorTypeUndead / ActorTypeGhost /
+DLC2AshSpawnKeyword), in `IsFoeSelector`, Board `kCondsCombat` after "Foe is dragon".
+`kCondFoeIsRanged` keeps its string; its meaning WIDENED (field 0928c): a bow / crossbow, a staff in
+either hand, or a spell in either hand whose delivery is not Self or Touch. "Foe attacking me:
+ranged" follows it (MFO-B141, recorded: consistent with marth's intent); "Foe attacking me: melee" already excluded every caster and staff, so it is
+unchanged, and the Scheduler's attacking-me exemption from target sizing covers all three as before.
 
 ### Config.cpp / Config.h
 ~90 `g_*` atomics read across 22 files (cross-thread-safe by design). INI-only

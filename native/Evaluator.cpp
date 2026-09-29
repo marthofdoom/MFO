@@ -28,7 +28,7 @@ namespace MFO::Eval {
                    a_op == Vocab::kCondFoeBlocking ||
                    a_op == Vocab::kCondFoeFleeing    ||
                    a_op == Vocab::kCondFoeWeakFire   || a_op == Vocab::kCondFoeWeakFrost ||
-                   a_op == Vocab::kCondFoeWeakShock;
+                   a_op == Vocab::kCondFoeWeakShock  || a_op == Vocab::kCondFoeIsMechanical;
         }
 
         // Weak to an element = its resist actor-value is negative (a race trait
@@ -62,13 +62,39 @@ namespace MFO::Eval {
             auto* l = a_foe->GetEquippedObject(true);
             return (r && r->As<RE::SpellItem>()) || (l && l->As<RE::SpellItem>());
         }
-        // Is the foe wielding a bow or crossbow? Weapon type, not distance.
+        // Does the foe fight FROM RANGE right now? (field 0928c, marth: "ranged is a
+        // concept, spellcaster is specific. They both stay, and there's no need for
+        // another descriptor.") What is in his hands, not his distance:
+        //   * a bow or crossbow (the right hand: a two-hander), or
+        //   * a staff in either hand, or
+        //   * a spell in either hand whose delivery is not Self or Touch (Aimed,
+        //     Target Actor, Target Location -- a touch spell is a melee reach).
+        // "Foe is a spellcaster" (FoeIsCaster) is unchanged: any spell in hand.
         bool FoeIsRanged(RE::Actor* a_foe) {
-            auto* obj  = a_foe ? a_foe->GetEquippedObject(false) : nullptr;
-            auto* weap = obj ? obj->As<RE::TESObjectWEAP>() : nullptr;
-            if (!weap) return false;
-            const auto wt = weap->GetWeaponType();
-            return wt == RE::WEAPON_TYPE::kBow || wt == RE::WEAPON_TYPE::kCrossbow;
+            if (!a_foe) return false;
+            for (const bool left : { false, true }) {
+                auto* obj = a_foe->GetEquippedObject(left);
+                if (!obj) continue;
+                if (auto* weap = obj->As<RE::TESObjectWEAP>()) {
+                    const auto wt = weap->GetWeaponType();
+                    if (wt == RE::WEAPON_TYPE::kStaff) return true;
+                    if (!left && (wt == RE::WEAPON_TYPE::kBow || wt == RE::WEAPON_TYPE::kCrossbow)) return true;
+                } else if (auto* sp = obj->As<RE::SpellItem>()) {
+                    const auto d = sp->GetDelivery();
+                    if (d != RE::MagicSystem::Delivery::kSelf && d != RE::MagicSystem::Delivery::kTouch) return true;
+                }
+            }
+            return false;
+        }
+        // Is the foe a Dwemer CONSTRUCT? (field 0928c; marth: "Only if they count as
+        // mechanical.") Race keyword ActorTypeDwarven, EXCLUDING what is not actually
+        // a construct: ActorTypeUndead (Dwarfsphere's Dwemer skeletons carry Undead +
+        // Dwarven), ActorTypeGhost, and DLC2AshSpawnKeyword (vanilla Dragonborn.esm's
+        // DLC2AshSpawnRace carries ActorTypeDwarven; USSEP swaps it for Undead). Read by
+        // keyword EditorID, the RaceHasKeyword road the undead / dragon selectors use.
+        bool FoeIsMechanical(RE::Actor* a_foe) {
+            return RaceHasKeyword(a_foe, "ActorTypeDwarven") && !RaceHasKeyword(a_foe, "ActorTypeUndead") &&
+                   !RaceHasKeyword(a_foe, "ActorTypeGhost") && !RaceHasKeyword(a_foe, "DLC2AshSpawnKeyword");
         }
         // Is the foe's combat AI in its flee state? Reads the foe's OWN
         // CombatState (guarded -- the header's IsFleeing() dereferences state
@@ -317,6 +343,8 @@ namespace MFO::Eval {
                         if (!RaceHasKeyword(foe, "ActorTypeUndead")) continue;
                     } else if (a_op == Vocab::kCondFoeIsDragon) {
                         if (!RaceHasKeyword(foe, "ActorTypeDragon")) continue;
+                    } else if (a_op == Vocab::kCondFoeIsMechanical) {
+                        if (!FoeIsMechanical(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeIsCaster) {
                         if (!FoeIsCaster(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeIsRanged) {

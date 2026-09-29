@@ -807,6 +807,20 @@ namespace MFO::Logistics {
             // arrow above the speech-scaled price).
             // Does he carry a weapon that fires this kind (a crossbow for bolts, a bow for
             // arrows)? Any count, worn or not.
+            // THE AMMO ROW'S KEYWORDS (field 0928c; MFO-B116 was this, not a VR-only
+            // edge). CommonLib is built with SE + AE + VR on (the fork's CMakeLists
+            // ENABLE_SKYRIM_* default ON, the port overrides none), and under that
+            // configuration TESAmmo's C++ class derives only TESValueForm
+            // (RE/T/TESAmmo.h, the #else branch), so TESForm::As<BGSKeywordForm>() --
+            // FormTraits' is_convertible static cast -- returns NULLPTR for every ammo
+            // form. VendorTrades(null) then refused every ammo row as 'vendor-filter'
+            // (Adelinda's bolts, 148 times at four blacksmiths whose VendorItemsBlacksmith
+            // list carries VendorItemArrow). TESAmmo::AsKeywordForm() reads the keyword
+            // form at the runtime's own offset (REL::RelocateMember 0xF8 SE/AE, 0xE8 VR).
+            const auto AmmoKeywords = [](RE::TESBoundObject* a_obj) -> RE::BGSKeywordForm* {
+                if (auto* am = a_obj ? a_obj->As<RE::TESAmmo>() : nullptr) return am->AsKeywordForm();
+                return a_obj ? a_obj->As<RE::BGSKeywordForm>() : nullptr;
+            };
             const auto carriesLauncherFor = [a_follower](bool a_bolt) {
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
@@ -843,7 +857,7 @@ namespace MFO::Logistics {
                         const auto unit = std::max<std::int32_t>(
                             1, static_cast<std::int32_t>(std::lround(s.value * sellFraction)));
                         sellCandidates.push_back(SellCandidate{
-                            s.obj, s.count, unit, false, s.obj->As<RE::BGSKeywordForm>(),
+                            s.obj, s.count, unit, false, AmmoKeywords(s.obj),
                             "SELL (off-kind ammo: no weapon fires it)" });
                     }
                     continue;
@@ -854,7 +868,7 @@ namespace MFO::Logistics {
                     const auto unit = std::max<std::int32_t>(
                         1, static_cast<std::int32_t>(std::lround(s.value * sellFraction)));
                     sellCandidates.push_back(SellCandidate{
-                        s.obj, s.count, unit, false, s.obj->As<RE::BGSKeywordForm>(),
+                        s.obj, s.count, unit, false, AmmoKeywords(s.obj),
                         "SELL (obsolete ammo)" });
                 }
             }

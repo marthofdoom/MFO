@@ -90,12 +90,14 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondFoeAttackingPlayer = "cond.foe_attacking_player";
     inline constexpr const char* kCondFoeAttackingMe     = "cond.foe_attacking_me";
     inline constexpr const char* kCondFoeAttackingMeMelee  = "cond.foe_attacking_me_melee";   // targets follower, melee
-    inline constexpr const char* kCondFoeAttackingMeRanged = "cond.foe_attacking_me_ranged";  // targets follower, bow/xbow
+    inline constexpr const char* kCondFoeAttackingMeRanged = "cond.foe_attacking_me_ranged";  // targets follower, fights from range (FoeIsRanged: bow/xbow, staff, non-touch spell)
     inline constexpr const char* kCondFoeIsUndead        = "cond.foe_is_undead";
     inline constexpr const char* kCondFoeIsDragon        = "cond.foe_is_dragon";
     // Foe TRAIT selectors -- what the foe IS or is DOING right now (no param).
-    // Caster = a SpellItem equipped in either hand; ranged = bow/crossbow in
-    // hand; weaker = lower level than this follower; blocking/fleeing read the
+    // Caster = a SpellItem equipped in either hand; ranged = attacks from range (a
+    // bow or crossbow, a staff, or a spell whose delivery is not Self or Touch --
+    // field 0928c, marth: "ranged is a concept, spellcaster is specific");
+    // weaker = lower level than this follower; blocking/fleeing read the
     // foe's live actor/combat state. Frozen serialization strings (#10).
     inline constexpr const char* kCondFoeIsCaster        = "cond.foe_is_caster";
     inline constexpr const char* kCondFoeIsRanged        = "cond.foe_is_ranged";
@@ -112,6 +114,14 @@ namespace MFO::Vocab {
     inline constexpr const char* kCondFoeWeakFire        = "cond.foe_weak_fire";
     inline constexpr const char* kCondFoeWeakFrost       = "cond.foe_weak_frost";
     inline constexpr const char* kCondFoeWeakShock       = "cond.foe_weak_shock";
+    // MECHANICAL selector (field 0928c; marth: "Only if they count as mechanical. The
+    // point is to be able to target magic that damages mechanical enemies."): the
+    // nearest foe whose RACE is a Dwemer construct -- ActorTypeDwarven, and NOT
+    // ActorTypeUndead / ActorTypeGhost / DLC2AshSpawnKeyword (Evaluator.cpp
+    // FoeIsMechanical). APPENDED; frozen serialization string (#10). Opcodes are saved
+    // as STRINGS (Serialization.cpp WriteString(g.conditionOpcode)), so a new one shifts
+    // no stored index.
+    inline constexpr const char* kCondFoeIsMechanical    = "cond.foe_is_mechanical";
     // ALLY SELECTOR -- the lowest-HP teammate under `param` pct; chooses that
     // ally as the target (for Cast at ally / Heal Other). Walks the maintained
     // teammate list, not a world sweep.

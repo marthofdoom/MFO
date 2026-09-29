@@ -7,6 +7,14 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Followers stop swapping relics when a companion falls behind.** A follower left in another room still counts toward the museum. His companions no longer strip their own gear to cover for him.
+- **No more "player put on" for a relic MFO took off.** A relic MFO takes off and later allows again is not mistaken for your choice.
+- **No lockpicking mid-fight.** A follower never starts picking a lock while he or you are in combat. With his weapon out, he puts it away first.
+- **Followers finally sell ammo.** Arrows and bolts now pass the vendor's check. Before, every blacksmith turned them down.
+- **Fewer empty trips to the vendor.** Another follower's trade no longer sends a follower back to a vendor who still cannot pay for anything he offers.
+- **Foe is ranged covers casters at range.** It now means a bow, a crossbow, a staff, or a spell cast from a distance. Foe is a spellcaster stays the same.
+- **New condition: Foe is mechanical.** Picks the nearest Dwemer construct: spiders, spheres, centurions and the like. Ghosts, skeletons and ash spawn do not count.
+
 - **Museum drop-offs come first.** A follower with the Loot museum items gambit who carries relics the museum needs heads for a Museum Shipments crate as soon as one is inside his leash. He stops a loot run for it, unless he is fetching a museum item. Then he drops that off too. Only combat and heals come first.
 - **Several followers can drop off at once.** Each follower runs his own trip. A failed walk only holds back that follower at that crate.
 - **The leash is the limit for drop-offs.** A follower only walks to a crate inside his leash, and turns back as soon as you move out of it.
