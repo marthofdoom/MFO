@@ -90,7 +90,7 @@ namespace MFO::Actuation {
         o.dist     = a_caster == a_target ? 0.0f
                                           : a_caster->GetPosition().GetDistance(a_target->GetPosition());
         o.los      = a_caster == a_target ? Sightline::Verdict::Visible
-                                          : Sightline::Check(o.caster, o.target);
+                                          : Sightline::Check(o.caster, o.target, Sightline::Basis::Own);
         o.attach   = a_attach;
         o.conc     = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
         o.claim    = APMFBridge::IsHealCastActive(o.caster) || APMFBridge::IsOwnedCastActive(o.caster);

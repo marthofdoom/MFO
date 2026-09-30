@@ -2340,7 +2340,23 @@ the AI can't re-arm magic over a forced weapon.
 
 ### Sightline.cpp — line-of-sight split across threads (NOT a hook)
 Raycast runs only on the main thread, results cached, worker reads the cache.
-- **Two-stage Measure (cast LoS).** `CustomRayConfirmsOcclusion` (`:52`, MAIN
+- **TWO BASES (2026-09-30, `fix/mfo-heal-field0930`, marth: every spell and bow gets our LoS).** The engine's
+  `Actor::HasLineOfSight` for an NPC viewer is a CACHED per-(viewer, target) bool (AIProcess), not a raycast, so it
+  can be stale or false whatever the geometry (the heal-target OCCLUDED/VISIBLE flicker, player heals never served).
+  `Sightline::Basis` (`Sightline.h`) is chosen by the CALLER, never inferred: `Own` = our ray ALONE is the verdict
+  (any clear sample VISIBLE, all blocked OCCLUDED; engine answer used only when the ray cannot run -- no cell /
+  bhkWorld / controller -- with a rate-limited `[los] ... own ray unavailable (<why>) -- engine cache used`);
+  `Engine` (the default) = today's two-stage below. Every pair keeps TWO slots (`Entry::s[2]`: verdict, stamp, `occRun`),
+  so a melee reader never sees the own-ray verdict; `Want`'s throttle is per (pair, basis) (`g_lastPost[2]`).
+  **Own callers (spell):** `Evaluator.cpp` PickAlly heal pick, PickFoe when the rule is `act.cast_*` OR a swing by a
+  non-melee-only follower (the bow/ranged decision; `PickFoe`'s `a_ownRay`), `cast/CanAct.cpp` (HealInReach,
+  RefuseHealApplyOnMain), `cast/Roads.cpp`, `cast/DirectTarget.cpp`, `cast/CastOn.cpp`, `cast/Auto.cpp`,
+  `cast/Hands.cpp` (OccludedRun), `cast/HealObs.cpp`, `logistics/Service.cpp` OOC casts. **Engine callers:**
+  `EngageOnSight.cpp` (MeasureNow), melee-only PickFoe. A NEW spell/ranged Sightline caller must pass `Basis::Own`
+  on its `Want` AND its `Check`/`CheckWithin`/`OccludedRun` (mismatched basis reads a slot nobody fills = Unknown).
+  Worst-case rate: <= 1 Measure per (pair, basis) per 0.3 s, <= 3 picks each, worldLock read-held per ray exactly as
+  before, `g_mx` never held across a ray. `MeasureNow` is unthrottled (its callers bound it).
+- **Two-stage Measure (`Basis::Engine` only).** `CustomRay` (was `CustomRayConfirmsOcclusion`, MAIN
   THREAD ONLY) is MFO's own `bhkWorld::PickObject` point-raycast, fired by
   `Measure` ONLY when the engine `HasLineOfSight` already said CLEAR — so the
   extra pick runs on the ambiguous cases only. Layer = `COL_LAYER::kCharController`

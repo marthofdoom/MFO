@@ -199,7 +199,7 @@ namespace MFO::Actuation {
         if (!a_caster || !a_target || !a_spell) return false;
         if (a_caster == a_target) return true;
         if (a_caster->GetPosition().GetDistance(a_target->GetPosition()) > HealReach(a_spell)) return false;
-        return Sightline::Check(a_caster->GetFormID(), a_target->GetFormID()) != Sightline::Verdict::Occluded;
+        return Sightline::Check(a_caster->GetFormID(), a_target->GetFormID(), Sightline::Basis::Own) != Sightline::Verdict::Occluded;
     }
 
     bool HealsHealth(RE::SpellItem* a_spell) { return SpellHealsHealth(a_spell); }
@@ -213,7 +213,7 @@ namespace MFO::Actuation {
         const char* why   = nullptr;
         if (dist > reach)
             why = "beyond the spell's reach";
-        else if (Sightline::MeasureNow(a_caster->GetFormID(), a_target->GetFormID()) ==
+        else if (Sightline::MeasureNow(a_caster->GetFormID(), a_target->GetFormID(), Sightline::Basis::Own) ==
                  Sightline::Verdict::Occluded)
             why = "no line of sight";
         if (!why) return false;

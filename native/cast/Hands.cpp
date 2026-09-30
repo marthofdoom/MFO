@@ -455,7 +455,7 @@ namespace MFO::Actuation {
         if (a_follower == a_victim) return false;
         if (a_follower->GetPosition().GetDistance(a_victim->GetPosition()) > HealReach(a_spell)) return true;
         const auto fid = a_follower->GetFormID();
-        if (Sightline::OccludedRun(fid, a_victim->GetFormID(), kHealLosTrustSec) < kHealLosAgreeingReadings)
+        if (Sightline::OccludedRun(fid, a_victim->GetFormID(), kHealLosTrustSec, Sightline::Basis::Own) < kHealLosAgreeingReadings)
             return false;
         if (auto it = g_castLock.find(fid); it != g_castLock.end()) {
             const auto& lk = it->second.hand[kHandLeft];
@@ -694,7 +694,7 @@ namespace MFO::Actuation {
                 // lost". Sightline::Want is the worker-safe, per-pair rate-limited
                 // request (locked map, no engine call here); the verdict lands a frame
                 // later and is read by the CheckWithin below on a later lap.
-                Sightline::Want(a_follower->GetFormID(), { a_lock.target });
+                Sightline::Want(a_follower->GetFormID(), { a_lock.target }, Sightline::Basis::Own);
                 // Out of sight is TWO agreeing readings, and not while the claim is still
                 // building its caster (HealRecipientUnreachable, field 2026-09-30): one
                 // flicker of the Sightline verdict dropped the incumbent and the claim

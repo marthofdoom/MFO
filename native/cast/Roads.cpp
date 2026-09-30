@@ -45,7 +45,7 @@ namespace MFO::Actuation {
             // runtime where the raycast cannot run (VR: no main-thread pump)
             // degrades to today's behaviour instead of an inert forced cast.
             if (!self) {
-                const auto v = Sightline::Check(id, a_target->GetFormID());
+                const auto v = Sightline::Check(id, a_target->GetFormID(), Sightline::Basis::Own);
                 if (v == Sightline::Verdict::Occluded) {
                     spdlog::debug("[cast] {:08X}: forced cast HELD -- no line of sight to {:08X}",
                                   id, a_target->GetFormID());
@@ -67,7 +67,7 @@ namespace MFO::Actuation {
                                            : "grace elapsed, no cast",
                              self ? "n/a"
                                   : Sightline::VerdictName(
-                                        Sightline::Check(id, a_target->GetFormID())));
+                                        Sightline::Check(id, a_target->GetFormID(), Sightline::Basis::Own)));
                 // The package carries the spell itself, but the latch stays
                 // (v1.0.30): clearing consent here re-opened the same
                 // between-casts gap the sink's Clear did -- until the next

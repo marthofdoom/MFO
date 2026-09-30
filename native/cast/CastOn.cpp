@@ -375,7 +375,7 @@ namespace MFO::Actuation {
             if (healClaim) {
                 RE::Actor* recipient = (a_target == a_follower) ? a_follower : a_target;
                 const bool atSelf    = recipient == a_follower;
-                if (!atSelf) Sightline::Want(id, { recipient->GetFormID() });
+                if (!atSelf) Sightline::Want(id, { recipient->GetFormID() }, Sightline::Basis::Own);
                 const char* lost = nullptr;
                 if (recipient->IsDead() || recipient->IsDisabled())
                     lost = "the recipient is dead or gone";
@@ -439,8 +439,8 @@ namespace MFO::Actuation {
             if (offenseSpell && a_target) {
                 if (auto blk = g_unsightedCharge.find(id); blk != g_unsightedCharge.end()) {
                     if (blk->second.spell == a_spellID && blk->second.target == a_target->GetFormID()) {
-                        Sightline::Want(id, { a_target->GetFormID() });
-                        if (Sightline::CheckWithin(id, a_target->GetFormID(), kHealLosTrustSec) ==
+                        Sightline::Want(id, { a_target->GetFormID() }, Sightline::Basis::Own);
+                        if (Sightline::CheckWithin(id, a_target->GetFormID(), kHealLosTrustSec, Sightline::Basis::Own) ==
                             Sightline::Verdict::Occluded)
                             return { Result::FailedOther,
                                      "offense cast held: its target is still unsighted after a charge that never fired",
@@ -578,7 +578,7 @@ namespace MFO::Actuation {
                         oldestMs = std::max<long long>(oldestMs, ageMs.count());
                     }
                     if (allCharged &&
-                        Sightline::CheckWithin(id, a_target->GetFormID(), kHealLosTrustSec) ==
+                        Sightline::CheckWithin(id, a_target->GetFormID(), kHealLosTrustSec, Sightline::Basis::Own) ==
                             Sightline::Verdict::Occluded) {
                         spdlog::warn("[cast] {:08X} forced offense cast {:08X} at {:08X} RELEASED: fully charged "
                                      "({} hand) for {} ms with no observed cast and the foe measured Occluded "
