@@ -323,9 +323,10 @@ namespace MFO::Eval {
             // engaged foe's position, not just the ones the scan below lets through, so it
             // is measured first: ONE read-lock pass that only copies (handle, position) of
             // the live, not-lost foes (the CombatSense::FoeCount filters, #23: reads only,
-            // nothing else inside), released before anything else runs. The engine calls
-            // (Is3DLoaded, the brawl gate) are made after the lock, like the scan's own
-            // ones are made on the copies. clusterOthers maps a foe's handle to the number
+            // nothing else inside), released before anything else runs. Inside the lock
+            // this pre-pass reads only handle, flags and position, like CombatSense::FoeCount.
+            // The engine calls (Is3DLoaded, the brawl gate) are made after the lock. The main
+            // scan below makes its own gate calls inside the group lock, as before. clusterOthers maps a foe's handle to the number
             // of OTHER members within a_param units, for foes with at least 2 (a cluster of
             // 3+); an absent foe does not qualify. The chase cap does not limit members:
             // the cluster is measured foe to foe, the cap only limits who may be CHOSEN.
