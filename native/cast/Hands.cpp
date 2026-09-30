@@ -794,7 +794,9 @@ namespace MFO::Actuation {
         //  - kNeverFired (WARN): the heal IS in the left hand and the engine has not
         //    fired it within the never-observed bound. The one shape that is not
         //    expected to happen, so it stays loud.
-        enum Shape : std::uint8_t { kCooldown, kOutOfHand, kNeverFired };
+        //  - kBetweenCasts (debug, round 3 R3-2): in hand, fired earlier, not within the
+        //    bound. The normal gap between casts of a claim; not news.
+        enum Shape : std::uint8_t { kCooldown, kOutOfHand, kNeverFired, kBetweenCasts };
         HealRepair rep;
         rep.shape = kOutOfHand;
         // Left hand = GetEquippedObject(true), the same read Loadout::Read /
@@ -807,8 +809,15 @@ namespace MFO::Actuation {
         // spell MFO does not recognise in the left hand of a live claim whose proxy is
         // not learned yet is therefore read as the heal's, never overwritten on a
         // guess. Not a mask: if it is really the AI's own spell, it never fires as
-        // this claim, and the kNeverFired test below repairs it within the bound.
+        // this claim, and the kNeverFired WARN below says so; once the proxy is
+        // learned the spell reads as out of hand and is repaired.
         if (!inHand && proxy == 0 && held && held->As<RE::SpellItem>()) inHand = true;
+        // PREPARE ONLY WHEN THE HEAL IS OUT OF HAND (review round 3, R3-1). With the
+        // heal or its learned proxy in the left hand, Prepare's Read sees the proxy as
+        // "a different spell" and its Caster branch EquipSpells the ORIGINAL over
+        // APMF's proxy (before the cooldown gate). An in-hand shape is therefore a
+        // heartbeat + log only; the spell in hand is already the one APMF drives.
+        rep.prepare = !inHand;
         if (!inHand) {
             if (Loadout::CoolingDown(fid)) {
                 rep.why   = "the heal is out of the left hand during the post-fire cooldown";
@@ -823,14 +832,24 @@ namespace MFO::Actuation {
                 age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
                 !ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, spellID,
                                               APMFBridge::kHealHoldNeverObservedMs)) {
-                rep.why   = "equipped in the left hand but not fired within the never-observed bound";
-                rep.shape = kNeverFired;
+                // WARN ONLY WHEN IT HAS NEVER FIRED (review round 3, R3-2): `lastSeen`
+                // is the claim stamp now (R2-3), so "no fire in the last N s" is also
+                // the ordinary gap between two casts of a claim that has fired. The
+                // latch (ObservedFiring(.., 0)) tells the two apart.
+                if (!ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, spellID, 0)) {
+                    rep.why   = "equipped in the left hand but never fired within the never-observed bound";
+                    rep.shape = kNeverFired;
+                } else {
+                    rep.why   = "in the left hand between casts (fired before, not in the last bound)";
+                    rep.shape = kBetweenCasts;
+                }
             }
         }
         return rep;
     }
 
     const char* HealRepairVerdict(Loadout::Ready a_ready) {
+        // (An in-hand shape never calls Prepare: CastOn logs "no Prepare" instead.)
         switch (a_ready) {
         case Loadout::Ready::AlreadyReady: return "the heal is in the left hand (Prepare: already ready)";
         case Loadout::Ready::Equipped:     return "the heal was put back in the left hand (Prepare: equipped)";
@@ -845,22 +864,22 @@ namespace MFO::Actuation {
     // One 5 s slot per (follower, shape), so a quiet cooldown line never uses up the
     // slot a WARN needs. A Failed verdict is at least WARN whatever the shape.
     void LogHealRepair(RE::FormID a_follower, RE::FormID a_spell, const HealRepair& a_rep,
-                       Loadout::Ready a_ready, const std::string& a_prepareWhy) {
+                       const char* a_verdict, bool a_failed, const std::string& a_prepareWhy) {
         if (!a_rep) return;
-        struct Slots { std::chrono::steady_clock::time_point at[3]{}; };
+        struct Slots { std::chrono::steady_clock::time_point at[4]{}; };
         static std::unordered_map<RE::FormID, Slots> s_log;
-        const std::uint8_t shape = a_rep.shape < 3 ? a_rep.shape : 1;
+        const std::uint8_t shape = a_rep.shape < 4 ? a_rep.shape : 1;
         const auto now  = std::chrono::steady_clock::now();
         auto&      last = s_log[a_follower].at[shape];
         if (std::chrono::duration<float>(now - last).count() < 5.0f) return;
         last = now;
-        auto lvl = shape == 0 ? spdlog::level::debug :
-                   shape == 2 ? spdlog::level::warn :
-                                spdlog::level::info;
-        if (a_ready == Loadout::Ready::Failed) lvl = spdlog::level::warn;
+        auto lvl = (shape == 0 || shape == 3) ? spdlog::level::debug :
+                   shape == 2                 ? spdlog::level::warn :
+                                                spdlog::level::info;
+        if (a_failed) lvl = spdlog::level::warn;
         spdlog::log(lvl,
                     "[heal] {:08X} heal claim (spell {:08X}) REPAIR: {} -- claim refreshed; {}{}{}",
-                    a_follower, a_spell, a_rep.why, HealRepairVerdict(a_ready),
+                    a_follower, a_spell, a_rep.why, a_verdict,
                     a_prepareWhy.empty() ? "" : ": ", a_prepareWhy);
     }
 

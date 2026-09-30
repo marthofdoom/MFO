@@ -474,15 +474,21 @@ namespace MFO::Actuation {
         // right there, under the claim the refresh renewed, keeping the lock as it
         // is (no PIN-VOID, no lock re-stamp: R2-3), and returns transparent. Never a
         // direct cast.
+        // Round 3 (R3-1/R3-2): `prepare` is true only when the heal is OUT of the left
+        // hand -- an in-hand shape (the spell or its learned proxy held) is a
+        // heartbeat + log, never a Prepare, which would equip the original over the
+        // proxy. Shape 3 = in hand between casts of a claim that HAS fired (debug);
+        // shape 2 (WARN) is kept for a heal never observed firing at all.
         struct HealRepair {
-            const char*  why   = nullptr;
-            std::uint8_t shape = 0;   // 0 cooldown (debug), 1 out of hand (info), 2 unfired in hand (WARN)
+            const char*  why     = nullptr;
+            std::uint8_t shape   = 0;   // 0 cooldown (debug), 1 out of hand (info), 2 never fired (WARN), 3 between casts (debug)
+            bool         prepare = false;
             explicit operator bool() const { return why != nullptr; }
         };
         HealRepair HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell);
         const char* HealRepairVerdict(Loadout::Ready a_ready);
         void LogHealRepair(RE::FormID a_follower, RE::FormID a_spell, const HealRepair& a_rep,
-                           Loadout::Ready a_ready, const std::string& a_prepareWhy);
+                           const char* a_verdict, bool a_failed, const std::string& a_prepareWhy);
         RE::FormID CastProxyOnHand(RE::FormID a_follower, std::size_t a_hand);
         void PreemptHand(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_wantedSpell);
         // a_urgentHeal (field 2026-09-29): the asker is a HEAL whose recipient is

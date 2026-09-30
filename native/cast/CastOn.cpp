@@ -558,14 +558,22 @@ namespace MFO::Actuation {
                     // all (bEquipToCast, the normal path's own gate on Prepare).
                     if (healClaim && handPlan.left && !handPlan.right && Config::g_equipToCast.load()) {
                         if (const HealRepair rep = HealClaimNeedsRepair(a_follower, spell)) {
+                            // In-hand shapes never Prepare (round 3, R3-1): the heal or
+                            // APMF's proxy is already held; Prepare would equip the
+                            // original over the proxy. Heartbeat (the refresh above) + log.
                             std::string why;
-                            const auto ready = Loadout::Prepare(a_follower, spell, why, HealYieldLeft,
-                                                                /*a_healClaimLive=*/true);
-                            if (ready == Loadout::Ready::AlreadyReady || ready == Loadout::Ready::Equipped)
-                                CasterConsent::Want(id, a_spellID);   // idempotent; the Ready arms' call
-                            LogHealRepair(id, a_spellID, rep, ready, why);
-                            return { Result::NoOp,
-                                     std::format("heal claim repair: {}", HealRepairVerdict(ready)), true };
+                            const char* verdict = "no Prepare: the heal or its proxy is in the left hand";
+                            bool failed = false;
+                            if (rep.prepare) {
+                                const auto ready = Loadout::Prepare(a_follower, spell, why, HealYieldLeft,
+                                                                    /*a_healClaimLive=*/true);
+                                if (ready == Loadout::Ready::AlreadyReady || ready == Loadout::Ready::Equipped)
+                                    CasterConsent::Want(id, a_spellID);   // idempotent; the Ready arms' call
+                                verdict = HealRepairVerdict(ready);
+                                failed  = ready == Loadout::Ready::Failed;
+                            }
+                            LogHealRepair(id, a_spellID, rep, verdict, failed, why);
+                            return { Result::NoOp, std::format("heal claim repair: {}", verdict), true };
                         }
                     }
                     // NOTHING TO RE-STAMP HERE. Rank lives in the lock's
