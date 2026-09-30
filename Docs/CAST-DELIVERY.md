@@ -358,10 +358,47 @@ touch ONLY the one genuinely-broken case: concentration + Self + off-self.** FF 
 self-cast were already correct; do not touch them, do not re-broaden the proxy, do not
 reintroduce AddTarget.
 
-## COMPOSED FORCED CAST (CFC) — bHealAnimPackage repurposed, DEFAULT OFF
+## COMPOSED FORCED CAST (CFC) — bHealAnimPackage repurposed, DEFAULT ON since animheal phase 2
+
+**THE HEAL ROAD AGAIN (animheal phase 2, `feat/mfo-animheal-p2`, 2026-09-30). Read this paragraph
+first; the 09-21 paragraph after it is history and still describes the road for wards, for a heal
+with no combat controller, and with Harbinger absent.**
+- **Which road.** `ComposedCast::ChooseHealRoad` decides for every heal caller. A Heal-kind spell
+  with Harbinger present and capable (ABI >= 5, `bHealAnimPackage` ON, `bEquipToCast` ON, a verified
+  runtime: 1.6.1170 or 1.5.97, where Harbinger installs the heal seats too) and a `CombatController`
+  on the follower goes through the ch.8b claim, cast by the follower's OWN AI with the real hand
+  animation. No controller (out of combat, an own-OOC follower in a party fight, a retreating
+  healer): the DIRECT road, unanimated, with a rate-limited `[heal] <id> <spell>: no combat controller
+  -- DIRECT road` line (marth's D1), and a heal claim still standing on that follower is RELEASED
+  first. A non-Self heal aimed at its own caster has no seat (Harbinger resolves a self claim only
+  for Self delivery): direct, `[heal] ... WARN`. Harbinger absent: the direct road, as always.
+- **Why the reversal is safe now.** The 09-21 "freeze" was MFO's direct Healing Hands on the INSTANT
+  caster denied against MFO's own hand claim (`hand=?`), not the engine choosing another heal
+  (`scratchpad/animheal-design.md` §2). Harbinger `d41ed43` stopped ch.8b gating the instant caster;
+  `85a8f2f` makes a self claim name the claimant so seat 0x06/0x0A/0x0F serve self heals.
+- **How it casts.** `CastOn`'s composed branch for self, ally and player alike: `ComposedCast::Try`
+  (LEFT, TTL 6 s, the F1/F12 holds), `Loadout::Prepare` (the spell into the LEFT hand; a left-hand
+  weapon yields at that point of no return and comes back after), `CasterConsent::Want`, the LEFT
+  lock. The right hand keeps its weapon or its own offense claim. Rank preemption is unchanged (a
+  higher heal takes the hand between casts, an urgent heal takes it from a lower offense
+  mid-charge). No re-point mid-cast.
+- **Recipients.** Lowest health first, one real cast at a time: the ally picker already names the
+  lowest; the hand lock re-aims the same rule only once the claimed cast has FIRED and is not in
+  flight (`IncumbentHealCastDone`), or when the recipient is lost (dead, full, beyond reach or out of
+  sight). AUTO is a SERIES now: pick the lowest, finish a cast in flight first (D8), hand it to
+  `CastOn`. Every lap re-judges the recipient (`HealInReach`) before the claim is refreshed; lost ->
+  the claim is released at once and the rule falls through.
+- **Concentration** runs to full (Harbinger's seat 0x07, stopPct 0), bounded by a per-channel stream
+  cap (`DrawConcCap`, 8-15 s): at the cap the claim is released and re-claimed next lap while the
+  rule wins.
+- **Magicka.** The engine charges the real cast; MFO deducts nothing on this road.
+- **Loud, never masked.** A refusal fails closed (`LogApmfRefusal`), a silent claim warns (`[cfc] ...
+  NO observed cast`), a fired heal that did not land warns (`[heal-obs] ... road=claim ... HEAL NOT
+  LANDING`). Nothing re-routes a claimed heal to the direct road.
 
 **UNREACHABLE FOR HEALS SINCE `fix/mfo-combat-restoration-direct` (2026-09-21) — read this
-paragraph before the section, which is history from here down.** On the COMBAT table a
+paragraph before the section, which is history from here down.** (Superseded for heals with a combat
+controller by the paragraph above.) On the COMBAT table a
 RESTORATION cast (`Actuation::IsRestorationSpell`: not Offense, and either a beneficial Health
 effect or any effect of the Restoration school) now takes the DIRECT road — `CastSelfDirect` /
 `CastTargetDirect`, `CastSpellImmediate` `MainThread::Post`'d, magicka deducted, bounded by the

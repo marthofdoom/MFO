@@ -351,7 +351,6 @@ namespace MFO::Actuation {
             if (!hostile && kind == CasterConsent::SpellKind::Heal &&
                 ComposedCast::ChooseHealRoad(a_follower, spell, nullptr) ==
                     ComposedCast::HealRoad::Claim) {
-                constexpr float kLosTrustS = 3.0f;   // = Evaluator.cpp's kHealLosTrustS (PickAlly)
                 const float radius  = Config::g_sharedRadius.load();
                 const float ceiling = std::min(a_healThreshold, Vocab::kHealFull);
                 const auto  selfPos = a_follower->GetPosition();
@@ -370,7 +369,7 @@ namespace MFO::Actuation {
                         if (selfPos.GetDistance(m->GetPosition()) > radius) return;
                         sightWant.push_back(m->GetFormID());
                         if (!HealInReach(a_follower, m, spell) ||
-                            Sightline::CheckWithin(id, m->GetFormID(), kLosTrustS) ==
+                            Sightline::CheckWithin(id, m->GetFormID(), kHealLosTrustSec) ==
                                 Sightline::Verdict::Occluded) {
                             ++outOfReach;
                             return;

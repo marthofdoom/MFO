@@ -471,9 +471,11 @@ per concern:
 - `cast/Roads.cpp` (288) = the three delivery ROADS `CastOn` forks to: `ForceCast` (`:31`, the
   forced package cast), `ConcentrationCast` (`:129`, the bounded concentration stream entry) and
   `RestorationCastDirect` (`:269`).
-- `cast/CastOn.cpp` (1387) = `CastOn` (`:110`, the AI-first hybrid of one spell at one target)
+- `cast/CastOn.cpp` (1490 -- at the ~1500 "plan a split" mark after animheal phase 2; the next brief
+  that touches it proposes the split) = `CastOn` (`:110`, the AI-first hybrid of one spell at one target;
+  its heal-road block `:335-384`, see "ANIMATED HEAL CLAIM ROAD" below)
   + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:76`, extern via `cast/Direct_internal.h`)
-  + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1363`/`:1379`).
+  + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1466`/`:1482`).
 - `cast/Equip.cpp` (1050) = THE WEAPON HOLD: `EquipWeapon` (`:350`, **PERK-DRIVEN since
   2026-09-13 — see "COMBAT PICK + DUAL WIELD BY PERKS" below**) with its anon helpers
   `WeaponRolesFor` (`:97`), `IsOneHandMelee` (`:105`), `IsMuseumRelic` (`:122`, LOTD, batch L),
@@ -520,27 +522,31 @@ per concern:
     `SettleSec` `:285`, `PostSettle` `:297`), `ApplySelfEffect` (`:323`), `SelfCastEndActor` (`:436`),
     `ApplyTargetEffect` (`:464`), `TargetCastEndActor` (`:633`), `SpellHealsHealth` (`:675`),
     `IsRestorationSpell` (`:690`), `ClearSelfCasts` (`:701`), `ClearApmfRefusalLog` (`:733`).
-  - `cast/DirectSelf.cpp` (356) = the SELF stream: `CastSelfDirect` (`:17`), `SelfCastReconcile` (`:237`).
-  - `cast/DirectTarget.cpp` (385) = the ON-TARGET stream: `CastTargetDirect` (`:30`),
-    `TargetCastReconcile` (`:295`), `TargetStreamLive` (`:380`).
+  - `cast/DirectSelf.cpp` (358) = the SELF stream: `CastSelfDirect` (`:17`), `SelfCastReconcile` (`:239`).
+  - `cast/DirectTarget.cpp` (387) = the ON-TARGET stream: `CastTargetDirect` (`:30`),
+    `TargetCastReconcile` (`:297`), `TargetStreamLive` (`:382`).
   - `cast/CanAct.cpp` (236) = the CAN-ACT block (see "CAN-ACT" below): `NoteRefusedApply` (`:103`),
     `NoteHealLanded` (`:114`), `NoteLifeState` (`:124`), `HealReach` (`:180`), `HealInReach` (`:198`),
     `HealsHealth` (`:205`), `RefuseHealApplyOnMain` (`:207`); `ResetCanActState` (`:84`, extern since the
     split, `ClearSelfCasts` calls it).
-  - `cast/HealObs.cpp` (202) = `[heal-obs]`: `ReadbackWarnDue` (`:56`), `HealObsNote` (`:72`),
-    `HealObsSweep` (`:104`); `ResetHealObs` (`:39`, extern since the split).
+  - `cast/HealObs.cpp` (249) = `[heal-obs]`: `ReadbackWarnDue` (`:61`), `HealObsNote` (`:77`),
+    the claim road's `HealObsClaimLap` (`:109`) / `HealObsNoteClaimFire` (`:115`) (animheal phase 2),
+    `HealObsSweep` (`:140`); `ResetHealObs` (`:43`, extern since the split).
 - `cast/Summon.cpp` (369) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
   `CastSummonOnce` (`:305`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
   `g_summonMx`/`g_summon`/`g_summonPosted` (`:68-69`, `:79`) is extern (ClearSelfCasts clears it).
-- `cast/Auto.cpp` (613) = the AUTO fan-out `CastAuto` (`:280`) with its pacing `g_autoCast` (`:22`)
-  and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:165`), and
-  `IsSummonSpell` (`:227`, public; it lives here because `CastAuto` inlines it).
-- `cast/Hands.cpp` (919) = THE PER-HAND CAST LOCK's implementation (moved whole) —
-  `HoldCastLock`/`ClearCastLockHand` (`:62`/`:78`), the liveness ladder (`ClaimLiveOnHand` `:90`,
-  `CastInFlightOnHand` `:252` (PUBLIC since 2.0.5, declared in the public header),
-  `CastLockLive` `:312`), rank preemption (`CanPreemptHand` `:431`, `IncumbentTargetLost` `:470`,
-  `IsOwnRetarget` `:521`, `PreemptHand` `:532`), `WeaponHandExposure` (`:164`), `CastProxyOnHand`
-  (`:110`), `HandFree` (`:586`), `CastHandHeld` (`:364`) and THE JUGGLE `ResolveCastHand` (`:612`).
+- `cast/Auto.cpp` (725) = the AUTO fan-out `CastAuto` (`:308`; its claim-road heal SERIES `:325`, see
+  "ANIMATED HEAL CLAIM ROAD" below) with its pacing `g_autoCast` (`:22`)
+  and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:193`), and
+  `IsSummonSpell` (`:266`, public; it lives here because `CastAuto` inlines it).
+- `cast/Hands.cpp` (1123) = THE PER-HAND CAST LOCK's implementation (moved whole) —
+  `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
+  `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
+  `CastLockLive` `:332`), rank preemption (`CanPreemptHand` `:477`, `IncumbentTargetLost` `:561`,
+  `IncumbentHealCastDone` `:626`, `IsOwnRetarget` `:664`, `PreemptHand` `:675`), the animated-heal
+  lock helpers `ReleaseOwnHealClaim` (`:738`) / `HealChannelCapped` (`:769`), `WeaponHandExposure`
+  (`:178`), `CastProxyOnHand` (`:124`), `HandFree` (`:790`), `CastHandHeld` (`:384`) and THE JUGGLE
+  `ResolveCastHand` (`:816`).
 - `cast/Actuation_internal.h` (520) = everything that crosses a TU boundary inside the family: the
   shared concentration numbers (`kConc*` sustain windows, `kConcApplyPeriod` `:67` cadence
   contract, `DrawConcCap` `:83` random stream cap) AND the cast lock's shared state (`g_castLock`
@@ -684,7 +690,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   in the table for marth's `REL::Offset` decision). `Actuation.cpp` was 2678 lines — over the
   2500 cap, reported not split (rule 1; REVIEW-BACKLOG **MFO-B37** held the split brief, drained by the wave-1 split into `cast/`, 2026-09-24).
 - **CAST-ROAD SELECTION BY SPELL NATURE (`fix/mfo-combat-restoration-direct`, 2026-09-21 — Deck
-  2026-09-21, Jesper 750012C6).** On the COMBAT table a RESTORATION cast takes the DIRECT road and an
+  2026-09-21, Jesper 750012C6). REVERSED FOR HEALS WITH A COMBAT CONTROLLER by animheal phase 2
+  (the next entry): the text below is the history and still holds for wards, for heals with no
+  controller, and with Harbinger absent.** On the COMBAT table a RESTORATION cast takes the DIRECT road and an
   OFFENSIVE cast keeps the AI-fired road. The classifier is **`Actuation::IsRestorationSpell`**
   (`cast/Direct.cpp:690`, declared `cast/Actuation.h:168`): `CasterConsent::ClassifySpell != Offense`
   AND (`SpellHealsHealth` — a beneficial Health effect, the same read `ClassifySpell`'s Heal kind and
@@ -715,6 +723,72 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   still promises an animated hand cast (backlog `MFO-B48`). **What breaks if you change this:** re-routing any heal-kind spell
   back through `Try` re-creates the frozen follower unless the floor gate below holds; a self target
   reaching `CastOn` with `bCastSelf` OFF keeps its old road on purpose (`a_target != a_follower`).
+- **ANIMATED HEAL CLAIM ROAD (`feat/mfo-animheal-p2`, animheal PHASE 2, 2026-09-30; design
+  scratchpad `animheal-design.md` §4, decisions D1/D2/D8 as marth answered them).** REVERSES the entry
+  above for ONE case: a Heal-kind spell (`ClassifySpell == Heal`) with Harbinger present and capable
+  and a `CombatController` on the follower is a ch.8b cast claim cast by the follower's OWN AI,
+  animated. Wards and other non-heal Restoration-school spells keep the direct road (open: they are
+  not animated yet, see STATUS). Why reversing is now safe: the 09-21 "freeze" was MFO's direct cast on
+  the INSTANT caster colliding with MFO's own hand claim; Harbinger `d41ed43` stopped ch.8b gating the
+  instant caster, and `85a8f2f` resolves a self claim (target 0) to the claimant for a Self-delivery
+  spell, so self heals get seat answers (RC-3's Harbinger half).
+  * **ONE decision, `ComposedCast::ChooseHealRoad`** (`ComposedCast.cpp:683`, enum `ComposedCast.h:201`):
+    `NotHeal` / `Claim` / `DirectNoCombat` (D1: no controller -> direct, unanimated, a rate-limited
+    `[heal] ... no combat controller -- DIRECT road` line, AND any standing heal claim is RELEASED so
+    one actor never runs both roads -- RC-1/RC-2 of 09-21) / `DirectNoSeat` (a non-Self heal aimed at
+    its own caster: Harbinger resolves self only for Self delivery, `[heal] ... WARN`) / `DirectDegrade`
+    (Harbinger absent or ABI < 5, unverified runtime, `bHealAnimPackage` or `bEquipToCast` OFF; no
+    line). Asked by `CastOn`, `CastAuto`, `CastSelfDirect` (`cast/DirectSelf.cpp:102`) and
+    `CastTargetDirect` (`cast/DirectTarget.cpp:138`) -- the last two replace their `!IsRestorationSpell`
+    gate, so an OOC-table heal that meets a controller claims too rather than casting direct beside it.
+    1.5.97 takes the claim road as well: Harbinger installs the heal seats on every non-VR runtime.
+  * **`CastOn` (`cast/CastOn.cpp:335-384`)**: `healClaim` skips the self fork (`:569`), the
+    concentration fork and the restoration fork, and sends self / ally / player heals to the composed
+    branch (`:824`, now also for self): `ComposedCast::Try` -> `Loadout::Prepare` (spell into the LEFT
+    hand; a left-hand weapon yields at that point of no return and `ReconcileForcedWeapon` returns it)
+    -> `CasterConsent::Want` -> the LEFT lock keyed on `lockTargetKey` (0 for self). A **per-lap
+    recipient check** runs before the hand lock and before the in-flight refresh: dead / beyond reach or
+    out of sight (`HealInReach` + `kHealLosTrustSec`) -> this rule's claim released at once (`ReleaseOwnHealClaim`) and a
+    transparent `FailedOther`; at full with nothing in flight -> released too (D8: a cast in flight
+    finishes). **Concentration stream cap** in the in-flight refresh (`:443`): past
+    `HealChannelCapped`'s per-channel `DrawConcCap` (8-15 s, heal band) the claim is released instead
+    of renewed and re-claimed next lap (release + re-stream, like the direct cap; never a cooldown).
+    Harbinger's seat 0x07 still stops the channel at full (stopPct 0). **No MFO magicka deduction on
+    this road**: the engine charges the real cast (the competence gate still checks cost).
+  * **Hand lock (`cast/Hands.cpp`)**: heals stay LEFT, offense keeps its PlanCastHand pick; rank is
+    carried (`CanPreemptHand`, urgent heal mid-charge unchanged). `IncumbentTargetLost` (`:561`) now
+    also calls a HEAL recipient lost at full health, beyond `HealInReach`, or measured Occluded within
+    `kHealLosTrustSec` (3 s, = PickAlly's `kHealLosTrustS`; MFO-B162 drained), and
+    a self heal lock (target 0) lost at full. `IncumbentHealCastDone` (`:626`) lets the SAME rule
+    re-aim a heal once its claimed cast has FIRED since the lock (ObservedFiring over `now - lastSeen`)
+    and is not in flight: one real cast at a time, lowest first, never a pre-charge flicker.
+    `CastLock::channelSince/channelCap` (`cast/Actuation_internal.h:285`) carry the stream cap; a new
+    spell or recipient resets them in `HoldCastLock`.
+  * **AUTO becomes a SERIES** (`cast/Auto.cpp:325`): on the claim road `CastAuto` picks the lowest
+    health fraction under the rule's threshold (party, player, and the caster only for a Self-delivery
+    spell; `HealInReach` + PickAlly's 3 s Occluded trust), keeps the standing claim's recipient while a
+    cast is IN FLIGHT (D8), releases this rule's claim when nobody needs it, and hands the pick to
+    `CastOn` -- so the lock, preemption, recipient check and cap are the single-target road's own.
+    Off the claim road the fan / conc series are unchanged (direct, D1).
+  * **`[heal-obs] road=claim`** (`cast/HealObs.cpp:109-138`): the SpellSink's CFC-fired branch
+    (`Diagnostics.cpp:276`) calls `HealObsNoteClaimFire`; when the fired form is the heal claim's spell
+    or proxy it posts one `HealObsNote` (recipient = `APMFBridge::GetHealCastTarget`, new,
+    `apmf/CastClaims.cpp:419`), "HP before" = the recipient's HP on the claim's last lap
+    (`HealObsClaimLap`, stamped by CastOn). The sweep reads a claim's channel from the LEFT hand and
+    warns `HEAL NOT LANDING: the claimed cast FIRED, but ...` for a lasting heal with no effect and no
+    HP rise.
+  * **`bHealAnimPackage` (D2: kept)** is now the heal road's KILL SWITCH, default ON in all six wired
+    places (`Config.h`/`Config.cpp` atomic + reset + `kMcmDefaults`, both MCM inis, `config.json`,
+    `MFO.ini`); MCM text "Animated heals in combat" (MFO-B48 drained). An existing MCM store seeded
+    with the old `0` keeps 0.
+  * **What breaks if you change this:** calling `ChooseHealRoad` from only some heal callers re-creates
+    two roads on one actor; dropping the controller release lets a claim nothing can serve outlive the
+    fight; moving the recipient check after `resolveHands` lets the in-flight refresh feed a claim at an
+    unreachable ally; removing `IncumbentHealCastDone` makes a heal stick to one recipient until it
+    leaves the threshold (not lowest first); letting AUTO fan on the claim road asks one hand for N
+    casts. Surfaced backlog: MFO-B5 (a retarget is still Release + RequestCast), MFO-B7/B8
+    (`kHealHoldNeverObservedMs` sizing, the next field log measures it), MFO-B58 (Task-1 concentration
+    claims without a controller test), MFO-B161.
 - **[heal-obs] + APPLY READ-BACK + MFO'S CONCPROXY ON THE ALLOW-LIST (`feat/mfo-animheal-p0`,
   2026-09-29; design scratchpad `animheal-design.md` phases 0a + 1m).** Field 0928c: Harbinger denied
   MFO's own ConcProxy forms 48 times on the INSTANT caster (`hand=?`) while MFO printed `effect applied` /
@@ -5943,7 +6017,14 @@ native seats) and ENGINE_NOTES §0.40.
   former `T#67` mirror, opened 2026-09-15; see Actuation's RUNTIME GATES entry), **HEAL-ONLY** (`kind !=
   SpellKind::Heal` → immediate false — offense/buff never enter this module,
   they stay on the byte-identical AI-fired/kInstant paths), `Config::
-  g_healAnimPackage` (repurposed toggle), `APMFBridge::Available()`. Sequence:
+  g_healAnimPackage` (repurposed toggle; DEFAULT ON and the heal road's kill switch since animheal
+  phase 2), `APMFBridge::Available()`. **WHO REACHES IT (animheal phase 2, 2026-09-30):** every heal
+  caller first asks `ChooseHealRoad` (`ComposedCast.cpp:683`: `Enabled()` + ABI >= 5 + `bEquipToCast`
+  + a `CombatController`, plus the Self-delivery test for a self heal); only `HealRoad::Claim` calls
+  `Try`. With no controller it RELEASES a standing heal claim (`End`) and labels the direct road; see
+  MAP §2 cast/ "ANIMATED HEAL CLAIM ROAD". The F1 / F12 holds below key on a DIFFERENT spell; a
+  same-spell RECIPIENT change is held by the hand lock in `CastOn` instead (`IsOwnRetarget` +
+  `IncumbentTargetLost` / `IncumbentHealCastDone`). Sequence:
   computes `isConcentration` from `spell->GetCastingType()` →
   `APMFBridge::ClaimHealCast(fid, spellID, targetID, kApmfHandLeft,
   isConcentration, stopPct)` — spellID/targetID FORWARDED UNCHANGED (a_spell

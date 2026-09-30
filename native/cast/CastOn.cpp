@@ -366,7 +366,9 @@ namespace MFO::Actuation {
                 const char* lost = nullptr;
                 if (recipient->IsDead() || recipient->IsDisabled())
                     lost = "the recipient is dead or gone";
-                else if (!atSelf && !HealInReach(a_follower, recipient, spell))
+                else if (!atSelf && (!HealInReach(a_follower, recipient, spell) ||
+                                     Sightline::CheckWithin(id, recipient->GetFormID(), kHealLosTrustSec) ==
+                                         Sightline::Verdict::Occluded))
                     lost = "the recipient is beyond the heal's reach or out of sight";
                 else if (Vocab::HealthPct(recipient) >= Vocab::kHealFull &&
                          !CastInFlightOnHand(a_follower, kHandLeft, a_spellID,

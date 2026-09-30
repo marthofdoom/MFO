@@ -7,6 +7,12 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Heals are animated in combat again.** With Harbinger installed, a follower in combat casts their heal gambits with their own hands and the real cast animation. Self heals, heals on an ally, heals on you and Auto heals all work this way. Out of combat heals still land instantly for now.
+- **One heal at a time, lowest health first.** An Auto heal no longer lands on the whole party at once. The follower heals whoever is lowest, finishes that cast, then picks again. A channelled heal like Healing Hands runs until the target is full.
+- **Heals use the left hand.** An attack spell or a weapon keeps the right hand. A weapon in the left hand steps aside for the heal and comes back after.
+- **A heal stops when it can't land.** If the ally dies, runs out of reach or goes behind a wall, the follower lets the heal go at once and moves to the next rule.
+- **The MCM toggle now says what it does.** "Animated heals in combat" is on by default. Turn it off and every heal lands instantly with no animation. If you updated from an older version, check it is on: your old setting is kept.
+- **New log lines.** [heal] says when a heal takes the instant road and why. [heal-obs] now also reports animated heals, with road=claim.
 - **A heal takes the hand at once.** A heal rule near the top of the list no longer waits behind an attack spell lower down. If the ally is down or under the rule's threshold, the follower drops the attack mid-charge and heals. Any other higher rule gets the hand as soon as the attack in progress fires (before, a follower who kept recasting Incinerate never let the heal above it through).
 - **Heals pick an ally they can see.** An Ally HP below rule with a heal skips an ally behind a wall and heals the most hurt ally in sight. If nobody hurt is in sight, the rule passes to the next one. Before, the follower kept picking the ally behind the wall and every cast was refused.
 - **Walk-to-loot gait works, and reads right.** The MCM offers Walk, Jog and Run, slowest to fastest, named for what you see in game. Run is the default. The old sprint is gone (it looked like a sprint, not a run). A saved Fast walk becomes Jog, which is the same speed.

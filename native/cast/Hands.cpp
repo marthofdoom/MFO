@@ -607,7 +607,9 @@ namespace MFO::Actuation {
             if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
                 sp && SpellHealsHealth(sp) &&
                 CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense &&
-                (Vocab::HealthPct(victim) >= Vocab::kHealFull || !HealInReach(a_follower, victim, sp)))
+                (Vocab::HealthPct(victim) >= Vocab::kHealFull || !HealInReach(a_follower, victim, sp) ||
+                 Sightline::CheckWithin(a_follower->GetFormID(), a_lock.target, kHealLosTrustSec) ==
+                     Sightline::Verdict::Occluded))
                 return true;
             return false;
         }

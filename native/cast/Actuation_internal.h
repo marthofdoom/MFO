@@ -66,6 +66,15 @@ namespace MFO::Actuation {
         // still-up ward from re-stacking.
         inline constexpr float kConcApplyPeriod = 1.0f;
 
+        // HOW LONG A MEASURED Occluded IS TRUSTED FOR A HEAL RECIPIENT (animheal phase
+        // 2): the SAME 3 s as Evaluator.cpp's kHealLosTrustS (PickAlly's heal pick),
+        // shared by the claim road's recipient check (CastOn), the incumbent test
+        // (IncumbentTargetLost) and CastAuto's series so the picker, the lock and
+        // the per-lap check agree about who is out of sight. Sized from the cadence:
+        // above the per-follower service period (133 ms x party) plus the frame the
+        // re-measure waits for. Keep equal to kHealLosTrustS.
+        inline constexpr float kHealLosTrustSec = 3.0f;
+
         // ONE source of truth for the concentration STREAM TIME-CAP (marth: loose,
         // human timing -- each stream lasts a slightly different, RANDOMIZED duration
         // so channels never feel like a fixed constant). Drawn ONCE when a stream
