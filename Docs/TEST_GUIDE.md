@@ -136,6 +136,10 @@ while looking at **nothing** to release them.
 The key is `iFocusKey` in the INI (DIK code; backslash is `0x2B`, unbound in
 vanilla Skyrim so it will not fight an existing control).
 
+Two more keys are unbound by default: `iBoardKey` opens and closes the Field
+Orders board like the Field Orders power, and `iHudKey` toggles the combat HUD.
+Both are also MCM keymaps on the Interface page.
+
 **What success looks like:** the follower breaks off and goes for the enemy you
 were looking at. The log says who:
 

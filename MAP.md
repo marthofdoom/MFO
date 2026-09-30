@@ -3866,7 +3866,7 @@ MESG (FULL "Progression", manifest entry[1] before the classes FLST; `BuildGener
 captures its FULL, no DLL literal) — `Board_Progression.cpp:43` `BeginTabItem(hostedTabLabel)`. (2) The
 board edit queue's progression verbs collapsed to ONE generic carrier `EditKind::AddonAction`
 + `EditCmd::verbId` (`AddonVerb` enum, `Board_internal.h:48`); the `verbId`→backend dispatch
-(`ApplyEdits`, `Board.cpp:882`) stays progression-shaped (Phase 7/9). The tab BODY
+(`ApplyEdits`, `Board.cpp:1173`) stays progression-shaped (Phase 7/9). The tab BODY
 (all of Board_Progression.cpp) + view payload are still add-on-typed (Phase 7/9). `Get()` read by ProgAllocator (`:143,
 150,437,666,935,1047,1264,1554`) + `Board_Progression.cpp:202`. `kAddonPlugin=
 "MFO_Progression.esl"` (`:30`). **What breaks:** the catalog is the load-time drop
@@ -4307,14 +4307,14 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   before any face is added asserts (MergeMode needs a host). Font setup must stay
   before the DX11 backend init. Log: `[overlay-probe] cjk fallback font:`.
 - **INPUT: TWO MUTUALLY EXCLUSIVE CARRIERS over ONE translation body (v2.0.4).**
-  The translation is `InputSink::Feed` (`:751`, hotkeys → close grace → ImGui feed);
+  The translation is `InputSink::Feed` (`:790`, hotkeys → close grace → ImGui feed);
   it returns TRUE when the board has taken the batch. `g_inputTrampoline` (`:92`)
   says which carrier is live, and NOTHING may drive both:
-  * **1.6.1170 AND 1.5.97 — `InputDispatchHook` (`:987`), the v1.1.4 call-site
+  * **1.6.1170 AND 1.5.97 — `InputDispatchHook` (`:1078`), the v1.1.4 call-site
     trampoline, RESTORED.** `write_call<5>` at `REL::RelocationID(67315, 68617)`
     +`0x7B` (`BSInputDeviceManager::PollInputDevices`, AE `0x140CD8F40` from id
     `68617`, SE `0x140C150B0` from id `67315`), installed by
-    `InstallInputHook` (`:1581`) from `plugin.cpp` at **PLUGIN LOAD** — it rewrites
+    `InstallInputHook` (`:1675`) from `plugin.cpp` at **PLUGIN LOAD** — it rewrites
     five live bytes in a function that runs on the input thread, and at plugin load
     that thread does not exist yet. It calls `Feed` and, on TRUE, **nulls the
     caller's head pointer** so the engine's own sinks never see the batch. THE
@@ -4333,7 +4333,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
     instruction `48 8b ce` ends at `+0x7B`, next starts at `+0x80`); `rcx` = the
     manager, `rdx` = `lea [rsp+0x40]`, a caller STACK SLOT, so the null is scoped
     to the dispatch. Full derivation in the `InstallInputHook` comment.
-  * **every other runtime — `InputSink::ProcessEvent` (`:963`)**, a
+  * **every other runtime — `InputSink::ProcessEvent` (`:1059`)**, a
     `BSTEventSink<InputEvent*>` on `BSInputDeviceManager` registered by `Install`.
     THE SINK FEEDS THE BOARD here; it cannot consume, so consumption falls to
     `SyncControlBlock` (`:485`, ControlMap toggle, edge-driven from Present) and is
@@ -4371,9 +4371,9 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
     translation (`:120`), `CloseBoard`
     (`:183` — see the anon-namespace note below), `SpellTooltip` (`:207`), `DrawHud`
     (`:226`), `WndProcHook` (`:313`) + the whole overlay hook section (`:337-1000`),
-    then the public API: `ToggleHud` (`:1008`), `Toggle` (`:1015`), `FillRuleViews`
-    (`:1032`), `ApplyEdits` (`:1081`), `PublishSnapshot` (`:1316`),
-    `InstallInputHook` (`:1581`), `Install` (`:1622`, end).
+    then the public API: `ToggleHud` (`:1099`), `Toggle` (`:1106`), `FillRuleViews`
+    (`:1124`), `ApplyEdits` (`:1173`), `PublishSnapshot` (`:1408`),
+    `InstallInputHook` (`:1675`), `Install` (`:1729`).
   * `Board_FieldKit.cpp` (1135) = **the whole panel**, ONE public function
     `DrawFieldKit` (`:151`, Followers+Gambits tabs, the list-picker, cascaded-B
     close) plus the four helpers it is the SOLE caller of, in its own anonymous
@@ -4406,7 +4406,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   resolve an opcode back to a label/ParamKind) scan them; their opcode strings are
   a FROZEN co-save contract (#10).
 - **TWO install entry points, at DIFFERENT times, and neither may move:**
-  * `InstallInputHook()` (`Board.h`, body `Board.cpp:1581`) — caller `plugin.cpp`
+  * `InstallInputHook()` (`Board.h`, body `Board.cpp:1675`) — caller `plugin.cpp`
     inside `SKSEPluginLoad`, **PLUGIN LOAD ONLY**. Writes the `68617`/`67315`+`0x7B`
     call-site trampoline. Must run before the input thread exists (it patches five
     live bytes inside that thread's own poll function). Refuses VR, then gates on
@@ -4457,7 +4457,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   queued edits so a command from the old save can't hit a freshly loaded one.
   `SetHud` ← `plugin.cpp:365`, `Diagnostics.cpp:94`, `Serialization.cpp:621`.
   `IsOpen`/`IsAvailable`/`Toggle` ← Diagnostics (publish cadence + Field Orders
-  power). `ToggleHud` (`Board.cpp:809`) is **dead** (no caller).
+  power). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B185 (gamepad/mouse keymap codes dropped). `ToggleHud` (`Board.cpp:1099`) is called by the `iHudKey` hotkey in `InputSink::Feed` (`Board.cpp:~822-865`, panel closed and no menu up via `UI::GameIsPaused`). The `iBoardKey` hotkey is there too: closed = gated `AddTask` { `PublishSnapshot` + `Toggle` } (same body as the Field Orders power in Diagnostics.cpp); open = the keyboard case closes on RELEASE via `g_boardKeyDownSeen` then `g_wantClose` (the shout-key shape, consumed in `DrawFieldKit`); both edges are consumed. Both keys default 0 (unbound), `Config::g_boardKey`/`g_hudKey`, MCM keymaps on the Interface page. The HUD key flips `g_hud` only: an MCM/Journal close re-applies `bShowHud` over it.
 
 ### Papyrus.cpp / Papyrus.h — outbound VM dispatch shim
 Reaches Papyrus-only natives by class-name+method-name string, async fire-and-forget.
@@ -6568,8 +6568,8 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 |---|---|---|
 | Serialization Save/Load/Revert callbacks | `plugin.cpp:412-414` | `kSerID='MFO0'` |
 | Message listener | `plugin.cpp:416` | drives the whole lifecycle |
-| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + WndProc + InputSink (sink path only) | `plugin.cpp:306` → `Board::Install` (`Board.cpp:1622`, end) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
-| Board input: `InputDispatchHook` `write_call<5>` on `(67315, 68617)` +`0x7B` | `plugin.cpp` (SKSEPluginLoad) → `Board::InstallInputHook` (`Board.cpp:1581`) | **at PLUGIN LOAD**, before the input thread exists; VR-refused and gated to **1.6.1170 or 1.5.97**, each a separate branch with its own verified disassembly (AE `0x140CD8F40`+`0x7B`, SE `0x140C150B0`+`0x7B`, both whole `E8 rel32`); every other runtime is a logged no-op; nulls the batch so the board takes input outright |
+| Board overlay: swapchain-vtable Present(8)/ResizeBuffers(13) + WndProc + InputSink (sink path only) | `plugin.cpp:306` → `Board::Install` (`Board.cpp:1729`) | at kDataLoaded, VR-refused; polls for live swapchain, ZERO game offsets |
+| Board input: `InputDispatchHook` `write_call<5>` on `(67315, 68617)` +`0x7B` | `plugin.cpp` (SKSEPluginLoad) → `Board::InstallInputHook` (`Board.cpp:1675`) | **at PLUGIN LOAD**, before the input thread exists; VR-refused and gated to **1.6.1170 or 1.5.97**, each a separate branch with its own verified disassembly (AE `0x140CD8F40`+`0x7B`, SE `0x140C150B0`+`0x7B`, both whole `E8 rel32`); every other runtime is a logged no-op; nulls the batch so the board takes input outright |
 | `MainThread::Install` (player Update vfunc 0x0AD) | `plugin.cpp:297` | true main-thread pump |
 | `Targeting::InstallHook` (Character::UpdateCombat 0xE4) | `plugin.cpp:299` | also drives CombatStyle |
 | `CasterConsent::InstallHook` (CheckStartCast 0x06 + CheckCast 0x0A) | `plugin.cpp:300` | 14 + 1 vtables |

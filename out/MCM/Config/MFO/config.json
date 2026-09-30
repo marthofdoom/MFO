@@ -769,6 +769,26 @@
           }
         },
         {
+          "id": "iBoardKey:General",
+          "text": "Field Orders board hotkey",
+          "type": "keymap",
+          "help": "Key that opens and closes the Field Orders board, the same as casting the Field Orders power. Unbound by default.",
+          "ignoreConflicts": false,
+          "valueOptions": {
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
+          "id": "iHudKey:General",
+          "text": "Combat HUD hotkey",
+          "type": "keymap",
+          "help": "Key that turns the combat HUD on and off. Unbound by default.",
+          "ignoreConflicts": false,
+          "valueOptions": {
+            "sourceType": "ModSettingInt"
+          }
+        },
+        {
           "id": "iOverlayX:General",
           "text": "Combat HUD: right margin (px)",
           "type": "slider",
