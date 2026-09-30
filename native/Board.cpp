@@ -435,6 +435,12 @@ namespace MFO::Board {
             ImGui::CreateContext();
             auto& io = ImGui::GetIO();
             io.IniFilename = nullptr;    // never write imgui.ini into the game dir
+            // Windows move ONLY by their title bar, and resize from any edge (marth).
+            // ResizeFromEdges already defaults true in 1.92.8, set explicitly so a
+            // future ImGui bump cannot flip it. The HUD is unaffected: it carries
+            // NoMove + NoDecoration (includes NoResize) + NoInputs.
+            io.ConfigWindowsMoveFromTitleBarOnly = true;
+            io.ConfigWindowsResizeFromEdges      = true;
             io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
             // LOAD-BEARING: gamepad nav needs NavEnableGamepad AND HasGamepad. Our
             // vendored backend compiles its XInput poll out (v1.0.59), so this
