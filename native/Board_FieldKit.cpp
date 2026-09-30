@@ -152,7 +152,7 @@ namespace MFO::Board {
             ImGui::EndTooltip();
         }
 
-    }   // ── end of the panel-only helpers
+    }   // ── end of the panel-only helpers ─────────────────────────────
 
     // ── REMEMBERED WINDOW RECT (marth: "It should remember, yes") ─────────
     // The board's pos/size live in Data/SKSE/Plugins/MFO_UI.ini as FRACTIONS
@@ -203,17 +203,24 @@ namespace MFO::Board {
                 if (k == "version") { float f; if (ParseF(val, f)) ver = static_cast<int>(f); }
             }
             if (ver != 1 || !(got[0] && got[1] && got[2] && got[3])) return;
-            // Out of range -> centred default.
-            if (v[0] < 0.0f || v[0] > 1.0f || v[1] < 0.0f || v[1] > 1.0f ||
+            // Out of range -> centred default. x/y may be negative (a window
+            // parked partly off the left/top edge); the restore clamp fixes it.
+            if (v[0] < -1.0f || v[0] > 1.0f || v[1] < -1.0f || v[1] > 1.0f ||
                 v[2] < 0.05f || v[2] > 1.0f || v[3] < 0.05f || v[3] > 1.0f) return;
             s_mem.x = v[0]; s_mem.y = v[1]; s_mem.w = v[2]; s_mem.h = v[3];
             s_mem.have = true;
         }
 
         void SaveWinMem() {
-            char buf[256];
-            std::snprintf(buf, sizeof(buf), "version=1\nboardX=%.5f\nboardY=%.5f\nboardW=%.5f\nboardH=%.5f\n",
-                          s_mem.lx, s_mem.ly, s_mem.lw, s_mem.lh);
+            // std::to_chars: locale-independent, so from_chars always reads it back.
+            std::string buf = "version=1\n";
+            const auto put = [&buf](const char* a_key, float a_v) {
+                char num[32];
+                const auto r = std::to_chars(num, num + sizeof(num), a_v, std::chars_format::fixed, 5);
+                buf += a_key; buf += '='; buf.append(num, r.ptr); buf += '\n';
+            };
+            put("boardX", s_mem.lx); put("boardY", s_mem.ly);
+            put("boardW", s_mem.lw); put("boardH", s_mem.lh);
             const std::string tmp = std::string(kUiPath) + ".tmp";
             {
                 std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
@@ -234,7 +241,9 @@ namespace MFO::Board {
     // Called EVERY frame from the Present thunk (render thread). Writes the
     // remembered rect once the board has closed. Cheap when nothing changed.
     void FlushBoardWindowMemory(bool a_open) {
-        if (!a_open && s_mem.dirty) SaveWinMem();
+        // ONE attempt per close: clear dirty first so a failed save is not
+        // retried (and re-logged) every frame while the board stays closed.
+        if (!a_open && s_mem.dirty) { s_mem.dirty = false; SaveWinMem(); }
     }
 
 

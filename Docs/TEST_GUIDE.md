@@ -37,7 +37,7 @@ clean — always verify the deck's DLL hash after a deploy).
 | SKSE's log | `~/Games/umu/489830/drive_c/.../My Games/Skyrim Special Edition/SKSE/skse64.log` |
 
 Those are on **different filesystems** — SKSE's lives inside the wine prefix.
-The board also writes `MFO_UI.ini` next to it (window position and size, display fractions) when it closes after a move or resize. Delete it to reset the board to centred.
+The board also writes `MFO_UI.ini` next to `MFO.log` in `Data/SKSE/Plugins` (window position and size, display fractions) when it closes after a move or resize. Delete it to reset the board to centred.
 
 If `MFO.log` is missing, search for it before concluding the DLL never ran.
 
