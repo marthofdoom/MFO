@@ -1070,3 +1070,12 @@ Raised against 3a42371 (`fix/mfo-heal-open-items`, tier-A review, Opus, finding 
 
 ### MFO-B194 (SEV-5) -- B181's flip lap runs after commitPreempt(); the displaced incumbent is not restored
 Raised against 3a42371 (`fix/mfo-heal-open-items`, tier-A review, Opus, finding F4), 2026-09-30. Reviewer's finding (verbatim from the coordinator's relay): "B181's flip lap runs after commitPreempt(). The displaced incumbent is not restored; not a regression." Left open. Code: `cast/CastOn.cpp` commitPreempt and the NotApplicable arm.
+
+### MFO-B195 (SEV-5) -- no field log of the caster state value that proves kReady is the held-charge state
+Raised against 8f915c0 (`fix/mfo-heal-field0930`, Opus review), 2026-09-30. `CastChargedWaitingOnHand` and the unsighted-charge release treat `MagicCaster::State::kReady` (3) as "charged and held". The fork enum and APMF's `CasterStateName` names disagree except on 3, and no field log yet records the state value of a held charge. Left open until a `[cfc]`/state capture shows 3 on a held charge. Code: `cast/Hands.cpp` `CastChargedWaitingOnHand`, `cast/CastObserve.cpp` `CasterStateName`.
+
+### MFO-B196 (SEV-5) -- CanPreemptHand makes a non-urgent heal wait on a kReady offense incumbent
+Raised against 8f915c0 (`fix/mfo-heal-field0930`, Opus review), 2026-09-30. A heal that is not urgent still waits behind an offense incumbent that is `kReady`, because the F12 yield and `CanPreemptHand` only take the hand at once for the urgent case. Left open; revisit if a field log shows a non-urgent heal starved by a charged offense hold. Code: `cast/Hands.cpp` `CanPreemptHand`, `ComposedCast.cpp` Try F12.
+
+### MFO-B197 (SEV-5) -- cost of EndDirectHealStreams on Claimed refresh laps
+Raised against 8f915c0 (`fix/mfo-heal-field0930`, Opus review), 2026-09-30. `EndDirectHealStreams` runs at `Try()`'s `Claimed` return, including refresh laps of a standing claim, so it is called every lap. Not measured; left open until a profile shows it matters. Code: `ComposedCast.cpp` Try `Claimed` return.

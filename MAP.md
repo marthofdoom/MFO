@@ -894,11 +894,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     above the ally rule's threshold (`g_firingAllyThreshold`). Change either and the claim re-mints every flicker again.
     (2) CHARGED HAND: `CastChargedWaitingOnHand` (`cast/Hands.cpp:308`, state `kReady` = 3, Harbinger's "Charged") lets
     `ComposedCast::Try`'s F12 in-flight hold (`:611`) yield to a heal when the incumbent is an OFFENSE cast held charged; `CastOn`'s
-    in-flight refresh releases a single-hand forced offense charge that sat `kReady` with no observed cast past
+    in-flight refresh releases a forced offense charge (single hand, or BOTH hands of a dual-cast plan, each `kReady`) that sat with no observed cast past
     `kHealHoldNeverObservedMs` on an Occluded foe (WARN `[cast] ... RELEASED`), and `g_unsightedCharge` (`Actuation_internal.h`,
-    cleared in `ClearCastLocks`) refuses that (spell, foe) until the foe is sighted. A dual-cast (both hands) charge is NOT bounded.
+    cleared in `ClearCastLocks`) refuses that (spell, foe) until the foe is sighted. `Sightline` `occRun` restarts when the previous reading is older than 3 s (two stale readings never count as agreeing).
     (3) `ComposedCast::NoteOocDirectHeal` labels the OOC instant heal (MFO-B191 open). (5) `EndDirectHealStreams` now runs at
-    `Try()`'s `Claimed` return (MFO-B192 fixed); MFO-B193, MFO-B194 open.
+    `Try()`'s `Claimed` return (MFO-B192 fixed); MFO-B193, MFO-B194 open; MFO-B195 (kReady unproven in a field log), MFO-B196 (non-urgent heal waits on a kReady offense incumbent via `CanPreemptHand`), MFO-B197 (`EndDirectHealStreams` cost on Claimed refresh laps) open.
     **Backlog drain (141c480):** FIXED B175, B178, B179, B183, B186, B187, B188, B190 (B180 partly); B173 REOPENED (OOC `CastAuto` still claims via `CastSelfDirect`/`CastTargetDirect` during a controller flap); B184 closed by design; B181 REOPENED by marth (any in-combat instant-road use outside 1.5.97 is a defect to fix, never by-design). B186: the
     shield-by-perks top-up's rank lives in `cast/Equip.cpp` `g_shieldRank` (in-memory, `g_forcedMx`), read by
     `LeftHoldRule` only while that shield is in the left hand; B187: `Loadout::LeftHandYield` now reports the

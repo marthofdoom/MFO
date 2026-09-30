@@ -16,6 +16,11 @@ namespace MFO::Sightline {
         // through a doorway is not "occluded" for a whole fight.
         constexpr float kFreshSeconds = 1.0f;
 
+        // Two Occluded readings further apart than this are not "agreeing": the run
+        // restarts. Mirrors the callers' trust window (Actuation kHealLosTrustSec,
+        // 3 s), which cannot be included here.
+        constexpr float kOccRunTrustSeconds = 3.0f;
+
         // Per-PAIR floor between measurements. PickFoe runs once per RULE per
         // tick, so one follower with five foe selectors would otherwise queue
         // five identical measurement batches into the same frame.
@@ -190,6 +195,9 @@ namespace MFO::Sightline {
                 }
                 e.los = los;
                 e.at  = Clock::now();
+                // A stale run is not "agreeing": readings further apart than the trust window
+                // restart the count (the new reading is run 1).
+                if (!never && Since(e.at) > kOccRunTrustSeconds) e.occRun = 0;
                 e.occRun = los ? 0 : static_cast<std::uint16_t>(std::min<int>(e.occRun + 1, 0xFFFF));
             }
         }

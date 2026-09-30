@@ -550,32 +550,54 @@ namespace MFO::Actuation {
                 // charge that is still building, firing, or aimed at a sighted foe is
                 // never cut. The release is loud (WARN), and the rule may claim again only
                 // once the foe is sighted (g_unsightedCharge above).
-                if (offenseSpell && a_target && handPlan.left != handPlan.right) {
-                    const std::size_t h = handPlan.left ? kHandLeft : kHandRight;
-                    const auto stamp = CastLockClaimStamp(id, h, a_spellID);
-                    if (stamp != std::chrono::steady_clock::time_point{}) {
+                // DUAL-CAST PLANS ARE BOUNDED TOO (field 2026-09-30: Incinerate charged in
+                // BOTH hands): every hand of the plan must be fully charged (kReady), past
+                // the window, with no observed fire on either, and the foe Occluded. One
+                // hand still building, or one that fired, keeps the claim.
+                if (offenseSpell && a_target && (handPlan.left || handPlan.right)) {
+                    const std::size_t hands[2] = { kHandLeft, kHandRight };
+                    const bool        planned[2] = { handPlan.left, handPlan.right };
+                    bool              allCharged = true;
+                    long long         oldestMs   = 0;
+                    for (int i = 0; i < 2 && allCharged; ++i) {
+                        if (!planned[i]) continue;
+                        const std::size_t h = hands[i];
+                        const auto stamp = CastLockClaimStamp(id, h, a_spellID);
+                        if (stamp == std::chrono::steady_clock::time_point{}) { allCharged = false; break; }
                         const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - stamp);
-                        if (ageMs >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
-                            !ComposedCast::ObservedFiring(id, claimHand, a_spellID,
-                                                          static_cast<std::uint32_t>(ageMs.count() + 1)) &&
-                            CastChargedWaitingOnHand(a_follower, h, a_spellID, CastProxyOnHand(id, h)) &&
-                            Sightline::CheckWithin(id, a_target->GetFormID(), kHealLosTrustSec) ==
-                                Sightline::Verdict::Occluded) {
-                            spdlog::warn("[cast] {:08X} forced offense cast {:08X} at {:08X} RELEASED: fully charged "
-                                         "({} hand) for {} ms with no observed cast and the foe measured Occluded "
-                                         "-- the charge never fires while the foe is unsighted (rule {}); the "
-                                         "rule may claim again once the foe is sighted",
-                                         id, a_spellID, a_target->GetFormID(), h == kHandLeft ? "left" : "right", ageMs.count(),
-                                         g_firingRule);
-                            APMFBridge::ReleaseCastClaimOnHand(id, claimHand);
-                            ClearCastLockHand(id, h);
-                            ComposedCast::ClearWatchHand(id, claimHand);
-                            g_unsightedCharge[id] = { a_spellID, a_target->GetFormID() };
-                            return { Result::FailedOther,
-                                     "offense cast released: charged for the never-observed window on an unsighted foe",
-                                     true };
+                        if (ageMs < std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) ||
+                            ComposedCast::ObservedFiring(id, h == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                                            : APMFBridge::kApmfHandRight,
+                                                         a_spellID,
+                                                         static_cast<std::uint32_t>(ageMs.count() + 1)) ||
+                            !CastChargedWaitingOnHand(a_follower, h, a_spellID, CastProxyOnHand(id, h))) {
+                            allCharged = false;
+                            break;
                         }
+                        oldestMs = std::max<long long>(oldestMs, ageMs.count());
+                    }
+                    if (allCharged &&
+                        Sightline::CheckWithin(id, a_target->GetFormID(), kHealLosTrustSec) ==
+                            Sightline::Verdict::Occluded) {
+                        spdlog::warn("[cast] {:08X} forced offense cast {:08X} at {:08X} RELEASED: fully charged "
+                                     "({} hand) for {} ms with no observed cast and the foe measured Occluded "
+                                     "-- the charge never fires while the foe is unsighted (rule {}); the "
+                                     "rule may claim again once the foe is sighted",
+                                     id, a_spellID, a_target->GetFormID(),
+                                     (handPlan.left && handPlan.right) ? "both" : handPlan.left ? "left" : "right",
+                                     oldestMs, g_firingRule);
+                        APMFBridge::ReleaseCastClaimOnHand(id, claimHand);   // a dual claim is one handle
+                        for (int i = 0; i < 2; ++i) {
+                            if (!planned[i]) continue;
+                            ClearCastLockHand(id, hands[i]);
+                            ComposedCast::ClearWatchHand(id, i == 0 ? APMFBridge::kApmfHandLeft
+                                                                    : APMFBridge::kApmfHandRight);
+                        }
+                        g_unsightedCharge[id] = { a_spellID, a_target->GetFormID() };
+                        return { Result::FailedOther,
+                                 "offense cast released: charged for the never-observed window on an unsighted foe",
+                                 true };
                     }
                 }
                 if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
