@@ -322,6 +322,89 @@ namespace MFO::Actuation {
             const auto kind    = CasterConsent::ClassifySpell(spell);
             const bool hostile = (kind == CasterConsent::SpellKind::Offense);
 
+            // ── AUTO HEAL ON THE ANIMATED CLAIM ROAD: A SERIES OF REAL CASTS ─────
+            // (animheal phase 2, 2026-09-30, marth: "lowest-HP eligible recipient
+            // first, one real cast at a time"; the fan becomes a series.) With
+            // Harbinger present and a combat controller (ComposedCast::
+            // ChooseHealRoad) a heal is cast by the follower's own AI, one real cast
+            // with one hand, so it cannot land on N allies at once. Pick ONE
+            // recipient and hand it to the single-target road (CastOn), which owns
+            // everything a claimed heal needs: the per-lap reach / LoS / full re-judge,
+            // the LEFT hand lock with its carried-rank preemption, Loadout::Prepare's
+            // left-hand yield, the claim, the stream cap. So AUTO and an explicit
+            // heal rule cannot drift apart.
+            //   * the pick is the LOWEST health fraction under the rule's own
+            //     threshold, among the party, the player and -- for a Self-delivery
+            //     spell only (Harbinger serves a self claim for Self delivery) -- the
+            //     caster, each inside the heal's reach with line of sight (HealInReach
+            //     plus PickAlly's 3 s trust of a recent Occluded);
+            //   * a cast IN FLIGHT on the standing claim's recipient finishes first
+            //     (D8): the pick stays on him until the engine is done;
+            //   * between casts CastOn's hand lock decides: the same rule re-aims at
+            //     the new lowest only once the incumbent's cast has FIRED (or the
+            //     incumbent is lost -- dead, out of reach, full), so two allies
+            //     trading the lowest slot never restart the claim before a cast lands;
+            //   * nobody needs it -> this rule's standing claim is released, a
+            //     transparent NoOp.
+            // Out of combat, or with Harbinger absent, the fan / conc series below
+            // stay exactly as they were (the direct road, D1, labelled).
+            if (!hostile && kind == CasterConsent::SpellKind::Heal &&
+                ComposedCast::ChooseHealRoad(a_follower, spell, nullptr) ==
+                    ComposedCast::HealRoad::Claim) {
+                const float radius  = Config::g_sharedRadius.load();
+                const float ceiling = std::min(a_healThreshold, Vocab::kHealFull);
+                const auto  selfPos = a_follower->GetPosition();
+                const bool  selfOk  = spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+                std::vector<RE::FormID> sightWant;
+                RE::Actor* lowest   = nullptr;
+                float      lowestHp = ceiling;   // strictly under the rule's ceiling
+                int        outOfReach = 0;
+                auto probe = [&](RE::Actor* m) {
+                    if (!m || m->IsDead() || m->IsDisabled() || !m->Is3DLoaded()) return;
+                    const float hp = Vocab::HealthPct(m);
+                    if (hp >= lowestHp) return;
+                    if (m == a_follower) {
+                        if (!selfOk) return;
+                    } else {
+                        if (selfPos.GetDistance(m->GetPosition()) > radius) return;
+                        sightWant.push_back(m->GetFormID());
+                        if (!HealInReach(a_follower, m, spell) ||
+                            Sightline::CheckWithin(id, m->GetFormID(), kHealLosTrustSec) ==
+                                Sightline::Verdict::Occluded) {
+                            ++outOfReach;
+                            return;
+                        }
+                    }
+                    lowestHp = hp; lowest = m;
+                };
+                // SEV-1 discipline: the lock-guarded FormID snapshot, never g_active (#4).
+                if (auto snap = Followers::ActiveSnapshot())
+                    for (const RE::FormID fid : *snap)
+                        probe(RE::TESForm::LookupByID<RE::Actor>(fid));
+                probe(RE::PlayerCharacter::GetSingleton());
+                if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant));
+
+                // D8: a cast the engine is running on the standing claim's recipient
+                // finishes before anyone else is served.
+                RE::Actor* pick = lowest;
+                if (APMFBridge::GetHealCastSpell(id) == a_spellID &&
+                    CastInFlightOnHand(a_follower, kHandLeft, a_spellID, APMFBridge::GetHealCastProxy(id))) {
+                    const auto t = APMFBridge::GetHealCastTarget(id);
+                    if (auto* cur = t == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(t))
+                        pick = cur;
+                }
+                if (!pick) {
+                    ReleaseOwnHealClaim(a_follower, a_spellID, "AUTO: nobody in reach needs this heal now");
+                    return { Result::NoOp,
+                             outOfReach ? std::format("auto heal: {} in need, none in the spell's reach", outOfReach)
+                                        : std::string("auto heal: nobody below threshold"),
+                             true };
+                }
+                auto out = CastOn(a_follower, a_spellID, pick, /*a_rangeGate=*/false);
+                out.reason = std::format("auto heal (lowest first) at {:08X}: {}", pick->GetFormID(), out.reason);
+                return out;
+            }
+
             // AUTO ALLY-HEAL, CONCENTRATION -> SEQUENTIAL MOST-HURT (marth). A
             // concentration heal starts an ENGINE channel on the follower's caster,
             // and one caster sustains only ONE channel at a time -- so AUTO cannot fan

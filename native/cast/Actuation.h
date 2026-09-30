@@ -312,6 +312,20 @@ namespace MFO::Actuation {
                      RE::SpellItem* a_castForm, const char* a_road, float a_hpBefore,
                      HealAttach a_attach);
 
+    // [heal-obs] ON THE CLAIM ROAD (animheal phase 2). There is no MFO apply to
+    // observe there: the follower's own AI casts. So the observation starts at the
+    // engine's own FIRE of the claimed heal (Diagnostics.cpp's TESSpellCastEvent sink,
+    // on the job worker, right after ComposedCast::NoteObservedCast): when the fired
+    // form is the standing heal claim's spell or its delivery-flip proxy, one
+    // HealObsNote with road=claim is posted to the main thread, recipient = the
+    // claim's own target (0 = the caster). The "HP before" is the recipient's health
+    // on the claim's last lap before the fire (HealObsClaimLap, stamped by CastOn's
+    // per-lap recipient check), because by the time the event reaches MFO an instant
+    // heal has already landed. Worker-serial callers; the shared state is under the
+    // [heal-obs] mutex.
+    void HealObsClaimLap(RE::FormID a_caster, RE::FormID a_recipient, float a_hp);
+    void HealObsNoteClaimFire(RE::FormID a_caster, RE::FormID a_firedForm);
+
     // MFO's own ConcProxy forms (the delivery-flipped 0xFF copies, minted at runtime,
     // kept for the session, re-minted after a load): every one minted so far. ANY
     // thread (an atomic mirror). Published on the follower's ch.8 allow-list so

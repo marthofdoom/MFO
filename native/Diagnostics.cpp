@@ -271,6 +271,9 @@ namespace MFO::Diagnostics {
                             // the positive fire signal its RELEASE phase waits on.
                             if (expectingCfc) {
                                 ComposedCast::NoteObservedCast(casterID, spellID);
+                                // [heal-obs] road=claim (animheal phase 2): a no-op unless
+                                // this fire is the standing HEAL claim's spell or proxy.
+                                Actuation::HealObsNoteClaimFire(casterID, spellID);
                                 spdlog::info("[cast] {:08X} {} CFC-fired {} ({:08X}) "
                                              "*** THE ANIMATED PATH ***", casterID,
                                              actor && actor->GetName() ? actor->GetName() : "?",
@@ -299,7 +302,12 @@ namespace MFO::Diagnostics {
                             // cannot claim control nobody has. One line per
                             // gambit cast -- cast cadence, never tick cadence.
                             if (ours) {
-                                Loadout::StartCooldown(casterID);
+                                // animheal phase 2 (review F2): the fire of a LIVE claimed
+                                // concentration heal is its channel STARTING -- stamp the
+                                // cooldown, keep the spell in hand; the claim's end
+                                // (ComposedCast::End) takes it back.
+                                Loadout::StartCooldown(casterID,
+                                    /*a_release=*/!ComposedCast::HealClaimFireKeepsSpell(casterID, spellID));
                                 if (CasterConsent::NoteOurCast(casterID)) {
                                     spdlog::info("[consent] {:08X} holding exclusive control "
                                                  "through the cast cooldown", casterID);

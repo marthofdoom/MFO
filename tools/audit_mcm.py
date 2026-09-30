@@ -28,7 +28,10 @@ CONFIG_CPP   = ROOT / "native/Config.cpp"
 
 # Keys that legitimately live in an ini store but are NOT MCM controls (seed- or
 # dev-only). Orphan check exempts these. Add here when you intentionally add one.
-STORE_ALLOWLIST = set()
+# bHealAnimMigrated (animheal phase 2, 2026-09-30): the one-shot marker of the
+# bHealAnimPackage 0 -> 1 store migration in Config.cpp EnsureMcmDefaults. Shipped
+# = 1 in both stores so a fresh store is never migrated; nothing reads it.
+STORE_ALLOWLIST = {"bHealAnimMigrated"}
 
 errors = []
 def fail(msg): errors.append(msg)

@@ -262,11 +262,11 @@ namespace MFO::Config {
     // fix/mfo-no-decline-fallback removed.
     //
     // THE HEAL KILL SWITCH IS `bHealAnimPackage` OFF. That makes
-    // `ComposedCast::Enabled` false, so MFO never claims the facet at all, `Try`
-    // answers `NotApplicable`, and the caller runs its OWN degrade path -- the
-    // working kInstant heal (no follower animation) in the `Actuation_Direct.cpp`
-    // callers, and the AI-first-grace + `ForceCast` legacy hybrid in `CastOn`'s
-    // ally/player branch. That is MFO NOT ASKING -- not a fallback from a refusal.
+    // `ComposedCast::Enabled` false, so MFO never claims the facet at all:
+    // `ComposedCast::ChooseHealRoad` answers `DirectDegrade` and every heal caller
+    // takes the direct road (the kInstant heal, no follower animation). That is MFO
+    // NOT ASKING -- not a fallback from a refusal. (animheal phase 2, 2026-09-30:
+    // the default is now ON; OFF is the kill switch.)
     //
     // WITH APMF PRESENT, A REFUSED CLAIM FAILS CLOSED and never degrades: the cast
     // visibly does not happen and one rate-limited `[apmf] ... APMF REFUSED ...`
@@ -370,7 +370,16 @@ namespace MFO::Config {
     // equipped the SAME hand APMF/the AI could touch and caused a cross-thread
     // use-after-free CTD in the field; that drive is fully retired.
     //
-    // DEFAULT OFF (still experimental -- proving cast+heal on APMF). ON: a
+    // DEFAULT ON since animheal phase 2 (2026-09-30; marth's release gate: every
+    // in-combat cast animated). The meaning, as it now is: ON + Harbinger present +
+    // a combat controller on the follower = a heal gambit is a ch.8b claim cast by
+    // the follower's own AI, animated (ComposedCast::ChooseHealRoad decides; out of
+    // combat the direct road, labelled). OFF = the KILL SWITCH: every heal lands on
+    // the direct road. The key name is frozen (MCM-Helper persistence identity), so
+    // it keeps its historical name. UPGRADE: a store that still holds the old seeded
+    // `bHealAnimPackage = 0` is flipped to 1 ONCE by EnsureMcmDefaults' migration
+    // (marker key `bHealAnimMigrated`); a later OFF is kept. The older text below describes the claim's
+    // outcome contract and still holds. ON: a
     // follower's forced heal (self or at an ally) is claimed via APMFBridge::
     // ClaimHealCast. **THE TWO NEGATIVE OUTCOMES ARE NOT THE SAME THING, and this
     // line used to conflate them into one false claim ("a refused claim degrades
@@ -394,7 +403,7 @@ namespace MFO::Config {
     // (CasterConsent::SpellKind::Heal), they stay on the legacy AI-fired /
     // kInstant paths regardless. Wholly INERT without APMF and on SE/VR. No
     // save state. See native/ComposedCast.cpp.
-    inline std::atomic<bool>  g_healAnimPackage{ false };
+    inline std::atomic<bool>  g_healAnimPackage{ true };
 
     // Composed Forced Cast per-follower DEGRADE backoff, ms (SPEC-FORCED-CAST.md
     // §1.6). VESTIGIAL as of the feat/cast-act S1 pass (2026-09-05) and still

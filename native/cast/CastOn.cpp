@@ -98,6 +98,19 @@ namespace MFO::Actuation {
                           a_follower, a_what, a_spell, a_target, a_hand);
         }
 
+        // Prepare's LeftHandYield callbacks (plain function pointers, Loadout.h). The
+        // heal claim road's also yields a two-hander / bow RIGHT hold (it occupies the
+        // left hand too): CastOn reaches Prepare on that road only after the
+        // LeftHoldRule gate found the heal rule outranking any such hold (review
+        // round 2, marth's ruling). Every other cast keeps the left-hold-only yield.
+        bool CastYieldLeft(RE::Actor* a_actor) {
+            return YieldForcedLeftHand(a_actor, "a cast is taking the left hand");
+        }
+        bool HealYieldLeft(RE::Actor* a_actor) {
+            return YieldForcedLeftHand(a_actor, "an animated heal claim ranked above the hold is taking "
+                                                "the left hand", /*a_twoHandToo=*/true);
+        }
+
     }
 
         // a_rangeGate (#68): true only for an OBVIOUS target (ladder rungs
@@ -331,6 +344,83 @@ namespace MFO::Actuation {
                                        : Vocab::kHealFull;
                 urgentHeal = recipient && !recipient->IsDead() && (down || Vocab::HealthPct(recipient) < bar);
             }
+
+            // ── THE HEAL ROAD (animheal phase 2, 2026-09-30) ─────────────────────
+            // A Heal-kind spell with Harbinger present and a combat controller on the
+            // follower is a ch.8b cast claim, cast by the follower's OWN AI with the
+            // real animation -- self, ally and player alike (ComposedCast::
+            // ChooseHealRoad owns the decision, so every heal caller agrees on it).
+            // healClaim sends it past the self / concentration / restoration forks
+            // below to the composed branch, the road that animated in the field
+            // (2026-09-06/08/09): ComposedCast::Try, Loadout::Prepare (the spell into
+            // the LEFT hand, a left-hand weapon yielding at that point of no return),
+            // the LEFT lock. It reverses fix/mfo-combat-restoration-direct (2026-09-21)
+            // for exactly this case: that freeze was MFO's own direct cast colliding
+            // with MFO's own claim on the instant caster, which Harbinger no longer
+            // gates by a hand claim (APMF d41ed43). Everything else keeps its road.
+            const auto healRoad  = ComposedCast::ChooseHealRoad(a_follower, spell, a_target);
+            const bool healClaim = healRoad == ComposedCast::HealRoad::Claim;
+            // THE RECIPIENT, RE-JUDGED EVERY LAP ON THE CLAIM ROAD, before the hand
+            // lock and before the in-flight refresh (a claim is re-asked for every
+            // lap, so this is its per-lap check). The direct road makes the same
+            // reach test inside CastTargetDirect; the claim road never gets there.
+            //   * dead, or beyond the heal's reach / out of sight (HealInReach, the
+            //     picker's own test) -> this rule's claim on it is released NOW, even
+            //     mid-cast (a heal cannot land on him), and the rule falls through;
+            //   * at full health and nothing in flight -> released (a claim at a full
+            //     recipient would only make the AI cast into a full bar). A cast in
+            //     flight finishes first (D8); a channel stops at full by seat 0x07.
+            // Transparent either way: the rules below run. Not a fallback -- nothing
+            // else casts this heal this lap.
+            if (healClaim) {
+                RE::Actor* recipient = (a_target == a_follower) ? a_follower : a_target;
+                const bool atSelf    = recipient == a_follower;
+                if (!atSelf) Sightline::Want(id, { recipient->GetFormID() });
+                const char* lost = nullptr;
+                if (recipient->IsDead() || recipient->IsDisabled())
+                    lost = "the recipient is dead or gone";
+                else if (!atSelf && (!HealInReach(a_follower, recipient, spell) ||
+                                     Sightline::CheckWithin(id, recipient->GetFormID(), kHealLosTrustSec) ==
+                                         Sightline::Verdict::Occluded))
+                    lost = "the recipient is beyond the heal's reach or out of sight";
+                else if (Vocab::HealthPct(recipient) >= Vocab::kHealFull &&
+                         !CastInFlightOnHand(a_follower, kHandLeft, a_spellID,
+                                             CastProxyOnHand(id, kHandLeft)))
+                    lost = "the recipient is at full health";
+                if (lost) {
+                    // Only a claim aimed at THIS recipient is this lap's to end (0 = self).
+                    if (APMFBridge::GetHealCastTarget(id) == (atSelf ? 0 : recipient->GetFormID()))
+                        ReleaseOwnHealClaim(a_follower, a_spellID, lost);
+                    return { Result::FailedOther, std::format("animated heal not cast: {}", lost), true };
+                }
+                // GAMBIT ORDER ON THE LEFT HAND (review round 2, marth 2026-09-30: "Gambit
+                // order wins, so in most cases it's heal. But a poorly ordered gambit
+                // board shouldn't be rescued programmatically."). An equip gambit whose
+                // hold occupies the left hand (a dual-wield left hold, or a two-hander /
+                // bow) and whose rule OUTRANKS this one keeps the hand: the heal does not
+                // claim, and a claim of this rule's still standing is released. Rank is
+                // the carried rule index (ForcedHold::rule vs g_firingRule), no tenure,
+                // no rescue. The reverse (the heal outranks) is handled where the hand
+                // is taken: the hold yields at Prepare's point of no return and returns
+                // once the heal has fired (HealClaimTakesLeftFrom on the equip side).
+                if (const int holdRule = LeftHoldRule(id); holdRule < g_firingRule) {
+                    ReleaseOwnHealClaim(a_follower, a_spellID,
+                                        "an equip gambit ranked above this rule holds the left hand");
+                    static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_outrankLog;
+                    const auto now = std::chrono::steady_clock::now();
+                    auto& last = s_outrankLog[id];
+                    if (now - last >= std::chrono::seconds(5)) {
+                        last = now;
+                        spdlog::info("[heal] {:08X} animated heal (spell {:08X}, rule {}) NOT claimed -- equip "
+                                     "rule {} holds the left hand and ranks above it (gambit order)",
+                                     id, a_spellID, g_firingRule, holdRule);
+                    }
+                    return { Result::FailedOther,
+                             "animated heal not cast: an equip gambit ranked above holds the left hand", true };
+                }
+                // [heal-obs]'s "HP before" for a claim fire (HealObsClaimLap).
+                HealObsClaimLap(id, atSelf ? 0 : recipient->GetFormID(), Vocab::HealthPct(recipient));
+            }
             HandPlan handPlan;
             // ONE lambda, because the in-flight gate below may have to run this a
             // SECOND time: if the claim its hand-pin was based on turns out to be
@@ -390,6 +480,29 @@ namespace MFO::Actuation {
             // falls straight through to the normal path below, which re-claims and
             // reports its own outcome exactly as before.
             if (handPlan.inFlight) {
+                // THE CLAIMED CONCENTRATION HEAL'S STREAM CAP (animheal phase 2; exact
+                // bounding covers every spell class). This refresh is the claim's
+                // heartbeat, so it is where the bound bites: past the per-channel cap
+                // (HealChannelCapped, DrawConcCap's heal band) the claim is released
+                // instead of renewed. Release + re-stream while the rule keeps
+                // winning, exactly as the direct stream's cap does -- never a stop and
+                // never a cooldown: the next lap claims it afresh.
+                if (healClaim && handPlan.left &&
+                    spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                    float capSec = 0.0f;
+                    if (HealChannelCapped(a_follower, a_spellID, capSec)) {
+                        // The spell STAYS in the hand (review round 2, R2-5): this is a
+                        // re-stream, not the claim's end, so End() takes nothing back and
+                        // the next lap's re-claim finds it there (Prepare: AlreadyReady).
+                        ReleaseOwnHealClaim(a_follower, a_spellID,
+                                            "the concentration heal reached its stream cap "
+                                            "(released, re-streams while the rule wins; the spell stays in hand)",
+                                            /*a_keepSpell=*/true);
+                        return { Result::NoOp,
+                                 std::format("concentration heal reached its {:.1f} s stream cap", capSec),
+                                 true };
+                    }
+                }
                 const std::int32_t claimHand =
                     (handPlan.left && handPlan.right) ? APMFBridge::kApmfHandDualCast :
                     handPlan.left                     ? APMFBridge::kApmfHandLeft :
@@ -421,11 +534,55 @@ namespace MFO::Actuation {
                     if (handPlan.right)
                         ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandRight,
                                                  CastProxyOnHand(id, kHandRight));
+                    // ── REPAIR, INSIDE THE REFRESH (review F1; round 2 R2-1, R2-3 and
+                    // SHADOW R2-1) ──────────────────────────────────────────────────
+                    // A heal claim whose spell left the left hand (the post-fire take-
+                    // back, a restore, a give-back), or that sits in hand unfired past
+                    // the never-observed bound, is put back in the hand HERE, under the
+                    // claim the refresh above just renewed. Three things about where:
+                    //   * AFTER the refresh, because the refresh's replay is what learns
+                    //     APMF's delivery-flip proxy. Judged before it (lap 2 of a fresh
+                    //     ally claim, proxy still 0), APMF's proxy in the left hand read
+                    //     as "not in hand" and Prepare equipped the ORIGINAL over it
+                    //     mid-charge (SHADOW R2-1).
+                    //   * WITHOUT the PIN-VOID below, and without lockHands: the claim is
+                    //     live, so the pin is valid, and the lock keeps its `lastSeen`
+                    //     (IncumbentHealCastDone's "fired since claimed" window) and its
+                    //     rank/waiter state untouched (R2-3).
+                    //   * TRANSPARENT like the refresh: the claim is standing, the lap
+                    //     only maintained it, so the rules below still run.
+                    // Never a direct cast. Prepare's REAL verdict is logged (R2-1): an
+                    // open gear debt no longer refuses a refill of an EMPTY left hand
+                    // under a live heal claim (a_healClaimLive), and a Debounced /
+                    // Failed answer is said as such. Only where MFO equips spells at
+                    // all (bEquipToCast, the normal path's own gate on Prepare).
+                    if (healClaim && handPlan.left && !handPlan.right && Config::g_equipToCast.load()) {
+                        if (const HealRepair rep = HealClaimNeedsRepair(a_follower, spell)) {
+                            // In-hand shapes never Prepare (round 3, R3-1): the heal or
+                            // APMF's proxy is already held; Prepare would equip the
+                            // original over the proxy. Heartbeat (the refresh above) + log.
+                            std::string why;
+                            const char* verdict = "no Prepare: the heal or its proxy is in the left hand";
+                            bool failed = false;
+                            if (rep.prepare) {
+                                const auto ready = Loadout::Prepare(a_follower, spell, why, HealYieldLeft,
+                                                                    /*a_healClaimLive=*/true);
+                                if (ready == Loadout::Ready::AlreadyReady || ready == Loadout::Ready::Equipped)
+                                    CasterConsent::Want(id, a_spellID);   // idempotent; the Ready arms' call
+                                verdict = HealRepairVerdict(ready);
+                                failed  = ready == Loadout::Ready::Failed;
+                            }
+                            LogHealRepair(id, a_spellID, rep, verdict, failed, why);
+                            return { Result::NoOp, std::format("heal claim repair: {}", verdict), true };
+                        }
+                    }
                     // NOTHING TO RE-STAMP HERE. Rank lives in the lock's
                     // owningRule, written once when the hand was claimed, so an
                     // in-flight refresh has no rank bookkeeping to do -- and
                     // `lastSeen` must stay frozen (F8's cap depends on it; see
-                    // CastLock::claimGoneAt).
+                    // CastLock::claimGoneAt; IncumbentHealCastDone reads it as the
+                    // claim stamp). The heal repair above returns before this and
+                    // never re-stamps it either (round 2, R2-3).
                     LogCastInFlight(id, handPlan.left ? kHandLeft : kHandRight, a_spellID,
                                     handPlan.left && handPlan.right);
                     return { Result::NoOp, "cast already in flight (claim refreshed)", true };
@@ -497,7 +654,7 @@ namespace MFO::Actuation {
             // refreshes the channel + applies the effect on the channel's own
             // beat -- ~1 s kConcApplyPeriod for concentration, fCastCooldown
             // for FF); the reconcile releases it when the rule goes false.
-            if (a_target == a_follower && Config::g_castSelf.load()) {
+            if (a_target == a_follower && Config::g_castSelf.load() && !healClaim) {
                 // F3 tri-state (mirrors Logistics.cpp's OOC cast dispatch,
                 // ~`:1500-1560` -- see the corrected cite at the self fork above):
                 // only a real Applied is THIS tick's action. A Refreshed tick (the channel is
@@ -546,7 +703,7 @@ namespace MFO::Actuation {
             // fire-and-forget release to observe. The bounded stream is its
             // own actuation (see ConcentrationCast above). (Self concentration
             // never reaches here -- the self fork above intercepts it.)
-            if (spell->GetCastingType() ==
+            if (!healClaim && spell->GetCastingType() ==
                 RE::MagicSystem::CastingType::kConcentration) {
                 commitPreempt();   // the claim happens inside ConcentrationCast
                 return ConcentrationCast(a_follower, spell, a_target);
@@ -562,7 +719,7 @@ namespace MFO::Actuation {
             // target only reaches here with bCastSelf OFF, and that dev-only
             // world keeps its old road byte-identical (the heal twin below
             // already scopes itself the same way).
-            if (a_target != a_follower && IsRestorationSpell(spell)) {
+            if (!healClaim && a_target != a_follower && IsRestorationSpell(spell)) {
                 commitPreempt();   // the hand is taken inside CastTargetDirect
                 return RestorationCastDirect(a_follower, spell, a_target);
             }
@@ -752,7 +909,12 @@ namespace MFO::Actuation {
                     // degrade contract, not a refusal: equip/consent/legacy hybrid run
                     // below exactly as in a world with no APMF. Silent -- APMFBridge
                     // warns once per session about a too-old ABI itself.
-                } else if (a_target && a_target != a_follower) {
+                } else if (a_target && (a_target != a_follower || healClaim)) {
+                    // (animheal phase 2: a SELF heal on the claim road comes here too --
+                    // Try() sends target 0 for self, which Harbinger resolves to the
+                    // claimant for a Self-delivery spell, and ChooseHealRoad keeps any
+                    // other delivery off this road. Before, self heals took the self
+                    // fork's CastSelfDirect and never met Loadout::Prepare's yield.)
                     // The heal twin. `ownedCast` is Offense-only by its own
                     // classification check, so a Heal/Buff spell never took that branch
                     // and fell straight into the AI-first-grace + force-on-miss hybrid
@@ -803,9 +965,11 @@ namespace MFO::Actuation {
                 // Prepare always equips into the LEFT slot, so this is keyed to the
                 // physical hand it takes, not to handPlan.left. Returns whether a
                 // hold was released, so Prepare books no gear debt for it (F2).
-                switch (Loadout::Prepare(a_follower, spell, why, [](RE::Actor* a_actor) {
-                            return YieldForcedLeftHand(a_actor, "a cast is taking the left hand");
-                        })) {
+                // The heal claim road (review round 2): its own yield (a two-hander /
+                // bow hold ranked below it yields too), and a_healClaimLive when its
+                // claim stands, so an open gear debt does not refuse an EMPTY left hand.
+                switch (Loadout::Prepare(a_follower, spell, why, healClaim ? HealYieldLeft : CastYieldLeft,
+                                         healClaim && composed == ComposedCast::TryResult::Claimed)) {
                 case Loadout::Ready::AlreadyReady:
                 case Loadout::Ready::Equipped: {
                     equipped = true;
@@ -1024,7 +1188,11 @@ namespace MFO::Actuation {
                             // resolved above, this is a Heal/Buff spell) so a different
                             // cast rule cannot re-point APMF's engine seats mid-charge/
                             // mid-decision.
-                            lockHands(a_spellID, a_target->GetFormID());
+                            // lockTargetKey, not a_target's FormID (animheal phase 2): a
+                            // SELF heal reaches this branch now, and ResolveCastHand keys
+                            // a self lock on 0, so the FormID would read as a stranger
+                            // on the next lap. Identical to the FormID for any ally.
+                            lockHands(a_spellID, lockTargetKey);
 
                             // OPAQUE hold: the AI is deciding+casting; firing lower rules now
                             // risks disturbing that decision (the §0.6 confound). No force,

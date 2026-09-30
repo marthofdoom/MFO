@@ -165,13 +165,77 @@ namespace MFO::ComposedCast {
     TryResult Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
                   CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct = 0);
 
+    // ── WHICH ROAD A HEAL TAKES (animheal phase 2, 2026-09-30) ─────────────────
+    // ONE decision, asked by every heal caller (CastOn, CastAuto, CastSelfDirect,
+    // CastTargetDirect) so the combat table, the AUTO series and the OOC table can
+    // never pick two different roads for one actor at one instant (RC-1 of the
+    // 2026-09-21 freeze was exactly that: MFO's own claim and MFO's own direct cast
+    // colliding on one follower).
+    //   NotHeal        -- not a Heal-kind spell (CasterConsent::ClassifySpell). The
+    //                     caller's own road, unchanged. Wards and other Restoration-
+    //                     school buffs stay on the direct road (IsRestorationSpell).
+    //   Claim          -- THE heal road. Harbinger present and capable (ABI >= 5,
+    //                     bHealAnimPackage ON), a verified runtime (1.6.1170 or
+    //                     1.5.97: Harbinger installs the heal seats on both), and the
+    //                     follower HAS a CombatController, the object every heal seat
+    //                     hangs off. The follower's own AI casts it, animated.
+    //   DirectNoCombat -- Harbinger present and capable, but no CombatController (out
+    //                     of combat, an own-OOC follower in a party fight, a healer
+    //                     who retreated). marth's D1 default: the direct road,
+    //                     unanimated, with its own rate-limited [heal] line. A heal
+    //                     claim still standing on that follower is RELEASED here, so
+    //                     the two roads never overlap (one road per actor).
+    //   DirectNoSeat   -- Harbinger present, a controller, but the shape has no seat:
+    //                     a heal whose delivery is not Self aimed at its own caster.
+    //                     Harbinger resolves a self claim to the claimant only for a
+    //                     Self-delivery spell (APMF 12c456e), so such a claim could
+    //                     never fire. Direct road, labelled. (AUTO never picks it.)
+    //   DirectDegrade  -- Harbinger absent or too old, an unverified runtime, or the
+    //                     kill switches (bHealAnimPackage / bEquipToCast) OFF: the
+    //                     documented "legacy = Harbinger-absent" degrade, no line.
+    // NEVER a fallback: a Claim that is then refused or never fires stays loud and
+    // falls through per the gambit; nothing re-routes it to the direct road.
+    // a_target: the recipient (the caster for a self heal); nullptr when the caller
+    // has not picked one yet (CastAuto), which skips only the DirectNoSeat test.
+    // Worker-serial (same worker as Try/End; its log dedup is unlocked for that reason).
+    enum class HealRoad : std::uint8_t { NotHeal, Claim, DirectNoCombat, DirectNoSeat, DirectDegrade };
+    HealRoad ChooseHealRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target);
+
     // Release a_follower's heal-cast claim + its CastBounds arm now. Call the
     // instant the gambit stops wanting the heal (target lost / rule no longer
     // wins) so APMF restores the AI's own cast deliberation immediately; the
     // shared APMFBridge FacetExpiry() backstop AND the claim's own TTL (on
     // APMF's side) cover a caller that forgets. Safe to call when nothing is
     // held (no-op). Also clears this module's own silent-cast diagnostic watch.
-    void End(RE::FormID a_follower);
+    // a_keepSpell (review round 2, R2-5): true leaves the heal spell in the hand
+    // (no Loadout::ReleaseSpellIf). ONLY the concentration stream cap passes it: that
+    // release is a re-stream while the rule still wins, not the claim's real end, so
+    // the next lap re-claims with the spell already in hand (Prepare: AlreadyReady).
+    void End(RE::FormID a_follower, bool a_keepSpell = false);
+
+    // animheal phase 2 (review F2). True when a_fired (the SpellSink's observed
+    // form) is the LIVE heal claim's spell or its delivery-flip proxy AND that
+    // spell is CONCENTRATION: its TESSpellCastEvent arrives as the channel STARTS,
+    // so the sink must not take the spell back then (Loadout::StartCooldown's
+    // a_release = false); End() takes it back when the claim ends. Worker-safe.
+    bool HealClaimFireKeepsSpell(RE::FormID a_follower, RE::FormID a_fired);
+
+    // IS A LIVE HEAL CLAIM'S CAST PENDING ON THE LEFT HAND? (review round 2, marth's
+    // ruling 2026-09-30: "Gambit order wins, so in most cases it's heal. But a poorly
+    // ordered gambit board shouldn't be rescued programmatically.") True while a heal
+    // claim stands (it exists only because its rule WON the gambit order) AND its
+    // heal is either charging / channelling on the left (CastInFlightOnHand, the one
+    // in-flight definition) or has NOT fired within the post-fire cooldown
+    // (fCastCooldown; ObservedFiring over the [cfc] watch). So it turns false the
+    // moment the heal fires, stays false through the cooldown, turns true again when
+    // the next cast of the same claim is due, and is false once the claim ends.
+    // What reads it: MFO's own NON-GAMBIT left-hand automation (Loadout's shield-
+    // on-hit restore and two-hander give-back) is suspended while it is true and
+    // resumes right after; an equip gambit's hold ranked BELOW the heal rule yields
+    // the left hand while it is true (Actuation's equip side adds the rank test).
+    // No cooldown configured (fCastCooldown <= 0): pending for the whole claim.
+    // Worker-serial (reads the watch map, like ObservedFiring).
+    bool HealTakesLeft(RE::Actor* a_follower);
 
     // ── observe hand-off (Diagnostics::SpellSink's call site) ──────────────────
     // Diagnostics.cpp's TESSpellCastEvent sink calls ExpectingCast(caster,

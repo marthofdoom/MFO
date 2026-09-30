@@ -3,6 +3,8 @@
 #include "Config.h"
 #include "Followers.h"
 #include "CasterConsent.h"   // v1.0.32: StartCooldown mirrors into the hook's permit
+#include "MainThread.h"      // animheal phase 2 (review F2): the DeselectSpell runs on the MAIN thread
+#include "ComposedCast.h"    // review round 2 (marth's ruling): HealTakesLeft suspends the left-hand automation
 
 namespace MFO::Loadout {
 
@@ -23,6 +25,13 @@ namespace MFO::Loadout {
             RE::TESBoundObject* stowedWeapon  = nullptr;   // two-hander taken away
             bool  leftWasShield = false;
             std::chrono::steady_clock::time_point stowedAt{};
+            // A hit arrived while a live heal claim's cast was pending on the left
+            // hand (ComposedCast::HealTakesLeft): the shield restore it asked for is
+            // DEFERRED, and Tick performs it the moment the heal fires or the claim
+            // ends (review round 2, marth's ruling: MFO's own non-gambit automation
+            // must not undo a live heal claim).
+            bool  hitDeferred = false;
+            bool  giveBackDeferredLogged = false;   // one log line per deferred 2H give-back
         };
         std::unordered_map<RE::FormID, Debt> g_debt;
 
@@ -294,7 +303,7 @@ namespace MFO::Loadout {
     }
 
     Ready Prepare(RE::Actor* a_actor, RE::SpellItem* a_spell, std::string& a_why,
-                  LeftHandYield a_yieldLeft) {
+                  LeftHandYield a_yieldLeft, bool a_healClaimLive) {
         if (!a_actor || !a_spell) { a_why = "no actor or spell"; return Ready::Failed; }
 
         // NEVER grant a spell the follower does not know (INVARIANTS #20,
@@ -397,14 +406,40 @@ namespace MFO::Loadout {
 
         // NEVER overwrite an unpaid debt. If we already owe this follower
         // something, we are not taking anything else from them.
-        if (existing != g_debt.end() &&
-            (existing->second.displacedLeft || existing->second.stowedWeapon)) {
+        //
+        // ONE EXCEPTION, AND IT TAKES NOTHING (review round 2, R2-1): a LIVE heal
+        // claim (a_healClaimLive: it exists because its rule won the gambit order)
+        // whose spell left the hand -- the post-fire take-back, a stream-cap cycle,
+        // a re-claim -- while the debt MFO booked for the follower's own left item
+        // is still open. With the left hand EMPTY and no two-hander in the right,
+        // EquipSpell displaces nothing, so there is no second debt to overwrite the
+        // first: the ledger entry is left exactly as it is (RestoreOne /
+        // OnFollowerHit / Tick still repay it). Without this the heal was claimed,
+        // its left hand empty and no heal landed until combat end.
+        const bool debtOpen = existing != g_debt.end() &&
+                              (existing->second.displacedLeft || existing->second.stowedWeapon);
+        const bool refillEmptyLeft = debtOpen && a_healClaimLive && !hands.left &&
+                                     hands.grip != Grip::TwoHanded;
+        if (debtOpen && !refillEmptyLeft) {
             a_why = "already owe this follower gear -- not displacing more";
             return Ready::Debounced;
         }
 
         auto* mgr = RE::ActorEquipManager::GetSingleton();
         if (!mgr) { a_why = "no equip manager"; return Ready::Failed; }
+
+        if (refillEmptyLeft) {
+            // The point of no return, as below: a hold the ledger still names for
+            // the left hand yields (it is not in the hand, so nothing is booked).
+            if (a_yieldLeft) a_yieldLeft(a_actor);
+            mgr->EquipSpell(a_actor, a_spell, LeftHandSlot());
+            a_actor->DrawWeaponMagicHands(true);
+            g_equipClock[id] = now;              // a fresh equip, a fresh AI window
+            g_mfoSpell[id] = a_spell->GetFormID();
+            a_why = "heal re-equipped into the EMPTY left hand (live heal claim; the open gear "
+                    "debt is kept, nothing displaced)";
+            return Ready::Equipped;
+        }
 
         // Work out what we are about to displace, but do NOT record it until the
         // equip actually happens -- a ledger entry for a displacement that never
@@ -423,7 +458,10 @@ namespace MFO::Loadout {
         // still showed that weapon in the left: a true return means the left item
         // was MFO's OWN hold, not gear the follower loses -- book NO debt for it
         // (F2), or the repay hands MFO's released weapon back at combat end.
-        if (a_yieldLeft && a_yieldLeft(a_actor)) willDisplaceLeft = nullptr;
+        // A two-hander / bow HOLD yielded to a higher-ranked heal claim (review round
+        // 2, marth's ruling) is MFO's own hold too: no stow debt either -- the equip
+        // gambit puts it back itself once the heal has fired.
+        if (a_yieldLeft && a_yieldLeft(a_actor)) { willDisplaceLeft = nullptr; willStowWeapon = nullptr; }
 
         mgr->EquipSpell(a_actor, a_spell, LeftHandSlot());
         a_actor->DrawWeaponMagicHands(true);
@@ -433,6 +471,8 @@ namespace MFO::Loadout {
         debt.stowedWeapon  = willStowWeapon;
         debt.leftWasShield = hands.leftIsShield;
         debt.stowedAt      = now;
+        debt.hitDeferred   = false;
+        debt.giveBackDeferredLogged = false;
         // A FRESH equip gets a FRESH window -- plain assignment, unlike the
         // AlreadyReady try_emplace above.
         g_equipClock[id] = now;
@@ -464,11 +504,26 @@ namespace MFO::Loadout {
 
         // Only if it is still OUR spell in that hand. Their own AI may have
         // swapped since, and unequipping a choice they made is not ours to do.
-        if (actor->GetEquippedObject(true) != spell) return;
-
-        actor->DeselectSpell(spell);
-        spdlog::debug("[loadout] {:08X} -- {} taken back", a_actorID,
-                      spell->GetName() ? spell->GetName() : "?");
+        //
+        // ON THE MAIN THREAD (animheal phase 2, review F2). Every caller of this
+        // runs on the AddTask job worker (the [cast] SpellSink task, the Scheduler's
+        // H3 release, CastOn's magicka refusals), and DeselectSpell is an equip-
+        // state write -- the #62 off-main-equip class (memory off-main-equip-
+        // invisible-head). The bookkeeping above stays on the worker that owns it;
+        // the hand read and the deselect move to main, where the "still ours"
+        // test is also exact. By FormID, re-resolved there. VR has no pump (Post is
+        // a documented no-op): run it direct there, as before.
+        const RE::FormID spellID = spell->GetFormID();
+        auto takeBack = [a_actorID, spellID]() {
+            auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
+            if (!a || !sp || a->GetEquippedObject(true) != sp) return;
+            a->DeselectSpell(sp);
+            spdlog::debug("[loadout] {:08X} -- {} taken back", a_actorID,
+                          sp->GetName() ? sp->GetName() : "?");
+        };
+        if (MainThread::IsInstalled()) MainThread::Post(std::move(takeBack));
+        else                           takeBack();
 
         // DELIBERATELY NOT restoring displaced gear here.
         //
@@ -479,7 +534,13 @@ namespace MFO::Loadout {
         // combat end, and on dismissal. This only takes back the SPELL.
     }
 
-    void StartCooldown(RE::FormID a_actorID) {
+    void ReleaseSpellIf(RE::FormID a_actorID, RE::FormID a_spell) {
+        const auto it = g_mfoSpell.find(a_actorID);
+        if (it == g_mfoSpell.end() || a_spell == 0 || it->second != a_spell) return;
+        ReleaseSpell(a_actorID);
+    }
+
+    void StartCooldown(RE::FormID a_actorID, bool a_release) {
         const float cd = Config::g_castCooldown.load();
         if (cd <= 0.0f) return;
         g_coolUntil[a_actorID] = std::chrono::steady_clock::now() +
@@ -493,7 +554,12 @@ namespace MFO::Loadout {
         // Taking the spell back IS the rate limit -- they cannot cast what they
         // are not holding. Leaving it in hand and merely declining to re-equip
         // would pace MFO and do nothing about their AI.
-        ReleaseSpell(a_actorID);
+        // a_release false (animheal phase 2, review F2): the fire of a LIVE claimed
+        // CONCENTRATION heal. Its TESSpellCastEvent arrives when the channel STARTS,
+        // so taking the spell back here cut the channel after its first beat. The
+        // heal claim's end takes it back instead (ComposedCast::End ->
+        // ReleaseSpellIf). The cooldown stamp above still lands.
+        if (a_release) ReleaseSpell(a_actorID);
     }
 
     bool CoolingDown(RE::FormID a_actorID) {
@@ -523,8 +589,22 @@ namespace MFO::Loadout {
         auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
         if (!actor) return;
 
+        // SUSPENDED WHILE A LIVE HEAL CLAIM'S CAST IS PENDING ON THE LEFT HAND
+        // (review round 2, marth's ruling: this restore is MFO automation, not a
+        // gambit, so it may not undo the heal the gambit order chose). Remembered,
+        // and Tick restores the shield right after the heal fires or the claim ends.
+        if (ComposedCast::HealTakesLeft(actor)) {
+            if (!it->second.hitDeferred)
+                spdlog::info("[loadout] {:08X} took a hit -- shield restore DEFERRED: a live heal "
+                             "claim holds the left hand until its heal fires or the claim ends",
+                             a_actorID);
+            it->second.hitDeferred = true;
+            return;
+        }
+
         EquipBack(actor, it->second.displacedLeft);
         spdlog::info("[loadout] {:08X} took a hit -- shield restored", a_actorID);
+        it->second.hitDeferred = false;
         it->second.displacedLeft = nullptr;
         it->second.leftWasShield = false;
     }
@@ -553,6 +633,7 @@ namespace MFO::Loadout {
         // mutating g_debt from inside its own iteration is the shape INVARIANTS
         // #2 exists to forbid (MEO's use-after-free).
         std::vector<RE::FormID> restoreAll;
+        std::vector<RE::FormID> shieldBack;   // deferred hits, due now
 
         std::vector<RE::FormID> settled;
 
@@ -577,9 +658,31 @@ namespace MFO::Loadout {
                 continue;
             }
 
+            // SUSPENSION (review round 2, marth's ruling): while a live heal claim's
+            // cast is pending on the left hand, neither give-back below undoes it.
+            // Combat end is NOT suspended (the backstop further down): the claim
+            // does not outlive combat, and the honest deadline stays honest.
+            const bool healHolds = actor->IsInCombat() && ComposedCast::HealTakesLeft(actor);
+
+            // A hit that arrived during the suspension: restore the shield now that
+            // the heal has fired or the claim has ended.
+            if (debt.hitDeferred && !healHolds) {
+                debt.hitDeferred = false;
+                if (debt.displacedLeft && debt.leftWasShield) shieldBack.push_back(id);
+            }
+
             // Two-hander comes back once the cast has had time to happen.
             if (debt.stowedWeapon &&
                 std::chrono::duration<float>(now - debt.stowedAt).count() >= hold) {
+                if (healHolds) {
+                    if (!debt.giveBackDeferredLogged) {
+                        debt.giveBackDeferredLogged = true;
+                        spdlog::info("[loadout] {:08X} two-hander give-back DEFERRED: a live heal "
+                                     "claim holds the left hand until its heal fires or the claim ends",
+                                     id);
+                    }
+                    continue;
+                }
                 restoreAll.push_back(id);
                 continue;
             }
@@ -599,6 +702,18 @@ namespace MFO::Loadout {
         // immediately, the clock survives with its original timestamp, and
         // every later cast sees a huge elapsed time and skips the grace.
         for (const auto id : settled) { g_debt.erase(id); g_equipClock.erase(id); }
+
+        for (const auto id : shieldBack) {
+            auto it = g_debt.find(id);   // re-found: an equip above may have dispatched events
+            if (it == g_debt.end() || !it->second.displacedLeft || !it->second.leftWasShield) continue;
+            if (auto* actor = RE::TESForm::LookupByID<RE::Actor>(id)) {
+                EquipBack(actor, it->second.displacedLeft);
+                spdlog::info("[loadout] {:08X} shield restored (the hit was deferred while a heal "
+                             "claim held the left hand)", id);
+            }
+            it->second.displacedLeft = nullptr;
+            it->second.leftWasShield = false;
+        }
 
         for (const auto id : restoreAll) {
             if (const int n = RestoreOne(id); n > 0) {

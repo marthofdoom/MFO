@@ -125,16 +125,18 @@ namespace MFO::Actuation {
         // IN COMBAT NOTHING CHANGES -- the claim path runs exactly as it did, and
         // that is the path that produced this session's confirmed animated heals.
         //
-        // RESTORATION TAKES THE DIRECT ROAD ON THE COMBAT TABLE TOO (fix/mfo-
-        // combat-restoration-direct, 2026-09-21 -- IsRestorationSpell, Actuation.h).
-        // The controller test above chose the direct road OUT of combat only; in
-        // combat the claim road produced the frozen follower (a left-hand claim the
-        // engine never fired + the idle-hand floor on the right). So the ask is
-        // made only for a spell that is NOT restoration -- and since Try() is
-        // HEAL-ONLY and every Heal-kind spell is restoration, the claim road below
-        // is unreachable unless the two classifiers diverge (kept compiled, same
-        // reasoning as the self twin above).
-        if (a_follower->GetActorRuntimeData().combatController && !IsRestorationSpell(a_spell)) {
+        // THE HEAL ROAD IS CHOSEN IN ONE PLACE (animheal phase 2, 2026-09-30):
+        // ComposedCast::ChooseHealRoad makes exactly the controller test described
+        // above, plus the Heal-kind and Harbinger gates Try() itself makes. It
+        // reverses fix/mfo-combat-restoration-direct (2026-09-21) for the claim
+        // case only: that "freeze" was MFO's own direct cast colliding with MFO's
+        // own claim on the instant caster, which Harbinger no longer gates by a
+        // hand claim (APMF d41ed43). The combat table sends a claim-road heal
+        // through CastOn's composed branch; this ask serves any other caller that
+        // meets a controller, so one actor never runs both roads for one heal.
+        // Out of combat (D1) the direct stream below delivers, labelled.
+        if (ComposedCast::ChooseHealRoad(a_follower, a_spell, a_target) ==
+            ComposedCast::HealRoad::Claim) {
             switch (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct)) {
             case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
             case ComposedCast::TryResult::Held:    return SelfCast::Held;

@@ -13,6 +13,77 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-09-30 branch `feat/mfo-animheal-p2` (off `main` `d896d74`; NOT merged, NOT deployed; tier A). ANIMATED
+  HEALS PHASE 2: combat heals take the ch.8b claim road again (MAP.md §2 cast/ "ANIMATED HEAL CLAIM ROAD";
+  CAST-DELIVERY "COMPOSED FORCED CAST").** marth's release gate: no release until every in-combat cast is animated.
+  With Harbinger present (needs Harbinger `main` `85a8f2f` or newer: the instant-caster fix `d41ed43` and the self-claim
+  handle `12c456e`) and a combat controller, a Heal-kind gambit (cast_self, cast_target / ally / player, AUTO) is cast
+  by the follower's own AI: `ComposedCast::ChooseHealRoad` -> `CastOn`'s composed branch (Try + Prepare + LEFT lock).
+  AUTO is a series (lowest first, a cast in flight finishes first). No controller -> the direct road, labelled (D1).
+  `bHealAnimPackage` default ON, the kill switch. 1.5.97 takes the claim road too (Harbinger's heal seats install on
+  every non-VR runtime). **NOT covered, still unanimated in combat:** wards and other non-heal Restoration-school
+  buffs (they stay on the direct road; the release gate still needs them), and summons (the one-shot direct cast).
+  **UPGRADE (marth 2026-09-30, review F5):** a one-shot migration flips an existing store's old `bHealAnimPackage = 0`
+  to 1 at the first launch (marker key `bHealAnimMigrated`; later OFF choices are kept). Check MFO.log for
+  `[config] MCM migration: bHealAnimPackage 0 -> 1` (or `... nothing to flip`) once, then never again.
+  **DECIDED (marth 2026-09-30, review F4):** a heal re-aims at a lower ally only when the hand is idle between casts
+  ("Otherwise there'd be constant switching"). Not a defect (MFO-B171).
+  **DECIDED (marth 2026-09-30, review F1 policy):** a heal claim that has not fired is REPAIRED (the heal is
+  re-equipped into the left hand under the same claim), never swapped for an instant cast and never released
+  beyond the existing state conditions ("Once equipped it's never failed"). Field read: `[heal] ... REPAIR:
+  equipped in the left hand but not fired ...` is a WARN and should not appear; the cooldown wait between
+  casts is debug-level only.
+  **FIELD PLAN (next Deck session; deploy the MFO + Harbinger `85a8f2f`+ pair together, Harbinger's
+  `[Probe] bRestoreCensus=1` and `bCasterTypeCensus=1` left at their field defaults):** marth heals himself and an ally
+  in combat (Jesper with Fast Healing self + Heal Other / Fast Healing ally rules, and one Auto heal rule), with an
+  offense spell rule below the heals. What the logs must show:
+  1. **Harbinger `[census]` windows ENGAGE fast, self and ally.** `grep '\[census\].*CLOSE' APMF.log`: every heal
+     window reads `ENGAGED (the claimed hand took the driven form)` with `first hand engage` in the low seconds, for
+     BOTH `target=self` and `target=ally`. A self window reading `ZERO` or `RESTORE DELIBERATED, the hand never
+     took the driven form` is the failure (RC-3 not closed).
+  2. **`[ctcensus]` Restore FIRED ANIMATED.** `grep '\[ctcensus\].*CLOSE.*VERDICT' APMF.log`: heal windows read
+     `VERDICT: FIRED via Restore (the hand charged: ANIMATED; ...)`. `BUILT ... NOT FIRED` or `NOT BUILT` on a heal
+     window is the failure (`NOT BUILT: NO CONTROLLER` means MFO claimed without a controller: a bug here).
+  3. **MFO `[heal-obs] ... road=claim ... landed=effect|hp|effect+hp`.** `grep 'heal-obs.*road=claim' MFO.log`: one
+     line ~1 s after each claimed heal FIRES, `landed` not `NO`. `*** HEAL NOT LANDING: the claimed cast FIRED ***`
+     is the failure. Also `grep 'CFC-fired' MFO.log` (the fire itself, `*** THE ANIMATED PATH ***`).
+  4. **No freeze.** The follower keeps moving and attacking while a heal claim stands: `grep 'IDLE-HAND FLOOR'
+     MFO.log` shows the floor only while a heal drives, and `grep '\[cfc\].*NO observed cast' MFO.log` stays rare
+     (a claim live 3.5 s with no fire). No `[heal] ... combat controller gone` while the follower is visibly fighting.
+  5. **Heals not starved by offense.** With a heal rule ranked above the offense rule: `grep 'PREEMPTED the left
+     hand' MFO.log` shows the heal taking the hand, `grep 'cast gambit locked' MFO.log` never shows the HEAL rule
+     locked out for more than one cast by a LOWER offense rule, and offense keeps firing on the right hand
+     (`SATISFIED IN FLIGHT` lines for the heal while offense `CFC-fired` lines continue).
+  6. **One road per actor.** In combat NO `FORCE-CAST ... Fast Healing|Heal Other|Healing Hands` direct lines and no
+     `[heal] ... no combat controller` lines for a follower who is fighting; out of combat those heals print the
+     `[heal] ... no combat controller -- DIRECT road` line (15 s dedup) and land as before.
+  6b. **Repair, not freeze (review F1/F2, round 2).** `grep '\[heal\].*REPAIR' MFO.log`: every repair line now
+     ends with Prepare's REAL verdict. After a fire, `REPAIR: the heal is no longer in the left hand ... the heal was
+     put back in the left hand (Prepare: equipped)` (a dual-wielder's own left sword still owed is fine: `heal
+     re-equipped into the EMPTY left hand ... open gear debt is kept`). `the heal was NOT put back (Prepare:
+     debounced): already owe this follower gear` must NOT appear (that was round 2's R2-1 freeze). On the SECOND lap
+     of a fresh ally claim with a Self-delivery spell (Fast Healing at an ally, proxied) there must be NO repair
+     line (SHADOW R2-1). An in-hand repair line says `no Prepare: the heal or its proxy is in the left hand`
+     and must never be followed by the original spell replacing the proxy (round 3, R3-1). `REPAIR: equipped in
+     the left hand but never fired ...` (WARN) is the unsolved "claim that never fires" case (F1 policy) and appears
+     only for a heal not observed firing since THIS claim was stamped (per claim, round 4); between two casts of a
+     claim that has fired it is DEBUG (R3-2). If the AI's own spell sits in the left hand with no proxy learned,
+     the WARN line is followed by `Prepare: equipped` (round 4).
+     The follower's own off-hand weapon or torch comes back at combat end, not at the fire (R3-3). A channelled self heal keeps channelling past its first beat, and past its
+     stream cap it re-claims with the spell still in hand (no `taken back` on `reached its stream cap`).
+  6c. **Gambit order on the left hand (marth's ruling, round 2).** Sword-and-board healer being hit mid-cast:
+     `[loadout] ... shield restore DEFERRED` during the charge, then `shield restored (the hit was deferred ...)`
+     right after the heal's `CFC-fired`; no shield<->spell swap per hit. 2H follower with no equip rule: `two-hander
+     give-back DEFERRED` until the fire. With an equip-melee/ranged rule BELOW the heal: `hold yielded (an animated
+     heal claim ranked above the hold ...)`, `[equip] ... HELD OFF` for a two-hander / bow while the heal is pending,
+     then the weapon back after the fire. With the equip rule ABOVE the heal: `[heal] ... NOT claimed -- equip rule N
+     holds the left hand and ranks above it`, and no heal claim at all (the board order decides; no rescue).
+  7. **Series + release lines.** `grep '\[heal\].*RELEASED' MFO.log`: a claim released when its recipient is
+     full / out of reach / nobody needs the AUTO heal; `auto heal (lowest first) at <id>` outcome reasons name the
+     lowest ally; a concentration heal past 8-15 s prints `reached its stream cap` and re-claims.
+  Report any field surprise straight to an Opus 5.5 diagnosis with an evidence file (CLAUDE.md FIELD DIAGNOSIS 4);
+  do not argue from loot/travel arrival lines. MFO-B7/B8 (`kHealHoldNeverObservedMs` 4000 ms) is measured by the
+  `[census] ... first hand engage` / `CFC-fired` timings in this run.
 - **2026-09-29 branch `feat/mfo-animheal-p0` (off `main` `815c833`; NOT merged, NOT deployed; tier B + threading
   carve-out). [heal-obs] passive heal observation + the apply READ-BACK + MFO's ConcProxy forms on the ch.8 allow-list
   (MAP.md §2 cast/ "[heal-obs] + APPLY READ-BACK").** A direct heal/buff apply reports landed only when an effect of the

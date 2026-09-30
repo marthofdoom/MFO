@@ -234,12 +234,12 @@
         },
         {
           "id": "bHealAnimPackage:General",
-          "text": "Animated forced casts (experimental)",
+          "text": "Animated heals in combat",
           "type": "toggle",
-          "help": "Route forced casts (heals, buffs) through a real animated hand cast while the follower keeps moving. Experimental; falls back to instant apply on any failure. Requires APMF.",
+          "help": "ON (default): in combat, heal gambits are cast by the follower with the real hand animation, one cast at a time, lowest health first. Out of combat heals still land instantly. OFF: every heal lands instantly, no animation. Requires Harbinger.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
-            "defaultValue": 0
+            "defaultValue": 1
           }
         },
         {
