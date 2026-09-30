@@ -193,11 +193,12 @@ namespace MFO::Sightline {
                     spdlog::info("[los] {:08X} -> {:08X}: {}", a_viewer, tid,
                                  los ? "VISIBLE" : "OCCLUDED");
                 }
+                // A stale run is not "agreeing": readings further apart than the trust window
+                // restart the count (the new reading is run 1). Measured against the PREVIOUS
+                // reading's stamp, so it must run before e.at is refreshed.
+                if (!never && Since(e.at) > kOccRunTrustSeconds) e.occRun = 0;
                 e.los = los;
                 e.at  = Clock::now();
-                // A stale run is not "agreeing": readings further apart than the trust window
-                // restart the count (the new reading is run 1).
-                if (!never && Since(e.at) > kOccRunTrustSeconds) e.occRun = 0;
                 e.occRun = los ? 0 : static_cast<std::uint16_t>(std::min<int>(e.occRun + 1, 0xFFFF));
             }
         }
