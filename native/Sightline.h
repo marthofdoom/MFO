@@ -23,13 +23,26 @@
 // therefore up to ~a tick stale, which is fine: walls do not move, and a foe
 // crossing a doorway flips the verdict on the next pump.
 //
-// TWO-STAGE MEASURE. The engine's HasLineOfSight is the cheap FIRST pass. Only
-// when it says CLEAR does Measure fire MFO's OWN bhkWorld point-raycast
-// (kCharController layer, feet/torso/head samples) to catch what the engine LoS
-// sees through -- camp-tent cloth, some anim-static -- and to forgive a foe one
-// stair up/down (any clear sample => visible). The custom ray only ever turns a
-// VISIBLE into OCCLUDED and fails open if it cannot run; the cheap-first order
-// bounds its cost to the ambiguous cases. See CustomRayConfirmsOcclusion.
+// TWO BASES (2026-09-30, marth: "any spell cast using harbinger gets our los
+// check ... should also apply to bows"). The engine's HasLineOfSight, for an NPC
+// viewer, does NOT raycast: it returns a per-(viewer, target) bool cached in the
+// AIProcess, refreshed on the engine's own schedule, so it can be stale or false
+// whatever the geometry (it flickered a heal target OCCLUDED/VISIBLE about once a
+// second, and never served heals at the player). So the CALLER names the basis:
+//   Basis::Engine (the default, today's behaviour): engine HasLineOfSight first;
+//       MFO's own bhkWorld ray (kCharController, feet/torso/head, any clear
+//       sample => visible) only when the engine says CLEAR, to catch tent cloth
+//       etc. It can only turn VISIBLE into OCCLUDED and fails open.
+//       Melee-only foe checks and every non-spell, non-ranged use.
+//   Basis::Own: EVERY measurement serving an MFO SPELL decision (any target, any
+//       road) or a BOW/ranged decision. Our ray ALONE is the verdict; the engine
+//       cache does not decide. If the ray cannot run (no cell / bhkWorld /
+//       controller) that one measurement uses the engine's answer and logs
+//       "[los] ... own ray unavailable (<why>) -- engine cache used".
+// Each (viewer, target) pair keeps a SEPARATE slot per basis (verdict, stamp,
+// occRun), and the Want() throttle is per (pair, basis), so a melee reader never
+// sees an own-ray verdict and a spell reader never sees the engine's bool.
+// Enemy NPCs' own sight is never touched.
 //
 // FAIL-OPEN BY DESIGN. Unknown (cold cache, unloaded 3D, VR where the
 // main-thread pump refuses to install) must degrade to TODAY'S behaviour --
@@ -37,6 +50,12 @@
 // makes the forced cast inert on a runtime where the raycast cannot run.
 
 namespace MFO::Sightline {
+
+    // Which verdict a call reads/measures. Chosen by the CALLER, never inferred.
+    enum class Basis : std::uint8_t {
+        Engine,   // engine HasLineOfSight first, own ray only to catch an engine-CLEAR (today)
+        Own,      // spells and bows: our ray alone (engine only if the ray cannot run)
+    };
 
     enum class Verdict : std::uint8_t {
         Unknown,    // never measured, stale, or unmeasurable -- treat as today
@@ -49,31 +68,39 @@ namespace MFO::Sightline {
     // The cached verdict for viewer -> target. WORKER-SAFE: a locked map read,
     // no engine call. Stale entries (older than the freshness window) read as
     // Unknown rather than lying about a wall that may have stopped mattering.
-    Verdict Check(RE::FormID a_viewer, RE::FormID a_target);
+    Verdict Check(RE::FormID a_viewer, RE::FormID a_target, Basis a_basis = Basis::Engine);
 
     // Ask the main thread to (re)measure viewer -> each target. Callable from
     // any thread; rate-limited per (viewer, target) pair (0.3 s, per pair since
     // 2026-09-29 so one caller's batch never drops another's) so the evaluator's
     // per-rule calls at 7.5 Hz cannot flood the frame queue. The results land in the cache a
     // frame later -- callers read Check(), never a return value.
-    void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets);
+    void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets, Basis a_basis = Basis::Engine);
 
     // Check() with a caller-chosen trust window instead of kFreshSeconds: the
     // last measured verdict if it is younger than a_maxAgeSeconds, else Unknown.
     // For a caller that must not read an OLD Occluded as Unknown-passes merely
     // because its own re-measure is one service period out (PickAlly's heal
     // pick, field 2026-09-29). Any thread, same leaf lock as Check().
-    Verdict CheckWithin(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds);
+    Verdict CheckWithin(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds,
+                        Basis a_basis = Basis::Engine);
 
-    // MAIN THREAD ONLY. Measure viewer -> target NOW -- the same two-stage Measure
-    // that Want() posts (engine HasLineOfSight, then MFO's own ray on a CLEAR) --
+    // How many Occluded measurements in a ROW the last verdict is, 0 when the last
+    // verdict is Visible, absent, or older than a_maxAgeSeconds. Any thread, same
+    // leaf lock. For a caller that must not act on a single Occluded reading of a
+    // borderline line (the heal recipient check: two agreeing readings).
+    int OccludedRun(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds,
+                    Basis a_basis = Basis::Engine);
+
+    // MAIN THREAD ONLY. Measure viewer -> target NOW -- the same Measure
+    // that Want() posts (per a_basis; see the file header) --
     // write the cache, and return the verdict (Check() right after). For a caller
     // that is ALREADY running on the main thread inside a MainThread::Post (the
     // engage-on-sight probe, EngageOnSight.cpp), where a Want() would only queue
     // the measurement another frame out. Not throttled: the caller bounds its own
     // cost. Returns Unknown on VR (HasLineOfSight has no VR id; the pump never
     // runs there anyway) and when either actor is unresolvable, dead or unloaded.
-    Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target);
+    Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target, Basis a_basis = Basis::Engine);
 
     // LINE OF FIRE (concentration streams). True when the PLAYER or any
     // active teammate -- other than the caster and the intended target --

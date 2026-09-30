@@ -1610,7 +1610,7 @@ namespace MFO::Logistics {
                     // of channelling through it. Only for a HOSTILE target -- a heal
                     // stream at an ally is never LoS-gated, so skip the raycast there.
                     if (tgt->IsHostileToActor(a_follower))
-                        Sightline::Want(id, { tgt->GetFormID() });
+                        Sightline::Want(id, { tgt->GetFormID() }, Sightline::Basis::Own);
                     const auto r = Actuation::CastTargetDirect(a_follower, sp, tgt);
                     // HELD OFF -- its OWN outcome now (Fable SEV-2, 2026-09-06),
                     // not a delivery wearing Applied's clothes. ComposedCast::Try
@@ -1829,7 +1829,7 @@ namespace MFO::Logistics {
                     // 2026-09-29): as far as the player's own cast of the spell, with
                     // line of sight (Actuation::HealInReach). Out of reach -> next rule.
                     if (tgt != a_follower && Actuation::HealsHealth(sp)) {
-                        Sightline::Want(id, { tgt->GetFormID() });
+                        Sightline::Want(id, { tgt->GetFormID() }, Sightline::Basis::Own);
                         if (!Actuation::HealInReach(a_follower, tgt, sp)) {
                             start = choice.ruleIndex + 1; continue;
                         }
@@ -1903,11 +1903,11 @@ namespace MFO::Logistics {
                     // verdict. Fail-open is preserved: the FIRST tick still reads
                     // Unknown and passes, exactly like the combat gates on their
                     // first sighting -- walls do not move, so the second tick holds.
-                    Sightline::Want(id, { tgt->GetFormID() });
+                    Sightline::Want(id, { tgt->GetFormID() }, Sightline::Basis::Own);
                     acted = Packages::Available() &&
                             Packages::CastAt(a_follower, sp, tgt) == Packages::Decline::None;
                     if (!acted &&
-                        Sightline::Check(id, tgt->GetFormID()) != Sightline::Verdict::Occluded &&
+                        Sightline::Check(id, tgt->GetFormID(), Sightline::Basis::Own) != Sightline::Verdict::Occluded &&
                         !Sightline::TeammateInFireLine(id, tgt->GetFormID())) {
                         const float cost = sp->CalculateMagickaCost(a_follower);
                         auto* avo = a_follower->AsActorValueOwner();

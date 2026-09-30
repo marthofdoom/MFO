@@ -599,7 +599,27 @@ namespace MFO::ComposedCast {
             // Heals are LEFT always (ClaimHealCast's hard rule), so hand[0] and
             // kHandLeft are the only slot in question.
             if (incumbent.spell != 0 && incumbent.spell != spellID) {
-                if (Actuation::CastInFlightOnHand(a_follower, Actuation::kHandLeft,
+                // A CHARGED-AND-WAITING OFFENSE CAST IS NOT "IN FLIGHT" FOR A HEAL
+                // (field 2026-09-30). The incumbent was a forced Incinerate the engine
+                // had fully charged (kReady) and was HOLDING because every foe was
+                // occluded; CastInFlightOnHand counts that as in flight, so a
+                // higher-ranked heal -- whose rank the hand lock already decided before
+                // this Try() ran -- sat HELD OFF (IN FLIGHT) for the whole 6000 ms cap.
+                // A held charge has nothing left to finish, so the heal takes the hand
+                // at once. Only a kReady OFFENSE incumbent: a casting or concluding cast,
+                // and any HEAL incumbent, keep the F12 hold below unchanged.
+                bool chargedOffenseWaiting = false;
+                if (auto* inc = RE::TESForm::LookupByID<RE::SpellItem>(incumbent.spell);
+                    inc && CasterConsent::ClassifySpell(inc) == CasterConsent::SpellKind::Offense &&
+                    Actuation::CastChargedWaitingOnHand(a_follower, Actuation::kHandLeft,
+                                                        incumbent.spell, incumbent.proxy)) {
+                    chargedOffenseWaiting = true;
+                    spdlog::info("[cfc] {:08X} heal spell {:08X} takes the left hand from offense spell "
+                                 "{:08X}: that cast is fully charged and waiting, not casting -- "
+                                 "nothing in flight to protect", fid, spellID, incumbent.spell);
+                }
+                if (!chargedOffenseWaiting &&
+                    Actuation::CastInFlightOnHand(a_follower, Actuation::kHandLeft,
                                                   incumbent.spell, incumbent.proxy)) {
                     const auto now = Clock::now();
                     if (incumbent.inFlightHoldSince.time_since_epoch().count() == 0)
@@ -681,6 +701,8 @@ namespace MFO::ComposedCast {
         WatchArmed(fid, WatchSlot(APMFBridge::kApmfHandLeft), spellID,
                   APMFBridge::GetHealCastProxy(fid));
 
+        // ONE ROAD PER ACTOR, the direct -> claim half (MFO-B176), at the mint (MFO-B192).
+        Actuation::EndDirectHealStreams(fid, "the heal takes the animated claim road");
         return TryResult::Claimed;   // APMF owns the cast: caller skips its kInstant apply.
     }
 
@@ -763,8 +785,27 @@ namespace MFO::ComposedCast {
         // not overlap the claim until its stale window lapses. The dispel and the
         // kInstant interrupt run on the main thread (MainThread::Post inside the
         // stream's EndActor). A no-op when no heal stream stands.
-        Actuation::EndDirectHealStreams(fid, "the heal takes the animated claim road");
+        // MOVED (MFO-B192, review F1 on 3a42371): the end now runs where the claim is
+        // MINTED, on Try()'s Claimed return, not at this road ANSWER. A held-off lower
+        // rule is answered Claim here too but never mints, and ended a higher rule's
+        // DirectNoSeat stream (reachable with bCastSelf ON).
         return HealRoad::Claim;
+    }
+
+    void NoteOocDirectHeal(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !a_spell) return;
+        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Heal) return;
+        const auto fid     = a_follower->GetFormID();
+        const auto spellID = a_spell->GetFormID();
+        // The dedup slot is HealRoad::DirectDegrade's, which has no line of its own in
+        // ChooseHealRoad, so this label never shadows the no-controller one.
+        if (!RoadLogDue(fid, spellID, HealRoad::DirectDegrade)) return;
+        spdlog::info("[heal] {:08X} {} ({:08X}): out-of-combat heal -- INSTANT road, unanimated "
+                     "(combat controller {}). The instant road is a degrade, not the finished "
+                     "build: an animated out-of-combat heal needs the combat substrate (backlog "
+                     "MFO-B191)",
+                     fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
+                     a_follower->GetActorRuntimeData().combatController ? "PRESENT" : "absent");
     }
 
     bool HealClaimFireKeepsSpell(RE::FormID a_follower, RE::FormID a_fired) {

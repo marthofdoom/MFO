@@ -142,6 +142,7 @@ namespace MFO::Actuation {
         // party-OOC teardown would end it the next service), and while a combat
         // heal claim still stands its heal WAITS instead of streaming beside it.
         if (OocHealWaitsForClaim(a_follower, a_spell)) return SelfCast::Declined;
+        if (g_firingRule == kNoRule) ComposedCast::NoteOocDirectHeal(a_follower, a_spell);   // F2: name the instant road
         if (g_firingRule != kNoRule &&
             ComposedCast::ChooseHealRoad(a_follower, a_spell, a_target) ==
                 ComposedCast::HealRoad::Claim) {
@@ -216,7 +217,7 @@ namespace MFO::Actuation {
         // Declined (transparent): don't apply this tick, and the un-refreshed entry
         // goes stale so TargetCastReconcile CUTS the beam, exactly like ffWatch.
         if (kind == CasterConsent::SpellKind::Offense) {
-            if (Sightline::Check(id, targetID) == Sightline::Verdict::Occluded)
+            if (Sightline::Check(id, targetID, Sightline::Basis::Own) == Sightline::Verdict::Occluded)
                 return SelfCast::Declined;
             if (Sightline::TeammateInFireLine(id, targetID))
                 return SelfCast::Declined;
@@ -229,7 +230,7 @@ namespace MFO::Actuation {
         // left reach is no longer refreshed, so TargetCastReconcile ends it (stale).
         // Want() warms the LoS cache for the pair a frame ahead (Unknown passes).
         if (kind == CasterConsent::SpellKind::Heal || SpellHealsHealth(a_spell)) {
-            Sightline::Want(id, { targetID });
+            Sightline::Want(id, { targetID }, Sightline::Basis::Own);
             if (!HealInReach(a_follower, a_target, a_spell)) {
                 // Deduped per (caster, target) at 5 s -- worker-serial, like the
                 // other per-follower log throttles on this road.
@@ -243,7 +244,7 @@ namespace MFO::Actuation {
                                  id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, targetID,
                                  a_follower->GetPosition().GetDistance(a_target->GetPosition()),
                                  HealReach(a_spell),
-                                 Sightline::VerdictName(Sightline::Check(id, targetID)));
+                                 Sightline::VerdictName(Sightline::Check(id, targetID, Sightline::Basis::Own)));
                 }
                 return SelfCast::Declined;
             }

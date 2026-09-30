@@ -376,7 +376,7 @@ namespace MFO::Actuation {
                         if (selfPos.GetDistance(m->GetPosition()) > radius) return;
                         sightWant.push_back(m->GetFormID());
                         if (!HealInReach(a_follower, m, spell) ||
-                            Sightline::CheckWithin(id, m->GetFormID(), kHealLosTrustSec) ==
+                            Sightline::CheckWithin(id, m->GetFormID(), kHealLosTrustSec, Sightline::Basis::Own) ==
                                 Sightline::Verdict::Occluded) {
                             ++outOfReach;
                             return;
@@ -389,7 +389,7 @@ namespace MFO::Actuation {
                     for (const RE::FormID fid : *snap)
                         probe(RE::TESForm::LookupByID<RE::Actor>(fid));
                 probe(RE::PlayerCharacter::GetSingleton());
-                if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant));
+                if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant), Sightline::Basis::Own);
 
                 // D8: a cast the engine is running on the standing claim's recipient
                 // finishes before anyone else is served.
@@ -466,7 +466,7 @@ namespace MFO::Actuation {
                     for (const RE::FormID fid : *snap)
                         probe(RE::TESForm::LookupByID<RE::Actor>(fid));
                 probe(RE::PlayerCharacter::GetSingleton());
-                if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant));
+                if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant), Sightline::Basis::Own);
                 // Prefer the CURRENT stream's recipient if it is still hurt and no one
                 // else is dramatically worse (the hysteresis above) -- and still in
                 // reach (fix/mfo-can-act).
@@ -630,7 +630,7 @@ namespace MFO::Actuation {
                 // F7: warm the LoS cache for the foes we will try to hit, so the
                 // apply loop's Sightline::Check stops being fail-open Unknown
                 // forever (the verdict lands a frame later; walls do not move).
-                if (!targets.empty()) Sightline::Want(id, targets);
+                if (!targets.empty()) Sightline::Want(id, targets, Sightline::Basis::Own);
             } else {
                 // WHOLE PARTY: every active follower + the player within range who
                 // NEEDS it -- the CASTER INCLUDED (he is one of N, so a self-buff
@@ -691,7 +691,7 @@ namespace MFO::Actuation {
                     for (const RE::FormID fid : *snap)
                         consider(RE::TESForm::LookupByID<RE::Actor>(fid));
                 consider(RE::PlayerCharacter::GetSingleton());
-                if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant));
+                if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant), Sightline::Basis::Own);
             }
 
             if (targets.empty())
@@ -704,7 +704,7 @@ namespace MFO::Actuation {
             int fired = 0, skipped = 0;
             for (const auto tgtID : targets) {
                 if (!affordable()) { ++skipped; break; }   // insufficient magicka -> stop the fan-out
-                if (hostile && Sightline::Check(id, tgtID) == Sightline::Verdict::Occluded) {
+                if (hostile && Sightline::Check(id, tgtID, Sightline::Basis::Own) == Sightline::Verdict::Occluded) {
                     ++skipped; continue;                    // no line of sight -- fail-open on Unknown
                 }
                 ApplyEffectFromTo(id, tgtID, a_spellID, hostile);

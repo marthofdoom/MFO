@@ -16,6 +16,11 @@ namespace MFO::Sightline {
         // through a doorway is not "occluded" for a whole fight.
         constexpr float kFreshSeconds = 1.0f;
 
+        // Two Occluded readings further apart than this are not "agreeing": the run
+        // restarts. Mirrors the callers' trust window (Actuation kHealLosTrustSec,
+        // 3 s), which cannot be included here.
+        constexpr float kOccRunTrustSeconds = 3.0f;
+
         // Per-PAIR floor between measurements. PickFoe runs once per RULE per
         // tick, so one follower with five foe selectors would otherwise queue
         // five identical measurement batches into the same frame.
@@ -32,10 +37,21 @@ namespace MFO::Sightline {
         // caller can starve another and the cost per pair is unchanged.
         constexpr float kRepostSeconds = 0.3f;
 
-        struct Entry {
+        // One verdict slot. A pair has TWO (Entry::s), one per Basis, so an
+        // engine-basis reader (melee, engage-on-sight) never sees the own-ray
+        // verdict and a spell/bow reader never sees the engine's cached bool.
+        struct Slot {
             bool              los = false;
             Clock::time_point at{};
+            // CONSECUTIVE Occluded measurements (reset by any Visible one). The heal
+            // recipient check asks for two agreeing readings before it calls a sight
+            // loss, so one flicker of a borderline line does not drop the recipient
+            // (field 2026-09-30, Jesper -> Herd). Written with `los` under g_mx.
+            std::uint16_t     occRun = 0;
         };
+        struct Entry { Slot s[2]; };   // indexed by Idx(Basis)
+
+        constexpr int Idx(Basis a_b) { return a_b == Basis::Own ? 1 : 0; }
 
         // Written by the MAIN thread (the measurement), read by the WORKER
         // (the evaluator) -- cross-thread by design, so a real lock (#4).
@@ -44,7 +60,7 @@ namespace MFO::Sightline {
         // the combat-group lock the caller may be inside.
         std::mutex g_mx;
         std::unordered_map<std::uint64_t, Entry> g_cache;
-        std::unordered_map<std::uint64_t, Clock::time_point> g_lastPost;   // Key(viewer, target)
+        std::unordered_map<std::uint64_t, Clock::time_point> g_lastPost[2];   // [Idx(basis)], Key(viewer, target)
 
         constexpr std::uint64_t Key(RE::FormID a_viewer, RE::FormID a_target) {
             return (static_cast<std::uint64_t>(a_viewer) << 32) | a_target;
@@ -55,10 +71,13 @@ namespace MFO::Sightline {
             return std::chrono::duration<float>(Clock::now() - a_t).count();
         }
 
-        // MAIN THREAD ONLY. MFO's OWN physics raycast, fired ONLY when the
-        // engine LoS already says CLEAR -- it exists to catch what
-        // HasLineOfSight ignores (camp tents, cloth, some anim-static geometry)
-        // and to forgive a foe one step up or down.
+        // MAIN THREAD ONLY. MFO's OWN physics raycast. Basis::Engine: fired ONLY
+        // when the engine LoS already says CLEAR, to catch what HasLineOfSight
+        // ignores (camp tents, cloth, some anim-static geometry) and to forgive a
+        // foe one step up or down. Basis::Own (spells and bows): it is the WHOLE
+        // verdict -- the engine's HasLineOfSight for an NPC viewer is a cached
+        // bool the engine refreshes on its own schedule (no raycast), so it can be
+        // stale or false whatever the geometry (field 2026-09-30).
         //
         // Layer: kCharController. We ask "could a walking body travel this
         // line?" -- solid nav geometry (walls, tent walls, closed doors) stops
@@ -72,16 +91,21 @@ namespace MFO::Sightline {
         //
         // Multi-sample: feet / torso / head. If ANY sample is clear the verdict
         // is VISIBLE -- a foe one stair up, or behind a low sill, is not
-        // "occluded." Returns true ONLY when every sample is blocked.
+        // "occluded." Blocked ONLY when every sample is blocked.
         //
-        // FAIL-OPEN: no parent cell, no bhkWorld, or an unresolved controller
-        // returns false (clear). We never manufacture an occlusion we cannot
-        // prove, so the engine's own VISIBLE verdict stands.
-        bool CustomRayConfirmsOcclusion(RE::Actor* a_vf, RE::Actor* a_tf) {
+        // Unavailable (no parent cell, no bhkWorld; with a_strict also no char
+        // controller) is NOT a verdict. Engine basis: the engine's own VISIBLE
+        // stands (fail-open, as before). Own basis: the caller uses the engine's
+        // answer for that one measurement and logs it (principle 7: never mask).
+        // a_why names the reason. The worldLock scope is unchanged: read lock
+        // around the picks only, g_mx never held here.
+        enum class Ray { Clear, Blocked, Unavailable };
+        Ray CustomRay(RE::Actor* a_vf, RE::Actor* a_tf, bool a_strict, const char*& a_why) {
             auto* cell = a_vf->GetParentCell();
-            if (!cell) return false;
+            if (!cell) { a_why = "no cell"; return Ray::Unavailable; }
             auto* world = cell->GetbhkWorld();
-            if (!world) return false;
+            if (!world) { a_why = "no bhkWorld"; return Ray::Unavailable; }
+            if (a_strict && !a_vf->GetCharController()) { a_why = "no controller"; return Ray::Unavailable; }
 
             // System group of the caster, so the ray skips the caster's own
             // char-controller capsule (same non-zero group => not collided).
@@ -118,7 +142,10 @@ namespace MFO::Sightline {
                 RE::NiPoint3 to = pt;
                 const RE::NiPoint3 seg = to - eye;
                 const float len = seg.Length();
-                if (len > kTargetMargin) {
+                // Point-blank (within the margin): the segment would end inside the
+                // target's own capsule, and nothing can stand in that gap -> clear.
+                if (len <= kTargetMargin) return Ray::Clear;
+                {
                     const float f = (len - kTargetMargin) / len;
                     to = { eye.x + seg.x * f, eye.y + seg.y * f, eye.z + seg.z * f };
                 }
@@ -130,9 +157,9 @@ namespace MFO::Sightline {
                 pick.rayInput.filterInfo = rayFilter;
 
                 world->PickObject(pick);
-                if (!pick.rayOutput.HasHit()) return false;  // a clear sample -> visible, done
+                if (!pick.rayOutput.HasHit()) return Ray::Clear;  // a clear sample -> visible, done
             }
-            return true;  // every sample blocked -> an occluder the engine saw through
+            return Ray::Blocked;  // every sample blocked
         }
 
         // MAIN THREAD ONLY -- the actual raycast. Resolves ids fresh (a handle
@@ -144,7 +171,19 @@ namespace MFO::Sightline {
         // pair was never measured -- not again merely because the entry went stale, which
         // a probe slower than kFreshSeconds (a big party's service period) would hit on
         // every measurement.
-        void Measure(RE::FormID a_viewer, const std::vector<RE::FormID>& a_targets, bool a_changeOnly = false) {
+        //
+        // a_basis picks the verdict (see Basis in the header), set by the CALLER, never
+        // inferred here:
+        //   Engine -- today's two-stage: engine HasLineOfSight first, the own ray only
+        //             when the engine says CLEAR (it can only turn VISIBLE to OCCLUDED).
+        //   Own    -- our ray ALONE decides (any clear sample VISIBLE, all blocked
+        //             OCCLUDED); HasLineOfSight is not consulted unless the ray cannot
+        //             run, in which case its answer is used for that one measurement and
+        //             the failure is logged (rate-limited).
+        // Cost: one Measure per (viewer, target, basis) pair per kRepostSeconds through
+        // Want(), at most 3 picks each (worldLock read-held per ray, exactly as before).
+        void Measure(RE::FormID a_viewer, const std::vector<RE::FormID>& a_targets, Basis a_basis,
+                     bool a_changeOnly = false) {
             auto* vf = RE::TESForm::LookupByID<RE::Actor>(a_viewer);
             if (!vf || vf->IsDead() || !vf->Is3DLoaded()) return;
 
@@ -152,39 +191,57 @@ namespace MFO::Sightline {
                 auto* tf = RE::TESForm::LookupByID<RE::Actor>(tid);
                 if (!tf || tf->IsDead() || !tf->Is3DLoaded()) continue;
 
-                // The engine's own combat-AI LoS read. a_arg2 is an out-param
-                // the engine sets alongside the answer; only the return is the
-                // verdict. Verified against the pinned NG rev: this thunks
-                // RELOCATION_ID(53029, 53829) -- no VR id, but this function
-                // is only ever reached through MainThread::Post, which is a
-                // documented no-op on VR (pump refused), so VR never gets here.
-                bool arg2 = false;
-                bool los = vf->HasLineOfSight(tf, arg2);
-
-                // Cheap engine check FIRST. The custom ray runs ONLY when the
-                // engine says CLEAR, so the extra pick is spent on the
-                // ambiguous cases and an already-occluded foe costs nothing
-                // more. The ray can only ever turn a VISIBLE into OCCLUDED
-                // (catch a tent/cloth the engine saw through) -- it never
-                // overturns an OCCLUDED, and it fails OPEN (VISIBLE stands) when
-                // it cannot run. Both discrete and concentration casts reach
-                // this only through Want()'s repost throttle (kRepostSeconds,
-                // per viewer/target pair since 2026-09-29), so the pick is
-                // bounded to once per ~0.3 s per pair -- NOT the 133 ms pump tick.
-                if (los && CustomRayConfirmsOcclusion(vf, tf)) los = false;
+                bool los = true;
+                if (a_basis == Basis::Own) {
+                    const char* why = nullptr;
+                    const Ray r = CustomRay(vf, tf, /*a_strict=*/true, why);
+                    if (r == Ray::Unavailable) {
+                        // Principle 7: say so, then use the engine's cached answer for this
+                        // one measurement. Main thread only, so a plain static is safe.
+                        bool arg2 = false;
+                        los = vf->HasLineOfSight(tf, arg2);
+                        static std::unordered_map<std::uint64_t, Clock::time_point> s_unavailLog;
+                        if (s_unavailLog.size() > 256) s_unavailLog.clear();
+                        auto& last = s_unavailLog[Key(a_viewer, tid)];
+                        if (Since(last) >= 10.0f) {
+                            last = Clock::now();
+                            spdlog::warn("[los] {:08X} -> {:08X}: own ray unavailable ({}) -- engine cache used ({})",
+                                         a_viewer, tid, why, los ? "VISIBLE" : "OCCLUDED");
+                        }
+                    } else {
+                        los = (r == Ray::Clear);
+                    }
+                } else {
+                    // The engine's own combat-AI LoS read. a_arg2 is an out-param
+                    // the engine sets alongside the answer; only the return is the
+                    // verdict. Verified against the pinned NG rev: this thunks
+                    // RELOCATION_ID(53029, 53829) -- no VR id, but this function
+                    // is only ever reached through MainThread::Post, which is a
+                    // documented no-op on VR (pump refused), so VR never gets here.
+                    bool arg2 = false;
+                    los = vf->HasLineOfSight(tf, arg2);
+                    // Cheap engine check FIRST; the ray runs ONLY on a CLEAR, fails OPEN.
+                    const char* why = nullptr;
+                    if (los && CustomRay(vf, tf, /*a_strict=*/false, why) == Ray::Blocked) los = false;
+                }
 
                 std::lock_guard lk(g_mx);
-                auto& e = g_cache[Key(a_viewer, tid)];
+                auto& e = g_cache[Key(a_viewer, tid)].s[Idx(a_basis)];
                 // Transition-only logging (#22j): a stable verdict at pump
                 // cadence would be a 7.5 Hz flood per follower-foe pair.
                 const bool fresh = Since(e.at) <= kFreshSeconds;
                 const bool never = e.at.time_since_epoch().count() == 0;
                 if (a_changeOnly ? (never || e.los != los) : (!fresh || e.los != los)) {
-                    spdlog::info("[los] {:08X} -> {:08X}: {}", a_viewer, tid,
-                                 los ? "VISIBLE" : "OCCLUDED");
+                    spdlog::info("[los] {:08X} -> {:08X}: {}{}", a_viewer, tid,
+                                 los ? "VISIBLE" : "OCCLUDED", a_basis == Basis::Own ? " (own ray)" : "");
                 }
+                // A stale run is not "agreeing": readings further apart than the trust window
+                // restart the count (the new reading is run 1). Measured against the PREVIOUS
+                // reading's stamp, so it must run before e.at is refreshed.
+                if (!never && Since(e.at) > kOccRunTrustSeconds) e.occRun = 0;
                 e.los = los;
                 e.at  = Clock::now();
+                e.occRun = los ? 0 : static_cast<std::uint16_t>(std::min<int>(e.occRun + 1, 0xFFFF));
             }
         }
 
@@ -198,33 +255,41 @@ namespace MFO::Sightline {
         }
     }
 
-    Verdict Check(RE::FormID a_viewer, RE::FormID a_target) {
+    Verdict Check(RE::FormID a_viewer, RE::FormID a_target, Basis a_basis) {
+        return CheckWithin(a_viewer, a_target, kFreshSeconds, a_basis);
+    }
+
+    Verdict CheckWithin(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds, Basis a_basis) {
         std::lock_guard lk(g_mx);
         const auto it = g_cache.find(Key(a_viewer, a_target));
         if (it == g_cache.end()) return Verdict::Unknown;
-        if (Since(it->second.at) > kFreshSeconds) return Verdict::Unknown;
-        return it->second.los ? Verdict::Visible : Verdict::Occluded;
+        const auto& e = it->second.s[Idx(a_basis)];
+        if (Since(e.at) > a_maxAgeSeconds) return Verdict::Unknown;   // also the never-measured slot
+        return e.los ? Verdict::Visible : Verdict::Occluded;
     }
 
-    Verdict CheckWithin(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds) {
+    int OccludedRun(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds, Basis a_basis) {
         std::lock_guard lk(g_mx);
         const auto it = g_cache.find(Key(a_viewer, a_target));
-        if (it == g_cache.end()) return Verdict::Unknown;
-        if (Since(it->second.at) > a_maxAgeSeconds) return Verdict::Unknown;
-        return it->second.los ? Verdict::Visible : Verdict::Occluded;
+        if (it == g_cache.end()) return 0;
+        const auto& e = it->second.s[Idx(a_basis)];
+        if (e.los) return 0;
+        if (Since(e.at) > a_maxAgeSeconds) return 0;
+        return e.occRun;
     }
 
-    void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets) {
+    void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets, Basis a_basis) {
         if (!a_viewer || a_targets.empty()) return;
+        auto& lastPost = g_lastPost[Idx(a_basis)];   // throttled per (pair, basis)
         {
             std::lock_guard lk(g_mx);
             // Bounded: a long session meets many foes. Stamps older than the
             // floor carry no information, so drop them when the map grows.
-            if (g_lastPost.size() > 1024)
-                std::erase_if(g_lastPost, [](const auto& kv) { return Since(kv.second) >= kRepostSeconds; });
+            if (lastPost.size() > 1024)
+                std::erase_if(lastPost, [](const auto& kv) { return Since(kv.second) >= kRepostSeconds; });
             const auto now = Clock::now();
             std::erase_if(a_targets, [&](RE::FormID t) {
-                auto& last = g_lastPost[Key(a_viewer, t)];
+                auto& last = lastPost[Key(a_viewer, t)];
                 if (Since(last) < kRepostSeconds) return true;   // measured (or queued) just now
                 last = now;
                 return false;
@@ -234,12 +299,12 @@ namespace MFO::Sightline {
         // Post OUTSIDE our lock (leaf-mutex discipline; MainThread has its own
         // queue mutex). Capture by value: FormIDs, never handles or pointers,
         // so the frame that runs this re-resolves against the live world.
-        MainThread::Post([a_viewer, targets = std::move(a_targets)]() {
-            Measure(a_viewer, targets);
+        MainThread::Post([a_viewer, a_basis, targets = std::move(a_targets)]() {
+            Measure(a_viewer, targets, a_basis);
         });
     }
 
-    Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target) {
+    Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target, Basis a_basis) {
         if (!a_viewer || !a_target || REL::Module::IsVR()) return Verdict::Unknown;
         auto* vf = RE::TESForm::LookupByID<RE::Actor>(a_viewer);
         auto* tf = RE::TESForm::LookupByID<RE::Actor>(a_target);
@@ -247,14 +312,15 @@ namespace MFO::Sightline {
         // must not answer for a measurement that did not happen.
         if (!vf || vf->IsDead() || !vf->Is3DLoaded()) return Verdict::Unknown;
         if (!tf || tf->IsDead() || !tf->Is3DLoaded()) return Verdict::Unknown;
-        Measure(a_viewer, { a_target }, /*a_changeOnly=*/true);
-        return Check(a_viewer, a_target);
+        Measure(a_viewer, { a_target }, a_basis, /*a_changeOnly=*/true);
+        return Check(a_viewer, a_target, a_basis);
     }
 
     void ClearTransientState() {
         std::lock_guard lk(g_mx);
         g_cache.clear();
-        g_lastPost.clear();
+        g_lastPost[0].clear();
+        g_lastPost[1].clear();
     }
 
     namespace {

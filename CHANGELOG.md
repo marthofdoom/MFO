@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Followers judge line of sight themselves for spells and bows.** A heal or a shot no longer waits on the game's stale sight answer, so heals stop hopping between targets and heals aimed at you get served.
 - **The menu remembers where you put it.** The Field Orders window reopens at the position and size you left it, even after you restart the game. It is saved in `Data/SKSE/Plugins/MFO_UI.ini`. Delete that file to go back to the centred default. If your resolution changes, the window is kept on screen.
 - **Heals are animated in combat again.** With Harbinger installed, a follower in combat casts their heal gambits with their own hands and the real cast animation. Self heals, heals on an ally, heals on you and Auto heals all work this way. Out of combat heals still land instantly for now.
 - **One heal at a time, lowest health first.** An Auto heal no longer lands on the whole party at once. The follower heals whoever is lowest, finishes that cast, then picks again. A channelled heal like Healing Hands runs until the target is full.
@@ -15,7 +16,9 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **An equip rule's shield is held by gambit order too.** A shield an equip rule puts on a follower for their perks is now kept against a heal that sits below that rule, the same as a weapon. A heal above the rule still borrows the hand.
 - **A channelled heal keeps the left hand between bursts.** A long heal like Healing Hands restarts every 8 to 15 seconds. A lower attack rule no longer grabs the left hand in that moment, so the heal carries on without a gap.
 - **One heal road at a time.** When a follower enters combat while an instant heal is still running on them, that heal stops as the animated heal takes over, so the two never overlap. Out of combat a follower no longer starts an animated heal that the end of the fight would cancel right away.
-- **A heal stops when it can't land.** If the ally dies, runs out of reach or goes behind a wall, the follower lets the heal go at once and moves to the next rule.
+- **A heal stops when it can't land.** If the ally dies, runs out of reach or goes behind a wall, the follower lets the heal go and moves to the next rule. A wall has to be seen twice in a row, and never while the heal is still getting ready to cast.
+- **Heals no longer hop between allies.** A line of sight that flickers no longer makes the follower swap the ally they are healing every second. They keep the hurt ally until the heal has had time to start, and an ally at or above the rule's health threshold is never picked.
+- **A held charge no longer blocks a heal.** An attack spell the follower has fully charged but cannot fire, because every foe is out of sight, steps aside for a higher heal rule at once. The charge is let go after a few seconds and is not started again until the foe is in view.
 - **The MCM toggle now says what it does.** "Animated heals in combat" is on by default. Turn it off and every heal lands instantly with no animation. If you update from an older version, it is switched on once for you. Turn it off again and it stays off.
 - **New log lines.** [heal] says when a heal takes the instant road and why. [heal-obs] now also reports animated heals, with road=claim.
 - **The menu only drags by its title bar, and resizes from any edge.** Before, you could drag the Field Orders window from anywhere in it, which fought with sliders and lists. Now you grab the title bar to move it. Drag any edge, or a bottom corner, to resize it. The combat HUD stays fixed.

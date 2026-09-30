@@ -184,8 +184,9 @@ namespace MFO::ComposedCast {
     //                     follower HAS a CombatController, the object every heal seat
     //                     hangs off. The follower's own AI casts it, animated. A
     //                     direct HEAL stream still standing on the follower is ENDED
-    //                     here (Actuation::EndDirectHealStreams, MFO-B176), so the
-    //                     two roads never overlap in this direction either.
+    //                     when the claim is MINTED (Try()'s Claimed return, MFO-B176 /
+    //                     MFO-B192; Actuation::EndDirectHealStreams), so the two
+    //                     roads never overlap in this direction either.
     //   DirectNoCombat -- Harbinger present and capable, but no CombatController (out
     //                     of combat, an own-OOC follower in a party fight, a healer
     //                     who retreated). marth's D1 default: the direct road,
@@ -207,6 +208,16 @@ namespace MFO::ComposedCast {
     // Worker-serial (same worker as Try/End; its log dedup is unlocked for that reason).
     enum class HealRoad : std::uint8_t { NotHeal, Claim, DirectNoCombat, DirectNoSeat, DirectDegrade };
     HealRoad ChooseHealRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target);
+
+    // NoteOocDirectHeal (review F2 on 3a42371): the out-of-combat heal callers
+    // (CastSelfDirect / CastTargetDirect with g_firingRule == kNoRule) no longer ask
+    // ChooseHealRoad (MFO-B173), so a follower that still holds a CombatController
+    // while the party is out of combat healed on the instant road with NO [heal]
+    // line. marth 2026-09-30: nothing uses the instant road in the finished build
+    // (aside from where 1.5 needs it), and every cause of fallback usage is a problem
+    // to fix, so the use is named. One [heal] line per (follower, spell) per 15 s
+    // (RoadLogDue); a Heal-kind spell only. Logging only, changes nothing. Worker-serial.
+    void NoteOocDirectHeal(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
     // Release a_follower's heal-cast claim + its CastBounds arm now. Call the
     // instant the gambit stops wanting the heal (target lost / rule no longer

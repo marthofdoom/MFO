@@ -204,6 +204,24 @@ namespace MFO::Eval {
             }
         }
 
+        // Sightline basis for a SWING rule (marth 2026-09-30: spells and BOWS only). True when
+        // the right hand holds a bow or crossbow (a ranged shot), or either hand holds a staff
+        // (a staff "swing" casts its spell, so it is a spell measurement). A melee swing,
+        // declared melee-only or not, stays on the engine basis.
+        bool HoldsBowOrStaff(RE::Actor* a_actor) {
+            if (!a_actor) return false;
+            if (auto* r = a_actor->GetEquippedObject(false))
+                if (auto* w = r->As<RE::TESObjectWEAP>()) {
+                    const auto t = w->GetWeaponType();
+                    if (t == RE::WEAPON_TYPE::kBow || t == RE::WEAPON_TYPE::kCrossbow) return true;
+                }
+            for (const bool left : { false, true })
+                if (auto* o = a_actor->GetEquippedObject(left))
+                    if (auto* w = o->As<RE::TESObjectWEAP>(); w && w->GetWeaponType() == RE::WEAPON_TYPE::kStaff)
+                        return true;
+            return false;
+        }
+
         // Pick a foe from the follower's OWN COMBAT GROUP.
         //
         // Not a world sweep. The engine already tracks who is in this fight, so
@@ -222,9 +240,11 @@ namespace MFO::Eval {
         // that choice. Other actions (casts, equips, drinks) are never gated.
         // a_reachSlack = Scheduler::ReachHoldSlack (-64 u while the reach hold holds him),
         // so the picker reads the SAME line as the ch.23 hold and Fire (review U3).
+        // a_ownRay: the rule casts a spell or swings as a non-melee-only (ranged) follower, so
+        // the LoS preference uses Sightline::Basis::Own (MFO's ray), else the engine basis.
         RE::ActorHandle PickFoe(RE::Actor* a_self, RE::Actor* a_player,
                                 const std::string& a_op, float a_param, bool a_reachGate,
-                                float a_reachSlack) {
+                                float a_reachSlack, bool a_ownRay) {
             RE::ActorHandle best;
             if (!a_self) return best;
 
@@ -298,6 +318,10 @@ namespace MFO::Eval {
             RE::ActorHandle bestVis;
             int   qualified    = 0;       // candidates that passed every gate
             std::vector<RE::FormID> wantLoS;   // measured NEXT tick, on main
+            // a_ownRay (the CALLER's class): this rule's action is a SPELL cast or a
+            // ranged swing, so its LoS preference reads MFO's own ray verdict; any
+            // other rule (a melee-only swing, Wait, ...) keeps the engine basis.
+            const Sightline::Basis losBasis = a_ownRay ? Sightline::Basis::Own : Sightline::Basis::Engine;
             const auto selfID  = a_self->GetFormID();
             const auto selfPos = a_self->GetPosition();
             int         nonHostile = 0;   // brawl gate: foes skipped as non-hostile
@@ -492,7 +516,7 @@ namespace MFO::Eval {
                     // CACHED verdict for this tick's preference.
                     ++qualified;
                     wantLoS.push_back(foe->GetFormID());
-                    if (Sightline::Check(selfID, foe->GetFormID()) !=
+                    if (Sightline::Check(selfID, foe->GetFormID(), losBasis) !=
                         Sightline::Verdict::Occluded) {
                         if (score < bestVisScore) { bestVisScore = score; bestVis = t.targetHandle; }
                     }
@@ -502,7 +526,7 @@ namespace MFO::Eval {
             }
             // OUTSIDE the group lock: ask the main thread to (re)measure LoS
             // for this tick's candidates so the next tick reads warm verdicts.
-            if (!wantLoS.empty()) Sightline::Want(selfID, std::move(wantLoS));
+            if (!wantLoS.empty()) Sightline::Want(selfID, std::move(wantLoS), losBasis);
 
             // The sighted best wins; the unsighted overall best is the
             // fallback so an all-occluded pack never reads as "no foe".
@@ -577,7 +601,8 @@ namespace MFO::Eval {
                     // re-measured Visible on the next lap (the Want above), and one
                     // that is never re-measured (unloaded) falls back to Unknown after
                     // it. Self never reaches this (a_self is excluded above).
-                    if (Sightline::CheckWithin(a_self->GetFormID(), ally->GetFormID(), kHealLosTrustS) ==
+                    if (Sightline::CheckWithin(a_self->GetFormID(), ally->GetFormID(), kHealLosTrustS,
+                                               Sightline::Basis::Own) ==
                         Sightline::Verdict::Occluded)
                         return;
                 }
@@ -588,7 +613,7 @@ namespace MFO::Eval {
                 consider(ptr.get());
             }
             consider(a_player);   // the player is an ally candidate too
-            if (!sightWant.empty()) Sightline::Want(a_self->GetFormID(), std::move(sightWant));
+            if (!sightWant.empty()) Sightline::Want(a_self->GetFormID(), std::move(sightWant), Sightline::Basis::Own);
             return best;
         }
 
@@ -702,7 +727,12 @@ namespace MFO::Eval {
                 if (swing && meleeOnly < 0) meleeOnly = Actuation::MeleeOnly(a_follower) ? 1 : 0;
                 chosen = PickFoe(a_follower, player, g.conditionOpcode, g.conditionParam,
                                  swing && meleeOnly == 1,
-                                 Scheduler::ReachHoldSlack(a_follower->GetFormID()));
+                                 Scheduler::ReachHoldSlack(a_follower->GetFormID()),
+                                 // Own ray: a spell-cast rule, or a swing while a bow/crossbow (right hand) or a
+                                 // staff (either hand; a staff cast is a spell) is equipped. A melee swing stays Engine.
+                                 g.actionOpcode == Vocab::kActCastTarget || g.actionOpcode == Vocab::kActCastSelf ||
+                                     g.actionOpcode == Vocab::kActCastPlayer ||
+                                     (swing && HoldsBowOrStaff(a_follower)));
                 if (!chosen) continue;
             } else if (IsAllySelector(g.conditionOpcode)) {
                 // Same shape, ally side: true iff a wounded teammate is found,

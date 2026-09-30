@@ -70,6 +70,17 @@ namespace MFO::Actuation {
     bool CastInFlightOnHand(RE::Actor* a_follower, std::size_t a_hand,
                             RE::FormID a_spell, RE::FormID a_proxy);
 
+    // CHARGED AND WAITING (field 2026-09-30): CastInFlightOnHand's own reads (spell or
+    // proxy selected, caster built) AND the caster is in MagicCaster::State::kReady,
+    // the fork's state 3, which Harbinger's census names "Charged" (CastObserve.cpp
+    // CasterStateName). A spell the engine has fully charged and is HOLDING, not yet
+    // casting and not concluding. An offense charge held on an unsighted foe sits
+    // here for as long as the claim stands, and CastInFlightOnHand alone calls that
+    // "in flight". Racy plain loads, same as CastInFlightOnHand (definition in
+    // cast/Hands.cpp). Worker-safe.
+    bool CastChargedWaitingOnHand(RE::Actor* a_follower, std::size_t a_hand,
+                                  RE::FormID a_spell, RE::FormID a_proxy);
+
     // WHEN THE CAST LOCK ON `a_hand` CLAIMED `a_spell` (MFO-B190): the lock's
     // `lastSeen`, which a refresh in flight and a heal repair lap never re-stamp, so
     // it is the claim's start. Returns the clock epoch (time_point{}) when the hand
@@ -87,7 +98,7 @@ namespace MFO::Actuation {
 
     // End a_follower's direct HEAL streams (MFO-B176): the self stream and the
     // on-target stream, each only when its spell is Heal-kind. ComposedCast::
-    // ChooseHealRoad calls it when a heal takes the claim road, so one actor never
+    // Try calls it when a heal claim is minted (Claimed return, MFO-B192), so one actor never
     // runs a direct heal stream beside a heal claim ("ONE ROAD PER ACTOR"; the
     // claim -> direct half is ChooseHealRoad's own End). It is the streams' own
     // switch end: settle, then the dispel + kInstant interrupt posted to the MAIN
