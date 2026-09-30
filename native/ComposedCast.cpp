@@ -666,6 +666,65 @@ namespace MFO::ComposedCast {
         return TryResult::Claimed;   // APMF owns the cast: caller skips its kInstant apply.
     }
 
+    namespace {
+        // [heal] road-label dedup: one line per (follower, spell, road) every 15 s.
+        // Worker-serial, no lock (the same worker as every other map in this TU).
+        std::unordered_map<std::uint64_t, std::pair<std::uint8_t, Clock::time_point>> g_roadLog;
+        bool RoadLogDue(RE::FormID a_fid, RE::FormID a_spell, HealRoad a_road) {
+            const auto now = Clock::now();
+            auto& e = g_roadLog[(static_cast<std::uint64_t>(a_fid) << 32) | a_spell];
+            if (e.first == static_cast<std::uint8_t>(a_road) && now - e.second < std::chrono::seconds(15))
+                return false;
+            e = { static_cast<std::uint8_t>(a_road), now };
+            return true;
+        }
+    }
+
+    HealRoad ChooseHealRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target) {
+        if (!a_follower || !a_spell) return HealRoad::NotHeal;
+        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Heal) return HealRoad::NotHeal;
+        // Enabled() is Try()'s own gate (Heal kind, verified runtime, bHealAnimPackage,
+        // Harbinger present); HealCastClaimSupported adds the ABI (>= 5). bEquipToCast:
+        // the claim road is CastOn's composed branch, which lives inside that toggle.
+        if (!Enabled(a_follower, a_spell, CasterConsent::SpellKind::Heal) ||
+            !APMFBridge::HealCastClaimSupported() || !Config::g_equipToCast.load())
+            return HealRoad::DirectDegrade;
+        const auto fid     = a_follower->GetFormID();
+        const auto spellID = a_spell->GetFormID();
+        // THE TEST IS THE OBJECT THE SEATS HANG OFF (see CastTargetDirect's note):
+        // a plain member load through the SE/AE-shifted accessor, racy by design --
+        // worst case one lap takes the other road.
+        if (!a_follower->GetActorRuntimeData().combatController) {
+            // ONE ROAD PER ACTOR: a heal claim minted on an in-combat lap must not
+            // outlive the controller it needed (RC-2 of 09-21: a claim nothing could
+            // serve, heart-beaten for 9.7 s) while this lap casts direct beside it.
+            const auto standing = APMFBridge::GetHealCastSpell(fid);
+            if (standing != 0) {
+                End(fid);
+                spdlog::info("[heal] {:08X} combat controller gone -- the standing heal claim "
+                             "(spell {:08X}) is RELEASED; heals take the direct road until the "
+                             "follower is in combat again", fid, standing);
+            }
+            if (RoadLogDue(fid, spellID, HealRoad::DirectNoCombat))
+                spdlog::info("[heal] {:08X} {} ({:08X}): no combat controller -- DIRECT road, "
+                             "unanimated (D1: the animated heal needs the follower's own combat AI)",
+                             fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
+            return HealRoad::DirectNoCombat;
+        }
+        // a_target nullptr = no recipient chosen yet (CastAuto asks before it picks,
+        // and keeps the caster out of its own candidates for a non-Self spell).
+        const bool atSelf = a_target == a_follower;
+        if (atSelf && a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf) {
+            if (RoadLogDue(fid, spellID, HealRoad::DirectNoSeat))
+                spdlog::warn("[heal] {:08X} {} ({:08X}) aimed at its own caster, but its delivery is "
+                             "not Self: Harbinger resolves a self claim only for a Self-delivery "
+                             "spell, so no seat can fire it -- DIRECT road, unanimated",
+                             fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
+            return HealRoad::DirectNoSeat;
+        }
+        return HealRoad::Claim;
+    }
+
     void End(RE::FormID a_follower) {
         APMFBridge::ReleaseHealCast(a_follower);
         CastBounds::Disarm(a_follower);
@@ -762,6 +821,7 @@ namespace MFO::ComposedCast {
         g_watch.clear();
         g_lastHold.clear();
         g_lastHoldLog.clear();
+        g_roadLog.clear();
     }
 
 }

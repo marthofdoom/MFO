@@ -165,6 +165,42 @@ namespace MFO::ComposedCast {
     TryResult Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
                   CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct = 0);
 
+    // ── WHICH ROAD A HEAL TAKES (animheal phase 2, 2026-09-30) ─────────────────
+    // ONE decision, asked by every heal caller (CastOn, CastAuto, CastSelfDirect,
+    // CastTargetDirect) so the combat table, the AUTO series and the OOC table can
+    // never pick two different roads for one actor at one instant (RC-1 of the
+    // 2026-09-21 freeze was exactly that: MFO's own claim and MFO's own direct cast
+    // colliding on one follower).
+    //   NotHeal        -- not a Heal-kind spell (CasterConsent::ClassifySpell). The
+    //                     caller's own road, unchanged. Wards and other Restoration-
+    //                     school buffs stay on the direct road (IsRestorationSpell).
+    //   Claim          -- THE heal road. Harbinger present and capable (ABI >= 5,
+    //                     bHealAnimPackage ON), a verified runtime (1.6.1170 or
+    //                     1.5.97: Harbinger installs the heal seats on both), and the
+    //                     follower HAS a CombatController, the object every heal seat
+    //                     hangs off. The follower's own AI casts it, animated.
+    //   DirectNoCombat -- Harbinger present and capable, but no CombatController (out
+    //                     of combat, an own-OOC follower in a party fight, a healer
+    //                     who retreated). marth's D1 default: the direct road,
+    //                     unanimated, with its own rate-limited [heal] line. A heal
+    //                     claim still standing on that follower is RELEASED here, so
+    //                     the two roads never overlap (one road per actor).
+    //   DirectNoSeat   -- Harbinger present, a controller, but the shape has no seat:
+    //                     a heal whose delivery is not Self aimed at its own caster.
+    //                     Harbinger resolves a self claim to the claimant only for a
+    //                     Self-delivery spell (APMF 12c456e), so such a claim could
+    //                     never fire. Direct road, labelled. (AUTO never picks it.)
+    //   DirectDegrade  -- Harbinger absent or too old, an unverified runtime, or the
+    //                     kill switches (bHealAnimPackage / bEquipToCast) OFF: the
+    //                     documented "legacy = Harbinger-absent" degrade, no line.
+    // NEVER a fallback: a Claim that is then refused or never fires stays loud and
+    // falls through per the gambit; nothing re-routes it to the direct road.
+    // a_target: the recipient (the caster for a self heal); nullptr when the caller
+    // has not picked one yet (CastAuto), which skips only the DirectNoSeat test.
+    // Worker-serial (same worker as Try/End; its log dedup is unlocked for that reason).
+    enum class HealRoad : std::uint8_t { NotHeal, Claim, DirectNoCombat, DirectNoSeat, DirectDegrade };
+    HealRoad ChooseHealRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target);
+
     // Release a_follower's heal-cast claim + its CastBounds arm now. Call the
     // instant the gambit stops wanting the heal (target lost / rule no longer
     // wins) so APMF restores the AI's own cast deliberation immediately; the

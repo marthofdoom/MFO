@@ -1232,6 +1232,15 @@ namespace MFO::APMFBridge {
     // coexisting" (leave the heal alone). Same contract as GetHealCastProxy.
     RE::FormID GetHealCastSpell(RE::FormID a_follower);
 
+    // Worker-safe (SAME g_mx). The RECIPIENT the heal slot's LIVE claim names: 0 when
+    // no heal claim stands AND for a self claim (MFO sends target 0 for self, which
+    // Harbinger resolves to the claimant for a Self-delivery spell). So a caller must
+    // pair it with GetHealCastSpell to tell "no claim" from "a self claim". Exists for
+    // the animated-heal series (animheal phase 2): CastAuto keeps a cast that is in
+    // flight on its current recipient and re-picks between casts, so it has to know
+    // who the standing claim is aimed at.
+    RE::FormID GetHealCastTarget(RE::FormID a_follower);
+
     RE::FormID GetHealCastProxy(RE::FormID a_follower);
 
     // Worker-safe (the SAME g_mx as every accessor above). HEARTBEAT for a

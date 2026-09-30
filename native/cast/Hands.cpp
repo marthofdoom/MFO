@@ -62,6 +62,11 @@ namespace MFO::Actuation {
     void HoldCastLock(RE::FormID a_follower, std::size_t a_hand,
                       RE::FormID a_spell, RE::FormID a_target) {
         auto& lock = g_castLock[a_follower].hand[a_hand];
+        // A new spell or recipient is a new channel: its stream cap starts over.
+        if (lock.spell != a_spell || lock.target != a_target) {
+            lock.channelSince = {};
+            lock.channelCap   = 0.0f;
+        }
         lock.spell = a_spell; lock.target = a_target;
         lock.lastSeen = std::chrono::steady_clock::now();
         lock.claimGoneAt = {};   // fresh hold == fresh cast: reset F8's cap window
@@ -549,11 +554,22 @@ namespace MFO::Actuation {
         // Still a target -> the re-aim is a flicker and is HELD. No longer a target
         // -> re-aiming is the only correct move and it proceeds.
         //
-        // A SELF-CAST (target 0) can never reach here: its lock's target never
-        // changes, so HandFree's incumbent match succeeds and there is nothing to
-        // re-aim. Answered false rather than left to the actor lookup.
+        // A SELF-CAST (target 0) could never reach here before animheal phase 2: its
+        // lock's target never changed, so HandFree's incumbent match succeeded. The
+        // AUTO heal series now moves a self heal to an ally, so a self HEAL lock is
+        // judged below (lost at full health); any other self lock answers false.
         bool IncumbentTargetLost(RE::Actor* a_follower, const CastLock& a_lock) {
-            if (!a_follower || a_lock.target == 0) return false;
+            if (!a_follower) return false;
+            // A SELF HEAL CAN BE RE-AIMED NOW (animheal phase 2): CastAuto's series
+            // moves one rule's heal from the caster to an ally, so a target-0 lock
+            // does meet a different target here. Its only "lost" is the caster back
+            // at full health; every other self lock keeps the answer it always had.
+            if (a_lock.target == 0) {
+                auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
+                return sp && SpellHealsHealth(sp) &&
+                       CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense &&
+                       Vocab::HealthPct(a_follower) >= Vocab::kHealFull;
+            }
             // ONE DELIBERATE MIRROR GAP: PickAlly's "resolves" means "is in
             // Followers::g_active, or is the player", while this resolves the raw
             // FormID -- so a follower DISMISSED mid-fight still reads as a valid
@@ -578,7 +594,49 @@ namespace MFO::Actuation {
                 const float ceiling = std::min(g_firingAllyThreshold, Vocab::kHealFull);
                 if (Vocab::HealthPct(victim) >= ceiling) return true;
             }
+            // A HEAL'S RECIPIENT IS ALSO LOST WHEN THE HEAL CAN NO LONGER REACH IT
+            // (animheal phase 2; MFO-B162's fix shape). The ally picker (PickAlly) and
+            // CastAuto's series both drop an ally that is beyond the spell's reach or
+            // out of sight (HealInReach: distance + the Sightline verdict), so the
+            // incumbent is judged by the same test -- otherwise the re-aim to the ally
+            // the picker moved to is held while the claim keeps aiming at the one
+            // behind the wall. A recipient back at FULL health is lost too, whatever
+            // the rule's condition (an AUTO or an explicit-subject heal carries no ally
+            // threshold): there is nothing left for this heal to do there. A heal
+            // only: an offense lock keeps the three tests above.
+            if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
+                sp && SpellHealsHealth(sp) &&
+                CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense &&
+                (Vocab::HealthPct(victim) >= Vocab::kHealFull || !HealInReach(a_follower, victim, sp)))
+                return true;
             return false;
+        }
+
+        // ── ONE REAL HEAL AT A TIME, LOWEST FIRST (animheal phase 2, marth) ─────
+        // A claimed heal whose engine cast has FIRED since this lock was taken, and
+        // is not charging or channelling now, has done its one cast: the same rule
+        // may re-aim at the recipient the picker names NOW (the lowest). That is the
+        // per-cast re-pick marth asked for, and it is still not a flicker: the
+        // recipient changes only between completed casts, never before the first
+        // one lands (the 2.3-4.5 s window IncumbentTargetLost's note guards).
+        // ObservedFiring only ever answers for a CLAIM (it reads the [cfc] watch),
+        // so the direct road's locks are untouched. `lastSeen` is the lock's claim
+        // stamp (the in-flight refresh never re-stamps it), so "fired within
+        // now - lastSeen" is "fired since this recipient was claimed".
+        bool IncumbentHealCastDone(RE::Actor* a_follower, std::size_t a_hand, const CastLock& a_lock) {
+            const auto fid = a_follower ? a_follower->GetFormID() : 0;
+            if (fid == 0 || a_lock.spell == 0) return false;   // target 0 (self) included
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
+            if (!sp || !SpellHealsHealth(sp) ||
+                CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Offense)
+                return false;
+            const auto since = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - a_lock.lastSeen);
+            if (since.count() <= 0) return false;
+            const std::int32_t apmfHand = (a_hand == kHandLeft) ? APMFBridge::kApmfHandLeft
+                                                                : APMFBridge::kApmfHandRight;
+            return ComposedCast::ObservedFiring(fid, apmfHand, a_lock.spell,
+                                                static_cast<std::uint32_t>(since.count()));
         }
 
         // ── THE SAME RULE, RE-AIMED (review finding, 2026-09-08) ────────────────
@@ -665,6 +723,66 @@ namespace MFO::Actuation {
                          ? "The incumbent was a DUAL cast holding both hands as ONE claim, so both "
                            "hands were freed -- a dual cast cannot be half-released."
                          : "The other hand is untouched.");
+    }
+
+    // ── THE ANIMATED-HEAL CLAIM ROAD'S TWO LOCK HELPERS (animheal phase 2) ──────
+    // Declared (with the contract) in Actuation_internal.h.
+    //
+    // ReleaseOwnHealClaim. A heal claim is released by STATE, never by a timer: the
+    // recipient left reach or sight, reached full, or is no longer the AUTO pick.
+    // Only THIS rule's claim on THIS spell: a heal claim on another spell belongs to
+    // another rule (PreemptHand is the road for taking it), and a LEFT lock another
+    // rule owns on the same spell is that rule's (two rules can share a spell).
+    // kNoRule (the OOC Logistics caller) owns nothing and so releases nothing it did
+    // not claim itself -- it can only meet its own claim here.
+    bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why) {
+        const auto fid = a_follower ? a_follower->GetFormID() : 0;
+        if (fid == 0 || a_spell == 0) return false;
+        if (APMFBridge::GetHealCastSpell(fid) != a_spell) return false;
+        auto it = g_castLock.find(fid);
+        if (it != g_castLock.end()) {
+            const auto& lk = it->second.hand[kHandLeft];
+            if (lk.spell == a_spell && lk.owningRule != g_firingRule && lk.owningRule != kNoRule)
+                return false;   // another rule's claim on the same spell
+        }
+        const RE::FormID recipient = APMFBridge::GetHealCastTarget(fid);
+        ComposedCast::End(fid);
+        if (it != g_castLock.end() && it->second.hand[kHandLeft].spell == a_spell)
+            it->second.hand[kHandLeft] = CastLock{};
+        static std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> s_log;
+        const auto now = std::chrono::steady_clock::now();
+        auto& e = s_log[fid];
+        if (e.first != a_spell || std::chrono::duration<float>(now - e.second).count() >= 2.0f) {
+            e = { a_spell, now };
+            spdlog::info("[heal] {:08X} heal claim RELEASED -- spell {:08X} at {:08X}: {} (rule {})",
+                         fid, a_spell, recipient == 0 ? fid : recipient, a_why, g_firingRule);
+        }
+        return true;
+    }
+
+    // HealChannelCapped. Read the LEFT lock's spell against the engine's own caster:
+    // while the follower channels it (CastInFlightOnHand, the one in-flight
+    // definition) the clock runs from the first lap it was seen channelling; the
+    // moment it is not channelling, the clock resets. A per-channel cap drawn once
+    // from DrawConcCap's heal band, like the direct stream's (principle 9: it bounds
+    // one channel, it never paces casts).
+    bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec) {
+        const auto fid = a_follower ? a_follower->GetFormID() : 0;
+        auto it = g_castLock.find(fid);
+        if (fid == 0 || it == g_castLock.end()) return false;
+        auto& lk = it->second.hand[kHandLeft];
+        if (lk.spell != a_spell || a_spell == 0) return false;
+        if (!CastInFlightOnHand(a_follower, kHandLeft, lk.spell, CastProxyOnHand(fid, kHandLeft))) {
+            lk.channelSince = {};
+            return false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (lk.channelSince.time_since_epoch().count() == 0) {
+            lk.channelSince = now;
+            lk.channelCap   = DrawConcCap(CasterConsent::SpellKind::Heal);
+        }
+        a_capSec = lk.channelCap;
+        return std::chrono::duration<float>(now - lk.channelSince).count() > lk.channelCap;
     }
 
     namespace {
@@ -762,7 +880,7 @@ namespace MFO::Actuation {
             const auto& lk = lockIt->second.hand[h];
             return IsOwnRetarget(lk, a_spell) &&
                    !CastInFlightOnHand(a_follower, h, lk.spell, CastProxyOnHand(fid, h)) &&
-                   IncumbentTargetLost(a_follower, lk);
+                   (IncumbentTargetLost(a_follower, lk) || IncumbentHealCastDone(a_follower, h, lk));
         };
         auto outranks = [&](std::size_t h) {
             return lockIt != g_castLock.end() &&

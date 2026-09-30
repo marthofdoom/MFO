@@ -31,6 +31,10 @@ namespace MFO::Actuation {
         // Read-back warn rate limit (ReadbackWarnDue): per (caster, spell), last print +
         // how many were held back since. Written on main; cleared by ResetHealObs, so
         // it shares g_healObsMx (a leaf lock, nothing is taken inside it).
+        // The claim road's "HP before" (HealObsClaimLap): per caster, the recipient
+        // and its health on the claim's most recent lap. Under g_healObsMx.
+        struct ClaimLap { RE::FormID recipient = 0; float hp = 0.0f; };
+        std::unordered_map<RE::FormID, ClaimLap> g_claimLap;
         struct WarnGate { SelfClock::time_point last{}; std::uint32_t held = 0; };
         std::map<std::tuple<RE::FormID, RE::FormID, ReadbackWarn>, WarnGate> g_readbackWarn;
         constexpr float kReadbackWarnEverySec = 5.0f;
@@ -41,6 +45,7 @@ namespace MFO::Actuation {
             g_healObsPending.clear();
             g_healObsLast.clear();
             g_readbackWarn.clear();
+            g_claimLap.clear();
         }
     namespace {
 
@@ -101,6 +106,37 @@ namespace MFO::Actuation {
         g_healObsPending.push_back(o);
     }
 
+    void HealObsClaimLap(RE::FormID a_caster, RE::FormID a_recipient, float a_hp) {
+        if (a_caster == 0) return;
+        std::lock_guard lk(g_healObsMx);
+        g_claimLap[a_caster] = ClaimLap{ a_recipient == 0 ? a_caster : a_recipient, a_hp };
+    }
+
+    void HealObsNoteClaimFire(RE::FormID a_caster, RE::FormID a_firedForm) {
+        const RE::FormID spell = APMFBridge::GetHealCastSpell(a_caster);
+        if (spell == 0 || a_firedForm == 0) return;
+        const RE::FormID proxy = APMFBridge::GetHealCastProxy(a_caster);
+        if (a_firedForm != spell && (proxy == 0 || a_firedForm != proxy)) return;   // not the heal claim
+        const RE::FormID tgt       = APMFBridge::GetHealCastTarget(a_caster);
+        const RE::FormID recipient = tgt == 0 ? a_caster : tgt;
+        float hpLap = -1.0f;   // -1 = no lap stamp for this recipient: read at the fire instead
+        {
+            std::lock_guard lk(g_healObsMx);
+            if (const auto it = g_claimLap.find(a_caster);
+                it != g_claimLap.end() && it->second.recipient == recipient)
+                hpLap = it->second.hp;
+        }
+        MainThread::Post([a_caster, recipient, spell, a_firedForm, hpLap] {
+            auto* caster = RE::TESForm::LookupByID<RE::Actor>(a_caster);
+            auto* target = RE::TESForm::LookupByID<RE::Actor>(recipient);
+            auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(spell);
+            auto* form   = RE::TESForm::LookupByID<RE::SpellItem>(a_firedForm);
+            if (!caster || !target || !sp) return;
+            HealObsNote(caster, target, sp, form ? form : sp, "claim",
+                        hpLap >= 0.0f ? hpLap : Vocab::HealthPct(target), HealAttach::Instant);
+        });
+    }
+
     void HealObsSweep() {
         std::vector<HealObs> due;
         {
@@ -116,8 +152,12 @@ namespace MFO::Actuation {
             // WORKER-side registry read (worker-serial, #4): is MFO's own stream for this
             // (caster, spell, recipient) still registered? A stopped channel on a live
             // stream is the masked-failure shape; one on a released stream is expected.
-            const char* stream = "none";
-            if (o.conc) {
+            // THE CLAIM ROAD (animheal phase 2) has no MFO stream: the follower's own
+            // AI channels it on a HAND caster, so the direct road's registries say
+            // nothing about it and its channel is read from the LEFT hand below.
+            const bool claimRoad = std::string_view(o.road) == "claim";
+            const char* stream = claimRoad ? "n/a" : "none";
+            if (o.conc && !claimRoad) {
                 if (o.caster == o.target) {
                     const auto it = g_selfCast.find(o.caster);
                     stream = (it != g_selfCast.end() && it->second.spell == o.spell) ? "live" : "released";
@@ -125,7 +165,7 @@ namespace MFO::Actuation {
                     stream = TargetStreamLive(o.caster, o.spell, o.target) ? "live" : "released";
                 }
             }
-            MainThread::Post([o, stream] {
+            MainThread::Post([o, stream, claimRoad] {
                 auto* caster = RE::TESForm::LookupByID<RE::Actor>(o.caster);
                 auto* target = RE::TESForm::LookupByID<RE::Actor>(o.target);
                 auto* form   = RE::TESForm::LookupByID<RE::MagicItem>(o.castForm);
@@ -138,7 +178,9 @@ namespace MFO::Actuation {
                 const char* channel = "n/a";
                 int         st      = -1;
                 if (o.conc) {
-                    auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
+                    // Heals are LEFT always on the claim road (ClaimHealCast's hard rule).
+                    auto* inst = caster->GetMagicCaster(claimRoad ? RE::MagicSystem::CastingSource::kLeftHand
+                                                                  : RE::MagicSystem::CastingSource::kInstant);
                     st = inst ? static_cast<int>(inst->state.get()) : -1;
                     channel = (inst && inst->currentSpell && inst->currentSpell->GetFormID() == o.castForm &&
                                inst->state.get() == RE::MagicCaster::State::kCasting)
@@ -161,7 +203,10 @@ namespace MFO::Actuation {
                 const bool hpRose     = hpAfter > o.hpBefore + 0.005f;
                 const bool atApply    = !liveStream && o.attach == HealAttach::Present;
                 const bool landed     = atApply || present || hpRose;
-                const bool gone   = lasting && !landed && (!o.conc || std::string_view(stream) == "live");
+                // On the claim road the fire itself is the evidence the cast happened, so
+                // a lasting heal with no effect and no HP rise 1 s later is NOT landing.
+                const bool gone   = lasting && !landed &&
+                                    (!o.conc || claimRoad || std::string_view(stream) == "live");
                 // THE CHANNEL ONLY COUNTS WHERE A CHANNEL IS EXPECTED. Both direct roads
                 // ("direct self", "direct stream") keep the effect alive themselves
                 // (SustainConcentrationEffect re-arms it each beat), so the instant
@@ -190,7 +235,9 @@ namespace MFO::Actuation {
                                                                  : "hp");
                 if (gone || cut)
                     spdlog::warn("{} *** HEAL NOT LANDING: {} ***", line,
-                                 gone ? "logged as applied, but the recipient carries no effect of it"
+                                 gone ? (claimRoad ? "the claimed cast FIRED, but 1 s later the recipient "
+                                                     "shows neither its effect nor a health rise"
+                                                   : "logged as applied, but the recipient carries no effect of it")
                                       : "the stream is live but its channel is not running (a CheckCast "
                                         "deny on the instant caster interrupts it)");
                 else

@@ -416,6 +416,14 @@ namespace MFO::APMFBridge {
         return it->second.heal.spell;
     }
 
+    RE::FormID GetHealCastTarget(RE::FormID a_follower) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return 0;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.heal.handle == APMF_API::kInvalidHandle) return 0;
+        return it->second.heal.target;
+    }
+
     RE::FormID GetHealCastProxy(RE::FormID a_follower) {
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return 0;
         std::scoped_lock lock(g_mx);

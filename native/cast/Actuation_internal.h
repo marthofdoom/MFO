@@ -273,6 +273,17 @@ namespace MFO::Actuation {
             int waiterRule = kNoRule;
             std::chrono::steady_clock::time_point waitSince{};
             std::chrono::steady_clock::time_point waitLast{};
+            // THE CLAIMED CONCENTRATION HEAL'S STREAM CAP (animheal phase 2). A heal
+            // on the claim road is channelled by the follower's own AI and stopped at
+            // full by Harbinger's seat 0x07; this is the bound behind it (exact
+            // bounding covers every spell class). Stamped by HealChannelCapped the
+            // first lap the engine is seen CHANNELLING this lock's spell, with a cap
+            // drawn once from the SAME DrawConcCap band the direct stream uses
+            // (8-15 s for a heal); zeroed when the channel is not running, so the cap
+            // is per continuous channel. A fresh lock (a new spell or recipient, or
+            // CastLock{}) starts it over. Worker-serial (#4).
+            std::chrono::steady_clock::time_point channelSince{};
+            float channelCap = 0.0f;
         };
         struct FollowerCastLocks { CastLock hand[kHandCount]; };
         inline std::unordered_map<RE::FormID, FollowerCastLocks> g_castLock;
@@ -389,6 +400,17 @@ namespace MFO::Actuation {
         void HoldCastLock(RE::FormID a_follower, std::size_t a_hand,
                           RE::FormID a_spell, RE::FormID a_target);
         void ClearCastLockHand(RE::FormID a_follower, std::size_t a_hand);
+        // ANIMATED-HEAL CLAIM ROAD (animheal phase 2), defined in cast/Hands.cpp.
+        // ReleaseOwnHealClaim: end THIS rule's heal claim on a_spell now (the claim
+        // via ComposedCast::End, and the LEFT lock that names it) -- the recipient
+        // left reach, reached full, or is no longer the AUTO pick. It never touches a
+        // heal claim on another spell, nor one another rule owns. Logs one line
+        // (a_why) per (follower, spell) per 2 s. Returns true when it released.
+        // HealChannelCapped: true once the engine has channelled the LEFT lock's
+        // concentration heal continuously past its drawn cap (see CastLock::
+        // channelSince); a_capSec reports the cap. Both worker-serial (#4).
+        bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why);
+        bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec);
         RE::FormID CastProxyOnHand(RE::FormID a_follower, std::size_t a_hand);
         void PreemptHand(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_wantedSpell);
         // a_urgentHeal (field 2026-09-29): the asker is a HEAL whose recipient is

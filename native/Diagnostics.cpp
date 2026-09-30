@@ -271,6 +271,9 @@ namespace MFO::Diagnostics {
                             // the positive fire signal its RELEASE phase waits on.
                             if (expectingCfc) {
                                 ComposedCast::NoteObservedCast(casterID, spellID);
+                                // [heal-obs] road=claim (animheal phase 2): a no-op unless
+                                // this fire is the standing HEAL claim's spell or proxy.
+                                Actuation::HealObsNoteClaimFire(casterID, spellID);
                                 spdlog::info("[cast] {:08X} {} CFC-fired {} ({:08X}) "
                                              "*** THE ANIMATED PATH ***", casterID,
                                              actor && actor->GetName() ? actor->GetName() : "?",

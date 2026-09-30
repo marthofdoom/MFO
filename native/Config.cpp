@@ -167,7 +167,7 @@ namespace MFO::Config {
             else if (a_key == "bApmfRetreat")       setB(g_apmfRetreat);      // APMF package-offer retreat, inert without APMF
             else if (a_key == "bApmfEquipAuthority") setB(g_apmfEquipAuthority); // APMF equip authority (declared worn set), inert without APMF v7+
             else if (a_key == "bWarnNoApmf")        setB(g_warnNoApmf);       // corner-toast reminder when APMF is absent, default ON
-            else if (a_key == "bHealAnimPackage")   setB(g_healAnimPackage);  // REPURPOSED master enable for the ComposedCast animated forced-cast executor, default OFF, inert without APMF (SPEC-FORCED-CAST.md)
+            else if (a_key == "bHealAnimPackage")   setB(g_healAnimPackage);  // animated heals in combat (the ComposedCast claim road), default ON, KILL SWITCH; inert without Harbinger (key name frozen)
             else if (a_key == "iForcedCastTrigger") setI(g_forcedCastTrigger, 0, 3);   // ComposedCast trigger variant, RESERVED (default 0)
             else if (a_key == "iCfcBackoffMs")      setI(g_cfcBackoffMs, 0, 60000);    // ComposedCast per-follower degrade backoff, ms
             else if (a_key == "bCasterHook")        setB(g_casterHook);
@@ -319,7 +319,7 @@ namespace MFO::Config {
             g_apmfRetreat        = true;    // default = APMF package-offer retreat, inert without APMF
             g_apmfEquipAuthority = true;    // default = declare the worn set to APMF (equip authority), inert without APMF v7+
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent
-            g_healAnimPackage    = false;   // default OFF = kInstant heal (byte-identical); ON = ComposedCast animated forced-cast executor (inert until the trigger seam lands)
+            g_healAnimPackage    = true;    // default ON (animheal phase 2): with Harbinger present and a combat controller a heal is cast ANIMATED by the follower's own AI (the ch.8b claim road); OFF = the kill switch, heals take the direct road (unanimated)
             g_forcedCastTrigger  = 0;       // RESERVED ComposedCast trigger variant
             g_cfcBackoffMs       = 10000;   // ComposedCast degrade backoff (ms)
             g_castSource         = 3;
@@ -425,7 +425,7 @@ namespace MFO::Config {
             { "bLegacyCastHybrid", "0" },      { "bWarnNoApmf", "1" },
             { "bApmfEquipAuthority", "1" },
             { "bCstyReassert", "1" },
-            { "bHealAnimPackage", "0" },
+            { "bHealAnimPackage", "1" },
             { "iForcedCastTrigger", "0" },     { "iCfcBackoffMs", "10000" },
             { "iOverlayX", "12" },             { "iOverlayY", "12" },
             { "bDollsMode", "0" },
