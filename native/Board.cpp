@@ -116,6 +116,7 @@ namespace MFO::Board {
         std::atomic<bool> g_inputTrampoline{ false };
 
         bool g_stickNav[4] = { false, false, false, false };   // up/down/left/right
+        std::atomic<bool> g_boardKeyDownSeen{ false };   // iBoardKey close-on-release, mirrors g_shoutDownSeen
         std::atomic<bool> g_shoutDownSeen{ false };
 
         // ── input translation ───────────────────────────────────────────────
@@ -435,6 +436,12 @@ namespace MFO::Board {
             ImGui::CreateContext();
             auto& io = ImGui::GetIO();
             io.IniFilename = nullptr;    // never write imgui.ini into the game dir
+            // Windows move ONLY by their title bar, and resize from any edge (marth).
+            // ResizeFromEdges already defaults true in 1.92.8, set explicitly so a
+            // future ImGui bump cannot flip it. The HUD is unaffected: it carries
+            // NoMove + NoDecoration (includes NoResize) + NoInputs.
+            io.ConfigWindowsMoveFromTitleBarOnly = true;
+            io.ConfigWindowsResizeFromEdges      = true;
             io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
             // LOAD-BEARING: gamepad nav needs NavEnableGamepad AND HasGamepad. Our
             // vendored backend compiles its XInput poll out (v1.0.59), so this
@@ -818,6 +825,49 @@ namespace MFO::Board {
                         }
                     }
 
+                    // INTERFACE HOTKEYS (iBoardKey / iHudKey, 0 = unbound). Same
+                    // shape as the focus key, panel CLOSED and never consuming.
+                    // The board key OPENS the board here; while it is open the
+                    // keyboard case below closes it (this block does not run then,
+                    // so one press is exactly one toggle).
+                    {
+                        const int bk = Config::g_boardKey.load();
+                        const int hk = Config::g_hudKey.load();
+                        // Not while a menu/console/text field owns the keyboard
+                        // (GameIsPaused): a bound letter typed into the console, a
+                        // SkyUI search box or a naming dialog must not open the board
+                        // or flip the HUD.
+                        auto* ui = RE::UI::GetSingleton();
+                        const bool menuUp = ui && ui->GameIsPaused();
+                        if ((bk != 0 || hk != 0) && !menuUp) {
+                            for (auto* e = *a_events; e; e = e->next) {
+                                if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) continue;
+                                auto* b = static_cast<RE::ButtonEvent*>(e);
+                                if (!b->IsDown()) continue;                 // edge only
+                                if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
+                                const int code = static_cast<int>(b->GetIDCode());
+                                if (bk != 0 && code == bk) {
+                                    // Same body as the Field Orders power (Diagnostics.cpp):
+                                    // PublishSnapshot reads g_followers, so it runs in a
+                                    // gated AddTask, never inline on the input thread.
+                                    const auto epoch = MFO::Diagnostics::CurrentPumpEpoch();
+                                    SKSE::GetTaskInterface()->AddTask([epoch]() {
+                                        MFO::Diagnostics::PumpTickGate gate(epoch);
+                                        if (!gate) return;
+                                        if (IsAvailable()) {
+                                            PublishSnapshot();
+                                            Toggle();
+                                        } else {
+                                            spdlog::info("[board] iBoardKey pressed but the overlay is unavailable");
+                                        }
+                                    });
+                                } else if (hk != 0 && code == hk) {
+                                    ToggleHud();   // a bare atomic flip, safe on the input thread
+                                }
+                            }
+                        }
+                    }
+
                     // PROGRESSION PROBE HOTKEY (dev-only, bProgProbe=0 for everyone
                     // else). The probe MUTATES engine state (AddPerk /
                     // SetBaseActorValue) so it rides MainThread::Post, never AddTask
@@ -935,6 +985,15 @@ namespace MFO::Board {
                                 // instantly reopens.
                                 if (down) g_shoutDownSeen = true;
                                 else if (g_shoutDownSeen.exchange(false)) g_wantClose = true;
+                            } else if (Config::g_boardKey.load() != 0 &&
+                                       static_cast<int>(code) == Config::g_boardKey.load()) {
+                                // iBoardKey closes the open board on RELEASE, exactly like
+                                // the shout key: both edges are consumed here (never
+                                // forwarded, never leaked to the game), and the release
+                                // of the OPENING press cannot close it because the flag is
+                                // only set by a press seen while open.
+                                if (down) { if (!io.WantTextInput) g_boardKeyDownSeen = true; }
+                                else if (g_boardKeyDownSeen.exchange(false)) g_wantClose = true;
                             } else if (auto k = DIKToImGuiKey(code); k != ImGuiKey_None) {
                                 io.AddKeyEvent(k, down);
                             }
@@ -1056,6 +1115,7 @@ namespace MFO::Board {
         if (now) {
             for (bool& s : g_stickNav) s = false;   // no stuck direction from last time
             g_shoutDownSeen = false;                // the opening press's RELEASE must not close it
+            g_boardKeyDownSeen = false;             // same for iBoardKey
             g_justOpened = true;                    // R1 party-switch waits for a release after open
             g_cursorInit = true;                    // seed the cursor or the first click misses
             g_cursorX = g_bbW * 0.5f;
