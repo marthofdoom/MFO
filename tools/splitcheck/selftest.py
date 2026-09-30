@@ -435,11 +435,12 @@ def main():
                 t = ins.address + ins.size + mem[0].mem.disp
                 os_ = [o for o in ends0.get(t, ()) if o in refs and o not in used_o]
                 s = B0.cstring(t)
+                ai = next((q for q in range(min(8, len(s))) if chr(s[q]).isalpha()), None) if s.isascii() else None
                 if not os_ or B0.names_at.get(t) or not B0.readonly_data(t) or len(s) < 3 \
-                        or not s.isascii() or not s[:1].isalpha() or cmp0.bound_use(B0, f, ins):
+                        or ai is None or cmp0.bound_use(B0, f, ins):
                     continue
                 used_o.add(os_[0])
-                lits.append((f, t, s, os_[0]))
+                lits.append((f, t, s, os_[0], ai))
                 break
         for i, lab in enumerate(("N7b a literal right after an object its function also references (proof build)",
                                  "N7c the same, a second object (proof build)")):
@@ -447,13 +448,13 @@ def main():
                 record(lab, False, "not applicable (no candidate): no unnamed literal right after a sized "
                                    "named object its function references", na=True)
                 continue
-            f, t, s, o = lits[i]
+            f, t, s, o, ai = lits[i]
             dst = copy_build(args.b0, os.path.join(work, "n7" + "bc"[i]))
-            patch_dll(dst, t, bytes([s[0] ^ 0x20]))
+            patch_dll(dst, t + ai, bytes([s[ai] ^ 0x20]))       # its first LETTER (a log tag starts with "[")
             r = run_sc(args.a, args.b, work, args.tu_map, proof=(args.a0, dst))
             record(lab, r["result"] == "FAIL" and not r.get("provenance"),
                    f"{r['result']} (exit {r['_exit']}), {f['name'][:50]} literal {s[:30]!r} at {t:#x}, right after "
-                   f"{sorted(B0.names_at[o])[0][:40]} (also referenced), first letter case-flipped")
+                   f"{sorted(B0.names_at[o])[0][:40]} (also referenced), byte {ai} case-flipped")
 
         # N8: a UTF-8 literal (non-ASCII bytes, e.g. an em-dash) changed PAST
         # byte 16, in the proof build
