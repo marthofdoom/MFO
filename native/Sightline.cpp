@@ -142,7 +142,10 @@ namespace MFO::Sightline {
                 RE::NiPoint3 to = pt;
                 const RE::NiPoint3 seg = to - eye;
                 const float len = seg.Length();
-                if (len > kTargetMargin) {
+                // Point-blank (within the margin): the segment would end inside the
+                // target's own capsule, and nothing can stand in that gap -> clear.
+                if (len <= kTargetMargin) return Ray::Clear;
+                {
                     const float f = (len - kTargetMargin) / len;
                     to = { eye.x + seg.x * f, eye.y + seg.y * f, eye.z + seg.z * f };
                 }
