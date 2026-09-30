@@ -1,0 +1,3 @@
+# Direct.cpp split (2026-09-29, MFO-B152): which new translation units the old
+# cast/Direct.cpp became (see wave1.txt for the format).
+cast/Direct.cpp:        cast/Direct.cpp cast/DirectSelf.cpp cast/DirectTarget.cpp cast/CanAct.cpp cast/HealObs.cpp

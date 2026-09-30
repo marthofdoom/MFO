@@ -273,7 +273,7 @@ releases **by eviction** with a non-actor XMarker.
   TRIGGERS the cast — the QNAM + target-alias linkage is what drives the engine to
   EXECUTE the foe cast — and a package is DECLINED outright on package-locked custom
   followers (Lucien, prio-80 quest). So self routes through
-  **`Actuation::CastSelfDirect`** (`cast/Direct.cpp:628`, public) — effect + magicka only,
+  **`Actuation::CastSelfDirect`** (`cast/DirectSelf.cpp:17`, public) — effect + magicka only,
   **NO equip, NO channel** (registry `g_selfCast`, worker-serial; `SelfCastReconcile`
   ticks it from `Diagnostics` before `Loadout::Tick`; `ClearSelfCasts` on revert).
   **NEVER equips the spell**: `CastSpellImmediate`(kInstant) applies the effect
@@ -309,7 +309,7 @@ releases **by eviction** with a non-actor XMarker.
 - **CONCENTRATION = DIRECT FORCE everywhere, no package (`CastTargetDirect`) — see
   `Docs/CAST-DELIVERY.md` (canonical).** BOTH the Logistics OOC dispatch AND combat's
   `ConcentrationCast` deliver EVERY non-self concentration cast (player/ally/foe)
-  through `Actuation::CastTargetDirect` (`cast/Direct.cpp:999`) — `CastSpellImmediate` straight onto the target
+  through `Actuation::CastTargetDirect` (`cast/DirectTarget.cpp:30`) — `CastSpellImmediate` straight onto the target
   + magicka deduct, the SAME known-working force `CastSelfDirect` uses, touching NO
   package. Why: the package route `§4.6`-DECLINED every tick for a **package-locked
   custom follower** (Lucien 2F00591F, prio-80 quest owns the cast alias) — OOC his
@@ -326,8 +326,8 @@ releases **by eviction** with a non-actor XMarker.
   (the caster's EFFECTIVE cost: skill curve + `kModSpellCost` perk entry point; per
   SECOND for concentration; the SAME function the engine's own `MagicCaster::
   GetCurrentSpellCost` uses) × SECONDS, inside the existing main-thread posts:
-  `ApplySelfEffect` (`cast/Direct.cpp:356`, deduct `:416`), `ApplyTargetEffect`
-  (`:462`, deduct `:540`), and the release-time `PostSettle` (`:330`, deduct `:341`). A
+  `ApplySelfEffect` (`cast/Direct.cpp:323`, deduct `:416`), `ApplyTargetEffect`
+  (`:464`, deduct `:610`), and the release-time `PostSettle` (`:297`, deduct `:310`). A
   TIMED stream (`SelfCastState`/`TargetCastState::timed`: momentary concentration —
   self `ConcMomentary` `:270`, target = concentration && kind != Buff) keeps a WORKER-side
   `paidThrough` clock in the stream map: `BeatChargeSec` (`:297`) bills 1 s on the first
@@ -354,7 +354,7 @@ releases **by eviction** with a non-actor XMarker.
   continuously (effect VFX is IN scope — only the caster POSE is deferred). Wired into
   `ApplySelfEffect`, `ApplyTargetEffect`, AND AUTO's `ApplyEffectFromTo`.
   **CONCENTRATION + SELF-delivery off-self → DELIVERY-FLIPPED PROXY (`ConcProxy`/`DeliverySpell`,
-  `cast/Direct.cpp:181`/`:255`):** baseline `CastSpellImmediate(sp,target,follower)` lands an FF Self effect on
+  `cast/Direct.cpp:140`/`:221`):** baseline `CastSpellImmediate(sp,target,follower)` lands an FF Self effect on
   `target` (Candlelight/flesh work — do NOT touch), but a `kSelf` CONCENTRATION channel binds to
   the caster's OWNER, so a player/ally conc heal collapses onto the follower. Gated on
   `kSelf && kConcentration && target!=follower`, MFO casts a transient COPY with casting style
@@ -459,7 +459,7 @@ releases **by eviction** with a non-actor XMarker.
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
-### native/cast/ — Fire / Roads / CastOn / Equip / Direct / Summon / Auto / Hands + Actuation.h / Actuation_internal.h — "a package IS the action"
+### native/cast/ — Fire / Roads / CastOn / Equip / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / Auto / Hands + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
 Only module that mutates actor state; main-thread only. **Layout = the wave-1 subsystem-folder
 split (2026-09-24, `refactor/subsystem-folders-wave1`, drained REVIEW-BACKLOG MFO-B37), a pure
 move proven function by function by `tools/splitcheck`; before it the family was
@@ -472,7 +472,7 @@ per concern:
   forced package cast), `ConcentrationCast` (`:129`, the bounded concentration stream entry) and
   `RestorationCastDirect` (`:269`).
 - `cast/CastOn.cpp` (1387) = `CastOn` (`:110`, the AI-first hybrid of one spell at one target)
-  + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:116`)
+  + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:76`, extern via `cast/Direct_internal.h`)
   + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1363`/`:1379`).
 - `cast/Equip.cpp` (1050) = THE WEAPON HOLD: `EquipWeapon` (`:350`, **PERK-DRIVEN since
   2026-09-13 — see "COMBAT PICK + DUAL WIELD BY PERKS" below**) with its anon helpers
@@ -502,18 +502,33 @@ per concern:
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
   field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
   keeps a relic out of the declared set (MFO-B126).
-- `cast/Direct.cpp` (1879, past ~1500 since fix/mfo-can-act: plan a split -- the CAN-ACT block
-  `:1488-` and the [heal-obs] block `:1711-1879` are the natural cuts; MFO-B152) = the DIRECT-DELIVERY
-  road: the apply substrate (`ConcProxy` `:184`, its minted-form mirror `g_slotFormId` and the public
-  `ConcProxyForms` `:1872`, `DeliverySpell` `:265`, dispel/sustain, `ApplySelfEffect` `:366`,
-  `ApplyTargetEffect` `:507`,
-  charge-for-time) and the per-follower streams `CastSelfDirect` (`:743`) / `SelfCastReconcile`
-  (`:963`) / `ClearSelfCasts` (`:1087`) / `CastTargetDirect` (`:1134`) / `TargetCastReconcile`
-  (`:1399`) / `TargetStreamLive` (`:1484`), plus `IsRestorationSpell` (`:732`) and
-  `SpellHealsHealth` (`:717`), and the CAN-ACT block (see "CAN-ACT" below): `NoteRefusedApply`,
-  `NoteHealLanded`, `NoteLifeState`, `HealReach`, `HealInReach`, `HealsHealth`,
-  `RefuseHealApplyOnMain`. The self registry `g_selfCast` (`:63`) is file-local; the target
-  registry `g_targetCast` (`:130`) went extern in wave 1 (`CastAuto` reads it).
+- **The DIRECT-DELIVERY road = five files + `cast/Direct_internal.h`** (the Direct.cpp split,
+  2026-09-29, `split/cast-direct`, the Direct.cpp part of MFO-B152: a pure move of the old 1879-line `cast/Direct.cpp`,
+  proven by `tools/splitcheck`, TU map `tools/splitcheck/tumaps/wave3.txt`). `cast/Direct_internal.h` (83)
+  is the road's OWN shared header, included ONLY by these five TUs: `SelfCastState` (`:43`) + `extern
+  g_selfCast` (`:58`), `LogApmfRefusal` (`:61`), the apply substrate's prototypes and
+  `ResetCanActState`/`ResetHealObs` (`:80-81`). It is separate from `Actuation_internal.h` ON PURPOSE:
+  `cast/CastOn.cpp` includes that header and keeps a FILE-LOCAL twin `LogApmfRefusal`, so declaring this
+  road's one there makes every CastOn call ambiguous. **What breaks:** including `Direct_internal.h`
+  from `CastOn.cpp` (the ambiguity); moving `g_lastApmfRefusal` or `ConcProxy` out of `Direct.cpp`
+  (both stay file-local there, `ClearSelfCasts` / `ClearApmfRefusalLog` / `ConcProxyForms` reach them).
+  - `cast/Direct.cpp` (742) = the road's STATE + apply SUBSTRATE: `g_selfCast` (`:18`, extern since the
+    split), the APMF-refusal log (`LogApmfRefusal` `:76`; its throttle `g_lastApmfRefusal` stays anon),
+    `g_targetCast` (`:86`, extern since wave 1, `CastAuto` reads it), `ConcProxy` (`:140`, anon) with its
+    minted-form mirror `g_slotFormId` (`:148`) and the public `ConcProxyForms` (`:735`), `DeliverySpell`
+    (`:221`, anon), dispel/sustain, charge-for-time (`ConcMomentary` `:237`, `BeatChargeSec` `:264`,
+    `SettleSec` `:285`, `PostSettle` `:297`), `ApplySelfEffect` (`:323`), `SelfCastEndActor` (`:436`),
+    `ApplyTargetEffect` (`:464`), `TargetCastEndActor` (`:633`), `SpellHealsHealth` (`:675`),
+    `IsRestorationSpell` (`:690`), `ClearSelfCasts` (`:701`), `ClearApmfRefusalLog` (`:733`).
+  - `cast/DirectSelf.cpp` (356) = the SELF stream: `CastSelfDirect` (`:17`), `SelfCastReconcile` (`:237`).
+  - `cast/DirectTarget.cpp` (385) = the ON-TARGET stream: `CastTargetDirect` (`:30`),
+    `TargetCastReconcile` (`:295`), `TargetStreamLive` (`:380`).
+  - `cast/CanAct.cpp` (236) = the CAN-ACT block (see "CAN-ACT" below): `NoteRefusedApply` (`:103`),
+    `NoteHealLanded` (`:114`), `NoteLifeState` (`:124`), `HealReach` (`:180`), `HealInReach` (`:198`),
+    `HealsHealth` (`:205`), `RefuseHealApplyOnMain` (`:207`); `ResetCanActState` (`:84`, extern since the
+    split, `ClearSelfCasts` calls it).
+  - `cast/HealObs.cpp` (202) = `[heal-obs]`: `ReadbackWarnDue` (`:56`), `HealObsNote` (`:72`),
+    `HealObsSweep` (`:104`); `ResetHealObs` (`:39`, extern since the split).
 - `cast/Summon.cpp` (369) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
   `CastSummonOnce` (`:305`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
   `g_summonMx`/`g_summon`/`g_summonPosted` (`:68-69`, `:79`) is extern (ClearSelfCasts clears it).
@@ -603,7 +618,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   on those locks.
 - **RUNTIME GATES — THE 1.5.97 PASS (`feat/mfo-1.5.97-pass`, 2026-09-15; Fable round 2 on
   `87cabc1` applied).** The five cast-control gates — `CastOn` (`cast/CastOn.cpp:110`),
-  `CastSelfDirect` (`cast/Direct.cpp:628`), `CastTargetDirect` (`cast/Direct.cpp:999`), `CastAuto`
+  `CastSelfDirect` (`cast/DirectSelf.cpp:17`), `CastTargetDirect` (`cast/DirectTarget.cpp:30`), `CastAuto`
   (`cast/Auto.cpp:269`) and `ComposedCast::Enabled` (`ComposedCast.cpp:61`) — evaluate ONE shared
   predicate, **`Runtime::CastPathsVerified()`** (`native/Runtime.h`, header-only) **=
   `REL::Module::IsAE() || Runtime::IsVerified1_5_97()`** — the pre-existing AE bucket, or
@@ -671,17 +686,17 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
 - **CAST-ROAD SELECTION BY SPELL NATURE (`fix/mfo-combat-restoration-direct`, 2026-09-21 — Deck
   2026-09-21, Jesper 750012C6).** On the COMBAT table a RESTORATION cast takes the DIRECT road and an
   OFFENSIVE cast keeps the AI-fired road. The classifier is **`Actuation::IsRestorationSpell`**
-  (`cast/Direct.cpp:617`, declared `cast/Actuation.h:168`): `CasterConsent::ClassifySpell != Offense`
+  (`cast/Direct.cpp:690`, declared `cast/Actuation.h:168`): `CasterConsent::ClassifySpell != Offense`
   AND (`SpellHealsHealth` — a beneficial Health effect, the same read `ClassifySpell`'s Heal kind and
   `CastAuto` make — OR any effect whose `EffectSetting::data.associatedSkill == kRestoration`, a plain
   member read, never the `GetAssociatedSkill` vfunc). A hostile Restoration-school spell (Sun Fire,
   Turn Undead) is OFFENSE and stays AI-fired. Five sites consult it: `CastSelfDirect`
-  (`cast/Direct.cpp:628`) and `CastTargetDirect` (`cast/Direct.cpp:999`) skip `ComposedCast::Try` for a
+  (`cast/DirectSelf.cpp:17`) and `CastTargetDirect` (`cast/DirectTarget.cpp:30`) skip `ComposedCast::Try` for a
   restoration spell and fall to their own kInstant direct force, and their two TASK 1
-  concentration-offense claims (`ClaimOffenseCast`, `cast/Direct.cpp:757` / `:1145`) are gated on it too so a
+  concentration-offense claims (`ClaimOffenseCast`, `cast/DirectSelf.cpp:146` / `cast/DirectTarget.cpp:176`) are gated on it too so a
   Restoration-school ward streams direct instead of claiming the AI-fired road (**open `MFO-B58`:**
   those two sites carry NO `combatController` test, so a non-restoration concentration Buff on an
-  own-OOC party-combat follower reaches `ClaimOffenseCast` with no caster — mirror `cast/Direct.cpp:1106`'s
+  own-OOC party-combat follower reaches `ClaimOffenseCast` with no caster — mirror `cast/DirectTarget.cpp:137`'s
   `combatController &&` there when drained); `CastOn` forks a fire-and-forget
   restoration cast at an ally/player (`cast/CastOn.cpp:546`, after the concentration fork, non-self
   only) to **`RestorationCastDirect`** (`cast/Roads.cpp:269`) = `CastTargetDirect` with the SAME outcome map, LEFT
@@ -704,7 +719,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   2026-09-29; design scratchpad `animheal-design.md` phases 0a + 1m).** Field 0928c: Harbinger denied
   MFO's own ConcProxy forms 48 times on the INSTANT caster (`hand=?`) while MFO printed `effect applied` /
   `conc effect ATTACHED` unconditionally.
-  * **Read-back (1m a).** `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:366` / `:507`) and
+  * **Read-back (1m a).** `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:323` / `:464`) and
     `ApplyEffectFromTo` (`cast/Auto.cpp:77`) report an apply as landed only when an ActiveEffect of the
     FORM CAST (the spell, or its ConcProxy) is on the recipient after `CastSpellImmediate`
     (`SpellEffectPresentOn` / `HasDurationEffect` / `DeliveryAppliesInCall`, `cast/Actuation_internal.h`).
@@ -721,7 +736,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     `NOT LANDED ... no magicka spent` and returns before the deduct; an offensive one keeps its charge (a
     resisted hit still costs) but prints `conc effect NOT ATTACHED`, never ATTACHED. Both warns are rate
     limited per (caster, spell, line) to one per 5 s with a held count (`ReadbackWarnDue`,
-    `cast/Direct.cpp`). The VR inline fallback of the OOC FF heal (`logistics/Service.cpp`) runs on the
+    `cast/HealObs.cpp:56`). The VR inline fallback of the OOC FF heal (`logistics/Service.cpp`) runs on the
     worker and skips `HealObsNote` there.
   * **`[heal-obs]` (0a).** `HealObsNote` (MAIN, every direct heal apply: self stream, target stream, AUTO,
     the OOC FF heal in `logistics/Service.cpp`) queues one observation per (caster, recipient) per 3 s
@@ -732,7 +747,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     `fix/mfo-field-0929`** (13/13 field warns were false): LANDED = effect present at apply, OR present now,
     OR HP rose (> 0.5 pt), printed as `landed=effect|hp|effect+hp|NO`. EXCEPT a LIVE stream (`conc` and
     `stream=live`): judged on NOW only (present now or HP rose), so a stream MFO still holds that stopped healing
-    stays loud (`Direct.cpp` `liveStream` / `atApply`, review F2). A short effect that expired before the
+    stays loud (`HealObs.cpp` `liveStream` / `atApply`, review F2). A short effect that expired before the
     read-back with HP up has landed. `HEAL NOT LANDING` = a lasting effect with none of the three on a live
     apply. The channel only counts on a road that does NOT sustain the effect itself: both `direct` roads re-arm
     it every beat (`SustainConcentrationEffect`), so `channel=stopped (state 0)` there is normal and is only
@@ -787,7 +802,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     downed follower may keep his retreat, "still downed and crawling during retreat"; MFO-B153).
   * **Main-thread re-gates, right before each apply** (no cast, no magicka, `[bleed] ... apply
     REFUSED` once per caster until he can act, `NoteRefusedApply`): `ApplyEffectFromTo`
-    (`cast/Auto.cpp:89`), `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:365` / `:481`),
+    (`cast/Auto.cpp:89`), `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:323` / `:464`),
     the legacy force `doCast` (`cast/CastOn.cpp:1327`), `SummonOnMain` (`cast/Summon.cpp:285`, verdict
     Failed), the two OOC `doCast`s (`logistics/Service.cpp:1846` / `:1912`), and the drink
     (`DrinkBest`, `logistics/Service.cpp:70`: not posted, so the check sits in the same synchronous call
@@ -795,14 +810,14 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   * **Streams.** `SelfCastReconcile` / `TargetCastReconcile` end a live stream whose CASTER cannot act
     (`RELEASE (caster-down: why)`, dispel + interrupt + slot free, like heal-full).
   * **Normal reach for a heal on another actor** (`HealReach` / `HealInReach` / `RefuseHealApplyOnMain`,
-    `cast/Direct.cpp`, end of file): Aimed / TargetActor / TargetLocation = SPIT range, else the longest
+    `cast/CanAct.cpp:180` / `:198` / `:207`): Aimed / TargetActor / TargetLocation = SPIT range, else the longest
     effect projectile range, else no cap of its own; Self / Touch on an ALLY = Heal Other's reach by the
     same rule (Skyrim.esm 0x00012FD2: Range 0, projectile 0x12FDC range 10000; marth 2026-09-29 option
     B). A self-heal on the caster is never reach-checked. Worker: distance + `Sightline::Check != Occluded` (the caller `Want`s);
     main: distance + `Sightline::MeasureNow`. Applied at `CastAuto`'s concentration most-hurt probe +
     hysteresis and its beneficial heal fan (`cast/Auto.cpp:339` / `:360` / `:560`; `fSharedRadius` stays
     the outer bound, a non-heal buff keeps the radius alone), `CastTargetDirect` for heal kinds
-    (`cast/Direct.cpp:1211`, transparent Declined + a 5 s deduped `[cast] ... out of reach` line), the
+    (`cast/DirectTarget.cpp:214`, transparent Declined + a 5 s deduped `[cast] ... out of reach` line), the
     OOC FF heal (`logistics/Service.cpp:1833`), the ALLY SELECTOR (`Evaluator.cpp` `PickAlly:476`: for a
     `Cast at foe/ally` rule whose spell heals, only allies in reach are candidates, so "Ally HP below X"
     names the most-hurt ally it can actually heal; review C2; since `fix/mfo-field-0929` an ally measured
@@ -1315,7 +1330,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   Both its Applied/Refreshed branches now also call `HoldCastLock(id, kHandLeft, ...)`
   (PASS H; hardcoded LEFT — concentration always is) so a live stream is protected by
   the SAME per-hand lock `CastOn` checks up front (feat/per-hand-cast-slots).
-- `CastTargetDirect` (PUBLIC, `cast/Direct.cpp:999`) = `CastSelfDirect` generalized to a NON-self target: the
+- `CastTargetDirect` (PUBLIC, `cast/DirectTarget.cpp:30`) = `CastSelfDirect` generalized to a NON-self target: the
   known-working DIRECT FORCE (`CastSpellImmediate` onto the target + magicka deduct, NO
   package → beats the `§4.6` lock). Registry `g_targetCast`; concentration re-applies
   at `kConcApplyPeriod` (~1 s, the heal cadence contract — per-second authored
@@ -1351,8 +1366,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   deliberately — it IS the object the seats hang off (same read as
   `CombatSense.h`'s `FoeCount`). **IN COMBAT NOTHING CHANGES.** Twins deliberately
   left alone and recorded instead: `CastSelfDirect`'s own `ComposedCast::Try`
-  (`cast/Direct.cpp:713`) and this function's OOC offense-concentration
-  `ClaimOffenseCast` (`cast/Direct.cpp:1145`) carry the identical exposure.
+  (`cast/DirectSelf.cpp:102`) and this function's OOC offense-concentration
+  `ClaimOffenseCast` (`cast/DirectTarget.cpp:176`) carry the identical exposure.
 - `CastAuto` (PUBLIC, `cast/Auto.cpp:269`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
   subject actor, no selector target). **Wired into BOTH paths:** combat `Fire`'s
@@ -1963,7 +1978,7 @@ them clobbers unrelated engine vtables).
   pointer; unrecognized vtable returns benign.
 - **§0.29 guard:** reads the actor via `a_cc->attackerHandle` (0x28) ONLY, never
   `cachedAttacker`; static_asserts pin `attackerHandle==0x28 && <0x68` (`:333,336`).
-- `ClassifySpell` (PUBLIC, `:34`) → the cast family (`cast/CastOn.cpp:314,679,758`, `cast/Direct.cpp`, `cast/Auto.cpp`). `Want` (`CasterConsent.cpp:1148`) →
+- `ClassifySpell` (PUBLIC, `:34`) → the cast family (`cast/CastOn.cpp:314,679,758`, `cast/Direct.cpp` / `DirectSelf.cpp` / `DirectTarget.cpp`, `cast/Auto.cpp`). `Want` (`CasterConsent.cpp:1148`) →
   `cast/CastOn.cpp:801,1130`, `cast/Roads.cpp:223,274`. `WantedSpell` (`CasterConsent.cpp:1142`) → `Scheduler.cpp:1102` +
   `CombatStyle.cpp:341` (the equip gate's one exemption). `ClearTransientState`
   (`:1267`) → `Serialization.cpp:718`. (`NoteCooldown` is GONE — see "NO CAST
@@ -2147,7 +2162,7 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
 - `Measure` (`:~135`, MAIN THREAD ONLY) calls `HasLineOfSight` (RELOCATION_ID
   53029/53829) inside `MainThread::Post` (§0.30 crash class off-worker). `Check`
   (decl `Sightline.h:52`, worker-safe cache read) → `cast/Roads.cpp:48,70`,
-  `cast/Direct.cpp:1169`, `cast/Auto.cpp:552`, `Evaluator.cpp:320`.
+  `cast/DirectTarget.cpp:200`, `cast/Auto.cpp:552`, `Evaluator.cpp:320`.
   **Repost throttle is PER (viewer, target) PAIR since `fix/mfo-field-0929`** (`Want`, `Sightline.cpp:217`):
   it was one stamp per viewer, so the first batch in a 0.3 s window dropped every other caller's (the heal
   pick's ally batch lost to the foe selectors for seconds, its Occluded aged into Unknown, Unknown passed).
@@ -2167,7 +2182,7 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   every stale entry); Unknown on VR or an
   unresolvable / dead / unloaded pair (it does not let an older cache entry answer). Not throttled:
   its one caller bounds itself (<= 3 per probe, one probe per 0.3 s per follower).
-- `TeammateInFireLine` (`:149`) → `cast/Direct.cpp:1171`, `Packages.cpp:990`. Reads
+- `TeammateInFireLine` (`:149`) → `cast/DirectTarget.cpp:202`, `Packages.cpp:990`. Reads
   `Followers::g_active` UNGUARDED (`:168`) — documented as joining an existing
   tolerated pattern. **UNVERIFIED — check before relying** if `g_active` is ever
   rebuilt reallocating concurrently with a worker read.
@@ -5131,10 +5146,10 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     NOT happen and NOTHING routes around APMF into the legacy hybrid. One `spdlog::error` `[apmf] …
     APMF REFUSED the … claim` names actor/spell/target/hand, rate-limited to one line per
     (follower, spell, target) per ~5s (`LogApmfRefusal`, `cast/CastOn.cpp` anon ns; a twin lives in
-    `cast/Direct.cpp`). A refusal is a bug to fix in APMF, never a condition to degrade through
+    `cast/Direct.cpp`, extern via `cast/Direct_internal.h`). A refusal is a bug to fix in APMF, never a condition to degrade through
     (`CLAUDE.md` principle 7). The heal twin (`ComposedCast::TryResult`, widened from three values
     to FOUR by this branch — see the ComposedCast entry below) and the two concentration
-    `ClaimOffenseCast` sites in `cast/Direct.cpp` (`CastSelfDirect`/`CastTargetDirect` →
+    `ClaimOffenseCast` sites in `cast/DirectSelf.cpp` / `cast/DirectTarget.cpp` (`CastSelfDirect`/`CastTargetDirect` →
     `SelfCast::Declined` on a refusal) follow the identical split. **This bullet no longer contradicts the FAILS-CLOSED principle stated
     for `Packages.cpp` below.**
   - **THE ASK RUNS BEFORE THE EQUIP (F3-2, `fix/mfo-fourstate-followups` 2026-09-07).** Both asks used to
@@ -5170,7 +5185,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `ComposedCast::Enabled` (`ComposedCast.cpp:38-45`) reads neither, so with APMF present and
     `bHealAnimPackage` ON a HEAL gambit still mints a claim on those paths and `ClientCastClaimed` stands the
     deny down identically — corrected by the re-review 2026-09-07), and the direct-force FF beats
-    (`cast/Direct.cpp:833`, `:1224`) and
+    (`cast/DirectSelf.cpp:223`, `cast/DirectTarget.cpp:283`) and
     `CastAuto`'s interval (`cast/Auto.cpp:391`) are untouched. marth: *"a cast can only cast as fast as a cast. No
     reason to be slower."* The engine's own equip→charge→fire pipeline (~2.3-2.5s offense, 2.95s
     claim-to-observed on the one landed heal) already paces casting at the fastest a cast can physically
@@ -5556,7 +5571,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   CONCENTRATION stream now reaches the engine-seat path, + the firing-spell
   gambit LOCK.** Two independent fixes; full writeup in `Docs/CAST-DELIVERY.md`'s
   "CONCENTRATION CLAIM PORT + THE FIRING-SPELL GAMBIT LOCK" section.
-  (1) `CastSelfDirect`/`CastTargetDirect` (`cast/Direct.cpp`), right after
+  (1) `CastSelfDirect`/`CastTargetDirect` (`cast/DirectSelf.cpp` / `cast/DirectTarget.cpp`), right after
   their existing `ComposedCast::Try` call (which stays HEAL-ONLY, untouched —
   owned by a parallel change), now call `APMFBridge::ClaimOffenseCast` DIRECTLY
   with `concentration=true, stopPct=0` when `kind != Heal` and the spell is
@@ -5627,7 +5642,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   (`ComposedCast.cpp`) gained a `proxy` field alongside `spell`;
   `WatchArmed`/`WatchClaim` take a new `a_proxy` parameter (every call site —
   `ComposedCast::Try`, `cast/CastOn.cpp`'s owned-cast branch,
-  `cast/Direct.cpp`'s two concentration-offense claims — fetches it via the new
+  `cast/DirectSelf.cpp`'s / `cast/DirectTarget.cpp`'s concentration-offense claims — fetches it via the new
   accessors and forwards it); `ExpectingCast`/`NoteObservedCast` now match on spell
   OR proxy. `Diagnostics.cpp`'s `SpellSink` "ours" check (the `*** MFO GAMBIT
   SPELL ***` log tag, previously `g.actionParamForm == spellID` only) now also
@@ -5847,7 +5862,7 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   with the real proxy key on the main thread inside the drive (`PhaseSelect`).
 - `Disarm(RE::FormID actor)` (`:79`) — clears EVERY slot the actor owns (both spell
   and proxy keys). Called on every `ComposedCast` exit (`Try`'s refused-claim
-  branch; `End`), by `cast/Direct.cpp:964` beside `ConcProxy::Reset()`, and
+  branch; `End`), by `cast/Direct.cpp:711` beside `ConcProxy::Reset()`, and
   by `Followers.cpp:324` (`ReleaseHeldState`, dismissal path, beside
   `APMFBridge::ReleaseHealCast` — replaces the deleted
   `Packages::HealAnimEvictIf`).
@@ -5858,7 +5873,7 @@ on the COMBAT thread (see that entry's "MFO-executed-cast early-pass" note below
   `:222`) by `ConcUnboundedDeny` (`:244`), the `CheckStartCast` thunk's
   early-pass (`:579`), and `CheckCastThunk`'s early-pass (`:947`, 0x0A).
 - `Reset()` (`:104`) — clears every slot. `kPreLoadGame`/revert, called from
-  `cast/Direct.cpp:964` beside `ConcProxy::Reset()`, NOT independently wired
+  `cast/Direct.cpp:711` beside `ConcProxy::Reset()`, NOT independently wired
   into `plugin.cpp` (folded into `ClearSelfCasts`'s existing teardown call site).
 - `LiveCount()` (`:111`) — diagnostics only, cheap and lock-free.
 - **What breaks:** ONLY relevant to a cast that DELIBERATES through the engine's
@@ -5917,8 +5932,8 @@ native seats) and ENGINE_NOTES §0.40.
   ARBITRATION answered. The old `Refused` was **renamed** to `NotApplicable` rather than
   re-pointed, deliberately: re-using the name for the opposite meaning would have let every
   call site keep compiling with inverted semantics.
-  ← `cast/Direct.cpp:713` (in `CastSelfDirect`, `:628`), `:1107` (in
-  `CastTargetDirect`, `:999`) **and `cast/CastOn.cpp:757`** (`CastOn`'s ally/player
+  ← `cast/DirectSelf.cpp:102` (in `CastSelfDirect`, `:17`), `cast/DirectTarget.cpp:138` (in
+  `CastTargetDirect`, `:30`) **and `cast/CastOn.cpp:757`** (`CastOn`'s ally/player
   branch — a third call site, MISSING from this entry until 2026-09-06; MOVED by
   F3-2 out of the equip switch into `CastOn`'s pre-flight, so the ask now precedes
   `Loadout::Prepare`/`CasterConsent::Want` and a refusal leaves no side effects).
@@ -5983,7 +5998,7 @@ native seats) and ENGINE_NOTES §0.40.
   separate since this TU has no access to that anon-ns helper, but the two
   MUST agree) is the same arm for a caller claiming `kIntent_Cast` directly
   (`Actuation::CastOn`'s `ownedCast` branch, via `ClaimOffenseCast`, and
-  `cast/Direct.cpp`'s two concentration-offense claims) — called
+  `cast/DirectSelf.cpp`'s / `cast/DirectTarget.cpp`'s concentration-offense claims) — called
   once per hand the claim actually occupies (both, for a DualCast plan). If
   2s+ pass with no observed cast on that hand (rate-limited to once per 5s),
   logs a `[cfc]` warning naming the follower/spell/hand.
@@ -6078,7 +6093,7 @@ native seats) and ENGINE_NOTES §0.40.
     `ComposedCast.h:218`) ← `logistics/Service.cpp:1212` — names WHICH incumbent held a
     spell off, for the LOG ONLY. Reads `g_lastHold`, which every `Try()` erases at
     its top (`:207`), so it needs no expiry and MUST NOT grow one (#9).
-  - **Depended-on-by:** `cast/Direct.cpp:715`/`:1109` map `Held` →
+  - **Depended-on-by:** `cast/DirectSelf.cpp:104`/`cast/DirectTarget.cpp:140` map `Held` →
     `SelfCast::Held` (`cast/Actuation.h:120`) → `cast/Auto.cpp:370` (`CastAuto`,
     transparent NoOp) and `logistics/Service.cpp:1173` (transparent `continue`, log deduped
     2s); `cast/Roads.cpp:166-167`/`:242-243` (`ConcentrationCast`) returns a TRANSPARENT NoOp with NO hand
@@ -6147,7 +6162,7 @@ native seats) and ENGINE_NOTES §0.40.
     observed cast` when it never fires). Do not word that back to "delivered" (#7).
     **Since 2026-09-21 that label is derived from the ROAD, not from claim liveness:**
     `logistics/Service.cpp:1253` reads `Actuation::TargetStreamLive(id, spell, target)`
-    (`cast/Direct.cpp:1312`, the direct road's own `g_targetCast` entry) — `IsHealCastActive`
+    (`cast/DirectTarget.cpp:380`, the direct road's own `g_targetCast` entry) — `IsHealCastActive`
     answered "any live heal claim on this follower" and labelled a direct Healing Hands "APMF
     claimed" because rule 0's Fast Healing claim was live (deck 2026-09-21 08:09:39).
 - `End(RE::FormID follower)` — `APMFBridge::ReleaseHealCast` + `CastBounds::Disarm`
