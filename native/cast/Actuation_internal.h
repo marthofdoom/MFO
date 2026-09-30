@@ -200,9 +200,11 @@ namespace MFO::Actuation {
         // "no lock" as "one writer thread", never as "not shared".
         // Deliberately NOT threaded through six signatures: every reader is reached
         // only from Fire(), so a parameter would be the same value re-typed at each
-        // hop with more places to get it wrong. Actuation_Direct.cpp's OOC callers
-        // (Logistics -> CastSelfDirect/CastTargetDirect) live in another TU, never
-        // touch the hand gate, and cannot see this at all.
+        // hop with more places to get it wrong. ONE deliberate exception, the
+        // table test: CastAuto's claim branch (MFO-B175) and the direct entries'
+        // heal gate (CastSelfDirect / CastTargetDirect / OocHealWaitsForClaim,
+        // MFO-B173) are also reached from the out-of-combat Logistics caller and
+        // read it ONLY as "kNoRule = not the combat table", never as a rank.
         inline int g_firingRule = kNoRule;
 
         // THE FIRING RULE'S ALLY-HP THRESHOLD, or < 0 when its condition is not an
@@ -293,6 +295,20 @@ namespace MFO::Actuation {
             // CastLock{}) starts it over. Worker-serial (#4).
             std::chrono::steady_clock::time_point channelSince{};
             float channelCap = 0.0f;
+            // THE STREAM CAP'S RE-STREAM GAP (MFO-B177; marth 2026-09-30 "Gambit order
+            // wins", and rank is carried, never inferred). The cap releases the heal
+            // claim and the owning rule re-claims on its NEXT lap. This lock is KEPT
+            // through that gap (ReleaseOwnHealClaim with a_keepSpell) and stamped
+            // here, so the heal's rank still holds the LEFT hand: CastLockLive answers
+            // live for FacetExpiry() from this stamp (the same round-robin-aware
+            // window that keeps any lock live between its own rule's laps), so a
+            // lower-ranked rule is held off and a higher-ranked one preempts it as
+            // usual. `lastSeen` is NOT touched (IncumbentHealCastDone's and the
+            // repair's "fired since this claim" window stays the claim's own).
+            // Cleared by HoldCastLock (the re-claim) and by any CastLock{} reset;
+            // past the window it no longer counts and the lock ages out as before.
+            // In memory only, worker-serial (#4).
+            std::chrono::steady_clock::time_point restreamAt{};
         };
         struct FollowerCastLocks { CastLock hand[kHandCount]; };
         inline std::unordered_map<RE::FormID, FollowerCastLocks> g_castLock;
@@ -440,7 +456,9 @@ namespace MFO::Actuation {
         // cast is pending (ComposedCast::HealTakesLeft: until it fires, from the
         // cooldown's end again, false once the claim ends). The equip side's "is the
         // left hand reserved for a cast" reads (LeftReservedForCast) consult it for
-        // a heal claim; an offense claim keeps the old CastHandHeld answer.
+        // a heal claim; an offense claim keeps the old CastHandHeld answer. In the
+        // stream cap's one-lap re-stream gap (no claim, the LEFT lock kept with its
+        // rank, HealRestreamRule, MFO-B177) both answer by that kept rank, pending.
         // All worker-serial (#4; the ledger under g_forcedMx).
         int  LeftHoldRule(RE::FormID a_follower);
         bool HealClaimTakesLeftFrom(RE::Actor* a_follower, int a_holdRule);
@@ -469,10 +487,18 @@ namespace MFO::Actuation {
         // concentration heal continuously past its drawn cap (see CastLock::
         // channelSince); a_capSec reports the cap. Both worker-serial (#4).
         // a_keepSpell: the concentration stream cap's re-stream (R2-5) -- ComposedCast::
-        // End leaves the spell in the hand.
+        // End leaves the spell in the hand, AND the LEFT lock is kept with its rank for
+        // the gap to the re-claim (CastLock::restreamAt, MFO-B177; its channel cap
+        // starts over). With no claim standing, a call from the rule that owns such a
+        // kept lock drops it (the rule decided not to re-claim) and returns false.
         bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why,
                                  bool a_keepSpell = false);
         bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec);
+        // HealRestreamRule (MFO-B177): the owning rule of a LEFT lock in its stream-cap
+        // re-stream gap (CastLock::restreamAt within FacetExpiry()), else kNoRule. The
+        // equip side's rank read for the gap, when no heal claim stands to ask.
+        // Worker-serial (#4).
+        int HealRestreamRule(RE::FormID a_follower);
         // HealClaimNeedsRepair (review F1, the part that is needed whatever marth
         // decides): on a lap that has just REFRESHED this rule's standing heal claim
         // (CastOn's in-flight branch -- after the refresh, which is what learns the

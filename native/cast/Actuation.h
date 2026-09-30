@@ -85,6 +85,24 @@ namespace MFO::Actuation {
     // right hand's lock is never touched. Worker-serial (#4).
     void ClearLeftCastLockIf(RE::FormID a_follower, RE::FormID a_spell);
 
+    // End a_follower's direct HEAL streams (MFO-B176): the self stream and the
+    // on-target stream, each only when its spell is Heal-kind. ComposedCast::
+    // ChooseHealRoad calls it when a heal takes the claim road, so one actor never
+    // runs a direct heal stream beside a heal claim ("ONE ROAD PER ACTOR"; the
+    // claim -> direct half is ChooseHealRoad's own End). It is the streams' own
+    // switch end: settle, then the dispel + kInstant interrupt posted to the MAIN
+    // thread (FormIDs only, re-resolved there), then the registry entry is dropped.
+    // a_why names the switch in the [heal] line. Worker-serial (#4). A no-op when
+    // no heal stream stands.
+    void EndDirectHealStreams(RE::FormID a_follower, const char* a_why);
+
+    // Is a_follower's LEFT heal lock in its stream-cap re-stream gap (MFO-B177)? The
+    // cap released the heal claim and the rule re-claims next lap; the lock keeps
+    // the heal's rank until then (CastLock::restreamAt). ComposedCast::HealTakesLeft
+    // reads it so MFO's non-gambit left automation keeps deferring across that one
+    // lap. Worker-serial (#4).
+    bool HealRestreamGap(RE::FormID a_follower);
+
     // THE CAST-TARGET RESOLUTION LADDER (#68). Resolves WHO a cast_target row
     // aims at: a live selector target -> a named specific follower -> Subject
     // Player/NearestAlly -> the PLAYER fallback (a_outIsFallbackPlayer marks that

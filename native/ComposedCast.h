@@ -170,15 +170,22 @@ namespace MFO::ComposedCast {
     // CastTargetDirect) so the combat table, the AUTO series and the OOC table can
     // never pick two different roads for one actor at one instant (RC-1 of the
     // 2026-09-21 freeze was exactly that: MFO's own claim and MFO's own direct cast
-    // colliding on one follower).
-    //   NotHeal        -- not a Heal-kind spell (CasterConsent::ClassifySpell). The
+    // colliding on one follower). COMBAT TABLE ONLY (MFO-B173/B175): CastAuto,
+    // CastSelfDirect and CastTargetDirect ask it only inside Fire() (g_firingRule set);
+    // the out-of-combat table never mints a claim, and while a combat claim still
+    // stands its heal waits (Actuation's OocHealWaitsForClaim) instead of casting
+    // direct beside it.
+    //   NotHeal       -- not a Heal-kind spell (CasterConsent::ClassifySpell). The
     //                     caller's own road, unchanged. Wards and other Restoration-
     //                     school buffs stay on the direct road (IsRestorationSpell).
     //   Claim          -- THE heal road. Harbinger present and capable (ABI >= 5,
     //                     bHealAnimPackage ON), a verified runtime (1.6.1170 or
     //                     1.5.97: Harbinger installs the heal seats on both), and the
     //                     follower HAS a CombatController, the object every heal seat
-    //                     hangs off. The follower's own AI casts it, animated.
+    //                     hangs off. The follower's own AI casts it, animated. A
+    //                     direct HEAL stream still standing on the follower is ENDED
+    //                     here (Actuation::EndDirectHealStreams, MFO-B176), so the
+    //                     two roads never overlap in this direction either.
     //   DirectNoCombat -- Harbinger present and capable, but no CombatController (out
     //                     of combat, an own-OOC follower in a party fight, a healer
     //                     who retreated). marth's D1 default: the direct road,
@@ -234,6 +241,8 @@ namespace MFO::ComposedCast {
     // resumes right after; an equip gambit's hold ranked BELOW the heal rule yields
     // the left hand while it is true (Actuation's equip side adds the rank test).
     // No cooldown configured (fCastCooldown <= 0): pending for the whole claim.
+    // Also true in the stream cap's one-lap re-stream gap (no claim, the LEFT lock
+    // kept with its rank until the re-claim, Actuation::HealRestreamGap, MFO-B177).
     // Worker-serial (reads the watch map, like ObservedFiring).
     bool HealTakesLeft(RE::Actor* a_follower);
 

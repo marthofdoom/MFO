@@ -992,7 +992,14 @@ namespace MFO::Actuation {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0) return false;
         const RE::FormID heal = APMFBridge::GetHealCastSpell(fid);
-        if (heal == 0) return false;
+        if (heal == 0) {
+            // THE STREAM CAP'S RE-STREAM GAP (MFO-B177): no claim stands for one lap,
+            // but the heal's LEFT lock keeps its rank until the rule re-claims, and
+            // that re-claim is due now (the cast is pending by definition). Same rank
+            // test as below; with no kept lock this is the old "no heal claim" answer.
+            const int restream = HealRestreamRule(fid);
+            return restream != kNoRule && a_holdRule >= restream;
+        }
         // The heal's rank is its LEFT lock's owningRule (carried, never inferred).
         // No lock naming it (the OOC Logistics caller, kNoRule) ranks below any
         // real rule, exactly as CanPreemptHand treats an unowned hand.
@@ -1008,8 +1015,10 @@ namespace MFO::Actuation {
         if (!CastHandHeld(a_follower, kHandLeft)) return false;
         const auto fid = a_follower->GetFormID();
         // Anything but a lone heal claim on the left (an offense claim, a lock
-        // with no heal claim behind it) keeps the answer it always had.
-        if (APMFBridge::GetHealCastSpell(fid) == 0 ||
+        // with no heal claim behind it) keeps the answer it always had. A heal lock
+        // kept through its stream-cap re-stream gap (MFO-B177) is judged by rank,
+        // like the claim it stands for.
+        if ((APMFBridge::GetHealCastSpell(fid) == 0 && HealRestreamRule(fid) == kNoRule) ||
             APMFBridge::IsOwnedCastActiveOnHand(fid, APMFBridge::kApmfHandLeft))
             return true;
         return HealClaimTakesLeftFrom(a_follower, a_holdRule);

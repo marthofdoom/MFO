@@ -132,11 +132,19 @@ namespace MFO::Actuation {
         // case only: that "freeze" was MFO's own direct cast colliding with MFO's
         // own claim on the instant caster, which Harbinger no longer gates by a
         // hand claim (APMF d41ed43). The combat table sends a claim-road heal
-        // through CastOn's composed branch; this ask serves any other caller that
-        // meets a controller, so one actor never runs both roads for one heal.
+        // through CastOn's composed branch; this ask serves a combat-table road
+        // (ConcentrationCast, CastAuto's series) whose lap met a controller only
+        // after its own road choice, so one actor never runs both roads for one
+        // heal. The out-of-combat table no longer asks (MFO-B173, below).
         // Out of combat (D1) the direct stream below delivers, labelled.
-        if (ComposedCast::ChooseHealRoad(a_follower, a_spell, a_target) ==
-            ComposedCast::HealRoad::Claim) {
+        // COMBAT TABLE ONLY (MFO-B173): the road is asked only inside Fire()
+        // (g_firingRule set). The out-of-combat caller never mints a claim (the
+        // party-OOC teardown would end it the next service), and while a combat
+        // heal claim still stands its heal WAITS instead of streaming beside it.
+        if (OocHealWaitsForClaim(a_follower, a_spell)) return SelfCast::Declined;
+        if (g_firingRule != kNoRule &&
+            ComposedCast::ChooseHealRoad(a_follower, a_spell, a_target) ==
+                ComposedCast::HealRoad::Claim) {
             switch (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct)) {
             case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
             case ComposedCast::TryResult::Held:    return SelfCast::Held;
@@ -145,7 +153,16 @@ namespace MFO::Actuation {
                 return SelfCast::Declined;
             // NO `default:` -- see the twin in CastSelfDirect above (F3-6).
             case ComposedCast::TryResult::NotApplicable:
-                break;
+                // MFO-B181: this lap chose the claim road, so NotApplicable can only
+                // be the kill switch (bHealAnimPackage) flipping OFF between
+                // ChooseHealRoad and Try. Never the direct stream on a claim lap:
+                // nothing is cast now, and the next lap's ChooseHealRoad reads the
+                // switch again, releases any standing claim and labels its road.
+                spdlog::warn("[heal] {:08X} heal {:08X} -> {:08X}: the animated heal road was switched "
+                             "off between the road choice and the claim on this lap -- NOT cast this "
+                             "lap (never the direct road on a claim lap); the next lap takes the road "
+                             "the switch now names", id, spellID, targetID);
+                return SelfCast::Declined;
             }
         }
 
