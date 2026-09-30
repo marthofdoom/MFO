@@ -732,6 +732,7 @@ class Cmp:
         self._ue_active = set()
         self._named_ok = {}
         self._live = {}
+        self._bu = {}           # (image, lea address) -> bound_use result
         self._prefs = {}        # (image, proc rva) -> every address field target (loop_bound)
         self._ends = {}         # image -> {end address: start rvas} of sized named data
 
@@ -749,22 +750,17 @@ class Cmp:
             return self._live[key]
         spans = sorted((r, r + (img.data_size.get(r) or max(1, img.struct_extent(r))))
                        for n, r, _m in img.datas if norm(n) == var)
-        owner_of = {}
         if GUARD.fullmatch(var):
             # a guard known only by its PUBLIC (an inline function's static whose
-            # owner every caller inlined: no module record) is a copy too, and a
-            # public names the guard's OWNER (guard_owner)
+            # owner every caller inlined: no module record) is a copy too
             have = {a for a, _b in spans}
-            for g, r, o in img.guard_pubs:
-                if g != var:
-                    continue
-                if r not in have:
+            for g, r, _o in img.guard_pubs:
+                if g == var and r not in have:
                     spans.append((r, r + 4))
                     have.add(r)
-                if o:
-                    owner_of[r] = o
             spans.sort()
         starts = [a for a, _b in spans]
+        starts_set = set(starts)
 
         def copy_of(t):
             j = bisect.bisect_right(starts, t) - 1
@@ -792,6 +788,7 @@ class Cmp:
             # function's; two sites with identical ranges are told apart this
             # way too).
             body = defaultdict(set)
+            outside = defaultdict(set)      # proc rva -> copies its own code (no inline site) touches
             fun, bare = [], []
             by_copy = defaultdict(set)
             for p in img.procs:
@@ -809,20 +806,23 @@ class Cmp:
                         cover = [(b - a, n) for a, b, n in ranges if a <= off < b]
                         body[(norm(p["name"]), p.get("mod"))].add(c)
                         me = min(cover)[1] if cover else qual_key(p["name"])
-                        own = owner_of.get(c)
-                        pin = bool(own) and (qual_key(p["name"]) == own or
-                                             bool(img.inl_all.get(p["key"], {}).get(own)))
-                        if pin:
-                            me = own
-                        bare.append((p, c, me, pin))
+                        if not cover:
+                            outside[p["rva"]].add(c)
+                        bare.append((p, c, me, not cover))
                         by_copy[c].add(me)
             inl_of = defaultdict(set)       # what a function's out-of-line body inlines
             for p in img.procs:
                 inl_of[qual_key(p["name"])].update(img.inl_all.get(p["key"], ()))
-            for p, c, me, pin in bare:
-                if pin:
-                    # the copy's public names its owner, and this proc IS that
-                    # owner or inlines it: the reference is the owner's
+            for p, c, me, out in bare:
+                if out and len(outside[p["rva"]]) > 1:
+                    # the proc's OWN code (outside every inline site) touches
+                    # two or more copies of this guard name: its own static's
+                    # guard and another. Never re-attributed, so a reference
+                    # rebound from the proc's own guard INTO an inlined
+                    # owner's guard shows as the proc reading two guard copies
+                    # (selftest N13b). A hoisted guard test of an inlined owner
+                    # in a proc that also has its own same-named static FAILs
+                    # here too: loud, never masked (README).
                     readers[(me, p.get("mod"))].add(c)
                     continue
                 inl = img.inl_all.get(p["key"], {})
@@ -842,7 +842,7 @@ class Cmp:
                     c = copy_of(t)
                     if c is None:
                         continue
-                    if t == c and k == "rip" and ins.mnemonic == "lea" and self.loop_bound(img, p, t):
+                    if t == c and k == "rip" and self.loop_bound(img, p, t, ins, starts_set):
                         continue
                     readers[(norm(untag(p["name"])), p.get("mod"))].add(c)
         for r in img.relocs:
@@ -855,15 +855,18 @@ class Cmp:
         self._live[key] = dict(readers)
         return self._live[key]
 
-    def loop_bound(self, img, p, t):
+    def loop_bound(self, img, p, t, ins, own=()):
         """A `lea` of address t in proc p is the ONE-PAST-THE-END loop bound of
         a named object O, not a use of whatever the linker placed at t, when O
-        (PDB type size known, same section) ends exactly at t and p also
-        references O's START (the loop's begin pointer). Mirrors the read-only
-        data rule in Image.resolve. Only an address computation qualifies: a
-        load, store or memory compare at t (`mov`, `cmp [t]`...) touches the
-        object at t and always counts as its reader, and so does a `lea` of t
-        in a proc that never references O (selftest N18 / N18b)."""
+        (PDB type size known, same section, NOT one of `own` -- another copy of
+        the variable being judged) ends exactly at t, p also references O's
+        START (the loop's begin pointer), and the `lea`'s register is only ever
+        COMPARED (bound_use). A load, store or memory compare at t, a `lea` of t
+        whose register is passed on, stored or dereferenced, and a `lea` of t in
+        a proc that never references O all touch the object at t and count as
+        its readers (selftest N18 / N18b / N18c)."""
+        if ins is None or ins.mnemonic != "lea":
+            return False
         ends = self._ends.get(id(img))
         if ends is None:
             ends = defaultdict(set)
@@ -872,11 +875,79 @@ class Cmp:
                 if sz and img.sec_of(r) == img.sec_of(r + sz):
                     ends[r + sz].add(r)
             self._ends[id(img)] = ends
-        starts = ends.get(t)
+        starts = [o for o in ends.get(t, ()) if o != t and o not in own]
         if not starts:
             return False
         refs = self.proc_refs(img, p)
-        return any(o in refs for o in starts if o != t)
+        return any(o in refs for o in starts) and self.bound_use(img, p, ins)
+
+    _FAM = {}
+
+    @classmethod
+    def reg_family(cls, name):
+        """rax/eax/ax/al/ah -> "a"; r8/r8d/r8w/r8b -> "r8"; ..."""
+        f = cls._FAM.get(name)
+        if f is None:
+            m = re.fullmatch(r"(r\d+)[dwb]?", name)
+            if m:
+                f = m.group(1)
+            else:
+                m = re.fullmatch(r"[re]?([abcd])[xhl]|([abcd])l|[re]?(si|di|bp|sp)l?|[re]?(ip)", name)
+                f = next((g for g in m.groups() if g), name) if m else name
+            cls._FAM[name] = f
+        return f
+
+    def bound_use(self, img, p, ins):
+        """The destination register of `lea reg, [rip+X]` is used ONLY as a
+        register operand of a `cmp` (a loop's end pointer): scanning p forward
+        from the `lea` (following direct unconditional jumps inside p), the
+        first instruction that reads the register must be a `cmp` with it as a
+        plain register operand, before any instruction writes it, before any
+        call, and before a return or a jump out of p. Anything else -- the
+        register stored, moved, passed to a call, used as a base -- is a USE
+        of the object at X."""
+        k = (id(img), ins.address)
+        if k in self._bu:
+            return self._bu[k]
+        dst = ins.operands[0]
+        fam = self.reg_family(ins.reg_name(dst.reg)) if dst.type == X.X86_OP_REG else None
+        res = False
+        if fam is not None:
+            seq = self.disasm(img, p["rva"], p["size"])
+            at = {x.address: i for i, x in enumerate(seq)}
+            i, seen, steps = at.get(ins.address, len(seq)) + 1, set(), 0
+            while i < len(seq) and steps < 256:
+                x = seq[i]
+                steps += 1
+                if x.mnemonic == "nop":
+                    i += 1                      # multi-byte padding (nop dword ptr [rax+rax]) reads nothing
+                    continue
+                try:
+                    rd, wr = x.regs_access()
+                except capstone.CsError:
+                    break
+                rd = {self.reg_family(x.reg_name(r)) for r in rd}
+                wr = {self.reg_family(x.reg_name(r)) for r in wr}
+                if fam in rd:
+                    res = x.mnemonic == "cmp" and any(
+                        o.type == X.X86_OP_REG and self.reg_family(x.reg_name(o.reg)) == fam
+                        for o in x.operands) and not any(
+                        o.type == X.X86_OP_MEM and fam in {self.reg_family(x.reg_name(r))
+                                                          for r in (o.mem.base, o.mem.index) if r}
+                        for o in x.operands)
+                    break
+                if fam in wr or x.group(capstone.CS_GRP_CALL) or x.group(capstone.CS_GRP_RET):
+                    break
+                if x.mnemonic == "jmp":
+                    tgt = x.operands[0].imm if x.operands and x.operands[0].type == X.X86_OP_IMM else None
+                    if tgt is None or tgt not in at or tgt in seen:
+                        break
+                    seen.add(tgt)
+                    i = at[tgt]
+                    continue
+                i += 1
+        self._bu[k] = res
+        return res
 
     def proc_refs(self, img, p):
         """Every address-field target of proc p (cached)."""
@@ -992,24 +1063,26 @@ class Cmp:
                     b[q] = 0
         return bytes(b)
 
-    def toks(self, img, f, kind, tgt):
+    def toks(self, img, f, kind, tgt, ins=None):
         if f["rva"] <= tgt < f["rva"] + f["size"] and kind in ("rel", "rip", "imgrel"):
             return [("local", frozenset(), tgt - f["rva"], tgt)]
         out = img.resolve(tgt)
         if img.readonly_data(tgt):
             # ONE PAST THE END of a sized named read-only object O is O's loop
-            # bound only when f also references O's START; otherwise the
-            # target is whatever begins there (an unnamed literal the linker
+            # bound only when the instruction is a `lea` whose register is only
+            # compared (bound_use) and f also references O's START; otherwise
+            # the target is whatever begins there (an unnamed literal the linker
             # placed right after O) and must be compared by its own content,
-            # never waved through by O's name (selftest N7 on the cast/Direct
-            # pair: "APMF.dll" sat right after SKSE::RUNTIME_SSE_1_6_629)
-            refs = None
+            # never waved through by O's name (selftest N7 / N7b / N7c on the
+            # cast/Direct pair: "APMF.dll" right after RUNTIME_SSE_1_6_629, a
+            # log literal right after RE::VTABLE_Character, "left" right after
+            # kSilentWarnEvery)
             keep = []
             for c in out:
                 if c[0] == "sym" and c[2] > 0 and img.data_size.get(c[3] - c[2]) == c[2]:
-                    if refs is None:
-                        refs = self.proc_refs(img, f)
-                    if (c[3] - c[2]) not in refs:
+                    if kind != "rip" or ins is None or \
+                            (c[3] - c[2]) not in self.proc_refs(img, f) or \
+                            ins.mnemonic != "lea" or not self.bound_use(img, f, ins):
                         continue
                 keep.append(c)
             out = keep
@@ -1270,8 +1343,8 @@ class Cmp:
             for (oa_, sa_, ka_, ta_), (ob_, sb_, kb_, tb_) in zip(fla, flb):
                 if (oa_, sa_, ka_) != (ob_, sb_, kb_):
                     return desc
-                t1 = self.toks(A, fa, ka_, ta_)
-                t2 = self.toks(B, fb, kb_, tb_)
+                t1 = self.toks(A, fa, ka_, ta_, x)
+                t2 = self.toks(B, fb, kb_, tb_, y)
                 if ka_ == "imgrel" and ta_ == tb_ and not (t1[0][0] == "local" or t2[0][0] == "local"):
                     continue  # identical constant displacement that only looked like an RVA
                 if not self.same_target(t1, t2, depth):
@@ -1326,7 +1399,7 @@ class Cmp:
                 for v in self.own_imm(img, ins, seq[n_ins + 1] if n_ins + 1 < len(seq) else None):
                     imms[v] += 1
             for _o, _s, kind, t in self.fields(img, ins):
-                cands = self.toks(img, f, kind, t)
+                cands = self.toks(img, f, kind, t, ins)
                 if cands[0][0] == "local":
                     continue
                 tok = ("ref", img, tuple(cands))
