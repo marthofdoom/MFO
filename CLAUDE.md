@@ -75,20 +75,17 @@ regressions here; the ripple notes are why the map exists.
   No redundant/overlapping agents; reuse via SendMessage over respawn; one agent
   per build tree. **MODEL POLICY (marth 2026-09-06 — SUPERSEDES the older "cheap
   workers" rule, which said Sonnet should do the build grind):**
-  - **AN OPUS AGENT WRITES THE CODE — INCLUDING SMALL CHANGES.** Not Sonnet, and NOT
-    the coordinator itself. marth set the threshold LOW on purpose: "by reasonably sized
-    I mean smaller. but we cant afford the sloppy work weve been getting from teh cheap
-    agents." The driver is QUALITY, not token size. If in doubt, it is an Opus agent's job.
-  - **Cheap models (Sonnet/Haiku) are NOT for authoring code at all now.** Reserve them
-    for non-authoring mechanical grinds — log/artifact sweeps, bulk greps, collating
-    output — and even there, check their work. Their sloppiness is what cost us the
-    invented-symbol CI failures and misapplied fixes.
-  - **SONNET 5.5 EXCEPTION (marth 2026-09-30): "anything easy that you'll verify anyway."**
-    Sonnet 5.5 (`claude-sonnet-5-5`, the Agent tool's `sonnet`) may do easy work whose
-    result the coordinator verifies mechanically: log/evidence pulls, docs and text,
-    bookkeeping, read-only audits, and tier-C code edits (strings/comments only) proven by
-    the comment-strip / string-literal diff. Anything that changes logic, and every review,
-    field diagnosis and engine/RE task, stays on Opus 5.5.
+  - **SONNET 5.5 WRITES MOST CODE (marth 2026-09-30; supersedes the 2026-09-06 "Opus agent writes
+    all code" rule).** Author = `sonnet-coder` (Agent tool model `sonnet`), NOT the coordinator itself.
+    EXCEPTION: tier-A changes (engine seats/hooks, ABI, byte-shared headers, co-save format, threading,
+    TU splits) are still authored by Opus 5.5.
+    HISTORY (why the Opus review gate stays): on 2026-09-06 marth ruled cheap models out of authoring —
+    "by reasonably sized I mean smaller. but we cant afford the sloppy work weve been getting from teh
+    cheap agents." — after invented-symbol CI failures and misapplied fixes. Sonnet 5.5 passed its
+    2026-09-30 trial; the Opus diff review is what catches that class now.
+  - **Sonnet 5.5 at LOW effort (`sonnet-chore`) for very menial tasks:** log/evidence pulls, docs and
+    text, bookkeeping, read-only audits, tier-C edits proven by the comment-strip / string-literal diff.
+    The coordinator still verifies mechanically.
   - **OPUS 5.5 reviews EVERY commit's diff** (see dispatcher rule 8), plus deep research
     and risky co-save/threading work.
   - **The coordinator does NOT author reasonably sized additions itself.** It dispatches,
@@ -120,6 +117,7 @@ regressions here; the ripple notes are why the map exists.
 > are left verbatim too. The standing review model is still the cheap one: the author names its 1-5
 > uncertain spots and the reviewer answers only those, unless the change is co-save / ABI / a new engine
 > seat / a TU split.
+> Update 2026-09-30: Fable returns ONLY as an escalation (Opus repeatedly wrong, deep reverse engineering, or a failure Opus can't crack) — never a routine review.
 
 ## SCOPE DISCIPLINE — the git system only catches regressions if nobody skips it
 
@@ -214,9 +212,9 @@ dispatches and merges it.
    risk changes get higher effort checks with better agents"). Tier is decided by the DIFF'S SHAPE:**
    | Tier | Shape | Author | Review | Rounds |
    |---|---|---|---|---|
-   | A | engine seat / ABI / byte-shared header / co-save / threading / TU split | Opus | Opus 5.5 tier 3 | until nothing >SEV-3 |
-   | B | logic inside an existing mechanism (most feature work) | Opus | Opus 5.5 ONE pass; author fixes; coordinator merges on the author's report + its own diff read | ≤2 |
-   | C | docs / strings / log text / comments / backlog entries / small INI | Opus small brief, or the coordinator inline for one-liners | mechanical (comment-strip diff) | 1 |
+   | A | engine seat / ABI / byte-shared header / co-save / threading / TU split | Opus 5.5 | Opus 5.5 tier 3 | until nothing >SEV-3 |
+   | B | logic inside an existing mechanism (most feature work) | Sonnet 5.5 | Opus 5.5 ONE pass; author fixes; coordinator merges on the author's report + its own diff read | ≤2 |
+   | C | docs / strings / log text / comments / backlog entries / small INI | Sonnet 5.5 (low effort), or the coordinator inline for one-liners | mechanical (comment-strip diff) | 1 |
    Two rules that cut the most waste: (1) a CLOSING round (strings, wording, backlog notes) never gets an
    Opus 5.5 pass — prove it by comment-strip diff or the coordinator's read; (2) SEV-4/SEV-5 findings go to
    the backlog, never into the current round "because the author is there" — one drain before the cut
