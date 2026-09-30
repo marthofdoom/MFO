@@ -116,6 +116,7 @@ namespace MFO::Board {
         std::atomic<bool> g_inputTrampoline{ false };
 
         bool g_stickNav[4] = { false, false, false, false };   // up/down/left/right
+        std::atomic<bool> g_boardKeyDownSeen{ false };   // iBoardKey close-on-release, mirrors g_shoutDownSeen
         std::atomic<bool> g_shoutDownSeen{ false };
 
         // ── input translation ───────────────────────────────────────────────
@@ -826,7 +827,13 @@ namespace MFO::Board {
                     {
                         const int bk = Config::g_boardKey.load();
                         const int hk = Config::g_hudKey.load();
-                        if (bk != 0 || hk != 0) {
+                        // Not while a menu/console/text field owns the keyboard
+                        // (GameIsPaused): a bound letter typed into the console, a
+                        // SkyUI search box or a naming dialog must not open the board
+                        // or flip the HUD.
+                        auto* ui = RE::UI::GetSingleton();
+                        const bool menuUp = ui && ui->GameIsPaused();
+                        if ((bk != 0 || hk != 0) && !menuUp) {
                             for (auto* e = *a_events; e; e = e->next) {
                                 if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) continue;
                                 auto* b = static_cast<RE::ButtonEvent*>(e);
@@ -844,6 +851,8 @@ namespace MFO::Board {
                                         if (IsAvailable()) {
                                             PublishSnapshot();
                                             Toggle();
+                                        } else {
+                                            spdlog::info("[board] iBoardKey pressed but the overlay is unavailable");
                                         }
                                     });
                                 } else if (hk != 0 && code == hk) {
@@ -970,13 +979,15 @@ namespace MFO::Board {
                                 // instantly reopens.
                                 if (down) g_shoutDownSeen = true;
                                 else if (g_shoutDownSeen.exchange(false)) g_wantClose = true;
-                            } else if (down && Config::g_boardKey.load() != 0 &&
-                                       static_cast<int>(code) == Config::g_boardKey.load() &&
-                                       !io.WantTextInput) {
-                                // iBoardKey closes the open board (press, not release:
-                                // the opening press's release arrives here as !down and
-                                // is ignored). Same flag the shout key uses.
-                                g_wantClose = true;
+                            } else if (Config::g_boardKey.load() != 0 &&
+                                       static_cast<int>(code) == Config::g_boardKey.load()) {
+                                // iBoardKey closes the open board on RELEASE, exactly like
+                                // the shout key: both edges are consumed here (never
+                                // forwarded, never leaked to the game), and the release
+                                // of the OPENING press cannot close it because the flag is
+                                // only set by a press seen while open.
+                                if (down) { if (!io.WantTextInput) g_boardKeyDownSeen = true; }
+                                else if (g_boardKeyDownSeen.exchange(false)) g_wantClose = true;
                             } else if (auto k = DIKToImGuiKey(code); k != ImGuiKey_None) {
                                 io.AddKeyEvent(k, down);
                             }
@@ -1098,6 +1109,7 @@ namespace MFO::Board {
         if (now) {
             for (bool& s : g_stickNav) s = false;   // no stuck direction from last time
             g_shoutDownSeen = false;                // the opening press's RELEASE must not close it
+            g_boardKeyDownSeen = false;             // same for iBoardKey
             g_justOpened = true;                    // R1 party-switch waits for a release after open
             g_cursorInit = true;                    // seed the cursor or the first click misses
             g_cursorX = g_bbW * 0.5f;
