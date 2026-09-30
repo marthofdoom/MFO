@@ -4291,6 +4291,15 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   unchanged `WndProcHook` swap (`:313`, WM_CHAR/WM_KILLFOCUS), and `LazyInit`
   (`:401`, ImGui context + DX11/Win32 backend on first Present). `TryInstallHooks`
   (`:711`) polls for the live swapchain then patches.
+- **Window drag/resize policy (`LazyInit`, `Board.cpp:442-443`):** `io.ConfigWindowsMoveFromTitleBarOnly = true`
+  (windows move only by the title bar) and `io.ConfigWindowsResizeFromEdges = true` (ImGui 1.92.8 fields, `imgui.h:2439-2440`).
+  Per window: the Field Orders board (`Board_FieldKit.cpp:200`, has a title bar) drags by the bar and resizes from
+  any edge; its pos/size are `ImGuiCond_Appearing` + `NoSavedSettings`, so a move/resize sticks only until the board
+  closes (every reopen re-centres at default size). Popups have no title bar, so the title-bar-only flag does NOT
+  apply: the pickers can still be dragged from empty space (as before, `BeginPopup` adds no `NoMove`), and
+  `##ptreewin` is re-centred every frame (`ImGuiCond_Always`). The HUD (`##mfohud`, `Board.cpp:246-249`) is `NoDecoration|AlwaysAutoResize|NoInputs|NoMove`
+  and stays fixed, placed by the MCM X/Y. **What breaks:** give the board `NoTitleBar` and it can no longer be
+  moved; change the board's `SetNextWindowSize` to `ImGuiCond_Always` and edge resize is undone every frame.
 - **Fonts (`LazyInit`, `Board.cpp:445-483`; open backlog MFO-B78..B80):** body/head TTFs baked at backbuffer
   scale, each followed by `mergeCjk()` merging the optional `fonts/cjk.otf`
   (Noto Sans JP) into it. **What breaks:** a new face added without its own
