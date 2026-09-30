@@ -159,10 +159,31 @@ whatever the linker placed at that address. O is never another copy of the
 variable being judged (107 `s_Utf8BOM` copies sit right after another copy in
 the cast/Direct build). A load, store or memory compare at that address, a
 `lea` of it whose register is passed on, and a `lea` of it in a proc that
-never references O are all readers (selftest N18 / N18b / N18c). Residual: a
+never references O are all readers (selftest N18 / N18b / N18c). "Passed on"
+includes a call argument: the callee's integer argument count comes from its
+PDB type string, and a variadic callee (llvm-pdbutil prints the ellipsis as
+`<no type>`, e.g. `ImGui::Text | void (const char*, <no type>)`), a truncated
+string, or one whose brackets do not balance counts as reading all four
+argument registers (selftest N18d: compared, then passed to `ImGui::Text`;
+`selftest.py --unit` U1/U2). A `cmov` into the register or a write narrower
+than 4 bytes does not end the path (the pointer, or its upper bits, can
+survive it). Residual: a
 proc that only COMPARES against the address of an object that sits right
 after an array it also loops over is not seen as that object's reader (the
 object's content is not used by a compare).
+
+**Known limitations (REVIEW round 2 of `a59d985`, SEV-5, not fixed):**
+- **G4.** The register walk treats a path that runs off the end of the
+  disassembly as ending clean. 107 of 12648 procs in the cast/Direct /O2
+  build disassemble short of their PDB size (a jump table at the end: regex /
+  format std internals, `REL::IDDatabase::unpack_file`). That region is only
+  reachable by fall-through after a `jmp reg`, which already fails while the
+  register is live, so it is benign today. Hardening would treat running off a
+  truncated sequence as a use.
+- **G5.** A compare-only `lea` is compared by O's name. If it is really a
+  pointer-IDENTITY compare against a named object X that sits right after O,
+  then a rebind to a Y that ALSO sits right after a same-named, same-size O in
+  B passes. That needs two layout coincidences, and nothing reads content.
 
 `--tu-map FILE` lists which new TUs each old
 TU became (`old.cpp<TAB>new/a.cpp new/b.cpp`); it is how file-local twins are

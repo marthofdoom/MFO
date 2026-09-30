@@ -894,18 +894,43 @@ class Cmp:
         member function (`this` + 1), plus the hidden return-slot pointer
         unless the return type is plainly a scalar, pointer or reference.
         Anything else -- an indirect call, a type
-        string llvm-pdbutil truncated (`...`), a variadic list -- is 4 (every
-        argument register), so this only ever errs towards "the register is an
+        string llvm-pdbutil truncated (`...`), a variadic list (llvm-pdbutil
+        prints the ellipsis as `<no type>`: `void (const char*, <no type>)`),
+        a string whose brackets do not balance -- is 4 (every argument
+        register), so this only ever errs towards "the register is an
         argument", i.e. towards comparing by content."""
         if not x.operands or x.operands[0].type != X.X86_OP_IMM or x.operands[0].imm not in img.proc_at:
             return 4
         sig = next((p["sig"] for p in img.procs if p["rva"] == x.operands[0].imm), "")
-        if "..." in sig:
+        return self.sig_args(sig)
+
+    @staticmethod
+    def sig_args(sig):
+        """call_args for one PDB type string (see there)."""
+        sig = sig.strip()
+        if "..." in sig or "<no type>" in sig or not sig.endswith(")"):
             return 4
-        m = re.fullmatch(r"(.*?)(::)?\((.*)\)", sig.strip())
-        if not m:
+        # the argument list is the bracket group that ENDS the string: match
+        # backwards from the final `)` (a return type may itself hold `(`, e.g.
+        # `std::function<void ()> (int, int)`)
+        depth, j = 0, None
+        for i in range(len(sig) - 1, -1, -1):
+            ch = sig[i]
+            depth += ch in ")>]"
+            depth -= ch in "(<["
+            if depth < 0:
+                return 4
+            if depth == 0:
+                if ch != "(":
+                    return 4
+                j = i
+                break
+        if j is None:
             return 4
-        args = m.group(3).strip()
+        pre, args = sig[:j].rstrip(), sig[j + 1:-1].strip()
+        if any(pre.count(a) != pre.count(b) for a, b in ("<>", "()", "[]")):
+            return 4                                # an unbalanced prefix: parse nothing
+        m = re.fullmatch(r"(.*?)(::)?", pre, re.S)
         n = 0
         if args not in ("", "void"):
             depth, n = 0, 1
@@ -947,7 +972,9 @@ class Cmp:
         call while the register is volatile (Windows x64: it may be an
         argument), a return, an indirect jump or a jump out of p while the
         value is live, is a USE of the object at X. At least one `cmp` must be
-        reached. Padding `nop`s read nothing."""
+        reached. Padding `nop`s read nothing. A `cmov` into the register or a
+        write narrower than 4 bytes is NOT a redefinition (a conditional or
+        partial write leaves the pointer, or its upper bits, in place)."""
         k = (id(img), ins.address)
         if k in self._bu:
             return self._bu[k]
@@ -992,8 +1019,13 @@ class Cmp:
                             continue
                         ok = False
                         break
-                    if fam in wr:
+                    if fam in wr and not x.mnemonic.startswith("cmov") and not any(
+                            o.type == X.X86_OP_REG and self.reg_family(x.reg_name(o.reg)) == fam and o.size < 4
+                            for o in x.operands[:1]):
                         break                       # redefined: this path is done
+                    # (a `cmov` keeps the old value on its not-taken condition,
+                    # and an 8/16-bit write keeps the upper bits: the pointer
+                    # may survive, so the path goes on)
                     if x.group(capstone.CS_GRP_RET):
                         ok = fam != "a"             # rax at a return is the returned value: a use
                         break
