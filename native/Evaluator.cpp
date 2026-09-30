@@ -31,7 +31,8 @@ namespace MFO::Eval {
                    a_op == Vocab::kCondFoeBlocking ||
                    a_op == Vocab::kCondFoeFleeing    ||
                    a_op == Vocab::kCondFoeWeakFire   || a_op == Vocab::kCondFoeWeakFrost ||
-                   a_op == Vocab::kCondFoeWeakShock  || a_op == Vocab::kCondFoeIsMechanical;
+                   a_op == Vocab::kCondFoeWeakShock  || a_op == Vocab::kCondFoeIsMechanical ||
+                   a_op == Vocab::kCondFoeMultipleWithin;
         }
 
         // Weak to an element = its resist actor-value is negative (a race trait
@@ -163,6 +164,20 @@ namespace MFO::Eval {
             spdlog::info("[brawl] {:08X}: held fire -- {} non-hostile foe(s) in group "
                          "(e.g. {:08X}), no real target. Brawl / proving fight?",
                          a_self->GetFormID(), a_count, a_foe);
+        }
+
+        // [cluster] the cluster centre cond.foe_multiple_within chose: which foe and how many
+        // foes stand within the rule's distance of it (itself excluded). Throttled per
+        // follower (5 s, the other selector lines' cadence), OUTSIDE the group lock.
+        void LogCluster(RE::Actor* a_self, RE::Actor* a_centre, int a_others, float a_units) {
+            static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_next;
+            const auto now = std::chrono::steady_clock::now();
+            auto& nxt = s_next[a_self->GetFormID()];
+            if (nxt.time_since_epoch().count() != 0 && now < nxt) return;
+            nxt = now + std::chrono::seconds(5);
+            spdlog::debug("[cluster] {:08X}: centre '{}' ({:08X}) has {} other foe(s) within {:.0f}u",
+                          a_self->GetFormID(), a_centre->GetName() ? a_centre->GetName() : "?",
+                          a_centre->GetFormID(), a_others, a_units);
         }
 
         // [reach] THE MELEE-ONLY SKIP (fix/mfo-unreachable-flyer): a foe the reach gate
@@ -304,6 +319,46 @@ namespace MFO::Eval {
             RE::ActorHandle          reachSkipped;   // the first foe the reach gate skipped
             CombatSense::ReachRead   reachSkippedRead;
 
+            // CLUSTER PRE-PASS (cond.foe_multiple_within). A foe's cluster count needs EVERY
+            // engaged foe's position, not just the ones the scan below lets through, so it
+            // is measured first: ONE read-lock pass that only copies (handle, position) of
+            // the live, not-lost foes (the CombatSense::FoeCount filters, #23: reads only,
+            // nothing else inside), released before anything else runs. Inside the lock
+            // this pre-pass reads only handle, flags and position, like CombatSense::FoeCount.
+            // The engine calls (Is3DLoaded, the brawl gate) are made after the lock. The main
+            // scan below makes its own gate calls inside the group lock, as before. clusterOthers maps a foe's handle to the number
+            // of OTHER members within a_param units, for foes with at least 2 (a cluster of
+            // 3+); an absent foe does not qualify. The chase cap does not limit members:
+            // the cluster is measured foe to foe, the cap only limits who may be CHOSEN.
+            std::unordered_map<std::uint32_t, int> clusterOthers;
+            if (a_op == Vocab::kCondFoeMultipleWithin && a_param > 0.0f) {
+                struct Member { RE::ActorHandle h; RE::NiPoint3 pos; };
+                std::vector<Member> raw;
+                {
+                    RE::BSReadLockGuard lk(cc->combatGroup->lock);
+                    for (const auto& t : cc->combatGroup->targets) {
+                        auto ptr  = t.targetHandle.get();   // HOLD the NiPointer
+                        auto* foe = ptr.get();
+                        if (!foe || foe == a_self) continue;
+                        if (foe->IsDead() || foe->IsDisabled()) continue;
+                        if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
+                        raw.push_back({ t.targetHandle, foe->GetPosition() });
+                    }
+                }
+                std::vector<Member> mem;
+                for (const auto& m : raw) {
+                    auto ptr  = m.h.get();
+                    auto* foe = ptr.get();
+                    if (!foe || !foe->Is3DLoaded() || !foe->IsHostileToActor(a_self)) continue;   // brawl partners do not count
+                    mem.push_back(m);
+                }
+                for (std::size_t i = 0; i < mem.size(); ++i) {
+                    int others = 0;
+                    for (std::size_t j = 0; j < mem.size(); ++j)
+                        if (i != j && mem[i].pos.GetDistance(mem[j].pos) <= a_param) ++others;
+                    if (others >= 2) clusterOthers[mem[i].h.native_handle()] = others;
+                }
+            }
             // The group is shared mutable engine state; read it under its own
             // lock, and do NOTHING but read inside.
             {
@@ -392,6 +447,13 @@ namespace MFO::Eval {
                         if (!RaceHasKeyword(foe, "ActorTypeDragon")) continue;
                     } else if (a_op == Vocab::kCondFoeIsMechanical) {
                         if (!FoeIsMechanical(foe)) continue;
+                    } else if (a_op == Vocab::kCondFoeMultipleWithin) {
+                        // CENTRE of a cluster: most other foes within the distance wins;
+                        // ties go to the one nearest the follower (the + dist term, always
+                        // far below one foe's worth of the 100000 weight).
+                        auto it = clusterOthers.find(t.targetHandle.native_handle());
+                        if (it == clusterOthers.end()) continue;
+                        score = -static_cast<float>(it->second) * 100000.0f + dist;
                     } else if (a_op == Vocab::kCondFoeIsCaster) {
                         if (!FoeIsCaster(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeIsRanged) {
@@ -453,6 +515,12 @@ namespace MFO::Eval {
             // real was selected. Log outside the group lock (throttled).
             if (nonHostile > 0 && !best) LogBrawlSkip(a_self, lastNH, nonHostile);
             if (reachSkipped) LogReachSkip(a_self, reachSkipped, reachSkippedRead, best);
+            if (a_op == Vocab::kCondFoeMultipleWithin && best) {
+                if (auto it = clusterOthers.find(best.native_handle()); it != clusterOthers.end()) {
+                    auto cp = best.get();
+                    if (cp) LogCluster(a_self, cp.get(), it->second, a_param);
+                }
+            }
             return best;
         }
 

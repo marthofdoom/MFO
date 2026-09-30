@@ -27,7 +27,7 @@ Read it as history and this block as current.
   to 1 at the first launch (marker key `bHealAnimMigrated`; later OFF choices are kept). Check MFO.log for
   `[config] MCM migration: bHealAnimPackage 0 -> 1` (or `... nothing to flip`) once, then never again.
   **DECIDED (marth 2026-09-30, review F4):** a heal re-aims at a lower ally only when the hand is idle between casts
-  ("Otherwise there'd be constant switching"). Not a defect (MFO-B168).
+  ("Otherwise there'd be constant switching"). Not a defect (MFO-B171).
   **DECIDED (marth 2026-09-30, review F1 policy):** a heal claim that has not fired is REPAIRED (the heal is
   re-equipped into the left hand under the same claim), never swapped for an instant cast and never released
   beyond the existing state conditions ("Once equipped it's never failed"). Field read: `[heal] ... REPAIR:
