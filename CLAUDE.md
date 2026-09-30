@@ -83,6 +83,12 @@ regressions here; the ripple notes are why the map exists.
     for non-authoring mechanical grinds — log/artifact sweeps, bulk greps, collating
     output — and even there, check their work. Their sloppiness is what cost us the
     invented-symbol CI failures and misapplied fixes.
+  - **SONNET 5.5 EXCEPTION (marth 2026-09-30): "anything easy that you'll verify anyway."**
+    Sonnet 5.5 (`claude-sonnet-5-5`, the Agent tool's `sonnet`) may do easy work whose
+    result the coordinator verifies mechanically: log/evidence pulls, docs and text,
+    bookkeeping, read-only audits, and tier-C code edits (strings/comments only) proven by
+    the comment-strip / string-literal diff. Anything that changes logic, and every review,
+    field diagnosis and engine/RE task, stays on Opus 5.5.
   - **OPUS 5.5 reviews EVERY commit's diff** (see dispatcher rule 8), plus deep research
     and risky co-save/threading work.
   - **The coordinator does NOT author reasonably sized additions itself.** It dispatches,
