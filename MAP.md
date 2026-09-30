@@ -876,13 +876,13 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     casts. Surfaced backlog: MFO-B5 (a retarget is still Release + RequestCast), MFO-B7/B8
     (`kHealHoldNeverObservedMs` sizing, the next field log measures it), MFO-B58 (Task-1 concentration
     claims without a controller test), MFO-B161, MFO-B172..B184 (round 1 F7-F13 and round 2's SEV-4/5), MFO-B186..B189 (round 3), MFO-B190 (round 4).
-    **Backlog drain (141c480):** FIXED B173, B175, B178, B179, B183, B186, B187, B188, B190 (B180 partly). B186: the
+    **Backlog drain (141c480):** FIXED B175, B178, B179, B183, B186, B187, B188, B190 (B180 partly); B173 REOPENED (OOC `CastAuto` still claims via `CastSelfDirect`/`CastTargetDirect` during a controller flap); B181 and B184 closed by design. B186: the
     shield-by-perks top-up's rank lives in `cast/Equip.cpp` `g_shieldRank` (in-memory, `g_forcedMx`), read by
     `LeftHoldRule` only while that shield is in the left hand; B187: `Loadout::LeftHandYield` now reports the
     released left/right hold objects; B188: the heal road's log dedup maps are `Actuation_internal.h` globals
     cleared in `ClearCastLocks`; B190: `Actuation::CastLockClaimStamp` (`cast/Hands.cpp`) feeds `WatchArmed`'s
     per-claim fired test; B175: `CastAuto`'s claim branch needs `g_firingRule != kNoRule`. STILL OPEN (each carries a
-    "needs ruling" line in the backlog): B174, B176, B177, B180 (rest), B181, B182, B184; B189 left as recorded.
+    "needs ruling" line in the backlog): B173, B174, B176, B177, B180 (rest), B182; B189 left as recorded.
     Round 2: comparing the equip hold's rank anywhere but through `ForcedHold::rule` vs the heal lock's
     `owningRule` invents a heuristic marth ruled out; letting `OnFollowerHit` / `Tick` act while
     `HealTakesLeft` holds re-creates the per-hit shield thrash; judging the repair before the refresh
