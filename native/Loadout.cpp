@@ -345,7 +345,7 @@ namespace MFO::Loadout {
                     // POINT OF NO RETURN (F1): the left hand is taken on the next
                     // line, so MFO's own left weapon hold yields here and not
                     // earlier. No debt is booked on this branch (spell->spell swap).
-                    if (a_yieldLeft) a_yieldLeft(a_actor);
+                    if (a_yieldLeft) a_yieldLeft(a_actor, nullptr, nullptr);
                     m->EquipSpell(a_actor, a_spell, LeftHandSlot());
                     a_actor->DrawWeaponMagicHands(true);
 
@@ -431,7 +431,7 @@ namespace MFO::Loadout {
         if (refillEmptyLeft) {
             // The point of no return, as below: a hold the ledger still names for
             // the left hand yields (it is not in the hand, so nothing is booked).
-            if (a_yieldLeft) a_yieldLeft(a_actor);
+            if (a_yieldLeft) a_yieldLeft(a_actor, nullptr, nullptr);
             mgr->EquipSpell(a_actor, a_spell, LeftHandSlot());
             a_actor->DrawWeaponMagicHands(true);
             g_equipClock[id] = now;              // a fresh equip, a fresh AI window
@@ -461,7 +461,18 @@ namespace MFO::Loadout {
         // A two-hander / bow HOLD yielded to a higher-ranked heal claim (review round
         // 2, marth's ruling) is MFO's own hold too: no stow debt either -- the equip
         // gambit puts it back itself once the heal has fired.
-        if (a_yieldLeft && a_yieldLeft(a_actor)) { willDisplaceLeft = nullptr; willStowWeapon = nullptr; }
+        // MFO-B187: only the item the yield actually released is MFO's own hold. A
+        // stray ledger hold that is not in the hand must not null the debt for the
+        // follower's OWN left item / two-hander (the old code nulled both on any
+        // true return).
+        {
+            RE::TESBoundObject* yieldedLeft  = nullptr;
+            RE::TESBoundObject* yieldedRight = nullptr;
+            if (a_yieldLeft && a_yieldLeft(a_actor, &yieldedLeft, &yieldedRight)) {
+                if (yieldedLeft && yieldedLeft == willDisplaceLeft)  willDisplaceLeft = nullptr;
+                if (yieldedRight && yieldedRight == willStowWeapon) willStowWeapon   = nullptr;
+            }
+        }
 
         mgr->EquipSpell(a_actor, a_spell, LeftHandSlot());
         a_actor->DrawWeaponMagicHands(true);

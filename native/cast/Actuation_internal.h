@@ -324,6 +324,19 @@ namespace MFO::Actuation {
         // cast stopped, so it must be legible in the log it appears in.
         inline std::unordered_map<RE::FormID, FollowerLockLog> g_lastPreemptLog;
 
+        // The animated-heal road's log dedup maps (MFO-B188, MFO-B180's class). They
+        // were function-local statics, so a revert could not clear them and a stale
+        // stamp suppressed a line for up to 5 s after a load. Namespace-scope here so
+        // ClearCastLocks (the revert call) drops them with the rest. Worker-serial
+        // (#4), like every log map above. g_heldOffLog: EquipWeapon's HELD OFF line.
+        // g_healOutrankLog: CastOn's heal-road "NOT claimed" line. g_releaseHealLog:
+        // ReleaseOwnHealClaim's line. g_healRepairLog: LogHealRepair's per-shape slots.
+        struct HealRepairLogSlots { std::chrono::steady_clock::time_point at[4]{}; };
+        inline std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_heldOffLog;
+        inline std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_healOutrankLog;
+        inline std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> g_releaseHealLog;
+        inline std::unordered_map<RE::FormID, HealRepairLogSlots> g_healRepairLog;
+
         // Which hand(s) a (spell,target) request would occupy if it proceeds.
         // Both false never happens on a non-held return (ResolveCastHand always
         // sets at least one before returning std::nullopt).
@@ -407,7 +420,11 @@ namespace MFO::Actuation {
         // OUTRANKS the hold (LeftHoldRule); the equip gambit takes it back after the
         // heal fires (EquipWeapon's HealClaimTakesLeftFrom gate). A true return then
         // also covers that right hold (Prepare books no stow debt for it).
-        bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why, bool a_twoHandToo = false);
+        // a_outLeft / a_outRight (MFO-B187), when non-null, receive the hold objects
+        // actually released (LeftHandYield's contract).
+        bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why, bool a_twoHandToo = false,
+                                 RE::TESBoundObject** a_outLeft = nullptr,
+                                 RE::TESBoundObject** a_outRight = nullptr);
 
         // ── GAMBIT ORDER ON THE LEFT HAND: equip hold vs heal claim (review round
         // 2, marth 2026-09-30: "Gambit order wins, so in most cases it's heal. But a

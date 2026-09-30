@@ -213,7 +213,20 @@ namespace MFO::ComposedCast {
             // "not ours" + [cfc] alarm straight back. a_proxy == 0 still keeps
             // whatever we already learned (it only means "not minted YET").
             if (a_proxy != 0) w.proxy = a_proxy;
-            if (w.observed) return;   // already confirmed firing this claim -- stay quiet
+            // PER CLAIM, NOT FIGHT-WIDE (MFO-B190). `observed` is a latch that a re-claim
+            // of the same spell inherits (this function's no-reset branch), so a claim
+            // that never fires after an earlier one did would stay quiet for the rest of
+            // the fight. Where the hand has a cast lock for this spell, "fired" means
+            // fired SINCE THE LOCK'S CLAIM STAMP (the lock is stamped once at the claim,
+            // IncumbentHealCastDone's and HealClaimNeedsRepair's own anchor). Callers
+            // with no lock (the direct roads' arms) keep the latch: there is no claim
+            // stamp to measure from, and the latch is the only evidence they have.
+            const auto claimStamp = Actuation::CastLockClaimStamp(
+                a_fid, a_slot == 0 ? Actuation::kHandLeft : Actuation::kHandRight, a_spell);
+            const bool firedThisClaim = (claimStamp == Clock::time_point{})
+                                            ? w.observed
+                                            : (w.observed && w.lastObservedAt >= claimStamp);
+            if (firedThisClaim) return;   // already confirmed firing this claim -- stay quiet
             const auto now = Clock::now();
             if (now - w.since < kSilentWarnAfter)  return;   // still within the grace window
             if (now - w.lastWarn < kSilentWarnEvery) return;  // rate-limited
@@ -716,6 +729,7 @@ namespace MFO::ComposedCast {
             const auto standing = APMFBridge::GetHealCastSpell(fid);
             if (standing != 0) {
                 End(fid);
+                Actuation::ClearLeftCastLockIf(fid, standing);   // MFO-B179: End alone left the LEFT lock naming it
                 spdlog::info("[heal] {:08X} combat controller gone -- the standing heal claim "
                              "(spell {:08X}) is RELEASED; heals take the direct road until the "
                              "follower is in combat again", fid, standing);

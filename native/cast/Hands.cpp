@@ -188,6 +188,21 @@ namespace MFO::Actuation {
 
     }   // anon
 
+    std::chrono::steady_clock::time_point CastLockClaimStamp(RE::FormID a_follower, std::size_t a_hand,
+                                                             RE::FormID a_spell) {
+        if (a_hand >= kHandCount || a_spell == 0) return {};
+        const auto it = g_castLock.find(a_follower);
+        if (it == g_castLock.end()) return {};
+        const auto& lk = it->second.hand[a_hand];
+        return lk.spell == a_spell ? lk.lastSeen : std::chrono::steady_clock::time_point{};
+    }
+
+    void ClearLeftCastLockIf(RE::FormID a_follower, RE::FormID a_spell) {
+        const auto it = g_castLock.find(a_follower);
+        if (it == g_castLock.end() || a_spell == 0) return;
+        if (it->second.hand[kHandLeft].spell == a_spell) it->second.hand[kHandLeft] = CastLock{};
+    }
+
     // ── CROSS-TU (2026-09-09) ────────────────────────────────────────────────
     // CastInFlightOnHand was file-local until the heal claim path needed it.
     // ComposedCast.cpp is not one of the three Actuation TUs and cannot include
@@ -604,13 +619,22 @@ namespace MFO::Actuation {
             // the rule's condition (an AUTO or an explicit-subject heal carries no ally
             // threshold): there is nothing left for this heal to do there. A heal
             // only: an offense lock keeps the three tests above.
-            if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
-                sp && SpellHealsHealth(sp) &&
-                CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense &&
-                (Vocab::HealthPct(victim) >= Vocab::kHealFull || !HealInReach(a_follower, victim, sp) ||
-                 Sightline::CheckWithin(a_follower->GetFormID(), a_lock.target, kHealLosTrustSec) ==
-                     Sightline::Verdict::Occluded))
-                return true;
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
+            if (sp && SpellHealsHealth(sp) &&
+                CasterConsent::ClassifySpell(sp) != CasterConsent::SpellKind::Offense) {
+                // KEEP THE INCUMBENT'S VERDICT FRESH (MFO-B178). CastOn wants only the
+                // current pick and CastAuto's probe only the candidates that beat the
+                // running lowest, so nobody measured the incumbent once the pick moved
+                // on and its Occluded verdict aged to Unknown, which reads as "not
+                // lost". Sightline::Want is the worker-safe, per-pair rate-limited
+                // request (locked map, no engine call here); the verdict lands a frame
+                // later and is read by the CheckWithin below on a later lap.
+                Sightline::Want(a_follower->GetFormID(), { a_lock.target });
+                if (Vocab::HealthPct(victim) >= Vocab::kHealFull || !HealInReach(a_follower, victim, sp) ||
+                    Sightline::CheckWithin(a_follower->GetFormID(), a_lock.target, kHealLosTrustSec) ==
+                        Sightline::Verdict::Occluded)
+                    return true;
+            }
             return false;
         }
 
@@ -754,9 +778,8 @@ namespace MFO::Actuation {
         ComposedCast::End(fid, a_keepSpell);
         if (it != g_castLock.end() && it->second.hand[kHandLeft].spell == a_spell)
             it->second.hand[kHandLeft] = CastLock{};
-        static std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> s_log;
         const auto now = std::chrono::steady_clock::now();
-        auto& e = s_log[fid];
+        auto& e = g_releaseHealLog[fid];   // revert-cleared (MFO-B180/B188)
         if (e.first != a_spell || std::chrono::duration<float>(now - e.second).count() >= 2.0f) {
             e = { a_spell, now };
             spdlog::info("[heal] {:08X} heal claim RELEASED -- spell {:08X} at {:08X}: {} (rule {})",
@@ -765,12 +788,10 @@ namespace MFO::Actuation {
         return true;
     }
 
-    // HealChannelCapped. Read the LEFT lock's spell against the engine's own caster:
-    // while the follower channels it (CastInFlightOnHand, the one in-flight
-    // definition) the clock runs from the first lap it was seen channelling; the
-    // moment it is not channelling, the clock resets. A per-channel cap drawn once
-    // from DrawConcCap's heal band, like the direct stream's (principle 9: it bounds
-    // one channel, it never paces casts).
+    // HealClaimNeedsRepair. Is the standing heal claim's spell out of the LEFT hand, or
+    // in hand and never fired within the never-observed bound? Returns the repair
+    // shape (HealRepair) the refresh lap acts on and LogHealRepair names; it reads
+    // the lock and the engine, it touches nothing.
     HealRepair HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0 || !a_spell) return {};
@@ -878,11 +899,9 @@ namespace MFO::Actuation {
     void LogHealRepair(RE::FormID a_follower, RE::FormID a_spell, const HealRepair& a_rep,
                        const char* a_verdict, bool a_failed, const std::string& a_prepareWhy) {
         if (!a_rep) return;
-        struct Slots { std::chrono::steady_clock::time_point at[4]{}; };
-        static std::unordered_map<RE::FormID, Slots> s_log;
         const std::uint8_t shape = a_rep.shape < 4 ? a_rep.shape : 1;
         const auto now  = std::chrono::steady_clock::now();
-        auto&      last = s_log[a_follower].at[shape];
+        auto&      last = g_healRepairLog[a_follower].at[shape];   // revert-cleared (MFO-B180/B188)
         if (std::chrono::duration<float>(now - last).count() < 5.0f) return;
         last = now;
         auto lvl = (shape == 0 || shape == 3) ? spdlog::level::debug :
@@ -895,6 +914,12 @@ namespace MFO::Actuation {
                     a_prepareWhy.empty() ? "" : ": ", a_prepareWhy);
     }
 
+    // HealChannelCapped. Read the LEFT lock's spell against the engine's own caster:
+    // while the follower channels it (CastInFlightOnHand, the one in-flight
+    // definition) the clock runs from the first lap it was seen channelling; the
+    // moment it is not channelling, the clock resets. A per-channel cap drawn once
+    // from DrawConcCap's heal band, like the direct stream's (principle 9: it bounds
+    // one channel, it never paces casts).
     bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         auto it = g_castLock.find(fid);

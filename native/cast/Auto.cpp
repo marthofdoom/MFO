@@ -348,7 +348,14 @@ namespace MFO::Actuation {
             //     transparent NoOp.
             // Out of combat, or with Harbinger absent, the fan / conc series below
             // stay exactly as they were (the direct road, D1, labelled).
-            if (!hostile && kind == CasterConsent::SpellKind::Heal &&
+            // COMBAT TABLE ONLY (MFO-B175 / MFO-B173): g_firingRule is a real rule index
+            // only inside Fire(); the OOC Logistics caller reaches here with kNoRule. A
+            // claim made there is unranked (it cannot preempt anything and anything
+            // preempts it), is read by Logistics as "not acted", and the party-OOC
+            // teardown would End it every service. Out of combat the heal stays on the
+            // direct road below, as it always was (this note is also why
+            // Actuation_internal.h's "reached only from Fire()" invariant holds again).
+            if (!hostile && kind == CasterConsent::SpellKind::Heal && g_firingRule != kNoRule &&
                 ComposedCast::ChooseHealRoad(a_follower, spell, nullptr) ==
                     ComposedCast::HealRoad::Claim) {
                 const float radius  = Config::g_sharedRadius.load();
