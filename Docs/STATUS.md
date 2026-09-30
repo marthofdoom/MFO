@@ -57,11 +57,22 @@ Read it as history and this block as current.
   6. **One road per actor.** In combat NO `FORCE-CAST ... Fast Healing|Heal Other|Healing Hands` direct lines and no
      `[heal] ... no combat controller` lines for a follower who is fighting; out of combat those heals print the
      `[heal] ... no combat controller -- DIRECT road` line (15 s dedup) and land as before.
-  6b. **Repair, not freeze (review F1/F2).** `grep '\[heal\].*REPAIR' MFO.log`: a sword-and-board or 2H healer
-     whose shield / weapon came back over the heal shows `REPAIR: the heal is no longer in the left hand` and the
-     heal is back in the left hand next lap; `REPAIR: no fire within the never-observed bound` repeating every ~4 s
-     for one claim is the unsolved "claim that never fires" case (F1 policy, marth's call). A channelled self heal
-     (vanilla Healing) keeps channelling past its first beat (no `taken back` right after `CFC-fired`).
+  6b. **Repair, not freeze (review F1/F2, round 2).** `grep '\[heal\].*REPAIR' MFO.log`: every repair line now
+     ends with Prepare's REAL verdict. After a fire, `REPAIR: the heal is no longer in the left hand ... the heal was
+     put back in the left hand (Prepare: equipped)` (a dual-wielder's own left sword still owed is fine: `heal
+     re-equipped into the EMPTY left hand ... open gear debt is kept`). `the heal was NOT put back (Prepare:
+     debounced): already owe this follower gear` must NOT appear (that was round 2's R2-1 freeze). On the SECOND lap
+     of a fresh ally claim with a Self-delivery spell (Fast Healing at an ally, proxied) there must be NO repair
+     line (SHADOW R2-1). `REPAIR: equipped in the left hand but not fired ...` (WARN) is the unsolved "claim that
+     never fires" case (F1 policy). A channelled self heal keeps channelling past its first beat, and past its
+     stream cap it re-claims with the spell still in hand (no `taken back` on `reached its stream cap`).
+  6c. **Gambit order on the left hand (marth's ruling, round 2).** Sword-and-board healer being hit mid-cast:
+     `[loadout] ... shield restore DEFERRED` during the charge, then `shield restored (the hit was deferred ...)`
+     right after the heal's `CFC-fired`; no shield<->spell swap per hit. 2H follower with no equip rule: `two-hander
+     give-back DEFERRED` until the fire. With an equip-melee/ranged rule BELOW the heal: `hold yielded (an animated
+     heal claim ranked above the hold ...)`, `[equip] ... HELD OFF` for a two-hander / bow while the heal is pending,
+     then the weapon back after the fire. With the equip rule ABOVE the heal: `[heal] ... NOT claimed -- equip rule N
+     holds the left hand and ranks above it`, and no heal claim at all (the board order decides; no rescue).
   7. **Series + release lines.** `grep '\[heal\].*RELEASED' MFO.log`: a claim released when its recipient is
      full / out of reach / nobody needs the AUTO heal; `auto heal (lowest first) at <id>` outcome reasons name the
      lowest ally; a concentration heal past 8-15 s prints `reached its stream cap` and re-claims.
