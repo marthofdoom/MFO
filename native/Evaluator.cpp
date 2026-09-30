@@ -9,6 +9,7 @@
 #include "Confidence.h"  // ChaseRadius -- the combat chase cap (#22)
 #include "Sightline.h"   // LoS preference in PickFoe (worker-safe cached read)
 #include "CombatSense.h" // OutOfMeleeReach -- the melee-only reach gate (fix/mfo-unreachable-flyer)
+#include "apmf/APMFBridge.h"   // GetHealCastSpell/Target -- the incumbent heal recipient (PickAlly)
 #include "cast/Actuation.h" // MeleeOnly -- has MFO declared him melee, with nothing ranged in hand
 #include "Scheduler.h"   // ReachHoldSlack -- the reach hold's hysteresis line (review U3)
 
@@ -601,9 +602,22 @@ namespace MFO::Eval {
                     // re-measured Visible on the next lap (the Want above), and one
                     // that is never re-measured (unloaded) falls back to Unknown after
                     // it. Self never reaches this (a_self is excluded above).
-                    if (Sightline::CheckWithin(a_self->GetFormID(), ally->GetFormID(), kHealLosTrustS,
-                                               Sightline::Basis::Own) ==
-                        Sightline::Verdict::Occluded)
+                    //
+                    // THE STANDING CLAIM'S RECIPIENT IS NEVER DROPPED ON ONE READING
+                    // (field 2026-09-30b). A downed ally on the ground flickers Occluded /
+                    // Visible under the own-ray basis; dropping him for a single Occluded
+                    // skipped the heal rule for that lap, its claim's refresh went stale
+                    // and the sweep released it (Herd, 28 s to the first landing). The
+                    // incumbent is judged by HealRecipientUnreachable: agreeing readings
+                    // AND outside the caster-build window. Everyone else keeps the
+                    // single-reading rule above.
+                    const bool incumbent = APMFBridge::GetHealCastSpell(a_self->GetFormID()) != 0 &&
+                                           APMFBridge::GetHealCastTarget(a_self->GetFormID()) == ally->GetFormID();
+                    if (incumbent) {
+                        if (Actuation::HealRecipientUnreachable(a_self, ally, a_healSpell)) return;
+                    } else if (Sightline::CheckWithin(a_self->GetFormID(), ally->GetFormID(), kHealLosTrustS,
+                                                      Sightline::Basis::Own) ==
+                               Sightline::Verdict::Occluded)
                         return;
                 }
                 lowest = hp; best = ally->GetHandle();

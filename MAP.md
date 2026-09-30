@@ -899,6 +899,14 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     cleared in `ClearCastLocks`) refuses that (spell, foe) until the foe is sighted. `Sightline` `occRun` restarts when the previous reading is older than 3 s (two stale readings never count as agreeing).
     (3) `ComposedCast::NoteOocDirectHeal` labels the OOC instant heal (MFO-B191 open). (5) `EndDirectHealStreams` now runs at
     `Try()`'s `Claimed` return (MFO-B192 fixed); MFO-B193, MFO-B194 open; MFO-B195 (kReady unproven in a field log), MFO-B196 (non-urgent heal waits on a kReady offense incumbent via `CanPreemptHand`), MFO-B197 (`EndDirectHealStreams` cost on Claimed refresh laps) open.
+    **Field 2026-09-30b (`fix/mfo-heal-sweep`):** (a) `PickAlly` (`Evaluator.cpp` ~:604) no longer drops the STANDING heal claim's
+    recipient (`APMFBridge::GetHealCastTarget` == the ally, spell claimed) on one Occluded reading: the incumbent is judged by
+    `Actuation::HealRecipientUnreachable` (now also declared in `cast/Actuation.h`), every other candidate keeps the single-reading
+    skip. Drop the incumbent test and the heal rule skips laps, `refreshed` goes stale and the sweep restarts the claim every 3-5 s
+    on a downed ally. (b) `APMFBridge::Tick`'s heal sweep (`apmf/Bridge.cpp` ~:982, the `o.heal` branch of the FacetExpiry sweep,
+    on the AddTask job worker) HOLDS a heal claim younger than `kHealHoldNeverObservedMs` (from `created`) that `ObservedFiring` has
+    not seen fire, and every release it does make logs `[heal] ... heal claim RELEASED by the expiry sweep` (handle, spell, target,
+    age, stale ms), rate-limited 1 s per follower. The other-hand offense behaviour (diagnosis cause B) is unchanged and unproven.
     **Backlog drain (141c480):** FIXED B175, B178, B179, B183, B186, B187, B188, B190 (B180 partly); B173 REOPENED (OOC `CastAuto` still claims via `CastSelfDirect`/`CastTargetDirect` during a controller flap); B184 closed by design; B181 REOPENED by marth (any in-combat instant-road use outside 1.5.97 is a defect to fix, never by-design). B186: the
     shield-by-perks top-up's rank lives in `cast/Equip.cpp` `g_shieldRank` (in-memory, `g_forcedMx`), read by
     `LeftHoldRule` only while that shield is in the left hand; B187: `Loadout::LeftHandYield` now reports the
