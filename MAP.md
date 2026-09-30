@@ -886,6 +886,19 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     casts. Surfaced backlog: MFO-B5 (a retarget is still Release + RequestCast), MFO-B7/B8
     (`kHealHoldNeverObservedMs` sizing, the next field log measures it), MFO-B58 (Task-1 concentration
     claims without a controller test), MFO-B161, MFO-B172..B184 (round 1 F7-F13 and round 2's SEV-4/5), MFO-B186..B189 (round 3), MFO-B190 (round 4).
+    **Field 2026-09-30 (`fix/mfo-heal-field0930`):** (1) TARGET HOPPING: `HealRecipientUnreachable` (`cast/Hands.cpp:453`,
+    `Actuation_internal.h`) is the ONE incumbent out-of-reach test, used by `IncumbentTargetLost` (`:641`) and `CastOn`'s per-lap
+    recipient check: beyond reach at once, out of sight only after `kHealLosAgreeingReadings` (2) Occluded measurements in a
+    row (`Sightline::OccludedRun`, `Sightline.cpp` `Entry::occRun`) and never inside the claim's build window
+    (`kHealHoldNeverObservedMs` from the LEFT lock's `lastSeen`, not yet `ObservedFiring`); `CastOn` also releases a recipient at or
+    above the ally rule's threshold (`g_firingAllyThreshold`). Change either and the claim re-mints every flicker again.
+    (2) CHARGED HAND: `CastChargedWaitingOnHand` (`cast/Hands.cpp:308`, state `kReady` = 3, Harbinger's "Charged") lets
+    `ComposedCast::Try`'s F12 in-flight hold (`:611`) yield to a heal when the incumbent is an OFFENSE cast held charged; `CastOn`'s
+    in-flight refresh releases a single-hand forced offense charge that sat `kReady` with no observed cast past
+    `kHealHoldNeverObservedMs` on an Occluded foe (WARN `[cast] ... RELEASED`), and `g_unsightedCharge` (`Actuation_internal.h`,
+    cleared in `ClearCastLocks`) refuses that (spell, foe) until the foe is sighted. A dual-cast (both hands) charge is NOT bounded.
+    (3) `ComposedCast::NoteOocDirectHeal` labels the OOC instant heal (MFO-B191 open). (5) `EndDirectHealStreams` now runs at
+    `Try()`'s `Claimed` return (MFO-B192 fixed); MFO-B193, MFO-B194 open.
     **Backlog drain (141c480):** FIXED B175, B178, B179, B183, B186, B187, B188, B190 (B180 partly); B173 REOPENED (OOC `CastAuto` still claims via `CastSelfDirect`/`CastTargetDirect` during a controller flap); B184 closed by design; B181 REOPENED by marth (any in-combat instant-road use outside 1.5.97 is a defect to fix, never by-design). B186: the
     shield-by-perks top-up's rank lives in `cast/Equip.cpp` `g_shieldRank` (in-memory, `g_forcedMx`), read by
     `LeftHoldRule` only while that shield is in the left hand; B187: `Loadout::LeftHandYield` now reports the

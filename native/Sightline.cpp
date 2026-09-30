@@ -35,6 +35,11 @@ namespace MFO::Sightline {
         struct Entry {
             bool              los = false;
             Clock::time_point at{};
+            // CONSECUTIVE Occluded measurements (reset by any Visible one). The heal
+            // recipient check asks for two agreeing readings before it calls a sight
+            // loss, so one flicker of a borderline line does not drop the recipient
+            // (field 2026-09-30, Jesper -> Herd). Written with `los` under g_mx.
+            std::uint16_t     occRun = 0;
         };
 
         // Written by the MAIN thread (the measurement), read by the WORKER
@@ -185,6 +190,7 @@ namespace MFO::Sightline {
                 }
                 e.los = los;
                 e.at  = Clock::now();
+                e.occRun = los ? 0 : static_cast<std::uint16_t>(std::min<int>(e.occRun + 1, 0xFFFF));
             }
         }
 
@@ -212,6 +218,14 @@ namespace MFO::Sightline {
         if (it == g_cache.end()) return Verdict::Unknown;
         if (Since(it->second.at) > a_maxAgeSeconds) return Verdict::Unknown;
         return it->second.los ? Verdict::Visible : Verdict::Occluded;
+    }
+
+    int OccludedRun(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds) {
+        std::lock_guard lk(g_mx);
+        const auto it = g_cache.find(Key(a_viewer, a_target));
+        if (it == g_cache.end() || it->second.los) return 0;
+        if (Since(it->second.at) > a_maxAgeSeconds) return 0;
+        return it->second.occRun;
     }
 
     void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets) {

@@ -379,10 +379,18 @@ namespace MFO::Actuation {
                 const char* lost = nullptr;
                 if (recipient->IsDead() || recipient->IsDisabled())
                     lost = "the recipient is dead or gone";
-                else if (!atSelf && (!HealInReach(a_follower, recipient, spell) ||
-                                     Sightline::CheckWithin(id, recipient->GetFormID(), kHealLosTrustSec) ==
-                                         Sightline::Verdict::Occluded))
+                // TWO agreeing Sightline readings and not inside the claim's caster-build
+                // window (HealRecipientUnreachable): a single Occluded flicker used to
+                // release the claim here and re-mint it on another ally (field 2026-09-30).
+                else if (!atSelf && HealRecipientUnreachable(a_follower, recipient, spell))
                     lost = "the recipient is beyond the heal's reach or out of sight";
+                // NEVER A RECIPIENT AT OR ABOVE THE RULE'S OWN THRESHOLD (ally selector
+                // rules, PickAlly's clamp; IncumbentTargetLost's ceiling). A cast in
+                // flight finishes first (D8), as for the full-health test below.
+                else if (g_firingAllyThreshold >= 0.0f &&
+                         Vocab::HealthPct(recipient) >= std::min(g_firingAllyThreshold, Vocab::kHealFull) &&
+                         !CastInFlightOnHand(a_follower, kHandLeft, a_spellID, CastProxyOnHand(id, kHandLeft)))
+                    lost = "the recipient is at or above the rule's HP threshold";
                 else if (Vocab::HealthPct(recipient) >= Vocab::kHealFull &&
                          !CastInFlightOnHand(a_follower, kHandLeft, a_spellID,
                                              CastProxyOnHand(id, kHandLeft)))
@@ -423,6 +431,23 @@ namespace MFO::Actuation {
                 }
                 // [heal-obs]'s "HP before" for a claim fire (HealObsClaimLap).
                 HealObsClaimLap(id, atSelf ? 0 : recipient->GetFormID(), Vocab::HealthPct(recipient));
+            }
+            // A FORCED OFFENSE CHARGE THAT NEVER FIRED ON AN UNSIGHTED FOE WAS RELEASED
+            // (see the in-flight refresh below): refuse the same (spell, foe) while the
+            // measured verdict stays Occluded, so the release is not a four second churn.
+            // Transparent, so the rules below run. Logged when it stops applying.
+            if (offenseSpell && a_target) {
+                if (auto blk = g_unsightedCharge.find(id); blk != g_unsightedCharge.end()) {
+                    if (blk->second.spell == a_spellID && blk->second.target == a_target->GetFormID()) {
+                        Sightline::Want(id, { a_target->GetFormID() });
+                        if (Sightline::CheckWithin(id, a_target->GetFormID(), kHealLosTrustSec) ==
+                            Sightline::Verdict::Occluded)
+                            return { Result::FailedOther,
+                                     "offense cast held: its target is still unsighted after a charge that never fired",
+                                     true };
+                    }
+                    g_unsightedCharge.erase(blk);
+                }
             }
             HandPlan handPlan;
             // ONE lambda, because the in-flight gate below may have to run this a
@@ -513,6 +538,46 @@ namespace MFO::Actuation {
                     (handPlan.left && handPlan.right) ? APMFBridge::kApmfHandDualCast :
                     handPlan.left                     ? APMFBridge::kApmfHandLeft :
                                                         APMFBridge::kApmfHandRight;
+                // ── A FORCED OFFENSE CHARGE IS BOUNDED WHILE ITS FOE IS UNSIGHTED (field
+                // 2026-09-30, Jesper's Incinerate) ─────────────────────────────────────
+                // The engine charged both hands and held them ("the FORCED cast stays
+                // held": every foe occluded), so this refresh renewed the claim for 32 s
+                // with no observed cast and the hand was never free. The bound is the
+                // one the claim path already uses for a claim nothing fires: the
+                // never-observed window (APMFBridge::kHealHoldNeverObservedMs) from the
+                // claim stamp, with the caster fully CHARGED (kReady, held, not casting)
+                // and the foe's measured verdict Occluded. All three must hold, so a
+                // charge that is still building, firing, or aimed at a sighted foe is
+                // never cut. The release is loud (WARN), and the rule may claim again only
+                // once the foe is sighted (g_unsightedCharge above).
+                if (offenseSpell && a_target && handPlan.left != handPlan.right) {
+                    const std::size_t h = handPlan.left ? kHandLeft : kHandRight;
+                    const auto stamp = CastLockClaimStamp(id, h, a_spellID);
+                    if (stamp != std::chrono::steady_clock::time_point{}) {
+                        const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - stamp);
+                        if (ageMs >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
+                            !ComposedCast::ObservedFiring(id, claimHand, a_spellID,
+                                                          static_cast<std::uint32_t>(ageMs.count() + 1)) &&
+                            CastChargedWaitingOnHand(a_follower, h, a_spellID, CastProxyOnHand(id, h)) &&
+                            Sightline::CheckWithin(id, a_target->GetFormID(), kHealLosTrustSec) ==
+                                Sightline::Verdict::Occluded) {
+                            spdlog::warn("[cast] {:08X} forced offense cast {:08X} at {:08X} RELEASED: fully charged "
+                                         "({} hand) for {} ms with no observed cast and the foe measured Occluded "
+                                         "-- the charge never fires while the foe is unsighted (rule {}); the "
+                                         "rule may claim again once the foe is sighted",
+                                         id, a_spellID, a_target->GetFormID(), h == kHandLeft ? "left" : "right", ageMs.count(),
+                                         g_firingRule);
+                            APMFBridge::ReleaseCastClaimOnHand(id, claimHand);
+                            ClearCastLockHand(id, h);
+                            ComposedCast::ClearWatchHand(id, claimHand);
+                            g_unsightedCharge[id] = { a_spellID, a_target->GetFormID() };
+                            return { Result::FailedOther,
+                                     "offense cast released: charged for the never-observed window on an unsighted foe",
+                                     true };
+                        }
+                    }
+                }
                 if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
                     // KEEP THE [cfc] WATCH TICKING. ComposedCast::WatchClaim's own
                     // contract is "call every tick the caller's OWN claim call
@@ -1603,6 +1668,7 @@ namespace MFO::Actuation {
         g_healOutrankLog.clear();
         g_releaseHealLog.clear();
         g_healRepairLog.clear();
+        g_unsightedCharge.clear();
     }
 
 }

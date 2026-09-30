@@ -297,6 +297,29 @@ namespace MFO::Actuation {
                st != RE::MagicCaster::State::kUnk09;
     }
 
+    // CHARGED AND WAITING (declared in Actuation.h). The same three reads as
+    // CastInFlightOnHand, then the ONE state value: kReady (3), verified against the
+    // marthofdoom/CommonLibSSE-NG mit-3.7 MagicCaster.h enum (kNone 0, kUnk01 Start?,
+    // kUnk02 StartCharge?, kReady 3, kUnk04 PreStart?, kCharging 5, kCasting 6, kUnk07,
+    // kUnk08 Interrupt, kUnk09 Interrupt/Deselect) and against Harbinger's own census
+    // (CastObserve.cpp CasterStateName: 3 = "Charged"), which reads the same array.
+    // Only 3 is "charged and held": 0-2 and 4 are still building, 5/6 are charging or
+    // casting, 7-9 are ending.
+    bool CastChargedWaitingOnHand(RE::Actor* a_follower, std::size_t a_hand,
+                                  RE::FormID a_spell, RE::FormID a_proxy) {
+        if (!a_follower || a_spell == 0) return false;
+        const std::size_t slot = a_hand == kHandLeft
+            ? static_cast<std::size_t>(RE::Actor::SlotTypes::kLeftHand)
+            : static_cast<std::size_t>(RE::Actor::SlotTypes::kRightHand);
+        RE::MagicCaster* caster = a_follower->GetActorRuntimeData().magicCasters[slot];
+        if (!caster) return false;
+        auto* held = caster->currentSpell;
+        if (!held) return false;
+        const auto cur = held->GetFormID();
+        if (cur != a_spell && (a_proxy == 0 || cur != a_proxy)) return false;
+        return caster->state.get() == RE::MagicCaster::State::kReady;
+    }
+
     namespace {
 
         // HOW LONG THE IN-FLIGHT EXTENSION BELOW MAY RUN AFTER THE CLAIM BEHIND IT
@@ -413,6 +436,40 @@ namespace MFO::Actuation {
         auto& lock = it->second.hand[a_hand];
         if (lock.spell == 0) return false;
         return CastLockLive(a_follower, a_hand, lock);
+    }
+
+    // See Actuation_internal.h. The two halves of "out of reach" and why the second
+    // is not a single reading (field 2026-09-30):
+    //   * beyond the spell's reach: geometry, not a flicker, judged at once;
+    //   * out of sight: kHealLosAgreeingReadings Occluded measurements in a row, read
+    //     within kHealLosTrustSec (the same trust window the picker uses), and never
+    //     while the claim on this recipient is still building its caster.
+    // The build window is the one the claim path already sizes its holds from
+    // (APMFBridge::kHealHoldNeverObservedMs, measured claim-to-first-charge 2.3-4.5 s),
+    // anchored on the LEFT lock's claim stamp (`lastSeen`, frozen at the claim) and
+    // closed by an observed fire since that stamp. A recipient truly behind a wall is
+    // therefore released at the window's end, not held forever, and the claim's own
+    // never-fired WARN still speaks for it.
+    bool HealRecipientUnreachable(RE::Actor* a_follower, RE::Actor* a_victim, RE::SpellItem* a_spell) {
+        if (!a_follower || !a_victim || !a_spell) return false;
+        if (a_follower == a_victim) return false;
+        if (a_follower->GetPosition().GetDistance(a_victim->GetPosition()) > HealReach(a_spell)) return true;
+        const auto fid = a_follower->GetFormID();
+        if (Sightline::OccludedRun(fid, a_victim->GetFormID(), kHealLosTrustSec) < kHealLosAgreeingReadings)
+            return false;
+        if (auto it = g_castLock.find(fid); it != g_castLock.end()) {
+            const auto& lk = it->second.hand[kHandLeft];
+            if (lk.spell == a_spell->GetFormID() && lk.target == a_victim->GetFormID()) {
+                const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - lk.lastSeen);
+                if (ageMs.count() >= 0 &&
+                    ageMs < std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
+                    !ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, lk.spell,
+                                                  static_cast<std::uint32_t>(ageMs.count() + 1)))
+                    return false;   // the caster is still being built: do not restart it
+            }
+        }
+        return true;
     }
 
     namespace {
@@ -638,9 +695,12 @@ namespace MFO::Actuation {
                 // request (locked map, no engine call here); the verdict lands a frame
                 // later and is read by the CheckWithin below on a later lap.
                 Sightline::Want(a_follower->GetFormID(), { a_lock.target });
-                if (Vocab::HealthPct(victim) >= Vocab::kHealFull || !HealInReach(a_follower, victim, sp) ||
-                    Sightline::CheckWithin(a_follower->GetFormID(), a_lock.target, kHealLosTrustSec) ==
-                        Sightline::Verdict::Occluded)
+                // Out of sight is TWO agreeing readings, and not while the claim is still
+                // building its caster (HealRecipientUnreachable, field 2026-09-30): one
+                // flicker of the Sightline verdict dropped the incumbent and the claim
+                // was re-minted on another ally five times.
+                if (Vocab::HealthPct(victim) >= Vocab::kHealFull ||
+                    HealRecipientUnreachable(a_follower, victim, sp))
                     return true;
             }
             return false;

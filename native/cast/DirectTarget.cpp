@@ -142,6 +142,7 @@ namespace MFO::Actuation {
         // party-OOC teardown would end it the next service), and while a combat
         // heal claim still stands its heal WAITS instead of streaming beside it.
         if (OocHealWaitsForClaim(a_follower, a_spell)) return SelfCast::Declined;
+        if (g_firingRule == kNoRule) ComposedCast::NoteOocDirectHeal(a_follower, a_spell);   // F2: name the instant road
         if (g_firingRule != kNoRule &&
             ComposedCast::ChooseHealRoad(a_follower, a_spell, a_target) ==
                 ComposedCast::HealRoad::Claim) {

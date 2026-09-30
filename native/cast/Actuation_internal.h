@@ -75,6 +75,15 @@ namespace MFO::Actuation {
         // re-measure waits for. Keep equal to kHealLosTrustS.
         inline constexpr float kHealLosTrustSec = 3.0f;
 
+        // HOW MANY Occluded MEASUREMENTS IN A ROW make a heal recipient "out of sight"
+        // for the INCUMBENT tests (field 2026-09-30: Jesper's verdict to Herd flickered
+        // OCCLUDED / VISIBLE about once a second, and every single Occluded re-picked
+        // the claim to another ally, so Harbinger never had the ~1-2 s it needs to
+        // build a Restore caster). Two agreeing readings, not one. The picker still
+        // skips a single Occluded ally for a NEW pick; only dropping the ally the
+        // claim already stands on asks for this.
+        inline constexpr int kHealLosAgreeingReadings = 2;
+
         // ONE source of truth for the concentration STREAM TIME-CAP (marth: loose,
         // human timing -- each stream lasts a slightly different, RANDOMIZED duration
         // so channels never feel like a fixed constant). Drawn ONCE when a stream
@@ -353,6 +362,14 @@ namespace MFO::Actuation {
         inline std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> g_releaseHealLog;
         inline std::unordered_map<RE::FormID, HealRepairLogSlots> g_healRepairLog;
 
+        // An offense charge that sat fully charged on an unsighted foe past the never-
+        // observed bound was RELEASED (CastOn, in-flight refresh). Its (spell, target)
+        // is refused a re-claim for as long as the target's measured verdict stays
+        // Occluded, so the release does not become a four second churn. Worker-serial
+        // (#4); cleared with the locks (ClearCastLocks).
+        struct UnsightedChargeBlock { RE::FormID spell = 0; RE::FormID target = 0; };
+        inline std::unordered_map<RE::FormID, UnsightedChargeBlock> g_unsightedCharge;
+
         // Which hand(s) a (spell,target) request would occupy if it proceeds.
         // Both false never happens on a non-held return (ResolveCastHand always
         // sets at least one before returning std::nullopt).
@@ -418,6 +435,17 @@ namespace MFO::Actuation {
         // through this one question so the equip side and the cast side never
         // disagree about who owns the hand. Worker-serial (reads g_castLock).
         bool CastHandHeld(RE::Actor* a_follower, std::size_t a_hand);
+
+        // Is the heal recipient `a_victim` out of `a_follower`'s reach for the INCUMBENT
+        // tests (IncumbentTargetLost, CastOn's per-lap recipient check)? True when the
+        // spell's reach is exceeded, or when the line of sight has read Occluded on
+        // kHealLosAgreeingReadings measurements in a row inside kHealLosTrustSec --
+        // unless the claim standing on this recipient is still INSIDE ITS BUILD WINDOW
+        // (younger than APMFBridge::kHealHoldNeverObservedMs, the claim-to-first-charge
+        // window the claim path already sizes its holds from, and not yet observed
+        // firing): the engine has not finished building the Restore caster yet and a
+        // replace or release would restart it. Defined in cast/Hands.cpp. Worker-serial.
+        bool HealRecipientUnreachable(RE::Actor* a_follower, RE::Actor* a_victim, RE::SpellItem* a_spell);
 
         // Drop ONLY the dual-wield left-hand hold (force-unequip into the LEFT
         // slot + ledger .left = null; the right hold stays). Defined in

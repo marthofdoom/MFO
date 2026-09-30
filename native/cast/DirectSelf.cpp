@@ -105,6 +105,7 @@ namespace MFO::Actuation {
         // heal claim still stands its heal WAITS instead of streaming beside it.
         const auto selfKind = CasterConsent::ClassifySpell(a_spell);
         if (OocHealWaitsForClaim(a_follower, a_spell)) return SelfCast::Declined;
+        if (g_firingRule == kNoRule) ComposedCast::NoteOocDirectHeal(a_follower, a_spell);   // F2: name the instant road
         if (g_firingRule != kNoRule &&
             ComposedCast::ChooseHealRoad(a_follower, a_spell, a_follower) ==
                 ComposedCast::HealRoad::Claim) {

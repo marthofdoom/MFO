@@ -65,6 +65,12 @@ namespace MFO::Sightline {
     // pick, field 2026-09-29). Any thread, same leaf lock as Check().
     Verdict CheckWithin(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds);
 
+    // How many Occluded measurements in a ROW the last verdict is, 0 when the last
+    // verdict is Visible, absent, or older than a_maxAgeSeconds. Any thread, same
+    // leaf lock. For a caller that must not act on a single Occluded reading of a
+    // borderline line (the heal recipient check: two agreeing readings).
+    int OccludedRun(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds);
+
     // MAIN THREAD ONLY. Measure viewer -> target NOW -- the same two-stage Measure
     // that Want() posts (engine HasLineOfSight, then MFO's own ray on a CLEAR) --
     // write the cache, and return the verdict (Check() right after). For a caller
