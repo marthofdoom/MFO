@@ -882,6 +882,9 @@ class Cmp:
         return any(o in refs for o in starts) and self.bound_use(img, p, ins)
 
     _FAM = {}
+    # Windows x64: registers a callee must preserve (a loop bound kept in one
+    # survives the calls in the loop body, wave 1 ProgAllocator::Enroll r13)
+    NONVOLATILE = {"b", "bp", "di", "si", "r12", "r13", "r14", "r15"}
 
     @classmethod
     def reg_family(cls, name):
@@ -902,8 +905,9 @@ class Cmp:
         register operand of a `cmp` (a loop's end pointer): scanning p forward
         from the `lea` (following direct unconditional jumps inside p), the
         first instruction that reads the register must be a `cmp` with it as a
-        plain register operand, before any instruction writes it, before any
-        call, and before a return or a jump out of p. Anything else -- the
+        plain register operand, before any instruction writes it, before a
+        call when the register is volatile (Windows x64), and before a return
+        or a jump out of p. Anything else -- the
         register stored, moved, passed to a call, used as a base -- is a USE
         of the object at X."""
         k = (id(img), ins.address)
@@ -936,8 +940,10 @@ class Cmp:
                                                           for r in (o.mem.base, o.mem.index) if r}
                         for o in x.operands)
                     break
-                if fam in wr or x.group(capstone.CS_GRP_CALL) or x.group(capstone.CS_GRP_RET):
+                if fam in wr or x.group(capstone.CS_GRP_RET):
                     break
+                if x.group(capstone.CS_GRP_CALL) and fam not in self.NONVOLATILE:
+                    break                       # a volatile register does not survive a call
                 if x.mnemonic == "jmp":
                     tgt = x.operands[0].imm if x.operands and x.operands[0].type == X.X86_OP_IMM else None
                     if tgt is None or tgt not in at or tgt in seen:

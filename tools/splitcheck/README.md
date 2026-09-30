@@ -190,8 +190,8 @@ kept apart.
    size, or one past its end (a loop bound) compares by name. One past the end
    counts as a loop bound only when the instruction is a `lea` whose register
    is only ever COMPARED (the first later instruction reading it is a `cmp`
-   with it as a plain register operand, before it is overwritten, before any
-   call or return; padding `nop`s skipped, direct jumps inside the function
+   with it as a plain register operand, before it is overwritten, before a
+   call when the register is volatile (Windows x64), before a return; padding `nop`s skipped, direct jumps inside the function
    followed) AND the same function references the object's START. Otherwise it
    is whatever begins there (an unnamed literal the linker placed right after
    the object) and is compared by content (selftest N7 / N7b / N7c: on the
