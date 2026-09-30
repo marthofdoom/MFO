@@ -53,6 +53,10 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/CastOn.cpp
     cast/Equip.cpp
     cast/Direct.cpp
+    cast/DirectSelf.cpp
+    cast/DirectTarget.cpp
+    cast/CanAct.cpp
+    cast/HealObs.cpp
     cast/Summon.cpp
     cast/Auto.cpp
     cast/Hands.cpp
