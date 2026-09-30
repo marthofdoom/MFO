@@ -237,7 +237,6 @@ namespace MFO::Board {
         if (!a_open && s_mem.dirty) SaveWinMem();
     }
 
- ─────────────────────────────
 
         void DrawFieldKit(const Snapshot& snap) {
             // Shout-key close already fires on the key's RELEASE with both edges
