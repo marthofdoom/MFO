@@ -775,32 +775,61 @@ namespace MFO::Actuation {
         if (APMFBridge::GetHealCastSpell(fid) != spellID) return nullptr;   // not this heal's claim
         const RE::FormID proxy = CastProxyOnHand(fid, kHandLeft);
         if (CastInFlightOnHand(a_follower, kHandLeft, spellID, proxy)) return nullptr;   // casting: leave it
-        const char* why = nullptr;
+        // THREE SHAPES, THREE LOG LEVELS (F1 policy, marth 2026-09-30: "we're basically
+        // tricking the engine into using our spells. Once equipped it's never failed").
+        // The repair IS the policy: re-Prepare the heal into the left hand, stay on the
+        // claim, never a direct/unanimated fallback, never a release the state does not
+        // call for. What changes per shape is only how loud it is:
+        //  - kCooldown (debug): out of hand while Loadout's post-fire cooldown runs. That
+        //    is the NORMAL gap between two casts (StartCooldown took it back); Prepare
+        //    refuses the re-equip until the cooldown ends. Not news.
+        //  - kOutOfHand (info): out of hand with no cooldown (a shield restored on hit,
+        //    a 2H / bow given back, an equip-gambit declaration). A real repair.
+        //  - kNeverFired (WARN): the heal IS in the left hand and the engine has not
+        //    fired it within the never-observed bound. The one shape that is not
+        //    expected to happen, so it stays loud.
+        enum Shape : std::uint8_t { kCooldown, kOutOfHand, kNeverFired };
+        const char* why   = nullptr;
+        Shape       shape = kOutOfHand;
         // Left hand = GetEquippedObject(true), the same read Loadout::Read /
         // ReleaseSpell make. A plain member read, racy like CastInFlightOnHand's:
         // at worst one lap early or late.
         auto* held = a_follower->GetEquippedObject(true);
         const bool inHand = held && (held->GetFormID() == spellID || (proxy != 0 && held->GetFormID() == proxy));
         if (!inHand) {
-            why = "the heal is no longer in the left hand";
+            if (Loadout::CoolingDown(fid)) {
+                why   = "the heal is out of the left hand during the post-fire cooldown";
+                shape = kCooldown;
+            } else {
+                why = "the heal is no longer in the left hand";
+            }
         } else if (auto it = g_castLock.find(fid); it != g_castLock.end()) {
             const auto& lk  = it->second.hand[kHandLeft];
             const auto  age = std::chrono::steady_clock::now() - lk.lastSeen;
             if (lk.spell == spellID &&
                 age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
                 !ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, spellID,
-                                              APMFBridge::kHealHoldNeverObservedMs))
-                why = "no fire within the never-observed bound";
+                                              APMFBridge::kHealHoldNeverObservedMs)) {
+                why   = "equipped in the left hand but not fired within the never-observed bound";
+                shape = kNeverFired;
+            }
         }
         if (!why) return nullptr;
-        static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_log;
-        const auto now = std::chrono::steady_clock::now();
-        auto& last = s_log[fid];
+        // One 5 s slot per (follower, shape): a quiet cooldown line never uses up the
+        // slot a WARN needs.
+        struct Slots { std::chrono::steady_clock::time_point at[3]{}; };
+        static std::unordered_map<RE::FormID, Slots> s_log;
+        const auto now  = std::chrono::steady_clock::now();
+        auto&      last = s_log[fid].at[shape];
         if (std::chrono::duration<float>(now - last).count() >= 5.0f) {
             last = now;
-            spdlog::info("[heal] {:08X} heal claim (spell {:08X}) REPAIR: {} -- not refreshed; the "
-                         "left hand is prepared again (Loadout::Prepare) under the same claim",
-                         fid, spellID, why);
+            const auto lvl = shape == kCooldown   ? spdlog::level::debug :
+                             shape == kNeverFired ? spdlog::level::warn :
+                                                    spdlog::level::info;
+            spdlog::log(lvl,
+                        "[heal] {:08X} heal claim (spell {:08X}) REPAIR: {} -- not refreshed; the "
+                        "left hand is prepared again (Loadout::Prepare) under the same claim",
+                        fid, spellID, why);
         }
         return why;
     }

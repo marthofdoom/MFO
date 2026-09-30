@@ -370,9 +370,9 @@ namespace MFO::Config {
     // the follower's own AI, animated (ComposedCast::ChooseHealRoad decides; out of
     // combat the direct road, labelled). OFF = the KILL SWITCH: every heal lands on
     // the direct road. The key name is frozen (MCM-Helper persistence identity), so
-    // it keeps its historical name. NOTE: an install whose MCM store already holds
-    // `bHealAnimPackage = 0` (the old seeded default) keeps 0 -- the default only
-    // reaches a store without the key. The older text below describes the claim's
+    // it keeps its historical name. UPGRADE: a store that still holds the old seeded
+    // `bHealAnimPackage = 0` is flipped to 1 ONCE by EnsureMcmDefaults' migration
+    // (marker key `bHealAnimMigrated`); a later OFF is kept. The older text below describes the claim's
     // outcome contract and still holds. ON: a
     // follower's forced heal (self or at an ally) is claimed via APMFBridge::
     // ClaimHealCast. **THE TWO NEGATIVE OUTCOMES ARE NOT THE SAME THING, and this

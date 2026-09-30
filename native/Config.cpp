@@ -426,6 +426,7 @@ namespace MFO::Config {
             { "bApmfEquipAuthority", "1" },
             { "bCstyReassert", "1" },
             { "bHealAnimPackage", "1" },
+            { "bHealAnimMigrated", "1" },   // the one-shot marker of the migration below (NOT a control)
             { "iForcedCastTrigger", "0" },     { "iCfcBackoffMs", "10000" },
             { "iOverlayX", "12" },             { "iOverlayY", "12" },
             { "bDollsMode", "0" },
@@ -572,17 +573,121 @@ namespace MFO::Config {
             }
         }
 
+        // ANIMATED-HEAL MIGRATION (animheal phase 2, 2026-09-30; marth: "YES, a one-time
+        // migration ... to ON"). bHealAnimPackage's default moved 0 -> 1 (the heal road's
+        // kill switch), but every existing store was seeded with the OLD shipped 0 and
+        // this self-heal only ever appends MISSING keys, so upgraders would keep the
+        // unanimated road. ONCE per store: a store without the marker key
+        // `bHealAnimMigrated` has its `bHealAnimPackage = 0` flipped to 1, and the marker
+        // is then appended below (it is in kMcmDefaults, so the ordinary append writes
+        // it). A store that already carries the marker -- migrated before, or created
+        // fresh by MCM Helper from the shipped defaults, which carry `bHealAnimMigrated =
+        // 1` -- is never touched again, so a player who turns the toggle OFF afterwards
+        // keeps it off. Only the OLD default is flipped: a bare `0` (optionally followed
+        // by whitespace, CR or an inline comment), exact key, under [General] -- the SAME
+        // in-place one-byte method as the gait migration above (in|out|binary, no
+        // truncation, each byte read back as '0' before '1' is written, flush + good()
+        // + close checks). On ANY failure: logged loudly, the store keeps its 0, and the
+        // marker is NOT appended, so the next launch tries again. The marker is not an
+        // MCM control: MCM Helper registers it from settings.ini like any ModSetting and
+        // nothing reads it (tools/audit_mcm.py STORE_ALLOWLIST).
+        bool healMarkerHold = false;   // a failed migration must not write its marker
+        if (!present("bHealAnimMigrated")) {
+            const std::size_t        bomOff = hadBom ? 3 : 0;
+            constexpr std::string_view kKey = "bHealAnimPackage";
+            std::vector<std::size_t> digits;   // FILE offsets of each stored '0'
+            bool                     inGeneral = false;
+            std::size_t              pos = 0;
+            while (pos < text.size()) {
+                auto eol = text.find('\n', pos);
+                if (eol == std::string::npos) eol = text.size();
+                const std::string_view lv(text.data() + pos, eol - pos);
+                const auto             b = lv.find_first_not_of(" \t\r");
+                if (b != std::string_view::npos) {
+                    if (lv[b] == '[') {
+                        const auto close = lv.find(']', b);
+                        std::string name;
+                        if (close != std::string_view::npos)
+                            name = Trim(std::string(lv.substr(b + 1, close - b - 1)));
+                        for (auto& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        inGeneral = name == "general";
+                    } else if (inGeneral && lv.substr(b, kKey.size()) == kKey) {
+                        auto i = b + kKey.size();
+                        while (i < lv.size() && (lv[i] == ' ' || lv[i] == '\t')) ++i;
+                        if (i < lv.size() && lv[i] == '=') {
+                            ++i;
+                            while (i < lv.size() && (lv[i] == ' ' || lv[i] == '\t')) ++i;
+                            if (i < lv.size() && lv[i] == '0') {
+                                auto r = i + 1;
+                                while (r < lv.size() && (lv[r] == ' ' || lv[r] == '\t' || lv[r] == '\r')) ++r;
+                                if (r == lv.size() || lv[r] == ';' || lv[r] == '#')
+                                    digits.push_back(bomOff + pos + i);
+                            }
+                        }
+                    }
+                }
+                pos = eol + 1;
+            }
+            if (digits.empty()) {
+                spdlog::info("[config] MCM migration: bHealAnimPackage is not the old default 0 in the "
+                             "store -- nothing to flip; marking the store migrated");
+            } else {
+                std::fstream f(kMCMPath, std::ios::in | std::ios::out | std::ios::binary);   // no trunc
+                bool         ok      = static_cast<bool>(f);
+                std::size_t  patched = 0;
+                for (const auto off : digits) {
+                    if (!ok) break;
+                    f.seekg(static_cast<std::streamoff>(off));
+                    const auto cur = f.get();
+                    if (!f.good() || cur != '0') { ok = false; break; }   // file moved under us
+                    f.seekp(static_cast<std::streamoff>(off));
+                    f.put('1');
+                    f.flush();
+                    if (!f.good()) { ok = false; break; }
+                    text[off - bomOff] = '1';
+                    ++patched;
+                }
+                f.close();
+                if (f.fail()) ok = false;
+                if (ok) {
+                    spdlog::warn("[config] MCM migration: bHealAnimPackage 0 -> 1 (animated heals in combat "
+                                 "are now ON; the old 0 was the retired default). Patched in place, ONCE -- "
+                                 "turn it off in the MCM and it stays off");
+                } else {
+                    healMarkerHold = true;
+                    spdlog::error("[config] MCM migration FAILED: could not patch bHealAnimPackage 0 -> 1 in {} "
+                                  "({} of {} byte(s) written). The store was not truncated or rewritten and "
+                                  "is NOT marked migrated, so the next launch tries again; until then heals "
+                                  "take the direct road (unanimated)",
+                                  kMCMPath, patched, digits.size());
+                }
+            }
+        }
+
         std::string add;
         int n = 0;
-        for (const auto& [k, v] : kMcmDefaults)
+        for (const auto& [k, v] : kMcmDefaults) {
+            if (healMarkerHold && std::string_view(k) == "bHealAnimMigrated") continue;
             if (!present(k)) { add += k; add += " = "; add += v; add += "\n"; ++n; }
+        }
         if (add.empty()) return;
 
         std::ofstream out(kMCMPath, std::ios::binary | std::ios::app);
-        if (!out) return;
+        if (!out) {
+            // Loud: a missing marker (bHealAnimMigrated) makes the next launch run the
+            // heal migration again -- harmless while the store holds 1, but it must be seen.
+            spdlog::error("[config] MCM self-heal FAILED: could not open {} to append {} missing "
+                          "setting(s); the store is unchanged by this step", kMCMPath, n);
+            return;
+        }
         if (!text.empty() && text.back() != '\n') out << "\n";   // don't glue onto the last line
         out << add;
         out.close();
+        if (out.fail()) {
+            spdlog::error("[config] MCM self-heal FAILED: appending {} missing setting(s) to {} did not "
+                          "complete (the one-shot heal-migration marker may be missing)", n, kMCMPath);
+            return;
+        }
         spdlog::info("[config] MCM self-heal: seeded {} missing setting(s) into the store", n);
     }
 

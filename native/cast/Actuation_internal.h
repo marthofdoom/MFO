@@ -423,7 +423,9 @@ namespace MFO::Actuation {
         // HealClaimNeedsRepair (review F1, the part that is needed whatever marth
         // decides): on a lap that would only REFRESH this rule's standing heal claim
         // (CastOn's in-flight branch), is the claim's steady state broken? Non-null
-        // (the reason, logged once per 5 s per follower) when the engine is NOT
+        // (the reason, logged once per 5 s per follower per shape: DEBUG while out of
+        // hand in the post-fire cooldown, INFO out of hand otherwise, WARN when in hand
+        // but never fired past the bound) when the engine is NOT
         // casting it on the LEFT hand AND either (a) neither the heal spell nor the
         // claim's delivery-flip proxy is in the left hand any more (a shield
         // restored on hit, a 2H / bow given back, an equip-gambit declaration, the

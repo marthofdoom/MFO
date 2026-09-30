@@ -539,7 +539,7 @@ per concern:
   "ANIMATED HEAL CLAIM ROAD" below) with its pacing `g_autoCast` (`:22`)
   and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:193`), and
   `IsSummonSpell` (`:266`, public; it lives here because `CastAuto` inlines it).
-- `cast/Hands.cpp` (1125) = THE PER-HAND CAST LOCK's implementation (moved whole) —
+- `cast/Hands.cpp` (1191) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
   `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
   `CastLockLive` `:332`), rank preemption (`CanPreemptHand` `:477`, `IncumbentTargetLost` `:561`,
@@ -782,8 +782,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     HP rise.
   * **`bHealAnimPackage` (D2: kept)** is now the heal road's KILL SWITCH, default ON in all six wired
     places (`Config.h`/`Config.cpp` atomic + reset + `kMcmDefaults`, both MCM inis, `config.json`,
-    `MFO.ini`); MCM text "Animated heals in combat" (MFO-B48 drained). An existing MCM store seeded
-    with the old `0` keeps 0.
+    `MFO.ini`); MCM text "Animated heals in combat" (MFO-B48 drained). An existing store's old `0` is
+    flipped once by the migration below.
   * **Review round 1 (tier A of `02b7dbc`, 2026-09-30).** (F2) The SpellSink no longer takes a LIVE
     claimed CONCENTRATION heal's spell back on its fire event (that event is the channel STARTING):
     `Loadout::StartCooldown(id, a_release=false)` via `ComposedCast::HealClaimFireKeepsSpell`; the claim's
@@ -797,7 +797,28 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     refresh lap a heal claim whose spell / proxy left the LEFT hand, or that has not fired within
     `kHealHoldNeverObservedMs` of its lock stamp, is NOT refreshed; the PIN-VOID path re-derives the plan
     and the normal path re-claims (same tuple = heartbeat) and re-runs `Loadout::Prepare` (log `[heal] ...
-    REPAIR`). What a claim that STILL never fires should do is marth's call (F1 policy, held).
+    REPAIR`).
+  * **DECIDED (marth 2026-09-30, review F1 policy): the repair loop IS the policy.** "We're basically
+    tricking the engine into using our spells. Once equipped it's never failed." A claim that does not
+    fire keeps being repaired (re-Prepared into the left hand) under the same claim for as long as the
+    rule wins; NO direct/unanimated fallback and NO release beyond the existing state conditions
+    (recipient lost/full/out of reach/behind a wall, the stream cap, the kill switch, no controller,
+    rule stops wanting it, combat end, caster down). `HealClaimNeedsRepair` (`cast/Hands.cpp`) logs by
+    shape, 5 s per follower per shape: out of hand during Loadout's post-fire cooldown = DEBUG (the normal
+    gap between casts), out of hand otherwise = INFO, **in hand but not fired past
+    `kHealHoldNeverObservedMs` = WARN** (the one shape that should not happen; grep it after a field run).
+  * **DECIDED (marth 2026-09-30, review F4, MFO-B168): a heal re-aims at a new lowest recipient only
+    when the hand is IDLE between casts** ("It's fine. Otherwise there'd be constant switching."). A
+    charge that starts right after the incumbent's fire keeps the incumbent; there is no charge-boundary
+    re-aim for a same-rule recipient change. Not a defect -- do not "fix" it.
+  * **`bHealAnimPackage` one-shot migration (marth 2026-09-30, review F5)** in `Config::EnsureMcmDefaults`
+    (`native/Config.cpp`, after the gait migration): a store WITHOUT the marker key `bHealAnimMigrated`
+    has `bHealAnimPackage = 0` (bare 0 under [General], exact key) flipped to 1 in place, one byte, the
+    gait migration's method; the ordinary self-heal append then writes `bHealAnimMigrated = 1`
+    (`kMcmDefaults`). Both shipped stores carry the marker = 1, so a fresh store is never migrated and a
+    player who turns the toggle off later keeps it off. A failed patch logs an error, leaves the file
+    untouched and holds the marker back so the next launch retries. The marker is not a control
+    (`tools/audit_mcm.py` STORE_ALLOWLIST).
   * **What breaks if you change this:** calling `ChooseHealRoad` from only some heal callers re-creates
     two roads on one actor; dropping the controller release lets a claim nothing can serve outlive the
     fight; moving the recipient check after `resolveHands` lets the in-flight refresh feed a claim at an

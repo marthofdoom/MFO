@@ -23,7 +23,16 @@ Read it as history and this block as current.
   `bHealAnimPackage` default ON, the kill switch. 1.5.97 takes the claim road too (Harbinger's heal seats install on
   every non-VR runtime). **NOT covered, still unanimated in combat:** wards and other non-heal Restoration-school
   buffs (they stay on the direct road; the release gate still needs them), and summons (the one-shot direct cast).
-  **UPGRADE CAVEAT:** an MCM store seeded with the old `bHealAnimPackage = 0` keeps 0. The Deck must have it ON.
+  **UPGRADE (marth 2026-09-30, review F5):** a one-shot migration flips an existing store's old `bHealAnimPackage = 0`
+  to 1 at the first launch (marker key `bHealAnimMigrated`; later OFF choices are kept). Check MFO.log for
+  `[config] MCM migration: bHealAnimPackage 0 -> 1` (or `... nothing to flip`) once, then never again.
+  **DECIDED (marth 2026-09-30, review F4):** a heal re-aims at a lower ally only when the hand is idle between casts
+  ("Otherwise there'd be constant switching"). Not a defect (MFO-B168).
+  **DECIDED (marth 2026-09-30, review F1 policy):** a heal claim that has not fired is REPAIRED (the heal is
+  re-equipped into the left hand under the same claim), never swapped for an instant cast and never released
+  beyond the existing state conditions ("Once equipped it's never failed"). Field read: `[heal] ... REPAIR:
+  equipped in the left hand but not fired ...` is a WARN and should not appear; the cooldown wait between
+  casts is debug-level only.
   **FIELD PLAN (next Deck session; deploy the MFO + Harbinger `85a8f2f`+ pair together, Harbinger's
   `[Probe] bRestoreCensus=1` and `bCasterTypeCensus=1` left at their field defaults):** marth heals himself and an ally
   in combat (Jesper with Fast Healing self + Heal Other / Fast Healing ally rules, and one Auto heal rule), with an
