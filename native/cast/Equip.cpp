@@ -965,21 +965,27 @@ namespace MFO::Actuation {
     // ── GAMBIT ORDER ON THE LEFT HAND (review round 2; contract in
     // Actuation_internal.h beside the declarations) ──────────────────────────────
     int LeftHoldRule(RE::FormID a_follower) {
-        std::scoped_lock lk(g_forcedMx);
-        const auto it = g_forcedWeapon.find(a_follower);
-        if (it != g_forcedWeapon.end() &&
-            (it->second.left || TakesBothHands(it->second.right)))
-            return it->second.rule;
+        ShieldRank shield;
+        {
+            std::scoped_lock lk(g_forcedMx);
+            const auto it = g_forcedWeapon.find(a_follower);
+            if (it != g_forcedWeapon.end() &&
+                (it->second.left || TakesBothHands(it->second.right)))
+                return it->second.rule;
+            const auto s = g_shieldRank.find(a_follower);
+            if (s == g_shieldRank.end()) return kNoRule;
+            shield = s->second;   // copied: the engine reads below run outside the lock
+        }
         // The shield-by-perks top-up (MFO-B186): held by rank only while that shield
         // is the object in the LEFT hand. NOT erased on a miss: the equip is posted to
-        // the main thread, so the first lap after the stamp can still see the old hand;
-        // a stale record is harmless (it answers only while its shield is in the hand)
-        // and is dropped with the hold (ReleaseForcedWeapon) or a revert.
-        const auto s = g_shieldRank.find(a_follower);
-        if (s == g_shieldRank.end()) return kNoRule;
+        // the main thread, so the first lap after the stamp can still see the old hand.
+        // A stale record answers only while its shield is in the hand, and is dropped
+        // when the equip rule's hold ends: ReleaseForcedWeapon, or ReconcileForcedWeapon's
+        // no-ledger branch (a top-up over the AI's own one-hander has no ledger entry),
+        // or a revert.
         auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_follower);
         auto* leftObj = actor ? actor->GetEquippedObject(true) : nullptr;
-        return (leftObj && leftObj->GetFormID() == s->second.shield) ? s->second.rule : kNoRule;
+        return (leftObj && leftObj->GetFormID() == shield.shield) ? shield.rule : kNoRule;
     }
 
     bool HealClaimTakesLeftFrom(RE::Actor* a_follower, int a_holdRule) {
@@ -1074,7 +1080,17 @@ namespace MFO::Actuation {
         {
             std::scoped_lock lk(g_forcedMx);
             auto it = g_forcedWeapon.find(a_follower->GetFormID());
-            if (it == g_forcedWeapon.end()) return;   // nothing forced -> nothing to do
+            if (it == g_forcedWeapon.end()) {
+                // NO LEDGER, BUT MAYBE A SHIELD RANK (MFO-B186 review F1): a top-up over
+                // the AI's own one-hander records the shield's rank with no
+                // g_forcedWeapon entry, so ReleaseForcedWeapon never runs for it. Apply
+                // the same release decision here (kill-switch off, or the condition
+                // known false for a one-hander category) or the rank would refuse
+                // lower-ranked heals for the rest of the fight.
+                if (!Config::g_weaponStyleControl.load() || (a_condKnownFalse && a_wantStance != 1))
+                    g_shieldRank.erase(a_follower->GetFormID());
+                return;   // nothing forced -> nothing more to do
+            }
             // The category of the hold: the right-hand weapon's, or -- a left-
             // only hold (AI-equipped right, MFO-held dual-wield left) -- the
             // left's, which is one-handed melee by construction.

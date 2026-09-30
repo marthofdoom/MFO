@@ -228,7 +228,11 @@ namespace MFO::ComposedCast {
                                             : (w.observed && w.lastObservedAt >= claimStamp);
             if (firedThisClaim) return;   // already confirmed firing this claim -- stay quiet
             const auto now = Clock::now();
-            if (now - w.since < kSilentWarnAfter)  return;   // still within the grace window
+            // The claim's start for BOTH the grace and the printed age: the later of the
+            // watch-arm stamp and the lock's claim stamp (MFO-B190 review F3), so a
+            // same-spell re-claim gets a fresh grace and a per-claim figure.
+            const auto claimSince = std::max(w.since, claimStamp);
+            if (now - claimSince < kSilentWarnAfter)  return;   // still within the grace window
             if (now - w.lastWarn < kSilentWarnEvery) return;  // rate-limited
             // MID-CHARGE IS NOT SILENT (fix/mfo-spell-authority-0922). The engine has
             // this claim's spell (or its delivery-flip proxy) selected on THIS hand
@@ -245,7 +249,7 @@ namespace MFO::ComposedCast {
                          "(spell {:08X}, {} hand) -- APMF's engine seats may not be firing it; "
                          "check APMF.log for the seat state",
                          a_fid,
-                         std::chrono::duration_cast<std::chrono::milliseconds>(now - w.since).count(),
+                         std::chrono::duration_cast<std::chrono::milliseconds>(now - claimSince).count(),
                          a_spell, a_slot == 0 ? "left" : "right");
             w.lastWarn = now;
         }
@@ -713,6 +717,7 @@ namespace MFO::ComposedCast {
             // no-op when Harbinger is absent (nothing was ever claimed).
             if (const auto standing = APMFBridge::GetHealCastSpell(fid); standing != 0) {
                 End(fid);
+                Actuation::ClearLeftCastLockIf(fid, standing);   // same shape as MFO-B179
                 spdlog::info("[heal] {:08X} the animated heal road is OFF (bHealAnimPackage / "
                              "bEquipToCast) -- the standing heal claim (spell {:08X}) is RELEASED; "
                              "heals take the direct road", fid, standing);
