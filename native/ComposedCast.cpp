@@ -756,6 +756,14 @@ namespace MFO::ComposedCast {
                              fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
             return HealRoad::DirectNoSeat;
         }
+        // ONE ROAD PER ACTOR, the direct -> claim half (MFO-B176). A direct heal
+        // stream still standing from a lap that took the direct road (a controller
+        // flap, the out-of-combat table) is ENDED here, the same way the stream ends
+        // its own on a switch: its sustained effect and MFO's magicka billing must
+        // not overlap the claim until its stale window lapses. The dispel and the
+        // kInstant interrupt run on the main thread (MainThread::Post inside the
+        // stream's EndActor). A no-op when no heal stream stands.
+        Actuation::EndDirectHealStreams(fid, "the heal takes the animated claim road");
         return HealRoad::Claim;
     }
 
@@ -772,7 +780,10 @@ namespace MFO::ComposedCast {
         const RE::FormID fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0) return false;
         const RE::FormID spell = APMFBridge::GetHealCastSpell(fid);
-        if (spell == 0) return false;   // no heal claim stands
+        // No heal claim stands. The one exception is the stream cap's re-stream gap
+        // (MFO-B177): the claim was released for one lap and its rule re-claims next
+        // lap, so the next cast is due and the left stays the heal's.
+        if (spell == 0) return Actuation::HealRestreamGap(fid);
         if (Actuation::CastInFlightOnHand(a_follower, Actuation::kHandLeft, spell,
                                           APMFBridge::GetHealCastProxy(fid)))
             return true;                // charging / channelling now

@@ -389,7 +389,11 @@ namespace MFO::Actuation {
                     lost = "the recipient is at full health";
                 if (lost) {
                     // Only a claim aimed at THIS recipient is this lap's to end (0 = self).
-                    if (APMFBridge::GetHealCastTarget(id) == (atSelf ? 0 : recipient->GetFormID()))
+                    // With NO claim standing, the call only drops this rule's lock kept
+                    // through a stream-cap re-stream gap (MFO-B177): the rule is not
+                    // re-claiming this lap, so its kept rank goes now.
+                    if (APMFBridge::GetHealCastSpell(id) == 0 ||
+                        APMFBridge::GetHealCastTarget(id) == (atSelf ? 0 : recipient->GetFormID()))
                         ReleaseOwnHealClaim(a_follower, a_spellID, lost);
                     return { Result::FailedOther, std::format("animated heal not cast: {}", lost), true };
                 }
@@ -493,6 +497,9 @@ namespace MFO::Actuation {
                         // The spell STAYS in the hand (review round 2, R2-5): this is a
                         // re-stream, not the claim's end, so End() takes nothing back and
                         // the next lap's re-claim finds it there (Prepare: AlreadyReady).
+                        // The LEFT lock and its RANK stay too (MFO-B177, CastLock::
+                        // restreamAt): a lower-ranked rule below this one cannot take the
+                        // left hand on this transparent lap (gambit order wins).
                         ReleaseOwnHealClaim(a_follower, a_spellID,
                                             "the concentration heal reached its stream cap "
                                             "(released, re-streams while the rule wins; the spell stays in hand)",
@@ -947,6 +954,24 @@ namespace MFO::Actuation {
                         return { Result::FailedSkill, "APMF refused the heal claim", true };
                     }
                 }
+            }
+            // A CLAIM LAP NEVER REACHES THE INSTANT ROAD (MFO-B181; marth 2026-09-30:
+            // "any causes of fallback usage are problems to fix"). ChooseHealRoad chose
+            // the claim road on this lap, so a heal ask that did not happen (bEquipToCast
+            // read OFF just above) or answered NotApplicable (bHealAnimPackage read OFF
+            // inside Try or the bridge) can only be a kill switch flipping between the
+            // two reads. The switch is read again inside the bridge, so one read cannot
+            // span the lap; instead the lap casts NOTHING (transparent) rather than
+            // falling to Prepare / the AI grace / ForceCast / CastSpellImmediate below.
+            // The next lap's ChooseHealRoad reads the switch once more, releases any
+            // standing claim (review F3) and labels the road it takes.
+            if (healClaim && composed == ComposedCast::TryResult::NotApplicable) {
+                spdlog::warn("[heal] {:08X} heal {:08X} -> {:08X}: the animated heal road was switched off "
+                             "between the road choice and the claim on this lap -- NOT cast this lap "
+                             "(never the instant road on a claim lap); the next lap takes the road the "
+                             "switch now names", id, a_spellID, a_target->GetFormID());
+                return { Result::FailedOther,
+                         "animated heal not cast: the heal road was switched off during this lap", true };
             }
 
             bool equipped = false;

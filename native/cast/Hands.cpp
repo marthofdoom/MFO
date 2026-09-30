@@ -70,6 +70,7 @@ namespace MFO::Actuation {
         lock.spell = a_spell; lock.target = a_target;
         lock.lastSeen = std::chrono::steady_clock::now();
         lock.claimGoneAt = {};   // fresh hold == fresh cast: reset F8's cap window
+        lock.restreamAt  = {};   // MFO-B177: the re-claim closes a stream-cap re-stream gap
         // A waiter was waiting on the OLD owner's charge. A different rule taking
         // the hand ends that wait (the new owner is judged afresh). The SAME rule
         // re-holding (a re-claim after its claim lapsed) keeps it: the waiter is
@@ -351,6 +352,13 @@ namespace MFO::Actuation {
                 a_lock.claimGoneAt = {};   // the claim is here: F8's cap window is not open
                 return true;
             }
+            // MFO-B177: a heal claim released by its stream cap keeps its rank on the
+            // hand until its own rule re-claims next lap (CastLock::restreamAt). The
+            // window is the one that keeps any lock live between its rule's laps.
+            if (a_lock.restreamAt.time_since_epoch().count() != 0 &&
+                now - a_lock.restreamAt <= std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                                               APMFBridge::FacetExpiry()))
+                return true;
             const float elapsed = std::chrono::duration<float>(now - a_lock.lastSeen).count();
             if (elapsed <= std::chrono::duration<float>(APMFBridge::FacetExpiry()).count())
                 return true;
@@ -767,8 +775,20 @@ namespace MFO::Actuation {
                              bool a_keepSpell) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0 || a_spell == 0) return false;
-        if (APMFBridge::GetHealCastSpell(fid) != a_spell) return false;
         auto it = g_castLock.find(fid);
+        if (APMFBridge::GetHealCastSpell(fid) != a_spell) {
+            // MFO-B177: no claim stands, but THIS rule's lock may still be held
+            // through a stream-cap re-stream gap. The rule has just decided not to
+            // re-claim (recipient lost / full, an outranking equip hold, AUTO found
+            // nobody), so the kept rank goes now, not at the gap's window.
+            if (it != g_castLock.end()) {
+                auto& lk = it->second.hand[kHandLeft];
+                if (lk.spell == a_spell && lk.restreamAt.time_since_epoch().count() != 0 &&
+                    lk.owningRule == g_firingRule)
+                    lk = CastLock{};
+            }
+            return false;
+        }
         if (it != g_castLock.end()) {
             const auto& lk = it->second.hand[kHandLeft];
             if (lk.spell == a_spell && lk.owningRule != g_firingRule && lk.owningRule != kNoRule)
@@ -776,8 +796,22 @@ namespace MFO::Actuation {
         }
         const RE::FormID recipient = APMFBridge::GetHealCastTarget(fid);
         ComposedCast::End(fid, a_keepSpell);
-        if (it != g_castLock.end() && it->second.hand[kHandLeft].spell == a_spell)
-            it->second.hand[kHandLeft] = CastLock{};
+        if (it != g_castLock.end() && it->second.hand[kHandLeft].spell == a_spell) {
+            auto& lk = it->second.hand[kHandLeft];
+            if (a_keepSpell && g_firingRule != kNoRule && lk.owningRule == g_firingRule) {
+                // THE STREAM CAP'S RE-STREAM (MFO-B177). The claim is released, but the
+                // lock and its rank stay for the gap to this rule's re-claim next lap,
+                // so a lower-ranked rule cannot take the left hand on this lap (gambit
+                // order wins; rank is carried). `lastSeen` stays the claim's own stamp.
+                // The channel cap starts over, as a fresh lock's would: otherwise the
+                // re-claim's first refresh would read the old channel clock as capped.
+                lk.restreamAt   = std::chrono::steady_clock::now();
+                lk.channelSince = {};
+                lk.channelCap   = 0.0f;
+            } else {
+                lk = CastLock{};
+            }
+        }
         const auto now = std::chrono::steady_clock::now();
         auto& e = g_releaseHealLog[fid];   // revert-cleared (MFO-B180/B188)
         if (e.first != a_spell || std::chrono::duration<float>(now - e.second).count() >= 2.0f) {
@@ -939,6 +973,20 @@ namespace MFO::Actuation {
         return std::chrono::duration<float>(now - lk.channelSince).count() > lk.channelCap;
     }
 
+    // HealRestreamRule (MFO-B177). The same window CastLockLive applies to a kept lock.
+    int HealRestreamRule(RE::FormID a_follower) {
+        const auto it = g_castLock.find(a_follower);
+        if (it == g_castLock.end()) return kNoRule;
+        const auto& lk = it->second.hand[kHandLeft];
+        if (lk.spell == 0 || lk.restreamAt.time_since_epoch().count() == 0) return kNoRule;
+        const auto window = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            APMFBridge::FacetExpiry());
+        return std::chrono::steady_clock::now() - lk.restreamAt <= window ? lk.owningRule : kNoRule;
+    }
+
+    // See Actuation.h (MFO-B177).
+    bool HealRestreamGap(RE::FormID a_follower) { return HealRestreamRule(a_follower) != kNoRule; }
+
     namespace {
 
         bool HandFree(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell,
@@ -1032,8 +1080,13 @@ namespace MFO::Actuation {
         auto mine = [&](std::size_t h) {
             if (lockIt == g_castLock.end()) return false;
             const auto& lk = lockIt->second.hand[h];
-            return IsOwnRetarget(lk, a_spell) &&
-                   !CastInFlightOnHand(a_follower, h, lk.spell, CastProxyOnHand(fid, h)) &&
+            if (!IsOwnRetarget(lk, a_spell)) return false;
+            // A lock kept through its stream-cap re-stream gap (MFO-B177) is the
+            // SAME rule's, and the cap has already ended that channel's claim: its
+            // re-claim may aim at a new recipient exactly as it could when the gap
+            // cleared the lock, so the kept rank never holds its own rule off.
+            if (lk.restreamAt.time_since_epoch().count() != 0) return true;
+            return !CastInFlightOnHand(a_follower, h, lk.spell, CastProxyOnHand(fid, h)) &&
                    (IncumbentTargetLost(a_follower, lk) || IncumbentHealCastDone(a_follower, h, lk));
         };
         auto outranks = [&](std::size_t h) {

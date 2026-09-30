@@ -76,6 +76,18 @@ namespace MFO::Actuation {
                                RE::FormID a_spellID, bool a_guard, float a_chargeSec);
         void TargetCastEndActor(RE::FormID a_targetID, RE::FormID a_spellID, RE::FormID a_ownerID);
 
+        // MFO-B173 (cast/Direct.cpp). The OUT-OF-COMBAT caller's heal gate for
+        // CastSelfDirect / CastTargetDirect: true when the caller is NOT the combat
+        // table (g_firingRule == kNoRule, i.e. Logistics or CastAuto reached from it),
+        // a_spell is Heal-kind, and a combat heal claim still stands on the follower
+        // (the first party-OOC service, before the teardown ends it). The entry then
+        // returns Declined (transparent to both callers) and casts nothing, so one
+        // actor never runs a claim and a direct heal side by side. Logs one [heal]
+        // line per follower per 5 s. Off the combat table the entries never ask
+        // ChooseHealRoad, so an out-of-combat heal never MINTS a claim the party-OOC
+        // teardown would end on the next service (the claim/Release churn B173 names).
+        bool OocHealWaitsForClaim(RE::Actor* a_follower, RE::SpellItem* a_spell);
+
         // The revert/load resets ClearSelfCasts (cast/Direct.cpp) calls.
         void ResetCanActState();   // fix/mfo-can-act -- defined with its state in cast/CanAct.cpp
         void ResetHealObs();       // feat/mfo-animheal-p0 -- defined with its state in cast/HealObs.cpp

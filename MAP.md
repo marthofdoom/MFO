@@ -738,15 +738,22 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   the INSTANT caster colliding with MFO's own hand claim; Harbinger `d41ed43` stopped ch.8b gating the
   instant caster, and `85a8f2f` resolves a self claim (target 0) to the claimant for a Self-delivery
   spell, so self heals get seat answers (RC-3's Harbinger half).
-  * **ONE decision, `ComposedCast::ChooseHealRoad`** (`ComposedCast.cpp:684`, enum `ComposedCast.h:201`):
+  * **ONE decision, `ComposedCast::ChooseHealRoad`** (`ComposedCast.cpp:701`, enum `ComposedCast.h:208`):
     `NotHeal` / `Claim` / `DirectNoCombat` (D1: no controller -> direct, unanimated, a rate-limited
     `[heal] ... no combat controller -- DIRECT road` line, AND any standing heal claim is RELEASED so
     one actor never runs both roads -- RC-1/RC-2 of 09-21) / `DirectNoSeat` (a non-Self heal aimed at
     its own caster: Harbinger resolves self only for Self delivery, `[heal] ... WARN`) / `DirectDegrade`
     (Harbinger absent or ABI < 5, unverified runtime, `bHealAnimPackage` or `bEquipToCast` OFF; no
-    line). Asked by `CastOn`, `CastAuto`, `CastSelfDirect` (`cast/DirectSelf.cpp:102`) and
-    `CastTargetDirect` (`cast/DirectTarget.cpp:138`) -- the last two replace their `!IsRestorationSpell`
-    gate, so an OOC-table heal that meets a controller claims too rather than casting direct beside it.
+    line). Asked by `CastOn`, `CastAuto`, `CastSelfDirect` (`cast/DirectSelf.cpp:108`) and
+    `CastTargetDirect` (`cast/DirectTarget.cpp:145`) -- the last two replace their `!IsRestorationSpell`
+    gate and ask ONLY on the combat table (`g_firingRule != kNoRule`, MFO-B173): the OOC table never mints
+    a claim, and while a combat claim still stands its heal waits (`OocHealWaitsForClaim`,
+    `cast/Direct.cpp`, Declined + a 5 s `[heal] ... WAITS` line). On `Claim` it also ENDS any Heal-kind
+    direct stream on the actor (`Actuation::EndDirectHealStreams`, `cast/Direct.cpp`, MFO-B176: the
+    streams' own switch end, dispel + kInstant interrupt posted to the main thread). A claim lap never
+    reaches the instant road (MFO-B181): `NotApplicable` from `Try` (or `bEquipToCast` read OFF) on a
+    lap that chose `Claim` is a WARN + transparent no-cast in all three callers (`cast/CastOn.cpp` after
+    the composed block, `cast/DirectSelf.cpp`, `cast/DirectTarget.cpp`).
     1.5.97 takes the claim road as well: Harbinger installs the heal seats on every non-VR runtime.
   * **`CastOn` (`cast/CastOn.cpp:348-419`)**: `healClaim` skips the self fork (`:649`), the
     concentration fork and the restoration fork, and sends self / ally / player heals to the composed
@@ -760,7 +767,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     finishes). **Concentration stream cap** in the in-flight refresh (`:483`): past
     `HealChannelCapped`'s per-channel `DrawConcCap` (8-15 s, heal band) the claim is released instead
     of renewed and re-claimed next lap (release + re-stream, like the direct cap; never a cooldown; the
-    spell stays in hand, `End(id, keepSpell)`, round 2 R2-5).
+    spell stays in hand, `End(id, keepSpell)`, round 2 R2-5). **The LEFT lock and its rank stay too**
+    (MFO-B177): `CastLock::restreamAt` (`cast/Actuation_internal.h`), live in `CastLockLive` for
+    `FacetExpiry()`, cleared by `HoldCastLock`; `lastSeen` untouched; the owning rule's re-aim is `mine`
+    in the gap; the equip side ranks it (`HealRestreamRule`) and `HealTakesLeft` stays true.
     Harbinger's seat 0x07 still stops the channel at full (stopPct 0). **No MFO magicka deduction on
     this road**: the engine charges the real cast (the competence gate still checks cost).
   * **Hand lock (`cast/Hands.cpp`)**: heals stay LEFT, offense keeps its PlanCastHand pick; rank is
@@ -882,7 +892,13 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     released left/right hold objects; B188: the heal road's log dedup maps are `Actuation_internal.h` globals
     cleared in `ClearCastLocks`; B190: `Actuation::CastLockClaimStamp` (`cast/Hands.cpp`) feeds `WatchArmed`'s
     per-claim fired test; B175: `CastAuto`'s claim branch needs `g_firingRule != kNoRule`. STILL OPEN (each carries a
-    "needs ruling" line in the backlog): B173, B174, B176, B177, B180 (rest), B182; B189 left as recorded.
+    "needs ruling" line in the backlog): B174, B180 (rest), B182; B189 left as recorded.
+    **Open-items round (`fix/mfo-heal-open-items`, 3a42371):** FIXED B173 (direct entries claim only on
+    the combat table; OOC heal waits while a combat claim stands), B176 (`EndDirectHealStreams` on
+    `Claim`), B177 (re-stream gap keeps the LEFT lock's rank, `CastLock::restreamAt`), B181 (a claim lap
+    never reaches the instant road). What breaks: clearing the LEFT lock on the cap release again hands
+    the left to a lower rule for a lap; re-stamping `lastSeen` there instead breaks IncumbentHealCastDone's
+    re-aim; letting the OOC caller ask `ChooseHealRoad` re-creates the claim/teardown churn.
     Round 2: comparing the equip hold's rank anywhere but through `ForcedHold::rule` vs the heal lock's
     `owningRule` invents a heuristic marth ruled out; letting `OnFollowerHit` / `Tick` act while
     `HealTakesLeft` holds re-creates the per-hit shield thrash; judging the repair before the refresh
@@ -1538,7 +1554,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   deliberately — it IS the object the seats hang off (same read as
   `CombatSense.h`'s `FoeCount`). **IN COMBAT NOTHING CHANGES.** Twins deliberately
   left alone and recorded instead: `CastSelfDirect`'s own `ComposedCast::Try`
-  (`cast/DirectSelf.cpp:102`) and this function's OOC offense-concentration
+  (`cast/DirectSelf.cpp:108`) and this function's OOC offense-concentration
   `ClaimOffenseCast` (`cast/DirectTarget.cpp:176`) carry the identical exposure.
 - `CastAuto` (PUBLIC, `cast/Auto.cpp:269`) — AUTO target inference for `act.cast_target`,
   engaged ONLY when the board's default "Auto" pick is set (subject `Self`, no
@@ -6116,7 +6132,7 @@ native seats) and ENGINE_NOTES §0.40.
   ARBITRATION answered. The old `Refused` was **renamed** to `NotApplicable` rather than
   re-pointed, deliberately: re-using the name for the opposite meaning would have let every
   call site keep compiling with inverted semantics.
-  ← `cast/DirectSelf.cpp:102` (in `CastSelfDirect`, `:17`), `cast/DirectTarget.cpp:138` (in
+  ← `cast/DirectSelf.cpp:108` (in `CastSelfDirect`, `:17`), `cast/DirectTarget.cpp:145` (in
   `CastTargetDirect`, `:30`) **and `cast/CastOn.cpp:757`** (`CastOn`'s ally/player
   branch — a third call site, MISSING from this entry until 2026-09-06; MOVED by
   F3-2 out of the equip switch into `CastOn`'s pre-flight, so the ask now precedes

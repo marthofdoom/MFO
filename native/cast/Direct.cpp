@@ -18,6 +18,12 @@ namespace MFO::Actuation {
         std::unordered_map<RE::FormID, SelfCastState> g_selfCast;   // worker-serial
 
     namespace {
+        // OocHealWaitsForClaim's line dedup (MFO-B173): one per follower per 5 s.
+        // Worker-serial, no lock (#4); cleared on revert in ClearSelfCasts.
+        std::unordered_map<RE::FormID, SelfClock::time_point> g_oocHealWaitLog;
+    }
+
+    namespace {
         // ── APMF REFUSAL: the ONE trace a cast that did NOT happen leaves ─────────
         // The exact twin of Actuation.cpp's own LogApmfRefusal (same wording, same
         // ~5 s (follower, spell, target) dedup, same spdlog::error level) -- a
@@ -718,6 +724,7 @@ namespace MFO::Actuation {
         }
         ResetCanActState();           // fix/mfo-can-act: the [bleed] ledgers
         ResetHealObs();               // feat/mfo-animheal-p0: [heal-obs] is session-scoped
+        g_oocHealWaitLog.clear();     // MFO-B173: OocHealWaitsForClaim's log dedup
     }
 
     // F3-7 (deploy-gate review 2026-09-07). Drop ONE follower's APMF-refusal log
@@ -737,6 +744,60 @@ namespace MFO::Actuation {
         for (const auto& id : ConcProxy::g_slotFormId)
             if (const auto f = id.load(std::memory_order_acquire); f != 0) out.push_back(f);
         return out;
+    }
+
+    // See Actuation.h (MFO-B176). The SAME end the streams' own "switch" branch makes
+    // (CastSelfDirect / CastTargetDirect): settle the unpaid seconds, then the
+    // EndActor post (dispel, interrupt the kInstant channel, and for a target stream
+    // free the ConcProxy slot), then drop the registry entry. Both posts carry
+    // FormIDs only and re-resolve on the main thread. Only a HEAL stream: a ward or
+    // other non-heal stream is not on the heal road and keeps running.
+    void EndDirectHealStreams(RE::FormID a_follower, const char* a_why) {
+        if (a_follower == 0) return;
+        const auto now = SelfClock::now();
+        if (auto it = g_selfCast.find(a_follower); it != g_selfCast.end()) {
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(it->second.spell);
+            if (sp && CasterConsent::ClassifySpell(sp) == CasterConsent::SpellKind::Heal) {
+                spdlog::info("[heal] {:08X} self-stream RELEASE (road switch: {}) spell {:08X}",
+                             a_follower, a_why, it->second.spell);
+                PostSettle(a_follower, it->second.spell,
+                           SettleSec(it->second.timed, it->second.paidThrough, it->second.lastApply,
+                                     it->second.window, now),
+                           "self-stream", "road-switch");
+                SelfCastEndActor(a_follower, it->second.spell);
+                g_selfCast.erase(it);
+            }
+        }
+        if (auto it = g_targetCast.find(a_follower);
+            it != g_targetCast.end() && it->second.kind == CasterConsent::SpellKind::Heal) {
+            spdlog::info("[heal] {:08X} stream RELEASE (road switch: {}) tgt {:08X} spell {:08X}",
+                         a_follower, a_why, it->second.target, it->second.spell);
+            PostSettle(a_follower, it->second.spell,
+                       SettleSec(it->second.timed, it->second.paidThrough, it->second.lastApply,
+                                 it->second.window, now),
+                       "stream", "road-switch");
+            TargetCastEndActor(it->second.target, it->second.spell, a_follower);
+            g_targetCast.erase(it);
+        }
+    }
+
+    // See Direct_internal.h (MFO-B173).
+    bool OocHealWaitsForClaim(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !a_spell || g_firingRule != kNoRule) return false;
+        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Heal) return false;
+        const RE::FormID fid      = a_follower->GetFormID();
+        const RE::FormID standing = APMFBridge::GetHealCastSpell(fid);
+        if (standing == 0) return false;
+        const auto now  = SelfClock::now();
+        auto&      last = g_oocHealWaitLog[fid];
+        if (now - last >= std::chrono::seconds(5)) {
+            last = now;
+            spdlog::info("[heal] {:08X} out-of-combat heal {:08X} WAITS: a combat heal claim (spell {:08X}) "
+                         "still stands and one actor never runs both heal roads; the party-OOC teardown "
+                         "ends that claim, then this heal takes the direct road",
+                         fid, a_spell->GetFormID(), standing);
+        }
+        return true;
     }
 
 }
