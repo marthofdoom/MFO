@@ -818,10 +818,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     hysteresis and its beneficial heal fan (`cast/Auto.cpp:339` / `:360` / `:560`; `fSharedRadius` stays
     the outer bound, a non-heal buff keeps the radius alone), `CastTargetDirect` for heal kinds
     (`cast/DirectTarget.cpp:214`, transparent Declined + a 5 s deduped `[cast] ... out of reach` line), the
-    OOC FF heal (`logistics/Service.cpp:1833`), the ALLY SELECTOR (`Evaluator.cpp` `PickAlly:476`: for a
+    OOC FF heal (`logistics/Service.cpp:1833`), the ALLY SELECTOR (`Evaluator.cpp` `PickAlly:549`: for a
     `Cast at foe/ally` rule whose spell heals, only allies in reach are candidates, so "Ally HP below X"
     names the most-hurt ally it can actually heal; review C2; since `fix/mfo-field-0929` an ally measured
-    Occluded in the last `kHealLosTrustS` = 3 s (`Evaluator.cpp:480`, sized above the per-follower service
+    Occluded in the last `kHealLosTrustS` = 3 s (`Evaluator.cpp:547`, sized above the per-follower service
     period) is skipped too via `Sightline::CheckWithin`, and none in sight = no pick, the rule falls through.
     `IncumbentTargetLost` does NOT mirror this LoS test, open backlog MFO-B162) and every main-thread heal apply above.
   * **`[bleed]`** (`NoteLifeState` / `NoteHealLanded`): a transition-only line per life-state change
@@ -919,7 +919,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **A self-retarget carries TWO bounds, and never-mid-charge is NOT the load-bearing one:** it protects a
   cast only from the moment charging BEGINS, and the claim-to-first-charge window is 2.3-4.5 s with the
   caster reading `kNone` throughout. `IncumbentTargetLost` (`cast/Hands.cpp:470`) is the bound that matters —
-  it asks the evaluator's own three questions (`Evaluator.cpp`'s `PickAlly`, `:354-375`, mirrored not
+  it asks the evaluator's own three questions (`Evaluator.cpp`'s `PickAlly`, `:549-590`, mirrored not
   invented): does the target still resolve to a live actor, is it still inside `fSharedRadius`, and — when
   the firing rule's condition is the ally selector that owns that number (`g_firingAllyThreshold`, `:254`,
   carried from `Eval::Choice::conditionParam`) — is it still strictly under `min(param, kHealFull)`. A
@@ -1910,7 +1910,7 @@ Hooks `Character::UpdateCombat` (`VTABLE_Character[0]`, idx `0xE4`, `:145,197`).
   `Followers.cpp:371`, `Rapport.cpp:324`; `ClearAll` (`:274`) `Serialization.cpp:717`,
   `Probe.cpp:347,449`. All of them are converted to the pin at this choke point; no caller
   names the route. The foe selector also skips a foe whose 3D is not loaded (the pin's
-  "unloaded" end), on both routes: the group scan at `Evaluator.cpp:254`, and the
+  "unloaded" end), on both routes: the group scan at `Evaluator.cpp:257`, and the
   targeted-range early return (`kCondFoeWithinRange`/`BeyondRange`, `:175`), which also
   requires the current target to be in the group's targets and not `kTargetLost` (one group
   read lock, taken before the chase-cap computation, so it never nests — #23). Both are the
@@ -2162,13 +2162,13 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
 - `Measure` (`:~135`, MAIN THREAD ONLY) calls `HasLineOfSight` (RELOCATION_ID
   53029/53829) inside `MainThread::Post` (§0.30 crash class off-worker). `Check`
   (decl `Sightline.h:52`, worker-safe cache read) → `cast/Roads.cpp:48,70`,
-  `cast/DirectTarget.cpp:200`, `cast/Auto.cpp:552`, `Evaluator.cpp:320`.
+  `cast/DirectTarget.cpp:200`, `cast/Auto.cpp:552`, `Evaluator.cpp:494`.
   **Repost throttle is PER (viewer, target) PAIR since `fix/mfo-field-0929`** (`Want`, `Sightline.cpp:217`):
   it was one stamp per viewer, so the first batch in a 0.3 s window dropped every other caller's (the heal
   pick's ally batch lost to the foe selectors for seconds, its Occluded aged into Unknown, Unknown passed).
   `CheckWithin` (`:209`) = `Check` with a caller-chosen age (PickAlly's heal pick, 3 s).
   Open backlog: MFO-B166 (total main-thread measurement now scales with distinct targets per viewer).
-  `Want` (decl `Sightline.h:59`) → `Evaluator.cpp:330`, `cast/Auto.cpp:490` (F7 auto-cast),
+  `Want` (decl `Sightline.h:59`) → `Evaluator.cpp:504`, `cast/Auto.cpp:490` (F7 auto-cast),
   `logistics/Service.cpp:1424` (OOC hostile cast — seeds the `Check` at `:1321`; added to
   close the 2026-08-18 review SEV-3 "Check without a Want → Unknown always passes"
   inert wall-gate). `g_mx` is a strict LEAF (nothing called while held). Fail-open
@@ -6471,13 +6471,13 @@ NOT scaled) main-thread; `Spend` external caller `progression/Verbs.cpp:328`. `R
 
 ### Evaluator.cpp / Evaluator.h
 Gambit condition/action evaluator: scan a table top-down, **first true wins, PURE
-READS (#23).** `Evaluate` (`:436`) ← `Scheduler.cpp:432` (combat) + `logistics/Service.cpp:981`
+READS (#23).** `Evaluate` (`:677`) ← `Scheduler.cpp:432` (combat) + `logistics/Service.cpp:981`
 . `Choice` (`Evaluator.h:11`: `actionOpcode`, `actionParam`, `subject`,
 `subjectActorForm` #68, `target`) is the ABI to `Actuation::Fire`. The `a_startIndex`
 resume contract (`Evaluator.h:41`) prevents a near-always-true rule shadowing rules
 below. Opcode dispatch is entirely string-compare vs `Vocab::` constants; unknown →
 false (fail-closed). **Threading landmine:** `ChaseRadius` is hoisted OUT of the
-`combatGroup->lock` (`:203`) to avoid a nested read-lock deadlock — do not move it back
+`combatGroup->lock` (`:316` is the hoisted call) to avoid a nested read-lock deadlock — do not move it back
 in. Player-HP special-case gated to `kCondPlayerHpBelow`+`kActCastTarget` only (`:474`,
 un-gating was friendly-fire).
 **Melee-only reach gate (fix/mfo-unreachable-flyer):** `PickFoe(..., a_reachGate, a_reachSlack)` (`:210`) skips a
