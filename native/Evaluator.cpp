@@ -204,6 +204,24 @@ namespace MFO::Eval {
             }
         }
 
+        // Sightline basis for a SWING rule (marth 2026-09-30: spells and BOWS only). True when
+        // the right hand holds a bow or crossbow (a ranged shot), or either hand holds a staff
+        // (a staff "swing" casts its spell, so it is a spell measurement). A melee swing,
+        // declared melee-only or not, stays on the engine basis.
+        bool HoldsBowOrStaff(RE::Actor* a_actor) {
+            if (!a_actor) return false;
+            if (auto* r = a_actor->GetEquippedObject(false))
+                if (auto* w = r->As<RE::TESObjectWEAP>()) {
+                    const auto t = w->GetWeaponType();
+                    if (t == RE::WEAPON_TYPE::kBow || t == RE::WEAPON_TYPE::kCrossbow) return true;
+                }
+            for (const bool left : { false, true })
+                if (auto* o = a_actor->GetEquippedObject(left))
+                    if (auto* w = o->As<RE::TESObjectWEAP>(); w && w->GetWeaponType() == RE::WEAPON_TYPE::kStaff)
+                        return true;
+            return false;
+        }
+
         // Pick a foe from the follower's OWN COMBAT GROUP.
         //
         // Not a world sweep. The engine already tracks who is in this fight, so
@@ -710,10 +728,11 @@ namespace MFO::Eval {
                 chosen = PickFoe(a_follower, player, g.conditionOpcode, g.conditionParam,
                                  swing && meleeOnly == 1,
                                  Scheduler::ReachHoldSlack(a_follower->GetFormID()),
-                                 // Own ray: a spell-cast rule, or a swing by a follower that is
-                                 // NOT melee-only (bow/crossbow/staff holders shoot on an Attack).
+                                 // Own ray: a spell-cast rule, or a swing while a bow/crossbow (right hand) or a
+                                 // staff (either hand; a staff cast is a spell) is equipped. A melee swing stays Engine.
                                  g.actionOpcode == Vocab::kActCastTarget || g.actionOpcode == Vocab::kActCastSelf ||
-                                     g.actionOpcode == Vocab::kActCastPlayer || (swing && meleeOnly == 0));
+                                     g.actionOpcode == Vocab::kActCastPlayer ||
+                                     (swing && HoldsBowOrStaff(a_follower)));
                 if (!chosen) continue;
             } else if (IsAllySelector(g.conditionOpcode)) {
                 // Same shape, ally side: true iff a wounded teammate is found,

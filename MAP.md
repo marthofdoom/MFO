@@ -2348,8 +2348,8 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   bhkWorld / controller -- with a rate-limited `[los] ... own ray unavailable (<why>) -- engine cache used`);
   `Engine` (the default) = today's two-stage below. Every pair keeps TWO slots (`Entry::s[2]`: verdict, stamp, `occRun`),
   so a melee reader never sees the own-ray verdict; `Want`'s throttle is per (pair, basis) (`g_lastPost[2]`).
-  **Own callers (spell):** `Evaluator.cpp` PickAlly heal pick, PickFoe when the rule is `act.cast_*` OR a swing by a
-  non-melee-only follower (the bow/ranged decision; `PickFoe`'s `a_ownRay`), `cast/CanAct.cpp` (HealInReach,
+  **Own callers (spell):** `Evaluator.cpp` PickAlly heal pick, PickFoe when the rule is `act.cast_*` OR a swing while a bow/crossbow (right hand) or a staff (either hand, a
+  staff cast is a spell) is equipped (`HoldsBowOrStaff`, `PickFoe`'s `a_ownRay`); a melee swing stays Engine, `cast/CanAct.cpp` (HealInReach,
   RefuseHealApplyOnMain), `cast/Roads.cpp`, `cast/DirectTarget.cpp`, `cast/CastOn.cpp`, `cast/Auto.cpp`,
   `cast/Hands.cpp` (OccludedRun), `cast/HealObs.cpp`, `logistics/Service.cpp` OOC casts. **Engine callers:**
   `EngageOnSight.cpp` (MeasureNow), melee-only PickFoe. A NEW spell/ranged Sightline caller must pass `Basis::Own`
