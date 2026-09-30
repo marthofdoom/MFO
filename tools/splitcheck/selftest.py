@@ -8,8 +8,14 @@ as required; 1 = a case did not (the tool has a hole).
   selftest.py --a MAIN_DIR --b BRANCH_DIR --work SCRATCH [--tu-map MAP]
               [--a0 MAIN_NOINLINE_DIR --b0 BRANCH_NOINLINE_DIR]
               [--lc-old-rev REV --lc-old OLD... --lc-new NEW...]
+  selftest.py --unit          (only U1/U2 below; no builds, seconds)
 
 Every *_DIR holds MFO.dll + MFO.pdb (a CI `MFO-dll` artifact). Cases:
+  U1  call_args on crafted PDB type strings (variadic `<no type>`, parens in
+      the return type, unbalanced)                         -> exact counts
+  U2  bound_use on hand-assembled code: a compared lea passed at a vararg
+      position / kept through a cmov / an 8-bit write      -> NOT a bound
+      (and two controls that must be)
   P0  control: branch vs branch                            -> must PASS
   N1  a constant changed in an inline-DRIFT function       -> must FAIL naming it
   N2  a constant changed in a std::function wrapper of an
@@ -42,6 +48,24 @@ Every *_DIR holds MFO.dll + MFO.pdb (a CI `MFO-dll` artifact). Cases:
       another function (its body changed)                   -> must FAIL (only in B)
   N16 a literal referenced right after a referenced ""
       changed in B0 ("" compares only its NUL)              -> --proof must FAIL
+  N17 a guard known only by its public (owner inlined by every
+      caller): one split proc's references pointed at another
+      guard copy of the same name in B (/O2)               -> must FAIL as a STATE split
+  N18 the one-past-the-end loop-bound `lea` of an array that
+      lands on a mutable per-TU copy turned into a `mov` (a real
+      load of that copy) in B (/O2)                        -> must FAIL as a STATE split
+  N18b a `lea` of that copy in another split proc, one that never
+      references the array                                 -> must FAIL as a STATE split
+  N7b/N7c a literal right after a sized object the same function
+      references at its start, changed in B0                -> --proof must FAIL
+  N13b a proc's own-code guard reference rebound onto the guard of a
+      function it inlines (same name) in B (/O2)            -> must FAIL as a STATE split
+  N18c in the proc that loops over the array, another `lea` (its
+      register passed on) pointed at the copy              -> must FAIL as a STATE split
+  N18d in that proc, a new `lea r8` of the copy that is compared AND then
+      passed at a vararg position of a variadic callee     -> must FAIL as a STATE split
+  N7b, N7c, N13, N13b, N15, N17, N18, N18b, N18c, N18d report N/A (not applicable)
+  when the pair has no candidate structure: never a pass, never a hole.
   N11 A0's build record names B's commit                    -> --proof must REFUSE (provenance)
   N11b a DLL that is not the one its build record hashes    -> --proof must REFUSE (provenance)
 A planted copy gets a build record describing IT (same commit, its own SHA-256),
@@ -125,6 +149,109 @@ def patch_dll(dst, rva, data):
         write_info(dst, info)
 
 
+class _FakeImage:
+    """A few hand-assembled procedures, enough for Cmp.bound_use / call_args
+    (read, procs, proc_at): the unit checks below run without any build."""
+    def __init__(self, procs):
+        self.procs, self.proc_at, self._code = [], {}, {}
+        for rva, code, sig in procs:
+            self.procs.append({"name": f"f{rva:x}", "sig": sig, "rva": rva, "size": len(code), "key": None})
+            self.proc_at[rva] = len(code)
+            self._code[rva] = bytes(code)
+
+    def read(self, rva, size):
+        return self._code[rva][:size]
+
+
+def _rel(at, end_of_insn):
+    return (at - end_of_insn).to_bytes(4, "little", signed=True)
+
+
+def unit_checks(record):
+    """U1 (review of a59d985, G1/G2): Cmp.sig_args on crafted PDB type strings.
+    U2 (G1/G3): Cmp.bound_use on hand-assembled code -- a `lea` that is
+    compared and then passed at a VARIADIC position, or that survives a `cmov`
+    or an 8-bit write, must NOT be a loop bound; each has a control that must."""
+    sigs = [("void (const char*, <no type>)", 4),      # llvm-pdbutil's ellipsis (ImGui::Text)
+            ("int (<no type>)", 4),
+            ("std::function<void ()> (int, int)", 3),   # G2: parens in the RETURN type (+ hidden slot)
+            ("void (int, int)", 2),
+            ("bool ()", 0),
+            ("void (void)", 0),
+            ("void Foo::(int)", 2),                     # `this` + 1
+            ("std::basic_string<char> (int)", 2),       # hidden return slot + 1
+            ("int* (std::pair<int,int>, void (*)(int, int))", 2),
+            ("int (int, int, int, int, int)", 4),
+            ("std::function<void () (int)", 4),         # unbalanced prefix: parse nothing
+            ("void (int", 4),
+            ("void (const char*, ...)", 4)]
+    bad = [(sg, want, SC.Cmp.sig_args(sg)) for sg, want in sigs if SC.Cmp.sig_args(sg) != want]
+    record("U1 call_args on crafted signatures (variadic <no type>, parens in the return type)", not bad,
+           f"{len(sigs) - len(bad)}/{len(sigs)} as required" + (f"; wrong: {bad}" if bad else ""))
+
+    P, F, T = 0x1000, 0x2000, 0x5000               # proc, callee, the lea's target
+    lea_r8 = lambda: b"\x4c\x8d\x05" + _rel(T, P + 7)          # lea r8, [rip+T]
+    lea_rax = lambda: b"\x48\x8d\x05" + _rel(T, P + 7)         # lea rax, [rip+T]
+
+    def call(at):
+        return b"\xe8" + _rel(F, at + 5)
+
+    def bound(code, callee_sig):
+        img = _FakeImage([(P, code, "void ()"), (F, b"\xc3", callee_sig)])
+        cmp = SC.Cmp(img, img)
+        lea = cmp.disasm(img, P, len(code))[0]
+        return cmp.bound_use(img, img.procs[0], lea)
+
+    c1 = lea_r8() + b"\x4c\x39\xc1"                            # cmp rcx, r8
+    g1 = c1 + call(P + len(c1)) + b"\xc3"
+    c3 = lea_rax() + b"\x48\x39\xc1"                           # cmp rcx, rax
+    cases = [
+        ("compared, then r8 passed to a variadic `void (const char*, <no type>)`",
+         bound(g1, "void (const char*, <no type>)"), False),
+        ("control: compared, r8 not an argument of `void (const char*)`",
+         bound(g1, "void (const char*)"), True),
+        ("compared, then kept through `cmovne rax, rbx` and passed",
+         bound(c3 + b"\x48\x0f\x45\xc3\x48\x89\xc1" + call(P + len(c3) + 7) + b"\xc3", "void (int)"), False),
+        ("compared, then kept through `setb al` (upper bits) and passed",
+         bound(c3 + b"\x0f\x92\xc0\x48\x89\xc1" + call(P + len(c3) + 6) + b"\xc3", "void (int)"), False),
+        ("control: compared, then redefined by `mov eax, ebx`",
+         bound(c3 + b"\x89\xd8\x48\x89\xc1" + call(P + len(c3) + 5) + b"\xc3", "void (int)"), True),
+    ]
+    bad = [(lab, got) for lab, got, want in cases if got != want]
+    record("U2 bound_use: compare + variadic pass / cmov / partial write is not a bound", not bad,
+           f"{len(cases) - len(bad)}/{len(cases)} as required" + (f"; wrong: {bad}" if bad else ""))
+
+
+def n18d_patch(cmp, img, p, bound_ins):
+    """N18d plant: in p (the proc whose loop-bound `lea` lands on a per-TU
+    copy t), overwrite a run of whole instructions that carry no address with
+    `lea r8, [rip+t]; cmp rcx, r8; call V` (V a VARIADIC callee whose fixed
+    part is one pointer, so r8 is a vararg), padded with `nop`s. The new lea is
+    compared AND then passed on: a real use of the copy. Returns
+    (rva, bytes, V's name) or None."""
+    t = bound_ins.address + bound_ins.size + bound_ins.operands[1].mem.disp
+    vs = sorted((q for q in img.procs if q["sig"].replace(" ", "") == "void(constchar*,<notype>)"),
+                key=lambda q: (q["name"] != "ImGui::Text", q["name"]))
+    if not vs:
+        return None
+    v = vs[0]
+    seq = cmp.disasm(img, p["rva"], p["size"])
+
+    def plain(x):
+        return x.address != bound_ins.address and not cmp.fields(img, x) and not any(
+            o.type == X.X86_OP_MEM and o.mem.base == X.X86_REG_RIP for o in x.operands)
+    for k in range(len(seq)):
+        n, j = 0, k
+        while j < len(seq) and plain(seq[j]) and n < 15:
+            n += seq[j].size
+            j += 1
+        if n >= 15:
+            a = seq[k].address
+            code = (b"\x4c\x8d\x05" + _rel(t, a + 7) + b"\x4c\x39\xc1" + b"\xe8" + _rel(v["rva"], a + 15))
+            return a, code + b"\x90" * (n - len(code)), v["name"]
+    return None
+
+
 def imm_candidates(cmp, img, f, own_only=True):
     """cmp/mov reg, imm8/imm32 instructions in f's MFO code (own code, or an
     inlined MFO body such as a lambda inlined into its std::function wrapper)."""
@@ -167,8 +294,10 @@ def named_in(fails, name):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--a", required=True)
-    ap.add_argument("--b", required=True)
+    ap.add_argument("--a")
+    ap.add_argument("--b")
+    ap.add_argument("--unit", action="store_true",
+                    help="run only the unit checks U1/U2 (no builds needed)")
     ap.add_argument("--a0")
     ap.add_argument("--b0")
     ap.add_argument("--tu-map")
@@ -177,13 +306,24 @@ def main():
     ap.add_argument("--lc-old", nargs="*", default=[])
     ap.add_argument("--lc-new", nargs="*", default=[])
     args = ap.parse_args()
-    work = args.work or tempfile.mkdtemp(prefix="splitcheck-selftest-")
-    os.makedirs(work, exist_ok=True)
+    if not args.unit and not (args.a and args.b):
+        ap.error("--a and --b are required (or --unit)")
     results = []
 
-    def record(case, ok, detail):
-        results.append((case, ok, detail))
-        print(f"{'OK  ' if ok else 'HOLE'} {case}: {detail}", flush=True)
+    def record(case, ok, detail, na=False):
+        # na: NOT APPLICABLE -- the pair has none of the structure the case
+        # plants into (a STRUCTURAL absence, not a tool failure); only the cases
+        # documented as such may use it, and the summary lists them
+        results.append((case, ok or na, detail, na))
+        print(f"{'N/A ' if na else 'OK  ' if ok else 'HOLE'} {case}: {detail}", flush=True)
+
+    unit_checks(record)
+    if args.unit:
+        bad = [c for c, ok, _d, _na in results if not ok]
+        print(f"\n{len(results) - len(bad)}/{len(results)} unit checks as required" + (f"; HOLES: {bad}" if bad else ""))
+        return 1 if bad else 0
+    work = args.work or tempfile.mkdtemp(prefix="splitcheck-selftest-")
+    os.makedirs(work, exist_ok=True)
 
     # ---- P0 control -----------------------------------------------------------
     r = run_sc(args.b, args.b, work, args.tu_map)
@@ -392,6 +532,50 @@ def main():
             record("N7 unnamed string literal changed in the proof build",
                    r["result"] == "FAIL" and not r.get("provenance"),
                    f"{r['result']} (exit {r['_exit']}), {f['name'][:80]} literal {s[:40]!r} first letter case-flipped")
+
+        # N7b / N7c: an unnamed literal right after a sized named read-only
+        # object O that the SAME function also references at its start (the
+        # linker places a TU's literals right after its named objects), the
+        # literal's `lea` register used as anything but a loop bound. The
+        # one-past-the-end rule must not wave the change through by O's name.
+        # Two candidates with different O (review of 8df36dd, R3a / R3b).
+        ends0 = {}
+        for _n, r_, _m in B0.datas:
+            sz = B0.data_size.get(r_)
+            if sz and B0.readonly_data(r_):
+                ends0.setdefault(r_ + sz, set()).add(r_)
+        lits, used_o = [], set()
+        for f in sorted(B0.procs, key=lambda f: f["name"]):
+            if not f["name"].startswith("MFO::") or len(lits) >= 2:
+                continue
+            refs = cmp0.proc_refs(B0, f)
+            for ins in cmp0.disasm(B0, f["rva"], f["size"]):
+                mem = [o for o in ins.operands if o.type == X.X86_OP_MEM]
+                if ins.mnemonic != "lea" or not mem or mem[0].mem.base != X.X86_REG_RIP:
+                    continue
+                t = ins.address + ins.size + mem[0].mem.disp
+                os_ = [o for o in ends0.get(t, ()) if o in refs and o not in used_o]
+                s = B0.cstring(t)
+                ai = next((q for q in range(min(8, len(s))) if chr(s[q]).isalpha()), None) if s.isascii() else None
+                if not os_ or B0.names_at.get(t) or not B0.readonly_data(t) or len(s) < 3 \
+                        or ai is None or cmp0.bound_use(B0, f, ins):
+                    continue
+                used_o.add(os_[0])
+                lits.append((f, t, s, os_[0], ai))
+                break
+        for i, lab in enumerate(("N7b a literal right after an object its function also references (proof build)",
+                                 "N7c the same, a second object (proof build)")):
+            if i >= len(lits):
+                record(lab, False, "not applicable (no candidate): no unnamed literal right after a sized "
+                                   "named object its function references", na=True)
+                continue
+            f, t, s, o, ai = lits[i]
+            dst = copy_build(args.b0, os.path.join(work, "n7" + "bc"[i]))
+            patch_dll(dst, t + ai, bytes([s[ai] ^ 0x20]))       # its first LETTER (a log tag starts with "[")
+            r = run_sc(args.a, args.b, work, args.tu_map, proof=(args.a0, dst))
+            record(lab, r["result"] == "FAIL" and not r.get("provenance"),
+                   f"{r['result']} (exit {r['_exit']}), {f['name'][:50]} literal {s[:30]!r} at {t:#x}, right after "
+                   f"{sorted(B0.names_at[o])[0][:40]} (also referenced), byte {ai} case-flipped")
 
         # N8: a UTF-8 literal (non-ASCII bytes, e.g. an em-dash) changed PAST
         # byte 16, in the proof build
@@ -691,7 +875,9 @@ def main():
             if plan:
                 break
         if plan is None:
-            record("N13 a $TSS guard shared by two moved functions' statics", False, "no candidate")
+            record("N13 a $TSS guard shared by two moved functions' statics", False,
+                   "not applicable (no candidate): no two procs in one split TU read two different "
+                   "same-named guard copies", na=True)
         else:
             p1, c1, p2, i2, c2 = plan
             dst = copy_build(args.b, os.path.join(work, "n13"))
@@ -768,7 +954,8 @@ def main():
                 break
         if cand is None:
             record("N15 a funclet of an outlined function with its body changed", False,
-                   f"no candidate ({len(outl)} outlined-function funclets in P1)")
+                   f"not applicable (no candidate): {len(outl)} funclet(s) of an outlined function only in B "
+                   f"with a direct call/jmp in P1", na=True)
         else:
             f, ins, old, new = cand
             dst = copy_build(args.b, os.path.join(work, "n15"))
@@ -826,6 +1013,211 @@ def main():
                    f"{r['result']} (exit {r['_exit']}), \"\" at {t:#x}, literal {s[:30]!r} at +{u - t} first letter "
                    f"case-flipped")
 
+        # N17: an inline function's static whose guard is known only by its
+        # PUBLIC (every caller inlined the owner, so no module stream has a
+        # record of it) SPLIT: in the branch /O2 build, every reference one
+        # split proc makes to that guard is pointed at another guard copy of
+        # the same name, so the owner's inline copies no longer share one guard
+        # (the static is initialised twice, the second instance on its own).
+        # The inliners differ from main by inlining (proven by /Od), so only
+        # the owner-keyed state check can see this -- in the same run where
+        # the real pair's public-only guard must pass (P1).
+        pub_only = {}
+        known = {r_ for _n, r_, _m in B.datas}
+        for g, r_, o in B.guard_pubs:
+            if o and r_ not in known:
+                pub_only[r_] = (g, o)
+        gref = {}
+        for p in sorted(B.procs, key=lambda p: p["name"]):
+            if p.get("mod") not in split_b or SC.FUNCLET.match(p["name"]):
+                continue
+            for ins in cmpb.disasm(B, p["rva"], p["size"]):
+                for o in ins.operands:
+                    if o.type == X.X86_OP_MEM and o.mem.base == X.X86_REG_RIP \
+                            and ins.address + ins.size + o.mem.disp in pub_only:
+                        gref.setdefault(ins.address + ins.size + o.mem.disp, {}).setdefault(
+                            p["rva"], (p, []))[1].append(ins)
+        plan = None
+        for c, procs in sorted(gref.items()):
+            if len(procs) < 2:
+                continue
+            g, owner = pub_only[c]
+            p2, ins2 = procs[max(procs)]
+            others = sorted((r_ for n, r_, m in B.datas if SC.norm(n) == g and r_ != c),
+                            key=lambda r_: (not any(m == p2.get("mod") for n, rr, m in B.datas if rr == r_), r_))
+            if others:
+                plan = (c, g, owner, p2, ins2, others[0], len(procs))
+                break
+        if plan is None:
+            record("N17 an always-inlined owner's public-only $TSS guard split", False,
+                   "not applicable (no candidate): no public-only guard read by two procs in the split's TUs",
+                   na=True)
+        else:
+            c, g, owner, p2, ins2, x, n = plan
+            dst = copy_build(args.b, os.path.join(work, "n17"))
+            for i in ins2:
+                patch_dll(dst, i.address + i.disp_offset, (x - (i.address + i.size)).to_bytes(4, "little", signed=True))
+            r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+            hit = [y for y in r["data_differing"] if SC.norm(SC.untag(y[0])) == g and "STATE" in y[1]]
+            record("N17 an always-inlined owner's public-only $TSS guard split",
+                   r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                   f"{r['result']}, {owner[:40]}'s guard {g} at {c:#x} (public only, {n} inliners): "
+                   f"{p2['name'][:40]} ({p2.get('mod')}) {len(ins2)} ref(s) -> {x:#x}; "
+                   f"reported as state split: {bool(hit)}")
+
+        # N18 / N18b: the one-past-the-end loop-bound rule (a `lea` of the
+        # address right after a named array O, in a proc that also references
+        # O's start, is O's loop bound, not a reader of the per-TU copy the
+        # linker placed there) must not hide a GENUINE access to that copy.
+        # N18: the bound `lea` turned into a `mov` (a load FROM the copy).
+        # N18b: a `lea` in another split proc, one that never references O,
+        # pointed at the copy. Both in the branch /O2 build, with --proof.
+        mut = {}
+        for n, r_, _m in B.datas:
+            mut.setdefault(SC.norm(n), []).append(r_)
+        copies = {r_: v for v, rs in mut.items() if len(rs) > 1 and "`" not in v and not SC.GUARD.fullmatch(v)
+                  and B.sec_of(rs[0]) != ".text" and any(not B.is_const_data(q) for q in rs) for r_ in rs}
+        bound = None
+        leas = []
+        for p in sorted(B.procs, key=lambda p: p["name"]):
+            if p.get("mod") not in split_b or SC.FUNCLET.match(p["name"]):
+                continue
+            for ins in cmpb.disasm(B, p["rva"], p["size"]):
+                if ins.mnemonic != "lea" or ins.operands[1].type != X.X86_OP_MEM \
+                        or ins.operands[1].mem.base != X.X86_REG_RIP:
+                    continue
+                t = ins.address + ins.size + ins.operands[1].mem.disp
+                leas.append((p, ins, t))
+                if bound is None and t in copies and cmpb.loop_bound(B, p, t, ins, set(mut[copies[t]])):
+                    bound = (p, ins, t, copies[t])
+        if bound is None:
+            for lab in ("N18 a genuine load at an array's one-past-the-end address",
+                        "N18b a genuine lea of a per-TU copy right after an array the proc never uses",
+                        "N18c a lea of that copy passed on (not compared) in a proc that loops over the array",
+                        "N18d a lea of that copy compared AND passed to a variadic callee"):
+                record(lab, False, "not applicable (no candidate): no loop bound in the split's TUs lands on "
+                                   "a mutable per-TU copy", na=True)
+        else:
+            p, ins, t, var = bound
+            k = next(i for i in range(min(3, ins.size)) if ins.bytes[i] == 0x8D)
+            dst = copy_build(args.b, os.path.join(work, "n18"))
+            patch_dll(dst, ins.address + k, b"\x8b")               # lea r, [rip+t] -> mov r, [rip+t]
+            r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+            hit = [y for y in r["data_differing"] if SC.norm(SC.untag(y[0])) == var and "STATE" in y[1]]
+            record("N18 a genuine load at an array's one-past-the-end address",
+                   r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                   f"{r['result']}, {p['name'][:40]} +{ins.address - p['rva']:#x}: lea -> mov of {t:#x} "
+                   f"({var[:40]} copy); reported as state split: {bool(hit)}")
+            ostarts = {r_ for _n, r_, _m in B.datas if B.data_size.get(r_) and r_ + B.data_size[r_] == t}
+            q = next(((pq, iq) for pq, iq, tq in leas
+                      if pq["rva"] != p["rva"] and tq not in copies
+                      and not (ostarts & cmpb.proc_refs(B, pq))), None)
+            if q is None:
+                record("N18b a genuine lea of a per-TU copy right after an array the proc never uses", False,
+                       "not applicable (no candidate): no other split proc with a RIP lea", na=True)
+            else:
+                pq, iq = q
+                dst = copy_build(args.b, os.path.join(work, "n18b"))
+                patch_dll(dst, iq.address + iq.disp_offset,
+                          (t - (iq.address + iq.size)).to_bytes(4, "little", signed=True))
+                r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+                hit = [y for y in r["data_differing"] if SC.norm(SC.untag(y[0])) == var and "STATE" in y[1]]
+                record("N18b a genuine lea of a per-TU copy right after an array the proc never uses",
+                       r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                       f"{r['result']}, {pq['name'][:40]} +{iq.address - pq['rva']:#x} lea now of {t:#x} "
+                       f"({var[:40]} copy); reported as state split: {bool(hit)}")
+
+            # N18c (review of 8df36dd, F2): in the SAME proc that loops over
+            # the array (so it references O's start), another `lea` whose
+            # register is passed on (a call argument, a store), not compared,
+            # is pointed at the copy: a real use of the copy, never a bound
+            q = next(((pq, iq) for pq, iq, tq in leas
+                      if pq["rva"] == p["rva"] and iq.address != ins.address and tq not in copies
+                      and not cmpb.bound_use(B, pq, iq)), None)
+            if q is None:
+                record("N18c a lea of that copy passed on (not compared) in a proc that loops over the array",
+                       False, "not applicable (no candidate): the looping proc has no other RIP lea", na=True)
+            else:
+                pq, iq = q
+                dst = copy_build(args.b, os.path.join(work, "n18c"))
+                patch_dll(dst, iq.address + iq.disp_offset,
+                          (t - (iq.address + iq.size)).to_bytes(4, "little", signed=True))
+                r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+                hit = [y for y in r["data_differing"] if SC.norm(SC.untag(y[0])) == var and "STATE" in y[1]]
+                record("N18c a lea of that copy passed on (not compared) in a proc that loops over the array",
+                       r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                       f"{r['result']}, {pq['name'][:40]} +{iq.address - pq['rva']:#x} ({iq.op_str[:24]}) now of "
+                       f"{t:#x} ({var[:40]} copy); reported as state split: {bool(hit)}")
+
+            # N18d (review of a59d985, G1): in the same looping proc, a new
+            # `lea r8, [rip+t]` that is COMPARED and then passed at a vararg
+            # position (llvm-pdbutil prints `...` as `<no type>`) of a variadic
+            # callee: a real use of the copy, never a bound
+            q = n18d_patch(cmpb, B, p, ins)
+            if q is None:
+                record("N18d a lea of that copy compared AND passed to a variadic callee", False,
+                       "not applicable (no candidate): no `void (const char*, <no type>)` callee, or no "
+                       "15-byte run of address-free instructions in the looping proc", na=True)
+            else:
+                at, code, vname = q
+                dst = copy_build(args.b, os.path.join(work, "n18d"))
+                patch_dll(dst, at, code)
+                r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+                hit = [y for y in r["data_differing"] if SC.norm(SC.untag(y[0])) == var and "STATE" in y[1]]
+                record("N18d a lea of that copy compared AND passed to a variadic callee",
+                       r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                       f"{r['result']}, {p['name'][:40]} +{at - p['rva']:#x}: lea r8 of {t:#x} ({var[:40]} copy); "
+                       f"cmp rcx, r8; call {vname[:30]}; reported as state split: {bool(hit)}")
+
+        # N13b (review of 8df36dd, R1): a split proc with its OWN guarded static
+        # that also inlines another function with a same-named guard: one of
+        # the proc's own-code guard references (outside every inline site) is
+        # pointed at the inlined owner's guard copy (public-only or not). Two
+        # statics now share one init guard; only the owner-keyed state check can
+        # see it, in the /O2 build, in the run where the real pair must pass.
+        gcopies = {r_: SC.norm(n) for n, r_, _m in B.datas if SC.GUARD.fullmatch(SC.norm(n))}
+        for g, r_, _o in B.guard_pubs:
+            gcopies.setdefault(r_, g)
+        plan = None
+        for p in sorted(B.procs, key=lambda p: p["name"]):
+            if p.get("mod") not in split_b or SC.FUNCLET.match(p["name"]):
+                continue
+            ranges = B.inl_ranges_all.get(p["key"], [])
+            own_refs, inl_copies = [], set()
+            for ins in cmpb.disasm(B, p["rva"], p["size"]):
+                for o in ins.operands:
+                    if o.type != X.X86_OP_MEM or o.mem.base != X.X86_REG_RIP:
+                        continue
+                    t = ins.address + ins.size + o.mem.disp
+                    if t not in gcopies:
+                        continue
+                    off = ins.address - p["rva"]
+                    if any(a <= off < b for a, b, _n in ranges):
+                        inl_copies.add(t)
+                    else:
+                        own_refs.append((ins, t))
+            for ins, c2 in sorted(own_refs, key=lambda x: (x[0].mnemonic != "cmp", x[0].address)):
+                c1 = next((c for c in sorted(inl_copies) if c != c2 and gcopies[c] == gcopies[c2]), None)
+                if c1 is not None:
+                    plan = (p, ins, c2, c1, gcopies[c2])
+                    break
+            if plan:
+                break
+        if plan is None:
+            record("N13b a proc's own $TSS guard reference rebound onto an inlined owner's guard", False,
+                   "not applicable (no candidate): no split proc with its own guard reference that also inlines "
+                   "a function with a same-named guard", na=True)
+        else:
+            p, ins, c2, c1, g = plan
+            dst = copy_build(args.b, os.path.join(work, "n13b"))
+            patch_dll(dst, ins.address + ins.disp_offset, (c1 - (ins.address + ins.size)).to_bytes(4, "little", signed=True))
+            r = run_sc(args.a, dst, work, args.tu_map, proof=(args.a0, args.b0))
+            hit = [y for y in r["data_differing"] if SC.norm(SC.untag(y[0])) == g and "STATE" in y[1]]
+            record("N13b a proc's own $TSS guard reference rebound onto an inlined owner's guard",
+                   r["result"] == "FAIL" and bool(hit) and not r.get("provenance"),
+                   f"{r['result']}, {p['name'][:40]} +{ins.address - p['rva']:#x} ({ins.mnemonic}) {g} "
+                   f"{c2:#x} -> {c1:#x} (an inlined owner's guard); reported as state split: {bool(hit)}")
+
         # N11: the four builds do not pair up -- the proof must refuse
         info_b, _p = SC.read_build_info(os.path.join(args.b, "MFO.dll"))
         dst = copy_build(args.a0, os.path.join(work, "n11"))
@@ -872,8 +1264,11 @@ def main():
         record("N9 tail byte of a named const aggregate >16 bytes", r["result"] == "FAIL" and hit,
                f"{r['result']}, {n} ({sz} bytes) byte {last} flipped; reported: {hit}")
 
-    bad = [c for c, ok, _d in results if not ok]
-    print(f"\n{len(results) - len(bad)}/{len(results)} cases behaved as required" + (f"; HOLES: {bad}" if bad else ""))
+    bad = [c for c, ok, _d, _na in results if not ok]
+    na = [c.split()[0] for c, _ok, _d, n in results if n]
+    print(f"\n{len(results) - len(bad) - len(na)}/{len(results)} cases behaved as required"
+          + (f", {len(na)} not applicable to this pair ({', '.join(na)})" if na else "")
+          + (f"; HOLES: {bad}" if bad else ""))
     return 1 if bad else 0
 
 

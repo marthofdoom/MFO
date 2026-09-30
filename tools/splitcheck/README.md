@@ -83,7 +83,15 @@ Exit codes. `linecheck`: 0 PASS, 1 FAIL. `splitcheck`: 0 = `PASS` (byte
 identical) or `PASS-PROVEN`; 3 = `PASS-EXPLAINED-UNPROVEN` (explained classes
 only, no proof given: NOT mergeable for a split); 1 = `FAIL`.
 `cosave_roundtrip`: 0 = every save identical (and the self-test saw its
-planted change), else 1. `selftest`: 0 = every case behaved, 1 = a hole.
+planted change), else 1. `selftest`: 0 = every case behaved, 1 = a hole. A
+case whose structure the pair does not have is `N/A` (not applicable, no
+candidate), never a pass and never a hole; only N7b, N7c, N13, N13b, N15,
+N17, N18, N18b and N18c may report it, and the summary names them. N7b/N7c run
+whenever a literal sits right after an object its function references; N13b
+whenever a split proc with its own guard inlines a function with a same-named
+guard; N17 whenever a public-only guard is read by two procs in the split's
+TUs; N18 / N18b / N18c whenever a loop bound in the split's TUs lands on a
+mutable per-TU copy: exactly the shapes the rules below excuse.
 
 `--strict` disables every explained class. `--strict --copies-ok` (what
 `--proof` runs on the proof pair) still accepts only identical per-TU copies of
@@ -123,10 +131,59 @@ a reference inside an inline site belongs to the innermost inlined function
 optimizer left outside its site's ranges goes to the one other function that
 reads the same copy, is inlined into that proc, and is inlined by the
 enclosing function's own body; an unwind funclet's reference is its parent's
-when the parent's body reads that copy. The same mapping and sharing rules
-then apply, plus: an owner reading more guard copies in B than any
-same-named owner in A FAILs (its static's state is split, or it now shares
-another static's guard; selftest N13).
+when the parent's body reads that copy. A guard's copies are read from the
+module records AND from the PUBLICS: the guard of an external-linkage (inline)
+function's static is one object program-wide, and when every caller inlines
+that function no module has a record of it, only its public
+`?$TSS0@?1??<Owner>@...`. The public also names the OWNER
+(`guard_owner`, kept for diagnostics; attribution stays positional). When a
+proc's OWN code (outside every inline site) touches two or more copies of one
+guard name, none of those references is re-attributed to an inlined function:
+a reference rebound from the proc's own guard onto an inlined owner's guard
+then shows as the proc reading two guard copies (selftest N13b). Cost: an
+optimizer-hoisted guard test of an inlined owner, in a proc that also has its
+own same-named static, FAILs (loud, never masked; none on waves 1-3). The same
+mapping and sharing rules then apply, plus: an owner reading more guard copies
+in B than any same-named owner in A FAILs (its static's state is split, or it
+now shares another static's guard; selftest N13, N13b, and N17 for a
+public-only guard). **Known limitation (REVIEW F5):** readers are keyed by the
+owner's qualified NAME without its signature, so two overloads `F(int)` /
+`F(float)` that each own a static share one owner key, and a guard rebound
+between them is not seen.
+
+**One-past-the-end loop bounds.** A `lea` of the address right after a named
+object O whose PDB size is known, in a proc that also references O's START,
+whose register is only ever compared (the same test as for read-only data
+above), is O's loop bound (`for (p = O; p != O + n; ++p)`), not a reader of
+whatever the linker placed at that address. O is never another copy of the
+variable being judged (107 `s_Utf8BOM` copies sit right after another copy in
+the cast/Direct build). A load, store or memory compare at that address, a
+`lea` of it whose register is passed on, and a `lea` of it in a proc that
+never references O are all readers (selftest N18 / N18b / N18c). "Passed on"
+includes a call argument: the callee's integer argument count comes from its
+PDB type string, and a variadic callee (llvm-pdbutil prints the ellipsis as
+`<no type>`, e.g. `ImGui::Text | void (const char*, <no type>)`), a truncated
+string, or one whose brackets do not balance counts as reading all four
+argument registers (selftest N18d: compared, then passed to `ImGui::Text`;
+`selftest.py --unit` U1/U2). A `cmov` into the register or a write narrower
+than 4 bytes does not end the path (the pointer, or its upper bits, can
+survive it). Residual: a
+proc that only COMPARES against the address of an object that sits right
+after an array it also loops over is not seen as that object's reader (the
+object's content is not used by a compare).
+
+**Known limitations (REVIEW round 2 of `a59d985`, SEV-5, not fixed):**
+- **G4.** The register walk treats a path that runs off the end of the
+  disassembly as ending clean. 107 of 12648 procs in the cast/Direct /O2
+  build disassemble short of their PDB size (a jump table at the end: regex /
+  format std internals, `REL::IDDatabase::unpack_file`). That region is only
+  reachable by fall-through after a `jmp reg`, which already fails while the
+  register is live, so it is benign today. Hardening would treat running off a
+  truncated sequence as a use.
+- **G5.** A compare-only `lea` is compared by O's name. If it is really a
+  pointer-IDENTITY compare against a named object X that sits right after O,
+  then a rebind to a Y that ALSO sits right after a same-named, same-size O in
+  B passes. That needs two layout coincidences, and nothing reads content.
 
 `--tu-map FILE` lists which new TUs each old
 TU became (`old.cpp<TAB>new/a.cpp new/b.cpp`); it is how file-local twins are
@@ -151,7 +208,23 @@ kept apart.
    (twins by TU), RTTI by class name, differently-named callees by structural
    identity. **Read-only data** (a section neither code nor writable): a
    reference to a named object's start, inside a named object of known PDB
-   size, or one past its end (a loop bound) compares by name. Anything else is
+   size, or one past its end (a loop bound) compares by name. One past the end
+   counts as a loop bound only when the instruction is a `lea` whose register
+   is only ever COMPARED (on every path through the function from the `lea`,
+   both edges of each branch walked, until the register is overwritten, the
+   first instruction that reads it is a `cmp` with it as a plain register
+   operand; rcx/rdx/r8/r9 at a call (Windows x64 argument registers;
+   rax/r10/r11 die at a call, callee-saved registers survive it), a return of
+   rax, an indirect jump or a jump out of the function
+   with the value live is a use; padding `nop`s read nothing)
+   AND the same function references the object's START. Otherwise it
+   is whatever begins there (an unnamed literal the linker placed right after
+   the object) and is compared by content (selftest N7 / N7b / N7c: on the
+   cast/Direct pair `"APMF.dll"` sat right after `SKSE::RUNTIME_SSE_1_6_629`, a
+   log literal right after `RE::VTABLE_Character` and `"left"` right after
+   `kSilentWarnEvery`, and each change passed by that name before). The three
+   real bounds on that pair (ClearSelfCasts, ConcProxyForms x2) are all
+   `lea r ; ... cmp x, r`. Anything else is
    compared by CONTENT, never a fixed length: a string literal (named `??_C` or
    unnamed, UTF-8 accepted) as its whole NUL-terminated byte string (a
    source-path literal may change its file name); other unnamed data from the
