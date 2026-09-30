@@ -807,7 +807,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     fire keeps being repaired (re-Prepared into the left hand) under the same claim for as long as the
     rule wins; NO direct/unanimated fallback and NO release beyond the existing state conditions
     (recipient lost/full/out of reach/behind a wall, the stream cap, the kill switch, no controller,
-    rule stops wanting it, combat end, caster down). `LogHealRepair` (`cast/Hands.cpp:866`) logs by
+    rule stops wanting it, combat end, caster down). `LogHealRepair` (`cast/Hands.cpp:878`) logs by
     shape, 5 s per follower per shape, WITH Prepare's real verdict (round 2): out of hand during Loadout's post-fire cooldown = DEBUG (the normal
     gap between casts), out of hand otherwise = INFO, **in hand but not fired past
     `kHealHoldNeverObservedMs` = WARN** (the one shape that should not happen; grep it after a field run).
@@ -848,8 +848,12 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     - **Round 3 (R3-1, R3-2):** `HealRepair::prepare` is true only when the heal is OUT of the left hand;
       with the claim spell or its learned proxy held, the repair is a heartbeat + log and never calls
       Prepare (its Read sees the proxy as "a different spell" and would EquipSpell the original over it).
-      The never-fired WARN is kept only when `ObservedFiring(.., 0)` (the latch) is false; a claim that has
-      fired and sits in hand between casts logs a DEBUG "between casts" shape.
+      The never-fired WARN is kept only when the heal has not fired SINCE THIS CLAIM's lock stamp
+      (`ObservedFiring` over `now - lastSeen`, round 4 spot 2; the fight-wide latch let a re-claim inherit an
+      earlier fire); a claim that has fired and sits in hand between casts logs a DEBUG "between casts"
+      shape. Round 4 spot 1: on the never-fired shape a FOREIGN spell in hand (neither the claim spell nor
+      the learned proxy, read as in hand only on the "proxy still 0" guess) IS Prepared -- past the bound
+      the guess is stale.
     - (R2-4) the caster-down release reads `CannotActReason(f, false)` (`Scheduler.cpp:836`): a queued
       knock does not end a live claim (C3). (R2-5) the stream cap's `End(id, keepSpell=true)`.
   * **DECIDED (marth 2026-09-30, review F4, MFO-B171): a heal re-aims at a new lowest recipient only
@@ -871,7 +875,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     leaves the threshold (not lowest first); letting AUTO fan on the claim road asks one hand for N
     casts. Surfaced backlog: MFO-B5 (a retarget is still Release + RequestCast), MFO-B7/B8
     (`kHealHoldNeverObservedMs` sizing, the next field log measures it), MFO-B58 (Task-1 concentration
-    claims without a controller test), MFO-B161, MFO-B172..B184 (round 1 F7-F13 and round 2's SEV-4/5), MFO-B186..B189 (round 3).
+    claims without a controller test), MFO-B161, MFO-B172..B184 (round 1 F7-F13 and round 2's SEV-4/5), MFO-B186..B189 (round 3), MFO-B190 (round 4).
     Round 2: comparing the equip hold's rank anywhere but through `ForcedHold::rule` vs the heal lock's
     `owningRule` invents a heuristic marth ruled out; letting `OnFollowerHit` / `Tick` act while
     `HealTakesLeft` holds re-creates the per-hit shield thrash; judging the repair before the refresh

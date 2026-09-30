@@ -66,7 +66,9 @@ Read it as history and this block as current.
      line (SHADOW R2-1). An in-hand repair line says `no Prepare: the heal or its proxy is in the left hand`
      and must never be followed by the original spell replacing the proxy (round 3, R3-1). `REPAIR: equipped in
      the left hand but never fired ...` (WARN) is the unsolved "claim that never fires" case (F1 policy) and appears
-     only for a heal never observed firing; between two casts of a claim that has fired it is DEBUG (R3-2).
+     only for a heal not observed firing since THIS claim was stamped (per claim, round 4); between two casts of a
+     claim that has fired it is DEBUG (R3-2). If the AI's own spell sits in the left hand with no proxy learned,
+     the WARN line is followed by `Prepare: equipped` (round 4).
      The follower's own off-hand weapon or torch comes back at combat end, not at the fire (R3-3). A channelled self heal keeps channelling past its first beat, and past its
      stream cap it re-claims with the spell still in hand (no `taken back` on `reached its stream cap`).
   6c. **Gambit order on the left hand (marth's ruling, round 2).** Sword-and-board healer being hit mid-cast:
