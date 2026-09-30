@@ -63,8 +63,11 @@ Read it as history and this block as current.
      re-equipped into the EMPTY left hand ... open gear debt is kept`). `the heal was NOT put back (Prepare:
      debounced): already owe this follower gear` must NOT appear (that was round 2's R2-1 freeze). On the SECOND lap
      of a fresh ally claim with a Self-delivery spell (Fast Healing at an ally, proxied) there must be NO repair
-     line (SHADOW R2-1). `REPAIR: equipped in the left hand but not fired ...` (WARN) is the unsolved "claim that
-     never fires" case (F1 policy). A channelled self heal keeps channelling past its first beat, and past its
+     line (SHADOW R2-1). An in-hand repair line says `no Prepare: the heal or its proxy is in the left hand`
+     and must never be followed by the original spell replacing the proxy (round 3, R3-1). `REPAIR: equipped in
+     the left hand but never fired ...` (WARN) is the unsolved "claim that never fires" case (F1 policy) and appears
+     only for a heal never observed firing; between two casts of a claim that has fired it is DEBUG (R3-2).
+     The follower's own off-hand weapon or torch comes back at combat end, not at the fire (R3-3). A channelled self heal keeps channelling past its first beat, and past its
      stream cap it re-claims with the spell still in hand (no `taken back` on `reached its stream cap`).
   6c. **Gambit order on the left hand (marth's ruling, round 2).** Sword-and-board healer being hit mid-cast:
      `[loadout] ... shield restore DEFERRED` during the charge, then `shield restored (the hit was deferred ...)`
