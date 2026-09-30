@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Hotkeys for the board and the HUD.** Two new keys in the MCM Interface page, or `iBoardKey` and `iHudKey` in the INI. The board key opens and closes the Field Orders board, the same as casting the Field Orders power. The HUD key turns the combat HUD on and off. Both are unbound until you pick a key.
 - **New condition: Foe: Multiple within.** It is true when a foe has at least 2 other foes within the distance you set of it. That is a cluster of 3 or more. The follower picks the middle of the cluster, the foe with the most others near it, and it has to be one they can see. If two tie, they pick the one closest to them. Use it for area spells like Fireball, Chain Lightning or a Fear shout. It is in the Combat gambit list next to Foe: Count at least.
 - **A heal takes the hand at once.** A heal rule near the top of the list no longer waits behind an attack spell lower down. If the ally is down or under the rule's threshold, the follower drops the attack mid-charge and heals. Any other higher rule gets the hand as soon as the attack in progress fires (before, a follower who kept recasting Incinerate never let the heal above it through).
 - **Heals pick an ally they can see.** An Ally HP below rule with a heal skips an ally behind a wall and heals the most hurt ally in sight. If nobody hurt is in sight, the rule passes to the next one. Before, the follower kept picking the ally behind the wall and every cast was refused.

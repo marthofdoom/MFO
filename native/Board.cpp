@@ -818,6 +818,41 @@ namespace MFO::Board {
                         }
                     }
 
+                    // INTERFACE HOTKEYS (iBoardKey / iHudKey, 0 = unbound). Same
+                    // shape as the focus key, panel CLOSED and never consuming.
+                    // The board key OPENS the board here; while it is open the
+                    // keyboard case below closes it (this block does not run then,
+                    // so one press is exactly one toggle).
+                    {
+                        const int bk = Config::g_boardKey.load();
+                        const int hk = Config::g_hudKey.load();
+                        if (bk != 0 || hk != 0) {
+                            for (auto* e = *a_events; e; e = e->next) {
+                                if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) continue;
+                                auto* b = static_cast<RE::ButtonEvent*>(e);
+                                if (!b->IsDown()) continue;                 // edge only
+                                if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
+                                const int code = static_cast<int>(b->GetIDCode());
+                                if (bk != 0 && code == bk) {
+                                    // Same body as the Field Orders power (Diagnostics.cpp):
+                                    // PublishSnapshot reads g_followers, so it runs in a
+                                    // gated AddTask, never inline on the input thread.
+                                    const auto epoch = MFO::Diagnostics::CurrentPumpEpoch();
+                                    SKSE::GetTaskInterface()->AddTask([epoch]() {
+                                        MFO::Diagnostics::PumpTickGate gate(epoch);
+                                        if (!gate) return;
+                                        if (IsAvailable()) {
+                                            PublishSnapshot();
+                                            Toggle();
+                                        }
+                                    });
+                                } else if (hk != 0 && code == hk) {
+                                    ToggleHud();   // a bare atomic flip, safe on the input thread
+                                }
+                            }
+                        }
+                    }
+
                     // PROGRESSION PROBE HOTKEY (dev-only, bProgProbe=0 for everyone
                     // else). The probe MUTATES engine state (AddPerk /
                     // SetBaseActorValue) so it rides MainThread::Post, never AddTask
@@ -935,6 +970,13 @@ namespace MFO::Board {
                                 // instantly reopens.
                                 if (down) g_shoutDownSeen = true;
                                 else if (g_shoutDownSeen.exchange(false)) g_wantClose = true;
+                            } else if (down && Config::g_boardKey.load() != 0 &&
+                                       static_cast<int>(code) == Config::g_boardKey.load() &&
+                                       !io.WantTextInput) {
+                                // iBoardKey closes the open board (press, not release:
+                                // the opening press's release arrives here as !down and
+                                // is ignored). Same flag the shout key uses.
+                                g_wantClose = true;
                             } else if (auto k = DIKToImGuiKey(code); k != ImGuiKey_None) {
                                 io.AddKeyEvent(k, down);
                             }

@@ -4298,7 +4298,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   before any face is added asserts (MergeMode needs a host). Font setup must stay
   before the DX11 backend init. Log: `[overlay-probe] cjk fallback font:`.
 - **INPUT: TWO MUTUALLY EXCLUSIVE CARRIERS over ONE translation body (v2.0.4).**
-  The translation is `InputSink::Feed` (`:751`, hotkeys → close grace → ImGui feed);
+  The translation is `InputSink::Feed` (`:789`, hotkeys → close grace → ImGui feed);
   it returns TRUE when the board has taken the batch. `g_inputTrampoline` (`:92`)
   says which carrier is live, and NOTHING may drive both:
   * **1.6.1170 AND 1.5.97 — `InputDispatchHook` (`:987`), the v1.1.4 call-site
@@ -4324,7 +4324,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
     instruction `48 8b ce` ends at `+0x7B`, next starts at `+0x80`); `rcx` = the
     manager, `rdx` = `lea [rsp+0x40]`, a caller STACK SLOT, so the null is scoped
     to the dispatch. Full derivation in the `InstallInputHook` comment.
-  * **every other runtime — `InputSink::ProcessEvent` (`:963`)**, a
+  * **every other runtime — `InputSink::ProcessEvent` (`:1048`)**, a
     `BSTEventSink<InputEvent*>` on `BSInputDeviceManager` registered by `Install`.
     THE SINK FEEDS THE BOARD here; it cannot consume, so consumption falls to
     `SyncControlBlock` (`:485`, ControlMap toggle, edge-driven from Present) and is
@@ -4362,7 +4362,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
     translation (`:120`), `CloseBoard`
     (`:183` — see the anon-namespace note below), `SpellTooltip` (`:207`), `DrawHud`
     (`:226`), `WndProcHook` (`:313`) + the whole overlay hook section (`:337-1000`),
-    then the public API: `ToggleHud` (`:1008`), `Toggle` (`:1015`), `FillRuleViews`
+    then the public API: `ToggleHud` (`:1088`), `Toggle` (`:1095`), `FillRuleViews`
     (`:1032`), `ApplyEdits` (`:1081`), `PublishSnapshot` (`:1316`),
     `InstallInputHook` (`:1581`), `Install` (`:1622`, end).
   * `Board_FieldKit.cpp` (1135) = **the whole panel**, ONE public function
@@ -4448,7 +4448,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   queued edits so a command from the old save can't hit a freshly loaded one.
   `SetHud` ← `plugin.cpp:365`, `Diagnostics.cpp:94`, `Serialization.cpp:621`.
   `IsOpen`/`IsAvailable`/`Toggle` ← Diagnostics (publish cadence + Field Orders
-  power). `ToggleHud` (`Board.cpp:809`) is **dead** (no caller).
+  power). `ToggleHud` (`Board.cpp:1088`) is called by the `iHudKey` hotkey in `InputSink::Feed` (`Board.cpp:~820-850`, panel closed). The `iBoardKey` hotkey is there too: closed = gated `AddTask` { `PublishSnapshot` + `Toggle` } (same body as the Field Orders power in Diagnostics.cpp); open = the keyboard case sets `g_wantClose` (the shout-key close flag, consumed in `DrawFieldKit`). Both keys default 0 (unbound), `Config::g_boardKey`/`g_hudKey`, MCM keymaps on the Interface page. The HUD key flips `g_hud` only: an MCM/Journal close re-applies `bShowHud` over it.
 
 ### Papyrus.cpp / Papyrus.h — outbound VM dispatch shim
 Reaches Papyrus-only natives by class-name+method-name string, async fire-and-forget.

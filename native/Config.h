@@ -86,6 +86,12 @@ namespace MFO::Config {
     // DIK code for the focus hotkey. 0x2B is backslash -- unbound in vanilla
     // Skyrim, so it will not fight an existing control. 0 disables.
     inline std::atomic<int>   g_focusKey{ 0x2B };
+    // DIK codes for the interface hotkeys (INI iBoardKey / iHudKey, both also
+    // MCM keymaps on the Interface page). iBoardKey toggles the Field Orders
+    // board exactly like the Field Orders power (and closes it when open);
+    // iHudKey toggles the combat HUD. 0 = unbound (the default for both).
+    inline std::atomic<int>   g_boardKey{ 0 };
+    inline std::atomic<int>   g_hudKey{ 0 };
     // Put the gambit spell in the follower's hand so they cast it with a real
     // animation, and -- crucially -- so Loadout::Prepare's HasSpell/affordability
     // gate runs (the silent path skips it and would cast an unknown spell). Now
