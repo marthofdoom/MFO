@@ -749,14 +749,30 @@ namespace MFO::ComposedCast {
         return sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
     }
 
-    void End(RE::FormID a_follower) {
+    bool HealTakesLeft(RE::Actor* a_follower) {
+        const RE::FormID fid = a_follower ? a_follower->GetFormID() : 0;
+        if (fid == 0) return false;
+        const RE::FormID spell = APMFBridge::GetHealCastSpell(fid);
+        if (spell == 0) return false;   // no heal claim stands
+        if (Actuation::CastInFlightOnHand(a_follower, Actuation::kHandLeft, spell,
+                                          APMFBridge::GetHealCastProxy(fid)))
+            return true;                // charging / channelling now
+        const float cd = Config::g_castCooldown.load();
+        // ObservedFiring(.., 0) is the "ever" latch, so a zero cooldown asks for a
+        // 1 ms window instead: effectively "not fired", i.e. pending all claim long.
+        const auto ms = cd > 0.0f ? static_cast<std::uint32_t>(cd * 1000.0f) : 1u;
+        return !ObservedFiring(fid, APMFBridge::kApmfHandLeft, spell, ms);
+    }
+
+    void End(RE::FormID a_follower, bool a_keepSpell) {
         // THE HEAL SPELL LEAVES THE HAND WITH ITS CLAIM (animheal phase 2, review
         // F2): a claimed concentration heal keeps its spell through the fire event
         // (Loadout::StartCooldown(.., false)), so its end is where MFO takes back
         // the spell it equipped -- only that spell (ReleaseSpellIf), never an
         // offense spell MFO equipped since. Read before the release clears it.
+        // Not on a stream-cap re-stream (a_keepSpell, R2-5): the spell stays.
         const RE::FormID healSpell = APMFBridge::GetHealCastSpell(a_follower);
-        if (healSpell != 0) Loadout::ReleaseSpellIf(a_follower, healSpell);
+        if (healSpell != 0 && !a_keepSpell) Loadout::ReleaseSpellIf(a_follower, healSpell);
         APMFBridge::ReleaseHealCast(a_follower);
         CastBounds::Disarm(a_follower);
         // Heal is always LEFT -- clear only that slot; a concurrent offense

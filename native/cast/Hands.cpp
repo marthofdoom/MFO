@@ -623,8 +623,10 @@ namespace MFO::Actuation {
         // one lands (the 2.3-4.5 s window IncumbentTargetLost's note guards).
         // ObservedFiring only ever answers for a CLAIM (it reads the [cfc] watch),
         // so the direct road's locks are untouched. `lastSeen` is the lock's claim
-        // stamp (the in-flight refresh never re-stamps it), so "fired within
-        // now - lastSeen" is "fired since this recipient was claimed".
+        // stamp (neither the in-flight refresh nor a heal REPAIR lap re-stamps it --
+        // the repair runs inside the refresh and never reaches lockHands, review
+        // round 2 R2-3), so "fired within now - lastSeen" is "fired since this
+        // recipient was claimed".
         bool IncumbentHealCastDone(RE::Actor* a_follower, std::size_t a_hand, const CastLock& a_lock) {
             const auto fid = a_follower ? a_follower->GetFormID() : 0;
             if (fid == 0 || a_lock.spell == 0) return false;   // target 0 (self) included
@@ -737,7 +739,8 @@ namespace MFO::Actuation {
     // rule owns on the same spell is that rule's (two rules can share a spell).
     // kNoRule (the OOC Logistics caller) owns nothing and so releases nothing it did
     // not claim itself -- it can only meet its own claim here.
-    bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why) {
+    bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why,
+                             bool a_keepSpell) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0 || a_spell == 0) return false;
         if (APMFBridge::GetHealCastSpell(fid) != a_spell) return false;
@@ -748,7 +751,7 @@ namespace MFO::Actuation {
                 return false;   // another rule's claim on the same spell
         }
         const RE::FormID recipient = APMFBridge::GetHealCastTarget(fid);
-        ComposedCast::End(fid);
+        ComposedCast::End(fid, a_keepSpell);
         if (it != g_castLock.end() && it->second.hand[kHandLeft].spell == a_spell)
             it->second.hand[kHandLeft] = CastLock{};
         static std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> s_log;
@@ -768,13 +771,15 @@ namespace MFO::Actuation {
     // moment it is not channelling, the clock resets. A per-channel cap drawn once
     // from DrawConcCap's heal band, like the direct stream's (principle 9: it bounds
     // one channel, it never paces casts).
-    const char* HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+    HealRepair HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
-        if (fid == 0 || !a_spell) return nullptr;
+        if (fid == 0 || !a_spell) return {};
         const RE::FormID spellID = a_spell->GetFormID();
-        if (APMFBridge::GetHealCastSpell(fid) != spellID) return nullptr;   // not this heal's claim
+        if (APMFBridge::GetHealCastSpell(fid) != spellID) return {};   // not this heal's claim
+        // The proxy as the refresh the caller has JUST made learned it (round 2,
+        // SHADOW R2-1: read before that refresh it was still 0 on lap 2).
         const RE::FormID proxy = CastProxyOnHand(fid, kHandLeft);
-        if (CastInFlightOnHand(a_follower, kHandLeft, spellID, proxy)) return nullptr;   // casting: leave it
+        if (CastInFlightOnHand(a_follower, kHandLeft, spellID, proxy)) return {};   // casting: leave it
         // THREE SHAPES, THREE LOG LEVELS (F1 policy, marth 2026-09-30: "we're basically
         // tricking the engine into using our spells. Once equipped it's never failed").
         // The repair IS the policy: re-Prepare the heal into the left hand, stay on the
@@ -783,25 +788,33 @@ namespace MFO::Actuation {
         //  - kCooldown (debug): out of hand while Loadout's post-fire cooldown runs. That
         //    is the NORMAL gap between two casts (StartCooldown took it back); Prepare
         //    refuses the re-equip until the cooldown ends. Not news.
-        //  - kOutOfHand (info): out of hand with no cooldown (a shield restored on hit,
-        //    a 2H / bow given back, an equip-gambit declaration). A real repair.
+        //  - kOutOfHand (info): out of hand with no cooldown (a shield restored after
+        //    the heal fired, a 2H / bow given back, an equip gambit's hold returned).
+        //    A real repair.
         //  - kNeverFired (WARN): the heal IS in the left hand and the engine has not
         //    fired it within the never-observed bound. The one shape that is not
         //    expected to happen, so it stays loud.
         enum Shape : std::uint8_t { kCooldown, kOutOfHand, kNeverFired };
-        const char* why   = nullptr;
-        Shape       shape = kOutOfHand;
+        HealRepair rep;
+        rep.shape = kOutOfHand;
         // Left hand = GetEquippedObject(true), the same read Loadout::Read /
         // ReleaseSpell make. A plain member read, racy like CastInFlightOnHand's:
         // at worst one lap early or late.
         auto* held = a_follower->GetEquippedObject(true);
-        const bool inHand = held && (held->GetFormID() == spellID || (proxy != 0 && held->GetFormID() == proxy));
+        bool inHand = held && (held->GetFormID() == spellID || (proxy != 0 && held->GetFormID() == proxy));
+        // PROXY STILL UNKNOWN (SHADOW R2-1's second half): APMF can mint and select its
+        // delivery-flip proxy in its own Drain between the refresh and this read. A
+        // spell MFO does not recognise in the left hand of a live claim whose proxy is
+        // not learned yet is therefore read as the heal's, never overwritten on a
+        // guess. Not a mask: if it is really the AI's own spell, it never fires as
+        // this claim, and the kNeverFired test below repairs it within the bound.
+        if (!inHand && proxy == 0 && held && held->As<RE::SpellItem>()) inHand = true;
         if (!inHand) {
             if (Loadout::CoolingDown(fid)) {
-                why   = "the heal is out of the left hand during the post-fire cooldown";
-                shape = kCooldown;
+                rep.why   = "the heal is out of the left hand during the post-fire cooldown";
+                rep.shape = kCooldown;
             } else {
-                why = "the heal is no longer in the left hand";
+                rep.why = "the heal is no longer in the left hand";
             }
         } else if (auto it = g_castLock.find(fid); it != g_castLock.end()) {
             const auto& lk  = it->second.hand[kHandLeft];
@@ -810,28 +823,45 @@ namespace MFO::Actuation {
                 age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
                 !ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, spellID,
                                               APMFBridge::kHealHoldNeverObservedMs)) {
-                why   = "equipped in the left hand but not fired within the never-observed bound";
-                shape = kNeverFired;
+                rep.why   = "equipped in the left hand but not fired within the never-observed bound";
+                rep.shape = kNeverFired;
             }
         }
-        if (!why) return nullptr;
-        // One 5 s slot per (follower, shape): a quiet cooldown line never uses up the
-        // slot a WARN needs.
+        return rep;
+    }
+
+    const char* HealRepairVerdict(Loadout::Ready a_ready) {
+        switch (a_ready) {
+        case Loadout::Ready::AlreadyReady: return "the heal is in the left hand (Prepare: already ready)";
+        case Loadout::Ready::Equipped:     return "the heal was put back in the left hand (Prepare: equipped)";
+        case Loadout::Ready::Debounced:    return "the heal was NOT put back (Prepare: debounced)";
+        case Loadout::Ready::Failed:       return "the heal was NOT put back (Prepare: FAILED)";
+        }
+        return "?";
+    }
+
+    // THE REPAIR'S LOG LINE, WITH PREPARE'S REAL VERDICT (review round 2, R2-1: the
+    // round-1 line said "prepared again" on laps where Prepare had answered Debounced).
+    // One 5 s slot per (follower, shape), so a quiet cooldown line never uses up the
+    // slot a WARN needs. A Failed verdict is at least WARN whatever the shape.
+    void LogHealRepair(RE::FormID a_follower, RE::FormID a_spell, const HealRepair& a_rep,
+                       Loadout::Ready a_ready, const std::string& a_prepareWhy) {
+        if (!a_rep) return;
         struct Slots { std::chrono::steady_clock::time_point at[3]{}; };
         static std::unordered_map<RE::FormID, Slots> s_log;
+        const std::uint8_t shape = a_rep.shape < 3 ? a_rep.shape : 1;
         const auto now  = std::chrono::steady_clock::now();
-        auto&      last = s_log[fid].at[shape];
-        if (std::chrono::duration<float>(now - last).count() >= 5.0f) {
-            last = now;
-            const auto lvl = shape == kCooldown   ? spdlog::level::debug :
-                             shape == kNeverFired ? spdlog::level::warn :
-                                                    spdlog::level::info;
-            spdlog::log(lvl,
-                        "[heal] {:08X} heal claim (spell {:08X}) REPAIR: {} -- not refreshed; the "
-                        "left hand is prepared again (Loadout::Prepare) under the same claim",
-                        fid, spellID, why);
-        }
-        return why;
+        auto&      last = s_log[a_follower].at[shape];
+        if (std::chrono::duration<float>(now - last).count() < 5.0f) return;
+        last = now;
+        auto lvl = shape == 0 ? spdlog::level::debug :
+                   shape == 2 ? spdlog::level::warn :
+                                spdlog::level::info;
+        if (a_ready == Loadout::Ready::Failed) lvl = spdlog::level::warn;
+        spdlog::log(lvl,
+                    "[heal] {:08X} heal claim (spell {:08X}) REPAIR: {} -- claim refreshed; {}{}{}",
+                    a_follower, a_spell, a_rep.why, HealRepairVerdict(a_ready),
+                    a_prepareWhy.empty() ? "" : ": ", a_prepareWhy);
     }
 
     bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec) {

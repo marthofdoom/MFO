@@ -828,10 +828,16 @@ namespace MFO::Scheduler {
         // else is released), and a standing heal claim would otherwise live until the
         // FacetExpiry sweep. Guarded so a downed follower costs one bridge read per
         // service and logs once per claim.
-        if (cannotAct && APMFBridge::GetHealCastSpell(id) != 0) {
-            spdlog::info("[heal] {:08X} cannot act ({}) -- the standing heal claim (spell {:08X}) "
-                         "is RELEASED", id, cannotAct, APMFBridge::GetHealCastSpell(id));
-            ComposedCast::End(id);
+        // THE RELEASE READS WITHOUT THE QUEUED KNOCK (review round 2, R2-4): the C3
+        // contract (cast/Actuation.h, CannotActReason) is that a merely QUEUED knock
+        // is momentary and may never become a knockdown, so it never frees a live heal
+        // stream. The scan's own gate above keeps the default read.
+        if (APMFBridge::GetHealCastSpell(id) != 0) {
+            if (const char* down = Actuation::CannotActReason(f, /*a_countPendingKnock=*/false)) {
+                spdlog::info("[heal] {:08X} cannot act ({}) -- the standing heal claim (spell {:08X}) "
+                             "is RELEASED", id, down, APMFBridge::GetHealCastSpell(id));
+                ComposedCast::End(id);
+            }
         }
 
         // T#78: THE PER-FOLLOWER MFO MASTER SWITCH. When OFF, MFO leaves this

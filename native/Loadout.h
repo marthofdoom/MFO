@@ -134,8 +134,12 @@ namespace MFO::Loadout {
     // displaced so it can be given back. `a_yieldLeft` (see LeftHandYield) is
     // invoked right before the spell takes the left hand; nullptr = no hold to
     // yield (the only caller today is CastOn, which always passes it).
+    // a_healClaimLive (review round 2, R2-1): the caller holds a LIVE heal claim for
+    // a_spell. Then an open gear debt no longer refuses a re-equip into an EMPTY
+    // left hand (with no two-hander in the right): that equip displaces nothing,
+    // so the ledger is left untouched.
     Ready Prepare(RE::Actor* a_actor, RE::SpellItem* a_spell, std::string& a_why,
-                  LeftHandYield a_yieldLeft = nullptr);
+                  LeftHandYield a_yieldLeft = nullptr, bool a_healClaimLive = false);
 
     // Hand back everything owed to ONE follower -- on dismissal, or when they
     // leave the party still holding MFO's choice.
@@ -182,7 +186,10 @@ namespace MFO::Loadout {
     bool CoolingDown(RE::FormID a_actorID);
 
     // Restore a displaced SHIELD. Called from the hit sink -- a shield is worth
-    // giving back at the instant something hits them, and not before.
+    // giving back at the instant something hits them, and not before. DEFERRED
+    // while a live heal claim's cast is pending on the left hand
+    // (ComposedCast::HealTakesLeft; Tick restores it right after the heal fires or
+    // the claim ends), as is Tick's two-hander give-back (review round 2).
     void OnFollowerHit(RE::FormID a_actorID);
 
     // Restore a stowed two-handed weapon once its cast is done.

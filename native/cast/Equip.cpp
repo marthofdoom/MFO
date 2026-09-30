@@ -108,6 +108,15 @@ namespace MFO::Actuation {
                            a_w->IsOneHandedAxe()   || a_w->IsOneHandedMace());
         }
 
+        // Two-hander / bow / crossbow: a RIGHT-hand weapon that occupies the LEFT hand
+        // too (the same set Loadout's IsTwoHanded stows and EquipAuthority's
+        // rightTwoHanded names). Review round 2: such a hold is on the left hand's
+        // gambit-order ledger as much as a dual-wield left hold is.
+        bool TakesBothHands(const RE::TESForm* a_form) {
+            const auto* w = a_form ? a_form->As<RE::TESObjectWEAP>() : nullptr;
+            return w && (w->IsTwoHandedSword() || w->IsTwoHandedAxe() || w->IsBow() || w->IsCrossbow());
+        }
+
         // LOTD MUSEUM RELIC (field 2026-09-26, MFO-B126): a weapon base this follower
         // covers for the museum (Lotd::HoldFromSale -- the Economy / SwapUp "never sell"
         // test). It is carried to be DEPOSITED, not fought with: Cicero's looted relic
@@ -320,11 +329,13 @@ namespace MFO::Actuation {
             const auto it = g_followers.find(id);
             if (it == g_followers.end()) return;
             RE::FormID right = 0, left = 0;
+            int holdRule = kNoRule;
             {
                 std::scoped_lock lk(g_forcedMx);
                 if (auto h = g_forcedWeapon.find(id); h != g_forcedWeapon.end()) {
                     right = h->second.right ? h->second.right->GetFormID() : 0;
                     left  = h->second.left  ? h->second.left->GetFormID()  : 0;
+                    holdRule = h->second.rule;
                 }
             }
             // MFO-B41: unchanged ledger + its weapon in neither hand -> re-send.
@@ -345,7 +356,8 @@ namespace MFO::Actuation {
             }
             g_lastLedgerDeclared[id] = { right, left };
             Logistics::RefreshEquipDeclaration(a_follower, it->second, right, left,
-                                               CastHandHeld(a_follower, kHandLeft), /*judgeArmor*/false, a_why);
+                                               LeftReservedForCast(a_follower, holdRule),
+                                               /*judgeArmor*/false, a_why);
         }
 
         // Off-hand TOP-UP cadence on the equip rule's SATISFIED lap (the AI drew
@@ -458,7 +470,7 @@ namespace MFO::Actuation {
                     // cast until combat end. The repay (hit / combat end) clears
                     // the debt, then the top-up may fill the hand.
                     if (rightW && IsOneHandMelee(rightW) && !leftW && due &&
-                        !CastHandHeld(a_follower, kHandLeft) && !Loadout::OwesLeft(id)) {
+                        !LeftReservedForCast(a_follower, g_firingRule) && !Loadout::OwesLeft(id)) {
                         g_offHandRetryAt[id] = now + kOffHandRetry;
                         const Logistics::WeaponRoles roles = WeaponRolesFor(a_follower);
                         // TRANSPARENT either way (Fable F5 on f771399): a refill is a
@@ -522,6 +534,14 @@ namespace MFO::Actuation {
                         }
                     }
                 }
+                // RANK STAMP (review round 2, marth's ruling): a satisfied lap is this
+                // rule holding the hand this lap, so the hold (including one the
+                // top-up above just created) carries its rule index.
+                {
+                    std::scoped_lock lk(g_forcedMx);
+                    if (auto h = g_forcedWeapon.find(a_follower->GetFormID()); h != g_forcedWeapon.end())
+                        h->second.rule = g_firingRule;
+                }
                 return { Result::NoOp, "already holding that category", true };
             }
             // THE PICK: WeaponScore inside the ordered class (banner above). Ranged
@@ -553,6 +573,27 @@ namespace MFO::Actuation {
             if (!best) return { Result::FailedSkill, a_ranged ? "no ranged weapon carried"
                                                               : "no melee weapon carried",
                                 true };   // transparent -- cannot act, rules below run (§2)
+            // GAMBIT ORDER ON THE LEFT HAND (review round 2, marth 2026-09-30: "Gambit
+            // order wins ... a poorly ordered gambit board shouldn't be rescued
+            // programmatically"). A two-hander / bow takes the left hand too. While a
+            // live heal claim ranked ABOVE this equip rule has its cast pending there
+            // (HealClaimTakesLeftFrom: rank + ComposedCast::HealTakesLeft), the equip
+            // holds off -- transparent, nothing touched -- and puts the weapon back on
+            // the first lap after the heal fires or the claim ends. A heal ranked
+            // BELOW this rule never claims the hand at all (CastOn's LeftHoldRule gate).
+            if (TakesBothHands(best) && HealClaimTakesLeftFrom(a_follower, g_firingRule)) {
+                static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_heldLog;
+                const auto now = std::chrono::steady_clock::now();
+                auto& last = s_heldLog[a_follower->GetFormID()];
+                if (now - last >= std::chrono::seconds(5)) {
+                    last = now;
+                    spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' HELD OFF -- it takes both hands and a "
+                                 "heal claim ranked above rule {} holds the left hand until its heal fires",
+                                 a_follower->GetFormID(), a_ranged ? "ranged" : "melee",
+                                 best->GetName() ? best->GetName() : "?", g_firingRule);
+                }
+                return { Result::NoOp, "held off: a higher-ranked heal claim holds the left hand", true };
+            }
             const std::uint16_t bestDmg = best->GetAttackDamage();
             // Off-hand plan (one-hander in the right; offHand 2 -> a second one-
             // hander, 1 -> a shield), gated on bWeaponStyleControl. A live cast
@@ -564,7 +605,7 @@ namespace MFO::Actuation {
             bool               authority     = false;     // APMF equip authority live for this follower (set below)
             const bool offHandWanted = !a_ranged && roles.offHand != 0 && IsOneHandMelee(best) &&
                                        Config::g_weaponStyleControl.load();
-            const bool leftCastHeld  = offHandWanted && CastHandHeld(a_follower, kHandLeft);
+            const bool leftCastHeld  = offHandWanted && LeftReservedForCast(a_follower, g_firingRule);
             if (offHandWanted && !leftCastHeld) {
                 // The WEAPON hold (a prevent-removal lock) is also refused over an
                 // open LEFT gear debt (F-A, same reason as the top-up); the shield
@@ -638,6 +679,7 @@ namespace MFO::Actuation {
                         std::scoped_lock lk(g_forcedMx);
                         auto& hold = g_forcedWeapon[id];
                         hold.right = best;
+                        hold.rule  = g_firingRule;   // RANK STAMP (review round 2)
                         if (oldLeft) hold.left = nullptr;
                     }
                     // Off-hand (style control ON only -- see the plan above). The
@@ -857,17 +899,21 @@ namespace MFO::Actuation {
     // lock lapses. A left-ONLY hold (AI-equipped right) erases the entry and
     // releases the APMF equipment claim, so the claim never outlives the hold.
     // Idempotent. Worker-serial; map under the lock, engine call outside it.
-    bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why) {
+    bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why, bool a_twoHandToo) {
         if (!a_follower) return false;
         const auto id = a_follower->GetFormID();
-        RE::TESBoundObject* left = nullptr;
+        RE::TESBoundObject* left    = nullptr;
+        RE::TESBoundObject* right2h = nullptr;   // a two-hander / bow right hold (a_twoHandToo)
         bool lastHold = false;
         {
             std::scoped_lock lk(g_forcedMx);
             auto it = g_forcedWeapon.find(id);
-            if (it == g_forcedWeapon.end() || !it->second.left) return false;
+            if (it == g_forcedWeapon.end()) return false;
             left = it->second.left;
+            if (a_twoHandToo && TakesBothHands(it->second.right)) right2h = it->second.right;
+            if (!left && !right2h) return false;
             it->second.left = nullptr;
+            if (right2h) it->second.right = nullptr;
             if (it->second.Empty()) { g_forcedWeapon.erase(it); lastHold = true; }
         }
         // A FLOOR, not a reset (F1, principle 9): the top-up may refill the hand
@@ -879,13 +925,54 @@ namespace MFO::Actuation {
         // by object is unverified against a one-hander the engine could resolve
         // to the RIGHT hand, which would leave the left prevent-removal lock
         // standing and the hand unable to take a spell (heals are left-only).
-        if (auto* mgr = RE::ActorEquipManager::GetSingleton())
-            mgr->UnequipObject(a_follower, left, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+        // The two-hander's unequip is ReleaseForcedWeapon's own right-hand call
+        // (default slot, forced, which clears its prevent-removal lock).
+        if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
+            if (left)    mgr->UnequipObject(a_follower, left, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+            if (right2h) mgr->UnequipObject(a_follower, right2h, nullptr, 1, nullptr, true, true);
+        }
         if (lastHold) APMFBridge::ReleaseEquipment(id);
-        spdlog::info("[equip] {:08X}: left-hand hold yielded ({}){}", id, a_why,
+        spdlog::info("[equip] {:08X}: {} hold yielded ({}){}", id,
+                     right2h ? "two-handed (it takes the left hand too)" : "left-hand", a_why,
                      lastHold ? " -- no hold remains" : "");
-        LogLeftHandReadback(id);
+        if (left) LogLeftHandReadback(id);
         return true;
+    }
+
+    // ── GAMBIT ORDER ON THE LEFT HAND (review round 2; contract in
+    // Actuation_internal.h beside the declarations) ──────────────────────────────
+    int LeftHoldRule(RE::FormID a_follower) {
+        std::scoped_lock lk(g_forcedMx);
+        const auto it = g_forcedWeapon.find(a_follower);
+        if (it == g_forcedWeapon.end()) return kNoRule;
+        return (it->second.left || TakesBothHands(it->second.right)) ? it->second.rule : kNoRule;
+    }
+
+    bool HealClaimTakesLeftFrom(RE::Actor* a_follower, int a_holdRule) {
+        const auto fid = a_follower ? a_follower->GetFormID() : 0;
+        if (fid == 0) return false;
+        const RE::FormID heal = APMFBridge::GetHealCastSpell(fid);
+        if (heal == 0) return false;
+        // The heal's rank is its LEFT lock's owningRule (carried, never inferred).
+        // No lock naming it (the OOC Logistics caller, kNoRule) ranks below any
+        // real rule, exactly as CanPreemptHand treats an unowned hand.
+        int healRule = kNoRule;
+        if (auto it = g_castLock.find(fid); it != g_castLock.end() &&
+                                            it->second.hand[kHandLeft].spell == heal)
+            healRule = it->second.hand[kHandLeft].owningRule;
+        if (a_holdRule < healRule) return false;   // the equip gambit outranks: it keeps the hand
+        return ComposedCast::HealTakesLeft(a_follower);
+    }
+
+    bool LeftReservedForCast(RE::Actor* a_follower, int a_holdRule) {
+        if (!CastHandHeld(a_follower, kHandLeft)) return false;
+        const auto fid = a_follower->GetFormID();
+        // Anything but a lone heal claim on the left (an offense claim, a lock
+        // with no heal claim behind it) keeps the answer it always had.
+        if (APMFBridge::GetHealCastSpell(fid) == 0 ||
+            APMFBridge::IsOwnedCastActiveOnHand(fid, APMFBridge::kApmfHandLeft))
+            return true;
+        return HealClaimTakesLeftFrom(a_follower, a_holdRule);
     }
 
     void ReconcileForcedWeapon(RE::Actor* a_follower, int a_wantStance, bool a_condKnownFalse) {
@@ -928,14 +1015,26 @@ namespace MFO::Actuation {
         // outside the lock; Yield locks itself. Ordered BEFORE the release/claim
         // decision so a yield that emptied a left-only entry reads as "nothing
         // forced" and no equipment claim is re-engaged for a dead hold.
-        bool leftHeld = false;
+        // Review round 2 (marth's ruling): the question is LeftReservedForCast, which
+        // for a HEAL claim adds the gambit order (the hold keeps the hand when its
+        // rule outranks the heal's) and the pending test (the hold returns once the
+        // heal has fired); a two-hander / bow right hold yields to such a heal too.
+        bool leftHeld = false, twoHandHeld = false;
+        int  holdRule = kNoRule;
         {
             std::scoped_lock lk(g_forcedMx);
             auto it = g_forcedWeapon.find(a_follower->GetFormID());
-            leftHeld = it != g_forcedWeapon.end() && it->second.left != nullptr;
+            if (it != g_forcedWeapon.end()) {
+                leftHeld    = it->second.left != nullptr;
+                twoHandHeld = TakesBothHands(it->second.right);
+                holdRule    = it->second.rule;
+            }
         }
-        if (leftHeld && CastHandHeld(a_follower, kHandLeft))
+        if (leftHeld && LeftReservedForCast(a_follower, holdRule))
             YieldForcedLeftHand(a_follower, "a cast claim is live on the left hand");
+        else if (twoHandHeld && HealClaimTakesLeftFrom(a_follower, holdRule))
+            YieldForcedLeftHand(a_follower, "a higher-ranked heal claim takes the left hand",
+                                /*a_twoHandToo=*/true);
         bool release = false;
         RE::FormID heldWeaponForm = 0;   // captured under the lock; used outside it below
         {

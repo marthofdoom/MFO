@@ -207,7 +207,11 @@ namespace MFO::ComposedCast {
     // shared APMFBridge FacetExpiry() backstop AND the claim's own TTL (on
     // APMF's side) cover a caller that forgets. Safe to call when nothing is
     // held (no-op). Also clears this module's own silent-cast diagnostic watch.
-    void End(RE::FormID a_follower);
+    // a_keepSpell (review round 2, R2-5): true leaves the heal spell in the hand
+    // (no Loadout::ReleaseSpellIf). ONLY the concentration stream cap passes it: that
+    // release is a re-stream while the rule still wins, not the claim's real end, so
+    // the next lap re-claims with the spell already in hand (Prepare: AlreadyReady).
+    void End(RE::FormID a_follower, bool a_keepSpell = false);
 
     // animheal phase 2 (review F2). True when a_fired (the SpellSink's observed
     // form) is the LIVE heal claim's spell or its delivery-flip proxy AND that
@@ -215,6 +219,23 @@ namespace MFO::ComposedCast {
     // so the sink must not take the spell back then (Loadout::StartCooldown's
     // a_release = false); End() takes it back when the claim ends. Worker-safe.
     bool HealClaimFireKeepsSpell(RE::FormID a_follower, RE::FormID a_fired);
+
+    // IS A LIVE HEAL CLAIM'S CAST PENDING ON THE LEFT HAND? (review round 2, marth's
+    // ruling 2026-09-30: "Gambit order wins, so in most cases it's heal. But a poorly
+    // ordered gambit board shouldn't be rescued programmatically.") True while a heal
+    // claim stands (it exists only because its rule WON the gambit order) AND its
+    // heal is either charging / channelling on the left (CastInFlightOnHand, the one
+    // in-flight definition) or has NOT fired within the post-fire cooldown
+    // (fCastCooldown; ObservedFiring over the [cfc] watch). So it turns false the
+    // moment the heal fires, stays false through the cooldown, turns true again when
+    // the next cast of the same claim is due, and is false once the claim ends.
+    // What reads it: MFO's own NON-GAMBIT left-hand automation (Loadout's shield-
+    // on-hit restore and two-hander give-back) is suspended while it is true and
+    // resumes right after; an equip gambit's hold ranked BELOW the heal rule yields
+    // the left hand while it is true (Actuation's equip side adds the rank test).
+    // No cooldown configured (fCastCooldown <= 0): pending for the whole claim.
+    // Worker-serial (reads the watch map, like ObservedFiring).
+    bool HealTakesLeft(RE::Actor* a_follower);
 
     // ── observe hand-off (Diagnostics::SpellSink's call site) ──────────────────
     // Diagnostics.cpp's TESSpellCastEvent sink calls ExpectingCast(caster,

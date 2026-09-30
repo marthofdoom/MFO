@@ -366,9 +366,16 @@ namespace MFO::Actuation {
         // holds a weapon on this follower"). FWPN co-save layout is UNCHANGED (v1):
         // each non-null hand is written as its own (follower, weapon) pair, and the
         // loader has always released pairs by object, never by slot.
+        // `rule` (review round 2, marth's ruling 2026-09-30): the RANK of the equip
+        // gambit that holds it, stamped from g_firingRule by EquipWeapon on every lap
+        // the rule fires or is satisfied -- the same carried rule index the cast-hand
+        // lock keeps (CastLock::owningRule), compared the same way (lower index
+        // outranks). IN MEMORY ONLY: the FWPN co-save writes the weapon pairs alone
+        // and a session starts hold-free, so nothing about the save changes.
         struct ForcedHold {
             RE::TESBoundObject* right = nullptr;
             RE::TESBoundObject* left  = nullptr;
+            int rule = kNoRule;
             bool Empty() const { return !right && !left; }
         };
         extern std::unordered_map<RE::FormID, ForcedHold> g_forcedWeapon;
@@ -394,7 +401,33 @@ namespace MFO::Actuation {
         // -> false, nothing touched. Re-stamps the off-hand top-up FLOOR
         // (kOffHandRetry) rather than erasing it, so a refused cast can cost at
         // most one weapon<->spell flicker per 5 s, never one per lap.
-        bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why);
+        // a_twoHandToo (review round 2, marth's ruling): ALSO yield a two-hander /
+        // bow / crossbow RIGHT hold (it occupies the left hand as well). Passed only
+        // by the heal claim road, after CastOn has checked that the heal rule
+        // OUTRANKS the hold (LeftHoldRule); the equip gambit takes it back after the
+        // heal fires (EquipWeapon's HealClaimTakesLeftFrom gate). A true return then
+        // also covers that right hold (Prepare books no stow debt for it).
+        bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why, bool a_twoHandToo = false);
+
+        // ── GAMBIT ORDER ON THE LEFT HAND: equip hold vs heal claim (review round
+        // 2, marth 2026-09-30: "Gambit order wins, so in most cases it's heal. But a
+        // poorly ordered gambit board shouldn't be rescued programmatically.") ─────
+        // LeftHoldRule: the rank (ForcedHold::rule) of an equip-gambit hold that
+        // occupies the LEFT hand -- a dual-wield left hold, or a two-hander / bow /
+        // crossbow right hold -- or kNoRule when none does. CastOn's heal road
+        // compares it with g_firingRule: a hold that outranks the heal rule keeps
+        // the hand and the heal does not claim.
+        // HealClaimTakesLeftFrom: does a live heal claim take the left hand from an
+        // equip hold of rank a_holdRule right now? True only when the heal's LEFT
+        // lock rule does not rank below the hold (the gambit order) AND the heal's
+        // cast is pending (ComposedCast::HealTakesLeft: until it fires, from the
+        // cooldown's end again, false once the claim ends). The equip side's "is the
+        // left hand reserved for a cast" reads (LeftReservedForCast) consult it for
+        // a heal claim; an offense claim keeps the old CastHandHeld answer.
+        // All worker-serial (#4; the ledger under g_forcedMx).
+        int  LeftHoldRule(RE::FormID a_follower);
+        bool HealClaimTakesLeftFrom(RE::Actor* a_follower, int a_holdRule);
+        bool LeftReservedForCast(RE::Actor* a_follower, int a_holdRule);
 
         // ── THE LOCK'S CROSS-TU ENTRY POINTS ────────────────────────────────────
         // Defined in Actuation_Hands.cpp, each still carrying the doc comment it has
@@ -418,24 +451,38 @@ namespace MFO::Actuation {
         // HealChannelCapped: true once the engine has channelled the LEFT lock's
         // concentration heal continuously past its drawn cap (see CastLock::
         // channelSince); a_capSec reports the cap. Both worker-serial (#4).
-        bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why);
+        // a_keepSpell: the concentration stream cap's re-stream (R2-5) -- ComposedCast::
+        // End leaves the spell in the hand.
+        bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why,
+                                 bool a_keepSpell = false);
         bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec);
         // HealClaimNeedsRepair (review F1, the part that is needed whatever marth
-        // decides): on a lap that would only REFRESH this rule's standing heal claim
-        // (CastOn's in-flight branch), is the claim's steady state broken? Non-null
-        // (the reason, logged once per 5 s per follower per shape: DEBUG while out of
-        // hand in the post-fire cooldown, INFO out of hand otherwise, WARN when in hand
-        // but never fired past the bound) when the engine is NOT
+        // decides): on a lap that has just REFRESHED this rule's standing heal claim
+        // (CastOn's in-flight branch -- after the refresh, which is what learns the
+        // delivery-flip proxy, round 2 SHADOW R2-1), is the claim's steady state
+        // broken? A HealRepair whose `why` is non-null (the reason; the caller logs it
+        // with Prepare's REAL verdict through LogHealRepair, once per 5 s per follower
+        // per shape: DEBUG while out of hand in the post-fire cooldown, INFO out of
+        // hand otherwise, WARN when in hand but unfired past the bound) when the engine is NOT
         // casting it on the LEFT hand AND either (a) neither the heal spell nor the
         // claim's delivery-flip proxy is in the left hand any more (a shield
         // restored on hit, a 2H / bow given back, an equip-gambit declaration, the
         // spell taken back after a fire), or (b) the claim has not fired within
         // APMFBridge::kHealHoldNeverObservedMs of being claimed -- the SAME bound
         // refreshHeldOwnClaim puts on the hold path. The caller then does not
-        // refresh; it falls through to the normal path, whose same-tuple Try is a
-        // fast-path heartbeat and whose Loadout::Prepare puts the heal back in the
-        // left hand (re-yielding a left weapon). Never a direct cast.
-        const char* HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        // refresh... (round 2) the caller Prepares the heal back into the left hand
+        // right there, under the claim the refresh renewed, keeping the lock as it
+        // is (no PIN-VOID, no lock re-stamp: R2-3), and returns transparent. Never a
+        // direct cast.
+        struct HealRepair {
+            const char*  why   = nullptr;
+            std::uint8_t shape = 0;   // 0 cooldown (debug), 1 out of hand (info), 2 unfired in hand (WARN)
+            explicit operator bool() const { return why != nullptr; }
+        };
+        HealRepair HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        const char* HealRepairVerdict(Loadout::Ready a_ready);
+        void LogHealRepair(RE::FormID a_follower, RE::FormID a_spell, const HealRepair& a_rep,
+                           Loadout::Ready a_ready, const std::string& a_prepareWhy);
         RE::FormID CastProxyOnHand(RE::FormID a_follower, std::size_t a_hand);
         void PreemptHand(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_wantedSpell);
         // a_urgentHeal (field 2026-09-29): the asker is a HEAL whose recipient is
