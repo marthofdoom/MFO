@@ -477,8 +477,10 @@ namespace MFO::Actuation {
         // Round 3 (R3-1/R3-2): `prepare` is true only when the heal is OUT of the left
         // hand -- an in-hand shape (the spell or its learned proxy held) is a
         // heartbeat + log, never a Prepare, which would equip the original over the
-        // proxy. Shape 3 = in hand between casts of a claim that HAS fired (debug);
-        // shape 2 (WARN) is kept for a heal never observed firing at all.
+        // proxy. Round 4: also true for shape 2 when the held spell is FOREIGN (read as
+        // in hand only on the "proxy still 0" guess, stale past the bound). Shape 3 =
+        // in hand between casts of a claim that HAS fired since its lock stamp
+        // (debug); shape 2 (WARN) = not observed firing since this claim was stamped.
         struct HealRepair {
             const char*  why     = nullptr;
             std::uint8_t shape   = 0;   // 0 cooldown (debug), 1 out of hand (info), 2 never fired (WARN), 3 between casts (debug)

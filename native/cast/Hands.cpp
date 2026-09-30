@@ -804,13 +804,15 @@ namespace MFO::Actuation {
         // at worst one lap early or late.
         auto* held = a_follower->GetEquippedObject(true);
         bool inHand = held && (held->GetFormID() == spellID || (proxy != 0 && held->GetFormID() == proxy));
+        const bool foreign = held && !inHand;   // neither the claim spell nor the learned proxy
         // PROXY STILL UNKNOWN (SHADOW R2-1's second half): APMF can mint and select its
         // delivery-flip proxy in its own Drain between the refresh and this read. A
         // spell MFO does not recognise in the left hand of a live claim whose proxy is
         // not learned yet is therefore read as the heal's, never overwritten on a
         // guess. Not a mask: if it is really the AI's own spell, it never fires as
-        // this claim, and the kNeverFired WARN below says so; once the proxy is
-        // learned the spell reads as out of hand and is repaired.
+        // this claim, and the kNeverFired WARN below says so and repairs it (round 4:
+        // past the bound the guess is stale); once the proxy is learned the spell
+        // reads as out of hand and is repaired at once.
         if (!inHand && proxy == 0 && held && held->As<RE::SpellItem>()) inHand = true;
         // PREPARE ONLY WHEN THE HEAL IS OUT OF HAND (review round 3, R3-1). With the
         // heal or its learned proxy in the left hand, Prepare's Read sees the proxy as
@@ -834,11 +836,21 @@ namespace MFO::Actuation {
                                               APMFBridge::kHealHoldNeverObservedMs)) {
                 // WARN ONLY WHEN IT HAS NEVER FIRED (review round 3, R3-2): `lastSeen`
                 // is the claim stamp now (R2-3), so "no fire in the last N s" is also
-                // the ordinary gap between two casts of a claim that has fired. The
-                // latch (ObservedFiring(.., 0)) tells the two apart.
-                if (!ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, spellID, 0)) {
+                // the ordinary gap between two casts of a claim that has fired.
+                // PER CLAIM (review round 4, spot 2): "fired since this claim was
+                // stamped" -- ObservedFiring over now - lastSeen, IncumbentHealCastDone's
+                // own form. The fight-wide latch (a_withinMs 0) let a re-claim after
+                // FacetExpiry / TTL / a refusal inherit an earlier fire and hide a
+                // never-firing claim behind the DEBUG shape (principle 7).
+                const auto sinceClaim = std::chrono::duration_cast<std::chrono::milliseconds>(age);
+                if (!ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, spellID,
+                                                  static_cast<std::uint32_t>(sinceClaim.count()))) {
                     rep.why   = "equipped in the left hand but never fired within the never-observed bound";
                     rep.shape = kNeverFired;
+                    // A FOREIGN spell held under the "proxy still 0" guess (review round
+                    // 4, spot 1): past the bound the guess is stale, so the AI's own
+                    // spell is repaired. The claim spell / learned proxy never is (R3-1).
+                    if (foreign) rep.prepare = true;
                 } else {
                     rep.why   = "in the left hand between casts (fired before, not in the last bound)";
                     rep.shape = kBetweenCasts;
