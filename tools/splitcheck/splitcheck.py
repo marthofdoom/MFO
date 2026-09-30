@@ -885,6 +885,43 @@ class Cmp:
     # Windows x64: registers a callee must preserve (a loop bound kept in one
     # survives the calls in the loop body, wave 1 ProgAllocator::Enroll r13)
     NONVOLATILE = {"b", "bp", "di", "si", "r12", "r13", "r14", "r15"}
+    ARGREGS = ["c", "d", "r8", "r9"]            # Windows x64 integer argument registers, in order
+
+    def call_args(self, img, x):
+        """How many integer argument registers the callee of call x can read,
+        from its PDB type string when it is a direct call to a procedure and the
+        string is complete: `R (A, B)` is a free function (2), `R C::(A)` a
+        member function (`this` + 1), plus the hidden return-slot pointer
+        unless the return type is plainly a scalar, pointer or reference.
+        Anything else -- an indirect call, a type
+        string llvm-pdbutil truncated (`...`), a variadic list -- is 4 (every
+        argument register), so this only ever errs towards "the register is an
+        argument", i.e. towards comparing by content."""
+        if not x.operands or x.operands[0].type != X.X86_OP_IMM or x.operands[0].imm not in img.proc_at:
+            return 4
+        sig = next((p["sig"] for p in img.procs if p["rva"] == x.operands[0].imm), "")
+        if "..." in sig:
+            return 4
+        m = re.fullmatch(r"(.*?)(::)?\((.*)\)", sig.strip())
+        if not m:
+            return 4
+        args = m.group(3).strip()
+        n = 0
+        if args not in ("", "void"):
+            depth, n = 0, 1
+            for ch in args:
+                depth += ch in "<(["
+                depth -= ch in ">)]"
+                n += ch == "," and depth == 0
+        # a class returned by value comes back through a hidden pointer in rcx
+        # (or rdx after `this`): count it unless the return type is plainly a
+        # scalar, pointer or reference
+        ret = m.group(1).strip()
+        if m.group(2):
+            ret = ret.rsplit(" ", 1)[0] if " " in ret else ""
+        scalar = re.fullmatch(r"(const )?(void|bool|(unsigned |signed )?(char|short|int|long|__int64|long long)"
+                              r"|float|double|wchar_t|char16_t|char32_t)|.*[*&]", ret)
+        return min(4, n + (1 if m.group(2) else 0) + (0 if scalar else 1))
 
     @classmethod
     def reg_family(cls, name):
@@ -902,14 +939,15 @@ class Cmp:
 
     def bound_use(self, img, p, ins):
         """The destination register of `lea reg, [rip+X]` is used ONLY as a
-        register operand of a `cmp` (a loop's end pointer): scanning p forward
-        from the `lea` (following direct unconditional jumps inside p), the
-        first instruction that reads the register must be a `cmp` with it as a
-        plain register operand, before any instruction writes it, before a
-        call when the register is volatile (Windows x64), and before a return
-        or a jump out of p. Anything else -- the
-        register stored, moved, passed to a call, used as a base -- is a USE
-        of the object at X."""
+        register operand of a `cmp` (a loop's end pointer). Every path through
+        p from the `lea` (both edges of a conditional jump, direct jumps inside
+        p followed) is walked until the register is overwritten: the first
+        instruction on it that reads the register must be a `cmp` with it as a
+        plain register operand (not a memory base or index). Any other read, a
+        call while the register is volatile (Windows x64: it may be an
+        argument), a return, an indirect jump or a jump out of p while the
+        value is live, is a USE of the object at X. At least one `cmp` must be
+        reached. Padding `nop`s read nothing."""
         k = (id(img), ins.address)
         if k in self._bu:
             return self._bu[k]
@@ -919,39 +957,69 @@ class Cmp:
         if fam is not None:
             seq = self.disasm(img, p["rva"], p["size"])
             at = {x.address: i for i, x in enumerate(seq)}
-            i, seen, steps = at.get(ins.address, len(seq)) + 1, set(), 0
-            while i < len(seq) and steps < 256:
-                x = seq[i]
-                steps += 1
-                if x.mnemonic == "nop":
-                    i += 1                      # multi-byte padding (nop dword ptr [rax+rax]) reads nothing
-                    continue
-                try:
-                    rd, wr = x.regs_access()
-                except capstone.CsError:
-                    break
-                rd = {self.reg_family(x.reg_name(r)) for r in rd}
-                wr = {self.reg_family(x.reg_name(r)) for r in wr}
-                if fam in rd:
-                    res = x.mnemonic == "cmp" and any(
-                        o.type == X.X86_OP_REG and self.reg_family(x.reg_name(o.reg)) == fam
-                        for o in x.operands) and not any(
-                        o.type == X.X86_OP_MEM and fam in {self.reg_family(x.reg_name(r))
-                                                          for r in (o.mem.base, o.mem.index) if r}
-                        for o in x.operands)
-                    break
-                if fam in wr or x.group(capstone.CS_GRP_RET):
-                    break
-                if x.group(capstone.CS_GRP_CALL) and fam not in self.NONVOLATILE:
-                    break                       # a volatile register does not survive a call
-                if x.mnemonic == "jmp":
-                    tgt = x.operands[0].imm if x.operands and x.operands[0].type == X.X86_OP_IMM else None
-                    if tgt is None or tgt not in at or tgt in seen:
+            lo, hi = p["rva"], p["rva"] + p["size"]
+            work, seen, found, ok, steps = [at.get(ins.address, len(seq)) + 1], set(), False, True, 0
+            while work and ok:
+                i = work.pop()
+                while ok:
+                    if i >= len(seq) or i in seen:
                         break
-                    seen.add(tgt)
-                    i = at[tgt]
-                    continue
-                i += 1
+                    seen.add(i)
+                    steps += 1
+                    if steps > 8192:
+                        ok = False
+                        break
+                    x = seq[i]
+                    if x.mnemonic == "nop":
+                        i += 1
+                        continue
+                    try:
+                        rd, wr = x.regs_access()
+                    except capstone.CsError:
+                        ok = False
+                        break
+                    rd = {self.reg_family(x.reg_name(r)) for r in rd}
+                    wr = {self.reg_family(x.reg_name(r)) for r in wr}
+                    if fam in rd:
+                        if x.mnemonic == "cmp" and any(
+                                o.type == X.X86_OP_REG and self.reg_family(x.reg_name(o.reg)) == fam
+                                for o in x.operands) and not any(
+                                o.type == X.X86_OP_MEM and fam in {self.reg_family(x.reg_name(r))
+                                                                  for r in (o.mem.base, o.mem.index) if r}
+                                for o in x.operands):
+                            found = True
+                            i += 1                  # the compare's flags go on; the value may be compared again
+                            continue
+                        ok = False
+                        break
+                    if fam in wr:
+                        break                       # redefined: this path is done
+                    if x.group(capstone.CS_GRP_RET):
+                        ok = fam != "a"             # rax at a return is the returned value: a use
+                        break
+                    if x.group(capstone.CS_GRP_INT):
+                        break                       # int3 / int 0x29 (fastfail): the path ends
+                    if x.group(capstone.CS_GRP_CALL):
+                        if fam in self.ARGREGS and self.call_args(img, x) > self.ARGREGS.index(fam):
+                            ok = False              # an argument register the callee reads: a use
+                            break
+                        if fam in self.ARGREGS:
+                            break                   # not an argument of this callee: clobbered, dead
+                        if fam not in self.NONVOLATILE:
+                            break                   # rax/r10/r11: clobbered by the call, the value is dead
+                        i += 1
+                        continue
+                    if x.group(capstone.CS_GRP_JUMP):
+                        tgt = x.operands[0].imm if x.operands and x.operands[0].type == X.X86_OP_IMM else None
+                        if tgt is None or not lo <= tgt < hi or tgt not in at:
+                            ok = False              # indirect, or out of p, with the value live
+                            break
+                        if x.mnemonic == "jmp":
+                            i = at[tgt]
+                            continue
+                        work.append(at[tgt])
+                    i += 1
+            res = ok and found
         self._bu[k] = res
         return res
 

@@ -189,10 +189,14 @@ kept apart.
    reference to a named object's start, inside a named object of known PDB
    size, or one past its end (a loop bound) compares by name. One past the end
    counts as a loop bound only when the instruction is a `lea` whose register
-   is only ever COMPARED (the first later instruction reading it is a `cmp`
-   with it as a plain register operand, before it is overwritten, before a
-   call when the register is volatile (Windows x64), before a return; padding `nop`s skipped, direct jumps inside the function
-   followed) AND the same function references the object's START. Otherwise it
+   is only ever COMPARED (on every path through the function from the `lea`,
+   both edges of each branch walked, until the register is overwritten, the
+   first instruction that reads it is a `cmp` with it as a plain register
+   operand; rcx/rdx/r8/r9 at a call (Windows x64 argument registers;
+   rax/r10/r11 die at a call, callee-saved registers survive it), a return of
+   rax, an indirect jump or a jump out of the function
+   with the value live is a use; padding `nop`s read nothing)
+   AND the same function references the object's START. Otherwise it
    is whatever begins there (an unnamed literal the linker placed right after
    the object) and is compared by content (selftest N7 / N7b / N7c: on the
    cast/Direct pair `"APMF.dll"` sat right after `SKSE::RUNTIME_SSE_1_6_629`, a
