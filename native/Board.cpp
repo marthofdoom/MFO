@@ -662,6 +662,7 @@ namespace MFO::Board {
             SyncControlBlock();   // every frame -- drives the grace-expiry re-enable
 
             const bool wantPanel = g_open.load();
+            FlushBoardWindowMemory(wantPanel);
             const bool wantHud   = g_hud.load();
             if (g_ready.load() && (wantPanel || wantHud)) {
                 // Copy the snapshot BEFORE the IO lock (#6: never nested).

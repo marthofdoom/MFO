@@ -4294,12 +4294,15 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 - **Window drag/resize policy (`LazyInit`, `Board.cpp:442-443`):** `io.ConfigWindowsMoveFromTitleBarOnly = true`
   (windows move only by the title bar) and `io.ConfigWindowsResizeFromEdges = true` (ImGui 1.92.8 fields, `imgui.h:2439-2440`).
   Per window: the Field Orders board (`Board_FieldKit.cpp:200`, has a title bar) drags by the bar and resizes from
-  any edge; its pos/size are `ImGuiCond_Appearing` + `NoSavedSettings`, so a move/resize sticks only until the board
-  closes (every reopen re-centres at default size). Popups have no title bar, so the title-bar-only flag does NOT
+  any edge; its pos/size are `ImGuiCond_Appearing` + `NoSavedSettings` (imgui.ini stays off) and are REMEMBERED by MFO itself:
+  `Data/SKSE/Plugins/MFO_UI.ini` (`version=1`, `boardX/Y/W/H` as display fractions), read lazily once at the first open, captured
+  from the live window after `Begin`, written synchronously on the render thread when the board closes (`FlushBoardWindowMemory`,
+  called each frame from the Present thunk in `Board.cpp`; temp file + rename, only if the rect changed). Restore clamps size to
+  620x400..display and position so the whole window is on screen; missing/invalid values mean the centred default. Popups have no title bar, so the title-bar-only flag does NOT
   apply: the pickers can still be dragged from empty space (as before, `BeginPopup` adds no `NoMove`), and
   `##ptreewin` is re-centred every frame (`ImGuiCond_Always`). The HUD (`##mfohud`, `Board.cpp:246-249`) is `NoDecoration|AlwaysAutoResize|NoInputs|NoMove`
   and stays fixed, placed by the MCM X/Y. **What breaks:** give the board `NoTitleBar` and it can no longer be
-  moved; change the board's `SetNextWindowSize` to `ImGuiCond_Always` and edge resize is undone every frame.
+  moved; change the board's `SetNextWindowSize` to `ImGuiCond_Always` and edge resize is undone every frame; MFO_UI.ini is a NEW sidecar, never the MCM store or co-save (keep it that way).
 - **Fonts (`LazyInit`, `Board.cpp:445-483`; open backlog MFO-B78..B80):** body/head TTFs baked at backbuffer
   scale, each followed by `mergeCjk()` merging the optional `fonts/cjk.otf`
   (Noto Sans JP) into it. **What breaks:** a new face added without its own
