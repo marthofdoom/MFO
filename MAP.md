@@ -471,11 +471,11 @@ per concern:
 - `cast/Roads.cpp` (288) = the three delivery ROADS `CastOn` forks to: `ForceCast` (`:31`, the
   forced package cast), `ConcentrationCast` (`:129`, the bounded concentration stream entry) and
   `RestorationCastDirect` (`:269`).
-- `cast/CastOn.cpp` (1490 -- at the ~1500 "plan a split" mark after animheal phase 2; the next brief
+- `cast/CastOn.cpp` (1492 -- at the ~1500 "plan a split" mark after animheal phase 2; the next brief
   that touches it proposes the split) = `CastOn` (`:110`, the AI-first hybrid of one spell at one target;
-  its heal-road block `:335-384`, see "ANIMATED HEAL CLAIM ROAD" below)
+  its heal-road block `:335-386`, see "ANIMATED HEAL CLAIM ROAD" below)
   + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:76`, extern via `cast/Direct_internal.h`)
-  + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1466`/`:1482`).
+  + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1468`/`:1484`).
 - `cast/Equip.cpp` (1050) = THE WEAPON HOLD: `EquipWeapon` (`:350`, **PERK-DRIVEN since
   2026-09-13 — see "COMBAT PICK + DUAL WIELD BY PERKS" below**) with its anon helpers
   `WeaponRolesFor` (`:97`), `IsOneHandMelee` (`:105`), `IsMuseumRelic` (`:122`, LOTD, batch L),
@@ -535,33 +535,36 @@ per concern:
 - `cast/Summon.cpp` (369) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
   `CastSummonOnce` (`:305`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
   `g_summonMx`/`g_summon`/`g_summonPosted` (`:68-69`, `:79`) is extern (ClearSelfCasts clears it).
-- `cast/Auto.cpp` (725) = the AUTO fan-out `CastAuto` (`:308`; its claim-road heal SERIES `:325`, see
+- `cast/Auto.cpp` (724) = the AUTO fan-out `CastAuto` (`:308`; its claim-road heal SERIES `:325`, see
   "ANIMATED HEAL CLAIM ROAD" below) with its pacing `g_autoCast` (`:22`)
   and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:193`), and
   `IsSummonSpell` (`:266`, public; it lives here because `CastAuto` inlines it).
-- `cast/Hands.cpp` (1123) = THE PER-HAND CAST LOCK's implementation (moved whole) —
+- `cast/Hands.cpp` (1125) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
   `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
   `CastLockLive` `:332`), rank preemption (`CanPreemptHand` `:477`, `IncumbentTargetLost` `:561`,
-  `IncumbentHealCastDone` `:626`, `IsOwnRetarget` `:664`, `PreemptHand` `:675`), the animated-heal
-  lock helpers `ReleaseOwnHealClaim` (`:738`) / `HealChannelCapped` (`:769`), `WeaponHandExposure`
-  (`:178`), `CastProxyOnHand` (`:124`), `HandFree` (`:790`), `CastHandHeld` (`:384`) and THE JUGGLE
-  `ResolveCastHand` (`:816`).
-- `cast/Actuation_internal.h` (520) = everything that crosses a TU boundary inside the family: the
+  `IncumbentHealCastDone` `:628`, `IsOwnRetarget` `:666`, `PreemptHand` `:677`), the animated-heal
+  lock helpers `ReleaseOwnHealClaim` (`:740`) / `HealChannelCapped` (`:771`), `WeaponHandExposure`
+  (`:178`), `CastProxyOnHand` (`:124`), `HandFree` (`:792`), `CastHandHeld` (`:384`) and THE JUGGLE
+  `ResolveCastHand` (`:818`).
+- `cast/Actuation_internal.h` (618) = everything that crosses a TU boundary inside the family: the
   shared concentration numbers (`kConc*` sustain windows, `kConcApplyPeriod` `:67` cadence
-  contract, `DrawConcCap` `:83` random stream cap) AND the cast lock's shared state (`g_castLock`
-  `:260` + the three rate-limited log maps `:270`/`:281`/`:287`, `g_firingRule` `:197` and
-  `g_firingAllyThreshold` `:207`, `CastLock` `:209`, `HandPlan` `:309`; the hand indices
-  `kHandLeft`/`kHandRight`/`kHandCount` live in `cast/Actuation.h:54`) plus the lock's six
-  cross-TU entry points (`cast/Actuation_internal.h:369-376`), all as **`inline`** — any definition added to that header
+  contract, `kHealLosTrustSec` `:76` (animheal phase 2: the heal checks' 3 s Occluded trust, = PickAlly's
+  `kHealLosTrustS`), `DrawConcCap` `:92` random stream cap) AND the cast lock's shared state (`g_castLock`
+  `:298` + the three rate-limited log maps `:308`/`:319`/`:325`, `g_firingRule` `:206` and
+  `g_firingAllyThreshold` `:216`, `CastLock` `:218` (its animheal `channelSince`/`channelCap` `:294-295`),
+  `HandPlan` `:347`; the hand indices
+  `kHandLeft`/`kHandRight`/`kHandCount` live in `cast/Actuation.h:54`) plus the lock's cross-TU entry
+  points (`cast/Actuation_internal.h:407-428`, incl. animheal's `ReleaseOwnHealClaim`/`HealChannelCapped`),
+  all as **`inline`** — any definition added to that header
   MUST be `inline` or it's an LNK2005. It also carries the force-hold ledger's VALUE type
-  `ForcedHold{right,left}` (`:331`, `extern g_forcedWeapon`/`g_forcedMx` `:336-337`, defined in
-  `cast/Equip.cpp:41`/`:47`) and two non-inline declarations: `CastHandHeld(actor, hand)` (`:346`,
-  defined `cast/Hands.cpp:364` = `ClaimLiveOnHand || CastLockLive` — THE one question the equip
-  side asks before touching the left hand) and `bool YieldForcedLeftHand(actor, why)` (`:359`,
+  `ForcedHold{right,left}` (`:369`, `extern g_forcedWeapon`/`g_forcedMx` `:374-375`, defined in
+  `cast/Equip.cpp:41`/`:47`) and two non-inline declarations: `CastHandHeld(actor, hand)` (`:384`,
+  defined `cast/Hands.cpp:384` = `ClaimLiveOnHand || CastLockLive` — THE one question the equip
+  side asks before touching the left hand) and `bool YieldForcedLeftHand(actor, why)` (`:397`,
   defined `cast/Equip.cpp:767`; handed to `Loadout::Prepare` as its `LeftHandYield` callback from
-  `CastOn` `cast/CastOn.cpp:787`, and called from `ReconcileForcedWeapon` `cast/Equip.cpp:845`).
-  **Its WAVE-1 section (`:380` to the end)** lists what the 2026-09-24 cut made cross-TU:
+  `CastOn` `cast/CastOn.cpp:883`, and called from `ReconcileForcedWeapon` `cast/Equip.cpp:845`).
+  **Its WAVE-1 section (`:433` to the end)** lists what the 2026-09-24 cut made cross-TU:
   `ForceCast`/`ConcentrationCast`/`RestorationCastDirect`/`CastOn` (default arg moved to this
   declaration)/`EquipWeapon`/`SpellHealsHealth` declarations, `SelfClock`, `TargetCastState`,
   `BeneficialRecast`, `SummonVerdict`/`SummonState`, the `extern` stream/summon/AUTO maps, and
@@ -742,15 +745,15 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     `CastTargetDirect` (`cast/DirectTarget.cpp:138`) -- the last two replace their `!IsRestorationSpell`
     gate, so an OOC-table heal that meets a controller claims too rather than casting direct beside it.
     1.5.97 takes the claim road as well: Harbinger installs the heal seats on every non-VR runtime.
-  * **`CastOn` (`cast/CastOn.cpp:335-384`)**: `healClaim` skips the self fork (`:569`), the
+  * **`CastOn` (`cast/CastOn.cpp:335-386`)**: `healClaim` skips the self fork (`:571`), the
     concentration fork and the restoration fork, and sends self / ally / player heals to the composed
-    branch (`:824`, now also for self): `ComposedCast::Try` -> `Loadout::Prepare` (spell into the LEFT
+    branch (`:826`, now also for self): `ComposedCast::Try` -> `Loadout::Prepare` (spell into the LEFT
     hand; a left-hand weapon yields at that point of no return and `ReconcileForcedWeapon` returns it)
     -> `CasterConsent::Want` -> the LEFT lock keyed on `lockTargetKey` (0 for self). A **per-lap
     recipient check** runs before the hand lock and before the in-flight refresh: dead / beyond reach or
     out of sight (`HealInReach` + `kHealLosTrustSec`) -> this rule's claim released at once (`ReleaseOwnHealClaim`) and a
     transparent `FailedOther`; at full with nothing in flight -> released too (D8: a cast in flight
-    finishes). **Concentration stream cap** in the in-flight refresh (`:443`): past
+    finishes). **Concentration stream cap** in the in-flight refresh (`:445`): past
     `HealChannelCapped`'s per-channel `DrawConcCap` (8-15 s, heal band) the claim is released instead
     of renewed and re-claimed next lap (release + re-stream, like the direct cap; never a cooldown).
     Harbinger's seat 0x07 still stops the channel at full (stopPct 0). **No MFO magicka deduction on
@@ -759,10 +762,10 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     carried (`CanPreemptHand`, urgent heal mid-charge unchanged). `IncumbentTargetLost` (`:561`) now
     also calls a HEAL recipient lost at full health, beyond `HealInReach`, or measured Occluded within
     `kHealLosTrustSec` (3 s, = PickAlly's `kHealLosTrustS`; MFO-B162 drained), and
-    a self heal lock (target 0) lost at full. `IncumbentHealCastDone` (`:626`) lets the SAME rule
+    a self heal lock (target 0) lost at full. `IncumbentHealCastDone` (`:628`) lets the SAME rule
     re-aim a heal once its claimed cast has FIRED since the lock (ObservedFiring over `now - lastSeen`)
     and is not in flight: one real cast at a time, lowest first, never a pre-charge flicker.
-    `CastLock::channelSince/channelCap` (`cast/Actuation_internal.h:285`) carry the stream cap; a new
+    `CastLock::channelSince/channelCap` (`cast/Actuation_internal.h:294`) carry the stream cap; a new
     spell or recipient resets them in `HoldCastLock`.
   * **AUTO becomes a SERIES** (`cast/Auto.cpp:325`): on the claim road `CastAuto` picks the lowest
     health fraction under the rule's threshold (party, player, and the caster only for a Self-delivery
