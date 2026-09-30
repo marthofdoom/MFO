@@ -6509,6 +6509,13 @@ in Service.cpp / LootScan.cpp / Board (`logistics/Lotd.cpp` section). `kCondFoeI
 ("cond.foe_is_mechanical", field 0928c) is the newest APPENDED condition: Evaluator
 `FoeIsMechanical` (race ActorTypeDwarven, not ActorTypeUndead / ActorTypeGhost /
 DLC2AshSpawnKeyword), in `IsFoeSelector`, Board `kCondsCombat` after "Foe is dragon".
+`kCondFoeMultipleWithin` ("cond.foe_multiple_within", ClickUp 86e3g81x0) is APPENDED after it: a
+CLUSTER selector, param = units (`ParamKind::Distance`, Board `kCondsCombat` before "Foe: Count at
+least"). In `IsFoeSelector`; `PickFoe` runs a CLUSTER PRE-PASS (one read-lock copy of live, not-lost foe
+handle+position, the FoeCount filters, #23; Is3DLoaded / IsHostileToActor after the lock) into
+`clusterOthers`, then the scan scores `-others*100000 + dist` (most others within X, tie to the foe nearest
+the follower; the normal 3D / hostile / chase-cap / LoS-preference / reach gates still apply to who may be
+chosen). Count >= 3 is fixed (2 others). `[cluster]` debug line, 5 s throttle. No serialized shape changed.
 `kCondFoeIsRanged` keeps its string; its meaning WIDENED (field 0928c): a bow / crossbow, a staff in
 either hand, or a spell in either hand whose delivery is not Self or Touch. "Foe attacking me:
 ranged" follows it (MFO-B141, recorded: consistent with marth's intent); "Foe attacking me: melee" already excluded every caster and staff, so it is

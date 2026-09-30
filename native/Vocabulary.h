@@ -122,6 +122,13 @@ namespace MFO::Vocab {
     // as STRINGS (Serialization.cpp WriteString(g.conditionOpcode)), so a new one shifts
     // no stored index.
     inline constexpr const char* kCondFoeIsMechanical    = "cond.foe_is_mechanical";
+    // CLUSTER selector (ClickUp 86e3g81x0; for area spells: Fireball, Chain Lightning, a
+    // Fear shout): true when some foe has at least 2 OTHER live, engaged foes within
+    // `param` units of it (a cluster of 3+; the count of 3 is implied, no count param).
+    // Chooses the cluster's CENTRE foe: the one with the most foes within `param`, ties
+    // to the one nearest the follower (Evaluator.cpp PickFoe). param = units (Distance).
+    // APPENDED; frozen serialization string (#10), saved as a string like every opcode.
+    inline constexpr const char* kCondFoeMultipleWithin  = "cond.foe_multiple_within";
     // ALLY SELECTOR -- the lowest-HP teammate under `param` pct; chooses that
     // ally as the target (for Cast at ally / Heal Other). Walks the maintained
     // teammate list, not a world sweep.

@@ -183,6 +183,7 @@ namespace MFO::Board {
         { Vocab::kCondFoeWeakFire,   "Foe: Weak to fire",    ParamKind::None    },
         { Vocab::kCondFoeWeakFrost,  "Foe: Weak to frost",   ParamKind::None    },
         { Vocab::kCondFoeWeakShock,  "Foe: Weak to shock",   ParamKind::None    },
+        { Vocab::kCondFoeMultipleWithin,"Foe: Multiple within", ParamKind::Distance},
         { Vocab::kCondFoeCountAtLeast,"Foe: Count at least",  ParamKind::Count   },
         { Vocab::kCondSelfHpAbove,   "Self: HP above",      ParamKind::Percent },
         { Vocab::kCondSelfMpAbove,   "Self: Magicka above", ParamKind::Percent },
