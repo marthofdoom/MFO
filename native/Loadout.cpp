@@ -3,6 +3,7 @@
 #include "Config.h"
 #include "Followers.h"
 #include "CasterConsent.h"   // v1.0.32: StartCooldown mirrors into the hook's permit
+#include "MainThread.h"      // animheal phase 2 (review F2): the DeselectSpell runs on the MAIN thread
 
 namespace MFO::Loadout {
 
@@ -464,11 +465,26 @@ namespace MFO::Loadout {
 
         // Only if it is still OUR spell in that hand. Their own AI may have
         // swapped since, and unequipping a choice they made is not ours to do.
-        if (actor->GetEquippedObject(true) != spell) return;
-
-        actor->DeselectSpell(spell);
-        spdlog::debug("[loadout] {:08X} -- {} taken back", a_actorID,
-                      spell->GetName() ? spell->GetName() : "?");
+        //
+        // ON THE MAIN THREAD (animheal phase 2, review F2). Every caller of this
+        // runs on the AddTask job worker (the [cast] SpellSink task, the Scheduler's
+        // H3 release, CastOn's magicka refusals), and DeselectSpell is an equip-
+        // state write -- the #62 off-main-equip class (memory off-main-equip-
+        // invisible-head). The bookkeeping above stays on the worker that owns it;
+        // the hand read and the deselect move to main, where the "still ours"
+        // test is also exact. By FormID, re-resolved there. VR has no pump (Post is
+        // a documented no-op): run it direct there, as before.
+        const RE::FormID spellID = spell->GetFormID();
+        auto takeBack = [a_actorID, spellID]() {
+            auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
+            if (!a || !sp || a->GetEquippedObject(true) != sp) return;
+            a->DeselectSpell(sp);
+            spdlog::debug("[loadout] {:08X} -- {} taken back", a_actorID,
+                          sp->GetName() ? sp->GetName() : "?");
+        };
+        if (MainThread::IsInstalled()) MainThread::Post(std::move(takeBack));
+        else                           takeBack();
 
         // DELIBERATELY NOT restoring displaced gear here.
         //
@@ -479,7 +495,13 @@ namespace MFO::Loadout {
         // combat end, and on dismissal. This only takes back the SPELL.
     }
 
-    void StartCooldown(RE::FormID a_actorID) {
+    void ReleaseSpellIf(RE::FormID a_actorID, RE::FormID a_spell) {
+        const auto it = g_mfoSpell.find(a_actorID);
+        if (it == g_mfoSpell.end() || a_spell == 0 || it->second != a_spell) return;
+        ReleaseSpell(a_actorID);
+    }
+
+    void StartCooldown(RE::FormID a_actorID, bool a_release) {
         const float cd = Config::g_castCooldown.load();
         if (cd <= 0.0f) return;
         g_coolUntil[a_actorID] = std::chrono::steady_clock::now() +
@@ -493,7 +515,12 @@ namespace MFO::Loadout {
         // Taking the spell back IS the rate limit -- they cannot cast what they
         // are not holding. Leaving it in hand and merely declining to re-equip
         // would pace MFO and do nothing about their AI.
-        ReleaseSpell(a_actorID);
+        // a_release false (animheal phase 2, review F2): the fire of a LIVE claimed
+        // CONCENTRATION heal. Its TESSpellCastEvent arrives when the channel STARTS,
+        // so taking the spell back here cut the channel after its first beat. The
+        // heal claim's end takes it back instead (ComposedCast::End ->
+        // ReleaseSpellIf). The cooldown stamp above still lands.
+        if (a_release) ReleaseSpell(a_actorID);
     }
 
     bool CoolingDown(RE::FormID a_actorID) {

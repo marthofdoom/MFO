@@ -420,6 +420,20 @@ namespace MFO::Actuation {
         // channelSince); a_capSec reports the cap. Both worker-serial (#4).
         bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why);
         bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec);
+        // HealClaimNeedsRepair (review F1, the part that is needed whatever marth
+        // decides): on a lap that would only REFRESH this rule's standing heal claim
+        // (CastOn's in-flight branch), is the claim's steady state broken? Non-null
+        // (the reason, logged once per 5 s per follower) when the engine is NOT
+        // casting it on the LEFT hand AND either (a) neither the heal spell nor the
+        // claim's delivery-flip proxy is in the left hand any more (a shield
+        // restored on hit, a 2H / bow given back, an equip-gambit declaration, the
+        // spell taken back after a fire), or (b) the claim has not fired within
+        // APMFBridge::kHealHoldNeverObservedMs of being claimed -- the SAME bound
+        // refreshHeldOwnClaim puts on the hold path. The caller then does not
+        // refresh; it falls through to the normal path, whose same-tuple Try is a
+        // fast-path heartbeat and whose Loadout::Prepare puts the heal back in the
+        // left hand (re-yielding a left weapon). Never a direct cast.
+        const char* HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell);
         RE::FormID CastProxyOnHand(RE::FormID a_follower, std::size_t a_hand);
         void PreemptHand(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_wantedSpell);
         // a_urgentHeal (field 2026-09-29): the asker is a HEAL whose recipient is

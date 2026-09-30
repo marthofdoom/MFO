@@ -302,7 +302,12 @@ namespace MFO::Diagnostics {
                             // cannot claim control nobody has. One line per
                             // gambit cast -- cast cadence, never tick cadence.
                             if (ours) {
-                                Loadout::StartCooldown(casterID);
+                                // animheal phase 2 (review F2): the fire of a LIVE claimed
+                                // concentration heal is its channel STARTING -- stamp the
+                                // cooldown, keep the spell in hand; the claim's end
+                                // (ComposedCast::End) takes it back.
+                                Loadout::StartCooldown(casterID,
+                                    /*a_release=*/!ComposedCast::HealClaimFireKeepsSpell(casterID, spellID));
                                 if (CasterConsent::NoteOurCast(casterID)) {
                                     spdlog::info("[consent] {:08X} holding exclusive control "
                                                  "through the cast cooldown", casterID);

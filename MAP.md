@@ -784,6 +784,20 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     places (`Config.h`/`Config.cpp` atomic + reset + `kMcmDefaults`, both MCM inis, `config.json`,
     `MFO.ini`); MCM text "Animated heals in combat" (MFO-B48 drained). An existing MCM store seeded
     with the old `0` keeps 0.
+  * **Review round 1 (tier A of `02b7dbc`, 2026-09-30).** (F2) The SpellSink no longer takes a LIVE
+    claimed CONCENTRATION heal's spell back on its fire event (that event is the channel STARTING):
+    `Loadout::StartCooldown(id, a_release=false)` via `ComposedCast::HealClaimFireKeepsSpell`; the claim's
+    end does it instead (`ComposedCast::End` -> `Loadout::ReleaseSpellIf`, only when MFO's equipped spell
+    IS the heal), so a stream-cap release also takes the channelled spell back. `Loadout::ReleaseSpell`'s
+    `DeselectSpell` now runs on the MAIN thread (`MainThread::Post`, direct on VR) -- every caller is on
+    the job worker. (F3) `ChooseHealRoad`'s `DirectDegrade` (kill switch OFF) releases a standing heal
+    claim too. (F6) `ComposedCast::End` beside `ReleaseOffenseCast` in Scheduler's `!castSeen` block, in
+    the party-OOC combat-end teardown, and once per claim when the caster cannot act (Scheduler.cpp,
+    three minimal edits). (F1, the repair half) `HealClaimNeedsRepair` (`cast/Hands.cpp`): on an in-flight
+    refresh lap a heal claim whose spell / proxy left the LEFT hand, or that has not fired within
+    `kHealHoldNeverObservedMs` of its lock stamp, is NOT refreshed; the PIN-VOID path re-derives the plan
+    and the normal path re-claims (same tuple = heartbeat) and re-runs `Loadout::Prepare` (log `[heal] ...
+    REPAIR`). What a claim that STILL never fires should do is marth's call (F1 policy, held).
   * **What breaks if you change this:** calling `ChooseHealRoad` from only some heal callers re-creates
     two roads on one actor; dropping the controller release lets a claim nothing can serve outlive the
     fight; moving the recipient check after `resolveHands` lets the in-flight refresh feed a claim at an

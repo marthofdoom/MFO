@@ -5,6 +5,7 @@
 #include "CastBounds.h"
 #include "cast/Actuation.h"   // kHandLeft + CastInFlightOnHand -- THE one in-flight definition
 #include "Runtime.h"     // CastPathsVerified(): the ONE exact-version gate the cast paths share
+#include "Loadout.h"     // animheal phase 2 (review F2): End() takes the heal spell back
 
 #include <chrono>
 #include <unordered_map>
@@ -686,11 +687,25 @@ namespace MFO::ComposedCast {
         // Enabled() is Try()'s own gate (Heal kind, verified runtime, bHealAnimPackage,
         // Harbinger present); HealCastClaimSupported adds the ABI (>= 5). bEquipToCast:
         // the claim road is CastOn's composed branch, which lives inside that toggle.
-        if (!Enabled(a_follower, a_spell, CasterConsent::SpellKind::Heal) ||
-            !APMFBridge::HealCastClaimSupported() || !Config::g_equipToCast.load())
-            return HealRoad::DirectDegrade;
         const auto fid     = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
+        if (!Enabled(a_follower, a_spell, CasterConsent::SpellKind::Heal) ||
+            !APMFBridge::HealCastClaimSupported() || !Config::g_equipToCast.load()) {
+            // THE KILL SWITCH KILLS A STANDING CLAIM TOO (review F3). bHealAnimPackage
+            // (or bEquipToCast) flipped OFF mid-fight: a heal claim minted before the
+            // flip would otherwise be renewed by CastOn's in-flight refresh (which
+            // replays the claim without reading the toggle) for as long as its rule
+            // wins, so "OFF: every heal lands instantly" would be false until the
+            // fight ended. Released here, before any caller reaches that refresh; a
+            // no-op when Harbinger is absent (nothing was ever claimed).
+            if (const auto standing = APMFBridge::GetHealCastSpell(fid); standing != 0) {
+                End(fid);
+                spdlog::info("[heal] {:08X} the animated heal road is OFF (bHealAnimPackage / "
+                             "bEquipToCast) -- the standing heal claim (spell {:08X}) is RELEASED; "
+                             "heals take the direct road", fid, standing);
+            }
+            return HealRoad::DirectDegrade;
+        }
         // THE TEST IS THE OBJECT THE SEATS HANG OFF (see CastTargetDirect's note):
         // a plain member load through the SE/AE-shifted accessor, racy by design --
         // worst case one lap takes the other road.
@@ -725,7 +740,23 @@ namespace MFO::ComposedCast {
         return HealRoad::Claim;
     }
 
+    bool HealClaimFireKeepsSpell(RE::FormID a_follower, RE::FormID a_fired) {
+        const RE::FormID spell = APMFBridge::GetHealCastSpell(a_follower);
+        if (spell == 0 || a_fired == 0) return false;
+        const RE::FormID proxy = APMFBridge::GetHealCastProxy(a_follower);
+        if (a_fired != spell && (proxy == 0 || a_fired != proxy)) return false;
+        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spell);
+        return sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+    }
+
     void End(RE::FormID a_follower) {
+        // THE HEAL SPELL LEAVES THE HAND WITH ITS CLAIM (animheal phase 2, review
+        // F2): a claimed concentration heal keeps its spell through the fire event
+        // (Loadout::StartCooldown(.., false)), so its end is where MFO takes back
+        // the spell it equipped -- only that spell (ReleaseSpellIf), never an
+        // offense spell MFO equipped since. Read before the release clears it.
+        const RE::FormID healSpell = APMFBridge::GetHealCastSpell(a_follower);
+        if (healSpell != 0) Loadout::ReleaseSpellIf(a_follower, healSpell);
         APMFBridge::ReleaseHealCast(a_follower);
         CastBounds::Disarm(a_follower);
         // Heal is always LEFT -- clear only that slot; a concurrent offense

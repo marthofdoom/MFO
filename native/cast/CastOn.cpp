@@ -461,11 +461,18 @@ namespace MFO::Actuation {
                                  true };
                     }
                 }
+                // REPAIR, NOT REFRESH (review F1): a heal claim whose spell left the
+                // left hand, or that has not fired within the never-observed bound,
+                // is not refreshed here; the PIN-VOID path below re-derives the plan
+                // and the normal path re-claims (same tuple: a heartbeat) and
+                // re-Prepares the hand. See HealClaimNeedsRepair.
+                const bool repair = healClaim && handPlan.left && !handPlan.right &&
+                                    HealClaimNeedsRepair(a_follower, spell) != nullptr;
                 const std::int32_t claimHand =
                     (handPlan.left && handPlan.right) ? APMFBridge::kApmfHandDualCast :
                     handPlan.left                     ? APMFBridge::kApmfHandLeft :
                                                         APMFBridge::kApmfHandRight;
-                if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
+                if (!repair && APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
                     // KEEP THE [cfc] WATCH TICKING. ComposedCast::WatchClaim's own
                     // contract is "call every tick the caller's OWN claim call
                     // returns live" -- and on this path the refresh above IS that
@@ -511,6 +518,8 @@ namespace MFO::Actuation {
                 // the normal path -- which re-claims and reports its OWN outcome,
                 // loudly if APMF refuses again (LogApmfRefusal). Nothing is masked:
                 // the refusal is still made in the open, one lap later.
+                // (Also reached on a heal REPAIR lap above: the claim is live, and the
+                // same-tuple Try below is its heartbeat, not a new claim.)
                 if (handPlan.left)  ClearCastLockHand(id, kHandLeft);
                 if (handPlan.right) ClearCastLockHand(id, kHandRight);
                 handPlan = HandPlan{};

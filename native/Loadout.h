@@ -172,7 +172,13 @@ namespace MFO::Loadout {
     // and does not come back until it expires. Called after ANY gambit cast --
     // theirs or MFO's -- because both spend the same pool and the player sees
     // one follower casting either way.
-    void StartCooldown(RE::FormID a_actorID);
+    // a_release=false: stamp the cooldown but leave the spell in hand -- the fire
+    // of a live claimed concentration heal, whose event arrives as its channel
+    // starts (animheal phase 2, review F2).
+    void StartCooldown(RE::FormID a_actorID, bool a_release = true);
+    // ReleaseSpell, but only when the spell MFO equipped on this actor IS a_spell
+    // (the heal claim's end must not take back an offense spell MFO equipped since).
+    void ReleaseSpellIf(RE::FormID a_actorID, RE::FormID a_spell);
     bool CoolingDown(RE::FormID a_actorID);
 
     // Restore a displaced SHIELD. Called from the hit sink -- a shield is worth

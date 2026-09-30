@@ -823,6 +823,16 @@ namespace MFO::Scheduler {
         // [bleed] line logs his life-state transitions (down / up).
         Actuation::NoteLifeState(f);
         const char* const cannotAct = Actuation::CannotActReason(f);
+        // A CASTER WHO CANNOT ACT OWNS NO HEAL CLAIM (animheal phase 2, review F6): the
+        // scan below passes his rules over (their conditions still count, so nothing
+        // else is released), and a standing heal claim would otherwise live until the
+        // FacetExpiry sweep. Guarded so a downed follower costs one bridge read per
+        // service and logs once per claim.
+        if (cannotAct && APMFBridge::GetHealCastSpell(id) != 0) {
+            spdlog::info("[heal] {:08X} cannot act ({}) -- the standing heal claim (spell {:08X}) "
+                         "is RELEASED", id, cannotAct, APMFBridge::GetHealCastSpell(id));
+            ComposedCast::End(id);
+        }
 
         // T#78: THE PER-FOLLOWER MFO MASTER SWITCH. When OFF, MFO leaves this
         // follower completely untouched -- no combat gambits, no logistics /
@@ -904,6 +914,9 @@ namespace MFO::Scheduler {
                 // concentration) dies with the fight too, same reasoning as the
                 // cast-control latch just above -- a lock left standing from the
                 // last fight would hold off the FIRST cast rule of the next one.
+                // The heal claim ends with the fight too (animheal phase 2, review F6),
+                // by state rather than by the FacetExpiry sweep. No-op when none stands.
+                ComposedCast::End(id);
                 Actuation::ClearCastLock(id);
                 // Weapon-stance ownership dies with the fight too. The live CSTY
                 // already reverted when the per-combat controller was destroyed;
@@ -1690,6 +1703,11 @@ namespace MFO::Scheduler {
             // cast->melee transition keeps the target facet claimed rather than
             // releasing it. No-op when APMF is absent / no offense-cast claim held.
             APMFBridge::ReleaseOffenseCast(id);
+            // ...and the HEAL claim with it (animheal phase 2, review F6): the same
+            // "no cast rule wants it" signal, so the seats cannot drive one more
+            // heal at a recipient that no longer qualifies while the ~2.45 s
+            // FacetExpiry sweep catches up. No-op when no heal claim stands.
+            ComposedCast::End(id);
             // Clear the shared [cfc] silent-claim watch this claim armed
             // (Actuation::CastOn's ComposedCast::WatchClaim call) -- a no-op if
             // nothing was armed (heal claims clear their own watch via

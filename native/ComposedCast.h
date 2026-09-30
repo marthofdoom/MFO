@@ -209,6 +209,13 @@ namespace MFO::ComposedCast {
     // held (no-op). Also clears this module's own silent-cast diagnostic watch.
     void End(RE::FormID a_follower);
 
+    // animheal phase 2 (review F2). True when a_fired (the SpellSink's observed
+    // form) is the LIVE heal claim's spell or its delivery-flip proxy AND that
+    // spell is CONCENTRATION: its TESSpellCastEvent arrives as the channel STARTS,
+    // so the sink must not take the spell back then (Loadout::StartCooldown's
+    // a_release = false); End() takes it back when the claim ends. Worker-safe.
+    bool HealClaimFireKeepsSpell(RE::FormID a_follower, RE::FormID a_fired);
+
     // ── observe hand-off (Diagnostics::SpellSink's call site) ──────────────────
     // Diagnostics.cpp's TESSpellCastEvent sink calls ExpectingCast(caster,
     // spell) for EVERY cast a tracked follower's own AI fires; when Try() holds

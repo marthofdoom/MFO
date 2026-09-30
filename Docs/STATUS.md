@@ -48,6 +48,11 @@ Read it as history and this block as current.
   6. **One road per actor.** In combat NO `FORCE-CAST ... Fast Healing|Heal Other|Healing Hands` direct lines and no
      `[heal] ... no combat controller` lines for a follower who is fighting; out of combat those heals print the
      `[heal] ... no combat controller -- DIRECT road` line (15 s dedup) and land as before.
+  6b. **Repair, not freeze (review F1/F2).** `grep '\[heal\].*REPAIR' MFO.log`: a sword-and-board or 2H healer
+     whose shield / weapon came back over the heal shows `REPAIR: the heal is no longer in the left hand` and the
+     heal is back in the left hand next lap; `REPAIR: no fire within the never-observed bound` repeating every ~4 s
+     for one claim is the unsolved "claim that never fires" case (F1 policy, marth's call). A channelled self heal
+     (vanilla Healing) keeps channelling past its first beat (no `taken back` right after `CFC-fired`).
   7. **Series + release lines.** `grep '\[heal\].*RELEASED' MFO.log`: a claim released when its recipient is
      full / out of reach / nobody needs the AUTO heal; `auto heal (lowest first) at <id>` outcome reasons name the
      lowest ally; a concentration heal past 8-15 s prints `reached its stream cap` and re-claims.

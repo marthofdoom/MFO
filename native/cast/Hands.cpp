@@ -768,6 +768,43 @@ namespace MFO::Actuation {
     // moment it is not channelling, the clock resets. A per-channel cap drawn once
     // from DrawConcCap's heal band, like the direct stream's (principle 9: it bounds
     // one channel, it never paces casts).
+    const char* HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        const auto fid = a_follower ? a_follower->GetFormID() : 0;
+        if (fid == 0 || !a_spell) return nullptr;
+        const RE::FormID spellID = a_spell->GetFormID();
+        if (APMFBridge::GetHealCastSpell(fid) != spellID) return nullptr;   // not this heal's claim
+        const RE::FormID proxy = CastProxyOnHand(fid, kHandLeft);
+        if (CastInFlightOnHand(a_follower, kHandLeft, spellID, proxy)) return nullptr;   // casting: leave it
+        const char* why = nullptr;
+        // Left hand = GetEquippedObject(true), the same read Loadout::Read /
+        // ReleaseSpell make. A plain member read, racy like CastInFlightOnHand's:
+        // at worst one lap early or late.
+        auto* held = a_follower->GetEquippedObject(true);
+        const bool inHand = held && (held->GetFormID() == spellID || (proxy != 0 && held->GetFormID() == proxy));
+        if (!inHand) {
+            why = "the heal is no longer in the left hand";
+        } else if (auto it = g_castLock.find(fid); it != g_castLock.end()) {
+            const auto& lk  = it->second.hand[kHandLeft];
+            const auto  age = std::chrono::steady_clock::now() - lk.lastSeen;
+            if (lk.spell == spellID &&
+                age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
+                !ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, spellID,
+                                              APMFBridge::kHealHoldNeverObservedMs))
+                why = "no fire within the never-observed bound";
+        }
+        if (!why) return nullptr;
+        static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_log;
+        const auto now = std::chrono::steady_clock::now();
+        auto& last = s_log[fid];
+        if (std::chrono::duration<float>(now - last).count() >= 5.0f) {
+            last = now;
+            spdlog::info("[heal] {:08X} heal claim (spell {:08X}) REPAIR: {} -- not refreshed; the "
+                         "left hand is prepared again (Loadout::Prepare) under the same claim",
+                         fid, spellID, why);
+        }
+        return why;
+    }
+
     bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         auto it = g_castLock.find(fid);
