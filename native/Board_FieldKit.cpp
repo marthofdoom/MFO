@@ -13,8 +13,13 @@
 // ApplyEdits (Board.cpp) re-posts to the MAIN thread, where the backend gate
 // re-validates before any engine write (#4).
 
+#include <charconv>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 #include <imgui.h>
 #include <imgui_internal.h>   // nav state (NavWindow/NavLayer/NavId) for the cascaded B back-out
@@ -149,6 +154,99 @@ namespace MFO::Board {
 
     }   // ── end of the panel-only helpers ─────────────────────────────
 
+    // ── REMEMBERED WINDOW RECT (marth: "It should remember, yes") ─────────
+    // The board's pos/size live in Data/SKSE/Plugins/MFO_UI.ini as FRACTIONS
+    // of the display (resolution independent), game-root-relative like
+    // MFO.log so MO2's VFS lands it in overwrite. RENDER THREAD ONLY: read
+    // once lazily at the first open, written synchronously when the board
+    // closes and only if the rect changed (tiny file, temp + rename so a
+    // crash cannot leave half a file). Not the co-save, not the MCM store.
+    namespace {
+        constexpr const char* kUiPath = "Data/SKSE/Plugins/MFO_UI.ini";
+        struct WinMem {
+            bool  loaded = false;   // read attempted
+            bool  have   = false;   // stored rect valid
+            float x = 0, y = 0, w = 0, h = 0;      // fractions to restore
+            bool  dirty = false;    // live rect differs from baseline
+            float lx = 0, ly = 0, lw = 0, lh = 0;  // live fractions
+        };
+        WinMem s_mem;
+
+        bool ParseF(const std::string& a_v, float& a_out) {
+            float f = 0;
+            const char* b = a_v.data();
+            const char* e = b + a_v.size();
+            const auto r = std::from_chars(b, e, f);
+            if (r.ec != std::errc() || r.ptr != e || !std::isfinite(f)) return false;
+            a_out = f;
+            return true;
+        }
+
+        void LoadWinMem() {
+            s_mem.loaded = true;
+            std::ifstream in(kUiPath);
+            if (!in) return;
+            float v[4] = {}; bool got[4] = {}; int ver = 0;
+            std::string line;
+            while (std::getline(in, line)) {
+                const auto eq = line.find('=');
+                if (eq == std::string::npos) continue;
+                auto trim = [](std::string t) {
+                    const auto a = t.find_first_not_of(" \t\r\n\xEF\xBB\xBF");
+                    if (a == std::string::npos) return std::string();
+                    return t.substr(a, t.find_last_not_of(" \t\r\n") - a + 1);
+                };
+                const std::string k = trim(line.substr(0, eq)), val = trim(line.substr(eq + 1));
+                static const char* names[4] = {"boardX", "boardY", "boardW", "boardH"};
+                for (int i = 0; i < 4; ++i)
+                    if (k == names[i]) got[i] = ParseF(val, v[i]);
+                if (k == "version") { float f; if (ParseF(val, f)) ver = static_cast<int>(f); }
+            }
+            if (ver != 1 || !(got[0] && got[1] && got[2] && got[3])) return;
+            // Out of range -> centred default. x/y may be negative (a window
+            // parked partly off the left/top edge); the restore clamp fixes it.
+            if (v[0] < -1.0f || v[0] > 1.0f || v[1] < -1.0f || v[1] > 1.0f ||
+                v[2] < 0.05f || v[2] > 1.0f || v[3] < 0.05f || v[3] > 1.0f) return;
+            s_mem.x = v[0]; s_mem.y = v[1]; s_mem.w = v[2]; s_mem.h = v[3];
+            s_mem.have = true;
+        }
+
+        void SaveWinMem() {
+            // std::to_chars: locale-independent, so from_chars always reads it back.
+            std::string buf = "version=1\n";
+            const auto put = [&buf](const char* a_key, float a_v) {
+                char num[32];
+                const auto r = std::to_chars(num, num + sizeof(num), a_v, std::chars_format::fixed, 5);
+                buf += a_key; buf += '='; buf.append(num, r.ptr); buf += '\n';
+            };
+            put("boardX", s_mem.lx); put("boardY", s_mem.ly);
+            put("boardW", s_mem.lw); put("boardH", s_mem.lh);
+            const std::string tmp = std::string(kUiPath) + ".tmp";
+            {
+                std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+                if (!out) { spdlog::warn("[board] could not write {}", tmp); return; }
+                out << buf;
+                out.close();
+                if (out.fail()) { spdlog::warn("[board] short write to {}", tmp); return; }
+            }
+            std::error_code ec;
+            std::filesystem::rename(tmp, kUiPath, ec);   // replaces an existing file
+            if (ec) { spdlog::warn("[board] rename {} failed: {}", tmp, ec.message()); return; }
+            s_mem.x = s_mem.lx; s_mem.y = s_mem.ly; s_mem.w = s_mem.lw; s_mem.h = s_mem.lh;
+            s_mem.have = true;
+            s_mem.dirty = false;
+        }
+    }
+
+    // Called EVERY frame from the Present thunk (render thread). Writes the
+    // remembered rect once the board has closed. Cheap when nothing changed.
+    void FlushBoardWindowMemory(bool a_open) {
+        // ONE attempt per close: clear dirty first so a failed save is not
+        // retried (and re-logged) every frame while the board stays closed.
+        if (!a_open && s_mem.dirty) { s_mem.dirty = false; SaveWinMem(); }
+    }
+
+
         void DrawFieldKit(const Snapshot& snap) {
             // Shout-key close already fires on the key's RELEASE with both edges
             // swallowed -- no trailing edge to leak -- so it needs no grace.
@@ -188,10 +286,23 @@ namespace MFO::Board {
             if (s_r1Guard && !ImGui::IsKeyDown(ImGuiKey_GamepadR1)) s_r1Guard = false;
             const bool r1Ready = !s_r1Guard;
 
-            ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
-                                    ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-            ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.60f, io.DisplaySize.y * 0.62f),
-                                     ImGuiCond_Appearing);
+            if (!s_mem.loaded) LoadWinMem();
+            if (s_mem.have) {
+                // Restore the remembered rect: size from fractions clamped to
+                // the constraint range, then the position clamped so the whole
+                // window (so the whole title bar) stays on this display.
+                const float w = std::clamp(s_mem.w * io.DisplaySize.x, 620.0f, std::max(620.0f, io.DisplaySize.x));
+                const float h = std::clamp(s_mem.h * io.DisplaySize.y, 400.0f, std::max(400.0f, io.DisplaySize.y));
+                const float x = std::clamp(s_mem.x * io.DisplaySize.x, 0.0f, std::max(0.0f, io.DisplaySize.x - w));
+                const float y = std::clamp(s_mem.y * io.DisplaySize.y, 0.0f, std::max(0.0f, io.DisplaySize.y - h));
+                ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Appearing);
+                ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Appearing);
+            } else {
+                ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                                        ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.60f, io.DisplaySize.y * 0.62f),
+                                         ImGuiCond_Appearing);
+            }
             ImGui::SetNextWindowSizeConstraints(ImVec2(620.0f, 400.0f), io.DisplaySize);
 
             const int skinCols = PushSkin();
@@ -202,6 +313,25 @@ namespace MFO::Board {
                 ImGui::End();
                 ImGui::PopStyleColor(skinCols);
                 return;
+            }
+
+            // Remember the live rect (fractions of the display). The first frame
+            // of an open is the baseline (what we just set), so merely opening
+            // never dirties the file; any later move/resize does.
+            if (io.DisplaySize.x > 0.0f && io.DisplaySize.y > 0.0f) {
+                const ImVec2 wp = ImGui::GetWindowPos(), ws = ImGui::GetWindowSize();
+                const float fx = wp.x / io.DisplaySize.x, fy = wp.y / io.DisplaySize.y;
+                const float fw = ws.x / io.DisplaySize.x, fh = ws.y / io.DisplaySize.y;
+                const bool  differs = std::fabs(fx - s_mem.lx) > 0.0005f || std::fabs(fy - s_mem.ly) > 0.0005f ||
+                                      std::fabs(fw - s_mem.lw) > 0.0005f || std::fabs(fh - s_mem.lh) > 0.0005f;
+                const bool  matchesSaved = s_mem.have && std::fabs(fx - s_mem.x) <= 0.0005f &&
+                    std::fabs(fy - s_mem.y) <= 0.0005f && std::fabs(fw - s_mem.w) <= 0.0005f &&
+                    std::fabs(fh - s_mem.h) <= 0.0005f;
+                if (ImGui::IsWindowAppearing()) { s_mem.lx = fx; s_mem.ly = fy; s_mem.lw = fw; s_mem.lh = fh; s_mem.dirty = false; }
+                else if (differs) {
+                    s_mem.lx = fx; s_mem.ly = fy; s_mem.lw = fw; s_mem.lh = fh;
+                    s_mem.dirty = !matchesSaved;
+                }
             }
 
             // Centered display title flanked by drawn rules -- MEO's signature

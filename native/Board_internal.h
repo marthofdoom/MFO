@@ -296,6 +296,11 @@ namespace MFO::Board {
     // Present thunk in Board.cpp. RENDER THREAD.
     void DrawFieldKit(const Snapshot& snap);
 
+    // Writes the remembered board rect (Data/SKSE/Plugins/MFO_UI.ini) once the
+    // board is closed and the rect changed. DEFINED in Board_FieldKit.cpp, called
+    // every frame from the Present thunk in Board.cpp. RENDER THREAD.
+    void FlushBoardWindowMemory(bool a_open);
+
     // ── THE PROGRESSION TAB (#74 component 3) ───────────────────────────
     // Defined in Board_Progression.cpp (mechanical split of DrawFieldKit's
     // hosted-tab body). Render thread, inside DrawFieldKit's tab bar. The

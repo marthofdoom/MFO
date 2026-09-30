@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **The menu remembers where you put it.** The Field Orders window reopens at the position and size you left it, even after you restart the game. It is saved in `Data/SKSE/Plugins/MFO_UI.ini`. Delete that file to go back to the centred default. If your resolution changes, the window is kept on screen.
 - **The menu only drags by its title bar, and resizes from any edge.** Before, you could drag the Field Orders window from anywhere in it, which fought with sliders and lists. Now you grab the title bar to move it. Drag any edge, or a bottom corner, to resize it. The combat HUD stays fixed.
 - **Hotkeys for the board and the HUD.** Two new keys in the MCM Interface page, or `iBoardKey` and `iHudKey` in the INI. The board key opens and closes the Field Orders board, the same as casting the Field Orders power. The HUD key turns the combat HUD on and off. Both are unbound until you pick a key.
 - **New condition: Foe: Multiple within.** It is true when a foe has at least 2 other foes within the distance you set of it. That is a cluster of 3 or more. The follower picks the middle of the cluster, the foe with the most others near it, and it has to be one they can see. If two tie, they pick the one closest to them. Use it for area spells like Fireball, Chain Lightning or a Fear shout. It is in the Combat gambit list next to Foe: Count at least.
