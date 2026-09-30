@@ -103,12 +103,12 @@ namespace MFO::Actuation {
         // left hand too): CastOn reaches Prepare on that road only after the
         // LeftHoldRule gate found the heal rule outranking any such hold (review
         // round 2, marth's ruling). Every other cast keeps the left-hold-only yield.
-        bool CastYieldLeft(RE::Actor* a_actor) {
-            return YieldForcedLeftHand(a_actor, "a cast is taking the left hand");
+        bool CastYieldLeft(RE::Actor* a_actor, RE::TESBoundObject** a_left, RE::TESBoundObject** a_right) {
+            return YieldForcedLeftHand(a_actor, "a cast is taking the left hand", false, a_left, a_right);
         }
-        bool HealYieldLeft(RE::Actor* a_actor) {
+        bool HealYieldLeft(RE::Actor* a_actor, RE::TESBoundObject** a_left, RE::TESBoundObject** a_right) {
             return YieldForcedLeftHand(a_actor, "an animated heal claim ranked above the hold is taking "
-                                                "the left hand", /*a_twoHandToo=*/true);
+                                                "the left hand", /*a_twoHandToo=*/true, a_left, a_right);
         }
 
     }
@@ -406,9 +406,8 @@ namespace MFO::Actuation {
                 if (const int holdRule = LeftHoldRule(id); holdRule < g_firingRule) {
                     ReleaseOwnHealClaim(a_follower, a_spellID,
                                         "an equip gambit ranked above this rule holds the left hand");
-                    static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_outrankLog;
                     const auto now = std::chrono::steady_clock::now();
-                    auto& last = s_outrankLog[id];
+                    auto& last = g_healOutrankLog[id];
                     if (now - last >= std::chrono::seconds(5)) {
                         last = now;
                         spdlog::info("[heal] {:08X} animated heal (spell {:08X}, rule {}) NOT claimed -- equip "
@@ -1575,6 +1574,10 @@ namespace MFO::Actuation {
         g_lastPreemptLog.clear();
         g_lastInFlightLog.clear();   // F9
         g_lastApmfRefusal.clear();
+        g_heldOffLog.clear();        // MFO-B188 / B180: the heal road's log dedup, session-scoped
+        g_healOutrankLog.clear();
+        g_releaseHealLog.clear();
+        g_healRepairLog.clear();
     }
 
 }

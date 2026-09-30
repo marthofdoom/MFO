@@ -70,6 +70,21 @@ namespace MFO::Actuation {
     bool CastInFlightOnHand(RE::Actor* a_follower, std::size_t a_hand,
                             RE::FormID a_spell, RE::FormID a_proxy);
 
+    // WHEN THE CAST LOCK ON `a_hand` CLAIMED `a_spell` (MFO-B190): the lock's
+    // `lastSeen`, which a refresh in flight and a heal repair lap never re-stamp, so
+    // it is the claim's start. Returns the clock epoch (time_point{}) when the hand
+    // has no lock for that spell (the direct roads hold none). Worker-serial, no
+    // lock, like every cast-lock reader (#4); ComposedCast's [cfc] watch is the
+    // caller and runs on the same worker.
+    std::chrono::steady_clock::time_point CastLockClaimStamp(RE::FormID a_follower, std::size_t a_hand,
+                                                             RE::FormID a_spell);
+
+    // Drop the LEFT cast lock IF it names `a_spell` (MFO-B179): the twin of
+    // ReleaseOwnHealClaim's own lock clear for a caller that has already ended the
+    // claim through ComposedCast::End and cannot reach the ledger. Idempotent. The
+    // right hand's lock is never touched. Worker-serial (#4).
+    void ClearLeftCastLockIf(RE::FormID a_follower, RE::FormID a_spell);
+
     // THE CAST-TARGET RESOLUTION LADDER (#68). Resolves WHO a cast_target row
     // aims at: a live selector target -> a named specific follower -> Subject
     // Player/NearestAlly -> the PLAYER fallback (a_outIsFallbackPlayer marks that

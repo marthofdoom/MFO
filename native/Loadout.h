@@ -128,7 +128,15 @@ namespace MFO::Loadout {
     // debt is booked for it (F2: two ledgers over one hand had the repay put the
     // weapon back in the RIGHT hand at combat end). Non-capturing, so a plain
     // function pointer: no <functional> in this header.
-    using LeftHandYield = bool (*)(RE::Actor* a_actor);
+    //
+    // WHICH ITEMS IT RELEASED (MFO-B187): a_releasedLeft / a_releasedRight, when
+    // non-null, receive the ledger hold objects the yield actually let go (left
+    // hold, two-hander right hold), nullptr for a hand it released nothing in.
+    // Prepare books no gear debt only for an item that IS one of those, so a stray
+    // ledger entry that is not in the hand cannot drop the debt for the follower's
+    // own gear (a true return alone said "a hold was released", not which).
+    using LeftHandYield = bool (*)(RE::Actor* a_actor, RE::TESBoundObject** a_releasedLeft,
+                                   RE::TESBoundObject** a_releasedRight);
 
     // Put the spell in a hand if that is allowed right now, recording anything
     // displaced so it can be given back. `a_yieldLeft` (see LeftHandYield) is

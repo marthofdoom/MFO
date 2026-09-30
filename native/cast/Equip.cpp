@@ -186,7 +186,25 @@ namespace MFO::Actuation {
         // item pointers; re-resolve on the frame that runs; null-check both. A
         // plain equip, no ledger entry: the AI keeps shields on its own. VR (no
         // pump): the inline call, as the loot precedent does.
+        //
+        // THE SHIELD CARRIES THE EQUIP RULE'S RANK (MFO-B186, marth's ruling "Gambit
+        // order wins ... a poorly ordered gambit board shouldn't be rescued
+        // programmatically"). The top-up shield is never a ledger hold (the AI keeps
+        // shields on its own, and ForcedHold::left is a co-saved WEAPON hold), so it
+        // gets its own IN-MEMORY rank record: the shield's FormID and g_firingRule,
+        // stamped here and re-stamped on every satisfied lap (EquipWeapon's RANK STAMP).
+        // LeftHoldRule reads it, but only while that shield is STILL the object in the
+        // left hand, so a heal ranked BELOW the equip rule no longer displaces it and a
+        // heal ranked above still does, exactly like a weapon hold. Not co-saved, so
+        // FWPN is untouched. Guarded by g_forcedMx like the ledger beside it.
+        struct ShieldRank { RE::FormID shield = 0; int rule = kNoRule; };
+        std::unordered_map<RE::FormID, ShieldRank> g_shieldRank;   // under g_forcedMx
+        void StampShieldRank(RE::FormID a_follower, RE::FormID a_shield) {
+            std::scoped_lock lk(g_forcedMx);
+            g_shieldRank[a_follower] = { a_shield, g_firingRule };
+        }
         void EquipShieldOnMain(RE::FormID a_follower, RE::FormID a_shield) {
+            StampShieldRank(a_follower, a_shield);
             auto doEquip = [a_follower, a_shield]() {
                 auto* fol  = RE::TESForm::LookupByID<RE::Actor>(a_follower);
                 auto* form = RE::TESForm::LookupByID(a_shield);
@@ -541,6 +559,8 @@ namespace MFO::Actuation {
                     std::scoped_lock lk(g_forcedMx);
                     if (auto h = g_forcedWeapon.find(a_follower->GetFormID()); h != g_forcedWeapon.end())
                         h->second.rule = g_firingRule;
+                    if (auto s = g_shieldRank.find(a_follower->GetFormID()); s != g_shieldRank.end())
+                        s->second.rule = g_firingRule;   // MFO-B186: the top-up shield is held this lap too
                 }
                 return { Result::NoOp, "already holding that category", true };
             }
@@ -582,9 +602,8 @@ namespace MFO::Actuation {
             // the first lap after the heal fires or the claim ends. A heal ranked
             // BELOW this rule never claims the hand at all (CastOn's LeftHoldRule gate).
             if (TakesBothHands(best) && HealClaimTakesLeftFrom(a_follower, g_firingRule)) {
-                static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_heldLog;
                 const auto now = std::chrono::steady_clock::now();
-                auto& last = s_heldLog[a_follower->GetFormID()];
+                auto& last = g_heldOffLog[a_follower->GetFormID()];
                 if (now - last >= std::chrono::seconds(5)) {
                     last = now;
                     spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' HELD OFF -- it takes both hands and a "
@@ -767,6 +786,7 @@ namespace MFO::Actuation {
         ForcedHold hold;
         {
             std::scoped_lock lk(g_forcedMx);
+            g_shieldRank.erase(id);   // MFO-B186: the equip rule's hold is over, its shield rank with it
             auto it = g_forcedWeapon.find(id);
             if (it == g_forcedWeapon.end()) return;
             hold = it->second;
@@ -899,7 +919,8 @@ namespace MFO::Actuation {
     // lock lapses. A left-ONLY hold (AI-equipped right) erases the entry and
     // releases the APMF equipment claim, so the claim never outlives the hold.
     // Idempotent. Worker-serial; map under the lock, engine call outside it.
-    bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why, bool a_twoHandToo) {
+    bool YieldForcedLeftHand(RE::Actor* a_follower, const char* a_why, bool a_twoHandToo,
+                             RE::TESBoundObject** a_outLeft, RE::TESBoundObject** a_outRight) {
         if (!a_follower) return false;
         const auto id = a_follower->GetFormID();
         RE::TESBoundObject* left    = nullptr;
@@ -916,6 +937,8 @@ namespace MFO::Actuation {
             if (right2h) it->second.right = nullptr;
             if (it->second.Empty()) { g_forcedWeapon.erase(it); lastHold = true; }
         }
+        if (a_outLeft)  *a_outLeft  = left;
+        if (a_outRight) *a_outRight = right2h;
         // A FLOOR, not a reset (F1, principle 9): the top-up may refill the hand
         // no sooner than kOffHandRetry from this yield. Erasing the stamp let a
         // refused cast (yield -> EquipSpell -> refusal -> top-up -> yield...) cycle
@@ -942,10 +965,27 @@ namespace MFO::Actuation {
     // ── GAMBIT ORDER ON THE LEFT HAND (review round 2; contract in
     // Actuation_internal.h beside the declarations) ──────────────────────────────
     int LeftHoldRule(RE::FormID a_follower) {
-        std::scoped_lock lk(g_forcedMx);
-        const auto it = g_forcedWeapon.find(a_follower);
-        if (it == g_forcedWeapon.end()) return kNoRule;
-        return (it->second.left || TakesBothHands(it->second.right)) ? it->second.rule : kNoRule;
+        ShieldRank shield;
+        {
+            std::scoped_lock lk(g_forcedMx);
+            const auto it = g_forcedWeapon.find(a_follower);
+            if (it != g_forcedWeapon.end() &&
+                (it->second.left || TakesBothHands(it->second.right)))
+                return it->second.rule;
+            const auto s = g_shieldRank.find(a_follower);
+            if (s == g_shieldRank.end()) return kNoRule;
+            shield = s->second;   // copied: the engine reads below run outside the lock
+        }
+        // The shield-by-perks top-up (MFO-B186): held by rank only while that shield
+        // is the object in the LEFT hand. NOT erased on a miss: the equip is posted to
+        // the main thread, so the first lap after the stamp can still see the old hand.
+        // A stale record answers only while its shield is in the hand, and is dropped
+        // when the equip rule's hold ends: ReleaseForcedWeapon, or ReconcileForcedWeapon's
+        // no-ledger branch (a top-up over the AI's own one-hander has no ledger entry),
+        // or a revert.
+        auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_follower);
+        auto* leftObj = actor ? actor->GetEquippedObject(true) : nullptr;
+        return (leftObj && leftObj->GetFormID() == shield.shield) ? shield.rule : kNoRule;
     }
 
     bool HealClaimTakesLeftFrom(RE::Actor* a_follower, int a_holdRule) {
@@ -1040,7 +1080,17 @@ namespace MFO::Actuation {
         {
             std::scoped_lock lk(g_forcedMx);
             auto it = g_forcedWeapon.find(a_follower->GetFormID());
-            if (it == g_forcedWeapon.end()) return;   // nothing forced -> nothing to do
+            if (it == g_forcedWeapon.end()) {
+                // NO LEDGER, BUT MAYBE A SHIELD RANK (MFO-B186 review F1): a top-up over
+                // the AI's own one-hander records the shield's rank with no
+                // g_forcedWeapon entry, so ReleaseForcedWeapon never runs for it. Apply
+                // the same release decision here (kill-switch off, or the condition
+                // known false for a one-hander category) or the rank would refuse
+                // lower-ranked heals for the rest of the fight.
+                if (!Config::g_weaponStyleControl.load() || (a_condKnownFalse && a_wantStance != 1))
+                    g_shieldRank.erase(a_follower->GetFormID());
+                return;   // nothing forced -> nothing more to do
+            }
             // The category of the hold: the right-hand weapon's, or -- a left-
             // only hold (AI-equipped right, MFO-held dual-wield left) -- the
             // left's, which is one-handed melee by construction.
@@ -1081,6 +1131,7 @@ namespace MFO::Actuation {
         g_lastB41At.clear();
         std::scoped_lock lk(g_forcedMx);
         g_forcedWeapon.clear();
+        g_shieldRank.clear();
     }
 
     // T#76 force-hold co-save. Persist the force-equip locks so a load clears the
