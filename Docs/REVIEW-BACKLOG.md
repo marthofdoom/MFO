@@ -1079,3 +1079,6 @@ Raised against 8f915c0 (`fix/mfo-heal-field0930`, Opus review), 2026-09-30. A he
 
 ### MFO-B197 (SEV-5) -- cost of EndDirectHealStreams on Claimed refresh laps
 Raised against 8f915c0 (`fix/mfo-heal-field0930`, Opus review), 2026-09-30. `EndDirectHealStreams` runs at `Try()`'s `Claimed` return, including refresh laps of a standing claim, so it is called every lap. Not measured; left open until a profile shows it matters. Code: `ComposedCast.cpp` Try `Claimed` return.
+
+### MFO-B198 (SEV-4) -- essential-down heal release churns at the picker
+Raised against 6c974fd (`fix/mfo-lifestate-0930`, Sonnet review), 2026-09-30. Reviewer (verbatim): "only kEssentialDown triggers it ... the picker and Hands.cpp are unchanged, and the picker's urgentHeal treats essential-down as 'down'. The ally can therefore be re-picked every lap and released again each time. This is not a re-fire, since no claim is renewed, but it is churn plus a lap-by-lap FailedOther." Fix when drained: skip an essential-down ally at PickAlly / CastAuto pick time (where a heal cannot land), so the release path is not exercised every lap. CHANGELOG wording corrected at merge.

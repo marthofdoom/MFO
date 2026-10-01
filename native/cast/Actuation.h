@@ -238,8 +238,9 @@ namespace MFO::Actuation {
     //    engine reads the same field: 1.5.97 `[actor+0xC0] >> 21 & 0xF` compared to
     //    2 / 3 / 6 / 8 (26 sites), 1.6.1170 `[actor+0xC8] & 0x1E00000` compared to
     //    0x400000 / 0x600000 / 0xC00000 / 0xE00000 / 0x1000000 (144 sites) -- dead,
-    //    unconscious, restrained, essential-down, bleedout. Anything but kAlive and
-    //    kReanimate (a raised thrall acts) is "cannot act": dying, dead, unconscious,
+    //    unconscious, restrained, essential-down, bleedout. Only the named
+    //    down states are "cannot act" (an ALLOWLIST, fix/mfo-lifestate; kAlive and
+    //    kReanimate (a raised thrall acts) act, and so does an unnamed value): dying, dead, unconscious,
     //    restrained, recycle, essential-down, bleedout (ActorState::IsBleedingOut is
     //    exactly the last two).
     //  * KNOCK STATE = ActorState1 bits 25-27 (:115). Anything but kNormal (queued,
@@ -261,6 +262,13 @@ namespace MFO::Actuation {
     // does not count. The stream reconciles pass false, so a queued knock may skip a
     // lap (the scan / apply gates use the default) but never dispels, interrupts or
     // frees a live heal stream.
+    // fix/mfo-lifestate: an UNNAMED life state (raw value outside kAlive..kBleedout, 0-8)
+    // is NOT a down state. The give idle and the lockpick idle flip a follower to one
+    // (hp 100%), and 1b3af00's `default: "not alive"` stopped deposits and picks. Logs
+    // the raw value ONCE per actor per value (cast/CanAct.cpp), thread-safe.
+    void NoteUnknownLifeState(RE::FormID a_actor, std::uint32_t a_raw);
+    // The ALLOWLIST: only the named down states below block. kRecycle (5) is the engine's
+    // dead-body recycle, so it blocks too. Unknown values pass (see above).
     inline const char* CannotActReason(const RE::Actor* a_actor, bool a_countPendingKnock = true) {
         if (!a_actor) return "gone";
         if (const auto* st = a_actor->AsActorState()) {
@@ -273,7 +281,10 @@ namespace MFO::Actuation {
             case RE::ACTOR_LIFE_STATE::kRestrained:     return "restrained";
             case RE::ACTOR_LIFE_STATE::kDying:          return "dying";
             case RE::ACTOR_LIFE_STATE::kDead:           return "dead";
-            default:                                    return "not alive";
+            case RE::ACTOR_LIFE_STATE::kRecycle:        return "recycle";
+            default:
+                NoteUnknownLifeState(a_actor->GetFormID(), static_cast<std::uint32_t>(st->GetLifeState()));
+                break;
             }
             switch (st->GetKnockState()) {
             case RE::KNOCK_STATE_ENUM::kNormal:

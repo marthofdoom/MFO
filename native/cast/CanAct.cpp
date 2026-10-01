@@ -77,6 +77,14 @@ namespace MFO::Actuation {
             default:                                   return "?";
             }
         }
+        // Raw-value name for the [bleed] line: the unnamed values print as "?(N)".
+        std::string LifeStr(RE::ACTOR_LIFE_STATE a_s) {
+            const char* n = LifeName(a_s);
+            if (n[0] != '?') return n;
+            return std::format("?({})", static_cast<std::uint32_t>(a_s));
+        }
+        std::mutex                        g_unkLifeMx;
+        std::unordered_set<std::uint64_t> g_unkLifeLogged;
         bool LifeUp(RE::ACTOR_LIFE_STATE a_s) {
             return a_s == RE::ACTOR_LIFE_STATE::kAlive || a_s == RE::ACTOR_LIFE_STATE::kReanimate;
         }
@@ -88,10 +96,23 @@ namespace MFO::Actuation {
                 g_refusedLogged.clear();
             }
             {
+                std::lock_guard lk(g_unkLifeMx);
+                g_unkLifeLogged.clear();
+            }
+            {
                 std::lock_guard lk(g_healLandedMx);
                 g_healLanded.clear();
             }
         }
+    void NoteUnknownLifeState(RE::FormID a_actor, std::uint32_t a_raw) {
+        {
+            std::lock_guard lk(g_unkLifeMx);
+            if (!g_unkLifeLogged.insert((static_cast<std::uint64_t>(a_actor) << 32) | a_raw).second) return;
+        }
+        spdlog::info("[bleed] {:08X} UNNAMED life state {} (raw) -- not a down state, the follower still acts "
+                     "(logged once per actor per value)", a_actor, a_raw);
+    }
+
     namespace {
         const char* FormName(RE::FormID a_id) {
             auto* f = a_id ? RE::TESForm::LookupByID(a_id) : nullptr;
@@ -157,7 +178,7 @@ namespace MFO::Actuation {
         const std::string flips = quiet ? std::format(" (+{} flips not printed)", quiet) : std::string{};
         if (!LifeUp(life)) {
             spdlog::info("[bleed] {:08X} {}: DOWN ({}; was {} for {:.1f}s) hp {:.0f}%{}",
-                         id, name, LifeName(life), LifeName(was), heldSec, hp * 100.0f, flips);
+                         id, name, LifeStr(life), LifeStr(was), heldSec, hp * 100.0f, flips);
             return;
         }
         HealLanded h{};
@@ -174,7 +195,7 @@ namespace MFO::Actuation {
             heal = "no MFO heal landed on him while down";
         }
         spdlog::info("[bleed] {:08X} {}: UP ({} after {:.1f}s {}) hp {:.0f}% -- {}{}",
-                     id, name, LifeName(life), heldSec, LifeName(was), hp * 100.0f, heal, flips);
+                     id, name, LifeStr(life), heldSec, LifeStr(was), hp * 100.0f, heal, flips);
     }
 
     float HealReach(RE::SpellItem* a_spell) {
