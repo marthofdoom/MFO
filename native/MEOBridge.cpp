@@ -288,7 +288,7 @@ namespace MFO::MEOBridge {
                      const GemReconcilePrefs& a_p) {
             int b = 0;
             // MFO-B203 (F2): a support gem has NO value of its own here. It is worth +1 only
-            // when the link it would form works (SupportLinkValue), so a lone or inert
+            // when the link it would form works (LinkWorks, inlined at the pick and the swap-up), so a lone or inert
             // Focus/Echo/Conduit never outranks, or evicts, a working normal gem.
             (void)a_isSupport;
             if (a_p.caster) {
@@ -315,8 +315,13 @@ namespace MFO::MEOBridge {
         //           plugin.cpp:1819). Tier 2 never admits an off-domain gem (F1, below), so a
         //           Conduit has no job there and is worth nothing.
         // MEO_API exposes gids and not themes, so the elemental set is this gid list (the
-        // catalog's fire/frost/shock theme gems + chaos). A gem MEO adds later reads as
-        // non-elemental here: Focus/Echo-on-weapon are then valued 0 for it, never wrongly +1.
+        // catalog's fire/frost/shock theme gems + chaos). KNOWN LIMIT: MEO also MINTS runtime
+        // gem families from the load order (gids with an "x_" prefix, each with a calibrated
+        // theme that can be fire/frost/shock, plugin.cpp:985-998, 1346) and its IsElementalGem
+        // is theme-based. Such an "x_" elemental gem reads as NON-elemental here, so a Focus or
+        // Echo linked to it is valued 0 and not guarded. That errs toward evicting a support
+        // (never toward a wrong +1) and nothing is permanent, because an inert-looking support
+        // is an ordinary eviction candidate. Fixing it needs MEO to expose the theme (B203).
         bool IsElementalGid(const char* a_gid) {
             static constexpr const char* kElemental[] = {
                 "firedamage", "resistfire", "weaknessfire", "frost", "resistfrost", "weaknessfrost",
@@ -780,11 +785,14 @@ namespace MFO::MEOBridge {
                 // ~1 s cadence, so no double-unsocket.
                 if (a_effectAware && !mintGuard && nDet > 0) {
                     // MFO-B203 (F2): what is socketed now. LINKED = exactly 1 support + 1 normal
-                    // (MEO plugin.cpp:1960-1990). A LINKED support is never evicted (it transforms
-                    // its partner, and a Conduit's orphan goes inert, plugin.cpp:2003), and the
-                    // partner of a linked CONDUIT is never evicted either. The partner of a
-                    // working Focus/Echo may be, but only for a candidate that keeps the link
-                    // working (checked per candidate below).
+                    // (MEO plugin.cpp:1960-1990). A LINKED support is protected ONLY while its link
+                    // works (linkWorksNow): an inert last-resort Focus/Echo is worth 0 and is an ordinary
+                    // eviction candidate, or a better gem would stay loose forever. A linked CONDUIT and
+                    // its partner are protected ONLY when the partner is off-domain (the Conduit is what
+                    // makes it work, its orphan goes inert, plugin.cpp:2003; such a pair comes from tier 1
+                    // or the player). A Conduit on a same-domain partner just passes it through and is an
+                    // ordinary candidate (bonus 0, magnitude 0). The partner of a working Focus/Echo may
+                    // be evicted, but only for a candidate that keeps the link working (per candidate below).
                     int nSup = 0, nNorm = 0;
                     std::uint32_t supIdx = 0, normIdx = 0;
                     for (std::uint32_t i = 0; i < nDet; ++i) {
@@ -793,12 +801,13 @@ namespace MFO::MEOBridge {
                     const bool linkedNow     = nSup == 1 && nNorm == 1;
                     const bool conduitLinked = linkedNow && ContainsCI(det[supIdx].gid, "conduit");
                     const bool linkWorksNow  = linkedNow && LinkWorks(det[supIdx].gid, det[normIdx].gid, item.isArmor);
+                    const bool conduitHolds  = conduitLinked && det[normIdx].isArmor != item.isArmor;   // off-domain partner
                     bool          haveWeak = false;
                     std::uint32_t weakIdx = 0;
                     int   weakB = std::numeric_limits<int>::max();
                     float weakM = std::numeric_limits<float>::max();
                     for (std::uint32_t i = 0; i < nDet; ++i) {
-                        if (linkedNow && (det[i].isSupport || conduitLinked)) continue;   // protected (see above)
+                        if (linkedNow && (det[i].isSupport ? (linkWorksNow || conduitHolds) : conduitHolds)) continue;   // protected (see above)
                         const int bo = GemBonus(det[i].gid, det[i].name, det[i].isArmor, det[i].isSupport, a_prefs);
                         // F9: like with like, the socketed gem's BASE magnitude against the
                         // loose gem's base magnitude (effectiveMagnitude carries a Focus boost).
