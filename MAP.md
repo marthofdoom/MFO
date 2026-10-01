@@ -6692,8 +6692,8 @@ a fresh order.
   new merchant/actor reads; `follower->HasSpell` is the one tome read, on a loaded
   actor). Gear = one best-in-category upgrade per window at ≤50 % of the remaining
   purse; mage apparel is per-slot (head/body/hands/feet/ring/amulet, `MageClothingSlot`)
-  ranked MEO-aware (`MageApparelBuyKey`: value-primary when `MEOBridge::Available()`,
-  else school-enchant-primary) with a villain-coded blacklist + necromancer exception.
+  ranked by `MageApparelBuyKey`: value-primary by default (MEO or not), school-enchant-primary
+  only with `bMageApparelStrictSchool` (marth 2026-10-01) with a villain-coded blacklist + necromancer exception.
   Bought gear is protected from re-sell by the `keepArmor` set (buckets by LOGICAL
   slot — `MageClothingSlot` for clothing/jewelry, primary biped slot for rated armor
   — keeping worn + one best-per-slot upgrade; NOT the raw bitmask, which let varied

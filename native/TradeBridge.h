@@ -72,11 +72,10 @@ namespace MFO::TradeBridge {
         // judge is per-slot; buy must match). PlanBuy best-picks per slot.
         std::int32_t  armorBaseRat[5] = {};
         bool          buyMageApparel = false;// clothing/jewelry dress-up (caster + bMageWearRobes, not dolls mode)
-        // MEO-aware ranking (marth): value-driven ONLY when MEO is present (gems
-        // transfer and supply school relevance). schoolPrimary == true (MEO absent
-        // OR bMageApparelStrictSchool) ranks by school-enchant tier first; false
-        // ranks purely by gold value. Computed on the worker (MEOBridge::Available
-        // is worker-safe).
+        // Ranking (marth 2026-10-01): value-driven by default, with or without MEO.
+        // schoolPrimary == true ONLY with bMageApparelStrictSchool: ranks by
+        // school-enchant tier first; false ranks purely by gold value (most
+        // expensive piece per slot). Computed on the worker.
         bool          mageSchoolPrimary = false;
         // Owned baseline the buy must beat, per logical slot (0=head 1=body 2=hands
         // 3=feet 4=ring 5=amulet -- MageClothingSlot order), ranked by (tier,metric):

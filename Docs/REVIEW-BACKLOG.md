@@ -1227,3 +1227,10 @@ Raised against 8d153b86 (`fix/mfo-cicero-gear`, Opus review round 1). The SEV-3s
 - **F6 (SEV-5):** the rated slate (`ComputeOwnedGearSlate`) has no blacklist check, so a blacklisted worn piece can sit in the slate. The sell side still force-sells blacklisted apparel, so no loop, but the declaration may name it.
 - **F7 (SEV-5):** the `[gear] clothing mode` dedupe only runs while `IsCasterFollower` is true (a follower who stops being a caster never logs the change), and the dedupe is keyed on `const char*` literal pointers.
 - **Surfaced at edit time from:** MAP.md "CICERO GEAR FIXES".
+
+### MFO-B224 (SEV-4 / SEV-5, deferred) -- Cicero gear round 2 leftovers
+Raised against 79fb52a5 (`fix/mfo-cicero-gear`, Opus focused re-review, verdict MERGE), 2026-10-01.
+- **SEV-4:** `DeclaredSetKeeps` (`logistics/EquipAuthority.cpp:484-490`) uses the raw `gs.slot[]`, not the list `accept()` builds. `accept()` drops a slate piece that overlaps the pick, overlaps an earlier piece or shares the head mask. In mage mode `playerPieceWins` can also swap a piece. Membership then over-claims "kept", which is benign: the piece is no longer worn and sells later. The rule-5 test under-claims: a worn piece W that overlaps only a slate piece `accept()` dropped is still sent by the declaration's rule 5, but `DeclaredSetKeeps` returns false. If the keep set also ranks W `redundantInferior`, force-sell and `gemHold` run again. That needs a hood-on-robe or pick-overlap layout plus a gemmed worn piece, so it is rare. A substituted player piece stays protected (the `IsPlayerPick` check comes before `gemHold`). Fix: move `accept()` into a helper both callers use, as was done for `Rule5Overlaps`.
+- **SEV-5:** in mage mode `DeclaredSetKeeps` still calls `ComputeOwnedGearPick`, which walks inventory in `MageBestPerSlot`, and then throws the result away. Checking `gs.mage` first would skip the walk.
+- Stale docs from the same review (the "MEO absent" school rule in Logistics.h, TradeBridge.h, Economy.cpp and MAP) were fixed at merge.
+- **Surfaced at edit time from:** MAP.md "CICERO GEAR FIXES" note and the EquipAuthority entry.

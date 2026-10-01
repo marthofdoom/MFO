@@ -409,11 +409,9 @@ namespace MFO::Logistics {
                 buy.armorHeavyBias = armorPref.heavyBias;
                 buy.armorLightBias = armorPref.lightBias;
                 buy.buyMageApparel = useMageApparel && !dolls;
-                // MEO-aware ranking (marth): value-driven ONLY with MEO present (gems
-                // transfer + supply school relevance). Without MEO -- or with the
-                // strict toggle -- rank school-enchant first so a mage never trades a
-                // helpful enchant for a pricier off-school one. MEOBridge::Available()
-                // is a worker-safe bool (no main-thread MEO query on the tick).
+                // Ranking (marth 2026-10-01): value-driven by default, with or without
+                // MEO (most expensive piece per slot). Only the strict toggle ranks
+                // school-enchant first.
                 buy.mageSchoolPrimary = Config::g_mageApparelStrictSchool.load();
                 buy.isNecromancer  = IsNecromancerFollower(a_state);
                 buy.eligibleSchools= top2;

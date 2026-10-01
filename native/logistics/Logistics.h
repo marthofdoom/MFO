@@ -118,10 +118,10 @@ namespace MFO::Logistics {
     // is buyable (rating-0 clothing/jewelry, not villain-coded unless a_allowVillain,
     // i.e. a necromancer follower). On true, fills a comparable (out_tier, out_metric)
     // the caller sorts per slot (higher tier first, then higher metric):
-    //   a_schoolPrimary == false (MEO present + not strict): VALUE-driven -- tier is
+    //   a_schoolPrimary == false (bMageApparelStrictSchool off, the default, MEO or not): VALUE-driven -- tier is
     //     always 0, metric = gold value. Gems transfer on swap, so the most expensive
     //     piece is safe.
-    //   a_schoolPrimary == true  (MEO absent OR bMageApparelStrictSchool): SCHOOL-
+    //   a_schoolPrimary == true  (bMageApparelStrictSchool on): SCHOOL-
     //     enchant primary -- tier 2 fortifies one of the follower's top-2 schools
     //     (a_top2Mask), tier 1 is plain (no school fortify -- still fills a slot),
     //     tier 0 fortifies an off-school (ranked lowest). metric = value (+ matching
