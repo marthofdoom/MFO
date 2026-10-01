@@ -535,6 +535,9 @@ namespace MFO::Followers {
         std::lock_guard<std::mutex> lk(g_mx);   // the IsTrackedFast road, never g_followers
         return g_mfoOff.find(a_actorID) == g_mfoOff.end();
     }
+    // MFO-B12: public export of the anonymous-namespace PublishActiveMirror, for the Board's
+    // mfoEnabled write site. WORKER only; takes g_mx itself (leaf), call under no lock.
+    void RepublishActiveMirror() { PublishActiveMirror(); }
 
     void SetBaseClass(RE::FormID a_actorID, std::uint8_t a_stance) {
         if (auto* rec = TryEnsureRecord(a_actorID)) rec->combatClassOverride = a_stance;

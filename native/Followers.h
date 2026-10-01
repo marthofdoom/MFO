@@ -175,6 +175,10 @@ namespace MFO::Followers {
     // it. A toggle flipped on the Board is visible here by the next Refresh
     // (one diag turn). true when no record / not yet mirrored.
     bool IsMfoEnabled(RE::FormID a_actorID);
+    // Republish the g_mx mirrors (incl. the mfoEnabled one) NOW (MFO-B12: the Board's
+    // SetMfoEnabled write site calls it, so a toggle needs no wait for the next Refresh).
+    // WORKER-thread only (same domain that writes g_followers); call under no lock.
+    void RepublishActiveMirror();
     void         SetBaseClass(RE::FormID a_actorID, std::uint8_t a_stance);
     void         SetBaseClass(RE::Actor* a_actor,   std::uint8_t a_stance);
 
