@@ -899,14 +899,26 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     cleared in `ClearCastLocks`) refuses that (spell, foe) until the foe is sighted. `Sightline` `occRun` restarts when the previous reading is older than 3 s (two stale readings never count as agreeing).
     (3) `ComposedCast::NoteOocDirectHeal` labels the OOC instant heal (MFO-B191 open). (5) `EndDirectHealStreams` now runs at
     `Try()`'s `Claimed` return (MFO-B192 fixed); MFO-B193, MFO-B194 open; MFO-B195 (kReady unproven in a field log), MFO-B196 (non-urgent heal waits on a kReady offense incumbent via `CanPreemptHand`), MFO-B197 (`EndDirectHealStreams` cost on Claimed refresh laps) open.
-    **Field 2026-09-30b (`fix/mfo-heal-sweep`):** (a) `PickAlly` (`Evaluator.cpp` ~:604) no longer drops the STANDING heal claim's
-    recipient (`APMFBridge::GetHealCastTarget` == the ally, spell claimed) on one Occluded reading: the incumbent is judged by
-    `Actuation::HealRecipientUnreachable` (now also declared in `cast/Actuation.h`), every other candidate keeps the single-reading
-    skip. Drop the incumbent test and the heal rule skips laps, `refreshed` goes stale and the sweep restarts the claim every 3-5 s
-    on a downed ally. (b) `APMFBridge::Tick`'s heal sweep (`apmf/Bridge.cpp` ~:982, the `o.heal` branch of the FacetExpiry sweep,
-    on the AddTask job worker) HOLDS a heal claim younger than `kHealHoldNeverObservedMs` (from `created`) that `ObservedFiring` has
-    not seen fire, and every release it does make logs `[heal] ... heal claim RELEASED by the expiry sweep` (handle, spell, target,
-    age, stale ms), rate-limited 1 s per follower. The other-hand offense behaviour (diagnosis cause B) is unchanged and unproven.
+    **Field 2026-09-30b (`fix/mfo-heal-sweep`) -- marth: "Shouldnt it charge and hold the heal and then fire as soon as los is clear."**
+    (a) LINE OF SIGHT NEVER DROPS A STANDING HEAL CLAIM'S RECIPIENT. `HealRecipientUnreachable` (`cast/Hands.cpp`, also declared in
+    `cast/Actuation.h`) is now REACH ONLY (`HealReach` distance): the 4d790ff agreeing-readings and build-window LoS logic above
+    is gone from it (`kHealLosAgreeingReadings` / `Sightline::OccludedRun` are no longer read by the heal road). `PickAlly`
+    (`Evaluator.cpp` ~:590) tests the incumbent (`APMFBridge::GetHealCastSpell != 0` and `GetHealCastTarget` == the ally) for reach only,
+    skipping `HealInReach` and the trusted-Occluded skip; `CastAuto`'s probe (`cast/Auto.cpp` ~:378) does the same for the
+    standing claim's recipient. Sightline still decides the INITIAL pick (every non-incumbent candidate). The recipient ends only on
+    death, beyond reach, rising to the rule's HP threshold / full health, the claim ending for a non-LoS reason, or a higher-ranked
+    rule taking the hand. Why: with the picker dropping the incumbent on a LoS flicker the rule skipped laps, `refreshed` went stale
+    and the sweep restarted the claim every 3-5 s (Herd, 28 s to the first landing). The rule now runs every lap while the ally is
+    occluded, and `ClaimHealCast`'s heartbeat (`EnsureCastClaimLocked` fast path) keeps renewing the claim and APMF's TTL. TRADEOFF:
+    an ally walled off for a long time keeps the healer's LEFT hand committed; other hurt allies wait until a higher rule, a drop
+    condition above, or `RefreshHealCastClaim`'s never-observed cap (a COMPETING rule's hold, `kHealHoldNeverObservedMs`) frees it.
+    (b) `APMFBridge::Tick`'s heal sweep (`apmf/Bridge.cpp` ~:982, the `o.heal` branch of the FacetExpiry sweep, on the AddTask job
+    worker) HOLDS a heal claim younger than `kHealHoldNeverObservedMs` (from `created`) that `ObservedFiring` has not seen fire, and
+    EVERY release it does make logs `[heal] ... heal claim RELEASED by the expiry sweep` (handle, spell, target, age, stale ms),
+    rate-limited 1 s per follower. (c) THE RIGHT HAND STAYS FREE (marth): while the left-hand heal waits for sight, nothing here holds,
+    releases or blocks right-hand offense. The sweep only touches `o.heal` (left); the idle-hand floor reconciles from the driving claims
+    exactly as before (a deny-only floor appears on the RIGHT only when MFO is not driving it, and an offense claim replaces it).
+    The other-hand offense behaviour (diagnosis cause B) is unchanged and unproven.
     **Backlog drain (141c480):** FIXED B175, B178, B179, B183, B186, B187, B188, B190 (B180 partly); B173 REOPENED (OOC `CastAuto` still claims via `CastSelfDirect`/`CastTargetDirect` during a controller flap); B184 closed by design; B181 REOPENED by marth (any in-combat instant-road use outside 1.5.97 is a defect to fix, never by-design). B186: the
     shield-by-perks top-up's rank lives in `cast/Equip.cpp` `g_shieldRank` (in-memory, `g_forcedMx`), read by
     `LeftHoldRule` only while that shield is in the left hand; B187: `Loadout::LeftHandYield` now reports the

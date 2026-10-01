@@ -329,11 +329,9 @@ namespace MFO::Actuation {
     // Occluded (Unknown passes: the fail-open every other LoS gate here takes; the
     // caller Want()s the pair). Always true for a_target == a_caster.
     bool HealInReach(RE::Actor* a_caster, RE::Actor* a_target, RE::SpellItem* a_spell);
-    // WORKER-SERIAL (reads g_castLock): is the heal recipient out of a_follower's reach for
-    // an INCUMBENT test (beyond the spell's reach, or an agreeing run of Occluded readings
-    // with the claim past its caster-build window). Declared here (field 2026-09-30b) so
-    // Evaluator's PickAlly can apply the SAME hysteresis to the standing recipient; the
-    // definition and full rules are in cast/Hands.cpp (see Actuation_internal.h).
+    // Is the heal recipient beyond the spell's reach (HealReach)? REACH ONLY: line of sight
+    // never drops a standing claim's recipient (marth 2026-09-30b). Declared here so
+    // Evaluator's PickAlly applies the same incumbent test; defined in cast/Hands.cpp.
     bool HealRecipientUnreachable(RE::Actor* a_follower, RE::Actor* a_victim, RE::SpellItem* a_spell);
     // MAIN THREAD, right before an apply: true = REFUSE this heal on a_target (the
     // caster is beyond HealReach or Sightline::MeasureNow, a synchronous LoS measure,

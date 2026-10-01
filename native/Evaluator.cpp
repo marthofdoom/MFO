@@ -590,35 +590,34 @@ namespace MFO::Eval {
                 if (hp >= lowest) return;
                 if (a_healSpell) {
                     sightWant.push_back(ally->GetFormID());
-                    if (!Actuation::HealInReach(a_self, ally, a_healSpell)) return;
-                    // A RECENT OCCLUDED STILL COUNTS (field 2026-09-29). HealInReach
-                    // reads the 1 s cache, and past it an Occluded ages into Unknown,
-                    // which passes. The re-measure this lap's Want asks for lands a
-                    // service period later (133 ms x party, over 1 s for a big party),
-                    // so between the two the heal named an ally it could not see and
-                    // the main thread refused it (Jesper -> Herd, "no line of sight",
-                    // 14:30:09.97 / 11.58 / 19.70). The last verdict is trusted for
-                    // kHealLosTrustS here instead: an ally who steps into view is
-                    // re-measured Visible on the next lap (the Want above), and one
-                    // that is never re-measured (unloaded) falls back to Unknown after
-                    // it. Self never reaches this (a_self is excluded above).
-                    //
-                    // THE STANDING CLAIM'S RECIPIENT IS NEVER DROPPED ON ONE READING
-                    // (field 2026-09-30b). A downed ally on the ground flickers Occluded /
-                    // Visible under the own-ray basis; dropping him for a single Occluded
-                    // skipped the heal rule for that lap, its claim's refresh went stale
-                    // and the sweep released it (Herd, 28 s to the first landing). The
-                    // incumbent is judged by HealRecipientUnreachable: agreeing readings
-                    // AND outside the caster-build window. Everyone else keeps the
-                    // single-reading rule above.
+                    // THE STANDING CLAIM'S RECIPIENT IS NEVER DROPPED FOR LINE OF SIGHT
+                    // (field 2026-09-30b; marth: "Shouldnt it charge and hold the heal and
+                    // then fire as soon as los is clear."). A downed ally flickers
+                    // Occluded / Visible under the own-ray basis; dropping him skipped the
+                    // heal rule for that lap, its claim's refresh went stale and the sweep
+                    // released it (Herd, 28 s to the first landing). The incumbent is
+                    // tested for REACH only; the rule keeps running, keeps refreshing the
+                    // claim, and the engine fires when sight clears. Sightline still
+                    // decides the INITIAL pick: every other candidate keeps HealInReach
+                    // plus the trusted-Occluded skip below.
                     const bool incumbent = APMFBridge::GetHealCastSpell(a_self->GetFormID()) != 0 &&
                                            APMFBridge::GetHealCastTarget(a_self->GetFormID()) == ally->GetFormID();
                     if (incumbent) {
                         if (Actuation::HealRecipientUnreachable(a_self, ally, a_healSpell)) return;
-                    } else if (Sightline::CheckWithin(a_self->GetFormID(), ally->GetFormID(), kHealLosTrustS,
-                                                      Sightline::Basis::Own) ==
-                               Sightline::Verdict::Occluded)
-                        return;
+                    } else {
+                        if (!Actuation::HealInReach(a_self, ally, a_healSpell)) return;
+                        // A RECENT OCCLUDED STILL COUNTS (field 2026-09-29). HealInReach
+                        // reads the 1 s cache, and past it an Occluded ages into Unknown,
+                        // which passes. The re-measure this lap's Want asks for lands a
+                        // service period later, so the last verdict is trusted for
+                        // kHealLosTrustS here: an ally who steps into view is re-measured
+                        // Visible on the next lap, one never re-measured falls back to
+                        // Unknown after it. Self never reaches this (excluded above).
+                        if (Sightline::CheckWithin(a_self->GetFormID(), ally->GetFormID(), kHealLosTrustS,
+                                                   Sightline::Basis::Own) ==
+                            Sightline::Verdict::Occluded)
+                            return;
+                    }
                 }
                 lowest = hp; best = ally->GetHandle();
             };

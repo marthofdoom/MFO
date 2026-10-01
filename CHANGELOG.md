@@ -7,7 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
-- **A heal on an ally lying on the ground no longer restarts every few seconds.** A follower keeps healing the same downed ally through a flickering line of sight, so the heal lands instead of starting over.
+- **A heal on an ally lying on the ground no longer restarts every few seconds.** A follower keeps healing the same downed ally through a flickering line of sight, so the heal lands instead of starting over. The follower keeps the heal ready and casts it the moment the ally is back in sight.
 - **Followers judge line of sight themselves for spells and bows.** A heal or a shot no longer waits on the game's stale sight answer, so heals stop hopping between targets and heals aimed at you get served.
 - **The menu remembers where you put it.** The Field Orders window reopens at the position and size you left it, even after you restart the game. It is saved in `Data/SKSE/Plugins/MFO_UI.ini`. Delete that file to go back to the centred default. If your resolution changes, the window is kept on screen.
 - **Heals are animated in combat again.** With Harbinger installed, a follower in combat casts their heal gambits with their own hands and the real cast animation. Self heals, heals on an ally, heals on you and Auto heals all work this way. Out of combat heals still land instantly for now.

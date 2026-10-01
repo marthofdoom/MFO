@@ -438,38 +438,20 @@ namespace MFO::Actuation {
         return CastLockLive(a_follower, a_hand, lock);
     }
 
-    // See Actuation_internal.h. The two halves of "out of reach" and why the second
-    // is not a single reading (field 2026-09-30):
-    //   * beyond the spell's reach: geometry, not a flicker, judged at once;
-    //   * out of sight: kHealLosAgreeingReadings Occluded measurements in a row, read
-    //     within kHealLosTrustSec (the same trust window the picker uses), and never
-    //     while the claim on this recipient is still building its caster.
-    // The build window is the one the claim path already sizes its holds from
-    // (APMFBridge::kHealHoldNeverObservedMs, measured claim-to-first-charge 2.3-4.5 s),
-    // anchored on the LEFT lock's claim stamp (`lastSeen`, frozen at the claim) and
-    // closed by an observed fire since that stamp. A recipient truly behind a wall is
-    // therefore released at the window's end, not held forever, and the claim's own
-    // never-fired WARN still speaks for it.
+    // See Actuation_internal.h. REACH ONLY (marth 2026-09-30b: "Shouldnt it charge and
+    // hold the heal and then fire as soon as los is clear."). A standing heal claim's
+    // recipient is NEVER dropped for line of sight: the claim stays, the left hand stays
+    // charged or held, and the engine fires when sight clears. Sightline still decides
+    // the INITIAL pick (PickAlly / CastAuto for a candidate that is not the incumbent).
+    // The recipient is out of reach only when it is beyond the spell's HealReach
+    // (geometry, judged at once). Death, the rule's HP threshold, the claim ending and
+    // a higher-ranked rule taking the hand are the callers' own tests. An earlier form of
+    // this function (4d790ff) dropped the recipient after kHealLosAgreeingReadings
+    // Occluded readings outside the caster-build window; that LoS drop is gone.
     bool HealRecipientUnreachable(RE::Actor* a_follower, RE::Actor* a_victim, RE::SpellItem* a_spell) {
         if (!a_follower || !a_victim || !a_spell) return false;
         if (a_follower == a_victim) return false;
-        if (a_follower->GetPosition().GetDistance(a_victim->GetPosition()) > HealReach(a_spell)) return true;
-        const auto fid = a_follower->GetFormID();
-        if (Sightline::OccludedRun(fid, a_victim->GetFormID(), kHealLosTrustSec, Sightline::Basis::Own) < kHealLosAgreeingReadings)
-            return false;
-        if (auto it = g_castLock.find(fid); it != g_castLock.end()) {
-            const auto& lk = it->second.hand[kHandLeft];
-            if (lk.spell == a_spell->GetFormID() && lk.target == a_victim->GetFormID()) {
-                const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now() - lk.lastSeen);
-                if (ageMs.count() >= 0 &&
-                    ageMs < std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
-                    !ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, lk.spell,
-                                                  static_cast<std::uint32_t>(ageMs.count() + 1)))
-                    return false;   // the caster is still being built: do not restart it
-            }
-        }
-        return true;
+        return a_follower->GetPosition().GetDistance(a_victim->GetPosition()) > HealReach(a_spell);
     }
 
     namespace {
@@ -695,10 +677,8 @@ namespace MFO::Actuation {
                 // request (locked map, no engine call here); the verdict lands a frame
                 // later and is read by the CheckWithin below on a later lap.
                 Sightline::Want(a_follower->GetFormID(), { a_lock.target }, Sightline::Basis::Own);
-                // Out of sight is TWO agreeing readings, and not while the claim is still
-                // building its caster (HealRecipientUnreachable, field 2026-09-30): one
-                // flicker of the Sightline verdict dropped the incumbent and the claim
-                // was re-minted on another ally five times.
+                // Line of sight never drops the incumbent (HealRecipientUnreachable is
+                // reach only, marth 2026-09-30b): the claim waits charged for sight.
                 if (Vocab::HealthPct(victim) >= Vocab::kHealFull ||
                     HealRecipientUnreachable(a_follower, victim, sp))
                     return true;
