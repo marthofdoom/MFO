@@ -856,10 +856,15 @@ namespace MFO::Logistics {
                 const auto accept = [&](RE::TESObjectARMO* b) {
                     if (!b || b->IsShield()) return;
                     if (pick && SlotsOverlap(pick, b)) return;
+                    // Head is a LOGICAL slot (IsHeadSlotMask: Head|Hair|Circlet) while SlotsOverlap
+                    // is per biped bit, so two head pieces on different bits are one slot too.
                     if (std::any_of(slate.begin(), slate.end(),
-                                    [&](RE::TESObjectARMO* c) { return c == b || SlotsOverlap(c, b); }))
+                                    [&](RE::TESObjectARMO* c) {
+                                        return c == b || SlotsOverlap(c, b) ||
+                                               (IsHeadSlotMask(static_cast<std::uint32_t>(c->GetSlotMask())) &&
+                                                IsHeadSlotMask(static_cast<std::uint32_t>(b->GetSlotMask())));
+                                    }))
                         return;
-                    slate.push_back(b);
                 };
                 for (const int slot : { 1, 0, 2, 3, 4, 5 }) accept(gs.slot[slot]);
             }
@@ -910,16 +915,19 @@ namespace MFO::Logistics {
                 const auto it = inv.find(a_ar);
                 return it != inv.end() && it->second.second && it->second.second->IsWorn();
             };
-            // MFO is contesting a slot until the pick AND every slate piece is on him.
+            // MAGE ROAD ONLY (the old mageSetLanded): MFO is contesting a slot until every set
+            // piece is on him. The RATED road keeps main's `(!pick || pickWorn)` and main's
+            // 4b skip (`ar == pick` only): the rated slate holds every worn incumbent, so
+            // gating or skipping on it would stop a player-traded piece ever being recorded.
             const bool slateLanded = std::all_of(slate.begin(), slate.end(), wornNow);
             const bool mayRecordPlayerPick = APMFBridge::IsEquipAuthorityEnforced() &&
-                                             (!pick || pickWorn) && slateLanded;
+                                             (mageSetMode ? slateLanded : (!pick || pickWorn));
             if (mayRecordPlayerPick) {
                 for (auto& [obj, data] : inv) {
                     if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || ar->IsShield() || ar == pick) continue;
-                    if (std::find(slate.begin(), slate.end(), ar) != slate.end()) continue;
+                    if (mageSetMode && std::find(slate.begin(), slate.end(), ar) != slate.end()) continue;
                     const RE::FormID f = ar->GetFormID();
                     if (lastHas(f) || picks.count(f)) continue;
                     // MFO withheld it itself on the last build (a relic verdict that has

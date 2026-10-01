@@ -7,7 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
-- **A follower no longer ends up wearing the outfit the game forces back on them.** With Harbinger installed, they now ask for the best piece they own for every slot, not just one. A load screen or an outfit script can no longer swap their robes for the outfit's armor. A piece you put on them yourself still stays. Needs a field test: Jesper's robes after a cell load.
+- **A follower no longer ends up wearing the outfit the game forces back on them.** With Harbinger installed, followers in armor now ask for the best armor they own in every slot at once. An outfit piece the game puts back on them is no longer kept just because they are wearing it. A piece you put on them yourself still stays.
 
 ## v2.0.16 -- Heals are animated in combat again
 
