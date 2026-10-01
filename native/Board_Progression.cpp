@@ -37,7 +37,7 @@ namespace MFO::Board {
                 // label (boardTab MESG FULL), not a DLL "Progression" literal —
                 // the first published+active hosted tab's label. Fallback keeps
                 // the ID stable if an add-on ever ships an empty label.
-                const char* hostedTabLabel = "Field Orders";
+                const char* hostedTabLabel = Str::Get(Str::K::Win_Header);
                 for (const auto& t : snap.boardTabs)
                     if (t.active) { if (!t.label.empty()) hostedTabLabel = t.label.c_str(); break; }
                 if (progActive && ImGui::BeginTabItem(hostedTabLabel, nullptr, tabSelFlags)) {
@@ -76,7 +76,7 @@ namespace MFO::Board {
                     ProgAllocator::SetBoardFocus(s_psel);
 
                     if (!who) {
-                        ImGui::TextDisabled("No active follower. Recruit one to manage progression.");
+                        ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_NoFollower));
                         ImGui::EndTabItem();
                     } else {
                         const bool popupOpen = ImGui::IsPopupOpen(nullptr,
@@ -120,16 +120,16 @@ namespace MFO::Board {
                         ImGui::EndDisabled();
                         ImGui::SameLine();
                         if (who->enrolled && who->clsId != 0) {
-                            ImGui::TextDisabled("level %u", (unsigned)who->level);
+                            ImGui::TextDisabled("%s", Str::Fmt(Str::K::Pg_Level, { (unsigned)who->level }).c_str());
                             ImGui::SameLine();
-                            std::string cl = std::string("Class: ") +
-                                (who->clsName.empty() ? "?" : who->clsName.c_str());
+                            std::string cl = Str::Fmt(Str::K::Gb_ClassBtn,
+                                { who->clsName.empty() ? "?" : who->clsName.c_str() }) + "###pclassbtn";
                             if (ImGui::SmallButton(cl.c_str())) ImGui::OpenPopup("##pclass");
                         } else {
-                            ImGui::TextDisabled("not enrolled");
+                            ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_NotEnrolled));
                         }
                         ImGui::SameLine();
-                        ImGui::TextDisabled("  [LB]/[RB] change follower");
+                        ImGui::TextDisabled("  %s", Str::Get(Str::K::Gb_SwitchHint));
                         ImGui::Separator();
 
                         // ── CLASS PROMPT (§15 — REQUIRED behavior) ──────
@@ -158,18 +158,18 @@ namespace MFO::Board {
                             pickerDrawnThisFrame = true;
                             ImGui::PushFont(g_fontHead);
                             ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
-                            ImGui::TextUnformatted("Choose a class");
+                            ImGui::TextUnformatted(Str::Get(Str::K::Pg_ChooseTitle));
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
-                            ImGui::TextDisabled("Skills auto-scale to level by class; perks stay yours to pick.");
-                            ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
+                            ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_ClassHint));
+                            ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_PickHint));
                             ImGui::Separator();
                             // §18.6: the addon-declared classes (dynamic-N).
                             // Each Selectable carries its class-def FormID in
                             // the EditCmd's perk field (a float param can't
                             // hold a 32-bit FormID losslessly).
                             if (prog.classes.empty())
-                                ImGui::TextDisabled("(no classes declared by the addon)");
+                                ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_NoClasses));
                             int k = 0;
                             for (const auto& [classId, className] : prog.classes) {
                                 const bool cur = (who->clsId == classId);
@@ -189,15 +189,14 @@ namespace MFO::Board {
 
                         if (!progReady && !who->eligible) {
                             ImGui::Spacing();
-                            ImGui::TextWrapped("%s cannot progress: %s.",
-                                               who->name.c_str(), who->blocker.c_str());
+                            ImGui::TextWrapped("%s", Str::Fmt(Str::K::Pg_CannotProgress,
+                                               { who->name, who->blocker }).c_str());
                         } else if (needsClass) {
                             ImGui::Spacing();
-                            ImGui::TextWrapped("%s is not enrolled. Pick a class to begin -- "
-                                               "no skills are touched until you do.",
-                                               who->name.c_str());
+                            ImGui::TextWrapped("%s", Str::Fmt(Str::K::Pg_NotEnrolledMsg,
+                                               { who->name }).c_str());
                             ImGui::Spacing();
-                            if (ImGui::Button("Choose class...")) ImGui::OpenPopup("##pclass");
+                            if (ImGui::Button(Str::Label(Str::K::Pg_ChooseBtn, "pchoose"))) ImGui::OpenPopup("##pclass");
                         } else {
                             const auto& cat = Progression::Get();   // frozen — lock-free
                             std::size_t totalNodes = 0;
@@ -218,7 +217,7 @@ namespace MFO::Board {
                             // and "broken input" look identical; this line is
                             // always on screen and self-explains a zero).
                             ImGui::PushFont(g_fontHead);
-                            ImGui::TextColored(skin.accent, "Perk points: %.0f", who->unspentPerk);
+                            ImGui::TextColored(skin.accent, "%s", Str::Fmt(Str::K::Pg_PerkPoints, { Str::Arg::F(who->unspentPerk, 0) }).c_str());
                             ImGui::PopFont();
                             // §17: the derived budget, spelled out so a zero
                             // is self-explaining, never "is it broken?".
@@ -227,15 +226,13 @@ namespace MFO::Board {
                             // override changes it (a hardcoded "2" misinformed).
                             const int lpp = prog.levelsPerPerkPoint > 0 ? prog.levelsPerPerkPoint : 1;
                             if (who->unspentPerk < 1.0f)
-                                ImGui::TextDisabled("None to spend: 1 point per %d levels -- level "
-                                                    "%u has earned %u, and %u are already spent.",
-                                                    lpp, (unsigned)who->level,
-                                                    (unsigned)(who->level / lpp),
-                                                    (unsigned)who->allocatedRanks);
+                                ImGui::TextDisabled("%s", Str::Fmt(Str::K::Pg_NoneToSpend,
+                                                    { lpp, (unsigned)who->level,
+                                                      (unsigned)(who->level / lpp),
+                                                      (unsigned)who->allocatedRanks }).c_str());
                             else
-                                ImGui::TextDisabled("1 perk point per %d levels. "
-                                                    "Pick a skill to open its tree.", lpp);
-                            if (!stateOk) ImGui::TextDisabled("syncing follower state...");
+                                ImGui::TextDisabled("%s", Str::Fmt(Str::K::Pg_PerPoint, { lpp }).c_str());
+                            if (!stateOk) ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_Syncing));
 
                             // ── §16 MANUAL SKILL POINTS (design doc §16:
                             // auto-scaling is a default, never a cage — the
@@ -248,28 +245,24 @@ namespace MFO::Board {
                             // A toggles it on the pad.
                             {
                                 bool man = who->manualSkills;
-                                if (ImGui::Checkbox("Manual skill points", &man)) {
+                                if (ImGui::Checkbox(Str::Label(Str::K::Pg_Manual, "pmanual"), &man)) {
                                     EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u,
                                                man ? 1.0f : 0.0f };
                                     e.verbId = (int)AddonVerb::SetManual;
                                     QueueEdit(e);
                                 }
                                 if (ImGui::IsItemHovered())
-                                    ImGui::SetTooltip(
-                                        "Manual OVERRIDE: while ON, this follower earns %d skill\n"
-                                        "points per level for YOU to place -- INSTEAD OF automatic\n"
-                                        "class-based skill growth, never on top of it. Toggle OFF\n"
-                                        "to resume auto growth. For mage or multiclass builds the\n"
-                                        "class weights won't serve.", prog.manualSkillPtsPerLevel);
+                                    ImGui::SetTooltip("%s", Str::Fmt(Str::K::Pg_ManualTip,
+                                        { prog.manualSkillPtsPerLevel }).c_str());
                                 if (who->manualSkills) {
                                     ImGui::SameLine();
                                     ImGui::PushFont(g_fontHead);
-                                    ImGui::TextColored(skin.accent, "  Skill points: %d",
-                                                       who->manualAvail);
+                                    ImGui::TextColored(skin.accent, "  %s",
+                                        Str::Fmt(Str::K::Pg_SkillPoints, { who->manualAvail }).c_str());
                                     ImGui::PopFont();
                                     ImGui::SameLine();
-                                    ImGui::TextDisabled("  replaces auto growth -- select a skill "
-                                                        "to apply (+1 base, cap %g)", prog.skillCap);
+                                    ImGui::TextDisabled("  %s", Str::Fmt(Str::K::Pg_ManualNote,
+                                        { Str::Arg::F(prog.skillCap, -1) }).c_str());
                                 }
                             }
                             ImGui::Spacing();
@@ -290,10 +283,15 @@ namespace MFO::Board {
                             if (ImGui::BeginTable("##pskillpick", 4,
                                     ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                     ImGuiTableFlags_ScrollY, ImVec2(0.0f, -footer))) {
-                                ImGui::TableSetupColumn("Skill", ImGuiTableColumnFlags_WidthStretch);
-                                ImGui::TableSetupColumn("Level", ImGuiTableColumnFlags_WidthFixed, 110.0f);
-                                ImGui::TableSetupColumn("Perks", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                                ImGui::TableSetupColumn("",      ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                                // Fixed columns are measured (FitW): English widths are the floor.
+                                ImGui::TableSetupColumn(Str::Get(Str::K::Pg_ColSkill), ImGuiTableColumnFlags_WidthStretch);
+                                ImGui::TableSetupColumn(Str::Get(Str::K::Pg_ColLevel), ImGuiTableColumnFlags_WidthFixed,
+                                                        FitW(110.0f, { Str::Get(Str::K::Pg_ColLevel) }));
+                                ImGui::TableSetupColumn(Str::Get(Str::K::Pg_ColPerks), ImGuiTableColumnFlags_WidthFixed,
+                                                        FitW(90.0f, { Str::Get(Str::K::Pg_ColPerks) }));
+                                ImGui::TableSetupColumn("",      ImGuiTableColumnFlags_WidthFixed,
+                                                        FitW(120.0f, { Str::Fmt(Str::K::Pg_ToSpend, { 99 }).c_str(),
+                                                                       Str::Get(Str::K::Pg_NoTree) }));
                                 ImGui::TableHeadersRow();
 
                                 // P2 (deck round 3): rows come PRIMARILY from
@@ -309,7 +307,7 @@ namespace MFO::Board {
                                 if (!haveLines) {
                                     ImGui::TableNextRow();
                                     ImGui::TableNextColumn();
-                                    ImGui::TextDisabled("skill levels syncing...");
+                                    ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_SkillsSyncing));
                                 }
                                 auto flatBaseOf = [&](int idx) {
                                     std::size_t f = 0;
@@ -346,7 +344,7 @@ namespace MFO::Board {
                                     } else {
                                         catIdx = r; av = cat.skills[r].av;
                                         label = cat.skills[r].skillName.empty()
-                                                    ? "(skill)" : cat.skills[r].skillName.c_str();
+                                                    ? Str::Get(Str::K::Pg_SkillFallback) : cat.skills[r].skillName.c_str();
                                     }
                                     const bool hasTree = catIdx >= 0 &&
                                                          !cat.skills[catIdx].nodes.empty();
@@ -403,9 +401,9 @@ namespace MFO::Board {
                                         ImGui::TextDisabled("--");
                                     ImGui::TableNextColumn();
                                     if (availN > 0)
-                                        ImGui::TextColored(skin.accent, "%d to spend", availN);
+                                        ImGui::TextColored(skin.accent, "%s", Str::Fmt(Str::K::Pg_ToSpend, { availN }).c_str());
                                     else if (!hasTree)
-                                        ImGui::TextDisabled("no tree");
+                                        ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_NoTree));
                                 }
                                 ImGui::EndTable();
                             }
@@ -446,16 +444,16 @@ namespace MFO::Board {
                                     ImGui::TextUnformatted(actLabel);
                                     ImGui::PopStyleColor();
                                     ImGui::PopFont();
-                                    ImGui::TextDisabled("base %.0f (manual +%.0f)  |  %d point(s) "
-                                                        "pooled", base, manual, who->manualAvail);
-                                    ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
+                                    ImGui::TextDisabled("%s", Str::Fmt(Str::K::Pg_SkillBase,
+                                        { Str::Arg::F(base, 0), Str::Arg::F(manual, 0), who->manualAvail }).c_str());
+                                    ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_PickHint));
                                     ImGui::Separator();
 
                                     const bool canApply = who->manualAvail >= 1 &&
                                                           base + 0.5f < prog.skillCap;
                                     ImGui::BeginDisabled(!canApply);
-                                    const std::string apply = std::format(
-                                        "Apply 1 skill point  ({:.0f} -> {:.0f})", base, base + 1.0f);
+                                    const std::string apply = Str::Fmt(Str::K::Pg_Apply,
+                                        { Str::Arg::F(base, 0), Str::Arg::F(base + 1.0f, 0) }) + "###papply";
                                     if (ImGui::Selectable(apply.c_str(), false,
                                                           ImGuiSelectableFlags_DontClosePopups)) {
                                         EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u,
@@ -465,12 +463,12 @@ namespace MFO::Board {
                                     }
                                     ImGui::EndDisabled();
                                     if (!canApply)
-                                        ImGui::TextDisabled(who->manualAvail < 1
-                                                                ? "no pooled points"
-                                                                : "at the skill cap");
+                                        ImGui::TextDisabled("%s", Str::Get(who->manualAvail < 1
+                                                                ? Str::K::Pg_NoPooled
+                                                                : Str::K::Pg_AtCap));
                                     ImGui::BeginDisabled(!haveCatRow ||
                                                          cat.skills[s_skillCur].nodes.empty());
-                                    if (ImGui::Selectable("Open perk tree")) {
+                                    if (ImGui::Selectable(Str::Label(Str::K::Pg_OpenTree, "popentree"))) {
                                         s_scrollHome = true;
                                         wantOpenTree = true;   // opened at this scope, below
                                         ImGui::CloseCurrentPopup();
@@ -530,8 +528,8 @@ namespace MFO::Board {
                                 ImGui::PushFont(g_fontHead);
                                 ImGui::TextColored(skin.accent, "%s", tree.skillName.c_str());
                                 ImGui::SameLine();
-                                ImGui::TextColored(skin.accent, "  --  %.0f point(s)",
-                                                   who->unspentPerk);
+                                ImGui::TextColored(skin.accent, "  %s", Str::Fmt(Str::K::Pg_TreePoints,
+                                                   { Str::Arg::F(who->unspentPerk, 0) }).c_str());
                                 ImGui::PopFont();
                                 ImGui::SameLine();
                                 if (ImGui::SmallButton("-##zo")) s_zoom = std::max(0.5f, s_zoom - 0.15f);
@@ -539,10 +537,9 @@ namespace MFO::Board {
                                 if (ImGui::SmallButton("+##zi")) s_zoom = std::min(2.0f, s_zoom + 0.15f);
                                 ImGui::SameLine();
                                 static bool s_showMarginal = false;
-                                ImGui::Checkbox("Show marginal", &s_showMarginal);
+                                ImGui::Checkbox(Str::Label(Str::K::Pg_ShowMarginal, "pmarg"), &s_showMarginal);
                                 ImGui::SameLine();
-                                ImGui::TextDisabled(" d-pad move  [A] node  [LB]/[RB] zoom  "
-                                                    "[Y] next tree  [View] marginal  [B]/Esc back");
+                                ImGui::TextDisabled(" %s", Str::Get(Str::K::Pg_TreeHint));
                                 ImGui::Separator();
 
                                 // ── DOME LAYOUT + P3 FILTER (round 5) ───
@@ -954,9 +951,7 @@ namespace MFO::Board {
                                     // but marginal perks): SAY so instead of
                                     // drawing an empty canvas (round 4).
                                     if (s_vis.empty()) {
-                                        const char* msg =
-                                            "Nothing in this tree is useful to a follower -- "
-                                            "[View] shows marginal perks.";
+                                        const char* msg = Str::Get(Str::K::Pg_NothingUseful);
                                         const ImVec2 ts = ImGui::CalcTextSize(msg);
                                         dl->AddText(ImVec2(winPos.x + (childSz.x - ts.x) * 0.5f,
                                                            winPos.y + (childSz.y - ts.y) * 0.5f),
@@ -1078,18 +1073,18 @@ namespace MFO::Board {
                                             // selection back every frame.
                                             if (mouseActive) s_selNode = k;
                                             if (owned)
-                                                ImGui::SetTooltip("%s -- rank %d/%d (allocated by MFO)",
-                                                    n.name.c_str(), (int)st->ownedRank,
-                                                    (int)n.ranks.size());
+                                                ImGui::SetTooltip("%s", Str::Fmt(Str::K::Pg_TipOwned,
+                                                    { n.name, (int)st->ownedRank,
+                                                      (int)n.ranks.size() }).c_str());
                                             else if (native)
-                                                ImGui::SetTooltip("%s -- granted by your load order",
-                                                    n.name.c_str());
+                                                ImGui::SetTooltip("%s", Str::Fmt(Str::K::Pg_TipNative,
+                                                    { n.name }).c_str());
                                             else if (avail)
-                                                ImGui::SetTooltip("%s -- [A] take rank %d (1 point)",
-                                                    n.name.c_str(), (int)st->ownedRank + 1);
+                                                ImGui::SetTooltip("%s", Str::Fmt(Str::K::Pg_TipTake,
+                                                    { n.name, (int)st->ownedRank + 1 }).c_str());
                                             else if (st && !st->whyNot.empty())
-                                                ImGui::SetTooltip("%s -- locked: %s",
-                                                    n.name.c_str(), st->whyNot.c_str());
+                                                ImGui::SetTooltip("%s", Str::Fmt(Str::K::Pg_TipLocked,
+                                                    { n.name, st->whyNot }).c_str());
                                             else
                                                 ImGui::SetTooltip("%s", n.name.c_str());
                                         }
@@ -1134,11 +1129,11 @@ namespace MFO::Board {
                                             ImGui::PopFont();
                                             // Field fix #1: the point budget is
                                             // visible IN the take dialog too.
-                                            ImGui::TextColored(skin.accent,
-                                                "%.0f perk point(s) available",
-                                                who->unspentPerk);
+                                            ImGui::TextColored(skin.accent, "%s",
+                                                Str::Fmt(Str::K::Pg_PointsAvail,
+                                                         { Str::Arg::F(who->unspentPerk, 0) }).c_str());
                                             if (nd.verdict == Progression::Verdict::kMarginal)
-                                                ImGui::TextDisabled("marginal for followers");
+                                                ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_Marginal));
                                             if (!nd.description.empty()) {
                                                 ImGui::PushTextWrapPos(
                                                     ImGui::GetCursorPosX() + 380.0f);
@@ -1146,23 +1141,22 @@ namespace MFO::Board {
                                                 ImGui::PopTextWrapPos();
                                             }
                                             for (int rr = 0; rr < (int)nd.ranks.size(); ++rr)
-                                                ImGui::TextDisabled("rank %d: %s%s", rr + 1,
-                                                    nd.ranks[rr].skillReq.empty()
-                                                        ? "no skill requirement"
-                                                        : nd.ranks[rr].skillReq.c_str(),
-                                                    rr < ownedR ? "  [owned]" : "");
+                                                ImGui::TextDisabled("%s", Str::Fmt(Str::K::Pg_RankLine,
+                                                    { rr + 1,
+                                                      nd.ranks[rr].skillReq.empty()
+                                                          ? Str::Get(Str::K::Pg_NoSkillReq)
+                                                          : nd.ranks[rr].skillReq.c_str(),
+                                                      rr < ownedR ? ("  " + std::string(Str::Get(Str::K::Pg_Owned))) : std::string() }).c_str());
                                             ImGui::Separator();
                                             if (stv && stv->native) {
-                                                ImGui::TextDisabled("Granted by your load order -- "
-                                                                    "MFO leaves it untouched.");
+                                                ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_Native));
                                             } else if (ownedR > 0 &&
                                                        ownedR >= (int)nd.ranks.size()) {
-                                                ImGui::TextColored(skin.accent,
-                                                    "Fully allocated (%d/%d).",
-                                                    ownedR, (int)nd.ranks.size());
+                                                ImGui::TextColored(skin.accent, "%s",
+                                                    Str::Fmt(Str::K::Pg_FullyAlloc,
+                                                             { ownedR, (int)nd.ranks.size() }).c_str());
                                             } else if (stv && stv->available) {
-                                                const std::string take = std::format(
-                                                    "Take rank {}  (1 perk point)", ownedR + 1);
+                                                const std::string take = Str::Fmt(Str::K::Pg_Take, { ownedR + 1 }) + "###ptake";
                                                 if (ImGui::Selectable(take.c_str())) {
                                                     EditCmd e{ EditKind::AddonAction, s_psel,
                                                                0, 0u, 0.0f };
@@ -1173,13 +1167,13 @@ namespace MFO::Board {
                                                 }
                                                 ImGui::SetItemDefaultFocus();
                                             } else if (stv && !stv->whyNot.empty()) {
-                                                ImGui::TextWrapped("Locked: %s",
-                                                                   stv->whyNot.c_str());
+                                                ImGui::TextWrapped("%s", Str::Fmt(Str::K::Pg_LockedMsg,
+                                                                   { stv->whyNot }).c_str());
                                             } else {
-                                                ImGui::TextDisabled(
-                                                    stateOk ? "Locked." : "syncing...");
+                                                ImGui::TextDisabled("%s", Str::Get(
+                                                    stateOk ? Str::K::Pg_LockedPlain : Str::K::Pg_SyncingShort));
                                             }
-                                            ImGui::TextDisabled("[B]/Esc close");
+                                            ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_CloseHint));
                                         }
                                         ImGui::EndPopup();
                                     }
@@ -1190,19 +1184,17 @@ namespace MFO::Board {
                             }
 
                             // ── FOOTER: RESPEC + HINTS ──────────────────
-                            if (ImGui::Button("Respec")) ImGui::OpenPopup("##prespec");
+                            if (ImGui::Button(Str::Label(Str::K::Pg_Respec, "prespecbtn"))) ImGui::OpenPopup("##prespec");
                             ImGui::SameLine();
                             // The ONE free post-migration respec (ProgState::freeRespec,
                             // PRGN v7) — read from the SNAPSHOT row, never g_prog:
                             // BoardFollowerView::freeRespec is filled in PublishBoardViews
                             // on the main thread like every other who-> field here.
                             if (who->freeRespec)
-                                ImGui::TextDisabled("refund all perks, free (one time)  |  d-pad move   "
-                                                    "[A] open skill tree   [B] back");
+                                ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_RespecFree));
                             else
-                                ImGui::TextDisabled("refund all perks, -%.0f rapport  |  d-pad move   "
-                                                    "[A] open skill tree   [B] back",
-                                                    prog.respecRapportCost);
+                                ImGui::TextDisabled("%s", Str::Fmt(Str::K::Pg_RespecCost,
+                                                    { Str::Arg::F(prog.respecRapportCost, 0) }).c_str());
                             ImGui::SetNextWindowPos(
                                 ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
                                 ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
@@ -1210,31 +1202,27 @@ namespace MFO::Board {
                                 pickerDrawnThisFrame = true;
                                 ImGui::PushFont(g_fontHead);
                                 ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
-                                ImGui::TextUnformatted("Respec?");
+                                ImGui::TextUnformatted(Str::Get(Str::K::Pg_RespecTitle));
                                 ImGui::PopStyleColor();
                                 ImGui::PopFont();
                                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
                                 if (who->freeRespec)
-                                    ImGui::TextWrapped("Every perk MFO allocated to %s is removed and "
-                                                       "its points refunded. This one is free (one "
-                                                       "time): no rapport is lost.",
-                                                       who->name.c_str());
+                                    ImGui::TextWrapped("%s", Str::Fmt(Str::K::Pg_RespecBodyFree,
+                                                       { who->name }).c_str());
                                 else
-                                    ImGui::TextWrapped("Every perk MFO allocated to %s is removed and "
-                                                       "its points refunded. They will resent the "
-                                                       "reset: -%.0f rapport.",
-                                                       who->name.c_str(), prog.respecRapportCost);
+                                    ImGui::TextWrapped("%s", Str::Fmt(Str::K::Pg_RespecBodyCost,
+                                                       { who->name, Str::Arg::F(prog.respecRapportCost, 0) }).c_str());
                                 ImGui::PopTextWrapPos();
                                 ImGui::Separator();
                                 ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
-                                if (ImGui::Selectable("Confirm respec")) {
+                                if (ImGui::Selectable(Str::Label(Str::K::Pg_Confirm, "prespecok"))) {
                                     EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u, 0.0f };
                                     e.verbId = (int)AddonVerb::Respec;
                                     QueueEdit(e);
                                     ImGui::CloseCurrentPopup();
                                 }
                                 ImGui::PopStyleColor();
-                                if (ImGui::Selectable("Cancel")) ImGui::CloseCurrentPopup();
+                                if (ImGui::Selectable(Str::Label(Str::K::Pg_Cancel, "prespecno"))) ImGui::CloseCurrentPopup();
                                 ImGui::SetItemDefaultFocus();   // land on Cancel, not the danger row
                                 ImGui::EndPopup();
                             }

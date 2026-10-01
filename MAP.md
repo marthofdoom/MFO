@@ -2867,14 +2867,7 @@ module. Module layout:
   (T#69), `gemHold`, and `Catalog::IsExcluded`.
   **What breaks:** widen `denied` without widening the mapping and the new category
   silently keeps its old worn-is-kept behaviour; map a category MFO owns rather than
-  denies and the sell path starts selling gear the follower is wearing on purpose), **OPEN BACKLOG — read
-  before editing `RefreshEquipDeclaration`:** `MFO-B63` is PARTLY drained in v2.0.11
-  (`fix/mfo-declaration-hygiene-b63`): the 3D gate and the not-worn re-send SHIPPED (see THE
-  DECLARED WORN SET below). **STILL OPEN:** the declaration is `pick + everything else worn`
-  rather than best-per-slot, so a piece the engine's `OutfitApply` displaced is not in the set and
-  the outfit piece it put on is adopted into the set BECAUSE it is worn — a different window from
-  the bare body (it reads as "wearing the wrong thing"), and a restructure of the judge's output,
-  so it was deliberately NOT taken with the other two, `BuildBuyThresholds:425` → `TradeBridge::BuyThresholds`
+  denies and the sell path starts selling gear the follower is wearing on purpose), **BACKLOG — read before editing `RefreshEquipDeclaration`:** `MFO-B63` is DRAINED (remainder, `fix/mfo-b63-best-per-slot`): the declaration on the OOC road (`judgeArmor`) is now ONE ORDERED ACCEPTANCE pick -> SLATE -> everything else worn. The SLATE is `GearSlate` / `ComputeOwnedGearSlate` (file-local, `EquipAuthority.cpp:394` / `:409`, same TU as `RefreshEquipDeclaration`): best OWNED piece per governed slot (rated `ArmorBuySlot` 0-3, shield NEVER; mage `MageClothingSlot` 0-5 via `MageBestPerSlot`). RATED gate `ArmorIsBetter || already worn in that slot` (so the slate is a subset of what the wear judge acts on), INCUMBENCY (worn rating>0 piece with score >= best keeps the slot), FormID tiebreak, no `FitsCarryWeight`, no second `LogArmorClassIfChanged`; it reads `RefreshEquipDeclaration`'s own `inv` (no extra walk, only an extra `ArmorIsBetter` sweep per OOC tick). `accept()` skips null/shield/dup/overlap (`SlotsOverlap`) with the pick or an accepted piece, body first, so APMF cannot tolerate the engine's outfit piece beside the declared one. `playerPieceWins` (rule 4b) is applied to the pick and every slate entry; 4b is UNCHANGED on the rated road (skip `ar == pick`, record while `!pick || pickWorn`, exactly main) and keeps the whole-set-worn gate and set skip on the MAGE road only. `ComputeOwnedGearPick` and the combat road are unchanged. Pace: the mage road already declared all slots (cc4e895), what changed is that rated upgrades now go out in one declaration instead of one pick per tick. `accept()` also treats two head pieces (`IsHeadSlotMask`) as overlapping. Still open: the vanished shield/hood helmet after `OutfitApply` (`TESContainerChangedEvent` probe), the mage `MageBestPerSlot` strip/re-dress loop (backlog). NEEDS LOCAL (Deck): a NON-mage follower in rated armor with an outfit, after a cell load. Open: `MFO-B211`, `MFO-B212` in Docs/REVIEW-BACKLOG.md. The earlier note follows, kept as history: `MFO-B63` was PARTLY drained in v2.0.11 (`fix/mfo-declaration-hygiene-b63`): the 3D gate and the not-worn re-send SHIPPED (see THE DECLARED WORN SET below); the best-per-slot restructure of the judge's output was deliberately NOT taken with the other two, `BuildBuyThresholds:425` → `TradeBridge::BuyThresholds`
   **APPENDED** `armorHeavyBias` / `armorLightBias` / `armorBaseScore[5]`
   (`TradeBridge.h:99-107`; `armorBaseRat` keeps the raw rating as a diagnostic — a
   float score truncated into the int32 would tie its own baseline and re-buy every
@@ -4554,6 +4547,9 @@ Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 `imgui_impl_win32` = vendored, do not read.**
+- **DISPLAY TEXT is i18n keys (2026-10-01):** no wording a player reads lives in the three Board TUs (only symbols and the MFO brand stay literal)
+  as a literal any more. See the `native/i18n/` entry (section 6, below this one): `Str::Get/Fmt/Label`, `VocabEntry.key`,
+  `FitW` for fixed columns. New UI text = a new line in `i18n/Strings_keys.h` + regenerate the template.
 - **Overlay mechanism (`Board.cpp:337-1000`):** RENDER is offset-free — `PresentThunk`
   (`:610`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable slots 8/13**
   (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable` `:689`), the
@@ -4743,6 +4739,49 @@ name/arity breaks dispatch silently (bumps `g_failures`). `DoCombatSpellApply` (
 `policy->EmptyHandle()` not `0` (`:29`) — a real correctness point.
 
 ---
+
+### native/i18n/ — Strings.h / Strings.cpp / Strings_keys.h — display text (translations)
+ClickUp 86e3gmxmg. Every player-facing ImGui string is a stable KEY with an English default
+compiled in; a translator ships `Data/Interface/Translations/MFO_<LANGUAGE>.txt` (UTF-16 LE BOM,
+`$MFO_<Id><TAB>text`, the MCM Helper / Skyrim convention) and never rebuilds the DLL. Guide:
+`Docs/TRANSLATING.md`. Template: `out/Interface/Translations/MFO_ENGLISH.txt`, GENERATED by
+`tools/i18n/gen_template.py` from the key list (`--check` is run by `release.sh`).
+- `i18n/Strings_keys.h` = THE key list, one `MFO_STR(Id, "English", argc)` per line (X-macro, no
+  include guard; the generator parses it line by line, so keep one literal per line). `Strings.h`
+  turns it into `enum class K` and the public API: `Get(K)`, `Fmt(K,{args})`, `Label(K,"id")`
+  (`"text###id"` for an ImGui label with a stable ID), `Reload`, `HasOverrides`. `Strings.cpp`:
+  `kGameTerms` (the game-term bridge), `Parse` (placeholder validation), `Fill` (translator lookup),
+  `Reload` (publish).
+- **PRECEDENCE per key:** `MFO_<LANG>.txt` entry (read through `SKSE::Translation::Translate`, the
+  game's Scaleform translator, which the ENGINE fills from every `Interface/Translations/*_<LANG>.txt`;
+  `Reload` calls `SKSE::Translation::ParseTranslation("MFO")` only if it found nothing) > the game's own
+  localized word for the few keys in `kGameTerms` (a `$key` of Skyrim_<LANG>.txt or a `gmst:` string;
+  NON-English only, so an English game never changes spelling) > the English default.
+- **THREADING (CLAUDE.md #4):** `Reload` is MAIN THREAD only (`plugin.cpp` kDataLoaded, plus ONE
+  retry at kPostLoadGame/kNewGame while `HasOverrides()` is false). It builds a whole immutable
+  `Table` and publishes it with one release store. `Get/Fmt/Label` are lock-free from ANY thread (one
+  acquire load). A published table is NEVER freed or mutated (old ones leak on purpose) so a pointer
+  a render frame holds cannot dangle. `Fmt` never reads engine state. Before the first `Reload` every
+  call answers the English default.
+- **FORMAT SAFETY:** placeholders are `{1}..{argc}` only. `Parse` rejects any other brace and any
+  index outside 1..argc; a bad override is DROPPED to the English default with a `[i18n]` warn line
+  (never silent). A string is never used as a printf/std::format format. Args are pre-formatted by the
+  caller (`Arg` from ints/strings, `Arg::F(v, decimals)` for floats) so a translation cannot pick a
+  conversion. The board passes results to ImGui as `"%s"`.
+- **Depended-on-by:** `Board.cpp` (HUD, `SpellTooltip`, snapshot `subjectName`), `Board_FieldKit.cpp`,
+  `Board_Progression.cpp`, `Board_internal.h` (`VocabEntry::key`/`label()`, `FitW`), `plugin.cpp`.
+- **What breaks if you change this:** rename or reorder-by-meaning a key id and every shipped
+  translation silently falls back to English for it (ids are a frozen external contract, like the INI
+  key names). Add a key: add the line, run the generator, commit the template. Change a default's
+  `{N}` set without updating argc: the generator and `Reload` both log it. Never call `Reload` off
+  the main thread. A widget whose label is translated MUST carry a `###id` (`Label`) or its ImGui ID
+  moves with the language; table lists that can repeat a label use `PushID(k)` (already so).
+  Fixed table columns use `FitW`/CalcTextSize (English width is the floor). Gambit opcode strings
+  (`Vocab::kCond*`/`kAct*`) are FROZEN and are not keys: `VocabEntry.op` is the saved identity,
+  `VocabEntry.key` only the label.
+- **NOT YET MOVED (backlog):** diagnostic text that reaches the board from other modules
+  (`rv.fail` = `lastFailReason`, the progression blocker/whyNot reasons, the add-on's own tab label),
+  and the MCM (`out/MCM/Config/MFO/config.json` is plain English, no `$` keys).
 
 ## 7. External bridges / probes / diagnostics — `MEOBridge.*`, `MEO_API.h`, `apmf/` (APMFBridge), `TradeBridge.*`, `Probe.*`, `Diagnostics.*`
 

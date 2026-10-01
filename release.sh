@@ -291,6 +291,12 @@ cp out/MCM/Config/MFO/settings.ini "$STAGE/pkg/MCM/Config/MFO/"
 # Initial MCM Helper USER store -- still shipped for fresh installs so values are
 # complete on first launch (defaults file registers; user store overrides).
 cp out/MCM/Settings/MFO.ini       "$STAGE/pkg/MCM/Settings/"
+# The translation template (i18n, 86e3gmxmg). The engine loads every
+# Interface/Translations/*_<LANGUAGE>.txt, and MFO reads its $MFO_ keys from it.
+# Stale-template gate: it is generated from native/i18n/Strings_keys.h.
+python3 tools/i18n/gen_template.py --check || { echo "ERROR: out/Interface/Translations/MFO_ENGLISH.txt is stale (run tools/i18n/gen_template.py)." >&2; exit 1; }
+mkdir -p "$STAGE/pkg/Interface/Translations"
+cp out/Interface/Translations/MFO_ENGLISH.txt "$STAGE/pkg/Interface/Translations/"
 cp out/Scripts/MFO_MCM.pex        "$STAGE/pkg/Scripts/"
 # #21 econ bridge: MFO_Trade.pex MUST ship or MFO_TradeQuest's VMAD references a
 # missing script and the bridge is silently dead. Compiled fresh from
