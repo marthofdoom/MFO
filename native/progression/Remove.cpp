@@ -11,8 +11,9 @@
 //     Verbs.cpp), ApplyPerksFromBase once.
 //   * stripped native perks: TESNPC::RemovePerk in StripNativePerks (PerkGate.cpp),
 //     recorded in ProgState::strippedPerks -> RestoreNativePerksImpl, AFTER the
-//     grants come off (a node whose native rank 1 was stripped while MFO granted
-//     rank 2 ends with the native rank 1 back, as before MFO).
+//     grants come off: a form can be BOTH (native rank 2 stripped while MFO held
+//     rank 1, then MFO granted rank 2); restored first it would read as already
+//     present and the grant loop would then take the native off.
 //   * skill base AVs: SetBaseActorValue in ReconcileSkill (SkillScale.cpp, the single
 //     skill write site) -> UnwindSkills settles every entry with zero points through
 //     that same site.

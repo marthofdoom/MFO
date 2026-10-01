@@ -2579,7 +2579,8 @@ module. Module layout:
     `CountPotions:144`, `EquipTorch:167`, `HealExcludedWeapon:206`,
     `ShedOffRoleWeapon:288`, `IsLooting:512`, `WalkingLootLeg:553`, the lifecycle hooks
     (`NoteInCombat:564`, `ClearTransientState:568`, `OnFollowerRemoved:613`) and the
-    MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`).
+    MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`,
+    `EraseStockGear` (86e3eewaf roster removal: one follower's set, under `g_stockMx`, returns its size)).
   - `logistics/Sinks.cpp` = `BeastHeadSink`, `ContainerSink`, `GateLikeRef` (gate-like re-admit filter),
     `GateSink` (anonymous namespace), `RegisterSinks`, `SweepBeastHeadsOnLoad`. (The 86e3f9pkg
     player-drop record is GONE, 86e3faccn: what the player drops is fair game.) Line numbers: grep.
@@ -3843,6 +3844,7 @@ co-save record `'PGIV'` v1 (`CoSave:201` / `CoLoad:244`; layout in the co-save s
 player bits, so after a reload a relic the player gave (worn or not) still never ships and is never swapped
 out. Cleared by `ClearRecord:190` from `ResetAllState` (its own call after `ProgAllocator::ClearAll`, like
 `ClearStockGear`; no longer from `Logistics::ClearTransientState`) and at the top of `LoadCallback`.
+`ForgetFollower(fid)` (86e3eewaf) drops ONE follower's entries under `g_mx` for the roster removal.
 Consumers (all relic paths): `Lotd` `Shippable` / `TransferOnMain` (never ship a given relic),
 `KeptOffRoleWorn` (a worn relic ships only when NOT given, and only with `PlayerGiven::Installed()`),
 `cast/Equip.cpp` `IsMuseumRelic` (a player-equipped relic stays his pick) and `relicWithAlternative`
@@ -4284,6 +4286,13 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     discovery + `ApplyEconomyOverride` (`:149`), `ParseClassDef` (`:222`),
     `BuildGenericManifests` (`:277`), `Init` (`:360`), and the PRGN class-identity resolvers
     `DeriveClassIdentity` (`:464`) / `LookupAddonForm` (`:483`) called by the co-save.
+  - `progression/Remove.cpp` (86e3eewaf) = `RemoveFollowerRecord` (public, `ProgAllocator.h`), the
+    progression half of the roster removal: granted ranks off the base (Respec's loop), the stripped
+    natives back (`RestoreNativePerksImpl`), skills settled through `UnwindSkills` (`SkillScale.cpp`, a
+    zero-point `ReconcileSkill` per entry, so ReconcileSkill stays the ONLY skill write site), H/M/S to
+    `hmsBaseline` with RecomputeHMS's Health guard, then `g_prog.erase` + `g_hmsFiredMask.erase`. This is
+    the one H/M/S write outside `RecomputeHMS` and it is safe only because the record is erased in the
+    same call (the W invariant dies with it). See section 8 "Roster removal".
   - `progression/ProgAllocator_internal.h` (286) = the shared substrate (progression/ TUs only):
     `Economy`/`g_econ`/`g_econDefaults`, `g_ready`/`g_devCmd`, `g_classes`, `g_manifests`,
     `kSkillNames`, `kHmsAV`, `g_hmsFireMx`/`g_hmsFiredMask`, + the cross-module decls — every
@@ -4488,8 +4497,10 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `[hms] <id> never-processed HMS block adopted (no take-back)`, clears the stale `fixedStat`,
   streak and tally, clears 0x40 (the persisted once-only marker) and falls into the uncaptured
   ADOPT. Their base never drops, and a fixed-stat backfill computed that poll from the stale
-  baseline is not spent (the ADOPT returns first, F4). Open: MFO-B218..B219. Planned repair path
-  for a bad HMS state: the future "remove follower from MFO" action (marth 2026-10-01).
+  baseline is not spent (the ADOPT returns first, F4). Open: MFO-B218..B219. Repair path for a bad
+  HMS state: SHIPPED as the Followers-tab "Remove from roster" action (86e3eewaf, `roster/Remove.cpp`,
+  entry in section 8): removal writes H/M/S back to `hmsBaseline` and erases the record, and a later
+  recruit gets a fresh uncaptured HMS-only record (first `RecomputeHMS` ADOPTs, retro bit 0x40 set).
   (5) `Enroll` KEEPS a captured HMS block (`progression/Verbs.cpp` ~:85): re-capturing zeroes W
   while the next engine re-slam brings it back as a fresh award. (6) **R2:** runtime-only
   `hmsMeasuredThisWindow` (set at the measure in `RecomputeHMS`); `PollWork` judges a level-up
@@ -4803,9 +4814,20 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 - **T#78 Followers-tab MFO toggle** — the tab's FIRST column is a per-row checkbox
   bound to `FollowerRow.mfoEnabled` (mirrored from `FollowerState::mfoEnabled` in
   `PublishSnapshot`, both the active + retained builders). The `##followers` table
-  is now 8 columns. On toggle it `QueueEdit`s `EditKind::SetMfoEnabled` (param 0/1);
+  is now 9 columns (the 9th is the Remove from roster button, 86e3eewaf, below). On toggle it `QueueEdit`s `EditKind::SetMfoEnabled` (param 0/1);
   `ApplyEdits` flips `it->second.mfoEnabled`. The release-on-disable runs on the
   Scheduler tick's OFF edge, not in `ApplyEdits`.
+- **REMOVE FROM ROSTER row action (86e3eewaf, `Board_FieldKit.cpp` Followers tab, LAST column).** A
+  `SmallButton` per row; while `r.active` (currently following) it is drawn GREYED (TextDisabled colour,
+  NOT `BeginDisabled`, so d-pad nav still lands on it) and its hover/nav tooltip says why
+  (`Fk_TipRemoveFollowing`). On a retained row it opens `##rmroster` AFTER the table (window scope),
+  the respec confirm's shape: title, `Fk_RemoveBody` (marth's exact text, `{1}` = name), a danger
+  Selectable that `QueueEdit`s `EditKind::RemoveFromRoster` (appended LAST to `EditKind`, in-memory only),
+  Cancel with default focus, B backs out (popup = navBusy). `ApplyEdits` hands it to
+  `Roster::RequestRemove` on the worker before the `g_followers.find`. **What breaks:** making the button
+  `BeginDisabled` hides the reason from a controller; opening the popup inside the table's PushID scope
+  but drawing it outside (or the reverse) never shows it; the render side never decides alone, the
+  worker and the main phase both re-check "not following".
 - **Thread discipline:** `DXGIPresentHook` (render thread) copies `g_snapshot` under
   `g_snapMx` **before** taking `g_ioMx` (`:550`); reversing = render-thread deadlock.
   The two mutexes are never nested (#6). Draw functions **never touch `g_followers`**
@@ -6881,6 +6903,57 @@ concurrency question (distinct threads, mutual exclusion UNPROVEN).
   any leaves a latch that re-fills on every future load. Callers `plugin.cpp:357`,
   `Rapport.cpp:147`, `Diagnostics.cpp:253`. (Followers.h's per-symbol header comments
   predate the worker move — the DOMAIN is the serial worker/main pump, #4/#74.)
+- `EraseRecord` (86e3eewaf, beside `ReleaseHeldState`) — the ONLY `g_followers.erase` in MFO besides
+  the revert clear: erases the record + `g_lastCombat`/`g_missStreak`/`g_stateSample`, then
+  `PublishActiveMirror` (so `g_mfoOff`/`g_resolvedClass` forget him). Domain: worker, or main WITH THE
+  PUMP PAUSED (its sole caller, `roster/Remove.cpp`, pauses it).
+
+### native/roster/ — Roster.h / Remove.cpp — "Remove from roster" (ClickUp 86e3eewaf, 2026-10-01)
+**Why:** a dismissed follower keeps his `g_followers` record forever, so mandatory quest followers pile
+up on the Followers tab. Removal deletes everything MFO holds for one FormID and undoes what MFO did to
+the actor; the NPC is as it was before MFO. Also the repair path for a bad HMS block (fresh capture on a
+later recruit). Offered only for a follower NOT currently following (a party member would be re-adopted
+next Refresh with default data); the T#78 `mfoEnabled` switch is the "keep them, leave them alone" road.
+- **Flow (the spec's order):** Board `EditKind::RemoveFromRoster` → `ApplyEdits` (WORKER, the domain that
+  owns `g_followers`) → `Roster::RequestRemove` (`roster/Remove.cpp`): refuse no-record / unresolvable /
+  `IsTracked` / `!MainThread::IsInstalled()`; **1. RELEASE** = `Followers::ReleaseHeldState` right there
+  (the dismissal road, idempotent: aliases, APMF claims incl. the equip authority + declaration, Loadout
+  restore, latches, the FWPN hold); then `MainThread::Post` (captures `ProgAllocator::PollGeneration`,
+  bails if a revert/load moved it) → `RemoveOnMain` (TRUE MAIN): `Diagnostics::PausePump` + RAII
+  `ResumePump` for the whole body (the `SaveCallback` pattern: every gated AddTask body bails and the
+  running one drains, so nothing on the worker touches `g_followers`/Followers/Logistics state while
+  this erases; #74 says main and worker are not proven exclusive, so the pause is the guarantee, not the
+  phasing). Re-check under the pause: record still there, `!IsTrackedFast && !IsEligibleFollower`
+  (rejoined → refuse, nothing undone). **2. UNDO** = `ProgAllocator::RemoveFollowerRecord`. **3. ERASE**
+  = `Followers::EraseRecord` (FLWR + mirrors), `Logistics::EraseStockGear` (MSTK),
+  `PlayerGiven::ForgetFollower` (PGIV); FWPN went in step 1 (`ReleaseForcedWeapon` erases its entry);
+  PRGN in step 2. The next save omits him: **no record layout or version change, readers untouched.**
+- **Log:** `[roster] <id> <name> removed: release=done perks-removed= perks-absent= natives-restored=
+  skills-reset= hms-pools-reset= healed= records: flwr= prgn=(enrolled|hms-only) mstk= pgiv= failures=`;
+  every step that fails logs its own `[roster]` warn and a summary warn follows (never masked).
+  Refusals: `removal REFUSED: currently following` / `following again` / `no MFO record` / `actor does
+  not resolve` / `main-thread pump is not installed`; `removal dropped: superseded by revert/reload`.
+- **THE UNDO LIST (what MFO writes to an actor, and what removal does with each):** perks granted
+  (`PerkGate.cpp` GrantRank/ReapplyFollower) → removed; natives stripped (`StripNativePerks`) → restored;
+  skill base AVs (`ReconcileSkill`) → natural; base H/M/S (`RecomputeHMS` incl. parity + fixed-stat grant)
+  → `hmsBaseline` (exact for fixed-stat; a leveling NPC sits there until the engine's next absolute
+  autocalc slam); combat style on the controller, alias fills, APMF claims/declarations, Loadout swaps,
+  FWPN force-hold → the release road. **Deliberately STAYS:** spells learned from a spellbook
+  (`Board.cpp` TeachSpell, `logistics/Cast.cpp` learn-from-book; not ledgered, a book was paid), every
+  item move (loot, sales, gold, swaps, museum deposits, MEO gem sockets, lockpicks used, the
+  `Gear.cpp`/`Upkeep.cpp` evictions of non-playable or foreign gear), equips of gear he owns, transient
+  vitals (heals, costs) and magic effects, and the dev probes (`ProgProbe`). MFO writes no faction,
+  outfit, teammate flag or AV modifier. ~90 runtime throttle clocks / once-latches keyed by follower in
+  Scheduler, cast/, logistics/, apmf/, MEOBridge are NOT erased one by one: the claims among them are
+  released by step 1, the rest hold no MFO data, never reach the co-save, and drop at the next load.
+- **What breaks:** running any of step 2/3 on the worker (g_prog and the actor writes are main-only);
+  erasing without the pause (a worker body mid-iteration of `g_followers`/`g_stateSample`); dropping the
+  re-check (a rejoined quest follower is stripped and then re-adopted with defaults); restoring natives
+  BEFORE removing MFO's grants (a form that is both a recorded native and MFO's grant -- native rank 2
+  stripped while MFO held rank 1, then MFO granted rank 2 -- is skipped by the restore as already present
+  and then taken off by the grant loop, so the native is lost for the session); writing skills anywhere but `ReconcileSkill` (the baseline floor and exact recovery live
+  there); touching the co-save readers/writers (the erase IS the format: omitted records). A new
+  per-follower SAVED record (a 6th co-save block) must get its own erase here, or removal leaves it.
 
 ### Rapport.cpp / Rapport.h
 Per-follower rapport/rank + death/combat sinks + the ally-combat quash.
