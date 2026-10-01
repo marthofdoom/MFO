@@ -874,6 +874,7 @@ namespace MFO::Scheduler {
             // cast. Idempotent (no record -> no-op).
             Actuation::ReleaseForcedWeapon(f);
             g_meleeClampTrueAt.erase(id);   // T#76 hysteresis dwell dies with the follower
+            DeadTgtEnd(id, "follower down/disabled", 0);   // [deadtgt]: never leave a window open across a death
             return;
         }
 
@@ -942,6 +943,7 @@ namespace MFO::Scheduler {
         if (!it->second.mfoEnabled) {
             if (g_mfoDisabledSwept.insert(id).second)
                 Followers::ReleaseHeldState(id);
+            DeadTgtEnd(id, "MFO switched off for this follower", 0);   // [deadtgt]: close, no stale duration later
             return;
         }
         g_mfoDisabledSwept.erase(id);
