@@ -215,7 +215,7 @@ namespace MFO::MEOBridge {
         // that gem base's loose count -- MFO-B26) or a 60 s floor
         // (principle 9: sized from the ~1.2 s cadence, ~50 passes, never
         // silently forever). NOT a mask: the request is retried after the
-        // backoff and the failure stays in the log. A backed-off socket does
+        // backoff (an op-0 key is retried through the slot path only, MFO-B29) and the failure stays in the log. A backed-off socket does
         // NOT reserve its gem (Fable SEV-4 on b3ac577): a later worn item in
         // the same pass may take it.
         struct StuckKey {
@@ -237,8 +237,15 @@ namespace MFO::MEOBridge {
             std::uint64_t keyPrint = 0;   // MFO-B26: THIS key's own inputs (item worn (base,uid) + that gem base's loose count) when the stall was declared
         };
         constexpr auto kStuckBackoff = std::chrono::seconds(60);
+        // MFO-B29 held-key FLOOR, not an expiry: a declared op-0 key blocks the swap-up for
+        // this long after the stall, then the swap-up may try the gem ONCE more. The narrow
+        // fingerprint cannot see MEO's timing-dependent refusals (item not on actor, gem
+        // not in inventory, a Conduit that lands later), so without a floor one transient
+        // refusal would block the tier-2 upgrade forever. 10 minutes keeps the bounce far
+        // below the old ~63 s; if MEO refuses again the key re-stalls, re-holds and warns.
+        constexpr auto kHeldFloor = std::chrono::minutes(10);
         constexpr int  kStuckPasses  = 3;   // STUCK is declared on the 3rd consecutive pass, BEFORE issuing: 2 accepted
-                                            // issues (~2.4 s at the ~1.2 s cadence) with the empty count unchanged
+                                            // issues (~2.4 s at the ~1.2 s cadence) with the slot still pending
         // MAIN THREAD ONLY (ReconcileLooseGems runs there; VR runs it inline from the
         // worker, where nothing else touches this map) -- no lock, like the pass itself.
         std::unordered_map<RE::FormID, std::unordered_map<StuckKey, StuckState, StuckKeyHash>> g_stuck;
@@ -555,11 +562,13 @@ namespace MFO::MEOBridge {
             // this gem on this item? The swap-up reads THIS, not socketBackedOff: on a
             // fully-socketed item the swap-up used to be the expiry re-entry point and
             // evicted a worn gem every ~63 s for a gem MEO keeps refusing. The key
-            // survives expiry untouched and is erased only by the lift sweep.
+            // survives expiry untouched and is erased only by the lift sweep, but is held for the
+            // swap-up only until kHeldFloor after the stall (then one retry, see there).
             auto socketKeyHeld = [&](RE::FormID a_base, std::uint16_t a_uid, RE::FormID a_gemBase) {
                 for (const auto& [k, st] : stuckMap)
                     if (k.op == 0 && k.base == a_base && k.uid == a_uid && k.gemBase == a_gemBase &&
-                        st.backoffUntil != std::chrono::steady_clock::time_point{})
+                        st.backoffUntil != std::chrono::steady_clock::time_point{} &&
+                        now < st.backoffUntil - kStuckBackoff + kHeldFloor)   // declared-at + kHeldFloor
                         return true;
                 return false;
             };
@@ -668,8 +677,8 @@ namespace MFO::MEOBridge {
                     for (;;) {
                         pick = pickGem();
                         if (pick < 0) break;   // no (non-stuck) gem fits this item
-                        // STALL DETECTOR: same request as last pass with the empty count
-                        // unchanged = MEO accepted it and it did not land.
+                        // STALL DETECTOR: same request as last pass with THIS slot still
+                        // empty = MEO accepted it and it did not land.
                         key = StuckKey{ 0, item.base, item.uid, static_cast<std::uint8_t>(slot), loose[pick].gemBase };
                         if (stallGate(key, true, "SocketGem", loose[pick].name)) break;
                         excluded.insert(static_cast<std::uint32_t>(pick));   // stuck here: neither reserved nor shadowing
@@ -743,7 +752,7 @@ namespace MFO::MEOBridge {
                     for (std::uint32_t i = 0; i < nLoose; ++i) {
                         if (avail[i] == 0 || !GemFits(loose[i], sansEvictee)) continue;
                         // Never make room for a gem MEO keeps refusing on this item
-                        // (excluded this pass, or its socket key is still backed off from
+                        // (excluded this pass, or its socket key is still held from
                         // an earlier pass) -- the self-driven unsocket/re-socket loop.
                         if (excluded.contains(i) || socketKeyHeld(item.base, item.uid, loose[i].gemBase)) continue;
                         const int bo = GemBonus(loose[i].gid, loose[i].name,
@@ -852,7 +861,7 @@ namespace MFO::MEOBridge {
             // recurring (it landed, the gem left, the item was sold), so it is not
             // stuck and a later identical request starts from a clean count. A key
             // still in BACK-OFF is kept even if untouched (the swap-up's
-            // socketBackedOff read needs it when the item has no empty slot to gate
+            // socketKeyHeld read needs it when the item has no empty slot to gate
             // on). MFO-B29: an op-0 key is held PAST its expiry too (only the lift sweep
             // or the nLoose == 0 return erases it), op 1 expires as before.
             std::erase_if(stuckMap, [&](const auto& kv) {

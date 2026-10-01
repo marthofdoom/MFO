@@ -1088,3 +1088,10 @@ Raised against 8f915c0 (`fix/mfo-heal-field0930`, Opus review), 2026-09-30. `End
 
 ### MFO-B198 (SEV-4) -- essential-down heal release churns at the picker
 Raised against 6c974fd (`fix/mfo-lifestate-0930`, Sonnet review), 2026-09-30. Reviewer (verbatim): "only kEssentialDown triggers it ... the picker and Hands.cpp are unchanged, and the picker's urgentHeal treats essential-down as 'down'. The ally can therefore be re-picked every lap and released again each time. This is not a re-fire, since no claim is renewed, but it is churn plus a lap-by-lap FailedOther." Fix when drained: skip an essential-down ally at PickAlly / CastAuto pick time (where a heal cannot land), so the release path is not exercised every lap. CHANGELOG wording corrected at merge.
+
+### MFO-B202 — an expired key is not held during its 2 retry passes, so the swap-up can evict a worn gem for G during the retry
+- **Raised:** Opus review of `60d9e66` (`fix/mfo-gems-backlog`), SEV-5, pre-existing.
+- **Severity:** SEV-5
+- **Finding (verbatim):** When a key expires, stallGate resets it with `st = StuckState{}` (:518), so it is not held during the 2 retry passes; if G's stack has >=2 copies and the item has an empty slot, the swap-up can evict a worn gem for G during that retry. Once per expiry, bounded; same behaviour as socketBackedOff before this commit.
+- **Why it was NOT fixed:** pre-existing, bounded to once per expiry, SEV-5 (rule 9). Deferred, not dropped.
+- **Surfaced at edit time from:** MAP.md §7 MEOBridge "HELD KEYS" What-breaks.

@@ -7,7 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
-- **Fewer repeated gem warnings, and no socket bounce.** A gem a follower's gear keeps refusing is warned about once, not again every time something else in their pack changes. A fully socketed item no longer loses a good gem every minute to a gem it cannot take.
+- **Fewer gem warnings, and no socket bounce.** A gem a follower's gear keeps refusing no longer re-warns every time something unrelated changes in their pack. A fully socketed item no longer pulls out a worn gem every minute and puts it back for a gem it cannot take. An item with an open socket can still warn about a refused gem about once a minute.
 - **Museum deposits work again.** Followers finish the hand-over at the crate and the items ship, instead of the trip ending the moment the give animation starts.
 - **Lockpicking works again, with one animation per lock.** A follower picks a lock in one go. They no longer enter and leave the animation over and over, and a failed attempt waits before they try the lock again.
 - **A follower no longer wastes a heal on an ally who cannot be healed yet.** A heal stops on an ally who is down and out, where it cannot land, instead of casting into them.
