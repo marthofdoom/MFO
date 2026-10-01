@@ -3544,6 +3544,7 @@ anonymous-namespace copy — that silently forks the instance).
   `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
   `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-
   the-lock. Pieces:
+  - **Sounds** `PlayAtFollower` (`Lockpick.cpp:~185`, MainThread::Post, FormIDs only): UILockpickingPickMovement 000C1911 at each live play/replay, UILockpickingPickBreak 000C1916 per simulated break (`Job::breakSnds`), 3D at the follower.
   - **Gate** `Lockpick::Admit` (`Lockpick.cpp:523`, called by the scan `LootScan.cpp:488` after the
     owner / off-limits bars): refuses (logged once per follower+lock+reason) owned, offlimits,
     factionServiceContainer (`IsFactionServiceContainer`, batch L),
@@ -4667,7 +4668,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   (`Board.cpp:485-596`) — a plain call, not a patch, never reached on VR because
   `Install()` refuses VR first, and never reached at all on the trampoline path.
 - **Snapshot carries all actor-derived display data** (render thread reads plain
-  cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
+  cached values, never a live actor — #4): `FollowerRow` (`Board.h`; retained rows also carry `cell`, filled in `PublishSnapshot`'s retained loop `Board.cpp:~1590`, drawn after the name in `Board_FieldKit.cpp`) holds vitals as
   pct **and** raw `health/magicka/staminaCur/Max` (Followers tab, `Vocab::VitalCur/
   VitalMax`), and `knownSpells`/`teachableSpells` are `SpellPick`/`Teachable` structs
   carrying precomputed `magickaCost` (`spell->CalculateMagickaCost(follower)`, actor
@@ -4701,7 +4702,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   queued edits so a command from the old save can't hit a freshly loaded one.
   `SetHud` ← `plugin.cpp:365`, `Diagnostics.cpp:94`, `Serialization.cpp:621`.
   `IsOpen`/`IsAvailable`/`Toggle` ← Diagnostics (publish cadence + Field Orders
-  power). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B185 (gamepad/mouse keymap codes dropped). `ToggleHud` (`Board.cpp:1099`) is called by the `iHudKey` hotkey in `InputSink::Feed` (`Board.cpp:~822-865`, panel closed and no menu up via `UI::GameIsPaused`). The `iBoardKey` hotkey is there too: closed = gated `AddTask` { `PublishSnapshot` + `Toggle` } (same body as the Field Orders power in Diagnostics.cpp); open = the keyboard case closes on RELEASE via `g_boardKeyDownSeen` then `g_wantClose` (the shout-key shape, consumed in `DrawFieldKit`); both edges are consumed. Both keys default 0 (unbound), `Config::g_boardKey`/`g_hudKey`, MCM keymaps on the Interface page. The HUD key flips `g_hud` only: an MCM/Journal close re-applies `bShowHud` over it.
+  power). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B185 (gamepad/mouse keymap codes dropped). `ToggleHud` (`Board.cpp:1099`) is called by the `iHudKey` hotkey in `InputSink::Feed` (`Board.cpp:~822-865`, panel closed and no menu up via `UI::GameIsPaused`). The `iBoardKey` hotkey is there too: closed = gated `AddTask` { `PublishSnapshot` + `Toggle` } (same body as the Field Orders power in Diagnostics.cpp); open = the keyboard case closes on RELEASE via `g_boardKeyDownSeen` then `g_wantClose` (the shout-key shape, consumed in `DrawFieldKit`); both edges are consumed. Both keys default -1 (unbound; any value <= 0 is unbound, handlers test `> 0`), `Config::g_boardKey`/`g_hudKey`, MCM keymaps on the Interface page. The HUD key flips `g_hud` only: an MCM/Journal close re-applies `bShowHud` over it.
 
 ### Papyrus.cpp / Papyrus.h — outbound VM dispatch shim
 Reaches Papyrus-only natives by class-name+method-name string, async fire-and-forget.
