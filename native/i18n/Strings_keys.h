@@ -60,7 +60,7 @@ MFO_STR(Gb_Tab,             "Gambits", 0)
 MFO_STR(Gb_NoFollower,      "No active follower. Recruit one to edit gambits.", 0)
 MFO_STR(Gb_Rank,            "rank {1}", 1)   // {1}=the follower's rank
 MFO_STR(Gb_ClassBtn,        "Class: {1}", 1)   // {1}=Auto / Melee / Ranged / Mage
-MFO_STR(Gb_SwitchHint,      "  [LB]/[RB] change follower", 0)
+MFO_STR(Gb_SwitchHint,      "[LB]/[RB] change follower", 0)
 MFO_STR(Gb_PageCombat,      "Combat", 0)
 MFO_STR(Gb_PageLogistics,   "Logistics", 0)
 MFO_STR(Gb_SlotsUsed,       "{1} / {2} slots used", 2)   // {1}=rules in use, {2}=slots available
@@ -105,14 +105,14 @@ MFO_STR(Gb_SumWhen,         "{1}.  When {2}", 2)       // {1}=line number, {2}=c
 MFO_STR(Gb_SumWhenVal,      "{1}.  When {2} {3}", 3)   // {1}=line number, {2}=condition, {3}=value (50% / 3 / 500u)
 MFO_STR(Gb_SumCast,         "{1} ({2})", 2)   // {1}=action, {2}=spell name
 MFO_STR(Gb_SumOff,          "{1}   ->   {2}   [off]", 2)   // {1}=when part, {2}=do part, for a switched-off line
-MFO_STR(Gb_SumArrow,        "  ->  ", 0)
+MFO_STR(Gb_SumArrow,        "->", 0)
 MFO_STR(Gb_AddRule,         "+ Add rule", 0)
 MFO_STR(Gb_AllUsed,         "All {1} slots used. More unlock with rapport.", 1)   // {1}=slots
 MFO_STR(Gb_FooterHelp,      "Highlight a slot and press [A]/E to open its list. [Y] toggles the highlighted line. Top rule wins.", 0)
 
 // == Spell effect line (shown in the spell tooltip) ==
-MFO_STR(Spell_For,          " for {1}s", 1)   // {1}=duration in seconds
-MFO_STR(Spell_In,           " in {1}ft", 1)   // {1}=area in feet
+MFO_STR(Spell_For,          "for {1}s", 1)   // {1}=duration in seconds
+MFO_STR(Spell_In,           "in {1}ft", 1)   // {1}=area in feet
 
 // == Progression tab (the Field Orders board, hosted tab) ==
 MFO_STR(Pg_NoFollower, "No active follower. Recruit one to manage progression.", 0)
@@ -130,8 +130,8 @@ MFO_STR(Pg_PerPoint, "1 perk point per {1} levels. Pick a skill to open its tree
 MFO_STR(Pg_Syncing, "syncing follower state...", 0)
 MFO_STR(Pg_Manual, "Manual skill points", 0)   // checkbox
 MFO_STR(Pg_ManualTip, "Manual OVERRIDE: while ON, this follower earns {1} skill\npoints per level for YOU to place -- INSTEAD OF automatic\nclass-based skill growth, never on top of it. Toggle OFF\nto resume auto growth. For mage or multiclass builds the\nclass weights won't serve.", 1)   // tooltip, {1}=skill points per level. \n is a line break
-MFO_STR(Pg_SkillPoints, "  Skill points: {1}", 1)   // {1}=pooled points
-MFO_STR(Pg_ManualNote, "  replaces auto growth -- select a skill to apply (+1 base, cap {1})", 1)   // {1}=the skill cap
+MFO_STR(Pg_SkillPoints, "Skill points: {1}", 1)   // {1}=pooled points
+MFO_STR(Pg_ManualNote, "replaces auto growth -- select a skill to apply (+1 base, cap {1})", 1)   // {1}=the skill cap
 MFO_STR(Pg_ColSkill, "Skill", 0)   // column header
 MFO_STR(Pg_ColLevel, "Level", 0)   // column header
 MFO_STR(Pg_ColPerks, "Perks", 0)   // column header
@@ -144,9 +144,9 @@ MFO_STR(Pg_Apply, "Apply 1 skill point  ({1} -> {2})", 2)   // {1}=level now, {2
 MFO_STR(Pg_NoPooled, "no pooled points", 0)
 MFO_STR(Pg_AtCap, "at the skill cap", 0)
 MFO_STR(Pg_OpenTree, "Open perk tree", 0)
-MFO_STR(Pg_TreePoints, "  --  {1} point(s)", 1)   // {1}=perk points to spend
+MFO_STR(Pg_TreePoints, "--  {1} point(s)", 1)   // {1}=perk points to spend
 MFO_STR(Pg_ShowMarginal, "Show marginal", 0)   // checkbox
-MFO_STR(Pg_TreeHint, " d-pad move  [A] node  [LB]/[RB] zoom  [Y] next tree  [View] marginal  [B]/Esc back", 0)
+MFO_STR(Pg_TreeHint, "d-pad move  [A] node  [LB]/[RB] zoom  [Y] next tree  [View] marginal  [B]/Esc back", 0)
 MFO_STR(Pg_NothingUseful, "Nothing in this tree is useful to a follower -- [View] shows marginal perks.", 0)
 MFO_STR(Pg_TipOwned, "{1} -- rank {2}/{3} (allocated by MFO)", 3)   // {1}=perk, {2}=rank owned, {3}=ranks in the perk
 MFO_STR(Pg_TipNative, "{1} -- granted by your load order", 1)   // {1}=perk
@@ -156,7 +156,7 @@ MFO_STR(Pg_PointsAvail, "{1} perk point(s) available", 1)   // {1}=points
 MFO_STR(Pg_Marginal, "marginal for followers", 0)
 MFO_STR(Pg_RankLine, "rank {1}: {2}{3}", 3)   // {1}=rank number, {2}=the skill requirement, {3}=empty or the owned note
 MFO_STR(Pg_NoSkillReq, "no skill requirement", 0)
-MFO_STR(Pg_Owned, "  [owned]", 0)
+MFO_STR(Pg_Owned, "[owned]", 0)
 MFO_STR(Pg_Native, "Granted by your load order -- MFO leaves it untouched.", 0)
 MFO_STR(Pg_FullyAlloc, "Fully allocated ({1}/{2}).", 2)   // {1}=ranks owned, {2}=ranks in the perk
 MFO_STR(Pg_Take, "Take rank {1}  (1 perk point)", 1)   // {1}=the rank you take

@@ -62,6 +62,8 @@ def build():
         if key in seen:
             errors.append(f"{KEYS}:{ln}: duplicate key {key}")
         seen.add(key)
+        if en != en.strip():
+            errors.append(f"{KEYS}:{ln}: {key}: leading or trailing space in the value (the game may trim it, so put the space in code)")
         idx = [int(x) for x in re.findall(r"\{(\d+)\}", en)]
         stripped = re.sub(r"\{\d+\}", "", en)
         if "{" in stripped or "}" in stripped:

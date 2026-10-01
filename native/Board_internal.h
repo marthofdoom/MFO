@@ -296,14 +296,15 @@ namespace MFO::Board {
 
     // Width for a FIXED table column that must hold translated text: never
     // narrower than the English-tuned `base`, otherwise wide enough for the
-    // widest of `texts` plus cell padding (+ `extra`, e.g. a button's frame
+    // widest of `texts` (+ `extra`, e.g. a button's frame
     // padding). RENDER THREAD, inside BeginTable (it measures with the live
     // font). The columns stay WidthFixed, so gamepad navigation order is
     // unchanged; a longer translation widens the column instead of clipping.
     inline float FitW(float base, std::initializer_list<const char*> texts, float extra = 0.0f) {
         float w = base;
-        const float pad = ImGui::GetStyle().CellPadding.x * 2.0f + extra;
-        for (const char* t : texts) w = (std::max)(w, ImGui::CalcTextSize(t).x + pad);
+        // No cell padding term: ImGui adds the cell padding OUTSIDE a WidthFixed
+        // column, so the width given here is content width only.
+        for (const char* t : texts) w = (std::max)(w, ImGui::CalcTextSize(t).x + extra);
         return w;
     }
 

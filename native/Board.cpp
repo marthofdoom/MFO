@@ -223,8 +223,8 @@ namespace MFO::Board {
             const int area = static_cast<int>(eff->effectItem.area);
             if (mag  > 0) { if (!s.empty()) s += ' '; s += std::to_string(mag); }
             // Display text (i18n keys): this runs on main, the table read is lock-free.
-            if (dur  > 0) { s += Str::Fmt(Str::K::Spell_For, { dur }); }
-            if (area > 0) { s += Str::Fmt(Str::K::Spell_In,  { area }); }
+            if (dur  > 0) { s += " " + Str::Fmt(Str::K::Spell_For, { dur }); }
+            if (area > 0) { s += " " + Str::Fmt(Str::K::Spell_In,  { area }); }
             return s;
         }
 

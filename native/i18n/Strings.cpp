@@ -282,6 +282,19 @@ namespace MFO::Str {
             rejected.clear();
             t = Build(english, hits, rejected);
         }
+        // English game: the shipped MFO_ENGLISH.txt is read back by the engine's own
+        // parser. Prove it reproduces the compiled defaults byte for byte, per key.
+        int mismatches = 0;
+        if (english && hits > 0) {
+            for (std::size_t i = 0; i < t->e.size(); ++i) {
+                if (t->e[i].src == Src::Mfo && t->e[i].text != kDefaults[i].en) {
+                    ++mismatches;
+                    spdlog::warn("[i18n] english mismatch {}: loaded '{}' vs compiled '{}'",
+                                 kDefaults[i].name, t->e[i].text, kDefaults[i].en);
+                }
+            }
+            spdlog::info("[i18n] english check: mfoOverrides={} mismatches={}", hits, mismatches);
+        }
         g_table.store(t, std::memory_order_release);   // the old table (if any) is leaked ON PURPOSE
         g_hasOverrides.store(hits > 0, std::memory_order_release);
         spdlog::info("[i18n] reload ({}): language={} keys={} mfoOverrides={} rejected={} "

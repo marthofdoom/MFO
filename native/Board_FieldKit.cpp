@@ -620,7 +620,7 @@ namespace MFO::Board {
                         if (ImGui::SmallButton(">##nextf")) switchFollower(+1);
                         ImGui::EndDisabled();
                         ImGui::SameLine();
-                        ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_SwitchHint));
+                        ImGui::TextDisabled("  %s", Str::Get(Str::K::Gb_SwitchHint));
 
                         const bool combat = (selTable == 0);
                         const auto& rules = combat ? who->combat : who->logistics;
@@ -769,8 +769,7 @@ namespace MFO::Board {
                                                              ImGui::CalcTextSize(Str::Get(Str::K::Gb_DelSure)).x);
                                 return ImGui::CalcTextSize(Str::Get(Str::K::Gb_Up)).x + fp +
                                        ImGui::CalcTextSize(Str::Get(Str::K::Gb_Down)).x + fp +
-                                       del + fp + ImGui::GetStyle().ItemSpacing.x * 2.0f +
-                                       ImGui::GetStyle().CellPadding.x * 2.0f;
+                                       del + fp + ImGui::GetStyle().ItemSpacing.x * 2.0f;
                             }();
                             ImGui::TableSetupColumn("#",    ImGuiTableColumnFlags_WidthFixed, 24);
                             ImGui::TableSetupColumn(Str::Get(Str::K::Gb_ColOn), ImGuiTableColumnFlags_WidthFixed,
@@ -1191,7 +1190,7 @@ namespace MFO::Board {
                                 } else {
                                     ImGui::TextColored(skin.accent, "%s", cond.c_str());
                                     ImGui::SameLine(0, 0);
-                                    ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_SumArrow));
+                                    ImGui::TextDisabled("  %s  ", Str::Get(Str::K::Gb_SumArrow));
                                     ImGui::SameLine(0, 0);
                                     if (rv.actOp == Vocab::kActWait)
                                         ImGui::TextDisabled("%s", act.c_str());

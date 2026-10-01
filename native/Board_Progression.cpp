@@ -129,7 +129,7 @@ namespace MFO::Board {
                             ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_NotEnrolled));
                         }
                         ImGui::SameLine();
-                        ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_SwitchHint));
+                        ImGui::TextDisabled("  %s", Str::Get(Str::K::Gb_SwitchHint));
                         ImGui::Separator();
 
                         // ── CLASS PROMPT (§15 — REQUIRED behavior) ──────
@@ -257,11 +257,11 @@ namespace MFO::Board {
                                 if (who->manualSkills) {
                                     ImGui::SameLine();
                                     ImGui::PushFont(g_fontHead);
-                                    ImGui::TextColored(skin.accent, "%s",
+                                    ImGui::TextColored(skin.accent, "  %s",
                                         Str::Fmt(Str::K::Pg_SkillPoints, { who->manualAvail }).c_str());
                                     ImGui::PopFont();
                                     ImGui::SameLine();
-                                    ImGui::TextDisabled("%s", Str::Fmt(Str::K::Pg_ManualNote,
+                                    ImGui::TextDisabled("  %s", Str::Fmt(Str::K::Pg_ManualNote,
                                         { Str::Arg::F(prog.skillCap, -1) }).c_str());
                                 }
                             }
@@ -528,7 +528,7 @@ namespace MFO::Board {
                                 ImGui::PushFont(g_fontHead);
                                 ImGui::TextColored(skin.accent, "%s", tree.skillName.c_str());
                                 ImGui::SameLine();
-                                ImGui::TextColored(skin.accent, "%s", Str::Fmt(Str::K::Pg_TreePoints,
+                                ImGui::TextColored(skin.accent, "  %s", Str::Fmt(Str::K::Pg_TreePoints,
                                                    { Str::Arg::F(who->unspentPerk, 0) }).c_str());
                                 ImGui::PopFont();
                                 ImGui::SameLine();
@@ -539,7 +539,7 @@ namespace MFO::Board {
                                 static bool s_showMarginal = false;
                                 ImGui::Checkbox(Str::Label(Str::K::Pg_ShowMarginal, "pmarg"), &s_showMarginal);
                                 ImGui::SameLine();
-                                ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_TreeHint));
+                                ImGui::TextDisabled(" %s", Str::Get(Str::K::Pg_TreeHint));
                                 ImGui::Separator();
 
                                 // ── DOME LAYOUT + P3 FILTER (round 5) ───
@@ -1146,7 +1146,7 @@ namespace MFO::Board {
                                                       nd.ranks[rr].skillReq.empty()
                                                           ? Str::Get(Str::K::Pg_NoSkillReq)
                                                           : nd.ranks[rr].skillReq.c_str(),
-                                                      rr < ownedR ? Str::Get(Str::K::Pg_Owned) : "" }).c_str());
+                                                      rr < ownedR ? ("  " + std::string(Str::Get(Str::K::Pg_Owned))) : std::string() }).c_str());
                                             ImGui::Separator();
                                             if (stv && stv->native) {
                                                 ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_Native));
