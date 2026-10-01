@@ -7,6 +7,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Class based health, magicka and stamina growth is now part of MFO itself.** Every follower MFO manages grows by their class when they level, with or without the progression add-on. A Melee follower leans on health, a Ranged follower on stamina and a Mage on magicka. A follower on Auto gets a class too. MFO picks it from their gambits first, then their best combat skill, then their game class. Their growth also stays at your own rate, as it already did for progression followers. The add-on can still fine tune the split for its classes. A follower left on Auto is no longer marked as a fixed stat follower by mistake.
+
 ## v2.0.16 -- Heals are animated in combat again
 
 - **Smarter gem choices for followers.** With the effect-aware gem option on (it is off by default), a follower no longer swaps a good gem for a Focus, Echo or Conduit that would do nothing. They keep a support gem that works and drop one that does not when a better gem turns up. They stop pairing a gem with gear it does not suit. A follower with two identical weapons now carries the right weapon's gems over when they replace one, with no more failed retries on the second weapon.
