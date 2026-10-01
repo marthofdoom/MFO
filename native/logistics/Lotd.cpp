@@ -1761,18 +1761,28 @@ namespace MFO::Lotd {
         const auto now = Clock::now();
         const auto ids = Followers::ActiveSnapshot();
         std::vector<std::pair<RE::FormID, const char*>> ends;
+        const double clk = Scheduler::ServiceClock();
         for (const auto& [fid, trip] : g_trips) {
             const char* why = nullptr;
             auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
+            // fix/mfo-lifestate: a trip whose OWN give idle is live is not unserviced for the
+            // length of its confirmation window (the idle IS the action). Bounded: live for
+            // kGiveConfirmSec plus one kTripStall without the owner ticking still ends it.
+            bool stalled = now - trip.lastTick > kTripStall;
+            if (stalled && trip.phase == Phase::Giving && trip.liveClk >= 0.0 &&
+                clk - trip.liveClk < kGiveConfirmSec + std::chrono::duration<double>(kTripStall).count() &&
+                APMFBridge::DepositIdleStatus(fid) == 1)
+                stalled = false;
             if (!Enabled())                                        why = "LOTD awareness off";
             else if (!Config::g_logistics.load())                  why = "logistics off";
             else if (!f || f->IsDead() || !f->Is3DLoaded())        why = "follower dead or unloaded";
             else if (now - trip.start > kTripMax)                  why = "timed out (90 s)";
-            else if (now - trip.lastTick > kTripStall)             why = "the follower is no longer serviced";
+            else if (stalled)                                      why = "the follower is no longer serviced";
             else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end())
                                                                    why = "no longer an active follower";
             if (why) ends.emplace_back(fid, why);
         }
+        // (A swept trip is a failed one: EndTripLocked already holds the follower for kCooldownFail.)
         for (const auto& [fid, why] : ends) EndTripLocked(fid, now, why, false, CrateCd::None);
     }
 

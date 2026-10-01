@@ -958,7 +958,7 @@ namespace MFO::Logistics::Lockpick {
         return StepResult::kRefused;
     }
 
-    void SweepStale(Clock::time_point /*a_now*/) {
+    void SweepStale(Clock::time_point a_now) {
         const double clk = Scheduler::ServiceClock();   // UNPAUSED: a menu never ages a pick
         for (auto it = g_jobs.begin(); it != g_jobs.end();) {
             const RE::FormID fid = it->first;
@@ -973,9 +973,23 @@ namespace MFO::Logistics::Lockpick {
             }
             const char* why = nullptr;
             if (!tr || slotRef != j.ref)             why = "the loot excursion ended or moved on";
-            else if (clk - j.lastStep > kStaleFloorSec) why = "the arrival step stopped running";
+            else if (clk - j.lastStep > std::max<double>(kStaleFloorSec, std::max<double>(j.window, kIdleConfirmSec))) {   // never shorter than the pick window
+                // fix/mfo-lifestate: a job whose OWN idle is live is not stale for the length of
+                // its pick window (the idle IS the action; the step may be gated for a tick or
+                // two). The grace is the real pick timing, max(window, kIdleConfirmSec) from the
+                // first live read, plus one kStaleFloorSec: a job whose idle is live but whose
+                // step never resumes still ends, loudly, after that.
+                const bool idleLive = j.phase == Phase::kPicking && j.holdFiled && j.liveAt >= 0.0 &&
+                    APMFBridge::LockpickHoldStateOf(fid, clk - j.filedAt) == APMFBridge::PickHoldState::Live;
+                const double graceEnd = j.liveAt + std::max<double>(j.window, kIdleConfirmSec) + kStaleFloorSec;
+                if (!(idleLive && clk < graceEnd)) why = "the arrival step stopped running";
+            }
             if (!why) { ++it; continue; }
             ++it;   // EndJob erases fid's entry
+            // fix/mfo-lifestate: a stale abandon of a job that still targets its lock is a
+            // FAILED attempt: the same transient retry cooldown as the idle-ended path
+            // (MarkTravelFailed, never sticky), or the slot re-enters on the next tick.
+            if (j.ref && tr && slotRef == j.ref) MarkTravelFailed(j.ref, a_now);
             EndJob(fid, why);
         }
     }

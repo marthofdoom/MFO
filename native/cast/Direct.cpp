@@ -24,6 +24,16 @@ namespace MFO::Actuation {
     }
 
     namespace {
+        // [heal-obs] road label of the direct stream (fix/mfo-lifestate, log text only): a
+        // caster out of combat (the controller just vanished, ChooseHealRoad's DirectNoCombat)
+        // reads "OOC stream", not "direct stream", so it is never mistaken for an in-combat
+        // fallback. HealObs.cpp's sustainsItself accepts both prefixes.
+        const char* StreamRoadLabel(const RE::Actor* a_caster) {
+            return (a_caster && a_caster->IsInCombat()) ? "direct stream" : "OOC stream (no combat controller)";
+        }
+    }
+
+    namespace {
         // ── APMF REFUSAL: the ONE trace a cast that did NOT happen leaves ─────────
         // The exact twin of Actuation.cpp's own LogApmfRefusal (same wording, same
         // ~5 s (follower, spell, target) dedup, same spdlog::error level) -- a
@@ -585,7 +595,7 @@ namespace MFO::Actuation {
                                      a_casterID, caster->GetName() ? caster->GetName() : "?",
                                      sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
                                      castForm->GetFormID(), held);
-                    if (heal) HealObsNote(caster, tgt, sp, castForm, "direct stream", hpBefore, attach);
+                    if (heal) HealObsNote(caster, tgt, sp, castForm, StreamRoadLabel(caster), hpBefore, attach);
                     return;
                 }
                 // ── CONCENTRATION DOUBLE-CHARGE: OPEN, deliberately UNCHANGED ─────
@@ -623,7 +633,7 @@ namespace MFO::Actuation {
                              before, after, cost, a_chargeSec, spend);
                 if (heal) {
                     NoteHealLanded(a_targetID, a_casterID, a_spellID);   // [bleed]
-                    HealObsNote(caster, tgt, sp, castForm, "direct stream", hpBefore, attach);
+                    HealObsNote(caster, tgt, sp, castForm, StreamRoadLabel(caster), hpBefore, attach);
                 }
             });
         }

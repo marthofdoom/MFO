@@ -1009,11 +1009,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   change, stopping a heal stream at the rule's HP line, was REVERTED on the branch at marth's call:
   "for most healing gambits we do want to full". Streams still end at `kHealFullPct`; the rule's HP
   condition decides who and when, not where it stops.)
-  * **`Actuation::CannotActReason` / `CanAct`** (`cast/Actuation.h:220`, inline): nullptr, or a static
+  * **`Actuation::CannotActReason` / `CanAct`** (`cast/Actuation.h:272`, inline): nullptr, or a static
     reason. Plain member loads only (life state + knock state from `AsActorState()`, `boolBits
     kParalyzed`, `IsInKillMove()`), each verified against the fork and BOTH executables (the comment
-    there has the sites). Cannot act = life state other than alive / reanimated (bleedout,
-    essential-down, unconscious, restrained, dying, dead, recycle), knock state other than normal,
+    there has the sites). Cannot act = an ALLOWLIST of the named down life states (bleedout,
+    essential-down, unconscious, restrained, dying, dead, recycle); an UNNAMED life state (raw value above 8, e.g. what the give and lockpick idles flip a follower to, `[bleed] DOWN (?(N))`) is NOT a down state and passes, logged once per actor per value by `NoteUnknownLifeState` (`cast/CanAct.cpp`) (fix/mfo-lifestate), knock state other than normal,
     paralysed, kill move. `IsInRagdollState` is deliberately NOT used (a relocated call). A knock that
     is only QUEUED (kQueued / kWaitForTaskQueue) counts for the scan and the apply gates but NOT for
     ending a stream (`a_countPendingKnock=false` in the reconciles, review C3).
@@ -3580,8 +3580,8 @@ anonymous-namespace copy — that silently forks the instance).
     sees the ref unlocked -> kProceed -> the transfer. EVERY pick timer (snapshot / never-live /
     window / unlock / stale floors) runs on the Scheduler's UNPAUSED service clock
     (`Scheduler::ServiceClock`, `Scheduler.cpp:496`), so a menu never ages or abandons a pick.
-  - **Lifecycle:** `SweepStale` (`:850`, top of `ServiceFollower` `Service.cpp:192`) abandons a job
-    whose slot no longer targets its lock or whose arrival step stopped for `kStaleFloorSec` (3 s unpaused);
+  - **Lifecycle:** `SweepStale` (`:929`, top of `ServiceFollower` `Service.cpp:192`) abandons a job
+    whose slot no longer targets its lock or whose arrival step stopped for max(`kStaleFloorSec`, the pick window) (3 s floor, unpaused), unless its OWN idle is live (graced for max(window, `kIdleConfirmSec`) + the floor from `liveAt`); a stale abandon on a lock the slot still targets writes `MarkTravelFailed` (the retry cooldown), so it cannot re-enter at once;
     `Abort` from `ReleaseTravelOnCombat` / `OnFollowerRemoved` (`Upkeep.cpp:603` / `:623`); `Clear`
     from `ClearTransientState` (`Upkeep.cpp:598`). An abandoned pick releases the hold and consumes
     NOTHING.
@@ -3951,8 +3951,8 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   awareness off, crate gone, a non-arrived leg end (BLOCKED outside reach / the grown radius: 10 s retry,
   3 in a row = 120 s), the player beyond the leash (from him or the crate), a heal rule wanting the tick
   (Walking only), 90 s — and the
-  OWNER-INDEPENDENT backstop `SweepTrip:1520` (every trip) ← the pump (`Diagnostics.cpp:937`, every lap): logistics
-  off, the owner dead / unloaded / no longer active, not ticked for 10 s, or past 90 s.
+  OWNER-INDEPENDENT backstop `SweepTrip:1758` (every trip) ← the pump (`Diagnostics.cpp:937`, every lap): logistics
+  off, the owner dead / unloaded / no longer active, not ticked for 10 s (not while the trip's own give idle is live, graced `kGiveConfirmSec` + 10 s), or past 90 s.
 - **Shipping intro** (marth: "Trigger the message when LOTD awareness is triggered on. Pick a box
   and initialize through it"): `OnConfigRead:959` ← `Diagnostics.cpp:166` (MCM close) sees the
   OFF→ON edge (a load with it already on is not an edge, `OnPostLoad`) and posts
