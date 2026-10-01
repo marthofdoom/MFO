@@ -833,6 +833,8 @@ namespace MFO::Logistics {
     bool IsCasterFollower(const FollowerState& a_state);
     // Mage CLOTHING mode (equip/clothing decisions only): caster AND class-by-skill. See Cast.cpp.
     bool UsesMageClothing(const FollowerState& a_state, RE::Actor* a_follower);
+    // Does the armor choice (the declared GearSlate) keep this worn piece? EquipAuthority.cpp.
+    bool DeclaredSetKeeps(RE::Actor* a_follower, const FollowerState& a_state, RE::TESObjectARMO* a_worn);
     std::uint8_t TopTwoSchoolMask(RE::Actor* a_follower);
     void LearnCarriedTomes(RE::Actor* a_follower);
     const char* SchoolName(RE::ActorValue a_school);

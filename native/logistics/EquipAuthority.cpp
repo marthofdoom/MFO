@@ -449,6 +449,23 @@ namespace MFO::Logistics {
             }
         }
 
+        // THE SELL SIDE'S QUESTION TO THE WEAR JUDGE (fix/mfo-cicero-gear, 2026-10-01):
+        // is a_worn one of the pieces the armor choice DECLARES for this follower? Builds the
+        // same GearSlate RefreshEquipDeclaration declares (mage: MageBestPerSlot; rated: best
+        // owned per slot with worn-incumbency), so the economy's redundant-inferior force-sell
+        // can never contradict it (Cicero's Dawnguard helmet: sold + gem-held + re-socketed
+        // + re-equipped 89 times). Worker. One inventory walk, only called for a worn
+        // force-sell candidate, so it is off the common path.
+        bool DeclaredSetKeeps(RE::Actor* a_follower, const FollowerState& a_state, RE::TESObjectARMO* a_worn) {
+            if (!a_follower || !a_worn) return false;
+            GearSlate gs;
+            const auto inv = a_follower->GetInventory();
+            ComputeOwnedGearSlate(a_follower, a_state, gs, inv);
+            for (int i = 0; i < 6; ++i)
+                if (gs.slot[i] == a_worn) return true;
+            return false;
+        }
+
         // NO DECLINE-FALLBACK (marth 2026-09-28: "MFO's fallback is deprecated"): with
         // Harbinger present and the authority supported, MFO's equips go through the
         // declaration ONLY. A REFUSED claim -- the equip seat not installed (the engine

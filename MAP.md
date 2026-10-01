@@ -2869,6 +2869,10 @@ module. Module layout:
   `BuildBuyThresholds` `useMageApparel` + `umaSell`; `LootEquipment.cpp` `ctx.useMageApparel`; `Service.cpp` MEO gem
   `prefs.caster`. LEFT on the gambit signal: `Economy.cpp` tome buy, `Cast.cpp` auto-consume, `SwapUp.cpp` `keepMageMode`
   and `UsesAmmoKind`, the weapon-role / shield uses of `caster` in `BuildBuyThresholds` and `ComputeKeepSet`, `ClassResolve.cpp`.
+  (2) HELMET LOOP: `Economy.cpp` sell scan, `redundantInferior` (keep-set `bestBySlot`) force-sold a worn piece the armor
+  choice keeps, then `gemHold` (the only caller of `UnsocketItemGems`) extracted its gem. Now `DeclaredSetKeeps`
+  (`EquipAuthority.cpp:459`, the declared `GearSlate`) vetoes the force-sell and `continue`s before `gemHold`;
+  line `[sell] <id> '<name>' -> worn, kept by the armor choice -> not selling ...`. Blacklisted apparel still force-sells.
   Worker thread for all of it.
 - **ARMOR CLASS BY SKILL + PERKS (2026-09-14, field fix; branch
   `fix/mfo-armor-class-score`).** FIELD (Deck log on `69c5b3c`, Fable): after a

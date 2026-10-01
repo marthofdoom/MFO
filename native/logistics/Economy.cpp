@@ -707,6 +707,19 @@ namespace MFO::Logistics {
                             redundantInferior = true;
                     }
                 }
+                // THE WEAR JUDGE HAS THE LAST WORD ON A WORN PIECE (Cicero's helmet loop):
+                // bestBySlot is the KEEP set's ranking, a different judge from the armor
+                // choice's slate (per-biped-bit ArmorIsBetter + worn incumbency, or the mage
+                // set). When they disagree the worn piece is kept by the choice yet force-sold
+                // here, then gemHold extracted its gem, MEO re-socketed it and re-equipped it,
+                // every scan. A worn piece the declared set keeps is not being sold: no
+                // force-sell, no gemHold, no unequip. (Blacklisted apparel still force-sells.)
+                if (redundantInferior && !IsBlacklistedApparel(armo) &&
+                    DeclaredSetKeeps(a_follower, a_state, armo)) {
+                    redundantInferior = false;
+                    sdiag(obj, "worn, kept by the armor choice -> not selling (no unequip, no gem hold)");
+                    continue;
+                }
                 // ── A WORN ITEM IN A CATEGORY OUR OWN DECLARATION DENIES ──────────
                 // (fix/mfo-spell-authority-0922; Cicero's shield, field 2026-09-22.)
                 // The gate order below tests `worn` BEFORE everything after it and
