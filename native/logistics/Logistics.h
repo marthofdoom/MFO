@@ -25,6 +25,16 @@
 
 namespace MFO::Logistics {
 
+    // ── THE base-class resolver (marth 2026-10-01, logistics/ClassResolve.cpp) ──
+    // The follower's class, 1 Melee / 2 Ranged / 3 Mage: combatClassOverride when
+    // the player picked one, else Auto RESOLVED by one weighted vote over the
+    // gambit table (weighted highest), the highest combat skill and the NPC's
+    // engine class skill weights. Never returns 0. The ONLY Auto resolver: a new
+    // consumer that needs the class calls this, never a second rule. Reads
+    // a_state (g_followers contents), so it runs on the worker / main pump domain
+    // (#4). Off-worker callers read Followers::ResolvedClassFast instead.
+    std::uint8_t ResolveBaseClass(RE::Actor* a_actor, const FollowerState& a_state);
+
     // ── pure reads (the evaluator's supply conditions) ──────────────────────
 
     // Which resource a potion RESTORES, or kNone if it is not a plain H/S/M

@@ -83,17 +83,28 @@ namespace MFO::ProgAllocator {
             // skill baseline, so the redistribution never drives a pool below
             // the follower's true natural. hmsCaptured=true suppresses the
             // pre-v5 ADOPT fallback for a freshly enrolled follower.
-            for (int p = 0; p < 3; ++p) {
-                const float v = avo->GetBaseActorValue(kHmsAV[p]);
-                st.hmsBaseline[p]   = v;
-                st.hmsTarget[p]     = v;
-                st.hmsSkew[p]       = 0.0f;
-                st.hmsCumulative[p] = 0.0f;
+            // HMS IS CORE (2026-10-01): an HMS-only record that already CAPTURED
+            // keeps its whole HMS block (baseline, cumulative, withheld, credit,
+            // held, retro bit). Re-capturing would zero hmsWithheld while the
+            // engine's next re-slam brings those points back, so they would be
+            // measured again as a fresh award.
+            if (st.hmsCaptured) {
+                spdlog::info("[prog] {} enrolled with its core HMS record kept (baseline H {:.0f} / M {:.0f} / "
+                             "S {:.0f}, withheld {:.1f})", NameOf(a_actor), st.hmsBaseline[0],
+                             st.hmsBaseline[1], st.hmsBaseline[2], st.hmsWithheld);
+            } else {
+                for (int p = 0; p < 3; ++p) {
+                    const float v = avo->GetBaseActorValue(kHmsAV[p]);
+                    st.hmsBaseline[p]   = v;
+                    st.hmsTarget[p]     = v;
+                    st.hmsSkew[p]       = 0.0f;
+                    st.hmsCumulative[p] = 0.0f;
+                }
+                st.hmsWithheld = 0.0f; st.hmsParityCredit = 0.0f;   // PRGN v8 parity starts clean
+                st.hmsRetroPending = true;   // an engine level jump before the 1st player level-up
+                for (int p = 0; p < 3; ++p) st.hmsHeld[p] = st.hmsBaseline[p];   // v8: what he holds now
+                st.hmsCaptured = true;
             }
-            st.hmsWithheld = 0.0f; st.hmsParityCredit = 0.0f;   // PRGN v8 parity starts clean
-            st.hmsRetroPending = true;   // an engine level jump before the 1st player level-up
-            for (int p = 0; p < 3; ++p) st.hmsHeld[p] = st.hmsBaseline[p];   // v8: what he holds now
-            st.hmsCaptured = true;
         }
 
         // B′: strip the list-given catalog perks NOW (engagement); recorded for

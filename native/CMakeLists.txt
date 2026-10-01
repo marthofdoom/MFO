@@ -69,6 +69,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/Sinks.cpp
     logistics/Service.cpp
     logistics/Cast.cpp
+    logistics/ClassResolve.cpp
     logistics/Economy.cpp
     logistics/EquipAuthority.cpp
     logistics/LootTake.cpp

@@ -55,7 +55,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (5 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1` (`Serialization.h`). PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
+| **Co-save (5 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1` (`Serialization.h`). PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -2604,7 +2604,7 @@ module. Module layout:
     player-drop record is GONE, 86e3faccn: what the player drops is fair game.) Line numbers: grep.
   - `logistics/LootTake.cpp` (906), `logistics/Gear.cpp` (743), `logistics/LootScan.cpp` (1027),
     `logistics/LootEquipment.cpp` (571), `logistics/Economy.cpp` (1044),
-    `logistics/EquipAuthority.cpp` (816), `logistics/Cast.cpp` (268),
+    `logistics/EquipAuthority.cpp` (816), `logistics/Cast.cpp` (268), `logistics/ClassResolve.cpp` (110),
     `logistics/SwapUp.cpp` (649, THE SWAP-UP RULE, 2026-09-25): see the bullets below.
   - `logistics/Logistics_internal.h` (938) = shared state/types/declarations;
     `logistics/LootTravel_internal.h` (562) = the loot TRAVEL substrate (`TravelIntent`,
@@ -2634,6 +2634,17 @@ module. Module layout:
   branch, unchanged) — a traveller can sit a room away from a fight for
   several ticks before his own `IsInCombat()` flips, which is the gap this
   closes.
+- `logistics/ClassResolve.cpp` (110, 2026-10-01) — **THE base-class resolver**
+  `ResolveBaseClass(actor, state)` (`:45`, declared in `logistics/Logistics.h`): the Gambit pick
+  (1/2/3) or Auto by a weighted vote, never 0. Signals: (i) gambit table via `TableHasAction`
+  equip_melee/equip_ranged + `HasCastGambit` (weight `kVoteGambit` 0.60, `:27`); (ii) highest BASE
+  combat skill, Melee max(1H,2H) / Ranged Archery / Mage max(5 schools) (0.25); (iii) the NPC's
+  `TESNPC::npcClass->data.skillWeights`, same grouping (0.15). 0.60 > 0.40, so a gambit table
+  naming ONE class always decides. Ties and all-abstain go to the lowest ordinal (Melee).
+  Consumer: core HMS only (through the `Followers::ResolvedClassFast` mirror). Equipment keeps
+  its own rule (skills pick armor/weapon type, perks pick usage, marth 2026-10-01) and does NOT
+  call this. **What breaks:** a second Auto rule elsewhere; calling it off the worker / main
+  pump (it reads `FollowerState`); changing a weight changes every Auto follower's HMS split.
 - `logistics/Cast.cpp` (268, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
   `TopTwoSchoolMask:108`, `LearnCarriedTomes:137`, school name/keyword helpers.
@@ -4285,9 +4296,9 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     `AllocatePerk` (`:173`), `AllocateNextEligible` (`:206`), `Respec` (`:266`), `HasFreeRespec`
     (`:340`), `RestoreNativePerks` (`:345`), `SetManualSkills` (`:357`), `ApplyManualSkillPoint`
     (`:396`); `FindTree` (`:30`) is file-local here.
-  - `progression/Hms.cpp` (563, moved whole) = §HMS — `HmsProfile` (`:37`), the F3 fired-pool
-    mirror consumers, `HmsTrackBattle` (`:126`), `RecomputeHMS` (`:184`), `HmsRetroParity`
-    (`:494`), `NoteCombatFire` (`:554`).
+  - `progression/Hms.cpp` (626) = §HMS — the BASE split `kBaseHmsByClass` (`:31`), `HmsProfile`
+    (`:44`), the F3 fired-pool mirror consumers, `HmsTrackBattle` (`:140`), `RecomputeHMS` (`:197`),
+    `HmsRetroParity` (`:557`), `NoteCombatFire` (grep).
   - `progression/Manifest.cpp` (503, moved whole) = the §18.6 manifest reader — economy GLOB
     discovery + `ApplyEconomyOverride` (`:149`), `ParseClassDef` (`:222`),
     `BuildGenericManifests` (`:277`), `Init` (`:360`), and the PRGN class-identity resolvers
@@ -4461,6 +4472,57 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   ? lastWritten-points : cur` ADOPT path (engine leveling + MFO stack). Baseline
   uncaptured (old save) → ADOPT fallback. Both idempotent/replay-safe; toggle
   changes NO co-save layout (baseline already serialized).
+- **§HMS IS CORE (2026-10-01, ClickUp 86e3dnt7u, marth: "the reshaping is a core feature, enhanced
+  by the add on"). SUPERSEDES the Phase 2 "FindClassDef gate" and the Phase 7 "no DLL default" text
+  in the bullet below.** HMS (split + skew + player-rate parity + fixed-stat grant + retro) runs for
+  EVERY managed follower with `bHmsRedistribute` on, add-on present or not. (1) **Class** =
+  `Followers::ResolvedClassFast(id)` (`Followers.cpp:564`), the g_mx mirror `PublishActiveMirror`
+  (`Followers.cpp:142`, worker) fills from **THE resolver** `Logistics::ResolveBaseClass`
+  (`logistics/ClassResolve.cpp:45`): the Gambit pick, or Auto by a weighted vote (gambit table
+  0.60, highest base combat skill 0.25, the NPC's CLAS skill weights 0.15, `:27`). The poll is on
+  the TRUE main thread, so HMS reads the mirror, never `g_followers` (#74; the old
+  `GetBaseClass` read here was a live-map read off the worker). Records with a pick + ACTIVE Auto
+  followers are mirrored; a benched Auto follower reads 0 (`noclass` exit, nothing measured).
+  The Board's `SetClassOverride` republishes at once (`Board.cpp` ~:1305). (2) **Split** = the
+  BASE table `kBaseHmsByClass` (`progression/Hms.cpp:31`, numbers = the add-on's shipped
+  defaults, `MFO_GenerateESP.py:1381/1385/1389`, marth to confirm); an add-on ClassDef that
+  DECLARES `hmsWeights` for that stance refines it (`HmsProfile`, `:44`). (3) **State** = an
+  HMS-ONLY `ProgState` (`enrolled == false`) that `PollWork` (`progression/Poll.cpp:83`)
+  creates for each managed, persistable, non-summon active follower without a record
+  (off-worker reads: `ActiveSnapshot` + `IsMfoEnabled`); uncaptured (first `RecomputeHMS`
+  ADOPTs, no take-back) with the retro bit 0x40 set like `Enroll`. Saved in the v8 layout (see
+  the co-save row). (4) **Poll** starts without the add-on (`OnPostLoad`,
+  `progression/Allocator.cpp:141`); inside it every progression path is `prog = g_ready &&
+  st.enrolled`, board views only with `g_ready`. An enrolled CLASSLESS follower now gets HMS
+  too (its 0x40 from Enroll / the v<8 retro caps the first award once, then clears).
+  (4b) **NEVER-PROCESSED ENROLLED BLOCK (review F1, marth "Adopt, no take-back"):** an enrolled
+  follower whose HMS never ran under the old gate (Gambit Auto, or classless) still holds its
+  Enroll-time block. `RecomputeHMS` (`progression/Hms.cpp:257`) detects it exactly (enrolled,
+  captured, 0x40 set, cumulative 0, withheld 0, grant remainder 0, held == baseline), but ONLY for a
+  block LOADED FROM A SAVE (review R2-1): the runtime-only `ProgState::hmsAdoptArmed` is set by
+  `CoSaveLoad` for enrolled records (`progression/Allocator.cpp:829`), tested and cleared at the
+  check (`Hms.cpp:255-257`, cleared matched or not), never set by `Enroll`, and dropped with
+  `g_prog` by `ClearAll`. A fresh in-session Enroll has the same shape and keeps its 0x40 retro
+  cap. On a match it logs
+  `[hms] <id> never-processed HMS block adopted (no take-back)`, clears the stale `fixedStat`,
+  streak and tally, clears 0x40 (the persisted once-only marker) and falls into the uncaptured
+  ADOPT. Their base never drops, and a fixed-stat backfill computed that poll from the stale
+  baseline is not spent (the ADOPT returns first, F4). Open: MFO-B218..B219. Planned repair path
+  for a bad HMS state: the future "remove follower from MFO" action (marth 2026-10-01).
+  (5) `Enroll` KEEPS a captured HMS block (`progression/Verbs.cpp` ~:85): re-capturing zeroes W
+  while the next engine re-slam brings it back as a fresh award. (6) **R2:** runtime-only
+  `hmsMeasuredThisWindow` (set at the measure in `RecomputeHMS`); `PollWork` judges a level-up
+  window for fixed-stat only when set (`Poll.cpp:214`), so switch-off / unresolved class never
+  reads as a 0-award level. The uncaptured ADOPT no longer tallies its whole base into
+  `hmsAwardAccum`. `[hms-diag]` now prints `enrolled`/`clsId`/`resolvedClass`, exits
+  `none|noclass|noavo`. **What breaks:** reading `g_followers` from the poll (use the mirror);
+  a second Auto rule anywhere (extend `ResolveBaseClass`); re-capturing HMS in Enroll; a
+  progression path in `PollWork` without the `prog` gate (an add-on-absent session would run
+  add-on logic); filtering `!enrolled` out of `CoSaveSave` (drops every no-add-on follower's
+  HMS state); setting 0x40 again on an enrolled record (re-arms the never-processed adopt).
+  **DOWNGRADE LOSS (#12, review F2):** a DLL from v2.0.12 to v2.0.16 reads HMS-only records
+  but its poll and save skip them, so its first save DROPS them. Points withheld in that period
+  are lost, and after re-upgrading the follower re-ADOPTs the live base as a new record. Open: MFO-B69 (credit for fixed-stat), MFO-B213 (REVIEW-BACKLOG).
 - **§HMS class-redistribution (PRGN v5) — SIBLING of the skill reconcile.**
   `RecomputeHMS` (`progression/Hms.cpp:184`; the whole §HMS engine lives in that module) is called at the same
   three sites as `RecomputeSkills`: the level-gain edge + the ~2s drift-watch in
@@ -4566,7 +4628,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   first observation inits with gain 0). **(3) GATE + GRANT:** `fixedStat` follower with
   `playerTotalNow >= Σ hmsBaseline` (player caught up) ⇒ `RecomputeHMS(actor,st,log,grantBudget=playerGain)`
   — the injected budget feeds the SAME converging/skew allocation, distributed by
-  `HmsProfile(GetBaseClass)`; the grant path carries fractions in `hmsGrantRemainder[3]`
+  `HmsProfile(ResolvedClassFast)` (2026-10-01); the grant path carries fractions in `hmsGrantRemainder[3]`
   so a 15/80/5 split lands as WHOLE base-AV points over levels. While
   `playerTotalNow < Σ hmsBaseline` the follower stays FROZEN (budget 0). **RETROACTIVE
   = per-level going forward, NOT a lump backfill** (the gate compares CURRENT player
@@ -4579,8 +4641,9 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   mirrors into it** — the old `Followers::SetBaseClass(id, def->stance)` write only ever
   wrote 0 (the discarded GLOB suffix) and clobbered the user's Gambit pick with Auto;
   removed. `SetClass` now sets the SKILL class (`clsId`) only. Reads of
-  `combatClassOverride` on the serial-worker path (Scheduler/Actuation stance) — and now
-  HMS (`RecomputeHMS`/`HmsTrackBattle`) — go through `Followers::GetBaseClass`. Board snapshot is the
+  `combatClassOverride` on the serial-worker path (Scheduler/Actuation stance) go through
+  `Followers::GetBaseClass`; HMS (`RecomputeHMS`/`HmsTrackBattle`, main-thread poll) reads the
+  RESOLVED class off the `Followers::ResolvedClassFast` mirror (2026-10-01). Board snapshot is the
   one cross-thread structure (guarded `g_viewMx`); `Rapport::Spend` (called at `progression/Verbs.cpp:328`) is a
   cross-module write on respec.
 
@@ -6815,6 +6878,9 @@ concurrency question (distinct threads, mutual exclusion UNPROVEN).
   thread / serial-worker only** (same as `TryEnsureRecord`). Callers today: `SetBaseClass`
   ← `ProgAllocator::SetClass`; `GetBaseClass` ← `Scheduler.cpp` stance + `cast/Equip.cpp:354`
   dagger-melee; `Get/SetFollowerHMS`+`MeasureEngineVitalAward` ← `ProgAllocator::RecomputeHMS`.
+  **`ResolvedClassFast` (2026-10-01, `:564`) is OFF-WORKER safe** (the `g_mx` mirror, like
+  `IsMfoEnabled`): `PublishActiveMirror` resolves every record's class with
+  `Logistics::ResolveBaseClass` BEFORE taking `g_mx` (leaf rule), on the worker / drained pump.
   This is the surface Phases 2+ grow (SetSkill/GrantPerk/level-up events) — keep it general.
 - `Refresh` (`:419`, the eviction hub) — **runs on the JOB WORKER** (`Diagnostics.cpp`
   tick), not the main thread; it rebuilds `g_active`/`g_activeIds` and republishes the

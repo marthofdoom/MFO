@@ -139,12 +139,18 @@ namespace MFO::ProgAllocator {
     bool Active() { return g_ready; }
 
     void OnPostLoad() {
+        // HMS IS CORE (marth 2026-10-01): the level poll runs with or without the
+        // add-on, because it is also the base HMS split + parity driver. Without
+        // the add-on every progression path inside it is gated on g_ready (inert,
+        // data preserved), and no board view is published.
         if (!g_ready) {
-            if (!g_prog.empty())
+            std::size_t enrolledN = 0;
+            for (const auto& [id, st] : g_prog) if (st.enrolled) ++enrolledN;
+            if (enrolledN)
                 spdlog::warn("[prog] {} progression record(s) loaded but the addon is absent — "
-                             "inert this session (data preserved, nothing applied)", g_prog.size());
-            return;
-        }
+                             "progression inert this session (data preserved, nothing applied); "
+                             "core HMS still runs", enrolledN);
+        } else {
         // §10 (perk-bug fix 2026-08-17): DO NOT re-read the economy from GLOB
         // values here. GLOB values are SAVE-PERSISTED — a save made before an
         // economy GLOB was repurposed/re-defaulted carries a STALE value (e.g.
@@ -154,6 +160,7 @@ namespace MFO::ProgAllocator {
         // rides a NON-save-persisted INI instead (ApplyEconomyOverride), never
         // the globals.
         ApplyEconomyOverride();   // re-overlay the addon MCM INI (defaults cached)
+        }
         // Fresh session: everything reapplies lazily (the poll retries until
         // each enrolled actor resolves — P3's guarded shape, never eager).
         // Fable F1 (4a62688): base perk edits do NOT survive a load (P3), so the
@@ -169,7 +176,7 @@ namespace MFO::ProgAllocator {
         // Seed the board views once so the Progression TAB exists on the very
         // first board open (the power's own PublishSnapshot copies the prog
         // pointer before the open-gated poll refresh would have run).
-        PublishBoardViews();
+        if (g_ready) PublishBoardViews();
         spdlog::info("[prog] post-load: {} progression record(s); level poll started (gen {})",
                      g_prog.size(), gen);
     }
@@ -252,9 +259,10 @@ namespace MFO::ProgAllocator {
     }
 
     // GENERAL follower-allocation-state serializer (host machinery — Serialization.h
-    // §PRGN). Writes the header + one blob per ENROLLED follower; with no add-on
-    // manifest nothing enrolls, g_prog is empty, and only the header + count=0 go
-    // out (Phase 9 acceptance test). Every field is general allocation-engine state;
+    // §PRGN). Writes the header + one blob per follower record: ENROLLED ones and
+    // the HMS-only ones core HMS keeps for every managed follower (2026-10-01).
+    // With no add-on manifest nothing enrolls, so only HMS-only records go out
+    // (the Phase 9 "count=0" acceptance line now holds with HMS switched off). Every field is general allocation-engine state;
     // the class is an OPAQUE plugin-qualified reference re-resolved on load, never
     // interpreted here (its meaning lives in the manifest form). Written even when
     // the add-on is ABSENT this session so a temporarily-disabled ESL's state is
@@ -270,15 +278,21 @@ namespace MFO::ProgAllocator {
         // version>=6; a pre-v6 stream inits it from the live player on load.
         a_intfc->WriteRecordData(g_playerHmsTotalLast);
 
+        // Every record is written: ENROLLED ones and the HMS-ONLY ones (enrolled
+        // false, marth 2026-10-01 HMS is core) in the SAME v8 layout, flags bit0
+        // telling them apart. No layout change, no version bump: every shipped v8
+        // reader consumes the bytes identically (its poll and its save skip a
+        // non-enrolled record, so an older DLL drops it on its next save and the
+        // follower re-ADOPTs here after an upgrade).
         std::uint32_t persistable = 0;
         for (const auto& [id, st] : g_prog)
-            if (st.enrolled && Followers::IsPersistableID(id)) ++persistable;
+            if (Followers::IsPersistableID(id)) ++persistable;
         a_intfc->WriteRecordData(persistable);
 
-        std::uint32_t written = 0, skippedRuntime = 0;
+        std::uint32_t written = 0, skippedRuntime = 0, hmsOnly = 0;
         for (const auto& [id, st] : g_prog) {
-            if (!st.enrolled) continue;
             if (!Followers::IsPersistableID(id)) { ++skippedRuntime; continue; }
+            if (!st.enrolled) ++hmsOnly;
             a_intfc->WriteRecordData(id);
             const std::uint8_t flags =
                 (st.enrolled ? 1u : 0u) | (st.autoSpend ? 2u : 0u) |
@@ -384,7 +398,7 @@ namespace MFO::ProgAllocator {
                 a_intfc->WriteRecordData(st.hmsHeld[p]);    // v8 f32×3 {H,M,S}: last HELD
             ++written;
         }
-        spdlog::info("[cosave] saved {} progression record(s), schema v{}{}", written, kProgVersion,
+        spdlog::info("[cosave] saved {} progression record(s) ({} HMS-only), schema v{}{}", written, hmsOnly, kProgVersion,
                      skippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) record(s)", skippedRuntime)
                                     : std::string{});
     }
@@ -810,6 +824,9 @@ namespace MFO::ProgAllocator {
             }
 
             if (!resolved) { ++droppedActor; continue; }
+            // Review R2-1: arm the once-per-load never-processed-block check
+            // (RecomputeHMS) for every enrolled record read from a save. Runtime only.
+            st.hmsAdoptArmed = st.enrolled;
             g_prog[resolvedID] = std::move(st);
             ++loaded;
         }
