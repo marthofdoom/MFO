@@ -7,6 +7,9 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Museum deposits work again.** Followers finish the hand-over at the crate and the items ship, instead of the trip ending the moment the give animation starts.
+- **Lockpicking works again, with one animation per lock.** A follower picks a lock in one go. They no longer enter and leave the animation over and over, and a failed attempt waits before they try the lock again.
+- **A follower no longer wastes a heal on an ally who cannot be healed yet.** Heals skip an ally who is down and out until they are back on their feet.
 - **A heal on an ally lying on the ground no longer restarts every few seconds.** A follower keeps healing the same downed ally through a flickering line of sight, so the heal lands instead of starting over. The follower keeps the heal ready and casts it the moment the ally is back in sight.
 - **Followers judge line of sight themselves for spells and bows.** A heal or a shot no longer waits on the game's stale sight answer, so heals stop hopping between targets and heals aimed at you get served.
 - **The menu remembers where you put it.** The Field Orders window reopens at the position and size you left it, even after you restart the game. It is saved in `Data/SKSE/Plugins/MFO_UI.ini`. Delete that file to go back to the centred default. If your resolution changes, the window is kept on screen.

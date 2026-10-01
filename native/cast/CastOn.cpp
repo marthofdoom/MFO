@@ -379,6 +379,14 @@ namespace MFO::Actuation {
                 const char* lost = nullptr;
                 if (recipient->IsDead() || recipient->IsDisabled())
                     lost = "the recipient is dead or gone";
+                // ESSENTIAL-DOWN (fix/mfo-lifestate, field 0930c: 3 of 3 fires at an essential-down
+                // ally left the effect ABSENT and hp unmoved, landed=NO). A heal cannot land on
+                // it, so the claim is released NOW, even mid-cast, and no lap re-fires it; it is
+                // healed again once up. Only kEssentialDown: BLEEDOUT (kBleedout) is not skipped,
+                // marth: healing a downed ally is wanted and no field line shows it failing.
+                else if (const auto* rst = recipient->AsActorState();
+                         rst && rst->GetLifeState() == RE::ACTOR_LIFE_STATE::kEssentialDown)
+                    lost = "the recipient is essential-down (a heal does not land on it)";
                 // REACH ONLY (HealRecipientUnreachable, marth 2026-09-30b): line of sight
                 // never ends a standing heal claim, it waits charged and the engine fires
                 // when sight clears. The heartbeat below keeps renewing it meanwhile.

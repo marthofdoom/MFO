@@ -216,7 +216,8 @@ namespace MFO::Actuation {
                 // printed. No road that reaches this today relies on a running channel,
                 // so `cut` fires only for a road that does not sustain the effect
                 // itself, and only when nothing else says the heal landed.
-                const bool sustainsItself = std::string_view(o.road).starts_with("direct");
+                const bool sustainsItself = std::string_view(o.road).starts_with("direct") ||
+                                            std::string_view(o.road).starts_with("OOC stream");
                 const bool cut  = o.conc && !sustainsItself && !landed &&
                                   std::string_view(stream) == "live" &&
                                   std::string_view(channel) == "stopped";
