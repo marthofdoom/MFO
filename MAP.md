@@ -2745,8 +2745,9 @@ module. Module layout:
   (`emptyWhileAmmoElsewhere`; museum relics are excluded from "elsewhere", and `ComputeWeaponRoles` keeps relics in a
   last-resort pool exactly as the pick does). Ranged perk bias: with ranged role, `votes.weapon[7] > 0` ->
   `preferKinds |= kWkBow` and `votes.weapon[8] > 0` -> `kWkCrossbow` (new bit `1<<8`; `StyleVotes::weapon` is 9 wide, an
-  internal struct, not co-saved). The votes come from `ReadStyleFacts`: the `WeapTypeBow` keyword (both vanilla kinds
-  carry it, so vanilla Archery perks bias both equally) AND a RIGHT-hand `GetEquippedItemType` test admitting exactly
+  internal struct, not co-saved). The votes come from `ReadStyleFacts`: the `WeapTypeBow` keyword (`WeaponKindOfKeyword` returns
+  `kWkBow | kWkCrossbow`, a MASK, its one caller ORs it; both vanilla kinds carry the keyword, so a keyword perk votes
+  `weapon[7]` AND `weapon[8]` and biases both kinds equally) AND a RIGHT-hand `GetEquippedItemType` test admitting exactly
   7 (bow) or exactly 12 (crossbow), so a perk that tests the crossbow item type biases crossbows only (the unarmed
   logic is untouched: these bits go to `a_out` only, never `localWeaponKinds`). No melee kind intersects bits 7/8;
   offHand and the `[style]` line stay melee-only. Loot/buy/keep/ammo targets
@@ -2756,8 +2757,8 @@ module. Module layout:
   every melee score are unchanged (`preferKinds` gains only bits 7 and 8). It DIFFERS for bow+crossbow carried: before, the
   family with MORE rounds won (damage on a tie) and the combat equip took raw max damage ignoring ammo; now a weapon
   with matching ammo beats one without, then perk-biased damage decides (rounds count no longer matters), and none
-  with ammo -> plain/perk-biased damage. `ReadStyleFacts` is unchanged (it already votes `WeapTypeBow` into
-  `weapon[7]`). **What breaks:** the two decision sites must keep sharing `RangedPickScore` or loot chases the ammo of a
+  with ammo -> plain/perk-biased damage. `ReadStyleFacts` gained only the item-type 7/12 votes and the keyword mask above (a keyword
+  perk votes `weapon[7]` and `weapon[8]`, so with only keyword votes both kinds get the same 1.5x as before this change). **What breaks:** the two decision sites must keep sharing `RangedPickScore` or loot chases the ammo of a
   weapon the combat pick does not draw; re-adding an enum test in `WeaponKindOf` re-breaks keywordless modded guns'
   neutrality; `EquipAuthority.cpp:688` still uses `IsCrossbow()`. Open items: `Docs/REVIEW-BACKLOG.md` **MFO-B210**.
   **CLOSED 2026-09-14 (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`) — THE

@@ -7,7 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
-- **Archers pick the ranged weapon that has ammo.** A follower with a bow and a crossbow now draws the one they can actually fire. A weapon with no matching ammo sorts below any that has some. If none has ammo, the old order stands. Perks that test for a bow or a crossbow in hand nudge the pick toward that kind. The vanilla Archery perks name only the bow keyword that both share, so they favour both alike. Modded guns work the same way, because the match comes from the weapon's own record. Loot and shopping then chase the ammo for the weapon they picked.
+- **Archers pick the ranged weapon that has ammo.** A follower with a bow and a crossbow now draws the one they can actually fire. A weapon with no matching ammo sorts below any that has some. If none has ammo, the old order stands. Perks that test for a bow or a crossbow in hand nudge the pick toward that kind. The vanilla Archery perks name the bow keyword that both kinds share, so they favour both alike. Modded guns work the same way, because the match comes from the weapon's own record. Loot and shopping then chase the ammo for the weapon they picked.
 
 ## v2.0.16 -- Heals are animated in combat again
 

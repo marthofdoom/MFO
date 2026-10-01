@@ -135,8 +135,8 @@ namespace MFO::Progression {
         kWkGreatsword = 1u << 4,   // WeapTypeGreatsword
         kWkBattleaxe  = 1u << 5,   // WeapTypeBattleaxe
         kWkWarhammer  = 1u << 6,   // WeapTypeWarhammer
-        kWkBow        = 1u << 7,   // WeapTypeBow keyword, or a right-hand item-type-7 test
-        kWkCrossbow   = 1u << 8,   // a right-hand item-type-12 test (crossbow); no keyword names it
+        kWkBow        = 1u << 7,   // WeapTypeBow keyword (votes with kWkCrossbow), or an item-type-7 test (bow only)
+        kWkCrossbow   = 1u << 8,   // WeapTypeBow keyword (votes with kWkBow), or an item-type-12 test (crossbow only)
         kWkOneHandAll = kWkSword | kWkDagger | kWkWarAxe | kWkMace,
         kWkTwoHandAll = kWkGreatsword | kWkBattleaxe | kWkWarhammer,
     };

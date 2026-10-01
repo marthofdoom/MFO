@@ -290,7 +290,8 @@ namespace MFO::Progression {
             if (id == "WeapTypeGreatsword") return kWkGreatsword;
             if (id == "WeapTypeBattleaxe")  return kWkBattleaxe;
             if (id == "WeapTypeWarhammer")  return kWkWarhammer;
-            if (id == "WeapTypeBow")        return kWkBow;
+            // Both vanilla bows and crossbows carry this keyword, so a perk conditioned on it names both kinds.
+            if (id == "WeapTypeBow")        return kWkBow | kWkCrossbow;
             return 0;
         }
         std::uint8_t ArmorKindOfKeyword(const RE::TESForm* a_kw) {
