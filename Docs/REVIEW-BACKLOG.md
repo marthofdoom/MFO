@@ -1118,3 +1118,14 @@ Raised against 676b676 (`fix/mfo-logic-bundle2`), Opus review F4, not fixed. Ver
 - **Finding (verbatim):** When a key expires, stallGate resets it with `st = StuckState{}` (:518), so it is not held during the 2 retry passes; if G's stack has >=2 copies and the item has an empty slot, the swap-up can evict a worn gem for G during that retry. Once per expiry, bounded; same behaviour as socketBackedOff before this commit.
 - **Why it was NOT fixed:** pre-existing, bounded to once per expiry, SEV-5 (rule 9). Deferred, not dropped.
 - **Surfaced at edit time from:** MAP.md §7 MEOBridge "HELD KEYS" What-breaks.
+
+### MFO-B203 — gem CHOICE review (Opus, 2026-10-01): safe bug fixes DRAINED, design decisions OPEN
+- **Raised:** Opus logic review of MFO's gem choice (`agentlogs/review-gem-choice.md`, findings F1-F12), against `origin/main` 0166f75 and MEO a47f99c.
+- **Severity:** mixed. F1 and F2 were SEV-2, the rest SEV-4/SEV-5.
+- **DRAINED by `fix/mfo-gem-choice-bugs` (2026-10-01), pending its review:** F4 (uid-0 item skips `GetGemDetails`), F1 (tier 2 never admits an off-domain gem through a Conduit, the simple option, because the sibling map would duplicate MEO's catalog and MEO_API carries no theme), F2 and the eviction half of B34/F6 (a support is valued only when its link works, a linked support is protected only while its link works, a linked Conduit and its partner only when the partner is off-domain, partner replacement must keep a working Focus/Echo link), F9 (base vs base magnitude in the swap-up), F10 second half (`WornUid` hand-matched for the weapon capture).
+- **OPEN, design decisions for marth:** F3 (gem relevance model: the text heuristic in `GemBonus` misses frost, weapon-skill fortifies, treats `magickadamage` and unarmed as magic), F5 (gear-swap destination and pouch overflow policy, and the `MoveGems` to `UnsocketGem` rework: MoveGems does no eligibility or foreign-enchant check when `toUid` is given, and overflow goes to the shared pouch), F7 (provenance), F8 (default tier, `bMeoAwareGems` is OFF), F10 race (the uid-0 mint race), F11 (VR threading). B34 insert half and B33/B35 still wait.
+- **OPEN, cross-repo:** MEO should expose a gem's theme (and element) in `GemInfo`/`GemDetail`/`LooseGemInfo`. MFO's `IsElementalGid` is a gid list, so MEO's minted `x_` runtime families (calibrated themes, plugin.cpp:985-998, 1346) read as non-elemental and a Focus or Echo linked to one is not valued or guarded. Needs an append-only MEO_API change on MEO's side.
+- **OPEN, SEV-5:** MEO's "linked" test excludes normal gems with no magic effect and capped player copies (plugin.cpp:1990), which MFO's count of 1 support + 1 normal does not.
+- **OPEN, SEV-5:** a second armor Echo on the same actor is inert ("first linked Echo-armor wins", plugin.cpp:7608-7660) but MFO values it +1.
+- **Surfaced at edit time from:** MAP.md §7 MEOBridge "GEM CHOICE BUG FIXES".
+

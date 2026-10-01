@@ -678,7 +678,11 @@ namespace MFO::Logistics {
                         }
                     }
                 }
-                if (oldItem && fromUid == 0) fromUid = MEOBridge::WornUid(a_follower, oldItem);
+                // A weapon capture names its hand (MFO-B203 / F10): both callers pass the RIGHT-hand
+                // weapon (GetEquippedObject(false)), and a dual-wielded pair of one base is two worn
+                // instances with their own uids, so read hand 0's xList, never the left twin's.
+                if (oldItem && fromUid == 0)
+                    fromUid = MEOBridge::WornUid(a_follower, oldItem, oldItem->As<RE::TESObjectWEAP>() ? 0 : -1);
                 if (oldItem) fromBase = oldItem->GetFormID();
             }
 
