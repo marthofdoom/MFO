@@ -865,6 +865,7 @@ namespace MFO::Logistics {
                                                 IsHeadSlotMask(static_cast<std::uint32_t>(b->GetSlotMask())));
                                     }))
                         return;
+                    slate.push_back(b);
                 };
                 for (const int slot : { 1, 0, 2, 3, 4, 5 }) accept(gs.slot[slot]);
             }
