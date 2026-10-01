@@ -980,7 +980,10 @@ namespace MFO::Actuation {
         // Exempt ONLY a RUNNING cast of the asker's own (review F1): a right-hand claim standing
         // between casts or never fired is not a cast to protect, and exempting it by lock spell
         // alone kept the floor released (the E6 shape, 09:06:10-11).
-        const bool askerHoldsRight = it->second.hand[kHandRight].spell == a_askerSpell;
+        // Owned by the ASKER's rule too (R2-1): a lower rule casting the same spell as a higher
+        // rule's right-hand claim must not release that other rule's claim.
+        const auto& rlk = it->second.hand[kHandRight];
+        const bool askerHoldsRight = rlk.spell == a_askerSpell && rlk.owningRule == a_askerRule;
         if (askerHoldsRight &&
             CastInFlightOnHand(a_follower, kHandRight, a_askerSpell, CastProxyOnHand(fid, kHandRight)))
             return false;
@@ -1000,6 +1003,7 @@ namespace MFO::Actuation {
         if (askerHoldsRight) {
             APMFBridge::ReleaseCastClaimOnHand(fid, APMFBridge::kApmfHandRight);
             ClearCastLockHand(fid, kHandRight);
+            ComposedCast::ClearWatchHand(fid, APMFBridge::kApmfHandRight);   // as the unsighted-charge release does
             released = true;
         }
         auto& e = g_healHoldLog[fid];

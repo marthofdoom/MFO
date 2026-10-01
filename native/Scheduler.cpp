@@ -1310,9 +1310,10 @@ namespace MFO::Scheduler {
                         if (sc.actionOpcode != Vocab::kActCastSelf) continue;
                         auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.actionParam);
                         if (!sp || !Actuation::HealsHealth(sp)) continue;
-                        // The EXACT decision CastOn will make: only the direct, unanimated road runs
-                        // here (an inactive controller still answers Claim, review F2).
-                        if (ComposedCast::ChooseHealRoad(f, sp, f) != ComposedCast::HealRoad::DirectNoCombat) continue;
+                        // The EXACT decision CastOn will make: only a package-free direct road runs here
+                        // (NoCombat, NoSeat, Degrade and NotHeal all reach CastSelfDirect with bCastSelf
+                        // on). An inactive controller still answers Claim, which is skipped (review F2).
+                        if (ComposedCast::ChooseHealRoad(f, sp, f) == ComposedCast::HealRoad::Claim) continue;
                         const Actuation::Outcome o = Actuation::Fire(f, sc);
                         if (o.transparent) continue;
                         auto& last = g_retreatHealLog[id];
