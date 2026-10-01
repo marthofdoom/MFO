@@ -600,7 +600,7 @@ namespace MFO::Eval {
                     // claim, and the engine fires when sight clears. Sightline still
                     // decides the INITIAL pick: every other candidate keeps HealInReach
                     // plus the trusted-Occluded skip below.
-                    const bool incumbent = APMFBridge::GetHealCastSpell(a_self->GetFormID()) != 0 &&
+                    const bool incumbent = APMFBridge::GetHealCastSpell(a_self->GetFormID()) == a_healSpell->GetFormID() &&
                                            APMFBridge::GetHealCastTarget(a_self->GetFormID()) == ally->GetFormID();
                     if (incumbent) {
                         if (Actuation::HealRecipientUnreachable(a_self, ally, a_healSpell)) return;
