@@ -244,5 +244,9 @@ namespace MFO::Logistics {
     // repopulates from that save's kRecStock record; a main-menu revert with
     // no load leaves the map empty, same as every other save-scoped map.
     void ClearStockGear();
+    // ROSTER REMOVAL (ClickUp 86e3eewaf): drop ONE follower's stock-gear set (MSTK),
+    // so the next save omits him. Returns how many stock bases were recorded.
+    // Locked (g_stockMx), any thread.
+    std::size_t EraseStockGear(RE::FormID a_followerID);
 
 }

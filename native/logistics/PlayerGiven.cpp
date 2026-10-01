@@ -192,6 +192,15 @@ namespace MFO::PlayerGiven {
         g_rec.clear();
     }
 
+    std::size_t ForgetFollower(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mx);
+        const auto it = g_rec.find(a_follower);
+        if (it == g_rec.end()) return 0;
+        const std::size_t n = it->second.size();
+        g_rec.erase(it);
+        return n;
+    }
+
     // ── the 'PGIV' co-save record (Serialization.h has the layout) ──────────────
     namespace {
         constexpr std::uint32_t kMaxSavedFollowers = 4096;   // #11: bound every count

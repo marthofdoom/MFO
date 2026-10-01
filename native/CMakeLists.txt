@@ -48,6 +48,8 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     progression/Verbs.cpp
     progression/Hms.cpp
     progression/Manifest.cpp
+    progression/Remove.cpp
+    roster/Remove.cpp
     Evaluator.cpp
     cast/Fire.cpp
     cast/Roads.cpp

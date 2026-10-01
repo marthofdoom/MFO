@@ -54,6 +54,13 @@ MFO_STR(Fk_StateLooting,    "Looting", 0)
 MFO_STR(Fk_StateTrading,    "Trading", 0)
 MFO_STR(Fk_StateFollowing,  "following", 0)
 MFO_STR(Fk_TipVitalLine,    "{1} {2} / {3}", 3)   // one line of the vitals tooltip. {1}=H/M/S word, {2}=current, {3}=max
+MFO_STR(Fk_ColRoster,       "Roster", 0)   // column header for the Remove button
+MFO_STR(Fk_RemoveBtn,       "Remove", 0)   // row button: remove this follower from the roster
+MFO_STR(Fk_TipRemove,       "Remove from roster: deletes all MFO data for {1} and undoes what MFO changed on them", 1)   // {1}=follower name
+MFO_STR(Fk_TipRemoveFollowing, "{1} is following you. Removal is only for followers who are not in your party. Dismiss them first, or uncheck MFO to keep them and have MFO leave them alone.", 1)   // why the button is greyed. {1}=follower name
+MFO_STR(Fk_RemoveTitle,     "Remove from roster?", 0)   // popup title
+MFO_STR(Fk_RemoveBody,      "This deletes all MFO data for {1}, including progression. Cannot be undone.", 1)   // {1}=follower name
+MFO_STR(Fk_RemoveConfirm,   "Remove from roster", 0)   // the confirm row in the popup
 
 // == Gambits tab ==
 MFO_STR(Gb_Tab,             "Gambits", 0)

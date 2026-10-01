@@ -443,6 +443,15 @@ namespace MFO::Followers {
         Actuation::ClearCastLock(id);
     }
 
+    bool EraseRecord(RE::FormID id) {
+        const bool had = g_followers.erase(id) > 0;
+        g_lastCombat.erase(id);
+        g_missStreak.erase(id);
+        g_stateSample.erase(id);
+        PublishActiveMirror();   // g_mfoOff / g_resolvedClass are rebuilt from g_followers
+        return had;
+    }
+
     void Refresh() {
         auto* pl = RE::ProcessLists::GetSingleton();
         if (!pl) {

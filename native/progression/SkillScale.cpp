@@ -259,4 +259,41 @@ namespace MFO::ProgAllocator {
                                BaselineFloor(a_st, e.av), id, a_log);
         }
 
+        // ROSTER REMOVAL (ClickUp 86e3eewaf): take every MFO skill point back off
+        // the actor through the SAME single write site, with zero points -- the
+        // exact line RecomputeSkills' HOLD uses to settle an empty entry back to
+        // natural (REVERT: the enrollment baseline; ADOPT: cur - points, or cur when
+        // the engine has re-slammed it since). So no new SetBaseActorValue site and
+        // the baseline floor still rides. Returns the skills whose base moved;
+        // a_fails counts entries that could not be settled (no ActorValueOwner,
+        // an out-of-range AV, or a write that did not read back). MAIN THREAD.
+        int UnwindSkills(RE::Actor* a_actor, ProgState& a_st, int& a_fails) {
+            auto* avo = a_actor ? a_actor->AsActorValueOwner() : nullptr;
+            if (!avo) {
+                a_fails += static_cast<int>(a_st.skills.size());
+                return 0;
+            }
+            const auto id = a_actor->GetFormID();
+            int moved = 0;
+            for (auto& e : a_st.skills) {
+                if (!IsKnownSkillAv(static_cast<std::uint32_t>(e.av))) {
+                    spdlog::warn("[roster] {:08X}: skill entry with unknown AV {} -- NOT settled",
+                                 id, static_cast<std::uint32_t>(e.av));
+                    ++a_fails;
+                    continue;
+                }
+                const float before = avo->GetBaseActorValue(e.av);
+                ReconcileSkill(avo, e, 0.0f, BaselineFloor(a_st, e.av), id, /*log*/ true);
+                const float after = avo->GetBaseActorValue(e.av);
+                if (after != e.lastWrittenBase) {
+                    spdlog::warn("[roster] {:08X}: skill {} settle did NOT stick (wrote {:.1f}, reads {:.1f})",
+                                 id, AvName(e.av), e.lastWrittenBase, after);
+                    ++a_fails;
+                } else if (after != before) {
+                    ++moved;
+                }
+            }
+            return moved;
+        }
+
 }

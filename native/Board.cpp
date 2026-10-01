@@ -37,6 +37,7 @@
 #include "Vocabulary.h"
 #include "Scheduler.h"
 #include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the focus-fire sink
+#include "roster/Roster.h"  // 86e3eewaf: RequestRemove (the RemoveFromRoster edit)
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -1272,6 +1273,15 @@ namespace MFO::Board {
                     }
                     ProgAllocator::PublishBoardViews();
                 });
+                continue;
+            }
+
+            // 86e3eewaf: "Remove from roster". Per-FOLLOWER, keyed on c.fid alone.
+            // This drain IS the serial worker that owns g_followers (#4), the domain
+            // RequestRemove needs: it refuses a current follower, runs the dismissal
+            // release here, and posts the undo + erase to the main thread (pump paused).
+            if (c.kind == EditKind::RemoveFromRoster) {
+                Roster::RequestRemove(c.fid);
                 continue;
             }
 

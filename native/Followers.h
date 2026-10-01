@@ -78,6 +78,16 @@ namespace MFO::Followers {
     // per-follower MFO-OFF toggle (Scheduler tick).
     void ReleaseHeldState(RE::FormID a_actorID);
 
+    // ROSTER REMOVAL (ClickUp 86e3eewaf, roster/Remove.cpp is the only caller).
+    // ERASE this follower's g_followers record (FLWR: gambits, rank, rapport, class
+    // override, mfoEnabled) plus this file's per-follower worker maps (last combat,
+    // miss streak, state-line sample), then republish the g_mx mirrors so
+    // IsMfoEnabled / ResolvedClassFast / IsTrackedFast forget him at once. Returns
+    // false when there was no record. The next FLWR save simply omits him.
+    // DOMAIN: the serial worker, or the main thread WHILE THE PUMP IS PAUSED
+    // (Diagnostics::PausePump, the SaveCallback pattern) -- never a bare main call.
+    bool EraseRecord(RE::FormID a_actorID);
+
     // False for runtime (0xFF) FormIDs, which must NEVER be persisted
     // (INVARIANTS #9). IsCommandedActor() does not cover this: a spawned or
     // cloned teammate is not commanded but still carries a 0xFF id, and

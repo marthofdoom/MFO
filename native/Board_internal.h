@@ -37,11 +37,14 @@ namespace MFO::Board {
                                          SetSubject, SetSubjectActor,   // #68
                                          SetClassOverride,   // #65
                                          SetMfoEnabled,      // T#78 per-follower MFO switch
-                                         AddonAction };   // v1.1 Phase 6c: ONE generic
+                                         AddonAction,     // v1.1 Phase 6c: ONE generic
                                                             // add-on-verb carrier. The specific
                                                             // verb rides EditCmd::verbId (an
                                                             // add-on-agnostic int) — EditKind no
                                                             // longer enumerates progression verbs.
+                                         RemoveFromRoster };   // 86e3eewaf: per-FOLLOWER (fid only);
+                                                               // roster/Roster.h. In-memory queue only,
+                                                               // never serialized.
     // v1.1 Phase 6c: the verbs an EditKind::AddonAction can carry. The CARRIER
     // (EditKind/EditCmd) is add-on-agnostic; these ids + the dispatch in
     // ApplyEdits stay progression-shaped until Phase 7/9 routes verbs through

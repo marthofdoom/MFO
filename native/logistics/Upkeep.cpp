@@ -700,4 +700,13 @@ namespace MFO::Logistics {
         g_stockGear.clear();
     }
 
+    std::size_t EraseStockGear(RE::FormID a_followerID) {
+        std::scoped_lock lk(g_stockMx);
+        const auto it = g_stockGear.find(a_followerID);
+        if (it == g_stockGear.end()) return 0;
+        const std::size_t n = it->second.size();
+        g_stockGear.erase(it);
+        return n;
+    }
+
 }

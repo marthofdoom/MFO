@@ -44,6 +44,7 @@ namespace MFO::PlayerGiven {
     // TESContainerChangedEvent sink for logistics), before its logistics gate.
     void OnContainerChanged(const RE::TESContainerChangedEvent& a_ev);
     void ClearRecord();                // revert: ResetAllState, after StopPump (the record is SAVED, 'PGIV')
+    std::size_t ForgetFollower(RE::FormID a_follower);   // roster removal (86e3eewaf): drop his PGIV entries, returns how many
     void CoSave(SKSE::SerializationInterface* a_intfc);                          // 'PGIV' v1
     void CoLoad(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version); // 'PGIV' (version-checked by the caller)
     bool Installed();                  // the sinks are registered (a worn relic ships only then)

@@ -417,7 +417,12 @@ namespace MFO::Board {
                     // Reserve the footer, or ScrollY takes the remaining height
                     // and pushes the hint line below the fold.
                     const float footer = ImGui::GetFrameHeightWithSpacing() + 6.0f;
-                    if (ImGui::BeginTable("##followers", 8,
+                    // 86e3eewaf: the row's Remove button asks for the confirm popup;
+                    // it is opened AFTER the table, in the window scope it is drawn in.
+                    static RE::FormID  s_rmFid = 0;
+                    static std::string s_rmName;
+                    bool wantRemovePopup = false;
+                    if (ImGui::BeginTable("##followers", 9,
                                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                           ImGuiTableFlags_ScrollY,
                                           ImVec2(0.0f, -footer))) {
@@ -444,6 +449,8 @@ namespace MFO::Board {
                             FitW(150.0f, { Str::Get(Str::K::Fk_ColVitals) }));
                         ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColDist), ImGuiTableColumnFlags_WidthFixed,
                             FitW(70.0f, { Str::Get(Str::K::Fk_ColDist) }));
+                        ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColRoster), ImGuiTableColumnFlags_WidthFixed,
+                            FitW(70.0f, { Str::Get(Str::K::Fk_ColRoster), Str::Get(Str::K::Fk_RemoveBtn) }));
                         ImGui::TableHeadersRow();
 
                         for (const auto& r : snap.rows) {
@@ -536,8 +543,63 @@ namespace MFO::Board {
                             ImGui::TableNextColumn();
                             if (r.active) ImGui::Text("%.0f", r.distance);
                             else          ImGui::TextDisabled("--");
+
+                            // 86e3eewaf: Remove from roster. Offered only while he is NOT
+                            // following (r.active = in the live roster): a party member
+                            // would be re-adopted next Refresh with default data. Greyed,
+                            // NOT ImGui-disabled, so the d-pad can still land on it and the
+                            // tooltip says why (the same hover/nav tooltip as the MFO box).
+                            // The worker re-checks before anything is touched.
+                            ImGui::TableNextColumn();
+                            ImGui::PushID(static_cast<int>(r.id));
+                            if (r.active)
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                            const bool rmPressed = ImGui::SmallButton(Str::Label(Str::K::Fk_RemoveBtn, "rmroster"));
+                            if (r.active) ImGui::PopStyleColor();
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("%s", Str::Fmt(r.active ? Str::K::Fk_TipRemoveFollowing
+                                                                          : Str::K::Fk_TipRemove,
+                                                                 { r.name }).c_str());
+                            if (rmPressed && !r.active) {
+                                s_rmFid  = r.id;
+                                s_rmName = r.name;
+                                wantRemovePopup = true;
+                            }
+                            ImGui::PopID();
                         }
                         ImGui::EndTable();
+                    }
+                    if (wantRemovePopup) ImGui::OpenPopup("##rmroster");
+                    ImGui::SetNextWindowPos(
+                        ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f),
+                        ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+                    if (ImGui::BeginPopup("##rmroster")) {
+                        // The respec confirm's shape (Board_Progression.cpp): pad A on a
+                        // row picks, B backs out (the cascaded-B rule sees the popup),
+                        // focus lands on Cancel, never on the danger row.
+                        pickerDrawnThisFrame = true;
+                        ImGui::PushFont(g_fontHead);
+                        ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
+                        ImGui::TextUnformatted(Str::Get(Str::K::Fk_RemoveTitle));
+                        ImGui::PopStyleColor();
+                        ImGui::PopFont();
+                        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
+                        ImGui::TextWrapped("%s", Str::Fmt(Str::K::Fk_RemoveBody, { s_rmName }).c_str());
+                        ImGui::PopTextWrapPos();
+                        ImGui::Separator();
+                        ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
+                        if (ImGui::Selectable(Str::Label(Str::K::Fk_RemoveConfirm, "rmrosterok"))) {
+                            if (s_rmFid) QueueEdit({ EditKind::RemoveFromRoster, s_rmFid, 0, 0u, 0.0f });
+                            s_rmFid = 0;
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::PopStyleColor();
+                        if (ImGui::Selectable(Str::Label(Str::K::Pg_Cancel, "rmrosterno"))) {
+                            s_rmFid = 0;
+                            ImGui::CloseCurrentPopup();
+                        }
+                        ImGui::SetItemDefaultFocus();   // land on Cancel, not the danger row
+                        ImGui::EndPopup();
                     }
                     ImGui::EndTabItem();
                 }

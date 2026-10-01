@@ -419,6 +419,33 @@ namespace MFO::ProgAllocator {
     // actor is null / unenrolled. Idempotent (a perk already on the base skips).
     bool RestoreNativePerks(RE::Actor* a_actor);
 
+    // ROSTER REMOVAL (ClickUp 86e3eewaf, roster/Remove.cpp is the only caller).
+    // Undo everything progression wrote to this actor, then ERASE its g_prog
+    // record (and its g_hmsFiredMask entry), so the next PRGN save simply omits it
+    // (no layout or version change). Order: (1) MFO's granted perk ranks off the
+    // BASE (Respec's loop) + one ApplyPerksFromBase, (2) the stripped native perks
+    // back (RestoreNativePerksImpl), (3) every skill settled to its natural through
+    // the single ReconcileSkill write site (UnwindSkills), (4) base H/M/S back to
+    // the captured hmsBaseline, healing the Health drop like RecomputeHMS's guard.
+    // Every step that fails is counted AND logged at warn; nothing is masked.
+    // Works with or without the add-on (an echoed record is still unwound).
+    // MAIN THREAD (g_prog). Republishes the board views when a record was erased.
+    struct RemovalResult {
+        bool  hadRecord       = false;
+        bool  enrolled        = false;
+        int   perksRemoved    = 0;   // MFO-granted rank forms taken off the base
+        int   perksAbsent     = 0;   // an alloc whose rank form was not on the base (nothing of ours there)
+        int   perkFails       = 0;   // unresolvable rank form, or still on the base after RemovePerk
+        int   nativesRestored = 0;   // stripped native perks put back on the base
+        int   nativeFails     = 0;   // a recorded native perk that no longer resolves
+        int   skillsReset     = 0;   // skills whose base AV moved back to natural
+        int   skillFails      = 0;
+        int   hmsPoolsReset   = 0;   // H/M/S pools written back to the baseline
+        int   hmsFails        = 0;
+        float healed          = 0.0f;
+    };
+    RemovalResult RemoveFollowerRecord(RE::Actor* a_actor);
+
     // Revert/reload generation — bumped by ClearAll (revert) and OnPostLoad.
     // A board prog-edit captures this at post time and bails inside its
     // MainThread::Post closure if it moved, so an edit that survives a revert
