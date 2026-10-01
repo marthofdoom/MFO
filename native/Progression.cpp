@@ -240,7 +240,8 @@ namespace MFO::Progression {
         // The UNARMED signature (marth: fists are a valid fighting style only
         // when "unarmed perks are selected via progression"): a tab whose
         // GetEquippedItemType test on EITHER hand admits ONLY code 0 (the
-        // "== 0" / "<= 0" / "< 1" shapes -- the hand must be EMPTY), while no
+        // "== 0" / "<= 0" / "< 1" shapes -- the hand must be EMPTY; MFO-B14: the
+        // RIGHT hand, a left-empty test alone is the free-off-hand one-hand shape), while no
         // hand test on the same tab REQUIRES a weapon (excludes 0) and no
         // weapon-kind keyword is named on it. So "right empty AND left empty"
         // (vanilla Fists of Steel) and "right empty" alone both count;
@@ -349,7 +350,11 @@ namespace MFO::Progression {
             }
             if (leftExcludesEmpty && leftAdmitsOneHand && leftExcludesNonWeapon) a_out.leftHandWeapon = true;
             if (leftShield) a_out.leftHandShield = true;
-            if ((handEmpty[0] || handEmpty[1]) && !handWeapon[0] && !handWeapon[1] &&
+            // MFO-B14: a LEFT-empty test ALONE is the "free off-hand" one-hand perk shape
+            // (a sword in the right hand is exactly what it expects), so it no longer votes.
+            // Right empty (alone or with left empty) is what a fists perk pins; the
+            // condition-free primaryAV signal in WalkPerkEntries is unchanged.
+            if (handEmpty[1] && !handWeapon[0] && !handWeapon[1] &&
                 localWeaponKinds == 0)
                 a_out.unarmed = true;
         }

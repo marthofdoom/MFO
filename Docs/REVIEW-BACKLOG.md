@@ -34,6 +34,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning for deferral:** not fixable in general without an APMF dry-run / "can you serve this?" query. Recorded so the next reader does not assume F2 is closed.
 
 ### MFO-B3 — right-first hand selection fails toward RIGHT when `bWeaponStyleControl` is OFF
+- **DRAINED** (`fix/mfo-logic-bundle2`): with the switch off `WeaponHandExposure` falls back to `Followers::GetBaseClass` Melee/Ranged (switch ON unchanged); Auto hybrid not covered.
 - **Raised:** Fable review of `1044816` (finding C, SEV-4). Recorded at the site and in MAP.md by `625f3b7`.
 - **Severity:** SEV-4 (non-default config only; default is ON, `Config.h:505`)
 - **Finding:** `WeaponHandExposure` depends on a `g_forcedWeapon` entry, and `EquipWeapon` writes one only under `Config::g_weaponStyleControl` (the kill-switch-off branch is a plain `EquipObject`, no ledger); `ReconcileForcedWeapon` releases unconditionally when off. So with that feature off, a melee/hybrid follower in the transient-unarmed gap still lands RIGHT — the 2026-09-05 "cast never left rest" shape.
@@ -114,6 +115,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained (verbatim):** round the migrated autoPts up to the next whole point when points is cap-clamped (autoPts = ceil(autoPts − 1e-3)), or fold into the MFO-B11 entry as a note. Not a co-save layout change.
 
 ### MFO-B14 — the empty-hand condition signal can mark a "free off-hand" one-hand perk as unarmed
+- **DRAINED** (`fix/mfo-logic-bundle2`): `ReadStyleFacts` unarmed now requires the RIGHT hand pinned empty; a left-empty-only test no longer votes.
 - **Raised:** Fable tier-3 review of `49a9cc2` (`feat/mfo-shed-fists-rule`), SEV-4. F2.
 - **Severity:** SEV-4
 - **Finding (verbatim):** F2 — SEV-4, PLAUSIBLE: the empty-hand condition signal can mark a 'free off-hand' one-hand perk as unarmed. native/Progression.cpp:326-336, 352-354. The per-list rule fires on a list where any GetEquippedItemType(hand) test admits code 0 only, with no hand test excluding 0 and no weapon-kind keyword. A perk of the shape 'left hand empty' alone (an overhaul's 'no offhand' one-handed perk with no WeapType* keyword and no right-hand GetEquippedItemType test) satisfies it. If MFO allocates such a rank to an enrolled follower, votes.unarmed > 0, fists become valid, and the shed will strip him of an off-role weapon he was legitimately swinging one-handed. Shape-level risk, not demonstrated. Cheap tightening: require the OTHER hand not to be a one-hand-weapon signature on the same tree/node, or require both hands empty unless the primaryAV signal also fires.

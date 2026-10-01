@@ -1244,7 +1244,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   collisions came from: the heal facet is LEFT-ONLY by contract (`ClaimHealCast`'s hard rule), so an offense
   cast idling on the left stands exactly where the next heal must go while the right hand sits empty. It now
   prefers the RIGHT hand — free-and-unclaimed first, then free, then by rank — leaving the left for the
-  facet that can use no other, **unless `WeaponHandExposure` (`cast/Hands.cpp:164`) says a weapon owns the
+  facet that can use no other, **unless `WeaponHandExposure` (`cast/Hands.cpp:184`) says a weapon owns the
   right hand or is coming back to it**, in which case the old LEFT-first order stands. That gate is not
   optional: `PlanCastHand` returns `EitherFree` only when `APMFBridge::WeaponHandActive` is false, and that
   reads the LIVE grip and the live equipment CLAIM — both false during the documented transient-unarmed
@@ -1255,12 +1255,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   is the one signal that survives that gap. A pure caster never has an entry, so right-first still applies
   to exactly the follower marth's ruling was about. (`DualCast` still takes both hands in that gap; that
   exposure predates this branch and is unchanged by it.)
-  **RESIDUAL, non-default config:** the ledger is only WRITTEN while `bWeaponStyleControl` is on —
-  `EquipWeapon`'s kill-switch-off branch is a plain `EquipObject` with no entry, and
-  `ReconcileForcedWeapon` releases unconditionally when the switch is off. With that feature off a melee
-  follower in the transient-unarmed gap therefore still lands RIGHT, i.e. the 2026-09-05 shape on a
-  non-default setting. Recorded, not closed: closing it needs a signal that does not depend on that
-  feature being on.
+  **RESIDUAL, non-default config (CLOSED, MFO-B3, `fix/mfo-logic-bundle2`):** the ledger is only WRITTEN
+  while `bWeaponStyleControl` is on, so with the switch off `WeaponHandExposure` (`cast/Hands.cpp:184`) also
+  reads the declared role: `Followers::GetBaseClass` Melee (1) or Ranged (2) counts as "a weapon owns the right
+  hand". Consulted ONLY with the switch off (switch-ON answer is the ledger answer, unchanged). Not covered: an
+  Auto (0) hybrid with the switch off.
   `g_forcedWeapon` is read under `g_forcedMx` here like every other access — the map has an OFF-THREAD
   reader (the SKSE save callback, `CoSaveForcedWeapons`), so "the writers are worker-serial" is not
   sufficient. Its declaration comment used to assert BOTH "no lock (#4)" and "guard every access"; the
@@ -3298,10 +3297,10 @@ anonymous-namespace copy — that silently forks the instance).
   `TallyStyleVotes` note). The mirror the shed reads MUST stay cleared on load
   (`Serialization.cpp ResetAllState` → `Logistics::ClearStyleMirror`, after
   `StopPump` + `MainThread::Clear`) or a stale `unarmed` from the previous save
-  drops a weapon on the first post-load tick (Fable F1 on `49a9cc2`). **OPEN
-  BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B14** (SEV-4) — a "left hand empty"-only
-  one-hand perk can vote `unarmed` and make the shed strip a legitimately wielded
-  off-role weapon; read it before touching `inRole` or the unarmed classifier.
+  drops a weapon on the first post-load tick (Fable F1 on `49a9cc2`). **MFO-B14
+  DRAINED (`fix/mfo-logic-bundle2`):** the empty-hand unarmed signal in `ReadStyleFacts` now needs the RIGHT hand
+  pinned empty, so a "left hand empty"-only one-hand perk no longer votes `unarmed`; the primaryAV signal is
+  unchanged. Keep the right-hand requirement when touching `inRole` or the unarmed classifier.
 - `ClearTransientState` (`logistics/Upkeep.cpp:568`) → `Serialization.cpp:641`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
