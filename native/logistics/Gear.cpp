@@ -395,6 +395,16 @@ namespace MFO::Logistics {
             g_styleMirror.clear();
         }
 
+        AmmoOwned CountAmmoOwned(RE::Actor* a_follower) {
+            AmmoOwned o;
+            if (!a_follower) return o;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                if (auto* am = obj->As<RE::TESAmmo>()) (AmmoIsBolt(am) ? o.bolts : o.arrows) += data.first;
+            }
+            return o;
+        }
+
         WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state) {
             using WT = RE::WEAPON_TYPE;
             const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
@@ -413,8 +423,8 @@ namespace MFO::Logistics {
             // census -- moved here verbatim from ShedOffRoleWeapon so both
             // callers derive wantCrossbow from the exact same scan.
             bool carriesMelee = false, carriesRanged = false;
-            std::uint16_t bowDmg = 0, xbowDmg = 0;
-            int arrows = 0, bolts = 0;
+            std::vector<RE::TESObjectWEAP*> rangedCandidates;   // playable ranged weapons carried
+            AmmoOwned ammoOwned;
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (auto* w = obj->As<RE::TESObjectWEAP>()) {
@@ -425,13 +435,14 @@ namespace MFO::Logistics {
                         break;
                     case WepClass::Ranged:
                         carriesRanged = true;
-                        if (w->GetWeaponType() == WT::kBow) bowDmg  = std::max(bowDmg,  w->GetAttackDamage());
-                        else                                xbowDmg = std::max(xbowDmg, w->GetAttackDamage());
+                        // Same non-playable gate as the combat pick (cast/Equip.cpp `eligible`):
+                        // an INVISIBLE creature bow must not decide the ammo family.
+                        if ((w->GetFormFlags() & (1u << 2)) == 0) rangedCandidates.push_back(w);
                         break;
                     default: break;   // staff/hand-to-hand -- not a role signal
                     }
                 } else if (auto* am = obj->As<RE::TESAmmo>()) {
-                    (AmmoIsBolt(am) ? bolts : arrows) += data.first;
+                    (AmmoIsBolt(am) ? ammoOwned.bolts : ammoOwned.arrows) += data.first;
                 }
             }
 
@@ -487,13 +498,27 @@ namespace MFO::Logistics {
                                  votes.classified, votes.owned);
             }
 
-            // BOW vs CROSSBOW (verbatim from ShedOffRoleWeapon): carrying both,
-            // the ammo they hold decides (damage breaks a tie); carrying ONE
-            // kind, that kind; carrying neither, their ammo decides.
+            // RANGED perk bias (marth 2026-09-14): a follower with a ranged role and owned perk ranks
+            // conditioned on the ranged keyword prefers the weapons that keyword names (WeaponKindOf).
+            // OR'd into the same mask, which no melee weapon's kind ever intersects, so every melee
+            // score is unchanged by it. Kept OUT of the melee block above: that block also derives
+            // offHand and the [style] line, which a ranged-only follower must not start producing.
+            if (roles.doRanged && StyleVotesFor(a_follower).weapon[7] > 0)
+                roles.preferKinds |= Progression::WeaponKind::kWkBow;
+
+            // RANGED PICK (marth 2026-09-14): the weapon the follower will fire decides the ammo
+            // family everything downstream chases (loot / buy / keep / declaration all read
+            // wantCrossbow as "the chosen weapon's ammo is the bolt family"). Candidates are scored
+            // exactly as the combat equip scores them (RangedPickScore: perk bias + ammo tier) so the
+            // two can never disagree; carrying NO ranged weapon, the ammo they hold decides (the old
+            // rule, unchanged: more bolts than arrows -> bolt family).
             if (roles.doRanged) {
-                if (bowDmg > 0 && xbowDmg > 0)      roles.wantCrossbow = (bolts != arrows) ? (bolts > arrows) : (xbowDmg > bowDmg);
-                else if (bowDmg > 0 || xbowDmg > 0) roles.wantCrossbow = xbowDmg > bowDmg;
-                else                                 roles.wantCrossbow = bolts > arrows;
+                const RE::TESObjectWEAP* top = nullptr; float topScore = -1.0f;
+                for (auto* w : rangedCandidates) {
+                    const float sc = RangedPickScore(roles, w, ammoOwned);
+                    if (sc >= topScore) { topScore = sc; top = w; }   // `>=`: same tie order as Equip
+                }
+                roles.wantCrossbow = top ? RangedUsesBolts(top) : (ammoOwned.bolts > ammoOwned.arrows);
             }
             return roles;
         }

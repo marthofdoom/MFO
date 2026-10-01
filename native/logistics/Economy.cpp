@@ -350,7 +350,7 @@ namespace MFO::Logistics {
                                 secondScore = std::max(secondScore, sc);
                             }
                         }
-                        if (doRanged && w->GetWeaponType() == (wantCrossbow ? WT::kCrossbow : WT::kBow))
+                        if (doRanged && RangedInFamily(w, wantCrossbow))
                             myRangedDmg = std::max(myRangedDmg, w->GetAttackDamage());
                     } else if (auto* ar = obj->As<RE::TESObjectARMO>()) {
                         if (IsCreatureArmor(ar)) continue;

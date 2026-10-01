@@ -373,8 +373,7 @@ namespace MFO::Logistics {
             if (wc == WepClass::OneHand || wc == WepClass::TwoHand) return wc == meleeRole;
             if (wc == WepClass::Ranged) {
                 if (!doRanged) return false;
-                const auto t = w->GetWeaponType();
-                return wantCrossbow ? (t == WT::kCrossbow) : (t == WT::kBow);
+                return RangedInFamily(w, wantCrossbow);
             }
             // Fists/other: never a shed target (the loop below only counts or
             // skips), but in-role -- i.e. able to satisfy the never-disarm

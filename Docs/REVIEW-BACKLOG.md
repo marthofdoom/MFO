@@ -1139,3 +1139,14 @@ Raised against 676b676 (`fix/mfo-logic-bundle2`), Opus review F4, not fixed. Ver
 
 ### MFO-B205 (SEV-5, accepted) -- co-save readers: the FWPN cap literal, and the residual B13 noise-window corner
 Raised against ce1b54c (`fix/mfo-cosave-readers`, Opus tier-3 review, verdict MERGE, nothing above SEV-5), 2026-10-01. Reviewer (verbatim, as relayed): "(a) the 4096 literal is tied to kMaxFollowers only by a comment. Harmless either way. Use a shared constant in Serialization.h only when that file is next touched. (b) the residual B13 corner when natural's fraction is in (0.999,1), e.g. natural 20.9995 gives the share 79.0005, ceil(...-1e-3) gives 79, and the actor holds 99.9995. That is the price of the noise window." Reasoning: (a) both sides are 4096 today and the FWPN cap only needs to be at least 2x the follower bound, so drift is harmless until someone lowers it; moving `kMaxFollowers` out of `Serialization.cpp`'s anon namespace is its own change. (b) the 1e-3 window is what makes ceil the identity on float noise around whole shares; a natural within 1e-3 below an integer is the cost. Fix when drained: (a) a shared `kMaxFollowers` in `Serialization.h`, `kMaxForcedWeapons = 2 * kMaxFollowers`, the next time that header is touched; (b) none planned.
+
+### MFO-B210 (SEV-5/SEV-4, OPEN) -- ranged kind by perks + ammo: what the first cut does NOT do
+Raised by the author of `feat/mfo-ranged-kind-ammo` (ClickUp 86e3940yd), 2026-10-01, not reviewed yet. Recorded, not fixed (rule 9):
+- **Perk bias is neutral for vanilla.** Both vanilla bows and crossbows carry `WeapTypeBow` (the only ranged kind `Progression::WeaponKind` has, `kWkBow`), so the bias is the same 1.5x on both and only separates a keyworded weapon from a keywordless modded one. A per-kind ranged vote needs a ranged keyword the perks name (none verified), stored per keyword rather than per enum bit.
+- **Ammo pairing is the animation type.** `RangedUsesBolts` = crossbow animation, because a Skyrim WEAP has no ammo field. A modded gun that is bow-animation but fires bolt-flagged ammo (or the reverse) is mismatched. Not disassembly-verified how the engine refuses such a pair.
+- **`EquipAuthority.cpp:688` `rightW->IsCrossbow()`** still picks the declared ammo family from the worn weapon's enum. Left alone because it sits inside `RefreshEquipDeclaration` (B63, another branch). Switch it to `RangedUsesBolts(rightW)`.
+- **`TradeBridge.cpp:125` `isXbow`** still compares the enum (equivalent today; it has no access to the internal header).
+- **Ranged loot/buy weapon compares stay raw damage** (`LootEquipment` `myRangedDmg`, `PlanBuy` ranged), not the perk-biased/ammo score. Only the family (and so the ammo) follows the new pick.
+- **Museum relics** are not excluded from `ComputeWeaponRoles`' ranged candidates, but the combat pick ranks them in a separate pool.
+- **Surfaced at edit time from:** MAP.md "RANGED PICK" entry (WEAPON / ARMOR STYLE BY PERKS).
+

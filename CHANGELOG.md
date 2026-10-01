@@ -7,6 +7,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Archers pick the ranged weapon that has ammo.** A follower with a bow and a crossbow now draws the one they can actually fire. A weapon with no matching ammo sorts below any that has some. If none has ammo, the old order stands. Perks that name the ranged weapon type nudge the pick. Modded guns work the same way, because the match comes from the weapon's own record. Loot and shopping then chase the ammo for the weapon they picked.
+
 ## v2.0.16 -- Heals are animated in combat again
 
 - **Smarter gem choices for followers.** With the effect-aware gem option on (it is off by default), a follower no longer swaps a good gem for a Focus, Echo or Conduit that would do nothing. They keep a support gem that works and drop one that does not when a better gem turns up. They stop pairing a gem with gear it does not suit. A follower with two identical weapons now carries the right weapon's gems over when they replace one, with no more failed retries on the second weapon.

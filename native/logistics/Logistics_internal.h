@@ -309,14 +309,17 @@ namespace MFO::Logistics {
             if (a_w->HasKeywordString("WeapTypeGreatsword")) return WK::kWkGreatsword;
             if (a_w->HasKeywordString("WeapTypeBattleaxe"))  return WK::kWkBattleaxe;
             if (a_w->HasKeywordString("WeapTypeWarhammer"))  return WK::kWkWarhammer;
+            // RANGED (2026-10-01, marth: kinds DATA-DRIVEN from the WEAP record): the kind is the
+            // record's own keyword, the same one the archery perks' conditions name -- no bow/
+            // crossbow enum. A ranged weapon WITHOUT the keyword (a modded gun that never carried
+            // it) is simply not one of the weapons those perks apply to: no bias, never a filter.
+            if (a_w->HasKeywordString("WeapTypeBow"))        return WK::kWkBow;
             switch (a_w->GetWeaponType()) {
             case RE::WEAPON_TYPE::kOneHandSword:  return WK::kWkSword;
             case RE::WEAPON_TYPE::kOneHandDagger: return WK::kWkDagger;
             case RE::WEAPON_TYPE::kOneHandAxe:    return WK::kWkWarAxe;
             case RE::WEAPON_TYPE::kOneHandMace:   return WK::kWkMace;
             case RE::WEAPON_TYPE::kTwoHandSword:  return WK::kWkGreatsword;
-            case RE::WEAPON_TYPE::kBow:
-            case RE::WEAPON_TYPE::kCrossbow:      return WK::kWkBow;
             default:                              return 0;   // 2H axe w/o keyword, staff, fists
             }
         }
@@ -332,6 +335,38 @@ namespace MFO::Logistics {
             if (a_roles.preferKinds != 0 && (WeaponKindOf(a_w) & a_roles.preferKinds) != 0)
                 s *= kStyleBias;
             return s;
+        }
+
+        // ── RANGED PICK: PERK BIAS + AMMO TERM (marth 2026-09-14, built 2026-10-01) ─────────
+        // "ranged pick = perk bias + ammo term (no ammo -> below any that has ammo; below nothing
+        // only if none has ammo); kinds + ammo matching DATA-DRIVEN from the WEAP record".
+        // A Skyrim WEAP record has NO bound-ammo field (TESObjectWEAP carries none; fork header
+        // verified): the engine pairs ammo with a weapon by its ANIMATION TYPE -- crossbow
+        // animation fires bolt-flagged ammo (AMMO_DATA kNonBolt clear), every other ranged
+        // animation fires non-bolt ammo. A modded gun is therefore matched by its own record
+        // data, with no per-weapon or bow/crossbow list.
+        inline bool RangedUsesBolts(const RE::TESObjectWEAP* a_w) {
+            return a_w && a_w->GetWeaponType() == RE::WEAPON_TYPE::kCrossbow;
+        }
+        // A ranged weapon belongs to the family `a_wantBolt` names: ranged by the record's animation
+        // class, family by the ammo it fires. Replaces the old `type == kBow / kCrossbow` pair.
+        inline bool RangedInFamily(const RE::TESObjectWEAP* a_w, bool a_wantBolt) {
+            return a_w && WeaponClassOf(a_w->GetWeaponType()) == WepClass::Ranged &&
+                   RangedUsesBolts(a_w) == a_wantBolt;
+        }
+        // Rounds the follower carries per ammo family (Logistics::AmmoIsBolt decides the family).
+        struct AmmoOwned {
+            int arrows = 0, bolts = 0;
+            int For(const RE::TESObjectWEAP* a_w) const { return RangedUsesBolts(a_w) ? bolts : arrows; }
+        };
+        // A weapon with any matching ammo outranks every one without, by a tier no damage reaches
+        // (WeaponScore tops out far below it); inside a tier the perk-biased WeaponScore decides.
+        // When NO candidate has ammo every candidate sits in the lower tier, so the perk-biased
+        // order stands untouched.
+        constexpr float kRangedAmmoTier = 1.0e6f;
+        inline float RangedPickScore(const WeaponRoles& a_roles, const RE::TESObjectWEAP* a_w,
+                                     const AmmoOwned& a_ammo) {
+            return WeaponScore(a_roles, a_w) + (a_ammo.For(a_w) > 0 ? kRangedAmmoTier : 0.0f);
         }
 
         // ── ARMOR CLASS BY SKILL + PERKS (marth 2026-09-14) ─────────────────
@@ -744,6 +779,7 @@ namespace MFO::Logistics {
                                  RE::TESObjectARMO* a_armo);
     void KeepHeadClear(RE::Actor* a_actor);
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
+    AmmoOwned   CountAmmoOwned(RE::Actor* a_follower);   // same family test ComputeWeaponRoles uses
     Progression::StyleVotes StyleVotesFor(RE::Actor* a_follower);
     bool IsCreatureWeapon(const RE::TESObjectWEAP* a_w);
     bool IsCreatureArmor(const RE::TESObjectARMO* a_armo);
