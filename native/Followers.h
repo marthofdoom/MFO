@@ -175,6 +175,13 @@ namespace MFO::Followers {
     // it. A toggle flipped on the Board is visible here at once (the Board write site calls
     // RepublishActiveMirror), else by the next Refresh. true when no record / not yet mirrored.
     bool IsMfoEnabled(RE::FormID a_actorID);
+    // The follower's RESOLVED class, 1 Melee / 2 Ranged / 3 Mage: the Gambit-tab
+    // pick, or for Auto the Logistics::ResolveBaseClass vote (THE resolver,
+    // logistics/ClassResolve.cpp). OFF-WORKER SAFE: reads the g_mx-guarded mirror
+    // PublishActiveMirror republishes (the IsMfoEnabled road, #74). 0 = not
+    // resolved yet (no record, or a benched follower left on Auto). A Board class
+    // change shows here at the next Refresh.
+    std::uint8_t ResolvedClassFast(RE::FormID a_actorID);
     // Republish the g_mx mirrors (incl. the mfoEnabled one) NOW (MFO-B12: the Board's
     // SetMfoEnabled write site calls it, so a toggle is visible at once).
     // WORKER-thread only (same domain that writes g_followers); call under no lock.

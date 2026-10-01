@@ -8,7 +8,7 @@
 #include "ProgAllocator_internal.h"
 #include <cmath>         // std::floor — not guaranteed via the PCH
 #include "Config.h"      // g_hmsRedistribute / g_hmsSkewMaxFrac (main-MFO MCM)
-#include "Followers.h"   // GetBaseClass / MeasureEngineVitalAward / SetFollowerHMS
+#include "Followers.h"   // ResolvedClassFast / MeasureEngineVitalAward / SetFollowerHMS
 
 namespace MFO::ProgAllocator {
 
@@ -19,34 +19,47 @@ namespace MFO::ProgAllocator {
             return "?";
         }
 
-        // Class HMS ratio profile keyed by base-class stance ordinal (the general
-        // engine fact from GetBaseClass: 1/2/3, 0=none).
-        // v1.1 Phase 7: the ratios are ADD-ON DATA (`ClassDef::hmsWeights` +
-        // `primaryPool`, declared per class, parsed positionally in ParseClassDef),
-        // NOT a DLL-baked switch. This walks the declared classes for the one whose
-        // stance matches and returns its NORMALIZED H/M/S weights + primary pool.
-        // Per the governing rule there is NO DLL default: a stance with no declared
-        // class, or a class that declared no weights, yields false → HMS reshapes
-        // nothing (absent add-on = no ratios). The general skew/convergence math
-        // downstream is unchanged and consumes this profile exactly as before.
-        //
-        // Byte-identical to the retired switch for the shipped add-on: the generator
-        // emits the same raw weights (Melee 60/5/35 primary Health, Ranged 40/5/55
-        // primary Stamina, Mage 15/80/5 primary Magicka) and each sums to 100, so
-        // `weight/sum` reproduces the former float literals exactly.
+        // BASE class H/M/S split (marth 2026-10-01: "the reshaping is a core
+        // feature, enhanced by the add on"). A BASE fact the DLL owns, keyed by the
+        // resolved class ordinal (1 Melee / 2 Ranged / 3 Mage). Raw weights (normalized
+        // by HmsProfile) + primary pool (0=H 1=M 2=S). Initial numbers EQUAL the
+        // add-on's shipped defaults (MFO_GenerateESP.py:1381 / :1385 / :1389,
+        // PROG_CLASSES): marth to confirm. Supersedes the 2026-08-26 "no DLL default"
+        // ruling for this one item. The add-on REFINES through its declared
+        // ClassDef::hmsWeights / primaryPool, read by HmsProfile below.
+        struct BaseHmsRow { float w[3]; int primary; };
+        constexpr BaseHmsRow kBaseHmsByClass[3] = {
+            { { 60.0f,  5.0f, 35.0f }, 0 },   // 1 Melee  -- primary Health
+            { { 40.0f,  5.0f, 55.0f }, 2 },   // 2 Ranged -- primary Stamina
+            { { 15.0f, 80.0f,  5.0f }, 1 },   // 3 Mage   -- primary Magicka
+        };
+
+        // Class HMS ratio profile for a resolved class ordinal (Followers::
+        // ResolvedClassFast: 1/2/3, 0 = unresolved). Returns the NORMALIZED H/M/S
+        // weights + primary pool. An add-on that DECLARED weights for a class of this
+        // stance (ClassDef::hmsWeights, the general add-on API) refines the split:
+        // its declaration wins. Otherwise the BASE table above. false only for an
+        // unresolved class (0). Every row of both sources sums to 100 today, so
+        // `weight/sum` gives the same floats the old literals did.
         bool HmsProfile(std::uint8_t a_stance, float a_out[3], int& a_primary) {
-            if (a_stance == 0) return false;
-            for (const auto& def : g_classes) {
+            if (a_stance < 1 || a_stance > 3) return false;
+            for (const auto& def : g_classes) {   // add-on refinement (empty without the add-on)
                 if (def.stance != a_stance || !def.hmsWeightsSet) continue;
                 const float sum = def.hmsWeights[0] + def.hmsWeights[1] + def.hmsWeights[2];
-                if (sum <= 0.0f) return false;
+                if (!(sum > 0.0f)) continue;      // a zero declaration refines nothing
                 a_out[0] = def.hmsWeights[0] / sum;
                 a_out[1] = def.hmsWeights[1] / sum;
                 a_out[2] = def.hmsWeights[2] / sum;
                 a_primary = static_cast<int>(def.primaryPool);
                 return true;
             }
-            return false;
+            const auto& row = kBaseHmsByClass[a_stance - 1];
+            const float sum = row.w[0] + row.w[1] + row.w[2];
+            a_out[0] = row.w[0] / sum;
+            a_out[1] = row.w[1] / sum;
+            a_out[2] = row.w[2] / sum;
+            a_primary = row.primary;
+            return true;
         }
 
         // Which HMS pool is the follower PHYSICALLY exercising right now, read
@@ -117,19 +130,19 @@ namespace MFO::ProgAllocator {
     }   // anonymous namespace
 
         // Combat-edge battle counting for the skew usage metric. Runs every poll
-        // on the MAIN thread for a resolved, active enrolled follower. Detects
+        // on the MAIN thread for an active follower with a ProgState (enrolled, or
+        // the HMS-only record every managed follower gets, marth 2026-10-01). Detects
         // the rising edge of a (3s-dwell-smoothed) battle and, once per battle,
         // flags whether the follower exercised an off-class pool. Both counters
         // are reset by RecomputeHMS when it consumes them for a fresh award.
         // Runtime state (hmsInBattle/hmsBattleOffCounted/hmsLastCombat) is never
         // serialized; the two COUNTS are (v5 block).
         void HmsTrackBattle(RE::Actor* a_actor, ProgState& a_st) {
-            const ClassDef* def = FindClassDef(a_st.clsId);
-            if (!def) return;   // enrollment/MFO-managed gate (stays on clsId)
             float prof[3]; int primary = 0;
-            // v1.1 Phase 2: stance from the base Gambit class (GetBaseClass), not
-            // ClassDef::stance (GLOB editor-id suffix, discarded at runtime → 0).
-            if (!HmsProfile(Followers::GetBaseClass(a_actor), prof, primary)) return;
+            // The RESOLVED class (Gambit pick, or Auto through THE resolver,
+            // Logistics::ResolveBaseClass), read off the g_mx mirror (#74). No
+            // add-on gate: HMS is core (marth 2026-10-01).
+            if (!HmsProfile(Followers::ResolvedClassFast(a_actor->GetFormID()), prof, primary)) return;
 
             constexpr auto kHmsCombatDwell = std::chrono::seconds(3);   // mirror Logistics shed dwell
             const auto now = std::chrono::steady_clock::now();
@@ -183,32 +196,33 @@ namespace MFO::ProgAllocator {
         // is the NORMAL engine-award path, byte-identical to Phase 2.
         void RecomputeHMS(RE::Actor* a_actor, ProgState& a_st, bool a_log, float a_grantBudget) {
             if (!Config::g_hmsRedistribute.load()) return;   // main-MFO MCM master switch
-            const ClassDef* def = FindClassDef(a_st.clsId);  // enrollment/MFO gate + skew/weights
-            // v1.1 Phase 2: the stance AUTHORITY is the base Gambit class
-            // (FollowerState::combatClassOverride, read via GetBaseClass) — NOT
-            // ClassDef::stance, which is parsed from a GLOB editor-id suffix the
-            // engine DISCARDS at runtime (→ always 0 → HMS wrongly skipped). Only
-            // the stance VALUE moves here; def stays the gate + skew/weights source.
-            const std::uint8_t stance = Followers::GetBaseClass(a_actor);
+            // HMS is CORE (marth 2026-10-01): no add-on gate. The class is the
+            // Gambit-tab pick, or Auto RESOLVED by THE resolver
+            // (Logistics::ResolveBaseClass), read off the g_mx mirror because this
+            // poll runs on the TRUE main thread, never the live g_followers (#74).
+            // The split is the BASE table, refined by an add-on declaration
+            // (HmsProfile).
             const auto id = a_actor->GetFormID();
+            const std::uint8_t stance = Followers::ResolvedClassFast(id);
 
             // [hms-diag] once per call (low-frequency: level-up / ~2s drift). Deferred
             // emit so earlyReturn + measured budget reflect the ACTUAL exit path.
             const char* diagExit = "none";
             float diagBudget = 0.0f;
             auto emitDiag = [&] {
-                spdlog::info("[hms-diag] {:08X} clsId={:08X} def=\"{}\" defStance={} "
-                             "baseClass={} earlyReturn={} redistribute={:.1f} "
+                spdlog::info("[hms-diag] {:08X} enrolled={} clsId={:08X} "
+                             "resolvedClass={} earlyReturn={} redistribute={:.1f} "
                              "fixedStat={} grantBudget={:.1f}",
-                             id, a_st.clsId, def ? def->name : "none",
-                             def ? static_cast<int>(def->stance) : -1,
+                             id, a_st.enrolled, a_st.clsId,
                              static_cast<int>(stance), diagExit, diagBudget,
                              a_st.fixedStat, a_grantBudget);
             };
 
-            if (!def) { diagExit = "nodef"; emitDiag(); return; }   // no class picked, or the addon left
             float prof[3]; int primary = 0;
-            if (!HmsProfile(stance, prof, primary)) { diagExit = "noprofile"; emitDiag(); return; }   // stance 0/none → skip
+            // 0 = not resolved yet (the mirror has not seen this follower: first
+            // seconds after a load, or a benched follower left on Auto). Nothing is
+            // measured, so the window is not judged for fixed-stat (Poll.cpp).
+            if (!HmsProfile(stance, prof, primary)) { diagExit = "noclass"; emitDiag(); return; }
             if (!a_actor->AsActorValueOwner()) { diagExit = "noavo"; emitDiag(); return; }
 
             // MEASURE the engine's fresh per-level award via the general follower
@@ -223,6 +237,11 @@ namespace MFO::ProgAllocator {
             // MeasureEngineVitalAward's header.
             float cur[3]; float delta[3];
             const float measured = Followers::MeasureEngineVitalAward(a_actor, a_st.hmsTarget, cur, delta);
+            // R2 (2026-10-01): this window HAS a measurement, so the next player
+            // level-up may judge it for fixed-stat. Set on every road that reaches
+            // the measure, the uncaptured ADOPT included (it measured, the award is
+            // just not spent). Runtime-only.
+            a_st.hmsMeasuredThisWindow = true;
             // PRGN v8 parity: the engine's total sits hmsWithheld ABOVE the held
             // total (points MFO withheld at earlier levels). Its absolute re-slam
             // brings them back into the signed drift every level, so subtract
@@ -234,7 +253,10 @@ namespace MFO::ProgAllocator {
             // engine award (never the injected grant) toward the next player
             // level-up's 0-award check. A grant call (a_grantBudget>0) measures 0
             // for a fixed-stat follower, so adding it is a harmless +0.
-            if (engineAward > 0.0f) a_st.hmsAwardAccum += engineAward;
+            // An uncaptured record measures against a zero target (its whole base
+            // reads as "drift"), which is not an award: it ADOPTs below, so it is
+            // not tallied. Every HMS-only record starts uncaptured (2026-10-01).
+            if (engineAward > 0.0f && a_st.hmsCaptured) a_st.hmsAwardAccum += engineAward;
             // NORMAL path: budget = the engine award (capped at the player rate
             // just below). GRANT path: reshape the injected player-gain instead.
             float budget = (a_grantBudget > 0.0f) ? a_grantBudget : engineAward;

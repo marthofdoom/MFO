@@ -127,6 +127,11 @@ namespace MFO::Followers {
         std::mutex                                       g_mx;
         std::unordered_set<RE::FormID>                   g_tracked;   // FormID membership mirror
         std::unordered_set<RE::FormID>                   g_mfoOff;    // T#78 mfoEnabled==false mirror
+        // The RESOLVED class (1/2/3, Logistics::ResolveBaseClass) per follower, for
+        // the base HMS split on the progression poll's TRUE main thread (#74: never
+        // the live map). Holds every record with a picked class, plus every ACTIVE
+        // follower on Auto (resolved by the vote). Absent = 0 = unresolved.
+        std::unordered_map<RE::FormID, std::uint8_t>     g_resolvedClass;
         std::shared_ptr<const std::vector<RE::FormID>>   g_activeSnapshot =
             std::make_shared<const std::vector<RE::FormID>>();
 
@@ -135,7 +140,21 @@ namespace MFO::Followers {
         // ClearTransientState and (via RepublishActiveMirror) the Board's mfoEnabled write. g_mx is a strict LEAF -- no MFO call is made
         // while it is held.
         void PublishActiveMirror() {
+            // Resolve the classes BEFORE taking g_mx (it is a strict leaf: the
+            // resolver makes engine reads). Worker / drained-pump domain, the same
+            // one that owns g_followers, so the live map and the gambit tables are
+            // legal to read here.
+            std::unordered_map<RE::FormID, std::uint8_t> resolved;
+            for (const auto& [id, st] : g_followers) {
+                if (st.combatClassOverride >= 1 && st.combatClassOverride <= 3) {
+                    resolved.emplace(id, st.combatClassOverride);
+                } else if (std::find(g_activeIds.begin(), g_activeIds.end(), id) != g_activeIds.end()) {
+                    if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id))
+                        resolved.emplace(id, Logistics::ResolveBaseClass(a, st));
+                }
+            }
             std::lock_guard<std::mutex> lk(g_mx);
+            g_resolvedClass.swap(resolved);
             g_tracked.clear();
             g_tracked.reserve(g_activeIds.size());
             for (const auto id : g_activeIds) g_tracked.insert(id);
@@ -541,6 +560,11 @@ namespace MFO::Followers {
     bool IsMfoEnabled(RE::FormID a_actorID) {
         std::lock_guard<std::mutex> lk(g_mx);   // the IsTrackedFast road, never g_followers
         return g_mfoOff.find(a_actorID) == g_mfoOff.end();
+    }
+    std::uint8_t ResolvedClassFast(RE::FormID a_actorID) {
+        std::lock_guard<std::mutex> lk(g_mx);   // the IsTrackedFast road, never g_followers
+        const auto it = g_resolvedClass.find(a_actorID);
+        return it != g_resolvedClass.end() ? it->second : std::uint8_t{ 0 };
     }
     // MFO-B12: public export of the anonymous-namespace PublishActiveMirror, for the Board's
     // mfoEnabled write site. WORKER only; takes g_mx itself (leaf), call under no lock.

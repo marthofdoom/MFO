@@ -139,6 +139,12 @@ namespace MFO::ProgAllocator {
 
     struct ProgState {
         // flags (serialized as one byte)
+        // false = an HMS-ONLY record (marth 2026-10-01, HMS is core): every
+        // managed follower gets one so the base HMS split + player-rate parity
+        // run with or without the add-on. Only the §HMS fields are live on it;
+        // every progression path (skills, perks, reapply, verbs) requires
+        // enrolled. Saved in the SAME PRGN v8 record layout with flags bit0 = 0
+        // (no layout change). Enroll() on it keeps a captured HMS block.
         bool enrolled{ false };
         bool autoSpend{ false };                     // reserved for the board (comp 3)
         bool veteranConsumed{ false };               // one-shot catch-up granted
@@ -329,6 +335,11 @@ namespace MFO::ProgAllocator {
         // runtime-only: the outside-change line was already logged for the current
         // divergence (cleared when the base is back on held). Never serialized.
         bool          hmsOutsideLogged{ false };
+        // runtime-only, never serialized (R2, 2026-10-01): RecomputeHMS reached the
+        // measurement since the last fixed-stat judgment. PollWork judges a player
+        // level-up window for fixed-stat ONLY when this is set (switch off, or a
+        // class not yet resolved, used to read as a 0-award level), then clears it.
+        bool          hmsMeasuredThisWindow{ false };
 
         // §HMS runtime-only, never serialized: combat-edge tracking for the
         // battle counters. hmsInBattle = currently inside a (dwell-smoothed)
@@ -345,7 +356,8 @@ namespace MFO::ProgAllocator {
     };
 
     // Keyed on the actor's persistent FormID (the g_followers discipline).
-    // MAIN THREAD ONLY, no lock.
+    // MAIN THREAD ONLY, no lock. Holds enrolled records AND HMS-only records
+    // (enrolled == false, created by PollWork for managed followers).
     inline std::unordered_map<RE::FormID, ProgState> g_prog;
 
     // ── lifecycle ───────────────────────────────────────────────────────────
