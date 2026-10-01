@@ -4,6 +4,8 @@
 // Split out of the old native/Logistics*.cpp by the wave-2 subsystem-folder split
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "Logistics_internal.h"
+#include "Lotd.h"             // HoldFromSale: the museum-relic pool rule for the ranged pick
+#include "PlayerGiven.h"      // IsPlayerEquipped: ... unless the PLAYER put it on him
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 
 namespace MFO::Logistics {
@@ -423,7 +425,8 @@ namespace MFO::Logistics {
             // census -- moved here verbatim from ShedOffRoleWeapon so both
             // callers derive wantCrossbow from the exact same scan.
             bool carriesMelee = false, carriesRanged = false;
-            std::vector<RE::TESObjectWEAP*> rangedCandidates;   // playable ranged weapons carried
+            std::vector<RE::TESObjectWEAP*> rangedCandidates;   // playable, non-relic ranged weapons carried
+            std::vector<RE::TESObjectWEAP*> rangedRelics;       // museum relics: a pool of last resort
             AmmoOwned ammoOwned;
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
@@ -437,7 +440,13 @@ namespace MFO::Logistics {
                         carriesRanged = true;
                         // Same non-playable gate as the combat pick (cast/Equip.cpp `eligible`):
                         // an INVISIBLE creature bow must not decide the ammo family.
-                        if ((w->GetFormFlags() & (1u << 2)) == 0) rangedCandidates.push_back(w);
+                        // Museum relics are a SEPARATE pool, exactly as the combat pick ranks them
+                        // (cast/Equip.cpp IsMuseumRelic): used only when nothing else is carried.
+                        if ((w->GetFormFlags() & (1u << 2)) == 0) {
+                            const bool relic = Lotd::HoldFromSale(a_follower->GetFormID(), w) &&
+                                               !PlayerGiven::IsPlayerEquipped(a_follower->GetFormID(), w->GetFormID());
+                            (relic ? rangedRelics : rangedCandidates).push_back(w);
+                        }
                         break;
                     default: break;   // staff/hand-to-hand -- not a role signal
                     }
@@ -503,18 +512,21 @@ namespace MFO::Logistics {
             // OR'd into the same mask, which no melee weapon's kind ever intersects, so every melee
             // score is unchanged by it. Kept OUT of the melee block above: that block also derives
             // offHand and the [style] line, which a ranged-only follower must not start producing.
-            if (roles.doRanged && StyleVotesFor(a_follower).weapon[7] > 0)
-                roles.preferKinds |= Progression::WeaponKind::kWkBow;
+            if (roles.doRanged) {
+                const auto rv = StyleVotesFor(a_follower);
+                if (rv.weapon[7] > 0) roles.preferKinds |= Progression::WeaponKind::kWkBow;
+                if (rv.weapon[8] > 0) roles.preferKinds |= Progression::WeaponKind::kWkCrossbow;
+            }
 
             // RANGED PICK (marth 2026-09-14): the weapon the follower will fire decides the ammo
             // family everything downstream chases (loot / buy / keep / declaration all read
             // wantCrossbow as "the chosen weapon's ammo is the bolt family"). Candidates are scored
-            // exactly as the combat equip scores them (RangedPickScore: perk bias + ammo tier) so the
-            // two can never disagree; carrying NO ranged weapon, the ammo they hold decides (the old
+            // exactly as the combat equip scores them (RangedPickScore: perk bias + ammo tier, relics in
+            // their own last-resort pool) so the two agree on the same inputs; carrying NO ranged weapon, the ammo they hold decides (the old
             // rule, unchanged: more bolts than arrows -> bolt family).
             if (roles.doRanged) {
                 const RE::TESObjectWEAP* top = nullptr; float topScore = -1.0f;
-                for (auto* w : rangedCandidates) {
+                for (auto* w : (rangedCandidates.empty() ? rangedRelics : rangedCandidates)) {
                     const float sc = RangedPickScore(roles, w, ammoOwned);
                     if (sc >= topScore) { topScore = sc; top = w; }   // `>=`: same tie order as Equip
                 }

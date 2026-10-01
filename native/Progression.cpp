@@ -336,6 +336,14 @@ namespace MFO::Progression {
                         if (Admits(d, 0.0f) && !admitsAnyItem) handEmpty[hand] = true;
                         if (!Admits(d, 0.0f)) handWeapon[hand] = true;
                     }
+                    // RANGED KIND by the right-hand item type (2026-10-01, marth: perks decide how a
+                    // weapon type is used): 7 = bow, 12 = crossbow. A test that admits exactly one of
+                    // them votes that kind, beside the keyword votes. Added to a_out only, NOT to
+                    // localWeaponKinds, so the unarmed logic below stays exactly as it was (MFO-B14).
+                    if (hand == 1) {
+                        if (Admits(d, 12.0f) && !Admits(d, 7.0f)) a_out.weaponKinds |= kWkCrossbow;
+                        else if (Admits(d, 7.0f) && !Admits(d, 12.0f)) a_out.weaponKinds |= kWkBow;
+                    }
                     if (hand != 0) continue;   // right-hand checks carry no other style fact
                     if (!Admits(d, 0.0f)) leftExcludesEmpty = true;
                     if (Admits(d, 1.0f) || Admits(d, 2.0f) || Admits(d, 3.0f) || Admits(d, 4.0f))
@@ -989,7 +997,7 @@ namespace MFO::Progression {
                     ++v.owned;
                     if (!st.Any()) continue;   // unclassifiable rank: votes for nothing
                     ++v.classified;
-                    for (int b = 0; b < 8; ++b) if (st.weaponKinds & (1u << b)) ++v.weapon[b];
+                    for (int b = 0; b < 9; ++b) if (st.weaponKinds & (1u << b)) ++v.weapon[b];
                     for (int b = 0; b < 3; ++b) if (st.armorKinds  & (1u << b)) ++v.armor[b];
                     if (st.leftHandWeapon) ++v.leftHandWeapon;
                     if (st.leftHandShield) ++v.leftHandShield;

@@ -135,7 +135,8 @@ namespace MFO::Progression {
         kWkGreatsword = 1u << 4,   // WeapTypeGreatsword
         kWkBattleaxe  = 1u << 5,   // WeapTypeBattleaxe
         kWkWarhammer  = 1u << 6,   // WeapTypeWarhammer
-        kWkBow        = 1u << 7,   // WeapTypeBow (bows AND crossbows carry it)
+        kWkBow        = 1u << 7,   // WeapTypeBow keyword, or a right-hand item-type-7 test
+        kWkCrossbow   = 1u << 8,   // a right-hand item-type-12 test (crossbow); no keyword names it
         kWkOneHandAll = kWkSword | kWkDagger | kWkWarAxe | kWkMace,
         kWkTwoHandAll = kWkGreatsword | kWkBattleaxe | kWkWarhammer,
     };
@@ -332,7 +333,7 @@ namespace MFO::Progression {
     // mutates on the main thread (AddPerk/RemovePerk realloc it), and the
     // allocator's own record (ProgAllocator::g_prog, main-thread, no lock).
     struct StyleVotes {
-        int weapon[8]{};          // by WeaponKind bit index (0 Sword .. 7 Bow)
+        int weapon[9]{};          // by WeaponKind bit index (0 Sword .. 7 Bow, 8 Crossbow)
         int armor[3]{};           // by ArmorKind bit index (0 Heavy 1 Light 2 Shield)
         int leftHandWeapon{ 0 };  // dual-wield-conditioned ranks
         int leftHandShield{ 0 };  // shield-in-left-hand-conditioned ranks

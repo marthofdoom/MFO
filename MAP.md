@@ -2731,9 +2731,10 @@ module. Module layout:
   PICK + DUAL WIELD BY PERKS". **STILL A GAP:** bow vs crossbow stays the
   ammo/damage rule (no perk record distinguishes them — both carry `WeapTypeBow`).
   **RANGED PICK: PERK BIAS + AMMO TERM (2026-10-01, `feat/mfo-ranged-kind-ammo`, ClickUp 86e3940yd,
-  marth 2026-09-14; CLOSES the "bow vs crossbow stays the ammo/damage rule" gaps above).**
+  marth 2026-09-14; the "bow vs crossbow stays the ammo/damage rule" gaps above are now: ammo decides first, perks bias second).**
   Kind and ammo are read from the WEAP record, never a bow/crossbow enum: `WeaponKindOf` (`logistics/Logistics_internal.h`)
-  now returns `kWkBow` from the `WeapTypeBow` KEYWORD (its enum fallback for kBow/kCrossbow is gone);
+  now returns `kWkCrossbow` for a crossbow-animation weapon and `kWkBow` for a bow animation or the `WeapTypeBow`
+  keyword on anything else (vanilla crossbows carry the keyword too, so the animation is tested first);
   `RangedUsesBolts` = crossbow animation (a Skyrim WEAP has NO ammo field -- the engine pairs ammo by animation, bolt
   flag `kNonBolt` clear); `AmmoOwned`/`CountAmmoOwned` (`Gear.cpp`) count rounds per family via `AmmoIsBolt`;
   `RangedPickScore` = `WeaponScore` + `kRangedAmmoTier` (1e6) when the weapon's family has any ammo. THE DECISION is in
@@ -2741,8 +2742,14 @@ module. Module layout:
   `roles.wantCrossbow` = the family of the top `RangedPickScore` candidate (playable ranged weapons carried; no
   candidate -> the old `bolts > arrows`), and `cast/Equip.cpp` `EquipWeapon` ranks the SAME score in its pick loop and
   refuses to call an EMPTY held ranged weapon "already holding" while another eligible one has ammo
-  (`emptyWhileAmmoElsewhere`). Ranged perk bias: with ranged role and `votes.weapon[7] > 0`, `preferKinds |= kWkBow`
-  (no melee weapon's kind intersects it; offHand and the `[style]` line stay melee-only). Loot/buy/keep/ammo targets
+  (`emptyWhileAmmoElsewhere`; museum relics are excluded from "elsewhere", and `ComputeWeaponRoles` keeps relics in a
+  last-resort pool exactly as the pick does). Ranged perk bias: with ranged role, `votes.weapon[7] > 0` ->
+  `preferKinds |= kWkBow` and `votes.weapon[8] > 0` -> `kWkCrossbow` (new bit `1<<8`; `StyleVotes::weapon` is 9 wide, an
+  internal struct, not co-saved). The votes come from `ReadStyleFacts`: the `WeapTypeBow` keyword (both vanilla kinds
+  carry it, so vanilla Archery perks bias both equally) AND a RIGHT-hand `GetEquippedItemType` test admitting exactly
+  7 (bow) or exactly 12 (crossbow), so a perk that tests the crossbow item type biases crossbows only (the unarmed
+  logic is untouched: these bits go to `a_out` only, never `localWeaponKinds`). No melee kind intersects bits 7/8;
+  offHand and the `[style]` line stay melee-only. Loot/buy/keep/ammo targets
   already read `wantCrossbow` as "the chosen weapon's ammo family", so they now chase the picked weapon's ammo; the
   weapon-kind filters at `LootEquipment`, `Upkeep` `inRole`, `Economy` `BuildBuyThresholds` use `RangedInFamily`.
   **DEFAULT-CASE PROOF / WHERE IT DIFFERS:** one ranged weapon carried -> same family as before; melee followers and

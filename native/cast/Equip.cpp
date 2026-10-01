@@ -484,7 +484,7 @@ namespace MFO::Actuation {
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* w = obj->As<RE::TESObjectWEAP>();
-                    if (w && w != hw && eligible(w) && have.For(w) > 0) return true;
+                    if (w && w != hw && eligible(w) && !IsMuseumRelic(a_follower, w) && have.For(w) > 0) return true;
                 }
                 return false;
             };

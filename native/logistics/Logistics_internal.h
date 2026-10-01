@@ -313,7 +313,12 @@ namespace MFO::Logistics {
             // record's own keyword, the same one the archery perks' conditions name -- no bow/
             // crossbow enum. A ranged weapon WITHOUT the keyword (a modded gun that never carried
             // it) is simply not one of the weapons those perks apply to: no bias, never a filter.
-            if (a_w->HasKeywordString("WeapTypeBow"))        return WK::kWkBow;
+            // A crossbow-animation weapon is the crossbow kind; any other ranged weapon carrying the
+            // WeapTypeBow keyword is the bow kind (vanilla crossbows carry the keyword too, which is
+            // why the animation is tested first). Perks are matched to the kind they test for.
+            if (a_w->GetWeaponType() == RE::WEAPON_TYPE::kCrossbow) return WK::kWkCrossbow;
+            if (a_w->GetWeaponType() == RE::WEAPON_TYPE::kBow ||
+                a_w->HasKeywordString("WeapTypeBow"))        return WK::kWkBow;
             switch (a_w->GetWeaponType()) {
             case RE::WEAPON_TYPE::kOneHandSword:  return WK::kWkSword;
             case RE::WEAPON_TYPE::kOneHandDagger: return WK::kWkDagger;
