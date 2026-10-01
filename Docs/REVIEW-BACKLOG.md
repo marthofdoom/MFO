@@ -1151,3 +1151,5 @@ Raised by the author of `feat/mfo-ranged-kind-ammo` (ClickUp 86e3940yd), 2026-10
 - **SEV-4 (marth's call):** a PlayerGiven relic bow with no arrows is swapped for a crossbow with bolts, which contradicts Equip.cpp:128-130 ("a held one is never swapped out"). Defensible, since it cannot fire.
 - **SEV-4 perf:** `CountAmmoOwned` builds a full `GetInventory` map on every satisfied ranged lap per hand (`emptyWhileAmmoElsewhere`). Compute once per lap and only walk when the held family has 0 ammo. Noted under MFO-B21.
 - **SEV-4:** a follower carrying only non-playable ranged weapons now gets its ammo family from the ammo counts (arrows by default) because they are not candidates.
+- **SEV-5, raised against 73c14560 (Opus tier-2 review, MERGE):** the GetEquippedItemType votes ignore the condition's run-on subject, so a perk testing the TARGET's crossbow would vote too. Reviewer's reasoning (as relayed): the keyword and hand facts already read conditions the same way, ignoring the subject, so this is the existing convention and not new. Deferred, not dropped.
+

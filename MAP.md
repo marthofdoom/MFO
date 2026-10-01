@@ -2728,8 +2728,8 @@ module. Module layout:
   too (via `logistics/Logistics_internal.h`, included from `cast/Equip.cpp`), and `offHand`
   STEERS: 2 → a second one-hander force-held in the left, 1 → best shield, under
   `MFO_MeleeStyle` DATA = `1|4` (`kAllowDualWielding`) — see §2 Actuation "COMBAT
-  PICK + DUAL WIELD BY PERKS". **STILL A GAP:** bow vs crossbow stays the
-  ammo/damage rule (no perk record distinguishes them — both carry `WeapTypeBow`).
+  PICK + DUAL WIELD BY PERKS". **(SUPERSEDED 2026-10-01 by RANGED PICK
+  below: ammo decides first, perks bias second.)**
   **RANGED PICK: PERK BIAS + AMMO TERM (2026-10-01, `feat/mfo-ranged-kind-ammo`, ClickUp 86e3940yd,
   marth 2026-09-14; the "bow vs crossbow stays the ammo/damage rule" gaps above are now: ammo decides first, perks bias second).**
   Kind and ammo are read from the WEAP record, never a bow/crossbow enum: `WeaponKindOf` (`logistics/Logistics_internal.h`)
@@ -2757,10 +2757,10 @@ module. Module layout:
   every melee score are unchanged (`preferKinds` gains only bits 7 and 8). It DIFFERS for bow+crossbow carried: before, the
   family with MORE rounds won (damage on a tie) and the combat equip took raw max damage ignoring ammo; now a weapon
   with matching ammo beats one without, then perk-biased damage decides (rounds count no longer matters), and none
-  with ammo -> plain/perk-biased damage. `ReadStyleFacts` gained only the item-type 7/12 votes and the keyword mask above (a keyword
+  with ammo -> plain/perk-biased damage. `ReadStyleFacts` gained only the item-type 7/12 votes (counted only when the test admits EXACTLY ONE code in 1..12, so `== 7` and `== 12` vote and `!= 7`, `> 7`, `>= 8`, `<= 7` do not) and the keyword mask above (a keyword
   perk votes `weapon[7]` and `weapon[8]`, so with only keyword votes both kinds get the same 1.5x as before this change). **What breaks:** the two decision sites must keep sharing `RangedPickScore` or loot chases the ammo of a
-  weapon the combat pick does not draw; re-adding an enum test in `WeaponKindOf` re-breaks keywordless modded guns'
-  neutrality; `EquipAuthority.cpp:688` still uses `IsCrossbow()`. Open items: `Docs/REVIEW-BACKLOG.md` **MFO-B210**.
+  weapon the combat pick does not draw; dropping the animation test in `WeaponKindOf` re-breaks keywordless modded guns
+  (weapons are classed by animation type, so keyword perks bias keywordless bows and crossbows too); `EquipAuthority.cpp:688` still uses `IsCrossbow()`. Open items: `Docs/REVIEW-BACKLOG.md` **MFO-B210**.
   **CLOSED 2026-09-14 (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`) — THE
   SECOND ONE-HANDER, all three paths at once, one rule for weapon-role followers:** `wantOffHand` =
   `roles.offHand == 2 && meleeTargetClass == OneHand`; `offHandBaseScore` = the

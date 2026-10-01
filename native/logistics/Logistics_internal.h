@@ -309,10 +309,9 @@ namespace MFO::Logistics {
             if (a_w->HasKeywordString("WeapTypeGreatsword")) return WK::kWkGreatsword;
             if (a_w->HasKeywordString("WeapTypeBattleaxe"))  return WK::kWkBattleaxe;
             if (a_w->HasKeywordString("WeapTypeWarhammer"))  return WK::kWkWarhammer;
-            // RANGED (2026-10-01, marth: kinds DATA-DRIVEN from the WEAP record): the kind is the
-            // record's own keyword, the same one the archery perks' conditions name -- no bow/
-            // crossbow enum. A ranged weapon WITHOUT the keyword (a modded gun that never carried
-            // it) is simply not one of the weapons those perks apply to: no bias, never a filter.
+            // RANGED (2026-10-01, marth: skills pick the type, perks decide how it is used): ranged
+            // weapons are classed by the record's ANIMATION TYPE, with the keyword as the other road,
+            // so a keyword perk (which names both kinds) biases a keywordless bow or crossbow too.
             // A crossbow-animation weapon is the crossbow kind; any other ranged weapon carrying the
             // WeapTypeBow keyword is the bow kind (vanilla crossbows carry the keyword too, which is
             // why the animation is tested first). Perks are matched to the kind they test for.
