@@ -909,9 +909,13 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     death, beyond reach, rising to the rule's HP threshold / full health, the claim ending for a non-LoS reason, or a higher-ranked
     rule taking the hand. Why: with the picker dropping the incumbent on a LoS flicker the rule skipped laps, `refreshed` went stale
     and the sweep restarted the claim every 3-5 s (Herd, 28 s to the first landing). The rule now runs every lap while the ally is
-    occluded, and `ClaimHealCast`'s heartbeat (`EnsureCastClaimLocked` fast path) keeps renewing the claim and APMF's TTL. TRADEOFF:
-    an ally walled off for a long time keeps the healer's LEFT hand committed; other hurt allies wait until a higher rule, a drop
-    condition above, or `RefreshHealCastClaim`'s never-observed cap (a COMPETING rule's hold, `kHealHoldNeverObservedMs`) frees it.
+    occluded, and `ClaimHealCast`'s heartbeat (`EnsureCastClaimLocked` fast path) keeps renewing the claim and APMF's TTL. The held heal is a STATE every lap re-evaluates, not a lock
+    (marth: "Nothing should ever be locked up"): the gambit scan runs every lap, higher-ranked rules preempt at once, and the
+    drop conditions are checked every lap. NO cap was added. (Pre-existing and untouched: `RefreshHealCastClaim`'s
+    never-observed cap lifts a COMPETING rule's incumbent hold at `kHealHoldNeverObservedMs`.) PER-HAND HEAL SLOTS (planned, not
+    in this round): the spots that still assume a heal is LEFT are the sweep's `o.heal` branch (`kApmfHandLeft` for `ObservedFiring` /
+    `ClearWatchHand`), `CastOn`'s `ResolveCastHand(... HandPick::Left ...)` and `CastChargedWaitingOnHand(.., kHandLeft, ..)`, and
+    the bridge's single `o.heal` slot (`ClaimHealCast`); `HealRecipientUnreachable` and the PickAlly/CastAuto incumbent tests are hand-agnostic.
     (b) `APMFBridge::Tick`'s heal sweep (`apmf/Bridge.cpp` ~:982, the `o.heal` branch of the FacetExpiry sweep, on the AddTask job
     worker) HOLDS a heal claim younger than `kHealHoldNeverObservedMs` (from `created`) that `ObservedFiring` has not seen fire, and
     EVERY release it does make logs `[heal] ... heal claim RELEASED by the expiry sweep` (handle, spell, target, age, stale ms),
