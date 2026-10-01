@@ -8,7 +8,6 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 ## Unreleased
 
 - **The board and HUD hotkeys start empty.** They no longer show a key in the MCM until you pick one. `iBoardKey` and `iHudKey` default to -1, and any value of 0 or less means no key. If you already saved one of these as 0, it still reads as unbound.
-- **Followers make lockpicking sounds.** While a follower works a lock you hear the pick at their position, and a pick snaps with the vanilla break sound at them for each pick they break.
 - **The Followers tab shows where retained followers are.** A follower you are not currently travelling with now lists their current cell next to their name, or the location name if the cell has none.
 - **Museum deposits work again.** Followers finish the hand-over at the crate and the items ship, instead of the trip ending the moment the give animation starts.
 - **Lockpicking works again, with one animation per lock.** A follower picks a lock in one go. They no longer enter and leave the animation over and over, and a failed attempt waits before they try the lock again.

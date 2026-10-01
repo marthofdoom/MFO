@@ -78,10 +78,6 @@ namespace MFO::Logistics::Lockpick {
         // "Playing an idle at a target": about 5.6 s, one-shot).
         constexpr RE::FormID kLockpickForm = 0x0000000A;
         constexpr RE::FormID kIdleLockPick = 0x000BB051;
-        // Vanilla SNDR records in Skyrim.esm (read from the esm: UILockpickingPickMovement 000C1911,
-        // UILockpickingPickBreak 000C1916), played AT THE FOLLOWER while a pick attempt runs.
-        constexpr RE::FormID kSndPickMovement = 0x000C1911;
-        constexpr RE::FormID kSndPickBreak    = 0x000C1916;
 
         // THE ONE MODELLED CONSTANT (not an engine number): how long the simulated searcher
         // holds a binding lock before releasing it. The engine gives the drain RATE (100/life
@@ -179,22 +175,6 @@ namespace MFO::Logistics::Lockpick {
         void UnlockOnMain(RE::TESObjectREFR* a_ref) {
             if (!a_ref || !UnlockSeatOk()) return;
             UnlockRel()(a_ref);
-        }
-
-        // A vanilla sound descriptor played in 3D at the follower. FormIDs only cross the
-        // thread boundary; the audio calls run on the true main thread. Fire and forget.
-        void PlayAtFollower(RE::FormID a_follower, RE::FormID a_sound) {
-            MainThread::Post([a_follower, a_sound]() {
-                auto* f   = RE::TESForm::LookupByID<RE::Actor>(a_follower);
-                auto* snd = RE::TESForm::LookupByID<RE::BGSSoundDescriptorForm>(a_sound);
-                auto* am  = RE::BSAudioManager::GetSingleton();
-                if (!f || !snd || !am || f->IsDead() || !f->Is3DLoaded()) return;
-                RE::BSSoundHandle h;
-                if (!am->BuildSoundDataFromDescriptor(h, snd)) return;
-                h.SetPosition(f->GetPosition());
-                if (auto* n = f->Get3D()) h.SetObjectToFollow(n);
-                h.Play();
-            });
         }
 
         std::int32_t CountOf(RE::TESObjectREFR* a_holder, RE::TESBoundObject* a_obj) {
@@ -484,7 +464,6 @@ namespace MFO::Logistics::Lockpick {
             std::chrono::steady_clock::time_point lastWall{};
             bool          waitLogged = false;
             bool          sheathePosted = false;
-            int           breakSnds = 0;       // break sounds already played at the follower this window
         };
         std::unordered_map<RE::FormID, Job> g_jobs;
         // LP-M2 F-L3: the last lock THIS follower's own job opened (picked or keyed), read and
@@ -879,7 +858,6 @@ namespace MFO::Logistics::Lockpick {
             if (j.liveAt < 0.0) {
                 j.liveAt   = clk;   // the first play is live: the window starts now
                 j.lastPlay = 0.0;
-                PlayAtFollower(fid, kSndPickMovement);   // the attempt sound, at the follower
             }
             const double elapsed = clk - j.liveAt;
             // The pick window, but never shorter than Harbinger's confirmation window
@@ -891,16 +869,6 @@ namespace MFO::Logistics::Lockpick {
                     if (APMFBridge::ReplayLockpickIdle(fid)) {
                         j.lastPlay = elapsed;
                         ++j.replays;
-                        PlayAtFollower(fid, kSndPickMovement);
-                    }
-                }
-                // The simulated breaks, spread evenly through the window: one break sound at the
-                // follower per broken pick (none for a key).
-                if (!j.viaKey && j.sim.broken > 0 && j.window > 0.0f) {
-                    while (j.breakSnds < j.sim.broken &&
-                           elapsed >= static_cast<double>(j.window) * (j.breakSnds + 1) / (j.sim.broken + 1)) {
-                        ++j.breakSnds;
-                        PlayAtFollower(fid, kSndPickBreak);
                     }
                 }
                 return StepResult::kHold;

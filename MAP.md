@@ -3544,7 +3544,6 @@ anonymous-namespace copy — that silently forks the instance).
   `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
   `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-
   the-lock. Pieces:
-  - **Sounds** `PlayAtFollower` (`Lockpick.cpp:~185`, MainThread::Post, FormIDs only): UILockpickingPickMovement 000C1911 at each live play/replay, UILockpickingPickBreak 000C1916 per simulated break (`Job::breakSnds`), 3D at the follower.
   - **Gate** `Lockpick::Admit` (`Lockpick.cpp:523`, called by the scan `LootScan.cpp:488` after the
     owner / off-limits bars): refuses (logged once per follower+lock+reason) owned, offlimits,
     factionServiceContainer (`IsFactionServiceContainer`, batch L),

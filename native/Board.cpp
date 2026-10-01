@@ -1591,8 +1591,8 @@ namespace MFO::Board {
                 if (auto* a = f->As<RE::Actor>(); a && a->GetName() && *a->GetName()) {
                     r.name = a->GetName();
                 }
-                // Current cell name, else the location name (retained followers only). Same
-                // worker-side read domain as the name above: two pointer reads, no engine call.
+                // Current cell name, else the location name (retained followers only). Worker-side
+                // read-only lookups copied into the snapshot, so the render thread never touches the actor.
                 if (auto* a = f->As<RE::Actor>()) {
                     if (auto* c = a->GetParentCell(); c && c->GetName() && *c->GetName()) {
                         r.cell = c->GetName();
