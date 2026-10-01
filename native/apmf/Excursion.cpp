@@ -167,6 +167,14 @@ namespace MFO::APMFBridge {
             it->second.targetRefreshed = std::chrono::steady_clock::now();   // keep-alive: timestamp only
     }
 
+    RE::FormID GetCombatTargetClaim(RE::FormID a_follower) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return 0;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end() || it->second.targetHandle == APMF_API::kInvalidHandle) return 0;
+        return it->second.target;
+    }
+
     // ── ch.20 TARGET PIN (ABI v13, kIntent_TargetPin) ──────────────────────────────
     // Contract: APMF_API.h kIntent_TargetPin; Harbinger Docs/INTEGRATION.md "Pinning a
     // combat target". The CLIENT declares {follower, foe}; Harbinger answers the engine's

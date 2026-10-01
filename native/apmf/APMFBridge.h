@@ -374,6 +374,11 @@ namespace MFO::APMFBridge {
     // fight; it is released by the expiry sweep only once this STOPS being called (i.e.
     // combat ended). No-op if the follower holds no combat-target claim.
     void RefreshCombatTarget(RE::FormID a_follower);
+    // The FormID of the foe this follower's LIVE ch.6 combat-target claim names (0 when no
+    // claim stands, APMF is absent, or the claim handle was released). READ-ONLY, same g_mx
+    // contract as GetHealCastTarget; worker- and combat-thread-safe. Added for the passive
+    // `[deadtgt]` diagnostic (Scheduler.cpp, ClickUp 86e3eb078): "ch.6 intended target".
+    RE::FormID GetCombatTargetClaim(RE::FormID a_follower);
 
     // ── ch.20 TARGET PIN (ABI v13, kIntent_TargetPin): MFO's foe choice, HELD ──────
     // Harbinger answers the engine's own combat-target selector (vtable slot 6) with the
