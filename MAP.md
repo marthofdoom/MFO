@@ -442,6 +442,9 @@ releases **by eviction** with a non-actor XMarker.
   CasterConsent/Packages/OnFollowerRemoved/RetreatEvictIf) is now ONE helper
   `Followers::ReleaseHeldState(id)` (`Followers.cpp`, worker-only, idempotent) —
   shared by the dismissal sweep (`Refresh`) and the T#78 MFO-OFF toggle (Scheduler).
+  The sweep drops a follower only after `kMissesBeforeDrop` (3) CONSECUTIVE misses, and `Refresh` does not count a
+  miss while `RE::LoadingMenu` is open (`Followers.cpp` `loading`, 86e3buxgw (d), `fix/mfo-logic-bundle2`): he is held,
+  the streak untouched, so a load screen cannot dismiss and strip him. Counting resumes when the menu closes.
 - `ForceRefToNative` (`:319`) = `REL::RelocationID(24523, 25052)` `TESQuest::ForceRefTo`,
   AE + SE (SE id verified 2026-09-13 via the engine's own `ReferenceAlias.ForceRefTo`
   Papyrus callback tail-jump; **CONFIRMED 2026-09-15** — `Docs/ADDRESS-TABLE-2026-09-15.md`

@@ -33,6 +33,10 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **Walk-to-loot gait works, and reads right.** The MCM offers Walk, Jog and Run, slowest to fastest, named for what you see in game. Run is the default. The old sprint is gone (it looked like a sprint, not a run). A saved Fast walk becomes Jog, which is the same speed.
 - **Fewer false alarms in the log.** The [heal-obs] line no longer calls a heal missed when it landed. A heal counts as landed if its effect was on the ally, or their health went up.
 - **New log line: [stall-probe].** While the party fights and a follower is not in combat themselves, MFO.log notes every 2 seconds how far they moved, their AI package, and what you are fighting. It changes nothing. It is there to explain followers standing around after a fight.
+- **A load screen no longer drops a follower.** A follower who is missing from the party list while a loading screen is up is held, not counted as gone. They are no longer released and stripped of their orders just because the load took a while.
+- **A melee or ranged follower no longer casts with the weapon hand when style control is off.** With the weapon style debug switch off, a follower who is briefly empty handed keeps their right hand for the weapon. Before, the spell took it and the weapon pushed it back out.
+- **A free off-hand perk no longer counts as a fists perk.** A one-hand perk that only asks for an empty left hand does not make a follower with a weapon drop it. Only a perk that needs the right hand empty counts.
+- **A caster no longer keeps a spare dagger they never fetch.** What a follower keeps to sell or hold now follows the same melee rule as buying and looting, so a base caster does not hold on to a second one-hander.
 
 ## v2.0.15 -- Followers pick locks and ship relics to the museum
 
