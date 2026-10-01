@@ -4202,6 +4202,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     `g_boardSnap`/`g_boardFocus` `:28-30`), `EnrollBlocker` (`:40`), `BuildNodeViews` (`:59`),
     `SetBoardFocus` (`:94`), `CopyBoardViews`/`CopyBoardTabViews` (`:96`/`:105`),
     `PublishBoardViews` (`:119`).
+  - (2026-10-01) `Poll.cpp` `DumpLedgerOnce` (READ-ONLY `[prog] ledger` dump, once per load per follower, keyed on `g_pollGen`) is called at the end of `PollWork`'s per-follower body; it writes nothing.
   - `progression/Poll.cpp` (224) = the level poll: `Unmanaged` (`:35`), `PollWork` (`:43`),
     `PollTick` (`:200`, also drives the board-view refresh).
   - `progression/Harness.cpp` (176) = the dev harness: `ClsName` (`:24`), `PickFollower` (`:35`),

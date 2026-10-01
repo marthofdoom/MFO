@@ -74,6 +74,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why the reuse was reasonable:** all three are "how long may a claim go without evidence of life", and inventing three literals would be worse. The defect is that a future change made for one intent silently moves the other two.
 - **Fix shape (the author's own, and it is right):** three NAMED constants derived from one, not three literals — so each can later be sized from its own evidence instead of inheriting one number's assumptions.
 - **What would size (c):** the maximum caster-`kNone` gap between consecutive `MLh/MRh_SpellFire` events of one claimed spell while its rule keeps winning, from the `CASTER[L/R]` state log. Mis-sizing (c) is cheap both ways — too short gives an earlier re-aim, which is the direction marth's ruling wants; too long gives a longer hold.
+- **DRAINED by `fix/mfo-backlog-batch3` (2026-10-01).** `apmf/APMFBridge.h` now derives `kHealClaimNeverObservedCapMs` (a: CastClaims `RefreshHealCastClaim`, CastOn charged-never-fired check), `kHoldLastSeenCapMs` (b: Hands.cpp hold age caps on `lastSeen`), `kObservedFiringRecencyMs` (c: Hands.cpp `ObservedFiring` windows) and a 4th alias `kHealBuildWindowMs` (Bridge.cpp expiry-sweep build window: created-anchored like (a) but bounds caster construction, measured 2.3-4.5 s) from `kHealHoldNeverObservedMs`; all 4000, no behaviour change. ComposedCast.cpp static_asserts apply to (a) and (b). Sizing of each from its own evidence remains B7's job.
 
 ### MFO-B9 — two comments in one file now state two different bounds for the same mechanism
 - **Raised:** Fable review of `e1e55fb` (F-4, SEV-5)
@@ -104,6 +105,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** `Board.cpp` is outside the 2026-09-13 brief's file boundary (no `Board*`), which is why the write-site republish was not done. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** one `PublishActiveMirror()` call after Board.cpp:1203 (worker-domain, g_mx is a leaf — safe).
 - **Drain attempt 2026-09-14 (`feat/mfo-board-free-respec-label`), NOT fixed — boundary stop:** the write site was re-verified as worker-domain with no lock held (`ApplyEdits` `Board.cpp:1081` ← `PublishSnapshot` `:1317` ← the Diagnostics `AddTask` body `Diagnostics.cpp:330-355`, same domain as `Followers::Refresh`; `g_editMx` is released at the `:1083` swap scope). But `PublishActiveMirror` has INTERNAL linkage — it lives in Followers.cpp's anonymous namespace (`:43` open, function `:98`) with no `Followers.h` declaration — so Board.cpp cannot call it as the fix shape assumes. The drain needs a public export in `Followers.h` + `Followers.cpp` (both outside that brief's boundary) before the one-line Board.cpp call. Still open.
+- **DRAINED by `fix/mfo-backlog-batch3` (2026-10-01).** The 2026-09-14 stop was file-boundary only (re-verified: `ApplyEdits` drains on the worker, `g_editMx` released after the swap, g_mx is a leaf). New public `Followers::RepublishActiveMirror()` (Followers.h/.cpp, beside `IsMfoEnabled`) wraps the anonymous-namespace `PublishActiveMirror`; Board.cpp's `SetMfoEnabled` write site calls it.
 
 ### MFO-B13 — F3's hold-time floor can shave a fraction off a v6-migrated, cap-saturated skill on the first v7 hold
 - **Raised:** Fable round-2 review of `028eb5a` (`feat/mfo-progression-strict-points-perk-style`), SEV-5. R2-2. Adjacent to MFO-B11 (same root).
@@ -161,6 +163,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** raised in a round with nothing above SEV-3 once F1-F5 were fixed; a public seam in `Logistics.h` was outside the brief's file boundary. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** proper seam is a public declaration in Logistics.h (declare `WeaponRoles`/`ComputeWeaponRoles`/`WeaponScore` there, or a thin `Logistics::CombatWeaponScore(actor, weapon)` wrapper, and drop the internal include from `Actuation.cpp`).
 - **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+- **Drain attempt 2026-10-01 (`fix/mfo-backlog-batch3`), NOT done -- STOP per brief.** `Equip.cpp` also consumes the inline `Logistics::WeaponScore` (`Logistics_internal.h`, which pulls `WeaponKindOf`, `kStyleBias`, `Progression::WeaponKind`), and `WeaponRoles` needs the `WepClass` enum. A seam is the struct + enum + three inline definitions (>40 lines, moves inline defs), or a non-inline `WeaponScore` wrapper; its own brief.
 
 ### MFO-B20 — `kMaxForcedWeapons` (64) is now a PAIR cap and the FWPN reader aborts the whole load above it
 - **Raised:** Fable tier-3 review of `f771399` (`feat/mfo-dualwield-combat-pick`), SEV-5. F8.
@@ -197,6 +200,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** backlogged as-is per the coordinator (no `RightHandSlot()` helper exists; adding one is its own small brief). Deferred, not dropped.
 - **Fix shape when drained (verbatim):** passing the right-hand slot would make it unambiguous — add `Loadout::RightHandSlot()` (the `kRightHandEquip` twin of `LeftHandSlot`, verify the default-object id in the pinned tree) and pass it on the `inRight` unequip.
 - **Surfaced at edit time from:** MAP.md §1 FWPN entry + §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+- **DRAINED by `fix/mfo-backlog-batch3` (2026-10-01).** `Loadout::RightHandSlot()` (`Loadout.cpp`/`.h`, FormID lookup `0x00013F42`, DOBJ `RHEQ` index 20 = `kRightHandEquip` in the fork's `BGSDefaultObjectManager.h`) is passed on `Equip.cpp`'s CoLoad `inRight` unequip.
 
 ### MFO-B24 — keep gates the second one-hander on `keepRoles.melee`, loot/buy on `meleeTargetClass`; a base caster keeps two daggers but never fetches a second
 - **Raised:** Fable review of `b3ac577` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5 (a).
