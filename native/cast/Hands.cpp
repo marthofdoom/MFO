@@ -977,7 +977,13 @@ namespace MFO::Actuation {
         if (fid == 0 || a_askerRule == kNoRule) return false;
         const auto it = g_castLock.find(fid);
         if (it == g_castLock.end()) return false;
-        if (it->second.hand[kHandRight].spell == a_askerSpell) return false;   // its own charge is running: keep refreshing it
+        // Exempt ONLY a RUNNING cast of the asker's own (review F1): a right-hand claim standing
+        // between casts or never fired is not a cast to protect, and exempting it by lock spell
+        // alone kept the floor released (the E6 shape, 09:06:10-11).
+        const bool askerHoldsRight = it->second.hand[kHandRight].spell == a_askerSpell;
+        if (askerHoldsRight &&
+            CastInFlightOnHand(a_follower, kHandRight, a_askerSpell, CastProxyOnHand(fid, kHandRight)))
+            return false;
         const auto& lk = it->second.hand[kHandLeft];
         if (lk.spell == 0 || lk.owningRule == kNoRule || lk.owningRule >= a_askerRule) return false;
         if (APMFBridge::GetHealCastSpell(fid) != lk.spell) return false;   // not a standing HEAL claim
@@ -988,12 +994,24 @@ namespace MFO::Actuation {
         if (ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, lk.spell,
                                          static_cast<std::uint32_t>(sinceClaim.count())))
             return false;   // fired since this claim: normal behaviour resumes
+        // The held rule's own idle right-hand claim is released THIS lap, so the idle-hand floor
+        // engages (otherwise the FacetExpiry sweep, ~2.8 s, eats the 4 s hold).
+        bool released = false;
+        if (askerHoldsRight) {
+            APMFBridge::ReleaseCastClaimOnHand(fid, APMFBridge::kApmfHandRight);
+            ClearCastLockHand(fid, kHandRight);
+            released = true;
+        }
         auto& e = g_healHoldLog[fid];
         if (e.first != lk.spell || e.second != lk.lastSeen) {
             e = { lk.spell, lk.lastSeen };
             spdlog::info("[heal-hold] {:08X} rule {} held off: heal claim pending (rule {}, spell {:08X}, "
-                         "not yet fired or charging)",
-                         fid, a_askerRule, lk.owningRule, lk.spell);
+                         "not yet fired or charging){}",
+                         fid, a_askerRule, lk.owningRule, lk.spell,
+                         released ? "; its own idle right-hand claim was released so the floor engages" : "");
+        } else if (released) {
+            spdlog::info("[heal-hold] {:08X} rule {}: idle right-hand claim released (heal claim still pending)",
+                         fid, a_askerRule);
         }
         return true;
     }

@@ -1170,3 +1170,12 @@ Raised against 7b2552fb (`feat/mfo-translations`, Opus review, nothing above SEV
 - **SEV-5:** the hosted tab fallback in `Board_Progression.cpp` (`hostedTabLabel`, now `Win_Header`) is also the tab's ImGui ID, so the ID depends on the language. Reasoning: only matters if the add-on ships an empty label.
 - **SEV-5:** the del / sure? button swap changes the ImGui ID with the armed state (kept as before on purpose). Reasoning: unchanged behaviour, noted so nobody "fixes" it blindly.
 - **Surfaced at edit time from:** MAP.md section 6, `native/i18n/` entry.
+
+### MFO-B218 (SEV-4) -- retreat self-heal scan skips a higher-ranked act.wait and the g_recent window
+Raised against c773a4ff (`fix/mfo-heal-starve-retreat`, Opus review, F4), 2026-10-01. Finding: the retreat's mini scan fires any Heal-kind cast_self rule and does not honour a higher-ranked `act.wait` (the authored suppress idiom) or the `g_recent` suppression window that the normal combat scan keeps. Reviewer's severity SEV-4, deferred, no behaviour harm seen. Fix shape: run the same positional stop rules in the mini scan.
+
+### MFO-B219 (SEV-4) -- field watch: P1 hold can re-arm per claim and starve offense
+Raised against c773a4ff (same review, F5). Finding: re-mints restamp `lastSeen`, so a heal that never starts can re-arm the 4 s hold each claim. `kNeverFired` stays the loud signal. A field watch, not a code change: see MAP.md "Telling P1 worked from P1 starved offense".
+
+### MFO-B220 (SEV-5) -- a B177 restream-gap kept heal lock survives the retreat
+Raised against c773a4ff (same review, F7). Finding: a heal lock kept through the stream-cap restream gap (B177, `restreamAt`) is not cleared when the retreat fills, because `ReleaseHealClaimForRetreat` only acts on a standing claim. Harmless until the gap window lapses.

@@ -402,9 +402,10 @@ namespace MFO::Scheduler {
         // Timeout: 30 s -- past any plausible walk time at Run speed.
         constexpr float kRetreatConfidence = 0.25f;
         // P2: the longest the fill waits for the follower's OWN cast in flight, from the first
-        // delay. Sized from the measured heal cast, Casting to Concluding in 458 ms (E5) and
-        // 568 ms (E6, cut), times three, plus one 133 ms pump: 1500 ms. A floor on the cast,
-        // not an expiry on the retreat: past it the fill goes ahead, loudly (WARN).
+        // delay. OwnCastInFlight counts caster states 1-7: a heal took about 560 ms from state 1 to 6
+        // (E5 458 ms, E6 568 ms to 4), an offense charge about 0.7-1.0 s from state 1 to 4. 1500 ms
+        // covers both with margin over one 133 ms pump. A floor on the cast, not an expiry on the
+        // retreat: past it the fill goes ahead, loudly (WARN).
         constexpr std::uint32_t kRetreatCastDeferMs = 1500;
         // ENGAGE-ON-SIGHT BAR (Confidence v2 review, SEV-3): starting a fight needs a
         // margin OVER the retreat floor, so a follower never starts a fight he would
@@ -1299,7 +1300,7 @@ namespace MFO::Scheduler {
                 // (ChooseHealRoad DirectNoCombat), which owns no package and no alias, so the
                 // retreat travel is untouched and nothing is left for a later StopCombat to
                 // cut. Before it lands, nothing runs (a claim minted now would be cut by it).
-                if (!f->IsInCombat() && !Actuation::CannotActReason(f)) {
+                if (!f->IsInCombat() && !Actuation::CannotActReason(f) && Config::g_castSelf.load()) {
                     for (int start = 0; ; ) {
                         const auto rec = g_followers.find(id);
                         if (rec == g_followers.end()) break;
@@ -1309,6 +1310,9 @@ namespace MFO::Scheduler {
                         if (sc.actionOpcode != Vocab::kActCastSelf) continue;
                         auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.actionParam);
                         if (!sp || !Actuation::HealsHealth(sp)) continue;
+                        // The EXACT decision CastOn will make: only the direct, unanimated road runs
+                        // here (an inactive controller still answers Claim, review F2).
+                        if (ComposedCast::ChooseHealRoad(f, sp, f) != ComposedCast::HealRoad::DirectNoCombat) continue;
                         const Actuation::Outcome o = Actuation::Fire(f, sc);
                         if (o.transparent) continue;
                         auto& last = g_retreatHealLog[id];
@@ -1338,7 +1342,8 @@ namespace MFO::Scheduler {
                     // time, bounded by kRetreatCastDeferMs from the first delay so a held charge
                     // or a long stream cannot postpone the retreat for good.
                     bool deferFill = false;
-                    if (Actuation::OwnCastInFlight(f)) {
+                    if (!Actuation::OwnCastInFlight(f)) note.castDeferSince = {};
+                    else {
                         // A stamp from an earlier lap-run that never reached a fill is stale.
                         if (note.castDeferSince.time_since_epoch().count() == 0 ||
                             now - note.castDeferSince > std::chrono::milliseconds(2 * kRetreatCastDeferMs)) {
