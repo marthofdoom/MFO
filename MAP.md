@@ -884,6 +884,12 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     player who turns the toggle off later keeps it off. A failed patch logs an error, leaves the file
     untouched and holds the marker back so the next launch retries. The marker is not a control
     (`tools/audit_mcm.py` STORE_ALLOWLIST).
+  * **`iBoardKey` / `iHudKey` one-shot migration (2026-09-30)**, right after it in `EnsureMcmDefaults`:
+    a store WITHOUT the marker `bHotkeyUnbindMigrated` has a stored bare `0` for either key rewritten to
+    `-1` in place (the two bytes ` 0` become `-1`, so `= 0` turns into `=-1`; same matching and
+    in|out|binary read-back method as the heal migration). A `=0` line with no space cannot be patched in
+    place: logged, left (still reads as unbound), marker still written. An I/O failure logs an error and
+    holds the marker back. Marker = 1 in `kMcmDefaults`, both shipped inis, `STORE_ALLOWLIST`.
   * **What breaks if you change this:** calling `ChooseHealRoad` from only some heal callers re-creates
     two roads on one actor; dropping the controller release lets a claim nothing can serve outlive the
     fight; moving the recipient check after `resolveHands` lets the in-flight refresh feed a claim at an
@@ -3546,6 +3552,7 @@ anonymous-namespace copy — that silently forks the instance).
   `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
   `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-
   the-lock. Pieces:
+  - **Sounds** `PlayAtFollower` (`Lockpick.cpp:190`, MainThread::Post, FormIDs only): MFO.esp SNDR `0x904` MFO_LockpickPickMovementSD at each live play/replay (`:897`, `:909`, both gated `!j.viaKey`), MFO.esp SNDR `0x905` MFO_LockpickPickBreakSD per simulated break (`:919`, `Job::breakSnds`, at most ONE per step, none for a key), 3D at the follower. They are positional copies (ONAM SOMMono01400 0005A28A, GNAM AudioCategorySFX 000172A1) of Skyrim.esm UILockpickingPickMovement 000C1911 / UILockpickingPickBreak 000C1916, whose output model SOMUIDefault is 2D (marth 2026-10-01). Resolved on the main thread by local id + `Forms::kPlugin` (`Forms.h` `kSndLockpickPickMovement/Break`). A missing record logs once per sound and plays nothing. No fallback to the 2D vanilla sound. Values in `MFO_GenerateESP.py` `LOCKPICK_SNDR_PENDING` (read from Skyrim.esm 2026-10-01: vanilla ANAM/LNAM/BNAM kept, GNAM AudioCategorySFX 000172A1 per marth, as on NPCHumanWoodPickup). The generator refuses to emit both records if any value there is `None`.
   - **Gate** `Lockpick::Admit` (`Lockpick.cpp:523`, called by the scan `LootScan.cpp:488` after the
     owner / off-limits bars): refuses (logged once per follower+lock+reason) owned, offlimits,
     factionServiceContainer (`IsFactionServiceContainer`, batch L),
@@ -3693,7 +3700,7 @@ anonymous-namespace copy — that silently forks the instance).
   LOOT ROUND M1 above): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
   PlayerID()`, `ContainerSink` in `logistics/Sinks.cpp`) or it re-fires on its own removal (MAO infinite-credit loop);
-  only QUEUES to the worker. It first calls `PlayerGiven::OnContainerChanged` (own gate; the
+  only QUEUES to the worker. It first runs `InvProbe` (`logistics/Sinks.cpp:136`, PASSIVE `[inv-probe]` log: an ARMO/WEAP leaving a managed follower, membership `Followers::IsTrackedFast`, 12 lines/10 s hard cap; MFO-B63 addendum, result NEEDS LOCAL), then calls `PlayerGiven::OnContainerChanged` (own gate; the
   86e3f9pkg player-drop branch is gone, 86e3faccn). `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
   → `KeepHeadClear`; since 2026-09-14 it also emits the passive `[armor-obs]` line
   (`logistics/Sinks.cpp:60`) for every rated-ARMO equip/unequip on a tracked follower
@@ -4673,7 +4680,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   (`Board.cpp:485-596`) — a plain call, not a patch, never reached on VR because
   `Install()` refuses VR first, and never reached at all on the trampoline path.
 - **Snapshot carries all actor-derived display data** (render thread reads plain
-  cached values, never a live actor — #4): `FollowerRow` (`Board.h`) holds vitals as
+  cached values, never a live actor — #4): `FollowerRow` (`Board.h`; retained rows also carry `cell`, filled in `PublishSnapshot`'s retained loop `Board.cpp:~1590`, drawn after the name in `Board_FieldKit.cpp`) holds vitals as
   pct **and** raw `health/magicka/staminaCur/Max` (Followers tab, `Vocab::VitalCur/
   VitalMax`), and `knownSpells`/`teachableSpells` are `SpellPick`/`Teachable` structs
   carrying precomputed `magickaCost` (`spell->CalculateMagickaCost(follower)`, actor
@@ -4707,7 +4714,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   queued edits so a command from the old save can't hit a freshly loaded one.
   `SetHud` ← `plugin.cpp:365`, `Diagnostics.cpp:94`, `Serialization.cpp:621`.
   `IsOpen`/`IsAvailable`/`Toggle` ← Diagnostics (publish cadence + Field Orders
-  power). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B185 (gamepad/mouse keymap codes dropped). `ToggleHud` (`Board.cpp:1099`) is called by the `iHudKey` hotkey in `InputSink::Feed` (`Board.cpp:~822-865`, panel closed and no menu up via `UI::GameIsPaused`). The `iBoardKey` hotkey is there too: closed = gated `AddTask` { `PublishSnapshot` + `Toggle` } (same body as the Field Orders power in Diagnostics.cpp); open = the keyboard case closes on RELEASE via `g_boardKeyDownSeen` then `g_wantClose` (the shout-key shape, consumed in `DrawFieldKit`); both edges are consumed. Both keys default 0 (unbound), `Config::g_boardKey`/`g_hudKey`, MCM keymaps on the Interface page. The HUD key flips `g_hud` only: an MCM/Journal close re-applies `bShowHud` over it.
+  power). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B185 (gamepad/mouse keymap codes dropped). `ToggleHud` (`Board.cpp:1099`) is called by the `iHudKey` hotkey in `InputSink::Feed` (`Board.cpp:~822-865`, panel closed and no menu up via `UI::GameIsPaused`). The `iBoardKey` hotkey is there too: closed = gated `AddTask` { `PublishSnapshot` + `Toggle` } (same body as the Field Orders power in Diagnostics.cpp); open = the keyboard case closes on RELEASE via `g_boardKeyDownSeen` then `g_wantClose` (the shout-key shape, consumed in `DrawFieldKit`); both edges are consumed. Both keys default -1 (unbound; any value <= 0 is unbound, handlers test `> 0`), `Config::g_boardKey`/`g_hudKey`, MCM keymaps on the Interface page. The HUD key flips `g_hud` only: an MCM/Journal close re-applies `bShowHud` over it.
 
 ### Papyrus.cpp / Papyrus.h — outbound VM dispatch shim
 Reaches Papyrus-only natives by class-name+method-name string, async fire-and-forget.
@@ -5119,8 +5126,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `EquipAuthorityOwns(fid, cats)` = a claim stands, a declaration has gone out on it, and the
   last SENT `owned` overlaps `cats` — THE gate for a direct path writing into a held hand
   (`Logistics::EquipTorch` on `kEquipCat_Left`). `DeclareEquipSet(fid,
-  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **OPEN BACKLOG: MFO-B136 (mage set re-sends a never-wearable piece every 3 s), MFO-B139 (shield deny misses a mage on class Auto), MFO-B133, MFO-B135 (the refused-claim NoOp reads as a satisfied equip), MFO-B134 (Gear.cpp's weapon
-  equip hop and EquipTorch still equip directly under a refused claim) -- read before editing.** **A REFUSED CLAIM NO LONGER FALLS BACK
+  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **OPEN BACKLOG: MFO-B136 (mage set re-sends a never-wearable piece every 3 s), MFO-B139 (shield deny misses a mage on class Auto), MFO-B133, MFO-B135 (the refused-claim NoOp reads as a satisfied equip) -- read before editing.** (MFO-B134 DRAINED 2026-10-01: `logistics/Gear.cpp` AcquireEquip's weapon stock `:648` (before the MEO gem capture) and `logistics/Upkeep.cpp` `EquipTorch` `:175` now stay out when `EquipAuthoritySupported() && !IsEquipAuthorityClaimed(fid)`. MFO-B139 stays deferred, no Auto-to-class resolver.) **A REFUSED CLAIM NO LONGER FALLS BACK
   (`fix/mfo-museum-priority`, marth 2026-09-28 "MFO's fallback is deprecated", SUPERSEDES F1/F5 of
   `c66dc80`):** with the authority SUPPORTED, a refused claim means MFO stays out of the equipment: no
   direct equip, no unequip (`cast/Equip.cpp` returns a transparent NoOp before the old-hold unequips;
@@ -6844,7 +6850,7 @@ load-bearing — removing any re-opens a silent-zero bug. **UNVERIFIED:** sync o
 comment, not independently checked here.
 
 ### Forms.cpp / Forms.h — FormID resolution + Field Orders grant ⚠️ FROZEN IDs
-Frozen local FormIDs (`Forms.h:21-57`, `0x800`+) are a contract with
+Frozen local FormIDs (`Forms.h:21-110`, `0x800` and up, `0x904/0x905` are the lockpick SNDRs, read by `logistics/Lockpick.cpp` not by `Resolve`) are a contract with
 `MFO_GenerateESP.py`, audited by `tools/audit_esp.py` (#41); changing one orphans
 every save that saw it; `0x802` stays reserved. `Resolve` (`:27`) ← `plugin.cpp:283`
 (after Config, before Quirks/sinks) — returns false only if `g_fieldOrders` missing;

@@ -74,6 +74,9 @@ REQUIRED = {
     0x834: ('CSTY', "MFO_RangedStyle",      ['EDID', 'CSGD']),
     # LOTD awareness: the detected flag the DLL writes and the MCM hiddenToggle reads.
     0x903: ('GLOB', "MFO_LOTDDetected",     ['EDID', 'FNAM', 'FLTV']),
+    # Positional lockpick sounds: SNDR copies the DLL plays at the follower (Lockpick.cpp).
+    0x904: ('SNDR', "MFO_LockpickPickMovementSD", ['EDID', 'CNAM', 'GNAM', 'ANAM', 'ONAM', 'LNAM', 'BNAM']),
+    0x905: ('SNDR', "MFO_LockpickPickBreakSD",    ['EDID', 'CNAM', 'GNAM', 'ANAM', 'ONAM', 'LNAM', 'BNAM']),
 }
 
 # Quests that are start-game-enabled but NOT run-once must appear in the SEQ or

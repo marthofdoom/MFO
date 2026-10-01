@@ -469,6 +469,10 @@ namespace MFO::Board {
                             if (r.active) ImGui::TextUnformatted(r.name.c_str());
                             else          ImGui::TextDisabled("%s", r.name.c_str());
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%08X", r.id);
+                            if (!r.active && !r.cell.empty()) {
+                                ImGui::SameLine();
+                                ImGui::TextDisabled("- %s", r.cell.c_str());
+                            }
 
                             ImGui::TableNextColumn();
                             if (!r.active) {

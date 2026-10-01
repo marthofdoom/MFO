@@ -642,6 +642,17 @@ namespace MFO::Logistics {
                           bool a_forceStock) {
             if (!a_follower || !a_item) return false;
 
+            // MFO-B134: a WEAPON whose claim was REFUSED (channel supported, no claim standing) is
+            // never equipped directly -- "MFO stays out" (marth 2026-09-28). Make it a real STOCK
+            // before the gem capture: no capture, no queued gem move, equipIt false, returns false.
+            if (!a_forceStock && a_item->As<RE::TESObjectWEAP>() && APMFBridge::EquipAuthoritySupported() &&
+                !APMFBridge::IsEquipAuthorityClaimed(a_follower->GetFormID())) {
+                a_forceStock = true;
+                spdlog::info("[equip] {:08X}: '{}' stocked, not equipped -- equip authority supported but no "
+                             "claim stands (MFO stays out)", a_follower->GetFormID(),
+                             a_item->GetName() ? a_item->GetName() : "?");
+            }
+
             // MEO gem transfer (#17): capture the OLD worn item this upgrade REPLACES
             // (base + instance uid) BEFORE the swap. CROSS-ROLE IS THE BUG (marth): a
             // new bow must never pull gems off the melee weapon. Same-role/slot only.
