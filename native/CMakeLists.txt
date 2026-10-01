@@ -35,6 +35,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Board.cpp
     Board_Progression.cpp
     Board_FieldKit.cpp
+    i18n/Strings.cpp
     Probe.cpp
     ProgProbe.cpp
     Progression.cpp
@@ -58,6 +59,8 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/CanAct.cpp
     cast/HealObs.cpp
     cast/Summon.cpp
+    cast/Archetype.cpp
+    cast/SummonProbe.cpp
     cast/Auto.cpp
     cast/Hands.cpp
     Scheduler.cpp

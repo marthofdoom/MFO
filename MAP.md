@@ -465,7 +465,7 @@ releases **by eviction** with a non-actor XMarker.
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
-### native/cast/ — Fire / Roads / CastOn / Equip / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / Auto / Hands + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
+### native/cast/ — Fire / Roads / CastOn / Equip / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / SummonProbe / Archetype / Auto / Hands + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
 Only module that mutates actor state; main-thread only. **Layout = the wave-1 subsystem-folder
 split (2026-09-24, `refactor/subsystem-folders-wave1`, drained REVIEW-BACKLOG MFO-B37), a pure
 move proven function by function by `tools/splitcheck`; before it the family was
@@ -538,13 +538,34 @@ per concern:
   - `cast/HealObs.cpp` (249) = `[heal-obs]`: `ReadbackWarnDue` (`:61`), `HealObsNote` (`:77`),
     the claim road's `HealObsClaimLap` (`:109`) / `HealObsNoteClaimFire` (`:115`) (animheal phase 2),
     `HealObsSweep` (`:140`); `ResetHealObs` (`:43`, extern since the split).
-- `cast/Summon.cpp` (369) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
-  `CastSummonOnce` (`:305`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
+- `cast/Summon.cpp` (383) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
+  `CastSummonOnce` (`:315`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
   `g_summonMx`/`g_summon`/`g_summonPosted` (`:68-69`, `:79`) is extern (ClearSelfCasts clears it).
 - `cast/Auto.cpp` (724) = the AUTO fan-out `CastAuto` (`:308`; its claim-road heal SERIES `:325`, see
   "ANIMATED HEAL CLAIM ROAD" below) with its pacing `g_autoCast` (`:22`)
   and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:193`), and
-  `IsSummonSpell` (`:266`, public; it lives here because `CastAuto` inlines it).
+  `IsSummonSpell` (`:269`, public; it lives here because `CastAuto` inlines it).
+- **SPELL ARCHETYPE PROBE (feat/mfo-spell-archetype-probe, task 7 slice P0, PASSIVE, no behaviour change).**
+  `cast/Archetype.cpp` = `ClassifyArchetype(SpellItem*)` (pure SPEL/MGEF form reads, cached per FormID under
+  the leaf `g_cacheMx`): shape, delivery, casting, two-handed, noDualMods, charge, range, area, projectile,
+  snap-to-navmesh, and a PREDICTED engine caster row mirrored from Harbinger `Docs/STATUS.md:135-161` (each
+  `kRows` entry cites its line); `NoteArchetypeRoad` = the once-per-(follower, spell, road) `[archetype]`
+  INFO + one WARN per (follower, spell) for a claim road meeting predicted `none` (ledger `g_noted`/`g_warned`
+  behind `g_noteMx`, cleared by `ResetArchetypeLog` from `ClearSelfCasts`); `CastBreadcrumb` = the flushed
+  `[cast-call]` line before every `CastSpellImmediate`; `DescribeArchetype` = the `[cfc]` enrichment
+  (`ComposedCast.cpp` NO-observed-cast warn). `cast/SummonProbe.cpp` = `ProbeSummonLanding`, the
+  self-reposting MAIN-thread `[summon-probe]` (offset, height, bearing, controller ground state at "appeared"
+  and +2 s "settled"), started from `SummonOnMain` right after the cast.
+  Call sites (all passive, delete the one line to remove): `NoteArchetypeRoad` at `CastSummonOnce` (covers
+  `cast/Fire.cpp:275`, `logistics/Service.cpp:1513`, `cast/Auto.cpp:603`), `CastOn.cpp` owned claim / heal
+  claim / legacy `ForceCast`, `DirectSelf.cpp` + `DirectTarget.cpp` heal claim and concentration claim,
+  `Auto.cpp` heal-claim series and `ApplyEffectFromTo`, `Direct.cpp` `ApplySelfEffect` / `ApplyTargetEffect`,
+  the two OOC `doCast`s in `logistics/Service.cpp`; `CastBreadcrumb` before each of the 9 direct
+  `CastSpellImmediate` sites in those files plus `SummonOnMain` (`Probe.cpp:224` is a probe and is not
+  crumbed). **What breaks:** nothing reads these results, so a wrong prediction only misleads a log read;
+  adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
+  `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
+  Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
 - `cast/Hands.cpp` (1191) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
   `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
@@ -1039,9 +1060,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     downed follower may keep his retreat, "still downed and crawling during retreat"; MFO-B153).
   * **Main-thread re-gates, right before each apply** (no cast, no magicka, `[bleed] ... apply
     REFUSED` once per caster until he can act, `NoteRefusedApply`): `ApplyEffectFromTo`
-    (`cast/Auto.cpp:89`), `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:323` / `:464`),
-    the legacy force `doCast` (`cast/CastOn.cpp:1327`), `SummonOnMain` (`cast/Summon.cpp:285`, verdict
-    Failed), the two OOC `doCast`s (`logistics/Service.cpp:1846` / `:1912`), and the drink
+    (`cast/Auto.cpp:77`), `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:339` / `:483`),
+    the legacy force `doCast` (`cast/CastOn.cpp:1621`), `SummonOnMain` (`cast/Summon.cpp:171`, verdict
+    Failed), the two OOC `doCast`s (`logistics/Service.cpp:1840` / `:1917`), and the drink
     (`DrinkBest`, `logistics/Service.cpp:70`: not posted, so the check sits in the same synchronous call
     as its `EquipObject`).
   * **Streams.** `SelfCastReconcile` / `TargetCastReconcile` end a live stream whose CASTER cannot act
@@ -1694,7 +1715,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   AUTO-only no-fanout)** — `Actuation::IsSummonSpell` + `Actuation::CastSummonOnce`
   (`cast/Summon.cpp`; main-thread half `SummonOnMain` `:171`, limit
   `SummonLimit` `:109`) are THE single summon path. The combat `Fire` guard
-  (`cast/Fire.cpp:215`) and the Logistics OOC cast block (`logistics/Service.cpp:1060`) send every
+  (`cast/Fire.cpp:275`) and the Logistics OOC cast block (`logistics/Service.cpp:1513`) send every
   summon there BEFORE any other road, for every target setting (self/player/foe/AUTO);
   `CastAuto` delegates too. **Threading:** the worker only runs the competence/magicka gates,
   reads the main thread's last verdict (`g_summon`, leaf mutex, fresh 1 s), throttles posts
@@ -4592,6 +4613,9 @@ Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
 `imgui_impl_win32` = vendored, do not read.**
+- **DISPLAY TEXT is i18n keys (2026-10-01):** no wording a player reads lives in the three Board TUs (only symbols and the MFO brand stay literal)
+  as a literal any more. See the `native/i18n/` entry (section 6, below this one): `Str::Get/Fmt/Label`, `VocabEntry.key`,
+  `FitW` for fixed columns. New UI text = a new line in `i18n/Strings_keys.h` + regenerate the template.
 - **Overlay mechanism (`Board.cpp:337-1000`):** RENDER is offset-free — `PresentThunk`
   (`:610`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable slots 8/13**
   (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable` `:689`), the
@@ -4781,6 +4805,49 @@ name/arity breaks dispatch silently (bumps `g_failures`). `DoCombatSpellApply` (
 `policy->EmptyHandle()` not `0` (`:29`) — a real correctness point.
 
 ---
+
+### native/i18n/ — Strings.h / Strings.cpp / Strings_keys.h — display text (translations)
+ClickUp 86e3gmxmg. Every player-facing ImGui string is a stable KEY with an English default
+compiled in; a translator ships `Data/Interface/Translations/MFO_<LANGUAGE>.txt` (UTF-16 LE BOM,
+`$MFO_<Id><TAB>text`, the MCM Helper / Skyrim convention) and never rebuilds the DLL. Guide:
+`Docs/TRANSLATING.md`. Template: `out/Interface/Translations/MFO_ENGLISH.txt`, GENERATED by
+`tools/i18n/gen_template.py` from the key list (`--check` is run by `release.sh`).
+- `i18n/Strings_keys.h` = THE key list, one `MFO_STR(Id, "English", argc)` per line (X-macro, no
+  include guard; the generator parses it line by line, so keep one literal per line). `Strings.h`
+  turns it into `enum class K` and the public API: `Get(K)`, `Fmt(K,{args})`, `Label(K,"id")`
+  (`"text###id"` for an ImGui label with a stable ID), `Reload`, `HasOverrides`. `Strings.cpp`:
+  `kGameTerms` (the game-term bridge), `Parse` (placeholder validation), `Fill` (translator lookup),
+  `Reload` (publish).
+- **PRECEDENCE per key:** `MFO_<LANG>.txt` entry (read through `SKSE::Translation::Translate`, the
+  game's Scaleform translator, which the ENGINE fills from every `Interface/Translations/*_<LANG>.txt`;
+  `Reload` calls `SKSE::Translation::ParseTranslation("MFO")` only if it found nothing) > the game's own
+  localized word for the few keys in `kGameTerms` (a `$key` of Skyrim_<LANG>.txt or a `gmst:` string;
+  NON-English only, so an English game never changes spelling) > the English default.
+- **THREADING (CLAUDE.md #4):** `Reload` is MAIN THREAD only (`plugin.cpp` kDataLoaded, plus ONE
+  retry at kPostLoadGame/kNewGame while `HasOverrides()` is false). It builds a whole immutable
+  `Table` and publishes it with one release store. `Get/Fmt/Label` are lock-free from ANY thread (one
+  acquire load). A published table is NEVER freed or mutated (old ones leak on purpose) so a pointer
+  a render frame holds cannot dangle. `Fmt` never reads engine state. Before the first `Reload` every
+  call answers the English default.
+- **FORMAT SAFETY:** placeholders are `{1}..{argc}` only. `Parse` rejects any other brace and any
+  index outside 1..argc; a bad override is DROPPED to the English default with a `[i18n]` warn line
+  (never silent). A string is never used as a printf/std::format format. Args are pre-formatted by the
+  caller (`Arg` from ints/strings, `Arg::F(v, decimals)` for floats) so a translation cannot pick a
+  conversion. The board passes results to ImGui as `"%s"`.
+- **Depended-on-by:** `Board.cpp` (HUD, `SpellTooltip`, snapshot `subjectName`), `Board_FieldKit.cpp`,
+  `Board_Progression.cpp`, `Board_internal.h` (`VocabEntry::key`/`label()`, `FitW`), `plugin.cpp`.
+- **What breaks if you change this:** rename or reorder-by-meaning a key id and every shipped
+  translation silently falls back to English for it (ids are a frozen external contract, like the INI
+  key names). Add a key: add the line, run the generator, commit the template. Change a default's
+  `{N}` set without updating argc: the generator and `Reload` both log it. Never call `Reload` off
+  the main thread. A widget whose label is translated MUST carry a `###id` (`Label`) or its ImGui ID
+  moves with the language; table lists that can repeat a label use `PushID(k)` (already so).
+  Fixed table columns use `FitW`/CalcTextSize (English width is the floor). Gambit opcode strings
+  (`Vocab::kCond*`/`kAct*`) are FROZEN and are not keys: `VocabEntry.op` is the saved identity,
+  `VocabEntry.key` only the label.
+- **NOT YET MOVED (backlog):** diagnostic text that reaches the board from other modules
+  (`rv.fail` = `lastFailReason`, the progression blocker/whyNot reasons, the add-on's own tab label),
+  and the MCM (`out/MCM/Config/MFO/config.json` is plain English, no `$` keys).
 
 ## 7. External bridges / probes / diagnostics — `MEOBridge.*`, `MEO_API.h`, `apmf/` (APMFBridge), `TradeBridge.*`, `Probe.*`, `Diagnostics.*`
 

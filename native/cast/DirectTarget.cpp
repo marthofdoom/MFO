@@ -146,6 +146,7 @@ namespace MFO::Actuation {
         if (g_firingRule != kNoRule &&
             ComposedCast::ChooseHealRoad(a_follower, a_spell, a_target) ==
                 ComposedCast::HealRoad::Claim) {
+            NoteArchetypeRoad(a_follower, a_spell, ArchRoad::HealClaim);   // [archetype] probe (passive)
             switch (ComposedCast::Try(a_follower, a_spell, a_target, kind, a_stopPct)) {
             case ComposedCast::TryResult::Claimed: return SelfCast::Applied;
             case ComposedCast::TryResult::Held:    return SelfCast::Held;
@@ -193,6 +194,7 @@ namespace MFO::Actuation {
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
             !Config::g_legacyCastHybrid.load()) {
+            NoteArchetypeRoad(a_follower, a_spell, ArchRoad::ConcClaim);   // [archetype] probe (passive)
             if (APMFBridge::ClaimOffenseCast(id, spellID, targetID, APMFBridge::kApmfHandLeft,
                                              /*concentration=*/true, /*stopPct=*/0)) {
                 // Fetch the SAME claim's minted delivery-flip proxy (ABI v6; 0
