@@ -830,7 +830,7 @@ namespace MFO::Board {
                         }
                     }
 
-                    // INTERFACE HOTKEYS (iBoardKey / iHudKey, 0 = unbound). Same
+                    // INTERFACE HOTKEYS (iBoardKey / iHudKey, <= 0 = unbound). Same
                     // shape as the focus key, panel CLOSED and never consuming.
                     // The board key OPENS the board here; while it is open the
                     // keyboard case below closes it (this block does not run then,
@@ -844,14 +844,14 @@ namespace MFO::Board {
                         // or flip the HUD.
                         auto* ui = RE::UI::GetSingleton();
                         const bool menuUp = ui && ui->GameIsPaused();
-                        if ((bk != 0 || hk != 0) && !menuUp) {
+                        if ((bk > 0 || hk > 0) && !menuUp) {
                             for (auto* e = *a_events; e; e = e->next) {
                                 if (e->eventType != RE::INPUT_EVENT_TYPE::kButton) continue;
                                 auto* b = static_cast<RE::ButtonEvent*>(e);
                                 if (!b->IsDown()) continue;                 // edge only
                                 if (b->device.get() != RE::INPUT_DEVICE::kKeyboard) continue;
                                 const int code = static_cast<int>(b->GetIDCode());
-                                if (bk != 0 && code == bk) {
+                                if (bk > 0 && code == bk) {
                                     // Same body as the Field Orders power (Diagnostics.cpp):
                                     // PublishSnapshot reads g_followers, so it runs in a
                                     // gated AddTask, never inline on the input thread.
@@ -866,7 +866,7 @@ namespace MFO::Board {
                                             spdlog::info("[board] iBoardKey pressed but the overlay is unavailable");
                                         }
                                     });
-                                } else if (hk != 0 && code == hk) {
+                                } else if (hk > 0 && code == hk) {
                                     ToggleHud();   // a bare atomic flip, safe on the input thread
                                 }
                             }
@@ -990,7 +990,7 @@ namespace MFO::Board {
                                 // instantly reopens.
                                 if (down) g_shoutDownSeen = true;
                                 else if (g_shoutDownSeen.exchange(false)) g_wantClose = true;
-                            } else if (Config::g_boardKey.load() != 0 &&
+                            } else if (Config::g_boardKey.load() > 0 &&
                                        static_cast<int>(code) == Config::g_boardKey.load()) {
                                 // iBoardKey closes the open board on RELEASE, exactly like
                                 // the shout key: both edges are consumed here (never
@@ -1613,6 +1613,15 @@ namespace MFO::Board {
             if (auto* f = RE::TESForm::LookupByID(id)) {
                 if (auto* a = f->As<RE::Actor>(); a && a->GetName() && *a->GetName()) {
                     r.name = a->GetName();
+                }
+                // Current cell name, else the location name (retained followers only). Worker-side
+                // read-only lookups copied into the snapshot, so the render thread never touches the actor.
+                if (auto* a = f->As<RE::Actor>()) {
+                    if (auto* c = a->GetParentCell(); c && c->GetName() && *c->GetName()) {
+                        r.cell = c->GetName();
+                    } else if (auto* loc = a->GetCurrentLocation(); loc && loc->GetName() && *loc->GetName()) {
+                        r.cell = loc->GetName();
+                    }
                 }
             }
             r.active         = false;

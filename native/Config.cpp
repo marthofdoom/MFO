@@ -181,8 +181,8 @@ namespace MFO::Config {
             else if (a_key == "bCommandCast")       setB(g_commandCast);
             else if (a_key == "bCommandTarget")     setB(g_commandTarget);
             else if (a_key == "iFocusKey")          setI(g_focusKey, 0, 255);
-            else if (a_key == "iBoardKey")          setI(g_boardKey, 0, 255);
-            else if (a_key == "iHudKey")            setI(g_hudKey, 0, 255);
+            else if (a_key == "iBoardKey")          setI(g_boardKey, -1, 255);
+            else if (a_key == "iHudKey")            setI(g_hudKey, -1, 255);
             else if (a_key == "fTwoHandedDebounce") setF(g_twoHandedDebounce, 0.0f, 60.0f);
             else if (a_key == "fSharedCombatGrace") setF(g_sharedCombatGrace, 0.0f, 300.0f);
             else if (a_key == "bLogistics")         setB(g_logistics);
@@ -353,8 +353,8 @@ namespace MFO::Config {
             g_commandCast        = false;
             g_commandTarget      = true;
             g_focusKey           = 0x2B;
-            g_boardKey           = 0;
-            g_hudKey             = 0;
+            g_boardKey           = -1;
+            g_hudKey             = -1;
             g_twoHandedDebounce  = 6.0f;
             g_sharedCombatGrace  = 15.0f;
             g_logistics          = true;
@@ -463,7 +463,8 @@ namespace MFO::Config {
             { "fLeashMin", "512.000000" },     { "fLeashMax", "4000.000000" },
             { "fMeleeReach", "200.000000" },
             { "iMenuStyle", "0" },             { "bShowHud", "0" },
-            { "iBoardKey", "0" },              { "iHudKey", "0" },
+            { "iBoardKey", "-1" },             { "iHudKey", "-1" },
+            { "bHotkeyUnbindMigrated", "1" },   // the one-shot marker of the hotkey migration (NOT a control)
             { "bDebugUnlockSlots", "0" },
         };
 
@@ -669,10 +670,116 @@ namespace MFO::Config {
             }
         }
 
+        // HOTKEY-UNBIND MIGRATION (2026-09-30; marth: "The hotkeys should default to
+        // empty"). iBoardKey / iHudKey defaults moved 0 -> -1, but every existing store
+        // was seeded with the OLD shipped 0 (DIK 0 is not a real key, yet the MCM keymap
+        // shows it as a bound key). ONCE per store: a store without the marker key
+        // `bHotkeyUnbindMigrated` has a stored bare `0` for either key (exact key, under
+        // [General], optionally followed by whitespace, CR or an inline comment -- the
+        // SAME matching rules as the heal migration above) rewritten to `-1`. `-1` is
+        // two bytes, so to stay in place the TWO bytes " 0" (the space right before the
+        // 0) become "-1": `iBoardKey = 0` -> `iBoardKey =-1`. Both bytes are read back
+        // (' ' then '0') before either is written; flush + good() + close checks; no
+        // truncation. A line with no space right before the 0 (`iBoardKey=0`) cannot be
+        // patched in place: logged, left alone (it still reads as unbound, since the
+        // native clamp maps <= 0 to no key), and the marker is still written so the
+        // launch does not retry forever. On an I/O FAILURE: logged loudly and the marker
+        // is NOT appended, so the next launch tries again. The marker is not an MCM
+        // control (tools/audit_mcm.py STORE_ALLOWLIST). The native parse (Trim +
+        // std::stoi) accepts `=-1` with no space.
+        bool hotkeyMarkerHold = false;
+        if (!present("bHotkeyUnbindMigrated")) {
+            const std::size_t          bomOff = hadBom ? 3 : 0;
+            constexpr std::string_view kKeys[] = { "iBoardKey", "iHudKey" };
+            std::vector<std::size_t>   digits;     // FILE offsets of each patchable '0' (preceded by ' ')
+            std::size_t                stuck = 0;  // stored 0s with no space before them
+            bool                       inGeneral = false;
+            std::size_t                pos = 0;
+            while (pos < text.size()) {
+                auto eol = text.find('\n', pos);
+                if (eol == std::string::npos) eol = text.size();
+                const std::string_view lv(text.data() + pos, eol - pos);
+                const auto             b = lv.find_first_not_of(" \t\r");
+                if (b != std::string_view::npos) {
+                    if (lv[b] == '[') {
+                        const auto close = lv.find(']', b);
+                        std::string name;
+                        if (close != std::string_view::npos)
+                            name = Trim(std::string(lv.substr(b + 1, close - b - 1)));
+                        for (auto& c : name) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        inGeneral = name == "general";
+                    } else if (inGeneral) {
+                        for (const auto kKey : kKeys) {
+                            if (lv.substr(b, kKey.size()) != kKey) continue;
+                            auto i = b + kKey.size();
+                            while (i < lv.size() && (lv[i] == ' ' || lv[i] == '\t')) ++i;
+                            if (i < lv.size() && lv[i] == '=') {
+                                ++i;
+                                while (i < lv.size() && (lv[i] == ' ' || lv[i] == '\t')) ++i;
+                                if (i < lv.size() && lv[i] == '0') {
+                                    auto r = i + 1;
+                                    while (r < lv.size() && (lv[r] == ' ' || lv[r] == '\t' || lv[r] == '\r')) ++r;
+                                    if (r == lv.size() || lv[r] == ';' || lv[r] == '#') {
+                                        if (i > 0 && lv[i - 1] == ' ') digits.push_back(bomOff + pos + i);
+                                        else ++stuck;
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                pos = eol + 1;
+            }
+            if (stuck > 0)
+                spdlog::warn("[config] MCM migration: {} hotkey line(s) store a bare 0 with no space before it "
+                             "(`iBoardKey=0` style) and cannot be rewritten in place; left as is (0 still "
+                             "reads as unbound, only the MCM keymap shows a key). Marking the store migrated",
+                             stuck);
+            if (digits.empty()) {
+                spdlog::info("[config] MCM migration: iBoardKey / iHudKey are not the old default 0 in the "
+                             "store -- nothing to clear; marking the store migrated");
+            } else {
+                std::fstream f(kMCMPath, std::ios::in | std::ios::out | std::ios::binary);   // no trunc
+                bool         ok      = static_cast<bool>(f);
+                std::size_t  patched = 0;
+                for (const auto off : digits) {
+                    if (!ok) break;
+                    f.seekg(static_cast<std::streamoff>(off - 1));
+                    const auto sp = f.get();
+                    const auto zr = f.get();
+                    if (!f.good() || sp != ' ' || zr != '0') { ok = false; break; }   // file moved under us
+                    f.seekp(static_cast<std::streamoff>(off - 1));
+                    f.put('-');
+                    f.put('1');
+                    f.flush();
+                    if (!f.good()) { ok = false; break; }
+                    text[off - 1 - bomOff] = '-';
+                    text[off - bomOff]     = '1';
+                    ++patched;
+                }
+                f.close();
+                if (f.fail()) ok = false;
+                if (ok) {
+                    spdlog::warn("[config] MCM migration: {} hotkey value(s) 0 -> -1 (the board and HUD "
+                                 "hotkeys now start empty; the old 0 was the retired default). Patched in "
+                                 "place, ONCE -- pick a key in the MCM and it stays", patched);
+                } else {
+                    hotkeyMarkerHold = true;
+                    spdlog::error("[config] MCM migration FAILED: could not patch iBoardKey / iHudKey 0 -> -1 "
+                                  "in {} ({} of {} value(s) written). The store was not truncated or "
+                                  "rewritten and is NOT marked migrated, so the next launch tries again; "
+                                  "until then a stored 0 still reads as unbound",
+                                  kMCMPath, patched, digits.size());
+                }
+            }
+        }
+
         std::string add;
         int n = 0;
         for (const auto& [k, v] : kMcmDefaults) {
             if (healMarkerHold && std::string_view(k) == "bHealAnimMigrated") continue;
+            if (hotkeyMarkerHold && std::string_view(k) == "bHotkeyUnbindMigrated") continue;
             if (!present(k)) { add += k; add += " = "; add += v; add += "\n"; ++n; }
         }
         if (add.empty()) return;
