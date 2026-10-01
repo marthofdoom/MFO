@@ -982,7 +982,7 @@ namespace MFO::APMFBridge {
             if (o.heal.handle != APMF_API::kInvalidHandle && now - o.heal.refreshed >= facetExpiry) {
                 // BUILD-WINDOW HOLD (field 2026-09-30b): a heal claim younger than
                 // kHealHoldNeverObservedMs and not yet seen firing is still waiting for
-                // the engine to build its Restore caster (measured claim-to-first-charge
+                // the engine to build its Restore caster (measured claim-to-fire
                 // 2.3-4.5 s). The rule can skip a lap or two (PickAlly's LoS trust) and
                 // let `refreshed` go stale inside that window; releasing then restarts
                 // the build (a floor claims the hand, the next lap re-mints the proxy

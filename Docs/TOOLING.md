@@ -138,13 +138,15 @@ python3 MFO_GenerateESP.py out`.
   `FID_*` constants at the top; `OWN = 0x01000000`. These are a **frozen
   contract** with `native/Forms.h` (#41) — changing one orphans every save that
   saw it. `0x802` is permanently reserved.
-- **MFO_Progression.esl** — `PGID_*` constants, prefix `OWN_PROG = 0x02000000`
-  (own records move to master index **0x02** because the ESL masters *two*
-  plugins). Local ids still `0x800`+ (ESL-legal range `0x800`–`0xFFF`).
+- **MFO_Progression.esl** — `PGID_*` constants, prefix `OWN_PROG = 0x01000000`
+  (own records use master index **0x01**: since the v1.1 Vortex fix the ESL
+  masters only Skyrim.esm and no longer MFO.esp; the prefix was `0x02` before
+  that). Local ids still `0x800`+ (ESL-legal range `0x800`–`0xFFF`).
   `PROG_NEXT_OBJECT_ID` must stay **above every emitted local id** (bumped to
   `0x871` when the MCM quest `0x870` was added).
-- Cross-references from the ESL into Skyrim.esm use master index `0x00`; into
-  MFO.esp use `0x01` (the addon-sentinel keyword the manifest points at).
+- Cross-references from the ESL into Skyrim.esm use master index `0x00`. There
+  is no MFO.esp master: the add-on manifest self-declares through its own
+  keyword (`PGID_MANIFEST_KYWD`).
 
 ### Record helpers
 

@@ -34,6 +34,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning for deferral:** not fixable in general without an APMF dry-run / "can you serve this?" query. Recorded so the next reader does not assume F2 is closed.
 
 ### MFO-B3 — right-first hand selection fails toward RIGHT when `bWeaponStyleControl` is OFF
+- **NARROWED** (`fix/mfo-logic-bundle2`): with the switch off `WeaponHandExposure` falls back to `Followers::GetBaseClass` Melee/Ranged (switch ON unchanged). STILL OPEN: an Auto (0) hybrid with the switch off; reading its equip gambits needs a new read-only `Followers` accessor (no new plumbing taken in a small-fix round).
 - **Raised:** Fable review of `1044816` (finding C, SEV-4). Recorded at the site and in MAP.md by `625f3b7`.
 - **Severity:** SEV-4 (non-default config only; default is ON, `Config.h:505`)
 - **Finding:** `WeaponHandExposure` depends on a `g_forcedWeapon` entry, and `EquipWeapon` writes one only under `Config::g_weaponStyleControl` (the kill-switch-off branch is a plain `EquipObject`, no ledger); `ReconcileForcedWeapon` releases unconditionally when off. So with that feature off, a melee/hybrid follower in the transient-unarmed gap still lands RIGHT — the 2026-09-05 "cast never left rest" shape.
@@ -56,6 +57,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **The only genuine claim-to-first-CHARGE-STATE data in the tree:** ~2.5 s (0906 heal: mint 19:59:11.158 -> castobs Unk1 <=13.643) and ~3.6 s (0908 heal: request 11:35:57.163 -> `CASTER[L] Unk1` 11:36:00.778).
 - **Ready-made fix (no re-derivation needed):** relabel both endpoints as claim-to-fire, and quote the two charge-state figures above wherever "claim-to-first-charge" is actually meant.
 - **Provenance caveat that does NOT go away now the DIAG is committed:** the 4.5 s heal figure's sole source is `Docs/DIAG-2026-09-08-field.md`, whose own arithmetic disagrees with itself — its timeline (`:257`) gives request 57.163 -> fire 03.258 = **6.1 s**, while it labels 4.5 s "from repoint" (`:52, :257`) and "claim-to-fire" (`:266`). Do not treat a committed citation as a settled measurement.
+
+- **DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01):  the 2.3-4.5 s span is relabelled claim-to-fire in Hands.cpp, Bridge.cpp and MAP.md, and the two real claim-to-first-charge figures (~2.5 s, ~3.6 s) are quoted once in Hands.cpp.**
 
 ### MFO-B7 — `kHealHoldNeverObservedMs` (4000 ms) is sized from a datum the newest session already exceeded
 - **Raised:** Fable review of `e1e55fb` (F-2, SEV-4). Pre-existing; NOT introduced by this cycle. `e1e55fb` did, however, bind two further questions to the same number (see MFO-B8).
@@ -82,6 +85,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Finding:** `Actuation_Hands.cpp:439-442` (landed by `6bfbd79`, and cited as the drain for MFO-B4) says the hold's heartbeat "stops at `kHealHoldNeverObservedMs` for a claim that never fires ... bounded by that window". `Actuation_Hands.cpp:710-716` (landed by `e1e55fb`) says the real bound is the SUM, ~4.8-6.5 s, and that it also covers a claim that fired and went quiet.
 - **Fix:** one-line reword at `:439-442`. A file that states two bounds for one mechanism will get the wrong one believed — the same shape as the `g_forcedWeapon` "no lock" / "guard every access" pair this cycle already had to reconcile.
 
+- **DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01): the `Hands.cpp` heal-lift comment now states the SUM bound, matching the later comment.**
+
 ### MFO-B10 — the hand-index enum in `Actuation_internal.h` is unnamed
 - **Raised:** Fable review of `89085bd` (the `refactor/actuation-split` mechanical split), SEV-5.
 - **Severity:** SEV-5
@@ -89,6 +94,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** the enum was file-local in `Actuation.cpp` before the split, where linkage of its enumerators could not matter; promoting it to a shared header is what surfaces the corner. It is a CORNER, not a bug — no practical effect, and the reviewer said so in the same breath. The whole cycle graded nothing above SEV-5, so rule 9 ends it here.
 - **Why it was NOT fixed in the split:** naming the enum is a RENAME, which the split's brief forbids by name ("no refactors, no renames"), and a rename touching a shared header consumed by three TUs is its own change with its own review. Deferred, not dropped.
 - **Fix shape when drained:** give it a name in the house style the other internal headers use (`enum class` where the call sites can take the scoping, or a plain named `enum` if the bare `kHandLeft`/`kHandRight`/`kHandCount` spellings must survive at ~60 call sites across `Actuation.cpp` and `Actuation_Hands.cpp`). Purely mechanical, but it touches every one of those call sites, so it wants a diff review of its own.
+
+- **DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01): the enum (now in `cast/Actuation.h`) is `enum HandIndex : std::size_t`, enumerators unchanged, so no call site changed.**
 
 ### MFO-B11 — v6→v7 PRGN migration under cap saturation under-records the auto ledger
 - **Raised:** Fable tier-3 review of `4a62688` (`feat/mfo-progression-strict-points-perk-style`), SEV-5. F5.
@@ -114,8 +121,10 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** the migration carries the v6 applied delta verbatim (the only datum), and the F3 hold-time floor (a whole-point actor write) is applied to it like any v7 ledger value; the two are individually correct and only meet in the cap-saturated + fractional-natural corner, where the effect is at most one displayed integer. Nothing above SEV-3 remained in the round, so rule 9 ends the cycle here.
 - **Why it was NOT fixed:** raised in the round that ended the cycle; a non-layout tweak of the migration branch with its own review cost. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** round the migrated autoPts up to the next whole point when points is cap-clamped (autoPts = ceil(autoPts − 1e-3)), or fold into the MFO-B11 entry as a note. Not a co-save layout change.
+- **DRAINED by `fix/mfo-cosave-readers` (2026-10-01), pending its tier-A review.** The clamp itself is NOT knowable at migration time: the save-time `skillCap` was never persisted in PRGN, and the live `g_econ.skillCap` is this session's (it may have changed, it is the 100 default with the addon absent, and it is main-thread state the load callback does not read today). Its only consequence for this finding IS knowable from the record: v6 shares were whole points and manual points are whole (+1 per placement, `Verbs.cpp:434`), so `points − manual` is fractional only on a cap-clamped skill with a fractional natural. `progression/Allocator.cpp:653` now applies `autoPts = max(0, ceil(max(0, points − manual) − 1e-3))` in the `a_version < 7` branch: the identity on a whole share (float noise within 1e-3 snaps to the integer), a round-up exactly on the corner. Bytes read unchanged (a value transform after the reads), no version bump. MFO-B11 stays OPEN (the wasted points are still unrecoverable).
 
 ### MFO-B14 — the empty-hand condition signal can mark a "free off-hand" one-hand perk as unarmed
+- **DRAINED** (`fix/mfo-logic-bundle2`): `ReadStyleFacts` unarmed now requires the RIGHT hand pinned empty; a left-empty-only test no longer votes.
 - **Raised:** Fable tier-3 review of `49a9cc2` (`feat/mfo-shed-fists-rule`), SEV-4. F2.
 - **Severity:** SEV-4
 - **Finding (verbatim):** F2 — SEV-4, PLAUSIBLE: the empty-hand condition signal can mark a 'free off-hand' one-hand perk as unarmed. native/Progression.cpp:326-336, 352-354. The per-list rule fires on a list where any GetEquippedItemType(hand) test admits code 0 only, with no hand test excluding 0 and no weapon-kind keyword. A perk of the shape 'left hand empty' alone (an overhaul's 'no offhand' one-handed perk with no WeapType* keyword and no right-hand GetEquippedItemType test) satisfies it. If MFO allocates such a rank to an enrolled follower, votes.unarmed > 0, fists become valid, and the shed will strip him of an off-role weapon he was legitimately swinging one-handed. Shape-level risk, not demonstrated. Cheap tightening: require the OTHER hand not to be a one-hand-weapon signature on the same tree/node, or require both hands empty unless the primaryAV signal also fires.
@@ -165,6 +174,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
 - **Drain attempt 2026-10-01 (`fix/mfo-backlog-batch3`), NOT done -- STOP per brief.** `Equip.cpp` also consumes the inline `Logistics::WeaponScore` (`Logistics_internal.h`, which pulls `WeaponKindOf`, `kStyleBias`, `Progression::WeaponKind`), and `WeaponRoles` needs the `WepClass` enum. A seam is the struct + enum + three inline definitions (>40 lines, moves inline defs), or a non-inline `WeaponScore` wrapper; its own brief.
 
+- **PARTLY DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01): the include is dropped from Fire/Roads/CastOn. `Equip.cpp` really uses `ComputeWeaponRoles`/`WeaponRoles` (and four more internal symbols), so the public seam in Logistics.h is still open.**
+
 ### MFO-B20 — `kMaxForcedWeapons` (64) is now a PAIR cap and the FWPN reader aborts the whole load above it
 - **Raised:** Fable tier-3 review of `f771399` (`feat/mfo-dualwield-combat-pick`), SEV-5. F8.
 - **Severity:** SEV-5
@@ -172,6 +183,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** a dual hold writes two pairs per follower, so the cap is effectively 32 dual-wielding followers; the party is bounded far below that, and the abort path only drops the release sweep (a session starts hold-free anyway once the gambit re-forces).
 - **Why it was NOT fixed:** unreachable at party scale; raised in a round with nothing above SEV-3 once F1-F5 were fixed. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** raise the cap to `2 * kMaxFollowers`-shaped headroom or make the reader skip (not abort) past it; not a layout change (the count field is unchanged).
+- **DRAINED by `fix/mfo-cosave-readers` (2026-10-01), pending its tier-A review.** Chose RAISE + a matching WRITER clamp, not skip: `kMaxForcedWeapons` (`cast/Equip.cpp:1154`) = `2u * 4096u` (2 hands x the FLWR `kMaxFollowers`, a literal because that constant is anon-namespace in `Serialization.cpp`), and `CoSaveForcedWeapons` truncates its snapshot to the same cap with an error line, so every count the writer can emit is read in full and an above-cap count can only be a corrupt record (still aborts). A skip would have read the first N pairs and left every later pair's stale force-lock unreleased. Review round (same branch): the truncation path alone stable-sorts by follower FormID and cuts at a follower boundary (whole followers drop, never half a dual hold); ordinary saves are unsorted and byte-identical. Layout unchanged (`u32 count; count x {u32 follower, u32 weapon}`, v1).
 - **Surfaced at edit time from:** MAP.md §1 FWPN entry + §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
 
 ### MFO-B21 — `ComputeWeaponRoles` (inventory walk + style mirror lock) now also runs from every pick lap and every 5 s top-up attempt
@@ -192,6 +204,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained (verbatim):** move the `[equip] ... GAMBIT equip shield` line into the posted closure after the null checks (log what actually happened), optionally with an `IsTracked`/alive check; same shape as the loot precedent.
 - **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
 
+- **DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01): the line is logged inside the closure after the null checks. The combined `[equip] ... + shield` line at the weapon-equip site is untouched.**
+
 ### MFO-B23 — CoLoad both-hands-same-form: the second unequip is slot-less by object after the left-slot one
 - **Raised:** Fable round-2 review of `1ac3c6b` (`feat/mfo-dualwield-combat-pick`), SEV-5. F-F.
 - **Severity:** SEV-5
@@ -203,6 +217,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **DRAINED by `fix/mfo-backlog-batch3` (2026-10-01).** `Loadout::RightHandSlot()` (`Loadout.cpp`/`.h`, FormID lookup `0x00013F42`, DOBJ `RHEQ` index 20 = `kRightHandEquip` in the fork's `BGSDefaultObjectManager.h`) is passed on `Equip.cpp`'s CoLoad `inRight` unequip.
 
 ### MFO-B24 — keep gates the second one-hander on `keepRoles.melee`, loot/buy on `meleeTargetClass`; a base caster keeps two daggers but never fetches a second
+- **DRAINED** (`fix/mfo-logic-bundle2`): `keepSecond1H` (`logistics/SwapUp.cpp`) gates on the identical meleeTargetClass expression as buy/loot; MAP wording softened.
 - **Raised:** Fable review of `b3ac577` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5 (a).
 - **Severity:** SEV-5
 - **Finding (verbatim):** SEV-5 keep gates the second 1H on `keepRoles.melee == OneHand` (Logistics_Economy.cpp:687) while loot/buy gate on `meleeTargetClass == OneHand` (Loot_Equipment.cpp:147, Economy.cpp:459), which is `Other` for a base caster → a caster with a dagger and dual-wield votes keeps two daggers but never fetches a second; harmless; MAP's "ONE rule" overstated for casters.
@@ -229,6 +244,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** the lift-on-change is what keeps the back-off from masking a request that WOULD now succeed; narrowing the fingerprint trades that for quieter logs and wants a deck measurement first. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** narrow the fingerprint to the stalled key's own inputs (that item's worn (base,uid) + that gem base's loose count) so an unrelated socket/swap does not lift it; or keep the lift but suppress the re-warn within the original 60 s window.
 - **Surfaced at edit time from:** MAP.md §7 MEOBridge "RETURN LOGGING + STALL DETECTOR" What-breaks.
+- **DRAINED by `fix/mfo-gems-backlog` (2026-10-01), pending its review.** Narrowed fingerprint (the first fix shape): each stall key now lifts only when ITS OWN inputs change, `keyPrint` in `native/MEOBridge.cpp` `ReconcileLooseGems` = the item's worn (base,uid) + that gem base's loose count, checked by one lift sweep at the top of the pass. An unrelated socket or swap no longer lifts it, so B31 (our own swap-up lifting G's back-off) is gone with it. The 60 s floor still bounds a stale key, and `inventoryKey` stays the LEFTOVER line's fingerprint.
+
 
 ### MFO-B27 — the stall detector's progress signal is the per-ITEM empty count shared by both ops; another slot landing on the same item resets a genuinely stuck key
 - **Raised:** Fable round-2 review of `5f814d5` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5.
@@ -238,6 +255,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** bounded and in the safe direction (later, never spurious); a per-slot progress signal needs `GetGemDetails` re-read per slot per pass and its own review. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** key progress on the SLOT, not the item: record `filled.contains(slot)` (from `GetGemDetails`) at issue and treat "this slot is still empty next pass" as no-progress, independent of sibling slots; the unsocket op mirrors it with "this slot is still filled".
 - **Surfaced at edit time from:** MAP.md §7 MEOBridge "RETURN LOGGING + STALL DETECTOR" What-breaks.
+- **DRAINED by `fix/mfo-gems-backlog` (2026-10-01), pending its review.** `StuckState.emptyAtIssue` is replaced by `pendingAtIssue`, and `stallGate` takes the slot's own state read from `GetGemDetails` this pass (op 0 still empty, op 1 still filled) instead of the item's empty count. A sibling slot landing no longer resets a stuck key. The STUCK line now says `the slot never filled/emptied`.
+
 
 ### MFO-B28 — bought weapons never reach `AcquireEquip`, so a BOUGHT primary upgrade carries no gems (pre-existing)
 - **Raised:** Fable round-2 review of `5f814d5` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5.
@@ -257,6 +276,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** carve-out (b) question: if marth's pass criterion is "M stops bouncing" fix before deploy; if "bounce ≤ once per back-off window, warned" is acceptable, defer.
 - **Why it was NOT fixed:** coordinator call 2026-09-14: loud, bounded to once per 60 s window, does not corrupt the next test (the STUCK line still names the request); deploy proceeds; marth informed.
 - **Fix shape when drained (verbatim):** (i) at expiry retry ONLY via the slot path — the swap-up keeps skipping a gem whose key EXISTS for this item (expired or not); the key is then erased only by the fingerprint-change lift; or (ii) keep `reported`/pass history across expiry and grow the back-off (exponential) so the warn escalates instead of repeating.
+- **DRAINED by `fix/mfo-gems-backlog` (2026-10-01), pending its review.** Fix shape (i). An op-0 key with a declared back-off now survives its expiry untouched (end-of-pass forget keeps it) and is erased only by the lift sweep (B26 fingerprint change). The swap-up reads the new `socketKeyHeld` (key exists, expired or not) so it never evicts for a gem MEO refused; the slot path stays the only retry (`stallGate` resets an expired key). Interaction with B26: the narrowed fingerprint is what makes the held key safe to keep, because our own eviction/re-socket of another gem no longer changes it. A fully-socketed item now never retries the refused gem until a slot opens or its inputs change.
+
 
 ### MFO-B30/B31/B32 — SEV-5 notes from the same review (`64512aa`)
 - **B30:** stuck key is per-SLOT, exclusion per-ITEM, and a uid-0 key does not cover the minted uid (`:473`, `:436`, `:398-404`): each newly-opened slot (and the first post-mint pass) re-runs the 2-issue + warn detour for G; bounded by capacity (≤ 8 per item), never spurious. Note against B27.
@@ -580,6 +601,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **DRAINED by `6bfbd79`** (the same commit that landed the cap): the comment now states the actual bound — the re-aim is held while the claim is fed, and the hold's own heartbeat stops at `kHealHoldNeverObservedMs` for a claim that never fires, so the cost is bounded by that window rather than by the fight. Verified in the round-6 review of that SHA.
 
 ### MFO-B63 — item 5 of the 2026-09-22 field batch (Jesper's outfit) was DEFERRED, not fixed
+- **AUDIT 2026-10-01 (`fix/mfo-logic-bundle2`, ClickUp 86e3buxgw):** 3D gate (`EquipAuthority.cpp:508`) and not-worn re-send (`kDeclDriftHold`) are shipped; the mage judge declares its full best-per-slot set via `MageBestPerSlot` (`cc4e895`). STILL OPEN: best-per-slot for NON-mage followers (a restructure of the judge's output, not taken). The roster-sweep load-screen drop (kMissesBeforeDrop) is DRAINED on this branch.
 - **Raised:** author of `fix/mfo-spell-authority-0922`, 2026-09-22, under the brief's own instruction ("include only if it does not risk the round ... If this makes the round too large, STOP and report it as deferred rather than half-doing it").
 - **Severity:** SEV-2 (a follower stood visibly bare for 2 min 36 s in the field, so this is NOT a cosmetic backlog item)
 - **Finding (verbatim, from the brief):** "The declaration is 'one judged pick + everything else worn' (`Logistics_Economy.cpp:835,930-937`), so a piece the engine's outfit-apply displaced falls out of the set; the re-declare went into a 3D-absent actor (APMF logged 'equip pass skipped, re-declare once loaded' and MFO never re-sent); then SEND-ONLY-ON-CHANGE (`:950`) swallowed 7 correct picks and the follower stood bare for 2 min 36 s. Fix: declare best-per-slot from the judge rather than pick+worn; treat 'a declared piece is not worn at the next service and nothing is in flight' as a change (erase the last-declared cache and re-send, MFO-B41's shape generalised to armor); skip declaring while `!Is3DLoaded()` and mark dirty so the first loaded tick re-sends."
@@ -1086,3 +1108,32 @@ Raised against 8f915c0 (`fix/mfo-heal-field0930`, Opus review), 2026-09-30. `End
 
 ### MFO-B198 (SEV-4) -- essential-down heal release churns at the picker
 Raised against 6c974fd (`fix/mfo-lifestate-0930`, Sonnet review), 2026-09-30. Reviewer (verbatim): "only kEssentialDown triggers it ... the picker and Hands.cpp are unchanged, and the picker's urgentHeal treats essential-down as 'down'. The ally can therefore be re-picked every lap and released again each time. This is not a re-fire, since no claim is renewed, but it is churn plus a lap-by-lap FailedOther." Fix when drained: skip an essential-down ally at PickAlly / CastAuto pick time (where a heal cannot land), so the release path is not exercised every lap. CHANGELOG wording corrected at merge.
+
+### MFO-B199 (SEV-5) -- "only measured claim-to-first-charge" overclaims against two later comments
+Raised against a9acf09 (`fix/mfo-cleanup-bundle1`, Opus review), 2026-10-01. Reviewer (verbatim): "`native/cast/Hands.cpp:340-342` new text says 'The only measured claim to first CHARGE STATE figures are ~2.5 s (0906 heal) and ~3.6 s (0908 heal)'. That 'only' was copied from the MFO-B6 entry written before 2026-09-22; `native/ComposedCast.cpp:144` ('the measured claim -> first CHARGE STATE latency for an offense cast is 2.3-2.5 s', from the 2026-09-22 deck) and `MAP.md:6329` say the same, contradicting 'only'. The 0922 figure is identical to the 0906 offense claim-to-FIRE figure, so it may be the same mislabelling MFO-B6 describes." Fix: drop "only" in Hands.cpp, and check ComposedCast.cpp:144 / MAP.md:6329 against the 2026-09-22 log for whether that figure is claim-to-charge or claim-to-fire. Comment-only. Surfaced at edit time from: MAP.md Actuation heal hold (MFO-B6 cross-ref).
+
+### MFO-B200 (SEV-5) -- EquipShieldOnMain's '?' name fallback is dead
+Raised against a9acf09 (`fix/mfo-cleanup-bundle1`, Opus review), 2026-10-01. Reviewer (verbatim): "`native/cast/Equip.cpp:218-219` `item->GetName() ? item->GetName() : \"?\"` is a dead fallback: in the fork `TESForm::GetName()` returns `\"\"`, never null (`src/RE/T/TESForm.cpp:28-37`). An unnamed shield now logs `''` instead of `'?'` (old code used `TESObjectARMO::GetFullName()`). Same idiom as the existing `nm` lambda at :733. Harmless." Fix: test `*name` instead of the pointer if '?' matters. Log text only.
+
+### MFO-B204 (SEV-5) -- the roster-sweep hold now lasts the whole load screen
+Raised against 676b676 (`fix/mfo-logic-bundle2`), Opus review F4, not fixed. Verbatim: "native/Followers.cpp:478-499: the hold window was capped at ~1.6 s (3 sweeps x 532 ms); it now lasts the whole load screen, so the Scheduler keeps ticking a held follower for that long. Memory-safe (g_active stores ActorHandle, .get() nulls a freed actor; tick consumers already null-check), recorded for the longer window."
+
+### MFO-B202 — an expired key is not held during its 2 retry passes, so the swap-up can evict a worn gem for G during the retry
+- **Raised:** Opus review of `60d9e66` (`fix/mfo-gems-backlog`), SEV-5, pre-existing.
+- **Severity:** SEV-5
+- **Finding (verbatim):** When a key expires, stallGate resets it with `st = StuckState{}` (:518), so it is not held during the 2 retry passes; if G's stack has >=2 copies and the item has an empty slot, the swap-up can evict a worn gem for G during that retry. Once per expiry, bounded; same behaviour as socketBackedOff before this commit.
+- **Why it was NOT fixed:** pre-existing, bounded to once per expiry, SEV-5 (rule 9). Deferred, not dropped.
+- **Surfaced at edit time from:** MAP.md §7 MEOBridge "HELD KEYS" What-breaks.
+
+### MFO-B203 — gem CHOICE review (Opus, 2026-10-01): safe bug fixes DRAINED, design decisions OPEN
+- **Raised:** Opus logic review of MFO's gem choice (`agentlogs/review-gem-choice.md`, findings F1-F12), against `origin/main` 0166f75 and MEO a47f99c.
+- **Severity:** mixed. F1 and F2 were SEV-2, the rest SEV-4/SEV-5.
+- **DRAINED by `fix/mfo-gem-choice-bugs` (2026-10-01), pending its review:** F4 (uid-0 item skips `GetGemDetails`), F1 (tier 2 never admits an off-domain gem through a Conduit, the simple option, because the sibling map would duplicate MEO's catalog and MEO_API carries no theme), F2 and the eviction half of B34/F6 (a support is valued only when its link works, a linked support is protected only while its link works, a linked Conduit and its partner only when the partner is off-domain, partner replacement must keep a working Focus/Echo link), F9 (base vs base magnitude in the swap-up), F10 second half (`WornUid` hand-matched for the weapon capture).
+- **OPEN, design decisions for marth:** F3 (gem relevance model: the text heuristic in `GemBonus` misses frost, weapon-skill fortifies, treats `magickadamage` and unarmed as magic), F5 (gear-swap destination and pouch overflow policy, and the `MoveGems` to `UnsocketGem` rework: MoveGems does no eligibility or foreign-enchant check when `toUid` is given, and overflow goes to the shared pouch), F7 (provenance), F8 (default tier, `bMeoAwareGems` is OFF), F10 race (the uid-0 mint race), F11 (VR threading). B34 insert half and B33/B35 still wait.
+- **OPEN, cross-repo:** MEO should expose a gem's theme (and element) in `GemInfo`/`GemDetail`/`LooseGemInfo`. MFO's `IsElementalGid` is a gid list, so MEO's minted `x_` runtime families (calibrated themes, plugin.cpp:985-998, 1346) read as non-elemental and a Focus or Echo linked to one is not valued or guarded. Needs an append-only MEO_API change on MEO's side.
+- **OPEN, SEV-5:** MEO's "linked" test excludes normal gems with no magic effect and capped player copies (plugin.cpp:1990), which MFO's count of 1 support + 1 normal does not.
+- **OPEN, SEV-5:** a second armor Echo on the same actor is inert ("first linked Echo-armor wins", plugin.cpp:7608-7660) but MFO values it +1.
+- **Surfaced at edit time from:** MAP.md §7 MEOBridge "GEM CHOICE BUG FIXES".
+
+### MFO-B205 (SEV-5, accepted) -- co-save readers: the FWPN cap literal, and the residual B13 noise-window corner
+Raised against ce1b54c (`fix/mfo-cosave-readers`, Opus tier-3 review, verdict MERGE, nothing above SEV-5), 2026-10-01. Reviewer (verbatim, as relayed): "(a) the 4096 literal is tied to kMaxFollowers only by a comment. Harmless either way. Use a shared constant in Serialization.h only when that file is next touched. (b) the residual B13 corner when natural's fraction is in (0.999,1), e.g. natural 20.9995 gives the share 79.0005, ceil(...-1e-3) gives 79, and the actor holds 99.9995. That is the price of the noise window." Reasoning: (a) both sides are 4096 today and the FWPN cap only needs to be at least 2x the follower bound, so drift is harmless until someone lowers it; moving `kMaxFollowers` out of `Serialization.cpp`'s anon namespace is its own change. (b) the 1e-3 window is what makes ceil the identity on float noise around whole shares; a natural within 1e-3 below an integer is the cost. Fix when drained: (a) a shared `kMaxFollowers` in `Serialization.h`, `kMaxForcedWeapons = 2 * kMaxFollowers`, the next time that header is touched; (b) none planned.

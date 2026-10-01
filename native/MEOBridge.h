@@ -41,7 +41,11 @@ namespace MFO::MEOBridge {
     // from the loot tick against a follower whose 3D is loaded and whose worn
     // extras are stable across the tick; it only reads, mirroring MEO's own
     // FindInstanceXList walk. Returns 0 on any miss.
-    std::uint16_t WornUid(RE::Actor* a_actor, RE::TESBoundObject* a_base);
+    //
+    // a_hand (MFO-B203 / F10): -1 = either hand (the old behaviour, armor), 0 = the RIGHT
+    // hand's worn xList only (kWorn), 1 = the LEFT's (kWornLeft). A dual-wielded pair of
+    // one base is TWO worn instances with their own uids, so a weapon capture names its hand.
+    std::uint16_t WornUid(RE::Actor* a_actor, RE::TESBoundObject* a_base, int a_hand = -1);
 
     // ── Build A: ACCURATE carried-gem sell-skip (MEO ABI v2) ─────────────────
     // The economy sell path must skip only items that ACTUALLY carry a socketed

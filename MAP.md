@@ -55,7 +55,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (5 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1` (`Serialization.h`). PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; and a cap-saturated skill with a FRACTIONAL natural can display one integer lower after the v7 hold-time floor, REVIEW-BACKLOG MFO-B13), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
+| **Co-save (5 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1` (`Serialization.h`). PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -160,7 +160,7 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   live base. All floats finite-guarded; streak clamped 0..2.
 - **`'FWPN'` / `kForcedWeaponVersion=1`** (`Serialization.h:105-106`) — T#76 force-hold:
   the weapons MFO force-equipped for an active equip gambit. Owner
-  `cast/Equip.cpp` (`CoSaveForcedWeapons` `:899`/`CoLoadForcedWeapons` `:934`); **CoLoad
+  `cast/Equip.cpp` (`CoSaveForcedWeapons` `:1156`/`CoLoadForcedWeapons` `:1208`); **CoLoad
   RELEASES the locks, never repopulates** (a session starts with no force-hold,
   the gambit re-forces if still true). Fourth independent record. **LAYOUT UNCHANGED
   by the 2026-09-13 dual-wield left hold:** the ledger value became
@@ -169,7 +169,10 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   follower, and the loader has always released pairs by OBJECT, never by slot
   (since `1ac3c6b`, F4, the loader names the slot from the LIVE hands: left slot
   when the form is held left, default when right, both for a same-form dual
-  hold). `kMaxForcedWeapons` 64 is a PAIR cap now (REVIEW-BACKLOG MFO-B20).
+  hold). `kMaxForcedWeapons` (`:1154`) is a PAIR cap = 2 x 4096 (2 hands x the FLWR
+  `kMaxFollowers`); the WRITER clamps to the same cap, so the reader accepts every
+  count the writer can emit and aborts only on a corrupt count (MFO-B20 DRAINED
+  2026-10-01; was 64, which aborted the whole load above 32 dual holders).
 - **`'PGIV'` / `kPlayerGivenVersion=1`** (`Serialization.h:154-155`, ClickUp 86e3faccn, 2026-09-27) --
   the LOTD museum relics the PLAYER gave a follower or put on him in the trade / gift menu. Owner
   `logistics/PlayerGiven.cpp` (`CoSave:201` / `CoLoad:244`, written last in `SaveCallback`
@@ -442,6 +445,9 @@ releases **by eviction** with a non-actor XMarker.
   CasterConsent/Packages/OnFollowerRemoved/RetreatEvictIf) is now ONE helper
   `Followers::ReleaseHeldState(id)` (`Followers.cpp`, worker-only, idempotent) —
   shared by the dismissal sweep (`Refresh`) and the T#78 MFO-OFF toggle (Scheduler).
+  The sweep drops a follower only after `kMissesBeforeDrop` (3) CONSECUTIVE misses, and `Refresh` does not count a
+  miss while `RE::LoadingMenu` is open (`Followers.cpp` `loading`, 86e3buxgw (d), `fix/mfo-logic-bundle2`): he is held,
+  the streak untouched, so a load screen cannot dismiss and strip him. Counting resumes when the menu closes.
 - `ForceRefToNative` (`:319`) = `REL::RelocationID(24523, 25052)` `TESQuest::ForceRefTo`,
   AE + SE (SE id verified 2026-09-13 via the engine's own `ReferenceAlias.ForceRefTo`
   Papyrus callback tail-jump; **CONFIRMED 2026-09-15** — `Docs/ADDRESS-TABLE-2026-09-15.md`
@@ -476,7 +482,7 @@ per concern:
   its heal-road block `:348-419`, see "ANIMATED HEAL CLAIM ROAD" below)
   + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:76`, extern via `cast/Direct_internal.h`)
   + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1556`/`:1572`).
-- `cast/Equip.cpp` (1193) = THE WEAPON HOLD: `EquipWeapon` (`:377`, **PERK-DRIVEN since
+- `cast/Equip.cpp` (1275) = THE WEAPON HOLD: `EquipWeapon` (`:377`, **PERK-DRIVEN since
   2026-09-13 — see "COMBAT PICK + DUAL WIELD BY PERKS" below**) with its anon helpers
   `WeaponRolesFor` (`:97`), `IsOneHandMelee` (`:105`), `IsMuseumRelic` (`:122`, LOTD, batch L),
   `PickOffHandWeapon` (`:127`), `PickShield` (`:145`), `EquipShieldOnMain` (`:165`), `EquipLeftHeld`
@@ -484,8 +490,8 @@ per concern:
   `g_offHandRetryAt`/`kOffHandRetry` (`:345-346`); the T#76 force-hold ledger `g_forcedWeapon`/`g_forcedMx`
   (`:42`/`:48`) + `LogLeftHandReadback` (`:656`), `ForcedHoldFor` (`:670`), `ReleaseForcedWeapon` (`:678`),
   `YieldForcedLeftHand` (`:816`), `ReconcileForcedWeapon` (`:847`), `ClearForcedWeapons`
-  (`:933`); and the FWPN co-save, WHOLE in this file (`CoSaveForcedWeapons` `:948`,
-  `CoLoadForcedWeapons` `:983`).
+  (`:933`); and the FWPN co-save, WHOLE in this file (`CoSaveForcedWeapons` `:1156`,
+  `CoLoadForcedWeapons` `:1208`).
   **LOTD MUSEUM RELICS (batch L, field 2026-09-26: Cicero fought six hours with a looted relic
   two-hander).** `IsMuseumRelic` = `Lotd::HoldFromSale(id, w)` (worker road: the needs cache is
   worker-only; EquipWeapon runs on the Scheduler's worker tick). The pick loop keeps relics in a
@@ -1142,7 +1148,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **Open backlog:** MFO-B161 (an urgent preempt then a downstream refusal discards a mid-charge offense),
   MFO-B164 (drain skew on the boundary), MFO-B165 (SpellHealsHealth urgent edge on a hostile conc spell).
   **A self-retarget carries TWO bounds, and never-mid-charge is NOT the load-bearing one:** it protects a
-  cast only from the moment charging BEGINS, and the claim-to-first-charge window is 2.3-4.5 s with the
+  cast only from the moment charging BEGINS, and the claim-to-fire pipeline is 2.3-4.5 s with the
   caster reading `kNone` throughout. `IncumbentTargetLost` (`cast/Hands.cpp:470`) is the bound that matters —
   it asks the evaluator's own three questions (`Evaluator.cpp`'s `PickAlly`, `:549-590`, mirrored not
   invented): does the target still resolve to a live actor, is it still inside `fSharedRadius`, and — when
@@ -1156,7 +1162,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   On a held lap NOTHING else touches the incumbent claim — F9's in-flight refresh runs only when
   `HandFree`'s (spell,target) match SUCCEEDS, which is exactly the match a re-aimed target fails — so
   `refreshed` stopped moving and `APMFBridge::Tick()` swept the claim at `FacetExpiry()` (~2.45 s default,
-  floor 0.77 s) inside the 2.3-4.5 s claim-to-first-charge window: the hold was killing the claim it was
+  floor 0.77 s) inside the 2.3-4.5 s claim-to-fire pipeline: the hold was killing the claim it was
   protecting (principle 9, the stale-cadence class). It calls the same
   `APMFBridge::RefreshOwnedCastOnHand` the in-flight path uses, **and that renews APMF's TTL as well as
   MFO's stamp — deliberately.** The heal-hold heartbeat refuses to renew because it feeds an incumbent
@@ -1244,7 +1250,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   collisions came from: the heal facet is LEFT-ONLY by contract (`ClaimHealCast`'s hard rule), so an offense
   cast idling on the left stands exactly where the next heal must go while the right hand sits empty. It now
   prefers the RIGHT hand — free-and-unclaimed first, then free, then by rank — leaving the left for the
-  facet that can use no other, **unless `WeaponHandExposure` (`cast/Hands.cpp:164`) says a weapon owns the
+  facet that can use no other, **unless `WeaponHandExposure` (`cast/Hands.cpp:184`) says a weapon owns the
   right hand or is coming back to it**, in which case the old LEFT-first order stands. That gate is not
   optional: `PlanCastHand` returns `EitherFree` only when `APMFBridge::WeaponHandActive` is false, and that
   reads the LIVE grip and the live equipment CLAIM — both false during the documented transient-unarmed
@@ -1255,12 +1261,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   is the one signal that survives that gap. A pure caster never has an entry, so right-first still applies
   to exactly the follower marth's ruling was about. (`DualCast` still takes both hands in that gap; that
   exposure predates this branch and is unchanged by it.)
-  **RESIDUAL, non-default config:** the ledger is only WRITTEN while `bWeaponStyleControl` is on —
-  `EquipWeapon`'s kill-switch-off branch is a plain `EquipObject` with no entry, and
-  `ReconcileForcedWeapon` releases unconditionally when the switch is off. With that feature off a melee
-  follower in the transient-unarmed gap therefore still lands RIGHT, i.e. the 2026-09-05 shape on a
-  non-default setting. Recorded, not closed: closing it needs a signal that does not depend on that
-  feature being on.
+  **RESIDUAL, non-default config (NARROWED, MFO-B3, `fix/mfo-logic-bundle2`):** the ledger is only WRITTEN
+  while `bWeaponStyleControl` is on, so with the switch off `WeaponHandExposure` (`cast/Hands.cpp:184`) also
+  reads the declared role: `Followers::GetBaseClass` Melee (1) or Ranged (2) counts as "a weapon owns the right
+  hand". Consulted ONLY with the switch off (switch-ON answer is the ledger answer, unchanged). Not covered: an
+  Auto (0) hybrid with the switch off: reading its gambit table needs a new `Followers` read-only accessor (no record getter exists outside `Followers.cpp`), so it stays open.
   `g_forcedWeapon` is read under `g_forcedMx` here like every other access — the map has an OFF-THREAD
   reader (the SKSE save callback, `CoSaveForcedWeapons`), so "the writers are worker-serial" is not
   sufficient. Its declaration comment used to assert BOTH "no lock (#4)" and "guard every access"; the
@@ -1292,7 +1297,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `roles = Logistics::ComputeWeaponRoles(actor, g_followers[id])` (`WeaponRolesFor` `cast/Equip.cpp:96`,
   worker-serial `g_followers` read, #4; no record → default roles). **`cast/Equip.cpp` therefore
   includes `logistics/Logistics_internal.h` (`:11`)** — the wave-1 split carried Actuation.cpp's include block, this line included, into every file cut from it; `ComputeWeaponRoles`/
-  `WeaponScore` are NOT in `logistics/Logistics.h` (REVIEW-BACKLOG **MFO-B19**: the proper seam is a public
+  `WeaponScore` are NOT in `logistics/Logistics.h` (REVIEW-BACKLOG **MFO-B19**, PARTLY drained: `Fire`/`Roads`/`CastOn` no longer include the internal header, `Equip.cpp` still does; the proper seam is a public
   declaration there). DEFAULT-CASE PROOF: `preferKinds==0` → score == `float(uint16 damage)`, same
   `>=` last-equal-wins loop, same inventory order → the same weapon as before. The melee CLASS is
   NOT a filter here (the pick still spans 1H+2H by score, as it always did; `roles.melee` is the
@@ -1464,12 +1469,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   between this file and `logistics/Logistics_internal.h` is impossible by construction (one inline) — do NOT
   re-implement it here; placing a left WEAPON hold without the `OwesLeft` gate re-creates F-A
   (heals dead until combat end) and re-opens F-B; a single `MainThread::Post` for the readback
-  re-creates the F-C stale-read ambiguity. Backlog: MFO-B22 (shield log precedes the posted
-  equip), MFO-B23 (CoLoad same-form second unequip is slot-less; no `RightHandSlot()` exists).
+  re-creates the F-C stale-read ambiguity. MFO-B22 DRAINED: `EquipShieldOnMain` (`cast/Equip.cpp:~206`) takes an optional log reason and logs `GAMBIT equip shield` inside the posted closure after the null checks; the combined `[equip] ... + shield` weapon line (`:~736`) is still synchronous. Backlog: MFO-B23 (CoLoad same-form second unequip is slot-less; no `RightHandSlot()` exists).
   **FWPN co-save LAYOUT UNCHANGED v1:** a dual hold writes TWO (follower,
   weapon) pairs; `CoLoadForcedWeapons` has always released per pair by object (now slot-named from
-  the live hands, F4); `kMaxForcedWeapons` 64 is now a PAIR cap and the reader aborts above it
-  (REVIEW-BACKLOG **MFO-B20**, unreachable at party scale). **KNOWN GAP (economy/loot, other
+  the live hands, F4); `kMaxForcedWeapons` is a PAIR cap, 2 x 4096, and
+  the writer clamps to it (REVIEW-BACKLOG **MFO-B20** DRAINED 2026-10-01). **KNOWN GAP (economy/loot, other
   files):** the economy keep buckets keep ONE 1H form, so a DIFFERENT second one-hander sells at
   the next vendor; loot never fetches a second one-hander. **PERF NOTE (MFO-B21):**
   `ComputeWeaponRoles` now also runs per pick lap and per 5 s top-up attempt — negligible at party
@@ -2524,7 +2528,7 @@ function by function with `tools/splitcheck`; before it: `Logistics.cpp` / `_Cas
 `_Economy` / `_Loot` / `_Loot_Equipment` / `_internal.h` / `Logistics.h` in `native/`,
 the v1.1 split pass + the 2026-09-06 `_Loot_Equipment` module).** Other subsystems include
 ONLY `logistics/Logistics.h`, except the cast family's weapon-style read
-(`cast/Fire.cpp`/`Roads.cpp`/`CastOn.cpp`/`Equip.cpp` include `logistics/Logistics_internal.h`,
+(only `cast/Equip.cpp` still includes `logistics/Logistics_internal.h`,
 REVIEW-BACKLOG **MFO-B19**). Cross-module state/types/small helpers live as `inline`
 members of `namespace MFO::Logistics` in `logistics/Logistics_internal.h` (ONE instance
 across the TUs); big cross-module helpers are declared there and defined in their home
@@ -2726,11 +2730,11 @@ module. Module layout:
   PICK + DUAL WIELD BY PERKS". **STILL A GAP:** bow vs crossbow stays the
   ammo/damage rule (no perk record distinguishes them — both carry `WeapTypeBow`).
   **CLOSED 2026-09-14 (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`) — THE
-  SECOND ONE-HANDER, all three paths at once, ONE rule:** `wantOffHand` =
+  SECOND ONE-HANDER, all three paths at once, one rule for weapon-role followers:** `wantOffHand` =
   `roles.offHand == 2 && meleeTargetClass == OneHand`; `offHandBaseScore` = the
   SECOND-best owned in-class one-hander's `WeaponScore` (0 with fewer than two
   owned; a stack of >= 2 of one form counts twice — it covers both hands).
-  KEEP (`logistics/SwapUp.cpp` `ComputeKeepSet` `keepSecond1H`, the weapon keep buckets): bucket
+  KEEP (`logistics/SwapUp.cpp` `ComputeKeepSet` `keepSecond1H`, the weapon keep buckets; gated on `keepMeleeTargetClass`): bucket
   1 also keeps its runner-up form UNLESS the best form is a stack >= 2 (then
   `PickOffHandWeapon` takes the second copy and the runner-up is junk). BUY
   (`BuildBuyThresholds` → `TradeBridge::BuyThresholds` APPENDED `wantOffHand` /
@@ -2757,10 +2761,7 @@ module. Module layout:
   `BuildBuyThresholds`) and the keep runner-up must stay the SAME top-2 rule or
   loot fetches what keep sells; `PlanBuy`'s `plan[c.idx] >= c.avail` skip is what
   stops the off-hand buy from over-buying a single stock line; the LOOT take must stay
-  `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **OPEN
-  BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B24** (SEV-5) — keep gates on
-  `keepRoles.melee`, loot/buy on `meleeTargetClass` (a base caster keeps two daggers,
-  fetches none); "ONE rule" holds for weapon-role followers; **MFO-B28** (SEV-5,
+  `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **MFO-B24 DRAINED (`fix/mfo-logic-bundle2`):** `keepSecond1H` gates on the LOOT judge's `meleeTargetClass` with its exact `mageMode` (cast gambit AND class Mage, or class Auto with no melee/ranged gambit; `logistics/SwapUp.cpp` `keepMeleeTargetClass`), so keep and loot agree exactly and keep never sells what loot fetches. Buy keeps the broader `IsCasterFollower` test, which is safe: whenever buy's class is OneHand, loot's and keep's are too, so buy never purchases what keep sells. Keep that expression identical to `LootEquipment.cpp` if it changes (no shared helper); **MFO-B28** (SEV-5,
   pre-existing) — a BOUGHT primary upgrade never passes `AcquireEquip`, so it carries
   no gems. **What breaks:** the `trueSecond` test must stay `best != bestWeap` — a bare
   `best == bestOffHand` stocks every primary upgrade. Changing
@@ -3298,10 +3299,10 @@ anonymous-namespace copy — that silently forks the instance).
   `TallyStyleVotes` note). The mirror the shed reads MUST stay cleared on load
   (`Serialization.cpp ResetAllState` → `Logistics::ClearStyleMirror`, after
   `StopPump` + `MainThread::Clear`) or a stale `unarmed` from the previous save
-  drops a weapon on the first post-load tick (Fable F1 on `49a9cc2`). **OPEN
-  BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B14** (SEV-4) — a "left hand empty"-only
-  one-hand perk can vote `unarmed` and make the shed strip a legitimately wielded
-  off-role weapon; read it before touching `inRole` or the unarmed classifier.
+  drops a weapon on the first post-load tick (Fable F1 on `49a9cc2`). **MFO-B14
+  DRAINED (`fix/mfo-logic-bundle2`):** the empty-hand unarmed signal in `ReadStyleFacts` now needs the RIGHT hand
+  pinned empty, so a "left hand empty"-only one-hand perk no longer votes `unarmed`; the primaryAV signal is
+  unchanged. Keep the right-hand requirement when touching `inRole` or the unarmed classifier.
 - `ClearTransientState` (`logistics/Upkeep.cpp:568`) → `Serialization.cpp:641`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
@@ -4136,7 +4137,7 @@ outside the catalog (hidden engine perks like PerkSkillBoosts, creature perks, d
 player-UI perks) never vote; a catalog rank conditioned on nothing classifiable votes
 for nothing (`classified`/`owned` counters say how many). NO overhaul is assumed
 anywhere — the facts come off the perk record's own conditions. **UNARMED (2026-09-14):**
-`PerkStyleFacts::unarmed` = a list whose `GetEquippedItemType` test on EITHER hand admits
+`PerkStyleFacts::unarmed` = a list whose `GetEquippedItemType` test on the RIGHT hand (MFO-B14: a left-empty test alone no longer votes) admits
 code 0 only (`== 0` / `<= 0` / `< 1`), no hand test on that list excludes 0, and no
 weapon-kind keyword is named on it (per-list, not per-merged-entry); OR (second signal,
 read in `WalkPerkEntries` beside the effect-condition read) an ability entry with an effect
@@ -4183,12 +4184,12 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   2026-08-31 split).** Other subsystems include ONLY `progression/ProgAllocator.h`. Open:
   REVIEW-BACKLOG **MFO-B91** (`PerkPointsAvailable` is declared `inline` there but defined only
   in `ProgAllocator_internal.h`; a caller outside `progression/` cannot use it yet).
-  - `progression/Allocator.cpp` (818) = the CORE: session state (`g_pollGen` `:38`,
+  - `progression/Allocator.cpp` (840) = the CORE: session state (`g_pollGen` `:38`,
     `g_lastPlayerLevel` `:44`, `g_playerHmsTotalLast` `:53`, all extern since wave 1), the catalog
     index (`NodeIndex` `:76`, `FindNode` `:97`), `OwnsAnyRank` (`:111`), the class table
     (`Classes` `:130`, `FindClassDef` `:132`), `OnPostLoad` (`:141`) / `OnMenuClose` (`:177`), and
-    the WHOLE PRGN co-save block (`CoSaveSave` `:262`, `CoSaveLoad` `:397`, `ClearAll` `:801`,
-    `PollGeneration` `:817`, the plugin-name codec `:232`/`:240`) — the serializers NEVER leave
+    the WHOLE PRGN co-save block (`CoSaveSave` `:262`, `CoSaveLoad` `:397`, `ClearAll` `:823`,
+    `PollGeneration` `:839`, the plugin-name codec `:232`/`:240`) — the serializers NEVER leave
     this TU, and the PRGN field order inside them is the save format.
   - `progression/SkillScale.cpp` (262) = skill points: `BaselineFloor` (`:28`), the §4.2
     `ReconcileSkill` (`:73`), the §6 class weights (`DominantWeaponSkill`/`DominantArmorSkill`
@@ -4757,9 +4758,9 @@ warn on false — the `EquipSink` move, `UnsocketItemGems`, both reconcile sites
 lock — same domain as the pass; VR runs the pass inline off the worker, which nothing
 else shares) keyed `StuckKey{op, base, uid, slot, gemBase}` (op 0 = `SocketGem`, op 1 = the tier-2
 swap-out `UnsocketGem`, gemBase 0 there — `GemDetail` carries none) →
-`StuckState{emptyAtIssue, passes, reported, backoffUntil, inventoryKey}`, applied by ONE
+`StuckState{pendingAtIssue, passes, reported, backoffUntil, keyPrint}`, applied by ONE
 lambda `stallGate` at BOTH issue sites: a request seen `kStuckPasses` (3) consecutive
-passes with `GetEmptySocketCount` unMOVED (a socket drops it, an unsocket raises it) —
+passes with ITS OWN SLOT still pending per `GetGemDetails` (op 0 still empty, op 1 still filled; MFO-B27) —
 i.e. 2 accepted issues, ~2.4 s, STUCK declared on the 3rd pass BEFORE issuing — logs
 `[meo] reconcile STUCK <actor> <item>/<uid> slot <n> gem <base> -- <api> accepted 2
 time(s) ... -- see MEO.log [api] <api>` ONCE and backs that key off. A backed-off
@@ -4767,16 +4768,16 @@ socket NEITHER RESERVES NOR SHADOWS its gem (Fable SEV-4 on `b3ac577` + round-2 
 on `5f814d5`): the gem is not taken from the pass-local `avail` (a later worn item may
 take it), the slot marks it `excluded` for THIS item and RE-PICKS (`pickGem` lambda)
 so the next-best gem fills the slot, and the tier-2 swap-up skips any loose gem that is
-`excluded` or whose socket key on this item is still backed off (`socketBackedOff`) —
+`excluded` or whose op-0 socket key on this item is still HELD (`socketKeyHeld`, below) —
 without that the swap-up unsocketed a worn gem to make room for the refused one, our
 own unsocket changed the inventory fingerprint, lifted the back-off, and the item
-cycled unsocket/re-socket every ~5 s forever. The back-off holds until the follower's
-loose-gem/worn fingerprint changes or `kStuckBackoff` (60 s — principle 9: sized from
-the ~1.2 s cadence, ~50 passes, never silently forever); then it retries from a clean
-count and reports again if it stalls again. Keys not re-issued
-in a pass are forgotten at its end EXCEPT keys still in back-off (the swap-up's
-`socketBackedOff` read needs them when the item has no empty slot to gate on; they
-expire at their own `backoffUntil`); the `nLoose == 0` early return drops the actor's
+cycled unsocket/re-socket every ~5 s forever. The back-off holds until that key's own
+inputs change (see the 2026-10-01 note below) or `kStuckBackoff` (60 s — principle 9: sized from
+the ~1.2 s cadence, ~50 passes, never silently forever); then the slot path retries
+from a clean slate and reports again if it stalls again. Keys not re-issued
+in a pass are forgotten at its end EXCEPT declared keys (the swap-up's
+`socketKeyHeld` read needs them when the item has no empty slot to gate on; op 1 expires
+at its own `backoffUntil`, op 0 is kept until the lift sweep); the `nLoose == 0` early return drops the actor's
 keys; `ClearTransientState` clears the map (revert/load, `Serialization.cpp`). NOT a
 mask: the failure is loud and retried. Domain is matched here so MEO never rejects
 into a retry loop. Tier 1 conservation always runs (fill any domain-matching gem);
@@ -4787,11 +4788,8 @@ without `g_mx` on purpose (a lock held across `g_meo->` calls is the #4 re-entra
 deadlock class) — never touch it from the worker while the pump is live; lowering
 `kStuckPasses` below 2 turns every first issue into a STUCK line; a `MEO_API.h`
 change is off the table (byte-shared, append-only); the swap-up MUST keep skipping
-backed-off gems or the unsocket/re-socket loop returns. **OPEN BACKLOG:
-`Docs/REVIEW-BACKLOG.md` MFO-B26** (SEV-5) — the back-off lifts on ANY inventory
-change, so under churn the one warn per 60 s becomes one per change + 3 passes;
-**MFO-B27** (SEV-5) — progress is the per-ITEM empty count, so a sibling slot
-landing delays a stuck key's detection (never spurious).
+backed-off gems or the unsocket/re-socket loop returns. **HELD KEYS (2026-10-01 `fix/mfo-gems-backlog`, MFO-B26/B27/B29 DRAINED):** the back-off lifts on the key's OWN inputs only (`keyPrint` lambda + the lift sweep at the top of the pass: item worn (base,uid) + that gem base's loose count; `StuckState.keyPrint`), progress is the SLOT's state (`StuckState.pendingAtIssue`, `stallGate(key, a_pending, ...)`), and an op-0 key with a declared back-off survives expiry (end-of-pass forget keeps it), so the swap-up, which reads `socketKeyHeld` instead of `socketBackedOff`, never evicts for a refused gem on a full item for `kHeldFloor` (10 min after the stall; a FLOOR, since the narrow fingerprint cannot see MEO's timing-dependent refusals or a late Conduit). After it the swap-up may retry once, and a re-stall re-holds and re-warns. The slot path is the only other retry. `socketBackedOff` (time-limited) still feeds the LEFTOVER classifier. **What breaks:** the swap-up MUST read `socketKeyHeld`, and a held op-0 key MUST be erased only by the lift sweep or `nLoose == 0`, else the ~63 s eviction bounce returns (and removing `kHeldFloor` lets one transient refusal block a tier-2 upgrade forever); widening `keyPrint` back to the whole inventory brings back one warn per change.
+**GEM CHOICE BUG FIXES (2026-10-01 `fix/mfo-gem-choice-bugs`, `Docs/REVIEW-BACKLOG.md` MFO-B203 lists what is drained and what is OPEN design):** (F4) an un-minted item (uid 0) skips `GetGemDetails`, because MEO scans every instance of the base for uid 0 (plugin.cpp:9144) and a gemmed dual-wield twin leaked its capacity and support state into this item. (F1) tier 2 never admits an off-domain gem through a Conduit: the `fits` lambda (one place, used by the pick, the swap-up candidate and the LEFTOVER classifier) forces `hasConduit` false when `a_effectAware`; tier 1 keeps the admission. (F2) a support gem has no value in `GemBonus`; a support is worth +1 only through `LinkWorks` (focus = elemental gem, echo = armor or elemental on a weapon, conduit = never), the swap-up protects a linked support (1 support + 1 normal) ONLY while its link works, and a linked Conduit with its partner ONLY when the partner is off-domain (an inert last-resort support or a pass-through Conduit is an ordinary eviction candidate), and replacing the partner of a working Focus/Echo needs a candidate that keeps the link working. `IsElementalGid` is a gid list mirrored from MEO's GemCatalog.h fire/frost/shock theme gems + chaos (MEO_API carries gids, not themes): MEO's minted `x_` families (theme unknown to MFO) read as non-elemental, valued 0, never wrongly +1, and the support is then evictable. (F9) the swap-up compares `baseMagnitude` to the loose base magnitude. (F10 second half) `WornUid(actor, base, hand)` reads one hand's worn xList and `AcquireEquip` (`logistics/Gear.cpp`) passes hand 0 for a weapon capture, since both callers pass the right-hand weapon. **What breaks:** keep `fits` as the ONLY fit test in the pass or the LEFTOVER classifier warns on gems tier 2 will not place; `IsElementalGid` must follow MEO's catalog; `WornUid`'s default (-1) is the old either-hand read, armor relies on it.
 **THE INVARIANT (marth 2026-09-14, `fix/mfo-meo-no-loose-gems`): "there should never be
 unequipped gems when there are free spaces on equipped items."** After a
 `ReconcileLooseGems` pass no loose gem may remain while any WORN item has an empty

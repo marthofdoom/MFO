@@ -203,14 +203,21 @@ namespace MFO::Actuation {
             std::scoped_lock lk(g_forcedMx);
             g_shieldRank[a_follower] = { a_shield, g_firingRule };
         }
-        void EquipShieldOnMain(RE::FormID a_follower, RE::FormID a_shield) {
+        // a_logWhy (optional, a string literal) names the `[equip] ... GAMBIT equip shield`
+        // line. It is logged HERE, after the re-resolve null checks, so the line only claims
+        // an equip that was actually issued (MFO-B22), never one the closure dropped.
+        void EquipShieldOnMain(RE::FormID a_follower, RE::FormID a_shield, const char* a_logWhy = nullptr) {
             StampShieldRank(a_follower, a_shield);
-            auto doEquip = [a_follower, a_shield]() {
+            auto doEquip = [a_follower, a_shield, a_logWhy]() {
                 auto* fol  = RE::TESForm::LookupByID<RE::Actor>(a_follower);
                 auto* form = RE::TESForm::LookupByID(a_shield);
                 auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
+                if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq) {
                     eq->EquipObject(fol, item);
+                    if (a_logWhy)
+                        spdlog::info("[equip] {:08X}: GAMBIT equip shield '{}' ({})", a_follower,
+                                     item->GetName() ? item->GetName() : "?", a_logWhy);
+                }
             };
             if (MainThread::IsInstalled()) MainThread::Post(doEquip);
             else                           doEquip();
@@ -545,9 +552,7 @@ namespace MFO::Actuation {
                             }
                         } else if (roles.offHand == 1 && !(leftA && leftA->IsShield())) {
                             if (auto* sh = PickShield(a_follower)) {
-                                EquipShieldOnMain(id, sh->GetFormID());   // v9: Shield is never owned -- always direct
-                                spdlog::info("[equip] {:08X}: GAMBIT equip shield '{}' (shield by perks, "
-                                             "top-up)", id, sh->GetFullName() ? sh->GetFullName() : "?");
+                                EquipShieldOnMain(id, sh->GetFormID(), "shield by perks, top-up");   // v9: Shield is never owned -- always direct
                             }
                         }
                     }
@@ -1146,7 +1151,12 @@ namespace MFO::Actuation {
     // T#76 force-hold co-save. Persist the force-equip locks so a load clears the
     // stale ones the .ess carried (the engine's forceEquip serializes; the map
     // does not). INDEPENDENT record — its own version guard + ResolveFormID/DROP.
-    constexpr std::uint32_t kMaxForcedWeapons = 64;   // party is tiny; a generous cap
+    // MFO-B20: a PAIR cap -- a dual hold writes TWO (follower, weapon) pairs, so
+    // the cap is 2 hands x the FLWR follower cap (kMaxFollowers = 4096,
+    // Serialization.cpp, anon-namespace there). The writer clamps to the SAME cap,
+    // so the reader accepts every count the writer can emit; above it is only a
+    // corrupt record, which still aborts. Was 64 (= 32 dual holders) until 2026-10-01.
+    constexpr std::uint32_t kMaxForcedWeapons = 2u * 4096u;
 
     void CoSaveForcedWeapons(SKSE::SerializationInterface* a_intfc) {
         if (!a_intfc->OpenRecord(kRecForcedWeapon, kForcedWeaponVersion)) {
@@ -1174,6 +1184,23 @@ namespace MFO::Actuation {
                     snap.emplace_back(id, Followers::IsPersistableID(wid) ? wid : 0u);
                 }
             }
+        }
+        // MFO-B20: never emit more pairs than CoLoad accepts (it aborts above the
+        // cap). Unreachable at party scale; loud if it ever happens. ONLY on this
+        // path: stable-sort by follower (the snapshot emits each follower's pairs
+        // together, right then left, so stability keeps that hand order) and cut
+        // at a follower boundary -- whole followers drop, never half a dual hold,
+        // and the cut is deterministic rather than unordered_map order. Ordinary
+        // saves are not sorted, so their bytes are unchanged.
+        if (snap.size() > kMaxForcedWeapons) {
+            std::stable_sort(snap.begin(), snap.end(),
+                             [](const auto& a, const auto& b) { return a.first < b.first; });
+            std::size_t cut = kMaxForcedWeapons;
+            while (cut > 0 && snap[cut - 1].first == snap[cut].first) --cut;
+            spdlog::error("[cosave] {} force-hold pair(s) exceed the cap {} -- {} pair(s) NOT saved "
+                          "(whole followers, highest FormIDs)",
+                          snap.size(), kMaxForcedWeapons, snap.size() - cut);
+            snap.resize(cut);
         }
         a_intfc->WriteRecordData(static_cast<std::uint32_t>(snap.size()));
         for (const auto& [id, wid] : snap) {

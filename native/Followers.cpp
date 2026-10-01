@@ -474,15 +474,22 @@ namespace MFO::Followers {
                 LogStateLine(a, id, "30s");
             }
         }
+        const bool loading = [] {
+            auto* ui = RE::UI::GetSingleton();
+            return ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
+        }();
         for (const auto id : before) {
             bool still = false;
             for (const auto& h : next) {
                 if (auto* a = h.get().get(); a && a->GetFormID() == id) { still = true; break; }
             }
             if (!still) {
-                // Not seen this sweep -- but hold them until it repeats.
-                const int misses = ++g_missStreak[id];
-                if (misses < kMissesBeforeDrop) {
+                // Not seen this sweep -- but hold them until it repeats. DURING A LOADING
+                // SCREEN the process lists are mid-rebuild and every follower reads absent,
+                // so the sweep says nothing: hold him WITHOUT counting the miss, or a long
+                // load drops (and ReleaseHeldState strips) a follower who never left.
+                const int misses = loading ? g_missStreak[id] : ++g_missStreak[id];
+                if (loading || misses < kMissesBeforeDrop) {
                     for (size_t i = 0; i < g_active.size() && i < g_activeIds.size(); ++i) {
                         if (g_activeIds[i] == id) { next.push_back(g_active[i]); nextIds.push_back(id); break; }
                     }

@@ -106,14 +106,17 @@ namespace MFO::MEOBridge {
             src->AddEventSink<RE::TESEquipEvent>(EquipSink::GetSingleton());
     }
 
-    std::uint16_t WornUid(RE::Actor* a_actor, RE::TESBoundObject* a_base) {
+    std::uint16_t WornUid(RE::Actor* a_actor, RE::TESBoundObject* a_base, int a_hand) {
         if (!a_actor || !a_base) return 0;
         auto* ch = a_actor->GetInventoryChanges();
         if (!ch || !ch->entryList) return 0;
         for (auto* e : *ch->entryList) {
             if (!e || e->object != a_base || !e->extraLists) continue;
             for (auto* xl : *e->extraLists) {
-                if (!IsWornXList(xl)) continue;
+                const bool worn = a_hand == 0 ? (xl && xl->HasType(RE::ExtraDataType::kWorn))
+                                : a_hand == 1 ? (xl && xl->HasType(RE::ExtraDataType::kWornLeft))
+                                              : IsWornXList(xl);
+                if (!worn) continue;
                 if (auto* uid = xl->GetByType<RE::ExtraUniqueID>()) return uid->uniqueID;
             }
         }
@@ -207,15 +210,15 @@ namespace MFO::MEOBridge {
         // request (op, item base, item uid, slot, gem base -- op 0 = SocketGem,
         // op 1 = the tier-2 swap-out UnsocketGem, whose gem base MEO's GemDetail
         // does not carry, so 0): count consecutive passes that re-issue it while
-        // GetEmptySocketCount did not MOVE (a socket drops it, an unsocket raises
-        // it). On the kStuckPasses-th such pass -- i.e. after kStuckPasses-1
+        // ITS OWN SLOT did not move (op 0: still empty, op 1: still filled, per
+        // GetGemDetails -- MFO-B27, not the item's empty count). On the kStuckPasses-th such pass -- i.e. after kStuckPasses-1
         // accepted issues -- log STUCK once (loud, names the item so MEO.log's
         // [api] SocketGem/UnsocketGem line can be matched) and BACK OFF that
-        // key -- until the follower's inventory changes (the loose-gem set or
-        // the worn set differs from the pass that stalled) or a 60 s floor
+        // key -- until that key's own inputs change (the item's worn (base,uid) or
+        // that gem base's loose count -- MFO-B26) or a 60 s floor
         // (principle 9: sized from the ~1.2 s cadence, ~50 passes, never
         // silently forever). NOT a mask: the request is retried after the
-        // backoff and the failure stays in the log. A backed-off socket does
+        // backoff (an op-0 key is retried through the slot path only, MFO-B29) and the failure stays in the log. A backed-off socket does
         // NOT reserve its gem (Fable SEV-4 on b3ac577): a later worn item in
         // the same pass may take it.
         struct StuckKey {
@@ -230,15 +233,22 @@ namespace MFO::MEOBridge {
             }
         };
         struct StuckState {
-            int   emptyAtIssue = -1;   // GetEmptySocketCount when the request was last issued
-            int   passes       = 0;    // consecutive passes that saw it with the count unchanged (issues + the STUCK pass)
+            bool  pendingAtIssue = false;   // MFO-B27: THIS slot's own state when last issued (op 0: still empty, op 1: still filled), from GetGemDetails
+            int   passes       = 0;    // consecutive passes that saw it with its slot still pending (issues + the STUCK pass)
             bool  reported     = false;
             std::chrono::steady_clock::time_point backoffUntil{};   // zero = not backed off
-            std::uint64_t inventoryKey = 0;   // the follower's loose+worn fingerprint when the stall was declared
+            std::uint64_t keyPrint = 0;   // MFO-B26: THIS key's own inputs (item worn (base,uid) + that gem base's loose count) when the stall was declared
         };
         constexpr auto kStuckBackoff = std::chrono::seconds(60);
+        // MFO-B29 held-key FLOOR, not an expiry: a declared op-0 key blocks the swap-up for
+        // this long after the stall, then the swap-up may try the gem ONCE more. The narrow
+        // fingerprint cannot see MEO's timing-dependent refusals (item not on actor, gem
+        // not in inventory, a Conduit that lands later), so without a floor one transient
+        // refusal would block the tier-2 upgrade forever. 10 minutes keeps the bounce far
+        // below the old ~63 s; if MEO refuses again the key re-stalls, re-holds and warns.
+        constexpr auto kHeldFloor = std::chrono::minutes(10);
         constexpr int  kStuckPasses  = 3;   // STUCK is declared on the 3rd consecutive pass, BEFORE issuing: 2 accepted
-                                            // issues (~2.4 s at the ~1.2 s cadence) with the empty count unchanged
+                                            // issues (~2.4 s at the ~1.2 s cadence) with the slot still pending
         // MAIN THREAD ONLY (ReconcileLooseGems runs there; VR runs it inline from the
         // worker, where nothing else touches this map) -- no lock, like the pass itself.
         std::unordered_map<RE::FormID, std::unordered_map<StuckKey, StuckState, StuckKeyHash>> g_stuck;
@@ -277,7 +287,10 @@ namespace MFO::MEOBridge {
         int GemBonus(const char* a_gid, const char* a_name, bool a_isArmor, bool a_isSupport,
                      const GemReconcilePrefs& a_p) {
             int b = 0;
-            if (a_isSupport) b += 1;   // Focus/Conduit/Echo glue is always useful
+            // MFO-B203 (F2): a support gem has NO value of its own here. It is worth +1 only
+            // when the link it would form works (LinkWorks, inlined at the pick and the swap-up), so a lone or inert
+            // Focus/Echo/Conduit never outranks, or evicts, a working normal gem.
+            (void)a_isSupport;
             if (a_p.caster) {
                 const char* sw = SchoolWord(a_p.school);
                 if (*sw && (ContainsCI(a_gid, sw) || ContainsCI(a_name, sw)))            b += 4;
@@ -289,6 +302,39 @@ namespace MFO::MEOBridge {
                     ContainsCI(a_gid, "stamina"))                                        b += 2;
             }
             return b;
+        }
+
+        // ── SUPPORT LINKS (MFO-B203 / F2), grounded in MEO plugin.cpp RebuildInstanceEnchant ──
+        // A support gem does nothing alone: it is LINKED only when the item holds exactly 1
+        // support + 1 normal gem (plugin.cpp:1960-1990). Then, by gid (GemCatalog.h):
+        //   focus   lifts a linked ELEMENTAL gem (IsElementalGem, plugin.cpp:1770-1777: a
+        //           fire / frost / shock THEME gem, resist and weakness included, or "chaos")
+        //   echo    on a WEAPON gives an AoE to a linked elemental gem (plugin.cpp:2036-2040);
+        //           on ARMOR it is the follower-share heartbeat, so any linked gem
+        //   conduit adapts an OFF-domain gem to its same-theme sibling (ConduitSibling,
+        //           plugin.cpp:1819). Tier 2 never admits an off-domain gem (F1, below), so a
+        //           Conduit has no job there and is worth nothing.
+        // MEO_API exposes gids and not themes, so the elemental set is this gid list (the
+        // catalog's fire/frost/shock theme gems + chaos). KNOWN LIMIT: MEO also MINTS runtime
+        // gem families from the load order (gids with an "x_" prefix, each with a calibrated
+        // theme that can be fire/frost/shock, plugin.cpp:985-998, 1346) and its IsElementalGem
+        // is theme-based. Such an "x_" elemental gem reads as NON-elemental here, so a Focus or
+        // Echo linked to it is valued 0 and not guarded. That errs toward evicting a support
+        // (never toward a wrong +1) and nothing is permanent, because an inert-looking support
+        // is an ordinary eviction candidate. Fixing it needs MEO to expose the theme (B203).
+        bool IsElementalGid(const char* a_gid) {
+            static constexpr const char* kElemental[] = {
+                "firedamage", "resistfire", "weaknessfire", "frost", "resistfrost", "weaknessfrost",
+                "shockdamage", "resistshockt", "weaknessshock", "chaos" };
+            if (!a_gid) return false;
+            for (const char* g : kElemental) if (std::strcmp(a_gid, g) == 0) return true;
+            return false;
+        }
+        bool LinkWorks(const char* a_supportGid, const char* a_normalGid, bool a_itemIsArmor) {
+            if (!a_supportGid || !a_normalGid) return false;
+            if (std::strcmp(a_supportGid, "focus") == 0) return IsElementalGid(a_normalGid);
+            if (std::strcmp(a_supportGid, "echo") == 0)  return a_itemIsArmor || IsElementalGid(a_normalGid);
+            return false;   // conduit (see above) or an unknown support
         }
 
         // ── THE WORN SET: MEO's OWN eligibility, mirrored (marth 2026-09-14) ─────
@@ -469,38 +515,71 @@ namespace MFO::MEOBridge {
             // Every key not re-issued this pass is forgotten at the end (a request
             // that stopped recurring is not stuck) -- collect the ones we touched.
             std::vector<StuckKey> touched;
+            // MFO-B26: a stalled key's back-off lifts only when ITS OWN inputs change --
+            // that item still worn at (base,uid) and that gem base's loose count -- not
+            // on any inventory change (an unrelated socket or swap elsewhere used to lift
+            // it and re-warn every change + 3 passes). `inventoryKey` above stays the
+            // LEFTOVER line's fingerprint. Op-1 keys carry gemBase 0: item only.
+            auto keyPrint = [&](const StuckKey& k) -> std::uint64_t {
+                std::uint64_t h = 1469598103934665603ull;
+                auto mix = [&](std::uint64_t v) { h = (h ^ v) * 1099511628211ull; };
+                bool worn = false;
+                for (const auto& it : items) if (it.base == k.base && it.uid == k.uid) { worn = true; break; }
+                mix(k.base); mix(k.uid); mix(worn ? 1u : 0u);
+                if (k.gemBase) {
+                    std::uint64_t n = 0;
+                    for (std::uint32_t i = 0; i < nLoose; ++i) if (loose[i].gemBase == k.gemBase) n += loose[i].count ? loose[i].count : 1u;
+                    mix(k.gemBase); mix(n);
+                }
+                return h;
+            };
+            // THE LIFT SWEEP (MFO-B26 + B29): a held key (back-off declared, expired or
+            // not) is erased here, and only here, when its own inputs changed. An
+            // expired op-0 key is KEPT (see the end-of-pass forget) so the swap-up on a
+            // fully-socketed item keeps skipping its gem; the slot path retries it.
+            std::erase_if(stuckMap, [&](const auto& kv) {
+                return kv.second.backoffUntil != std::chrono::steady_clock::time_point{} && kv.second.keyPrint != keyPrint(kv.first);
+            });
             // THE GATE, shared by SocketGem and the swap-out UnsocketGem. true = issue
             // the request now (st.passes then says which issue this is); false = the
             // key is stuck and backed off, skip it this pass.
-            auto stallGate = [&](const StuckKey& a_key, int a_emptyNow, const char* a_api,
+            //
+            // PROGRESS IS THE SLOT'S OWN STATE (MFO-B27), not the item's empty count: a
+            // sibling slot landing on the same item moves that count but says nothing
+            // about this request. a_pending = this slot, as GetGemDetails read it this
+            // pass, is still waiting (op 0: still empty, op 1: still filled). A key that
+            // is reached while its slot is pending, pass after pass, is not landing; a
+            // slot that landed is never reached, its key goes untouched and is forgotten.
+            auto stallGate = [&](const StuckKey& a_key, bool a_pending, const char* a_api,
                                  const char* a_gemName) -> bool {
                 auto& st = stuckMap[a_key];
                 touched.push_back(a_key);
                 if (st.backoffUntil != std::chrono::steady_clock::time_point{}) {
-                    const bool inventoryChanged = st.inventoryKey != inventoryKey;
-                    if (now < st.backoffUntil && !inventoryChanged) return false;
-                    // Backoff over (60 s floor) or the inventory changed: retry from a
-                    // clean count, and report again if it stalls again.
+                    // A key whose own inputs changed was already erased by the lift sweep
+                    // above (MFO-B26), so what is left here is held: still inside the 60 s
+                    // floor = skip; expired = retry from a clean slate and report again if
+                    // it stalls again (the ONLY retry path of an op-0 key, MFO-B29).
+                    if (now < st.backoffUntil) return false;
                     st = StuckState{};
                 }
-                if (st.passes > 0 && st.emptyAtIssue == a_emptyNow) {
+                if (st.passes > 0 && st.pendingAtIssue && a_pending) {
                     ++st.passes;
                     if (!st.reported && st.passes >= kStuckPasses) {
                         st.reported = true;
                         spdlog::warn("[meo] reconcile STUCK {:08X} '{}' {:08X}/{} slot {} gem {:08X} '{}' -- "
-                                     "{} accepted {} time(s) and the empty count never moved ({}); "
-                                     "backing off {} s (or until his inventory changes) -- see MEO.log [api] {}",
+                                     "{} accepted {} time(s) and the slot never {}; "
+                                     "backing off {} s (or until this item or gem changes) -- see MEO.log [api] {}",
                                      a_actor->GetFormID(), a_actor->GetName() ? a_actor->GetName() : "?",
                                      a_key.base, a_key.uid, a_key.slot, a_key.gemBase, a_gemName,
-                                     a_api, st.passes - 1, a_emptyNow,
+                                     a_api, st.passes - 1, a_key.op == 0 ? "filled" : "emptied",
                                      std::chrono::duration_cast<std::chrono::seconds>(kStuckBackoff).count(), a_api);
                         st.backoffUntil = now + kStuckBackoff;
-                        st.inventoryKey = inventoryKey;
+                        st.keyPrint = keyPrint(a_key);
                         return false;
                     }
                 } else {
-                    st.passes       = 1;   // first issue, or the count moved (progress): restart
-                    st.emptyAtIssue = a_emptyNow;
+                    st.passes         = 1;   // first issue, or the slot moved (progress): restart
+                    st.pendingAtIssue = a_pending;
                 }
                 return true;
             };
@@ -514,6 +593,21 @@ namespace MFO::MEOBridge {
                 for (const auto& [k, st] : stuckMap)
                     if (k.op == 0 && k.base == a_base && k.uid == a_uid && k.gemBase == a_gemBase &&
                         st.backoffUntil != std::chrono::steady_clock::time_point{} && now < st.backoffUntil)
+                        return true;
+                return false;
+            };
+
+            // MFO-B29: does a held op-0 key (back-off declared, EXPIRED OR NOT) exist for
+            // this gem on this item? The swap-up reads THIS, not socketBackedOff: on a
+            // fully-socketed item the swap-up used to be the expiry re-entry point and
+            // evicted a worn gem every ~63 s for a gem MEO keeps refusing. The key
+            // survives expiry untouched and is erased only by the lift sweep, but is held for the
+            // swap-up only until kHeldFloor after the stall (then one retry, see there).
+            auto socketKeyHeld = [&](RE::FormID a_base, std::uint16_t a_uid, RE::FormID a_gemBase) {
+                for (const auto& [k, st] : stuckMap)
+                    if (k.op == 0 && k.base == a_base && k.uid == a_uid && k.gemBase == a_gemBase &&
+                        st.backoffUntil != std::chrono::steady_clock::time_point{} &&
+                        now < st.backoffUntil - kStuckBackoff + kHeldFloor)   // declared-at + kHeldFloor
                         return true;
                 return false;
             };
@@ -532,6 +626,18 @@ namespace MFO::MEOBridge {
                 std::unordered_set<std::uint32_t> excluded;   // loose entries stuck/backed off on THIS item
             };
             std::vector<ItemPass> recs(items.size());
+            // MFO-B203 (F1): TIER 2 NEVER ADMITS AN OFF-DOMAIN GEM THROUGH A CONDUIT. MEO maps an
+            // off-domain gem to a same-theme sibling in the item's domain and leaves it INERT
+            // when it has none (ConduitSibling, plugin.cpp:1819, 2024-2030: Martial / Drain /
+            // Utility themes have no cross-domain sibling), and MEO_API carries gids, not themes.
+            // Modelling the sibling map would duplicate MEO's catalog, so tier 2 takes the
+            // simplest rule: a socketed Conduit does not widen the domain. Tier 1 keeps the
+            // Conduit admission (its job is only "fill an open socket"). Every fit test in a
+            // pass (pick, swap-up candidate, LEFTOVER) goes through this one lambda.
+            auto fits = [&](const MEO_API::LooseGemInfo& a_g, ItemFit a_f) {
+                if (a_effectAware) a_f.hasConduit = false;
+                return GemFits(a_g, a_f);
+            };
             std::unordered_set<RE::FormID> mintedBases;    // bases that took a uid-0 SocketGem this pass (one per base per pass)
 
             for (std::size_t idx = 0; idx < items.size(); ++idx) {
@@ -548,7 +654,13 @@ namespace MFO::MEOBridge {
                 // returns the TRUE count; capacity = filled + empty.
                 constexpr std::uint32_t kMaxDet = 8;
                 MEO_API::GemDetail det[kMaxDet];
-                const std::uint32_t trueDet = g_meo->GetGemDetails(a_actor, item.base, item.uid, det, kMaxDet);
+                // MFO-B203 (F4): an un-minted item (uid 0) has NOTHING filled by definition
+                // (GetEmptySocketCount(uid 0) is "what could this base hold": capacity), but
+                // GetGemDetails(base, uid 0) scans EVERY minted instance of the base (MEO
+                // plugin.cpp:9144), so a dual-wield twin that already has gems would be read as
+                // this item's: capacity inflated past the real one (SocketGem slot >= cap is
+                // refused) and hasSupport/hasConduit inherited. Skip the call for uid 0.
+                const std::uint32_t trueDet = item.uid ? g_meo->GetGemDetails(a_actor, item.base, item.uid, det, kMaxDet) : 0u;
                 const std::uint32_t nDet    = std::min(trueDet, kMaxDet);
                 const int capacity          = static_cast<int>(trueDet) + emptyCount;
                 if (capacity <= 0) continue;   // socketless item -- nothing to fill or swap
@@ -591,19 +703,25 @@ namespace MFO::MEOBridge {
                 // item may still take it) nor SHADOWS (the slot re-picks past it, and
                 // the swap-up ignores it) -- Fable round-2 SEV-2 on 5f814d5.
                 auto& excluded = rec.excluded;
+                std::vector<const char*> normalGids;   // gids of the item's normal gems: socketed now + issued this pass (F2)
+                for (std::uint32_t i = 0; i < nDet; ++i) if (!det[i].isSupport) normalGids.push_back(det[i].gid);
                 auto pickGem = [&]() -> int {
                     int pick = -1;
                     if (!a_effectAware) {
                         // tier 1 conservation: first fitting loose gem in stock.
                         for (std::uint32_t i = 0; i < nLoose; ++i)
-                            if (avail[i] > 0 && !excluded.contains(i) && GemFits(loose[i], rec.fitNow)) { pick = static_cast<int>(i); break; }
+                            if (avail[i] > 0 && !excluded.contains(i) && fits(loose[i], rec.fitNow)) { pick = static_cast<int>(i); break; }
                     } else {
                         // tier 2 effect-aware: best by (class bonus, base magnitude).
                         int bestB = std::numeric_limits<int>::min(); float bestM = -1.0f;
                         for (std::uint32_t i = 0; i < nLoose; ++i) {
-                            if (avail[i] == 0 || excluded.contains(i) || !GemFits(loose[i], rec.fitNow)) continue;
+                            if (avail[i] == 0 || excluded.contains(i) || !fits(loose[i], rec.fitNow)) continue;
+                            // F2: a support is worth +1 only when it would LINK with the item's one normal gem
+                            // (normalGids: socketed + issued this pass) and that link works.
                             const int bo = GemBonus(loose[i].gid, loose[i].name,
-                                                    loose[i].isArmor, loose[i].isSupport, a_prefs);
+                                                    loose[i].isArmor, loose[i].isSupport, a_prefs) +
+                                           (loose[i].isSupport && normalGids.size() == 1 && !rec.fitNow.hasSupport &&
+                                            LinkWorks(loose[i].gid, normalGids[0], item.isArmor) ? 1 : 0);
                             if (bo > bestB || (bo == bestB && loose[i].magnitude > bestM)) {
                                 bestB = bo; bestM = loose[i].magnitude; pick = static_cast<int>(i);
                             }
@@ -622,10 +740,10 @@ namespace MFO::MEOBridge {
                     for (;;) {
                         pick = pickGem();
                         if (pick < 0) break;   // no (non-stuck) gem fits this item
-                        // STALL DETECTOR: same request as last pass with the empty count
-                        // unchanged = MEO accepted it and it did not land.
+                        // STALL DETECTOR: same request as last pass with THIS slot still
+                        // empty = MEO accepted it and it did not land.
                         key = StuckKey{ 0, item.base, item.uid, static_cast<std::uint8_t>(slot), loose[pick].gemBase };
-                        if (stallGate(key, emptyCount, "SocketGem", loose[pick].name)) break;
+                        if (stallGate(key, true, "SocketGem", loose[pick].name)) break;
                         excluded.insert(static_cast<std::uint32_t>(pick));   // stuck here: neither reserved nor shadowing
                     }
                     if (pick < 0) break;   // nothing left for this item -> next item
@@ -638,6 +756,7 @@ namespace MFO::MEOBridge {
                         --avail[pick];
                         ++rec.issued;
                         if (mintGuard) mintedBases.insert(item.base);
+                        if (!loose[pick].isSupport) normalGids.push_back(loose[pick].gid);
                         if (loose[pick].isSupport) {
                             rec.fitNow.hasSupport = true;   // one support per item (MEO :9272)
                             if (ContainsCI(loose[pick].gid, "conduit")) rec.fitNow.hasConduit = true;   // MEO runs the queue in order: it lands before a later off-domain request
@@ -665,15 +784,41 @@ namespace MFO::MEOBridge {
                 // replaces it) never re-triggers -> no ping-pong. Async latency << the
                 // ~1 s cadence, so no double-unsocket.
                 if (a_effectAware && !mintGuard && nDet > 0) {
+                    // MFO-B203 (F2): what is socketed now. LINKED = exactly 1 support + 1 normal
+                    // (MEO plugin.cpp:1960-1990). A LINKED support is protected ONLY while its link
+                    // works (linkWorksNow): an inert last-resort Focus/Echo is worth 0 and is an ordinary
+                    // eviction candidate, or a better gem would stay loose forever. A linked CONDUIT and
+                    // its partner are protected ONLY when the partner is off-domain (the Conduit is what
+                    // makes it work, its orphan goes inert, plugin.cpp:2003; such a pair comes from tier 1
+                    // or the player). A Conduit on a same-domain partner just passes it through and is an
+                    // ordinary candidate (bonus 0, magnitude 0). The partner of a working Focus/Echo may
+                    // be evicted, but only for a candidate that keeps the link working (per candidate below).
+                    int nSup = 0, nNorm = 0;
+                    std::uint32_t supIdx = 0, normIdx = 0;
+                    for (std::uint32_t i = 0; i < nDet; ++i) {
+                        if (det[i].isSupport) { ++nSup; supIdx = i; } else { ++nNorm; normIdx = i; }
+                    }
+                    const bool linkedNow     = nSup == 1 && nNorm == 1;
+                    const bool conduitLinked = linkedNow && ContainsCI(det[supIdx].gid, "conduit");
+                    const bool linkWorksNow  = linkedNow && LinkWorks(det[supIdx].gid, det[normIdx].gid, item.isArmor);
+                    const bool conduitHolds  = conduitLinked && det[normIdx].isArmor != item.isArmor;   // off-domain partner
+                    bool          haveWeak = false;
                     std::uint32_t weakIdx = 0;
                     int   weakB = std::numeric_limits<int>::max();
                     float weakM = std::numeric_limits<float>::max();
                     for (std::uint32_t i = 0; i < nDet; ++i) {
+                        if (linkedNow && (det[i].isSupport ? (linkWorksNow || conduitHolds) : conduitHolds)) continue;   // protected (see above)
                         const int bo = GemBonus(det[i].gid, det[i].name, det[i].isArmor, det[i].isSupport, a_prefs);
-                        if (bo < weakB || (bo == weakB && det[i].effectiveMagnitude < weakM)) {
-                            weakB = bo; weakM = det[i].effectiveMagnitude; weakIdx = i;
+                        // F9: like with like, the socketed gem's BASE magnitude against the
+                        // loose gem's base magnitude (effectiveMagnitude carries a Focus boost).
+                        if (bo < weakB || (bo == weakB && det[i].baseMagnitude < weakM)) {
+                            weakB = bo; weakM = det[i].baseMagnitude; weakIdx = i; haveWeak = true;
                         }
                     }
+                    if (!haveWeak) continue;   // every socketed gem is protected
+                    // The gem that STAYS if weakIdx is evicted (for a loose support's link value).
+                    const char* stayGid = (nDet == 2) ? det[1 - weakIdx].gid : nullptr;
+                    const bool  stayIsSupport = nDet == 2 && det[1 - weakIdx].isSupport;
                     // The candidate must fit the item WITHOUT the evictee (Fable SEV-2 on
                     // 1efa3e3): evicting the Conduit un-admits every off-domain gem, so an
                     // off-domain candidate admitted THROUGH that Conduit would be refused
@@ -695,13 +840,18 @@ namespace MFO::MEOBridge {
                     int   lootB = std::numeric_limits<int>::min();
                     float lootM = -1.0f;
                     for (std::uint32_t i = 0; i < nLoose; ++i) {
-                        if (avail[i] == 0 || !GemFits(loose[i], sansEvictee)) continue;
+                        if (avail[i] == 0 || !fits(loose[i], sansEvictee)) continue;
                         // Never make room for a gem MEO keeps refusing on this item
-                        // (excluded this pass, or its socket key is still backed off from
+                        // (excluded this pass, or its socket key is still held from
                         // an earlier pass) -- the self-driven unsocket/re-socket loop.
-                        if (excluded.contains(i) || socketBackedOff(item.base, item.uid, loose[i].gemBase)) continue;
+                        if (excluded.contains(i) || socketKeyHeld(item.base, item.uid, loose[i].gemBase)) continue;
+                        // Replacing the partner of a WORKING Focus/Echo must keep that link working.
+                        if (linkWorksNow && weakIdx == normIdx && !LinkWorks(det[supIdx].gid, loose[i].gid, item.isArmor)) continue;
+                        // A loose support is worth +1 only if it would link with the gem that stays.
                         const int bo = GemBonus(loose[i].gid, loose[i].name,
-                                                loose[i].isArmor, loose[i].isSupport, a_prefs);
+                                                loose[i].isArmor, loose[i].isSupport, a_prefs) +
+                                       (loose[i].isSupport && stayGid && !stayIsSupport &&
+                                        LinkWorks(loose[i].gid, stayGid, item.isArmor) ? 1 : 0);
                         if (bo > lootB || (bo == lootB && loose[i].magnitude > lootM)) {
                             lootB = bo; lootM = loose[i].magnitude; loot = static_cast<int>(i);
                         }
@@ -710,9 +860,10 @@ namespace MFO::MEOBridge {
                         // Same stall gate as the socket (op 1; GemDetail carries no gem
                         // base, so 0): an accepted-then-failed unsocket would otherwise
                         // re-issue every pass with a "(queued)" line -- the 192x class.
-                        // Progress = the empty count RISING once the unsocket lands.
+                        // Progress = THIS slot emptying once the unsocket lands (MFO-B27);
+                        // the slot is in `det`, i.e. filled, so it is pending here.
                         const StuckKey ukey{ 1, item.base, item.uid, det[weakIdx].slot, 0 };
-                        if (!stallGate(ukey, emptyCount, "UnsocketGem", det[weakIdx].name)) continue;
+                        if (!stallGate(ukey, true, "UnsocketGem", det[weakIdx].name)) continue;
                         if (g_meo->UnsocketGem(a_actor, item.base, item.uid, det[weakIdx].slot)) {
                             // MFO-B36: RESERVE the copy this swap-out is for, so a later item
                             // cannot evict its own weakest for the same single loose gem. It is
@@ -749,7 +900,7 @@ namespace MFO::MEOBridge {
                     for (std::size_t idx = 0; idx < items.size(); ++idx) {
                         const auto& rec = recs[idx];
                         if (!(rec.considered || rec.dupDeferred) || rec.emptyAtStart - rec.issued <= 0) continue;
-                        if (!GemFits(loose[i], rec.fitNow)) {
+                        if (!fits(loose[i], rec.fitNow)) {
                             // A support gem kept out only by the item's one support seat.
                             if (loose[i].isSupport && rec.fitNow.capacity >= 2) supportLimit = true;
                             continue;
@@ -769,7 +920,7 @@ namespace MFO::MEOBridge {
                         // was it ever open this pass (then other gems took it), or never?
                         bool wasOpen = false;
                         for (const auto& rec : recs)
-                            if ((rec.considered || rec.dupDeferred) && rec.emptyAtStart > 0 && GemFits(loose[i], rec.fitAtStart)) { wasOpen = true; break; }
+                            if ((rec.considered || rec.dupDeferred) && rec.emptyAtStart > 0 && fits(loose[i], rec.fitAtStart)) { wasOpen = true; break; }
                         why = supportLimit ? LeftoverWhy::kSupportLimit
                             : wasOpen      ? LeftoverWhy::kCapacity : LeftoverWhy::kOffDomain;
                     } else if (hole)    why = LeftoverWhy::kUnclassified;
@@ -805,11 +956,12 @@ namespace MFO::MEOBridge {
             // recurring (it landed, the gem left, the item was sold), so it is not
             // stuck and a later identical request starts from a clean count. A key
             // still in BACK-OFF is kept even if untouched (the swap-up's
-            // socketBackedOff read needs it when the item has no empty slot to gate
-            // on); it expires at its own backoffUntil.
+            // socketKeyHeld read needs it when the item has no empty slot to gate
+            // on). MFO-B29: an op-0 key is held PAST its expiry too (only the lift sweep
+            // or the nLoose == 0 return erases it), op 1 expires as before.
             std::erase_if(stuckMap, [&](const auto& kv) {
-                const bool backedOff = kv.second.backoffUntil != std::chrono::steady_clock::time_point{} &&
-                                       now < kv.second.backoffUntil;
+                const bool held = kv.second.backoffUntil != std::chrono::steady_clock::time_point{};
+                const bool backedOff = held && (kv.first.op == 0 || now < kv.second.backoffUntil);
                 return !backedOff && std::find(touched.begin(), touched.end(), kv.first) == touched.end();
             });
             if (stuckMap.empty()) g_stuck.erase(a_actor->GetFormID());

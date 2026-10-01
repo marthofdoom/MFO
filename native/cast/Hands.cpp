@@ -164,14 +164,19 @@ namespace MFO::Actuation {
         // hand this instant. Read under g_forcedMx: the map has an OFF-THREAD
         // reader (the SKSE save callback) and every access guards it.
         //
-        // ONE RESIDUAL, STATED: the ledger is only written while
-        // bWeaponStyleControl is ON (EquipWeapon's else branch is a plain
+        // THE KILL-SWITCH-OFF RESIDUAL (MFO-B3, closed): the ledger is only written
+        // while bWeaponStyleControl is ON (EquipWeapon's else branch is a plain
         // EquipObject with no ledger entry, and ReconcileForcedWeapon releases
-        // unconditionally when the switch is off). With the kill-switch off a
-        // melee follower in the transient-unarmed gap therefore still lands RIGHT
-        // -- the 2026-09-05 shape, on a non-default config. Recorded rather than
-        // papered over; closing it needs a signal that does not depend on that
-        // feature being on.
+        // unconditionally when the switch is off). With the switch off the ledger
+        // says nothing, so the gate reads the follower's DECLARED role instead:
+        // base class Melee (1) or Ranged (2) (Followers::GetBaseClass, the same
+        // "declared melee" read MeleeOnly makes, Fire.cpp) means a weapon owns that
+        // follower's right hand and the equip gambit will put it back. That signal
+        // does not depend on the feature, the hands or any claim, so it holds in the
+        // transient-unarmed gap. It is consulted ONLY when the switch is off, so the
+        // switch-ON answer is exactly the ledger answer as before. Not covered: an
+        // Auto (0) hybrid with the switch off, whose role is resolved from the live
+        // loadout and has no durable declaration in the gap.
         //
         // A pure caster never has an entry, so right-first still applies to
         // exactly the follower marth's ruling was about ("theres two hands, auto
@@ -183,8 +188,16 @@ namespace MFO::Actuation {
             // declaration): its off-thread reader is the SKSE SAVE callback, so
             // "the writers are worker-serial" is not enough. Nothing else is held
             // here and no engine call sits inside the lock.
-            std::scoped_lock lk(g_forcedMx);
-            return g_forcedWeapon.contains(a_follower->GetFormID());     // ... or coming back
+            {
+                std::scoped_lock lk(g_forcedMx);
+                if (g_forcedWeapon.contains(a_follower->GetFormID())) return true;   // ... or coming back
+            }
+            // Switch OFF: no ledger is ever written, so fall back to the declared role (MFO-B3).
+            if (!Config::g_weaponStyleControl.load()) {
+                const auto cls = Followers::GetBaseClass(a_follower->GetFormID());   // worker-serial, #4
+                return cls == 1 || cls == 2;   // Melee / Ranged: a weapon owns the right hand
+            }
+            return false;
         }
 
     }   // anon
@@ -333,10 +346,13 @@ namespace MFO::Actuation {
         // It clears the measured pipeline with room to spare. The two numbers this
         // file quotes are DIFFERENT measurements and neither is a range of the
         // other -- stated once here because two comments phrased them as if they
-        // were: 2.3-2.5 s is an offense cast's equip + charge (claim to first
-        // CHARGE STATE), and 4.5 s is claim to observed FIRE for the one heal the
-        // 2026-09-08 session landed. "2.3-4.5 s" as used elsewhere in this file is
-        // the span those two bracket, not a single measured quantity.
+        // were: 2.3-2.5 s is an offense cast's claim to FIRE (Firebolt, DIAG
+        // 2026-09-06), and 4.5 s is claim to observed FIRE for the one heal the
+        // 2026-09-08 session landed (that DIAG's own timeline reads 6.1 s, so treat
+        // it as soft). "2.3-4.5 s" as used elsewhere in this file is the claim-to-
+        // FIRE span those two bracket, not a single measured quantity. The only
+        // measured claim to first CHARGE STATE figures are ~2.5 s (0906 heal) and
+        // ~3.6 s (0908 heal).
         constexpr auto kInFlightHoldCap = std::chrono::milliseconds(APMFBridge::kHealCastTtlMs);
 
         // WHY CanPreemptHand last said yes on each hand (field 2026-09-29), for
@@ -594,7 +610,7 @@ namespace MFO::Actuation {
         // ── IS THE INCUMBENT'S TARGET STILL A TARGET? (review finding, 2026-09-08) ──
         // The bound on a rule re-aiming its own cast. Without one, `IsOwnRetarget`
         // let the incumbent Release+RequestCast on EVERY lap its target changed,
-        // and the claim-to-first-charge window is 2.3-4.5 s -- so a target that
+        // and the claim-to-fire pipeline is 2.3-4.5 s -- so a target that
         // flickers faster than that restarts APMF's window forever and the cast
         // NEVER reaches a charge. That is reachable, not theoretical:
         // Evaluator.cpp's PickAlly re-picks the STRICTLY lowest-HP party member
@@ -637,9 +653,10 @@ namespace MFO::Actuation {
             // FormID -- so a follower DISMISSED mid-fight still reads as a valid
             // recipient here until it heals above the threshold. Left as-is: the
             // re-aim is then held while that claim is fed, and the hold's own
-            // heartbeat stops at kHealHoldNeverObservedMs for a claim that never
-            // fires (see refreshHeldOwnClaim), so the cost is bounded by that
-            // window rather than by the fight. Reaching g_active from this
+            // heartbeat stops feeding at kHealHoldNeverObservedMs for a claim that never
+            // fires and the claim then dies at the FacetExpiry sweep, so the real
+            // bound is that SUM (~4.8-6.5 s, see refreshHeldOwnClaim), also for a
+            // claim that fired and went quiet, rather than by the fight. Reaching g_active from this
             // predicate would bind the cast lock to the roster list for a case the
             // field has never reported.
             auto* victim = RE::TESForm::LookupByID<RE::Actor>(a_lock.target);
@@ -734,7 +751,7 @@ namespace MFO::Actuation {
         // THIS PREDICATE IS ONLY THE IDENTITY HALF. "Never mid-charge" is NOT a
         // sufficient bound on its own and an earlier comment here said it was: it
         // protects a cast from the moment charging begins, and the 2.3-4.5 s
-        // between claim and first charge is precisely the window a flickering
+        // claim-to-fire pipeline (the stretch before first charge included) is precisely the window a flickering
         // target restarts. The caller pairs this with IncumbentTargetLost above,
         // which is the bound that makes the re-aim safe.
         bool IsOwnRetarget(const CastLock& a_lock, RE::FormID a_spell) {
@@ -1107,8 +1124,8 @@ namespace MFO::Actuation {
         //    APMF's side, since a cast claim cannot be retargeted in place).
         //    TWO bounds, and the second is not optional. Never mid-charge --
         //    which protects a cast from the moment charging BEGINS, and NOTHING
-        //    before it: the claim-to-first-charge window is 2.3-4.5 s and the
-        //    caster reads kNone throughout, so that test alone let a flickering
+        //    before it: the claim-to-fire pipeline is 2.3-4.5 s and the
+        //    caster reads kNone through its first stretch, so that test alone let a flickering
         //    target restart APMF's window every lap and the cast never charged
         //    at all. So also: only when the incumbent's target is genuinely
         //    LOST (IncumbentTargetLost -- the evaluator's own three tests). A
@@ -1146,7 +1163,7 @@ namespace MFO::Actuation {
         // a re-aimed target fails. So `refreshed` stops moving while the hold
         // stands, and APMFBridge::Tick() sweeps the claim at FacetExpiry()
         // (~2.45 s at the defaults, floor 0.77 s) -- against a
-        // claim-to-first-charge window of 2.3-4.5 s. The hold would then have
+        // claim-to-fire pipeline of 2.3-4.5 s. The hold would then have
         // been protecting a claim its own silence was killing: A claimed at
         // t=0, the ally swap at t=0.5, sweep at ~2.95 s, APMF's Release tears
         // down the equipment set and interrupts the charge, and A never
