@@ -361,6 +361,9 @@ namespace MFO::Actuation {
         inline std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_healOutrankLog;
         inline std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> g_releaseHealLog;
         inline std::unordered_map<RE::FormID, HealRepairLogSlots> g_healRepairLog;
+        // g_healHoldLog: HealPendingHoldsOffense's `[heal-hold]` line, once per claim (keyed by
+        // the claim's lock stamp, so a re-claim logs again). Revert-cleared by ClearCastLocks.
+        inline std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> g_healHoldLog;
 
         // An offense charge that sat fully charged on an unsighted foe past the never-
         // observed bound was RELEASED (CastOn, in-flight refresh). Its (spell, target)
@@ -555,6 +558,18 @@ namespace MFO::Actuation {
             explicit operator bool() const { return why != nullptr; }
         };
         HealRepair HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        // HealPendingHoldsOffense (fix/mfo-heal-starve-retreat, P1): is a STRICTLY HIGHER-RANKED
+        // heal claim (lower rule index than a_askerRule) standing on the LEFT hand PENDING, i.e.
+        // not in flight on the hand and not observed firing since its claim stamp, and younger
+        // than kHoldLastSeenCapMs? Then a lower-ranked OFFENSE rule must not take the other
+        // hand or pin a foe (that drops Bridge.cpp's idle-hand floor, and the engine then
+        // sat on the heal for ~10 s, field 2026-10-01). Derived from the lock + claim + watch,
+        // no state of its own and no timer: the bound is the existing claim-age cap, past
+        // which the kNeverFired WARN is the loud signal and offense resumes. Logs `[heal-hold]`
+        // once per claim. Worker-serial (#4).
+        bool HealPendingHoldsOffense(RE::Actor* a_follower, int a_askerRule, RE::FormID a_askerSpell);
+        // An asker that already HOLDS a hand with its own spell (an offense charge in progress) is
+        // never held: starving its refresh would kill a running cast, which is not this fix's job.
         const char* HealRepairVerdict(Loadout::Ready a_ready);
         void LogHealRepair(RE::FormID a_follower, RE::FormID a_spell, const HealRepair& a_rep,
                            const char* a_verdict, bool a_failed, const std::string& a_prepareWhy);

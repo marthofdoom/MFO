@@ -114,6 +114,14 @@ namespace MFO::Actuation {
     // lap. Worker-serial (#4).
     bool HealRestreamGap(RE::FormID a_follower);
 
+    // P2 (fix/mfo-heal-starve-retreat). OwnCastInFlight: the follower's own cast is in a live
+    // cast state on either hand whose cast lock names the spell (CastInFlightOnHand, the one
+    // definition of in flight; no new engine read). ReleaseHealClaimForRetreat: end a standing
+    // heal claim and drop its left lock, so the retreat fill does not leave it to the
+    // FacetExpiry sweep (returns true when one stood; logs it). Both worker-serial (#4).
+    bool OwnCastInFlight(RE::Actor* a_follower);
+    bool ReleaseHealClaimForRetreat(RE::Actor* a_follower);
+
     // THE CAST-TARGET RESOLUTION LADDER (#68). Resolves WHO a cast_target row
     // aims at: a live selector target -> a named specific follower -> Subject
     // Player/NearestAlly -> the PLAYER fallback (a_outIsFallbackPlayer marks that

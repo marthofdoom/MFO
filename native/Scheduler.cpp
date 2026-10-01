@@ -189,6 +189,9 @@ namespace MFO::Scheduler {
             // COOLDOWN: the next auto-fill waits until BOTH floors pass.
             std::chrono::steady_clock::time_point rearmAt{};
             std::uint32_t rearmLaps = 0;   // own services still to wait
+            // P2: when the retreat trigger first held off for the follower's own cast in
+            // flight (epoch == not holding). Bounds the delay, see kRetreatCastDeferMs.
+            std::chrono::steady_clock::time_point castDeferSince{};
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
 
@@ -396,6 +399,11 @@ namespace MFO::Scheduler {
         // drift. Arrival: 200u (package radius 150 + engine stop slack).
         // Timeout: 30 s -- past any plausible walk time at Run speed.
         constexpr float kRetreatConfidence = 0.25f;
+        // P2: the longest the fill waits for the follower's OWN cast in flight, from the first
+        // delay. Sized from the measured heal cast, Casting to Concluding in 458 ms (E5) and
+        // 568 ms (E6, cut), times three, plus one 133 ms pump: 1500 ms. A floor on the cast,
+        // not an expiry on the retreat: past it the fill goes ahead, loudly (WARN).
+        constexpr std::uint32_t kRetreatCastDeferMs = 1500;
         // ENGAGE-ON-SIGHT BAR (Confidence v2 review, SEV-3): starting a fight needs a
         // margin OVER the retreat floor, so a follower never starts a fight he would
         // flee at the first damage (the v2 HP trend drops Of() as soon as he is hit).
@@ -1292,8 +1300,31 @@ namespace MFO::Scheduler {
                 // would log a misleading 0.8-1.0 (assess-confidence-leash step 4).
                 const float conf = Confidence::Of(f);
                 if (conf < kRetreatConfidence) {
+                    // P2 (field 2026-10-01): a cast in flight finishes (the heal rule's own D8).
+                    // Delay the fill while the follower's own cast is live, one sense lap at a
+                    // time, bounded by kRetreatCastDeferMs from the first delay so a held charge
+                    // or a long stream cannot postpone the retreat for good.
+                    bool deferFill = false;
+                    if (Actuation::OwnCastInFlight(f)) {
+                        // A stamp from an earlier lap-run that never reached a fill is stale.
+                        if (note.castDeferSince.time_since_epoch().count() == 0 ||
+                            now - note.castDeferSince > std::chrono::milliseconds(2 * kRetreatCastDeferMs)) {
+                            note.castDeferSince = now;
+                            spdlog::info("[retreat] {:08X}: fill delayed -- own cast in flight "
+                                         "(bounded {} ms, confidence={:.2f} dPlayer={:.0f})",
+                                         id, kRetreatCastDeferMs, conf, dPlayer);
+                        }
+                        if (now - note.castDeferSince < std::chrono::milliseconds(kRetreatCastDeferMs))
+                            deferFill = true;
+                        else
+                            spdlog::warn("[retreat] {:08X}: cast still in flight after {} ms -- filling anyway",
+                                         id, kRetreatCastDeferMs);
+                    }
+                    if (!deferFill) {
+                    note.castDeferSince = {};
                     const int foes = CombatSense::FoeCount(f);
                     if (Packages::RetreatFill(f)) {
+                        Actuation::ReleaseHealClaimForRetreat(f);
                         note.phase           = RetreatPhase::Travel;
                         note.took            = false;
                         note.outOfCombatSeen = false;
@@ -1311,6 +1342,7 @@ namespace MFO::Scheduler {
                                      "retry after {} own services and {:.0f}s", id, conf, foes, dPlayer,
                                      kRetreatCooldownLaps, kRetreatCooldownSecs);
                     }
+                    }   // !deferFill
                 }
             }
         }
