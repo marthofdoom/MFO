@@ -535,8 +535,8 @@ namespace MFO::Actuation {
         // claim's delivery-flip proxy is in the left hand any more (a shield
         // restored on hit, a 2H / bow given back, an equip-gambit declaration, the
         // spell taken back after a fire), or (b) the claim has not fired within
-        // APMFBridge::kHealHoldNeverObservedMs of being claimed -- the SAME bound
-        // refreshHeldOwnClaim puts on the hold path. The caller then does not
+        // APMFBridge::kHealClaimNeverObservedCapMs of being claimed -- the same VALUE as the
+        // hold path's kHoldLastSeenCapMs (refreshHeldOwnClaim), each named for its own intent. The caller then does not
         // refresh... (round 2) the caller Prepares the heal back into the left hand
         // right there, under the claim the refresh renewed, keeping the lock as it
         // is (no PIN-VOID, no lock re-stamp: R2-3), and returns transparent. Never a

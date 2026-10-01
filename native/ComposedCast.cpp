@@ -147,8 +147,8 @@ namespace MFO::ComposedCast {
         // firing it" while the seats were firing it perfectly. A diagnostic that
         // cries wolf on every claim is worse than none (principle 8). 3500 ms sits
         // above the measured charge latency and still strictly BELOW both
-        // kHealHoldNeverObservedMs (4000) and kIdleFloorUnobservedMs (8000), so both
-        // static_asserts below keep holding and the warning still precedes either
+        // kHealClaimNeverObservedCapMs / kHoldLastSeenCapMs (4000) and
+        // kIdleFloorUnobservedMs (8000), so all three static_asserts below keep holding and the warning still precedes either
         // lift in the log.
         //
         // The timer is not the real fix, though -- WatchArmed below now also stays
@@ -166,9 +166,14 @@ namespace MFO::ComposedCast {
         // explains it, so the warning has to reach the log FIRST. Compile-time,
         // because the two constants live in different files and drift silently.
         static_assert(std::chrono::milliseconds(
-                          static_cast<long long>(APMFBridge::kHealHoldNeverObservedMs)) >
+                          static_cast<long long>(APMFBridge::kHealClaimNeverObservedCapMs)) >
                       kSilentWarnAfter,
                       "the never-observed hold cap must outlast kSilentWarnAfter, so the "
+                      "silent-claim warning always precedes the lift in the log");
+        static_assert(std::chrono::milliseconds(
+                          static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) >
+                      kSilentWarnAfter,
+                      "the hold's lastSeen cap must outlast kSilentWarnAfter, so the "
                       "silent-claim warning always precedes the lift in the log");
         // Same ordering for the idle-hand floor's unobserved gate (fix/mfo-combat-
         // restoration-direct, 2026-09-21): the "[cfc] ... NO observed cast" line

@@ -1244,14 +1244,16 @@ namespace MFO::Actuation {
                     if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(weapon)) {
                         // The pair carries no hand (layout v1), so name the slot
                         // from the LIVE hands (F4): a form held in the LEFT is
-                        // unequipped with the left slot, one in the RIGHT with the
-                        // default -- BOTH when the same form sits in each hand (a
-                        // count>=2 same-form dual hold). Held in neither: the
+                        // unequipped with the left slot, one in the RIGHT with no
+                        // slot (a two-hander / bow has the BothHands slot, unverified) --
+                        // BOTH when the same form sits in each hand (a count>=2
+                        // same-form dual hold): then the second unequip names the RIGHT
+                        // slot (MFO-B23). Held in neither: the
                         // slot-less call by object, exactly as before.
                         const bool inLeft  = actor->GetEquippedObject(true)  == obj;
                         const bool inRight = actor->GetEquippedObject(false) == obj;
                         if (inLeft)  mgr->UnequipObject(actor, obj, nullptr, 1, Loadout::LeftHandSlot(), true, true);
-                        if (inRight) mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
+                        if (inRight) mgr->UnequipObject(actor, obj, nullptr, 1, inLeft ? Loadout::RightHandSlot() : nullptr, true, true);
                         if (!inLeft && !inRight)
                             mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
                     }

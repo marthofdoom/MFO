@@ -549,7 +549,7 @@ namespace MFO::Actuation {
                 // held": every foe occluded), so this refresh renewed the claim for 32 s
                 // with no observed cast and the hand was never free. The bound is the
                 // one the claim path already uses for a claim nothing fires: the
-                // never-observed window (APMFBridge::kHealHoldNeverObservedMs) from the
+                // never-observed window (APMFBridge::kHealClaimNeverObservedCapMs) from the
                 // claim stamp, with the caster fully CHARGED (kReady, held, not casting)
                 // and the foe's measured verdict Occluded. All three must hold, so a
                 // charge that is still building, firing, or aimed at a sighted foe is
@@ -571,7 +571,7 @@ namespace MFO::Actuation {
                         if (stamp == std::chrono::steady_clock::time_point{}) { allCharged = false; break; }
                         const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - stamp);
-                        if (ageMs < std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) ||
+                        if (ageMs < std::chrono::milliseconds(APMFBridge::kHealClaimNeverObservedCapMs) ||
                             ComposedCast::ObservedFiring(id, h == kHandLeft ? APMFBridge::kApmfHandLeft
                                                                             : APMFBridge::kApmfHandRight,
                                                          a_spellID,

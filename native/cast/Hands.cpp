@@ -653,7 +653,7 @@ namespace MFO::Actuation {
             // FormID -- so a follower DISMISSED mid-fight still reads as a valid
             // recipient here until it heals above the threshold. Left as-is: the
             // re-aim is then held while that claim is fed, and the hold's own
-            // heartbeat stops feeding at kHealHoldNeverObservedMs for a claim that never
+            // heartbeat stops feeding at kHoldLastSeenCapMs for a claim that never
             // fires and the claim then dies at the FacetExpiry sweep, so the real
             // bound is that SUM (~4.8-6.5 s, see refreshHeldOwnClaim), also for a
             // claim that fired and went quiet, rather than by the fight. Reaching g_active from this
@@ -943,9 +943,9 @@ namespace MFO::Actuation {
             const auto& lk  = it->second.hand[kHandLeft];
             const auto  age = std::chrono::steady_clock::now() - lk.lastSeen;
             if (lk.spell == spellID &&
-                age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
+                age >= std::chrono::milliseconds(APMFBridge::kHoldLastSeenCapMs) &&
                 !ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, spellID,
-                                              APMFBridge::kHealHoldNeverObservedMs)) {
+                                              APMFBridge::kObservedFiringRecencyMs)) {
                 // WARN ONLY WHEN IT HAS NEVER FIRED (review round 3, R3-2): `lastSeen`
                 // is the claim stamp now (R2-3), so "no fire in the last N s" is also
                 // the ordinary gap between two casts of a claim that has fired.
@@ -1194,7 +1194,7 @@ namespace MFO::Actuation {
         //
         // THE CODEBASE ALREADY DECIDED THIS, one file over: RefreshHealCastClaim
         // refuses to renew AND caps a NEVER-OBSERVED claim at
-        // kHealHoldNeverObservedMs (4000 ms, sized from measured
+        // kHealClaimNeverObservedCapMs (4000 ms, sized from measured
         // claim-to-observed latency), for exactly this failure -- "an incumbent
         // the engine NEVER casts can re-arm indefinitely". This path reaches the
         // same heal slot (RefreshOwnedCastOnHand's LEFT branch replays o.heal),
@@ -1206,7 +1206,7 @@ namespace MFO::Actuation {
         //     A firing claim is by definition not a wedge, and a channelled or
         //     repeating cast should keep its hand for as long as it runs.
         //   * otherwise, only while the claim is younger than the SAME
-        //     kHealHoldNeverObservedMs window, anchored on `lastSeen`, which
+        //     kHoldLastSeenCapMs window, anchored on `lastSeen`, which
         //     HoldCastLock stamps at the claim or re-aim and nothing moves
         //     afterwards -- so it measures exactly "how long this claim has
         //     stood without being re-stated". Past it, stop feeding: the
@@ -1254,15 +1254,15 @@ namespace MFO::Actuation {
                 // fired once on this hand this fight" -- across claims and
                 // across RULES -- and using it here would leave the cap
                 // unbounded for the ordinary case: any rule whose spell had
-                // landed even once could then hold its hand forever. Same
-                // window as the age cap below, so both halves of "is this
-                // claim still alive" are measured against one number.
+                // landed even once could then hold its hand forever. The
+                // recency window (kObservedFiringRecencyMs) and the age cap below
+                // (kHoldLastSeenCapMs) are separately named; both are 4000 ms today.
                 const bool fired = ComposedCast::ObservedFiring(
-                    fid, apmfHand, lk.spell, APMFBridge::kHealHoldNeverObservedMs);
+                    fid, apmfHand, lk.spell, APMFBridge::kObservedFiringRecencyMs);
                 const auto  age  = std::chrono::duration_cast<std::chrono::milliseconds>(
                                        now - lk.lastSeen);
                 if (!fired && !inFlight &&
-                    age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs))
+                    age >= std::chrono::milliseconds(APMFBridge::kHoldLastSeenCapMs))
                     continue;   // silent too long -- stop feeding it, let the sweep run
                 // The SPELL, not just the hand: on the LEFT an offense claim
                 // and a heal claim can stand together, and a held offense

@@ -1300,6 +1300,7 @@ namespace MFO::Board {
             // the dismissal sweep (Followers::ReleaseHeldState).
             if (c.kind == EditKind::SetMfoEnabled) {
                 it->second.mfoEnabled = (c.param > 0.5f);
+                Followers::RepublishActiveMirror();   // MFO-B12: worker-domain, g_mx is a leaf
                 continue;
             }
 
