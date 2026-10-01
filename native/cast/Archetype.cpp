@@ -458,12 +458,12 @@ namespace MFO::Actuation {
     }
 
     void ResetArchetypeLog() {
-        std::lock_guard lk(g_noteMx);
-        g_noted.clear();
-        g_warned.clear();
-        g_settled.clear();
-    }
-    {
+        {
+            std::lock_guard lk(g_noteMx);
+            g_noted.clear();
+            g_warned.clear();
+            g_settled.clear();
+        }
         std::lock_guard lk(g_cacheMx);   // renumbered dynamic forms and any edited records start clean
         g_cache.clear();
     }
