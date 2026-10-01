@@ -21,6 +21,7 @@
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
 #include "EngageOnSight.h" // the hidden OOC gambit "nearest visible enemy" (party-OOC branch)
 #include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
+#include <cstring>          // [deadtgt] strcmp on the CannotActReason strings
 #include <unordered_set>   // T#78: MFO-OFF one-time-release latch (g_mfoDisabledSwept)
 
 namespace MFO::Scheduler {
@@ -282,6 +283,93 @@ namespace MFO::Scheduler {
                          pc && pc->IsInCombat() ? 1 : 0, tgt ? tgt->GetFormID() : 0u,
                          tgt && tgt->GetName() ? tgt->GetName() : "",
                          tgt ? (tgt->IsDead() ? " (dead)" : "") : "");
+        }
+        // [deadtgt] (PASSIVE, ClickUp 86e3eb078, diag/mfo-dead-target): a follower in combat whose
+        // ENGINE current target (currentCombatTarget, the same worker read as the quash backstop)
+        // resolves to an actor that is not alive -- dead / dying / recycle / bleedout / essential-down /
+        // unconscious / restrained / kill move. One line at first sighting, then at most one per
+        // kDeadTgtLogS while it persists, and a closing line with the total duration when it ends
+        // (target alive, changed, gone, or combat over). Worker-serial, keyed by follower; cleared on
+        // revert (ResetState) and on the party-OOC teardown. Reads only; writes no target, no pin.
+        struct DeadTgtState {
+            std::chrono::steady_clock::time_point since{};
+            std::chrono::steady_clock::time_point lastLog{};
+            RE::FormID                            tgt = 0;
+        };
+        std::unordered_map<RE::FormID, DeadTgtState> g_deadTgt;
+        constexpr double kDeadTgtLogS = 1.0;
+
+        // Why a target counts as "not alive", or nullptr. Knockdown / paralysis are NOT down states.
+        const char* DeadTgtReason(const RE::Actor* a_t) {
+            const char* why = Actuation::CannotActReason(a_t, false);
+            if (why && (!std::strcmp(why, "knocked down") || !std::strcmp(why, "paralysed") ||
+                        !std::strcmp(why, "knock queued")))
+                why = nullptr;
+            if (!why && a_t->IsDead()) why = "dead";
+            return why;
+        }
+
+        // Non-idle casters in the actor's own magicCasters[] (plain loads, as CastInFlightOnHand).
+        std::string DeadTgtCasting(RE::Actor* a_f) {
+            static constexpr const char* kSlot[RE::Actor::SlotTypes::kTotal] = { "L", "R", "?", "V" };
+            std::string out;
+            for (std::size_t i = 0; i < RE::Actor::SlotTypes::kTotal; ++i) {
+                RE::MagicCaster* c = a_f->GetActorRuntimeData().magicCasters[i];
+                if (!c) continue;
+                const auto st = c->state.get();
+                if (st == RE::MagicCaster::State::kNone || st == RE::MagicCaster::State::kUnk08 ||
+                    st == RE::MagicCaster::State::kUnk09)
+                    continue;
+                auto* sp = c->currentSpell;
+                if (!out.empty()) out += ",";
+                out += std::format("{}:{:08X} '{}' st={}", kSlot[i], sp ? sp->GetFormID() : 0u,
+                                   sp && sp->GetName() ? sp->GetName() : "", static_cast<int>(st));
+            }
+            return out.empty() ? std::string("none") : out;
+        }
+
+        void DeadTgtEnd(RE::FormID a_id, const char* a_why, RE::FormID a_now) {
+            const auto it = g_deadTgt.find(a_id);
+            if (it == g_deadTgt.end()) return;
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - it->second.since).count();
+            spdlog::info("[deadtgt] {:08X} engine target {:08X} not-alive window ENDED after {} ms ({}); now={:08X}",
+                         a_id, it->second.tgt, ms, a_why, a_now);
+            g_deadTgt.erase(it);
+        }
+
+        void DeadTgtService(RE::Actor* a_f, RE::FormID a_id, bool a_inCombat) {
+            RE::NiPointer<RE::Actor> tp;
+            const RE::Actor*         tgt = nullptr;
+            const char*              why = nullptr;
+            if (a_inCombat) {
+                tp  = a_f->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
+                tgt = tp.get();
+                if (tgt && tgt != a_f) why = DeadTgtReason(tgt);
+            }
+            if (!why) {
+                DeadTgtEnd(a_id, !a_inCombat ? "combat over" : !tgt ? "no target" : "target up",
+                           tgt ? tgt->GetFormID() : 0u);
+                return;
+            }
+            const auto tid = tgt->GetFormID();
+            auto it = g_deadTgt.find(a_id);
+            if (it != g_deadTgt.end() && it->second.tgt != tid) {
+                DeadTgtEnd(a_id, "target changed to another not-alive actor", tid);
+                it = g_deadTgt.end();
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (it == g_deadTgt.end()) it = g_deadTgt.emplace(a_id, DeadTgtState{ now, now - std::chrono::hours(1), tid }).first;
+            if (std::chrono::duration<double>(now - it->second.lastLog).count() < kDeadTgtLogS) return;
+            it->second.lastLog = now;
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - it->second.since).count();
+            const auto latched = Targeting::Current(a_id).get();   // the pin (pin route) / the latch (degrade)
+            const auto claim   = APMFBridge::GetCombatTargetClaim(a_id);
+            const bool pinned  = Targeting::PinRoute() && latched;
+            spdlog::info("[deadtgt] {:08X} '{}' engine target {:08X} '{}' state={} for {} ms; MFO latched={:08X} "
+                         "ch6 intended={:08X} pinned={} casting={}",
+                         a_id, a_f->GetName() ? a_f->GetName() : "?", tid, tgt->GetName() ? tgt->GetName() : "", why, ms,
+                         latched ? latched->GetFormID() : 0u, claim, pinned ? "yes" : "no", DeadTgtCasting(a_f));
         }
         // Once-per-fight latch for the "[eval] ... combat table: N rules, none
         // matched" line (2026-09-21, Deck/Fable): a follower whose every
@@ -627,6 +715,7 @@ namespace MFO::Scheduler {
         g_partyCombat = false;        // party-combat substrate: no phantom OFF edge in the next world
         g_partyCombatNoted.clear();
         g_stallProbe.clear();                   // [stall-probe] samples are session state
+        g_deadTgt.clear();                      // [deadtgt] windows are session state
         g_noneMatchedNoted.clear();
         g_equipRangeUndecidableNoted.clear();   // MFO-B55 once-per-fight note
         g_reachHold.clear();                    // fix/mfo-unreachable-flyer: the leash hold
@@ -931,6 +1020,7 @@ namespace MFO::Scheduler {
                 CombatStyle::Clear(id);
                 g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
                 g_stallProbe.erase(id);        // [stall-probe]: the party fight is over
+                DeadTgtEnd(id, "combat over", 0);   // [deadtgt]: closes an open window
                 g_noneMatchedNoted.erase(id);  // and the once-per-fight "none matched" line
                 g_equipRangeUndecidableNoted.erase(id);   // MFO-B55: and the once-per-fight undecidable note
                 // T#76: the equip force-hold dies with the fight too -- combat end is
@@ -1066,6 +1156,7 @@ namespace MFO::Scheduler {
             spdlog::info("[sched] {:08X}: party combat, own combat=0 -- combat table live", id);
         if (ownCombat) g_stallProbe.erase(id);   // [stall-probe]: only while own combat is OFF
         else           StallProbe(f, id);
+        DeadTgtService(f, id, ownCombat);   // [deadtgt]: passive, ClickUp 86e3eb078
 
         // OWNED MODEL: keep this follower's APMF combat-target claim (if any) alive for
         // the WHOLE fight. Refreshes the expiry timestamp only (no create, no re-point)

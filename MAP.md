@@ -1776,6 +1776,7 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   package + `packData.packType`, and the player's combat flag + `currentCombatTarget` (handle resolve). Engine
   reads on the worker: `GetCurrentPackage`, the player's `currentCombatTarget` handle, `IsInCombat` (same worker
   precedents as `Scheduler.cpp:429` / Targeting); no engine writes.
+  **`[deadtgt]` (PASSIVE, `diag/mfo-dead-target`, ClickUp 86e3eb078, `DeadTgtService` `Scheduler.cpp` ~:290, called right after `StallProbe`; closed by `DeadTgtEnd` in the party-OOC teardown, cleared on revert):** per follower with OWN combat on whose engine `currentCombatTarget` (worker read, same as the quash backstop) is not alive (`CannotActReason` down states + `IsDead`; knockdown/paralysis excluded): one line at first sighting, then <=1/s, plus a closing line with total ms. Shows MFO latched (`Targeting::Current`), ch.6 intended (`APMFBridge::GetCombatTargetClaim`, new read-only getter, `apmf/Excursion.cpp`), pinned, and non-idle `magicCasters[]` slots. Grep `[deadtgt]`. Writes nothing.
   Sample dropped on own combat, the party-OOC teardown and revert. Nothing reads it. GATE 2 (`:451`, `MFO-B60` fixed, item G) — the
   WHOLE party-OOC teardown (the ready-beat / proposal / per-fight latches — NOT the
   retreat since 86e3erv94, see the AUTO-RETREAT DRIVER entry below — `CasterConsent::Clear`, `ClearCastLock`, `CombatStyle::Clear`,
