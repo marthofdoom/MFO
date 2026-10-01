@@ -454,6 +454,10 @@ namespace MFO::Actuation {
                     g_unsightedCharge.erase(blk);
                 }
             }
+            // P1 (field 2026-10-01): a higher-ranked heal claim that is PENDING (not yet
+            // fired) owns the lap's other hand too. Transparent, so rules below still run.
+            if (offenseSpell && HealPendingHoldsOffense(a_follower, g_firingRule, a_spellID))
+                return { Result::NoOp, "offense held: a higher-ranked heal claim is pending", true };
             HandPlan handPlan;
             // ONE lambda, because the in-flight gate below may have to run this a
             // SECOND time: if the claim its hand-pin was based on turns out to be
@@ -1699,6 +1703,7 @@ namespace MFO::Actuation {
         g_healOutrankLog.clear();
         g_releaseHealLog.clear();
         g_healRepairLog.clear();
+        g_healHoldLog.clear();
         g_unsightedCharge.clear();
     }
 

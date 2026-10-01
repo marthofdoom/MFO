@@ -14,15 +14,15 @@ Each item had an Opus review and a green CI run. CI only proves the build compil
 | f690e6e7 | Translatable Board/HUD text (`native/i18n/`, `out/Interface/Translations/MFO_ENGLISH.txt`, Docs/TRANSLATING.md) |
 | f4ff8127 | Passive `[archetype]` and `[summon-probe]` diagnostics (cast/Archetype.cpp, cast/SummonProbe.cpp) |
 | ad6d1bd1 | Ranged pick: ammo first, then perks. Relic pools, crossbow perk signal |
+| (heal merge) | Heal fixes from the 10-01 field log: heal hold while a higher heal waits, retreat waits for own cast and releases the heal claim, self-heal while retreating (marth: "Themselves, yes. others no."). Backlog B216, B217, B220 to B222 |
 | 4f574cd0 | HMS is core: runs without the add-on. Auto class resolver (logistics/ClassResolve.cpp), HMS-only PRGN records (v8 layout, no bump), never-processed adopt armed at load only |
 
-Main CI is green on 4f574cd0 (run 36900292422). Not released. v2.0.16 is the last tag.
+Main CI was green on 4f574cd0 (run 36900292422). Check CI on the heal merge commit, which came after this file was first written. Not released. v2.0.16 is the last tag.
 
 ## 2. Open branches
 
 | Branch | State | Next step |
 |---|---|---|
-| `fix/mfo-heal-starve-retreat` | Heal fixes from the 10-01 field log: P1 heal hold, P2 retreat waits for own cast, self-heal while retreating (marth: "Themselves, yes. others no."). Opus reviewed, final small round in progress at handoff | If not merged by the cloud: read the last diff, check CI on the newest SHA, merge |
 | `feat/mfo-remove-roster` | Remove from roster (86e3eewaf). STOWED, unreviewed, tier A | See its `Docs/handoff/remove-roster.md`: Opus tier-3 review of the undo list, then a Deck test |
 | `feat/mfo-loot-giveway`, `fix/mfo-summon-ground-position`, `split/cast-direct` | Not from this cloud session | Yours |
 | MEO and linux-native-tools branches | Parked by marth ("let the other two go for now") | Untouched |
@@ -39,7 +39,7 @@ Main CI is green on 4f574cd0 (run 36900292422). Not released. v2.0.16 is the las
   - Run a non-English test with a sample MFO_FRENCH.txt, then check gamepad navigation in the Gambits and Progression lists.
   - The Gambits button column is now about 125 px, because "sure?" clipped at 96. Check it in game.
   - release.sh now needs python3.
-- **Heal fixes** (once merged):
+- **Heal fixes:**
   - `[heal-hold]` including "idle right-hand claim was released", then `IDLE-HAND FLOOR claimed`, then a prompt ctcensus `FIRED type=Restore`.
   - `[retreat] fill delayed -- own cast in flight`, then `[heal] ... RELEASED ... the retreat filled`.
   - `[retreat-heal]` should only ever be a self heal.
@@ -61,6 +61,6 @@ Main CI is green on 4f574cd0 (run 36900292422). Not released. v2.0.16 is the las
 
 ## 5. Backlog and housekeeping
 
-- Docs/REVIEW-BACKLOG.md got new entries this session, B206 to B219. The heal branch adds three more, renumbered at its merge.
+- Docs/REVIEW-BACKLOG.md got new entries this session, B206 to B222.
 - cast/CastOn.cpp is about 1710 lines, past the ~1500 plan-a-split mark. Its split needs its own brief (splitcheck tool).
 - APMF task created: [Harbinger sound facet](https://app.clickup.com/t/86e3hbh80). It covers blocking sounds and proxying stereo to mono positional.

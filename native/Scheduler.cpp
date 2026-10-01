@@ -189,8 +189,13 @@ namespace MFO::Scheduler {
             // COOLDOWN: the next auto-fill waits until BOTH floors pass.
             std::chrono::steady_clock::time_point rearmAt{};
             std::uint32_t rearmLaps = 0;   // own services still to wait
+            // P2: when the retreat trigger first held off for the follower's own cast in
+            // flight (epoch == not holding). Bounds the delay, see kRetreatCastDeferMs.
+            std::chrono::steady_clock::time_point castDeferSince{};
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
+        // [retreat-heal] line dedup (3 s per follower).
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_retreatHealLog;
 
         // UNPAUSED SERVICE CLOCK (seconds). Advanced at the per-follower pause
         // gate in Tick by the time since the previous advance, ONLY when the
@@ -396,6 +401,12 @@ namespace MFO::Scheduler {
         // drift. Arrival: 200u (package radius 150 + engine stop slack).
         // Timeout: 30 s -- past any plausible walk time at Run speed.
         constexpr float kRetreatConfidence = 0.25f;
+        // P2: the longest the fill waits for the follower's OWN cast in flight, from the first
+        // delay. OwnCastInFlight counts caster states 1-7: a heal took about 560 ms from state 1 to 6
+        // (E5 458 ms, E6 568 ms to 4), an offense charge about 0.7-1.0 s from state 1 to 4. 1500 ms
+        // covers both with margin over one 133 ms pump. A floor on the cast, not an expiry on the
+        // retreat: past it the fill goes ahead, loudly (WARN).
+        constexpr std::uint32_t kRetreatCastDeferMs = 1500;
         // ENGAGE-ON-SIGHT BAR (Confidence v2 review, SEV-3): starting a fight needs a
         // margin OVER the retreat floor, so a follower never starts a fight he would
         // flee at the first damage (the v2 HP trend drops Of() as soon as he is hit).
@@ -706,6 +717,7 @@ namespace MFO::Scheduler {
 
     void ClearTransientState() {
         g_retreatNotes.clear();
+        g_retreatHealLog.clear();
         EngageOnSight::ClearTransientState();   // its per-follower notes + the probe mirror
         g_serviceClock   = 0.0;
         g_serviceClockAt = {};
@@ -1279,6 +1291,40 @@ namespace MFO::Scheduler {
                 // follower is disengaging, not gambitting -- that is the point.
                 // Deliberately NO serviceOwnOoc() here either: a loot travel
                 // armed under the retreat would fight it for the same actor.
+                //
+                // THE ONE EXCEPTION (marth 2026-10-01: "Heal while retreating? Themselves,
+                // yes. others no."): a Heal-kind act.cast_self rule. cast_self is self-
+                // targeted by definition, so no heal on others, no offense and no buff
+                // reaches Fire. Only once StopCombat has landed (out of combat): then the
+                // follower has no CombatController and CastOn takes the direct self road
+                // (ChooseHealRoad DirectNoCombat), which owns no package and no alias, so the
+                // retreat travel is untouched and nothing is left for a later StopCombat to
+                // cut. Before it lands, nothing runs (a claim minted now would be cut by it).
+                if (!f->IsInCombat() && !Actuation::CannotActReason(f) && Config::g_castSelf.load()) {
+                    for (int start = 0; ; ) {
+                        const auto rec = g_followers.find(id);
+                        if (rec == g_followers.end()) break;
+                        const Eval::Choice sc = Eval::Evaluate(f, rec->second, Table::Combat, start);
+                        if (sc.ruleIndex < 0) break;
+                        start = sc.ruleIndex + 1;
+                        if (sc.actionOpcode != Vocab::kActCastSelf) continue;
+                        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.actionParam);
+                        if (!sp || !Actuation::HealsHealth(sp)) continue;
+                        // The EXACT decision CastOn will make: only a package-free direct road runs here
+                        // (NoCombat, NoSeat, Degrade and NotHeal all reach CastSelfDirect with bCastSelf
+                        // on). An inactive controller still answers Claim, which is skipped (review F2).
+                        if (ComposedCast::ChooseHealRoad(f, sp, f) == ComposedCast::HealRoad::Claim) continue;
+                        const Actuation::Outcome o = Actuation::Fire(f, sc);
+                        if (o.transparent) continue;
+                        auto& last = g_retreatHealLog[id];
+                        if (now - last > std::chrono::seconds(3)) {
+                            last = now;
+                            spdlog::info("[retreat-heal] {:08X}: self-heal rule {} (spell {:08X}) while retreating: {}",
+                                         id, sc.ruleIndex, sc.actionParam, o.reason);
+                        }
+                        break;
+                    }
+                }
                 g_lastTickMs = std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - t0).count();
                 return;
@@ -1292,8 +1338,32 @@ namespace MFO::Scheduler {
                 // would log a misleading 0.8-1.0 (assess-confidence-leash step 4).
                 const float conf = Confidence::Of(f);
                 if (conf < kRetreatConfidence) {
+                    // P2 (field 2026-10-01): a cast in flight finishes (the heal rule's own D8).
+                    // Delay the fill while the follower's own cast is live, one sense lap at a
+                    // time, bounded by kRetreatCastDeferMs from the first delay so a held charge
+                    // or a long stream cannot postpone the retreat for good.
+                    bool deferFill = false;
+                    if (!Actuation::OwnCastInFlight(f)) note.castDeferSince = {};
+                    else {
+                        // A stamp from an earlier lap-run that never reached a fill is stale.
+                        if (note.castDeferSince.time_since_epoch().count() == 0 ||
+                            now - note.castDeferSince > std::chrono::milliseconds(2 * kRetreatCastDeferMs)) {
+                            note.castDeferSince = now;
+                            spdlog::info("[retreat] {:08X}: fill delayed -- own cast in flight "
+                                         "(bounded {} ms, confidence={:.2f} dPlayer={:.0f})",
+                                         id, kRetreatCastDeferMs, conf, dPlayer);
+                        }
+                        if (now - note.castDeferSince < std::chrono::milliseconds(kRetreatCastDeferMs))
+                            deferFill = true;
+                        else
+                            spdlog::warn("[retreat] {:08X}: cast still in flight after {} ms -- filling anyway",
+                                         id, kRetreatCastDeferMs);
+                    }
+                    if (!deferFill) {
+                    note.castDeferSince = {};
                     const int foes = CombatSense::FoeCount(f);
                     if (Packages::RetreatFill(f)) {
+                        Actuation::ReleaseHealClaimForRetreat(f);
                         note.phase           = RetreatPhase::Travel;
                         note.took            = false;
                         note.outOfCombatSeen = false;
@@ -1311,6 +1381,7 @@ namespace MFO::Scheduler {
                                      "retry after {} own services and {:.0f}s", id, conf, foes, dPlayer,
                                      kRetreatCooldownLaps, kRetreatCooldownSecs);
                     }
+                    }   // !deferFill
                 }
             }
         }

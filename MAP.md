@@ -477,7 +477,7 @@ per concern:
 - `cast/Roads.cpp` (288) = the three delivery ROADS `CastOn` forks to: `ForceCast` (`:31`, the
   forced package cast), `ConcentrationCast` (`:129`, the bounded concentration stream entry) and
   `RestorationCastDirect` (`:269`).
-- `cast/CastOn.cpp` (1580 -- PAST the ~1500 "plan a split" mark after animheal phase 2's review round 3;
+- `cast/CastOn.cpp` (1706 -- PAST the ~1500 "plan a split" mark after animheal phase 2's review round 3;
   flagged, not split: the next brief that touches it proposes the split as its own round) = `CastOn` (`:123`, the AI-first hybrid of one spell at one target;
   its heal-road block `:348-419`, see "ANIMATED HEAL CLAIM ROAD" below)
   + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:76`, extern via `cast/Direct_internal.h`)
@@ -800,6 +800,16 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     in the gap; the equip side ranks it (`HealRestreamRule`) and `HealTakesLeft` stays true.
     Harbinger's seat 0x07 still stops the channel at full (stopPct 0). **No MFO magicka deduction on
     this road**: the engine charges the real cast (the competence gate still checks cost).
+  * **HEAL PENDING HOLDS OFFENSE (`fix/mfo-heal-starve-retreat`, P1, field 2026-10-01, MFO-B196 is the same-hand rank-inversion sibling; MFO-B216/B217 are the deferred P3/bleed items; B220-B222 the review's deferred findings).**
+    `HealPendingHoldsOffense` (`cast/Hands.cpp:975`, declared `cast/Actuation_internal.h`; exempts the asker only while ITS OWN right-hand cast RUNS, and releases the held rule's idle right-hand claim that lap) is asked by `CastOn` for an
+    OFFENSE spell right after the unsighted-charge block (`cast/CastOn.cpp:459`), before the hand plan: a STRICTLY
+    higher-ranked (lower index) heal claim on the LEFT lock that is not in flight, not observed firing since its
+    stamp, and younger than `kHoldLastSeenCapMs` makes the offense rule a transparent NoOp, so no right-hand claim and no
+    ch.6/ch.20 pin, and `apmf/Bridge.cpp:787`'s IDLE-HAND FLOOR stays. No state of its own, no timer (the bound is the
+    existing claim-age cap, past which the kNeverFired WARN speaks). An offense rule already holding the right hand
+    with its own spell is never held (its refresh must not starve). `[heal-hold]` logs once per claim
+    (`g_healHoldLog`, cleared by `ClearCastLocks`). Lowers the F9 "an offense rule below gets its lap" text above for the pending case only.
+  * **Telling "P1 worked" from "P1 starved offense" (MFO-B221):** re-mints restamp the lock's `lastSeen`, so the 4 s hold can re-arm per claim. In the field, `[heal-hold]` once per claim and a prompt `FIRED type=Restore` = worked. Repeated `[heal-hold]` lines with the `[cfc] kNeverFired` WARN and no fire = offense is starved by a heal that never starts (the WARN stays the loud signal).
   * **Hand lock (`cast/Hands.cpp`)**: heals stay LEFT, offense keeps its PlanCastHand pick; rank is
     carried (`CanPreemptHand`, urgent heal mid-charge unchanged). `IncumbentTargetLost` (`:561`) now
     also calls a HEAL recipient lost at full health, beyond `HealInReach`, or measured Occluded within
@@ -1884,6 +1894,15 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   `MFO-B59` (the `ownedCast` explicit-subject ally + Offense road, the stream outliving a
   castSeen-false lap by the reconcile's stale window, a magicka-dry Declined stretch delaying
   logistics) and `MFO-B58` (the Task-1 concentration claims with no controller test).
+- **RETREAT WAITS FOR OWN CAST + RELEASES THE HEAL CLAIM (`fix/mfo-heal-starve-retreat`, P2).** The trigger in `Scheduler.cpp`
+  (`:1300-1345`) asks `Actuation::OwnCastInFlight` (`cast/Hands.cpp:1020`, `CastInFlightOnHand` over both lock hands) and
+  defers the fill, bounded by `kRetreatCastDeferMs` (`Scheduler.cpp:409`, 1500 ms from the first delay,
+  `RetreatNote::castDeferSince`), then fills anyway with a WARN. On a successful fill
+  `Actuation::ReleaseHealClaimForRetreat` (`cast/Hands.cpp:1032`) ends the standing heal claim and its left lock. Both
+  worker-serial. SELF-HEAL WHILE RETREATING (marth 2026-10-01 "Themselves, yes. others no."): in `ServiceRetreat`'s
+  early-return branch (`Scheduler.cpp` ~:1292-1318) a mini scan fires ONLY `act.cast_self` rules whose spell
+  `HealsHealth`, and only when out of combat, able to act, `bCastSelf` on and `ChooseHealRoad` answers `DirectNoCombat` (so CastOn takes the direct self road, no package, no
+  claim for the StopCombat to cut). `[retreat-heal]` logs it (3 s dedup, `g_retreatHealLog`). The gambit table and OOC service stay skipped.
 - **AUTO-RETREAT DRIVER (ClickUp 86e3erv94, batch L, 2026-09-25; tier A; revised after the
   7580bea and 19f67e0 reviews).** `ServiceRetreat` (`:343`) runs on EVERY service from BOTH tables — the
   party-OOC branch (`:768`, before `Logistics::ServiceFollower`) and the combat table (`:942`)

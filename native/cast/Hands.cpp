@@ -972,6 +972,81 @@ namespace MFO::Actuation {
         return rep;
     }
 
+    bool HealPendingHoldsOffense(RE::Actor* a_follower, int a_askerRule, RE::FormID a_askerSpell) {
+        const auto fid = a_follower ? a_follower->GetFormID() : 0;
+        if (fid == 0 || a_askerRule == kNoRule) return false;
+        const auto it = g_castLock.find(fid);
+        if (it == g_castLock.end()) return false;
+        // Exempt ONLY a RUNNING cast of the asker's own (review F1): a right-hand claim standing
+        // between casts or never fired is not a cast to protect, and exempting it by lock spell
+        // alone kept the floor released (the E6 shape, 09:06:10-11).
+        // Owned by the ASKER's rule too (R2-1): a lower rule casting the same spell as a higher
+        // rule's right-hand claim must not release that other rule's claim.
+        const auto& rlk = it->second.hand[kHandRight];
+        const bool askerHoldsRight = rlk.spell == a_askerSpell && rlk.owningRule == a_askerRule;
+        if (askerHoldsRight &&
+            CastInFlightOnHand(a_follower, kHandRight, a_askerSpell, CastProxyOnHand(fid, kHandRight)))
+            return false;
+        const auto& lk = it->second.hand[kHandLeft];
+        if (lk.spell == 0 || lk.owningRule == kNoRule || lk.owningRule >= a_askerRule) return false;
+        if (APMFBridge::GetHealCastSpell(fid) != lk.spell) return false;   // not a standing HEAL claim
+        const auto age = std::chrono::steady_clock::now() - lk.lastSeen;
+        if (age >= std::chrono::milliseconds(APMFBridge::kHoldLastSeenCapMs)) return false;   // capped: kNeverFired WARN speaks
+        if (CastInFlightOnHand(a_follower, kHandLeft, lk.spell, CastProxyOnHand(fid, kHandLeft))) return false;   // running
+        const auto sinceClaim = std::chrono::duration_cast<std::chrono::milliseconds>(age);
+        if (ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, lk.spell,
+                                         static_cast<std::uint32_t>(sinceClaim.count())))
+            return false;   // fired since this claim: normal behaviour resumes
+        // The held rule's own idle right-hand claim is released THIS lap, so the idle-hand floor
+        // engages (otherwise the FacetExpiry sweep, ~2.8 s, eats the 4 s hold).
+        bool released = false;
+        if (askerHoldsRight) {
+            APMFBridge::ReleaseCastClaimOnHand(fid, APMFBridge::kApmfHandRight);
+            ClearCastLockHand(fid, kHandRight);
+            ComposedCast::ClearWatchHand(fid, APMFBridge::kApmfHandRight);   // as the unsighted-charge release does
+            released = true;
+        }
+        auto& e = g_healHoldLog[fid];
+        if (e.first != lk.spell || e.second != lk.lastSeen) {
+            e = { lk.spell, lk.lastSeen };
+            spdlog::info("[heal-hold] {:08X} rule {} held off: heal claim pending (rule {}, spell {:08X}, "
+                         "not yet fired or charging){}",
+                         fid, a_askerRule, lk.owningRule, lk.spell,
+                         released ? "; its own idle right-hand claim was released so the floor engages" : "");
+        } else if (released) {
+            spdlog::info("[heal-hold] {:08X} rule {}: idle right-hand claim released (heal claim still pending)",
+                         fid, a_askerRule);
+        }
+        return true;
+    }
+
+    // P2 (fix/mfo-heal-starve-retreat): the retreat trigger's two questions. Public (Actuation.h).
+    bool OwnCastInFlight(RE::Actor* a_follower) {
+        const auto fid = a_follower ? a_follower->GetFormID() : 0;
+        if (fid == 0) return false;
+        const auto it = g_castLock.find(fid);
+        if (it == g_castLock.end()) return false;
+        for (std::size_t h : { kHandLeft, kHandRight }) {
+            const RE::FormID sp = it->second.hand[h].spell;
+            if (sp != 0 && CastInFlightOnHand(a_follower, h, sp, CastProxyOnHand(fid, h))) return true;
+        }
+        return false;
+    }
+
+    bool ReleaseHealClaimForRetreat(RE::Actor* a_follower) {
+        const auto fid = a_follower ? a_follower->GetFormID() : 0;
+        if (fid == 0) return false;
+        const RE::FormID spell = APMFBridge::GetHealCastSpell(fid);
+        if (spell == 0) return false;
+        const RE::FormID recipient = APMFBridge::GetHealCastTarget(fid);
+        ComposedCast::End(fid);
+        ClearLeftCastLockIf(fid, spell);
+        spdlog::info("[heal] {:08X} heal claim RELEASED -- spell {:08X} at {:08X}: the retreat filled "
+                     "(released explicitly, not left to the expiry sweep)",
+                     fid, spell, recipient == 0 ? fid : recipient);
+        return true;
+    }
+
     const char* HealRepairVerdict(Loadout::Ready a_ready) {
         // (An in-hand shape never calls Prepare: CastOn logs "no Prepare" instead.)
         switch (a_ready) {
