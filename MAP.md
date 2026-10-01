@@ -3550,7 +3550,7 @@ anonymous-namespace copy — that silently forks the instance).
   `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
   `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-
   the-lock. Pieces:
-  - **Sounds** `PlayAtFollower` (`Lockpick.cpp:186`, MainThread::Post, FormIDs only): UILockpickingPickMovement 000C1911 at each live play/replay (`:882`, `:894`, both gated `!j.viaKey`), UILockpickingPickBreak 000C1916 per simulated break (`:903`, `Job::breakSnds`, at most ONE per step, none for a key), 3D at the follower. Both SNDR EDIDs verified in Skyrim.esm.
+  - **Sounds** `PlayAtFollower` (`Lockpick.cpp:190`, MainThread::Post, FormIDs only): MFO.esp SNDR `0x904` MFO_LockpickPickMovementSD at each live play/replay (`:897`, `:909`, both gated `!j.viaKey`), MFO.esp SNDR `0x905` MFO_LockpickPickBreakSD per simulated break (`:919`, `Job::breakSnds`, at most ONE per step, none for a key), 3D at the follower. They are positional copies (ONAM SOMMono01400 0005A28A) of Skyrim.esm UILockpickingPickMovement 000C1911 / UILockpickingPickBreak 000C1916, whose output model SOMUIDefault is 2D (marth 2026-10-01). Resolved on the main thread by local id + `Forms::kPlugin` (`Forms.h` `kSndLockpickPickMovement/Break`). A missing record logs once per sound and plays nothing. No fallback to the 2D vanilla sound. **PENDING (feat/mfo-lockpick-sndr):** the generator refuses to emit the two records until `LOCKPICK_SNDR_PENDING` in `MFO_GenerateESP.py` holds the vanilla values read from Skyrim.esm, so until then the pick sounds are SILENT.
   - **Gate** `Lockpick::Admit` (`Lockpick.cpp:523`, called by the scan `LootScan.cpp:488` after the
     owner / off-limits bars): refuses (logged once per follower+lock+reason) owned, offlimits,
     factionServiceContainer (`IsFactionServiceContainer`, batch L),
@@ -6805,7 +6805,7 @@ load-bearing — removing any re-opens a silent-zero bug. **UNVERIFIED:** sync o
 comment, not independently checked here.
 
 ### Forms.cpp / Forms.h — FormID resolution + Field Orders grant ⚠️ FROZEN IDs
-Frozen local FormIDs (`Forms.h:21-57`, `0x800`+) are a contract with
+Frozen local FormIDs (`Forms.h:21-83`, `0x800`+; `0x904/0x905` = the lockpick SNDRs, read by `logistics/Lockpick.cpp` not by `Resolve`) are a contract with
 `MFO_GenerateESP.py`, audited by `tools/audit_esp.py` (#41); changing one orphans
 every save that saw it; `0x802` stays reserved. `Resolve` (`:27`) ← `plugin.cpp:283`
 (after Config, before Quirks/sinks) — returns false only if `g_fieldOrders` missing;

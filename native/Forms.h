@@ -71,6 +71,16 @@ namespace MFO::Forms {
     // writes 1 when Legacy of the Dragonborn is detected (0 otherwise) at
     // kDataLoaded and every load; the MCM hiddenToggle reads it ("MFO.esp|903").
     inline constexpr RE::FormID kLotdDetectedGlob = 0x903;
+    // POSITIONAL LOCKPICK SOUNDS (marth 2026-10-01): SNDR copies of Skyrim.esm
+    // UILockpickingPickMovement 000C1911 (0x904, MFO_LockpickPickMovementSD) and
+    // UILockpickingPickBreak 000C1916 (0x905, MFO_LockpickPickBreakSD). Same wav
+    // files and values, but ONAM = SOMMono01400 0005A28A (a positional mono output
+    // model) instead of SOMUIDefault 000B75FB, which is 2D: every vanilla
+    // UILockpicking* SNDR plays at full volume in the player's ears wherever the
+    // follower is. logistics/Lockpick.cpp plays these at the follower. A miss (old
+    // ESP) plays nothing, never the 2D vanilla sound.
+    inline constexpr RE::FormID kSndLockpickPickMovement = 0x904;
+    inline constexpr RE::FormID kSndLockpickPickBreak    = 0x905;
     // APMF LOOT-TRAVEL (ch.9 0x49 route, APMFBridge::OfferPackage): ONE package
     // per concurrent loot slot (kMaxLootSlots), mirroring kTravelPackage{,1,2,3}'s
     // per-slot shape but with a RUNTIME-HANDLE Location input (PLDT type 0, "Near

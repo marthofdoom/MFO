@@ -99,9 +99,20 @@ FID_APMF_RETREAT_PACKAGE = OWN | 0x83A
 # otherwise. The MCM hiddenToggle reads it (GlobalValue "MFO.esp|903") and hides
 # the bLootLOTD control when LOTD is absent. Nothing else reads it.
 FID_LOTD_DETECTED_GLOB = OWN | 0x903
+# POSITIONAL LOCKPICK SOUNDS (marth 2026-10-01): SNDR copies of Skyrim.esm
+# UILockpickingPickMovement 000C1911 / UILockpickingPickBreak 000C1916 with a
+# positional mono output model. native/Forms.h kSndLockpickPickMovement /
+# kSndLockpickPickBreak; native/logistics/Lockpick.cpp plays them at the follower.
+# See LOCKPICK_SNDR_PENDING / make_lockpick_sndr() below.
+FID_SND_PICK_MOVEMENT = OWN | 0x904
+FID_SND_PICK_BREAK    = OWN | 0x905
 NEXT_OBJECT_ID     = 0x904         # first never-used local id (0x836-0x839 = APMF loot-travel packages,
                                    # 0x83A = APMF retreat package, 0x83B/0x83C = retired (see above),
                                    # 0x900-0x902 = P7 travel packages, 0x903 = MFO_LOTDDetected)
+                                   # 0x904/0x905 are CLAIMED by the lockpick SNDRs (Forms.h) but only
+                                   # emitted once LOCKPICK_SNDR_PENDING is complete; main() then writes
+                                   # NEXT_OBJECT_ID_WITH_SNDR into the header.
+NEXT_OBJECT_ID_WITH_SNDR = 0x906
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -1144,6 +1155,115 @@ def make_csty():
     return group('CSTY', cast + melee + ranged)
 
 
+# ── SNDR: positional lockpick sounds ────────────────────────────────────────
+# SUBRECORD ORDER SOURCE: xEdit's TES5 definition, TES5Edit/TES5Edit branch
+# dev-4.1.6, Core/wbDefinitionsTES5.pas `wbRecord(SNDR, 'Sound Descriptor', ...)`
+# (fetched 2026-10-01), plus wbSoundDescriptorSounds in Core/wbDefinitionsCommon.pas
+# (= wbRArray('Sounds', wbString(ANAM, 'Sound'))). The order is:
+#   EDID, CNAM (u32 Descriptor Type, 0x1EEF540A = Standard), GNAM (SNCT Category),
+#   SNAM (SNDR Alternate Sound For), ANAM* (one zstring per sound file),
+#   ONAM (SOPM Output Model), FNAM (u32 flags, ONLY below form version 35),
+#   CTDA* (conditions), LNAM (4 bytes: unknown, looping, unknown, rumble),
+#   BNAM (s8 % freq shift, s8 % freq variance, u8 priority, u8 dB variance,
+#         u16 static attenuation in dB*100).
+# NOTE: CNAM is the descriptor TYPE, not the category. The category is GNAM.
+# Top-group order: xEdit wbAddGroupOrder puts SNDR after CSTY (... PACK, CSTY,
+# ..., MOVT, SNDR, DUAL, SNCT, SOPM), so the SNDR group goes last in MFO.esp.
+#
+# WHY: every vanilla UILockpicking* SNDR (000C1910-000C1919) uses output model
+# 000B75FB SOMUIDefault (DefinedSpeakers, 2D), so it plays at full volume in the
+# player's ears wherever the follower is (local xEdit check, ClickUp 86e3haxqw).
+# These copies keep every vanilla value and swap ONLY the output model.
+#
+# ONAM: Skyrim.esm 0005A28A SOMMono01400 (positional mono, 1400u attenuation),
+# named in the local agent's ClickUp 86e3haxqw comment. Skyrim.esm is MFO.esp's
+# only master, so its forms are written with master index 0x00.
+FREF_SOPM_MONO01400 = 0x0005A28A
+ABSENT = 'ABSENT'   # "this subrecord is not present on the vanilla record"
+
+# ============================================================================
+# LOCKPICK_SNDR_PENDING -- EVERY value here is COPIED from the vanilla record.
+# None = not read from Skyrim.esm yet. While ANY value is None the generator
+# REFUSES to emit both records and writes MFO.esp exactly as before. NEVER fill
+# a value from memory or a guess: read it from Skyrim.esm (xEdit or a dump).
+#   'flags': record header flags (u32) of the vanilla record.
+#   'cnam' : CNAM u32 descriptor type, or ABSENT.
+#   'gnam' : GNAM SNCT category FormID as stored in Skyrim.esm (0x00xxxxxx), or ABSENT.
+#   'snam' : SNAM alternate-sound-for SNDR FormID, or ABSENT.
+#   'anam' : list of every ANAM string, EXACT case and order, exactly as stored
+#            (whether it starts with "Sound\" or is relative to Data\Sound is
+#            whatever the vanilla bytes say), backslashes as in the record.
+#   'fnam' : FNAM raw bytes (hex string), or ABSENT (expected ABSENT when the
+#            vanilla record's form version is 35 or higher).
+#   'ctda' : list of raw CTDA subrecord payloads as hex strings ([] = none).
+#   'lnam' : LNAM raw 4 bytes as a hex string, e.g. "00000000".
+#   'bnam' : BNAM raw 6 bytes as a hex string.
+# ============================================================================
+LOCKPICK_SNDR_PENDING = {
+    FID_SND_PICK_MOVEMENT: {
+        'edid':   "MFO_LockpickPickMovementSD",
+        'source': "Skyrim.esm 000C1911 UILockpickingPickMovement",
+        'flags': None, 'cnam': None, 'gnam': None, 'snam': None,
+        'anam':  None, 'fnam': None, 'ctda': None, 'lnam': None, 'bnam': None,
+    },
+    FID_SND_PICK_BREAK: {
+        'edid':   "MFO_LockpickPickBreakSD",
+        'source': "Skyrim.esm 000C1916 UILockpickingPickBreak",
+        'flags': None, 'cnam': None, 'gnam': None, 'snam': None,
+        'anam':  None, 'fnam': None, 'ctda': None, 'lnam': None, 'bnam': None,
+    },
+}
+_SNDR_COPIED_KEYS = ('flags', 'cnam', 'gnam', 'snam', 'anam', 'fnam', 'ctda', 'lnam', 'bnam')
+
+
+def lockpick_sndr_missing():
+    """[(edid, key), ...] for every copied value still None."""
+    return [(spec['edid'], k) for spec in LOCKPICK_SNDR_PENDING.values()
+            for k in _SNDR_COPIED_KEYS if spec[k] is None]
+
+
+def _hexbytes(v, n=None, what=''):
+    b = bytes.fromhex(v.replace(' ', ''))
+    if n is not None and len(b) != n:
+        raise SystemExit(f"LOCKPICK_SNDR_PENDING: {what} must be {n} bytes, got {len(b)}")
+    return b
+
+
+def _sndr_record(fid, spec):
+    e = spec['edid']
+    body = subrec('EDID', zstr(e))
+    if spec['cnam'] != ABSENT:
+        body += subrec('CNAM', struct.pack('<I', spec['cnam']))
+    if spec['gnam'] != ABSENT:
+        body += subrec('GNAM', struct.pack('<I', spec['gnam']))
+    if spec['snam'] != ABSENT:
+        body += subrec('SNAM', struct.pack('<I', spec['snam']))
+    if not spec['anam']:
+        raise SystemExit(f"LOCKPICK_SNDR_PENDING: {e} has no ANAM sound files")
+    for path in spec['anam']:
+        body += subrec('ANAM', zstr(path))
+    body += subrec('ONAM', struct.pack('<I', FREF_SOPM_MONO01400))   # the ONE change
+    if spec['fnam'] != ABSENT:
+        body += subrec('FNAM', _hexbytes(spec['fnam'], what=f"{e} FNAM"))
+    for c in spec['ctda']:
+        body += subrec('CTDA', _hexbytes(c, 32, f"{e} CTDA"))
+    body += subrec('LNAM', _hexbytes(spec['lnam'], 4, f"{e} LNAM"))
+    body += subrec('BNAM', _hexbytes(spec['bnam'], 6, f"{e} BNAM"))
+    return record('SNDR', fid, spec['flags'], body)
+
+
+def make_lockpick_sndr():
+    """The SNDR group, or b'' (and a loud message) while any copied value is None."""
+    missing = lockpick_sndr_missing()
+    if missing:
+        print("SNDR  REFUSED: LOCKPICK_SNDR_PENDING is incomplete, so the two positional lockpick")
+        print("      sounds (0x904/0x905) are NOT emitted and MFO.esp is written as before.")
+        print("      Missing: " + ", ".join(f"{e}.{k}" for e, k in missing))
+        return b''
+    return group('SNDR', b''.join(_sndr_record(fid, spec)
+                                  for fid, spec in sorted(LOCKPICK_SNDR_PENDING.items())))
+
+
 def make_qust():
     return group('QUST', make_startup_quest() + make_mcm_quest()
                  + make_command_quest() + make_loot_quest() + make_retreat_quest()
@@ -1742,7 +1862,9 @@ def main():
     out_dir = sys.argv[1] if len(sys.argv) > 1 else "out"
     os.makedirs(out_dir, exist_ok=True)
 
-    data = make_tes4(NEXT_OBJECT_ID)
+    sndr = make_lockpick_sndr()
+    next_id = NEXT_OBJECT_ID_WITH_SNDR if sndr else NEXT_OBJECT_ID
+    data = make_tes4(next_id)
     data += make_kywd()
     # GLOB between KYWD and MGEF -- vanilla top-group order (KYWD .. GLOB ..
     # MGEF). ONE group: the PoC probe switchboard (only when the probes are
@@ -1757,6 +1879,8 @@ def main():
     # CSTY after PACK -- vanilla's own top-group order (Skyrim.esm: ... QUST,
     # IDLE, PACK, CSTY, LSCR ...), verified by walking the shipped master.
     data += make_csty()
+    # SNDR after CSTY -- xEdit's TES5 group order (CSTY ... MOVT, SNDR, DUAL, ...).
+    data += sndr
 
     out_path = os.path.join(out_dir, "MFO.esp")
     with open(out_path, 'wb') as f:
@@ -1811,7 +1935,7 @@ def main():
           f"({len(PROG_MCM_SLIDERS)} ModSetting economy sliders)")
     print()
     print("Records:")
-    print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{NEXT_OBJECT_ID:03X}")
+    print(f"  TES4  header     master: Skyrim.esm, ESL flagged, NEXT_OBJECT_ID 0x{next_id:03X}")
     print(f"  KYWD  0x{FID_GRANTED_KYWD & 0xFFF:03X}        MFO_GrantedSpell")
     print(f"  MGEF  0x{FID_ORDERS_MGEF & 0xFFF:03X}        MFO_FieldOrdersMGEF")
     print(f"  SPEL  0x{FID_ORDERS_SPELL & 0xFFF:03X}        MFO_FieldOrdersPower (lesser power)")
@@ -1834,6 +1958,12 @@ def main():
     print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
     print(f"  CSTY  0x{FID_MELEE_STYLE & 0xFFF:03X}        MFO_MeleeStyle (equip_melee stance -- default ON)")
     print(f"  CSTY  0x{FID_RANGED_STYLE & 0xFFF:03X}        MFO_RangedStyle (equip_ranged stance -- default ON)")
+    if sndr:
+        for fid, spec in sorted(LOCKPICK_SNDR_PENDING.items()):
+            print(f"  SNDR  0x{fid & 0xFFF:03X}        {spec['edid']} (copy of {spec['source']}, "
+                  f"ONAM -> SOMMono01400 {FREF_SOPM_MONO01400:08X})")
+    else:
+        print("  SNDR  0x904/0x905  NOT EMITTED (LOCKPICK_SNDR_PENDING incomplete)")
     print(f"  GLOB  0x{FID_LOTD_DETECTED_GLOB & 0xFFF:03X}        MFO_LOTDDetected (the DLL sets 1 when LOTD is detected; MCM hiddenToggle)")
     if POC_ENABLED:
         print(f"  GLOB  0x{FID_PROBE_GLOB & 0xFFF:03X}        MFO_ProbeSelect (console: set MFO_ProbeSelect to N; 0 = all probes off)")

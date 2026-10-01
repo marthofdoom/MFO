@@ -78,10 +78,12 @@ namespace MFO::Logistics::Lockpick {
         // "Playing an idle at a target": about 5.6 s, one-shot).
         constexpr RE::FormID kLockpickForm = 0x0000000A;
         constexpr RE::FormID kIdleLockPick = 0x000BB051;
-        // Vanilla SNDR records in Skyrim.esm (read from the esm: UILockpickingPickMovement 000C1911,
-        // UILockpickingPickBreak 000C1916), played AT THE FOLLOWER while a pick attempt runs.
-        constexpr RE::FormID kSndPickMovement = 0x000C1911;
-        constexpr RE::FormID kSndPickBreak    = 0x000C1916;
+        // The pick sounds are MFO.esp SNDR records (LOCAL ids, resolved against MFO.esp on the
+        // main thread): positional copies of Skyrim.esm UILockpickingPickMovement 000C1911 and
+        // UILockpickingPickBreak 000C1916. The vanilla ones use the 2D SOMUIDefault output model
+        // and would play in the player's ears wherever the follower is (Forms.h, marth 2026-10-01).
+        constexpr RE::FormID kSndPickMovement = Forms::kSndLockpickPickMovement;   // MFO.esp 0x904
+        constexpr RE::FormID kSndPickBreak    = Forms::kSndLockpickPickBreak;      // MFO.esp 0x905
 
         // THE ONE MODELLED CONSTANT (not an engine number): how long the simulated searcher
         // holds a binding lock before releasing it. The engine gives the drain RATE (100/life
@@ -181,14 +183,27 @@ namespace MFO::Logistics::Lockpick {
             UnlockRel()(a_ref);
         }
 
-        // A vanilla sound descriptor played in 3D at the follower. FormIDs only cross the
-        // thread boundary; the audio calls run on the true main thread. Fire and forget.
-        void PlayAtFollower(RE::FormID a_follower, RE::FormID a_sound) {
-            MainThread::Post([a_follower, a_sound]() {
+        // An MFO.esp sound descriptor (a_soundLocal = its LOCAL id) played in 3D at the follower.
+        // FormIDs only cross the thread boundary; the lookup and the audio calls run on the true
+        // main thread. Fire and forget. A missing record (an old MFO.esp) logs once per sound and
+        // plays NOTHING: there is no fallback to the 2D vanilla sound (principle 7, no masking).
+        void PlayAtFollower(RE::FormID a_follower, RE::FormID a_soundLocal) {
+            MainThread::Post([a_follower, a_soundLocal]() {
+                auto* dh  = RE::TESDataHandler::GetSingleton();
+                auto* snd = dh ? dh->LookupForm<RE::BGSSoundDescriptorForm>(a_soundLocal, Forms::kPlugin) : nullptr;
+                if (!snd) {
+                    static bool s_missMovement = false, s_missBreak = false;   // main thread only
+                    bool& missed = (a_soundLocal == kSndPickBreak) ? s_missBreak : s_missMovement;
+                    if (!missed) {
+                        missed = true;
+                        spdlog::warn("[lockpick] {} SNDR {:03X} not found -- MFO.esp is older than this DLL; "
+                                     "that pick sound is silent", Forms::kPlugin, a_soundLocal);
+                    }
+                    return;
+                }
                 auto* f   = RE::TESForm::LookupByID<RE::Actor>(a_follower);
-                auto* snd = RE::TESForm::LookupByID<RE::BGSSoundDescriptorForm>(a_sound);
                 auto* am  = RE::BSAudioManager::GetSingleton();
-                if (!f || !snd || !am || f->IsDead() || !f->Is3DLoaded()) return;
+                if (!f || !am || f->IsDead() || !f->Is3DLoaded()) return;
                 RE::BSSoundHandle h;
                 if (!am->BuildSoundDataFromDescriptor(h, snd)) return;
                 h.SetPosition(f->GetPosition());
