@@ -298,11 +298,13 @@ namespace MFO::Actuation {
                              caster ? "magicka ran short before the cast" : "no instant magic caster");
                 return;
             }
+            CastBreadcrumb("summon", f, sp, f->GetFormID());   // [cast-call], flushed: a freeze's last line names this call
             caster->CastSpellImmediate(sp, false, f, 1.0f, false, 0.0f, f);
             const float spend = avo ? std::min(cost, pool) : 0.0f;
             if (avo && spend > 0.0f)
                 avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kMagicka, -spend);
             setVerdict(SummonVerdict::Cast);
+            ProbeSummonLanding(a_id, a_spellID, appear);   // passive [summon-probe] (cast/SummonProbe.cpp)
             spdlog::info("[summon] {:08X} {} {} ({:08X}) rule {} ({}, target {}): road=direct, cast once "
                          "(magicka -{:.0f}; summons listed {} + appearing {} of limit {}{})",
                          a_id, fname, name, a_spellID, a_rule, a_table, a_target, spend,
@@ -320,6 +322,10 @@ namespace MFO::Actuation {
             return { Result::FailedOther, "summon needs the main-thread pump", true };
         if (!a_follower->HasSpell(a_spell))
             return { Result::FailedSkill, "follower does not know this spell", true };
+        // [archetype] (feat/mfo-spell-archetype-probe, passive): the ONE place every summon dispatch
+        // passes through (Fire.cpp combat table, Service.cpp logistics, Auto.cpp AUTO), once per
+        // (follower, spell) per session. Reads form data only.
+        NoteArchetypeRoad(a_follower, a_spell, ArchRoad::Summon);
 
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();

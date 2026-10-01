@@ -58,6 +58,8 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/CanAct.cpp
     cast/HealObs.cpp
     cast/Summon.cpp
+    cast/Archetype.cpp
+    cast/SummonProbe.cpp
     cast/Auto.cpp
     cast/Hands.cpp
     Scheduler.cpp

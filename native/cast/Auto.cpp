@@ -94,6 +94,7 @@ namespace MFO::Actuation {
                 auto* avo  = caster->AsActorValueOwner();
                 auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
+                NoteArchetypeRoad(caster, sp, ArchRoad::Direct);   // [archetype] probe (passive)
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 const bool  heal     = !a_hostile && SpellHealsHealth(sp);
                 const float hpBefore = Vocab::HealthPct(target);   // [heal-obs]: read BEFORE the cast
@@ -119,6 +120,7 @@ namespace MFO::Actuation {
                             ? kConcHealCap : kConcUtilityHold;
                     attach = HealAttach::Present;   // the live effect was found and re-armed
                     if (!SustainConcentrationEffect(target, sp, window)) {
+                        CastBreadcrumb("auto-direct", caster, sp, a_targetID);   // [cast-call], flushed
                         inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
                         if (SustainConcentrationEffect(target, sp, window)) {
                             spdlog::info("[cast] {:08X} conc effect ATTACHED on {:08X} "
@@ -131,6 +133,7 @@ namespace MFO::Actuation {
                         }
                     }
                 } else {
+                    CastBreadcrumb("auto-direct", caster, sp, a_targetID);   // [cast-call], flushed
                     inst->CastSpellImmediate(sp, false, target, 1.0f, false, 0.0f, caster);
                     if (HasDurationEffect(sp) && DeliveryAppliesInCall(sp))
                         attach = SpellEffectPresentOn(target, sp) ? HealAttach::Present : HealAttach::Absent;
@@ -358,6 +361,7 @@ namespace MFO::Actuation {
             if (!hostile && kind == CasterConsent::SpellKind::Heal && g_firingRule != kNoRule &&
                 ComposedCast::ChooseHealRoad(a_follower, spell, nullptr) ==
                     ComposedCast::HealRoad::Claim) {
+                NoteArchetypeRoad(a_follower, spell, ArchRoad::HealClaim);   // [archetype] probe (passive)
                 const float radius  = Config::g_sharedRadius.load();
                 const float ceiling = std::min(a_healThreshold, Vocab::kHealFull);
                 const auto  selfPos = a_follower->GetPosition();

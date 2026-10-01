@@ -250,12 +250,18 @@ namespace MFO::ComposedCast {
                                               a_slot == 0 ? Actuation::kHandLeft : Actuation::kHandRight,
                                               a_spell, w.proxy))
                 return;
+            // feat/mfo-spell-archetype-probe (passive, task 7): name the spell and the engine row the
+            // docs predict for it, so the next log answers "which spell, what shape" without a
+            // load-order lookup. Form data only (cast/Archetype.cpp); the wording up to "hand)" is
+            // unchanged, the archetype text rides at the end.
+            const std::string archetype =
+                Actuation::DescribeArchetype(RE::TESForm::LookupByID<RE::SpellItem>(a_spell));
             spdlog::warn("[cfc] {:08X} kIntent_Cast claim live {} ms with NO observed cast "
                          "(spell {:08X}, {} hand) -- APMF's engine seats may not be firing it; "
-                         "check APMF.log for the seat state",
+                         "check APMF.log for the seat state; spell {}",
                          a_fid,
                          std::chrono::duration_cast<std::chrono::milliseconds>(now - claimSince).count(),
-                         a_spell, a_slot == 0 ? "left" : "right");
+                         a_spell, a_slot == 0 ? "left" : "right", archetype);
             w.lastWarn = now;
         }
 
