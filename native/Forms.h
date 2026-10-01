@@ -74,8 +74,10 @@ namespace MFO::Forms {
     // POSITIONAL LOCKPICK SOUNDS (marth 2026-10-01): SNDR copies of Skyrim.esm
     // UILockpickingPickMovement 000C1911 (0x904, MFO_LockpickPickMovementSD) and
     // UILockpickingPickBreak 000C1916 (0x905, MFO_LockpickPickBreakSD). Same wav
-    // files and values, but ONAM = SOMMono01400 0005A28A (a positional mono output
-    // model) instead of SOMUIDefault 000B75FB, which is 2D: every vanilla
+    // files, LNAM and BNAM, but TWO deliberate changes (marth): ONAM = SOMMono01400
+    // 0005A28A (a positional mono output model) instead of SOMUIDefault 000B75FB,
+    // and GNAM = AudioCategorySFX 000172A1 instead of AudioCategoryUI 00064451 (the
+    // sound-effects volume slider), as NPCHumanWoodPickup does. SOMUIDefault is 2D: every vanilla
     // UILockpicking* SNDR plays at full volume in the player's ears wherever the
     // follower is. logistics/Lockpick.cpp plays these at the follower. A miss (old
     // ESP) plays nothing, never the 2D vanilla sound.

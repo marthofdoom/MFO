@@ -6805,7 +6805,7 @@ load-bearing — removing any re-opens a silent-zero bug. **UNVERIFIED:** sync o
 comment, not independently checked here.
 
 ### Forms.cpp / Forms.h — FormID resolution + Field Orders grant ⚠️ FROZEN IDs
-Frozen local FormIDs (`Forms.h:21-83`, `0x800`+; `0x904/0x905` = the lockpick SNDRs, read by `logistics/Lockpick.cpp` not by `Resolve`) are a contract with
+Frozen local FormIDs (`Forms.h:21-110`, `0x800` and up, `0x904/0x905` are the lockpick SNDRs, read by `logistics/Lockpick.cpp` not by `Resolve`) are a contract with
 `MFO_GenerateESP.py`, audited by `tools/audit_esp.py` (#41); changing one orphans
 every save that saw it; `0x802` stays reserved. `Resolve` (`:27`) ← `plugin.cpp:283`
 (after Config, before Quirks/sinks) — returns false only if `g_fieldOrders` missing;

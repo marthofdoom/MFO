@@ -1183,7 +1183,8 @@ FREF_SOPM_MONO01400 = 0x0005A28A
 ABSENT = 'ABSENT'   # "this subrecord is not present on the vanilla record"
 
 # ============================================================================
-# LOCKPICK_SNDR_PENDING -- EVERY value here is COPIED from the vanilla record.
+# LOCKPICK_SNDR_PENDING -- every value here is COPIED from the vanilla record EXCEPT gnam
+# (AudioCategorySFX, marth's instruction) and the ONAM written in _sndr_record (SOMMono01400).
 # None = not read from Skyrim.esm yet. While ANY value is None the generator
 # REFUSES to emit both records and writes MFO.esp exactly as before. NEVER fill
 # a value from memory or a guess: read it from Skyrim.esm (xEdit or a dump).
@@ -1276,7 +1277,7 @@ def _sndr_record(fid, spec):
         raise SystemExit(f"LOCKPICK_SNDR_PENDING: {e} has no ANAM sound files")
     for path in spec['anam']:
         body += subrec('ANAM', zstr(path))   # exact bytes + NUL (77 / 71 bytes)
-    body += subrec('ONAM', struct.pack('<I', FREF_SOPM_MONO01400))   # the ONE change
+    body += subrec('ONAM', struct.pack('<I', FREF_SOPM_MONO01400))   # changed (with GNAM): positional output
     if spec['fnam'] != ABSENT:
         body += subrec('FNAM', _hexbytes(spec['fnam'], what=f"{e} FNAM"))
     for c in spec['ctda']:
@@ -1995,7 +1996,7 @@ def main():
     if sndr:
         for fid, spec in sorted(LOCKPICK_SNDR_PENDING.items()):
             print(f"  SNDR  0x{fid & 0xFFF:03X}        {spec['edid']} (copy of {spec['source']}, "
-                  f"ONAM -> SOMMono01400 {FREF_SOPM_MONO01400:08X})")
+                  f"ONAM -> SOMMono01400 {FREF_SOPM_MONO01400:08X}, GNAM -> AudioCategorySFX)")
     else:
         print("  SNDR  0x904/0x905  NOT EMITTED (LOCKPICK_SNDR_PENDING incomplete)")
     print(f"  GLOB  0x{FID_LOTD_DETECTED_GLOB & 0xFFF:03X}        MFO_LOTDDetected (the DLL sets 1 when LOTD is detected; MCM hiddenToggle)")
