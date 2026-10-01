@@ -1306,6 +1306,9 @@ namespace MFO::Board {
             if (c.kind == EditKind::SetClassOverride) {
                 it->second.combatClassOverride =
                     static_cast<std::uint8_t>(std::clamp((int)(c.param + 0.5f), 0, 3));
+                // The resolved-class mirror the base HMS split reads (#74) sees the
+                // new pick at once, not at the next Refresh. Worker domain, g_mx leaf.
+                Followers::RepublishActiveMirror();
                 continue;
             }
 

@@ -75,9 +75,31 @@ namespace MFO::ProgAllocator {
             if (g_lastPlayerLevel == 0) g_lastPlayerLevel = pl;   // first observation, no retro-grant
             const int d = static_cast<int>(pl) - static_cast<int>(g_lastPlayerLevel);
             if (d != 0) {
-                spdlog::info("[prog] player level {} -> {} ({} enrolled record(s) to advance)",
+                spdlog::info("[prog] player level {} -> {} ({} follower record(s) to advance)",
                              g_lastPlayerLevel, pl, g_prog.size());
                 g_lastPlayerLevel = pl;
+            }
+
+            // HMS IS CORE (marth 2026-10-01): every managed follower gets a ProgState
+            // so the base HMS split + player-rate parity run with or without the
+            // add-on. An HMS-ONLY record (enrolled=false) carries only the §HMS
+            // fields. Off-worker roster reads only (#74): ActiveSnapshot +
+            // IsMfoEnabled. Starts uncaptured (RecomputeHMS ADOPTs the live base,
+            // no retro take-back) with the retro bit set like Enroll, so an engine
+            // level jump before the first player level-up is capped at the
+            // player-rate share once. Persistable ids only (#9); summons never.
+            if (Config::g_hmsRedistribute.load()) {
+                const auto snap = Followers::ActiveSnapshot();
+                for (const RE::FormID fid : *snap) {
+                    if (g_prog.find(fid) != g_prog.end()) continue;
+                    if (!Followers::IsPersistableID(fid) || !Followers::IsMfoEnabled(fid)) continue;
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
+                    if (!a || a->IsCommandedActor()) continue;
+                    auto& nst = g_prog[fid];
+                    nst.hmsRetroPending = true;
+                    spdlog::info("[hms] {:08X} '{}' HMS record created (core HMS, not enrolled in progression)",
+                                 fid, NameOf(a));
+                }
             }
 
             // §HMS Phase 3: the player's LIVE per-level HMS gain (modlist-agnostic,
@@ -100,16 +122,19 @@ namespace MFO::ProgAllocator {
                 g_playerHmsTotalLast = t;
             }
             if (playerGain > 0.0f)
-                spdlog::info("[hms-parity] player HMS gain {:.1f} -> credited to every enrolled follower", playerGain);
+                spdlog::info("[hms-parity] player HMS gain {:.1f} -> credited to every follower record", playerGain);
 
             for (auto& [id, st] : g_prog) {
-                if (!st.enrolled) continue;
+                // Every record, enrolled or HMS-only, earns the player-rate credit.
                 st.hmsParityCredit += playerGain;   // PRGN v8: the player-rate cap RecomputeHMS spends
 
                 RE::Actor* actor   = RE::TESForm::LookupByID<RE::Actor>(id);
                 const bool managed = Followers::IsMfoEnabled(id);
+                // Progression (the add-on's skills, perks, levels, reapply) runs only
+                // for an ENROLLED record with the add-on present. HMS runs for all.
+                const bool prog = g_ready && st.enrolled;
 
-                if (st.clsId != 0) {
+                if (prog && st.clsId != 0) {
                     const bool active = IsActiveFollower(id);
                     const int  lag    = std::max(0, static_cast<int>(pl) - static_cast<int>(st.progressionLevel));
                     int gain = 0;
@@ -152,20 +177,28 @@ namespace MFO::ProgAllocator {
                     st.applied = false;
                     st.nativeHeld = false;
                 } else if (actor) {
-                    // B′: an unstripped follower (v6 save / benched / re-enrolled)
-                    // is stripped the first ACTIVE poll, BEFORE the reapply (re-armed
-                    // when anything was removed); never restored while enrolled.
-                    if (!st.nativeHeld && IsActiveFollower(id))
-                        if (auto* base = actor->GetActorBase())
-                            if (StripNativePerks(actor, base, st) > 0) st.applied = false;
-                    if (!st.applied) {
-                        ReapplyFollower(actor, st);   // lazy: runs once the actor resolves
-                    } else if (st.clsId != 0 && IsActiveFollower(id)) {
-                        // Drift watch on the active party: an engine recompute
-                        // (level-up autocalc, another mod's write) is adopted
-                        // and re-topped by the reconcile. Writes only on
-                        // divergence, so the steady state is pure reads.
-                        RecomputeSkills(actor, st, /*log*/ true);
+                    bool hmsTurn = false;   // the HMS drift watch runs this poll
+                    if (prog) {
+                        // B′: an unstripped follower (v6 save / benched / re-enrolled)
+                        // is stripped the first ACTIVE poll, BEFORE the reapply (re-armed
+                        // when anything was removed); never restored while enrolled.
+                        if (!st.nativeHeld && IsActiveFollower(id))
+                            if (auto* base = actor->GetActorBase())
+                                if (StripNativePerks(actor, base, st) > 0) st.applied = false;
+                        if (!st.applied) {
+                            ReapplyFollower(actor, st);   // lazy: runs once the actor resolves
+                        } else if (IsActiveFollower(id)) {
+                            // Drift watch on the active party: an engine recompute
+                            // (level-up autocalc, another mod's write) is adopted
+                            // and re-topped by the reconcile. Writes only on
+                            // divergence, so the steady state is pure reads.
+                            if (st.clsId != 0) RecomputeSkills(actor, st, /*log*/ true);
+                            hmsTurn = true;   // HMS no longer waits for an add-on class
+                        }
+                    } else if (IsActiveFollower(id)) {
+                        hmsTurn = true;   // HMS-only record, or the add-on is absent
+                    }
+                    if (hmsTurn) {
                         // §HMS: the drift-watch is the PRIMARY measure site —
                         // it MEASURES the engine's positive HMS drift (the award)
                         // and redistributes it, then holds target. Between awards
@@ -178,15 +211,22 @@ namespace MFO::ProgAllocator {
                         // tallied over the window that just closed decides 0-award.
                         float grantBudget = 0.0f;
                         if (playerLeveled) {
-                            const bool gotAward = (st.hmsAwardAccum > 1e-4f);
-                            st.hmsAwardAccum = 0.0f;   // close the window
-                            if (gotAward) {
-                                st.hmsZeroAwardStreak = 0;
-                                st.fixedStat          = false;   // it's a leveling follower
-                            } else {
-                                if (st.hmsZeroAwardStreak < 2) ++st.hmsZeroAwardStreak;
-                                if (st.hmsZeroAwardStreak >= 2) st.fixedStat = true;
+                            // R2 (2026-10-01): judge the window ONLY if RecomputeHMS
+                            // actually measured in it. With the switch off or the
+                            // class unresolved nothing is tallied, and that used to
+                            // read as a 0-award level (fixed-stat after two).
+                            if (st.hmsMeasuredThisWindow) {
+                                const bool gotAward = (st.hmsAwardAccum > 1e-4f);
+                                st.hmsAwardAccum = 0.0f;   // close the window
+                                if (gotAward) {
+                                    st.hmsZeroAwardStreak = 0;
+                                    st.fixedStat          = false;   // it's a leveling follower
+                                } else {
+                                    if (st.hmsZeroAwardStreak < 2) ++st.hmsZeroAwardStreak;
+                                    if (st.hmsZeroAwardStreak >= 2) st.fixedStat = true;
+                                }
                             }
+                            st.hmsMeasuredThisWindow = false;
                             if (st.fixedStat) {
                                 // GATE: freeze until the player's total HMS catches up
                                 // to this follower's baseline total, THEN converge the
@@ -220,7 +260,7 @@ namespace MFO::ProgAllocator {
                         RecomputeHMS(actor, st, /*log*/ true, grantBudget);
                     }
                 }
-                if (actor && (st.applied || !managed)) DumpLedgerOnce(id, actor, st, managed);   // diagnostic, read-only; never pre-reapply
+                if (st.enrolled && actor && (st.applied || !managed)) DumpLedgerOnce(id, actor, st, managed);   // diagnostic, read-only; never pre-reapply
             }
         }
 
@@ -237,7 +277,10 @@ namespace MFO::ProgAllocator {
             // switched who it is looking at — don't make the tree lag half a
             // second behind an L1/R1), and on the ~500ms cadence. Closed =
             // free (one atomic read + a bool).
-            if (Board::IsOpen()) {
+            // The add-on's board views exist only with the add-on (g_ready): an
+            // add-on-absent session runs this poll for HMS alone and publishes no
+            // view, exactly as before the poll ran without the add-on.
+            if (g_ready && Board::IsOpen()) {
                 const bool focusChanged = g_boardFocus.load() != g_lastPublishedFocus;
                 if (!g_boardWasOpen || focusChanged || --g_viewFrames <= 0) {
                     g_viewFrames = kViewFrames;
