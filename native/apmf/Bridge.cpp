@@ -980,6 +980,37 @@ namespace MFO::APMFBridge {
                                  ? "kill switch off" : "not republished within FacetExpiry");
             }
             if (o.heal.handle != APMF_API::kInvalidHandle && now - o.heal.refreshed >= facetExpiry) {
+                // BUILD-WINDOW HOLD (field 2026-09-30b): a heal claim younger than
+                // kHealHoldNeverObservedMs and not yet seen firing is still waiting for
+                // the engine to build its Restore caster (measured claim-to-first-charge
+                // 2.3-4.5 s). The rule can skip a lap or two (PickAlly's LoS trust) and
+                // let `refreshed` go stale inside that window; releasing then restarts
+                // the build (a floor claims the hand, the next lap re-mints the proxy
+                // and interrupts the cast). Hold it, the window's end bounds the hold.
+                // Runs on the AddTask job worker (Tick is called from Diagnostics.cpp's
+                // body), the ComposedCast worker-serial context ObservedFiring needs.
+                const auto healAgeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    now - o.heal.created).count();
+                const bool buildingCaster =
+                    healAgeMs >= 0 && healAgeMs < static_cast<long long>(kHealHoldNeverObservedMs) &&
+                    !ComposedCast::ObservedFiring(it->first, kApmfHandLeft, o.heal.spell,
+                                                  static_cast<std::uint32_t>(healAgeMs + 1));
+                if (!buildingCaster) {
+                // NEVER SILENT (principle 7): every release this sweep makes is logged,
+                // rate-limited per follower (1 s) so a flapping claim cannot flood.
+                static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_lastSweepLog;
+                auto& lastLog = s_lastSweepLog[it->first];
+                if (now - lastLog >= std::chrono::seconds(1)) {
+                    lastLog = now;
+                    const auto staleMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now - o.heal.refreshed).count();
+                    spdlog::info("[heal] {:08X}: heal claim RELEASED by the expiry sweep: handle={} hand=left "
+                                 "spell={:08X} target={:08X} age={}ms, not refreshed for {}ms (>= FacetExpiry {}ms) "
+                                 "and outside the {}ms caster-build window or already observed firing",
+                                 it->first, o.heal.handle, o.heal.spell, o.heal.target, healAgeMs, staleMs,
+                                 std::chrono::duration_cast<std::chrono::milliseconds>(facetExpiry).count(),
+                                 kHealHoldNeverObservedMs);
+                }
                 ReleaseClaimLocked(o.heal);
                 // Heals are LEFT always; an offense claim still live on the left
                 // shares that watch slot and must keep it (Try arms hand 0 for the
@@ -987,6 +1018,7 @@ namespace MFO::APMFBridge {
                 // slot's spell is whichever armed last, so clear only if it is ours).
                 if (o.offense[0].handle == APMF_API::kInvalidHandle)
                     ComposedCast::ClearWatchHand(it->first, kApmfHandLeft);
+                }
             }
             // ── THE IDLE-HAND FLOOR (F10, 2026-09-08) ───────────────────────
             // Reconciled HERE, and only here, AFTER every sweep above -- so it

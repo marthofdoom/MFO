@@ -379,11 +379,11 @@ namespace MFO::Actuation {
                 const char* lost = nullptr;
                 if (recipient->IsDead() || recipient->IsDisabled())
                     lost = "the recipient is dead or gone";
-                // TWO agreeing Sightline readings and not inside the claim's caster-build
-                // window (HealRecipientUnreachable): a single Occluded flicker used to
-                // release the claim here and re-mint it on another ally (field 2026-09-30).
+                // REACH ONLY (HealRecipientUnreachable, marth 2026-09-30b): line of sight
+                // never ends a standing heal claim, it waits charged and the engine fires
+                // when sight clears. The heartbeat below keeps renewing it meanwhile.
                 else if (!atSelf && HealRecipientUnreachable(a_follower, recipient, spell))
-                    lost = "the recipient is beyond the heal's reach or out of sight";
+                    lost = "the recipient is beyond the heal's reach";
                 // NEVER A RECIPIENT AT OR ABOVE THE RULE'S OWN THRESHOLD (ally selector
                 // rules, PickAlly's clamp; IncumbentTargetLost's ceiling). A cast in
                 // flight finishes first (D8), as for the full-health test below.

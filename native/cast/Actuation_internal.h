@@ -437,14 +437,10 @@ namespace MFO::Actuation {
         bool CastHandHeld(RE::Actor* a_follower, std::size_t a_hand);
 
         // Is the heal recipient `a_victim` out of `a_follower`'s reach for the INCUMBENT
-        // tests (IncumbentTargetLost, CastOn's per-lap recipient check)? True when the
-        // spell's reach is exceeded, or when the line of sight has read Occluded on
-        // kHealLosAgreeingReadings measurements in a row inside kHealLosTrustSec --
-        // unless the claim standing on this recipient is still INSIDE ITS BUILD WINDOW
-        // (younger than APMFBridge::kHealHoldNeverObservedMs, the claim-to-first-charge
-        // window the claim path already sizes its holds from, and not yet observed
-        // firing): the engine has not finished building the Restore caster yet and a
-        // replace or release would restart it. Defined in cast/Hands.cpp. Worker-serial.
+        // tests (IncumbentTargetLost, CastOn's per-lap recipient check)? REACH ONLY: true
+        // when the distance exceeds the spell's HealReach. Line of sight never drops a
+        // standing claim's recipient (marth 2026-09-30b: charge, hold, fire when sight
+        // clears), so no Sightline read and no build window here. Defined in cast/Hands.cpp.
         bool HealRecipientUnreachable(RE::Actor* a_follower, RE::Actor* a_victim, RE::SpellItem* a_spell);
 
         // Drop ONLY the dual-wield left-hand hold (force-unequip into the LEFT

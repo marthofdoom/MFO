@@ -375,9 +375,14 @@ namespace MFO::Actuation {
                     } else {
                         if (selfPos.GetDistance(m->GetPosition()) > radius) return;
                         sightWant.push_back(m->GetFormID());
-                        if (!HealInReach(a_follower, m, spell) ||
+                        // The STANDING claim's recipient is judged for reach only (marth
+                        // 2026-09-30b: line of sight never drops it, the heal waits charged).
+                        const bool incumbent = APMFBridge::GetHealCastSpell(id) == a_spellID &&
+                                               APMFBridge::GetHealCastTarget(id) == m->GetFormID();
+                        if (incumbent ? HealRecipientUnreachable(a_follower, m, spell)
+                                      : (!HealInReach(a_follower, m, spell) ||
                             Sightline::CheckWithin(id, m->GetFormID(), kHealLosTrustSec, Sightline::Basis::Own) ==
-                                Sightline::Verdict::Occluded) {
+                                Sightline::Verdict::Occluded)) {
                             ++outOfReach;
                             return;
                         }
