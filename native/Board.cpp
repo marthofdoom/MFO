@@ -637,18 +637,22 @@ namespace MFO::Board {
                 // trampoline is not in, so it is the one that sees unverified builds.
                 static const bool toggleVerified = Runtime::SeatVerified(toggle.address(), "Board.ToggleControls");
                 if (!toggleVerified) return;
-                // storeState=FALSE. The overlay is a transient panel, not a game
-                // mode, and has no business writing the engine's SAVED control
-                // state at +0x124 (SE +0x11C) -- menus, favorites and dialogue
-                // save/restore through that same field, so polluting it can leave
-                // controls dead after we have already re-enabled the live ones.
-                // The site previously passed true, justified as "reproduces what
-                // the 3.7.0 header's inline version did to unk11C". That is FALSE
-                // on AE: the inline version never reached +0x124, it was writing
-                // the context stack (the crash). So true was not restoring old
-                // behaviour, it was writing a field we had never written before.
-                // We touch the live field only, and put it back on close.
-                toggle(cm, flags, !want, false);   // want -> disable, else re-enable
+                // storeState=TRUE (review-debt fix of 6d3e9c5, 2026-10-01). With
+                // storeState the engine updates the SAVED control state at +0x124
+                // (SE +0x11C) only when one is ACTIVE (not kInvalid) -- it never
+                // creates one (mit-3.7 fork ControlMap.h, written from the
+                // disassembly of 67245/68545). So true keeps a menu's saved state
+                // CONSISTENT with our toggle, which is what we need: with false, a
+                // menu that opens over the board (forcegreet, script MessageBox)
+                // saves the board-disabled controls, the board's close re-enables
+                // only the live field, and the menu's close then restores its
+                // saved, still-disabled state -- movement, menus and console dead,
+                // with no further edge for SyncControlBlock to repair. The old
+                // "false" rationale (never write a field we had not written) was
+                // backwards: the engine's own guard already confines the write to a
+                // saved state that exists. [DISASM-confirm pending: which menus set
+                // +0x124, and the kInvalid guard inside 67245/68545, per the review.]
+                toggle(cm, flags, !want, true);   // want -> disable, else re-enable
             });
         }
 
@@ -1090,11 +1094,26 @@ namespace MFO::Board {
             static inline REL::Relocation<decltype(thunk)> func;
         };
 
+        // Returns false WITHOUT patching unless the site still holds a whole E8
+        // rel32 call (review-debt fix of 49c9d1b, 2026-10-01). The generator checks
+        // the E8 offline and SeatVerified checks the function base, but neither sees
+        // another plugin that patched this exact site first; write_call decodes the
+        // rel32 without checking the opcode, so a foreign jmp/byte there would make
+        // T::func garbage and crash on the first input poll. Only E8 is accepted: an
+        // E9 (jmp) has different control flow and must not be turned into a call.
         template <class T>
-        void WriteThunkCall(REL::RelocationID a_id, REL::VariantOffset a_off) {
-            auto& trampoline = SKSE::GetTrampoline();
+        bool WriteThunkCall(REL::RelocationID a_id, REL::VariantOffset a_off) {
             const REL::Relocation<std::uintptr_t> hook{ a_id, a_off };
+            const auto op = *reinterpret_cast<const std::uint8_t*>(hook.address());
+            if (op != 0xE8) {
+                spdlog::error("[overlay-probe] input call site {:X} holds opcode {:02X}, not E8 (another plugin "
+                              "patched it?) -- trampoline NOT installed",
+                              hook.address(), op);
+                return false;
+            }
+            auto& trampoline = SKSE::GetTrampoline();
             T::func = trampoline.write_call<5>(hook.address(), T::thunk);
+            return true;
         }
 
     }
@@ -1725,8 +1744,11 @@ namespace MFO::Board {
         // adds 0x7B. The two slots happen to carry the same offset because the
         // two functions really are laid out identically, NOT because one value
         // was assumed to cover both.
-        WriteThunkCall<InputDispatchHook>(REL::RelocationID(67315, 68617),
-                                          REL::VariantOffset(0x7B, 0x7B, 0x7B));
+        if (!WriteThunkCall<InputDispatchHook>(REL::RelocationID(67315, 68617),
+                                               REL::VariantOffset(0x7B, 0x7B, 0x7B))) {
+            spdlog::error("[overlay-probe] runtime {} -- using the input sink + ControlMap path", ver.string());
+            return;
+        }
         g_inputTrampoline.store(true);
         spdlog::info("[overlay-probe] input trampoline installed on {}+0x7B (runtime {}) -- "
                      "the board takes input outright; ControlMap sync disabled",
