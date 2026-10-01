@@ -179,8 +179,8 @@ namespace MFO::Logistics {
             std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best obj (worn-inferior convergence)
             if (out.armorJudged) {
                 using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-                const bool caster         = IsCasterFollower(a_state);
-                const bool useMageApparel = caster && Config::g_mageWearRobes.load() &&
+                const bool caster         = IsCasterFollower(a_state);   // weapon/shield roles: gambit signal
+                const bool useMageApparel = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load() &&
                                             !Config::g_dollsMode.load();
                 const std::uint8_t top2   = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
                 const bool schoolPrimary  = !MEOBridge::Available() ||

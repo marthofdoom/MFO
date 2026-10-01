@@ -102,7 +102,7 @@ namespace MFO::Logistics {
                                                  ArmorPref& a_outPref, bool& a_outMageMode) {
             a_outMageMode = false;
             if (!a_follower || Config::g_dollsMode.load()) return nullptr;
-            const bool caster         = IsCasterFollower(a_state);
+            const bool caster         = UsesMageClothing(a_state, a_follower);
             const bool useMageApparel = caster && Config::g_mageWearRobes.load();
             a_outMageMode = useMageApparel;
 
@@ -410,7 +410,7 @@ namespace MFO::Logistics {
                                        const RE::TESObjectREFR::InventoryItemMap& a_inv) {
                 a_out = GearSlate{};
                 if (!a_follower || Config::g_dollsMode.load()) return;
-                if (IsCasterFollower(a_state) && Config::g_mageWearRobes.load()) {
+                if (UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load()) {
                     a_out.mage = true;
                     MageSlotBest best[6];
                     MageBestPerSlot(a_follower, a_state, best);
@@ -828,7 +828,7 @@ namespace MFO::Logistics {
             // one slot). The legacy (APMF-absent) EquipBestOwnedGear single pick is
             // unchanged, and the combat road (a_judgeArmor false) still declares worn.
             const bool mageSetMode = a_judgeArmor && !Config::g_dollsMode.load() &&
-                                     IsCasterFollower(a_state) && Config::g_mageWearRobes.load();
+                                     UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load();
             if (a_judgeArmor && !mageSetMode) {
                 RE::TESBoundObject* pickObj = nullptr;
                 if (g_handedPick.set && g_handedPick.follower == id) {
@@ -951,7 +951,7 @@ namespace MFO::Logistics {
             // nothing extra is needed there.
             const auto playerPieceWins = [&](RE::TESObjectARMO* a_challenger) -> RE::TESObjectARMO* {
                 if (!a_challenger || picks.empty()) return nullptr;
-                if (!(IsCasterFollower(a_state) && Config::g_mageWearRobes.load())) return nullptr;
+                if (!(UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load())) return nullptr;
                 const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
                 const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
                 int ct = 0; std::int32_t cm = 0;

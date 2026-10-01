@@ -303,7 +303,7 @@ namespace MFO::Logistics {
             // "Is a caster" for apparel/weapon-role (gambit signal == loot mageMode);
             // gate mage apparel additionally on bMageWearRobes (marth).
             const bool caster         = IsCasterFollower(a_state);
-            const bool useMageApparel = caster && Config::g_mageWearRobes.load();
+            const bool useMageApparel = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load();
             const std::uint8_t top2   = TopTwoSchoolMask(a_follower);
 
             // ── Feature A: weapon/armor/apparel thresholds (reuse the loot judge) ──
@@ -636,7 +636,7 @@ namespace MFO::Logistics {
             if (diag)
                 spdlog::info("[sell] {:08X} scanning (sellAnything={})", fid, sellAnything);
 
-            const bool umaSell = IsCasterFollower(a_state) && Config::g_mageWearRobes.load() &&
+            const bool umaSell = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load() &&
                                  !Config::g_dollsMode.load();
 
             // SELL CANDIDATES: the follower's OWN unworn weapons/armour (jewellery is
