@@ -6,12 +6,22 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-09-27 UTC (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-10-01 UTC (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
+
+- **2026-10-01 SHIPPED v2.0.16 "Heals are animated in combat again" (current version).** Commit `4624e91`, CI run
+  36880174711, DLL sha256 `bd4e54f5...`, tag `v2.0.16` pushed. Zip `releases/v2.0.16/MFO-v2.0.16.zip` (NOT uploaded to
+  Nexus yet, marth uploads). Deployed to the Deck (Tuxbornrc1) 2026-10-01: MFO.dll, MCM config.json and MFO_Trade.pex.
+  marth's own INIs were left untouched. Backups: `*.bak-1001` next to each file, plus
+  `Projects/_research/deck-backups/2026-10-01-pre-release/`. **FIELD-TEST PENDING** (use the animheal-p2 field plan below).
+  NOT included: unmerged branches `feat/mfo-ux-0930` (hotkeys default -1 + migration, followers-tab cell, lockpick
+  sounds) and `feat/mfo-lockpick-sndr` (positional lockpick SNDRs, values pending), the cloud agent is finishing both.
+  Batch A (ClickUp tag `batch-a-animated-casts`) still open: freeze root cause, remaining cast kinds, second heal on
+  the right hand, held-heal move-to, pickup sounds hook (Monday), Jesper's armor source (Monday).
 
 - **2026-09-30 branch `feat/mfo-animheal-p2` (off `main` `d896d74`; NOT merged, NOT deployed; tier A). ANIMATED
   HEALS PHASE 2: combat heals take the ch.8b claim road again (MAP.md §2 cast/ "ANIMATED HEAL CLAIM ROAD";
