@@ -625,6 +625,14 @@ namespace MFO::ProgAllocator {
                 if (!IsKnownSkillAv(av)) { ++droppedAv; continue; }   // L2: value, not just count
                 if (!std::isfinite(manual) || manual < 0.0f) manual = 0.0f;   // L2 for v2
                 if (!std::isfinite(autoPts) || autoPts < 0.0f) autoPts = 0.0f;
+                // MFO-B13 review: a corrupt record's non-finite points/lastBase
+                // become the reconcile's own "no data" shape -- the fresh-entry
+                // {points 0, lastWrittenBase -1} SkillScale creates. -1 means
+                // "never wrote": ReconcileSkill ADOPTs cur and never reads points
+                // as a recovery delta. lastBase is only an anchor for
+                // `lastBase - points`, so an unusable points drops the anchor too.
+                if (!std::isfinite(points)) { points = 0.0f; lastBase = -1.0f; }
+                if (!std::isfinite(lastBase)) lastBase = -1.0f;
                 // v6 MIGRATION (A′): the auto share is whatever is APPLIED today
                 // minus the manual points — frozen as placed, never re-split.
                 // Under cap saturation `points` is the CLAMPED applied delta, so

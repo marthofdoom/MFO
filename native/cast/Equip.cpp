@@ -1181,11 +1181,21 @@ namespace MFO::Actuation {
             }
         }
         // MFO-B20: never emit more pairs than CoLoad accepts (it aborts above the
-        // cap). Unreachable at party scale; loud if it ever happens.
+        // cap). Unreachable at party scale; loud if it ever happens. ONLY on this
+        // path: stable-sort by follower (the snapshot emits each follower's pairs
+        // together, right then left, so stability keeps that hand order) and cut
+        // at a follower boundary -- whole followers drop, never half a dual hold,
+        // and the cut is deterministic rather than unordered_map order. Ordinary
+        // saves are not sorted, so their bytes are unchanged.
         if (snap.size() > kMaxForcedWeapons) {
-            spdlog::error("[cosave] {} force-hold pair(s) exceed the cap {} -- the excess is NOT saved",
-                          snap.size(), kMaxForcedWeapons);
-            snap.resize(kMaxForcedWeapons);
+            std::stable_sort(snap.begin(), snap.end(),
+                             [](const auto& a, const auto& b) { return a.first < b.first; });
+            std::size_t cut = kMaxForcedWeapons;
+            while (cut > 0 && snap[cut - 1].first == snap[cut].first) --cut;
+            spdlog::error("[cosave] {} force-hold pair(s) exceed the cap {} -- {} pair(s) NOT saved "
+                          "(whole followers, highest FormIDs)",
+                          snap.size(), kMaxForcedWeapons, snap.size() - cut);
+            snap.resize(cut);
         }
         a_intfc->WriteRecordData(static_cast<std::uint32_t>(snap.size()));
         for (const auto& [id, wid] : snap) {
