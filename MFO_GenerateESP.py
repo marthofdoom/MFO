@@ -1176,10 +1176,11 @@ OWN_PROG = 0x01000000                  # ESL own-form prefix: 1 master (Skyrim.e
 # (light plugin) regardless, so co-saves resolve unchanged (LookupAddonForm by
 # {plugin, localID}); only the file-internal master index moved.
 
-# MFOP_Version FLTV — the addon version as MAJOR.MINOR. The value is a float32 GLOB, so the
-# patch digit (add-on 1.1.4) cannot be carried; bump this by hand with the add-on's major/minor.
-# There is no single machine-readable add-on version (VERSION is MFO's own, 2.x).
-PROG_VERSION_STAMP = 1.1
+# MFOP_Version FLTV — the addon version encoded as MAJOR.MINORPATCH (add-on 1.1.4 -> 1.104,
+# marth 2026-10-01). The value is a float32 GLOB, so a dotted x.y.z cannot be stored; nothing in
+# the DLL gates on it. Bump by hand with the add-on (no machine-readable add-on version exists;
+# VERSION is MFO's own, 2.x).
+PROG_VERSION_STAMP = 1.104
 
 PGID_VERSION            = OWN_PROG | 0x800  # GLOB detection anchor + version stamp
 PGID_RESERVED           = OWN_PROG | 0x801  # GLOB spare future gate (design §10)
