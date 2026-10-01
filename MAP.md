@@ -4756,7 +4756,7 @@ warn on false — the `EquipSink` move, `UnsocketItemGems`, both reconcile sites
 lock — same domain as the pass; VR runs the pass inline off the worker, which nothing
 else shares) keyed `StuckKey{op, base, uid, slot, gemBase}` (op 0 = `SocketGem`, op 1 = the tier-2
 swap-out `UnsocketGem`, gemBase 0 there — `GemDetail` carries none) →
-`StuckState{emptyAtIssue, passes, reported, backoffUntil, inventoryKey}`, applied by ONE
+`StuckState{pendingAtIssue, passes, reported, backoffUntil, keyPrint}`, applied by ONE
 lambda `stallGate` at BOTH issue sites: a request seen `kStuckPasses` (3) consecutive
 passes with `GetEmptySocketCount` unMOVED (a socket drops it, an unsocket raises it) —
 i.e. 2 accepted issues, ~2.4 s, STUCK declared on the 3rd pass BEFORE issuing — logs
@@ -4769,8 +4769,8 @@ so the next-best gem fills the slot, and the tier-2 swap-up skips any loose gem 
 `excluded` or whose socket key on this item is still backed off (`socketBackedOff`) —
 without that the swap-up unsocketed a worn gem to make room for the refused one, our
 own unsocket changed the inventory fingerprint, lifted the back-off, and the item
-cycled unsocket/re-socket every ~5 s forever. The back-off holds until the follower's
-loose-gem/worn fingerprint changes or `kStuckBackoff` (60 s — principle 9: sized from
+cycled unsocket/re-socket every ~5 s forever. The back-off holds until that key's own
+inputs change (see the 2026-10-01 note below) or `kStuckBackoff` (60 s — principle 9: sized from
 the ~1.2 s cadence, ~50 passes, never silently forever); then it retries from a clean
 count and reports again if it stalls again. Keys not re-issued
 in a pass are forgotten at its end EXCEPT keys still in back-off (the swap-up's
@@ -4786,11 +4786,7 @@ without `g_mx` on purpose (a lock held across `g_meo->` calls is the #4 re-entra
 deadlock class) — never touch it from the worker while the pump is live; lowering
 `kStuckPasses` below 2 turns every first issue into a STUCK line; a `MEO_API.h`
 change is off the table (byte-shared, append-only); the swap-up MUST keep skipping
-backed-off gems or the unsocket/re-socket loop returns. **OPEN BACKLOG:
-`Docs/REVIEW-BACKLOG.md` MFO-B26** (SEV-5) — the back-off lifts on ANY inventory
-change, so under churn the one warn per 60 s becomes one per change + 3 passes;
-**MFO-B27** (SEV-5) — progress is the per-ITEM empty count, so a sibling slot
-landing delays a stuck key's detection (never spurious).
+backed-off gems or the unsocket/re-socket loop returns. **2026-10-01 `fix/mfo-gems-backlog` (MFO-B26/B27/B29 DRAINED):** the back-off lifts on the key's OWN inputs only (`keyPrint` lambda + the lift sweep at the top of the pass: item worn (base,uid) + that gem base's loose count; `StuckState.keyPrint`), progress is the SLOT's state (`StuckState.pendingAtIssue`, `stallGate(key, a_pending, ...)`, op 0 still empty / op 1 still filled), and an op-0 key with a declared back-off is HELD past expiry (end-of-pass forget keeps it) so the swap-up, which now reads `socketKeyHeld` instead of `socketBackedOff`, never evicts for a refused gem on a full item; the slot path is the only retry. `socketBackedOff` (time-limited) still feeds the LEFTOVER classifier. **What breaks:** the swap-up MUST read `socketKeyHeld`, and a held op-0 key MUST be erased only by the lift sweep or `nLoose == 0`, else the ~63 s eviction bounce returns; widening `keyPrint` back to the whole inventory brings back one warn per change.
 **THE INVARIANT (marth 2026-09-14, `fix/mfo-meo-no-loose-gems`): "there should never be
 unequipped gems when there are free spaces on equipped items."** After a
 `ReconcileLooseGems` pass no loose gem may remain while any WORN item has an empty

@@ -225,6 +225,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** the lift-on-change is what keeps the back-off from masking a request that WOULD now succeed; narrowing the fingerprint trades that for quieter logs and wants a deck measurement first. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** narrow the fingerprint to the stalled key's own inputs (that item's worn (base,uid) + that gem base's loose count) so an unrelated socket/swap does not lift it; or keep the lift but suppress the re-warn within the original 60 s window.
 - **Surfaced at edit time from:** MAP.md §7 MEOBridge "RETURN LOGGING + STALL DETECTOR" What-breaks.
+- **DRAINED by `fix/mfo-gems-backlog` (2026-10-01), pending its review.** Narrowed fingerprint (the first fix shape): each stall key now lifts only when ITS OWN inputs change, `keyPrint` in `native/MEOBridge.cpp` `ReconcileLooseGems` = the item's worn (base,uid) + that gem base's loose count, checked by one lift sweep at the top of the pass. An unrelated socket or swap no longer lifts it, so B31 (our own swap-up lifting G's back-off) is gone with it. The 60 s floor still bounds a stale key, and `inventoryKey` stays the LEFTOVER line's fingerprint.
+
 
 ### MFO-B27 — the stall detector's progress signal is the per-ITEM empty count shared by both ops; another slot landing on the same item resets a genuinely stuck key
 - **Raised:** Fable round-2 review of `5f814d5` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5.
@@ -234,6 +236,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** bounded and in the safe direction (later, never spurious); a per-slot progress signal needs `GetGemDetails` re-read per slot per pass and its own review. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** key progress on the SLOT, not the item: record `filled.contains(slot)` (from `GetGemDetails`) at issue and treat "this slot is still empty next pass" as no-progress, independent of sibling slots; the unsocket op mirrors it with "this slot is still filled".
 - **Surfaced at edit time from:** MAP.md §7 MEOBridge "RETURN LOGGING + STALL DETECTOR" What-breaks.
+- **DRAINED by `fix/mfo-gems-backlog` (2026-10-01), pending its review.** `StuckState.emptyAtIssue` is replaced by `pendingAtIssue`, and `stallGate` takes the slot's own state read from `GetGemDetails` this pass (op 0 still empty, op 1 still filled) instead of the item's empty count. A sibling slot landing no longer resets a stuck key. The STUCK line now says `the slot never filled/emptied`.
+
 
 ### MFO-B28 — bought weapons never reach `AcquireEquip`, so a BOUGHT primary upgrade carries no gems (pre-existing)
 - **Raised:** Fable round-2 review of `5f814d5` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5.
@@ -253,6 +257,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** carve-out (b) question: if marth's pass criterion is "M stops bouncing" fix before deploy; if "bounce ≤ once per back-off window, warned" is acceptable, defer.
 - **Why it was NOT fixed:** coordinator call 2026-09-14: loud, bounded to once per 60 s window, does not corrupt the next test (the STUCK line still names the request); deploy proceeds; marth informed.
 - **Fix shape when drained (verbatim):** (i) at expiry retry ONLY via the slot path — the swap-up keeps skipping a gem whose key EXISTS for this item (expired or not); the key is then erased only by the fingerprint-change lift; or (ii) keep `reported`/pass history across expiry and grow the back-off (exponential) so the warn escalates instead of repeating.
+- **DRAINED by `fix/mfo-gems-backlog` (2026-10-01), pending its review.** Fix shape (i). An op-0 key with a declared back-off now survives its expiry untouched (end-of-pass forget keeps it) and is erased only by the lift sweep (B26 fingerprint change). The swap-up reads the new `socketKeyHeld` (key exists, expired or not) so it never evicts for a gem MEO refused; the slot path stays the only retry (`stallGate` resets an expired key). Interaction with B26: the narrowed fingerprint is what makes the held key safe to keep, because our own eviction/re-socket of another gem no longer changes it. A fully-socketed item now never retries the refused gem until a slot opens or its inputs change.
+
 
 ### MFO-B30/B31/B32 — SEV-5 notes from the same review (`64512aa`)
 - **B30:** stuck key is per-SLOT, exclusion per-ITEM, and a uid-0 key does not cover the minted uid (`:473`, `:436`, `:398-404`): each newly-opened slot (and the first post-mint pass) re-runs the 2-issue + warn detour for G; bounded by capacity (≤ 8 per item), never spurious. Note against B27.
