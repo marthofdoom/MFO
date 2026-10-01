@@ -164,14 +164,19 @@ namespace MFO::Actuation {
         // hand this instant. Read under g_forcedMx: the map has an OFF-THREAD
         // reader (the SKSE save callback) and every access guards it.
         //
-        // ONE RESIDUAL, STATED: the ledger is only written while
-        // bWeaponStyleControl is ON (EquipWeapon's else branch is a plain
+        // THE KILL-SWITCH-OFF RESIDUAL (MFO-B3, closed): the ledger is only written
+        // while bWeaponStyleControl is ON (EquipWeapon's else branch is a plain
         // EquipObject with no ledger entry, and ReconcileForcedWeapon releases
-        // unconditionally when the switch is off). With the kill-switch off a
-        // melee follower in the transient-unarmed gap therefore still lands RIGHT
-        // -- the 2026-09-05 shape, on a non-default config. Recorded rather than
-        // papered over; closing it needs a signal that does not depend on that
-        // feature being on.
+        // unconditionally when the switch is off). With the switch off the ledger
+        // says nothing, so the gate reads the follower's DECLARED role instead:
+        // base class Melee (1) or Ranged (2) (Followers::GetBaseClass, the same
+        // "declared melee" read MeleeOnly makes, Fire.cpp) means a weapon owns that
+        // follower's right hand and the equip gambit will put it back. That signal
+        // does not depend on the feature, the hands or any claim, so it holds in the
+        // transient-unarmed gap. It is consulted ONLY when the switch is off, so the
+        // switch-ON answer is exactly the ledger answer as before. Not covered: an
+        // Auto (0) hybrid with the switch off, whose role is resolved from the live
+        // loadout and has no durable declaration in the gap.
         //
         // A pure caster never has an entry, so right-first still applies to
         // exactly the follower marth's ruling was about ("theres two hands, auto
@@ -183,8 +188,16 @@ namespace MFO::Actuation {
             // declaration): its off-thread reader is the SKSE SAVE callback, so
             // "the writers are worker-serial" is not enough. Nothing else is held
             // here and no engine call sits inside the lock.
-            std::scoped_lock lk(g_forcedMx);
-            return g_forcedWeapon.contains(a_follower->GetFormID());     // ... or coming back
+            {
+                std::scoped_lock lk(g_forcedMx);
+                if (g_forcedWeapon.contains(a_follower->GetFormID())) return true;   // ... or coming back
+            }
+            // Switch OFF: no ledger is ever written, so fall back to the declared role (MFO-B3).
+            if (!Config::g_weaponStyleControl.load()) {
+                const auto cls = Followers::GetBaseClass(a_follower->GetFormID());   // worker-serial, #4
+                return cls == 1 || cls == 2;   // Melee / Ranged: a weapon owns the right hand
+            }
+            return false;
         }
 
     }   // anon

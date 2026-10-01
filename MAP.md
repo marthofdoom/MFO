@@ -442,6 +442,9 @@ releases **by eviction** with a non-actor XMarker.
   CasterConsent/Packages/OnFollowerRemoved/RetreatEvictIf) is now ONE helper
   `Followers::ReleaseHeldState(id)` (`Followers.cpp`, worker-only, idempotent) —
   shared by the dismissal sweep (`Refresh`) and the T#78 MFO-OFF toggle (Scheduler).
+  The sweep drops a follower only after `kMissesBeforeDrop` (3) CONSECUTIVE misses, and `Refresh` does not count a
+  miss while `RE::LoadingMenu` is open (`Followers.cpp` `loading`, 86e3buxgw (d), `fix/mfo-logic-bundle2`): he is held,
+  the streak untouched, so a load screen cannot dismiss and strip him. Counting resumes when the menu closes.
 - `ForceRefToNative` (`:319`) = `REL::RelocationID(24523, 25052)` `TESQuest::ForceRefTo`,
   AE + SE (SE id verified 2026-09-13 via the engine's own `ReferenceAlias.ForceRefTo`
   Papyrus callback tail-jump; **CONFIRMED 2026-09-15** — `Docs/ADDRESS-TABLE-2026-09-15.md`
@@ -1244,7 +1247,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   collisions came from: the heal facet is LEFT-ONLY by contract (`ClaimHealCast`'s hard rule), so an offense
   cast idling on the left stands exactly where the next heal must go while the right hand sits empty. It now
   prefers the RIGHT hand — free-and-unclaimed first, then free, then by rank — leaving the left for the
-  facet that can use no other, **unless `WeaponHandExposure` (`cast/Hands.cpp:164`) says a weapon owns the
+  facet that can use no other, **unless `WeaponHandExposure` (`cast/Hands.cpp:184`) says a weapon owns the
   right hand or is coming back to it**, in which case the old LEFT-first order stands. That gate is not
   optional: `PlanCastHand` returns `EitherFree` only when `APMFBridge::WeaponHandActive` is false, and that
   reads the LIVE grip and the live equipment CLAIM — both false during the documented transient-unarmed
@@ -1255,12 +1258,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   is the one signal that survives that gap. A pure caster never has an entry, so right-first still applies
   to exactly the follower marth's ruling was about. (`DualCast` still takes both hands in that gap; that
   exposure predates this branch and is unchanged by it.)
-  **RESIDUAL, non-default config:** the ledger is only WRITTEN while `bWeaponStyleControl` is on —
-  `EquipWeapon`'s kill-switch-off branch is a plain `EquipObject` with no entry, and
-  `ReconcileForcedWeapon` releases unconditionally when the switch is off. With that feature off a melee
-  follower in the transient-unarmed gap therefore still lands RIGHT, i.e. the 2026-09-05 shape on a
-  non-default setting. Recorded, not closed: closing it needs a signal that does not depend on that
-  feature being on.
+  **RESIDUAL, non-default config (NARROWED, MFO-B3, `fix/mfo-logic-bundle2`):** the ledger is only WRITTEN
+  while `bWeaponStyleControl` is on, so with the switch off `WeaponHandExposure` (`cast/Hands.cpp:184`) also
+  reads the declared role: `Followers::GetBaseClass` Melee (1) or Ranged (2) counts as "a weapon owns the right
+  hand". Consulted ONLY with the switch off (switch-ON answer is the ledger answer, unchanged). Not covered: an
+  Auto (0) hybrid with the switch off: reading its gambit table needs a new `Followers` read-only accessor (no record getter exists outside `Followers.cpp`), so it stays open.
   `g_forcedWeapon` is read under `g_forcedMx` here like every other access — the map has an OFF-THREAD
   reader (the SKSE save callback, `CoSaveForcedWeapons`), so "the writers are worker-serial" is not
   sufficient. Its declaration comment used to assert BOTH "no lock (#4)" and "guard every access"; the
@@ -2725,11 +2727,11 @@ module. Module layout:
   PICK + DUAL WIELD BY PERKS". **STILL A GAP:** bow vs crossbow stays the
   ammo/damage rule (no perk record distinguishes them — both carry `WeapTypeBow`).
   **CLOSED 2026-09-14 (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`) — THE
-  SECOND ONE-HANDER, all three paths at once, ONE rule:** `wantOffHand` =
+  SECOND ONE-HANDER, all three paths at once, one rule for weapon-role followers:** `wantOffHand` =
   `roles.offHand == 2 && meleeTargetClass == OneHand`; `offHandBaseScore` = the
   SECOND-best owned in-class one-hander's `WeaponScore` (0 with fewer than two
   owned; a stack of >= 2 of one form counts twice — it covers both hands).
-  KEEP (`logistics/SwapUp.cpp` `ComputeKeepSet` `keepSecond1H`, the weapon keep buckets): bucket
+  KEEP (`logistics/SwapUp.cpp` `ComputeKeepSet` `keepSecond1H`, the weapon keep buckets; gated on `keepMeleeTargetClass`): bucket
   1 also keeps its runner-up form UNLESS the best form is a stack >= 2 (then
   `PickOffHandWeapon` takes the second copy and the runner-up is junk). BUY
   (`BuildBuyThresholds` → `TradeBridge::BuyThresholds` APPENDED `wantOffHand` /
@@ -2756,10 +2758,7 @@ module. Module layout:
   `BuildBuyThresholds`) and the keep runner-up must stay the SAME top-2 rule or
   loot fetches what keep sells; `PlanBuy`'s `plan[c.idx] >= c.avail` skip is what
   stops the off-hand buy from over-buying a single stock line; the LOOT take must stay
-  `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **OPEN
-  BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B24** (SEV-5) — keep gates on
-  `keepRoles.melee`, loot/buy on `meleeTargetClass` (a base caster keeps two daggers,
-  fetches none); "ONE rule" holds for weapon-role followers; **MFO-B28** (SEV-5,
+  `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **MFO-B24 DRAINED (`fix/mfo-logic-bundle2`):** `keepSecond1H` gates on the LOOT judge's `meleeTargetClass` with its exact `mageMode` (cast gambit AND class Mage, or class Auto with no melee/ranged gambit; `logistics/SwapUp.cpp` `keepMeleeTargetClass`), so keep and loot agree exactly and keep never sells what loot fetches. Buy keeps the broader `IsCasterFollower` test, which is safe: whenever buy's class is OneHand, loot's and keep's are too, so buy never purchases what keep sells. Keep that expression identical to `LootEquipment.cpp` if it changes (no shared helper); **MFO-B28** (SEV-5,
   pre-existing) — a BOUGHT primary upgrade never passes `AcquireEquip`, so it carries
   no gems. **What breaks:** the `trueSecond` test must stay `best != bestWeap` — a bare
   `best == bestOffHand` stocks every primary upgrade. Changing
@@ -3297,10 +3296,10 @@ anonymous-namespace copy — that silently forks the instance).
   `TallyStyleVotes` note). The mirror the shed reads MUST stay cleared on load
   (`Serialization.cpp ResetAllState` → `Logistics::ClearStyleMirror`, after
   `StopPump` + `MainThread::Clear`) or a stale `unarmed` from the previous save
-  drops a weapon on the first post-load tick (Fable F1 on `49a9cc2`). **OPEN
-  BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B14** (SEV-4) — a "left hand empty"-only
-  one-hand perk can vote `unarmed` and make the shed strip a legitimately wielded
-  off-role weapon; read it before touching `inRole` or the unarmed classifier.
+  drops a weapon on the first post-load tick (Fable F1 on `49a9cc2`). **MFO-B14
+  DRAINED (`fix/mfo-logic-bundle2`):** the empty-hand unarmed signal in `ReadStyleFacts` now needs the RIGHT hand
+  pinned empty, so a "left hand empty"-only one-hand perk no longer votes `unarmed`; the primaryAV signal is
+  unchanged. Keep the right-hand requirement when touching `inRole` or the unarmed classifier.
 - `ClearTransientState` (`logistics/Upkeep.cpp:568`) → `Serialization.cpp:641`, after StopPump. Wipes
   the loot/drink/econ/travel maps (calls `Packages::LootTravelClear` first). Moving
   a clear out, or calling while the pump is live, races a worker insert (UB).
@@ -4135,7 +4134,7 @@ outside the catalog (hidden engine perks like PerkSkillBoosts, creature perks, d
 player-UI perks) never vote; a catalog rank conditioned on nothing classifiable votes
 for nothing (`classified`/`owned` counters say how many). NO overhaul is assumed
 anywhere — the facts come off the perk record's own conditions. **UNARMED (2026-09-14):**
-`PerkStyleFacts::unarmed` = a list whose `GetEquippedItemType` test on EITHER hand admits
+`PerkStyleFacts::unarmed` = a list whose `GetEquippedItemType` test on the RIGHT hand (MFO-B14: a left-empty test alone no longer votes) admits
 code 0 only (`== 0` / `<= 0` / `< 1`), no hand test on that list excludes 0, and no
 weapon-kind keyword is named on it (per-list, not per-merged-entry); OR (second signal,
 read in `WalkPerkEntries` beside the effect-condition read) an ability entry with an effect

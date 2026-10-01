@@ -34,6 +34,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning for deferral:** not fixable in general without an APMF dry-run / "can you serve this?" query. Recorded so the next reader does not assume F2 is closed.
 
 ### MFO-B3 — right-first hand selection fails toward RIGHT when `bWeaponStyleControl` is OFF
+- **NARROWED** (`fix/mfo-logic-bundle2`): with the switch off `WeaponHandExposure` falls back to `Followers::GetBaseClass` Melee/Ranged (switch ON unchanged). STILL OPEN: an Auto (0) hybrid with the switch off; reading its equip gambits needs a new read-only `Followers` accessor (no new plumbing taken in a small-fix round).
 - **Raised:** Fable review of `1044816` (finding C, SEV-4). Recorded at the site and in MAP.md by `625f3b7`.
 - **Severity:** SEV-4 (non-default config only; default is ON, `Config.h:505`)
 - **Finding:** `WeaponHandExposure` depends on a `g_forcedWeapon` entry, and `EquipWeapon` writes one only under `Config::g_weaponStyleControl` (the kill-switch-off branch is a plain `EquipObject`, no ledger); `ReconcileForcedWeapon` releases unconditionally when off. So with that feature off, a melee/hybrid follower in the transient-unarmed gap still lands RIGHT — the 2026-09-05 "cast never left rest" shape.
@@ -120,6 +121,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained (verbatim):** round the migrated autoPts up to the next whole point when points is cap-clamped (autoPts = ceil(autoPts − 1e-3)), or fold into the MFO-B11 entry as a note. Not a co-save layout change.
 
 ### MFO-B14 — the empty-hand condition signal can mark a "free off-hand" one-hand perk as unarmed
+- **DRAINED** (`fix/mfo-logic-bundle2`): `ReadStyleFacts` unarmed now requires the RIGHT hand pinned empty; a left-empty-only test no longer votes.
 - **Raised:** Fable tier-3 review of `49a9cc2` (`feat/mfo-shed-fists-rule`), SEV-4. F2.
 - **Severity:** SEV-4
 - **Finding (verbatim):** F2 — SEV-4, PLAUSIBLE: the empty-hand condition signal can mark a 'free off-hand' one-hand perk as unarmed. native/Progression.cpp:326-336, 352-354. The per-list rule fires on a list where any GetEquippedItemType(hand) test admits code 0 only, with no hand test excluding 0 and no weapon-kind keyword. A perk of the shape 'left hand empty' alone (an overhaul's 'no offhand' one-handed perk with no WeapType* keyword and no right-hand GetEquippedItemType test) satisfies it. If MFO allocates such a rank to an enrolled follower, votes.unarmed > 0, fists become valid, and the shed will strip him of an off-role weapon he was legitimately swinging one-handed. Shape-level risk, not demonstrated. Cheap tightening: require the OTHER hand not to be a one-hand-weapon signature on the same tree/node, or require both hands empty unless the primaryAV signal also fires.
@@ -209,6 +211,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Surfaced at edit time from:** MAP.md §1 FWPN entry + §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
 
 ### MFO-B24 — keep gates the second one-hander on `keepRoles.melee`, loot/buy on `meleeTargetClass`; a base caster keeps two daggers but never fetches a second
+- **DRAINED** (`fix/mfo-logic-bundle2`): `keepSecond1H` (`logistics/SwapUp.cpp`) gates on the identical meleeTargetClass expression as buy/loot; MAP wording softened.
 - **Raised:** Fable review of `b3ac577` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5 (a).
 - **Severity:** SEV-5
 - **Finding (verbatim):** SEV-5 keep gates the second 1H on `keepRoles.melee == OneHand` (Logistics_Economy.cpp:687) while loot/buy gate on `meleeTargetClass == OneHand` (Loot_Equipment.cpp:147, Economy.cpp:459), which is `Other` for a base caster → a caster with a dagger and dual-wield votes keeps two daggers but never fetches a second; harmless; MAP's "ONE rule" overstated for casters.
@@ -586,6 +589,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **DRAINED by `6bfbd79`** (the same commit that landed the cap): the comment now states the actual bound — the re-aim is held while the claim is fed, and the hold's own heartbeat stops at `kHealHoldNeverObservedMs` for a claim that never fires, so the cost is bounded by that window rather than by the fight. Verified in the round-6 review of that SHA.
 
 ### MFO-B63 — item 5 of the 2026-09-22 field batch (Jesper's outfit) was DEFERRED, not fixed
+- **AUDIT 2026-10-01 (`fix/mfo-logic-bundle2`, ClickUp 86e3buxgw):** 3D gate (`EquipAuthority.cpp:508`) and not-worn re-send (`kDeclDriftHold`) are shipped; the mage judge declares its full best-per-slot set via `MageBestPerSlot` (`cc4e895`). STILL OPEN: best-per-slot for NON-mage followers (a restructure of the judge's output, not taken). The roster-sweep load-screen drop (kMissesBeforeDrop) is DRAINED on this branch.
 - **Raised:** author of `fix/mfo-spell-authority-0922`, 2026-09-22, under the brief's own instruction ("include only if it does not risk the round ... If this makes the round too large, STOP and report it as deferred rather than half-doing it").
 - **Severity:** SEV-2 (a follower stood visibly bare for 2 min 36 s in the field, so this is NOT a cosmetic backlog item)
 - **Finding (verbatim, from the brief):** "The declaration is 'one judged pick + everything else worn' (`Logistics_Economy.cpp:835,930-937`), so a piece the engine's outfit-apply displaced falls out of the set; the re-declare went into a 3D-absent actor (APMF logged 'equip pass skipped, re-declare once loaded' and MFO never re-sent); then SEND-ONLY-ON-CHANGE (`:950`) swallowed 7 correct picks and the follower stood bare for 2 min 36 s. Fix: declare best-per-slot from the judge rather than pick+worn; treat 'a declared piece is not worn at the next service and nothing is in flight' as a change (erase the last-declared cache and re-send, MFO-B41's shape generalised to armor); skip declaring while `!Is3DLoaded()` and mark dirty so the first loaded tick re-sends."
@@ -1098,3 +1102,6 @@ Raised against a9acf09 (`fix/mfo-cleanup-bundle1`, Opus review), 2026-10-01. Rev
 
 ### MFO-B200 (SEV-5) -- EquipShieldOnMain's '?' name fallback is dead
 Raised against a9acf09 (`fix/mfo-cleanup-bundle1`, Opus review), 2026-10-01. Reviewer (verbatim): "`native/cast/Equip.cpp:218-219` `item->GetName() ? item->GetName() : \"?\"` is a dead fallback: in the fork `TESForm::GetName()` returns `\"\"`, never null (`src/RE/T/TESForm.cpp:28-37`). An unnamed shield now logs `''` instead of `'?'` (old code used `TESObjectARMO::GetFullName()`). Same idiom as the existing `nm` lambda at :733. Harmless." Fix: test `*name` instead of the pointer if '?' matters. Log text only.
+
+### MFO-B204 (SEV-5) -- the roster-sweep hold now lasts the whole load screen
+Raised against 676b676 (`fix/mfo-logic-bundle2`), Opus review F4, not fixed. Verbatim: "native/Followers.cpp:478-499: the hold window was capped at ~1.6 s (3 sweeps x 532 ms); it now lasts the whole load screen, so the Scheduler keeps ticking a held follower for that long. Memory-safe (g_active stores ActorHandle, .get() nulls a freed actor; tick consumers already null-check), recorded for the longer window."
