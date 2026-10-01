@@ -2730,6 +2730,29 @@ module. Module layout:
   `MFO_MeleeStyle` DATA = `1|4` (`kAllowDualWielding`) — see §2 Actuation "COMBAT
   PICK + DUAL WIELD BY PERKS". **STILL A GAP:** bow vs crossbow stays the
   ammo/damage rule (no perk record distinguishes them — both carry `WeapTypeBow`).
+  **RANGED PICK: PERK BIAS + AMMO TERM (2026-10-01, `feat/mfo-ranged-kind-ammo`, ClickUp 86e3940yd,
+  marth 2026-09-14; CLOSES the "bow vs crossbow stays the ammo/damage rule" gaps above).**
+  Kind and ammo are read from the WEAP record, never a bow/crossbow enum: `WeaponKindOf` (`logistics/Logistics_internal.h`)
+  now returns `kWkBow` from the `WeapTypeBow` KEYWORD (its enum fallback for kBow/kCrossbow is gone);
+  `RangedUsesBolts` = crossbow animation (a Skyrim WEAP has NO ammo field -- the engine pairs ammo by animation, bolt
+  flag `kNonBolt` clear); `AmmoOwned`/`CountAmmoOwned` (`Gear.cpp`) count rounds per family via `AmmoIsBolt`;
+  `RangedPickScore` = `WeaponScore` + `kRangedAmmoTier` (1e6) when the weapon's family has any ammo. THE DECISION is in
+  two places that must agree: `ComputeWeaponRoles` (`logistics/Gear.cpp`, after the melee block) sets
+  `roles.wantCrossbow` = the family of the top `RangedPickScore` candidate (playable ranged weapons carried; no
+  candidate -> the old `bolts > arrows`), and `cast/Equip.cpp` `EquipWeapon` ranks the SAME score in its pick loop and
+  refuses to call an EMPTY held ranged weapon "already holding" while another eligible one has ammo
+  (`emptyWhileAmmoElsewhere`). Ranged perk bias: with ranged role and `votes.weapon[7] > 0`, `preferKinds |= kWkBow`
+  (no melee weapon's kind intersects it; offHand and the `[style]` line stay melee-only). Loot/buy/keep/ammo targets
+  already read `wantCrossbow` as "the chosen weapon's ammo family", so they now chase the picked weapon's ammo; the
+  weapon-kind filters at `LootEquipment`, `Upkeep` `inRole`, `Economy` `BuildBuyThresholds` use `RangedInFamily`.
+  **DEFAULT-CASE PROOF / WHERE IT DIFFERS:** one ranged weapon carried -> same family as before; melee followers and
+  every melee score are unchanged (`preferKinds` gains only bit 7). It DIFFERS for bow+crossbow carried: before, the
+  family with MORE rounds won (damage on a tie) and the combat equip took raw max damage ignoring ammo; now a weapon
+  with matching ammo beats one without, then perk-biased damage decides (rounds count no longer matters), and none
+  with ammo -> plain/perk-biased damage. `ReadStyleFacts` is unchanged (it already votes `WeapTypeBow` into
+  `weapon[7]`). **What breaks:** the two decision sites must keep sharing `RangedPickScore` or loot chases the ammo of a
+  weapon the combat pick does not draw; re-adding an enum test in `WeaponKindOf` re-breaks keywordless modded guns'
+  neutrality; `EquipAuthority.cpp:688` still uses `IsCrossbow()`. Open items: `Docs/REVIEW-BACKLOG.md` **MFO-B210**.
   **CLOSED 2026-09-14 (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`) — THE
   SECOND ONE-HANDER, all three paths at once, one rule for weapon-role followers:** `wantOffHand` =
   `roles.offHand == 2 && meleeTargetClass == OneHand`; `offHandBaseScore` = the
