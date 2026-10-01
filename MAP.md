@@ -779,7 +779,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     in the gap; the equip side ranks it (`HealRestreamRule`) and `HealTakesLeft` stays true.
     Harbinger's seat 0x07 still stops the channel at full (stopPct 0). **No MFO magicka deduction on
     this road**: the engine charges the real cast (the competence gate still checks cost).
-  * **HEAL PENDING HOLDS OFFENSE (`fix/mfo-heal-starve-retreat`, P1, field 2026-10-01, MFO-B207/B208 are the deferred siblings).**
+  * **HEAL PENDING HOLDS OFFENSE (`fix/mfo-heal-starve-retreat`, P1, field 2026-10-01, MFO-B216/B208 are the deferred siblings).**
     `HealPendingHoldsOffense` (`cast/Hands.cpp:975`, declared `cast/Actuation_internal.h`) is asked by `CastOn` for an
     OFFENSE spell right after the unsighted-charge block (`cast/CastOn.cpp:459`), before the hand plan: a STRICTLY
     higher-ranked (lower index) heal claim on the LEFT lock that is not in flight, not observed firing since its
@@ -1877,7 +1877,10 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   defers the fill, bounded by `kRetreatCastDeferMs` (`Scheduler.cpp:406`, 1500 ms from the first delay,
   `RetreatNote::castDeferSince`), then fills anyway with a WARN. On a successful fill
   `Actuation::ReleaseHealClaimForRetreat` (`cast/Hands.cpp:1014`) ends the standing heal claim and its left lock. Both
-  worker-serial. Whether a retreating follower still heals (`:1274-1283`) is UNCHANGED, marth's decision.
+  worker-serial. SELF-HEAL WHILE RETREATING (marth 2026-10-01 "Themselves, yes. others no."): in `ServiceRetreat`'s
+  early-return branch (`Scheduler.cpp` ~:1292-1318) a mini scan fires ONLY `act.cast_self` rules whose spell
+  `HealsHealth`, and only when out of combat and able to act (so CastOn takes the direct self road, no package, no
+  claim for the StopCombat to cut). `[retreat-heal]` logs it (3 s dedup, `g_retreatHealLog`). The gambit table and OOC service stay skipped.
 - **AUTO-RETREAT DRIVER (ClickUp 86e3erv94, batch L, 2026-09-25; tier A; revised after the
   7580bea and 19f67e0 reviews).** `ServiceRetreat` (`:343`) runs on EVERY service from BOTH tables — the
   party-OOC branch (`:768`, before `Logistics::ServiceFollower`) and the combat table (`:942`)

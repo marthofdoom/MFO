@@ -194,6 +194,8 @@ namespace MFO::Scheduler {
             std::chrono::steady_clock::time_point castDeferSince{};
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
+        // [retreat-heal] line dedup (3 s per follower).
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_retreatHealLog;
 
         // UNPAUSED SERVICE CLOCK (seconds). Advanced at the per-follower pause
         // gate in Tick by the time since the previous advance, ONLY when the
@@ -714,6 +716,7 @@ namespace MFO::Scheduler {
 
     void ClearTransientState() {
         g_retreatNotes.clear();
+        g_retreatHealLog.clear();
         EngageOnSight::ClearTransientState();   // its per-follower notes + the probe mirror
         g_serviceClock   = 0.0;
         g_serviceClockAt = {};
@@ -1287,6 +1290,36 @@ namespace MFO::Scheduler {
                 // follower is disengaging, not gambitting -- that is the point.
                 // Deliberately NO serviceOwnOoc() here either: a loot travel
                 // armed under the retreat would fight it for the same actor.
+                //
+                // THE ONE EXCEPTION (marth 2026-10-01: "Heal while retreating? Themselves,
+                // yes. others no."): a Heal-kind act.cast_self rule. cast_self is self-
+                // targeted by definition, so no heal on others, no offense and no buff
+                // reaches Fire. Only once StopCombat has landed (out of combat): then the
+                // follower has no CombatController and CastOn takes the direct self road
+                // (ChooseHealRoad DirectNoCombat), which owns no package and no alias, so the
+                // retreat travel is untouched and nothing is left for a later StopCombat to
+                // cut. Before it lands, nothing runs (a claim minted now would be cut by it).
+                if (!f->IsInCombat() && !Actuation::CannotActReason(f)) {
+                    for (int start = 0; ; ) {
+                        const auto rec = g_followers.find(id);
+                        if (rec == g_followers.end()) break;
+                        const Eval::Choice sc = Eval::Evaluate(f, rec->second, Table::Combat, start);
+                        if (sc.ruleIndex < 0) break;
+                        start = sc.ruleIndex + 1;
+                        if (sc.actionOpcode != Vocab::kActCastSelf) continue;
+                        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.actionParam);
+                        if (!sp || !Actuation::HealsHealth(sp)) continue;
+                        const Actuation::Outcome o = Actuation::Fire(f, sc);
+                        if (o.transparent) continue;
+                        auto& last = g_retreatHealLog[id];
+                        if (now - last > std::chrono::seconds(3)) {
+                            last = now;
+                            spdlog::info("[retreat-heal] {:08X}: self-heal rule {} (spell {:08X}) while retreating: {}",
+                                         id, sc.ruleIndex, sc.actionParam, o.reason);
+                        }
+                        break;
+                    }
+                }
                 g_lastTickMs = std::chrono::duration<double, std::milli>(
                                    std::chrono::steady_clock::now() - t0).count();
                 return;

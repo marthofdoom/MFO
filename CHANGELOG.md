@@ -12,6 +12,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **The Followers tab shows where retained followers are.** A follower you are not currently travelling with now lists their current cell next to their name, or the location name if the cell has none.
 - **A healer's heal is no longer starved by their own attack spells.** When a heal is waiting to start, the attack rules ranked below it now hold off until it fires. Before, they took the other hand and the heal could sit for ten seconds. Rules ranked above the heal still win, and normal play resumes the moment the heal fires.
 - **A retreating follower finishes the spell they are casting.** The retreat waits a moment for a cast in flight, up to one and a half seconds, so a heal is no longer cut off mid-cast. When the retreat starts, any heal they had lined up is dropped at once instead of lingering.
+- **A retreating follower can still heal themself.** While they fall back, a self heal rule keeps working once they are out of combat. They never heal others, attack or buff while retreating, and the walk is not disturbed.
 
 ## v2.0.16 -- Heals are animated in combat again
 
