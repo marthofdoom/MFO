@@ -414,7 +414,7 @@ namespace MFO::Logistics {
                 // strict toggle -- rank school-enchant first so a mage never trades a
                 // helpful enchant for a pricier off-school one. MEOBridge::Available()
                 // is a worker-safe bool (no main-thread MEO query on the tick).
-                buy.mageSchoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                buy.mageSchoolPrimary = Config::g_mageApparelStrictSchool.load();
                 buy.isNecromancer  = IsNecromancerFollower(a_state);
                 buy.eligibleSchools= top2;
 
@@ -1107,10 +1107,10 @@ namespace MFO::Logistics {
         if (!a_allowVillain && IsVillainCodedApparel(a_armo)) return false;   // no evil regalia unless the follower is a necromancer
         const std::int32_t value = std::max<std::int32_t>(a_armo->GetGoldValue(), 0);
 
-        // VALUE-PRIMARY (MEO present + not strict): pure gold value, one flat tier.
+        // VALUE-PRIMARY (bMageApparelStrictSchool OFF, the default; marth 2026-10-01): pure gold value, one flat tier.
         if (!a_schoolPrimary) { out_tier = 0; out_metric = value; return true; }
 
-        // SCHOOL-PRIMARY (MEO absent OR strict): tier 2 = fortifies a top-2 school
+        // SCHOOL-PRIMARY (bMageApparelStrictSchool ON only): tier 2 = fortifies a top-2 school
         // (ranked by score then fanciness within), tier 1 = plain (no school fortify),
         // tier 0 = off-school enchant. So a cheap school robe beats a pricey wrong-
         // school one, and a bare slot still fills with plain clothing.

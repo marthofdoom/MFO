@@ -65,7 +65,7 @@ namespace MFO::Logistics {
             struct MageSlotBest { RE::TESBoundObject* obj = nullptr; int tier = -1; std::int32_t metric = -1; };
             void MageBestPerSlot(RE::Actor* a_follower, const FollowerState& a_state, MageSlotBest (&a_out)[6]) {
                 const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
-                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                const bool schoolPrimary = Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain  = IsNecromancerFollower(a_state);
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
@@ -994,7 +994,7 @@ namespace MFO::Logistics {
                 if (!a_challenger || picks.empty()) return nullptr;
                 if (!(UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load())) return nullptr;
                 const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
-                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                const bool schoolPrimary = Config::g_mageApparelStrictSchool.load();
                 int ct = 0; std::int32_t cm = 0;
                 const bool ranks = MageApparelBuyKey(a_challenger, top2, schoolPrimary, IsNecromancerFollower(a_state), ct, cm);
                 for (auto& [obj, data] : inv) {

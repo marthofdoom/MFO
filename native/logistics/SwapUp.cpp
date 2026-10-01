@@ -183,8 +183,7 @@ namespace MFO::Logistics {
                 const bool useMageApparel = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load() &&
                                             !Config::g_dollsMode.load();
                 const std::uint8_t top2   = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
-                const bool schoolPrimary  = !MEOBridge::Available() ||
-                                            Config::g_mageApparelStrictSchool.load();
+                const bool schoolPrimary  = Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain   = useMageApparel && IsNecromancerFollower(a_state);
                 // A shield is in-role ONLY for a dedicated one-hand MELEE follower. A
                 // ranged (bow) or caster follower never equips one, so it must NOT be

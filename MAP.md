@@ -2873,6 +2873,10 @@ module. Module layout:
   choice keeps, then `gemHold` (the only caller of `UnsocketItemGems`) extracted its gem. Now `DeclaredSetKeeps`
   (`EquipAuthority.cpp:~470`, the declared `GearSlate` OR rule 5 via the shared `Rule5Overlaps:~400`) vetoes the force-sell and `continue`s before `gemHold`;
   line `[sell] <id> '<name>' -> worn, kept by the armor choice -> not selling ...`. Blacklisted apparel still force-sells.
+  (3) marth 2026-10-01: a mage-clothing follower (explicit Mage OR Auto-by-skill, one bool, same path) wears the
+  most expensive clothing piece per slot unless `bMageApparelStrictSchool` is ON. Every site (`Economy.cpp:417`,
+  `EquipAuthority.cpp:68,~997`, `SwapUp.cpp:186`, `LootEquipment.cpp:104`) now reads ONLY that flag; the old
+  `!MEOBridge::Available() ||` clause (school-primary whenever MEO was absent) is gone.
   Worker thread for all of it.
 - **ARMOR CLASS BY SKILL + PERKS (2026-09-14, field fix; branch
   `fix/mfo-armor-class-score`).** FIELD (Deck log on `69c5b3c`, Fable): after a
