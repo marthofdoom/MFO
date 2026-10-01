@@ -1508,6 +1508,7 @@ namespace MFO::Board {
             r.id        = a->GetFormID();
             r.name      = a->GetName() ? a->GetName() : "?";   // null-guard like every sibling
             r.active    = true;
+            r.partyMember = true;   // 86e3eewaf
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
             r.inCombat  = a->IsInCombat();
@@ -1629,6 +1630,10 @@ namespace MFO::Board {
                 // Current cell name, else the location name (retained followers only). Worker-side
                 // read-only lookups copied into the snapshot, so the render thread never touches the actor.
                 if (auto* a = f->As<RE::Actor>()) {
+                    // 86e3eewaf: a party member out of the loaded roster (told to wait,
+                    // left behind) cannot be removed either. Flags + actor values only,
+                    // the same worker-side read Refresh and Lotd make.
+                    r.partyMember = Followers::IsEligibleFollower(a);
                     if (auto* c = a->GetParentCell(); c && c->GetName() && *c->GetName()) {
                         r.cell = c->GetName();
                     } else if (auto* loc = a->GetCurrentLocation(); loc && loc->GetName() && *loc->GetName()) {

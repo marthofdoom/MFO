@@ -64,6 +64,11 @@ namespace MFO::Board {
         std::uint8_t  logisticsRules = 0;
         bool          active = false;
         bool          teammate = false;
+        // 86e3eewaf: still in the player's party (Followers::IsEligibleFollower --
+        // teammate and not a dismissed custom follower). True on every active row;
+        // on a retained row it is a follower left waiting or out of the loaded area.
+        // Greys the Remove from roster button (he would be re-adopted with defaults).
+        bool          partyMember = false;
         bool          commanded = false;
         bool          inCombat = false;
         // Activity glyphs for the HUD [C][L][T] strip + the Followers-tab status

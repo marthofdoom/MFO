@@ -4818,7 +4818,9 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   `ApplyEdits` flips `it->second.mfoEnabled`. The release-on-disable runs on the
   Scheduler tick's OFF edge, not in `ApplyEdits`.
 - **REMOVE FROM ROSTER row action (86e3eewaf, `Board_FieldKit.cpp` Followers tab, LAST column).** A
-  `SmallButton` per row; while `r.active` (currently following) it is drawn GREYED (TextDisabled colour,
+  `SmallButton` per row; while `r.active || r.partyMember` (following, or a teammate out of the loaded
+  roster: `FollowerRow::partyMember` = `Followers::IsEligibleFollower`, filled by both `PublishSnapshot`
+  builders on the worker) it is drawn GREYED (TextDisabled colour,
   NOT `BeginDisabled`, so d-pad nav still lands on it) and its hover/nav tooltip says why
   (`Fk_TipRemoveFollowing`). On a retained row it opens `##rmroster` AFTER the table (window scope),
   the respec confirm's shape: title, `Fk_RemoveBody` (marth's exact text, `{1}` = name), a danger

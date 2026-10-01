@@ -545,22 +545,24 @@ namespace MFO::Board {
                             else          ImGui::TextDisabled("--");
 
                             // 86e3eewaf: Remove from roster. Offered only while he is NOT
-                            // following (r.active = in the live roster): a party member
-                            // would be re-adopted next Refresh with default data. Greyed,
+                            // following (r.active = in the live roster, r.partyMember = still a
+                            // teammate out of it): a party member would be re-adopted with
+                            // default data. Greyed,
                             // NOT ImGui-disabled, so the d-pad can still land on it and the
                             // tooltip says why (the same hover/nav tooltip as the MFO box).
                             // The worker re-checks before anything is touched.
                             ImGui::TableNextColumn();
                             ImGui::PushID(static_cast<int>(r.id));
-                            if (r.active)
+                            const bool inParty = r.active || r.partyMember;
+                            if (inParty)
                                 ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
                             const bool rmPressed = ImGui::SmallButton(Str::Label(Str::K::Fk_RemoveBtn, "rmroster"));
-                            if (r.active) ImGui::PopStyleColor();
+                            if (inParty) ImGui::PopStyleColor();
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("%s", Str::Fmt(r.active ? Str::K::Fk_TipRemoveFollowing
-                                                                          : Str::K::Fk_TipRemove,
+                                ImGui::SetTooltip("%s", Str::Fmt(inParty ? Str::K::Fk_TipRemoveFollowing
+                                                                         : Str::K::Fk_TipRemove,
                                                                  { r.name }).c_str());
-                            if (rmPressed && !r.active) {
+                            if (rmPressed && !inParty) {
                                 s_rmFid  = r.id;
                                 s_rmName = r.name;
                                 wantRemovePopup = true;
