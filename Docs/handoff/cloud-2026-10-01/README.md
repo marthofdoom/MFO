@@ -76,6 +76,8 @@ What this means for equip authority:
 
 This is the same fix shape as MFO-B16 (b): steer the engine's equip-best for followers MFO dresses. It would also make the B134 "refused claim, MFO stays out" mode and most of the declaration road unnecessary.
 
+**RULE (marth 2026-10-01): if the engine has a weighting system in an area Harbinger touches, Harbinger controls decisions through that weighting.** It feeds its bias into the engine's own scoring, so the actor still makes the choice itself. Denying the engine and substituting a decision is the fallback only where no weighting exists. This applies to every Harbinger facet, not just equipment. Check for an engine weighting first, every time.
+
 NEEDS LOCAL before any code. It is a new engine seat, so tier A, disassembly first, both runtimes (principle 11).
 1. Find the engine's follower auto-equip scorer on 1.6.1170 and 1.5.97. Record which function rates armor and weapons, what it weighs, and when it runs (inventory add, outfit re-apply, combat).
 2. Observe it running with a passive probe before building on it (principle 5).
