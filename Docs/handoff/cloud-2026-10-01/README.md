@@ -17,7 +17,7 @@ Each item had an Opus review and a green CI run. CI only proves the build compil
 | (heal merge) | Heal fixes from the 10-01 field log: heal hold while a higher heal waits, retreat waits for own cast and releases the heal claim, self-heal while retreating (marth: "Themselves, yes. others no."). Backlog B216, B217, B220 to B222 |
 | 4f574cd0 | HMS is core: runs without the add-on. Auto class resolver (logistics/ClassResolve.cpp), HMS-only PRGN records (v8 layout, no bump), never-processed adopt armed at load only |
 
-Main CI was green on 4f574cd0 (run 36900292422). Check CI on the heal merge commit, which came after this file was first written. Not released. v2.0.16 is the last tag.
+Main CI was green on 4f574cd0 (run 36900292422). Main CI is also green on the heal merge 1804f388 (run 36903967719), the last code merge of the session. Not released. v2.0.16 is the last tag.
 
 ## 2. Open branches
 
