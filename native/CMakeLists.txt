@@ -35,6 +35,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Board.cpp
     Board_Progression.cpp
     Board_FieldKit.cpp
+    i18n/Strings.cpp
     Probe.cpp
     ProgProbe.cpp
     Progression.cpp

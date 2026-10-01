@@ -222,8 +222,9 @@ namespace MFO::Board {
             const int dur  = static_cast<int>(eff->effectItem.duration);
             const int area = static_cast<int>(eff->effectItem.area);
             if (mag  > 0) { if (!s.empty()) s += ' '; s += std::to_string(mag); }
-            if (dur  > 0) { s += " for " + std::to_string(dur) + "s"; }
-            if (area > 0) { s += " in " + std::to_string(area) + "ft"; }
+            // Display text (i18n keys): this runs on main, the table read is lock-free.
+            if (dur  > 0) { s += Str::Fmt(Str::K::Spell_For, { dur }); }
+            if (area > 0) { s += Str::Fmt(Str::K::Spell_In,  { area }); }
             return s;
         }
 
@@ -260,13 +261,14 @@ namespace MFO::Board {
                 // separates "no rule matched" from "the evaluator is dead".
                 if (snap.evalTicks == 0) {
                     ImGui::SameLine();
-                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "[eval: NEVER RAN]");
+                    ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.3f, 1.0f), "%s", Str::Get(Str::K::Hud_EvalNever));
                 } else {
                     ImGui::SameLine();
-                    ImGui::TextDisabled("[eval %u tk %.2fms]", snap.evalTicks, snap.evalMs);
+                    ImGui::TextDisabled("%s", Str::Fmt(Str::K::Hud_Eval, { snap.evalTicks, Str::Arg::F(snap.evalMs, 2) }).c_str());
                 }
-                ImGui::TextDisabled("| session %u kill  %u rap  %.0f/hr", snap.kills, snap.rapport,
-                                    snap.minutes > 0.01 ? snap.rapport * 60.0 / snap.minutes : 0.0);
+                ImGui::TextDisabled("%s", Str::Fmt(Str::K::Hud_Session,
+                    { snap.kills, snap.rapport,
+                      Str::Arg::F(snap.minutes > 0.01 ? snap.rapport * 60.0 / snap.minutes : 0.0, 0) }).c_str());
                 ImGui::Separator();
 
                 int shown = 0;
@@ -287,16 +289,16 @@ namespace MFO::Board {
                     // ALWAYS drawn -- only the letter comes and goes -- so the strip's
                     // width never shifts as state changes. Empty slot = dim "[ ]",
                     // live slot = coloured "[C]"/"[L]"/"[T]", butted into [ ][ ][ ].
-                    if (r.inCombat) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "[C]");
+                    if (r.inCombat) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", Str::Get(Str::K::Hud_GlyphCombat));
                     else            ImGui::TextDisabled("[ ]");
                     ImGui::SameLine(0.0f, 0.0f);
-                    if (r.looting)  ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "[L]");
+                    if (r.looting)  ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "%s", Str::Get(Str::K::Hud_GlyphLooting));
                     else            ImGui::TextDisabled("[ ]");
                     ImGui::SameLine(0.0f, 0.0f);
-                    if (r.trading)  ImGui::TextColored(ImVec4(0.45f, 0.6f, 1.0f, 1.0f), "[T]");
+                    if (r.trading)  ImGui::TextColored(ImVec4(0.45f, 0.6f, 1.0f, 1.0f), "%s", Str::Get(Str::K::Hud_GlyphTrading));
                     else            ImGui::TextDisabled("[ ]");
                     ImGui::SameLine();
-                    ImGui::Text("R%u %u total", r.rank, r.rapport);
+                    ImGui::TextUnformatted(Str::Fmt(Str::K::Hud_RankTotal, { r.rank, r.rapport }).c_str());
 
                     const float w = 54.0f;
                     ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.8f, 0.3f, 0.3f, 1.0f));
@@ -313,7 +315,7 @@ namespace MFO::Board {
                     ImGui::SameLine();
                     ImGui::TextDisabled("%.0f", r.distance);
                 }
-                if (shown == 0) ImGui::TextDisabled("no followers");
+                if (shown == 0) ImGui::TextDisabled("%s", Str::Get(Str::K::Hud_NoFollowers));
             }
             ImGui::End();
         }
@@ -1169,16 +1171,16 @@ namespace MFO::Board {
             if (v.subjectActorForm) {
                 RE::Actor* act = nullptr;
                 if (auto* f = RE::TESForm::LookupByID(v.subjectActorForm)) act = f->As<RE::Actor>();
-                v.subjectName = act ? (act->GetName() ? act->GetName() : "?") : "(follower gone)";
+                v.subjectName = act ? (act->GetName() ? act->GetName() : "?") : Str::Get(Str::K::Gb_SubjGone);
             } else {
                 switch (static_cast<Vocab::Subject>(v.subject)) {
                 case Vocab::Subject::Player:
                     if (auto* pc = RE::PlayerCharacter::GetSingleton())
-                        v.subjectName = pc->GetName() ? pc->GetName() : "Player";
+                        v.subjectName = pc->GetName() ? pc->GetName() : Str::Get(Str::K::Gb_SubjPlayer);
                     break;
-                case Vocab::Subject::NearestAlly: v.subjectName = "Ally: Nearest"; break;
+                case Vocab::Subject::NearestAlly: v.subjectName = Str::Get(Str::K::Gb_SubjAlly); break;
                 case Vocab::Subject::Self:
-                default:                          v.subjectName = "Auto"; break;   // #68: subject 0 = Auto ladder, not self
+                default:                          v.subjectName = Str::Get(Str::K::Gb_SubjAuto); break;   // #68: subject 0 = Auto ladder, not self
                 }
             }
             a_out.push_back(std::move(v));
@@ -1524,7 +1526,7 @@ namespace MFO::Board {
             r.staminaMax = Vocab::VitalMax(a, RE::ActorValue::kStamina);
             if (player) {
                 r.distance   = a->GetPosition().GetDistance(player->GetPosition());
-                r.playerName = player->GetName() ? player->GetName() : "Player";
+                r.playerName = player->GetName() ? player->GetName() : Str::Get(Str::K::Gb_SubjPlayer);
             }
             // #68: the cast-target picker's follower list -- every OTHER
             // active teammate by name (never this row's own actor). Same

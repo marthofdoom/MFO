@@ -7,6 +7,7 @@
 #include "Rapport.h"
 #include "Diagnostics.h"
 #include "Board.h"
+#include "i18n/Strings.h"
 #include "ItemCatalog.h"
 #include "Probe.h"
 #include "ProgProbe.h"
@@ -356,6 +357,8 @@ namespace {
             MFO::Config::EnsureMcmDefaults();  // idempotent belt-and-suspenders (the real
                                                // seed ran at kInputLoaded, before MCM Helper)
             MFO::Config::Read();            // config first -- everything else reads it
+            MFO::Str::Reload("kDataLoaded");   // display text table (MAIN THREAD, published once;
+                                               // the render thread only ever reads the immutable result)
             spdlog::info("[wstyle] bCstyReassert={} -- Numpad 7 (DIK {:#04x}) flips it live for the "
                          "A/B combat-style-reassert proof (Docs/SPEC-COMBATSTYLE-SOURCEGATE.md)",
                          MFO::Config::g_cstyReassert.load() ? "ON" : "OFF",
@@ -460,6 +463,15 @@ namespace {
             // Also the anchor for re-asserting GlobalVariables: their values
             // are SAVE-PERSISTED, so a kDataLoaded write is overwritten when a
             // save loads (INVARIANTS.md, MRO's DR-handshake incident).
+            {
+                // The Scaleform translator may not have held MFO_<LANGUAGE>.txt at
+                // kDataLoaded. One retry per session, here, on the main thread.
+                static bool s_strRetried = false;
+                if (!s_strRetried && !MFO::Str::HasOverrides()) {
+                    s_strRetried = true;
+                    MFO::Str::Reload("post-load retry");
+                }
+            }
             spdlog::info("[startup] {} — {} follower record(s) live",
                          a_msg->type == SKSE::MessagingInterface::kNewGame ? "kNewGame" : "kPostLoadGame",
                          MFO::g_followers.size());

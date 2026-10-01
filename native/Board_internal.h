@@ -12,9 +12,12 @@
 #include "PCH.h"
 #include "Board.h"
 #include "Vocabulary.h"   // the frozen opcode strings the vocabulary tables name
+#include "i18n/Strings.h"  // display text: every label below is a key, never a literal
 
 #include <imgui.h>
 
+#include <algorithm>
+#include <initializer_list>
 #include <mutex>
 #include <vector>
 
@@ -148,61 +151,68 @@ namespace MFO::Board {
     // Distance = whole units (a range), edited like a count but on a wider
     // scale (a bow reaches ~1500u, a cell is 4096u).
     enum class ParamKind : std::uint8_t { None, Percent, Count, Distance };
-    struct VocabEntry { const char* op; const char* label; ParamKind kind = ParamKind::None; };
+    // `op` is the FROZEN opcode (never translated, never displayed). `key` is the
+    // display label's i18n key (Str::K::Cond_<Op> / Act_<Op>, English default in
+    // i18n/Strings_keys.h, overridable from MFO_<LANGUAGE>.txt). label() reads the
+    // immutable published table, safe on the render thread.
+    struct VocabEntry {
+        const char* op; Str::K key; ParamKind kind = ParamKind::None;
+        const char* label() const { return Str::Get(key); }
+    };
 
     // COMBAT and LOGISTICS have DISTINCT vocabularies. The editor shows the set
     // that matches the table you are editing -- so a logistics rule can actually
     // pick "loot potions", which the old single combat-only table made
     // impossible (marth: "no way to assign" the logistics gambits).
     inline constexpr VocabEntry kCondsCombat[] = {
-        { Vocab::kCondAlways,        "Always",               ParamKind::None    },
-        { Vocab::kCondSelfHpBelow,   "Self: HP below",      ParamKind::Percent },
-        { Vocab::kCondSelfMpBelow,   "Self: Magicka below", ParamKind::Percent },
-        { Vocab::kCondSelfSpBelow,   "Self: Stamina below", ParamKind::Percent },
-        { Vocab::kCondPlayerHpBelow, "Player: HP below",    ParamKind::Percent },
-        { Vocab::kCondFoeLowestHp,   "Foe: Lowest HP",     ParamKind::None    },
-        { Vocab::kCondFoeHpBelow,    "Foe: HP below",      ParamKind::Percent },
-        { Vocab::kCondFoeHighestHp,  "Foe: Highest HP",    ParamKind::None    },
-        { Vocab::kCondFoeHighestLevel,"Foe: Highest level",  ParamKind::None    },
-        { Vocab::kCondFoeAny,        "Foe: Nearest",         ParamKind::None    },
-        { Vocab::kCondFoeWithinRange,"Foe: Target within", ParamKind::Distance},
-        { Vocab::kCondFoeBeyondRange,"Foe: Target beyond", ParamKind::Distance},
-        { Vocab::kCondFoeAttackingPlayer,"Foe: Targeting player", ParamKind::None },
-        { Vocab::kCondFoeAttackingMe,"Foe: Targeting me",     ParamKind::None    },
-        { Vocab::kCondFoeAttackingMeMelee, "Foe: Targeting me (melee)",  ParamKind::None },
-        { Vocab::kCondFoeAttackingMeRanged,"Foe: Targeting me (ranged)", ParamKind::None },
-        { Vocab::kCondFoeIsUndead,   "Foe: Undead",        ParamKind::None    },
-        { Vocab::kCondFoeIsDragon,   "Foe: Dragon",        ParamKind::None    },
-        { Vocab::kCondFoeIsMechanical,"Foe: Mechanical",   ParamKind::None    },
-        { Vocab::kCondFoeIsCaster,   "Foe: Spellcaster", ParamKind::None    },
-        { Vocab::kCondFoeIsRanged,   "Foe: Ranged",        ParamKind::None    },
-        { Vocab::kCondFoeWeakerThanMe, "Foe: Weaker than me", ParamKind::None },
-        { Vocab::kCondFoeStrongerThanMe,"Foe: Stronger than me", ParamKind::None },
-        { Vocab::kCondFoeBlocking,   "Foe: Blocking",      ParamKind::None    },
-        { Vocab::kCondFoeFleeing,    "Foe: Fleeing",       ParamKind::None    },
-        { Vocab::kCondFoeWeakFire,   "Foe: Weak to fire",    ParamKind::None    },
-        { Vocab::kCondFoeWeakFrost,  "Foe: Weak to frost",   ParamKind::None    },
-        { Vocab::kCondFoeWeakShock,  "Foe: Weak to shock",   ParamKind::None    },
-        { Vocab::kCondFoeMultipleWithin,"Foe: Multiple within", ParamKind::Distance},
-        { Vocab::kCondFoeCountAtLeast,"Foe: Count at least",  ParamKind::Count   },
-        { Vocab::kCondSelfHpAbove,   "Self: HP above",      ParamKind::Percent },
-        { Vocab::kCondSelfMpAbove,   "Self: Magicka above", ParamKind::Percent },
-        { Vocab::kCondSelfSpAbove,   "Self: Stamina above", ParamKind::Percent },
-        { Vocab::kCondAllyHpBelow,   "Ally: HP below",      ParamKind::Percent },
+        { Vocab::kCondAlways, Str::K::Cond_Always,               ParamKind::None    },
+        { Vocab::kCondSelfHpBelow, Str::K::Cond_SelfHpBelow,      ParamKind::Percent },
+        { Vocab::kCondSelfMpBelow, Str::K::Cond_SelfMpBelow, ParamKind::Percent },
+        { Vocab::kCondSelfSpBelow, Str::K::Cond_SelfSpBelow, ParamKind::Percent },
+        { Vocab::kCondPlayerHpBelow, Str::K::Cond_PlayerHpBelow,    ParamKind::Percent },
+        { Vocab::kCondFoeLowestHp, Str::K::Cond_FoeLowestHp,     ParamKind::None    },
+        { Vocab::kCondFoeHpBelow, Str::K::Cond_FoeHpBelow,      ParamKind::Percent },
+        { Vocab::kCondFoeHighestHp, Str::K::Cond_FoeHighestHp,    ParamKind::None    },
+        { Vocab::kCondFoeHighestLevel, Str::K::Cond_FoeHighestLevel,  ParamKind::None    },
+        { Vocab::kCondFoeAny, Str::K::Cond_FoeAny,         ParamKind::None    },
+        { Vocab::kCondFoeWithinRange, Str::K::Cond_FoeWithinRange, ParamKind::Distance},
+        { Vocab::kCondFoeBeyondRange, Str::K::Cond_FoeBeyondRange, ParamKind::Distance},
+        { Vocab::kCondFoeAttackingPlayer, Str::K::Cond_FoeAttackingPlayer, ParamKind::None },
+        { Vocab::kCondFoeAttackingMe, Str::K::Cond_FoeAttackingMe,     ParamKind::None    },
+        { Vocab::kCondFoeAttackingMeMelee, Str::K::Cond_FoeAttackingMeMelee,  ParamKind::None },
+        { Vocab::kCondFoeAttackingMeRanged, Str::K::Cond_FoeAttackingMeRanged, ParamKind::None },
+        { Vocab::kCondFoeIsUndead, Str::K::Cond_FoeIsUndead,        ParamKind::None    },
+        { Vocab::kCondFoeIsDragon, Str::K::Cond_FoeIsDragon,        ParamKind::None    },
+        { Vocab::kCondFoeIsMechanical, Str::K::Cond_FoeIsMechanical,   ParamKind::None    },
+        { Vocab::kCondFoeIsCaster, Str::K::Cond_FoeIsCaster, ParamKind::None    },
+        { Vocab::kCondFoeIsRanged, Str::K::Cond_FoeIsRanged,        ParamKind::None    },
+        { Vocab::kCondFoeWeakerThanMe, Str::K::Cond_FoeWeakerThanMe, ParamKind::None },
+        { Vocab::kCondFoeStrongerThanMe, Str::K::Cond_FoeStrongerThanMe, ParamKind::None },
+        { Vocab::kCondFoeBlocking, Str::K::Cond_FoeBlocking,      ParamKind::None    },
+        { Vocab::kCondFoeFleeing, Str::K::Cond_FoeFleeing,       ParamKind::None    },
+        { Vocab::kCondFoeWeakFire, Str::K::Cond_FoeWeakFire,    ParamKind::None    },
+        { Vocab::kCondFoeWeakFrost, Str::K::Cond_FoeWeakFrost,   ParamKind::None    },
+        { Vocab::kCondFoeWeakShock, Str::K::Cond_FoeWeakShock,   ParamKind::None    },
+        { Vocab::kCondFoeMultipleWithin, Str::K::Cond_FoeMultipleWithin, ParamKind::Distance},
+        { Vocab::kCondFoeCountAtLeast, Str::K::Cond_FoeCountAtLeast,  ParamKind::Count   },
+        { Vocab::kCondSelfHpAbove, Str::K::Cond_SelfHpAbove,      ParamKind::Percent },
+        { Vocab::kCondSelfMpAbove, Str::K::Cond_SelfMpAbove, ParamKind::Percent },
+        { Vocab::kCondSelfSpAbove, Str::K::Cond_SelfSpAbove, ParamKind::Percent },
+        { Vocab::kCondAllyHpBelow, Str::K::Cond_AllyHpBelow,      ParamKind::Percent },
         // SUPPLY-STATE conditions (#10). Mirrors kCondsLogi -- lets a combat
         // gambit react to what the follower is CARRYING, not just health bars:
         // "Arrows below 5 -> Equip melee weapon", "Health potions below 2 ->
         // Cast heal on self" (conserve the stack). ConditionTrue answers these
         // the same in either table (it walks the follower's inventory, table-
         // agnostic), so no evaluator change is needed -- this is pure UI exposure.
-        { Vocab::kCondSelfLowHealthPotion, "Health potions below",  ParamKind::Count   },
-        { Vocab::kCondSelfLowStaminaPotion,"Stamina potions below", ParamKind::Count   },
-        { Vocab::kCondSelfLowMagickaPotion,"Magicka potions below", ParamKind::Count   },
-        { Vocab::kCondSelfOutOfArrows,     "Arrows below",          ParamKind::Count   },
-        { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
-        { Vocab::kCondIsInterior,    "In an interior",       ParamKind::None    },
-        { Vocab::kCondIsNight,       "At night",             ParamKind::None    },
-        { Vocab::kCondDark,          "In the dark",                 ParamKind::None    },
+        { Vocab::kCondSelfLowHealthPotion, Str::K::Cond_SelfLowHealthPotion,  ParamKind::Count   },
+        { Vocab::kCondSelfLowStaminaPotion, Str::K::Cond_SelfLowStaminaPotion, ParamKind::Count   },
+        { Vocab::kCondSelfLowMagickaPotion, Str::K::Cond_SelfLowMagickaPotion, ParamKind::Count   },
+        { Vocab::kCondSelfOutOfArrows, Str::K::Cond_SelfOutOfArrows,          ParamKind::Count   },
+        { Vocab::kCondSelfOutOfBolts, Str::K::Cond_SelfOutOfBolts,           ParamKind::Count   },
+        { Vocab::kCondIsInterior, Str::K::Cond_IsInterior,       ParamKind::None    },
+        { Vocab::kCondIsNight, Str::K::Cond_IsNight,             ParamKind::None    },
+        { Vocab::kCondDark, Str::K::Cond_Dark,                 ParamKind::None    },
     };
     inline constexpr VocabEntry kActsCombat[] = {
         { Vocab::kActWait,              "Wait" },
@@ -221,24 +231,24 @@ namespace MFO::Board {
         { Vocab::kActFlee,              "Flee to player" },
     };
     inline constexpr VocabEntry kCondsLogi[] = {
-        { Vocab::kCondAlways,              "Always",                ParamKind::None    },
-        { Vocab::kCondSelfHpBelow,         "Self: HP below",       ParamKind::Percent },
-        { Vocab::kCondSelfMpBelow,         "Self: Magicka below",  ParamKind::Percent },
-        { Vocab::kCondSelfSpBelow,         "Self: Stamina below",  ParamKind::Percent },
-        { Vocab::kCondSelfLowHealthPotion, "Health potions below",  ParamKind::Count   },
-        { Vocab::kCondSelfLowStaminaPotion,"Stamina potions below", ParamKind::Count   },
-        { Vocab::kCondSelfLowMagickaPotion,"Magicka potions below", ParamKind::Count   },
-        { Vocab::kCondSelfOutOfArrows,     "Arrows below",          ParamKind::Count   },
-        { Vocab::kCondSelfOutOfBolts,      "Bolts below",           ParamKind::Count   },
-        { Vocab::kCondSelfCarryWeightAbove,"Self: Carry weight above",  ParamKind::Percent },
+        { Vocab::kCondAlways, Str::K::Cond_Always,                ParamKind::None    },
+        { Vocab::kCondSelfHpBelow, Str::K::Cond_SelfHpBelow,       ParamKind::Percent },
+        { Vocab::kCondSelfMpBelow, Str::K::Cond_SelfMpBelow,  ParamKind::Percent },
+        { Vocab::kCondSelfSpBelow, Str::K::Cond_SelfSpBelow,  ParamKind::Percent },
+        { Vocab::kCondSelfLowHealthPotion, Str::K::Cond_SelfLowHealthPotion,  ParamKind::Count   },
+        { Vocab::kCondSelfLowStaminaPotion, Str::K::Cond_SelfLowStaminaPotion, ParamKind::Count   },
+        { Vocab::kCondSelfLowMagickaPotion, Str::K::Cond_SelfLowMagickaPotion, ParamKind::Count   },
+        { Vocab::kCondSelfOutOfArrows, Str::K::Cond_SelfOutOfArrows,          ParamKind::Count   },
+        { Vocab::kCondSelfOutOfBolts, Str::K::Cond_SelfOutOfBolts,           ParamKind::Count   },
+        { Vocab::kCondSelfCarryWeightAbove, Str::K::Cond_SelfCarryWeightAbove,  ParamKind::Percent },
         // Ally-health support targeting in LOGISTICS: "Ally: HP below -> Cast
         // heal on ally" for out-of-combat heals. The ally selector (incl. the
         // player, PickAlly) is table-agnostic in the evaluator, so this is pure
         // UI exposure -- no evaluator change needed to run it in the logi scan.
-        { Vocab::kCondAllyHpBelow,         "Ally: HP below",       ParamKind::Percent },
-        { Vocab::kCondIsInterior,          "In an interior",        ParamKind::None    },
-        { Vocab::kCondIsNight,             "At night",              ParamKind::None    },
-        { Vocab::kCondDark,                "In the dark",                  ParamKind::None    },
+        { Vocab::kCondAllyHpBelow, Str::K::Cond_AllyHpBelow,       ParamKind::Percent },
+        { Vocab::kCondIsInterior, Str::K::Cond_IsInterior,        ParamKind::None    },
+        { Vocab::kCondIsNight, Str::K::Cond_IsNight,              ParamKind::None    },
+        { Vocab::kCondDark, Str::K::Cond_Dark,                  ParamKind::None    },
     };
     inline constexpr VocabEntry kActsLogi[] = {
         { Vocab::kActDrinkHealthPotion,  "Drink health potion" },
@@ -276,12 +286,25 @@ namespace MFO::Board {
         return ((cur + dir) % n + n) % n;
     }
     inline const char* labelFor(const std::string& op, const VocabEntry* tab, int n) {
-        for (int i = 0; i < n; ++i) if (op == tab[i].op) return tab[i].label;
-        return op.empty() ? "(unset)" : op.c_str();
+        for (int i = 0; i < n; ++i) if (op == tab[i].op) return tab[i].label();
+        return op.empty() ? Str::Get(Str::K::Word_Unset) : op.c_str();
     }
     inline ParamKind kindFor(const std::string& op, const VocabEntry* tab, int n) {
         for (int i = 0; i < n; ++i) if (op == tab[i].op) return tab[i].kind;
         return ParamKind::None;
+    }
+
+    // Width for a FIXED table column that must hold translated text: never
+    // narrower than the English-tuned `base`, otherwise wide enough for the
+    // widest of `texts` plus cell padding (+ `extra`, e.g. a button's frame
+    // padding). RENDER THREAD, inside BeginTable (it measures with the live
+    // font). The columns stay WidthFixed, so gamepad navigation order is
+    // unchanged; a longer translation widens the column instead of clipping.
+    inline float FitW(float base, std::initializer_list<const char*> texts, float extra = 0.0f) {
+        float w = base;
+        const float pad = ImGui::GetStyle().CellPadding.x * 2.0f + extra;
+        for (const char* t : texts) w = (std::max)(w, ImGui::CalcTextSize(t).x + pad);
+        return w;
     }
 
     // ── CROSS-MODULE ENTRY POINTS ───────────────────────────────────────
