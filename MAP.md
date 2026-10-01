@@ -4225,9 +4225,9 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     `AllocatePerk` (`:173`), `AllocateNextEligible` (`:206`), `Respec` (`:266`), `HasFreeRespec`
     (`:340`), `RestoreNativePerks` (`:345`), `SetManualSkills` (`:357`), `ApplyManualSkillPoint`
     (`:396`); `FindTree` (`:30`) is file-local here.
-  - `progression/Hms.cpp` (585) = §HMS — the BASE split `kBaseHmsByClass` (`:31`), `HmsProfile`
+  - `progression/Hms.cpp` (626) = §HMS — the BASE split `kBaseHmsByClass` (`:31`), `HmsProfile`
     (`:44`), the F3 fired-pool mirror consumers, `HmsTrackBattle` (`:140`), `RecomputeHMS` (`:197`),
-    `HmsRetroParity` (`:516`), `NoteCombatFire` (grep).
+    `HmsRetroParity` (`:557`), `NoteCombatFire` (grep).
   - `progression/Manifest.cpp` (503, moved whole) = the §18.6 manifest reader — economy GLOB
     discovery + `ApplyEconomyOverride` (`:149`), `ParseClassDef` (`:222`),
     `BuildGenericManifests` (`:277`), `Init` (`:360`), and the PRGN class-identity resolvers
@@ -4424,6 +4424,14 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   `progression/Allocator.cpp:141`); inside it every progression path is `prog = g_ready &&
   st.enrolled`, board views only with `g_ready`. An enrolled CLASSLESS follower now gets HMS
   too (its 0x40 from Enroll / the v<8 retro caps the first award once, then clears).
+  (4b) **NEVER-PROCESSED ENROLLED BLOCK (review F1, marth "Adopt, no take-back"):** an enrolled
+  follower whose HMS never ran under the old gate (Gambit Auto, or classless) still holds its
+  Enroll-time block. `RecomputeHMS` (`progression/Hms.cpp:251`) detects it exactly (enrolled,
+  captured, 0x40 set, cumulative 0, withheld 0, grant remainder 0, held == baseline), logs
+  `[hms] <id> never-processed HMS block adopted (no take-back)`, clears the stale `fixedStat`,
+  streak and tally, clears 0x40 (the persisted once-only marker) and falls into the uncaptured
+  ADOPT. Their base never drops, and a fixed-stat backfill computed that poll from the stale
+  baseline is not spent (the ADOPT returns first, F4).
   (5) `Enroll` KEEPS a captured HMS block (`progression/Verbs.cpp` ~:85): re-capturing zeroes W
   while the next engine re-slam brings it back as a fresh award. (6) **R2:** runtime-only
   `hmsMeasuredThisWindow` (set at the measure in `RecomputeHMS`); `PollWork` judges a level-up
@@ -4434,7 +4442,10 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   a second Auto rule anywhere (extend `ResolveBaseClass`); re-capturing HMS in Enroll; a
   progression path in `PollWork` without the `prog` gate (an add-on-absent session would run
   add-on logic); filtering `!enrolled` out of `CoSaveSave` (drops every no-add-on follower's
-  HMS state). Open: MFO-B69 (credit for fixed-stat), MFO-B207 (REVIEW-BACKLOG).
+  HMS state); setting 0x40 again on an enrolled record (re-arms the never-processed adopt).
+  **DOWNGRADE LOSS (#12, review F2):** a DLL from v2.0.12 to v2.0.16 reads HMS-only records
+  but its poll and save skip them, so its first save DROPS them. Points withheld in that period
+  are lost, and after re-upgrading the follower re-ADOPTs the live base as a new record. Open: MFO-B69 (credit for fixed-stat), MFO-B213 (REVIEW-BACKLOG).
 - **§HMS class-redistribution (PRGN v5) — SIBLING of the skill reconcile.**
   `RecomputeHMS` (`progression/Hms.cpp:184`; the whole §HMS engine lives in that module) is called at the same
   three sites as `RecomputeSkills`: the level-gain edge + the ~2s drift-watch in

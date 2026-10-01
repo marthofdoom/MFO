@@ -225,6 +225,47 @@ namespace MFO::ProgAllocator {
             if (!HmsProfile(stance, prof, primary)) { diagExit = "noclass"; emitDiag(); return; }
             if (!a_actor->AsActorValueOwner()) { diagExit = "noavo"; emitDiag(); return; }
 
+            // NEVER-PROCESSED ENROLLED BLOCK (review F1, marth 2026-10-01 "Adopt, no
+            // take-back"). Before HMS was core, RecomputeHMS returned early for a
+            // Gambit-Auto (class 0) or classless enrolled follower, so the block Enroll
+            // captured was never processed: no award was ever measured against it while
+            // the engine kept raising the base. Measuring now would lump every award
+            // since Enroll into one, cap it and withhold the rest, and their base would
+            // DROP. Instead it re-ADOPTs the live base, exactly like an HMS-only record.
+            // Exact signature, every term required:
+            //   enrolled            -- an HMS-only record is created uncaptured and always
+            //                          goes through the ADOPT below, never this path;
+            //   hmsRetroPending     -- every never-processed enrolled block carries 0x40:
+            //                          Enroll sets it (PRGN v8) and the v<8 load retro sets
+            //                          it on every record. Only a parity pass on an award
+            //                          clears it, and that leaves cumulative or withheld > 0;
+            //   cumulative == 0, withheld == 0, grant remainder == 0, held == baseline --
+            //                          nothing was ever applied, withheld or granted.
+            // ONCE-ONLY: this path clears 0x40 (persisted in the flags byte), and nothing
+            // sets it again on an enrolled record. Clearing it is right, not a loss: 0x40
+            // means "the next award may hold engine levels no credit saw", and those levels
+            // are exactly what the adopt folds into the new baseline. The stale fixed-stat
+            // flag and streak (the R2 bug) are cleared too, so detection restarts on real
+            // measurements (and a backfill grant computed this poll from the stale
+            // baseline is dropped: the ADOPT below returns before spending any budget, F4).
+            if (a_st.enrolled && a_st.hmsCaptured && a_st.hmsRetroPending && a_st.hmsWithheld == 0.0f) {
+                bool untouched = true;
+                for (int p = 0; p < 3; ++p)
+                    if (a_st.hmsCumulative[p] != 0.0f || a_st.hmsGrantRemainder[p] != 0.0f ||
+                        a_st.hmsHeld[p] != a_st.hmsBaseline[p]) { untouched = false; break; }
+                if (untouched) {
+                    spdlog::info("[hms] {:08X} never-processed HMS block adopted (no take-back): enroll "
+                                 "baseline H {:.0f} / M {:.0f} / S {:.0f}, stale fixedStat {} streak {} cleared",
+                                 id, a_st.hmsBaseline[0], a_st.hmsBaseline[1], a_st.hmsBaseline[2],
+                                 a_st.fixedStat, a_st.hmsZeroAwardStreak);
+                    a_st.hmsCaptured        = false;   // -> the uncaptured ADOPT below
+                    a_st.hmsRetroPending    = false;   // the once-only marker (see above)
+                    a_st.fixedStat          = false;
+                    a_st.hmsZeroAwardStreak = 0;
+                    a_st.hmsAwardAccum      = 0.0f;
+                }
+            }
+
             // MEASURE the engine's fresh per-level award via the general follower
             // API (v1.1, byte-identical to the old inline read+diff): current base
             // H/M/S into cur, signed drift off the held target into delta, clamped

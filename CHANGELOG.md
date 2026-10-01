@@ -8,6 +8,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 ## Unreleased
 
 - **Class based health, magicka and stamina growth is now part of MFO itself.** Every follower MFO manages grows by their class when they level, with or without the progression add-on. A Melee follower leans on health, a Ranged follower on stamina and a Mage on magicka. A follower on Auto gets a class too. MFO picks it from their gambits first, then their best combat skill, then their game class. Their growth also stays at your own rate, as it already did for progression followers. The add-on can still fine tune the split for its classes. A follower left on Auto is no longer marked as a fixed stat follower by mistake.
+- **Followers whose growth MFO never shaped keep what they have.** A progression follower left on Auto, or without a class, was skipped before. MFO now takes their current health, magicka and stamina as their new starting point. Nothing is taken away. A wrong fixed stat mark on them is cleared.
+- **Going back to an older MFO loses this growth record.** Versions 2.0.12 to 2.0.16 do not keep the new record for followers outside the progression add-on. Their next save drops it. Coming back to this version starts those followers fresh from their current stats.
 
 ## v2.0.16 -- Heals are animated in combat again
 
