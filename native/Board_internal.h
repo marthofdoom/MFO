@@ -215,20 +215,20 @@ namespace MFO::Board {
         { Vocab::kCondDark, Str::K::Cond_Dark,                 ParamKind::None    },
     };
     inline constexpr VocabEntry kActsCombat[] = {
-        { Vocab::kActWait,              "Wait" },
-        { Vocab::kActCastSelf,          "Cast on self" },
-        { Vocab::kActCastTarget,        "Cast on target" },
+        { Vocab::kActWait, Str::K::Act_Wait },
+        { Vocab::kActCastSelf, Str::K::Act_CastSelf },
+        { Vocab::kActCastTarget, Str::K::Act_CastTarget },
         // cast_player is LOGISTICS-ONLY for now: in combat CastOn's package/grace
         // path delivers a self-delivery buff to the follower, not the player
         // (Fable, 2026-08-06). Combat player-casts are a follow-up.
-        { Vocab::kActAttack,            "Attack" },
-        { Vocab::kActDrinkHealthPotion, "Drink health potion" },
-        { Vocab::kActDrinkStaminaPotion,"Drink stamina potion" },
-        { Vocab::kActDrinkMagickaPotion,"Drink magicka potion" },
-        { Vocab::kActEquipRanged,       "Equip ranged weapon" },
-        { Vocab::kActEquipMelee,        "Equip melee weapon" },
-        { Vocab::kActPowerAttack,       "Power attack" },
-        { Vocab::kActFlee,              "Flee to player" },
+        { Vocab::kActAttack, Str::K::Act_Attack },
+        { Vocab::kActDrinkHealthPotion, Str::K::Act_DrinkHealthPotion },
+        { Vocab::kActDrinkStaminaPotion, Str::K::Act_DrinkStaminaPotion },
+        { Vocab::kActDrinkMagickaPotion, Str::K::Act_DrinkMagickaPotion },
+        { Vocab::kActEquipRanged, Str::K::Act_EquipRanged },
+        { Vocab::kActEquipMelee, Str::K::Act_EquipMelee },
+        { Vocab::kActPowerAttack, Str::K::Act_PowerAttack },
+        { Vocab::kActFlee, Str::K::Act_Flee },
     };
     inline constexpr VocabEntry kCondsLogi[] = {
         { Vocab::kCondAlways, Str::K::Cond_Always,                ParamKind::None    },
@@ -251,33 +251,33 @@ namespace MFO::Board {
         { Vocab::kCondDark, Str::K::Cond_Dark,                  ParamKind::None    },
     };
     inline constexpr VocabEntry kActsLogi[] = {
-        { Vocab::kActDrinkHealthPotion,  "Drink health potion" },
-        { Vocab::kActDrinkStaminaPotion, "Drink stamina potion" },
-        { Vocab::kActDrinkMagickaPotion, "Drink magicka potion" },
-        { Vocab::kActLootArrows,         "Loot arrows" },
-        { Vocab::kActLootBolts,          "Loot bolts" },
-        { Vocab::kActLootPotions,        "Loot potions (any)" },
-        { Vocab::kActLootHealthPotion,   "Loot health potions" },
-        { Vocab::kActLootStaminaPotion,  "Loot stamina potions" },
-        { Vocab::kActLootMagickaPotion,  "Loot magicka potions" },
-        { Vocab::kActLootEquipment,      "Loot better equipment" },
-        { Vocab::kActLootGold,           "Loot gold" },
-        { Vocab::kActLootJewelry,        "Loot jewellery" },
-        { Vocab::kActLootSoulGems,       "Loot soul gems" },
-        { Vocab::kActLootLockpicks,      "Loot lockpicks" },
-        { Vocab::kActLootIngredients,    "Loot ingredients" },
-        { Vocab::kActLootValuables,      "Loot valuables and gold (to sell)" },
+        { Vocab::kActDrinkHealthPotion, Str::K::Act_DrinkHealthPotion },
+        { Vocab::kActDrinkStaminaPotion, Str::K::Act_DrinkStaminaPotion },
+        { Vocab::kActDrinkMagickaPotion, Str::K::Act_DrinkMagickaPotion },
+        { Vocab::kActLootArrows, Str::K::Act_LootArrows },
+        { Vocab::kActLootBolts, Str::K::Act_LootBolts },
+        { Vocab::kActLootPotions, Str::K::Act_LootPotions },
+        { Vocab::kActLootHealthPotion, Str::K::Act_LootHealthPotion },
+        { Vocab::kActLootStaminaPotion, Str::K::Act_LootStaminaPotion },
+        { Vocab::kActLootMagickaPotion, Str::K::Act_LootMagickaPotion },
+        { Vocab::kActLootEquipment, Str::K::Act_LootEquipment },
+        { Vocab::kActLootGold, Str::K::Act_LootGold },
+        { Vocab::kActLootJewelry, Str::K::Act_LootJewelry },
+        { Vocab::kActLootSoulGems, Str::K::Act_LootSoulGems },
+        { Vocab::kActLootLockpicks, Str::K::Act_LootLockpicks },
+        { Vocab::kActLootIngredients, Str::K::Act_LootIngredients },
+        { Vocab::kActLootValuables, Str::K::Act_LootValuables },
         // LOTD awareness: listed only while LOTD is detected and bLootLOTD is on
         // (Board_FieldKit.cpp's picker skips it otherwise -- Lotd::GambitOffered).
-        { Vocab::kActLootMuseum,         "Loot museum items" },
-        { Vocab::kActEquipTorch,         "Equip torch" },
+        { Vocab::kActLootMuseum, Str::K::Act_LootMuseum },
+        { Vocab::kActEquipTorch, Str::K::Act_EquipTorch },
         // Cast in logistics (mage update): out-of-combat casting -- self-buffs,
         // candlelight, out-of-combat heals. Same opcodes as combat; the
         // logistics scan dispatches them through Actuation::Fire.
-        { Vocab::kActCastSelf,           "Cast on self" },
-        { Vocab::kActCastTarget,         "Cast on target" },
-        { Vocab::kActCastPlayer,         "Cast on player" },
-        { Vocab::kActWait,               "Wait" },   // gate lower rules, e.g. "carry weight > 90% -> Wait"
+        { Vocab::kActCastSelf, Str::K::Act_CastSelf },
+        { Vocab::kActCastTarget, Str::K::Act_CastTarget },
+        { Vocab::kActCastPlayer, Str::K::Act_CastPlayer },
+        { Vocab::kActWait, Str::K::Act_Wait },   // gate lower rules, e.g. "carry weight > 90% -> Wait"
     };
 
     inline int cycleIdx(const std::string& op, const VocabEntry* tab, int n, int dir) {

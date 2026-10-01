@@ -31,7 +31,7 @@ Skill names, perk names, spell names and item names are the game's data. They ar
 
 Open `MFO.log` after you start the game. Look for the `[i18n]` lines.
 
-- `reload (...): language=FRENCH keys=189 mfoOverrides=170 rejected=0` means your file was read. `mfoOverrides` is how many lines MFO used.
+- `reload (...): language=FRENCH keys=216 mfoOverrides=170 rejected=0` means your file was read. `mfoOverrides` is how many lines MFO used.
 - `rejected=N` means N of your lines broke the marker rules. The next lines name them.
 - `mfoOverrides=0` means MFO did not see your file. Check the name, the folder and the encoding.
 
