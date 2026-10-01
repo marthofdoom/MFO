@@ -94,13 +94,14 @@ namespace MFO::Logistics {
             // falls through to the plain rating armor judge below (marth). It gates
             // ONLY apparel selection -- the mage still keeps the backup-weapon /
             // no-melee-role contract (mageMode) and still buys/learns tomes.
-            ctx.useMageApparel = mageMode && Config::g_mageWearRobes.load();
+            ctx.useMageApparel = a_state && UsesMageClothing(*a_state, a_follower) &&
+                                 Config::g_mageWearRobes.load();   // apparel follows the clothing mode (class by skill); mageMode stays for weapons/backup
             // #21 UNIFIED mage-apparel ranking (loot side; shared with the buy side).
-            // Same MEO-aware model: value-primary when MEO carries gems, else school-
-            // enchant primary; villain blacklist with a necromancer exception; all
+            // Value-primary unless bMageApparelStrictSchool is on (school-
+            // enchant primary, marth 2026-10-01: robes by school only when asked); villain blacklist with a necromancer exception; all
             // clothing + jewelry slots (MageClothingSlot). See MageApparelBuyKey.
             ctx.mageTop2          = ctx.useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
-            ctx.mageSchoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+            ctx.mageSchoolPrimary = Config::g_mageApparelStrictSchool.load();
             ctx.mageAllowVillain  = ctx.useMageApparel && a_state && IsNecromancerFollower(*a_state);
 
             // The MELEE class we loot/upgrade, or Other = "no melee role at all".

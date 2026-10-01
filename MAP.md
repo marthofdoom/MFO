@@ -2645,9 +2645,12 @@ module. Module layout:
   its own rule (skills pick armor/weapon type, perks pick usage, marth 2026-10-01) and does NOT
   call this. **What breaks:** a second Auto rule elsewhere; calling it off the worker / main
   pump (it reads `FollowerState`); changing a weight changes every Auto follower's HMS split.
-- `logistics/Cast.cpp` (268, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
-  `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101`,
-  `TopTwoSchoolMask:108`, `LearnCarriedTomes:137`, school name/keyword helpers.
+- `logistics/Cast.cpp` (314, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
+  `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101` (weapon/shield/ammo/tome
+  role signal, gambit based), `UsesMageClothing:116` (MAGE CLOTHING MODE, equip/clothing decisions
+  only, `fix/mfo-cicero-gear`: caster AND class, explicit override wins, Auto = base skills, never the
+  gambit alone, never `ResolveBaseClass`; logs `[gear] <id> clothing mode: ...`),
+  `TopTwoSchoolMask:154`, `LearnCarriedTomes:183`, school name/keyword helpers.
 - #21 economy (was `Logistics_Economy.cpp`, wave-2 split into two): `logistics/Economy.cpp`
   (mage-apparel scoring, `VendorTrades:193`, `UnlockCollegeTomes:232`,
   `BuildBuyThresholds:298`, `EconomyProbe:451`, public buy helpers `MageApparelBuyKey:1003`
@@ -2859,6 +2862,22 @@ module. Module layout:
   looted greatsword sells); `preferKinds` must stay `Progression::WeaponKind`
   bits (shared with the buy thresholds); reading `TallyStyleVotes` directly from
   the worker instead of `StyleVotesFor` races the allocator.
+- **CICERO GEAR FIXES (`fix/mfo-cicero-gear`, 2026-10-01).** (1) MAGE CLOTHING MODE is decided by `UsesMageClothing`
+  (`logistics/Cast.cpp:116`), not by `HasCastGambit`: a Melee Cicero given Arcane Pull went back to his jester set.
+  Switched to it: `EquipAuthority.cpp` `ComputeOwnedGearPick`, `ComputeOwnedGearSlate`, `RefreshEquipDeclaration`
+  `mageSetMode` + `playerPieceWins`; `SwapUp.cpp` `ComputeKeepSet` `useMageApparel`; `Economy.cpp`
+  `BuildBuyThresholds` `useMageApparel` + `umaSell`; `LootEquipment.cpp` `ctx.useMageApparel`; `Service.cpp` MEO gem
+  `prefs.caster` was reverted to `IsCasterFollower` (gem preference is not clothing). LEFT on the gambit signal: `Economy.cpp` tome buy, `Cast.cpp` auto-consume, `SwapUp.cpp` `keepMageMode`
+  and `UsesAmmoKind`, the weapon-role / shield uses of `caster` in `BuildBuyThresholds` and `ComputeKeepSet`, `ClassResolve.cpp`.
+  (2) HELMET LOOP: `Economy.cpp` sell scan, `redundantInferior` (keep-set `bestBySlot`) force-sold a worn piece the armor
+  choice keeps, then `gemHold` (the only caller of `UnsocketItemGems`) extracted its gem. Now `DeclaredSetKeeps`
+  (`EquipAuthority.cpp:~470`, the declared `GearSlate` OR rule 5 via the shared `Rule5Overlaps:~400`) vetoes the force-sell and `continue`s before `gemHold`;
+  line `[sell] <id> '<name>' -> worn, kept by the armor choice -> not selling ...`. Blacklisted apparel still force-sells.
+  (3) marth 2026-10-01: a mage-clothing follower (explicit Mage OR Auto-by-skill, one bool, same path) wears the
+  most expensive clothing piece per slot unless `bMageApparelStrictSchool` is ON. Every site (`Economy.cpp:417`,
+  `EquipAuthority.cpp:68,~997`, `SwapUp.cpp:186`, `LootEquipment.cpp:104`) now reads ONLY that flag; the old
+  `!MEOBridge::Available() ||` clause (school-primary whenever MEO was absent) is gone.
+  Worker thread for all of it.
 - **ARMOR CLASS BY SKILL + PERKS (2026-09-14, field fix; branch
   `fix/mfo-armor-class-score`).** FIELD (Deck log on `69c5b3c`, Fable): after a
   respec Adelinda (Heavy 15 / Light 69) and Cicero (Heavy 20 / Light 77) stayed

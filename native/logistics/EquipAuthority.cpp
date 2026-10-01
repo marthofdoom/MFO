@@ -65,7 +65,7 @@ namespace MFO::Logistics {
             struct MageSlotBest { RE::TESBoundObject* obj = nullptr; int tier = -1; std::int32_t metric = -1; };
             void MageBestPerSlot(RE::Actor* a_follower, const FollowerState& a_state, MageSlotBest (&a_out)[6]) {
                 const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
-                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                const bool schoolPrimary = Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain  = IsNecromancerFollower(a_state);
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
@@ -102,7 +102,7 @@ namespace MFO::Logistics {
                                                  ArmorPref& a_outPref, bool& a_outMageMode) {
             a_outMageMode = false;
             if (!a_follower || Config::g_dollsMode.load()) return nullptr;
-            const bool caster         = IsCasterFollower(a_state);
+            const bool caster         = UsesMageClothing(a_state, a_follower);
             const bool useMageApparel = caster && Config::g_mageWearRobes.load();
             a_outMageMode = useMageApparel;
 
@@ -393,6 +393,18 @@ namespace MFO::Logistics {
             // caller keep it); the slate is a SIBLING read only by RefreshEquipDeclaration.
             struct GearSlate { RE::TESObjectARMO* slot[6] = {}; bool mage = false; };
 
+            // RULE 5's OVERLAP TEST, ONE copy for the declaration and the sell side: a WORN
+            // non-shield piece rides in the declaration when neither the pick nor any other
+            // slate piece shares a biped bit with it. DeclaredSetKeeps calls it too, so
+            // "what the declaration keeps" cannot drift between the two.
+            bool Rule5Overlaps(RE::TESObjectARMO* a_ar, RE::TESObjectARMO* a_pick,
+                               RE::TESObjectARMO* const* a_slate, std::size_t a_n) {
+                if (a_pick && a_ar != a_pick && SlotsOverlap(a_ar, a_pick)) return true;
+                for (std::size_t i = 0; i < a_n; ++i)
+                    if (a_slate[i] != a_ar && SlotsOverlap(a_ar, a_slate[i])) return true;
+                return false;
+            }
+
             // Worker. OOC only (the caller gates on judgeArmor). MAGE: MageBestPerSlot, the
             // very ranking the mage set already declared. RATED: ArmorIsBetter judges per
             // BIPED BIT while ArmorBuySlot / WornInLogicalSlot are LOGICAL slots, so a slate
@@ -410,7 +422,7 @@ namespace MFO::Logistics {
                                        const RE::TESObjectREFR::InventoryItemMap& a_inv) {
                 a_out = GearSlate{};
                 if (!a_follower || Config::g_dollsMode.load()) return;
-                if (IsCasterFollower(a_state) && Config::g_mageWearRobes.load()) {
+                if (UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load()) {
                     a_out.mage = true;
                     MageSlotBest best[6];
                     MageBestPerSlot(a_follower, a_state, best);
@@ -447,6 +459,35 @@ namespace MFO::Logistics {
                     if (ArmorScore(pref, worn) >= (a_out.slot[s] ? bestScore[s] : 0.0f)) a_out.slot[s] = worn;
                 }
             }
+        }
+
+        // THE SELL SIDE'S QUESTION TO THE WEAR JUDGE (fix/mfo-cicero-gear, 2026-10-01):
+        // is a_worn one of the pieces the armor choice DECLARES for this follower? Builds the
+        // same GearSlate RefreshEquipDeclaration declares (mage: MageBestPerSlot; rated: best
+        // owned per slot with worn-incumbency), so the economy's redundant-inferior force-sell
+        // can never contradict it (Cicero's Dawnguard helmet: sold + gem-held + re-socketed
+        // + re-equipped 89 times). Worker. One inventory walk, only called for a worn
+        // force-sell candidate, so it is off the common path.
+        bool DeclaredSetKeeps(RE::Actor* a_follower, const FollowerState& a_state, RE::TESObjectARMO* a_worn) {
+            if (!a_follower || !a_worn) return false;
+            GearSlate gs;
+            const auto inv = a_follower->GetInventory();
+            ComputeOwnedGearSlate(a_follower, a_state, gs, inv);
+            for (int i = 0; i < 6; ++i)
+                if (gs.slot[i] == a_worn) return true;
+            // RULE 5 (RefreshEquipDeclaration): a WORN piece no pick/slate piece overlaps is
+            // declared too, so the choice keeps it (a rated helmet in a mage set with no
+            // clothing for that slot; a circlet beside a helmet on another bit). Same test.
+            const auto it = inv.find(a_worn);
+            if (it == inv.end() || it->second.first <= 0 || !it->second.second || !it->second.second->IsWorn())
+                return false;
+            if (a_worn->IsShield() || RelicOffBody(a_follower, a_state, a_worn)) return false;
+            ArmorPref pref; bool mageMode = false;
+            auto* pickObj = ComputeOwnedGearPick(a_follower, a_state, pref, mageMode);
+            auto* pick = (!mageMode && pickObj) ? pickObj->As<RE::TESObjectARMO>() : nullptr;
+            RE::TESObjectARMO* sl[6]; std::size_t n = 0;
+            for (int i = 0; i < 6; ++i) if (gs.slot[i]) sl[n++] = gs.slot[i];
+            return !Rule5Overlaps(a_worn, pick, sl, n);
         }
 
         // NO DECLINE-FALLBACK (marth 2026-09-28: "MFO's fallback is deprecated"): with
@@ -828,7 +869,7 @@ namespace MFO::Logistics {
             // one slot). The legacy (APMF-absent) EquipBestOwnedGear single pick is
             // unchanged, and the combat road (a_judgeArmor false) still declares worn.
             const bool mageSetMode = a_judgeArmor && !Config::g_dollsMode.load() &&
-                                     IsCasterFollower(a_state) && Config::g_mageWearRobes.load();
+                                     UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load();
             if (a_judgeArmor && !mageSetMode) {
                 RE::TESBoundObject* pickObj = nullptr;
                 if (g_handedPick.set && g_handedPick.follower == id) {
@@ -951,9 +992,9 @@ namespace MFO::Logistics {
             // nothing extra is needed there.
             const auto playerPieceWins = [&](RE::TESObjectARMO* a_challenger) -> RE::TESObjectARMO* {
                 if (!a_challenger || picks.empty()) return nullptr;
-                if (!(IsCasterFollower(a_state) && Config::g_mageWearRobes.load())) return nullptr;
+                if (!(UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load())) return nullptr;
                 const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
-                const bool schoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                const bool schoolPrimary = Config::g_mageApparelStrictSchool.load();
                 int ct = 0; std::int32_t cm = 0;
                 const bool ranks = MageApparelBuyKey(a_challenger, top2, schoolPrimary, IsNecromancerFollower(a_state), ct, cm);
                 for (auto& [obj, data] : inv) {
@@ -984,10 +1025,7 @@ namespace MFO::Logistics {
                 if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                 auto* ar = obj->As<RE::TESObjectARMO>();
                 if (!ar || ar->IsShield()) continue;
-                if (pick && ar != pick && SlotsOverlap(ar, pick)) continue;
-                if (std::any_of(slate.begin(), slate.end(),
-                                [&](RE::TESObjectARMO* c) { return c != ar && SlotsOverlap(ar, c); }))
-                    continue;
+                if (Rule5Overlaps(ar, pick, slate.data(), slate.size())) continue;
                 if (RelicOffBody(a_follower, a_state, obj)) {
                     withheldNow.insert(ar->GetFormID());
                     // Once per (follower, relic) per session: the field proof of item 3.

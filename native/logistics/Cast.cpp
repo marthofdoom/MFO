@@ -102,6 +102,52 @@ namespace MFO::Logistics {
             return Config::g_magicLoadout.load() && HasCastGambit(a_state);
         }
 
+        // MAGE CLOTHING MODE (Cicero fix, 2026-10-01): does this follower WEAR mage
+        // clothing/jewelry instead of armor? marth: "skills determine armor type and
+        // weapon type, while perks determine how they are used." A cast gambit says
+        // what he CASTS, never what he wears (one Arcane Pull put a Melee Cicero back
+        // in his jester clothes). Needs IsCasterFollower (magic loadout + a cast
+        // gambit) AND the class: an explicit pick (combatClassOverride 1/2/3) wins;
+        // Auto (0) reads BASE skills only, mage when the best magic school STRICTLY
+        // beats both the melee pair and Archery (a tie is Melee, as ResolveBaseClass).
+        // Deliberately NOT ResolveBaseClass (HMS-only, gambit table weighted). Equip /
+        // clothing decisions only: casting, tome buying and ammo keep the gambit signal.
+        // Worker-serial (logistics service); the dedupe map is mutex-guarded anyway.
+        bool UsesMageClothing(const FollowerState& a_state, RE::Actor* a_follower) {
+            if (!IsCasterFollower(a_state)) return false;
+            const std::uint8_t cls = a_state.combatClassOverride;
+            bool mage = false;
+            const char* why = "";
+            if (cls == 3)      { mage = true;  why = "class Mage (explicit) -> mage clothing"; }
+            else if (cls == 1) { mage = false; why = "class Melee (explicit) -> armor"; }
+            else if (cls == 2) { mage = false; why = "class Ranged (explicit) -> armor"; }
+            else {
+                auto* avo = a_follower ? a_follower->AsActorValueOwner() : nullptr;
+                if (!avo) return false;   // no skills to read: not a mage (no actor, no clothing mode)
+                using AV = RE::ActorValue;
+                const float melee = std::max(avo->GetBaseActorValue(AV::kOneHanded),
+                                             avo->GetBaseActorValue(AV::kTwoHanded));
+                const float bow   = avo->GetBaseActorValue(AV::kArchery);
+                const float magic = std::max({ avo->GetBaseActorValue(AV::kAlteration),
+                                               avo->GetBaseActorValue(AV::kConjuration),
+                                               avo->GetBaseActorValue(AV::kDestruction),
+                                               avo->GetBaseActorValue(AV::kIllusion),
+                                               avo->GetBaseActorValue(AV::kRestoration) });
+                mage = magic > melee && magic > bow;
+                why = mage ? "class Auto, magic skill leads -> mage clothing"
+                           : "class Auto, melee/archery skill leads -> armor";
+            }
+            static std::mutex s_mx;
+            static std::unordered_map<std::uint32_t, const char*> s_last;
+            const std::uint32_t id = a_follower ? a_follower->GetFormID() : 0;
+            bool log = false;
+            { std::lock_guard<std::mutex> lk(s_mx);
+              auto& slot = s_last[id];
+              if (slot != why) { slot = why; log = true; } }
+            if (log) spdlog::info("[gear] {:08X} clothing mode: {}", id, why);
+            return mage;
+        }
+
         // Bitmask of the follower's TOP 2 magic-school skills (criterion #4), in the
         // fixed 0=Alt 1=Conj 2=Dest 3=Illu 4=Rest bit order SpellSchoolBit returns.
         // A pure skill read -- worker-safe on a loaded follower.

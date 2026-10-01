@@ -300,10 +300,10 @@ namespace MFO::Logistics {
                                                       const FollowerState& a_state) {
             TradeBridge::BuyThresholds buy;
             const bool dolls = Config::g_dollsMode.load();
-            // "Is a caster" for apparel/weapon-role (gambit signal == loot mageMode);
-            // gate mage apparel additionally on bMageWearRobes (marth).
+            // `caster` = the gambit signal, for the weapon/shield role only; APPAREL follows
+            // UsesMageClothing (class by skill) and bMageWearRobes (marth).
             const bool caster         = IsCasterFollower(a_state);
-            const bool useMageApparel = caster && Config::g_mageWearRobes.load();
+            const bool useMageApparel = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load();
             const std::uint8_t top2   = TopTwoSchoolMask(a_follower);
 
             // ── Feature A: weapon/armor/apparel thresholds (reuse the loot judge) ──
@@ -414,7 +414,7 @@ namespace MFO::Logistics {
                 // strict toggle -- rank school-enchant first so a mage never trades a
                 // helpful enchant for a pricier off-school one. MEOBridge::Available()
                 // is a worker-safe bool (no main-thread MEO query on the tick).
-                buy.mageSchoolPrimary = !MEOBridge::Available() || Config::g_mageApparelStrictSchool.load();
+                buy.mageSchoolPrimary = Config::g_mageApparelStrictSchool.load();
                 buy.isNecromancer  = IsNecromancerFollower(a_state);
                 buy.eligibleSchools= top2;
 
@@ -636,7 +636,7 @@ namespace MFO::Logistics {
             if (diag)
                 spdlog::info("[sell] {:08X} scanning (sellAnything={})", fid, sellAnything);
 
-            const bool umaSell = IsCasterFollower(a_state) && Config::g_mageWearRobes.load() &&
+            const bool umaSell = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load() &&
                                  !Config::g_dollsMode.load();
 
             // SELL CANDIDATES: the follower's OWN unworn weapons/armour (jewellery is
@@ -706,6 +706,19 @@ namespace MFO::Logistics {
                         if (bit != bestBySlot.end() && bit->second && bit->second != obj)
                             redundantInferior = true;
                     }
+                }
+                // THE WEAR JUDGE HAS THE LAST WORD ON A WORN PIECE (Cicero's helmet loop):
+                // bestBySlot is the KEEP set's ranking, a different judge from the armor
+                // choice's slate (per-biped-bit ArmorIsBetter + worn incumbency, or the mage
+                // set). When they disagree the worn piece is kept by the choice yet force-sold
+                // here, then gemHold extracted its gem, MEO re-socketed it and re-equipped it,
+                // every scan. A worn piece the declared set keeps is not being sold: no
+                // force-sell, no gemHold, no unequip. (Blacklisted apparel still force-sells.)
+                if (redundantInferior && !IsBlacklistedApparel(armo) &&
+                    DeclaredSetKeeps(a_follower, a_state, armo)) {
+                    redundantInferior = false;
+                    sdiag(obj, "worn, kept by the armor choice -> not selling (no unequip, no gem hold)");
+                    continue;
                 }
                 // ── A WORN ITEM IN A CATEGORY OUR OWN DECLARATION DENIES ──────────
                 // (fix/mfo-spell-authority-0922; Cicero's shield, field 2026-09-22.)
@@ -1094,10 +1107,10 @@ namespace MFO::Logistics {
         if (!a_allowVillain && IsVillainCodedApparel(a_armo)) return false;   // no evil regalia unless the follower is a necromancer
         const std::int32_t value = std::max<std::int32_t>(a_armo->GetGoldValue(), 0);
 
-        // VALUE-PRIMARY (MEO present + not strict): pure gold value, one flat tier.
+        // VALUE-PRIMARY (bMageApparelStrictSchool OFF, the default; marth 2026-10-01): pure gold value, one flat tier.
         if (!a_schoolPrimary) { out_tier = 0; out_metric = value; return true; }
 
-        // SCHOOL-PRIMARY (MEO absent OR strict): tier 2 = fortifies a top-2 school
+        // SCHOOL-PRIMARY (bMageApparelStrictSchool ON only): tier 2 = fortifies a top-2 school
         // (ranked by score then fanciness within), tier 1 = plain (no school fortify),
         // tier 0 = off-school enchant. So a cheap school robe beats a pricey wrong-
         // school one, and a bare slot still fills with plain clothing.
