@@ -879,7 +879,7 @@ namespace MFO::Logistics::Lockpick {
             if (j.liveAt < 0.0) {
                 j.liveAt   = clk;   // the first play is live: the window starts now
                 j.lastPlay = 0.0;
-                PlayAtFollower(fid, kSndPickMovement);   // the attempt sound, at the follower
+                if (!j.viaKey) PlayAtFollower(fid, kSndPickMovement);   // the attempt sound, at the follower (none for a key)
             }
             const double elapsed = clk - j.liveAt;
             // The pick window, but never shorter than Harbinger's confirmation window
@@ -891,14 +891,15 @@ namespace MFO::Logistics::Lockpick {
                     if (APMFBridge::ReplayLockpickIdle(fid)) {
                         j.lastPlay = elapsed;
                         ++j.replays;
-                        PlayAtFollower(fid, kSndPickMovement);
+                        if (!j.viaKey) PlayAtFollower(fid, kSndPickMovement);
                     }
                 }
                 // The simulated breaks, spread evenly through the window: one break sound at the
-                // follower per broken pick (none for a key).
+                // follower per broken pick (none for a key). AT MOST ONE per step: sparse steps
+                // would otherwise stack several breaks into one instant; the rest fall into later steps.
                 if (!j.viaKey && j.sim.broken > 0 && j.window > 0.0f) {
-                    while (j.breakSnds < j.sim.broken &&
-                           elapsed >= static_cast<double>(j.window) * (j.breakSnds + 1) / (j.sim.broken + 1)) {
+                    if (j.breakSnds < j.sim.broken &&
+                        elapsed >= static_cast<double>(j.window) * (j.breakSnds + 1) / (j.sim.broken + 1)) {
                         ++j.breakSnds;
                         PlayAtFollower(fid, kSndPickBreak);
                     }

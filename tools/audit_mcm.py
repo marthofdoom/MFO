@@ -31,7 +31,9 @@ CONFIG_CPP   = ROOT / "native/Config.cpp"
 # bHealAnimMigrated (animheal phase 2, 2026-09-30): the one-shot marker of the
 # bHealAnimPackage 0 -> 1 store migration in Config.cpp EnsureMcmDefaults. Shipped
 # = 1 in both stores so a fresh store is never migrated; nothing reads it.
-STORE_ALLOWLIST = {"bHealAnimMigrated"}
+# bHotkeyUnbindMigrated (2026-09-30): the one-shot marker of the iBoardKey / iHudKey
+# 0 -> -1 store migration in the same function. Shipped = 1 in both stores; nothing reads it.
+STORE_ALLOWLIST = {"bHealAnimMigrated", "bHotkeyUnbindMigrated"}
 
 errors = []
 def fail(msg): errors.append(msg)

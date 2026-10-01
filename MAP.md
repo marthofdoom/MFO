@@ -878,6 +878,12 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     player who turns the toggle off later keeps it off. A failed patch logs an error, leaves the file
     untouched and holds the marker back so the next launch retries. The marker is not a control
     (`tools/audit_mcm.py` STORE_ALLOWLIST).
+  * **`iBoardKey` / `iHudKey` one-shot migration (2026-09-30)**, right after it in `EnsureMcmDefaults`:
+    a store WITHOUT the marker `bHotkeyUnbindMigrated` has a stored bare `0` for either key rewritten to
+    `-1` in place (the two bytes ` 0` become `-1`, so `= 0` turns into `=-1`; same matching and
+    in|out|binary read-back method as the heal migration). A `=0` line with no space cannot be patched in
+    place: logged, left (still reads as unbound), marker still written. An I/O failure logs an error and
+    holds the marker back. Marker = 1 in `kMcmDefaults`, both shipped inis, `STORE_ALLOWLIST`.
   * **What breaks if you change this:** calling `ChooseHealRoad` from only some heal callers re-creates
     two roads on one actor; dropping the controller release lets a claim nothing can serve outlive the
     fight; moving the recipient check after `resolveHands` lets the in-flight refresh feed a claim at an
@@ -3544,7 +3550,7 @@ anonymous-namespace copy — that silently forks the instance).
   `_research/lockpick-design-2026-09-24.md`; RE findings in the agentlog `mfo-lockpick.md`).**
   `logistics/Lockpick.cpp` replaces the old flat skill gate (`LockPickable`) and ends loot-THROUGH-
   the-lock. Pieces:
-  - **Sounds** `PlayAtFollower` (`Lockpick.cpp:186`, MainThread::Post, FormIDs only): UILockpickingPickMovement 000C1911 at each live play/replay (`:882`, `:894`), UILockpickingPickBreak 000C1916 per simulated break (`:903`, `Job::breakSnds`), 3D at the follower. Both SNDR EDIDs verified in Skyrim.esm.
+  - **Sounds** `PlayAtFollower` (`Lockpick.cpp:186`, MainThread::Post, FormIDs only): UILockpickingPickMovement 000C1911 at each live play/replay (`:882`, `:894`, both gated `!j.viaKey`), UILockpickingPickBreak 000C1916 per simulated break (`:903`, `Job::breakSnds`, at most ONE per step, none for a key), 3D at the follower. Both SNDR EDIDs verified in Skyrim.esm.
   - **Gate** `Lockpick::Admit` (`Lockpick.cpp:523`, called by the scan `LootScan.cpp:488` after the
     owner / off-limits bars): refuses (logged once per follower+lock+reason) owned, offlimits,
     factionServiceContainer (`IsFactionServiceContainer`, batch L),
