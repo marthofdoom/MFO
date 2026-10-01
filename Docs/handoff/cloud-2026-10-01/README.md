@@ -92,3 +92,17 @@ NEEDS LOCAL before any code. It is a new engine seat, so tier A, disassembly fir
 - Do NOT add a "can't serve" ABI call. Do NOT stop MFO's heal-claim repair loop on such a signal. Either one hides the real problem behind a curtain.
 - Ground-targeted spells are the one shape Harbinger cannot build today. That is a gap to close properly, not a state to surface.
 - Diagnosis road: APMF branch `fix/apmf-restore-serve-exitlogs` logs every early exit of `ServeUnclassedHeal` as `[restore-serve] ... NOT served: <reason>`. Read those lines in the next Deck log. The line names the check to fix.
+
+## 8. Later merges (2026-10-01, evening)
+
+| Repo | Merge | What |
+|---|---|---|
+| MFO | 757eb014 (+ c9aca431 docs) | Cicero gear. Clothing-only mode now follows class, not a cast gambit. Explicit pick wins. On Auto, mage only when the best magic school is strictly above melee and archery. Worn armor the armor choice keeps is never force-sold or gem-held, which ends the helmet loop. Mage clothing is value-ranked by default with or without MEO (school robes only with Strict School, marth). Backlog MFO-B223, B224. Main CI green (run 36923634002). |
+| APMF | 9f93924 | `[restore-serve] ... NOT served: <reason>` on every `ServeUnclassedHeal` early exit. Unclaimed heal-shaped effects log too, and the no-claim lines are per actor. Logging only. APMF CI green (run 36918744172). |
+
+Deck checks:
+- `[gear] <id> clothing mode: ...`. Cicero stays in armor after he gets a cast gambit.
+- `[sell] ... worn, kept by the armor choice -> not selling`. The Dawnguard helmet stops flipping.
+- MEO-less mages re-dress once into the most expensive clothing per slot.
+- `[restore-serve] Close Greater Wounds`. The line names the failing check. No line at all means the engine AI never classified the spell (section 7).
+- Arcane Pull is dropped for now (marth).
