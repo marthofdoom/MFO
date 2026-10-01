@@ -103,7 +103,9 @@ namespace MFO {
     //            ResolveFormID'd, unresolvable dropped). NO per-session flag
     //            (nativeHeld is runtime-only — the strip re-runs every load
     //            because base perk edits do not persist). The v6 reader is KEPT
-    //            (#12): autoPoints migrates as max(0, points − manual) (today's
+    //            (#12): autoPoints migrates as max(0, points − manual) rounded
+    //            up to a whole point (ceil(x − 1e-3), REVIEW-BACKLOG MFO-B13:
+    //            only a cap-clamped share is fractional) (today's
     //            APPLIED value, frozen — under cap saturation this under-records
     //            auto points already wasted into skillCap; visible value
     //            unchanged, matters only if the cap is raised — REVIEW-BACKLOG

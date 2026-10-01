@@ -625,13 +625,35 @@ namespace MFO::ProgAllocator {
                 if (!IsKnownSkillAv(av)) { ++droppedAv; continue; }   // L2: value, not just count
                 if (!std::isfinite(manual) || manual < 0.0f) manual = 0.0f;   // L2 for v2
                 if (!std::isfinite(autoPts) || autoPts < 0.0f) autoPts = 0.0f;
+                // MFO-B13 review: a corrupt record's non-finite points/lastBase
+                // become the reconcile's own "no data" shape -- the fresh-entry
+                // {points 0, lastWrittenBase -1} SkillScale creates. -1 means
+                // "never wrote": ReconcileSkill ADOPTs cur and never reads points
+                // as a recovery delta. lastBase is only an anchor for
+                // `lastBase - points`, so an unusable points drops the anchor too.
+                if (!std::isfinite(points)) { points = 0.0f; lastBase = -1.0f; }
+                if (!std::isfinite(lastBase)) lastBase = -1.0f;
                 // v6 MIGRATION (A′): the auto share is whatever is APPLIED today
                 // minus the manual points — frozen as placed, never re-split.
                 // Under cap saturation `points` is the CLAMPED applied delta, so
                 // auto points already wasted into skillCap are not carried into
                 // the ledger (a v7 grant retains them). Visible value identical;
                 // matters only if skillCap is later raised (Fable F5, MFO-B11).
-                if (a_version < 7) autoPts = std::max(0.0f, points - manual);
+                // MFO-B13: v6 shares were WHOLE points (floor(total*w + 0.5)) and
+                // manual is whole (+1 per placement), so `points - manual` is
+                // fractional ONLY when the skill was cap-clamped with a fractional
+                // natural (points = skillCap - natural). The clamp itself is not
+                // knowable here -- the save-time skillCap was never persisted in
+                // PRGN -- but that fraction is, and the v7 hold floors it
+                // (SkillScale.cpp `floor(e.autoPoints + 1e-3)`), showing 99.7 as
+                // "99" where v6 showed 100. Round it UP: ceil(x - 1e-3) is the
+                // identity on a whole share (float noise within 1e-3 snaps to the
+                // integer), so it acts only on that corner. max(0, .) keeps a
+                // sub-1e-3 share from becoming -0.0f.
+                if (a_version < 7) {
+                    autoPts = std::max(0.0f, points - manual);
+                    autoPts = std::max(0.0f, std::ceil(autoPts - 1.0e-3f));
+                }
                 st.skills.push_back({ static_cast<RE::ActorValue>(av), points, lastBase, manual, autoPts });
             }
 

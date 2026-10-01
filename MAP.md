@@ -55,7 +55,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (5 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1` (`Serialization.h`). PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; and a cap-saturated skill with a FRACTIONAL natural can display one integer lower after the v7 hold-time floor, REVIEW-BACKLOG MFO-B13), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
+| **Co-save (5 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1` (`Serialization.h`). PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -160,7 +160,7 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   live base. All floats finite-guarded; streak clamped 0..2.
 - **`'FWPN'` / `kForcedWeaponVersion=1`** (`Serialization.h:105-106`) — T#76 force-hold:
   the weapons MFO force-equipped for an active equip gambit. Owner
-  `cast/Equip.cpp` (`CoSaveForcedWeapons` `:899`/`CoLoadForcedWeapons` `:934`); **CoLoad
+  `cast/Equip.cpp` (`CoSaveForcedWeapons` `:1156`/`CoLoadForcedWeapons` `:1208`); **CoLoad
   RELEASES the locks, never repopulates** (a session starts with no force-hold,
   the gambit re-forces if still true). Fourth independent record. **LAYOUT UNCHANGED
   by the 2026-09-13 dual-wield left hold:** the ledger value became
@@ -169,7 +169,10 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   follower, and the loader has always released pairs by OBJECT, never by slot
   (since `1ac3c6b`, F4, the loader names the slot from the LIVE hands: left slot
   when the form is held left, default when right, both for a same-form dual
-  hold). `kMaxForcedWeapons` 64 is a PAIR cap now (REVIEW-BACKLOG MFO-B20).
+  hold). `kMaxForcedWeapons` (`:1154`) is a PAIR cap = 2 x 4096 (2 hands x the FLWR
+  `kMaxFollowers`); the WRITER clamps to the same cap, so the reader accepts every
+  count the writer can emit and aborts only on a corrupt count (MFO-B20 DRAINED
+  2026-10-01; was 64, which aborted the whole load above 32 dual holders).
 - **`'PGIV'` / `kPlayerGivenVersion=1`** (`Serialization.h:154-155`, ClickUp 86e3faccn, 2026-09-27) --
   the LOTD museum relics the PLAYER gave a follower or put on him in the trade / gift menu. Owner
   `logistics/PlayerGiven.cpp` (`CoSave:201` / `CoLoad:244`, written last in `SaveCallback`
@@ -479,7 +482,7 @@ per concern:
   its heal-road block `:348-419`, see "ANIMATED HEAL CLAIM ROAD" below)
   + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:76`, extern via `cast/Direct_internal.h`)
   + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1556`/`:1572`).
-- `cast/Equip.cpp` (1193) = THE WEAPON HOLD: `EquipWeapon` (`:377`, **PERK-DRIVEN since
+- `cast/Equip.cpp` (1275) = THE WEAPON HOLD: `EquipWeapon` (`:377`, **PERK-DRIVEN since
   2026-09-13 — see "COMBAT PICK + DUAL WIELD BY PERKS" below**) with its anon helpers
   `WeaponRolesFor` (`:97`), `IsOneHandMelee` (`:105`), `IsMuseumRelic` (`:122`, LOTD, batch L),
   `PickOffHandWeapon` (`:127`), `PickShield` (`:145`), `EquipShieldOnMain` (`:165`), `EquipLeftHeld`
@@ -487,8 +490,8 @@ per concern:
   `g_offHandRetryAt`/`kOffHandRetry` (`:345-346`); the T#76 force-hold ledger `g_forcedWeapon`/`g_forcedMx`
   (`:42`/`:48`) + `LogLeftHandReadback` (`:656`), `ForcedHoldFor` (`:670`), `ReleaseForcedWeapon` (`:678`),
   `YieldForcedLeftHand` (`:816`), `ReconcileForcedWeapon` (`:847`), `ClearForcedWeapons`
-  (`:933`); and the FWPN co-save, WHOLE in this file (`CoSaveForcedWeapons` `:948`,
-  `CoLoadForcedWeapons` `:983`).
+  (`:933`); and the FWPN co-save, WHOLE in this file (`CoSaveForcedWeapons` `:1156`,
+  `CoLoadForcedWeapons` `:1208`).
   **LOTD MUSEUM RELICS (batch L, field 2026-09-26: Cicero fought six hours with a looted relic
   two-hander).** `IsMuseumRelic` = `Lotd::HoldFromSale(id, w)` (worker road: the needs cache is
   worker-only; EquipWeapon runs on the Scheduler's worker tick). The pick loop keeps relics in a
@@ -1469,8 +1472,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   re-creates the F-C stale-read ambiguity. MFO-B22 DRAINED: `EquipShieldOnMain` (`cast/Equip.cpp:~206`) takes an optional log reason and logs `GAMBIT equip shield` inside the posted closure after the null checks; the combined `[equip] ... + shield` weapon line (`:~736`) is still synchronous. Backlog: MFO-B23 (CoLoad same-form second unequip is slot-less; no `RightHandSlot()` exists).
   **FWPN co-save LAYOUT UNCHANGED v1:** a dual hold writes TWO (follower,
   weapon) pairs; `CoLoadForcedWeapons` has always released per pair by object (now slot-named from
-  the live hands, F4); `kMaxForcedWeapons` 64 is now a PAIR cap and the reader aborts above it
-  (REVIEW-BACKLOG **MFO-B20**, unreachable at party scale). **KNOWN GAP (economy/loot, other
+  the live hands, F4); `kMaxForcedWeapons` is a PAIR cap, 2 x 4096, and
+  the writer clamps to it (REVIEW-BACKLOG **MFO-B20** DRAINED 2026-10-01). **KNOWN GAP (economy/loot, other
   files):** the economy keep buckets keep ONE 1H form, so a DIFFERENT second one-hander sells at
   the next vendor; loot never fetches a second one-hander. **PERF NOTE (MFO-B21):**
   `ComputeWeaponRoles` now also runs per pick lap and per 5 s top-up attempt — negligible at party
@@ -4181,12 +4184,12 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   2026-08-31 split).** Other subsystems include ONLY `progression/ProgAllocator.h`. Open:
   REVIEW-BACKLOG **MFO-B91** (`PerkPointsAvailable` is declared `inline` there but defined only
   in `ProgAllocator_internal.h`; a caller outside `progression/` cannot use it yet).
-  - `progression/Allocator.cpp` (818) = the CORE: session state (`g_pollGen` `:38`,
+  - `progression/Allocator.cpp` (840) = the CORE: session state (`g_pollGen` `:38`,
     `g_lastPlayerLevel` `:44`, `g_playerHmsTotalLast` `:53`, all extern since wave 1), the catalog
     index (`NodeIndex` `:76`, `FindNode` `:97`), `OwnsAnyRank` (`:111`), the class table
     (`Classes` `:130`, `FindClassDef` `:132`), `OnPostLoad` (`:141`) / `OnMenuClose` (`:177`), and
-    the WHOLE PRGN co-save block (`CoSaveSave` `:262`, `CoSaveLoad` `:397`, `ClearAll` `:801`,
-    `PollGeneration` `:817`, the plugin-name codec `:232`/`:240`) — the serializers NEVER leave
+    the WHOLE PRGN co-save block (`CoSaveSave` `:262`, `CoSaveLoad` `:397`, `ClearAll` `:823`,
+    `PollGeneration` `:839`, the plugin-name codec `:232`/`:240`) — the serializers NEVER leave
     this TU, and the PRGN field order inside them is the save format.
   - `progression/SkillScale.cpp` (262) = skill points: `BaselineFloor` (`:28`), the §4.2
     `ReconcileSkill` (`:73`), the §6 class weights (`DominantWeaponSkill`/`DominantArmorSkill`
