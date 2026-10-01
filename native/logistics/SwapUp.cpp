@@ -90,7 +90,21 @@ namespace MFO::Logistics {
             // stack of >= 2, which already covers both hands (PickOffHandWeapon
             // takes the second copy), so the runner-up is junk and sells.
             const WeaponRoles keepRoles = ComputeWeaponRoles(a_follower, a_state);
-            const bool keepSecond1H = keepRoles.offHand == 2 && keepRoles.melee == WepClass::OneHand;
+            // MFO-B24: gated on the SAME meleeTargetClass expression the buy side
+            // (Economy.cpp, `caster` = IsCasterFollower) and the loot judge
+            // (LootEquipment.cpp) use, not on keepRoles.melee, so keep, buy and loot
+            // share one predicate: a base caster never fetches a second one-hander
+            // and no longer keeps a spare either. No shared helper exists, so this is
+            // the identical expression.
+            const bool keepWantsMelee   = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
+            const bool keepCaster       = IsCasterFollower(a_state);
+            const std::uint8_t keepBaseClass = a_state.combatClassOverride;
+            const bool keepBaseCaster     = keepBaseClass == 3;
+            const bool keepBaseWeaponUser = keepBaseClass == 1 || keepBaseClass == 2;
+            const WepClass keepMeleeTargetClass =
+                (keepCaster && !keepBaseWeaponUser && (keepBaseCaster || !keepWantsMelee))
+                    ? WepClass::Other : keepRoles.melee;
+            const bool keepSecond1H = keepRoles.offHand == 2 && keepMeleeTargetClass == WepClass::OneHand;
             std::unordered_set<RE::TESBoundObject*> keepWeapons;
             {
                 // bucket: 1=1H 2=2H 3=bow 4=crossbow 5=staff; -1 = don't protect.

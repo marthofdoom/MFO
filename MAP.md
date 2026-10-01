@@ -2725,11 +2725,11 @@ module. Module layout:
   PICK + DUAL WIELD BY PERKS". **STILL A GAP:** bow vs crossbow stays the
   ammo/damage rule (no perk record distinguishes them — both carry `WeapTypeBow`).
   **CLOSED 2026-09-14 (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`) — THE
-  SECOND ONE-HANDER, all three paths at once, ONE rule:** `wantOffHand` =
+  SECOND ONE-HANDER, all three paths at once, one rule for weapon-role followers:** `wantOffHand` =
   `roles.offHand == 2 && meleeTargetClass == OneHand`; `offHandBaseScore` = the
   SECOND-best owned in-class one-hander's `WeaponScore` (0 with fewer than two
   owned; a stack of >= 2 of one form counts twice — it covers both hands).
-  KEEP (`logistics/SwapUp.cpp` `ComputeKeepSet` `keepSecond1H`, the weapon keep buckets): bucket
+  KEEP (`logistics/SwapUp.cpp` `ComputeKeepSet` `keepSecond1H`, the weapon keep buckets; gated on `keepMeleeTargetClass`): bucket
   1 also keeps its runner-up form UNLESS the best form is a stack >= 2 (then
   `PickOffHandWeapon` takes the second copy and the runner-up is junk). BUY
   (`BuildBuyThresholds` → `TradeBridge::BuyThresholds` APPENDED `wantOffHand` /
@@ -2756,10 +2756,7 @@ module. Module layout:
   `BuildBuyThresholds`) and the keep runner-up must stay the SAME top-2 rule or
   loot fetches what keep sells; `PlanBuy`'s `plan[c.idx] >= c.avail` skip is what
   stops the off-hand buy from over-buying a single stock line; the LOOT take must stay
-  `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **OPEN
-  BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B24** (SEV-5) — keep gates on
-  `keepRoles.melee`, loot/buy on `meleeTargetClass` (a base caster keeps two daggers,
-  fetches none); "ONE rule" holds for weapon-role followers; **MFO-B28** (SEV-5,
+  `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **MFO-B24 DRAINED (`fix/mfo-logic-bundle2`):** `keepSecond1H` now gates on the same `meleeTargetClass` expression buy and loot use (`logistics/SwapUp.cpp` `keepMeleeTargetClass`), so keep, buy and loot agree for casters; keep that expression identical to `Economy.cpp` / `LootEquipment.cpp` if either changes (no shared helper); **MFO-B28** (SEV-5,
   pre-existing) — a BOUGHT primary upgrade never passes `AcquireEquip`, so it carries
   no gems. **What breaks:** the `trueSecond` test must stay `best != bestWeap` — a bare
   `best == bestOffHand` stocks every primary upgrade. Changing
