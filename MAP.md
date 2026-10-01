@@ -1142,7 +1142,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **Open backlog:** MFO-B161 (an urgent preempt then a downstream refusal discards a mid-charge offense),
   MFO-B164 (drain skew on the boundary), MFO-B165 (SpellHealsHealth urgent edge on a hostile conc spell).
   **A self-retarget carries TWO bounds, and never-mid-charge is NOT the load-bearing one:** it protects a
-  cast only from the moment charging BEGINS, and the claim-to-first-charge window is 2.3-4.5 s with the
+  cast only from the moment charging BEGINS, and the claim-to-fire pipeline is 2.3-4.5 s with the
   caster reading `kNone` throughout. `IncumbentTargetLost` (`cast/Hands.cpp:470`) is the bound that matters —
   it asks the evaluator's own three questions (`Evaluator.cpp`'s `PickAlly`, `:549-590`, mirrored not
   invented): does the target still resolve to a live actor, is it still inside `fSharedRadius`, and — when
@@ -1156,7 +1156,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   On a held lap NOTHING else touches the incumbent claim — F9's in-flight refresh runs only when
   `HandFree`'s (spell,target) match SUCCEEDS, which is exactly the match a re-aimed target fails — so
   `refreshed` stopped moving and `APMFBridge::Tick()` swept the claim at `FacetExpiry()` (~2.45 s default,
-  floor 0.77 s) inside the 2.3-4.5 s claim-to-first-charge window: the hold was killing the claim it was
+  floor 0.77 s) inside the 2.3-4.5 s claim-to-fire pipeline: the hold was killing the claim it was
   protecting (principle 9, the stale-cadence class). It calls the same
   `APMFBridge::RefreshOwnedCastOnHand` the in-flight path uses, **and that renews APMF's TTL as well as
   MFO's stamp — deliberately.** The heal-hold heartbeat refuses to renew because it feeds an incumbent
@@ -1292,7 +1292,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `roles = Logistics::ComputeWeaponRoles(actor, g_followers[id])` (`WeaponRolesFor` `cast/Equip.cpp:96`,
   worker-serial `g_followers` read, #4; no record → default roles). **`cast/Equip.cpp` therefore
   includes `logistics/Logistics_internal.h` (`:11`)** — the wave-1 split carried Actuation.cpp's include block, this line included, into every file cut from it; `ComputeWeaponRoles`/
-  `WeaponScore` are NOT in `logistics/Logistics.h` (REVIEW-BACKLOG **MFO-B19**: the proper seam is a public
+  `WeaponScore` are NOT in `logistics/Logistics.h` (REVIEW-BACKLOG **MFO-B19**, PARTLY drained: `Fire`/`Roads`/`CastOn` no longer include the internal header, `Equip.cpp` still does; the proper seam is a public
   declaration there). DEFAULT-CASE PROOF: `preferKinds==0` → score == `float(uint16 damage)`, same
   `>=` last-equal-wins loop, same inventory order → the same weapon as before. The melee CLASS is
   NOT a filter here (the pick still spans 1H+2H by score, as it always did; `roles.melee` is the
@@ -1464,8 +1464,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   between this file and `logistics/Logistics_internal.h` is impossible by construction (one inline) — do NOT
   re-implement it here; placing a left WEAPON hold without the `OwesLeft` gate re-creates F-A
   (heals dead until combat end) and re-opens F-B; a single `MainThread::Post` for the readback
-  re-creates the F-C stale-read ambiguity. Backlog: MFO-B22 (shield log precedes the posted
-  equip), MFO-B23 (CoLoad same-form second unequip is slot-less; no `RightHandSlot()` exists).
+  re-creates the F-C stale-read ambiguity. MFO-B22 DRAINED: `EquipShieldOnMain` (`cast/Equip.cpp:~206`) takes an optional log reason and logs `GAMBIT equip shield` inside the posted closure after the null checks; the combined `[equip] ... + shield` weapon line (`:~736`) is still synchronous. Backlog: MFO-B23 (CoLoad same-form second unequip is slot-less; no `RightHandSlot()` exists).
   **FWPN co-save LAYOUT UNCHANGED v1:** a dual hold writes TWO (follower,
   weapon) pairs; `CoLoadForcedWeapons` has always released per pair by object (now slot-named from
   the live hands, F4); `kMaxForcedWeapons` 64 is now a PAIR cap and the reader aborts above it
@@ -2524,7 +2523,7 @@ function by function with `tools/splitcheck`; before it: `Logistics.cpp` / `_Cas
 `_Economy` / `_Loot` / `_Loot_Equipment` / `_internal.h` / `Logistics.h` in `native/`,
 the v1.1 split pass + the 2026-09-06 `_Loot_Equipment` module).** Other subsystems include
 ONLY `logistics/Logistics.h`, except the cast family's weapon-style read
-(`cast/Fire.cpp`/`Roads.cpp`/`CastOn.cpp`/`Equip.cpp` include `logistics/Logistics_internal.h`,
+(only `cast/Equip.cpp` still includes `logistics/Logistics_internal.h`,
 REVIEW-BACKLOG **MFO-B19**). Cross-module state/types/small helpers live as `inline`
 members of `namespace MFO::Logistics` in `logistics/Logistics_internal.h` (ONE instance
 across the TUs); big cross-module helpers are declared there and defined in their home

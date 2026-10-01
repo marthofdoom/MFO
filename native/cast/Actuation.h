@@ -46,12 +46,12 @@ namespace MFO::Actuation {
     // ── HAND INDICES ────────────────────────────────────────────────────────
     // 0 = left, 1 = right, everywhere in the Actuation family (the per-hand cast
     // lock's two slots, CastInFlightOnHand's `a_hand`). MOVED here from
-    // Actuation_internal.h (2026-09-09) with its value and its name unchanged --
+    // Actuation_internal.h (2026-09-09) with its enumerators and values unchanged; named HandIndex (MFO-B10) --
     // it now has to be nameable from ComposedCast.cpp, which is NOT one of the
     // three Actuation TUs and so may not include that internal header. The same
     // numbering as RE::Actor::SlotTypes::kLeftHand/kRightHand, deliberately: the
     // array index is what CastInFlightOnHand ultimately reads.
-    enum : std::size_t { kHandLeft = 0, kHandRight = 1, kHandCount = 2 };
+    enum HandIndex : std::size_t { kHandLeft = 0, kHandRight = 1, kHandCount = 2 };
 
     // ── "THE ENGINE STARTED THIS CAST AND HAS NOT FINISHED IT" ───────────────
     // THE one definition of in-flight in this codebase (F8, 2026-09-08). True

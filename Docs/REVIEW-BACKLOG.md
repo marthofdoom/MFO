@@ -57,6 +57,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Ready-made fix (no re-derivation needed):** relabel both endpoints as claim-to-fire, and quote the two charge-state figures above wherever "claim-to-first-charge" is actually meant.
 - **Provenance caveat that does NOT go away now the DIAG is committed:** the 4.5 s heal figure's sole source is `Docs/DIAG-2026-09-08-field.md`, whose own arithmetic disagrees with itself — its timeline (`:257`) gives request 57.163 -> fire 03.258 = **6.1 s**, while it labels 4.5 s "from repoint" (`:52, :257`) and "claim-to-fire" (`:266`). Do not treat a committed citation as a settled measurement.
 
+- **DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01):  the 2.3-4.5 s span is relabelled claim-to-fire in Hands.cpp, Bridge.cpp and MAP.md, and the two real claim-to-first-charge figures (~2.5 s, ~3.6 s) are quoted once in Hands.cpp.**
+
 ### MFO-B7 — `kHealHoldNeverObservedMs` (4000 ms) is sized from a datum the newest session already exceeded
 - **Raised:** Fable review of `e1e55fb` (F-2, SEV-4). Pre-existing; NOT introduced by this cycle. `e1e55fb` did, however, bind two further questions to the same number (see MFO-B8).
 - **Severity:** SEV-4
@@ -81,6 +83,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Finding:** `Actuation_Hands.cpp:439-442` (landed by `6bfbd79`, and cited as the drain for MFO-B4) says the hold's heartbeat "stops at `kHealHoldNeverObservedMs` for a claim that never fires ... bounded by that window". `Actuation_Hands.cpp:710-716` (landed by `e1e55fb`) says the real bound is the SUM, ~4.8-6.5 s, and that it also covers a claim that fired and went quiet.
 - **Fix:** one-line reword at `:439-442`. A file that states two bounds for one mechanism will get the wrong one believed — the same shape as the `g_forcedWeapon` "no lock" / "guard every access" pair this cycle already had to reconcile.
 
+- **DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01): the `Hands.cpp` heal-lift comment now states the SUM bound, matching the later comment.**
+
 ### MFO-B10 — the hand-index enum in `Actuation_internal.h` is unnamed
 - **Raised:** Fable review of `89085bd` (the `refactor/actuation-split` mechanical split), SEV-5.
 - **Severity:** SEV-5
@@ -88,6 +92,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** the enum was file-local in `Actuation.cpp` before the split, where linkage of its enumerators could not matter; promoting it to a shared header is what surfaces the corner. It is a CORNER, not a bug — no practical effect, and the reviewer said so in the same breath. The whole cycle graded nothing above SEV-5, so rule 9 ends it here.
 - **Why it was NOT fixed in the split:** naming the enum is a RENAME, which the split's brief forbids by name ("no refactors, no renames"), and a rename touching a shared header consumed by three TUs is its own change with its own review. Deferred, not dropped.
 - **Fix shape when drained:** give it a name in the house style the other internal headers use (`enum class` where the call sites can take the scoping, or a plain named `enum` if the bare `kHandLeft`/`kHandRight`/`kHandCount` spellings must survive at ~60 call sites across `Actuation.cpp` and `Actuation_Hands.cpp`). Purely mechanical, but it touches every one of those call sites, so it wants a diff review of its own.
+
+- **DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01): the enum (now in `cast/Actuation.h`) is `enum HandIndex : std::size_t`, enumerators unchanged, so no call site changed.**
 
 ### MFO-B11 — v6→v7 PRGN migration under cap saturation under-records the auto ledger
 - **Raised:** Fable tier-3 review of `4a62688` (`feat/mfo-progression-strict-points-perk-style`), SEV-5. F5.
@@ -162,6 +168,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained (verbatim):** proper seam is a public declaration in Logistics.h (declare `WeaponRoles`/`ComputeWeaponRoles`/`WeaponScore` there, or a thin `Logistics::CombatWeaponScore(actor, weapon)` wrapper, and drop the internal include from `Actuation.cpp`).
 - **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
 
+- **PARTLY DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01): the include is dropped from Fire/Roads/CastOn. `Equip.cpp` really uses `ComputeWeaponRoles`/`WeaponRoles` (and four more internal symbols), so the public seam in Logistics.h is still open.**
+
 ### MFO-B20 — `kMaxForcedWeapons` (64) is now a PAIR cap and the FWPN reader aborts the whole load above it
 - **Raised:** Fable tier-3 review of `f771399` (`feat/mfo-dualwield-combat-pick`), SEV-5. F8.
 - **Severity:** SEV-5
@@ -188,6 +196,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** raised in a round with nothing above SEV-3 once F-A/F-C/F-D were fixed; a log-placement change with its own review cost. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** move the `[equip] ... GAMBIT equip shield` line into the posted closure after the null checks (log what actually happened), optionally with an `IsTracked`/alive check; same shape as the loot precedent.
 - **Surfaced at edit time from:** MAP.md §2 Actuation "COMBAT PICK + DUAL WIELD BY PERKS" What-breaks.
+
+- **DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01): the line is logged inside the closure after the null checks. The combined `[equip] ... + shield` line at the weapon-equip site is untouched.**
 
 ### MFO-B23 — CoLoad both-hands-same-form: the second unequip is slot-less by object after the left-slot one
 - **Raised:** Fable round-2 review of `1ac3c6b` (`feat/mfo-dualwield-combat-pick`), SEV-5. F-F.

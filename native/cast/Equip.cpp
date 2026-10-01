@@ -203,14 +203,21 @@ namespace MFO::Actuation {
             std::scoped_lock lk(g_forcedMx);
             g_shieldRank[a_follower] = { a_shield, g_firingRule };
         }
-        void EquipShieldOnMain(RE::FormID a_follower, RE::FormID a_shield) {
+        // a_logWhy (optional, a string literal) names the `[equip] ... GAMBIT equip shield`
+        // line. It is logged HERE, after the re-resolve null checks, so the line only claims
+        // an equip that was actually issued (MFO-B22), never one the closure dropped.
+        void EquipShieldOnMain(RE::FormID a_follower, RE::FormID a_shield, const char* a_logWhy = nullptr) {
             StampShieldRank(a_follower, a_shield);
-            auto doEquip = [a_follower, a_shield]() {
+            auto doEquip = [a_follower, a_shield, a_logWhy]() {
                 auto* fol  = RE::TESForm::LookupByID<RE::Actor>(a_follower);
                 auto* form = RE::TESForm::LookupByID(a_shield);
                 auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-                if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq)
+                if (auto* eq = RE::ActorEquipManager::GetSingleton(); fol && item && eq) {
                     eq->EquipObject(fol, item);
+                    if (a_logWhy)
+                        spdlog::info("[equip] {:08X}: GAMBIT equip shield '{}' ({})", a_follower,
+                                     item->GetName() ? item->GetName() : "?", a_logWhy);
+                }
             };
             if (MainThread::IsInstalled()) MainThread::Post(doEquip);
             else                           doEquip();
@@ -545,9 +552,7 @@ namespace MFO::Actuation {
                             }
                         } else if (roles.offHand == 1 && !(leftA && leftA->IsShield())) {
                             if (auto* sh = PickShield(a_follower)) {
-                                EquipShieldOnMain(id, sh->GetFormID());   // v9: Shield is never owned -- always direct
-                                spdlog::info("[equip] {:08X}: GAMBIT equip shield '{}' (shield by perks, "
-                                             "top-up)", id, sh->GetFullName() ? sh->GetFullName() : "?");
+                                EquipShieldOnMain(id, sh->GetFormID(), "shield by perks, top-up");   // v9: Shield is never owned -- always direct
                             }
                         }
                     }
