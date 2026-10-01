@@ -1173,7 +1173,8 @@ def make_csty():
 # WHY: every vanilla UILockpicking* SNDR (000C1910-000C1919) uses output model
 # 000B75FB SOMUIDefault (DefinedSpeakers, 2D), so it plays at full volume in the
 # player's ears wherever the follower is (local xEdit check, ClickUp 86e3haxqw).
-# These copies keep every vanilla value and swap ONLY the output model.
+# These copies keep the vanilla sound files, LNAM and BNAM, and swap the output
+# model and the category to the positional object-sound pair (see VALUES below).
 #
 # ONAM: Skyrim.esm 0005A28A SOMMono01400 (positional mono, 1400u attenuation),
 # named in the local agent's ClickUp 86e3haxqw comment. Skyrim.esm is MFO.esp's
@@ -1199,18 +1200,51 @@ ABSENT = 'ABSENT'   # "this subrecord is not present on the vanilla record"
 #   'lnam' : LNAM raw 4 bytes as a hex string, e.g. "00000000".
 #   'bnam' : BNAM raw 6 bytes as a hex string.
 # ============================================================================
+# VALUES: read from Skyrim.esm by the local agent, posted by marth 2026-10-01
+# (coordinator relay). Both vanilla records: flags 0, CNAM 0x1EEF540A (standard
+# descriptor type hash), no SNAM, no FNAM, no CTDA. ANAM strings are stored WITH
+# the "Data\\Sound\\" prefix (77 / 71 bytes per subrecord incl. the NUL), in the
+# vanilla order (it starts at _03). LNAM and BNAM are kept from the originals.
+# GNAM is NOT copied: marth 2026-10-01, "For a positional copy, use GNAM 000172A1
+# AudioCategorySFX and ONAM 0005A28A SOMMono01400, as the vanilla positional object
+# sound NPCHumanWoodPickup does." (NPCHumanWoodPickup 00100638: CNAM 1EEF540A,
+# GNAM 000172A1, ONAM 0005A28A, LNAM 00000000, BNAM 00 04 80 00 08 01.)
+FREF_SNCT_AUDIOCATEGORYSFX = 0x000172A1
 LOCKPICK_SNDR_PENDING = {
     FID_SND_PICK_MOVEMENT: {
         'edid':   "MFO_LockpickPickMovementSD",
         'source': "Skyrim.esm 000C1911 UILockpickingPickMovement",
-        'flags': None, 'cnam': None, 'gnam': None, 'snam': None,
-        'anam':  None, 'fnam': None, 'ctda': None, 'lnam': None, 'bnam': None,
+        'flags': 0x00000000, 'cnam': 0x1EEF540A, 'gnam': FREF_SNCT_AUDIOCATEGORYSFX, 'snam': ABSENT,
+        'anam': [
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_03.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_04.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_05.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_06.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_07.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_08.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_09.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_10.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_11.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_12.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_01.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickMovement\\UI_Lockpicking_PickMovement_02.wav",
+        ],
+        'fnam': ABSENT, 'ctda': [],
+        'lnam': "00 00 00 00",
+        'bnam': "00 0A 80 06 95 02",   # bytes [0,10,128,6,149,2]
     },
     FID_SND_PICK_BREAK: {
         'edid':   "MFO_LockpickPickBreakSD",
         'source': "Skyrim.esm 000C1916 UILockpickingPickBreak",
-        'flags': None, 'cnam': None, 'gnam': None, 'snam': None,
-        'anam':  None, 'fnam': None, 'ctda': None, 'lnam': None, 'bnam': None,
+        'flags': 0x00000000, 'cnam': 0x1EEF540A, 'gnam': FREF_SNCT_AUDIOCATEGORYSFX, 'snam': ABSENT,
+        'anam': [
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickBreak\\UI_Lockpicking_PickBreak_03.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickBreak\\UI_Lockpicking_PickBreak_01.wav",
+            "Data\\Sound\\FX\\UI\\Lockpicking\\PickBreak\\UI_Lockpicking_PickBreak_02.wav",
+        ],
+        'fnam': ABSENT, 'ctda': [],
+        'lnam': "00 00 00 00",
+        'bnam': "00 00 80 02 8C 01",   # bytes [0,0,128,2,140,1]
     },
 }
 _SNDR_COPIED_KEYS = ('flags', 'cnam', 'gnam', 'snam', 'anam', 'fnam', 'ctda', 'lnam', 'bnam')
@@ -1241,7 +1275,7 @@ def _sndr_record(fid, spec):
     if not spec['anam']:
         raise SystemExit(f"LOCKPICK_SNDR_PENDING: {e} has no ANAM sound files")
     for path in spec['anam']:
-        body += subrec('ANAM', zstr(path))
+        body += subrec('ANAM', zstr(path))   # exact bytes + NUL (77 / 71 bytes)
     body += subrec('ONAM', struct.pack('<I', FREF_SOPM_MONO01400))   # the ONE change
     if spec['fnam'] != ABSENT:
         body += subrec('FNAM', _hexbytes(spec['fnam'], what=f"{e} FNAM"))
