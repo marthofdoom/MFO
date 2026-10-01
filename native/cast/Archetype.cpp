@@ -8,7 +8,7 @@
 // that are never held across a log call or an engine call.
 //
 // WHY (principle 5, observe before building): the engine's NPC combat AI builds a caster only
-// for a spell whose highest-scoring effect has a row in a fixed 23-row table; a spell with no row
+// for a spell whose highest-scoring effect has a row in a fixed 23-row table (the docs list 22 of its rows, see kRows); a spell with no row
 // is never cast by the AI, so an APMF claim for it stands to its TTL and nothing fires (the
 // `[cfc] ... NO observed cast` shape, field datum 841D7023). This file lets the next Deck log say
 // WHICH spell, of WHAT shape, with WHAT predicted row, on WHICH MFO road. The design is
@@ -22,7 +22,7 @@
 //
 // FORK FIELDS READ (CommonLibSSE-NG mit-3.7 fork, fde0f3a, include/RE/...):
 //   SpellItem::data (SpellItem.h:46-57 `Data`): flags (kNoDualCastMods = 1<<23, :27), chargeTime
-//     (:51), castingType (:52), delivery (:53), range (:55); SpellItem::IsTwoHanded (:67, vfunc
+//     (:51), castingType (:52), delivery (:53), range (:56); SpellItem::IsTwoHanded (:82, vfunc
 //     0x67, `equipSlot && equipSlot->flags & 1`). MagicItem::effects (MagicItem.h:126).
 //   Effect::effectItem.area (Effect.h:13-22 EffectItem, :37), Effect::baseEffect (:39),
 //     Effect::cost (:40).
@@ -65,9 +65,10 @@ namespace MFO::Actuation {
         // The mirrored table. Source: /home/user/apmf Docs/STATUS.md at the cited lines (checkout
         // 3e6654b). Key = (archetype, AV, self, hostile) where self = SPELL delivery == Self (the
         // resolver's +0x4c, STATUS.md:135-139) and the row is that of the spell's highest-scoring
-        // effect with a non-null creator (:139-141). The table is complete at 23 rows (count it:
-        // 3 + 2 + 3 + 1 + 2 + 2 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 = 23 after expanding the
-        // grouped doc rows), so a key that matches none of them has NO row (STATUS.md:163-165).
+        // effect with a non-null creator (:139-141). The docs state the table has 23 rows but list
+        // only 22 once the grouped rows are expanded (1+2+2+3+1+2+2+1+8; kRows has 22), so ONE engine
+        // row is unaccounted for. A key matching none of the documented rows is therefore "no
+        // DOCUMENTED row" (STATUS.md:163-165 lists the known no-row spells), not a proven none.
         // Rows with a ONE-sided entry in the doc state only what the doc states.
         constexpr RowSpec kRows[] = {
             // STATUS.md:146  ValueMod Health, other, hostile -> Offensive
@@ -191,7 +192,7 @@ namespace MFO::Actuation {
             }
         }
 
-        SpellArchetype Compute(RE::SpellItem* sp) {
+        SpellArchetype Compute(RE::SpellItem* sp, bool a_seat0) {
             SpellArchetype o;
             o.delivery   = sp->data.delivery;
             o.casting    = sp->data.castingType;
@@ -206,7 +207,10 @@ namespace MFO::Actuation {
             }
             o.restoration = IsRestorationSpell(sp);
 
-            const bool self = o.delivery == RE::MagicSystem::Delivery::kSelf;
+            // Seat 0 (APMF STATUS.md:135 "seat 0 flips it", :186-188) forces self=1 for a claimed form;
+            // modelled only when the caller asks (heal claims).
+            o.seat0 = a_seat0;
+            const bool self = a_seat0 || o.delivery == RE::MagicSystem::Delivery::kSelf;
             bool anySummon = false, anyReanimate = false, anyScript = false, anyBound = false,
                  anyCloak = false, anyLight = false, anyWard = false;
             // Per-effect rows, the distinct caster rows, the costliest effect (Effect::cost).
@@ -296,11 +300,15 @@ namespace MFO::Actuation {
 
         // Leaf mutexes. Never held across a log or an engine call.
         std::mutex g_cacheMx;
-        std::unordered_map<RE::FormID, SpellArchetype> g_cache;
+        std::unordered_map<std::uint64_t, SpellArchetype> g_cache;   // (formid | seat0<<32)
+
+        // Dynamic forms (0xFF......: APMF delivery-flip proxies) renumber per save and are never cached.
+        bool IsDynamicForm(RE::FormID id) { return (id >> 24) == 0xFFu; }
 
         std::mutex g_noteMx;
         std::unordered_set<std::uint64_t> g_noted;        // (follower, spell, road)
         std::unordered_set<std::uint64_t> g_warned;       // (follower, spell)
+        std::unordered_set<std::uint64_t> g_settled;      // (follower, spell, road): claim INFO done, row known
 
         const char* RoadName(ArchRoad r) {
             switch (r) {
@@ -318,6 +326,7 @@ namespace MFO::Actuation {
         }
         std::string RowText(const SpellArchetype& a) {
             std::string t = EngineRowName(a.row);
+            if (a.seat0) t += "(seat0)";
             if (a.rowApprox) t += "(approx)";
             if (!a.rowWhy.empty()) { t += " ["; t += a.rowWhy; t += "]"; }
             return t;
@@ -368,16 +377,18 @@ namespace MFO::Actuation {
         return "?";
     }
 
-    SpellArchetype ClassifyArchetype(RE::SpellItem* a_spell) {
+    SpellArchetype ClassifyArchetype(RE::SpellItem* a_spell, bool a_seat0) {
         if (!a_spell) { SpellArchetype n; n.rowWhy = "null spell"; return n; }
         const auto id = a_spell->GetFormID();
+        if (IsDynamicForm(id)) return Compute(a_spell, a_seat0);   // renumbers per save: never cached
+        const std::uint64_t key = static_cast<std::uint64_t>(id) | (a_seat0 ? (1ull << 32) : 0ull);
         {
             std::lock_guard lk(g_cacheMx);
-            if (auto it = g_cache.find(id); it != g_cache.end()) return it->second;
+            if (auto it = g_cache.find(key); it != g_cache.end()) return it->second;
         }
-        SpellArchetype a = Compute(a_spell);   // outside the lock: pure form reads
+        SpellArchetype a = Compute(a_spell, a_seat0);   // outside the lock: pure form reads
         std::lock_guard lk(g_cacheMx);
-        return g_cache.emplace(id, std::move(a)).first->second;
+        return g_cache.emplace(key, std::move(a)).first->second;
     }
 
     std::string DescribeArchetype(RE::SpellItem* a_spell) {
@@ -400,9 +411,12 @@ namespace MFO::Actuation {
             // a log dedup, so a (vanishingly unlikely) collision would only swallow one info line.
             first = g_noted.insert(pair ^ ((static_cast<std::uint64_t>(a_road) + 1) * 0x9E3779B97F4A7C15ull)).second;
             // The per-tick fast path (a claim road is asked every tick): nothing left to log.
-            if (!first && (!IsClaimRoad(a_road) || g_warned.count(pair) != 0)) return;
+            const std::uint64_t roadKey = pair ^ ((static_cast<std::uint64_t>(a_road) + 1) * 0x9E3779B97F4A7C15ull);
+            if (!first && (!IsClaimRoad(a_road) || g_warned.count(pair) != 0 || g_settled.count(roadKey) != 0)) return;
         }
-        const auto a = ClassifyArchetype(a_spell);
+        // HealClaim: APMF seat 0 forces self=1 for the claim's driven form, so a heal-OTHER claim keys the
+        // Restore row (STATUS.md:135, :186-188, :1310-1316). Every other road is classified as authored.
+        const auto a = ClassifyArchetype(a_spell, a_road == ArchRoad::HealClaim);
         if (first) {
             const char* sname = a_spell->GetName() ? a_spell->GetName() : "?";
             const char* fname = a_follower->GetName() ? a_follower->GetName() : "?";
@@ -414,14 +428,16 @@ namespace MFO::Actuation {
                          a.twoHanded, a.noDualMods, a.chargeTime, a.range, a.area, a.hasProjectile,
                          a.hasBarrier ? "(barrier)" : "", a.hasExplosion, a.snapToNavMesh, a.effectCount);
         }
-        if (IsClaimRoad(a_road) && a.row == EngineRow::NoRow) {
+        if (IsClaimRoad(a_road)) {
             std::lock_guard lk(g_noteMx);
-            warn = g_warned.insert(pair).second;
+            if (a.row == EngineRow::NoRow) warn = g_warned.insert(pair).second;
+            else g_settled.insert(pair ^ ((static_cast<std::uint64_t>(a_road) + 1) * 0x9E3779B97F4A7C15ull));   // per-tick fast path
         }
         if (warn) {
             spdlog::warn("[archetype] {:08X} claim for \"{}\" ({:08X}) on road {} but the predicted engine caster row "
-                         "is NONE ({}) -- the engine has no caster for this spell, so this claim cannot fire "
-                         "(shape={}; prediction mirrored from APMF STATUS.md:135-161, check [ctcensus])",
+                         "is NONE ({}) -- no DOCUMENTED engine row matches this spell, so by the mirrored table the "
+                         "claim may not be able to fire (shape={}; prediction mirrored from APMF STATUS.md:135-161, "
+                         "NOT read from the engine; seat 0 is modelled for heal claims only; check [ctcensus])",
                          fid, a_spell->GetName() ? a_spell->GetName() : "?", sid, RoadName(a_road),
                          a.rowWhy.empty() ? "no reason recorded" : a.rowWhy, ShapeName(a.shape));
         }
@@ -445,6 +461,11 @@ namespace MFO::Actuation {
         std::lock_guard lk(g_noteMx);
         g_noted.clear();
         g_warned.clear();
+        g_settled.clear();
+    }
+    {
+        std::lock_guard lk(g_cacheMx);   // renumbered dynamic forms and any edited records start clean
+        g_cache.clear();
     }
 
 }

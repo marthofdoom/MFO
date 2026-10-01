@@ -604,6 +604,7 @@ namespace MFO::Actuation {
         RE::MagicSystem::CastingType casting    = RE::MagicSystem::CastingType::kFireAndForget;
         SpellShape   shape        = SpellShape::Plain;
         EngineRow    row          = EngineRow::NoRow;
+        bool         seat0        = false;   // classified with self forced to 1 (APMF seat 0 on a heal claim)
         bool         rowApprox    = false;   // several effects with different rows: costliest effect chosen
         std::string  rowWhy;                 // why NoRow / Unknown / approx (empty when exact)
         bool         restoration  = false;   // IsRestorationSpell, unchanged
@@ -621,7 +622,9 @@ namespace MFO::Actuation {
         const char*   kindName    = "?";    // CasterConsent::ClassifySpell: Offense / Buff / Heal (static literal)
     };
     // Cached per FormID under a leaf mutex (record data is static after load). Null -> default.
-    SpellArchetype ClassifyArchetype(RE::SpellItem* a_spell);
+    // a_seat0 = model APMF seat 0 (STATUS.md:135, :186-188): the claim's driven form keys self=1, so a
+    // heal-OTHER claim lands in the Restore row. Used for the HealClaim road only.
+    SpellArchetype ClassifyArchetype(RE::SpellItem* a_spell, bool a_seat0 = false);
     const char* ShapeName(SpellShape a_shape);
     const char* EngineRowName(EngineRow a_row);
     // "<name> (<id>) shape=<s> predicted=<row>[...]" -- the [cfc] enrichment.

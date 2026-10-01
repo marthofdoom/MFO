@@ -46,6 +46,7 @@ namespace MFO::Actuation {
             Clock::time_point start{};
             Clock::time_point resolved{};
             float             appearSec = 4.0f;
+            std::vector<RE::FormID> skip;      // commanded actors of this spell that ALREADY existed at the cast
         };
 
         float Since(Clock::time_point a_t, Clock::time_point a_now) {
@@ -100,7 +101,10 @@ namespace MFO::Actuation {
                             if (!ae || !ae->spell || ae->spell->GetFormID() != p.spell) continue;
                             auto* se = skyrim_cast<RE::SummonCreatureEffect*>(ae);
                             if (!se) continue;
-                            if (auto c = se->commandedActor.get()) { found = std::move(c); break; }
+                            if (auto c = se->commandedActor.get()) {
+                                if (std::find(p.skip.begin(), p.skip.end(), c->GetFormID()) != p.skip.end()) continue;
+                                found = std::move(c); break;
+                            }
                         }
                     }
                 }
@@ -133,6 +137,18 @@ namespace MFO::Actuation {
         p.spell     = a_spell;
         p.start     = Clock::now();
         p.appearSec = a_appearSec;
+        // An older creature of the same spell (summon limit 2, a re-cast) must not be measured as the new one.
+        if (auto* f = RE::TESForm::LookupByID<RE::Actor>(a_caster)) {
+            if (auto* mt = f->AsMagicTarget()) {
+                if (auto* list = mt->GetActiveEffectList()) {
+                    for (auto* ae : *list) {
+                        if (!ae || !ae->spell || ae->spell->GetFormID() != a_spell) continue;
+                        if (auto* se = skyrim_cast<RE::SummonCreatureEffect*>(ae))
+                            if (auto c = se->commandedActor.get()) p.skip.push_back(c->GetFormID());
+                    }
+                }
+            }
+        }
         MainThread::Post([p] { Step(p); });
     }
 

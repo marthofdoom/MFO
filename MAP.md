@@ -560,12 +560,12 @@ per concern:
   `cast/Fire.cpp:275`, `logistics/Service.cpp:1513`, `cast/Auto.cpp:603`), `CastOn.cpp` owned claim / heal
   claim / legacy `ForceCast`, `DirectSelf.cpp` + `DirectTarget.cpp` heal claim and concentration claim,
   `Auto.cpp` heal-claim series and `ApplyEffectFromTo`, `Direct.cpp` `ApplySelfEffect` / `ApplyTargetEffect`,
-  the two OOC `doCast`s in `logistics/Service.cpp`; `CastBreadcrumb` before each of the 10 direct
+  the two OOC `doCast`s in `logistics/Service.cpp`; `CastBreadcrumb` before each of the 9 direct
   `CastSpellImmediate` sites in those files plus `SummonOnMain` (`Probe.cpp:224` is a probe and is not
   crumbed). **What breaks:** nothing reads these results, so a wrong prediction only misleads a log read;
   adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
   `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
-  Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B207.
+  Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
 - `cast/Hands.cpp` (1191) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
   `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
