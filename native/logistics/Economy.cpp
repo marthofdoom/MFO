@@ -300,8 +300,8 @@ namespace MFO::Logistics {
                                                       const FollowerState& a_state) {
             TradeBridge::BuyThresholds buy;
             const bool dolls = Config::g_dollsMode.load();
-            // "Is a caster" for apparel/weapon-role (gambit signal == loot mageMode);
-            // gate mage apparel additionally on bMageWearRobes (marth).
+            // `caster` = the gambit signal, for the weapon/shield role only; APPAREL follows
+            // UsesMageClothing (class by skill) and bMageWearRobes (marth).
             const bool caster         = IsCasterFollower(a_state);
             const bool useMageApparel = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load();
             const std::uint8_t top2   = TopTwoSchoolMask(a_follower);

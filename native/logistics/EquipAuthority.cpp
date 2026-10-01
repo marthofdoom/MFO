@@ -393,6 +393,18 @@ namespace MFO::Logistics {
             // caller keep it); the slate is a SIBLING read only by RefreshEquipDeclaration.
             struct GearSlate { RE::TESObjectARMO* slot[6] = {}; bool mage = false; };
 
+            // RULE 5's OVERLAP TEST, ONE copy for the declaration and the sell side: a WORN
+            // non-shield piece rides in the declaration when neither the pick nor any other
+            // slate piece shares a biped bit with it. DeclaredSetKeeps calls it too, so
+            // "what the declaration keeps" cannot drift between the two.
+            bool Rule5Overlaps(RE::TESObjectARMO* a_ar, RE::TESObjectARMO* a_pick,
+                               RE::TESObjectARMO* const* a_slate, std::size_t a_n) {
+                if (a_pick && a_ar != a_pick && SlotsOverlap(a_ar, a_pick)) return true;
+                for (std::size_t i = 0; i < a_n; ++i)
+                    if (a_slate[i] != a_ar && SlotsOverlap(a_ar, a_slate[i])) return true;
+                return false;
+            }
+
             // Worker. OOC only (the caller gates on judgeArmor). MAGE: MageBestPerSlot, the
             // very ranking the mage set already declared. RATED: ArmorIsBetter judges per
             // BIPED BIT while ArmorBuySlot / WornInLogicalSlot are LOGICAL slots, so a slate
@@ -463,7 +475,19 @@ namespace MFO::Logistics {
             ComputeOwnedGearSlate(a_follower, a_state, gs, inv);
             for (int i = 0; i < 6; ++i)
                 if (gs.slot[i] == a_worn) return true;
-            return false;
+            // RULE 5 (RefreshEquipDeclaration): a WORN piece no pick/slate piece overlaps is
+            // declared too, so the choice keeps it (a rated helmet in a mage set with no
+            // clothing for that slot; a circlet beside a helmet on another bit). Same test.
+            const auto it = inv.find(a_worn);
+            if (it == inv.end() || it->second.first <= 0 || !it->second.second || !it->second.second->IsWorn())
+                return false;
+            if (a_worn->IsShield() || RelicOffBody(a_follower, a_state, a_worn)) return false;
+            ArmorPref pref; bool mageMode = false;
+            auto* pickObj = ComputeOwnedGearPick(a_follower, a_state, pref, mageMode);
+            auto* pick = (!mageMode && pickObj) ? pickObj->As<RE::TESObjectARMO>() : nullptr;
+            RE::TESObjectARMO* sl[6]; std::size_t n = 0;
+            for (int i = 0; i < 6; ++i) if (gs.slot[i]) sl[n++] = gs.slot[i];
+            return !Rule5Overlaps(a_worn, pick, sl, n);
         }
 
         // NO DECLINE-FALLBACK (marth 2026-09-28: "MFO's fallback is deprecated"): with
@@ -1001,10 +1025,7 @@ namespace MFO::Logistics {
                 if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                 auto* ar = obj->As<RE::TESObjectARMO>();
                 if (!ar || ar->IsShield()) continue;
-                if (pick && ar != pick && SlotsOverlap(ar, pick)) continue;
-                if (std::any_of(slate.begin(), slate.end(),
-                                [&](RE::TESObjectARMO* c) { return c != ar && SlotsOverlap(ar, c); }))
-                    continue;
+                if (Rule5Overlaps(ar, pick, slate.data(), slate.size())) continue;
                 if (RelicOffBody(a_follower, a_state, obj)) {
                     withheldNow.insert(ar->GetFormID());
                     // Once per (follower, relic) per session: the field proof of item 3.

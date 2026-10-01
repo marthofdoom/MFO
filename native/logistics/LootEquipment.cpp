@@ -94,8 +94,8 @@ namespace MFO::Logistics {
             // falls through to the plain rating armor judge below (marth). It gates
             // ONLY apparel selection -- the mage still keeps the backup-weapon /
             // no-melee-role contract (mageMode) and still buys/learns tomes.
-            ctx.useMageApparel = mageMode && Config::g_mageWearRobes.load() &&
-                                 (!a_state || UsesMageClothing(*a_state, a_follower));   // class-by-skill, not the gambit (Cicero)
+            ctx.useMageApparel = a_state && UsesMageClothing(*a_state, a_follower) &&
+                                 Config::g_mageWearRobes.load();   // apparel follows the clothing mode (class by skill); mageMode stays for weapons/backup
             // #21 UNIFIED mage-apparel ranking (loot side; shared with the buy side).
             // Same MEO-aware model: value-primary when MEO carries gems, else school-
             // enchant primary; villain blacklist with a necromancer exception; all

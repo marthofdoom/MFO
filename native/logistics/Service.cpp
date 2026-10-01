@@ -2116,7 +2116,7 @@ namespace MFO::Logistics {
             // gem simply stays as it does today -- no regression).
             if (MEOBridge::GemReconcileSupported()) {
                 MEOBridge::GemReconcilePrefs prefs;
-                prefs.caster = UsesMageClothing(a_state, a_follower);
+                prefs.caster = IsCasterFollower(a_state);
                 if (prefs.caster) {
                     int castGambits = 0;
                     prefs.school = static_cast<std::uint32_t>(TargetMagicSchool(a_state, castGambits));

@@ -2645,12 +2645,12 @@ module. Module layout:
   its own rule (skills pick armor/weapon type, perks pick usage, marth 2026-10-01) and does NOT
   call this. **What breaks:** a second Auto rule elsewhere; calling it off the worker / main
   pump (it reads `FollowerState`); changing a weight changes every Auto follower's HMS split.
-- `logistics/Cast.cpp` (268, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
+- `logistics/Cast.cpp` (314, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101` (weapon/shield/ammo/tome
   role signal, gambit based), `UsesMageClothing:116` (MAGE CLOTHING MODE, equip/clothing decisions
   only, `fix/mfo-cicero-gear`: caster AND class, explicit override wins, Auto = base skills, never the
   gambit alone, never `ResolveBaseClass`; logs `[gear] <id> clothing mode: ...`),
-  `TopTwoSchoolMask:~160`, `LearnCarriedTomes:137`, school name/keyword helpers.
+  `TopTwoSchoolMask:154`, `LearnCarriedTomes:183`, school name/keyword helpers.
 - #21 economy (was `Logistics_Economy.cpp`, wave-2 split into two): `logistics/Economy.cpp`
   (mage-apparel scoring, `VendorTrades:193`, `UnlockCollegeTomes:232`,
   `BuildBuyThresholds:298`, `EconomyProbe:451`, public buy helpers `MageApparelBuyKey:1003`
@@ -2867,11 +2867,11 @@ module. Module layout:
   Switched to it: `EquipAuthority.cpp` `ComputeOwnedGearPick`, `ComputeOwnedGearSlate`, `RefreshEquipDeclaration`
   `mageSetMode` + `playerPieceWins`; `SwapUp.cpp` `ComputeKeepSet` `useMageApparel`; `Economy.cpp`
   `BuildBuyThresholds` `useMageApparel` + `umaSell`; `LootEquipment.cpp` `ctx.useMageApparel`; `Service.cpp` MEO gem
-  `prefs.caster`. LEFT on the gambit signal: `Economy.cpp` tome buy, `Cast.cpp` auto-consume, `SwapUp.cpp` `keepMageMode`
+  `prefs.caster` was reverted to `IsCasterFollower` (gem preference is not clothing). LEFT on the gambit signal: `Economy.cpp` tome buy, `Cast.cpp` auto-consume, `SwapUp.cpp` `keepMageMode`
   and `UsesAmmoKind`, the weapon-role / shield uses of `caster` in `BuildBuyThresholds` and `ComputeKeepSet`, `ClassResolve.cpp`.
   (2) HELMET LOOP: `Economy.cpp` sell scan, `redundantInferior` (keep-set `bestBySlot`) force-sold a worn piece the armor
   choice keeps, then `gemHold` (the only caller of `UnsocketItemGems`) extracted its gem. Now `DeclaredSetKeeps`
-  (`EquipAuthority.cpp:459`, the declared `GearSlate`) vetoes the force-sell and `continue`s before `gemHold`;
+  (`EquipAuthority.cpp:~470`, the declared `GearSlate` OR rule 5 via the shared `Rule5Overlaps:~400`) vetoes the force-sell and `continue`s before `gemHold`;
   line `[sell] <id> '<name>' -> worn, kept by the armor choice -> not selling ...`. Blacklisted apparel still force-sells.
   Worker thread for all of it.
 - **ARMOR CLASS BY SKILL + PERKS (2026-09-14, field fix; branch
