@@ -7,6 +7,9 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **The menu can be translated without touching the DLL.** Every word on the Field Orders board, the Followers and Gambits tabs, the Progression tab and the on-screen strip is now a named line in a text file. Make `MFO_<LANGUAGE>.txt` in `Data/Interface/Translations/` (the same place and format MCM Helper uses) and the menu follows the game's language. A line you leave out stays English. `MFO_ENGLISH.txt` ships as the template and `Docs/TRANSLATING.md` explains the rest.
+- **Columns grow to fit longer words.** A translated header or state no longer gets cut off in the Followers, Gambits and skill lists. Controller navigation works the same.
+- **Bad translation lines cannot break the game.** A line with a missing or wrong `{1}` marker is skipped and MFO says so in `MFO.log`. The English text is used for that line.
 - **The board and HUD hotkeys start empty.** They no longer show a key in the MCM until you pick one. `iBoardKey` and `iHudKey` default to -1, and any value of 0 or less means no key. If your MCM still holds the old 0, MFO clears it to -1 once on upgrade. Pick a key and it stays.
 - **Followers make lockpicking sounds.** While a follower works a lock you hear the pick at their position, and a pick snaps with the vanilla break sound at them for each pick they break. The sound gets quieter with distance, so a follower picking a lock far away is faint. MFO.esp carries its own copies of the two vanilla sounds for this, because the vanilla ones always play in your ears. They follow your sound effects volume.
 - **The Followers tab shows where retained followers are.** A follower you are not currently travelling with now lists their current cell next to their name, or the location name if the cell has none.

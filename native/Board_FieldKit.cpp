@@ -49,7 +49,19 @@ namespace MFO::Board {
     // #65: the combat-class override picker's labels, index-matched to
     // FollowerState::combatClassOverride / CombatStyle::Stance (0=Auto,
     // 1=Melee, 2=Ranged, 3=Cast/Mage). Auto is the default -- "no override".
-    inline constexpr const char* kClassNames[4] = { "Auto", "Melee", "Ranged", "Mage" };
+    // (display text: i18n keys, index-matched)
+    inline constexpr Str::K kClassKeys[4] = { Str::K::Gb_ClassAuto, Str::K::Gb_ClassMelee,
+                                              Str::K::Gb_ClassRanged, Str::K::Gb_ClassMage };
+    inline const char* ClassName(int i) { return Str::Get(kClassKeys[std::clamp(i, 0, 3)]); }
+
+    // "50%" / "3" / "500u" -- a rule's value as the player reads it. Display text.
+    inline std::string ValueText(ParamKind pk, float param) {
+        if (pk == ParamKind::Percent)
+            return Str::Fmt(Str::K::Gb_FmtPct, { (int)(std::clamp(param, 0.0f, 1.0f) * 100.0f + 0.5f) });
+        if (pk == ParamKind::Count) return std::to_string((int)(param + 0.5f));
+        if (pk == ParamKind::Distance) return Str::Fmt(Str::K::Gb_FmtDist, { (int)(param + 0.5f) });
+        return {};
+    }
 
     // ── PICKER SUBMENU GROUPING ─────────────────────────────────────────
     // The list-picker popups below are flat scans over kCondsCombat /
@@ -141,10 +153,10 @@ namespace MFO::Board {
         inline void DrawSpellHoverTooltip(int a_magickaCost, const std::string& a_desc) {
             if (!ImGui::IsItemHovered()) return;
             ImGui::BeginTooltip();
-            ImGui::Text("Magicka cost: %d", a_magickaCost);
+            ImGui::TextUnformatted(Str::Fmt(Str::K::Gb_MagickaCost, { a_magickaCost }).c_str());
             if (!a_desc.empty()) {
                 ImGui::Separator();
-                ImGui::TextDisabled("What it does:");
+                ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_WhatItDoes));
                 ImGui::PushTextWrapPos(ImGui::GetFontSize() * 22.0f);
                 ImGui::TextUnformatted(a_desc.c_str());
                 ImGui::PopTextWrapPos();
@@ -308,7 +320,7 @@ namespace MFO::Board {
             const int skinCols = PushSkin();
             const auto& skin = kSkins[std::clamp(Config::g_menuStyle.load(), 0, 3)];
 
-            if (!ImGui::Begin("Follower Overhaul", nullptr,
+            if (!ImGui::Begin(Str::Label(Str::K::Win_Title, "mfoboard"), nullptr,
                               ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoSavedSettings)) {
                 ImGui::End();
                 ImGui::PopStyleColor(skinCols);
@@ -341,7 +353,7 @@ namespace MFO::Board {
             {
                 auto*        dl    = ImGui::GetWindowDrawList();
                 ImGui::PushFont(g_fontHead);   // header face (MEO parity); null -> default
-                const char*  title = "Field Orders";
+                const char*  title = Str::Get(Str::K::Win_Header);
                 const ImVec2 ts    = ImGui::CalcTextSize(title);
                 const float  tx    = (ImGui::GetWindowSize().x - ts.x) * 0.5f;
                 const ImVec2 wp    = ImGui::GetWindowPos();
@@ -397,9 +409,9 @@ namespace MFO::Board {
 
             if (ImGui::BeginTabBar("##tabs")) {
 
-                if (ImGui::BeginTabItem("Followers", nullptr, tabSel(0))) {
+                if (ImGui::BeginTabItem(Str::Label(Str::K::Fk_Tab, "tabfollowers"), nullptr, tabSel(0))) {
                     s_tab = 0;
-                    ImGui::TextDisabled("%zu tracked  (active + retained)", snap.rows.size());
+                    ImGui::TextDisabled("%s", Str::Fmt(Str::K::Fk_Tracked, { snap.rows.size() }).c_str());
                     ImGui::Spacing();
 
                     // Reserve the footer, or ScrollY takes the remaining height
@@ -411,14 +423,27 @@ namespace MFO::Board {
                                           ImVec2(0.0f, -footer))) {
                         // T#78: the per-follower MFO master switch, FIRST column.
                         // ON = MFO manages him; OFF = MFO leaves him vanilla.
+                        // Fixed columns are measured (FitW): the English widths are the
+                        // floor, a longer translation widens its column instead of clipping.
+                        // The State column also holds every state word the rows can show.
+                        const char* colFollower = Str::Get(Str::K::Fk_ColFollower);
                         ImGui::TableSetupColumn("MFO",     ImGuiTableColumnFlags_WidthFixed, 34.0f);
-                        ImGui::TableSetupColumn("Follower", ImGuiTableColumnFlags_WidthStretch);
-                        ImGui::TableSetupColumn("State",   ImGuiTableColumnFlags_WidthFixed, 110.0f);
-                        ImGui::TableSetupColumn("Rapport", ImGuiTableColumnFlags_WidthFixed, 90.0f);
-                        ImGui::TableSetupColumn("Rank",    ImGuiTableColumnFlags_WidthFixed, 50.0f);
-                        ImGui::TableSetupColumn("Slots",   ImGuiTableColumnFlags_WidthFixed, 70.0f);
-                        ImGui::TableSetupColumn("H/M/S",   ImGuiTableColumnFlags_WidthFixed, 150.0f);
-                        ImGui::TableSetupColumn("Dist",    ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                        ImGui::TableSetupColumn(colFollower, ImGuiTableColumnFlags_WidthStretch);
+                        ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColState), ImGuiTableColumnFlags_WidthFixed,
+                            FitW(110.0f, { Str::Get(Str::K::Fk_ColState), Str::Get(Str::K::Fk_StateRetained),
+                                           Str::Get(Str::K::Fk_StateSummon), Str::Get(Str::K::Fk_StateCombat),
+                                           Str::Get(Str::K::Fk_StateLooting), Str::Get(Str::K::Fk_StateTrading),
+                                           Str::Get(Str::K::Fk_StateFollowing) }));
+                        ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColRapport), ImGuiTableColumnFlags_WidthFixed,
+                            FitW(90.0f, { Str::Get(Str::K::Fk_ColRapport) }));
+                        ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColRank), ImGuiTableColumnFlags_WidthFixed,
+                            FitW(50.0f, { Str::Get(Str::K::Fk_ColRank) }));
+                        ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColSlots), ImGuiTableColumnFlags_WidthFixed,
+                            FitW(70.0f, { Str::Get(Str::K::Fk_ColSlots) }));
+                        ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColVitals), ImGuiTableColumnFlags_WidthFixed,
+                            FitW(150.0f, { Str::Get(Str::K::Fk_ColVitals) }));
+                        ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColDist), ImGuiTableColumnFlags_WidthFixed,
+                            FitW(70.0f, { Str::Get(Str::K::Fk_ColDist) }));
                         ImGui::TableHeadersRow();
 
                         for (const auto& r : snap.rows) {
@@ -436,9 +461,8 @@ namespace MFO::Board {
                                 QueueEdit({ EditKind::SetMfoEnabled, r.id, 0, 0u,
                                             en ? 1.0f : 0.0f });
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip(en ? "MFO ON -- managing this follower"
-                                                     : "MFO OFF -- follower left vanilla "
-                                                       "(no gambits, logistics, or equip)");
+                                ImGui::SetTooltip("%s", Str::Get(en ? Str::K::Fk_TipMfoOn
+                                                                        : Str::K::Fk_TipMfoOff));
                             ImGui::PopID();
 
                             ImGui::TableNextColumn();
@@ -452,18 +476,18 @@ namespace MFO::Board {
 
                             ImGui::TableNextColumn();
                             if (!r.active) {
-                                ImGui::TextDisabled("retained");
+                                ImGui::TextDisabled("%s", Str::Get(Str::K::Fk_StateRetained));
                             } else if (r.commanded) {
-                                ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "summon");
+                                ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "%s", Str::Get(Str::K::Fk_StateSummon));
                             } else if (r.inCombat) {
                                 // Same color code as the HUD [C][L][T] strip.
-                                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "In Combat");
+                                ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", Str::Get(Str::K::Fk_StateCombat));
                             } else if (r.looting) {
-                                ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "Looting");
+                                ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "%s", Str::Get(Str::K::Fk_StateLooting));
                             } else if (r.trading) {
-                                ImGui::TextColored(ImVec4(0.45f, 0.6f, 1.0f, 1.0f), "Trading");
+                                ImGui::TextColored(ImVec4(0.45f, 0.6f, 1.0f, 1.0f), "%s", Str::Get(Str::K::Fk_StateTrading));
                             } else {
-                                ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "following");
+                                ImGui::TextColored(ImVec4(0.5f, 0.9f, 0.5f, 1.0f), "%s", Str::Get(Str::K::Fk_StateFollowing));
                             }
 
                             ImGui::TableNextColumn();
@@ -495,10 +519,16 @@ namespace MFO::Board {
                                 ImGui::SameLine(0.0f, 3.0f);
                                 bar(r.staminaPct, r.staminaCur, ImVec4(0.4f, 0.8f, 0.4f, 1.0f));
                                 ImGui::EndGroup();
-                                if (ImGui::IsItemHovered())
-                                    ImGui::SetTooltip("H %.0f / %.0f\nM %.0f / %.0f\nS %.0f / %.0f",
-                                                      r.healthCur, r.healthMax, r.magickaCur, r.magickaMax,
-                                                      r.staminaCur, r.staminaMax);
+                                if (ImGui::IsItemHovered()) {
+                                    auto line = [](Str::K w, float cur, float mx) {
+                                        return Str::Fmt(Str::K::Fk_TipVitalLine,
+                                            { Str::Get(w), Str::Arg::F(cur, 0), Str::Arg::F(mx, 0) });
+                                    };
+                                    ImGui::SetTooltip("%s\n%s\n%s",
+                                        line(Str::K::Word_Health,  r.healthCur,  r.healthMax).c_str(),
+                                        line(Str::K::Word_Magicka, r.magickaCur, r.magickaMax).c_str(),
+                                        line(Str::K::Word_Stamina, r.staminaCur, r.staminaMax).c_str());
+                                }
                             } else {
                                 ImGui::TextDisabled("--");
                             }
@@ -522,7 +552,7 @@ namespace MFO::Board {
                 // funnels through the same QueueEdit machinery, so the frozen
                 // opcode / serialization model is untouched -- this is a new face
                 // on the old edits, presentation only.
-                if (ImGui::BeginTabItem("Gambits", nullptr, tabSel(1))) {
+                if (ImGui::BeginTabItem(Str::Label(Str::K::Gb_Tab, "tabgambits"), nullptr, tabSel(1))) {
                     s_tab = 1;
                     static RE::FormID sel = 0;
                     static int selTable = 0;   // 0 combat, 1 logistics
@@ -537,7 +567,7 @@ namespace MFO::Board {
                     if (!who) for (const auto& r : snap.rows) if (r.active) { who = &r; sel = r.id; break; }
 
                     if (!who) {
-                        ImGui::TextDisabled("No active follower. Recruit one to edit gambits.");
+                        ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_NoFollower));
                         ImGui::EndTabItem();
                     } else {
                         auto switchFollower = [&](int d) {
@@ -576,7 +606,7 @@ namespace MFO::Board {
                         ImGui::PopStyleColor();
                         ImGui::PopFont();
                         ImGui::SameLine();
-                        ImGui::TextDisabled("rank %u", who->rank);
+                        ImGui::TextDisabled("%s", Str::Fmt(Str::K::Gb_Rank, { who->rank }).c_str());
                         ImGui::SameLine();
                         // #65: per-follower combat-class OVERRIDE trigger. Auto
                         // (0) is the default and reads as "no override" -- the
@@ -586,7 +616,7 @@ namespace MFO::Board {
                         // drawn below, once listPopup exists.
                         {
                             const int curClass = std::clamp<int>(who->combatClassOverride, 0, 3);
-                            std::string cl = std::string("Class: ") + kClassNames[curClass];
+                            std::string cl = Str::Fmt(Str::K::Gb_ClassBtn, { ClassName(curClass) }) + "###classbtn";
                             if (ImGui::SmallButton(cl.c_str())) ImGui::OpenPopup("##class");
                         }
                         ImGui::SameLine();
@@ -594,7 +624,7 @@ namespace MFO::Board {
                         if (ImGui::SmallButton(">##nextf")) switchFollower(+1);
                         ImGui::EndDisabled();
                         ImGui::SameLine();
-                        ImGui::TextDisabled("  [LB]/[RB] change follower");
+                        ImGui::TextDisabled("  %s", Str::Get(Str::K::Gb_SwitchHint));
 
                         const bool combat = (selTable == 0);
                         const auto& rules = combat ? who->combat : who->logistics;
@@ -609,11 +639,11 @@ namespace MFO::Board {
 
                         // Combat / Logistics PAGE selector (FFXII flips pages the
                         // same way). Segmented radios, not a dropdown.
-                        if (ImGui::RadioButton("Combat", combat)) selTable = 0;
+                        if (ImGui::RadioButton(Str::Label(Str::K::Gb_PageCombat, "pgcombat"), combat)) selTable = 0;
                         ImGui::SameLine();
-                        if (ImGui::RadioButton("Logistics", !combat)) selTable = 1;
+                        if (ImGui::RadioButton(Str::Label(Str::K::Gb_PageLogistics, "pglogi"), !combat)) selTable = 1;
                         ImGui::SameLine();
-                        ImGui::TextDisabled("%d / %d slots used", (int)rules.size(), slots);
+                        ImGui::TextDisabled("%s", Str::Fmt(Str::K::Gb_SlotsUsed, { (int)rules.size(), slots }).c_str());
                         ImGui::Separator();
 
                         // ── THE LIST-PICKER (the FFXII interaction) ─────
@@ -639,7 +669,7 @@ namespace MFO::Board {
                                 ImGui::TextUnformatted(title);
                                 ImGui::PopStyleColor();
                                 ImGui::PopFont();
-                                ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
+                                ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_PickHint));
                                 ImGui::Separator();
                                 for (int k = 0; k < count; ++k) {
                                     const bool cur = (k == current);
@@ -670,8 +700,8 @@ namespace MFO::Board {
                         // alone (uid/table are unused, mirrors Add).
                         {
                             const int curClass = std::clamp<int>(who->combatClassOverride, 0, 3);
-                            listPopup("##class", "Combat class", 4,
-                                [&](int k) { return kClassNames[k]; }, curClass,
+                            listPopup("##class", Str::Get(Str::K::Gb_TitleClass), 4,
+                                [&](int k) { return ClassName(k); }, curClass,
                                 [&](int k) {
                                     QueueEdit({ EditKind::SetClassOverride, sel, selTable,
                                                 0u, (float)k });
@@ -734,18 +764,31 @@ namespace MFO::Board {
                         if (ImGui::BeginTable("##rules", 8,
                                 ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                 ImGuiTableFlags_ScrollY, ImVec2(0.0f, listH))) {
+                            // Fixed columns are measured (FitW): English widths are the floor.
+                            // The button column is up + dn + the wider of del / sure?, each
+                            // with frame padding, plus the item gaps between them.
+                            const float btnW = [&] {
+                                const float fp = ImGui::GetStyle().FramePadding.x * 2.0f;
+                                const float del = (std::max)(ImGui::CalcTextSize(Str::Get(Str::K::Gb_Del)).x,
+                                                             ImGui::CalcTextSize(Str::Get(Str::K::Gb_DelSure)).x);
+                                return ImGui::CalcTextSize(Str::Get(Str::K::Gb_Up)).x + fp +
+                                       ImGui::CalcTextSize(Str::Get(Str::K::Gb_Down)).x + fp +
+                                       del + fp + ImGui::GetStyle().ItemSpacing.x * 2.0f;
+                            }();
                             ImGui::TableSetupColumn("#",    ImGuiTableColumnFlags_WidthFixed, 24);
-                            ImGui::TableSetupColumn("On",   ImGuiTableColumnFlags_WidthFixed, 30);
-                            ImGui::TableSetupColumn("When (target / condition)",
+                            ImGui::TableSetupColumn(Str::Get(Str::K::Gb_ColOn), ImGuiTableColumnFlags_WidthFixed,
+                                                    FitW(30.0f, { Str::Get(Str::K::Gb_ColOn) }));
+                            ImGui::TableSetupColumn(Str::Get(Str::K::Gb_When),
                                                             ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableSetupColumn("Value",ImGuiTableColumnFlags_WidthFixed, 84);
-                            ImGui::TableSetupColumn("Do (action)",
+                            ImGui::TableSetupColumn(Str::Get(Str::K::Gb_Value), ImGuiTableColumnFlags_WidthFixed,
+                                                    FitW(84.0f, { Str::Get(Str::K::Gb_Value) }));
+                            ImGui::TableSetupColumn(Str::Get(Str::K::Gb_Do),
                                                             ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableSetupColumn("Spell",ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn(Str::Get(Str::K::Gb_Spell),ImGuiTableColumnFlags_WidthStretch);
                             // #68: who a Cast-on-target row hits (Self / player
                             // by name / Ally: Nearest / a specific follower).
-                            ImGui::TableSetupColumn("Target",ImGuiTableColumnFlags_WidthStretch);
-                            ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, 96);
+                            ImGui::TableSetupColumn(Str::Get(Str::K::Gb_Target),ImGuiTableColumnFlags_WidthStretch);
+                            ImGui::TableSetupColumn("",     ImGuiTableColumnFlags_WidthFixed, (std::max)(96.0f, btnW));
                             ImGui::TableHeadersRow();
 
                             for (int i = 0; i < (int)rules.size(); ++i) {
@@ -782,8 +825,8 @@ namespace MFO::Board {
                                 // WHEN -- Selectable that opens the condition list.
                                 ImGui::TableNextColumn();
                                 {
-                                    std::string cl = "When ";
-                                    cl += labelFor(rv.condOp, condTab, condN);
+                                    std::string cl = Str::Fmt(Str::K::Gb_WhenRow,
+                                                              { labelFor(rv.condOp, condTab, condN) });
                                     ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
                                     const bool clicked = ImGui::Selectable(cl.c_str());
                                     ImGui::PopStyleColor();
@@ -805,10 +848,10 @@ namespace MFO::Board {
                                     // stack. Calling OpenPopup inside the ##cond popup's onPick
                                     // mismatches the ID -> an invisible, input-blocking popup.
                                     bool openCondFoe = false;
-                                    listPopup("##cond", "When (target / condition)",
+                                    listPopup("##cond", Str::Get(Str::K::Gb_When),
                                         (int)condTopIdx.size(),
                                         [&](int t) { return condTopIdx[t] == -1
-                                                            ? "Foe:" : condTab[condTopIdx[t]].label; },
+                                                            ? Str::Get(Str::K::Gb_TitleFoe) : condTab[condTopIdx[t]].label(); },
                                         curC,
                                         [&](int t) {
                                             if (condTopIdx[t] == -1) { openCondFoe = true; return; }
@@ -820,8 +863,8 @@ namespace MFO::Board {
                                         int curF = 0;
                                         for (int t = 0; t < (int)condFoeIdx.size(); ++t)
                                             if (rv.condOp == condTab[condFoeIdx[t]].op) { curF = t; break; }
-                                        listPopup("##condfoe", "Foe:", (int)condFoeIdx.size(),
-                                            [&](int t) { return condTab[condFoeIdx[t]].label; }, curF,
+                                        listPopup("##condfoe", Str::Get(Str::K::Gb_TitleFoe), (int)condFoeIdx.size(),
+                                            [&](int t) { return condTab[condFoeIdx[t]].label(); }, curF,
                                             [&](int t) {
                                                 QueueEdit({ EditKind::SetCond, sel, selTable,
                                                             rv.uid, (float)condFoeIdx[t] });
@@ -838,21 +881,14 @@ namespace MFO::Board {
                                     if (pk == ParamKind::None) {
                                         ImGui::TextDisabled("-");
                                     } else {
-                                        std::string vs;
-                                        if (pk == ParamKind::Percent)
-                                            vs = std::to_string((int)(std::clamp(rv.param, 0.0f, 1.0f)
-                                                                      * 100.0f + 0.5f)) + "%";
-                                        else if (pk == ParamKind::Count)
-                                            vs = std::to_string((int)(rv.param + 0.5f));
-                                        else
-                                            vs = std::to_string((int)(rv.param + 0.5f)) + "u";
+                                        const std::string vs = ValueText(pk, rv.param);
                                         if (ImGui::Selectable(vs.c_str())) ImGui::OpenPopup("##val");
                                         track();
 
                                         std::vector<std::pair<float, std::string>> pv;
                                         if (pk == ParamKind::Percent) {
                                             for (int p = 5; p <= 100; p += 5)
-                                                pv.emplace_back(p / 100.0f, std::to_string(p) + "%");
+                                                pv.emplace_back(p / 100.0f, Str::Fmt(Str::K::Gb_FmtPct, { p }));
                                         } else if (pk == ParamKind::Count) {
                                             for (int n = 1; n <= 20; ++n)
                                                 pv.emplace_back((float)n, std::to_string(n));
@@ -860,16 +896,16 @@ namespace MFO::Board {
                                                 pv.emplace_back((float)n, std::to_string(n));
                                         } else {   // Distance
                                             for (int u = 0; u <= 2000; u += 100)
-                                                pv.emplace_back((float)u, std::to_string(u) + "u");
+                                                pv.emplace_back((float)u, Str::Fmt(Str::K::Gb_FmtDist, { u }));
                                             for (int u : { 2500, 3000, 4000, 5000 })
-                                                pv.emplace_back((float)u, std::to_string(u) + "u");
+                                                pv.emplace_back((float)u, Str::Fmt(Str::K::Gb_FmtDist, { u }));
                                         }
                                         int curV = 0; float best = 1e9f;
                                         for (int k = 0; k < (int)pv.size(); ++k) {
                                             float d = pv[k].first - rv.param; if (d < 0) d = -d;
                                             if (d < best) { best = d; curV = k; }
                                         }
-                                        listPopup("##val", "Value", (int)pv.size(),
+                                        listPopup("##val", Str::Get(Str::K::Gb_Value), (int)pv.size(),
                                             [&](int k) { return pv[k].second.c_str(); }, curV,
                                             [&](int k) {
                                                 QueueEdit({ EditKind::SetParam, sel, selTable,
@@ -881,8 +917,8 @@ namespace MFO::Board {
                                 // DO -- action list.
                                 ImGui::TableNextColumn();
                                 {
-                                    std::string al = "-> ";
-                                    al += labelFor(rv.actOp, actTab, actN);
+                                    std::string al = Str::Fmt(Str::K::Gb_DoRow,
+                                                              { labelFor(rv.actOp, actTab, actN) });
                                     const bool wait = (rv.actOp == Vocab::kActWait);
                                     if (wait) ImGui::PushStyleColor(ImGuiCol_Text,
                                         ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -908,10 +944,10 @@ namespace MFO::Board {
                                     // reason as ##condfoe above (an OpenPopup inside the ##act popup
                                     // mismatches the child's BeginPopup ID -> invisible hung popup).
                                     bool openActPotions = false, openActMisc = false;
-                                    listPopup("##act", "Do (action)", (int)actTopIdx.size(),
-                                        [&](int t) { return actTopIdx[t] == -1 ? "Loot potions:"
-                                                            : actTopIdx[t] == -2 ? "Loot misc:"
-                                                            : actTab[actTopIdx[t]].label; },
+                                    listPopup("##act", Str::Get(Str::K::Gb_Do), (int)actTopIdx.size(),
+                                        [&](int t) { return actTopIdx[t] == -1 ? Str::Get(Str::K::Gb_TitleLootPotions)
+                                                            : actTopIdx[t] == -2 ? Str::Get(Str::K::Gb_TitleLootMisc)
+                                                            : actTab[actTopIdx[t]].label(); },
                                         curA,
                                         [&](int t) {
                                             if (actTopIdx[t] == -1) { openActPotions = true; return; }
@@ -925,8 +961,8 @@ namespace MFO::Board {
                                         int curP = 0;
                                         for (int t = 0; t < (int)actPotionIdx.size(); ++t)
                                             if (rv.actOp == actTab[actPotionIdx[t]].op) { curP = t; break; }
-                                        listPopup("##actpotions", "Loot potions:", (int)actPotionIdx.size(),
-                                            [&](int t) { return actTab[actPotionIdx[t]].label; }, curP,
+                                        listPopup("##actpotions", Str::Get(Str::K::Gb_TitleLootPotions), (int)actPotionIdx.size(),
+                                            [&](int t) { return actTab[actPotionIdx[t]].label(); }, curP,
                                             [&](int t) {
                                                 QueueEdit({ EditKind::SetAct, sel, selTable,
                                                             rv.uid, (float)actPotionIdx[t] });
@@ -936,8 +972,8 @@ namespace MFO::Board {
                                         int curM = 0;
                                         for (int t = 0; t < (int)actMiscIdx.size(); ++t)
                                             if (rv.actOp == actTab[actMiscIdx[t]].op) { curM = t; break; }
-                                        listPopup("##actmisc", "Loot misc:", (int)actMiscIdx.size(),
-                                            [&](int t) { return actTab[actMiscIdx[t]].label; }, curM,
+                                        listPopup("##actmisc", Str::Get(Str::K::Gb_TitleLootMisc), (int)actMiscIdx.size(),
+                                            [&](int t) { return actTab[actMiscIdx[t]].label(); }, curM,
                                             [&](int t) {
                                                 QueueEdit({ EditKind::SetAct, sel, selTable,
                                                             rv.uid, (float)actMiscIdx[t] });
@@ -955,11 +991,11 @@ namespace MFO::Board {
                                         ImGui::TextDisabled("-");
                                     } else {
                                         const char* cur = rv.spellName.empty()
-                                                          ? "(pick spell)" : rv.spellName.c_str();
+                                                          ? Str::Get(Str::K::Gb_PickSpell) : rv.spellName.c_str();
                                         if (ImGui::Selectable(cur)) ImGui::OpenPopup("##spell");
                                         track();
                                         if (!rv.fail.empty() && ImGui::IsItemHovered())
-                                            ImGui::SetTooltip("last: %s", rv.fail.c_str());
+                                            ImGui::SetTooltip("%s", Str::Fmt(Str::K::Gb_LastFail, { rv.fail }).c_str());
                                         // #4: known spells (click = pick) PLUS
                                         // teachable-from-spellbook spells (a second
                                         // click confirms and CONSUMES the book).
@@ -977,13 +1013,13 @@ namespace MFO::Board {
                                             if (ImGui::IsWindowAppearing()) s_teachArmed = 0;   // never open pre-armed
                                             ImGui::PushFont(g_fontHead);
                                             ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
-                                            ImGui::TextUnformatted("Spell");
+                                            ImGui::TextUnformatted(Str::Get(Str::K::Gb_Spell));
                                             ImGui::PopStyleColor();
                                             ImGui::PopFont();
-                                            ImGui::TextDisabled("d-pad move   [A]/E pick   [B]/Esc back");
+                                            ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_PickHint));
                                             ImGui::Separator();
                                             if (who->knownSpells.empty() && who->teachableSpells.empty())
-                                                ImGui::TextDisabled("No spells known, no spellbooks carried");
+                                                ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_NoSpells));
                                             for (int k = 0; k < (int)who->knownSpells.size(); ++k) {
                                                 const auto& sp = who->knownSpells[k];
                                                 const bool curSel = sp.id == rv.spell;
@@ -1002,13 +1038,13 @@ namespace MFO::Board {
                                             }
                                             if (!who->teachableSpells.empty()) {
                                                 ImGui::Separator();
-                                                ImGui::TextDisabled("Teach from spellbook (consumes it):");
+                                                ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_TeachHeader));
                                                 for (const auto& t : who->teachableSpells) {
                                                     const bool armed = (s_teachArmed == t.book);
                                                     if (armed) ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
                                                     const std::string lbl = armed
-                                                        ? (t.name + "  Teach? This DESTROYS the book.")
-                                                        : (t.name + "  (spellbook)");
+                                                        ? Str::Fmt(Str::K::Gb_TeachArmed, { t.name })
+                                                        : Str::Fmt(Str::K::Gb_Spellbook, { t.name });
                                                     ImGui::PushID((int)t.book);   // dup names -> unique IDs
                                                     if (ImGui::Selectable(lbl.c_str(), false,
                                                                           ImGuiSelectableFlags_DontClosePopups)) {
@@ -1043,7 +1079,7 @@ namespace MFO::Board {
                                         ImGui::TextDisabled("-");
                                     } else {
                                         const char* cur = rv.subjectName.empty()
-                                                          ? "Auto" : rv.subjectName.c_str();
+                                                          ? Str::Get(Str::K::Gb_SubjAuto) : rv.subjectName.c_str();
                                         if (ImGui::Selectable(cur)) ImGui::OpenPopup("##target");
                                         track();
 
@@ -1063,8 +1099,9 @@ namespace MFO::Board {
                                         // it. It is NOT "cast on the follower" (that is the separate
                                         // Cast-on-self action). The manual picks below still target
                                         // exactly who you choose.
-                                        static const std::string kAutoLbl = "Auto (infer from spell)";
-                                        static const std::string kAllyLbl = "Ally: Nearest";
+                                        // Not static: the text is translated, a reload republishes it.
+                                        const std::string kAutoLbl = Str::Get(Str::K::Gb_SubjAutoInfer);
+                                        const std::string kAllyLbl = Str::Get(Str::K::Gb_SubjAlly);
                                         std::vector<TargetOpt> opts;
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::Self,        0, &kAutoLbl });
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::Player,      0, &who->playerName });
@@ -1081,7 +1118,7 @@ namespace MFO::Board {
                                                 if (opts[k].form == 0 && opts[k].kind == rv.subject) { curT = k; break; }
                                         }
 
-                                        listPopup("##target", "Target", (int)opts.size(),
+                                        listPopup("##target", Str::Get(Str::K::Gb_Target), (int)opts.size(),
                                             [&](int k) { return opts[k].label->c_str(); }, curT,
                                             [&](int k) {
                                                 if (opts[k].form != 0) {
@@ -1099,16 +1136,17 @@ namespace MFO::Board {
                                 // REORDER / DELETE (kept on buttons so reorder does
                                 // not fight the shoulder party-switch, per spec).
                                 ImGui::TableNextColumn();
-                                if (ImGui::SmallButton("up")) QueueEdit({ EditKind::MoveUp, sel, selTable, rv.uid, 0 });
+                                if (ImGui::SmallButton(Str::Label(Str::K::Gb_Up, "up"))) QueueEdit({ EditKind::MoveUp, sel, selTable, rv.uid, 0 });
                                 track();
                                 ImGui::SameLine();
-                                if (ImGui::SmallButton("dn")) QueueEdit({ EditKind::MoveDown, sel, selTable, rv.uid, 0 });
+                                if (ImGui::SmallButton(Str::Label(Str::K::Gb_Down, "dn"))) QueueEdit({ EditKind::MoveDown, sel, selTable, rv.uid, 0 });
                                 track();
                                 ImGui::SameLine();
                                 static std::uint32_t s_armed = 0;
                                 const bool armed = (s_armed == rv.uid);
                                 if (armed) ImGui::PushStyleColor(ImGuiCol_Button, skin.danger);
-                                if (ImGui::SmallButton(armed ? "sure?" : "del")) {
+                                if (ImGui::SmallButton(Str::Label(armed ? Str::K::Gb_DelSure : Str::K::Gb_Del,
+                                                                   armed ? "delarmed" : "del"))) {
                                     if (armed) { QueueEdit({ EditKind::Del, sel, selTable, rv.uid, 0 }); s_armed = 0; }
                                     else s_armed = rv.uid;
                                 }
@@ -1133,38 +1171,30 @@ namespace MFO::Board {
                         // ── FULL-WIDTH READ-ONLY SUMMARY (Deck legibility) ──
                         if (!rules.empty()) {
                             ImGui::Spacing();
-                            ImGui::TextDisabled("Full rules (read-only). Top wins.");
+                            ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_FullRules));
                             ImGui::Separator();
                             ImGui::PushTextWrapPos(0.0f);
                             for (int i = 0; i < (int)rules.size(); ++i) {
                                 const auto& rv = rules[i];
-                                std::string cond = std::to_string(i + 1) + ".  When ";
-                                cond += labelFor(rv.condOp, condTab, condN);
-                                switch (kindFor(rv.condOp, condTab, condN)) {
-                                case ParamKind::Percent:
-                                    cond += " " + std::to_string((int)(std::clamp(rv.param, 0.0f, 1.0f)
-                                                                        * 100.0f + 0.5f)) + "%"; break;
-                                case ParamKind::Count:
-                                    cond += " " + std::to_string((int)(rv.param + 0.5f)); break;
-                                case ParamKind::Distance:
-                                    cond += " " + std::to_string((int)(rv.param + 0.5f)) + "u"; break;
-                                default: break;
-                                }
+                                const std::string valTxt = ValueText(kindFor(rv.condOp, condTab, condN), rv.param);
+                                const std::string cond = valTxt.empty()
+                                    ? Str::Fmt(Str::K::Gb_SumWhen, { i + 1, labelFor(rv.condOp, condTab, condN) })
+                                    : Str::Fmt(Str::K::Gb_SumWhenVal, { i + 1, labelFor(rv.condOp, condTab, condN), valTxt });
                                 std::string act = labelFor(rv.actOp, actTab, actN);
                                 if ((rv.actOp == Vocab::kActCastSelf ||
                                      rv.actOp == Vocab::kActCastTarget ||
                                      rv.actOp == Vocab::kActCastPlayer) && !rv.spellName.empty())
-                                    act += " (" + rv.spellName + ")";
+                                    act = Str::Fmt(Str::K::Gb_SumCast, { act, rv.spellName });
                                 if (!rv.enabled) {
                                     ImGui::PushStyleColor(ImGuiCol_Text,
                                         ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                                    ImGui::TextWrapped("%s   ->   %s   [off]",
-                                                       cond.c_str(), act.c_str());
+                                    ImGui::TextWrapped("%s", Str::Fmt(Str::K::Gb_SumOff,
+                                                       { cond, act }).c_str());
                                     ImGui::PopStyleColor();
                                 } else {
                                     ImGui::TextColored(skin.accent, "%s", cond.c_str());
                                     ImGui::SameLine(0, 0);
-                                    ImGui::TextDisabled("  ->  ");
+                                    ImGui::TextDisabled("  %s  ", Str::Get(Str::K::Gb_SumArrow));
                                     ImGui::SameLine(0, 0);
                                     if (rv.actOp == Vocab::kActWait)
                                         ImGui::TextDisabled("%s", act.c_str());
@@ -1182,15 +1212,14 @@ namespace MFO::Board {
 
                         const bool full = (int)rules.size() >= slots;
                         ImGui::BeginDisabled(full);
-                        if (ImGui::Button("+ Add rule"))
+                        if (ImGui::Button(Str::Label(Str::K::Gb_AddRule, "addrule")))
                             QueueEdit({ EditKind::Add, sel, selTable, 0u, 0 });
                         ImGui::EndDisabled();
                         if (full) { ImGui::SameLine();
-                            ImGui::TextDisabled("All %d slots used. More unlock with rapport.", slots); }
+                            ImGui::TextDisabled("%s", Str::Fmt(Str::K::Gb_AllUsed, { slots }).c_str()); }
 
                         ImGui::Spacing();
-                        ImGui::TextDisabled("Highlight a slot and press [A]/E to open its list. "
-                                            "[Y] toggles the highlighted line. Top rule wins.");
+                        ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_FooterHelp));
 
                         ImGui::EndTabItem();
                     }
@@ -1264,10 +1293,9 @@ namespace MFO::Board {
             }
             s_prevNavBusy = navBusy;   // ground truth for next frame
             if (pickerDrawnThisFrame)
-                ImGui::TextDisabled("[A]/E pick   [B]/Esc back   d-pad to move");
+                ImGui::TextDisabled("%s", Str::Get(Str::K::Ft_Picker));
             else
-                ImGui::TextDisabled("[A]/E open list   [B]/Esc back-or-close   [LB]/[RB] follower   "
-                                    "[View] tab   [Y] toggle line   d-pad move   -   Skin in MCM");
+                ImGui::TextDisabled("%s", Str::Get(Str::K::Ft_Main));
             ImGui::End();
             ImGui::PopStyleColor(skinCols);
         }

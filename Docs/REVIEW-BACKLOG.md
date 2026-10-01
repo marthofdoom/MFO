@@ -1153,3 +1153,14 @@ Raised against ce1b54c (`fix/mfo-cosave-readers`, Opus tier-3 review, verdict ME
 - **Raised:** Opus review of `fix/mfo-b63-best-per-slot` @8e8c132, 2026-10-01. **Severity:** SEV-4. Pre-existing since `cc4e895`.
 - **Finding:** a player piece worn in a mage set slot is either the set's best (so 4b skips it as a set piece) or leaves the set best unworn (so the whole-set-worn gate blocks recording). Either way it never reaches `g_playerPicks`, and a later upgrade can sell it or ship it to the museum.
 - **Suggested fix:** record per slot, with the same per-slot gate as MFO-B211.
+
+### MFO-B206 (SEV-4 / SEV-5, deferred) -- i18n (translatable ImGui): review leftovers
+Raised against 7b2552fb (`feat/mfo-translations`, Opus review, nothing above SEV-3 after the SEV-3 and the column-width SEV-4 were fixed in the next commits), 2026-10-01. The reviewer's verbatim text was not stored on disk (only its working log, `agentlogs/review-i18n.md`); each item below carries the coordinator's relayed finding and the reviewer's reasoning as relayed.
+- **SEV-4, accepted:** `release.sh` is outside the brief's stated file list (it gained the template copy and the `gen_template.py --check` gate, +6 lines). Reasoning: shipping the template is the task's own deliverable, so it was accepted, but it should have been flagged as scope when it was done. Python 3 is now needed on the packaging machine.
+- **SEV-5:** `Strings.cpp` `TranslatorUp()` leaves the one AddRef `GetStateAddRef` takes, as the SKSE wrapper does. Reasoning: a singleton state object, bounded leak.
+- **SEV-5:** `ParseTranslation("MFO")` runs on the main thread at kDataLoaded and may touch `translationMap` while the engine's UI runs. Reasoning: no race found, and it only runs when nothing was found.
+- **SEV-5:** `##` / `###` inside a translated value is not rejected. Reasoning: a translator could embed an ImGui ID separator and change a label's ID or hide text.
+- **SEV-5:** a translator who copies `MFO_ENGLISH.txt` whole into `MFO_<LANG>.txt` supplies a line for every key, which blocks the game-term fallback (Health/Magicka/Stamina/Cancel). Reasoning: by design (MFO file wins), but easy to hit.
+- **SEV-5:** the hosted tab fallback in `Board_Progression.cpp` (`hostedTabLabel`, now `Win_Header`) is also the tab's ImGui ID, so the ID depends on the language. Reasoning: only matters if the add-on ships an empty label.
+- **SEV-5:** the del / sure? button swap changes the ImGui ID with the armed state (kept as before on purpose). Reasoning: unchanged behaviour, noted so nobody "fixes" it blindly.
+- **Surfaced at edit time from:** MAP.md section 6, `native/i18n/` entry.
