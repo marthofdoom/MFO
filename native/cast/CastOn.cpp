@@ -987,6 +987,7 @@ namespace MFO::Actuation {
                         handPlan.left                     ? APMFBridge::kApmfHandLeft :
                                                              APMFBridge::kApmfHandRight;
                     commitPreempt();
+                    NoteArchetypeRoad(a_follower, spell, ArchRoad::OwnedClaim);   // [archetype] probe (passive)
                     ownedClaimHeld =
                         APMFBridge::ClaimOffenseCast(a_follower->GetFormID(), spell->GetFormID(),
                                                      a_target->GetFormID(), claimHand,
@@ -1037,6 +1038,7 @@ namespace MFO::Actuation {
                     // threshold is in scope here, matching every ComposedCast::Try call
                     // site except CastAuto's own (CAST-DELIVERY.md's STOP-PERCENT note).
                     commitPreempt();
+                    NoteArchetypeRoad(a_follower, spell, ArchRoad::HealClaim);   // [archetype] probe (passive)
                     composed = ComposedCast::Try(a_follower, spell, a_target,
                                                  CasterConsent::ClassifySpell(spell),
                                                  /*stopPct=*/0);
@@ -1412,6 +1414,7 @@ namespace MFO::Actuation {
                     // its own spell. Force the CONFIGURED spell through the
                     // package route; only a structural decline falls through
                     // to the silent apply below (never a regression).
+                    NoteArchetypeRoad(a_follower, spell, ArchRoad::Legacy);   // [archetype] probe (passive)
                     if (auto forced = ForceCast(a_follower, spell, a_target, aiCastOther)) {
                         return *forced;
                     }
@@ -1639,6 +1642,7 @@ namespace MFO::Actuation {
                     if (!caster) return;   // F4: no caster -> no cast, no deduct
                     auto* mavo = f->AsActorValueOwner();
                     const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                    CastBreadcrumb("legacy-force", f, sp, tid);   // [cast-call], flushed
                     caster->CastSpellImmediate(sp, false, t, 1.0f, false, 0.0f, f);
                     const float c     = sp->CalculateMagickaCost(f);
                     const float spend = mavo ? std::min(c, pool) : 0.0f;

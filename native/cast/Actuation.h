@@ -590,4 +590,71 @@ namespace MFO::Actuation {
     // SAME per-follower release point. Not an outside-caller entry point.
     void ClearApmfRefusalLog(RE::FormID a_follower);
 
+    // ── SPELL ARCHETYPE CLASSIFIER + [archetype] PROBE (feat/mfo-spell-archetype-probe) ──
+    // PASSIVE. Nothing here changes a road, a gate or an outcome; it only reads the SPEL/MGEF
+    // records and writes log lines (cast/Archetype.cpp, which carries the full reasoning, the
+    // fork field citations and the doc citations of every mirrored row). Task 7, 86e3dmtr1.
+    // Pure FORM DATA: no engine call, safe on the worker, the main thread and the combat thread.
+    enum class SpellShape : std::uint8_t {
+        Plain, Constant, Summon, Reanimate, Script, BoundWeapon, Cloak, Ward, Light,
+        Rune, Wall, TLBurst, AimedAoE, Touch, SelfAoE
+    };
+    // The engine caster type the decoded table predicts (APMF Docs/STATUS.md:135-161). A
+    // PREDICTION mirrored from documentation, never read from the engine: NoRow = the table has
+    // no row so the AI builds no CombatInventoryItem; Unknown = a condition of the row cannot be
+    // read unambiguously from the docs.
+    enum class EngineRow : std::uint8_t {
+        NoRow, Unknown, Offensive, Restore, Stagger, Disarm, TargetEffect, Paralyze, Script,
+        Ward, Summon, Cloak, Light, Invisibility, BoundItem, Armor, Reanimate
+    };
+    struct SpellArchetype {
+        RE::MagicSystem::Delivery    delivery   = RE::MagicSystem::Delivery::kSelf;
+        RE::MagicSystem::CastingType casting    = RE::MagicSystem::CastingType::kFireAndForget;
+        SpellShape   shape        = SpellShape::Plain;
+        EngineRow    row          = EngineRow::NoRow;
+        bool         seat0        = false;   // classified with self forced to 1 (APMF seat 0 on a heal claim)
+        bool         rowApprox    = false;   // several effects with different rows: costliest effect chosen
+        std::string  rowWhy;                 // why NoRow / Unknown / approx (empty when exact)
+        bool         restoration  = false;   // IsRestorationSpell, unchanged
+        bool         anyHostile   = false;   // any effect kHostile
+        bool         twoHanded    = false;   // SpellItem::IsTwoHanded (equip slot flag 1)
+        bool         noDualMods   = false;   // SPIT flag kNoDualCastMods
+        float        chargeTime   = 0.0f;    // SPIT chargeTime
+        float        range        = 0.0f;    // SPIT range
+        std::uint32_t area        = 0;       // max EFIT area over effects
+        bool         hasProjectile = false;  // any effect names a projectile
+        bool         hasBarrier   = false;   // ...and it is a barrier type
+        bool         hasExplosion = false;
+        bool         snapToNavMesh = false;  // any effect kSnapToNavMesh
+        std::uint32_t effectCount = 0;
+        const char*   kindName    = "?";    // CasterConsent::ClassifySpell: Offense / Buff / Heal (static literal)
+    };
+    // Cached per FormID under a leaf mutex (record data is static after load). Null -> default.
+    // a_seat0 = model APMF seat 0 (STATUS.md:135, :186-188): the claim's driven form keys self=1, so a
+    // heal-OTHER claim lands in the Restore row. Used for the HealClaim road only.
+    SpellArchetype ClassifyArchetype(RE::SpellItem* a_spell, bool a_seat0 = false);
+    const char* ShapeName(SpellShape a_shape);
+    const char* EngineRowName(EngineRow a_row);
+    // "<name> (<id>) shape=<s> predicted=<row>[...]" -- the [cfc] enrichment.
+    std::string DescribeArchetype(RE::SpellItem* a_spell);
+
+    enum class ArchRoad : std::uint8_t { OwnedClaim, ConcClaim, HealClaim, Direct, Summon, Legacy };
+    // One-time [archetype] INFO per (follower, spell, road) per session, plus ONE WARN per (follower,
+    // spell) when a claim road meets a predicted NoRow. Call at the road decision. Leaf mutex only.
+    void NoteArchetypeRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, ArchRoad a_road);
+    // Flushed [cast-call] breadcrumb IMMEDIATELY before a CastSpellImmediate, so a hard freeze's
+    // last log line names the call. Form ids only on the target (no engine name read).
+    void CastBreadcrumb(const char* a_road, RE::Actor* a_caster, RE::SpellItem* a_spell,
+                        RE::FormID a_targetId);
+    // Revert/load: clear the once-per-session ledgers. Called from ClearSelfCasts.
+    void ResetArchetypeLog();
+
+    // SUMMON LANDING PROBE (cast/SummonProbe.cpp). MAIN THREAD ONLY (call from inside a MainThread::Post
+    // closure, as SummonOnMain does): starts a self-reposting main-thread probe that logs where the
+    // summon cast just made by a_caster for a_spell appears relative to it ([summon-probe] lines).
+    // a_preexisting = SnapshotSummonActors taken BEFORE the cast (else the new creature could be skipped).
+    std::vector<RE::FormID> SnapshotSummonActors(RE::Actor* a_caster, RE::FormID a_spell);
+    void ProbeSummonLanding(RE::FormID a_caster, RE::FormID a_spell, float a_appearSec,
+                            std::vector<RE::FormID> a_preexisting);
+
 }

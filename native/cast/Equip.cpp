@@ -472,8 +472,26 @@ namespace MFO::Actuation {
                 }
                 return false;
             };
-            const bool rightSatisfies = holdsCategory(heldRight) && !relicWithAlternative(heldRight);
-            const bool leftSatisfies  = holdsCategory(heldLeft) && !relicWithAlternative(heldLeft);
+            // RANGED AMMO TERM on the satisfied test (marth 2026-10-01): a ranged weapon held with NO
+            // matching ammo carried does not satisfy the rule while another eligible ranged weapon
+            // has some -- otherwise the pick below (which ranks that one first) never runs and the
+            // empty bow stays drawn. Walks the pack only when a ranged weapon is actually held.
+            const auto emptyWhileAmmoElsewhere = [&](RE::TESForm* a_held) {
+                auto* hw = (a_ranged && a_held) ? a_held->As<RE::TESObjectWEAP>() : nullptr;
+                if (!hw) return false;
+                const Logistics::AmmoOwned have = Logistics::CountAmmoOwned(a_follower);
+                if (have.For(hw) > 0) return false;
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* w = obj->As<RE::TESObjectWEAP>();
+                    if (w && w != hw && eligible(w) && !IsMuseumRelic(a_follower, w) && have.For(w) > 0) return true;
+                }
+                return false;
+            };
+            const bool rightSatisfies = holdsCategory(heldRight) && !relicWithAlternative(heldRight) &&
+                                        !emptyWhileAmmoElsewhere(heldRight);
+            const bool leftSatisfies  = holdsCategory(heldLeft) && !relicWithAlternative(heldLeft) &&
+                                        !emptyWhileAmmoElsewhere(heldLeft);
             if (rightSatisfies || leftSatisfies) {
                 // ── OFF-HAND TOP-UP on the satisfied lap (2026-09-13) ─────────
                 // Melee, style control ON, a one-hander in the RIGHT hand, no
@@ -569,9 +587,16 @@ namespace MFO::Actuation {
                 }
                 return { Result::NoOp, "already holding that category", true };
             }
-            // THE PICK: WeaponScore inside the ordered class (banner above). Ranged
-            // never has a preferred kind, so a bow/crossbow pick is plain damage.
+            // THE PICK: WeaponScore inside the ordered class (banner above). RANGED
+            // (marth 2026-09-14, 2026-10-01): RangedPickScore = the perk-biased WeaponScore plus
+            // an AMMO tier -- a bow/crossbow/gun with no matching ammo carried sorts below every
+            // one that has some, and when none has any the perk-biased order stands (the old
+            // behaviour with no preferred kind: plain damage). The ammo family is matched from the
+            // weapon's own record (Logistics::RangedUsesBolts), the same test ComputeWeaponRoles
+            // used to set wantCrossbow, so loot/buy chase the ammo of THIS pick.
             const Logistics::WeaponRoles roles = WeaponRolesFor(a_follower);
+            const Logistics::AmmoOwned ammoOwned = a_ranged ? Logistics::CountAmmoOwned(a_follower)
+                                                            : Logistics::AmmoOwned{};
             // LOTD (field 2026-09-26): a museum relic competes only in its own pool,
             // used when NOTHING else of the category is carried.
             RE::TESObjectWEAP* best = nullptr; float bestScore = 0.0f;
@@ -582,7 +607,8 @@ namespace MFO::Actuation {
                 if (!eligible(w)) continue;   // staff / non-playable / category / mage daggers (above)
                 // `>=` on the float score orders EXACTLY as the old `>=` on the
                 // uint16 damage did when no kind is preferred (last equal wins).
-                const float score = Logistics::WeaponScore(roles, w);
+                const float score = a_ranged ? Logistics::RangedPickScore(roles, w, ammoOwned)
+                                             : Logistics::WeaponScore(roles, w);
                 if (IsMuseumRelic(a_follower, w)) {
                     if (score >= bestRelicScore) { bestRelicScore = score; bestRelic = w; }
                     continue;
