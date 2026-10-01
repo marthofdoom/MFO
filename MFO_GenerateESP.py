@@ -1160,10 +1160,10 @@ def make_qust():
 # author-tunable in xEdit without touching the DLL.
 #
 # FormID band: FROZEN generator<->DLL contract with native/Progression.h
-# (0x800/0x801) and native/progression/ProgAllocator.h (everything else). §18.6: the ESL
-# now masters TWO plugins — Skyrim.esm (index 0x00) and MFO.esp (index 0x01),
-# the latter so the manifest FLST can point at MFO.esp's addon sentinel — so
-# the ESL's OWN forms move to master index 0x02 (OWN_PROG). ESL-legal locals
+# (0x800/0x801) and native/progression/ProgAllocator.h (everything else). The ESL
+# masters ONE plugin, Skyrim.esm (index 0x00), so its OWN forms sit at index 0x01
+# (OWN_PROG below; the earlier two-master §18.6 layout with MFO.esp and prefix 0x02
+# is retired, see the 1.1 note under OWN_PROG). ESL-legal locals
 # stay 0x800-0xFFF. The DLL resolves everything by (localID, plugin name), so
 # the prefix shift is invisible to it; the co-save stores runtime FormIDs.
 # ═══════════════════════════════════════════════════════════════════════════
