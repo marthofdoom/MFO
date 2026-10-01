@@ -172,11 +172,11 @@ namespace MFO::Followers {
     // every actor write for that follower too. OFF-WORKER SAFE: reads the
     // g_mx-guarded mirror Refresh republishes (the IsTrackedFast road, #74),
     // never the live map — so the TRUE main-thread progression poll may call
-    // it. A toggle flipped on the Board is visible here by the next Refresh
-    // (one diag turn). true when no record / not yet mirrored.
+    // it. A toggle flipped on the Board is visible here at once (the Board write site calls
+    // RepublishActiveMirror), else by the next Refresh. true when no record / not yet mirrored.
     bool IsMfoEnabled(RE::FormID a_actorID);
     // Republish the g_mx mirrors (incl. the mfoEnabled one) NOW (MFO-B12: the Board's
-    // SetMfoEnabled write site calls it, so a toggle needs no wait for the next Refresh).
+    // SetMfoEnabled write site calls it, so a toggle is visible at once).
     // WORKER-thread only (same domain that writes g_followers); call under no lock.
     void RepublishActiveMirror();
     void         SetBaseClass(RE::FormID a_actorID, std::uint8_t a_stance);

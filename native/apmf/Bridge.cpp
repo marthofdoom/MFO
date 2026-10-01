@@ -981,7 +981,7 @@ namespace MFO::APMFBridge {
             }
             if (o.heal.handle != APMF_API::kInvalidHandle && now - o.heal.refreshed >= facetExpiry) {
                 // BUILD-WINDOW HOLD (field 2026-09-30b): a heal claim younger than
-                // kHealHoldNeverObservedMs and not yet seen firing is still waiting for
+                // kHealClaimNeverObservedCapMs and not yet seen firing is still waiting for
                 // the engine to build its Restore caster (measured claim-to-fire
                 // 2.3-4.5 s). The rule can skip a lap or two (PickAlly's LoS trust) and
                 // let `refreshed` go stale inside that window; releasing then restarts
@@ -992,7 +992,7 @@ namespace MFO::APMFBridge {
                 const auto healAgeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     now - o.heal.created).count();
                 const bool buildingCaster =
-                    healAgeMs >= 0 && healAgeMs < static_cast<long long>(kHealBuildWindowMs) &&
+                    healAgeMs >= 0 && healAgeMs < static_cast<long long>(kHealClaimNeverObservedCapMs) &&
                     !ComposedCast::ObservedFiring(it->first, kApmfHandLeft, o.heal.spell,
                                                   static_cast<std::uint32_t>(healAgeMs + 1));
                 if (!buildingCaster) {
@@ -1009,7 +1009,7 @@ namespace MFO::APMFBridge {
                                  "and outside the {}ms caster-build window or already observed firing",
                                  it->first, o.heal.handle, o.heal.spell, o.heal.target, healAgeMs, staleMs,
                                  std::chrono::duration_cast<std::chrono::milliseconds>(facetExpiry).count(),
-                                 kHealBuildWindowMs);
+                                 kHealClaimNeverObservedCapMs);
                 }
                 ReleaseClaimLocked(o.heal);
                 // Heals are LEFT always; an offense claim still live on the left

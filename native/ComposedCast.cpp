@@ -147,8 +147,8 @@ namespace MFO::ComposedCast {
         // firing it" while the seats were firing it perfectly. A diagnostic that
         // cries wolf on every claim is worse than none (principle 8). 3500 ms sits
         // above the measured charge latency and still strictly BELOW both
-        // kHealHoldNeverObservedMs (4000) and kIdleFloorUnobservedMs (8000), so both
-        // static_asserts below keep holding and the warning still precedes either
+        // kHealClaimNeverObservedCapMs / kHoldLastSeenCapMs (4000) and
+        // kIdleFloorUnobservedMs (8000), so all three static_asserts below keep holding and the warning still precedes either
         // lift in the log.
         //
         // The timer is not the real fix, though -- WatchArmed below now also stays

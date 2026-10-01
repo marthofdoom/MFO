@@ -131,8 +131,8 @@ namespace MFO::Followers {
             std::make_shared<const std::vector<RE::FormID>>();
 
         // Republish the mirror + snapshot from the current g_activeIds. Call
-        // under NOTHING (it takes g_mx itself); invoked at Refresh's tail and
-        // from ClearTransientState. g_mx is a strict LEAF -- no MFO call is made
+        // under NOTHING (it takes g_mx itself); invoked at Refresh's tail, from
+        // ClearTransientState and (via RepublishActiveMirror) the Board's mfoEnabled write. g_mx is a strict LEAF -- no MFO call is made
         // while it is held.
         void PublishActiveMirror() {
             std::lock_guard<std::mutex> lk(g_mx);
@@ -143,7 +143,7 @@ namespace MFO::Followers {
             // The per-follower MFO switch, mirrored for the progression poll on the
             // TRUE main thread (#74: never the live map). Read here on the worker —
             // the same domain that writes it (Board ApplyEdits) — so a toggle is
-            // visible off-worker by the next Refresh (one diag turn).
+            // visible off-worker at once (RepublishActiveMirror at the Board write site) or by the next Refresh.
             g_mfoOff.clear();
             for (const auto& [id, st] : g_followers)
                 if (!st.mfoEnabled) g_mfoOff.insert(id);

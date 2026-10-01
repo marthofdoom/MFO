@@ -70,6 +70,7 @@ namespace MFO::Loadout {
         // EDIDs ("LeftHand" / "RightHand" / 0x13F44 "EitherHand"). Skyrim.esm is
         // always load index 00, so the runtime FormID is the file FormID.
         constexpr RE::FormID kLeftHandEquipSlot = 0x00013F43;
+        constexpr RE::FormID kRightHandEquipSlot = 0x00013F42;
 
         bool IsTwoHanded(RE::TESForm* a_form) {
             auto* weap = a_form ? a_form->As<RE::TESObjectWEAP>() : nullptr;
@@ -191,7 +192,7 @@ namespace MFO::Loadout {
     // `RHEQ` (index 20, kRightHandEquip; see the table note above). Same FormID
     // lookup as LeftHandSlot, for the same reason (no GetObject read).
     const RE::BGSEquipSlot* RightHandSlot() {
-        return RE::TESForm::LookupByID<RE::BGSEquipSlot>(0x00013F42);
+        return RE::TESForm::LookupByID<RE::BGSEquipSlot>(kRightHandEquipSlot);
     }
 
     Hands Read(RE::Actor* a_actor, RE::SpellItem* a_spell) {

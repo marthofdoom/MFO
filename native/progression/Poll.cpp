@@ -45,7 +45,7 @@ namespace MFO::ProgAllocator {
         // per follower, dump the skill ledger beside the live base AV. Runs on the poll's
         // main-thread domain (g_prog's only legal reader here); the per-load guard is
         // g_pollGen, which OnPostLoad bumps, so no extra reset hook is needed.
-        void DumpLedgerOnce(RE::FormID a_id, RE::Actor* a_actor, const ProgState& a_st) {
+        void DumpLedgerOnce(RE::FormID a_id, RE::Actor* a_actor, const ProgState& a_st, bool a_managed) {
             static int                          s_gen = -1;
             static std::unordered_set<RE::FormID> s_done;
             if (s_gen != g_pollGen) { s_gen = g_pollGen; s_done.clear(); }
@@ -55,7 +55,7 @@ namespace MFO::ProgAllocator {
                          "applied={} managed={} skills={} baselines={}",
                          a_id, NameOf(a_actor), a_st.clsId, NameOf(const_cast<RE::TESForm*>(cls)),
                          a_st.autoLevelsGranted, a_st.progressionLevel, a_st.applied,
-                         Followers::IsMfoEnabled(a_id), a_st.skills.size(), a_st.baseline.size());
+                         a_managed, a_st.skills.size(), a_st.baseline.size());
             auto* avo = a_actor->AsActorValueOwner();
             for (const auto& s : a_st.skills) {
                 float base = -1.0f;
@@ -220,7 +220,7 @@ namespace MFO::ProgAllocator {
                         RecomputeHMS(actor, st, /*log*/ true, grantBudget);
                     }
                 }
-                if (actor) DumpLedgerOnce(id, actor, st);   // diagnostic, read-only
+                if (actor && (st.applied || !managed)) DumpLedgerOnce(id, actor, st, managed);   // diagnostic, read-only; never pre-reapply
             }
         }
 
