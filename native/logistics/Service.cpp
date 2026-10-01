@@ -1856,6 +1856,8 @@ namespace MFO::Logistics {
                         auto* mavo = f->AsActorValueOwner();
                         const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                         const float hpBefore = Vocab::HealthPct(t);   // [heal-obs] (feat/mfo-animheal-p0)
+                        Actuation::NoteArchetypeRoad(f, s, Actuation::ArchRoad::Direct);   // [archetype] probe (passive)
+                        Actuation::CastBreadcrumb("ooc-cast", f, s, tgtID);   // [cast-call], flushed
                         caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
                         const float c     = s->CalculateMagickaCost(f);
                         const float spend = mavo ? std::min(c, pool) : 0.0f;   // never negative
@@ -1928,6 +1930,8 @@ namespace MFO::Logistics {
                                 if (!caster) return;
                                 auto* mavo = f->AsActorValueOwner();
                                 const float pool = mavo ? mavo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
+                                Actuation::NoteArchetypeRoad(f, s, Actuation::ArchRoad::Direct);   // [archetype] probe (passive)
+                                Actuation::CastBreadcrumb("ooc-hostile", f, s, tgtID);   // [cast-call], flushed
                                 caster->CastSpellImmediate(s, false, t, 1.0f, false, 0.0f, f);
                                 const float c     = s->CalculateMagickaCost(f);
                                 const float spend = mavo ? std::min(c, pool) : 0.0f;

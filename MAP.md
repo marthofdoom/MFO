@@ -465,7 +465,7 @@ releases **by eviction** with a non-actor XMarker.
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
-### native/cast/ — Fire / Roads / CastOn / Equip / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / Auto / Hands + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
+### native/cast/ — Fire / Roads / CastOn / Equip / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / SummonProbe / Archetype / Auto / Hands + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
 Only module that mutates actor state; main-thread only. **Layout = the wave-1 subsystem-folder
 split (2026-09-24, `refactor/subsystem-folders-wave1`, drained REVIEW-BACKLOG MFO-B37), a pure
 move proven function by function by `tools/splitcheck`; before it the family was
@@ -538,13 +538,34 @@ per concern:
   - `cast/HealObs.cpp` (249) = `[heal-obs]`: `ReadbackWarnDue` (`:61`), `HealObsNote` (`:77`),
     the claim road's `HealObsClaimLap` (`:109`) / `HealObsNoteClaimFire` (`:115`) (animheal phase 2),
     `HealObsSweep` (`:140`); `ResetHealObs` (`:43`, extern since the split).
-- `cast/Summon.cpp` (369) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
-  `CastSummonOnce` (`:305`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
+- `cast/Summon.cpp` (383) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
+  `CastSummonOnce` (`:315`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
   `g_summonMx`/`g_summon`/`g_summonPosted` (`:68-69`, `:79`) is extern (ClearSelfCasts clears it).
 - `cast/Auto.cpp` (724) = the AUTO fan-out `CastAuto` (`:308`; its claim-road heal SERIES `:325`, see
   "ANIMATED HEAL CLAIM ROAD" below) with its pacing `g_autoCast` (`:22`)
   and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:193`), and
-  `IsSummonSpell` (`:266`, public; it lives here because `CastAuto` inlines it).
+  `IsSummonSpell` (`:269`, public; it lives here because `CastAuto` inlines it).
+- **SPELL ARCHETYPE PROBE (feat/mfo-spell-archetype-probe, task 7 slice P0, PASSIVE, no behaviour change).**
+  `cast/Archetype.cpp` = `ClassifyArchetype(SpellItem*)` (pure SPEL/MGEF form reads, cached per FormID under
+  the leaf `g_cacheMx`): shape, delivery, casting, two-handed, noDualMods, charge, range, area, projectile,
+  snap-to-navmesh, and a PREDICTED engine caster row mirrored from Harbinger `Docs/STATUS.md:135-161` (each
+  `kRows` entry cites its line); `NoteArchetypeRoad` = the once-per-(follower, spell, road) `[archetype]`
+  INFO + one WARN per (follower, spell) for a claim road meeting predicted `none` (ledger `g_noted`/`g_warned`
+  behind `g_noteMx`, cleared by `ResetArchetypeLog` from `ClearSelfCasts`); `CastBreadcrumb` = the flushed
+  `[cast-call]` line before every `CastSpellImmediate`; `DescribeArchetype` = the `[cfc]` enrichment
+  (`ComposedCast.cpp` NO-observed-cast warn). `cast/SummonProbe.cpp` = `ProbeSummonLanding`, the
+  self-reposting MAIN-thread `[summon-probe]` (offset, height, bearing, controller ground state at "appeared"
+  and +2 s "settled"), started from `SummonOnMain` right after the cast.
+  Call sites (all passive, delete the one line to remove): `NoteArchetypeRoad` at `CastSummonOnce` (covers
+  `cast/Fire.cpp:275`, `logistics/Service.cpp:1513`, `cast/Auto.cpp:603`), `CastOn.cpp` owned claim / heal
+  claim / legacy `ForceCast`, `DirectSelf.cpp` + `DirectTarget.cpp` heal claim and concentration claim,
+  `Auto.cpp` heal-claim series and `ApplyEffectFromTo`, `Direct.cpp` `ApplySelfEffect` / `ApplyTargetEffect`,
+  the two OOC `doCast`s in `logistics/Service.cpp`; `CastBreadcrumb` before each of the 9 direct
+  `CastSpellImmediate` sites in those files plus `SummonOnMain` (`Probe.cpp:224` is a probe and is not
+  crumbed). **What breaks:** nothing reads these results, so a wrong prediction only misleads a log read;
+  adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
+  `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
+  Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
 - `cast/Hands.cpp` (1191) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
   `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
@@ -1039,9 +1060,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     downed follower may keep his retreat, "still downed and crawling during retreat"; MFO-B153).
   * **Main-thread re-gates, right before each apply** (no cast, no magicka, `[bleed] ... apply
     REFUSED` once per caster until he can act, `NoteRefusedApply`): `ApplyEffectFromTo`
-    (`cast/Auto.cpp:89`), `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:323` / `:464`),
-    the legacy force `doCast` (`cast/CastOn.cpp:1327`), `SummonOnMain` (`cast/Summon.cpp:285`, verdict
-    Failed), the two OOC `doCast`s (`logistics/Service.cpp:1846` / `:1912`), and the drink
+    (`cast/Auto.cpp:77`), `ApplySelfEffect` / `ApplyTargetEffect` (`cast/Direct.cpp:339` / `:483`),
+    the legacy force `doCast` (`cast/CastOn.cpp:1621`), `SummonOnMain` (`cast/Summon.cpp:171`, verdict
+    Failed), the two OOC `doCast`s (`logistics/Service.cpp:1840` / `:1917`), and the drink
     (`DrinkBest`, `logistics/Service.cpp:70`: not posted, so the check sits in the same synchronous call
     as its `EquipObject`).
   * **Streams.** `SelfCastReconcile` / `TargetCastReconcile` end a live stream whose CASTER cannot act
@@ -1694,7 +1715,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   AUTO-only no-fanout)** — `Actuation::IsSummonSpell` + `Actuation::CastSummonOnce`
   (`cast/Summon.cpp`; main-thread half `SummonOnMain` `:171`, limit
   `SummonLimit` `:109`) are THE single summon path. The combat `Fire` guard
-  (`cast/Fire.cpp:215`) and the Logistics OOC cast block (`logistics/Service.cpp:1060`) send every
+  (`cast/Fire.cpp:275`) and the Logistics OOC cast block (`logistics/Service.cpp:1513`) send every
   summon there BEFORE any other road, for every target setting (self/player/foe/AUTO);
   `CastAuto` delegates too. **Threading:** the worker only runs the competence/magicka gates,
   reads the main thread's last verdict (`g_summon`, leaf mutex, fresh 1 s), throttles posts

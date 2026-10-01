@@ -377,6 +377,7 @@ namespace MFO::Actuation {
                 auto* avo  = a->AsActorValueOwner();
                 auto* inst = a->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
+                NoteArchetypeRoad(a, sp, ArchRoad::Direct);   // [archetype] probe (passive)
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 const bool  heal     = SpellHealsHealth(sp);
                 const float hpBefore = Vocab::HealthPct(a);   // [heal-obs]: read BEFORE the cast
@@ -396,6 +397,7 @@ namespace MFO::Actuation {
                             ? kConcHealCap : kConcSelfUtilityCap;
                     attach = HealAttach::Present;   // the live effect was found and re-armed
                     if (!SustainConcentrationEffect(a, sp, window)) {
+                        CastBreadcrumb("direct-self", a, sp, a_id);   // [cast-call], flushed
                         inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);   // attach ONCE
                         if (SustainConcentrationEffect(a, sp, window)) {               // then pin it
                             // Evidence line: ONCE per stream if the engine honors the
@@ -409,6 +411,7 @@ namespace MFO::Actuation {
                         }
                     }
                 } else {
+                    CastBreadcrumb("direct-self", a, sp, a_id);   // [cast-call], flushed
                     inst->CastSpellImmediate(sp, false, a, 1.0f, false, 0.0f, a);
                     if (HasDurationEffect(sp) && DeliveryAppliesInCall(sp))
                         attach = SpellEffectPresentOn(a, sp) ? HealAttach::Present : HealAttach::Absent;
@@ -505,6 +508,7 @@ namespace MFO::Actuation {
                 auto* avo  = caster->AsActorValueOwner();
                 auto* inst = caster->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
                 if (!inst) return;   // F4: no caster -> no cast, so do NOT deduct magicka
+                NoteArchetypeRoad(caster, sp, ArchRoad::Direct);   // [archetype] probe (passive)
                 const float before = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 const bool  heal     = SpellHealsHealth(sp);
                 const float hpBefore = Vocab::HealthPct(tgt);   // [heal-obs]: read BEFORE the cast
@@ -556,6 +560,7 @@ namespace MFO::Actuation {
                     attach = HealAttach::Present;   // the live effect was found and re-armed
                     if (!SustainConcentrationEffect(tgt, castSp, window)) {
                         // The KNOWN-WORKING FORCE -- caster casts (proxy of) sp AT tgt.
+                        CastBreadcrumb("direct-target", caster, castSp, a_targetID);   // [cast-call], flushed
                         inst->CastSpellImmediate(castSp, false, tgt, 1.0f, false, 0.0f, caster);
                         if (SustainConcentrationEffect(tgt, castSp, window)) {
                             // Evidence line: ONCE per stream if the engine honors the
@@ -582,6 +587,7 @@ namespace MFO::Actuation {
                 } else {
                     // The KNOWN-WORKING FORCE -- caster casts sp AT tgt, package-free.
                     // (Baseline: an FF Self spell force-cast here lands on tgt.)
+                    CastBreadcrumb("direct-target", caster, sp, a_targetID);   // [cast-call], flushed
                     inst->CastSpellImmediate(sp, false, tgt, 1.0f, false, 0.0f, caster);
                     if (HasDurationEffect(sp) && DeliveryAppliesInCall(sp))
                         attach = SpellEffectPresentOn(tgt, sp) ? HealAttach::Present : HealAttach::Absent;
@@ -727,6 +733,7 @@ namespace MFO::Actuation {
         ComposedCast::Reset();        // drop executor streams/backoff/expected-cast set
         ClearCastLocks();             // Task 2: drop every firing-spell gambit lock
         g_lastApmfRefusal.clear();    // this file's APMF-refusal log dedup, session-scoped
+        ResetArchetypeLog();          // [archetype] once-per-session ledgers (cast/Archetype.cpp)
         g_summonPosted.clear();       // summon post throttle (worker state, session-scoped)
         {
             std::lock_guard lk(g_summonMx);   // main-written verdicts / last casts
