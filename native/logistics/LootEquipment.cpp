@@ -177,7 +177,7 @@ namespace MFO::Logistics {
                 if (ctx.wantBackup && WeaponClassOf(w->GetWeaponType()) == WepClass::OneHand &&
                     (!ctx.daggersOnly || w->GetWeaponType() == WT::kOneHandDagger))
                     ctx.myBackupDmg = std::max(ctx.myBackupDmg, w->GetAttackDamage());
-                if (ctx.doRanged && w->GetWeaponType() == (ctx.wantCrossbow ? WT::kCrossbow : WT::kBow))
+                if (ctx.doRanged && RangedInFamily(w, ctx.wantCrossbow))
                     ctx.myRangedDmg = std::max(ctx.myRangedDmg, w->GetAttackDamage());
             }
             return ctx;
@@ -238,8 +238,7 @@ namespace MFO::Logistics {
                     WeaponScore(ctx.roles, weap) > ctx.offHandBaseScore)
                     return true;
                 if (ctx.doRanged) {
-                    const auto wt = weap->GetWeaponType();
-                    const bool kindMatch = ctx.wantCrossbow ? (wt == WT::kCrossbow) : (wt == WT::kBow);
+                    const bool kindMatch = RangedInFamily(weap, ctx.wantCrossbow);
                     if (kindMatch && weap->GetAttackDamage() > ctx.myRangedDmg) return true;
                 }
                 if (ctx.wantBackup && wc == WepClass::OneHand &&
@@ -421,8 +420,7 @@ namespace MFO::Logistics {
                     }
                     // Ranged pickup -- ONLY the follower's kind (bow XOR crossbow).
                     if (doRanged) {
-                        const auto wt = weap->GetWeaponType();
-                        const bool kindMatch = wantCrossbow ? (wt == WT::kCrossbow) : (wt == WT::kBow);
+                        const bool kindMatch = RangedInFamily(weap, wantCrossbow);
                         if (kindMatch && weap->GetAttackDamage() > bestRangedDmg) {
                             bestRangedDmg = weap->GetAttackDamage();
                             bestRanged    = obj;

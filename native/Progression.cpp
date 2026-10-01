@@ -290,7 +290,8 @@ namespace MFO::Progression {
             if (id == "WeapTypeGreatsword") return kWkGreatsword;
             if (id == "WeapTypeBattleaxe")  return kWkBattleaxe;
             if (id == "WeapTypeWarhammer")  return kWkWarhammer;
-            if (id == "WeapTypeBow")        return kWkBow;
+            // Both vanilla bows and crossbows carry this keyword, so a perk conditioned on it names both kinds.
+            if (id == "WeapTypeBow")        return kWkBow | kWkCrossbow;
             return 0;
         }
         std::uint8_t ArmorKindOfKeyword(const RE::TESForm* a_kw) {
@@ -335,6 +336,20 @@ namespace MFO::Progression {
                         for (float c = 1.0f; c <= 12.0f; c += 1.0f) admitsAnyItem = admitsAnyItem || Admits(d, c);
                         if (Admits(d, 0.0f) && !admitsAnyItem) handEmpty[hand] = true;
                         if (!Admits(d, 0.0f)) handWeapon[hand] = true;
+                    }
+                    // RANGED KIND by the right-hand item type (2026-10-01, marth: perks decide how a
+                    // weapon type is used): 7 = bow, 12 = crossbow. A test that admits exactly one of
+                    // them votes that kind (ONLY when the test admits exactly one item-type code in
+                    // 1..12: `== 7` / `== 12` vote, while `!= 7`, `> 7`, `>= 8`, `<= 7` do not, since
+                    // those are "not with a bow" shapes). Beside the keyword votes. Added to a_out only, NOT to
+                    // localWeaponKinds, so the unarmed logic below stays exactly as it was (MFO-B14).
+                    if (hand == 1) {
+                        int admittedCodes = 0;
+                        for (float c = 1.0f; c <= 12.0f; c += 1.0f) if (Admits(d, c)) ++admittedCodes;
+                        if (admittedCodes == 1) {
+                            if (Admits(d, 12.0f))     a_out.weaponKinds |= kWkCrossbow;
+                            else if (Admits(d, 7.0f)) a_out.weaponKinds |= kWkBow;
+                        }
                     }
                     if (hand != 0) continue;   // right-hand checks carry no other style fact
                     if (!Admits(d, 0.0f)) leftExcludesEmpty = true;
@@ -989,7 +1004,7 @@ namespace MFO::Progression {
                     ++v.owned;
                     if (!st.Any()) continue;   // unclassifiable rank: votes for nothing
                     ++v.classified;
-                    for (int b = 0; b < 8; ++b) if (st.weaponKinds & (1u << b)) ++v.weapon[b];
+                    for (int b = 0; b < 9; ++b) if (st.weaponKinds & (1u << b)) ++v.weapon[b];
                     for (int b = 0; b < 3; ++b) if (st.armorKinds  & (1u << b)) ++v.armor[b];
                     if (st.leftHandWeapon) ++v.leftHandWeapon;
                     if (st.leftHandShield) ++v.leftHandShield;
