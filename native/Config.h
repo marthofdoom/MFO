@@ -89,9 +89,9 @@ namespace MFO::Config {
     // DIK codes for the interface hotkeys (INI iBoardKey / iHudKey, both also
     // MCM keymaps on the Interface page). iBoardKey toggles the Field Orders
     // board exactly like the Field Orders power (and closes it when open);
-    // iHudKey toggles the combat HUD. 0 = unbound (the default for both).
-    inline std::atomic<int>   g_boardKey{ 0 };
-    inline std::atomic<int>   g_hudKey{ 0 };
+    // iHudKey toggles the combat HUD. -1 = unbound (the default for both; any value <= 0 is unbound).
+    inline std::atomic<int>   g_boardKey{ -1 };
+    inline std::atomic<int>   g_hudKey{ -1 };
     // Put the gambit spell in the follower's hand so they cast it with a real
     // animation, and -- crucially -- so Loadout::Prepare's HasSpell/affordability
     // gate runs (the silent path skips it and would cast an unknown spell). Now

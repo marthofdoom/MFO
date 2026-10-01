@@ -7,6 +7,10 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **The board and HUD hotkeys start empty.** They no longer show a key in the MCM until you pick one. `iBoardKey` and `iHudKey` default to -1, and any value of 0 or less means no key. If your MCM still holds the old 0, MFO clears it to -1 once on upgrade. Pick a key and it stays.
+- **Followers make lockpicking sounds.** While a follower works a lock you hear the pick at their position, and a pick snaps with the vanilla break sound at them for each pick they break. The sound gets quieter with distance, so a follower picking a lock far away is faint. MFO.esp carries its own copies of the two vanilla sounds for this, because the vanilla ones always play in your ears. They follow your sound effects volume.
+- **The Followers tab shows where retained followers are.** A follower you are not currently travelling with now lists their current cell next to their name, or the location name if the cell has none.
+
 ## v2.0.16 -- Heals are animated in combat again
 
 - **Smarter gem choices for followers.** With the effect-aware gem option on (it is off by default), a follower no longer swaps a good gem for a Focus, Echo or Conduit that would do nothing. They keep a support gem that works and drop one that does not when a better gem turns up. They stop pairing a gem with gear it does not suit. A follower with two identical weapons now carries the right weapon's gems over when they replace one, with no more failed retries on the second weapon.

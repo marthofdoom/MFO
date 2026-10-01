@@ -55,6 +55,9 @@ namespace MFO::Board {
         // FollowerState::mfoEnabled for the Followers-tab first-column toggle.
         // ON by default; OFF means MFO leaves this follower entirely alone.
         bool          mfoEnabled = true;
+        // Retained (inactive) rows only: the follower's current cell name, or its location
+        // name when the cell is unnamed. Filled in PublishSnapshot, empty when unknown.
+        std::string   cell;
         std::uint8_t  combatSlots = 0;
         std::uint8_t  logisticsSlots = 0;
         std::uint8_t  combatRules = 0;
