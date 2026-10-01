@@ -926,9 +926,9 @@ namespace MFO::Actuation {
             const auto& lk  = it->second.hand[kHandLeft];
             const auto  age = std::chrono::steady_clock::now() - lk.lastSeen;
             if (lk.spell == spellID &&
-                age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) &&
+                age >= std::chrono::milliseconds(APMFBridge::kHoldLastSeenCapMs) &&
                 !ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, spellID,
-                                              APMFBridge::kHealHoldNeverObservedMs)) {
+                                              APMFBridge::kObservedFiringRecencyMs)) {
                 // WARN ONLY WHEN IT HAS NEVER FIRED (review round 3, R3-2): `lastSeen`
                 // is the claim stamp now (R2-3), so "no fire in the last N s" is also
                 // the ordinary gap between two casts of a claim that has fired.
@@ -1241,11 +1241,11 @@ namespace MFO::Actuation {
                 // window as the age cap below, so both halves of "is this
                 // claim still alive" are measured against one number.
                 const bool fired = ComposedCast::ObservedFiring(
-                    fid, apmfHand, lk.spell, APMFBridge::kHealHoldNeverObservedMs);
+                    fid, apmfHand, lk.spell, APMFBridge::kObservedFiringRecencyMs);
                 const auto  age  = std::chrono::duration_cast<std::chrono::milliseconds>(
                                        now - lk.lastSeen);
                 if (!fired && !inFlight &&
-                    age >= std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs))
+                    age >= std::chrono::milliseconds(APMFBridge::kHoldLastSeenCapMs))
                     continue;   // silent too long -- stop feeding it, let the sweep run
                 // The SPELL, not just the hand: on the LEFT an offense claim
                 // and a heal claim can stand together, and a held offense

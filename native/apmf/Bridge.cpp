@@ -992,7 +992,7 @@ namespace MFO::APMFBridge {
                 const auto healAgeMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                     now - o.heal.created).count();
                 const bool buildingCaster =
-                    healAgeMs >= 0 && healAgeMs < static_cast<long long>(kHealHoldNeverObservedMs) &&
+                    healAgeMs >= 0 && healAgeMs < static_cast<long long>(kHealBuildWindowMs) &&
                     !ComposedCast::ObservedFiring(it->first, kApmfHandLeft, o.heal.spell,
                                                   static_cast<std::uint32_t>(healAgeMs + 1));
                 if (!buildingCaster) {
@@ -1009,7 +1009,7 @@ namespace MFO::APMFBridge {
                                  "and outside the {}ms caster-build window or already observed firing",
                                  it->first, o.heal.handle, o.heal.spell, o.heal.target, healAgeMs, staleMs,
                                  std::chrono::duration_cast<std::chrono::milliseconds>(facetExpiry).count(),
-                                 kHealHoldNeverObservedMs);
+                                 kHealBuildWindowMs);
                 }
                 ReleaseClaimLocked(o.heal);
                 // Heals are LEFT always; an offense claim still live on the left

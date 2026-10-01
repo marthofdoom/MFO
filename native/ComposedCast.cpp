@@ -166,9 +166,14 @@ namespace MFO::ComposedCast {
         // explains it, so the warning has to reach the log FIRST. Compile-time,
         // because the two constants live in different files and drift silently.
         static_assert(std::chrono::milliseconds(
-                          static_cast<long long>(APMFBridge::kHealHoldNeverObservedMs)) >
+                          static_cast<long long>(APMFBridge::kHealClaimNeverObservedCapMs)) >
                       kSilentWarnAfter,
                       "the never-observed hold cap must outlast kSilentWarnAfter, so the "
+                      "silent-claim warning always precedes the lift in the log");
+        static_assert(std::chrono::milliseconds(
+                          static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) >
+                      kSilentWarnAfter,
+                      "the hold's lastSeen cap must outlast kSilentWarnAfter, so the "
                       "silent-claim warning always precedes the lift in the log");
         // Same ordering for the idle-hand floor's unobserved gate (fix/mfo-combat-
         // restoration-direct, 2026-09-21): the "[cfc] ... NO observed cast" line

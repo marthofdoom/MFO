@@ -1121,6 +1121,26 @@ namespace MFO::APMFBridge {
     // path, so an OBSERVED heal still runs its full kHealCastTtlMs window.
     inline constexpr std::uint32_t kHealHoldNeverObservedMs = 4000;
 
+    // MFO-B8: THE THREE (+1) QUESTIONS kHealHoldNeverObservedMs ANSWERS, NAMED SO EACH
+    // CAN BE RE-SIZED FROM ITS OWN EVIDENCE. All four are the same value today (no
+    // behaviour change); a change made for one intent must not move the others.
+    //  (a) cap on a claim's age since CREATION: must exceed claim-to-OBSERVED
+    //      latency (MFO-B7). RefreshHealCastClaim, CastOn's charged-never-fired check.
+    inline constexpr std::uint32_t kHealClaimNeverObservedCapMs = kHealHoldNeverObservedMs;
+    //  (b) hold age cap on `lastSeen`: need only exceed claim-to-first-CHARGE (inFlight
+    //      takes over from the first charge; measured 2.5-3.6 s).
+    inline constexpr std::uint32_t kHoldLastSeenCapMs = kHealHoldNeverObservedMs;
+    //  (c) ObservedFiring recency window: must exceed the inter-fire idle gap of a
+    //      repeating claimed cast (caster kNone between fire N and charge N+1). Size
+    //      from the max kNone gap between consecutive SpellFire events (CASTER[L/R]
+    //      log); NO log has been read for it yet.
+    inline constexpr std::uint32_t kObservedFiringRecencyMs = kHealHoldNeverObservedMs;
+    //  (d) Bridge.cpp's expiry-sweep BUILD WINDOW on `created`: how long a heal claim
+    //      may wait for the engine to build its Restore caster (measured
+    //      claim-to-first-charge 2.3-4.5 s). Fits none of a-c: it is created-anchored
+    //      like (a) but bounds caster construction, not firing.
+    inline constexpr std::uint32_t kHealBuildWindowMs = kHealHoldNeverObservedMs;
+
     // THE IDLE-HAND FLOOR'S UNOBSERVED GATE (fix/mfo-combat-restoration-direct,
     // 2026-09-21). How long a DRIVING cast claim may stand with NO observed cast
     // before the floor it earns on the other hand is RELEASED. Deck 2026-09-21

@@ -517,7 +517,7 @@ namespace MFO::APMFBridge {
         // through here at all (the caller's `!observed` guard), so a real cast
         // keeps running for as long as its rule and APMF agree it should.
         const auto now = std::chrono::steady_clock::now();
-        if (now - it->second.heal.created >= std::chrono::milliseconds(kHealHoldNeverObservedMs))
+        if (now - it->second.heal.created >= std::chrono::milliseconds(kHealClaimNeverObservedCapMs))
             return false;
         // ABI < 6 has no IsClaimLive, so there is NO bound available here at all:
         // the unchanged fast path in EnsureCastClaimLocked trusts a stored handle

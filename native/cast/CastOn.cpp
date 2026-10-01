@@ -574,7 +574,7 @@ namespace MFO::Actuation {
                         if (stamp == std::chrono::steady_clock::time_point{}) { allCharged = false; break; }
                         const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - stamp);
-                        if (ageMs < std::chrono::milliseconds(APMFBridge::kHealHoldNeverObservedMs) ||
+                        if (ageMs < std::chrono::milliseconds(APMFBridge::kHealClaimNeverObservedCapMs) ||
                             ComposedCast::ObservedFiring(id, h == kHandLeft ? APMFBridge::kApmfHandLeft
                                                                             : APMFBridge::kApmfHandRight,
                                                          a_spellID,
