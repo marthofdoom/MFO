@@ -34,6 +34,7 @@ namespace MFO::Str {
             { K::Word_Health,  { "$Health",  "gmst:sHealth",  nullptr } },
             { K::Word_Magicka, { "$Magicka", "gmst:sMagicka", nullptr } },
             { K::Word_Stamina, { "$Stamina", "gmst:sStamina", nullptr } },
+            { K::Pg_Cancel,    { "$Cancel",  nullptr,         nullptr } },
         };
 
         enum class Src : std::uint8_t { English, Mfo, Game };

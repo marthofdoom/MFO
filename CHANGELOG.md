@@ -7,6 +7,10 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **The menu can be translated without touching the DLL.** Every word on the Field Orders board, the Followers and Gambits tabs, the Progression tab and the on-screen strip is now a named line in a text file. Make `MFO_<LANGUAGE>.txt` in `Data/Interface/Translations/` (the same place and format MCM Helper uses) and the menu follows the game's language. A line you leave out stays English. `MFO_ENGLISH.txt` ships as the template and `Docs/TRANSLATING.md` explains the rest.
+- **Columns grow to fit longer words.** A translated header or state no longer gets cut off in the Followers, Gambits and skill lists. Controller navigation works the same.
+- **Bad translation lines cannot break the game.** A line with a missing or wrong `{1}` marker is skipped and MFO says so in `MFO.log`. The English text is used for that line.
+
 ## v2.0.16 -- Heals are animated in combat again
 
 - **Smarter gem choices for followers.** With the effect-aware gem option on (it is off by default), a follower no longer swaps a good gem for a Focus, Echo or Conduit that would do nothing. They keep a support gem that works and drop one that does not when a better gem turns up. They stop pairing a gem with gear it does not suit. A follower with two identical weapons now carries the right weapon's gems over when they replace one, with no more failed retries on the second weapon.

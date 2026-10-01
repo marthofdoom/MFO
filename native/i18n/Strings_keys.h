@@ -114,6 +114,65 @@ MFO_STR(Gb_FooterHelp,      "Highlight a slot and press [A]/E to open its list. 
 MFO_STR(Spell_For,          " for {1}s", 1)   // {1}=duration in seconds
 MFO_STR(Spell_In,           " in {1}ft", 1)   // {1}=area in feet
 
+// == Progression tab (the Field Orders board, hosted tab) ==
+MFO_STR(Pg_NoFollower, "No active follower. Recruit one to manage progression.", 0)
+MFO_STR(Pg_Level, "level {1}", 1)   // {1}=the follower's level
+MFO_STR(Pg_NotEnrolled, "not enrolled", 0)
+MFO_STR(Pg_ChooseTitle, "Choose a class", 0)   // list title
+MFO_STR(Pg_ClassHint, "Skills auto-scale to level by class; perks stay yours to pick.", 0)
+MFO_STR(Pg_NoClasses, "(no classes declared by the addon)", 0)
+MFO_STR(Pg_CannotProgress, "{1} cannot progress: {2}.", 2)   // {1}=follower name, {2}=the reason (comes from the game data, may stay English)
+MFO_STR(Pg_NotEnrolledMsg, "{1} is not enrolled. Pick a class to begin -- no skills are touched until you do.", 1)   // {1}=follower name
+MFO_STR(Pg_ChooseBtn, "Choose class...", 0)
+MFO_STR(Pg_PerkPoints, "Perk points: {1}", 1)   // {1}=points to spend
+MFO_STR(Pg_NoneToSpend, "None to spend: 1 point per {1} levels -- level {2} has earned {3}, and {4} are already spent.", 4)   // {1}=levels per point, {2}=level, {3}=points earned, {4}=points spent
+MFO_STR(Pg_PerPoint, "1 perk point per {1} levels. Pick a skill to open its tree.", 1)   // {1}=levels per point
+MFO_STR(Pg_Syncing, "syncing follower state...", 0)
+MFO_STR(Pg_Manual, "Manual skill points", 0)   // checkbox
+MFO_STR(Pg_ManualTip, "Manual OVERRIDE: while ON, this follower earns {1} skill\npoints per level for YOU to place -- INSTEAD OF automatic\nclass-based skill growth, never on top of it. Toggle OFF\nto resume auto growth. For mage or multiclass builds the\nclass weights won't serve.", 1)   // tooltip, {1}=skill points per level. \n is a line break
+MFO_STR(Pg_SkillPoints, "  Skill points: {1}", 1)   // {1}=pooled points
+MFO_STR(Pg_ManualNote, "  replaces auto growth -- select a skill to apply (+1 base, cap {1})", 1)   // {1}=the skill cap
+MFO_STR(Pg_ColSkill, "Skill", 0)   // column header
+MFO_STR(Pg_ColLevel, "Level", 0)   // column header
+MFO_STR(Pg_ColPerks, "Perks", 0)   // column header
+MFO_STR(Pg_SkillsSyncing, "skill levels syncing...", 0)
+MFO_STR(Pg_SkillFallback, "(skill)", 0)
+MFO_STR(Pg_ToSpend, "{1} to spend", 1)   // {1}=perk points. Keep it short, it sits in a narrow column
+MFO_STR(Pg_NoTree, "no tree", 0)   // keep it short, it sits in a narrow column
+MFO_STR(Pg_SkillBase, "base {1} (manual +{2})  |  {3} point(s) pooled", 3)   // {1}=base level, {2}=manual points added, {3}=pooled points
+MFO_STR(Pg_Apply, "Apply 1 skill point  ({1} -> {2})", 2)   // {1}=level now, {2}=level after
+MFO_STR(Pg_NoPooled, "no pooled points", 0)
+MFO_STR(Pg_AtCap, "at the skill cap", 0)
+MFO_STR(Pg_OpenTree, "Open perk tree", 0)
+MFO_STR(Pg_TreePoints, "  --  {1} point(s)", 1)   // {1}=perk points to spend
+MFO_STR(Pg_ShowMarginal, "Show marginal", 0)   // checkbox
+MFO_STR(Pg_TreeHint, " d-pad move  [A] node  [LB]/[RB] zoom  [Y] next tree  [View] marginal  [B]/Esc back", 0)
+MFO_STR(Pg_NothingUseful, "Nothing in this tree is useful to a follower -- [View] shows marginal perks.", 0)
+MFO_STR(Pg_TipOwned, "{1} -- rank {2}/{3} (allocated by MFO)", 3)   // {1}=perk, {2}=rank owned, {3}=ranks in the perk
+MFO_STR(Pg_TipNative, "{1} -- granted by your load order", 1)   // {1}=perk
+MFO_STR(Pg_TipTake, "{1} -- [A] take rank {2} (1 point)", 2)   // {1}=perk, {2}=the rank you would take
+MFO_STR(Pg_TipLocked, "{1} -- locked: {2}", 2)   // {1}=perk, {2}=why (comes from the game data, may stay English)
+MFO_STR(Pg_PointsAvail, "{1} perk point(s) available", 1)   // {1}=points
+MFO_STR(Pg_Marginal, "marginal for followers", 0)
+MFO_STR(Pg_RankLine, "rank {1}: {2}{3}", 3)   // {1}=rank number, {2}=the skill requirement, {3}=empty or the owned note
+MFO_STR(Pg_NoSkillReq, "no skill requirement", 0)
+MFO_STR(Pg_Owned, "  [owned]", 0)
+MFO_STR(Pg_Native, "Granted by your load order -- MFO leaves it untouched.", 0)
+MFO_STR(Pg_FullyAlloc, "Fully allocated ({1}/{2}).", 2)   // {1}=ranks owned, {2}=ranks in the perk
+MFO_STR(Pg_Take, "Take rank {1}  (1 perk point)", 1)   // {1}=the rank you take
+MFO_STR(Pg_LockedMsg, "Locked: {1}", 1)   // {1}=why (comes from the game data, may stay English)
+MFO_STR(Pg_LockedPlain, "Locked.", 0)
+MFO_STR(Pg_SyncingShort, "syncing...", 0)
+MFO_STR(Pg_CloseHint, "[B]/Esc close", 0)
+MFO_STR(Pg_Respec, "Respec", 0)   // button
+MFO_STR(Pg_RespecFree, "refund all perks, free (one time)  |  d-pad move   [A] open skill tree   [B] back", 0)
+MFO_STR(Pg_RespecCost, "refund all perks, -{1} rapport  |  d-pad move   [A] open skill tree   [B] back", 1)   // {1}=rapport lost
+MFO_STR(Pg_RespecTitle, "Respec?", 0)   // popup title
+MFO_STR(Pg_RespecBodyFree, "Every perk MFO allocated to {1} is removed and its points refunded. This one is free (one time): no rapport is lost.", 1)   // {1}=follower name
+MFO_STR(Pg_RespecBodyCost, "Every perk MFO allocated to {1} is removed and its points refunded. They will resent the reset: -{2} rapport.", 2)   // {1}=follower name, {2}=rapport lost
+MFO_STR(Pg_Confirm, "Confirm respec", 0)
+MFO_STR(Pg_Cancel, "Cancel", 0)   // If you leave this out in a translated game, the game's own Cancel word is used
+
 // == Gambit conditions ("When ...") ==
 MFO_STR(Cond_Always, "Always", 0)
 MFO_STR(Cond_SelfHpBelow, "Self: HP below", 0)
