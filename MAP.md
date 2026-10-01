@@ -1876,7 +1876,7 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   (`:1300-1345`) asks `Actuation::OwnCastInFlight` (`cast/Hands.cpp:1002`, `CastInFlightOnHand` over both lock hands) and
   defers the fill, bounded by `kRetreatCastDeferMs` (`Scheduler.cpp:406`, 1500 ms from the first delay,
   `RetreatNote::castDeferSince`), then fills anyway with a WARN. On a successful fill
-  `Actuation::ReleaseHealClaimForRetreat` (`cast/Hands.cpp:1013`) ends the standing heal claim and its left lock. Both
+  `Actuation::ReleaseHealClaimForRetreat` (`cast/Hands.cpp:1014`) ends the standing heal claim and its left lock. Both
   worker-serial. Whether a retreating follower still heals (`:1274-1283`) is UNCHANGED, marth's decision.
 - **AUTO-RETREAT DRIVER (ClickUp 86e3erv94, batch L, 2026-09-25; tier A; revised after the
   7580bea and 19f67e0 reviews).** `ServiceRetreat` (`:343`) runs on EVERY service from BOTH tables — the
