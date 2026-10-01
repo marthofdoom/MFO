@@ -163,6 +163,8 @@ namespace MFO::Logistics {
     int ArrowCount(RE::Actor* a_follower) { return AmmoCount(a_follower, false); }
     int BoltCount(RE::Actor* a_follower)  { return AmmoCount(a_follower, true);  }
 
+    static std::unordered_set<RE::FormID> g_torchRefusedLogged;   // MFO-B134 once-per-streak latch (worker-serial)
+
     // Equip a carriable torch the follower holds (moved here from combat, #35 --
     // torch is upkeep; pair with "In an interior"/"At night"). No-op if a light is
     // already in hand or none is carried. APMF equip authority (ABI v9): a torch
@@ -177,6 +179,19 @@ namespace MFO::Logistics {
             spdlog::info("[equip] {:08X}: torch skipped -- the equip authority owns the left hand (a hold stands)",
                          a_follower->GetFormID());
             return false;
+        }
+        // MFO-B134: a REFUSED claim (supported channel, no claim standing) means MFO stays out.
+        // Logged ONCE per follower per refusal streak (worker-serial set; cleared when the claim
+        // stands again and in ClearTransientState), not every service lap.
+        {
+            const RE::FormID fid = a_follower->GetFormID();
+            if (APMFBridge::EquipAuthoritySupported() && !APMFBridge::IsEquipAuthorityClaimed(fid)) {
+                if (g_torchRefusedLogged.insert(fid).second)
+                    spdlog::info("[equip] {:08X}: torch skipped -- equip authority supported but no claim stands "
+                                 "(MFO stays out)", fid);
+                return false;
+            }
+            g_torchRefusedLogged.erase(fid);
         }
         for (auto& [obj, data] : a_follower->GetInventory()) {
             if (!obj || data.first <= 0) continue;
@@ -600,6 +615,7 @@ namespace MFO::Logistics {
                                     // go in APMFBridge::ClearTransientState (kPreLoadGame); the first
                                     // service after the load re-claims and re-declares from scratch
         g_lastCombatSeen.clear();   // post-battle shed dwell -- save-scoped, live-session only
+        g_torchRefusedLogged.clear();   // MFO-B134 torch refusal latch -- re-log after a load
         g_shedFistsLogged.clear();  // the shed's logged fists verdict -- re-log after a load
         g_claim.clear();
         g_lastLootSource = 0;

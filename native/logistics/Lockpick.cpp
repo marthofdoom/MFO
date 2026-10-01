@@ -78,6 +78,12 @@ namespace MFO::Logistics::Lockpick {
         // "Playing an idle at a target": about 5.6 s, one-shot).
         constexpr RE::FormID kLockpickForm = 0x0000000A;
         constexpr RE::FormID kIdleLockPick = 0x000BB051;
+        // The pick sounds are MFO.esp SNDR records (LOCAL ids, resolved against MFO.esp on the
+        // main thread): positional copies of Skyrim.esm UILockpickingPickMovement 000C1911 and
+        // UILockpickingPickBreak 000C1916. The vanilla ones use the 2D SOMUIDefault output model
+        // and would play in the player's ears wherever the follower is (Forms.h, marth 2026-10-01).
+        constexpr RE::FormID kSndPickMovement = Forms::kSndLockpickPickMovement;   // MFO.esp 0x904
+        constexpr RE::FormID kSndPickBreak    = Forms::kSndLockpickPickBreak;      // MFO.esp 0x905
 
         // THE ONE MODELLED CONSTANT (not an engine number): how long the simulated searcher
         // holds a binding lock before releasing it. The engine gives the drain RATE (100/life
@@ -175,6 +181,35 @@ namespace MFO::Logistics::Lockpick {
         void UnlockOnMain(RE::TESObjectREFR* a_ref) {
             if (!a_ref || !UnlockSeatOk()) return;
             UnlockRel()(a_ref);
+        }
+
+        // An MFO.esp sound descriptor (a_soundLocal = its LOCAL id) played in 3D at the follower.
+        // FormIDs only cross the thread boundary; the lookup and the audio calls run on the true
+        // main thread. Fire and forget. A missing record (an old MFO.esp) logs once per sound and
+        // plays NOTHING: there is no fallback to the 2D vanilla sound (principle 7, no masking).
+        void PlayAtFollower(RE::FormID a_follower, RE::FormID a_soundLocal) {
+            MainThread::Post([a_follower, a_soundLocal]() {
+                auto* dh  = RE::TESDataHandler::GetSingleton();
+                auto* snd = dh ? dh->LookupForm<RE::BGSSoundDescriptorForm>(a_soundLocal, Forms::kPlugin) : nullptr;
+                if (!snd) {
+                    static bool s_missMovement = false, s_missBreak = false;   // main thread only
+                    bool& missed = (a_soundLocal == kSndPickBreak) ? s_missBreak : s_missMovement;
+                    if (!missed) {
+                        missed = true;
+                        spdlog::warn("[lockpick] {} SNDR {:03X} not found -- MFO.esp is older than this DLL; "
+                                     "that pick sound is silent", Forms::kPlugin, a_soundLocal);
+                    }
+                    return;
+                }
+                auto* f   = RE::TESForm::LookupByID<RE::Actor>(a_follower);
+                auto* am  = RE::BSAudioManager::GetSingleton();
+                if (!f || !am || f->IsDead() || !f->Is3DLoaded()) return;
+                RE::BSSoundHandle h;
+                if (!am->BuildSoundDataFromDescriptor(h, snd)) return;
+                h.SetPosition(f->GetPosition());
+                if (auto* n = f->Get3D()) h.SetObjectToFollow(n);
+                h.Play();
+            });
         }
 
         std::int32_t CountOf(RE::TESObjectREFR* a_holder, RE::TESBoundObject* a_obj) {
@@ -464,6 +499,7 @@ namespace MFO::Logistics::Lockpick {
             std::chrono::steady_clock::time_point lastWall{};
             bool          waitLogged = false;
             bool          sheathePosted = false;
+            int           breakSnds = 0;       // break sounds already played at the follower this window
         };
         std::unordered_map<RE::FormID, Job> g_jobs;
         // LP-M2 F-L3: the last lock THIS follower's own job opened (picked or keyed), read and
@@ -858,6 +894,7 @@ namespace MFO::Logistics::Lockpick {
             if (j.liveAt < 0.0) {
                 j.liveAt   = clk;   // the first play is live: the window starts now
                 j.lastPlay = 0.0;
+                if (!j.viaKey) PlayAtFollower(fid, kSndPickMovement);   // the attempt sound, at the follower (none for a key)
             }
             const double elapsed = clk - j.liveAt;
             // The pick window, but never shorter than Harbinger's confirmation window
@@ -869,6 +906,17 @@ namespace MFO::Logistics::Lockpick {
                     if (APMFBridge::ReplayLockpickIdle(fid)) {
                         j.lastPlay = elapsed;
                         ++j.replays;
+                        if (!j.viaKey) PlayAtFollower(fid, kSndPickMovement);
+                    }
+                }
+                // The simulated breaks, spread evenly through the window: one break sound at the
+                // follower per broken pick (none for a key). AT MOST ONE per step: sparse steps
+                // would otherwise stack several breaks into one instant; the rest fall into later steps.
+                if (!j.viaKey && j.sim.broken > 0 && j.window > 0.0f) {
+                    if (j.breakSnds < j.sim.broken &&
+                        elapsed >= static_cast<double>(j.window) * (j.breakSnds + 1) / (j.sim.broken + 1)) {
+                        ++j.breakSnds;
+                        PlayAtFollower(fid, kSndPickBreak);
                     }
                 }
                 return StepResult::kHold;
