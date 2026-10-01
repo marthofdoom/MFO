@@ -824,6 +824,9 @@ namespace MFO::ProgAllocator {
             }
 
             if (!resolved) { ++droppedActor; continue; }
+            // Review R2-1: arm the once-per-load never-processed-block check
+            // (RecomputeHMS) for every enrolled record read from a save. Runtime only.
+            st.hmsAdoptArmed = st.enrolled;
             g_prog[resolvedID] = std::move(st);
             ++loaded;
         }

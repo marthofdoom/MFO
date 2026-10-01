@@ -4426,12 +4426,18 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   too (its 0x40 from Enroll / the v<8 retro caps the first award once, then clears).
   (4b) **NEVER-PROCESSED ENROLLED BLOCK (review F1, marth "Adopt, no take-back"):** an enrolled
   follower whose HMS never ran under the old gate (Gambit Auto, or classless) still holds its
-  Enroll-time block. `RecomputeHMS` (`progression/Hms.cpp:251`) detects it exactly (enrolled,
-  captured, 0x40 set, cumulative 0, withheld 0, grant remainder 0, held == baseline), logs
+  Enroll-time block. `RecomputeHMS` (`progression/Hms.cpp:257`) detects it exactly (enrolled,
+  captured, 0x40 set, cumulative 0, withheld 0, grant remainder 0, held == baseline), but ONLY for a
+  block LOADED FROM A SAVE (review R2-1): the runtime-only `ProgState::hmsAdoptArmed` is set by
+  `CoSaveLoad` for enrolled records (`progression/Allocator.cpp:829`), tested and cleared at the
+  check (`Hms.cpp:255-257`, cleared matched or not), never set by `Enroll`, and dropped with
+  `g_prog` by `ClearAll`. A fresh in-session Enroll has the same shape and keeps its 0x40 retro
+  cap. On a match it logs
   `[hms] <id> never-processed HMS block adopted (no take-back)`, clears the stale `fixedStat`,
   streak and tally, clears 0x40 (the persisted once-only marker) and falls into the uncaptured
   ADOPT. Their base never drops, and a fixed-stat backfill computed that poll from the stale
-  baseline is not spent (the ADOPT returns first, F4).
+  baseline is not spent (the ADOPT returns first, F4). Open: MFO-B218..B219. Planned repair path
+  for a bad HMS state: the future "remove follower from MFO" action (marth 2026-10-01).
   (5) `Enroll` KEEPS a captured HMS block (`progression/Verbs.cpp` ~:85): re-capturing zeroes W
   while the next engine re-slam brings it back as a fresh award. (6) **R2:** runtime-only
   `hmsMeasuredThisWindow` (set at the measure in `RecomputeHMS`); `PollWork` judges a level-up

@@ -340,6 +340,12 @@ namespace MFO::ProgAllocator {
         // level-up window for fixed-stat ONLY when this is set (switch off, or a
         // class not yet resolved, used to read as a 0-award level), then clears it.
         bool          hmsMeasuredThisWindow{ false };
+        // runtime-only, never serialized (review R2-1, 2026-10-01): arms the ONE
+        // never-processed-block check in RecomputeHMS. Set ONLY by CoSaveLoad for an
+        // enrolled record read from a save. Enroll never sets it, so a fresh enroll
+        // keeps its 0x40 retro protection. Cleared the first time RecomputeHMS
+        // reaches that check, matched or not. ClearAll drops it with g_prog.
+        bool          hmsAdoptArmed{ false };
 
         // §HMS runtime-only, never serialized: combat-edge tracking for the
         // battle counters. hmsInBattle = currently inside a (dwell-smoothed)

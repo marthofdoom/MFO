@@ -248,7 +248,13 @@ namespace MFO::ProgAllocator {
             // flag and streak (the R2 bug) are cleared too, so detection restarts on real
             // measurements (and a backfill grant computed this poll from the stale
             // baseline is dropped: the ADOPT below returns before spending any budget, F4).
-            if (a_st.enrolled && a_st.hmsCaptured && a_st.hmsRetroPending && a_st.hmsWithheld == 0.0f) {
+            // ARMED AT LOAD ONLY (review R2-1): a fresh Enroll leaves this exact shape
+            // too, and must keep 0x40 to cap an early engine jump. So the check runs
+            // once per record per load (CoSaveLoad sets hmsAdoptArmed for enrolled
+            // records, Enroll never does), and is disarmed here, matched or not.
+            const bool adoptArmed = a_st.hmsAdoptArmed;
+            a_st.hmsAdoptArmed = false;
+            if (adoptArmed && a_st.enrolled && a_st.hmsCaptured && a_st.hmsRetroPending && a_st.hmsWithheld == 0.0f) {
                 bool untouched = true;
                 for (int p = 0; p < 3; ++p)
                     if (a_st.hmsCumulative[p] != 0.0f || a_st.hmsGrantRemainder[p] != 0.0f ||
