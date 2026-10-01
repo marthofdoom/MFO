@@ -64,3 +64,21 @@ Main CI was green on 4f574cd0 (run 36900292422). Check CI on the heal merge comm
 - Docs/REVIEW-BACKLOG.md got new entries this session, B206 to B222.
 - cast/CastOn.cpp is about 1710 lines, past the ~1500 plan-a-split mark. Its split needs its own brief (splitcheck tool).
 - APMF task created: [Harbinger sound facet](https://app.clickup.com/t/86e3hbh80). It covers blocking sounds and proxying stereo to mono positional.
+
+## 6. Design direction from marth (2026-10-01): steer the engine's own equip weighting
+
+marth: "I assume the proper fix is using the inbuilt weighting system to make the follower make that decision on thier own. That way we can allow other mods to equip things needed for them to work. The follower would make thier choice to follow MFOs decisions afterwaards"
+
+What this means for equip authority:
+- Today MFO claims a category, APMF denies the engine in it, and MFO declares the set.
+- The new direction is composition, not substitution (principles 3 and 4). MFO feeds its preference into the engine's own "equip best" scoring. The follower then picks MFO's choice through the normal engine decision.
+- Nothing is denied, so other mods can still equip what they need. Example: a quest item, or a mod's required gear.
+
+This is the same fix shape as MFO-B16 (b): steer the engine's equip-best for followers MFO dresses. It would also make the B134 "refused claim, MFO stays out" mode and most of the declaration road unnecessary.
+
+NEEDS LOCAL before any code. It is a new engine seat, so tier A, disassembly first, both runtimes (principle 11).
+1. Find the engine's follower auto-equip scorer on 1.6.1170 and 1.5.97. Record which function rates armor and weapons, what it weighs, and when it runs (inventory add, outfit re-apply, combat).
+2. Observe it running with a passive probe before building on it (principle 5).
+3. Decide where the weight goes. Options: a scoring hook that adds MFO's per-item bias, or an existing data path if the scorer reads one.
+4. Decide what happens to the APMF equip deny. Keep it only for the engine's outfit re-apply, or drop it once steering works.
+5. Write it as an APMF facet if the seat belongs in Harbinger. APMF_API.h is append-only.
