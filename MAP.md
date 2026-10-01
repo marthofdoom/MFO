@@ -2753,7 +2753,7 @@ module. Module layout:
   already read `wantCrossbow` as "the chosen weapon's ammo family", so they now chase the picked weapon's ammo; the
   weapon-kind filters at `LootEquipment`, `Upkeep` `inRole`, `Economy` `BuildBuyThresholds` use `RangedInFamily`.
   **DEFAULT-CASE PROOF / WHERE IT DIFFERS:** one ranged weapon carried -> same family as before; melee followers and
-  every melee score are unchanged (`preferKinds` gains only bit 7). It DIFFERS for bow+crossbow carried: before, the
+  every melee score are unchanged (`preferKinds` gains only bits 7 and 8). It DIFFERS for bow+crossbow carried: before, the
   family with MORE rounds won (damage on a tie) and the combat equip took raw max damage ignoring ammo; now a weapon
   with matching ammo beats one without, then perk-biased damage decides (rounds count no longer matters), and none
   with ammo -> plain/perk-biased damage. `ReadStyleFacts` is unchanged (it already votes `WeapTypeBow` into
