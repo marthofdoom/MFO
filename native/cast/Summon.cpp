@@ -298,13 +298,14 @@ namespace MFO::Actuation {
                              caster ? "magicka ran short before the cast" : "no instant magic caster");
                 return;
             }
+            auto preexisting = SnapshotSummonActors(f, a_spellID);   // before the cast: see SummonProbe.cpp
             CastBreadcrumb("summon", f, sp, f->GetFormID());   // [cast-call], flushed: a freeze's last line names this call
             caster->CastSpellImmediate(sp, false, f, 1.0f, false, 0.0f, f);
             const float spend = avo ? std::min(cost, pool) : 0.0f;
             if (avo && spend > 0.0f)
                 avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kMagicka, -spend);
             setVerdict(SummonVerdict::Cast);
-            ProbeSummonLanding(a_id, a_spellID, appear);   // passive [summon-probe] (cast/SummonProbe.cpp)
+            ProbeSummonLanding(a_id, a_spellID, appear, std::move(preexisting));   // passive [summon-probe] (cast/SummonProbe.cpp)
             spdlog::info("[summon] {:08X} {} {} ({:08X}) rule {} ({}, target {}): road=direct, cast once "
                          "(magicka -{:.0f}; summons listed {} + appearing {} of limit {}{})",
                          a_id, fname, name, a_spellID, a_rule, a_table, a_target, spend,

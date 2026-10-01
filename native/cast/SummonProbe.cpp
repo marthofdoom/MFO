@@ -131,24 +131,32 @@ namespace MFO::Actuation {
         }
     }
 
-    void ProbeSummonLanding(RE::FormID a_caster, RE::FormID a_spell, float a_appearSec) {
+    std::vector<RE::FormID> SnapshotSummonActors(RE::Actor* a_caster, RE::FormID a_spell) {
+        // MAIN THREAD (SummonOnMain, cast/Summon.cpp). Resolved commanded actors of a_spell that already
+        // exist: an older creature (summon limit 2, a re-cast) must not be measured as the new one.
+        // Taken BEFORE the cast, because a kInstant cast may add the new effect and handle synchronously.
+        std::vector<RE::FormID> out;
+        if (!a_caster) return out;
+        if (auto* mt = a_caster->AsMagicTarget()) {
+            if (auto* list = mt->GetActiveEffectList()) {
+                for (auto* ae : *list) {
+                    if (!ae || !ae->spell || ae->spell->GetFormID() != a_spell) continue;
+                    if (auto* se = skyrim_cast<RE::SummonCreatureEffect*>(ae))
+                        if (auto c = se->commandedActor.get()) out.push_back(c->GetFormID());
+                }
+            }
+        }
+        return out;
+    }
+
+    void ProbeSummonLanding(RE::FormID a_caster, RE::FormID a_spell, float a_appearSec,
+                            std::vector<RE::FormID> a_preexisting) {
         Probe p;
         p.caster    = a_caster;
         p.spell     = a_spell;
         p.start     = Clock::now();
         p.appearSec = a_appearSec;
-        // An older creature of the same spell (summon limit 2, a re-cast) must not be measured as the new one.
-        if (auto* f = RE::TESForm::LookupByID<RE::Actor>(a_caster)) {
-            if (auto* mt = f->AsMagicTarget()) {
-                if (auto* list = mt->GetActiveEffectList()) {
-                    for (auto* ae : *list) {
-                        if (!ae || !ae->spell || ae->spell->GetFormID() != a_spell) continue;
-                        if (auto* se = skyrim_cast<RE::SummonCreatureEffect*>(ae))
-                            if (auto c = se->commandedActor.get()) p.skip.push_back(c->GetFormID());
-                    }
-                }
-            }
-        }
+        p.skip      = std::move(a_preexisting);   // snapshot taken BEFORE the cast (SnapshotSummonActors)
         MainThread::Post([p] { Step(p); });
     }
 

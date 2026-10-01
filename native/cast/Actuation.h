@@ -644,6 +644,9 @@ namespace MFO::Actuation {
     // SUMMON LANDING PROBE (cast/SummonProbe.cpp). MAIN THREAD ONLY (call from inside a MainThread::Post
     // closure, as SummonOnMain does): starts a self-reposting main-thread probe that logs where the
     // summon cast just made by a_caster for a_spell appears relative to it ([summon-probe] lines).
-    void ProbeSummonLanding(RE::FormID a_caster, RE::FormID a_spell, float a_appearSec);
+    // a_preexisting = SnapshotSummonActors taken BEFORE the cast (else the new creature could be skipped).
+    std::vector<RE::FormID> SnapshotSummonActors(RE::Actor* a_caster, RE::FormID a_spell);
+    void ProbeSummonLanding(RE::FormID a_caster, RE::FormID a_spell, float a_appearSec,
+                            std::vector<RE::FormID> a_preexisting);
 
 }
