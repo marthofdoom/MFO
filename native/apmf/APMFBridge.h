@@ -806,9 +806,11 @@ namespace MFO::APMFBridge {
     // OffenseCastClaimSupported split, a refused CLAIM here does NOT fail closed
     // (F1/F5, Fable round 2): APMF refuses a ch.17 claim exactly when its #17a
     // equip seat is not installed, and then nothing on APMF's side can perform or
-    // deny an equip -- so the correct behaviour on refusal is "MFO keeps its own
-    // equips" (IsEquipAuthorityClaimed false -> every direct path runs as without
-    // APMF), and that is what every site does. What DOES fail closed is a
+    // deny an equip -- but since 2026-09-28 (marth: "MFO's fallback is deprecated") MFO
+    // does NOT fall back to its own equips on refusal: it STAYS OUT of equipment
+    // (supported && !IsEquipAuthorityClaimed -> no direct equip; MFO requires
+    // Harbinger, a seat-not-installed state is unsupported). Only the whole-APMF-absent
+    // degrade (this returns false) keeps the legacy direct paths. What DOES fail closed is a
     // DECLARATION on a standing claim (DeclareEquipSet false with a claim live):
     // the caller logs and does not equip around it.
     bool EquipAuthoritySupported();
@@ -836,8 +838,8 @@ namespace MFO::APMFBridge {
     // instead of "unchanged, nothing sent" against a handle APMF has forgotten.
     // false + EquipAuthoritySupported() -> APMF REFUSED the claim (APMF refuses
     // exactly when its equip seat is not installed, so nothing on its side could
-    // perform or deny an equip): the caller keeps MFO's OWN equips for that
-    // follower -- the direct paths run as without APMF. Logged once per streak.
+    // perform or deny an equip): since 2026-09-28 the caller STAYS OUT of that
+    // follower's equipment (no direct-equip fallback, MFO-B134). Logged once per streak.
     // Logs `[equip-auth] <id>: claim` when a handle is minted.
     bool ClaimEquipAuthority(RE::FormID a_follower, bool* a_outFresh = nullptr);
 

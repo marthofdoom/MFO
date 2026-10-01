@@ -3700,7 +3700,7 @@ anonymous-namespace copy — that silently forks the instance).
   LOOT ROUND M1 above): `ContainerSink`
   (`TESContainerChangedEvent`) — **direction filter mandatory** (`newContainer==
   PlayerID()`, `ContainerSink` in `logistics/Sinks.cpp`) or it re-fires on its own removal (MAO infinite-credit loop);
-  only QUEUES to the worker. It first calls `PlayerGiven::OnContainerChanged` (own gate; the
+  only QUEUES to the worker. It first runs `InvProbe` (`logistics/Sinks.cpp:136`, PASSIVE `[inv-probe]` log: an ARMO/WEAP leaving a managed follower, membership `Followers::IsTrackedFast`, 12 lines/10 s hard cap; MFO-B63 addendum, result NEEDS LOCAL), then calls `PlayerGiven::OnContainerChanged` (own gate; the
   86e3f9pkg player-drop branch is gone, 86e3faccn). `BeastHeadSink` (`TESEquipEvent`, `Config::g_beastHeadFix`)
   → `KeepHeadClear`; since 2026-09-14 it also emits the passive `[armor-obs]` line
   (`logistics/Sinks.cpp:60`) for every rated-ARMO equip/unequip on a tracked follower
@@ -5080,8 +5080,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `EquipAuthorityOwns(fid, cats)` = a claim stands, a declaration has gone out on it, and the
   last SENT `owned` overlaps `cats` — THE gate for a direct path writing into a held hand
   (`Logistics::EquipTorch` on `kEquipCat_Left`). `DeclareEquipSet(fid,
-  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **OPEN BACKLOG: MFO-B136 (mage set re-sends a never-wearable piece every 3 s), MFO-B139 (shield deny misses a mage on class Auto), MFO-B133, MFO-B135 (the refused-claim NoOp reads as a satisfied equip), MFO-B134 (Gear.cpp's weapon
-  equip hop and EquipTorch still equip directly under a refused claim) -- read before editing.** **A REFUSED CLAIM NO LONGER FALLS BACK
+  vector<APMF_EquipEntry>)` → `APMF_API_v8::SetEquipSetEx`. **OPEN BACKLOG: MFO-B136 (mage set re-sends a never-wearable piece every 3 s), MFO-B139 (shield deny misses a mage on class Auto), MFO-B133, MFO-B135 (the refused-claim NoOp reads as a satisfied equip) -- read before editing.** (MFO-B134 DRAINED 2026-10-01: `logistics/Gear.cpp` AcquireEquip's weapon stock `:648` (before the MEO gem capture) and `logistics/Upkeep.cpp` `EquipTorch` `:175` now stay out when `EquipAuthoritySupported() && !IsEquipAuthorityClaimed(fid)`. MFO-B139 stays deferred, no Auto-to-class resolver.) **A REFUSED CLAIM NO LONGER FALLS BACK
   (`fix/mfo-museum-priority`, marth 2026-09-28 "MFO's fallback is deprecated", SUPERSEDES F1/F5 of
   `c66dc80`):** with the authority SUPPORTED, a refused claim means MFO stays out of the equipment: no
   direct equip, no unequip (`cast/Equip.cpp` returns a transparent NoOp before the old-hold unequips;
