@@ -34,7 +34,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning for deferral:** not fixable in general without an APMF dry-run / "can you serve this?" query. Recorded so the next reader does not assume F2 is closed.
 
 ### MFO-B3 — right-first hand selection fails toward RIGHT when `bWeaponStyleControl` is OFF
-- **DRAINED** (`fix/mfo-logic-bundle2`): with the switch off `WeaponHandExposure` falls back to `Followers::GetBaseClass` Melee/Ranged (switch ON unchanged); Auto hybrid not covered.
+- **NARROWED** (`fix/mfo-logic-bundle2`): with the switch off `WeaponHandExposure` falls back to `Followers::GetBaseClass` Melee/Ranged (switch ON unchanged). STILL OPEN: an Auto (0) hybrid with the switch off; reading its equip gambits needs a new read-only `Followers` accessor (no new plumbing taken in a small-fix round).
 - **Raised:** Fable review of `1044816` (finding C, SEV-4). Recorded at the site and in MAP.md by `625f3b7`.
 - **Severity:** SEV-4 (non-default config only; default is ON, `Config.h:505`)
 - **Finding:** `WeaponHandExposure` depends on a `g_forcedWeapon` entry, and `EquipWeapon` writes one only under `Config::g_weaponStyleControl` (the kill-switch-off branch is a plain `EquipObject`, no ledger); `ReconcileForcedWeapon` releases unconditionally when off. So with that feature off, a melee/hybrid follower in the transient-unarmed gap still lands RIGHT — the 2026-09-05 "cast never left rest" shape.
@@ -1086,3 +1086,6 @@ Raised against 8f915c0 (`fix/mfo-heal-field0930`, Opus review), 2026-09-30. `End
 
 ### MFO-B198 (SEV-4) -- essential-down heal release churns at the picker
 Raised against 6c974fd (`fix/mfo-lifestate-0930`, Sonnet review), 2026-09-30. Reviewer (verbatim): "only kEssentialDown triggers it ... the picker and Hands.cpp are unchanged, and the picker's urgentHeal treats essential-down as 'down'. The ally can therefore be re-picked every lap and released again each time. This is not a re-fire, since no claim is renewed, but it is churn plus a lap-by-lap FailedOther." Fix when drained: skip an essential-down ally at PickAlly / CastAuto pick time (where a heal cannot land), so the release path is not exercised every lap. CHANGELOG wording corrected at merge.
+
+### MFO-B204 (SEV-5) -- the roster-sweep hold now lasts the whole load screen
+Raised against 676b676 (`fix/mfo-logic-bundle2`), Opus review F4, not fixed. Verbatim: "native/Followers.cpp:478-499: the hold window was capped at ~1.6 s (3 sweeps x 532 ms); it now lasts the whole load screen, so the Scheduler keeps ticking a held follower for that long. Memory-safe (g_active stores ActorHandle, .get() nulls a freed actor; tick consumers already null-check), recorded for the longer window."

@@ -90,19 +90,23 @@ namespace MFO::Logistics {
             // stack of >= 2, which already covers both hands (PickOffHandWeapon
             // takes the second copy), so the runner-up is junk and sells.
             const WeaponRoles keepRoles = ComputeWeaponRoles(a_follower, a_state);
-            // MFO-B24: gated on the SAME meleeTargetClass expression the buy side
-            // (Economy.cpp, `caster` = IsCasterFollower) and the loot judge
-            // (LootEquipment.cpp) use, not on keepRoles.melee, so keep, buy and loot
-            // share one predicate: a base caster never fetches a second one-hander
-            // and no longer keeps a spare either. No shared helper exists, so this is
-            // the identical expression.
+            // MFO-B24: gated on the loot judge's meleeTargetClass, with its exact mageMode
+            // (LootEquipment.cpp BuildEquipmentContext): cast gambit AND (class Mage, or
+            // class Auto with NO melee/ranged gambit). Keep is "what we hold", so it must
+            // never sell what loot fetches. castGambits > 0 there is HasCastGambit and
+            // g_magicLoadout is IsCasterFollower. Buy (Economy.cpp) uses the broader
+            // IsCasterFollower test, which is safe: whenever buy's class is OneHand, loot's
+            // and this one are too, so buy never purchases what keep sells. No shared
+            // helper exists, so the expression is repeated.
             const bool keepWantsMelee   = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
-            const bool keepCaster       = IsCasterFollower(a_state);
+            const bool keepWantsRanged  = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
             const std::uint8_t keepBaseClass = a_state.combatClassOverride;
             const bool keepBaseCaster     = keepBaseClass == 3;
             const bool keepBaseWeaponUser = keepBaseClass == 1 || keepBaseClass == 2;
+            const bool keepMageMode = IsCasterFollower(a_state) &&
+                (keepBaseCaster || (keepBaseClass == 0 && !keepWantsMelee && !keepWantsRanged));
             const WepClass keepMeleeTargetClass =
-                (keepCaster && !keepBaseWeaponUser && (keepBaseCaster || !keepWantsMelee))
+                (keepMageMode && !keepBaseWeaponUser && (keepBaseCaster || !keepWantsMelee))
                     ? WepClass::Other : keepRoles.melee;
             const bool keepSecond1H = keepRoles.offHand == 2 && keepMeleeTargetClass == WepClass::OneHand;
             std::unordered_set<RE::TESBoundObject*> keepWeapons;

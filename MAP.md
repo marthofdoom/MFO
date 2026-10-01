@@ -1258,11 +1258,11 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   is the one signal that survives that gap. A pure caster never has an entry, so right-first still applies
   to exactly the follower marth's ruling was about. (`DualCast` still takes both hands in that gap; that
   exposure predates this branch and is unchanged by it.)
-  **RESIDUAL, non-default config (CLOSED, MFO-B3, `fix/mfo-logic-bundle2`):** the ledger is only WRITTEN
+  **RESIDUAL, non-default config (NARROWED, MFO-B3, `fix/mfo-logic-bundle2`):** the ledger is only WRITTEN
   while `bWeaponStyleControl` is on, so with the switch off `WeaponHandExposure` (`cast/Hands.cpp:184`) also
   reads the declared role: `Followers::GetBaseClass` Melee (1) or Ranged (2) counts as "a weapon owns the right
   hand". Consulted ONLY with the switch off (switch-ON answer is the ledger answer, unchanged). Not covered: an
-  Auto (0) hybrid with the switch off.
+  Auto (0) hybrid with the switch off: reading its gambit table needs a new `Followers` read-only accessor (no record getter exists outside `Followers.cpp`), so it stays open.
   `g_forcedWeapon` is read under `g_forcedMx` here like every other access — the map has an OFF-THREAD
   reader (the SKSE save callback, `CoSaveForcedWeapons`), so "the writers are worker-serial" is not
   sufficient. Its declaration comment used to assert BOTH "no lock (#4)" and "guard every access"; the
@@ -2759,7 +2759,7 @@ module. Module layout:
   `BuildBuyThresholds`) and the keep runner-up must stay the SAME top-2 rule or
   loot fetches what keep sells; `PlanBuy`'s `plan[c.idx] >= c.avail` skip is what
   stops the off-hand buy from over-buying a single stock line; the LOOT take must stay
-  `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **MFO-B24 DRAINED (`fix/mfo-logic-bundle2`):** `keepSecond1H` now gates on the same `meleeTargetClass` expression buy and loot use (`logistics/SwapUp.cpp` `keepMeleeTargetClass`), so keep, buy and loot agree for casters; keep that expression identical to `Economy.cpp` / `LootEquipment.cpp` if either changes (no shared helper); **MFO-B28** (SEV-5,
+  `a_forceStock` (it replaces nothing → no MEO gem capture, the SEV-2 above). **MFO-B24 DRAINED (`fix/mfo-logic-bundle2`):** `keepSecond1H` gates on the LOOT judge's `meleeTargetClass` with its exact `mageMode` (cast gambit AND class Mage, or class Auto with no melee/ranged gambit; `logistics/SwapUp.cpp` `keepMeleeTargetClass`), so keep and loot agree exactly and keep never sells what loot fetches. Buy keeps the broader `IsCasterFollower` test, which is safe: whenever buy's class is OneHand, loot's and keep's are too, so buy never purchases what keep sells. Keep that expression identical to `LootEquipment.cpp` if it changes (no shared helper); **MFO-B28** (SEV-5,
   pre-existing) — a BOUGHT primary upgrade never passes `AcquireEquip`, so it carries
   no gems. **What breaks:** the `trueSecond` test must stay `best != bestWeap` — a bare
   `best == bestOffHand` stocks every primary upgrade. Changing
@@ -4135,7 +4135,7 @@ outside the catalog (hidden engine perks like PerkSkillBoosts, creature perks, d
 player-UI perks) never vote; a catalog rank conditioned on nothing classifiable votes
 for nothing (`classified`/`owned` counters say how many). NO overhaul is assumed
 anywhere — the facts come off the perk record's own conditions. **UNARMED (2026-09-14):**
-`PerkStyleFacts::unarmed` = a list whose `GetEquippedItemType` test on EITHER hand admits
+`PerkStyleFacts::unarmed` = a list whose `GetEquippedItemType` test on the RIGHT hand (MFO-B14: a left-empty test alone no longer votes) admits
 code 0 only (`== 0` / `<= 0` / `< 1`), no hand test on that list excludes 0, and no
 weapon-kind keyword is named on it (per-list, not per-merged-entry); OR (second signal,
 read in `WalkPerkEntries` beside the effect-condition read) an ability entry with an effect

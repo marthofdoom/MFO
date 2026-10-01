@@ -239,9 +239,9 @@ namespace MFO::Progression {
         //
         // The UNARMED signature (marth: fists are a valid fighting style only
         // when "unarmed perks are selected via progression"): a tab whose
-        // GetEquippedItemType test on EITHER hand admits ONLY code 0 (the
-        // "== 0" / "<= 0" / "< 1" shapes -- the hand must be EMPTY; MFO-B14: the
-        // RIGHT hand, a left-empty test alone is the free-off-hand one-hand shape), while no
+        // GetEquippedItemType test on the RIGHT hand admits ONLY code 0 (the
+        // "== 0" / "<= 0" / "< 1" shapes -- the hand must be EMPTY; MFO-B14: a
+        // left-empty test alone is the free-off-hand one-hand shape and does not vote), while no
         // hand test on the same tab REQUIRES a weapon (excludes 0) and no
         // weapon-kind keyword is named on it. So "right empty AND left empty"
         // (vanilla Fists of Steel) and "right empty" alone both count;
