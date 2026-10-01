@@ -84,3 +84,11 @@ NEEDS LOCAL before any code. It is a new engine seat, so tier A, disassembly fir
 3. Decide where the weight goes. Options: a scoring hook that adds MFO's per-item bias, or an existing data path if the scorer reads one.
 4. Decide what happens to the APMF equip deny. Keep it only for the engine's outfit re-apply, or drop it once steering works.
 5. Write it as an APMF facet if the seat belongs in Harbinger. APMF_API.h is append-only.
+
+## 7. Harbinger cannot say no (marth 2026-10-01)
+
+- Harbinger must never be unable to build an actor-targeted cast. The proxy exists for exactly that.
+- When a claimed actor-targeted cast is not served (example: Close Greater Wounds), that is a Harbinger bug to find and fix. Harbinger does not report it to MFO.
+- Do NOT add a "can't serve" ABI call. Do NOT stop MFO's heal-claim repair loop on such a signal. Either one hides the real problem behind a curtain.
+- Ground-targeted spells are the one shape Harbinger cannot build today. That is a gap to close properly, not a state to surface.
+- Diagnosis road: APMF branch `fix/apmf-restore-serve-exitlogs` logs every early exit of `ServeUnclassedHeal` as `[restore-serve] ... NOT served: <reason>`. Read those lines in the next Deck log. The line names the check to fix.
