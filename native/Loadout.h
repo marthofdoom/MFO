@@ -47,6 +47,8 @@ namespace MFO::Loadout {
     // identical slot form. nullptr only if that form is not in the load order,
     // which plugin.cpp's `[runtime]` line reports as an error. Pure read.
     const RE::BGSEquipSlot* LeftHandSlot();
+    // The RIGHT-hand EQUP form (Skyrim.esm 0x00013F42), twin of LeftHandSlot (MFO-B23).
+    const RE::BGSEquipSlot* RightHandSlot();
 
     // ── intelligent hand selection (marth's hand policy, 2026-09-06) ───────────
     // WHICH hand(s) a cast should claim, decided from the follower's REAL, LIVE

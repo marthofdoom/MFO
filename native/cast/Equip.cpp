@@ -1224,7 +1224,7 @@ namespace MFO::Actuation {
                         const bool inLeft  = actor->GetEquippedObject(true)  == obj;
                         const bool inRight = actor->GetEquippedObject(false) == obj;
                         if (inLeft)  mgr->UnequipObject(actor, obj, nullptr, 1, Loadout::LeftHandSlot(), true, true);
-                        if (inRight) mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
+                        if (inRight) mgr->UnequipObject(actor, obj, nullptr, 1, Loadout::RightHandSlot(), true, true);
                         if (!inLeft && !inRight)
                             mgr->UnequipObject(actor, obj, nullptr, 1, nullptr, true, true);
                     }
