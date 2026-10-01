@@ -10,6 +10,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **The board and HUD hotkeys start empty.** They no longer show a key in the MCM until you pick one. `iBoardKey` and `iHudKey` default to -1, and any value of 0 or less means no key. If your MCM still holds the old 0, MFO clears it to -1 once on upgrade. Pick a key and it stays.
 - **Followers make lockpicking sounds.** While a follower works a lock you hear the pick at their position, and a pick snaps with the vanilla break sound at them for each pick they break. The sound gets quieter with distance, so a follower picking a lock far away is faint. MFO.esp carries its own copies of the two vanilla sounds for this, because the vanilla ones always play in your ears. They follow your sound effects volume.
 - **The Followers tab shows where retained followers are.** A follower you are not currently travelling with now lists their current cell next to their name, or the location name if the cell has none.
+- **A follower no longer ends up wearing the outfit the game forces back on them.** With Harbinger installed, followers in armor now ask for the best armor they own in every slot at once. An outfit piece the game puts back on them is no longer kept just because they are wearing it. A piece you put on them yourself still stays.
 
 ## v2.0.16 -- Heals are animated in combat again
 
