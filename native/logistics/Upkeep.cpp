@@ -178,6 +178,12 @@ namespace MFO::Logistics {
                          a_follower->GetFormID());
             return false;
         }
+        // MFO-B134: a REFUSED claim (supported channel, no claim standing) means MFO stays out.
+        if (APMFBridge::EquipAuthoritySupported() && !APMFBridge::IsEquipAuthorityClaimed(a_follower->GetFormID())) {
+            spdlog::info("[equip] {:08X}: torch skipped -- equip authority supported but no claim stands (MFO stays out)",
+                         a_follower->GetFormID());
+            return false;
+        }
         for (auto& [obj, data] : a_follower->GetInventory()) {
             if (!obj || data.first <= 0) continue;
             auto* light = obj->As<RE::TESObjectLIGH>();

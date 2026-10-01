@@ -126,6 +126,50 @@ namespace MFO::Logistics {
             }
         };
 
+        // ── [inv-probe] (MFO-B63 addendum, ENGINE_NOTES 0.46): PASSIVE, read-only. After a
+        // DENIED outfit re-apply the shield and hood helmet vanished from GetInventory()
+        // while APMF still listed the shield. Logs every ARMO / WEAP that LEAVES a managed
+        // follower (old == follower, new != follower) so the next Deck run shows where it
+        // went. Membership is Followers::IsTrackedFast (the locked roster mirror, safe on
+        // any thread, #74) -- never g_followers (#4). HARD rate limit: kBurst lines per
+        // kWindow, the overflow counted and reported on the next line that is let through.
+        void InvProbe(const RE::TESContainerChangedEvent& a_ev) {
+            const RE::FormID from = a_ev.oldContainer;
+            if (from == 0 || a_ev.newContainer == from || a_ev.baseObj == 0 || a_ev.itemCount <= 0) return;
+            if (!Followers::IsTrackedFast(from)) return;
+            auto* form = RE::TESForm::LookupByID(a_ev.baseObj);
+            if (!form) return;
+            const bool armo = form->Is(RE::FormType::Armor);
+            if (!armo && !form->Is(RE::FormType::Weapon)) return;
+
+            static std::mutex                         s_mx;
+            static Clock::time_point                  s_winStart{};
+            static int                                s_inWin = 0, s_dropped = 0;
+            constexpr int                             kBurst  = 12;
+            constexpr std::chrono::seconds            kWindow{10};
+            int dropped = 0;
+            {
+                std::lock_guard<std::mutex> lk(s_mx);
+                const auto now = Clock::now();
+                if (now - s_winStart >= kWindow) { s_winStart = now; s_inWin = 0; }
+                if (s_inWin >= kBurst) { ++s_dropped; return; }
+                ++s_inWin;
+                dropped = s_dropped; s_dropped = 0;
+            }
+            auto*       fol    = RE::TESForm::LookupByID<RE::Actor>(from);
+            const char* itemNm = form->GetName();
+            const RE::FormID to = a_ev.newContainer;
+            const char* kind = to == 0 ? "world/destroyed" : to == PlayerID() ? "player" : "other";
+            if (to != 0 && to != PlayerID()) {
+                if (auto* d = RE::TESForm::LookupByID(to); d && d->As<RE::Actor>()) kind = "actor";
+            }
+            spdlog::info("[inv-probe] {:08X} '{}' lost {} '{}' ({:08X}) x{} -> {:08X} ({}) 3D={}{}",
+                         from, fol && fol->GetName() ? fol->GetName() : "?", armo ? "ARMO" : "WEAP",
+                         itemNm && *itemNm ? itemNm : "?", a_ev.baseObj, a_ev.itemCount, to, kind,
+                         fol && fol->Is3DLoaded() ? "loaded" : "unloaded",
+                         dropped ? fmt::format(" (+{} suppressed)", dropped) : std::string());
+        }
+
         // ── the player-looted waiver sink (#22h) ────────────────────────────
         class ContainerSink final : public RE::BSTEventSink<RE::TESContainerChangedEvent> {
         public:
@@ -135,6 +179,7 @@ namespace MFO::Logistics {
                                                   RE::BSTEventSource<RE::TESContainerChangedEvent>*) override {
                 if (!a_event) return RE::BSEventNotifyControl::kContinue;
                 PlayerGiven::OnContainerChanged(*a_event);   // batch L: player -> follower record (own gate)
+                InvProbe(*a_event);                          // passive [inv-probe], before the logistics gate
                 // Logistics off -> the waiver map is never read, so do no work.
                 if (!Config::g_logistics.load()) return RE::BSEventNotifyControl::kContinue;
 

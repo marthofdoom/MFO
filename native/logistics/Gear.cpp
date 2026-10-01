@@ -718,6 +718,14 @@ namespace MFO::Logistics {
                 spdlog::info("[equip] {:08X}: '{}' left to the APMF equip declaration (no direct EquipObject; "
                              "a refused claim is logged by [equip-auth])", a_follower->GetFormID(),
                              a_item->GetName() ? a_item->GetName() : "?");
+            } else if (equipIt && APMFBridge::EquipAuthoritySupported() &&
+                       !APMFBridge::IsEquipAuthorityClaimed(a_follower->GetFormID())) {
+                // MFO-B134: the claim was REFUSED (or is not minted yet) while the channel is
+                // supported -> "MFO stays out" (marth 2026-09-28): no direct equip of the
+                // looted weapon. It stays in the pack for the engine / the combat gambit.
+                spdlog::info("[equip] {:08X}: '{}' not equipped directly -- equip authority supported but no "
+                             "claim stands (MFO stays out)", a_follower->GetFormID(),
+                             a_item->GetName() ? a_item->GetName() : "?");
             } else if (equipIt) {
                 // #62 EQUIP ON THE MAIN THREAD. Capture FormIDs (never the worker's
                 // Actor*/item) and re-resolve on the frame that runs.
