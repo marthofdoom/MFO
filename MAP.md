@@ -1895,10 +1895,10 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   castSeen-false lap by the reconcile's stale window, a magicka-dry Declined stretch delaying
   logistics) and `MFO-B58` (the Task-1 concentration claims with no controller test).
 - **RETREAT WAITS FOR OWN CAST + RELEASES THE HEAL CLAIM (`fix/mfo-heal-starve-retreat`, P2).** The trigger in `Scheduler.cpp`
-  (`:1300-1345`) asks `Actuation::OwnCastInFlight` (`cast/Hands.cpp:1002`, `CastInFlightOnHand` over both lock hands) and
+  (`:1300-1345`) asks `Actuation::OwnCastInFlight` (`cast/Hands.cpp:1020`, `CastInFlightOnHand` over both lock hands) and
   defers the fill, bounded by `kRetreatCastDeferMs` (`Scheduler.cpp:409`, 1500 ms from the first delay,
   `RetreatNote::castDeferSince`), then fills anyway with a WARN. On a successful fill
-  `Actuation::ReleaseHealClaimForRetreat` (`cast/Hands.cpp:1014`) ends the standing heal claim and its left lock. Both
+  `Actuation::ReleaseHealClaimForRetreat` (`cast/Hands.cpp:1032`) ends the standing heal claim and its left lock. Both
   worker-serial. SELF-HEAL WHILE RETREATING (marth 2026-10-01 "Themselves, yes. others no."): in `ServiceRetreat`'s
   early-return branch (`Scheduler.cpp` ~:1292-1318) a mini scan fires ONLY `act.cast_self` rules whose spell
   `HealsHealth`, and only when out of combat, able to act, `bCastSelf` on and `ChooseHealRoad` answers `DirectNoCombat` (so CastOn takes the direct self road, no package, no
