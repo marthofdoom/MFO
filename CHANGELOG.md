@@ -7,6 +7,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **A follower no longer ends up wearing the outfit the game forces back on them.** With Harbinger installed, they now ask for the best piece they own for every slot, not just one. A load screen or an outfit script can no longer swap their robes for the outfit's armor. A piece you put on them yourself still stays. Needs a field test: Jesper's robes after a cell load.
+
 ## v2.0.16 -- Heals are animated in combat again
 
 - **Smarter gem choices for followers.** With the effect-aware gem option on (it is off by default), a follower no longer swaps a good gem for a Focus, Echo or Conduit that would do nothing. They keep a support gem that works and drop one that does not when a better gem turns up. They stop pairing a gem with gear it does not suit. A follower with two identical weapons now carries the right weapon's gems over when they replace one, with no more failed retries on the second weapon.
