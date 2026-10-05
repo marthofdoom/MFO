@@ -138,11 +138,14 @@ namespace MFO::Actuation {
                 const REL::Relocation<std::uintptr_t> fn{ REL::RelocationID(38993, 40056) };
                 const REL::Relocation<std::uintptr_t> gl{ REL::RelocationID(516851, 403330) };
                 // A row with a byte check verifies base + rva + bytesOffset: the
-                // `mov rax,[rip+g]` itself (+0x51 on 1.5.97, +0xA1 on 1.6.1170).
+                // `mov rax,[rip+g]` itself (+0x51 on 1.5.97, +0xA1 on 1.6.1170, +0xA1
+                // on 1.7.104: 0x72A370+0xA1, the same 15 bytes with its own RIP
+                // displacement, row kRows_1_7_104 / Docs/VERIFIED-ADDRESSES.md).
                 // G1: picked by EXACT build, never the IsAE() bucket. Covered()
-                // above already means one of the two; anything else refuses.
+                // above already means one of the three; anything else refuses.
                 const std::uintptr_t inFn = Runtime::IsVerified1_6_1170() ? 0xA1u
                                           : Runtime::IsVerified1_5_97()   ? 0x51u
+                                          : Runtime::IsVerified1_7_104()  ? 0xA1u
                                                                           : 0u;
                 if (!inFn) {
                     spdlog::error("[summon] the engine's skip-cap flag is NOT read on this build (runtime not "

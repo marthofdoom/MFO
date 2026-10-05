@@ -29,7 +29,7 @@ namespace MFO::Actuation {
     // the engine apply itself is posted to the MAIN thread (ApplyTargetEffect).
     SelfCast CastTargetDirect(RE::Actor* a_follower, RE::SpellItem* a_spell,
                               RE::Actor* a_target, std::uint32_t a_stopPct) {
-        // RUNTIME GATE (Runtime::CastPathsVerified(): exactly 1.6.1170 or 1.5.97, G1)
+        // RUNTIME GATE (Runtime::CastPathsVerified(): exactly 1.6.1170 or 1.5.97, G1, or 1.7.104, F2b)
         // -- the same lift, the same Docs/ADDRESS-TABLE-2026-09-15.md rows and the
         // same reasoning as CastSelfDirect's gate above (T#67's fault was the
         // LeftHandSlot GetObject read, now a FormID lookup; ForceRefTo 24523/25052;

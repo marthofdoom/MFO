@@ -516,9 +516,11 @@ namespace MFO::Logistics {
             // VR per CommonLib's table. The VR index is unverified (no VR binary)
             // and unreachable: the `!MainThread::IsInstalled()` guard below skips
             // the shed on VR before this lambda is ever posted. G1: the slot is no
-            // longer picked by the IsVR() bucket; it is 0xCB on the two exact builds
+            // longer picked by the IsVR() bucket; it is 0xCB on the exact builds
             // and REFUSED anywhere else (MainThread refuses those too, so this is
-            // the belt to that brace).
+            // the belt to that brace). F2b: 0xCB on 1.7.104 too -- the Actor and
+            // Character vtables keep 296 / 298 slots there and slot 0xCB holds the
+            // same 282-instruction body (1.6.1170 0x6781D0, 1.7.104 0x68ACB0).
             // Do NOT reinstate the wrapper, and do NOT substitute
             // RemoveItem(kDropping): it skips the middleHigh queued-3D cleanup and
             // the post-drop fix-ups the real DropObject performs.
