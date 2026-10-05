@@ -24,7 +24,14 @@ Read it as history and this block as current.
   DEFERRED" notes below are superseded. Field observable: `[runtime] 1.7.104.0 supported ... (exact 1.7.104)`,
   `[selfcheck] ... 56/56 verified`.
 
-- **2026-10-01 SHIPPED v2.0.16 "Heals are animated in combat again" (current version).** Commit `4624e91`, CI run
+- **2026-10-05 SHIPPED v2.1.0 "Skyrim 1.7.104 support" (current version).** Stamp commit `2e8bb7b`, CI run 37379635412, DLL sha256
+  `670222a5...`, tag `v2.1.0`. Zip `releases/v2.1.0/MFO-v2.1.0.zip` (NOT uploaded to Nexus yet, marth uploads). Includes everything
+  merged since v2.0.16 (1.7.104, skill drift hold, mage clothing, HMS core, translations, lockpick sounds, heal starve fix, the
+  Logistics MCM blank row fix). The i18n translator-kind import merge was reverted and is NOT in. Nexus kit (description +
+  changelog bbcode) is in `releases/v2.1.0/`. Deployed to LoreRim on this machine with Harbinger v0.10.0. **FIELD-TEST PENDING**
+  on 1.7.104: nobody has run MFO there yet.
+
+- **2026-10-01 SHIPPED v2.0.16 "Heals are animated in combat again" (superseded by v2.1.0).** Commit `4624e91`, CI run
   36880174711, DLL sha256 `bd4e54f5...`, tag `v2.0.16` pushed. Zip `releases/v2.0.16/MFO-v2.0.16.zip` (NOT uploaded to
   Nexus yet, marth uploads). Deployed to the Deck (Tuxbornrc1) 2026-10-01: MFO.dll, MCM config.json and MFO_Trade.pex.
   marth's own INIs were left untouched. Backups: `*.bak-1001` next to each file, plus
