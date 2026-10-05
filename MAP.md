@@ -4686,11 +4686,16 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   as a literal any more. See the `native/i18n/` entry (section 6, below this one): `Str::Get/Fmt/Label`, `VocabEntry.key`,
   `FitW` for fixed columns. New UI text = a new line in `i18n/Strings_keys.h` + regenerate the template.
 - **Overlay mechanism (`Board.cpp:337-1000`):** RENDER is offset-free — `PresentThunk`
-  (`:610`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable slots 8/13**
+  (`:700`)/`ResizeBuffersThunk` (`:767`) swapped into **IDXGISwapChain vtable slots 8/13**
   (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable` `:689`), the
   unchanged `WndProcHook` swap (`:313`, WM_CHAR/WM_KILLFOCUS), and `LazyInit`
   (`:401`, ImGui context + DX11/Win32 backend on first Present). `TryInstallHooks`
-  (`:711`) polls for the live swapchain then patches.
+  (`:711`) polls for the live swapchain then patches. **Hardening (2026-10-04):** both thunks
+  act only when `a_this == g_swapChain` (vtable is shared by every swapchain of the class; others
+  pass straight through); `ReportSwapchainChange` (`:684`) LOGS (never rebuilds) when the game's
+  current swapchain differs from the captured one; `CreateRTV` (`:406`) logs its HRESULT once and
+  the draw path logs once when `g_rtv` is null (retry = next ResizeBuffers). LazyInit warns if its
+  first presenter is not `renderWindows[0].swapChain` (still proceeds).
 - **Window drag/resize policy (`LazyInit`, `Board.cpp:442-443`):** `io.ConfigWindowsMoveFromTitleBarOnly = true`
   (windows move only by the title bar) and `io.ConfigWindowsResizeFromEdges = true` (ImGui 1.92.8 fields, `imgui.h:2439-2440`).
   Per window: the Field Orders board (`Board_FieldKit.cpp:302`, has a title bar) drags by the bar and resizes from
