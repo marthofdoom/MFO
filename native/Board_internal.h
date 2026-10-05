@@ -336,4 +336,19 @@ namespace MFO::Board {
                             const MenuSkin& skin, bool r1Ready,
                             int& s_tab, bool& pickerDrawnThisFrame);
 
+    // ── PRESS-LATCHED CLICKS (Board_Click.cpp) ──────────────────────────
+    // Drop-in replacements for the ImGui click widgets: same signature and
+    // return, but a press+release that lands on the same item registers even
+    // if the raw-delta cursor slipped off it in between. Gamepad/keyboard
+    // activation passes straight through. RENDER THREAD (inside the draw).
+    namespace Click {
+        bool Button(const char* a_label, const ImVec2& a_size = ImVec2(0, 0));
+        bool SmallButton(const char* a_label);
+        bool InvisibleButton(const char* a_id, const ImVec2& a_size, ImGuiButtonFlags a_flags = 0);
+        bool RadioButton(const char* a_label, bool a_active);
+        bool Checkbox(const char* a_label, bool* a_v);
+        bool Selectable(const char* a_label, bool a_selected = false, ImGuiSelectableFlags a_flags = 0,
+                        const ImVec2& a_size = ImVec2(0, 0));
+    }
+
 }

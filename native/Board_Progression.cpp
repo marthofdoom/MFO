@@ -106,7 +106,7 @@ namespace MFO::Board {
                         // ── FOLLOWER CONTEXT BAR ────────────────────────
                         ImGui::AlignTextToFramePadding();
                         ImGui::BeginDisabled(prog.rows.size() < 2);
-                        if (ImGui::SmallButton("<##prevpf")) switchFollower(-1);
+                        if (Click::SmallButton("<##prevpf")) switchFollower(-1);
                         ImGui::EndDisabled();
                         ImGui::SameLine();
                         ImGui::PushFont(g_fontHead);
@@ -116,7 +116,7 @@ namespace MFO::Board {
                         ImGui::PopFont();
                         ImGui::SameLine();
                         ImGui::BeginDisabled(prog.rows.size() < 2);
-                        if (ImGui::SmallButton(">##nextpf")) switchFollower(+1);
+                        if (Click::SmallButton(">##nextpf")) switchFollower(+1);
                         ImGui::EndDisabled();
                         ImGui::SameLine();
                         if (who->enrolled && who->clsId != 0) {
@@ -124,7 +124,7 @@ namespace MFO::Board {
                             ImGui::SameLine();
                             std::string cl = Str::Fmt(Str::K::Gb_ClassBtn,
                                 { who->clsName.empty() ? "?" : who->clsName.c_str() }) + "###pclassbtn";
-                            if (ImGui::SmallButton(cl.c_str())) ImGui::OpenPopup("##pclass");
+                            if (Click::SmallButton(cl.c_str())) ImGui::OpenPopup("##pclass");
                         } else {
                             ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_NotEnrolled));
                         }
@@ -174,7 +174,7 @@ namespace MFO::Board {
                             for (const auto& [classId, className] : prog.classes) {
                                 const bool cur = (who->clsId == classId);
                                 ImGui::PushID(k++);
-                                if (ImGui::Selectable(className.c_str(), cur)) {
+                                if (Click::Selectable(className.c_str(), cur)) {
                                     EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u, 0.0f };
                                     e.verbId = (int)AddonVerb::SetClass;
                                     e.perk = classId;
@@ -196,7 +196,7 @@ namespace MFO::Board {
                             ImGui::TextWrapped("%s", Str::Fmt(Str::K::Pg_NotEnrolledMsg,
                                                { who->name }).c_str());
                             ImGui::Spacing();
-                            if (ImGui::Button(Str::Label(Str::K::Pg_ChooseBtn, "pchoose"))) ImGui::OpenPopup("##pclass");
+                            if (Click::Button(Str::Label(Str::K::Pg_ChooseBtn, "pchoose"))) ImGui::OpenPopup("##pclass");
                         } else {
                             const auto& cat = Progression::Get();   // frozen — lock-free
                             std::size_t totalNodes = 0;
@@ -245,7 +245,7 @@ namespace MFO::Board {
                             // A toggles it on the pad.
                             {
                                 bool man = who->manualSkills;
-                                if (ImGui::Checkbox(Str::Label(Str::K::Pg_Manual, "pmanual"), &man)) {
+                                if (Click::Checkbox(Str::Label(Str::K::Pg_Manual, "pmanual"), &man)) {
                                     EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u,
                                                man ? 1.0f : 0.0f };
                                     e.verbId = (int)AddonVerb::SetManual;
@@ -374,7 +374,7 @@ namespace MFO::Board {
                                         (s_actAv != RE::ActorValue::kNone && av == s_actAv);
                                     if (skillActJustClosed && isActiveSkill)
                                         ImGui::SetKeyboardFocusHere();
-                                    if (ImGui::Selectable(label, isActiveSkill,
+                                    if (Click::Selectable(label, isActiveSkill,
                                                           ImGuiSelectableFlags_SpanAllColumns)) {
                                         s_skillCur = catIdx;   // catalog index (may be -1)
                                         s_actAv    = av;
@@ -454,7 +454,7 @@ namespace MFO::Board {
                                     ImGui::BeginDisabled(!canApply);
                                     const std::string apply = Str::Fmt(Str::K::Pg_Apply,
                                         { Str::Arg::F(base, 0), Str::Arg::F(base + 1.0f, 0) }) + "###papply";
-                                    if (ImGui::Selectable(apply.c_str(), false,
+                                    if (Click::Selectable(apply.c_str(), false,
                                                           ImGuiSelectableFlags_DontClosePopups)) {
                                         EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u,
                                                    (float)(int)s_actAv };
@@ -468,7 +468,7 @@ namespace MFO::Board {
                                                                 : Str::K::Pg_AtCap));
                                     ImGui::BeginDisabled(!haveCatRow ||
                                                          cat.skills[s_skillCur].nodes.empty());
-                                    if (ImGui::Selectable(Str::Label(Str::K::Pg_OpenTree, "popentree"))) {
+                                    if (Click::Selectable(Str::Label(Str::K::Pg_OpenTree, "popentree"))) {
                                         s_scrollHome = true;
                                         wantOpenTree = true;   // opened at this scope, below
                                         ImGui::CloseCurrentPopup();
@@ -532,12 +532,12 @@ namespace MFO::Board {
                                                    { Str::Arg::F(who->unspentPerk, 0) }).c_str());
                                 ImGui::PopFont();
                                 ImGui::SameLine();
-                                if (ImGui::SmallButton("-##zo")) s_zoom = std::max(0.5f, s_zoom - 0.15f);
+                                if (Click::SmallButton("-##zo")) s_zoom = std::max(0.5f, s_zoom - 0.15f);
                                 ImGui::SameLine();
-                                if (ImGui::SmallButton("+##zi")) s_zoom = std::min(2.0f, s_zoom + 0.15f);
+                                if (Click::SmallButton("+##zi")) s_zoom = std::min(2.0f, s_zoom + 0.15f);
                                 ImGui::SameLine();
                                 static bool s_showMarginal = false;
-                                ImGui::Checkbox(Str::Label(Str::K::Pg_ShowMarginal, "pmarg"), &s_showMarginal);
+                                Click::Checkbox(Str::Label(Str::K::Pg_ShowMarginal, "pmarg"), &s_showMarginal);
                                 ImGui::SameLine();
                                 ImGui::TextDisabled(" %s", Str::Get(Str::K::Pg_TreeHint));
                                 ImGui::Separator();
@@ -1028,7 +1028,7 @@ namespace MFO::Board {
                                         ImGui::PushID(k);
                                         ImGui::SetCursorScreenPos(
                                             ImVec2(p.x - R - 4.0f, p.y - R - 4.0f));
-                                        const bool clicked = ImGui::InvisibleButton(
+                                        const bool clicked = Click::InvisibleButton(
                                             "##nd", ImVec2((R + 4.0f) * 2.0f, (R + 4.0f) * 2.0f));
                                         const bool hovered = ImGui::IsItemHovered();
                                         ImGui::PopID();
@@ -1157,7 +1157,7 @@ namespace MFO::Board {
                                                              { ownedR, (int)nd.ranks.size() }).c_str());
                                             } else if (stv && stv->available) {
                                                 const std::string take = Str::Fmt(Str::K::Pg_Take, { ownedR + 1 }) + "###ptake";
-                                                if (ImGui::Selectable(take.c_str())) {
+                                                if (Click::Selectable(take.c_str())) {
                                                     EditCmd e{ EditKind::AddonAction, s_psel,
                                                                0, 0u, 0.0f };
                                                     e.verbId = (int)AddonVerb::AllocPerk;
@@ -1184,7 +1184,7 @@ namespace MFO::Board {
                             }
 
                             // ── FOOTER: RESPEC + HINTS ──────────────────
-                            if (ImGui::Button(Str::Label(Str::K::Pg_Respec, "prespecbtn"))) ImGui::OpenPopup("##prespec");
+                            if (Click::Button(Str::Label(Str::K::Pg_Respec, "prespecbtn"))) ImGui::OpenPopup("##prespec");
                             ImGui::SameLine();
                             // The ONE free post-migration respec (ProgState::freeRespec,
                             // PRGN v7) — read from the SNAPSHOT row, never g_prog:
@@ -1215,14 +1215,14 @@ namespace MFO::Board {
                                 ImGui::PopTextWrapPos();
                                 ImGui::Separator();
                                 ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
-                                if (ImGui::Selectable(Str::Label(Str::K::Pg_Confirm, "prespecok"))) {
+                                if (Click::Selectable(Str::Label(Str::K::Pg_Confirm, "prespecok"))) {
                                     EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u, 0.0f };
                                     e.verbId = (int)AddonVerb::Respec;
                                     QueueEdit(e);
                                     ImGui::CloseCurrentPopup();
                                 }
                                 ImGui::PopStyleColor();
-                                if (ImGui::Selectable(Str::Label(Str::K::Pg_Cancel, "prespecno"))) ImGui::CloseCurrentPopup();
+                                if (Click::Selectable(Str::Label(Str::K::Pg_Cancel, "prespecno"))) ImGui::CloseCurrentPopup();
                                 ImGui::SetItemDefaultFocus();   // land on Cancel, not the danger row
                                 ImGui::EndPopup();
                             }

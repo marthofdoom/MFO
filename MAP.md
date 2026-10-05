@@ -30,6 +30,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
    before the split. Largest files after it: Logistics_Loot 2499, Logistics 2290,
    Packages 2214, Board 1718, cast/CastOn 1387, cast/Direct 1317, CasterConsent 1283,
    Board_Progression 1248, Board_FieldKit 1135, apmf/Bridge 1074 (sizes 2026-09-24).
+   `Board_Click.cpp` (+ `Click::` decls in `Board_internal.h`): press-latched replacements for every ImGui click widget the board uses (Button/SmallButton/Selectable/Checkbox/RadioButton/InvisibleButton). The raw-delta cursor (`Board.cpp` kMouseMove) drifts between press and release, so a release off the item used to lose the click; a new clickable in Board_*.cpp must call `Click::X`, not `ImGui::X`. Nav (gamepad) passes through ImGui's own return.
    None of these should sit in context — grep to a symbol, read a narrow window.
    *(File-size rule, CLAUDE.md "SOURCE FILE SIZE AND SPLITS": ~1500 lines = plan a
    split as its own round, 2500 = hard backstop; every split is proven with
