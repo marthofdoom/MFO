@@ -136,4 +136,8 @@ python3 tools/verified_addresses/gen_verified_addresses.py --spec tools/verified
   Its rows are looked up by the 1.6.1170 id. A new spec row needs no 1.7.104 input: it is verified with its
   1.6.1170 signature at the idmap RVA, or it lands in the table above. An optional `sig["1.7.104"]`,
   `offset["1.7.104"]` or `bytes["1.7.104"]` overrides the 1.6.1170 one for that runtime only.
+- Optional spec list `raw_rvas` ({seat, rva = the raw 1.6.1170 RVA the code holds, source}): code constants that are not
+  Address Library ids. They exist only in the 1.7.104 table (id 0 = base+rva is verified, no library lookup): the
+  1.6.1170 signature is cut at the RVA and must hit exactly the idmap RVA (`rva:0x...` rows). The 1.6.1170 and
+  1.5.97 tables do not get them.
 - Keep `gen_verified_addresses.py` identical in MFO and APMF.

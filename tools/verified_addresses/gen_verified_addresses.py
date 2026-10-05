@@ -409,11 +409,10 @@ def hx(b):
 
 
 def load_idmap(path):
-    """idmap CSV -> {1.6.1170 id (int): row}. Only rows keyed by a plain numeric id."""
+    """idmap CSV -> {1.6.1170 id (int) or 'rva:0x...' (str, a raw 1.6.1170 RVA): row}."""
     m = {}
     for r in csv.DictReader(open(path, newline='')):
-        if r['id'].isdigit():
-            m[int(r['id'])] = r
+        m[int(r['id']) if r['id'].isdigit() else r['id']] = r
     return m
 
 
@@ -423,7 +422,6 @@ def derive_idmap(spec, img, img16, idmap, out16):
     rt = IDMAP_RT
     rows, unver = [], []
     by_id16 = {e['id']: e for e in out16}
-    want_csv_kind = {'vtable': 'vtable', 'rtti': 'rtti'}
     for row in spec['rows']:
         ids = row.get('ids', {})
         kind = row['kind']
@@ -444,9 +442,6 @@ def derive_idmap(spec, img, img16, idmap, out16):
             continue
         if not m['rva_1_7_104'].startswith('0x'):
             skip('UNRESOLVED in the idmap (%s)' % m['confidence'])
-            continue
-        if m['kind'] != want_csv_kind.get(kind, 'id'):
-            skip('idmap row kind %s does not match spec kind %s' % (m['kind'], kind))
             continue
         want = int(m['rva_1_7_104'], 16)
         e16 = by_id16.get(rid)
@@ -553,6 +548,29 @@ def derive_idmap(spec, img, img16, idmap, out16):
             skip('unknown kind %s' % kind)
             continue
         rows.append(ent)
+    # raw RVAs the code holds per runtime (spec "raw_rvas", keyed by the 1.6.1170 RVA, no Address Library id):
+    # the 1.6.1170 byte signature is cut at that RVA here (make_sig) and must hit exactly the idmap's RVA.
+    # Emitted with id 0 (SelfCheck verifies base+rva, no library lookup). 1.6.1170/1.5.97 tables are unchanged.
+    for raw in spec.get('raw_rvas', []):
+        r16 = int(raw['rva'], 16)
+        m = idmap.get('rva:' + raw['rva'].upper().replace('0X', '0x'))
+        if m is None or not m['rva_1_7_104'].startswith('0x'):
+            unver.append({'label': raw['seat'], 'id': None, 'row': raw, 'reason': 'raw RVA %s is %s in the idmap' % (
+                raw['rva'], 'absent' if m is None else 'UNRESOLVED')})
+            continue
+        want = int(m['rva_1_7_104'], 16)
+        sig = make_sig(img16, r16)
+        if sig is None:
+            unver.append({'label': raw['seat'], 'id': None, 'row': raw, 'reason': 'no unique 1.6.1170 signature at raw RVA %s' % raw['rva']})
+            continue
+        hits = sig_scan(img, sig)
+        if hits != [want]:
+            unver.append({'label': raw['seat'], 'id': None, 'row': raw, 'reason': 'signature cut at 1.6.1170 %s matches %d places %s, the idmap says 0x%X' % (
+                raw['rva'], len(hits), [hexs(x) for x in hits[:4]], want)})
+            continue
+        rows.append({'label': raw['seat'], 'id': 0, 'rva': want, 'bytesOffset': 0, 'bytes': '',
+                     'row': {'kind': 'raw rva', 'source': raw.get('source', ''), 'doc': raw.get('doc', '')}, 'slots': [],
+                     'method': 'raw RVA: 1.6.1170 %s signature (%d bytes) unique at the idmap RVA' % (raw['rva'], len(sig.split()))})
     return rows, unver
 
 
@@ -649,7 +667,7 @@ def write_doc(spec, rows, unver, path, args):
         cells = [label, row['kind']]
         for rt in RUNTIMES:
             if rt in d:
-                cells += [str(d[rt]['id']), hexs(d[rt]['rva']) + (' +0x%X %s' % (d[rt]['bytesOffset'], d[rt]['bytes'].upper()) if d[rt]['bytes'] else '')]
+                cells += [str(d[rt]['id']) if d[rt]['id'] else '-', hexs(d[rt]['rva']) + (' +0x%X %s' % (d[rt]['bytesOffset'], d[rt]['bytes'].upper()) if d[rt]['bytes'] else '')]
             else:
                 cells += ['-', '-']
         cells.append(e0['method'].split(';')[0])
@@ -718,6 +736,10 @@ def write_doc(spec, rows, unver, path, args):
     L.append('  Its rows are looked up by the 1.6.1170 id. A new spec row needs no 1.7.104 input: it is verified with its')
     L.append('  1.6.1170 signature at the idmap RVA, or it lands in the table above. An optional `sig["1.7.104"]`,')
     L.append('  `offset["1.7.104"]` or `bytes["1.7.104"]` overrides the 1.6.1170 one for that runtime only.')
+    L.append('- Optional spec list `raw_rvas` ({seat, rva = the raw 1.6.1170 RVA the code holds, source}): code constants that are not')
+    L.append('  Address Library ids. They exist only in the 1.7.104 table (id 0 = base+rva is verified, no library lookup): the')
+    L.append('  1.6.1170 signature is cut at the RVA and must hit exactly the idmap RVA (`rva:0x...` rows). The 1.6.1170 and')
+    L.append('  1.5.97 tables do not get them.')
     L.append('- Keep `gen_verified_addresses.py` identical in MFO and APMF.')
     L.append('')
     open(path, 'w', newline='\n').write('\n'.join(L))
