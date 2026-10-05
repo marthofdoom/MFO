@@ -937,6 +937,21 @@ namespace MFO::Logistics {
         // LP-M2 F-L3: true (once) when this follower's OWN job opened a_ref (picked or keyed).
         bool ConsumeOpenedByUs(RE::FormID a_follower, RE::FormID a_ref);
     }
+    // defined in logistics/PickupSound.cpp (batch A 86e3haxqx): the engine pickup sound of an
+    // ActivateRef MFO makes a follower do plays POSITIONALLY at him. Hold a Scope on the MAIN thread
+    // around exactly that ActivateRef call; the seat (installed at plugin load) acts only inside it.
+    // Inert when the seat is not installed. Not nestable (an inner Scope is a no-op).
+    namespace PickupSound {
+        class Scope {
+        public:
+            Scope(RE::FormID a_follower, RE::FormID a_ref, bool a_flora);
+            ~Scope();
+            Scope(const Scope&) = delete;
+            Scope& operator=(const Scope&) = delete;
+        private:
+            bool owner_ = false;
+        };
+    }
     // defined in logistics/LootScan.cpp: retarget an in-flight excursion's leg (the scan's
     // excursion branch and the lockpick door leg share it). a_point (LP-M2): walk to that WORLD
     // POINT instead of to a_ref (ch.19 kTravel_ToPosition; refused on the MFO-package road),

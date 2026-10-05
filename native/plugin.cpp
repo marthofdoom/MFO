@@ -571,6 +571,11 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     // calling it unconditionally is safe.
     MFO::Board::InstallInputHook();
 
+    // Batch A 86e3haxqx: the pickup-sound call-site seat inside Actor::PlayPickUpSound. Here for the
+    // same reason as the input trampoline: it rewrites five live bytes of engine code, and at plugin
+    // load no game thread can be executing them. A logged no-op wherever a row is refused.
+    MFO::Logistics::PickupSound::Install();
+
     auto* serialization = SKSE::GetSerializationInterface();
     serialization->SetUniqueID(MFO::kSerID);
     serialization->SetSaveCallback(MFO::SaveCallback);

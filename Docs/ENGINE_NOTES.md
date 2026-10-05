@@ -2473,6 +2473,55 @@ CommonLib layout read needs its own 1.7.104 compare before it ships, exactly lik
 includes 1.7.104 on the strength of this table). Re-run the compare if MFO starts reading a PlayerCharacter
 member (they move +8 on 1.7.104; use the fork's accessors) or constructs an `ExtraDataList` (needs the fork arm).
 
+### 0.50 An NPC's pickup sound IS built at the NPC; the item SNDR's output model makes it heard as the player's (batch A 86e3haxqx, 2026-10-05, disassembly of all three builds)
+
+Status: PROVEN by disassembly; the field log line `[pickupsnd]` is the observation (principle 5).
+
+The path MFO's loose pickup takes (`TESObjectREFR::ActivateRef(follower)` on main, `logistics/Service.cpp`):
+`TESBoundObject::Activate` (vslot 0x37, 1.6.1170 0x273690 id 17670) casts the activator to Actor and calls its
+`PickUpObject` (vslot 0xCC, 0x678600 id 37521) with playSound = 1, which calls `this->PlayPickUpSound(base, 1, 0)`
+(vslot 0xA3). Actor and Character share vslot 0xA3 = **Actor::PlayPickUpSound** (1.6.1170 0x65FE90 id 37196,
+1.5.97 0x5CF8E0 id 36216, 1.7.104 0x6728B0, AE id NOT in the MIT table revision 3); PlayerCharacter overrides it
+(0x743EB0 / 0x6AF620 / 0x756B10). The Actor version picks the SNDR (BGSPickupPutdownSounds, else per form type a
+default object, ALCH "use" = consume sound), then `BuildSoundDataFromDescriptor(handle, sndr+0x20, 0x11)` (+0x14A
+on 1.6.1170 and 1.7.104, +0x73 on 1.5.97 where the pick is an out-of-line helper 0x5CF9B0), `SetPosition(actor
++0x54/58/5C)`, `SetObjectToFollow(Get3D())`, `Play`. The PlayerCharacter version builds the same SNDR with 0x1A
+and no position.
+
+BuildSoundDataFromDescriptor flags (0xCB11A0 id 67666): the low 3 bits, when nonzero, REPLACE the descriptor's
+mode; bits 0x3800 likewise; the rest is ORed. The descriptor fill (BGSStandardSoundDef vslot 1, 1.6.1170 0x325CD0,
+1.5.97 0x2D0600, 1.7.104 0x32C330) sets mode 2 (2D) unless the output model (+0x48) has NAM1 flag 0x01
+("attenuates with distance", model +0x28): then 1 (HRTF, model +0x2C type 0) or 4 (defined speakers). So
+0x11 = forced 3D HRTF at the actor, 0x1A = forced 2D. BGSStandardSoundDef is the only BGSSoundDescriptor class on
+all three builds (one registered creator).
+
+Skyrim.esm: every vanilla item pickup SNDR uses SOMMono01400Player1st (000B4058: NAM1 flags 0x02 = no
+attenuation, MNAM 1 defined speaker output, no ANAM) or SOMUIDefault (000B75FB, flags 0): ITMGoldUpSD 0003E952
+(Gold001), ITMClothingUpSD, ITMPotionUpSD, ITMKeyUpSD, ITMArrowsUpSD, ITMCoinPouchUp, ITMGenericUpSD,
+ITMNoteUp, the ITMIngredient*Up family. With no distance attenuation the 3D sound plays at full volume
+anywhere: an NPC's pickup sounds exactly like the player's. (A few MISC use PHYGenericMetalHeavyH on
+SOMMono01400 0005A28A, which attenuates: those were already positional.)
+
+The engine's own way to change a handle's model: `BSSoundHandle::SetOutputModel(handle, model + 0x20)`
+(1.6.1170 0xCAF660 id 67624, 1.5.97 0xBED740 id 66363, 1.7.104 0xCC97E0; body identical) between build and
+play, e.g. the UI sound helper 1.6.1170 0x97AD20 (id 52940, Build 0x10 -> SetOutputModel(DOBJ 0x97) -> Play) and
+1.5.97 0x2864BE (after SetPosition/Follow, before Play). It takes the BSISoundOutputModel subobject: CommonLib's
+`SetOutputModel(const BGSSoundOutput*)` passes the form pointer itself (principle 6: do not call it).
+
+A coin PURSE is flora: the harvest (TESProduceForm, 1.6.1170 0x1E8EF0) plays its sound only when the harvester
+is the player; an NPC harvest plays none. Container takes (`RemoveItem` into the follower): a depth-4 static
+call-graph search from TESObjectREFR::RemoveItem (0x2E1750), Actor::RemoveItem (0x692800) and
+Actor::AddObjectToContainer (0x678F90) finds no call through vslot 0xA3 (not observed in the field).
+
+MFO's seat (`logistics/PickupSound.cpp`): a call-site trampoline on that one Build call; inside MFO's own
+ActivateRef scope (main thread) a non-attenuating model is replaced with SOMMono01400 0005A28A. Rows: see
+`Docs/VERIFIED-ADDRESSES.md` PickupSound.*; the 1.7.104 function is a raw-RVA row (evidence:
+`tools/verified_addresses/idmap-1.7.104-mfo.csv`).
+
+Side finding, NOT changed by this work: `logistics/Lockpick.cpp` PlayAtFollower builds with CommonLib's default
+flags 0x1A, which FORCES mode 2 (2D) whatever the MFO.esp SNDR's model says, so its SetPosition has no effect: the
+lockpick sounds are non-positional too. Building with 0x11 (or 0x10, the descriptor's own mode) would place them.
+
 ## 1. Actor control — Tier A primitives
 
 **Status: PROVEN (sibling).** Each has a working call site in shipped code.

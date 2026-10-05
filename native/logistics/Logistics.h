@@ -191,6 +191,13 @@ namespace MFO::Logistics {
     // they came from. Registered once at kDataLoaded, after form resolution.
     void RegisterSinks();
 
+    // Batch A 86e3haxqx (logistics/PickupSound.cpp): the call-site seat that makes the pickup sound of
+    // an MFO-caused follower pickup positional at the follower. PLUGIN LOAD only (it patches engine code
+    // before any game thread runs); exact builds; a refused row leaves the engine sound as it is.
+    namespace PickupSound {
+        void Install();
+    }
+
     // #62 ON-LOAD beast-head sweep: rebuild each beast-race teammate's 3D once on
     // load so a save comes up with heads already reattached (no trade/loot needed).
     // Main-thread, self-retrying, gated on bBeastHeadFix. Call at kPostLoadGame.
