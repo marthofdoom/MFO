@@ -438,8 +438,8 @@ namespace MFO::Board {
             }
 
             // No casts: on the pinned NG these are already the real D3D types.
-            g_device  = renderer->data.forwarder;
-            g_context = renderer->data.context;
+            g_device  = reinterpret_cast<ID3D11Device*>(renderer->data.forwarder);
+            g_context = reinterpret_cast<ID3D11DeviceContext*>(renderer->data.context);
             if (!g_device || !g_context) {
                 spdlog::error("[overlay-probe] no device/context -- Field Kit disabled");
                 return;
@@ -678,7 +678,7 @@ namespace MFO::Board {
         void ReportSwapchainChange(IDXGISwapChain* a_this) {
             static IDXGISwapChain* s_reported = nullptr;
             auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
-            IDXGISwapChain* cur = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+            IDXGISwapChain* cur = renderer ? reinterpret_cast<IDXGISwapChain*>(renderer->data.renderWindows[0].swapChain) : nullptr;
             IDXGISwapChain* old = g_swapChain.load();
             if (!old || a_this != cur || a_this == s_reported) return;
             s_reported = a_this;
@@ -702,7 +702,7 @@ namespace MFO::Board {
             // null one or any other presenter never initialises anything.
             if (!g_swapChain.load()) {
                 auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
-                IDXGISwapChain* game = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+                IDXGISwapChain* game = renderer ? reinterpret_cast<IDXGISwapChain*>(renderer->data.renderWindows[0].swapChain) : nullptr;
                 if (game && a_this == game)
                     std::call_once(g_lazyOnce, [&] { LazyInit(a_this); });
             }
@@ -835,7 +835,7 @@ namespace MFO::Board {
             if (g_hooksInstalled.load()) return;
             static std::atomic<int> s_attempts{ 0 };
             auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
-            IDXGISwapChain* swap = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+            IDXGISwapChain* swap = renderer ? reinterpret_cast<IDXGISwapChain*>(renderer->data.renderWindows[0].swapChain) : nullptr;
             if (!swap) {
                 if (s_attempts.fetch_add(1) < 600) {   // ~ generous startup grace
                     SKSE::GetTaskInterface()->AddTask([] { TryInstallHooks(); });

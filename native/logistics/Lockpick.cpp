@@ -1065,7 +1065,8 @@ namespace MFO::Logistics::Lockpick {
         if (cells[1] == cells[0]) cells[1] = nullptr;
         for (auto* c : cells) {
             if (!c || !c->IsAttached()) continue;
-            c->ForEachReferenceInRange(S, kGateDoorReach, [&](RE::TESObjectREFR& r) {
+            c->ForEachReferenceInRange(S, kGateDoorReach, [&](RE::TESObjectREFR* r_p) {
+                RE::TESObjectREFR& r = *r_p;  // upstream sync: ForEach callbacks take a pointer
                 auto* base = r.GetBaseObject();
                 if (!base || !base->Is(RE::FormType::Door) || r.IsDisabled() || r.IsMarkedForDeletion())
                     return RE::BSContainer::ForEachResult::kContinue;

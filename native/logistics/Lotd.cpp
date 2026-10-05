@@ -963,7 +963,8 @@ namespace MFO::Lotd {
             for (auto* anchor : { static_cast<RE::TESObjectREFR*>(a_follower), static_cast<RE::TESObjectREFR*>(pc) }) {
                 auto* cell = anchor ? anchor->GetParentCell() : nullptr;
                 if (!cell || !cell->IsAttached() || !seen.insert(cell).second) continue;
-                cell->ForEachReferenceInRange(ppos, leash, [&](RE::TESObjectREFR& r) {
+                cell->ForEachReferenceInRange(ppos, leash, [&](RE::TESObjectREFR* r_p) {
+                    RE::TESObjectREFR& r = *r_p;  // upstream sync: ForEach callbacks take a pointer
                     auto* b = r.GetBaseObject();
                     if (!b || b->GetFormID() != base) return RE::BSContainer::ForEachResult::kContinue;
                     if (r.IsDisabled() || !r.Is3DLoaded()) return RE::BSContainer::ForEachResult::kContinue;
