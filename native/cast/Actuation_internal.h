@@ -603,6 +603,12 @@ namespace MFO::Actuation {
         // coming back, or a Melee/Ranged class without weapon-style control)? cast/Hands.cpp.
         bool RightHandIsWeaponHand(RE::Actor* a_follower);
         void ResetHealRoad();   // ClearCastLocks
+        // Review round 1 (9895a53): the RIGHT hand's in-flight refresh is bounded by the
+        // never-observed window (released with a WARN when it never fired; F2), and the
+        // equip side asks the rank of a live right-hand heal claim before it puts a weapon
+        // in the right (kNoRule = none; F3).
+        std::optional<Outcome> HealRightNeverFired(RE::Actor* a_follower, RE::FormID a_spell);
+        int RightHealRule(RE::FormID a_follower);
         // An asker that already HOLDS a hand with its own spell (an offense charge in progress) is
         // never held: starving its refresh would kill a running cast, which is not this fix's job.
         const char* HealRepairVerdict(Loadout::Ready a_ready);

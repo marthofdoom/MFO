@@ -1248,3 +1248,10 @@ Raised against 957d748 (`fix/mfo-g1-exact-gates`, Opus tier-A review MERGE), 202
   data +0x110/+0x118/+0x11C, TESObjectCELL runtime data +0x68 with worldSpace +0x128 (`Docs/ENGINE_NOTES.md` section
   0.49, with addresses). Other off-table 1.5.x / 1.6.x builds still read CommonLib's upstream layouts in the tick, the
   same as before G1; that is not an F2 question and stays as it was. The two SEV-5 items above stay open.
+
+### MFO-B227 -- per-hand heal road: deferred review findings (F5 SEV-3 + SEV-4/SEV-5)
+Raised against 9895a53 (`feat/mfo-perhand-heal`, Opus tier-A review, 2026-10-05). F1 (Harbinger proxy is one slot per OWNER, freed by the departing claim) is fixed in APMF by a separate agent; F2/F3/F4/F6 were fixed in the follow-up round. Deferred here, verbatim from the reviewer's log (`agentlogs/review-perhand-heal.md`; the review's full prose went to the coordinator, so these are its recorded lines):
+- **F5 (SEV-3, deferred by the coordinator: `iCastControl` is 2 on LoreRim, exact mode is not in the test plan):** "castLvl>=4 Prepare deselects right heal -> SEV-3." `Loadout::Prepare`'s Caster branch at cast-control level 4 `DeselectSpell`s the RIGHT hand's spell when it is not the spell being prepared, so an offense or second-recipient Prepare for the LEFT can strip a right-hand heal claim's spell. Fix shape: skip the deselect while a right-hand heal claim names that spell (`APMFBridge::GetHealCastSpell(fid, kApmfHandRight)`).
+- **SEV-4 (the non-F6 half):** "Prepare AlreadyReady via right-hand copy -> false repair log -> SEV-3/4." F6 fixed the heal-claim Prepare; a non-heal caller (offense) still answers AlreadyReady off either hand's copy (unchanged, pre-existing).
+- **SEV-5:** MAP.md file:line citations in the native/cast/ entries were stale (corrected in the fix round for the per-hand heal files; the older cast entries still carry pre-split numbers).
+- **Surfaced at edit time from:** MAP.md native/cast/ "PER-HAND HEAL ROAD" What breaks.

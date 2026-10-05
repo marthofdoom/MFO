@@ -644,6 +644,22 @@ namespace MFO::Actuation {
                 }
                 return { Result::NoOp, "held off: a higher-ranked heal claim holds the left hand", true };
             }
+            // THE RIGHT HAND'S HEAL (feat/mfo-perhand-heal, review F3 on 9895a53): a live heal claim
+            // on the right that OUTRANKS this equip rule keeps the hand, by the same carried rank
+            // the left uses (no tenure). A higher-ranked equip rule takes it, and the heal road
+            // releases the right heal on its next lap (a weapon now owns the right hand).
+            if (const int healRule = RightHealRule(a_follower->GetFormID()); healRule < g_firingRule) {
+                const auto now = std::chrono::steady_clock::now();
+                auto& last = g_heldOffLog[a_follower->GetFormID()];
+                if (now - last >= std::chrono::seconds(5)) {
+                    last = now;
+                    spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' HELD OFF -- a heal claim (rule {}) ranked "
+                                 "above rule {} holds the right hand for a second heal recipient",
+                                 a_follower->GetFormID(), a_ranged ? "ranged" : "melee",
+                                 best->GetName() ? best->GetName() : "?", healRule, g_firingRule);
+                }
+                return { Result::NoOp, "held off: a higher-ranked heal claim holds the right hand", true };
+            }
             const std::uint16_t bestDmg = best->GetAttackDamage();
             // Off-hand plan (one-hander in the right; offHand 2 -> a second one-
             // hander, 1 -> a shield), gated on bWeaponStyleControl. A live cast

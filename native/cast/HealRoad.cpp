@@ -152,6 +152,38 @@ namespace MFO::Actuation {
             }
         }
 
+        // THE NEVER-OBSERVED BOUND ON A RENEWAL (review F2 on 9895a53, SEV-2). A claim this
+        // file renews without the rule re-asking for it (the companion, and the RIGHT hand's
+        // in-flight refresh, which has no Prepare repair behind it) must not be renewed
+        // forever when it never fires: the SAME window refreshHeldOwnClaim uses
+        // (`kHoldLastSeenCapMs` from that hand's lock claim stamp, and no fire observed ON
+        // THAT HAND within `kObservedFiringRecencyMs`), with nothing charging or casting on
+        // the hand (CastInFlightOnHand: a charged, held cast is in flight and is kept). The
+        // one other exemption is marth's held heal: a recipient measured Occluded (`losHeld`)
+        // is being waited for, not stuck. Past it the claim is RELEASED with a WARN (the
+        // twin of HealClaimNeedsRepair's kNeverFired WARN), never silently renewed: the
+        // CastClaims.cpp:196-204 note puts that cap at the call site, and a right claim
+        // Harbinger can no longer arm (its proxy freed) ends here instead of hanging.
+        bool NeverFiredRelease(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell, const char* a_who) {
+            const auto fid   = a_follower->GetFormID();
+            const auto stamp = CastLockClaimStamp(fid, a_hand, a_spell);
+            if (stamp == Clock::time_point{}) return false;   // no lock naming it: nothing to bound here
+            const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - stamp).count();
+            if (ageMs < static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) return false;
+            if (ComposedCast::ObservedFiring(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs))
+                return false;
+            if (CastInFlightOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand))) return false;
+            if (const auto it = g_healHands.find(fid); it != g_healHands.end() && it->second.hand[a_hand].losHeld)
+                return false;
+            spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {} NEVER FIRED: claimed {} ms ago, no fire "
+                         "observed on that hand in the last {} ms and nothing charging -- RELEASED, the hand is "
+                         "re-chosen next lap (a seat or proxy problem in Harbinger shows here; rule {})",
+                         fid, HandWord(a_hand), a_spell, a_who, ageMs, APMFBridge::kObservedFiringRecencyMs,
+                         g_firingRule);
+            ReleaseOwnHealClaim(a_follower, a_hand, a_spell, "it never fired within the never-observed window");
+            return true;
+        }
+
         // THIS RULE'S HEAL ON THE OTHER HAND (the companion). One rule fires once per lap
         // at one recipient, so a rule healing two recipients would otherwise maintain only
         // the one its picker named this lap and let the other's claim go stale. Re-judged
@@ -198,10 +230,16 @@ namespace MFO::Actuation {
                     return;
                 }
             }
-            if (APMFBridge::RefreshOwnedCastOnHand(fid, ah, /*a_holdSpell=*/hs)) {
-                ComposedCast::WatchClaim(fid, hs, ah, CastProxyOnHand(fid, a_hand));
-                NoteLosHold(fid, a_hand, hs, rid);
+            // A WEAPON NOW OWNS THE RIGHT (review F3): the weapon-hand hard rule wins, the
+            // right heal is released and its recipient re-picks a hand next lap.
+            if (a_hand == kHandRight && RightHandIsWeaponHand(a_follower)) {
+                ReleaseOwnHealClaim(a_follower, a_hand, hs, "a weapon now owns the right hand");
+                return;
             }
+            NoteLosHold(fid, a_hand, hs, rid);   // before the bound: a held heal is exempt from it
+            if (NeverFiredRelease(a_follower, a_hand, hs, "the other hand's recipient")) return;
+            if (APMFBridge::RefreshOwnedCastOnHand(fid, ah, /*a_holdSpell=*/hs))
+                ComposedCast::WatchClaim(fid, hs, ah, CastProxyOnHand(fid, a_hand));
         }
     }   // anon
 
@@ -319,6 +357,11 @@ namespace MFO::Actuation {
         // DIFFERENT recipient: then this second recipient takes the RIGHT, when the right
         // holds no heal of its own and no weapon owns it. Both hands healing others -> the
         // LEFT, which re-aims only in its idle gap (MFO-B171), as before.
+        if (servedOn == kHandRight && onHand[kHandRight].claim && RightHandIsWeaponHand(a_follower)) {
+            // A WEAPON NOW OWNS THE RIGHT (review F3): release; the recipient re-picks next lap.
+            ReleaseOwnHealClaim(a_follower, kHandRight, spellID, "a weapon now owns the right hand");
+            return Outcome{ Result::FailedOther, "animated heal not cast: a weapon now owns the right hand", true };
+        }
         if (servedOn < kHandCount) {
             a_hand = servedOn;
         } else if (contestedOn < kHandCount) {
@@ -365,6 +408,20 @@ namespace MFO::Actuation {
         // The held-through-lost-LoS state of the hand already serving him.
         if (servedOn < kHandCount && onHand[servedOn].claim) NoteLosHold(id, servedOn, spellID, recipKey);
         return std::nullopt;
+    }
+
+    std::optional<Outcome> HealRightNeverFired(RE::Actor* a_follower, RE::FormID a_spell) {
+        if (!a_follower || !NeverFiredRelease(a_follower, kHandRight, a_spell, "its recipient")) return std::nullopt;
+        return Outcome{ Result::FailedOther, "animated heal released: it never fired on the right hand", true };
+    }
+
+    int RightHealRule(RE::FormID a_follower) {
+        if (APMFBridge::GetHealCastSpell(a_follower, APMFBridge::kApmfHandRight) == 0) return kNoRule;
+        const auto it = g_castLock.find(a_follower);
+        if (it == g_castLock.end()) return kNoRule;
+        const auto& lk = it->second.hand[kHandRight];
+        return lk.spell == APMFBridge::GetHealCastSpell(a_follower, APMFBridge::kApmfHandRight) ? lk.owningRule
+                                                                                                 : kNoRule;
     }
 
     void ReleaseHealClaimsAllHands(RE::FormID a_follower, const char* a_why) {

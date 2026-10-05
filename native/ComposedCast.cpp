@@ -944,19 +944,47 @@ namespace MFO::ComposedCast {
         return Clock::now() - w.lastObservedAt < std::chrono::milliseconds(a_withinMs);
     }
 
+    std::int32_t HandCastingForm(RE::Actor* a_actor, RE::FormID a_form) {
+        if (!a_actor || a_form == 0) return 0;
+        // The SAME per-hand caster read Actuation::CastInFlightOnHand makes (magicCasters[]
+        // by SlotTypes, currentSpell), without its state test: the form is what matters here.
+        auto holds = [&](std::size_t a_slot) {
+            RE::MagicCaster* c = a_actor->GetActorRuntimeData().magicCasters[a_slot];
+            return c && c->currentSpell && c->currentSpell->GetFormID() == a_form;
+        };
+        const bool l = holds(static_cast<std::size_t>(RE::Actor::SlotTypes::kLeftHand));
+        const bool r = holds(static_cast<std::size_t>(RE::Actor::SlotTypes::kRightHand));
+        return l == r ? 0 : (l ? APMFBridge::kApmfHandLeft : APMFBridge::kApmfHandRight);
+    }
+
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell) {
         auto it = g_watch.find(a_follower);
         if (it == g_watch.end()) return;
         const auto now = Clock::now();
-        if (it->second.hand[0].spell == a_spell ||
-            (it->second.hand[0].proxy != 0 && it->second.hand[0].proxy == a_spell)) {
-            it->second.hand[0].observed = true;
-            it->second.hand[0].lastObservedAt = now;   // "recently", for ObservedFiring
+        auto names = [&](const Watch& w) { return w.spell == a_spell || (w.proxy != 0 && w.proxy == a_spell); };
+        bool mark[2] = { names(it->second.hand[0]), names(it->second.hand[1]) };
+        // BOTH hands watch this form (the same heal on two recipients, feat/mfo-perhand-heal;
+        // review F2 on 9895a53): the event names no hand, so the hand whose caster holds the
+        // fired form is the one that fired. Neither or both -> NEITHER is marked (one
+        // rate-limited line): a mark on the wrong hand would mask that hand's silent claim.
+        if (mark[0] && mark[1]) {
+            const std::int32_t h = HandCastingForm(RE::TESForm::LookupByID<RE::Actor>(a_follower), a_spell);
+            mark[0] = h == APMFBridge::kApmfHandLeft;
+            mark[1] = h == APMFBridge::kApmfHandRight;
+            if (h == 0) {
+                static std::unordered_map<RE::FormID, Clock::time_point> s_unattributed;
+                auto& last = s_unattributed[a_follower];
+                if (now - last >= std::chrono::seconds(5)) {
+                    last = now;
+                    spdlog::info("[cfc] {:08X} fire of {:08X} matches BOTH hands' claims and neither hand's "
+                                 "caster holds it alone -- not marked observed on either hand", a_follower, a_spell);
+                }
+            }
         }
-        if (it->second.hand[1].spell == a_spell ||
-            (it->second.hand[1].proxy != 0 && it->second.hand[1].proxy == a_spell)) {
-            it->second.hand[1].observed = true;
-            it->second.hand[1].lastObservedAt = now;
+        for (int i = 0; i < 2; ++i) {
+            if (!mark[i]) continue;
+            it->second.hand[i].observed = true;
+            it->second.hand[i].lastObservedAt = now;   // "recently", for ObservedFiring
         }
     }
 

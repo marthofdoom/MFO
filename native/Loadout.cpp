@@ -326,7 +326,11 @@ namespace MFO::Loadout {
         const auto now = std::chrono::steady_clock::now();
 
         const auto hands = Read(a_actor, a_spell);
-        if (hands.alreadyHolding) {
+        // The LEFT heal claim's Prepare (a_healClaimLive; every heal-claim caller passes it
+        // with the claim live) prepares the LEFT hand: the copy a second recipient's RIGHT
+        // heal holds is not this hand's (review F6 on 9895a53, feat/mfo-perhand-heal), so
+        // only the left answers "already holding" for it. Every other caller is unchanged.
+        if (hands.alreadyHolding && (!a_healClaimLive || hands.left == a_spell)) {
             // Spell already in hand: the AI window starts the first time a rule
             // WANTS this cast, not before. try_emplace -- re-arming every tick
             // would mean the window never elapses.

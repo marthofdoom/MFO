@@ -477,9 +477,9 @@ per concern:
 - `cast/Roads.cpp` (288) = the three delivery ROADS `CastOn` forks to: `ForceCast` (`:31`, the
   forced package cast), `ConcentrationCast` (`:129`, the bounded concentration stream entry) and
   `RestorationCastDirect` (`:269`).
-- `cast/CastOn.cpp` (1654 -- still PAST the ~1500 "plan a split" mark; marth 2026-10-05: do NOT split it,
+- `cast/CastOn.cpp` (1657 -- still PAST the ~1500 "plan a split" mark; marth 2026-10-05: do NOT split it,
   `CastOn()` is one 1550-line function; new heal-road logic goes in `cast/HealRoad.cpp` instead) = `CastOn` (`:123`, the AI-first hybrid of one spell at one target;
-  its heal-road call `HealRoadLap` `:368`, the right-hand heal's Prepare-free return `:1011`, see "ANIMATED HEAL CLAIM ROAD" and
+  its heal-road call `HealRoadLap` `:368`, the right heal's never-observed bound `:544`, the right-hand heal's Prepare-free return `:1013`, see "ANIMATED HEAL CLAIM ROAD" and
   "PER-HAND HEAL ROAD" below)
   + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:76`, extern via `cast/Direct_internal.h`)
   + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1556`/`:1572`).
@@ -567,11 +567,13 @@ per concern:
   adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
   `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
   Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
-- `cast/HealRoad.cpp` (371, feat/mfo-perhand-heal 2026-10-05) = THE PER-HAND HEAL ROAD, see "PER-HAND HEAL ROAD"
-  below: `HealRoadLap` (`:267`), `HealHandClaimed` (`:234`), `HealHandEnded` (`:199`), `HealHandsReconcile` (`:222`),
-  `ReleaseHealClaimsAllHands` (`:357`, public), `ResetHealRoad` (`:369`, from `ClearCastLocks`); anon `HealOnHand` (`:87`),
-  `RecipientLost` (`:107`), `NoteLosHold` (`:133`), `MaintainCompanion` (`:163`), the per-hand record `g_healHands`.
-- `cast/Hands.cpp` (1482) = THE PER-HAND CAST LOCK's implementation (moved whole) —
+- `cast/HealRoad.cpp` (441, feat/mfo-perhand-heal 2026-10-05) = THE PER-HAND HEAL ROAD, see "PER-HAND HEAL ROAD"
+  below: `HealRoadLap` (`:314`), `HealHandClaimed` (`:281`), `HealHandEnded` (`:246`), `HealHandsReconcile` (`:269`),
+  `HealRightNeverFired` (`:413`), `RightHealRule` (`:418`, the equip side's right-hand rank read),
+  `ReleaseHealClaimsAllHands` (`:427`, public), `ResetHealRoad` (`:439`, from `ClearCastLocks`); anon `HealOnHand` (`:87`),
+  `RecipientLost` (`:107`), `NoteLosHold` (`:133`), `NeverFiredRelease` (`:167`), `MaintainCompanion` (`:195`), the
+  per-hand record `g_healHands`.
+- `cast/Hands.cpp` (1484) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
   `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
   `CastLockLive` `:332`), rank preemption (`CanPreemptHand` `:477`, `IncumbentTargetLost` `:561`,
@@ -1057,7 +1059,19 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     RIGHT (`Loadout::HandPick::Right`, `ResolveCastHand`'s Left mirror: free / own re-aim / `CanPreemptHand`
     by rank, an urgent heal takes a lower offense mid-charge); else the LEFT (a third recipient re-aims the
     left in its idle gap, MFO-B171). The right heal skips `Loadout::Prepare` (LEFT-only): Harbinger's
-    per-hand seats arm it (`CastOn` `:1011`).
+    per-hand seats arm it (`CastOn` `:1013`). A left heal's Prepare (`a_healClaimLive`) answers AlreadyReady
+    only off the LEFT hand's copy (review F6).
+  * **Review round 1 (9895a53, F2/F3/F4/F6).** (F2) The companion and the RIGHT hand's in-flight refresh are
+    bounded by `NeverFiredRelease` (`HealRoad.cpp:167`): `kHoldLastSeenCapMs` from that hand's lock stamp, no
+    fire observed ON THAT HAND within `kObservedFiringRecencyMs`, nothing charging, recipient not held through
+    lost LoS -> RELEASED with the WARN `[heal-hand] <f> RIGHT hand heal <s> for <who> NEVER FIRED ...`.
+    `ComposedCast::NoteObservedCast` (`ComposedCast.cpp:960`) and `HealObsNoteClaimFire` are hand-aware: when
+    both hands' claims name the fired form, `ComposedCast::HandCastingForm` (`:947`, which hand caster's
+    `currentSpell` it is) decides, and an undecidable fire marks / attributes NEITHER hand. (F3) A served right
+    heal and a right companion are released when a weapon now owns the right (`RightHandIsWeaponHand`), and
+    `EquipWeapon` holds off while a higher-ranked right heal claim stands (`cast/Equip.cpp:651`, `RightHealRule`).
+    Harbinger's F1 (proxy per owner) is fixed in APMF; until it lands, a right claim whose proxy was freed ends at
+    the F2 bound. Deferred: REVIEW-BACKLOG MFO-B227 (F5: exact-mode Prepare deselects a right heal; SEV-4/5).
   * **Every lap, no caps.** `MaintainCompanion` re-judges THIS rule's heal on the other hand (dead /
     essential-down / beyond reach / at threshold or full with nothing in flight -> released; stream cap ->
     re-stream) or renews it in place (`RefreshOwnedCastOnHand` + `WatchClaim`), so one rule healing two
@@ -1081,8 +1095,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     holds the same spell (`DeselectSpell` is not proven hand-scoped). `logistics/Service.cpp:329`'s
     `leftReserved` reads `IsHealCastActive` (any hand), so a lone right heal also reserves the left (not
     edited: the file is past 1500 lines). Open: right-hand arming by the seats alone is unproven in the field
-    (CAST-DELIVERY "Open item"); the SpellSink names no hand, so a fire of the same spell marks both hands'
-    watches observed.
+    (CAST-DELIVERY "Open item"). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B227.
 - **[heal-obs] + APPLY READ-BACK + MFO'S CONCPROXY ON THE ALLOW-LIST (`feat/mfo-animheal-p0`,
   2026-09-29; design scratchpad `animheal-design.md` phases 0a + 1m).** Field 0928c: Harbinger denied
   MFO's own ConcProxy forms 48 times on the INSTANT caster (`hand=?`) while MFO printed `effect applied` /

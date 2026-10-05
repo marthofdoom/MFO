@@ -291,6 +291,11 @@ namespace MFO::ComposedCast {
     // original spell's nor the proxy's cast still warns exactly as before.
     bool ExpectingCast(RE::FormID a_follower, RE::FormID a_spell);
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell);
+    // Which hand's MagicCaster holds a_form as its currentSpell: kApmfHandLeft /
+    // kApmfHandRight, or 0 when neither or both (undecidable). The hand-aware sink for a
+    // fire both hands' claims name (feat/mfo-perhand-heal, review F2/F4). Racy plain
+    // loads, like Actuation::CastInFlightOnHand; worker.
+    std::int32_t HandCastingForm(RE::Actor* a_actor, RE::FormID a_form);
 
     // ── HELD-OFF query (Fable amendment (b), 2026-09-06) ──────────────────────
     // WHICH incumbent held a_spell off on a_follower's last Try(). Try() itself

@@ -3,6 +3,7 @@
 // Cut from cast/Direct.cpp by the Direct.cpp split (2026-09-29, MFO-B152): a pure
 // move, proven function by function with tools/splitcheck.
 #include "Direct_internal.h"
+#include "ComposedCast.h"   // HandCastingForm: the hand-aware fire sink (feat/mfo-perhand-heal)
 #include "apmf/APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
 #include <map>            // feat/mfo-animheal-p0 fix: ReadbackWarnDue gate (tuple key)
 #include <tuple>
@@ -114,17 +115,32 @@ namespace MFO::Actuation {
 
     void HealObsNoteClaimFire(RE::FormID a_caster, RE::FormID a_firedForm) {
         if (a_firedForm == 0) return;
-        // EITHER hand's heal claim (feat/mfo-perhand-heal); the event names no hand, so the
-        // left is matched first (a proxy is per claim, so a proxied heal matches exactly).
+        // EITHER hand's heal claim (feat/mfo-perhand-heal). The event names no hand, and a
+        // Harbinger proxy is per OWNER, not per claim (review F4 on 9895a53), so two hands'
+        // claims can name the same form: then the hand whose caster holds the fired form
+        // (ComposedCast::HandCastingForm, the same sink NoteObservedCast uses) decides, and an
+        // undecidable fire is NOT attributed (no [heal-obs] line rather than a wrong one).
         std::int32_t hand  = 0;
         RE::FormID   spell = 0;
-        for (const std::int32_t h : { APMFBridge::kApmfHandLeft, APMFBridge::kApmfHandRight }) {
-            const RE::FormID sp = APMFBridge::GetHealCastSpell(a_caster, h);
+        RE::FormID   match[2] = { 0, 0 };
+        const std::int32_t hands[2] = { APMFBridge::kApmfHandLeft, APMFBridge::kApmfHandRight };
+        for (int i = 0; i < 2; ++i) {
+            const RE::FormID sp = APMFBridge::GetHealCastSpell(a_caster, hands[i]);
             if (sp == 0) continue;
-            const RE::FormID proxy = APMFBridge::GetHealCastProxy(a_caster, h);
-            if (a_firedForm != sp && (proxy == 0 || a_firedForm != proxy)) continue;
-            hand = h; spell = sp;
-            break;
+            const RE::FormID proxy = APMFBridge::GetHealCastProxy(a_caster, hands[i]);
+            if (a_firedForm == sp || (proxy != 0 && a_firedForm == proxy)) match[i] = sp;
+        }
+        if (match[0] && match[1]) {
+            hand = ComposedCast::HandCastingForm(RE::TESForm::LookupByID<RE::Actor>(a_caster), a_firedForm);
+            if (hand == 0) {
+                spdlog::debug("[heal-obs] {:08X} fire of {:08X} matches both hands' heal claims and no single "
+                              "hand's caster holds it -- not attributed", a_caster, a_firedForm);
+                return;
+            }
+            spell = match[hand == APMFBridge::kApmfHandLeft ? 0 : 1];
+        } else if (match[0] || match[1]) {
+            hand  = match[0] ? hands[0] : hands[1];
+            spell = match[0] ? match[0] : match[1];
         }
         if (spell == 0) return;   // not a heal claim
         const RE::FormID tgt       = APMFBridge::GetHealCastTarget(a_caster, hand);
