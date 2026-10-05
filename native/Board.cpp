@@ -706,6 +706,18 @@ namespace MFO::Board {
                 if (game && a_this == game)
                     std::call_once(g_lazyOnce, [&] { LazyInit(a_this); });
             }
+            // Presents keep arriving but none from the game's swapchain: say so
+            // loudly ONCE instead of staying silent (the declared refusal stands).
+            if (!g_swapChain.load()) {
+                static int s_foreign = 0;   // render thread only
+                if (++s_foreign == 300) {
+                    auto* r = RE::BSGraphics::Renderer::GetSingleton();
+                    spdlog::error("[overlay-probe] {} presents seen but none from the game's swapchain "
+                                  "(presenter={} game={}) -- overlay NOT initialised, Field Kit disabled",
+                                  s_foreign, static_cast<void*>(a_this),
+                                  static_cast<void*>(r ? r->data.renderWindows[0].swapChain : nullptr));
+                }
+            }
 
             SyncControlBlock();   // EVERY present (its only caller) -- drives the grace-expiry re-enable
 
@@ -713,6 +725,7 @@ namespace MFO::Board {
             FlushBoardWindowMemory(wantPanel);
             // Any swapchain we did not capture goes straight through, untouched.
             if (a_this != g_swapChain.load()) {
+                if (!g_ready.load() && g_open.load()) CloseBoard();   // Toggle raced the disable
                 ReportSwapchainChange(a_this);
                 return g_origPresent(a_this, a_sync, a_flags);
             }
