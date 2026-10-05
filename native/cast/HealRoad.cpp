@@ -202,20 +202,67 @@ namespace MFO::Actuation {
         // A delivery-flip proxy Harbinger un-taught (a release on the other hand freeing a
         // shared per-owner proxy before APMF's per-claim ref-count, or APMF's PreSaveSweep on
         // save) leaves a claim the engine can never arm, on EITHER hand. The precise test, no
-        // timer: proxy != 0 && !actor->HasSpell(proxy). Released for a re-claim (keeping the
+        // timer: proxy != 0 && !actor->HasSpell(proxy), read on the MAIN thread (T1, below).
+        // Released for a re-claim (keeping the
         // lock's rank through the re-stream gap, MFO-B177's mechanism) so the next lap's
         // RequestCast has Harbinger mint and teach it again. One WARN per claim (the release
         // ends the claim). Correct with or without APMF's ref-count fix: with it, this simply
         // never fires outside the save sweep.
+        // THREADING (review T1 on 0ce73c4): Harbinger teaches and un-teaches proxies
+        // (AddSpell / RemoveSpell) on the MAIN thread, so the HasSpell read is made THERE,
+        // through MainThread::Post, and its verdict is LATCHED per (follower, hand) under
+        // g_proxyMx; the worker acts on the latch on a later lap. At most one read is pending
+        // per (follower, hand). A latch belongs to ONE claim: it is keyed on the proxy FormID
+        // AND the hand's lock claim stamp (a re-claim re-stamps the lock), so a verdict that
+        // lands after a release / re-claim / proxy change is dropped, never applied to the
+        // next claim. ResetHealRoad clears it all.
+        struct ProxyLatch {
+            RE::FormID        proxy    = 0;
+            Clock::time_point stamp{};
+            bool              pending  = false;
+            bool              untaught = false;
+            bool              formGone = false;
+        };
+        std::mutex                                    g_proxyMx;
+        std::unordered_map<std::uint64_t, ProxyLatch> g_proxyLatch;   // under g_proxyMx
+
         bool ProxyUnlearnedRelease(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell) {
             const auto fid = a_follower->GetFormID();
+            const std::uint64_t key = (static_cast<std::uint64_t>(fid) << 1) | a_hand;
             const RE::FormID proxy = APMFBridge::GetHealCastProxy(fid, ApmfHand(a_hand));
-            if (proxy == 0 || proxy == a_spell) return false;
-            auto* p = RE::TESForm::LookupByID<RE::SpellItem>(proxy);
-            if (p && a_follower->HasSpell(p)) return false;
+            const auto stamp = CastLockClaimStamp(fid, a_hand, a_spell);
+            bool act = false, gone = false;
+            {
+                std::scoped_lock lk(g_proxyMx);
+                if (proxy == 0 || proxy == a_spell || stamp == Clock::time_point{} || !MainThread::IsInstalled()) {
+                    g_proxyLatch.erase(key);
+                    return false;
+                }
+                auto& e = g_proxyLatch[key];
+                if (e.proxy != proxy || e.stamp != stamp) e = ProxyLatch{ proxy, stamp };   // a new claim / proxy
+                if (e.untaught) {
+                    act  = true;
+                    gone = e.formGone;
+                    g_proxyLatch.erase(key);   // consumed: one WARN + one release per claim
+                } else if (!e.pending) {
+                    e.pending = true;
+                    MainThread::Post([fid, key, proxy, stamp]() {
+                        auto* actor = RE::TESForm::LookupByID<RE::Actor>(fid);
+                        auto* p     = RE::TESForm::LookupByID<RE::SpellItem>(proxy);
+                        const bool untaught = actor && (!p || !actor->HasSpell(p));
+                        std::scoped_lock lk2(g_proxyMx);
+                        const auto it = g_proxyLatch.find(key);
+                        if (it == g_proxyLatch.end() || it->second.proxy != proxy || it->second.stamp != stamp) return;
+                        it->second.pending  = false;
+                        it->second.untaught = untaught;
+                        it->second.formGone = untaught && !p;
+                    });
+                }
+            }
+            if (!act) return false;
             spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X}: its Harbinger proxy {:08X} is no longer known to "
                          "the actor{} -- RELEASED for a re-claim, so Harbinger mints and teaches it again (rule {})",
-                         fid, HandWord(a_hand), a_spell, proxy, p ? "" : " (the form is gone)", g_firingRule);
+                         fid, HandWord(a_hand), a_spell, proxy, gone ? " (the form is gone)" : "", g_firingRule);
             ReleaseOwnHealClaim(a_follower, a_hand, a_spell,
                                 "its Harbinger proxy was un-taught (re-claimed next lap)", /*a_keepSpell=*/true);
             return true;
@@ -562,6 +609,10 @@ namespace MFO::Actuation {
     void ResetHealRoad() {
         g_healHands.clear();
         g_handFireAttach.clear();
+        {
+            std::scoped_lock lk(g_proxyMx);
+            g_proxyLatch.clear();   // review T1: every pending verdict is dropped with it
+        }
         std::scoped_lock lk(g_handFireMx);
         g_handFire.clear();
     }
