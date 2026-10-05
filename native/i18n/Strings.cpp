@@ -87,15 +87,23 @@ namespace MFO::Str {
             return m;
         }
 
-        // MAIN THREAD. Is the Scaleform translator up? (Same three lookups the
-        // SKSE wrapper makes; checked first so a not-yet-ready translator is ONE
-        // log line instead of one warning per key.) The AddRef the lookup takes
-        // is left, exactly as the SKSE wrapper leaves it: a singleton state.
-        bool TranslatorUp() {
+        // MAIN THREAD. What is installed as the Scaleform loader's translator?
+        // (The same lookups the SKSE wrapper makes; checked first so a not-yet-ready
+        // translator is ONE log line instead of one warning per key.) The AddRef the
+        // lookup takes is left, exactly as the SKSE wrapper leaves it: a singleton state.
+        // None   = no translator yet (UI not started).
+        // Vanilla = the engine's BSScaleformTranslator (SKSE ParseTranslation can fill it).
+        // Other  = some OTHER GFxTranslator: a translation plugin (Scaleform Translation
+        //          Plus Plus NG installs its own) replaced the engine's. SKSE's Translate
+        //          only needs the virtual GFxTranslator::Translate, so lookups still work;
+        //          only ParseTranslation (which needs the vanilla class) cannot.
+        enum class TrKind { None, Vanilla, Other };
+        TrKind TranslatorKind() {
             const auto mgr    = RE::BSScaleformManager::GetSingleton();
             const auto loader = mgr ? mgr->loader : nullptr;
             const auto tr     = loader ? loader->GetStateAddRef<RE::GFxTranslator>(RE::GFxState::StateType::kTranslator) : nullptr;
-            return skyrim_cast<RE::BSScaleformTranslator*>(tr) != nullptr;
+            if (!tr) return TrKind::None;
+            return skyrim_cast<RE::BSScaleformTranslator*>(tr) ? TrKind::Vanilla : TrKind::Other;
         }
 
         // MAIN THREAD. The Scaleform translator lookup, the wrapper SKSE ships.
@@ -143,10 +151,14 @@ namespace MFO::Str {
         // `rejected` collects keys whose override failed validation.
         int Fill(Table& t, bool a_english, std::vector<std::string>& rejected) {
             int hits = 0;
-            if (!TranslatorUp()) {
+            const TrKind kind = TranslatorKind();
+            if (kind == TrKind::None) {
                 spdlog::warn("[i18n] the Scaleform translator is not up yet: English defaults for now");
                 return 0;
             }
+            if (kind == TrKind::Other)
+                spdlog::info("[i18n] the Scaleform translator is not the engine's BSScaleformTranslator "
+                             "(a translation plugin replaced it): reading MFO keys through it");
             for (std::size_t i = 0; i < t.e.size(); ++i) {
                 const auto& d = kDefaults[i];
                 std::string raw;
@@ -277,7 +289,10 @@ namespace MFO::Str {
             // ParseTranslation never overwrites an existing key, so this is safe
             // when the engine already has the file, and it is a quiet no-op when
             // the file does not exist (the English-defaults case).
-            SKSE::Translation::ParseTranslation("MFO");
+            // ParseTranslation needs the engine's own translator class: with a
+            // replaced one (see TrKind::Other) it would only log a false failure.
+            if (TranslatorKind() == TrKind::Vanilla)
+                SKSE::Translation::ParseTranslation("MFO");
             delete t;   // never published, so it is safe to free
             rejected.clear();
             t = Build(english, hits, rejected);

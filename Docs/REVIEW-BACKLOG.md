@@ -1248,3 +1248,10 @@ Raised against 957d748 (`fix/mfo-g1-exact-gates`, Opus tier-A review MERGE), 202
   data +0x110/+0x118/+0x11C, TESObjectCELL runtime data +0x68 with worldSpace +0x128 (`Docs/ENGINE_NOTES.md` section
   0.49, with addresses). Other off-table 1.5.x / 1.6.x builds still read CommonLib's upstream layouts in the tick, the
   same as before G1; that is not an F2 question and stays as it was. The two SEV-5 items above stay open.
+
+### MFO-B226 (SEV-4/5) -- i18n translator-kind review follow-ups
+Raised against cbe5385 (`fix/mfo-i18n-import`, Opus tier-B review MERGE), 2026-10-05.
+- SEV-4: `native/i18n/Strings.cpp` Fill, Other branch: no RTTI/class name logged. Scenario: some other plugin replaces the translator, MFO gets zero hits and the log cannot say whose translator failed. Fix: add `typeid(*tr).name()` to the existing once-per-Fill info line.
+- SEV-4 (field-settled): under Scaleform Translation Plus Plus NG, `$MFO_*` keys resolve only if STPP loads `MFO_<LANG>.txt` (binary evidence says it scans `data/interface/translations` for `.*_<LANG>.txt`). Degrades loudly (english-check mismatches / "absent or empty"), never silently. One field log settles it.
+- SEV-5: Strings.cpp Reload hits==0 retry: in the Other case ParseTranslation is skipped but Build still runs a second time (redundant work, the Other/None line logged twice per Reload). Rebuild only when ParseTranslation actually ran.
+- SEV-5: MAP.md i18n PRECEDENCE entry still says the translator is "the game's Scaleform translator, which the ENGINE fills"; under STPP, STPP fills it. Wording only.
