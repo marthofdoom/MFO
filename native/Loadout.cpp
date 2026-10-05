@@ -533,14 +533,16 @@ namespace MFO::Loadout {
         // test is also exact. By FormID, re-resolved there. VR has no pump (Post is
         // a documented no-op): run it direct there, as before.
         const RE::FormID spellID = spell->GetFormID();
-        auto takeBack = [a_actorID, spellID]() {
+        // A RIGHT-hand heal claim naming the SAME spell (a second heal recipient,
+        // feat/mfo-perhand-heal): DeselectSpell names a spell, not a hand, so it is
+        // not proven to leave the right hand's copy alone. Read on the worker.
+        const bool rightHealSame =
+            APMFBridge::GetHealCastSpell(a_actorID, APMFBridge::kApmfHandRight) == spellID;
+        auto takeBack = [a_actorID, spellID, rightHealSame]() {
             auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
             auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
             if (!a || !sp || a->GetEquippedObject(true) != sp) return;
-            // The RIGHT hand may hold the SAME spell for a second heal recipient
-            // (feat/mfo-perhand-heal). DeselectSpell names a spell, not a hand, so
-            // it is not proven to leave that copy alone: skip the take-back then.
-            if (a->GetEquippedObject(false) == sp) return;
+            if (rightHealSame && a->GetEquippedObject(false) == sp) return;   // skip: the right heal holds it
             a->DeselectSpell(sp);
             spdlog::debug("[loadout] {:08X} -- {} taken back", a_actorID,
                           sp->GetName() ? sp->GetName() : "?");

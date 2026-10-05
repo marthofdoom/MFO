@@ -175,7 +175,16 @@ namespace MFO::Actuation {
             const RE::FormID rid = APMFBridge::GetHealCastTarget(fid, ah);
             RE::Actor* rcp = rid == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(rid);
             if (rid != 0 && rcp) Sightline::Want(fid, { rid }, Sightline::Basis::Own);
-            if (const char* lost = RecipientLost(a_follower, rcp, sp, a_hand)) {
+            // No picker names him this lap, so the picker's own membership tests are made
+            // here too (PickAlly / CastAuto: a tracked follower or the player, inside
+            // fSharedRadius): a recipient who LEFT the party or the radius is lost.
+            const char* gone = nullptr;
+            if (rid != 0 && rcp && rcp != RE::PlayerCharacter::GetSingleton() && !Followers::IsTrackedFast(rid))
+                gone = "the recipient left the party";
+            else if (rid != 0 && rcp &&
+                     a_follower->GetPosition().GetDistance(rcp->GetPosition()) > Config::g_sharedRadius.load())
+                gone = "the recipient left the shared radius";
+            if (const char* lost = gone ? gone : RecipientLost(a_follower, rcp, sp, a_hand)) {
                 ReleaseOwnHealClaim(a_follower, a_hand, hs, lost);
                 return;
             }
@@ -291,6 +300,10 @@ namespace MFO::Actuation {
         // THIS RULE'S HEAL ON THE OTHER HAND(S): re-judged and maintained every lap.
         for (std::size_t h = 0; h < kHandCount; ++h)
             if (h != servedOn) MaintainCompanion(a_follower, h);
+        // ...which may have released one: read both hands again, so a hand freed just now
+        // is taken as free (the LEFT first) instead of displacing the right's offense.
+        for (std::size_t h = 0; h < kHandCount; ++h)
+            if (h != servedOn) onHand[h] = HealOnHand(id, h);
 
         // THIS LAP'S RECIPIENT, RE-JUDGED (before the hand lock and before the in-flight
         // refresh). Lost -> a claim (or re-stream gap lock) of this rule's aimed at HIM is

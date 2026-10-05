@@ -860,6 +860,7 @@ namespace MFO::Actuation {
         }
         const RE::FormID recipient = APMFBridge::GetHealCastTarget(fid, apmfHand);
         ComposedCast::EndHand(fid, apmfHand, a_keepSpell);
+        bool restream = false;
         if (it != g_castLock.end() && it->second.hand[a_hand].spell == a_spell) {
             auto& lk = it->second.hand[a_hand];
             if (a_keepSpell && g_firingRule != kNoRule && lk.owningRule == g_firingRule) {
@@ -872,6 +873,7 @@ namespace MFO::Actuation {
                 lk.restreamAt   = std::chrono::steady_clock::now();
                 lk.channelSince = {};
                 lk.channelCap   = 0.0f;
+                restream        = true;
             } else {
                 lk = CastLock{};
             }
@@ -884,7 +886,7 @@ namespace MFO::Actuation {
             spdlog::info("[heal] {:08X} heal claim RELEASED -- spell {:08X} at {:08X}, {} hand: {} (rule {})",
                          fid, a_spell, who, HandName(a_hand), a_why, g_firingRule);
         }
-        HealHandEnded(fid, a_hand, a_why);   // cast/HealRoad.cpp: the per-hand record + its once-per-change line
+        if (!restream) HealHandEnded(fid, a_hand, a_why);   // cast/HealRoad.cpp: the per-hand record + its line
         return true;
     }
 
