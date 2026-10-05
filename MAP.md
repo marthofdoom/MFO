@@ -4713,11 +4713,18 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   as a literal any more. See the `native/i18n/` entry (section 6, below this one): `Str::Get/Fmt/Label`, `VocabEntry.key`,
   `FitW` for fixed columns. New UI text = a new line in `i18n/Strings_keys.h` + regenerate the template.
 - **Overlay mechanism (`Board.cpp:337-1000`):** RENDER is offset-free — `PresentThunk`
-  (`:610`)/`ResizeBuffersThunk` swapped into **IDXGISwapChain vtable slots 8/13**
-  (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable` `:689`), the
+  (`:699`)/`ResizeBuffersThunk` (`:773`) swapped into **IDXGISwapChain vtable slots 8/13**
+  (frozen COM/DXGI ABI → version-independent; `HookSwapchainVtable` `:799`), the
   unchanged `WndProcHook` swap (`:313`, WM_CHAR/WM_KILLFOCUS), and `LazyInit`
-  (`:401`, ImGui context + DX11/Win32 backend on first Present). `TryInstallHooks`
-  (`:711`) polls for the live swapchain then patches.
+  (`:429`, ImGui context + DX11/Win32 backend on first Present). `TryInstallHooks`
+  (`:821`) polls for the live swapchain then patches. **Hardening (2026-10-04):** the vtable is
+  shared by every swapchain of the class. `LazyInit` runs only for `renderWindows[0].swapChain`
+  (`g_swapChain` is `std::atomic`); `SyncControlBlock` + `FlushBoardWindowMemory` run on EVERY
+  present (SyncControlBlock's only caller, so the board stays closable); drawing and
+  `ResizeBuffersThunk` act only when `a_this == g_swapChain`, others pass straight through.
+  `ReportSwapchainChange` (`:678`) on a confirmed swapchain change sets `g_ready=false`, closes
+  the board and logs (no rebuild), so Toggle/IsAvailable bail. `CreateRTV` (`:406`) logs its
+  HRESULT once; Present retries it under `g_ioMx` when `g_rtv` is null, and logs once if still none.
 - **Window drag/resize policy (`LazyInit`, `Board.cpp:442-443`):** `io.ConfigWindowsMoveFromTitleBarOnly = true`
   (windows move only by the title bar) and `io.ConfigWindowsResizeFromEdges = true` (ImGui 1.92.8 fields, `imgui.h:2439-2440`).
   Per window: the Field Orders board (`Board_FieldKit.cpp:302`, has a title bar) drags by the bar and resizes from

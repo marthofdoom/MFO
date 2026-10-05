@@ -390,7 +390,7 @@ namespace MFO::Board {
         using ResizeFn  = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT,
                                                       DXGI_FORMAT, UINT);
 
-        IDXGISwapChain*         g_swapChain   = nullptr;   // the hooked swapchain (probe)
+        std::atomic<IDXGISwapChain*> g_swapChain{ nullptr };   // the captured swapchain (probe)
         ID3D11RenderTargetView* g_rtv         = nullptr;   // backbuffer RTV for the overlay draw
         PresentFn               g_origPresent = nullptr;
         ResizeFn                g_origResize  = nullptr;
@@ -401,13 +401,25 @@ namespace MFO::Board {
         // backbuffer RTV itself (the old code piggybacked on Skyrim's own present
         // wrapper, which left one bound). Created in LazyInit + after every
         // ResizeBuffers, released before a resize.
+        // A failure is logged ONCE (HRESULT) and never masked: the next resize
+        // retries (g_rtv stays null), the draw path logs the consequence once.
         void CreateRTV(IDXGISwapChain* a_swap) {
             if (!g_device || g_rtv) return;
+            static std::atomic<bool> s_failLogged{ false };
             ID3D11Texture2D* backBuffer = nullptr;
-            if (SUCCEEDED(a_swap->GetBuffer(0, IID_PPV_ARGS(&backBuffer))) && backBuffer) {
-                g_device->CreateRenderTargetView(backBuffer, nullptr, &g_rtv);
-                backBuffer->Release();
+            HRESULT hr = a_swap->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+            const char* stage = "GetBuffer";
+            if (SUCCEEDED(hr) && backBuffer) {
+                hr = g_device->CreateRenderTargetView(backBuffer, nullptr, &g_rtv);
+                stage = "CreateRenderTargetView";
+            } else if (SUCCEEDED(hr)) {
+                hr = E_POINTER;
             }
+            if (backBuffer) backBuffer->Release();
+            if ((FAILED(hr) || !g_rtv) && !s_failLogged.exchange(true))
+                spdlog::error("[overlay-probe] RTV creation FAILED at {} (hr=0x{:08X}) -- the "
+                              "overlay has no render target until the next ResizeBuffers retry",
+                              stage, static_cast<std::uint32_t>(hr));
         }
         void ReleaseRTV() { if (g_rtv) { g_rtv->Release(); g_rtv = nullptr; } }
 
@@ -415,7 +427,7 @@ namespace MFO::Board {
         // fires (device / context / swapchain are all live by then). This is the
         // old D3DInitHook body, verbatim, minus the trampoline plumbing.
         void LazyInit(IDXGISwapChain* a_swap) {
-            g_swapChain = a_swap;
+            g_swapChain.store(a_swap);
             auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
             if (!renderer) { spdlog::error("[overlay-probe] no renderer -- Field Kit disabled"); return; }
 
@@ -658,18 +670,65 @@ namespace MFO::Board {
             });
         }
 
+        // Logged refusal (no rebuild): if the game's CURRENT swapchain is not the one
+        // LazyInit captured (fullscreen/borderless toggle, device reset, upscaler),
+        // the overlay cannot render onto it. Say so loudly, once per new swapchain.
+        // Render thread only (statics are unsynchronised on purpose). Read-only on
+        // the renderer, only reached for a swapchain that is not g_swapChain.
+        void ReportSwapchainChange(IDXGISwapChain* a_this) {
+            static IDXGISwapChain* s_reported = nullptr;
+            auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
+            IDXGISwapChain* cur = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+            IDXGISwapChain* old = g_swapChain.load();
+            if (!old || a_this != cur || a_this == s_reported) return;
+            s_reported = a_this;
+            // Make the refusal real: with no overlay on screen the board must not
+            // be able to lock controls. Toggle and IsAvailable now bail.
+            g_ready.store(false);
+            if (g_open.load()) CloseBoard();
+            spdlog::error("[overlay-probe] swapchain changed (old={} new={}) -- overlay DISABLED "
+                          "(re-acquire not implemented), board closed if it was open",
+                          static_cast<void*>(old), static_cast<void*>(a_this));
+        }
+
         // The overlay's render frame + input consume-sync. Hooked into vtable slot
         // 8. We draw ImGui onto the current backbuffer, THEN call the original
         // Present (the standard swapchain-hook order; the old code hooked Skyrim's
         // higher-level present wrapper so it drew after -- steady-state pixels are
         // identical). Runs on the render thread, install-once.
         HRESULT STDMETHODCALLTYPE PresentThunk(IDXGISwapChain* a_this, UINT a_sync, UINT a_flags) {
-            std::call_once(g_lazyOnce, [&] { LazyInit(a_this); });
+            // The slot-8 patch sits on a vtable shared by every swapchain of this
+            // class. Init binds only to the GAME's swapchain (renderWindows[0]); a
+            // null one or any other presenter never initialises anything.
+            if (!g_swapChain.load()) {
+                auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
+                IDXGISwapChain* game = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+                if (game && a_this == game)
+                    std::call_once(g_lazyOnce, [&] { LazyInit(a_this); });
+            }
+            // Presents keep arriving but none from the game's swapchain: say so
+            // loudly ONCE instead of staying silent (the declared refusal stands).
+            if (!g_swapChain.load()) {
+                static int s_foreign = 0;   // render thread only
+                if (++s_foreign == 300) {
+                    auto* r = RE::BSGraphics::Renderer::GetSingleton();
+                    spdlog::error("[overlay-probe] {} presents seen but none from the game's swapchain "
+                                  "(presenter={} game={}) -- overlay NOT initialised, Field Kit disabled",
+                                  s_foreign, static_cast<void*>(a_this),
+                                  static_cast<void*>(r ? r->data.renderWindows[0].swapChain : nullptr));
+                }
+            }
 
-            SyncControlBlock();   // every frame -- drives the grace-expiry re-enable
+            SyncControlBlock();   // EVERY present (its only caller) -- drives the grace-expiry re-enable
 
             const bool wantPanel = g_open.load();
             FlushBoardWindowMemory(wantPanel);
+            // Any swapchain we did not capture goes straight through, untouched.
+            if (a_this != g_swapChain.load()) {
+                if (!g_ready.load() && g_open.load()) CloseBoard();   // Toggle raced the disable
+                ReportSwapchainChange(a_this);
+                return g_origPresent(a_this, a_sync, a_flags);
+            }
             const bool wantHud   = g_hud.load();
             if (g_ready.load() && (wantPanel || wantHud)) {
                 // Copy the snapshot BEFORE the IO lock (#6: never nested).
@@ -679,6 +738,8 @@ namespace MFO::Board {
                     snap = g_snapshot;
                 }
                 std::scoped_lock lk(g_ioMx);
+
+                if (!g_rtv) CreateRTV(a_this);   // retry (logs its failure once)
 
                 ImGui::GetIO().MouseDrawCursor = wantPanel;
 
@@ -700,7 +761,15 @@ namespace MFO::Board {
                 if (wantPanel) DrawFieldKit(snap);
                 ImGui::EndFrame();
                 ImGui::Render();
-                if (g_rtv) g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
+                if (g_rtv) {
+                    g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
+                } else {
+                    static std::atomic<bool> s_noRtvLogged{ false };
+                    if (!s_noRtvLogged.exchange(true))
+                        spdlog::error("[overlay-probe] no RTV -- drawing onto whatever target is "
+                                      "bound, which may not be the presented backbuffer (retry "
+                                      "happens on the next ResizeBuffers)");
+                }
                 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
 
                 const auto n = g_probePresent.fetch_add(1) + 1;
@@ -717,6 +786,8 @@ namespace MFO::Board {
         HRESULT STDMETHODCALLTYPE ResizeBuffersThunk(IDXGISwapChain* a_this, UINT a_count,
                                                      UINT a_w, UINT a_h, DXGI_FORMAT a_fmt,
                                                      UINT a_flags) {
+            // Shared vtable: a swapchain we did not capture must not lose our RTV.
+            if (a_this != g_swapChain.load()) return g_origResize(a_this, a_count, a_w, a_h, a_fmt, a_flags);
             {
                 std::scoped_lock lk(g_ioMx);
                 ReleaseRTV();
