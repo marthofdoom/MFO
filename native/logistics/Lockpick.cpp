@@ -170,8 +170,10 @@ namespace MFO::Logistics::Lockpick {
         // sourced id: refused rather than guessed.
         bool UnlockSeatOk() {
             static const bool ok = [] {
-                if (REL::Module::IsVR()) {
-                    spdlog::warn("[lockpick] VR: the engine Unlock has no verified id -- lockpicking is inert");
+                if (!Runtime::Known()) {   // G1: exact builds only (was VR-only)
+                    spdlog::warn("[lockpick] runtime {} not supported ({}): the engine Unlock has no verified id "
+                                 "-- lockpicking is inert",
+                                 REL::Module::get().version().string("."), Runtime::GateReason());
                     return false;
                 }
                 return Runtime::SeatVerified(UnlockRel().address(), "Lockpick.Unlock");

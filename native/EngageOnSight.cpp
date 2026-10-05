@@ -6,6 +6,7 @@
 #include "EngageOnSight.h"
 #include "apmf/APMFBridge.h"      // ch.21 entry table (CombatEntryOffered / RequestCombatEntry / ...)
 #include "Config.h"
+#include "Runtime.h"   // G1: Runtime::Known(), the exact-build gate
 #include "LocationTypes.h"        // IsCivilised: the shared location-type table (LP-M2)
 #include "Confidence.h"           // LeashRadius (the enemy must be inside it, from the player) / OfFacing
 #include "MainThread.h"
@@ -398,8 +399,11 @@ namespace MFO::EngageOnSight {
             Status(note, a_f, a_id, "", now);
             return false;
         }
-        if (REL::Module::IsVR()) {
-            Status(note, a_f, a_id, "inert: VR (Harbinger serves no ch.21 there, and MFO has no direct road)", now);
+        if (!Runtime::Known()) {   // G1: exact builds only (was VR-only); the IsVR() below is a label
+            Status(note, a_f, a_id,
+                   REL::Module::IsVR() ? "inert: VR (Harbinger serves no ch.21 there, and MFO has no direct road)"
+                                       : "inert: runtime not supported by this build",
+                   now);
             return false;
         }
         if (!Config::g_autoRetreat.load()) {

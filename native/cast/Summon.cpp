@@ -139,7 +139,17 @@ namespace MFO::Actuation {
                 const REL::Relocation<std::uintptr_t> gl{ REL::RelocationID(516851, 403330) };
                 // A row with a byte check verifies base + rva + bytesOffset: the
                 // `mov rax,[rip+g]` itself (+0x51 on 1.5.97, +0xA1 on 1.6.1170).
-                const std::uintptr_t refAt = fn.address() + (REL::Module::IsAE() ? 0xA1u : 0x51u);
+                // G1: picked by EXACT build, never the IsAE() bucket. Covered()
+                // above already means one of the two; anything else refuses.
+                const std::uintptr_t inFn = Runtime::IsVerified1_6_1170() ? 0xA1u
+                                          : Runtime::IsVerified1_5_97()   ? 0x51u
+                                                                          : 0u;
+                if (!inFn) {
+                    spdlog::error("[summon] the engine's skip-cap flag is NOT read on this build (runtime not "
+                                  "supported) -- MFO always applies the summon limit");
+                    return false;
+                }
+                const std::uintptr_t refAt = fn.address() + inFn;
                 const bool okFn = Runtime::SeatVerified(refAt, "Actuation.SummonCap.AddCommandedActor");
                 const bool okGl = Runtime::SeatVerified(gl.address(), "Actuation.SummonCap.SkipFlagGlobal");
                 if (!(okFn && okGl))

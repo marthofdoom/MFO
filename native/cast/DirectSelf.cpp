@@ -15,8 +15,8 @@
 namespace MFO::Actuation {
 
     SelfCast CastSelfDirect(RE::Actor* a_follower, RE::SpellItem* a_spell, std::uint32_t a_stopPct) {
-        // RUNTIME GATE: Runtime::CastPathsVerified() = the AE bucket (pre-existing)
-        // or EXACTLY 1.5.97 (feat/mfo-1.5.97-pass, 2026-09-15; was IsAE()-only as
+        // RUNTIME GATE: Runtime::CastPathsVerified() = EXACTLY 1.6.1170 (G1, 2026-10-04;
+        // was the AE bucket) or EXACTLY 1.5.97 (feat/mfo-1.5.97-pass, 2026-09-15; was IsAE()-only as
         // the T#67 SE crash gate). The T#67 fault was Loadout::LeftHandSlot()'s
         // GetObject read of BGSDefaultObjectManager (+0xB80 poison on SE) -- now a
         // FormID lookup (Docs/ADDRESS-TABLE-2026-09-15.md rows "held branch

@@ -8,6 +8,7 @@
 #include "Logistics.h"
 #include "Logistics_internal.h"   // the split modules' shared substrate
 #include "Evaluator.h"
+#include "Runtime.h"   // G1: Runtime::Known(), the exact-build gate
 #include "Vocabulary.h"
 #include "Config.h"
 #include "cast/Actuation.h"   // cast-in-logistics: reuse the combat cast path (Fire)
@@ -514,7 +515,10 @@ namespace MFO::Logistics {
             // binaries, VTABLE_Actor[0] / VTABLE_Character[0] slot 0xCB), 0xCD on
             // VR per CommonLib's table. The VR index is unverified (no VR binary)
             // and unreachable: the `!MainThread::IsInstalled()` guard below skips
-            // the shed on VR before this lambda is ever posted.
+            // the shed on VR before this lambda is ever posted. G1: the slot is no
+            // longer picked by the IsVR() bucket; it is 0xCB on the two exact builds
+            // and REFUSED anywhere else (MainThread refuses those too, so this is
+            // the belt to that brace).
             // Do NOT reinstate the wrapper, and do NOT substitute
             // RemoveItem(kDropping): it skips the middleHigh queued-3D cleanup and
             // the post-drop fix-ups the real DropObject performs.
@@ -522,7 +526,12 @@ namespace MFO::Logistics {
                 RE::Actor* a_this, RE::ObjectRefHandle* a_out,
                 const RE::TESBoundObject* a_object, RE::ExtraDataList* a_extraList,
                 std::int32_t a_count, const RE::NiPoint3* a_dropLoc, const RE::NiPoint3* a_rotate);
-            const std::size_t slot = REL::Module::IsVR() ? 0xCD : 0xCB;
+            if (!Runtime::Known()) {
+                spdlog::error("[shed] {:08X}: DropObject vtable slot is not verified on runtime {} -- shed REFUSED",
+                              folID, REL::Module::get().version().string("."));
+                return;
+            }
+            constexpr std::size_t slot = 0xCB;
             auto* vtbl = *reinterpret_cast<std::uintptr_t**>(fol);
             auto  fn   = reinterpret_cast<DropObjectFn>(vtbl[slot]);
             RE::ObjectRefHandle dropped;

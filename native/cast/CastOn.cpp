@@ -119,8 +119,8 @@ namespace MFO::Actuation {
         // this (unchanged -- they are not part of the #68 ladder at all).
         Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target,
                        bool a_rangeGate) {
-            // RUNTIME GUARD: Runtime::CastPathsVerified() -- the AE bucket (pre-
-            // existing) or EXACTLY 1.5.97; VR and every other 1.5.x refused (feat/
+            // RUNTIME GUARD: Runtime::CastPathsVerified() -- EXACTLY 1.6.1170 (G1,
+            // 2026-10-04; was the AE bucket) or EXACTLY 1.5.97; every other build refused (feat/
             // mfo-1.5.97-pass, 2026-09-15). This was the T#67 AE-only gate: the mage cast-control
             // path CRASHED on Skyrim SE 1.5.97 -- a reporter's crash log pinned an
             // EXCEPTION_ACCESS_VIOLATION to Scheduler::Tick -> Actuation::Fire ->

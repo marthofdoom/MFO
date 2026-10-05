@@ -370,11 +370,11 @@ namespace {
                 // predicate is THE SAME Runtime::CastPathsVerified() the cast gates
                 // (Actuation::CastOn, CastSelfDirect / CastTargetDirect / CastAuto,
                 // ComposedCast::Enabled) and Packages' ForceRefToNativeAvailable()
-                // evaluate -- the AE bucket or exactly 1.5.97; VR and every other
-                // 1.5.x read gated/fallback with the reason (Runtime::GateReason).
-                // "1.6.1170" / "1.5.97" name the measured builds; another AE build
-                // prints "AE (not 1.6.1170)" so the log says out loud that the
-                // offsets were measured elsewhere. The equip slot is the FormID
+                // evaluate -- exactly 1.6.1170 or exactly 1.5.97 (G1); VR and every
+                // other build read gated/fallback with the reason (Runtime::GateReason).
+                // "1.6.1170" / "1.5.97" name the measured builds; any other build
+                // prints "unsupported" (G1: no "AE (not 1.6.1170)" bucket label, that
+                // bucket no longer opens anything). The equip slot is the FormID
                 // lookup Loadout::LeftHandSlot() makes (0x00013F43, Skyrim.esm
                 // EQUP LeftHand) -- after Forms::Resolve so the form is loadable;
                 // a null here is a real fault (principle 7: every spell equip
@@ -383,8 +383,7 @@ namespace {
                 const bool  open   = MFO::Runtime::CastPathsVerified();
                 const char* build  = MFO::Runtime::IsVerified1_6_1170() ? "1.6.1170"
                                    : MFO::Runtime::IsVerified1_5_97()   ? "1.5.97"
-                                   : REL::Module::IsAE()                ? "AE (not 1.6.1170)"
-                                   : MFO::Runtime::GateReason();
+                                   : "unsupported";
                 const std::string gates = open ? "open"
                                                : std::string("gated (") + MFO::Runtime::GateReason() + ")";
                 const auto* slot = MFO::Loadout::LeftHandSlot();
@@ -545,6 +544,10 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     spdlog::info("=== MFO {}.{}.{} loading — game {} ===",
                  ver.major(), ver.minor(), ver.patch(),
                  REL::Module::get().version().string());
+
+    // G1: name the runtime and whether this build supports it (exact 1.6.1170.0
+    // or 1.5.97.0). Anything else: every version-dependent seat is refused.
+    MFO::Runtime::LogRuntime();
 
     // mit-3.7 F1: compare the loaded Address Library with our own table of every
     // hooked / called address (VerifiedAddresses.h). Every install below asks

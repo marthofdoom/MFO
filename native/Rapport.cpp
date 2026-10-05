@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Rapport.h"
 #include "Targeting.h"
+#include "Runtime.h"   // G1: Runtime::Known(), the exact-build gate
 #include "Followers.h"
 #include "Config.h"
 #include "State.h"
@@ -399,8 +400,11 @@ namespace MFO::Rapport {
         // also means only ONE site fires per window, so VR gets a single
         // deferred worker-side StopCombat -- the same exposure class as the
         // long-shipped auto-retreat path.
-        if (REL::Module::IsVR()) SKSE::GetTaskInterface()->AddTask(work);
-        else                     MainThread::Post(std::move(work));
+        // G1: exact builds -> the pump (MainThread's own gate); VR -> the documented
+        // AddTask compromise; any other build: OFF (the pump is refused there, so
+        // the old Post was already a no-op -- same effect, now said in code).
+        if (Runtime::Known())         MainThread::Post(std::move(work));
+        else if (REL::Module::IsVR()) SKSE::GetTaskInterface()->AddTask(work);
         return true;
     }
 

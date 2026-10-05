@@ -1234,3 +1234,10 @@ Raised against 79fb52a5 (`fix/mfo-cicero-gear`, Opus focused re-review, verdict 
 - **SEV-5:** in mage mode `DeclaredSetKeeps` still calls `ComputeOwnedGearPick`, which walks inventory in `MageBestPerSlot`, and then throws the result away. Checking `gs.mage` first would skip the walk.
 - Stale docs from the same review (the "MEO absent" school rule in Logistics.h, TradeBridge.h, Economy.cpp and MAP) were fixed at merge.
 - **Surfaced at edit time from:** MAP.md "CICERO GEAR FIXES" note and the EquipAuthority entry.
+
+### MFO-B225 (SEV-4/5) -- G1 review follow-ups
+Raised against 957d748 (`fix/mfo-g1-exact-gates`, Opus tier-A review MERGE), 2026-10-05.
+- SEV-4 (F2 scope): on an unsupported runtime the plugin still loads and its tick reads CommonLib bucket-selected layouts (GetActorRuntimeData in Scheduler/Evaluator/Hands, AMMO/TESObjectCELL GetRuntimeData). Before F2, 1.7.104 is filed as SE, so those reads would use the SE layout. F2 must make those accessors fatal or refuse off-table builds, or MFO must refuse to start its tick when !Known().
+- SEV-5: Board.cpp:1724-1730 InstallInputHook still uses a 3-field pair. Switch it to Runtime::IsVerified1_6_1170()/1_5_97(); a 1.6.1170.1 repack would otherwise hit a fatal id miss before SeatVerified. This also fixes the misleading "using the input sink + ControlMap path" log at :1731-1734.
+- SEV-5: Upkeep.cpp:~550 skip log says "(VR)" on any non-exact build. Use Runtime::GateReason().
+(The CHANGELOG naming of the Field Orders board was fixed at merge.)
