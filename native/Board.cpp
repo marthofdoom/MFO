@@ -390,7 +390,7 @@ namespace MFO::Board {
         using ResizeFn  = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain*, UINT, UINT, UINT,
                                                       DXGI_FORMAT, UINT);
 
-        IDXGISwapChain*         g_swapChain   = nullptr;   // the hooked swapchain (probe)
+        std::atomic<IDXGISwapChain*> g_swapChain{ nullptr };   // the captured swapchain (probe)
         ID3D11RenderTargetView* g_rtv         = nullptr;   // backbuffer RTV for the overlay draw
         PresentFn               g_origPresent = nullptr;
         ResizeFn                g_origResize  = nullptr;
@@ -427,15 +427,9 @@ namespace MFO::Board {
         // fires (device / context / swapchain are all live by then). This is the
         // old D3DInitHook body, verbatim, minus the trampoline plumbing.
         void LazyInit(IDXGISwapChain* a_swap) {
-            g_swapChain = a_swap;
+            g_swapChain.store(a_swap);
             auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
             if (!renderer) { spdlog::error("[overlay-probe] no renderer -- Field Kit disabled"); return; }
-            // Diagnostic only (proceeds either way): the first presenter may not be
-            // the game's swapchain (proxy, side swapchain).
-            if (renderer->data.renderWindows[0].swapChain != a_swap)
-                spdlog::warn("[overlay-probe] first presenting swapchain {} is not the game's {}",
-                             static_cast<void*>(a_swap),
-                             static_cast<void*>(renderer->data.renderWindows[0].swapChain));
 
             DXGI_SWAP_CHAIN_DESC sd{};
             if (FAILED(a_swap->GetDesc(&sd))) {
@@ -685,11 +679,16 @@ namespace MFO::Board {
             static IDXGISwapChain* s_reported = nullptr;
             auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
             IDXGISwapChain* cur = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
-            if (!g_swapChain || a_this != cur || a_this == s_reported) return;
+            IDXGISwapChain* old = g_swapChain.load();
+            if (!old || a_this != cur || a_this == s_reported) return;
             s_reported = a_this;
-            spdlog::error("[overlay-probe] swapchain changed (old={} new={}) -- overlay will NOT "
-                          "render on the new swapchain (re-acquire not implemented)",
-                          static_cast<void*>(g_swapChain), static_cast<void*>(a_this));
+            // Make the refusal real: with no overlay on screen the board must not
+            // be able to lock controls. Toggle and IsAvailable now bail.
+            g_ready.store(false);
+            if (g_open.load()) CloseBoard();
+            spdlog::error("[overlay-probe] swapchain changed (old={} new={}) -- overlay DISABLED "
+                          "(re-acquire not implemented), board closed if it was open",
+                          static_cast<void*>(old), static_cast<void*>(a_this));
         }
 
         // The overlay's render frame + input consume-sync. Hooked into vtable slot
@@ -698,20 +697,25 @@ namespace MFO::Board {
         // higher-level present wrapper so it drew after -- steady-state pixels are
         // identical). Runs on the render thread, install-once.
         HRESULT STDMETHODCALLTYPE PresentThunk(IDXGISwapChain* a_this, UINT a_sync, UINT a_flags) {
-            std::call_once(g_lazyOnce, [&] { LazyInit(a_this); });
-
             // The slot-8 patch sits on a vtable shared by every swapchain of this
-            // class. Only the swapchain LazyInit captured is ever drawn on. Any
-            // other one goes straight through, untouched. Cheap pointer compare.
-            if (a_this != g_swapChain) {
-                ReportSwapchainChange(a_this);
-                return g_origPresent(a_this, a_sync, a_flags);
+            // class. Init binds only to the GAME's swapchain (renderWindows[0]); a
+            // null one or any other presenter never initialises anything.
+            if (!g_swapChain.load()) {
+                auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
+                IDXGISwapChain* game = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+                if (game && a_this == game)
+                    std::call_once(g_lazyOnce, [&] { LazyInit(a_this); });
             }
 
-            SyncControlBlock();   // every frame -- drives the grace-expiry re-enable
+            SyncControlBlock();   // EVERY present (its only caller) -- drives the grace-expiry re-enable
 
             const bool wantPanel = g_open.load();
             FlushBoardWindowMemory(wantPanel);
+            // Any swapchain we did not capture goes straight through, untouched.
+            if (a_this != g_swapChain.load()) {
+                ReportSwapchainChange(a_this);
+                return g_origPresent(a_this, a_sync, a_flags);
+            }
             const bool wantHud   = g_hud.load();
             if (g_ready.load() && (wantPanel || wantHud)) {
                 // Copy the snapshot BEFORE the IO lock (#6: never nested).
@@ -721,6 +725,8 @@ namespace MFO::Board {
                     snap = g_snapshot;
                 }
                 std::scoped_lock lk(g_ioMx);
+
+                if (!g_rtv) CreateRTV(a_this);   // retry (logs its failure once)
 
                 ImGui::GetIO().MouseDrawCursor = wantPanel;
 
@@ -768,7 +774,7 @@ namespace MFO::Board {
                                                      UINT a_w, UINT a_h, DXGI_FORMAT a_fmt,
                                                      UINT a_flags) {
             // Shared vtable: a swapchain we did not capture must not lose our RTV.
-            if (a_this != g_swapChain) return g_origResize(a_this, a_count, a_w, a_h, a_fmt, a_flags);
+            if (a_this != g_swapChain.load()) return g_origResize(a_this, a_count, a_w, a_h, a_fmt, a_flags);
             {
                 std::scoped_lock lk(g_ioMx);
                 ReleaseRTV();
