@@ -607,7 +607,10 @@ namespace MFO::Actuation {
         // never-observed window (released with a WARN when it never fired; F2), and the
         // equip side asks the rank of a live right-hand heal claim before it puts a weapon
         // in the right (kNoRule = none; F3).
-        std::optional<Outcome> HealRightNeverFired(RE::Actor* a_follower, RE::FormID a_spell);
+        // HealRefreshGate (review round 2): on a heal claim's in-flight refresh, either hand --
+        // release for a re-claim when its Harbinger proxy is no longer known to the actor
+        // (R2-2), and on the RIGHT the never-observed bound (F2). nullopt = carry on.
+        std::optional<Outcome> HealRefreshGate(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell);
         int RightHealRule(RE::FormID a_follower);
         // An asker that already HOLDS a hand with its own spell (an offense charge in progress) is
         // never held: starving its refresh would kill a running cast, which is not this fix's job.

@@ -540,8 +540,8 @@ namespace MFO::Actuation {
                                  true };
                     }
                 }
-                if (healClaim && handPlan.right && !handPlan.left)   // review F2: the right heal's never-observed bound
-                    if (auto out = HealRightNeverFired(a_follower, a_spellID)) return *out;
+                if (healClaim && handPlan.left != handPlan.right)   // review F2 / R2-2: proxy + never-observed gates
+                    if (auto out = HealRefreshGate(a_follower, planHand, a_spellID)) return *out;
                 if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
                     // KEEP THE [cfc] WATCH TICKING. ComposedCast::WatchClaim's own
                     // contract is "call every tick the caller's OWN claim call

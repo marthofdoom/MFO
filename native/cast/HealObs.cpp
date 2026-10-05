@@ -3,7 +3,7 @@
 // Cut from cast/Direct.cpp by the Direct.cpp split (2026-09-29, MFO-B152): a pure
 // move, proven function by function with tools/splitcheck.
 #include "Direct_internal.h"
-#include "ComposedCast.h"   // HandCastingForm: the hand-aware fire sink (feat/mfo-perhand-heal)
+#include "ComposedCast.h"   // LastFireHand: the hand-aware fire sink (feat/mfo-perhand-heal)
 #include "apmf/APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
 #include <map>            // feat/mfo-animheal-p0 fix: ReadbackWarnDue gate (tuple key)
 #include <tuple>
@@ -117,8 +117,8 @@ namespace MFO::Actuation {
         if (a_firedForm == 0) return;
         // EITHER hand's heal claim (feat/mfo-perhand-heal). The event names no hand, and a
         // Harbinger proxy is per OWNER, not per claim (review F4 on 9895a53), so two hands'
-        // claims can name the same form: then the hand whose caster holds the fired form
-        // (ComposedCast::HandCastingForm, the same sink NoteObservedCast uses) decides, and an
+        // claims can name the same form: then the per-hand anim-graph SpellFire decision
+        // NoteObservedCast just made (ComposedCast::LastFireHand, review R2-1) decides, and an
         // undecidable fire is NOT attributed (no [heal-obs] line rather than a wrong one).
         std::int32_t hand  = 0;
         RE::FormID   spell = 0;
@@ -131,10 +131,10 @@ namespace MFO::Actuation {
             if (a_firedForm == sp || (proxy != 0 && a_firedForm == proxy)) match[i] = sp;
         }
         if (match[0] && match[1]) {
-            hand = ComposedCast::HandCastingForm(RE::TESForm::LookupByID<RE::Actor>(a_caster), a_firedForm);
+            hand = ComposedCast::LastFireHand(a_caster, a_firedForm);   // the anim-graph SpellFire decision
             if (hand == 0) {
                 spdlog::debug("[heal-obs] {:08X} fire of {:08X} matches both hands' heal claims and no single "
-                              "hand's caster holds it -- not attributed", a_caster, a_firedForm);
+                              "hand's SpellFire event decided it -- not attributed", a_caster, a_firedForm);
                 return;
             }
             spell = match[hand == APMFBridge::kApmfHandLeft ? 0 : 1];

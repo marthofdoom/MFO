@@ -109,6 +109,10 @@ namespace MFO::ComposedCast {
             // and has idled since reads as silent. Stamped by NoteObservedCast on
             // every observed fire, so a repeating cast keeps re-stamping itself.
             Clock::time_point lastObservedAt{};
+            // A fire of this form that matched BOTH hands and no per-hand evidence decided
+            // (review R2-1 on 57bd5e7): read by UndecidedFire, which keeps the never-fired
+            // bound off this hand. Epoch = none.
+            Clock::time_point lastUndecidedAt{};
             Clock::time_point lastWarn{};      // rate-limit
             // WHEN THE IN-FLIGHT EXTENSION BELOW FIRST ENGAGED for this claim
             // (F12, 2026-09-09), epoch = not engaged. The anchor for its cap --
@@ -944,17 +948,28 @@ namespace MFO::ComposedCast {
         return Clock::now() - w.lastObservedAt < std::chrono::milliseconds(a_withinMs);
     }
 
-    std::int32_t HandCastingForm(RE::Actor* a_actor, RE::FormID a_form) {
-        if (!a_actor || a_form == 0) return 0;
-        // The SAME per-hand caster read Actuation::CastInFlightOnHand makes (magicCasters[]
-        // by SlotTypes, currentSpell), without its state test: the form is what matters here.
-        auto holds = [&](std::size_t a_slot) {
-            RE::MagicCaster* c = a_actor->GetActorRuntimeData().magicCasters[a_slot];
-            return c && c->currentSpell && c->currentSpell->GetFormID() == a_form;
-        };
-        const bool l = holds(static_cast<std::size_t>(RE::Actor::SlotTypes::kLeftHand));
-        const bool r = holds(static_cast<std::size_t>(RE::Actor::SlotTypes::kRightHand));
-        return l == r ? 0 : (l ? APMFBridge::kApmfHandLeft : APMFBridge::kApmfHandRight);
+    namespace {
+        // The hand the LAST observed fire of a form was attributed to (worker-serial, like
+        // g_watch): HealObsNoteClaimFire reads it right after NoteObservedCast on the same task.
+        struct LastFire { RE::FormID form = 0; std::int32_t hand = 0; };
+        std::unordered_map<RE::FormID, LastFire> g_lastFire;
+        // How far back an anim-graph SpellFire event may precede the TESSpellCastEvent's
+        // AddTask'd read: the release event comes first (ENGINE_NOTES: MRh_SpellFire_Event ->
+        // StartCastImpl), and the sink's task can wait a pump lap or more behind it.
+        constexpr std::uint32_t kHandFireWindowMs = 1500;
+    }
+
+    std::int32_t LastFireHand(RE::FormID a_follower, RE::FormID a_form) {
+        const auto it = g_lastFire.find(a_follower);
+        return (it != g_lastFire.end() && it->second.form == a_form) ? it->second.hand : 0;
+    }
+
+    bool UndecidedFire(RE::FormID a_follower, std::int32_t a_hand, RE::FormID a_spell, std::uint32_t a_withinMs) {
+        const auto it = g_watch.find(a_follower);
+        if (it == g_watch.end() || a_spell == 0) return false;
+        const auto& w = it->second.hand[WatchSlot(a_hand)];
+        if (w.spell != a_spell || w.lastUndecidedAt == Clock::time_point{}) return false;
+        return Clock::now() - w.lastUndecidedAt < std::chrono::milliseconds(a_withinMs);
     }
 
     void NoteObservedCast(RE::FormID a_follower, RE::FormID a_spell) {
@@ -963,24 +978,47 @@ namespace MFO::ComposedCast {
         const auto now = Clock::now();
         auto names = [&](const Watch& w) { return w.spell == a_spell || (w.proxy != 0 && w.proxy == a_spell); };
         bool mark[2] = { names(it->second.hand[0]), names(it->second.hand[1]) };
-        // BOTH hands watch this form (the same heal on two recipients, feat/mfo-perhand-heal;
-        // review F2 on 9895a53): the event names no hand, so the hand whose caster holds the
-        // fired form is the one that fired. Neither or both -> NEITHER is marked (one
-        // rate-limited line): a mark on the wrong hand would mask that hand's silent claim.
+        // PER-HAND FIRE EVIDENCE FROM THE MOMENT OF THE FIRE (review R2-1 on 57bd5e7). The
+        // cast event names no hand and a caster's currentSpell is its SELECTED spell, not a
+        // fire marker (ENGINE_NOTES 0.15), so the hand comes from the animation graph's own
+        // MLh_/MRh_SpellFire_Event, counted on the event thread (Actuation::HandFireTake,
+        // cast/HealRoad.cpp) and consumed here. The passive [hand-fire] line lines each claim
+        // cast up with those events (principle 5: they are not yet proven for every cast).
+        bool animL = false, animR = false;
+        const bool proven = Actuation::HandFireTake(a_follower, kHandFireWindowMs, animL, animR);
+        spdlog::info("[hand-fire] {:08X} claimed cast of {:08X} (watched: left {} right {}) -- anim SpellFire "
+                     "since the last cast: left {} right {}{}",
+                     a_follower, a_spell, mark[0] ? "yes" : "no", mark[1] ? "yes" : "no",
+                     animL ? "YES" : "no", animR ? "YES" : "no",
+                     proven ? "" : " (no SpellFire event ever seen for this follower)");
+        std::int32_t hand = mark[0] && !mark[1] ? APMFBridge::kApmfHandLeft
+                          : mark[1] && !mark[0] ? APMFBridge::kApmfHandRight : 0;
+        // BOTH hands watch this form (the same heal on two recipients, feat/mfo-perhand-heal):
+        // the anim event decides; undecidable -> NEITHER is marked, and both hands carry an
+        // "undecided fire" stamp so the never-fired bound is NOT armed on them (an unknown
+        // must never release a heal; HealRoad's NeverFiredRelease reads UndecidedFire).
         if (mark[0] && mark[1]) {
-            const std::int32_t h = HandCastingForm(RE::TESForm::LookupByID<RE::Actor>(a_follower), a_spell);
-            mark[0] = h == APMFBridge::kApmfHandLeft;
-            mark[1] = h == APMFBridge::kApmfHandRight;
-            if (h == 0) {
+            if (animL != animR) {
+                hand = animL ? APMFBridge::kApmfHandLeft : APMFBridge::kApmfHandRight;
+                mark[0] = animL;
+                mark[1] = animR;
+            } else if (animL && animR) {
+                hand = 0;   // both hands released this form: both fired, both are marked
+            } else {
+                mark[0] = mark[1] = false;
+                it->second.hand[0].lastUndecidedAt = now;
+                it->second.hand[1].lastUndecidedAt = now;
                 static std::unordered_map<RE::FormID, Clock::time_point> s_unattributed;
                 auto& last = s_unattributed[a_follower];
                 if (now - last >= std::chrono::seconds(5)) {
                     last = now;
-                    spdlog::info("[cfc] {:08X} fire of {:08X} matches BOTH hands' claims and neither hand's "
-                                 "caster holds it alone -- not marked observed on either hand", a_follower, a_spell);
+                    spdlog::warn("[cfc] {:08X} fire of {:08X} matches BOTH hands' claims and no per-hand SpellFire "
+                                 "event decides it -- marked observed on NEITHER hand (the never-fired bound is "
+                                 "not armed on either)", a_follower, a_spell);
                 }
             }
         }
+        g_lastFire[a_follower] = LastFire{ a_spell, hand };
         for (int i = 0; i < 2; ++i) {
             if (!mark[i]) continue;
             it->second.hand[i].observed = true;
@@ -1012,6 +1050,7 @@ namespace MFO::ComposedCast {
         g_lastHold.clear();
         g_lastHoldLog.clear();
         g_roadLog.clear();
+        g_lastFire.clear();
     }
 
 }

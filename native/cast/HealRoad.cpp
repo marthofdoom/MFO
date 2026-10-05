@@ -43,6 +43,7 @@
 #include "ComposedCast.h"
 
 #include <chrono>
+#include <mutex>
 #include <unordered_map>
 
 namespace MFO::Actuation {
@@ -158,9 +159,12 @@ namespace MFO::Actuation {
         // forever when it never fires: the SAME window refreshHeldOwnClaim uses
         // (`kHoldLastSeenCapMs` from that hand's lock claim stamp, and no fire observed ON
         // THAT HAND within `kObservedFiringRecencyMs`), with nothing charging or casting on
-        // the hand (CastInFlightOnHand: a charged, held cast is in flight and is kept). The
-        // one other exemption is marth's held heal: a recipient measured Occluded (`losHeld`)
-        // is being waited for, not stuck. Past it the claim is RELEASED with a WARN (the
+        // the hand (CastInFlightOnHand: a charged, held cast -- marth's "charge and hold" --
+        // is in flight and is kept; an occluded recipient alone is NOT exempt, review R2-3:
+        // a claim that is not even charging is bounded). AN UNKNOWN NEVER RELEASES (R2-1): a
+        // fire of this form that matched BOTH hands and that no per-hand SpellFire event
+        // decided (ComposedCast::UndecidedFire) keeps the bound off, logged once per claim.
+        // Past it the claim is RELEASED with a WARN (the
         // twin of HealClaimNeedsRepair's kNeverFired WARN), never silently renewed: the
         // CastClaims.cpp:196-204 note puts that cap at the call site, and a right claim
         // Harbinger can no longer arm (its proxy freed) ends here instead of hanging.
@@ -173,14 +177,47 @@ namespace MFO::Actuation {
             if (ComposedCast::ObservedFiring(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs))
                 return false;
             if (CastInFlightOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand))) return false;
-            if (const auto it = g_healHands.find(fid); it != g_healHands.end() && it->second.hand[a_hand].losHeld)
+            if (ComposedCast::UndecidedFire(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs)) {
+                static std::unordered_map<std::uint64_t, Clock::time_point> s_noBoundLog;   // worker-serial
+                auto& logged = s_noBoundLog[(static_cast<std::uint64_t>(fid) << 1) | a_hand];
+                if (logged != stamp) {   // once per claim (its lock stamp)
+                    logged = stamp;
+                    spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X}: never-fired bound NOT armed -- a fire of "
+                                 "this form matched BOTH hands and no per-hand SpellFire event decided it, and an "
+                                 "unknown must never release a heal (rule {})",
+                                 fid, HandWord(a_hand), a_spell, g_firingRule);
+                }
                 return false;
+            }
             spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {} NEVER FIRED: claimed {} ms ago, no fire "
                          "observed on that hand in the last {} ms and nothing charging -- RELEASED, the hand is "
                          "re-chosen next lap (a seat or proxy problem in Harbinger shows here; rule {})",
                          fid, HandWord(a_hand), a_spell, a_who, ageMs, APMFBridge::kObservedFiringRecencyMs,
                          g_firingRule);
             ReleaseOwnHealClaim(a_follower, a_hand, a_spell, "it never fired within the never-observed window");
+            return true;
+        }
+
+        // THE CLAIM'S HARBINGER PROXY IS NO LONGER KNOWN TO THE ACTOR (review R2-2 on 57bd5e7).
+        // A delivery-flip proxy Harbinger un-taught (a release on the other hand freeing a
+        // shared per-owner proxy before APMF's per-claim ref-count, or APMF's PreSaveSweep on
+        // save) leaves a claim the engine can never arm, on EITHER hand. The precise test, no
+        // timer: proxy != 0 && !actor->HasSpell(proxy). Released for a re-claim (keeping the
+        // lock's rank through the re-stream gap, MFO-B177's mechanism) so the next lap's
+        // RequestCast has Harbinger mint and teach it again. One WARN per claim (the release
+        // ends the claim). Correct with or without APMF's ref-count fix: with it, this simply
+        // never fires outside the save sweep.
+        bool ProxyUnlearnedRelease(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell) {
+            const auto fid = a_follower->GetFormID();
+            const RE::FormID proxy = APMFBridge::GetHealCastProxy(fid, ApmfHand(a_hand));
+            if (proxy == 0 || proxy == a_spell) return false;
+            auto* p = RE::TESForm::LookupByID<RE::SpellItem>(proxy);
+            if (p && a_follower->HasSpell(p)) return false;
+            spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X}: its Harbinger proxy {:08X} is no longer known to "
+                         "the actor{} -- RELEASED for a re-claim, so Harbinger mints and teaches it again (rule {})",
+                         fid, HandWord(a_hand), a_spell, proxy, p ? "" : " (the form is gone)", g_firingRule);
+            ReleaseOwnHealClaim(a_follower, a_hand, a_spell,
+                                "its Harbinger proxy was un-taught (re-claimed next lap)", /*a_keepSpell=*/true);
             return true;
         }
 
@@ -236,12 +273,90 @@ namespace MFO::Actuation {
                 ReleaseOwnHealClaim(a_follower, a_hand, hs, "a weapon now owns the right hand");
                 return;
             }
-            NoteLosHold(fid, a_hand, hs, rid);   // before the bound: a held heal is exempt from it
+            if (ProxyUnlearnedRelease(a_follower, a_hand, hs)) return;
+            NoteLosHold(fid, a_hand, hs, rid);
             if (NeverFiredRelease(a_follower, a_hand, hs, "the other hand's recipient")) return;
             if (APMFBridge::RefreshOwnedCastOnHand(fid, ah, /*a_holdSpell=*/hs))
                 ComposedCast::WatchClaim(fid, hs, ah, CastProxyOnHand(fid, a_hand));
         }
     }   // anon
+
+    // ── PER-HAND FIRE EVIDENCE: THE ANIM GRAPH'S SpellFire EVENTS (review R2-1 on 57bd5e7) ──
+    // The release step of a cast is graph-gated per hand: MLh_SpellFire_Event (left) /
+    // MRh_SpellFire_Event (right) -> StartCastImpl (ENGINE_NOTES, the ALYSLC section). The
+    // TESSpellCastEvent names no hand, so these are the per-hand evidence, counted on the
+    // EVENT thread (the graph's own dispatch; a mutex, since that is not the worker) and
+    // consumed on the worker by ComposedCast::NoteObservedCast (HandFireTake). PASSIVE: the
+    // sink only counts; nothing here changes a cast. Attached by the worker (HandFireWatch,
+    // from every heal lap) through MainThread::Post, re-posted every 2 s so a rebuilt graph
+    // (3D reload) is re-sunk; AddEventSink de-duplicates. The sink is a static singleton, so
+    // a graph that dies with its actor never leaves it dangling.
+    namespace {
+        struct HandFireRec {
+            std::uint32_t     seq[kHandCount]   = { 0, 0 };
+            std::uint32_t     taken[kHandCount] = { 0, 0 };
+            Clock::time_point last[kHandCount]{};
+            bool              any = false;   // a SpellFire event was ever seen for this actor
+        };
+        std::mutex                                   g_handFireMx;
+        std::unordered_map<RE::FormID, HandFireRec>  g_handFire;            // under g_handFireMx
+        std::unordered_map<RE::FormID, Clock::time_point> g_handFireAttach;  // worker-serial throttle
+
+        class HandFireSink final : public RE::BSTEventSink<RE::BSAnimationGraphEvent> {
+        public:
+            RE::BSEventNotifyControl ProcessEvent(const RE::BSAnimationGraphEvent* a_ev,
+                                                  RE::BSTEventSource<RE::BSAnimationGraphEvent>*) override {
+                if (!a_ev || !a_ev->holder) return RE::BSEventNotifyControl::kContinue;
+                const char* tag = a_ev->tag.c_str();
+                if (!tag) return RE::BSEventNotifyControl::kContinue;
+                std::size_t h = kHandCount;
+                if (_stricmp(tag, "MLh_SpellFire_Event") == 0)      h = kHandLeft;
+                else if (_stricmp(tag, "MRh_SpellFire_Event") == 0) h = kHandRight;
+                if (h == kHandCount) return RE::BSEventNotifyControl::kContinue;
+                std::scoped_lock lk(g_handFireMx);
+                auto& r = g_handFire[a_ev->holder->GetFormID()];
+                ++r.seq[h];
+                r.last[h] = Clock::now();
+                r.any     = true;
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        };
+        HandFireSink g_handFireSink;
+    }
+
+    void HandFireWatch(RE::Actor* a_follower) {
+        if (!a_follower || !MainThread::IsInstalled()) return;
+        const auto fid = a_follower->GetFormID();
+        const auto now = Clock::now();
+        auto& last = g_handFireAttach[fid];
+        if (last != Clock::time_point{} && now - last < std::chrono::seconds(2)) return;
+        last = now;
+        MainThread::Post([fid]() {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(fid);
+            if (!actor) return;
+            RE::BSTSmartPointer<RE::BSAnimationGraphManager> mgr;
+            if (!actor->GetAnimationGraphManager(mgr) || !mgr) return;
+            for (auto& g : mgr->graphs) {
+                if (!g) continue;
+                static_cast<RE::BSTEventSource<RE::BSAnimationGraphEvent>*>(g.get())->AddEventSink(&g_handFireSink);
+            }
+        });
+    }
+
+    bool HandFireTake(RE::FormID a_follower, std::uint32_t a_windowMs, bool& a_left, bool& a_right) {
+        a_left = a_right = false;
+        std::scoped_lock lk(g_handFireMx);
+        const auto it = g_handFire.find(a_follower);
+        if (it == g_handFire.end()) return false;
+        auto& r = it->second;
+        const auto now = Clock::now();
+        bool* out[kHandCount] = { &a_left, &a_right };
+        for (std::size_t h = 0; h < kHandCount; ++h) {
+            *out[h] = r.seq[h] != r.taken[h] && now - r.last[h] <= std::chrono::milliseconds(a_windowMs);
+            r.taken[h] = r.seq[h];   // consumed: one SpellFire event answers one cast event
+        }
+        return r.any;
+    }
 
     void HealHandEnded(RE::FormID a_follower, std::size_t a_hand, const char* a_why) {
         const auto it = g_healHands.find(a_follower);
@@ -322,6 +437,7 @@ namespace MFO::Actuation {
         if (!atSelf) Sightline::Want(id, { recipient->GetFormID() }, Sightline::Basis::Own);
 
         HealHandsReconcile(id);
+        HandFireWatch(a_follower);   // the per-hand SpellFire evidence for this follower (R2-1)
 
         // WHICH HAND ALREADY SERVES THIS RECIPIENT? With this spell (the incumbent: its
         // claim or its re-stream gap), or with another spell (a different rule's heal on
@@ -410,18 +526,25 @@ namespace MFO::Actuation {
         return std::nullopt;
     }
 
-    std::optional<Outcome> HealRightNeverFired(RE::Actor* a_follower, RE::FormID a_spell) {
-        if (!a_follower || !NeverFiredRelease(a_follower, kHandRight, a_spell, "its recipient")) return std::nullopt;
-        return Outcome{ Result::FailedOther, "animated heal released: it never fired on the right hand", true };
+    std::optional<Outcome> HealRefreshGate(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell) {
+        if (!a_follower || a_hand >= kHandCount) return std::nullopt;
+        if (ProxyUnlearnedRelease(a_follower, a_hand, a_spell))
+            return Outcome{ Result::FailedOther, "animated heal released: its Harbinger proxy was un-taught", true };
+        // The never-observed bound: the RIGHT hand only here (the left lap has HealClaimNeedsRepair).
+        if (a_hand == kHandRight && NeverFiredRelease(a_follower, kHandRight, a_spell, "its recipient"))
+            return Outcome{ Result::FailedOther, "animated heal released: it never fired on the right hand", true };
+        return std::nullopt;
     }
 
     int RightHealRule(RE::FormID a_follower) {
-        if (APMFBridge::GetHealCastSpell(a_follower, APMFBridge::kApmfHandRight) == 0) return kNoRule;
+        // A live claim, OR the lock that keeps the hand through a re-stream / re-claim gap
+        // (review R2-4): HealOnHand reads both, so the rank holds across the gap.
+        const HandHeal hh = HealOnHand(a_follower, kHandRight);
+        if (!hh.found) return kNoRule;
         const auto it = g_castLock.find(a_follower);
         if (it == g_castLock.end()) return kNoRule;
         const auto& lk = it->second.hand[kHandRight];
-        return lk.spell == APMFBridge::GetHealCastSpell(a_follower, APMFBridge::kApmfHandRight) ? lk.owningRule
-                                                                                                 : kNoRule;
+        return lk.spell == hh.spell ? lk.owningRule : kNoRule;
     }
 
     void ReleaseHealClaimsAllHands(RE::FormID a_follower, const char* a_why) {
@@ -436,6 +559,11 @@ namespace MFO::Actuation {
         }
     }
 
-    void ResetHealRoad() { g_healHands.clear(); }
+    void ResetHealRoad() {
+        g_healHands.clear();
+        g_handFireAttach.clear();
+        std::scoped_lock lk(g_handFireMx);
+        g_handFire.clear();
+    }
 
 }

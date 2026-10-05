@@ -1255,3 +1255,4 @@ Raised against 9895a53 (`feat/mfo-perhand-heal`, Opus tier-A review, 2026-10-05)
 - **SEV-4 (the non-F6 half):** "Prepare AlreadyReady via right-hand copy -> false repair log -> SEV-3/4." F6 fixed the heal-claim Prepare; a non-heal caller (offense) still answers AlreadyReady off either hand's copy (unchanged, pre-existing).
 - **SEV-5:** MAP.md file:line citations in the native/cast/ entries were stale (corrected in the fix round for the per-hand heal files; the older cast entries still carry pre-split numbers).
 - **Surfaced at edit time from:** MAP.md native/cast/ "PER-HAND HEAL ROAD" What breaks.
+- **SEV-4 (round 2 re-check of 57bd5e7, appended):** a LEFT weapon with the heal spell S only in the RIGHT hand reads as `Grip::Caster` in `Loadout::Read`, so the left heal Prepare's Caster branch equips S into the left over the weapon with no gear debt booked (the weapon is not given back by the debt ledger). Edge of F6's fix (`Loadout.cpp:329-333`); left open.

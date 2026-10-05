@@ -650,7 +650,9 @@ namespace MFO::Actuation {
             // releases the right heal on its next lap (a weapon now owns the right hand).
             if (const int healRule = RightHealRule(a_follower->GetFormID()); healRule < g_firingRule) {
                 const auto now = std::chrono::steady_clock::now();
-                auto& last = g_heldOffLog[a_follower->GetFormID()];
+                // Its own throttle key (review round 2, SEV-5): not shared with the left's line.
+                static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_rightHeldOffLog;
+                auto& last = s_rightHeldOffLog[a_follower->GetFormID()];
                 if (now - last >= std::chrono::seconds(5)) {
                     last = now;
                     spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' HELD OFF -- a heal claim (rule {}) ranked "
