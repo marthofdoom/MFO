@@ -162,8 +162,12 @@ namespace MFO::ComposedCast {
     // gambited to heal an ally) is APMF's OWN problem to solve: it mints its
     // own delivery-flip proxy for the engine's Self branch (core/CastProxy.h)
     // rather than landing on the caster. MFO has no business building one here.
+    // a_hand (feat/mfo-perhand-heal): the heal slot this claim lives in -- LEFT (the
+    // default, every caller but one) or RIGHT for the heal road's second recipient
+    // (cast/HealRoad.cpp). The hold, the in-flight hold and the watch are that hand's.
     TryResult Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
-                  CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct = 0);
+                  CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct = 0,
+                  std::int32_t a_hand = APMFBridge::kApmfHandLeft);
 
     // ── WHICH ROAD A HEAL TAKES (animheal phase 2, 2026-09-30) ─────────────────
     // ONE decision, asked by every heal caller (CastOn, CastAuto, CastSelfDirect,
@@ -229,7 +233,10 @@ namespace MFO::ComposedCast {
     // (no Loadout::ReleaseSpellIf). ONLY the concentration stream cap passes it: that
     // release is a re-stream while the rule still wins, not the claim's real end, so
     // the next lap re-claims with the spell already in hand (Prepare: AlreadyReady).
+    // End releases BOTH hands' heal claims (feat/mfo-perhand-heal); EndHand one hand's
+    // (a_hand = kApmfHandLeft / kApmfHandRight). Only the LEFT takes its spell back.
     void End(RE::FormID a_follower, bool a_keepSpell = false);
+    void EndHand(RE::FormID a_follower, std::int32_t a_hand, bool a_keepSpell = false);
 
     // animheal phase 2 (review F2). True when a_fired (the SpellSink's observed
     // form) is the LIVE heal claim's spell or its delivery-flip proxy AND that

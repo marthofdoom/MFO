@@ -96,6 +96,11 @@ namespace MFO::Actuation {
     // right hand's lock is never touched. Worker-serial (#4).
     void ClearLeftCastLockIf(RE::FormID a_follower, RE::FormID a_spell);
 
+    // End EVERY hand's heal claim (feat/mfo-perhand-heal) and drop each hand's lock that
+    // names it, logging each per-hand end once ([heal-hand]). ComposedCast::ChooseHealRoad's
+    // road switch (kill switch / controller gone) is the caller. Worker-serial (#4).
+    void ReleaseHealClaimsAllHands(RE::FormID a_follower, const char* a_why);
+
     // End a_follower's direct HEAL streams (MFO-B176): the self stream and the
     // on-target stream, each only when its spell is Heal-kind. ComposedCast::
     // Try calls it when a heal claim is minted (Claimed return, MFO-B192), so one actor never

@@ -317,21 +317,38 @@ namespace MFO::ComposedCast {
         // holds are mutually exclusive on any one call so sharing the map cannot
         // silence either.
         void LogHealHoldOffInFlight(RE::FormID a_fid, RE::FormID a_wanted,
-                                    RE::FormID a_incumbent, std::int64_t a_heldMs) {
+                                    RE::FormID a_incumbent, std::size_t a_slot, std::int64_t a_heldMs) {
             const auto now = Clock::now();
             auto& entry = g_lastHoldLog[a_fid];
             if (entry.spell == a_wanted && now - entry.when < kHoldLogEvery) return;
             entry.spell = a_wanted; entry.when = now;
             spdlog::info("[cfc] {:08X} heal-cast HELD OFF (IN FLIGHT) -- spell {:08X} wants the "
                          "heal slot, but the engine is CASTING incumbent spell {:08X} on the "
-                         "left hand right now; the held-off spell was NOT delivered and the "
+                         "{} hand right now; the held-off spell was NOT delivered and the "
                          "incumbent claim was NOT re-pointed ({} ms into this hold, cap {} ms)",
-                         a_fid, a_wanted, a_incumbent, a_heldMs, kInFlightHoldCap.count());
+                         a_fid, a_wanted, a_incumbent, a_slot == 0 ? "left" : "right", a_heldMs,
+                         kInFlightHoldCap.count());
+        }
+
+        // CastBounds is keyed per (actor, spell) and only offers a per-ACTOR Disarm, so a
+        // heal ending on ONE hand re-arms the OTHER hand's still-standing heal claim right
+        // after (feat/mfo-perhand-heal): its bound must not lapse for a lap because the
+        // other hand's ended. Worker-serial, like every caller.
+        void DisarmHealHand(RE::FormID a_fid, std::int32_t a_hand) {
+            CastBounds::Disarm(a_fid);
+            const std::int32_t other = a_hand == APMFBridge::kApmfHandLeft ? APMFBridge::kApmfHandRight
+                                                                           : APMFBridge::kApmfHandLeft;
+            if (const RE::FormID sp = APMFBridge::GetHealCastSpell(a_fid, other); sp != 0)
+                CastBounds::Arm(a_fid, sp, APMFBridge::GetHealCastProxy(a_fid, other), kHealBoundsTtlMs);
         }
     }
 
     TryResult Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
-                  CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct) {
+                  CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct, std::int32_t a_hand) {
+        // PER HAND (feat/mfo-perhand-heal): a_hand is the heal slot this claim lives in
+        // (left, or right for a second recipient); every hold and watch below is that hand's.
+        const std::size_t slot = WatchSlot(a_hand);
+        const std::size_t engineHand = slot == 0 ? Actuation::kHandLeft : Actuation::kHandRight;
         // (b) Every Try() supersedes any earlier hold record for this follower:
         // the record means "the outcome of the MOST RECENT Try on this follower
         // was a hold", and Logistics reads it immediately after CastTargetDirect
@@ -509,7 +526,7 @@ namespace MFO::ComposedCast {
         // ClaimHealCast lap would have done, never a new lifetime.
         if (auto it = g_watch.find(fid); it != g_watch.end()) {
             // NON-const since F12 below stamps its own window anchor on the slot.
-            auto& incumbent = it->second.hand[0];
+            auto& incumbent = it->second.hand[slot];
             // RefreshHealCastClaim LAST: it takes APMFBridge's mutex and has the
             // heartbeat side effect, so short-circuit keeps both off every tick
             // that is not actually a hold.
@@ -541,7 +558,7 @@ namespace MFO::ComposedCast {
             // lets a heal Try() run after a minting claim in the same tick,
             // revisit this before assuming the hold still holds.
             if (incumbent.spell != 0 && incumbent.spell != spellID && !incumbent.observed &&
-                APMFBridge::RefreshHealCastClaim(fid)) {
+                APMFBridge::RefreshHealCastClaim(fid, a_hand)) {
                 // The ordinary hold is standing, so F12's window is not open --
                 // exactly as CastLockLive zeroes claimGoneAt while the claim is
                 // live. If this hold later lifts and the engine IS mid-cast, F12
@@ -607,8 +624,8 @@ namespace MFO::ComposedCast {
             //     re-claims on every lap it keeps winning, and if it has stopped
             //     winning then the claim dies at APMF's TTL while this hold merely
             //     lets the cast the engine already started finish.
-            // Heals are LEFT always (ClaimHealCast's hard rule), so hand[0] and
-            // kHandLeft are the only slot in question.
+            // The heal's own hand (a_hand) is the only slot in question: hand[slot]
+            // and engineHand (per hand since feat/mfo-perhand-heal).
             if (incumbent.spell != 0 && incumbent.spell != spellID) {
                 // A CHARGED-AND-WAITING OFFENSE CAST IS NOT "IN FLIGHT" FOR A HEAL
                 // (field 2026-09-30). The incumbent was a forced Incinerate the engine
@@ -622,15 +639,16 @@ namespace MFO::ComposedCast {
                 bool chargedOffenseWaiting = false;
                 if (auto* inc = RE::TESForm::LookupByID<RE::SpellItem>(incumbent.spell);
                     inc && CasterConsent::ClassifySpell(inc) == CasterConsent::SpellKind::Offense &&
-                    Actuation::CastChargedWaitingOnHand(a_follower, Actuation::kHandLeft,
+                    Actuation::CastChargedWaitingOnHand(a_follower, engineHand,
                                                         incumbent.spell, incumbent.proxy)) {
                     chargedOffenseWaiting = true;
-                    spdlog::info("[cfc] {:08X} heal spell {:08X} takes the left hand from offense spell "
+                    spdlog::info("[cfc] {:08X} heal spell {:08X} takes the {} hand from offense spell "
                                  "{:08X}: that cast is fully charged and waiting, not casting -- "
-                                 "nothing in flight to protect", fid, spellID, incumbent.spell);
+                                 "nothing in flight to protect", fid, spellID, slot == 0 ? "left" : "right",
+                                 incumbent.spell);
                 }
                 if (!chargedOffenseWaiting &&
-                    Actuation::CastInFlightOnHand(a_follower, Actuation::kHandLeft,
+                    Actuation::CastInFlightOnHand(a_follower, engineHand,
                                                   incumbent.spell, incumbent.proxy)) {
                     const auto now = Clock::now();
                     if (incumbent.inFlightHoldSince.time_since_epoch().count() == 0)
@@ -638,7 +656,7 @@ namespace MFO::ComposedCast {
                     const auto heldFor = now - incumbent.inFlightHoldSince;
                     if (heldFor < kInFlightHoldCap) {
                         LogHealHoldOffInFlight(
-                            fid, spellID, incumbent.spell,
+                            fid, spellID, incumbent.spell, slot,
                             std::chrono::duration_cast<std::chrono::milliseconds>(heldFor).count());
                         g_lastHold[fid] = HoldRecord{ spellID, incumbent.spell };
                         return TryResult::Held;
@@ -656,8 +674,8 @@ namespace MFO::ComposedCast {
 
         // CLAIM (create) or refresh the kIntent_Cast facet: while it stands,
         // APMF's engine seats drive the follower's OWN AI to select/equip/
-        // charge/aim/fire/channel this spell natively. hand = LEFT
-        // (APMFBridge::kApmfHandLeft), never auto -- an equip gambit's forced
+        // charge/aim/fire/channel this spell natively. hand = a_hand (LEFT for the
+        // first recipient, RIGHT for a second, cast/HealRoad.cpp), never auto -- an equip gambit's forced
         // weapon owns the RIGHT hand, so the spell must not contest it (see
         // apmf/APMFBridge.h's ClaimHealCast doc for the deck-proven failure auto
         // caused). LEFT is also the right fallback with no weapon held -- heals
@@ -665,15 +683,15 @@ namespace MFO::ComposedCast {
         // gambit's own configured heal threshold (0 = none -> full restoration);
         // see this file's Try() doc in ComposedCast.h. A `false` here is SPLIT
         // into ApmfRefused vs NotApplicable -- see the block inside the branch.
-        if (!APMFBridge::ClaimHealCast(fid, spellID, targetID, APMFBridge::kApmfHandLeft,
+        if (!APMFBridge::ClaimHealCast(fid, spellID, targetID, a_hand,
                                        isConcentration, a_stopPct)) {
-            CastBounds::Disarm(fid);
-            // Heal is always LEFT -- clear only that slot (see End()'s own
-            // comment: a concurrent offense watch on the RIGHT hand must
-            // survive a refused/ended heal claim).
+            DisarmHealHand(fid, a_hand);
+            // Clear only THIS heal's hand slot (see End()'s own comment: a
+            // concurrent watch on the OTHER hand must survive a refused/ended
+            // heal claim).
             if (auto it = g_watch.find(fid); it != g_watch.end()) {
-                it->second.hand[0] = Watch{};
-                if (it->second.hand[1].spell == 0) g_watch.erase(it);
+                it->second.hand[slot] = Watch{};
+                if (it->second.hand[1 - slot].spell == 0) g_watch.erase(it);
             }
             // A false from ClaimHealCast is SPLIT (fix/mfo-no-decline-fallback):
             // HealCastClaimSupported() tells "APMF is present + capable and it
@@ -685,7 +703,7 @@ namespace MFO::ComposedCast {
             // loudly themselves, so the old `[cfc] ... kInstant apply` line is
             // gone -- it asserted a fallback that no longer happens.
             //
-            // EITHER WAY hand[0] was just cleared above, which is what the F1
+            // EITHER WAY hand[slot] was just cleared above, which is what the F1
             // incumbent guard's documented invariant depends on ("a Refused one
             // clears hand[0] so no later Try() finds an incumbent to hold") --
             // splitting the value did not weaken it.
@@ -701,16 +719,15 @@ namespace MFO::ComposedCast {
         // F4 (RC4): pass the claim's minted delivery-flip proxy once known
         // (0 on ABI < 6 or a claim that minted none -- Arm already handles a
         // 0 fine) instead of the literal 0 this used to hard-code.
-        CastBounds::Arm(fid, spellID, APMFBridge::GetHealCastProxy(fid), kHealBoundsTtlMs);
+        CastBounds::Arm(fid, spellID, APMFBridge::GetHealCastProxy(fid, a_hand), kHealBoundsTtlMs);
 
         // Diagnostic only -- never gates the return value or re-fires anything
-        // (Task 6: no delivery watchdog). Heal is always the LEFT slot. See
+        // (Task 6: no delivery watchdog). The heal's own hand slot. See
         // WatchArmed's own comment. Fetch the SAME claim's minted delivery-flip
         // proxy (ABI v6; 0 on ABI < 6 or a claim that minted none) so the watch
         // recognises a cast of the proxy, not only spellID, as this claim
         // firing (cast-claim observability, 2026-09-06).
-        WatchArmed(fid, WatchSlot(APMFBridge::kApmfHandLeft), spellID,
-                  APMFBridge::GetHealCastProxy(fid));
+        WatchArmed(fid, slot, spellID, APMFBridge::GetHealCastProxy(fid, a_hand));
 
         // ONE ROAD PER ACTOR, the direct -> claim half (MFO-B176), at the mint (MFO-B192).
         Actuation::EndDirectHealStreams(fid, "the heal takes the animated claim road");
@@ -749,8 +766,8 @@ namespace MFO::ComposedCast {
             // fight ended. Released here, before any caller reaches that refresh; a
             // no-op when Harbinger is absent (nothing was ever claimed).
             if (const auto standing = APMFBridge::GetHealCastSpell(fid); standing != 0) {
-                End(fid);
-                Actuation::ClearLeftCastLockIf(fid, standing);   // same shape as MFO-B179
+                // BOTH hands' heal claims and their locks (feat/mfo-perhand-heal; MFO-B179's shape)
+                Actuation::ReleaseHealClaimsAllHands(fid, "the animated heal road is OFF");
                 spdlog::info("[heal] {:08X} the animated heal road is OFF (bHealAnimPackage / "
                              "bEquipToCast) -- the standing heal claim (spell {:08X}) is RELEASED; "
                              "heals take the direct road", fid, standing);
@@ -766,8 +783,8 @@ namespace MFO::ComposedCast {
             // serve, heart-beaten for 9.7 s) while this lap casts direct beside it.
             const auto standing = APMFBridge::GetHealCastSpell(fid);
             if (standing != 0) {
-                End(fid);
-                Actuation::ClearLeftCastLockIf(fid, standing);   // MFO-B179: End alone left the LEFT lock naming it
+                // BOTH hands (feat/mfo-perhand-heal); MFO-B179: End alone left the lock naming it
+                Actuation::ReleaseHealClaimsAllHands(fid, "the combat controller is gone");
                 spdlog::info("[heal] {:08X} combat controller gone -- the standing heal claim "
                              "(spell {:08X}) is RELEASED; heals take the direct road until the "
                              "follower is in combat again", fid, standing);
@@ -820,24 +837,29 @@ namespace MFO::ComposedCast {
     }
 
     bool HealClaimFireKeepsSpell(RE::FormID a_follower, RE::FormID a_fired) {
-        const RE::FormID spell = APMFBridge::GetHealCastSpell(a_follower);
-        if (spell == 0 || a_fired == 0) return false;
-        const RE::FormID proxy = APMFBridge::GetHealCastProxy(a_follower);
-        if (a_fired != spell && (proxy == 0 || a_fired != proxy)) return false;
-        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spell);
-        return sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+        if (a_fired == 0) return false;
+        // EITHER hand's heal claim (feat/mfo-perhand-heal): the sink has no hand to report.
+        for (const std::int32_t h : { APMFBridge::kApmfHandLeft, APMFBridge::kApmfHandRight }) {
+            const RE::FormID spell = APMFBridge::GetHealCastSpell(a_follower, h);
+            if (spell == 0) continue;
+            const RE::FormID proxy = APMFBridge::GetHealCastProxy(a_follower, h);
+            if (a_fired != spell && (proxy == 0 || a_fired != proxy)) continue;
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spell);
+            if (sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) return true;
+        }
+        return false;
     }
 
     bool HealTakesLeft(RE::Actor* a_follower) {
         const RE::FormID fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0) return false;
-        const RE::FormID spell = APMFBridge::GetHealCastSpell(fid);
+        const RE::FormID spell = APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft);   // the LEFT hand's heal
         // No heal claim stands. The one exception is the stream cap's re-stream gap
         // (MFO-B177): the claim was released for one lap and its rule re-claims next
         // lap, so the next cast is due and the left stays the heal's.
         if (spell == 0) return Actuation::HealRestreamGap(fid);
         if (Actuation::CastInFlightOnHand(a_follower, Actuation::kHandLeft, spell,
-                                          APMFBridge::GetHealCastProxy(fid)))
+                                          APMFBridge::GetHealCastProxy(fid, APMFBridge::kApmfHandLeft)))
             return true;                // charging / channelling now
         const float cd = Config::g_castCooldown.load();
         // ObservedFiring(.., 0) is the "ever" latch, so a zero cooldown asks for a
@@ -847,23 +869,34 @@ namespace MFO::ComposedCast {
     }
 
     void End(RE::FormID a_follower, bool a_keepSpell) {
+        EndHand(a_follower, APMFBridge::kApmfHandLeft, a_keepSpell);
+        EndHand(a_follower, APMFBridge::kApmfHandRight, a_keepSpell);
+    }
+
+    void EndHand(RE::FormID a_follower, std::int32_t a_hand, bool a_keepSpell) {
+        const std::size_t slot = WatchSlot(a_hand);
         // THE HEAL SPELL LEAVES THE HAND WITH ITS CLAIM (animheal phase 2, review
         // F2): a claimed concentration heal keeps its spell through the fire event
         // (Loadout::StartCooldown(.., false)), so its end is where MFO takes back
         // the spell it equipped -- only that spell (ReleaseSpellIf), never an
         // offense spell MFO equipped since. Read before the release clears it.
         // Not on a stream-cap re-stream (a_keepSpell, R2-5): the spell stays.
-        const RE::FormID healSpell = APMFBridge::GetHealCastSpell(a_follower);
-        if (healSpell != 0 && !a_keepSpell) Loadout::ReleaseSpellIf(a_follower, healSpell);
-        APMFBridge::ReleaseHealCast(a_follower);
-        CastBounds::Disarm(a_follower);
-        // Heal is always LEFT -- clear only that slot; a concurrent offense
-        // claim on the RIGHT hand (feat/per-hand-cast-slots) must not lose its
-        // own watch just because the heal ended.
+        // LEFT ONLY (feat/mfo-perhand-heal): Loadout::Prepare equips into the left and its
+        // record is the left's; a RIGHT-hand heal was never equipped by MFO (Harbinger's
+        // seats arm it), so its end takes nothing back -- least of all the left's spell.
+        const RE::FormID healSpell = APMFBridge::GetHealCastSpell(a_follower, a_hand);
+        if (slot == 0 && healSpell != 0 && !a_keepSpell) Loadout::ReleaseSpellIf(a_follower, healSpell);
+        APMFBridge::ReleaseHealCastOnHand(a_follower, a_hand);
+        DisarmHealHand(a_follower, a_hand);
+        // Clear only this hand's slot; a concurrent claim on the OTHER hand
+        // (feat/per-hand-cast-slots) must not lose its own watch just because the
+        // heal ended. The RIGHT slot is shared with right-hand offense, so it is
+        // cleared only when it names the heal just released (the left keeps its
+        // unconditional clear, as before).
         auto it = g_watch.find(a_follower);
-        if (it != g_watch.end()) {
-            it->second.hand[0] = Watch{};
-            if (it->second.hand[1].spell == 0) g_watch.erase(it);
+        if (it != g_watch.end() && (slot == 0 || (healSpell != 0 && it->second.hand[slot].spell == healSpell))) {
+            it->second.hand[slot] = Watch{};
+            if (it->second.hand[1 - slot].spell == 0) g_watch.erase(it);
         }
     }
 

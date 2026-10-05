@@ -42,6 +42,15 @@ namespace MFO::APMFBridge {
         inline std::size_t OffenseSlot(std::int32_t a_hand) {
             return a_hand == kApmfHandLeft ? 0 : 1;
         }
+        // The LIVE heal slot a_hand names (feat/mfo-perhand-heal); kApmfHandEither = the
+        // left slot when it is live, else the right. nullptr when that slot holds no claim.
+        inline const CastClaim* HealSlotLocked(const Owned& a_o, std::int32_t a_hand) {
+            if (a_hand == kApmfHandEither)
+                return a_o.heal[0].handle != APMF_API::kInvalidHandle ? &a_o.heal[0]
+                     : a_o.heal[1].handle != APMF_API::kInvalidHandle ? &a_o.heal[1] : nullptr;
+            const CastClaim& c = a_o.heal[OffenseSlot(a_hand)];
+            return c.handle != APMF_API::kInvalidHandle ? &c : nullptr;
+        }
     }
 
     bool IsOwnedCastActive(RE::FormID a_follower) {
@@ -187,7 +196,7 @@ namespace MFO::APMFBridge {
     // it additionally caps a NEVER-OBSERVED claim at kHealHoldNeverObservedMs --
     // both because an incumbent the engine never casts can otherwise re-arm
     // forever. Actuation's cast-hand lock now also calls this while an incumbent's
-    // own rule is held off from re-aiming, and its LEFT branch replays `o.heal`,
+    // own rule is held off from re-aiming, and each hand branch replays that hand's `o.heal[]` slot,
     // so an unbounded caller here would renew exactly the claim that cap exists to
     // bound. THE CAP THEREFORE LIVES AT THAT CALL SITE: the hold heartbeats only
     // while the claim has been OBSERVED firing or is younger than the same
@@ -275,12 +284,13 @@ namespace MFO::APMFBridge {
                 replayOffense(1);
         } else if (a_hand == kApmfHandLeft) {
             replayOffense(0);
-            // Heals are LEFT always (ClaimHealCast's hard rule), and a heal claim
-            // and an offense claim CAN both stand on the left hand at once, so
+            // A heal claim and an offense claim CAN both stand on one hand at once
+            // (each hand has its own heal slot since feat/mfo-perhand-heal), so
             // both are refreshed -- the caller named the hand, not the facet.
-            replay(o.heal);
+            replay(o.heal[0]);
         } else {
             replayOffense(1);
+            replay(o.heal[1]);
         }
 
         EraseIfEmpty(g_owned.find(a_follower));
@@ -371,10 +381,11 @@ namespace MFO::APMFBridge {
         auto* v5 = reinterpret_cast<const APMF_API::APMF_API_v5*>(api);
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
-        EnsureCastClaimLocked(v5, a_follower, o.heal, a_spell, a_target, a_hand,
+        auto& c = o.heal[OffenseSlot(a_hand)];   // per hand (feat/mfo-perhand-heal)
+        EnsureCastClaimLocked(v5, a_follower, c, a_spell, a_target, a_hand,
                               a_concentration, a_stopPct);
-        o.heal.refreshed = std::chrono::steady_clock::now();
-        const bool live = o.heal.handle != APMF_API::kInvalidHandle;
+        c.refreshed = std::chrono::steady_clock::now();
+        const bool live = c.handle != APMF_API::kInvalidHandle;
         EraseIfEmpty(g_owned.find(a_follower));
         return live;
     }
@@ -391,7 +402,16 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
         if (it == g_owned.end()) return;
-        ReleaseClaimLocked(it->second.heal);
+        ReleaseClaimLocked(it->second.heal[0]);
+        ReleaseClaimLocked(it->second.heal[1]);
+        EraseIfEmpty(it);
+    }
+
+    void ReleaseHealCastOnHand(RE::FormID a_follower, std::int32_t a_hand) {
+        std::scoped_lock lock(g_mx);
+        auto it = g_owned.find(a_follower);
+        if (it == g_owned.end()) return;
+        ReleaseClaimLocked(it->second.heal[OffenseSlot(a_hand)]);
         EraseIfEmpty(it);
     }
 
@@ -399,7 +419,16 @@ namespace MFO::APMFBridge {
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
-        return it != g_owned.end() && it->second.heal.handle != APMF_API::kInvalidHandle;
+        return it != g_owned.end() && (it->second.heal[0].handle != APMF_API::kInvalidHandle ||
+                                       it->second.heal[1].handle != APMF_API::kInvalidHandle);
+    }
+
+    bool IsHealCastActiveOnHand(RE::FormID a_follower, std::int32_t a_hand) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        return it != g_owned.end() &&
+               it->second.heal[OffenseSlot(a_hand)].handle != APMF_API::kInvalidHandle;
     }
 
     // Which spell the heal slot's live claim names (0 when none stands). Added for
@@ -408,28 +437,31 @@ namespace MFO::APMFBridge {
     // heal claim coexisting" -- releasing the second case's heal would drop a claim
     // nothing asked about. Same g_mx / no-live-claim-answers-0 contract as
     // GetHealCastProxy below.
-    RE::FormID GetHealCastSpell(RE::FormID a_follower) {
+    RE::FormID GetHealCastSpell(RE::FormID a_follower, std::int32_t a_hand) {
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return 0;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
-        if (it == g_owned.end() || it->second.heal.handle == APMF_API::kInvalidHandle) return 0;
-        return it->second.heal.spell;
+        if (it == g_owned.end()) return 0;
+        const CastClaim* c = HealSlotLocked(it->second, a_hand);
+        return c ? c->spell : 0;
     }
 
-    RE::FormID GetHealCastTarget(RE::FormID a_follower) {
+    RE::FormID GetHealCastTarget(RE::FormID a_follower, std::int32_t a_hand) {
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return 0;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
-        if (it == g_owned.end() || it->second.heal.handle == APMF_API::kInvalidHandle) return 0;
-        return it->second.heal.target;
+        if (it == g_owned.end()) return 0;
+        const CastClaim* c = HealSlotLocked(it->second, a_hand);
+        return c ? c->target : 0;
     }
 
-    RE::FormID GetHealCastProxy(RE::FormID a_follower) {
+    RE::FormID GetHealCastProxy(RE::FormID a_follower, std::int32_t a_hand) {
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return 0;
         std::scoped_lock lock(g_mx);
         const auto it = g_owned.find(a_follower);
-        if (it == g_owned.end() || it->second.heal.handle == APMF_API::kInvalidHandle) return 0;
-        return it->second.heal.proxy;
+        if (it == g_owned.end()) return 0;
+        const CastClaim* c = HealSlotLocked(it->second, a_hand);
+        return c ? c->proxy : 0;
     }
 
     // See the header for the full rationale (why the stamp, why the age cap, and
@@ -438,12 +470,14 @@ namespace MFO::APMFBridge {
     // already auto-expired -- stop treating it as live and let the normal path
     // (here: Tick()'s sweep, which then sees a stamp that stopped moving) clear
     // it, rather than issuing a Release against a handle APMF no longer knows.
-    bool RefreshHealCastClaim(RE::FormID a_follower) {
+    bool RefreshHealCastClaim(RE::FormID a_follower, std::int32_t a_hand) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || a_follower == 0) return false;
         std::scoped_lock lock(g_mx);
         auto it = g_owned.find(a_follower);
-        if (it == g_owned.end() || it->second.heal.handle == APMF_API::kInvalidHandle) return false;
+        if (it == g_owned.end()) return false;
+        auto& heal = it->second.heal[OffenseSlot(a_hand)];   // per hand (feat/mfo-perhand-heal)
+        if (heal.handle == APMF_API::kInvalidHandle) return false;
         // ── THE NEVER-OBSERVED HOLD CAP (Fable SEV-1 2026-09-06; MECHANISM AND
         //    SIZING BOTH CORRECTED by the Fable diff review, same day) ─────────
         // The ONLY caller is ComposedCast::Try's incumbent hold, and it calls
@@ -517,7 +551,7 @@ namespace MFO::APMFBridge {
         // through here at all (the caller's `!observed` guard), so a real cast
         // keeps running for as long as its rule and APMF agree it should.
         const auto now = std::chrono::steady_clock::now();
-        if (now - it->second.heal.created >= std::chrono::milliseconds(kHealClaimNeverObservedCapMs))
+        if (now - heal.created >= std::chrono::milliseconds(kHealClaimNeverObservedCapMs))
             return false;
         // ABI < 6 has no IsClaimLive, so there is NO bound available here at all:
         // the unchanged fast path in EnsureCastClaimLocked trusts a stored handle
@@ -530,16 +564,16 @@ namespace MFO::APMFBridge {
         // visibly), never a hold nobody can break. Inert in practice -- the pair
         // ships together at kABIVersion 6.
         if (api->abiVersion < 6) return false;
-        if (!reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(it->second.heal.handle))
+        if (!reinterpret_cast<const APMF_API::APMF_API_v6*>(api)->IsClaimLive(heal.handle))
             return false;                       // dead APMF-side: no heartbeat, Tick() sweeps it
-        it->second.heal.refreshed = now;
+        heal.refreshed = now;
         // LATCH THE OBSERVATION TOO (SEV-4, pre-merge review 2026-09-07). This IS a
         // genuine `IsClaimLive == true` sighting of this exact handle, and everLive's
         // own doc says it is set "the first time IsClaimLive(handle) answers true".
         // Without it, a heal whose only liveness sightings came through the hold path
         // would still look never-published to EnsureCastClaimLocked and be reported as
         // an outright refusal it never suffered.
-        it->second.heal.everLive = true;
+        heal.everLive = true;
         return true;
     }
 

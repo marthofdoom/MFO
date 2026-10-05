@@ -85,6 +85,10 @@ namespace MFO::Loadout {
                      // one the OTHER hand -- PlanCastHand only ever plans ONE
                      // spell's hand at a time; orchestrating two is the
                      // caller's job (it alone knows what else is wanted).
+        Right,       // NEVER returned by PlanCastHand. The heal road's SECOND
+                     // recipient (feat/mfo-perhand-heal, cast/HealRoad.cpp): a
+                     // caller-resolved RIGHT hand, chosen only when no weapon
+                     // owns it; ResolveCastHand treats it as Left's mirror.
     };
 
     // a_weaponHandActive: true iff a weapon currently owns (or an equip

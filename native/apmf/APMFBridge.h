@@ -161,10 +161,10 @@ namespace MFO::APMFBridge {
     // Actuation.cpp's per-hand cast-gambit lock (CastLockLive), which needs to
     // know whether ONE hand specifically is occupied, not just "the actor
     // has some offense claim somewhere" (IsOwnedCastActive's job, unchanged
-    // above). Heals are LEFT always (ClaimHealCast's own hard rule) and are
+    // above). Heal claims (per hand since feat/mfo-perhand-heal) are
     // NOT reflected here -- a caller that also cares about the heal facet
-    // ORs this with IsHealCastActive itself (Actuation.cpp does, for the left
-    // hand only).
+    // ORs this with IsHealCastActiveOnHand itself (cast/Hands.cpp does, per
+    // hand).
     bool IsOwnedCastActiveOnHand(RE::FormID a_follower, std::int32_t a_hand);
 
     // Worker- AND combat-thread-safe (SAME g_mx). The delivery-flip proxy FormID
@@ -297,10 +297,10 @@ namespace MFO::APMFBridge {
     // concurrent second claim (the dead handle is dropped first; one claim exists
     // at every instant, and there is no live charge left to interrupt).
     //
-    // a_hand: kApmfHandLeft -> the left offense slot AND the heal slot (heals are
-    // LEFT always, and the two can stand together); kApmfHandDualCast -> the
-    // mirrored dual claim, re-mirrored so both slots' stamps move together;
-    // anything else -> the right offense slot.
+    // a_hand: kApmfHandLeft -> the left offense slot AND the left heal slot (the
+    // two can stand together); kApmfHandDualCast -> the mirrored dual claim,
+    // re-mirrored so both slots' stamps move together; anything else -> the right
+    // offense slot AND the right heal slot (feat/mfo-perhand-heal).
     //
     // RETURNS true when at least one claim on that hand is still live afterwards.
     // A `false` means the claim really is gone (APMF aged it out, or the
@@ -966,8 +966,8 @@ namespace MFO::APMFBridge {
     // out ~500ms later (deck: "driving right hand" -> re-equipped 'Elven Dagger'
     // -> "never left rest -- degrading"). LEFT is also the correct fallback with
     // no weapon held: heals are left-hand almost always regardless, UNCONDITIONALLY
-    // -- a heal never routes through the dual-cast/juggle policy below, so
-    // ClaimHealCast always passes kApmfHandLeft (unchanged, 2026-09-06).
+    // -- a heal never routes through the dual-cast/juggle policy below. A SECOND
+    // recipient takes the RIGHT only when no weapon owns it (feat/mfo-perhand-heal).
     //
     // THE GENERAL HAND POLICY (2026-09-06, WIRED feat/per-hand-cast-slots), for
     // OFFENSE only (heal's own rule above always overrides it -- a heal never
@@ -1040,6 +1040,9 @@ namespace MFO::APMFBridge {
     // checked before anything else) that keeps this from ever firing over a
     // held weapon.
     inline constexpr std::int32_t kApmfHandDualCast = 3;
+    // The heal accessors' "either hand" (feat/mfo-perhand-heal): the left heal slot when
+    // it is live, else the right. MFO-side only, never sent to APMF.
+    inline constexpr std::int32_t kApmfHandEither = -1;
 
     // Translate a `Loadout::PlanCastHand` decision into this bridge's a_hand
     // encoding (kApmfHandLeft / kApmfHandDualCast / 0 for "either hand" --
@@ -1053,6 +1056,7 @@ namespace MFO::APMFBridge {
     inline std::int32_t HandFor(Loadout::HandPick a_pick) {
         switch (a_pick) {
         case Loadout::HandPick::Left:      return kApmfHandLeft;
+        case Loadout::HandPick::Right:     return kApmfHandRight;
         case Loadout::HandPick::DualCast:  return kApmfHandDualCast;
         case Loadout::HandPick::EitherFree:
         default:                           return 0;
@@ -1225,12 +1229,14 @@ namespace MFO::APMFBridge {
     // ClaimHealCast's own three non-arbitration early returns.
     bool HealCastClaimSupported();
 
-    // Worker-safe. Release ONLY the heal-cast claim now (every other facet left
-    // alone). Call the instant the gambit stops wanting the heal (target lost /
+    // Worker-safe. Release ONLY the heal-cast claims now, BOTH hands (every other facet
+    // left alone); ReleaseHealCastOnHand releases one hand's (a_hand as ClaimHealCast).
+    // Call the instant the gambit stops wanting the heal (target lost /
     // spell/rule no longer wins) so APMF restores the AI's own cast deliberation
     // immediately -- the round-robin-aware FacetExpiry() backstop (Tick()) AND the
     // claim's own TTL (on APMF's side) cover a caller that forgets.
     void ReleaseHealCast(RE::FormID a_follower);
+    void ReleaseHealCastOnHand(RE::FormID a_follower, std::int32_t a_hand);
 
     // Worker- AND combat-thread-safe (mutex-guarded read; the SAME g_mx every
     // other accessor here takes). Does a_follower currently hold a LIVE heal-cast
@@ -1239,13 +1245,15 @@ namespace MFO::APMFBridge {
     // Restore caster vtable -- that hook stands down via CastBounds
     // (native/CastBounds.h) OR'd with this very accessor (CasterConsent.cpp's
     // ClientCastClaimed), NOT this accessor alone. This also exists for parity/
-    // observability with the other IsXActive queries above.
+    // observability with the other IsXActive queries above. ANY hand; the OnHand twin
+    // reads one hand's heal slot (feat/mfo-perhand-heal).
     bool IsHealCastActive(RE::FormID a_follower);
+    bool IsHealCastActiveOnHand(RE::FormID a_follower, std::int32_t a_hand);
 
     // Worker- AND combat-thread-safe (SAME g_mx). The delivery-flip proxy FormID
     // APMF minted internally for a_follower's LIVE heal-cast claim (see
     // GetOffenseCastProxy's doc above -- same ABI v6/no-live-claim/no-proxy 0
-    // contract, heal's own always-LEFT slot). Cast-claim observability
+    // contract, a_hand's heal slot). Cast-claim observability
     // (2026-09-06): ComposedCast::Try hands this to WatchArmed so the silent-
     // claim diagnostic recognises a cast of the proxy, not only the original
     // spell, as the claimed heal actually firing.
@@ -1254,7 +1262,9 @@ namespace MFO::APMFBridge {
     // am displacing IS the heal claim" (route the release through
     // ComposedCast::End) from "an offense claim on the LEFT hand with a heal claim
     // coexisting" (leave the heal alone). Same contract as GetHealCastProxy.
-    RE::FormID GetHealCastSpell(RE::FormID a_follower);
+    // PER HAND (feat/mfo-perhand-heal, these three): a_hand = kApmfHandLeft / kApmfHandRight
+    // reads that hand's slot; kApmfHandEither (the default) the left slot if live, else the right.
+    RE::FormID GetHealCastSpell(RE::FormID a_follower, std::int32_t a_hand = kApmfHandEither);
 
     // Worker-safe (SAME g_mx). The RECIPIENT the heal slot's LIVE claim names: 0 when
     // no heal claim stands AND for a self claim (MFO sends target 0 for self, which
@@ -1263,9 +1273,9 @@ namespace MFO::APMFBridge {
     // the animated-heal series (animheal phase 2): CastAuto keeps a cast that is in
     // flight on its current recipient and re-picks between casts, so it has to know
     // who the standing claim is aimed at.
-    RE::FormID GetHealCastTarget(RE::FormID a_follower);
+    RE::FormID GetHealCastTarget(RE::FormID a_follower, std::int32_t a_hand = kApmfHandEither);
 
-    RE::FormID GetHealCastProxy(RE::FormID a_follower);
+    RE::FormID GetHealCastProxy(RE::FormID a_follower, std::int32_t a_hand = kApmfHandEither);
 
     // Worker-safe (the SAME g_mx as every accessor above). HEARTBEAT for a
     // heal-cast claim a client is deliberately HOLDING instead of re-requesting
@@ -1340,7 +1350,7 @@ namespace MFO::APMFBridge {
     // nothing able to end it -- a mask (#7). Refusing degrades honestly to the
     // pre-F1 behaviour (the two rules visibly thrash the slot) instead. Inert in
     // practice: kABIVersion is 6 and the DLL pair ships together.
-    bool RefreshHealCastClaim(RE::FormID a_follower);
+    bool RefreshHealCastClaim(RE::FormID a_follower, std::int32_t a_hand);   // a_hand's slot
 
     // ── CAST-SELECT CANDIDATE REFUSAL: a GATE-ONLY ch.8 claim + the ALLOW-LIST ──
     //    (kIntent_SelectSpell + APMF_API_v4 SetSpellAllowList; fix/mfo-spell-

@@ -1022,7 +1022,7 @@ namespace MFO::Actuation {
     bool HealClaimTakesLeftFrom(RE::Actor* a_follower, int a_holdRule) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0) return false;
-        const RE::FormID heal = APMFBridge::GetHealCastSpell(fid);
+        const RE::FormID heal = APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft);   // the LEFT hand's heal
         if (heal == 0) {
             // THE STREAM CAP'S RE-STREAM GAP (MFO-B177): no claim stands for one lap,
             // but the heal's LEFT lock keeps its rank until the rule re-claims, and
@@ -1049,7 +1049,7 @@ namespace MFO::Actuation {
         // with no heal claim behind it) keeps the answer it always had. A heal lock
         // kept through its stream-cap re-stream gap (MFO-B177) is judged by rank,
         // like the claim it stands for.
-        if ((APMFBridge::GetHealCastSpell(fid) == 0 && HealRestreamRule(fid) == kNoRule) ||
+        if ((APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft) == 0 && HealRestreamRule(fid) == kNoRule) ||
             APMFBridge::IsOwnedCastActiveOnHand(fid, APMFBridge::kApmfHandLeft))
             return true;
         return HealClaimTakesLeftFrom(a_follower, a_holdRule);

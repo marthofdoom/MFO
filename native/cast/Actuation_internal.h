@@ -518,9 +518,12 @@ namespace MFO::Actuation {
         // the gap to the re-claim (CastLock::restreamAt, MFO-B177; its channel cap
         // starts over). With no claim standing, a call from the rule that owns such a
         // kept lock drops it (the rule decided not to re-claim) and returns false.
-        bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why,
-                                 bool a_keepSpell = false);
-        bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec);
+        // PER HAND since feat/mfo-perhand-heal: a_hand (kHandLeft / kHandRight) names the
+        // heal slot and the lock; everything else is as described above.
+        bool ReleaseOwnHealClaim(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell,
+                                 const char* a_why, bool a_keepSpell = false);
+        bool HealChannelCapped(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell,
+                               float& a_capSec);
         // HealRestreamRule (MFO-B177): the owning rule of a LEFT lock in its stream-cap
         // re-stream gap (CastLock::restreamAt within FacetExpiry()), else kNoRule. The
         // equip side's rank read for the gap, when no heal claim stands to ask.
@@ -568,6 +571,38 @@ namespace MFO::Actuation {
         // which the kNeverFired WARN is the loud signal and offense resumes. Logs `[heal-hold]`
         // once per claim. Worker-serial (#4).
         bool HealPendingHoldsOffense(RE::Actor* a_follower, int a_askerRule, RE::FormID a_askerSpell);
+
+        // ── THE PER-HAND HEAL ROAD (feat/mfo-perhand-heal, cast/HealRoad.cpp) ──────────
+        // marth 2026-09-30: "One per follower is fine for this, the other hand would be for
+        // a second hurting follower"; "Nothing should ever be locked up, its a very fluid
+        // system". ONE recipient per hand: the first takes the LEFT, a DIFFERENT second one
+        // takes the RIGHT (displacing its offense by carried rank, never a weapon hand), and
+        // the right returns to offense when that heal ends. Everything is re-judged every
+        // lap; no cap, no tenure. ALL of it is worker-serial (#4): CastOn / CastAuto / the
+        // release helpers run on the AddTask job worker, and ClearCastLocks clears the
+        // per-hand records with the pump drained (ResetAllState order).
+        //
+        // HealRoadLap: CastOn's healClaim lap, before the hand lock. Reconciles the per-hand
+        // records, maintains this rule's heal on the OTHER hand (re-judge + heartbeat or
+        // release), re-judges this lap's recipient (released claim + transparent outcome when
+        // lost), applies the LEFT hand's equip-gambit rank gate, and names the hand this
+        // recipient is served on (a_hand). nullopt = carry on with a_hand.
+        std::optional<Outcome> HealRoadLap(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                           RE::Actor* a_target, std::size_t& a_hand);
+        // HealHandClaimed: a heal claim on a_hand was just minted or refreshed (Try ->
+        // Claimed) for a_recipient (0 = self). Logs the hand's assignment once per change.
+        void HealHandClaimed(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell,
+                             RE::FormID a_recipient);
+        // HealHandEnded: a_hand's heal claim ended (a_why). Logs once and drops the record;
+        // a RIGHT hand "returns to offense". No-op when no record stands.
+        void HealHandEnded(RE::FormID a_follower, std::size_t a_hand, const char* a_why);
+        // HealHandsReconcile: drop (and log once) every per-hand record whose claim ended
+        // elsewhere (expiry sweep, preempt, combat end). Cheap: one map lookup when none.
+        void HealHandsReconcile(RE::FormID a_follower);
+        // Does a weapon own the follower's right hand (live grip, a live claim, a force-hold
+        // coming back, or a Melee/Ranged class without weapon-style control)? cast/Hands.cpp.
+        bool RightHandIsWeaponHand(RE::Actor* a_follower);
+        void ResetHealRoad();   // ClearCastLocks
         // An asker that already HOLDS a hand with its own spell (an offense charge in progress) is
         // never held: starving its refresh would kill a running cast, which is not this fix's job.
         const char* HealRepairVerdict(Loadout::Ready a_ready);

@@ -103,18 +103,18 @@ namespace MFO::Actuation {
         // (2026-09-08) because the in-flight gate below asks the same question
         // and the two must never drift apart.
         bool ClaimLiveOnHand(RE::FormID a_follower, std::size_t a_hand) {
-            return (a_hand == kHandLeft)
-                ? (APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandLeft) ||
-                   APMFBridge::IsHealCastActive(a_follower))
-                : APMFBridge::IsOwnedCastActiveOnHand(a_follower, APMFBridge::kApmfHandRight);
+            const std::int32_t h = (a_hand == kHandLeft) ? APMFBridge::kApmfHandLeft
+                                                         : APMFBridge::kApmfHandRight;
+            return APMFBridge::IsOwnedCastActiveOnHand(a_follower, h) ||
+                   APMFBridge::IsHealCastActiveOnHand(a_follower, h);   // per-hand heal slot
         }
 
     }   // anon
 
     // THE DELIVERY-FLIP PROXY STANDING ON ONE HAND, WHICHEVER FACET MINTED IT
     // (review fix, 2026-09-08). An offense claim's proxy lives in
-    // GetOffenseCastProxy and a HEAL claim's in GetHealCastProxy, and heals are
-    // LEFT always -- so a left-hand lookup that consults only the offense
+    // GetOffenseCastProxy and a HEAL claim's in GetHealCastProxy (per hand since
+    // feat/mfo-perhand-heal) -- so a hand lookup that consults only the offense
     // accessor silently answers 0 for every proxied heal. That 0 is not
     // harmless at either call site: the in-flight watch re-arm would never
     // learn the heal's proxy (WatchArmed keeps whatever it has when handed 0),
@@ -126,8 +126,9 @@ namespace MFO::Actuation {
         const RE::FormID offense = APMFBridge::GetOffenseCastProxy(
             a_follower, a_hand == kHandLeft ? APMFBridge::kApmfHandLeft
                                             : APMFBridge::kApmfHandRight);
-        if (offense != 0 || a_hand != kHandLeft) return offense;
-        return APMFBridge::GetHealCastProxy(a_follower);
+        if (offense != 0) return offense;
+        return APMFBridge::GetHealCastProxy(a_follower, a_hand == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                                            : APMFBridge::kApmfHandRight);
     }
 
     namespace {
@@ -201,6 +202,8 @@ namespace MFO::Actuation {
         }
 
     }   // anon
+
+    bool RightHandIsWeaponHand(RE::Actor* a_follower) { return WeaponHandExposure(a_follower); }
 
     std::chrono::steady_clock::time_point CastLockClaimStamp(RE::FormID a_follower, std::size_t a_hand,
                                                              RE::FormID a_spell) {
@@ -796,9 +799,10 @@ namespace MFO::Actuation {
         // takes them down together. Only when the lock being preempted really
         // is the heal's: an offense claim on the LEFT hand must not drag an
         // unrelated coexisting heal down with it.
-        if (a_hand == kHandLeft && lostSpell != 0 &&
-            APMFBridge::GetHealCastSpell(fid) == lostSpell)
-            ComposedCast::End(fid);
+        const std::int32_t apmfHand = a_hand == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                          : APMFBridge::kApmfHandRight;
+        if (lostSpell != 0 && APMFBridge::GetHealCastSpell(fid, apmfHand) == lostSpell)
+            ComposedCast::EndHand(fid, apmfHand);   // that hand's heal claim (feat/mfo-perhand-heal)
         lock = CastLock{};
         if (dualIncumbent) other = CastLock{};
         const auto now = std::chrono::steady_clock::now();
@@ -828,18 +832,21 @@ namespace MFO::Actuation {
     // rule owns on the same spell is that rule's (two rules can share a spell).
     // kNoRule (the OOC Logistics caller) owns nothing and so releases nothing it did
     // not claim itself -- it can only meet its own claim here.
-    bool ReleaseOwnHealClaim(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why,
-                             bool a_keepSpell) {
+    bool ReleaseOwnHealClaim(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell,
+                             const char* a_why, bool a_keepSpell) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
-        if (fid == 0 || a_spell == 0) return false;
+        if (fid == 0 || a_spell == 0 || a_hand >= kHandCount) return false;
+        // PER HAND (feat/mfo-perhand-heal): a_hand's heal slot and lock only.
+        const std::int32_t apmfHand = a_hand == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                          : APMFBridge::kApmfHandRight;
         auto it = g_castLock.find(fid);
-        if (APMFBridge::GetHealCastSpell(fid) != a_spell) {
+        if (APMFBridge::GetHealCastSpell(fid, apmfHand) != a_spell) {
             // MFO-B177: no claim stands, but THIS rule's lock may still be held
             // through a stream-cap re-stream gap. The rule has just decided not to
             // re-claim (recipient lost / full, an outranking equip hold, AUTO found
             // nobody), so the kept rank goes now, not at the gap's window.
             if (it != g_castLock.end()) {
-                auto& lk = it->second.hand[kHandLeft];
+                auto& lk = it->second.hand[a_hand];
                 if (lk.spell == a_spell && lk.restreamAt.time_since_epoch().count() != 0 &&
                     lk.owningRule == g_firingRule)
                     lk = CastLock{};
@@ -847,14 +854,14 @@ namespace MFO::Actuation {
             return false;
         }
         if (it != g_castLock.end()) {
-            const auto& lk = it->second.hand[kHandLeft];
+            const auto& lk = it->second.hand[a_hand];
             if (lk.spell == a_spell && lk.owningRule != g_firingRule && lk.owningRule != kNoRule)
                 return false;   // another rule's claim on the same spell
         }
-        const RE::FormID recipient = APMFBridge::GetHealCastTarget(fid);
-        ComposedCast::End(fid, a_keepSpell);
-        if (it != g_castLock.end() && it->second.hand[kHandLeft].spell == a_spell) {
-            auto& lk = it->second.hand[kHandLeft];
+        const RE::FormID recipient = APMFBridge::GetHealCastTarget(fid, apmfHand);
+        ComposedCast::EndHand(fid, apmfHand, a_keepSpell);
+        if (it != g_castLock.end() && it->second.hand[a_hand].spell == a_spell) {
+            auto& lk = it->second.hand[a_hand];
             if (a_keepSpell && g_firingRule != kNoRule && lk.owningRule == g_firingRule) {
                 // THE STREAM CAP'S RE-STREAM (MFO-B177). The claim is released, but the
                 // lock and its rank stay for the gap to this rule's re-claim next lap,
@@ -870,12 +877,14 @@ namespace MFO::Actuation {
             }
         }
         const auto now = std::chrono::steady_clock::now();
-        auto& e = g_releaseHealLog[fid];   // revert-cleared (MFO-B180/B188)
-        if (e.first != a_spell || std::chrono::duration<float>(now - e.second).count() >= 2.0f) {
-            e = { a_spell, now };
-            spdlog::info("[heal] {:08X} heal claim RELEASED -- spell {:08X} at {:08X}: {} (rule {})",
-                         fid, a_spell, recipient == 0 ? fid : recipient, a_why, g_firingRule);
+        auto& e = g_releaseHealLog[fid];   // revert-cleared (MFO-B180/B188); keyed on the recipient
+        const RE::FormID who = recipient == 0 ? fid : recipient;   // so the two hands never mute each other
+        if (e.first != who || std::chrono::duration<float>(now - e.second).count() >= 2.0f) {
+            e = { who, now };
+            spdlog::info("[heal] {:08X} heal claim RELEASED -- spell {:08X} at {:08X}, {} hand: {} (rule {})",
+                         fid, a_spell, who, HandName(a_hand), a_why, g_firingRule);
         }
+        HealHandEnded(fid, a_hand, a_why);   // cast/HealRoad.cpp: the per-hand record + its once-per-change line
         return true;
     }
 
@@ -887,7 +896,7 @@ namespace MFO::Actuation {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0 || !a_spell) return {};
         const RE::FormID spellID = a_spell->GetFormID();
-        if (APMFBridge::GetHealCastSpell(fid) != spellID) return {};   // not this heal's claim
+        if (APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft) != spellID) return {};   // not the LEFT heal claim
         // The proxy as the refresh the caller has JUST made learned it (round 2,
         // SHADOW R2-1: read before that refresh it was still 0 on lap 2).
         const RE::FormID proxy = CastProxyOnHand(fid, kHandLeft);
@@ -989,7 +998,7 @@ namespace MFO::Actuation {
             return false;
         const auto& lk = it->second.hand[kHandLeft];
         if (lk.spell == 0 || lk.owningRule == kNoRule || lk.owningRule >= a_askerRule) return false;
-        if (APMFBridge::GetHealCastSpell(fid) != lk.spell) return false;   // not a standing HEAL claim
+        if (APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft) != lk.spell) return false;   // not a standing LEFT HEAL claim
         const auto age = std::chrono::steady_clock::now() - lk.lastSeen;
         if (age >= std::chrono::milliseconds(APMFBridge::kHoldLastSeenCapMs)) return false;   // capped: kNeverFired WARN speaks
         if (CastInFlightOnHand(a_follower, kHandLeft, lk.spell, CastProxyOnHand(fid, kHandLeft))) return false;   // running
@@ -1036,15 +1045,22 @@ namespace MFO::Actuation {
     bool ReleaseHealClaimForRetreat(RE::Actor* a_follower) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0) return false;
-        const RE::FormID spell = APMFBridge::GetHealCastSpell(fid);
-        if (spell == 0) return false;
-        const RE::FormID recipient = APMFBridge::GetHealCastTarget(fid);
-        ComposedCast::End(fid);
-        ClearLeftCastLockIf(fid, spell);
-        spdlog::info("[heal] {:08X} heal claim RELEASED -- spell {:08X} at {:08X}: the retreat filled "
-                     "(released explicitly, not left to the expiry sweep)",
-                     fid, spell, recipient == 0 ? fid : recipient);
-        return true;
+        bool any = false;
+        for (std::size_t h = 0; h < kHandCount; ++h) {   // BOTH hands' heal claims (feat/mfo-perhand-heal)
+            const std::int32_t ah = h == kHandLeft ? APMFBridge::kApmfHandLeft : APMFBridge::kApmfHandRight;
+            const RE::FormID spell = APMFBridge::GetHealCastSpell(fid, ah);
+            if (spell == 0) continue;
+            const RE::FormID recipient = APMFBridge::GetHealCastTarget(fid, ah);
+            ComposedCast::EndHand(fid, ah);
+            if (auto it = g_castLock.find(fid); it != g_castLock.end() && it->second.hand[h].spell == spell)
+                it->second.hand[h] = CastLock{};
+            spdlog::info("[heal] {:08X} heal claim RELEASED -- spell {:08X} at {:08X}, {} hand: the retreat "
+                         "filled (released explicitly, not left to the expiry sweep)",
+                         fid, spell, recipient == 0 ? fid : recipient, HandName(h));
+            HealHandEnded(fid, h, "the retreat filled");
+            any = true;
+        }
+        return any;
     }
 
     const char* HealRepairVerdict(Loadout::Ready a_ready) {
@@ -1086,13 +1102,13 @@ namespace MFO::Actuation {
     // moment it is not channelling, the clock resets. A per-channel cap drawn once
     // from DrawConcCap's heal band, like the direct stream's (principle 9: it bounds
     // one channel, it never paces casts).
-    bool HealChannelCapped(RE::Actor* a_follower, RE::FormID a_spell, float& a_capSec) {
+    bool HealChannelCapped(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell, float& a_capSec) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         auto it = g_castLock.find(fid);
-        if (fid == 0 || it == g_castLock.end()) return false;
-        auto& lk = it->second.hand[kHandLeft];
+        if (fid == 0 || it == g_castLock.end() || a_hand >= kHandCount) return false;
+        auto& lk = it->second.hand[a_hand];   // per hand (feat/mfo-perhand-heal)
         if (lk.spell != a_spell || a_spell == 0) return false;
-        if (!CastInFlightOnHand(a_follower, kHandLeft, lk.spell, CastProxyOnHand(fid, kHandLeft))) {
+        if (!CastInFlightOnHand(a_follower, a_hand, lk.spell, CastProxyOnHand(fid, a_hand))) {
             lk.channelSince = {};
             return false;
         }
@@ -1441,22 +1457,26 @@ namespace MFO::Actuation {
                             "right: spell {:08X})", busyL, busyR), true };
         }
         case Loadout::HandPick::Left:
-        default:
-            if (leftFree) { a_out = { true, false, false }; return std::nullopt; }
+        case Loadout::HandPick::Right:   // the heal road's second recipient (cast/HealRoad.cpp)
+        default: {
+            const bool r = a_pick == Loadout::HandPick::Right;
+            const auto h = r ? kHandRight : kHandLeft;
+            if (r ? rightFree : leftFree) { a_out = { !r, r, false }; return std::nullopt; }
             // THE CASE marth'S RULING IS ABOUT. Every heal, every self-cast and
-            // every concentration stream arrives here, LEFT-only, so this is
-            // the hand a heal near the top of the list has to be able to take
-            // from an offense claim below it.
-            if (mine(kHandLeft)) { a_out = { true, false, false }; return std::nullopt; }
-            if (outranks(kHandLeft)) {
-                a_out = { true, false, false, /*preemptLeft=*/true, false };
+            // every concentration stream arrives here, LEFT-only (a second heal
+            // recipient: RIGHT), so this is the hand a heal near the top of the
+            // list has to be able to take from an offense claim below it.
+            if (mine(h)) { a_out = { !r, r, false }; return std::nullopt; }
+            if (outranks(h)) {
+                a_out = { !r, r, false, /*preemptLeft=*/!r, /*preemptRight=*/r };
                 return std::nullopt;
             }
             refreshHeldOwnClaim();
-            LogCastLockHold(fid, kHandLeft, a_spell, busyL);
+            LogCastLockHold(fid, h, a_spell, r ? busyR : busyL);
             return Outcome{ Result::NoOp,
-                std::format("cast gambit locked -- spell {:08X} still firing (left hand)",
-                            busyL), true };
+                std::format("cast gambit locked -- spell {:08X} still firing ({} hand)",
+                            r ? busyR : busyL, HandName(h)), true };
+        }
         }
     }
 }

@@ -537,6 +537,10 @@ namespace MFO::Loadout {
             auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
             auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
             if (!a || !sp || a->GetEquippedObject(true) != sp) return;
+            // The RIGHT hand may hold the SAME spell for a second heal recipient
+            // (feat/mfo-perhand-heal). DeselectSpell names a spell, not a hand, so
+            // it is not proven to leave that copy alone: skip the take-back then.
+            if (a->GetEquippedObject(false) == sp) return;
             a->DeselectSpell(sp);
             spdlog::debug("[loadout] {:08X} -- {} taken back", a_actorID,
                           sp->GetName() ? sp->GetName() : "?");
