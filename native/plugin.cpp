@@ -528,12 +528,12 @@ namespace {
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     SKSE::Init(a_skse);
-    // F2b: on 1.7.104.0 the ids come from the fork's MIT id table
-    // (Data/SKSE/Plugins/mit-idtable-v1-1-7-104-0.bin). MFO's 1.7.104 column
+    // F2b: on 1.7.104.0 the ids come from the fork's MIT id table, built into
+    // this DLL since fork 57be9d67 (no file to install). MFO's 1.7.104 column
     // (VerifiedAddresses.h) and every id it reaches were verified against
-    // revision 3, so an older table stops the game here with a message naming
-    // both revisions instead of a missing id later. On every other build this
-    // only records the value.
+    // revision 3, so this checks the built-in table is at least that (it can
+    // only fail if MFO were built against an older fork). On every other build
+    // this only records the value.
     REL::IDDatabase::RequireMitTableRevision(3);
     SetupLog();
     // [fatal] passive hook: needs the logger (above) and REL::Module (SKSE::Init).

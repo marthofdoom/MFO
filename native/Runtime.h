@@ -35,12 +35,15 @@
 // (Board.cpp:1729's own pair ignores the build field; its seat is also behind
 // SeatVerified, whose table match is 4-field exact, so the effect is the same.)
 //
-// F2b, 1.7.104.0 (Steam), 2026-10-05. The fork (main 71021ae0, registry
-// d568e7f7) files 1.7.x with AE and reads its ids from the MIT id table
-// (mit-idtable-v1-1-7-104-0.bin, revision 3) instead of an Address Library.
+// F2b, 1.7.104.0 (Steam), 2026-10-05. The fork (main 57be9d67, registry
+// 5ae02e4f) files 1.7.x with AE and reads its ids from the MIT id table
+// (revision 3) BUILT INTO this DLL instead of an Address Library: players
+// install nothing extra. The two engine classes whose layout changes on
+// 1.7.104 that MFO depends on (SkyrimVM +0x10, PlayerCharacter +8) are read
+// through the fork's exact-build accessors.
 // 1.7.104 joins Known() because EVERY site Known() gates was proven on the
-// 1.7.104 executable by disassembly (Docs/VERIFIED-ADDRESSES.md, "1.7.104
-// proof"): every hooked vtable slot's target is the same function body as on
+// 1.7.104 executable by disassembly (Docs/ENGINE_NOTES.md section 0.49,
+// Docs/VERIFIED-ADDRESSES.md): every hooked vtable slot's target is the same function body as on
 // 1.6.1170, every called function is the same body, every MFO-owned offset is
 // the same value, and every CommonLib layout MFO reads was compared against the
 // 1.7.104 constructors and readers. Where a 1.7.104 value differs from 1.6.1170
@@ -99,8 +102,8 @@ namespace MFO::Runtime {
                          "each still subject to the self-check",
                          ver, BuildLabel());
             if (IsVerified1_7_104()) {
-                // The ids come from the MIT id table here, never an Address Library.
-                spdlog::info("[runtime] 1.7.104: ids from the MIT id table mit-idtable-v1-1-7-104-0.bin, "
+                // The ids come from the MIT id table built into this DLL, never an Address Library.
+                spdlog::info("[runtime] 1.7.104: ids from the MIT id table built into this DLL, "
                              "revision {}",
                              REL::IDDatabase::get().MitTableRevision());
             }

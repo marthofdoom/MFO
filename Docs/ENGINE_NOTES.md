@@ -2306,14 +2306,26 @@ FoeCount/inCombat mirror"; cross-referenced from MAP's Scheduler "What breaks".
 
 No 1.7.104 install exists. Everything here is disassembly of `binaries/1.7.104/SkyrimSE.exe` (plaintext, md5
 `113faeb7...`) against `binaries/1.6.1170/SkyrimSE.unpacked.exe`, the same way 1.5.97 was opened. The 1.7.104
-RVAs come from the CommonLib fork's shipped MIT id table (`data/mit-idtable-v1-1-7-104-0.bin`, revision 3, the
-file the plugin reads at runtime). "Identical" means the two function bodies have the same instruction count and
+RVAs come from the CommonLib fork's MIT id table (`data/mit-idtable-v1-1-7-104-0.bin`, revision 3). Since fork
+`57be9d67` that table is BUILT INTO the DLL, so players install nothing extra. "Identical" means the two function bodies have the same instruction count and
 every normalized instruction equal: every `[reg+disp]` displacement and every immediate kept, only rip-relative
 and branch targets masked. So an identical body proves every struct offset, size and constant it touches.
 Tools: a scratch capstone compare (pdata function bounds, difflib alignment), not shipped.
 
-**Verdict: nothing MFO reads or hooks differs on 1.7.104.** The 1.7.104 differences found are all in places MFO
-does not touch: PlayerCharacter's own members move +8 (a new `BSTEventSink<BSSystemEvent>` base at +0x2D8, and
+**Method, two layers.** (1) Class hierarchies: the RTTI base-class arrays of EVERY class were diffed between
+the two executables (8,557 classes in 1.6.1170, 8,636 in 1.7.104). Only five hierarchies differ, and only two
+change layout: `PlayerCharacter` (one new sink base, its own members move +8) and `SkyrimVM` (two new sink bases,
+its own members move +0x10). In the other three (`AudioLoadForPlaybackTask`, `AudioLoadToCacheTask`,
+`BShkbUtils::ProspectiveEventClipAddingFunctor`) only an anonymous-namespace base name changed. This is the
+CommonLib fork README section "How the 1.7.104 layouts are proven". A class whose hierarchy is unchanged can still
+move a member, so (2) every class MFO reads was also compared member by member below (ctor stores, reader bodies,
+vtable slot bodies).
+
+**Verdict.** Two engine classes MFO depends on change layout on 1.7.104, and both are handled by the fork's
+exact-build accessors, not by MFO code: `SkyrimVM` (impl `+0x200` -> `+0x210`, row below; the tier-A review's
+SEV-2 against 250f247, fixed in fork `90e8efe6` / `11a5858b` and adopted here through registry #20) and
+`PlayerCharacter` (own members +8, MFO reads none). Everything else MFO reads or hooks is the same value. The
+other 1.7.104 differences are in places MFO does not touch: PlayerCharacter's own members move +8 (a new `BSTEventSink<BSSystemEvent>` base at +0x2D8, and
 MFO uses no PlayerCharacter-declared member), the input stack (six devices, the event queue head at +0x558,
 three event kinds appended as types 6 to 8), the default-object array (366 -> 372, handled by the fork), and
 the fork gap `ExtraDataList::GetRuntimeSize()` with no 1.7.104 arm (fatal on `new ExtraDataList`, which MFO
@@ -2325,6 +2337,15 @@ never does). Two extra zero stores in the 1.7.104 Actor ctor (+0x128 / +0x130) a
 is MAPPED in revision 3. The 676 absent and 122 missing are all VTABLE_/RTTI_ entries, and none is one MFO names
 or casts through (84 names checked: native/ VTABLE_/RTTI_ uses, every `As<>` / `skyrim_cast` target and source).
 MFO's own ids 68545, 68617, 25052, 38561, 20226, 40056 and 403330 are mapped and in VerifiedAddresses.h.
+
+#### SkyrimVM (the one layout change MFO's paths go through)
+
+| item | 1.6.1170 | 1.7.104 | proof (1.6.1170 / 1.7.104) | verdict |
+|---|---|---|---|---|
+| SkyrimVM hierarchy | 58 bases | 60 bases: `BSTEventSink<TESAmiiboTouchEvent>` and `BSTEventSink<TESAmiiboForcedStopDetectionEvent>` at +0x180 / +0x188 | RTTI base-class arrays (fork README "How the 1.7.104 layouts are proven"); id-table layout flags on VTABLE_SkyrimVM[0..51] | DIFFERS |
+| SkyrimVM::impl (what `BSScript::Internal::VirtualMachine::GetSingleton()` returns) | +0x200 | +0x210 | the singleton (id 400475: 0x20FBA70 / 0x21A36E0) is loaded and then dereferenced at +0x200 by 56 engine sites on 1.6.1170 (e.g. 0x1B9B21) and at +0x210 by 56 sites on 1.7.104 (e.g. 0x1BF0D1), counted within three instructions of the load (the fork's wider count is 59 / 59); a second member moves the same way, +0x190 -> +0x1A0 (2 / 2 sites) | DIFFERS, every member it declares +0x10 |
+| How MFO reads it | fork `SkyrimVM::GetRuntimeData()` with exact arms (`57be9d67`); `VirtualMachine::GetSingleton()` goes through it; the inherited event-source API is deleted (`AsStatsEventSource()` instead) | same | fork `src/RE/V/VirtualMachine.cpp`; MFO calls no SkyrimVM member directly (grep: only `VirtualMachine::GetSingleton()`) | HANDLED (fork) |
+| MFO paths that depend on it | Papyrus dispatch (`Papyrus.cpp` VM()), alias / quest script dispatch (`Packages.cpp` VM()), LOTD script calls (`logistics/Lotd.cpp`), TradeBridge's 10 natives (registered through SKSE's Papyrus interface onto the same VM) | same | before the fork fix each would have read +0x200 on 1.7.104, a pointer into the wrong member | covered by the fork arm |
 
 #### Seats MFO owns
 
@@ -2446,7 +2467,7 @@ MFO's own ids 68545, 68617, 25052, 38561, 20226, 40056 and 403330 are mapped and
 | 5 UI dependency | Board reads `UI::GameIsPaused()` (numPausesGame) at Board.cpp:918-919 only. No IsMenuOpen in Board.cpp | | | dependency on group C (UI) |
 | 6 sink fallback: BSInputDeviceManager singleton (402776), BSTEventSource at manager +0 | 0x315CEA0 | 0x3204B30 | manager init CD8AF0/CF90C0: the source region +0x00..+0x58 is built identically (+0x48 lock, +0x50 flag). Manager fields after the device array shift +0x10 (+0x80->+0x90, +0x88->+0x98, +0xE0->+0xF0, 4->6 devices). The notify body is identical (1b). The CommonLib BSTEventSource template (sinks +0x00, pendingRegisters +0x18, pendingUnregisters +0x30, lock +0x48, notifying +0x50) matches it | SAME for what Board uses (GetSingleton + AddEventSink). Board reads no manager field past the source |
 
-**What breaks:** this proof covers the 1.7.104.0 Steam executable only (the id table is bound to its PE
+**What breaks:** this proof covers the 1.7.104.0 Steam executable only (the built-in id table is bound to its PE
 timestamp and image size, so another 1.7.104 build is refused by the fork at load). A new MFO seat or a new
 CommonLib layout read needs its own 1.7.104 compare before it ships, exactly like 1.5.97 (`Runtime::Known()`
 includes 1.7.104 on the strength of this table). Re-run the compare if MFO starts reading a PlayerCharacter

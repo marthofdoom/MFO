@@ -12,11 +12,11 @@ used in place of the library's answer.
 
 Offline result of this generation: 1.6.1170.0 56/56 verified, 0 refused, 1.5.97.0 56/56 verified, 0 refused.
 
-1.7.104.0 has NO Address Library. Its column is OUR OWN id map (the CommonLib fork's `data/idmap-1.7.104-*.csv`, keyed by
-the 1.6.1170 id), cross-checked row by row against the shipped id table `mit-idtable-v1-1-7-104-0.bin` (revision 3,
-17751 records, SkyrimSE.exe TimeDateStamp 0x6A8C7046), and
-re-verified against the plaintext 1.7.104 executable by the same row-kind checks (see the script
-docstring). Offline result: 1.7.104.0 56/56 verified, 0 NOT verified. A not-verified seat has no row in the 1.7.104 table,
+1.7.104.0 has NO Address Library. Its column is OUR OWN id map: the MIT id table of the CommonLibSSE-NG fork
+(`data/mit-idtable-v1-1-7-104-0.bin`, revision 3, 17751 records, SkyrimSE.exe TimeDateStamp 0x6A8C7046; built into every plugin, it is
+what SelfCheck queries at runtime; authoritative) with the evidence CSVs beside it, keyed by
+the 1.6.1170 id, re-verified against the plaintext 1.7.104 executable by the same row-kind checks (see the script
+docstring). Offline result: 1.7.104.0 56/56 verified, 0 NOT verified (0 of them BY DESIGN: 1.5.97-only labels whose AE twin row carries the 1.7.104 fact). A not-verified seat has no row in the 1.7.104 table,
 so `IsVerifiedAddress` is false and the seat is refused by name. The table of `Not verified on 1.7.104` is below.
 
 These rows prove the ADDRESSES. That each hooked slot holds the same function body on 1.7.104, and that every
@@ -123,9 +123,9 @@ audit covers everything the DLL installs or reads.
 python3 tools/verified_addresses/gen_verified_addresses.py --spec tools/verified_addresses/spec.json \
     --bin-1.6.1170 <binaries/1.6.1170/SkyrimSE.unpacked.exe> --al-1.6.1170 <versionlib-1-6-1170-0.bin> \
     --bin-1.5.97 <binaries/1.5.97/SkyrimSE.unpacked.exe> --al-1.5.97 <version-1-5-97-0.bin> \
-    --bin-1.7.104 <binaries/1.7.104/SkyrimSE.exe> \
-    --idmap <fork>/data/idmap-1.7.104-fork-full.csv --idmap <fork>/data/idmap-1.7.104-sync.csv \
-    --idmap <fork>/data/idmap-1.7.104-fixes.csv --idtable <fork>/data/mit-idtable-v1-1-7-104-0.bin \
+    --bin-1.7.104 <binaries/1.7.104/SkyrimSE.exe> --idtable <fork data/mit-idtable-v1-1-7-104-0.bin> \
+    --idmap <fork data/idmap-1.7.104-fork-full.csv> --idmap <fork data/idmap-1.7.104-sync.csv> --idmap <fork data/idmap-1.7.104-fixes.csv> \
+    --se-seats <_research/1.7.104-idmap/se-seats-1.7.104.csv> \
     --header native/VerifiedAddresses.h --doc Docs/VERIFIED-ADDRESSES.md
 ```
 
@@ -139,8 +139,7 @@ python3 tools/verified_addresses/gen_verified_addresses.py --spec tools/verified
   id, `offset` and per-runtime `bytes` (the RIP-relative instruction with its displacement, then the use-site
   bytes, 15 at most), and `global` (the global's id per runtime). The instruction's RIP target must equal the
   library's answer for `global`. It emits two rows: the function (id + byte check) and `global_seat` (id only).
-- 1.7.104 has no library: `--idmap` is our own id map, the fork's data/ CSVs; `--idtable` is the table the
-  plugin reads at runtime, and every 1.7.104 row must equal it (md5 of the exe is asserted: 113faeb71fd8f62b26d0c8627299ab40).
+- 1.7.104 has no library: `--idmap` is our own id map (md5 of the exe is asserted: 113faeb71fd8f62b26d0c8627299ab40).
   Its rows are looked up by the 1.6.1170 id. A new spec row needs no 1.7.104 input: it is verified with its
   1.6.1170 signature at the idmap RVA, or it lands in the table above. An optional `sig["1.7.104"]`,
   `offset["1.7.104"]` or `bytes["1.7.104"]` overrides the 1.6.1170 one for that runtime only.

@@ -17,8 +17,10 @@ Read it as history and this block as current.
   MFO adopts the MIT CommonLib fork main `71021ae0` (registry baseline `d568e7f7`, port 3.7.0#17: upstream sync
   2024-09 + F2a). `Runtime::Known()` now includes exact 1.7.104, opened per seat on disassembly proof only (no
   1.7.104 install exists). Proof tables: `Docs/ENGINE_NOTES.md` §0.49 and `Docs/VERIFIED-ADDRESSES.md` (1.7.104
-  column 56/56, cross-checked against the shipped id table revision 3). On 1.7.104 the user installs
-  `mit-idtable-v1-1-7-104-0.bin` (fork `data/`, canonical download pending marth). The old "1.7.104 stays
+  column 56/56, cross-checked against the fork's id table revision 3). Fork `57be9d67` (registry #20) builds that
+  table INTO the DLL: players install nothing extra. Tier-A review of 250f247: FIX FIRST on one SEV-2 in the fork
+  (SkyrimVM +0x10 on 1.7.104), fixed in the fork and adopted; two engine classes MFO depends on change layout on
+  1.7.104 (SkyrimVM, PlayerCharacter), both through fork accessors. The old "1.7.104 stays
   DEFERRED" notes below are superseded. Field observable: `[runtime] 1.7.104.0 supported ... (exact 1.7.104)`,
   `[selfcheck] ... 56/56 verified`.
 

@@ -656,14 +656,17 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   static lookup inside `ForEachReferenceInRange`, under the cell spin lock. Both are safe because a writer never waits
   on those locks.
 - **F2b — SKYRIM 1.7.104.0 (`feat/mfo-1.7.104`, 2026-10-05).** MFO builds against the MIT CommonLib fork main
-  `71021ae0` (`native/vcpkg-configuration.json` registry baseline `d568e7f7`, port 3.7.0#17: upstream sync 2024-09 +
-  F2a). The fork files 1.7.x with AE, reads 1.7.104.0's ids from its MIT id table
-  (`Data/SKSE/Plugins/mit-idtable-v1-1-7-104-0.bin`, bound to the Steam exe) and refuses every other 1.7.x at load.
-  `native/plugin.cpp:537` `REL::IDDatabase::RequireMitTableRevision(3)` right after `SKSE::Init` (MFO's 1.7.104
-  proof is against revision 3; an older table stops the game at load, by name). `native/Runtime.h:60`
-  **`IsVerified1_7_104()`** = `IsExactly(SKSE::RUNTIME_SSE_1_7_104)`; `Known()` (`:66`) =
+  `57be9d67` (`native/vcpkg-configuration.json` registry baseline `5ae02e4f`, port 3.7.0#20: upstream sync 2024-09 +
+  F2a + the SkyrimVM / UI-message 1.7.104 arms + the id table BUILT INTO the library). The fork files 1.7.x with AE,
+  reads 1.7.104.0's ids from its MIT id table (revision 3, inside MFO.dll, bound to the Steam exe; players install
+  nothing extra) and refuses every other 1.7.x at load. Two engine classes MFO depends on change layout on 1.7.104:
+  SkyrimVM (+0x10, impl at +0x210; `VirtualMachine::GetSingleton()` and every Papyrus / alias / LOTD / TradeBridge
+  path go through the fork's `SkyrimVM::GetRuntimeData()`) and PlayerCharacter (+8, MFO reads none of its own
+  members). `native/plugin.cpp:537` `REL::IDDatabase::RequireMitTableRevision(3)` right after `SKSE::Init` (MFO's
+  1.7.104 proof is against revision 3; it checks the built-in table). `native/Runtime.h:63`
+  **`IsVerified1_7_104()`** = `IsExactly(SKSE::RUNTIME_SSE_1_7_104)`; `Known()` (`:69`) =
   1.6.1170 || 1.5.97 || 1.7.104, so every G1 site below opens on 1.7.104 with no per-seat exception; `BuildLabel()`
-  (`:78`) names the build in `[runtime]` lines, and `LogRuntime()` (`:95`) adds the MIT table revision on 1.7.104.
+  (`:81`) names the build in `[runtime]` lines, and `LogRuntime()` (`:98`) adds the MIT table revision on 1.7.104.
   Exact 1.7.104 arms where a value is picked by build: `cast/Summon.cpp:146` in-function offset 0xA1 (ripref row),
   `native/Board.cpp:1822` `is17104` opens the PollInputDevices +0x7B trampoline. `logistics/Upkeep.cpp` DropObject
   stays 0xCB (proven). Upstream-sync source adaptations: `ForEachReferenceInRange` callbacks take a pointer

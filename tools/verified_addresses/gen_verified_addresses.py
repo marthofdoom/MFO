@@ -28,9 +28,8 @@ holds on each runtime. Runtime slot contents are NOT checked: another DLL may ho
 and that must not refuse our seat.
 
 1.7.104 (added 2026-10-04): there is NO Address Library for 1.7.104. Its column is resolved from OUR
-own id map (--idmap, repeatable: the CommonLib fork's data/ CSVs idmap-1.7.104-fork-full.csv,
-idmap-1.7.104-sync.csv, idmap-1.7.104-fixes.csv: key = the 1.6.1170/AE id, value = the 1.7.104 RVA, each
-with its own evidence; only final_state=MAPPED rows count) and then VERIFIED against the plaintext 1.7.104 executable by
+own id map (--idmap, the CommonLibSSE-NG fork's data/idmap-1.7.104-*.csv: key = the 1.6.1170/AE id, value = the
+1.7.104 RVA, each with its own evidence) and then VERIFIED against the plaintext 1.7.104 executable by
 the same row-kind checks, instead of a library comparison:
   vtable    - the vtable is identified by the NAME of the base subobject it belongs to (the first
               BaseClassArray entry whose displacement equals the COL offset, read from the 1.6.1170 image),
@@ -47,16 +46,14 @@ A row whose id is unresolved, whose idmap row disagrees with our 1.6.1170 deriva
 check above gets NO 1.7.104 entry: the header omits it (listed in a comment), so SelfCheck::IsVerifiedAddress
 is false for it and the seat is refused. A 1.7.104 failure never fails the generation; a 1.6.1170 or
 1.5.97 failure still does.
-With --idtable <the fork's shipped mit-idtable-v1-1-7-104-0.bin> every emitted 1.7.104 row must also be a
-mapped id of that table at the same RVA (header, checksum and order checked), or it gets no entry: the
-plugin reads that file at runtime, so a row it disagrees with could not resolve anyway.
 
 Usage:
   gen_verified_addresses.py --spec tools/verified_addresses/spec.json \
       --bin-1.6.1170 <SkyrimSE.unpacked.exe> --al-1.6.1170 <versionlib-1-6-1170-0.bin> \
       --bin-1.5.97   <SkyrimSE.unpacked.exe> --al-1.5.97   <version-1-5-97-0.bin> \
-      --bin-1.7.104  <binaries/1.7.104/SkyrimSE.exe>       --idmap <fork data/idmap-*.csv> [--idmap ...] \
-      [--idtable <fork data/mit-idtable-v1-1-7-104-0.bin>] \
+      --bin-1.7.104  <binaries/1.7.104/SkyrimSE.exe> --idtable <fork data/mit-idtable-v1-1-7-104-0.bin> \
+      --idmap <fork data/idmap-1.7.104-fork-full.csv> --idmap <...-sync.csv> --idmap <...-fixes.csv> \
+      --se-seats <se-seats-1.7.104.csv> \
       --header native/VerifiedAddresses.h --doc Docs/VERIFIED-ADDRESSES.md
   gen_verified_addresses.py --make-sig <1.6.1170|1.5.97|1.7.104> <rva> [same --bin/--al/--idmap args]
 
@@ -84,6 +81,7 @@ RUNTIMES = {
 AL_RUNTIMES = [rt for rt, m in RUNTIMES.items() if not m.get('idmap')]
 IDMAP_RT = '1.7.104'
 AE_RT = '1.6.1170'   # the idmap is keyed by this runtime's ids
+HAND_MARKER = '<!-- HAND-MAINTAINED BELOW: preserved verbatim by gen_verified_addresses.py -->'
 
 
 # ---------------------------------------------------------------- PE image
@@ -413,10 +411,47 @@ def hx(b):
     return ' '.join('%02X' % x for x in b)
 
 
-def load_idmap(paths):
-    """idmap CSV(s) -> {1.6.1170 id (int) or 'rva:0x...' (str, a raw 1.6.1170 RVA): row}.
-    Several CSVs (the fork's data/ set) are merged. Where a CSV has a final_state column only MAPPED rows
-    count. Two MAPPED rows for one key with different 1.7.104 RVAs stop the generation."""
+MIT_MAGIC = b'MITIDTAB'
+MIT_HEADER_FMT = '<8sHHIHHHHIIIIII16s'   # docs/MIT-ID-TABLE-FORMAT.md in the fork (format 1.x)
+
+
+def load_mit_table(path, img):
+    """The PUBLISHED MIT id table (the file the fork reads on 1.7.104) -> {AE id: rva, 0 = absent}.
+    Read under the format's own rules and matched to the 1.7.104 executable's PE header, so a row
+    verified here is verified against exactly the table SelfCheck will query at runtime."""
+    d = open(path, 'rb').read()
+    (magic, major, _minor, hsize, v0, v1, v2, v3, tds, soi, count, rsize, flags, revision,
+     module) = struct.unpack_from(MIT_HEADER_FMT, d, 0)
+    if magic != MIT_MAGIC or major != 1 or flags != 0 or len(d) != hsize + rsize * count + 8:
+        sys.exit('%s: not a format-1 MIT id table' % path)
+    h = 0xCBF29CE484222325
+    for b in d[:-8]:
+        h = ((h ^ b) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    if struct.unpack_from('<Q', d, len(d) - 8)[0] != h:
+        sys.exit('%s: checksum mismatch' % path)
+    pe = struct.unpack_from('<I', img.d, 0x3C)[0]
+    exe_tds = struct.unpack_from('<I', img.d, pe + 8)[0]
+    exe_soi = struct.unpack_from('<I', img.d, pe + 24 + 56)[0]
+    if (v0, v1, v2, v3) != RUNTIMES[IDMAP_RT]['version'] or tds != exe_tds or soi != exe_soi:
+        sys.exit('%s: table is for %d.%d.%d.%d TimeDateStamp 0x%X SizeOfImage 0x%X, the executable is 0x%X / 0x%X' % (
+            path, v0, v1, v2, v3, tds, soi, exe_tds, exe_soi))
+    t, prev = {}, -1
+    for k in range(count):
+        i, r = struct.unpack_from('<QQ', d, hsize + rsize * k)
+        if i <= prev:
+            sys.exit('%s: records not ascending at id %d (after %d)' % (path, i, prev))
+        prev = i
+        t[i] = r
+    return t, dict(revision=revision, count=count, tds=tds, soi=soi, module=module.rstrip(b'\0').decode(errors='replace'))
+
+
+def load_idmap(paths, table):
+    """idmap CSVs (the fork's data/ files, each row with its evidence) -> {1.6.1170 id (int) or
+    'rva:0x...' (str, a raw 1.6.1170 RVA): row}. Where a CSV has a final_state column only MAPPED rows
+    count. Two MAPPED rows for one key with different 1.7.104 RVAs stop the generation; an unresolved
+    row beside a mapped one is tolerated (the mapped one wins). For an id, the published table is authoritative: a CSV RVA that disagrees with it stops the
+    generation, and a CSV row whose id the table does not hold is marked NOT-IN-TABLE (SelfCheck
+    would fail it at runtime), so it never yields a 1.7.104 row."""
     m = {}
     for path in paths:
         for r in csv.DictReader(open(path, newline='')):
@@ -426,59 +461,27 @@ def load_idmap(paths):
             old = m.get(k)
             if old is not None and old['rva_1_7_104'].startswith('0x') and r['rva_1_7_104'].startswith('0x') \
                     and int(old['rva_1_7_104'], 16) != int(r['rva_1_7_104'], 16):
-                sys.exit('idmap: %s is %s in one CSV and %s in %s' % (k, old['rva_1_7_104'], r['rva_1_7_104'], path))
+                sys.exit('idmap: id %s is %s in one CSV and %s in %s' % (k, old['rva_1_7_104'], r['rva_1_7_104'], path))
             if old is None or not old['rva_1_7_104'].startswith('0x'):
-                m[k] = r
+                m[k] = dict(r)
+    for k, r in m.items():
+        if not isinstance(k, int) or not r['rva_1_7_104'].startswith('0x'):
+            continue
+        if k not in table or table[k] == 0:
+            r['rva_1_7_104'] = 'NOT-IN-TABLE'
+            r['confidence'] = 'id %d is not a mapped id of the published MIT table' % k
+        elif table[k] != int(r['rva_1_7_104'], 16):
+            sys.exit('idmap: id %d is %s in the CSV but 0x%X in the published MIT table' % (k, r['rva_1_7_104'], table[k]))
     return m
 
 
-IDTABLE_HDR = '<8sHHI4HIIIIII16s'   # docs/MIT-ID-TABLE-FORMAT.md (fork tools/mit-idtable/mit_idtable.py)
+def load_se_seats(path):
+    """se-seats-1.7.104.csv -> {1.5.97 seat label: row} (the SE -> AE -> 1.7.104 pairing of the
+    1.5.97-only EquipSink.Path rows, with its evidence)."""
+    return {r['seat']: r for r in csv.DictReader(open(path, newline=''))} if path else {}
 
 
-def load_idtable(path):
-    """The SHIPPED 1.7.104 id table (mit-idtable-v1-1-7-104-0.bin, format 1.x): header checks, FNV-1a 64
-    checksum, ascending records. Returns ({id: rva or None for an absent record}, header dict)."""
-    d = open(path, 'rb').read()
-    hs = struct.calcsize(IDTABLE_HDR)
-    (magic, major, minor, hsize, v0, v1, v2, v3, tds, soi, count, rsize, flags, revision,
-     module) = struct.unpack_from(IDTABLE_HDR, d, 0)
-    if magic != b'MITIDTAB' or major != 1 or hsize < hs or rsize < 16 or flags != 0 or (v0, v1, v2, v3) != (1, 7, 104, 0):
-        sys.exit('%s: not a format-1 1.7.104.0 id table' % path)
-    if len(d) != hsize + rsize * count + 8:
-        sys.exit('%s: size does not match recordCount %d' % (path, count))
-    h = 0xCBF29CE484222325
-    for b in d[:-8]:
-        h = ((h ^ b) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
-    if struct.unpack_from('<Q', d, len(d) - 8)[0] != h:
-        sys.exit('%s: checksum mismatch' % path)
-    recs, prev = {}, -1
-    for k in range(count):
-        i, r = struct.unpack_from('<QQ', d, hsize + rsize * k)
-        if i <= prev:
-            sys.exit('%s: records not ascending at id %d' % (path, i))
-        prev = i
-        recs[i] = None if r == 0 else r   # rva 0 = an absent record
-    return recs, dict(revision=revision, count=count, tds=tds, soi=soi, module=module.rstrip(b'\0').decode())
-
-
-def check_idtable(rows, unver, table):
-    """Every emitted 1.7.104 row (id != 0) must be a MAPPED id of the shipped table at the same RVA,
-    or it is moved to the not-verified list (the seat is then refused on 1.7.104)."""
-    keep = []
-    for e in rows:
-        if e['id']:
-            got = table.get(e['id'], 'missing')
-            if got != e['rva']:
-                unver.append({'label': e['label'], 'id': e['id'], 'row': e['row'], 'reason':
-                              'the shipped id table has %s for id %d, the generator derived 0x%X' % (
-                                  'no record' if got == 'missing' else 'an ABSENT record' if got is None else '0x%X' % got,
-                                  e['id'], e['rva'])})
-                continue
-        keep.append(e)
-    return keep
-
-
-def derive_idmap(spec, img, img16, idmap, out16):
+def derive_idmap(spec, img, img16, idmap, out16, se_seats=None):
     """1.7.104 column: the idmap's RVA, VERIFIED against the 1.7.104 image. Returns (rows, unverified);
     never fatal (a row that does not verify simply gets no 1.7.104 entry)."""
     rt = IDMAP_RT
@@ -496,14 +499,34 @@ def derive_idmap(spec, img, img16, idmap, out16):
                               'reason': 'proven through %s, which did not verify: %s' % (row['seat'], reason)})
 
         if rid is None:
-            skip('no 1.6.1170 (AE) id: the 1.7.104 map is keyed by AE id (1.5.97-only seat)')
+            twin = row.get('twin', {}).get(AE_RT)
+            if twin is None:
+                skip('no 1.6.1170 (AE) id: the 1.7.104 map is keyed by AE id (1.5.97-only seat)')
+                continue
+            # A 1.5.97-only LABEL whose function has its own AE-labelled row: the code reads that
+            # AE row's table on 1.6.1170 and 1.7.104, so this label is never asked there. The
+            # pairing is checked here (the twin must be a row of this spec, and se-seats must pair
+            # this SE id with the twin's AE id); the 1.7.104 fact itself is the twin's row.
+            trow = next((r for r in spec['rows'] if r['seat'] == twin), None)
+            sid = ids.get('1.5.97')
+            sp = (se_seats or {}).get(row['seat'])
+            if trow is None:
+                sys.exit('%s: twin %s is not a spec row' % (row['seat'], twin))
+            tid = trow.get('ids', {}).get(AE_RT)
+            if sp is None or int(sp['se_id_1_5_97']) != sid or int(sp['ae_id_1_6_1170']) != tid:
+                sys.exit('%s: se-seats pairing %s does not pair SE %s with the twin AE id %s' % (
+                    row['seat'], (sp['se_id_1_5_97'], sp['ae_id_1_6_1170']) if sp else None, sid, tid))
+            unver.append({'label': row['seat'], 'id': None, 'row': row, 'twin': True,
+                          'reason': 'BY DESIGN: 1.5.97-only label. On 1.6.1170 and 1.7.104 the code reads its AE twin '
+                                    '%s (AE id %d, 1.7.104 %s), whose own row carries the 1.7.104 fact (%s)' % (
+                                        twin, tid, sp['rva_1_7_104'], sp['confidence_ae'])})
             continue
         m = idmap.get(rid)
         if m is None:
             skip('id %d is not in the idmap' % rid)
             continue
         if not m['rva_1_7_104'].startswith('0x'):
-            skip('UNRESOLVED in the idmap (%s)' % m['confidence'])
+            skip('%s in the idmap (%s)' % ('NOT in the published MIT table' if m['rva_1_7_104'] == 'NOT-IN-TABLE' else 'UNRESOLVED', m['confidence']))
             continue
         want = int(m['rva_1_7_104'], 16)
         e16 = by_id16.get(rid)
@@ -709,20 +732,21 @@ def write_doc(spec, rows, unver, path, args):
     L.append('')
     L.append('Offline result of this generation: ' + ', '.join('%s.0 %d/%d verified, 0 refused' % (rt, len(rows[rt]), len(rows[rt])) for rt in AL_RUNTIMES) + '.')
     L.append('')
-    L.append('1.7.104.0 has NO Address Library. Its column is OUR OWN id map (the CommonLib fork\'s `data/idmap-1.7.104-*.csv`, keyed by')
-    if getattr(args, 'idtable_info', None):
-        t = args.idtable_info
-        L.append('the 1.6.1170 id), cross-checked row by row against the shipped id table `mit-idtable-v1-1-7-104-0.bin` (revision %d,' % t['revision'])
-        L.append('%d records, %s TimeDateStamp 0x%X), and' % (t['count'], t['module'], t['tds']))
-    else:
-        L.append('the 1.6.1170 id), NOT cross-checked against a shipped id table (no --idtable), and')
-    L.append('re-verified against the plaintext 1.7.104 executable by the same row-kind checks (see the script')
-    L.append('docstring). Offline result: 1.7.104.0 %d/%d verified, %d NOT verified. A not-verified seat has no row in the 1.7.104 table,' % (
-        len(rows[IDMAP_RT]), len(rows[IDMAP_RT]) + len(unver), len(unver)))
+    t = args.idtable_info
+    L.append('1.7.104.0 has NO Address Library. Its column is OUR OWN id map: the MIT id table of the CommonLibSSE-NG fork')
+    L.append('(`data/mit-idtable-v1-1-7-104-0.bin`, revision %d, %d records, %s TimeDateStamp 0x%X; built into every plugin, it is' % (
+        t['revision'], t['count'], t['module'], t['tds']))
+    L.append('what SelfCheck queries at runtime; authoritative) with the evidence CSVs beside it, keyed by')
+    L.append('the 1.6.1170 id, re-verified against the plaintext 1.7.104 executable by the same row-kind checks (see the script')
+    L.append('docstring). Offline result: 1.7.104.0 %d/%d verified, %d NOT verified (%d of them BY DESIGN: 1.5.97-only labels whose AE twin row carries the 1.7.104 fact). A not-verified seat has no row in the 1.7.104 table,' % (
+        len(rows[IDMAP_RT]), len(rows[IDMAP_RT]) + len(unver), len(unver), sum(1 for u in unver if u.get('twin'))))
     L.append('so `IsVerifiedAddress` is false and the seat is refused by name. The table of `Not verified on 1.7.104` is below.')
     L.append('')
     L.append('These rows prove the ADDRESSES. That each hooked slot holds the same function body on 1.7.104, and that every')
-    L.append('CommonLib layout %s reads is the same there, is proven separately in `Docs/ENGINE_NOTES.md` section 0.49.' % spec['repo'])
+    if spec['repo'] == 'MFO':
+        L.append('CommonLib layout %s reads is the same there, is proven separately in `Docs/ENGINE_NOTES.md` section 0.49.' % spec['repo'])
+    else:
+        L.append('CommonLib layout %s reads is the same there, is proven separately in the "1.7.104 proof" section below.' % spec['repo'])
     L.append('')
     L.append('## Rows')
     L.append('')
@@ -789,9 +813,9 @@ def write_doc(spec, rows, unver, path, args):
     L.append('python3 tools/verified_addresses/gen_verified_addresses.py --spec tools/verified_addresses/spec.json \\')
     L.append('    --bin-1.6.1170 <binaries/1.6.1170/SkyrimSE.unpacked.exe> --al-1.6.1170 <versionlib-1-6-1170-0.bin> \\')
     L.append('    --bin-1.5.97 <binaries/1.5.97/SkyrimSE.unpacked.exe> --al-1.5.97 <version-1-5-97-0.bin> \\')
-    L.append('    --bin-1.7.104 <binaries/1.7.104/SkyrimSE.exe> \\')
-    L.append('    --idmap <fork>/data/idmap-1.7.104-fork-full.csv --idmap <fork>/data/idmap-1.7.104-sync.csv \\')
-    L.append('    --idmap <fork>/data/idmap-1.7.104-fixes.csv --idtable <fork>/data/mit-idtable-v1-1-7-104-0.bin \\')
+    L.append('    --bin-1.7.104 <binaries/1.7.104/SkyrimSE.exe> --idtable <fork data/mit-idtable-v1-1-7-104-0.bin> \\')
+    L.append('    --idmap <fork data/idmap-1.7.104-fork-full.csv> --idmap <fork data/idmap-1.7.104-sync.csv> --idmap <fork data/idmap-1.7.104-fixes.csv> \\')
+    L.append('    --se-seats <_research/1.7.104-idmap/se-seats-1.7.104.csv> \\')
     L.append('    --header native/VerifiedAddresses.h --doc Docs/VERIFIED-ADDRESSES.md')
     L.append('```')
     L.append('')
@@ -805,8 +829,7 @@ def write_doc(spec, rows, unver, path, args):
     L.append('  id, `offset` and per-runtime `bytes` (the RIP-relative instruction with its displacement, then the use-site')
     L.append('  bytes, 15 at most), and `global` (the global\'s id per runtime). The instruction\'s RIP target must equal the')
     L.append('  library\'s answer for `global`. It emits two rows: the function (id + byte check) and `global_seat` (id only).')
-    L.append('- 1.7.104 has no library: `--idmap` is our own id map, the fork\'s data/ CSVs; `--idtable` is the table the')
-    L.append('  plugin reads at runtime, and every 1.7.104 row must equal it (md5 of the exe is asserted: 113faeb71fd8f62b26d0c8627299ab40).')
+    L.append('- 1.7.104 has no library: `--idmap` is our own id map (md5 of the exe is asserted: 113faeb71fd8f62b26d0c8627299ab40).')
     L.append('  Its rows are looked up by the 1.6.1170 id. A new spec row needs no 1.7.104 input: it is verified with its')
     L.append('  1.6.1170 signature at the idmap RVA, or it lands in the table above. An optional `sig["1.7.104"]`,')
     L.append('  `offset["1.7.104"]` or `bytes["1.7.104"]` overrides the 1.6.1170 one for that runtime only.')
@@ -816,7 +839,16 @@ def write_doc(spec, rows, unver, path, args):
     L.append('  1.5.97 tables do not get them.')
     L.append('- Keep `gen_verified_addresses.py` identical in MFO and APMF.')
     L.append('')
-    open(path, 'w', newline='\n').write('\n'.join(L))
+    # A hand-maintained tail (the 1.7.104 proof tables) below this marker survives regeneration.
+    try:
+        old = open(path, newline='').read()
+    except FileNotFoundError:
+        old = ''
+    k = old.find(HAND_MARKER)
+    if k >= 0:
+        L.append('')
+        L.append(old[k:].rstrip('\n'))
+    open(path, 'w', newline='\n').write('\n'.join(L) + ('\n' if k >= 0 else ''))
 
 
 def main():
@@ -830,8 +862,10 @@ def main():
         if not meta.get('idmap'):
             ap.add_argument('--al-' + rt, dest='al_' + rt.replace('.', '_'), required=True)
     ap.add_argument('--idmap', required=True, action='append',
-                    help='1.7.104 id map CSV (repeatable: the fork data/ CSVs; there is no 1.7.104 Address Library)')
-    ap.add_argument('--idtable', help='the shipped mit-idtable-v1-1-7-104-0.bin: every 1.7.104 row must match it')
+                    help='repeatable: the fork\'s data/idmap-1.7.104-*.csv (our own id map; there is no 1.7.104 Address Library)')
+    ap.add_argument('--idtable', required=True,
+                    help='the fork\'s PUBLISHED data/mit-idtable-v1-1-7-104-0.bin (what SelfCheck queries on 1.7.104; authoritative)')
+    ap.add_argument('--se-seats', help='se-seats-1.7.104.csv: SE -> AE pairing of the 1.5.97-only EquipSink.Path labels')
     a = ap.parse_args()
     imgs, libs = {}, {}
     for rt, meta in RUNTIMES.items():
@@ -857,11 +891,10 @@ def main():
         for e in errors:
             print('  ' + e)
         sys.exit(1)
-    rows[IDMAP_RT], unver = derive_idmap(spec, imgs[IDMAP_RT], imgs[AE_RT], load_idmap(a.idmap), rows[AE_RT])
-    a.idtable_info = None
-    if a.idtable:
-        table, a.idtable_info = load_idtable(a.idtable)
-        rows[IDMAP_RT] = check_idtable(rows[IDMAP_RT], unver, table)
+    table, a.idtable_info = load_mit_table(a.idtable, imgs[IDMAP_RT])
+    print('%s.0: published MIT id table revision %d, %d records' % (IDMAP_RT, a.idtable_info['revision'], len(table)))
+    rows[IDMAP_RT], unver = derive_idmap(spec, imgs[IDMAP_RT], imgs[AE_RT], load_idmap(a.idmap, table), rows[AE_RT],
+                                         load_se_seats(a.se_seats))
     write_header(spec, rows, unver, a.header)
     write_doc(spec, rows, unver, a.doc, a)
     for rt in RUNTIMES:
