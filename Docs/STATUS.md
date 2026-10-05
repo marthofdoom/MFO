@@ -13,6 +13,17 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-10-05 F2b: Skyrim 1.7.104.0 support on branch `feat/mfo-1.7.104` (NOT merged, needs the tier-A review).**
+  MFO adopts the MIT CommonLib fork main `71021ae0` (registry baseline `d568e7f7`, port 3.7.0#17: upstream sync
+  2024-09 + F2a). `Runtime::Known()` now includes exact 1.7.104, opened per seat on disassembly proof only (no
+  1.7.104 install exists). Proof tables: `Docs/ENGINE_NOTES.md` §0.49 and `Docs/VERIFIED-ADDRESSES.md` (1.7.104
+  column 56/56, cross-checked against the fork's id table revision 3). Fork `57be9d67` (registry #20) builds that
+  table INTO the DLL: players install nothing extra. Tier-A review of 250f247: FIX FIRST on one SEV-2 in the fork
+  (SkyrimVM +0x10 on 1.7.104), fixed in the fork and adopted; two engine classes MFO depends on change layout on
+  1.7.104 (SkyrimVM, PlayerCharacter), both through fork accessors. The old "1.7.104 stays
+  DEFERRED" notes below are superseded. Field observable: `[runtime] 1.7.104.0 supported ... (exact 1.7.104)`,
+  `[selfcheck] ... 56/56 verified`.
+
 - **2026-10-01 SHIPPED v2.0.16 "Heals are animated in combat again" (current version).** Commit `4624e91`, CI run
   36880174711, DLL sha256 `bd4e54f5...`, tag `v2.0.16` pushed. Zip `releases/v2.0.16/MFO-v2.0.16.zip` (NOT uploaded to
   Nexus yet, marth uploads). Deployed to the Deck (Tuxbornrc1) 2026-10-01: MFO.dll, MCM config.json and MFO_Trade.pex.

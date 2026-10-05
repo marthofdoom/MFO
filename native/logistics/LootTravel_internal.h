@@ -532,7 +532,8 @@ namespace MFO::Logistics {
             if (cells[1] == cells[0]) cells[1] = nullptr;
             for (auto* c : cells) {
                 if (!c || !c->IsAttached()) continue;
-                c->ForEachReferenceInRange(S, kActorBlockReach, [&](RE::TESObjectREFR& r) {
+                c->ForEachReferenceInRange(S, kActorBlockReach, [&](RE::TESObjectREFR* r_p) {
+                    RE::TESObjectREFR& r = *r_p;  // upstream sync: ForEach callbacks take a pointer
                     consider(r.As<RE::Actor>());
                     return RE::BSContainer::ForEachResult::kContinue;
                 });

@@ -370,9 +370,9 @@ namespace {
                 // predicate is THE SAME Runtime::CastPathsVerified() the cast gates
                 // (Actuation::CastOn, CastSelfDirect / CastTargetDirect / CastAuto,
                 // ComposedCast::Enabled) and Packages' ForceRefToNativeAvailable()
-                // evaluate -- exactly 1.6.1170 or exactly 1.5.97 (G1); VR and every
+                // evaluate -- exactly 1.6.1170, 1.5.97 (G1) or 1.7.104 (F2b); VR and every
                 // other build read gated/fallback with the reason (Runtime::GateReason).
-                // "1.6.1170" / "1.5.97" name the measured builds; any other build
+                // "1.6.1170" / "1.5.97" / "1.7.104" name the measured builds; any other build
                 // prints "unsupported" (G1: no "AE (not 1.6.1170)" bucket label, that
                 // bucket no longer opens anything). The equip slot is the FormID
                 // lookup Loadout::LeftHandSlot() makes (0x00013F43, Skyrim.esm
@@ -381,9 +381,7 @@ namespace {
                 // would then pass no slot), so it is an error line, never a
                 // quiet blank.
                 const bool  open   = MFO::Runtime::CastPathsVerified();
-                const char* build  = MFO::Runtime::IsVerified1_6_1170() ? "1.6.1170"
-                                   : MFO::Runtime::IsVerified1_5_97()   ? "1.5.97"
-                                   : "unsupported";
+                const char* build  = MFO::Runtime::BuildLabel();   // 1.6.1170 / 1.5.97 / 1.7.104 / unsupported
                 const std::string gates = open ? "open"
                                                : std::string("gated (") + MFO::Runtime::GateReason() + ")";
                 const auto* slot = MFO::Loadout::LeftHandSlot();
@@ -530,6 +528,13 @@ namespace {
 
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
     SKSE::Init(a_skse);
+    // F2b: on 1.7.104.0 the ids come from the fork's MIT id table, built into
+    // this DLL since fork 57be9d67 (no file to install). MFO's 1.7.104 column
+    // (VerifiedAddresses.h) and every id it reaches were verified against
+    // revision 3, so this checks the built-in table is at least that (it can
+    // only fail if MFO were built against an older fork). On every other build
+    // this only records the value.
+    REL::IDDatabase::RequireMitTableRevision(3);
     SetupLog();
     // [fatal] passive hook: needs the logger (above) and REL::Module (SKSE::Init).
     // Vectored handler LAST + std::terminate on this thread; never handles.
@@ -545,8 +550,8 @@ SKSEPluginLoad(const SKSE::LoadInterface* a_skse) {
                  ver.major(), ver.minor(), ver.patch(),
                  REL::Module::get().version().string());
 
-    // G1: name the runtime and whether this build supports it (exact 1.6.1170.0
-    // or 1.5.97.0). Anything else: every version-dependent seat is refused.
+    // G1: name the runtime and whether this build supports it (exact 1.6.1170.0,
+    // 1.5.97.0 or 1.7.104.0). Anything else: every version-dependent seat is refused.
     MFO::Runtime::LogRuntime();
 
     // mit-3.7 F1: compare the loaded Address Library with our own table of every

@@ -452,10 +452,10 @@ releases **by eviction** with a non-actor XMarker.
   AE + SE (SE id verified 2026-09-13 via the engine's own `ReferenceAlias.ForceRefTo`
   Papyrus callback tail-jump; **CONFIRMED 2026-09-15** — `Docs/ADDRESS-TABLE-2026-09-15.md`
   row "`Packages.cpp:302-305 TESQuest::ForceRefTo`": AE 25052 → `0x3CDEE0`, SE 24523 →
-  `0x375050`, both by raw objdump; 1.7.104 `0x3D4FA0` confirmed but NOT placed — no address
-  library, no `REL::Offset` convention, marth's call). Gated by `ForceRefToNativeAvailable()`
-  (`:319`) = **`Runtime::CastPathsVerified()`** (`Runtime.h`: EXACTLY 1.6.1170 or 1.5.97 since G1;
-  VR, every other 1.5.x / 1.6.x and 1.7.x refused, since the ids were confirmed on those two only) — every
+  `0x375050`, both by raw objdump; 1.7.104 `0x3D4FA0` through the fork's MIT id table since F2b,
+  body identical to 1.6.1170's). Gated by `ForceRefToNativeAvailable()`
+  (`:319`) = **`Runtime::CastPathsVerified()`** (`Runtime.h`: EXACTLY 1.6.1170 or 1.5.97 since G1, plus
+  1.7.104 since F2b; VR and every other build refused, since the ids were confirmed on those three only) — every
   call-site gate (`:911`, `:979`, `:1656`, `:1767`, `:2032`) goes through that ONE predicate;
   VM path only where it is false. **What breaks:** the predicate lives in `Runtime.h` and is
   SHARED with the five cast gates and `plugin.cpp`'s `[runtime]` line — change it in one
@@ -655,6 +655,31 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `APMFBridge::g_mx`). `logistics/LootTake.cpp` `IsCoinLoot`/`RefInPlayerStorage`/`IsLOTDDropOff` do their one-time
   static lookup inside `ForEachReferenceInRange`, under the cell spin lock. Both are safe because a writer never waits
   on those locks.
+- **F2b — SKYRIM 1.7.104.0 (`feat/mfo-1.7.104`, 2026-10-05).** MFO builds against the MIT CommonLib fork main
+  `57be9d67` (`native/vcpkg-configuration.json` registry baseline `5ae02e4f`, port 3.7.0#20: upstream sync 2024-09 +
+  F2a + the SkyrimVM / UI-message 1.7.104 arms + the id table BUILT INTO the library). The fork files 1.7.x with AE,
+  reads 1.7.104.0's ids from its MIT id table (revision 3, inside MFO.dll, bound to the Steam exe; players install
+  nothing extra) and refuses every other 1.7.x at load. Two engine classes MFO depends on change layout on 1.7.104:
+  SkyrimVM (+0x10, impl at +0x210; `VirtualMachine::GetSingleton()` and every Papyrus / alias / LOTD / TradeBridge
+  path go through the fork's `SkyrimVM::GetRuntimeData()`) and PlayerCharacter (+8, MFO reads none of its own
+  members). `native/plugin.cpp:537` `REL::IDDatabase::RequireMitTableRevision(3)` right after `SKSE::Init` (MFO's
+  1.7.104 proof is against revision 3; it checks the built-in table). `native/Runtime.h:63`
+  **`IsVerified1_7_104()`** = `IsExactly(SKSE::RUNTIME_SSE_1_7_104)`; `Known()` (`:69`) =
+  1.6.1170 || 1.5.97 || 1.7.104, so every G1 site below opens on 1.7.104 with no per-seat exception; `BuildLabel()`
+  (`:81`) names the build in `[runtime]` lines, and `LogRuntime()` (`:98`) adds the MIT table revision on 1.7.104.
+  Exact 1.7.104 arms where a value is picked by build: `cast/Summon.cpp:146` in-function offset 0xA1 (ripref row),
+  `native/Board.cpp:1822` `is17104` opens the PollInputDevices +0x7B trampoline. `logistics/Upkeep.cpp` DropObject
+  stays 0xCB (proven). Upstream-sync source adaptations: `ForEachReferenceInRange` callbacks take a pointer
+  (Economy, LootScan, Lockpick, Lotd, `LootTravel_internal.h`); Board casts `REX::W32` D3D types. The generator's
+  1.7.104 column comes from the fork's data/ CSVs, cross-checked against the shipped `.bin` (`--idtable`).
+  **PROOF:** `Docs/ENGINE_NOTES.md` section 0.49 (every hooked slot body, every called function, every CommonLib
+  layout MFO reads, the board's input/event/ControlMap/renderer path, id coverage) and `Docs/VERIFIED-ADDRESSES.md`
+  (56/56 rows on 1.7.104). Disassembly only, no 1.7.104 install. Resolves REVIEW-BACKLOG MFO-B225 SEV-4.
+  **What breaks:** a NEW seat, id call or CommonLib layout read must get its own 1.7.104 compare before it ships
+  (`Known()` includes 1.7.104 on the strength of section 0.49, so it does not refuse new code for you).
+  PlayerCharacter's own members move +8 on 1.7.104 (new base at +0x2D8): MFO reads none today, and any future read
+  goes through the fork's accessors. `new RE::ExtraDataList` is fatal on 1.7.104 (fork `GetRuntimeSize` has no
+  1.7.104 arm yet); MFO never constructs one. Harbinger (APMF) is a separate DLL with its own 1.7.104 work.
 - **G1 — EXACT-VERSION GATE SWEEP (`fix/mfo-g1-exact-gates`, 2026-10-04; prerequisite of fork F2 / 1.7.104).**
   Every runtime-dependent gate in `native/` is EXACT now. `native/Runtime.h:49` **`Runtime::Known()`** =
   `IsVerified1_6_1170() || IsVerified1_5_97()`, each `REL::Module::IsExactly(SKSE::RUNTIME_SSE_1_6_1170 /
@@ -745,8 +770,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   decision, never an accident of the predicate. **Not touched, on purpose:** the Board input
   trampoline (per-runtime since v2.0.6, its own exact-version pair — the two predicates are
   the same test written twice; folding Board onto `Runtime.h` is a separate change), VR (refused
-  everywhere), and anything 1.7.104 (no address library; the confirmed 1.7 values are recorded
-  in the table for marth's `REL::Offset` decision). `Actuation.cpp` was 2678 lines — over the
+  everywhere), and anything 1.7.104 (no address library then; opened by F2b through the fork's MIT id
+  table, see F2b above). `Actuation.cpp` was 2678 lines — over the
   2500 cap, reported not split (rule 1; REVIEW-BACKLOG **MFO-B37** held the split brief, drained by the wave-1 split into `cast/`, 2026-09-24).
 - **CAST-ROAD SELECTION BY SPELL NATURE (`fix/mfo-combat-restoration-direct`, 2026-09-21 — Deck
   2026-09-21, Jesper 750012C6). REVERSED FOR HEALS WITH A COMBAT CONTROLLER by animheal phase 2

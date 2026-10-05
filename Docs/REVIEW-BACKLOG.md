@@ -1241,3 +1241,10 @@ Raised against 957d748 (`fix/mfo-g1-exact-gates`, Opus tier-A review MERGE), 202
 - SEV-5: Board.cpp:1724-1730 InstallInputHook still uses a 3-field pair. Switch it to Runtime::IsVerified1_6_1170()/1_5_97(); a 1.6.1170.1 repack would otherwise hit a fatal id miss before SeatVerified. This also fixes the misleading "using the input sink + ControlMap path" log at :1731-1734.
 - SEV-5: Upkeep.cpp:~550 skip log says "(VR)" on any non-exact build. Use Runtime::GateReason().
 (The CHANGELOG naming of the Field Orders board was fixed at merge.)
+- **SEV-4 RESOLVED by F2b (`feat/mfo-1.7.104`, 2026-10-05).** The fork now files 1.7.x with AE and refuses every 1.7.x
+  but 1.7.104.0 at load, so 1.7.104 is no longer read as SE. Every bucket read the item names was compared against the
+  1.7.104 executable and is the same value there: Actor runtime data at +0xE8 (currentProcess +0xF8, combatController
+  +0x160, currentCombatTarget +0x104, magicCasters +0x1A8, addedSpells +0x190, boolBits +0xE8, boolFlags +0x204), AMMO
+  data +0x110/+0x118/+0x11C, TESObjectCELL runtime data +0x68 with worldSpace +0x128 (`Docs/ENGINE_NOTES.md` section
+  0.49, with addresses). Other off-table 1.5.x / 1.6.x builds still read CommonLib's upstream layouts in the tick, the
+  same as before G1; that is not an F2 question and stays as it was. The two SEV-5 items above stay open.

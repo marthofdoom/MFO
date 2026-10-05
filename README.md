@@ -181,12 +181,15 @@ leash and walk-to-loot.
 
 ## Requirements
 
-- **Skyrim Anniversary Edition 1.6.1170 or Special Edition 1.5.97.** VR is not
-  supported. Both versions get the full feature set: walking to loot, *Flee to
-  player*, *Auto-retreat* and cast control have worked on 1.5.97 since v2.0.9.
-  At startup MFO checks every game address it uses against a table made by hand
-  for these two versions. On any other version its hooks stay off and the log
-  says so.
+- **Skyrim 1.6.1170 (Anniversary Edition), 1.5.97 (Special Edition) or 1.7.104
+  (Steam).** VR is not supported. All three versions get the full feature set:
+  walking to loot, *Flee to player*, *Auto-retreat* and cast control have worked
+  on 1.5.97 since v2.0.9. At startup MFO checks every game address it uses
+  against a table made by hand for these versions. On any other version its hooks
+  stay off and the log says so. Support for 1.7.104 was checked against the game
+  files by hand, not yet in play, so please report anything odd there.
+  On 1.7.104 there is no Address Library. MFO carries its own table of game
+  addresses for that version inside the DLL, so you install nothing extra.
 - **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)** — the control-layer
   framework MFO drives followers through. Install it for the full feature set.
   This version wants Harbinger 0.9.10 (lockpicking, museum drop-offs, the fight
@@ -194,7 +197,7 @@ leash and walk-to-loot.
   0.9.5 or newer, and without it MFO degrades to its older paths and says so in
   the log.
 - **SKSE64**
-- **Address Library for SKSE Plugins**
+- **Address Library for SKSE Plugins** (1.6.1170 and 1.5.97 only, not needed on 1.7.104)
 - **SkyUI** and **MCM Helper** (version 9 or newer) — the settings menu
 - **powerofthree's Papyrus Extender** (`po3_papyrusextender.dll`) — required
   only for the optional follower economy (selling/buying); everything else runs

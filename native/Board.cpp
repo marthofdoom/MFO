@@ -438,8 +438,8 @@ namespace MFO::Board {
             }
 
             // No casts: on the pinned NG these are already the real D3D types.
-            g_device  = renderer->data.forwarder;
-            g_context = renderer->data.context;
+            g_device  = reinterpret_cast<ID3D11Device*>(renderer->data.forwarder);
+            g_context = reinterpret_cast<ID3D11DeviceContext*>(renderer->data.context);
             if (!g_device || !g_context) {
                 spdlog::error("[overlay-probe] no device/context -- Field Kit disabled");
                 return;
@@ -678,7 +678,7 @@ namespace MFO::Board {
         void ReportSwapchainChange(IDXGISwapChain* a_this) {
             static IDXGISwapChain* s_reported = nullptr;
             auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
-            IDXGISwapChain* cur = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+            IDXGISwapChain* cur = renderer ? reinterpret_cast<IDXGISwapChain*>(renderer->data.renderWindows[0].swapChain) : nullptr;
             IDXGISwapChain* old = g_swapChain.load();
             if (!old || a_this != cur || a_this == s_reported) return;
             s_reported = a_this;
@@ -702,7 +702,7 @@ namespace MFO::Board {
             // null one or any other presenter never initialises anything.
             if (!g_swapChain.load()) {
                 auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
-                IDXGISwapChain* game = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+                IDXGISwapChain* game = renderer ? reinterpret_cast<IDXGISwapChain*>(renderer->data.renderWindows[0].swapChain) : nullptr;
                 if (game && a_this == game)
                     std::call_once(g_lazyOnce, [&] { LazyInit(a_this); });
             }
@@ -835,7 +835,7 @@ namespace MFO::Board {
             if (g_hooksInstalled.load()) return;
             static std::atomic<int> s_attempts{ 0 };
             auto* renderer = RE::BSGraphics::Renderer::GetSingleton();
-            IDXGISwapChain* swap = renderer ? renderer->data.renderWindows[0].swapChain : nullptr;
+            IDXGISwapChain* swap = renderer ? reinterpret_cast<IDXGISwapChain*>(renderer->data.renderWindows[0].swapChain) : nullptr;
             if (!swap) {
                 if (s_attempts.fetch_add(1) < 600) {   // ~ generous startup grace
                     SKSE::GetTaskInterface()->AddTask([] { TryInstallHooks(); });
@@ -1782,6 +1782,24 @@ namespace MFO::Board {
     //     +0x50 reentry flag), rcx = source, rdx = the InputEvent** -- so the
     //     thunk signature is right on SE as well.
     //
+    // 1.7.104.0 (F2b, 2026-10-05) -- id 68617 -> RVA 0xCF95F0 (the fork's MIT id
+    //   table, revision 3; VerifiedAddresses.h row Board.PollInputDevices, whose
+    //   generator check found `E8` at +0x7B and the same call target id):
+    //   0x140CF95F0 + 0x7B = 0x140CF966B, an E8 rel32 CALL to 0x140CFA650, the
+    //     same BSTEventSource notify body as 1.6.1170's 0x140CD9E00 (instruction
+    //     identical, members +0x10/+0x18/+0x28/+0x48/+0x50). rcx = the manager,
+    //     rdx = &[rsp+0x40], the caller's stack slot filled from the queue head.
+    //   The function differs from 1.6.1170 only in what MFO never touches: six
+    //     device slots (loop 4 -> 6), the event queue's head read at +0x558
+    //     (was +0x380) and two manager fields (+0xE0 -> +0xF0, +0x88 -> +0x98).
+    //   Everything Feed() reads is unchanged on 1.7.104: InputEvent device
+    //     +0x08 / eventType +0x0C / next +0x10, ButtonEvent userEvent +0x18 /
+    //     idCode +0x20 / value +0x28 / heldDownSecs +0x2C, mouse-move and
+    //     thumbstick x/y +0x28/+0x2C, event types 0-5 (the three new kinds are
+    //     APPENDED as 6-8 and fail Feed's type checks), devices keyboard 0 /
+    //     mouse 1 / gamepad 2 (the enum grew after them). Proof addresses in
+    //     Docs/ENGINE_NOTES.md section 0.49.
+    //
     // Any other runtime gets the sink + ControlMap path unchanged. Do NOT widen
     // this gate without disassembling that runtime's 68617/67315 first.
     void InstallInputHook() {
@@ -1799,9 +1817,12 @@ namespace MFO::Board {
         // other.
         const bool isAE1170 = (ver.major() == 1 && ver.minor() == 6 && ver.patch() == 1170);
         const bool isSE597  = (ver.major() == 1 && ver.minor() == 5 && ver.patch() == 97);
-        if (!isAE1170 && !isSE597) {
+        // F2b: 1.7.104 is EXACT (all four fields): it is only ever loaded through the
+        // MIT id table, which is bound to the one Steam 1.7.104.0 executable.
+        const bool is17104  = Runtime::IsVerified1_7_104();
+        if (!isAE1170 && !isSE597 && !is17104) {
             spdlog::warn("[overlay-probe] runtime {} -- input trampoline NOT installed "
-                         "(+0x7B verified on 1.6.1170 and 1.5.97 only); using the input sink "
+                         "(+0x7B verified on 1.6.1170, 1.5.97 and 1.7.104 only); using the input sink "
                          "+ ControlMap path", ver.string());
             return;
         }
@@ -1823,6 +1844,8 @@ namespace MFO::Board {
         // SKSE trampoline (grep: this is the only AllocTrampoline in the plugin),
         // so this cannot double-allocate over another subsystem's reservation.
         SKSE::AllocTrampoline(64);
+        // On 1.7.104 the AE id 68617 resolves through the MIT id table (the fork
+        // files 1.7.x with AE), and the AE offset 0x7B applies (verified above).
         // RelocationID(se, ae) and VariantOffset(se, ae, vr) -- pinned 3.7.0
         // Relocation.h:1509 / :1427. On SE this resolves id 67315 out of
         // version-1-5-97-0.bin (load_file format 1, Relocation.h:1214) and adds
@@ -1838,7 +1861,7 @@ namespace MFO::Board {
         g_inputTrampoline.store(true);
         spdlog::info("[overlay-probe] input trampoline installed on {}+0x7B (runtime {}) -- "
                      "the board takes input outright; ControlMap sync disabled",
-                     isSE597 ? "67315" : "68617", ver.string());
+                     isSE597 ? "67315" : "68617", ver.string());   // 1.7.104: the AE id, 68617
     }
 
     void Install() {
@@ -1853,9 +1876,12 @@ namespace MFO::Board {
         //
         // G1 (2026-10-04): EXACT builds only (was VR-only). The overlay carries no
         // offset of its own, but it rides CommonLib layouts that are only verified
-        // on 1.6.1170 / 1.5.97 (BSInputDeviceManager, ControlMap, the renderer
-        // singleton; 1.7.104's input stack is known to differ), so "not VR" is not
-        // "verified". Any other build: refused, by name.
+        // on the exact builds (BSInputDeviceManager, ControlMap, the renderer
+        // singleton), so "not VR" is not "verified". Any other build: refused, by
+        // name. F2b: 1.7.104 joins (its input stack differs, but not in anything
+        // the board reads: the renderer, the BSTEventSource at manager +0, the
+        // event layouts and ControlMap's 1.7.104 arm were each compared against the
+        // 1.7.104 executable, Docs/ENGINE_NOTES.md section 0.49).
         const auto& mod = REL::Module::get();
         if (!Runtime::Known()) {
             spdlog::warn("[overlay-probe] runtime {} not supported ({}) -- Field Kit overlay REFUSED",

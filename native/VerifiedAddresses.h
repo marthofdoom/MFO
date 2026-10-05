@@ -9,6 +9,11 @@
 // byte signature) and then matched against the Address Library for that build; the
 // generator refuses to write this file if they disagree. REL::SelfCheck::Run() compares the
 // library in use at runtime against these rows. See REL/SelfCheck.h.
+//
+// 1.7.104.0 has no Address Library: its rows are the ids of OUR OWN id map (keyed by the 1.6.1170
+// id), each re-verified against the 1.7.104 executable. A seat that did not verify has NO row in
+// that table (listed in a comment there), so IsVerifiedAddress() is false for it and the seat is
+// refused. The Row/Table shapes are the same for every runtime.
 
 #include "REL/SelfCheck.h"
 
@@ -134,8 +139,70 @@ namespace MFO::VerifiedAddresses
 		{ 516851, 0x2F266F8, 0x0, 0, {  }, "Actuation.SummonCap.SkipFlagGlobal" },
 	};
 
+	// 1.7.104.0: 56 rows
+	// 0 NOT VERIFIED on 1.7.104.0, deliberately absent from this table (the seat is refused):
+	inline constexpr REL::SelfCheck::Row kRows_1_7_104[] = {
+		{ 207886, 0x1923258, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
+		{ 208040, 0x19296C0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
+		{ 205828, 0x18F6150, 0x0, 0, {  }, "CasterConsent.ActorMagicCaster.CheckCast" },
+		{ 211104, 0x194ACC0, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterOffensive.CheckStartCast" },
+		{ 211142, 0x194B0B0, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterRestore.CheckStartCast" },
+		{ 211118, 0x194AE58, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterWard.CheckStartCast" },
+		{ 211146, 0x194B2A8, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterSummon.CheckStartCast" },
+		{ 211154, 0x194B420, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterStagger.CheckStartCast" },
+		{ 211166, 0x194B558, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterDisarm.CheckStartCast" },
+		{ 211176, 0x194B6F0, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterCloak.CheckStartCast" },
+		{ 211186, 0x194B868, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterLight.CheckStartCast" },
+		{ 211200, 0x194BA00, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterInvisibility.CheckStartCast" },
+		{ 211210, 0x194BB78, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterBoundItem.CheckStartCast" },
+		{ 211232, 0x194BE88, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterTargetEffect.CheckStartCast" },
+		{ 211270, 0x194C200, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterParalyze.CheckStartCast" },
+		{ 211276, 0x194C398, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterScript.CheckStartCast" },
+		{ 211973, 0x19538E0, 0x0, 0, {  }, "CasterConsent.CombatMagicCasterReanimate.CheckStartCast" },
+		{ 211706, 0x194F838, 0x0, 0, {  }, "CombatStyle.MagicOffensive.CheckShouldEquip" },
+		{ 211612, 0x194EDB8, 0x0, 0, {  }, "CombatStyle.MagicRestore.CheckShouldEquip" },
+		{ 211658, 0x194F2F8, 0x0, 0, {  }, "CombatStyle.MagicWard.CheckShouldEquip" },
+		{ 211568, 0x194E858, 0x0, 0, {  }, "CombatStyle.MagicSummon.CheckShouldEquip" },
+		{ 211524, 0x194E338, 0x0, 0, {  }, "CombatStyle.MagicStagger.CheckShouldEquip" },
+		{ 211480, 0x194DDD8, 0x0, 0, {  }, "CombatStyle.MagicDisarm.CheckShouldEquip" },
+		{ 211436, 0x194D8B8, 0x0, 0, {  }, "CombatStyle.MagicCloak.CheckShouldEquip" },
+		{ 211390, 0x194D378, 0x0, 0, {  }, "CombatStyle.MagicLight.CheckShouldEquip" },
+		{ 211346, 0x194CE18, 0x0, 0, {  }, "CombatStyle.MagicInvisibility.CheckShouldEquip" },
+		{ 211302, 0x194C890, 0x0, 0, {  }, "CombatStyle.MagicBoundItem.CheckShouldEquip" },
+		{ 211204, 0x194BC30, 0x0, 0, {  }, "CombatStyle.MagicTargetEffect.CheckShouldEquip" },
+		{ 211092, 0x194AD38, 0x0, 0, {  }, "CombatStyle.MagicParalyze.CheckShouldEquip" },
+		{ 211050, 0x194A7A0, 0x0, 0, {  }, "CombatStyle.MagicScript.CheckShouldEquip" },
+		{ 211148, 0x194B498, 0x0, 0, {  }, "CombatStyle.MagicReanimate.CheckShouldEquip" },
+		{ 211254, 0x194C2B8, 0x0, 0, {  }, "CombatStyle.MagicArmor.CheckShouldEquip" },
+		{ 211688, 0x194F638, 0x0, 0, {  }, "CombatStyle.StaffOffensive.CheckShouldEquip" },
+		{ 211608, 0x194EC38, 0x0, 0, {  }, "CombatStyle.StaffRestore.CheckShouldEquip" },
+		{ 211642, 0x194F0F8, 0x0, 0, {  }, "CombatStyle.StaffWard.CheckShouldEquip" },
+		{ 211552, 0x194E658, 0x0, 0, {  }, "CombatStyle.StaffSummon.CheckShouldEquip" },
+		{ 211508, 0x194E138, 0x0, 0, {  }, "CombatStyle.StaffStagger.CheckShouldEquip" },
+		{ 211464, 0x194DBD8, 0x0, 0, {  }, "CombatStyle.StaffDisarm.CheckShouldEquip" },
+		{ 211420, 0x194D6B8, 0x0, 0, {  }, "CombatStyle.StaffCloak.CheckShouldEquip" },
+		{ 211380, 0x194D198, 0x0, 0, {  }, "CombatStyle.StaffLight.CheckShouldEquip" },
+		{ 211330, 0x194CBB0, 0x0, 0, {  }, "CombatStyle.StaffInvisibility.CheckShouldEquip" },
+		{ 211284, 0x194C670, 0x0, 0, {  }, "CombatStyle.StaffBoundItem.CheckShouldEquip" },
+		{ 211182, 0x194B920, 0x0, 0, {  }, "CombatStyle.StaffTargetEffect.CheckShouldEquip" },
+		{ 211076, 0x194AAC0, 0x0, 0, {  }, "CombatStyle.StaffParalyze.CheckShouldEquip" },
+		{ 211034, 0x194A5A0, 0x0, 0, {  }, "CombatStyle.StaffScript.CheckShouldEquip" },
+		{ 211128, 0x194B168, 0x0, 0, {  }, "CombatStyle.StaffReanimate.CheckShouldEquip" },
+		{ 211234, 0x194C020, 0x0, 0, {  }, "CombatStyle.StaffArmor.CheckShouldEquip" },
+		{ 68617, 0xCF95F0, 0x0, 0, {  }, "Board.PollInputDevices" },
+		{ 68545, 0xCEFAA0, 0x0, 0, {  }, "Board.ToggleControls" },
+		{ 25052, 0x3D4FA0, 0x0, 0, {  }, "Packages.ForceRefTo" },
+		{ 38561, 0x6C93B0, 0x0, 0, {  }, "Probe.StartCombat" },
+		{ 20226, 0x301500, 0x0, 0, {  }, "Lockpick.Unlock" },
+		{ 68233, 0xCE3250, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.LockForRead" },
+		{ 68239, 0xCE3510, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.UnlockForRead" },
+		{ 40056, 0x72A370, 0xA1, 15, { 0x48, 0x8B, 0x05, 0x00, 0x9A, 0xAF, 0x02, 0x8B, 0x88, 0x40, 0x03, 0x00, 0x00, 0xD1, 0xE9 }, "Actuation.SummonCap.AddCommandedActor" },
+		{ 403330, 0x3223E18, 0x0, 0, {  }, "Actuation.SummonCap.SkipFlagGlobal" },
+	};
+
 	inline constexpr REL::SelfCheck::Table kTables[] = {
 		{ REL::Version(1, 6, 1170, 0), kRows_1_6_1170, std::size(kRows_1_6_1170) },
 		{ REL::Version(1, 5, 97, 0), kRows_1_5_97, std::size(kRows_1_5_97) },
+		{ REL::Version(1, 7, 104, 0), kRows_1_7_104, std::size(kRows_1_7_104) },
 	};
 }

@@ -474,9 +474,9 @@ namespace MFO::Logistics {
             std::vector<RE::ActorHandle> living;
             living.reserve(kMaxVendorCands);
             cell->ForEachReferenceInRange(origin, kLootRadius,
-                [&](RE::TESObjectREFR& a_ref) {
+                [&](RE::TESObjectREFR* a_ref) {
                     if (living.size() >= kMaxVendorCands) return RE::BSContainer::ForEachResult::kStop;
-                    auto* actor = a_ref.As<RE::Actor>();
+                    auto* actor = a_ref->As<RE::Actor>();
                     if (!actor || actor == a_follower || actor == pc || actor->IsDead() ||
                         actor->IsDisabled() || actor->IsMarkedForDeletion())
                         return RE::BSContainer::ForEachResult::kContinue;

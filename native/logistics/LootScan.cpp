@@ -214,10 +214,10 @@ namespace MFO::Logistics {
             std::vector<AmmoStack> ammoHeld;   // HeldAmmo, read with ammoTarget (once per scan)
 
             auto scanOne =
-                [&](RE::TESObjectREFR& a_ref) {
+                [&](RE::TESObjectREFR* a_ref) {
                     if (candidates.size() >= kMaxCandidates) return RE::BSContainer::ForEachResult::kStop;
                     ++dRefs;
-                    RE::TESObjectREFR* ref = &a_ref;
+                    RE::TESObjectREFR* ref = a_ref;
                     if (ref == a_follower) return RE::BSContainer::ForEachResult::kContinue;
                     if (ref->IsDisabled() || ref->IsMarkedForDeletion())
                         return RE::BSContainer::ForEachResult::kContinue;
