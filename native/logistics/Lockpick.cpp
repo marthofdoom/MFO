@@ -207,7 +207,10 @@ namespace MFO::Logistics::Lockpick {
                 auto* am  = RE::BSAudioManager::GetSingleton();
                 if (!f || !am || f->IsDead() || !f->Is3DLoaded()) return;
                 RE::BSSoundHandle h;
-                if (!am->BuildSoundDataFromDescriptor(h, snd)) return;
+                // Flags 0x11, as the engine's own Actor::PlayPickUpSound builds an NPC's sound: the low
+                // 3 bits REPLACE the descriptor's mode, 1 = 3D (CommonLib's default 0x1A forces 2 = 2D,
+                // which ignores SetPosition and never attenuates). Docs/ENGINE_NOTES.md section 0.50.
+                if (!am->BuildSoundDataFromDescriptor(h, snd, 0x11)) return;
                 h.SetPosition(f->GetPosition());
                 if (auto* n = f->Get3D()) h.SetObjectToFollow(n);
                 h.Play();

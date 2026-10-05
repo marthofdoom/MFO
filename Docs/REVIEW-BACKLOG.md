@@ -1248,3 +1248,11 @@ Raised against 957d748 (`fix/mfo-g1-exact-gates`, Opus tier-A review MERGE), 202
   data +0x110/+0x118/+0x11C, TESObjectCELL runtime data +0x68 with worldSpace +0x128 (`Docs/ENGINE_NOTES.md` section
   0.49, with addresses). Other off-table 1.5.x / 1.6.x builds still read CommonLib's upstream layouts in the tick, the
   same as before G1; that is not an F2 question and stays as it was. The two SEV-5 items above stay open.
+
+### MFO-B226 (SEV-4/5) -- pickup-sound seat review follow-ups
+Raised against 7e17730 (`feat/mfo-pickup-sound-at-follower`, Opus tier-3 review MERGE), 2026-10-05.
+- SEV-4: the generated doc and header text is misleading. The "Regenerating" command in `Docs/VERIFIED-ADDRESSES.md` omits `--idmap tools/verified_addresses/idmap-1.7.104-mfo.csv`, and the `native/VerifiedAddresses.h:211` comment says the seat is refused on 1.7.104 when the raw row covers it. Fix it in the generator template, not by hand.
+- SEV-5: any other Actor::PlayPickUpSound that runs synchronously on main inside MFO's ActivateRef is also made positional and logged against the follower. Harmless.
+- SEV-5: the raw row carries no byte check, and only Install's runtime checks verify it. The generator could emit signature bytes for raw rows later.
+- Reasoning (author; the coordinator relayed severity and finding text only): none of the three changes behaviour today. The generator is shared byte-for-byte with APMF, so the SEV-4 fix is a two-repo generator round.
+- **Surfaced at edit time from:** MAP.md logistics `logistics/PickupSound.cpp` "What breaks".

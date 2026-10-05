@@ -2683,6 +2683,9 @@ module. Module layout:
     to the documented command (the generated doc's command does not list it); without it the 1.7.104 raw row
     `PickupSound.Actor.PlayPickUpSound.1_7_104` disappears and the seat refuses itself on 1.7.104 (logged, safe).
     A Scope taken anywhere but around MFO's own pickup ActivateRef would reposition that sound too.
+    Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B226 (misleading generated regenerate text / 1.7.104
+    comment, scope breadth, raw row without a byte check). `logistics/Lockpick.cpp` PlayAtFollower builds with
+    flags 0x11 (forced 3D) for the same reason; CommonLib's default 0x1A forces 2D.
   - `logistics/Lotd.cpp` (1641, past ~1500: plan a split round) + `logistics/Lotd.h` = LOTD awareness (feat/mfo-lotd, 2026-09-25):
     detection, the museum snapshot, the "Loot museum items" gambit and its deposit trip. Its own
     public header (plugin.cpp, Diagnostics.cpp, Board_FieldKit.cpp include it). See the LOTD section

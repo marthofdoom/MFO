@@ -2518,9 +2518,9 @@ ActivateRef scope (main thread) a non-attenuating model is replaced with SOMMono
 `Docs/VERIFIED-ADDRESSES.md` PickupSound.*; the 1.7.104 function is a raw-RVA row (evidence:
 `tools/verified_addresses/idmap-1.7.104-mfo.csv`).
 
-Side finding, NOT changed by this work: `logistics/Lockpick.cpp` PlayAtFollower builds with CommonLib's default
-flags 0x1A, which FORCES mode 2 (2D) whatever the MFO.esp SNDR's model says, so its SetPosition has no effect: the
-lockpick sounds are non-positional too. Building with 0x11 (or 0x10, the descriptor's own mode) would place them.
+Side finding (fixed in the follow-up commit): `logistics/Lockpick.cpp` PlayAtFollower built with CommonLib's
+default flags 0x1A, which FORCES mode 2 (2D) whatever the MFO.esp SNDR's model says, so its SetPosition had no
+effect. It now builds with 0x11 (forced 3D), as Actor::PlayPickUpSound does.
 
 ## 1. Actor control — Tier A primitives
 
