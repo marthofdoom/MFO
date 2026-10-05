@@ -5,7 +5,7 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
-## Unreleased
+## v2.1.0 -- Skyrim 1.7.104 support
 
 - **MFO supports Skyrim 1.7.104 (Steam).** There is no Address Library for 1.7.104, so MFO carries its own table of game addresses for it inside the DLL. You install nothing extra. Every hook, address and game structure MFO uses was checked by hand against the 1.7.104 game files. Two game structures moved in 1.7.104 (the player and the script engine), and MFO handles both. Nobody has played MFO on 1.7.104 yet, so please report anything odd. Harbinger supports 1.7.104 in its own update. `MFO.log` names the game version and the table revision at startup.
 - **The engine can no longer raise skills MFO did not give a follower.** Many follower mods use the game's auto-calc stats, which recompute skills from the class and level every time you level up. MFO already cancelled that for skills it manages. Every other skill kept drifting, which took Jesper's Light and Heavy Armor from 46 to 100. MFO now holds all 18 skills of a follower it manages at where they started, and its own points still raise them. A skill another mod trains on that follower is held back too. This follows the same setting that already cancels the engine's level-up gains.
@@ -28,6 +28,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **A retreating follower finishes the spell they are casting.** The retreat waits a moment for a cast in flight, up to one and a half seconds, so a heal is no longer cut off mid-cast. When the retreat starts, any heal they had lined up is dropped at once instead of lingering.
 - **A retreating follower can still heal themself.** While they fall back, a self heal rule keeps working once they are out of combat. They never heal others, attack or buff while retreating, and the walk is not disturbed.
 - **A follower no longer ends up wearing the outfit the game forces back on them.** With Harbinger installed, followers in armor now ask for the best armor they own in every slot at once. An outfit piece the game puts back on them is no longer kept just because they are wearing it. A piece you put on them yourself still stays.
+- **The Logistics MCM page no longer shows a blank row without Legacy of the Dragonborn.** The controls that only matter with that mod installed now sit at the end of the page, so nothing is left empty in the middle.
 
 ## v2.0.16 -- Heals are animated in combat again
 
