@@ -91,10 +91,13 @@ namespace MFO::MainThread {
         // index, and writing 0x0AD there would vector every frame into an
         // arbitrary virtual -- an instant CTD pointing nowhere near MFO. Same
         // refusal, for the same reason, as Targeting's UpdateCombat hook.
-        if (REL::Module::IsVR()) {
+        // G1: EXACT builds only (was VR-only). Packages / Rapport branch on the
+        // same Runtime::Known() to pick AddTask over a dead pump.
+        if (!Runtime::Known()) {
             g_dead = true;
-            spdlog::warn("[mainthread] VR runtime detected -- Update vtable index is not "
-                         "verified for VR; pump NOT installed (Post becomes a no-op).");
+            spdlog::warn("[mainthread] runtime {} not supported ({}) -- Update vtable index is not "
+                         "verified there; pump NOT installed (Post becomes a no-op).",
+                         REL::Module::get().version().string("."), Runtime::GateReason());
             return;
         }
         if (g_installed.exchange(true)) return;

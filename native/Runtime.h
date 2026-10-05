@@ -15,44 +15,69 @@
 // Docs/ADDRESS-TABLE-2026-09-15.md was confirmed against 1.5.97 and ONLY
 // 1.5.97, so the bucket is not the gate (CLAUDE.md rule 11: per-runtime paths,
 // each licensed by its own disassembly). Board.cpp's input trampoline already
-// gates on the exact pair (`isAE1170` / `isSE597`, Board.cpp:1594); this header
+// gates on the exact pair (`isAE1170` / `isSE597`, Board.cpp:1729); this header
 // is that predicate made shareable, so the five cast gates, Packages'
 // ForceRefToNativeAvailable() and plugin.cpp's `[runtime]` line cannot drift
 // from one another.
 //
-// THE AE SIDE IS THE PRE-EXISTING `IsAE()` BUCKET, ON PURPOSE. The cast gates
-// were `IsAE()` since v1.0.48 and shipped on every 1.6.x that way; narrowing
-// AE to exactly 1.6.1170 is outside the 1.5.97 pass's brief (coordinator call,
-// round 2) and is recorded in MAP.md's RUNTIME GATES entry as the open
-// question it is. `IsVerified1_6_1170()` exists so the `[runtime]` line can say
-// whether the AE build in use is the one every offset was measured on.
+// G1, THE EXACT-VERSION GATE SWEEP (2026-10-04, before 1.7.104 / fork F2).
+// The AE side used to be the `IsAE()` BUCKET (every 1.6.x, and every 1.7.x once
+// F2 files minor 7 as AE), and ~18 seats refused only VR, so "not VR" read as
+// "supported". Every runtime-dependent gate in MFO now asks the predicates
+// below, which are EXACT: 1.6.1170.0 or 1.5.97.0, all four version fields, via
+// the fork's REL::Module::IsExactly (Relocation.h, mit-3.7 F1) and
+// SKSE::RUNTIME_SSE_1_6_1170 / RUNTIME_SSE_1_5_97 (SKSE/Version.h). That is the
+// same match the F1 self-check uses to pick its table, so `Known()` is true on
+// exactly the builds VerifiedAddresses.h covers. Anything else (VR, any other
+// 1.5.x / 1.6.x, and 1.7.104 until F2 adds its own verified arm) is REFUSED:
+// the seat or path stays off and says so. Never fall through to the 1.6 path.
+// REL::Module::IsAE()/IsSE()/IsVR() survive in MFO only as log labels.
+// (Board.cpp:1729's own pair ignores the build field; its seat is also behind
+// SeatVerified, whose table match is 4-field exact, so the effect is the same.)
 namespace MFO::Runtime {
 
     inline bool IsVerified1_6_1170() {
-        const auto v = REL::Module::get().version();
-        return v.major() == 1 && v.minor() == 6 && v.patch() == 1170;
+        return REL::Module::IsExactly(SKSE::RUNTIME_SSE_1_6_1170);
     }
 
     inline bool IsVerified1_5_97() {
-        const auto v = REL::Module::get().version();
-        return v.major() == 1 && v.minor() == 5 && v.patch() == 97;
+        return REL::Module::IsExactly(SKSE::RUNTIME_SSE_1_5_97);
+    }
+
+    // THE gate for every version-dependent offset, slot, id, layout or path:
+    // this build was measured on the running executable. False -> refuse.
+    inline bool Known() {
+        return IsVerified1_6_1170() || IsVerified1_5_97();
     }
 
     // "Every engine value the cast-control paths and the native ForceRefTo
-    // reach has been verified on this runtime": the AE bucket (pre-existing)
-    // or exactly 1.5.97. False on VR, on any other 1.5.x, and on anything the
-    // library would otherwise file under SE.
+    // reach has been verified on this runtime": exactly 1.6.1170 or exactly
+    // 1.5.97 (G1; was the IsAE() bucket or exactly 1.5.97).
     inline bool CastPathsVerified() {
-        return REL::Module::IsAE() || IsVerified1_5_97();
+        return Known();
     }
 
-    // Why CastPathsVerified() is false, for the `[runtime]` line and for any
-    // decline reason that wants to say more than "gated".
+    // Why Known() is false, for the `[runtime]` lines and for any decline
+    // reason that wants to say more than "gated". Labels only, never a gate.
     inline const char* GateReason() {
-        if (CastPathsVerified())    return "verified";
+        if (Known())                return "verified";
         if (REL::Module::IsVR())    return "VR";
-        if (REL::Module::IsSE())    return "unverified 1.5.x";
-        return "unverified runtime";
+        return "not supported by this build";
+    }
+
+    // The startup line (SKSEPluginLoad, right after the version header): which
+    // runtime this is and whether this build supports it.
+    inline void LogRuntime() {
+        const auto ver = REL::Module::get().version().string(".");
+        if (Known()) {
+            spdlog::info("[runtime] {} supported by this build (exact {}) -- version-dependent seats open, "
+                         "each still subject to the self-check",
+                         ver, IsVerified1_6_1170() ? "1.6.1170" : "1.5.97");
+        } else {
+            spdlog::error("[runtime] {} not supported by this build -- all version-dependent seats refused "
+                          "(supported: 1.6.1170.0, 1.5.97.0; {})",
+                          ver, GateReason());
+        }
     }
 
     // ── SEAT SELF-CHECK (mit-3.7 F1, 2026-09-24) ────────────────────────────

@@ -42,8 +42,8 @@ namespace MFO::ComposedCast {
         // did before this existed.
         constexpr auto kInFlightHoldCap = std::chrono::milliseconds(APMFBridge::kHealCastTtlMs);
 
-        // Master gate: Runtime::CastPathsVerified() -- the AE bucket or exactly
-        // 1.5.97, VR and every other 1.5.x refused (feat/mfo-1.5.97-pass,
+        // Master gate: Runtime::CastPathsVerified() -- exactly 1.6.1170 or exactly
+        // 1.5.97 (G1, 2026-10-04; was the AE bucket), every other build refused (feat/mfo-1.5.97-pass,
         // 2026-09-15; was AE-only, mirroring CastSelfDirect's T#67 gate -- the
         // same lift, the same Docs/ADDRESS-TABLE-2026-09-15.md rows: the seats a
         // claim rides on are "CasterConsent.cpp:1087-1095 14 seat vtables",

@@ -32,7 +32,7 @@ namespace MFO::Probe {
         // fact about the binary; the call is ours.
         // SE/AE only: no sourced VR id, so VR is REFUSED rather than guessed.
         bool StartCombatOn(RE::Actor* a_actor, RE::Actor* a_target) {
-            if (REL::Module::IsVR()) return false;
+            if (!Runtime::Known()) return false;   // G1: exact 1.6.1170 / 1.5.97 only (was VR-only)
             using func_t = bool(RE::Actor*, RE::Actor*, void*);
             static REL::Relocation<func_t> func{ REL::RelocationID(37608, 38561) };
             static const bool verified = Runtime::SeatVerified(func.address(), "Probe.StartCombat");

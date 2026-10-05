@@ -309,8 +309,9 @@ namespace MFO::Packages {
         // VR is REFUSED: no verified VR id, and the two-arg RelocationID would
         // hand VR the SE id unverified. So is every 1.5.x other than 1.5.97: the
         // SE id was confirmed on that binary only, and pinned CommonLib's IsSE()
-        // is the default bucket for anything not 1.6/1.4 (Runtime.h). Every
-        // caller gates on this predicate. Docs/ADDRESS-TABLE-2026-09-15.md row
+        // is the default bucket for anything not 1.6/1.4 (Runtime.h). G1
+        // (2026-10-04): so is every AE build other than 1.6.1170, and 1.7.x.
+        // Every caller gates on this predicate. Docs/ADDRESS-TABLE-2026-09-15.md row
         // "Packages.cpp:302-305 TESQuest::ForceRefTo": AE id 25052 -> 0x3CDEE0,
         // SE id 24523 -> 0x375050, both CONFIRMED (Papyrus ForceRefTo callback
         // tail-jump on raw objdump). plugin.cpp's `[runtime]` startup line
@@ -1207,8 +1208,11 @@ namespace MFO::Packages {
                     spdlog::info("[retreat] {:08X}: StopCombat ({}) landed on main (wasInCombat={})",
                                  a_id, a_why, was);
             };
-            if (REL::Module::IsVR()) SKSE::GetTaskInterface()->AddTask(work);
-            else                     MainThread::Post(std::move(work));
+            // G1: exact builds -> the pump (MainThread's own gate); VR -> the documented
+            // AddTask compromise; any other build: OFF (the pump is refused there, so
+            // the old Post was already a no-op -- same effect, now said in code).
+            if (Runtime::Known())         MainThread::Post(std::move(work));
+            else if (REL::Module::IsVR()) SKSE::GetTaskInterface()->AddTask(work);
         }
 
         // EVICTION MARKER (#48 furniture-ejection). Releasing a follower from a
@@ -2325,7 +2329,7 @@ namespace MFO::Packages {
         // "no live foes" end is simply OFF; the travel timeout and the STAY end
         // still bound every retreat. (The retreat StopCombat's VR->AddTask road
         // is left as is: the documented Rapport::QuashAllyPair compromise.)
-        if (REL::Module::IsVR()) return;
+        if (!Runtime::Known()) return;   // G1: no pump off the exact builds (was VR-only)
         const auto* h = FindRetreatHold(a_id);
         if (!h) return;
         const std::uint32_t gen = h->gen;

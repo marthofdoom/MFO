@@ -360,9 +360,11 @@ namespace MFO::CombatStyle {
         if (g_gateHooked.exchange(true)) return;
         // VR GUARD, mirroring Targeting / CasterConsent: these vtable indices
         // are verified against the SE/AE pinned headers only.
-        if (REL::Module::IsVR()) {
-            spdlog::warn("[wstyle] VR runtime detected -- CombatInventoryItem vtable indices "
-                         "are not verified for VR; equip gate NOT installed.");
+        // G1: EXACT builds only (was VR-only).
+        if (!Runtime::Known()) {
+            spdlog::warn("[wstyle] runtime {} not supported ({}) -- CombatInventoryItem vtable indices "
+                         "are not verified there; equip gate NOT installed.",
+                         REL::Module::get().version().string("."), Runtime::GateReason());
             return;
         }
 

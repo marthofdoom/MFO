@@ -178,9 +178,11 @@ namespace MFO::Targeting {
         // arbitrary virtual on every actor in combat -- an instant CTD that
         // would not point anywhere near MFO. The reference implementation does
         // not support VR either.
-        if (REL::Module::IsVR()) {
-            spdlog::warn("[target] VR runtime detected -- UpdateCombat vtable index is not "
-                         "verified for VR; hook NOT installed.");
+        // G1: EXACT builds only (was VR-only, so every other runtime read as verified).
+        if (!Runtime::Known()) {
+            spdlog::warn("[target] runtime {} not supported ({}) -- UpdateCombat vtable index is not "
+                         "verified there; hook NOT installed.",
+                         REL::Module::get().version().string("."), Runtime::GateReason());
             return;
         }
         if (g_hooked.exchange(true)) return;

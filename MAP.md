@@ -454,8 +454,8 @@ releases **by eviction** with a non-actor XMarker.
   row "`Packages.cpp:302-305 TESQuest::ForceRefTo`": AE 25052 → `0x3CDEE0`, SE 24523 →
   `0x375050`, both by raw objdump; 1.7.104 `0x3D4FA0` confirmed but NOT placed — no address
   library, no `REL::Offset` convention, marth's call). Gated by `ForceRefToNativeAvailable()`
-  (`:319`) = **`Runtime::CastPathsVerified()`** (`Runtime.h`: the AE bucket or EXACTLY 1.5.97;
-  VR and every other 1.5.x refused, since the SE id was confirmed on 1.5.97 only) — every
+  (`:319`) = **`Runtime::CastPathsVerified()`** (`Runtime.h`: EXACTLY 1.6.1170 or 1.5.97 since G1;
+  VR, every other 1.5.x / 1.6.x and 1.7.x refused, since the ids were confirmed on those two only) — every
   call-site gate (`:911`, `:979`, `:1656`, `:1767`, `:2032`) goes through that ONE predicate;
   VM path only where it is false. **What breaks:** the predicate lives in `Runtime.h` and is
   SHARED with the five cast gates and `plugin.cpp`'s `[runtime]` line — change it in one
@@ -655,6 +655,30 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `APMFBridge::g_mx`). `logistics/LootTake.cpp` `IsCoinLoot`/`RefInPlayerStorage`/`IsLOTDDropOff` do their one-time
   static lookup inside `ForEachReferenceInRange`, under the cell spin lock. Both are safe because a writer never waits
   on those locks.
+- **G1 — EXACT-VERSION GATE SWEEP (`fix/mfo-g1-exact-gates`, 2026-10-04; prerequisite of fork F2 / 1.7.104).**
+  Every runtime-dependent gate in `native/` is EXACT now. `native/Runtime.h:49` **`Runtime::Known()`** =
+  `IsVerified1_6_1170() || IsVerified1_5_97()`, each `REL::Module::IsExactly(SKSE::RUNTIME_SSE_1_6_1170 /
+  RUNTIME_SSE_1_5_97)` (fork `mit-3.7`, all four version fields — the same match the F1 self-check uses to pick
+  its table). `CastPathsVerified()` (`Runtime.h:56`) = `Known()` (was `IsAE() || IsVerified1_5_97()`).
+  `GateReason()` (`:62`) is a label only (`verified` / `VR` / `not supported by this build`). `LogRuntime()`
+  (`:70`, called `plugin.cpp:550` right after the version header) prints `[runtime] <ver> supported by this
+  build (exact ...)` or `[runtime] <ver> not supported by this build -- all version-dependent seats refused`.
+  Former VR-only guards that now ask `!Runtime::Known()`: `Probe.cpp:35` StartCombat, `Sightline.cpp:309`
+  MeasureNow, `Targeting.cpp:182` UpdateCombat hook, `MainThread.cpp:96` pump, `CasterConsent.cpp:1064` /
+  `:1094` CheckCast / CheckStartCast hooks, `CombatStyle.cpp:364` equip gate, `EngageOnSight.cpp:402`,
+  `logistics/Lockpick.cpp:173` Unlock, `Board.cpp:633` ToggleControls, `Board.cpp:1789` overlay Install, and
+  the retreat foe probe (`Packages.cpp:2332`). The StopCombat deferrals (`Packages.cpp:1214`, `Rapport.cpp:406`)
+  are now `Known()` -> `MainThread::Post`, VR -> the documented AddTask compromise, anything else -> nothing
+  (the pump is refused there, so the old Post was already a no-op: same effect, stated in code). Slot / offset picks: `logistics/Upkeep.cpp:529` DropObject slot (0xCB on the two builds,
+  refused elsewhere; was `IsVR() ? 0xCD : 0xCB`), `cast/Summon.cpp:144` in-function offset (0xA1 / 0x51 by
+  exact build, refused elsewhere; was `IsAE() ? 0xA1 : 0x51`). Left as is: `Board.cpp:1719` (VR refusal ahead
+  of its own exact pair at `:1729`), `Diagnostics.cpp:1323` (fatal-handler module NAME, a label),
+  `EngageOnSight.cpp:404` / `Runtime.h:64` (message labels). **What breaks:** any new `IsAE()`/`IsSE()`/`IsVR()`
+  that selects an offset, slot, id, layout or path re-opens the bucket leak the moment F2 lets 1.7.x load
+  (IsAE() goes true there). Gate on `Runtime::Known()` (or an exact predicate) and refuse loudly; a 1.7 arm is
+  added by F2 as its own exact predicate, never by widening `Known()` without that build's verified rows.
+  Off the two builds the Field Kit overlay, pump, combat hooks and cast gates all stay off (1.6.640 etc.
+  included; they were already refused by the self-check except the overlay and the bucket cast gates).
 - **RUNTIME GATES — THE 1.5.97 PASS (`feat/mfo-1.5.97-pass`, 2026-09-15; Fable round 2 on
   `87cabc1` applied).** The five cast-control gates — `CastOn` (`cast/CastOn.cpp:110`),
   `CastSelfDirect` (`cast/DirectSelf.cpp:17`), `CastTargetDirect` (`cast/DirectTarget.cpp:30`), `CastAuto`
@@ -662,6 +686,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   predicate, **`Runtime::CastPathsVerified()`** (`native/Runtime.h`, header-only) **=
   `REL::Module::IsAE() || Runtime::IsVerified1_5_97()`** — the pre-existing AE bucket, or
   EXACTLY 1.5.97 (`major.minor.patch == 1.5.97`). VR and every other 1.5.x are refused.
+  **[SUPERSEDED by G1 above, 2026-10-04: now `Runtime::Known()`, exactly 1.6.1170 or 1.5.97; the
+  `AE (not 1.6.1170)` build label is gone (`unsupported`). The history below is kept.]**
   `Packages::ForceRefToNativeAvailable()` and `plugin.cpp`'s `[runtime]` line evaluate the
   SAME function. WHY EXACT (Fable SEV-3): pinned CommonLib 3.7.0 classifies the runtime from
   the exe's second version field alone (`REL/Relocation.h` `load_version`: 4 → VR, 6 → AE,
@@ -669,7 +695,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   of which have address libraries, so the plugin loads and a bucket gate would OPEN with ids
   confirmed on 1.5.97 only) and on any future `major.minor` that is not 1.6/1.4, a 1.7.x
   binary included (moot only while no format-1 `version-1.7.x.bin` exists, because
-  `IDDatabase::load` then dies fatally at plugin init). `Board.cpp:1594`'s input trampoline
+  `IDDatabase::load` then dies fatally at plugin init). `Board.cpp:1729`'s input trampoline
   already gated on the exact pair; `Runtime.h` is that predicate made shareable. **THE AE
   SIDE IS STILL THE `IsAE()` BUCKET (open question, outside the 1.5.97 brief):** the gates were
   `IsAE()` since v1.0.48 and shipped on every 1.6.x that way; every AE offset in the table was
@@ -1101,7 +1127,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   decision-to-apply window the field showed. **Open backlog: MFO-B149 (latches kept through a long
   bleedout), MFO-B150 (a main-thread reach refusal leaves the stream registered a lap or two), MFO-B152
   (file sizes); MFO-B151 is moot; MFO-B153 records the retreat decision.**
-- `CastOn` (`cast/CastOn.cpp:110`) escalation, IN EXECUTION ORDER: runtime gate `Runtime::CastPathsVerified()` (`cast/CastOn.cpp:140`, AE bucket or exactly 1.5.97 — see RUNTIME GATES above) →
+- `CastOn` (`cast/CastOn.cpp:110`) escalation, IN EXECUTION ORDER: runtime gate `Runtime::CastPathsVerified()` (`cast/CastOn.cpp:140`, exactly 1.6.1170 or 1.5.97 since G1 — see RUNTIME GATES above) →
   no target (`:146`) → spell lookup (`:148`) → #68 out-of-range skip (`:167`) → competence gate `HasSpell` (`:230`) → magicka reserve (`:268-280`) → range/competence/reserve →
   **the Task 2 firing-spell gambit lock, PER-HAND now (`ResolveCastHand`, feat/per-hand-
   cast-slots 2026-09-06 — renamed off `CheckCastLock`; TWO lock slots per follower,
@@ -1321,7 +1347,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   (`ClearCastLockHand`, `cast/Hands.cpp:78`) and re-derives the plan (`resolveHands` lambda) before
   falling through — without that, a LEFT-always heal pinned to the RIGHT by a stale lock would claim,
   equip and lock the wrong hand.
-  On an unverified runtime (VR, a non-97 1.5.x) the whole path declines transparently (the
+  On an unverified runtime (VR, a non-97 1.5.x, any AE build but 1.6.1170 since G1) the whole path declines transparently (the
   former T#67 AE-only gate; opened for exactly 1.5.97 on 2026-09-15 — see RUNTIME GATES above)
   so vanilla AI keeps casting.
   **The FF silent cast (and every other `CastSpellImmediate` on a live path) is now

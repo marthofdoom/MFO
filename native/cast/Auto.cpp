@@ -309,7 +309,7 @@ namespace MFO::Actuation {
     // (deferred project-wide). Friendly fire is structurally impossible: the
     // effect is placed on the CHOSEN actor, never launched as a projectile.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold) {
-            // RUNTIME GATE (Runtime::CastPathsVerified(): AE bucket or exactly 1.5.97)
+            // RUNTIME GATE (Runtime::CastPathsVerified(): exactly 1.6.1170 or 1.5.97, G1)
             // -- mirrors CastOn / CastSelfDirect (the former T#67 SE crash gate; see
             // CastSelfDirect's comment for the Docs/ADDRESS-TABLE-2026-09-15.md rows
             // every 1.5.97 value on this path comes from).

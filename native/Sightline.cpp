@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Sightline.h"
 #include "MainThread.h"
+#include "Runtime.h"   // G1: Runtime::Known(), the exact-build gate
 #include "Followers.h"   // TeammateInFireLine walks the maintained party list
 #include <limits>        // SegDist's +inf sentinel -- NOT in the PCH (the v1.0.8/9 CI lesson)
 
@@ -305,7 +306,7 @@ namespace MFO::Sightline {
     }
 
     Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target, Basis a_basis) {
-        if (!a_viewer || !a_target || REL::Module::IsVR()) return Verdict::Unknown;
+        if (!a_viewer || !a_target || !Runtime::Known()) return Verdict::Unknown;   // G1: exact builds only (was VR-only)
         auto* vf = RE::TESForm::LookupByID<RE::Actor>(a_viewer);
         auto* tf = RE::TESForm::LookupByID<RE::Actor>(a_target);
         // Measure() skips these without writing, and an older cache entry for the pair

@@ -1061,7 +1061,7 @@ namespace MFO::CasterConsent {
 
         void InstallCheckCastHook() {
             if (g_castHooked.exchange(true)) return;
-            if (REL::Module::IsVR()) return;   // same VR guard as InstallHook
+            if (!Runtime::Known()) return;   // same exact-build guard as InstallHook (G1; was VR-only)
             g_mainThread = std::this_thread::get_id();   // InstallHook runs at kDataLoaded (main)
             // ONLY vtable [0]. VTABLE_ActorMagicCaster's three entries are the three
             // BASE-SUBOBJECT vtables of ONE class (MagicCaster @0, the anim-graph
@@ -1090,9 +1090,11 @@ namespace MFO::CasterConsent {
         // would call garbage on every combat caster -- an instant CTD nowhere
         // near MFO. Now that bCasterHook defaults ON, this guard is what keeps a
         // VR player from that crash out of the box.
-        if (REL::Module::IsVR()) {
-            spdlog::warn("[consent] VR runtime detected -- CheckStartCast vtable indices are not "
-                         "verified for VR; hook NOT installed.");
+        // G1: EXACT builds only (was VR-only).
+        if (!Runtime::Known()) {
+            spdlog::warn("[consent] runtime {} not supported ({}) -- CheckStartCast vtable indices are not "
+                         "verified there; hook NOT installed.",
+                         REL::Module::get().version().string("."), Runtime::GateReason());
             return;
         }
         if (g_hooked.exchange(true)) return;

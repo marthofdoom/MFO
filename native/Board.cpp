@@ -630,7 +630,7 @@ namespace MFO::Board {
                 // `:785` -- it never reads `userEvent`), so the board keeps seeing
                 // every key and pad button while it is open.
                 // ────────────────────────────────────────────────────────────
-                if (REL::Module::IsVR()) return;   // no sourced VR id -- refuse, never guess
+                if (!Runtime::Known()) return;   // G1: exact builds only (was VR-only) -- refuse, never guess
                 using ToggleFn = void(RE::ControlMap*, RE::UserEvents::USER_EVENT_FLAG,
                                       bool a_enable, bool a_storeState);
                 static REL::Relocation<ToggleFn> toggle{ REL::RelocationID(67245, 68545) };
@@ -1779,9 +1779,16 @@ namespace MFO::Board {
         // belt-and-suspenders plus the right place to refuse VR, and it now runs
         // BEFORE install (the old call-site trampolines installed unconditionally
         // before the version was even read).
+        //
+        // G1 (2026-10-04): EXACT builds only (was VR-only). The overlay carries no
+        // offset of its own, but it rides CommonLib layouts that are only verified
+        // on 1.6.1170 / 1.5.97 (BSInputDeviceManager, ControlMap, the renderer
+        // singleton; 1.7.104's input stack is known to differ), so "not VR" is not
+        // "verified". Any other build: refused, by name.
         const auto& mod = REL::Module::get();
-        if (REL::Module::IsVR()) {
-            spdlog::warn("[overlay-probe] VR runtime ({}) -- Field Kit overlay REFUSED", mod.version().string());
+        if (!Runtime::Known()) {
+            spdlog::warn("[overlay-probe] runtime {} not supported ({}) -- Field Kit overlay REFUSED",
+                         mod.version().string(), Runtime::GateReason());
             return;
         }
         spdlog::info("[overlay-probe] install begin (runtime {}, flat-screen)", mod.version().string());

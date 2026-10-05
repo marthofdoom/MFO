@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **MFO now runs its engine features only on the game versions it was tested on.** That is 1.6.1170 and 1.5.97. On any other version MFO says so in `MFO.log` at startup and keeps those features off instead of guessing. This gets MFO ready for the 1.7 update.
 - **Mage clothing is the most expensive piece in every slot.** Without MEO installed, mages used to prefer school robes even with the school setting off. Now school robes only matter when the strict school option is on.
 - **A follower with a cast spell no longer drops their armor for clothes.** MFO used to treat anyone with a cast rule as a mage and dress them in clothing only. Cicero got Arcane Pull and went back to the jester outfit. Now the class decides. A Melee or Ranged pick stays in armor. A Mage pick wears mage clothing. On Auto the highest base skill decides, and magic has to beat both melee and archery. MFO.log says which way each follower went.
 - **Followers no longer swap a worn helmet over and over.** The sell code could mark a worn piece as surplus while the armor choice kept it. It then pulled the gem and the gem put it back on, 89 times for Cicero. The sell code now asks the armor choice first and leaves a worn piece it keeps alone.
