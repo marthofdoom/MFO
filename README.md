@@ -181,12 +181,22 @@ leash and walk-to-loot.
 
 ## Requirements
 
-- **Skyrim Anniversary Edition 1.6.1170 or Special Edition 1.5.97.** VR is not
-  supported. Both versions get the full feature set: walking to loot, *Flee to
-  player*, *Auto-retreat* and cast control have worked on 1.5.97 since v2.0.9.
-  At startup MFO checks every game address it uses against a table made by hand
-  for these two versions. On any other version its hooks stay off and the log
-  says so.
+- **Skyrim 1.6.1170 (Anniversary Edition), 1.5.97 (Special Edition) or 1.7.104
+  (Steam).** VR is not supported. All three versions get the full feature set:
+  walking to loot, *Flee to player*, *Auto-retreat* and cast control have worked
+  on 1.5.97 since v2.0.9. At startup MFO checks every game address it uses
+  against a table made by hand for these versions. On any other version its hooks
+  stay off and the log says so. Support for 1.7.104 was checked against the game
+  files by hand, not yet in play, so please report anything odd there.
+- **1.7.104 only: the MIT id table** (`mit-idtable-v1-1-7-104-0.bin`). There is
+  no Address Library for 1.7.104, so MFO reads its game addresses from this file
+  instead. Put it in `Data/SKSE/Plugins/` (as its own mod in your mod manager).
+  For now, download it from the `data` folder of
+  [marthofdoom/CommonLibSSE-NG](https://github.com/marthofdoom/CommonLibSSE-NG/tree/main/data)
+  (revision 3 or newer). A standalone download page for it is still to come.
+  Without the file, or with an older revision, the game stops at load with a
+  message that names the file. The other versions ignore it and keep using the
+  Address Library.
 - **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)** — the control-layer
   framework MFO drives followers through. Install it for the full feature set.
   This version wants Harbinger 0.9.10 (lockpicking, museum drop-offs, the fight
@@ -194,7 +204,7 @@ leash and walk-to-loot.
   0.9.5 or newer, and without it MFO degrades to its older paths and says so in
   the log.
 - **SKSE64**
-- **Address Library for SKSE Plugins**
+- **Address Library for SKSE Plugins** (1.6.1170 and 1.5.97)
 - **SkyUI** and **MCM Helper** (version 9 or newer) — the settings menu
 - **powerofthree's Papyrus Extender** (`po3_papyrusextender.dll`) — required
   only for the optional follower economy (selling/buying); everything else runs

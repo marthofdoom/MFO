@@ -899,126 +899,126 @@
    "what": "Character vtable slot, UpdateCombat",
    "value": "0xE4",
    "where": "Targeting.cpp:125",
-   "verified_by": "ADDRESS-TABLE:64 (slot dump both runtimes); slot targets in the Rows table",
-   "gate": "hook refused on VR and on any build the self-check does not cover"
+   "verified_by": "ADDRESS-TABLE:64 (slot dump both runtimes); slot targets in the Rows table; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
+   "gate": "Runtime::Known() (exact 1.6.1170 / 1.5.97 / 1.7.104) + the self-check row"
   },
   {
    "what": "PlayerCharacter vtable slot, Actor::Update",
    "value": "0xAD",
    "where": "MainThread.cpp:68",
-   "verified_by": "ADDRESS-TABLE:69; Rows table",
+   "verified_by": "ADDRESS-TABLE:69; Rows table; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "as above"
   },
   {
    "what": "ActorMagicCaster vtable slot, CheckCast",
    "value": "0x0A",
    "where": "CasterConsent.cpp:812",
-   "verified_by": "ADDRESS-TABLE:65; Rows table",
+   "verified_by": "ADDRESS-TABLE:65; Rows table; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "as above"
   },
   {
    "what": "CombatMagicCaster* vtable slot, CheckStartCast",
    "value": "0x06",
    "where": "CasterConsent.cpp:373",
-   "verified_by": "ADDRESS-TABLE:66,72; Rows table",
+   "verified_by": "ADDRESS-TABLE:66,72; Rows table; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "as above"
   },
   {
    "what": "CombatInventoryItemMagicT* vtable slot, CheckShouldEquip",
    "value": "0x0F",
    "where": "CombatStyle.cpp:255",
-   "verified_by": "ADDRESS-TABLE:67,80; Rows table",
+   "verified_by": "ADDRESS-TABLE:67,80; Rows table; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "as above"
   },
   {
    "what": "PollInputDevices call site to the input dispatch",
    "value": "+0x7B, E8",
    "where": "Board.cpp:1648",
-   "verified_by": "generator: bytes at rva+0x7B are E8 on both runtimes (offline only; MFO has no runtime byte check)",
-   "gate": "exact 1.6.1170 / 1.5.97 (Board.cpp isAE1170/isSE597) + self-check of the function"
+   "verified_by": "generator: bytes at rva+0x7B are E8 on both runtimes (offline only; MFO has no runtime byte check); 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
+   "gate": "exact 1.6.1170 / 1.5.97 / 1.7.104 (Board.cpp isAE1170/isSE597/is17104) + self-check of the function"
   },
   {
    "what": "Actor vtable slot, DropObject (called through the live vptr)",
-   "value": "0xCB (VR 0xCD)",
+   "value": "0xCB (VR 0xCD, never used: VR is refused)",
    "where": "Logistics.cpp:739",
-   "verified_by": "ADDRESS-TABLE:63 area; not an id, not self-checkable",
-   "gate": "non-VR only (MainThread::IsInstalled)"
+   "verified_by": "ADDRESS-TABLE:63 area; not an id, not self-checkable; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
+   "gate": "Runtime::Known() (Upkeep.cpp) + MainThread::IsInstalled()"
   },
   {
    "what": "IPackageData + 0x10 -> PackageTarget* / PackageLocation*",
    "value": "0x10",
    "where": "Packages.cpp:81, :504, :663",
-   "verified_by": "type-name check before each read (GetTypeName)",
+   "verified_by": "type-name check before each read (GetTypeName); 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "none (all runtimes)"
   },
   {
    "what": "CombatController attackerHandle / targetHandle / previousTargetHandle / combatStyle",
    "value": "0x28 / 0x2C / 0x30 / 0x38",
    "where": "Targeting.cpp:118; CombatStyle.cpp:167,288; CasterConsent.cpp:468,594",
-   "verified_by": "fork CombatController ctors (1.5.97 0x4FCA00, 1.6.1170 0x558070): identical below +0x68; static_asserts in each TU",
+   "verified_by": "fork CombatController ctors (1.5.97 0x4FCA00, 1.6.1170 0x558070): identical below +0x68; static_asserts in each TU; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "inside the hooks above"
   },
   {
    "what": "Actor runtime data currentCombatTarget / combatController",
    "value": "RT+0xFC / RT+0x158 (RT = +0xE0 before 1.6.629, +0xE8 after)",
    "where": "Targeting.cpp:56-102; Rapport.cpp:380; Evaluator.cpp:77",
-   "verified_by": "CommonLib RelocateMemberIfNewer(1.6.629) (not re-verified in F1)",
+   "verified_by": "CommonLib RelocateMemberIfNewer(1.6.629) (not re-verified in F1); 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "Targeting: hook; Rapport.cpp:402 and Evaluator: none"
   },
   {
    "what": "CombatGroup lock / targets, CombatTarget::targetHandle, CombatState::isFleeing",
    "value": "0x160 / 0x08 (elem 0xA8) / 0x00 / 0x04",
    "where": "Evaluator.cpp:177-219; CombatSense.h:17; Actuation_Direct.cpp:1879",
-   "verified_by": "CommonLib 3.7.0 declarations (not re-verified in F1)",
+   "verified_by": "CommonLib 3.7.0 declarations (not re-verified in F1); 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "none / CastPathsVerified"
   },
   {
    "what": "Actor magicCasters[] / MagicCaster currentSpell, state",
    "value": "RT+0x1A0 / 0x28, 0x30",
    "where": "cast/Hands.cpp:258",
-   "verified_by": "CommonLib 3.7.0 declarations",
+   "verified_by": "CommonLib 3.7.0 declarations; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "none"
   },
   {
    "what": "Renderer data / forwarder / context / renderWindows[0].swapChain",
    "value": "+0x10 / +0x38 / +0x40 / +0x48, +0x18",
    "where": "Board.cpp:415-426, :746",
-   "verified_by": "CommonLib Renderer (singleton RELOCATION_ID(524907, 411393))",
-   "gate": "Board::Install VR refusal"
+   "verified_by": "CommonLib Renderer (singleton RELOCATION_ID(524907, 411393)); 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
+   "gate": "Board::Install Runtime::Known()"
   },
   {
    "what": "ControlMap controlMap[] (context 0, gameplay)",
    "value": "+0x60 (same on both; members after it move, see fork ControlMap)",
    "where": "Board.cpp:163 (GetMappedKey)",
-   "verified_by": "fork ControlMap ctors (memset at +0x60, 0x88 vs 0x90)",
+   "verified_by": "fork ControlMap ctors (memset at +0x60, 0x88 vs 0x90); 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "fork: unverified build -> lookup refused"
   },
   {
    "what": "IDXGISwapChain vtable slots Present / ResizeBuffers",
    "value": "8 / 13",
    "where": "Board.cpp:731-733",
-   "verified_by": "DXGI COM ABI (not a game address)",
-   "gate": "Board::Install VR refusal"
+   "verified_by": "DXGI COM ABI (not a game address); 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
+   "gate": "Board::Install Runtime::Known()"
   },
   {
    "what": "Game image PE header e_lfanew / SizeOfImage",
    "value": "+0x3C / NT+0x50",
    "where": "Diagnostics.cpp:1216",
-   "verified_by": "MZ / PE magic check in code",
+   "verified_by": "MZ / PE magic check in code; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "none"
   },
   {
    "what": "CommonLib-bound calls MFO names: HasLineOfSight, HasQuestObject, GetMagicCaster (Actor 0x5C), CastSpellImmediate (MagicCaster 0x01), InterruptCast",
    "value": "RELOCATION_ID(53029, 53829) / (19201, 19627) / vslot 0x5C / vslot 0x01 / (33630, 34408)",
    "where": "Sightline.cpp:147; Logistics_Loot.cpp:753; Actuation*.cpp; Packages.cpp:868",
-   "verified_by": "CommonLib 3.7.0 ids (every id present in both libraries; a miss is now fatal, fork d9ad1072)",
+   "verified_by": "CommonLib 3.7.0 ids (every id present in both libraries; a miss is now fatal, fork d9ad1072); 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "cast paths: CastPathsVerified; others none"
   },
   {
    "what": "Summon limit reads (fix/mfo-summon-oneshot): MiddleHighProcessData commandedActors (raw count compared, no liveness, as the engine does; BSTArray<CommandedActorData>, elem 0x10: handle +0x00, ActiveEffect* +0x08); BGSEntryPoint::HandleEntryPoint(kModCommandedActorLimit 0x44, caster, spell, &limit); ActiveEffect spell / elapsedSeconds / flags",
    "value": "+0x100 data / +0x110 count; RELOCATION_ID(23073, 23526) -> 0x32ECE0 / 0x385F30; +0x40 / +0x70 / +0x7C",
    "where": "cast/Summon.cpp SummonLimit / SummonOnMain",
-   "verified_by": "disassembly of the engine's add-commanded-actor fn on both runtimes (1.5.97 0x683D70 id 38993, call at 0x683E11; 1.6.1170 0x717800 id 40056, call at 0x7178EC); GMST iMaxSummonedCreatures (int, default 1) and the round-half-up constant 0.5 identical on both; ActiveEffect +0x40 spell (both) and +0x70 elapsedSeconds (AE eviction compare) read in that fn; flags +0x7C verified by ActiveEffect::Dispel (1.5.97 0x53E380 / 1.6.1170 0x5AC880: bts [+0x7C] bit 0x12 = kDispelled); kInactive bit 15 is the CommonLib declaration",
+   "verified_by": "disassembly of the engine's add-commanded-actor fn on both runtimes (1.5.97 0x683D70 id 38993, call at 0x683E11; 1.6.1170 0x717800 id 40056, call at 0x7178EC); GMST iMaxSummonedCreatures (int, default 1) and the round-half-up constant 0.5 identical on both; ActiveEffect +0x40 spell (both) and +0x70 elapsedSeconds (AE eviction compare) read in that fn; flags +0x7C verified by ActiveEffect::Dispel (1.5.97 0x53E380 / 1.6.1170 0x5AC880: bts [+0x7C] bit 0x12 = kDispelled); kInactive bit 15 is the CommonLib declaration; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "cast paths: CastPathsVerified; main thread only; the skip-cap flag read is gated on the Actuation.SummonCap.* ripref rows"
   }
  ]

@@ -2302,6 +2302,156 @@ FoeCount/inCombat mirror"; cross-referenced from MAP's Scheduler "What breaks".
 
 ---
 
+### 0.49 Skyrim 1.7.104.0 (Steam): every MFO seat and every CommonLib layout MFO reads, proven by disassembly (F2b, 2026-10-05)
+
+No 1.7.104 install exists. Everything here is disassembly of `binaries/1.7.104/SkyrimSE.exe` (plaintext, md5
+`113faeb7...`) against `binaries/1.6.1170/SkyrimSE.unpacked.exe`, the same way 1.5.97 was opened. The 1.7.104
+RVAs come from the CommonLib fork's shipped MIT id table (`data/mit-idtable-v1-1-7-104-0.bin`, revision 3, the
+file the plugin reads at runtime). "Identical" means the two function bodies have the same instruction count and
+every normalized instruction equal: every `[reg+disp]` displacement and every immediate kept, only rip-relative
+and branch targets masked. So an identical body proves every struct offset, size and constant it touches.
+Tools: a scratch capstone compare (pdata function bounds, difflib alignment), not shipped.
+
+**Verdict: nothing MFO reads or hooks differs on 1.7.104.** The 1.7.104 differences found are all in places MFO
+does not touch: PlayerCharacter's own members move +8 (a new `BSTEventSink<BSSystemEvent>` base at +0x2D8, and
+MFO uses no PlayerCharacter-declared member), the input stack (six devices, the event queue head at +0x558,
+three event kinds appended as types 6 to 8), the default-object array (366 -> 372, handled by the fork), and
+the fork gap `ExtraDataList::GetRuntimeSize()` with no 1.7.104 arm (fatal on `new ExtraDataList`, which MFO
+never does). Two extra zero stores in the 1.7.104 Actor ctor (+0x128 / +0x130) are a value-init of the existing
+`editorLocCoord` NiPoint3, not a layout change. One proof is weaker than the rest: `CombatState::isFleeing`
+(+0x04) has no reader pair, only the identical ctor and the identical 0xC0 allocation.
+
+**Id coverage.** Every function and global id anywhere in the fork's include/ and src/ (9,416 distinct AE ids)
+is MAPPED in revision 3. The 676 absent and 122 missing are all VTABLE_/RTTI_ entries, and none is one MFO names
+or casts through (84 names checked: native/ VTABLE_/RTTI_ uses, every `As<>` / `skyrim_cast` target and source).
+MFO's own ids 68545, 68617, 25052, 38561, 20226, 40056 and 403330 are mapped and in VerifiedAddresses.h.
+
+#### Seats MFO owns
+
+| seat (MFO site) | 1.6.1170 | 1.7.104 | proof (1.6.1170 / 1.7.104) | 1.7.104 |
+|---|---|---|---|---|
+| Targeting: Character vtable [0] slot 0xE4 UpdateCombat (`Targeting.cpp`) | vt 0x18A5558, slot -> 0x6B6E70 | vt 0x1923258, slot -> 0x6C98F0 | 298 = 298 slots; slot bodies identical; row Targeting.Character.UpdateCombat | OPEN |
+| MainThread: PlayerCharacter vtable [0] slot 0xAD Update (`MainThread.cpp`) | vt 0x18AB9C0, -> 0x732660 | vt 0x19296C0, -> 0x745200 | 303 = 303 slots; same function (PlayerCharacter::Update), its only differences are the PlayerCharacter-own fields uniformly +8 (0x740..0xBE4) and stack frame; hook signature (this, float) unchanged | OPEN |
+| CasterConsent: ActorMagicCaster [0] slot 0x0A CheckCast | -> 0x5B1610 | -> 0x5C0150 | 30 = 30 slots, body identical | OPEN |
+| CasterConsent: 14 CombatMagicCaster* [0] slot 0x06 CheckStartCast | 0x81E7B0 .. 0x823010 | 0x833CA0 .. 0x838500 | 14 = 14 slots each, all 14 bodies identical (Docs/VERIFIED-ADDRESSES.md rows) | OPEN |
+| CombatStyle: 30 CombatInventoryItemMagicT* [0] slot 0x0F CheckShouldEquip | 0x827690 .. 0x834270 | 0x83CB80 .. 0x849760 | 23 = 23 slots each, all 30 bodies identical | OPEN |
+| Board: PollInputDevices (68617) +0x7B E8 input trampoline | 0xCD8FBB -> 0xCD9E00 | 0xCF966B -> 0xCFA650 | generator callsite row (E8 + call target id); callee identical; caller stack slot `[rsp+0x40]`; Feed's event layouts in the Board rows below | OPEN (Board.cpp exact 1.7.104 arm) |
+| Board: ToggleControls (68545) | 0xCD5650 | 0xCEFAA0 | body identical (34 ins) | OPEN |
+| Board: Present / ResizeBuffers (DXGI slots 8 / 13) and the renderer reads | renderer data +0x10 | same | DXGI COM ABI; renderer rows below | OPEN |
+| Packages: TESQuest::ForceRefTo (25052) | 0x3CDEE0 | 0x3D4FA0 | body identical (203 ins) | OPEN |
+| Probe: Actor::StartCombat (38561) | 0x6B6930 | 0x6C93B0 | body identical (313 ins) | OPEN |
+| Lockpick: Unlock (20226) | 0x2FAF00 | 0x301500 | body identical (16 ins) | OPEN |
+| Upkeep: Actor/Character vtable slot 0xCB DropObject (through the live vptr) | 0x6781D0 | 0x68ACB0 | 296 / 298 slots in both; body identical (282 ins) | OPEN |
+| Summon: AddCommandedActor (40056) +0xA1 `mov rax,[rip+g]` and global 403330 +0x340 bit 1 | 0x717800 +0xA1, g 0x317ABA8 | 0x72A370 +0xA1, g 0x3223E18 | ripref row (15 bytes incl. `8B 88 40 03 00 00 D1 E9`); body identical (156 ins); Summon.cpp exact arm 0xA1 | OPEN |
+| Sightline: HasLineOfSight (53829, via CommonLib) | 0x9BA120 | 0x9D19F0 | body identical (169 ins) | OPEN |
+| CommonLib form-map read lock 68233 / 68239 | 0xCC90C0 / 0xCC9380 | 0xCE3250 / 0xCE3510 | bodies identical | OPEN |
+| Actor vtable slot 0x5C GetMagicCaster, MagicCaster slot 0x01 CastSpellImmediate | 0x6C20D0, 0x5BB9C0 | 0x6D4B90, 0x5CA500 | bodies identical | OPEN |
+| EngageOnSight / Rapport / Packages retreat (`Known()` -> MainThread pump) | | | ride the pump seat above plus the Actor / combat rows below | OPEN |
+
+#### Actor, AIProcess, process data, ProcessLists, PlayerCharacter (and backlog MFO-B225)
+
+| item | 1.6.1170 | 1.7.104 | proof (1.6.1170 / 1.7.104) | verdict |
+|---|---|---|---|---|
+| Actor sizeof / base subobjects | 0x2B8; MagicTarget +0xA0, ActorValueOwner +0xB8, ActorState +0xC0, sinks +0xD0/+0xD8/+0xE0 | same | Actor ctor 0x65E270 / 0x670C60: every store equal; base vtables stored at +0xA0/+0xB8/+0xC0/+0xD0/+0xD8/+0xE0 resolve (COL base name) to MagicTarget / ActorValueOwner / ActorState / ... in both; CRITICAL_SECTION init at +0x290 in both. 1.7.104 adds `mov [rsi+0x128],rbp` + `mov [rsi+0x130],ebp` = RT+0x40/+0x48 = editorLocCoord x,y / z zero-init (value-init of an existing NiPoint3, no layout change; MFO never reads editorLocCoord) | SAME |
+| AsMagicTarget +0xA0 / AsActorValueOwner +0xB8 / AsActorState +0xC0 | +0xA0/+0xB8/+0xC0 | same | ctor stores above; Actor secondary vtables: col 0xB8 9/9 identical bodies, col 0xC0 22/22 identical, col 0xA0 10/12 identical (slot 5 = switch table; slot 0xB `mov ecx,0xcb` -> `0xcc`, an engine immediate, not a layout read) | SAME |
+| RT.currentProcess | +0xF8 | +0xF8 | Actor vslot 0xE 0x686710/0x699230 (identical) `mov rax,[rdi+0xf8]` @6867C0/6992E0; slot 0x3F 0x664EE0/0x677920 `mov rcx,[rcx+0xf8]` | SAME |
+| RT.combatController | +0x160 | +0x160 | vslot 0x10 0x687720/0x69A240 (identical) `mov rcx,[rdi+0x160]` @68793A/69A45A; vslot 0x56 0x692800/0x6A5370 @692930/6A54A0 | SAME |
+| RT.currentCombatTarget | +0x104 | +0x104 | vslot 0xEF 0x6B7900/0x6CA380 (identical) `mov eax,[rcx+0x104]` @6B7914/6CA394; vslot 0xE5 store @6B723C/6C9CBC | SAME |
+| RT.magicCasters[] | +0x1A8 | +0x1A8 | vslot 0x5C (GetMagicCaster) 0x6C20D0/0x6D4B90 identical `mov rax,[rsi+0x1a8]` @6C219A/6D4C5A; vslot 0x110 `lea rbx,[rcx+0x1a8]` @6C3C4C/6D670C | SAME |
+| RT.addedSpells (BSTSmallArray) | +0x190 | +0x190 | vslot 0x0 0x6A9A60/0x6BC4E0 identical `cmp dword [rbx+0x190],0` @6A9B69/6BC5E9; vslot 0xE @686C20/699740 | SAME |
+| RT.boolBits (IsPlayerTeammate = bit 26) | +0xE8 | +0xE8 | vslot 0x10 identical `mov eax,[rdi+0xe8]` @68786D/69A38D; vslot 0x40 0x67B690/0x68E150 @67B76A/68E22A. Bit 26: 52 sites in each build load `[reg+0xE8]` and test bit 0x1A within three instructions, e.g. `mov eax,[rsi+0xe8]; shr eax,0x1a; test al,1` at 0x2EC398 / 0x2F2928 | SAME |
+| RT.boolFlags | +0x204 | +0x204 | vslot 0x13 0x692560/0x6A50D0 identical `or dword [rbx+0x204],0x4000000` @692628/6A5198; vslot 0x4A `and dword [rcx+0x204],~1` @6621DE/674BFE | SAME |
+| ActorState actorState1 (lifeState bits) / actorState2 | Actor+0xC8 / +0xCC | same | vslot 0x99 0x674ED0/0x6879A0 identical `mov r8d,[rcx+0xc8]`; vslot 0x6C `and dword [rsi+0xc8],0xfffffff` @65EC63/671663; +0xCC vslot 0x10 @687997/69A4B7; ActorState vtable (col 0xC0) 22/22 identical | SAME |
+| AIProcess layout (sizeof 0x140) | middleHigh +0x08, high +0x10, currentPackage +0x18 (package ptr +0x20), processLevel +0x137 | same | alloc `mov edx,0x140` in vslot 0x10 (identical) @6877F9/69A319 -> ctor 0x6D3AF0/0x6E66A0 identical (64 ins, all stores equal); proc+0x137: vslot 0xE `movzx eax,[rax+0x137]` @6867D1/6992F1, vslots 0x6C/0x8A `cmp byte [rcx+0x137],1`; proc+0x18/+0x20: vslots 0xF1/0xF2/0xF3/0xF4/0xD8 identical (`lea rcx,[rax+0x18]` @681FA2/694A72, `mov rax,[rcx+0x20]` @6829B7/695487) | SAME |
+| middleHigh +0x08 / high +0x10, sizes | MH 0x338 at proc+8, HPD 0x478 at proc+0x10 | same | promote fn 0x6DD7C0/0x6F0370 identical (89 ins): `mov edx,0x338` / `mov edx,0x478` allocs; 0x6DD4F0/0x6F00A0 `mov [rsi+0x10],r15` / `mov [rsi+8],r15` after the 0x478/0x338 allocs; 40056 `mov rdx,[rcx+8]` @717827/72A397 | SAME |
+| MiddleHighProcessData layout (runOncePackage +0x58, commandedActors +0x100 data / +0x110 count, elem 0x10, effect +8) | as listed | same | MH ctor 0x7202D0/0x732DE0 identical (251 ins); AddCommandedActor 40056 0x717800/0x72A370 identical: `mov eax,[rdx+0x110]` @717836/72A3A6, `mov rdx,[rdx+0x100]` @717840/72A3B0, `[rdx+8]` elem @717869/72A3D9 | SAME |
+| HighProcessData layout (pathingCurrentMovementSpeed +0x88 NiPoint3, cachedActorHeight +0x1E4) | as listed | same | HPD ctor 0x708AB0/0x71B5F0 (325 ins; only diff one rip-relative lea): stores +0x88/+0x8C/+0x90 dword in both; id 39588 0x6EF7D0/0x7023A0 identical `movss [rax+0x1e4],xmm1` @6EF7D9/7023A9 (proc->high chain) | SAME |
+| AIProcess InHighProcess / GetCachedHeight / GetRunningPackage | inline CommonLib reads of processLevel / high->+0x1E4 / mh->runOncePackage, currentPackage | same offsets | covered by the rows above (all inline, no id) | SAME |
+| AIProcess::PlayIdle -> SetupSpecialIdle 38290/39256, kActionIdle=64 | 0x6DDE70 | 0x6F0A20 | id in table; bodies identical (263 ins). kActionIdle 64 < 188, below every 1.7.104 DOBJ insertion (fork BGSDefaultObjectManager.cpp:84), so the raw enum passed to the engine is the same object. Used by APMF only (MFO comments) | SAME |
+| AIProcess::SetHeadtrackTarget 38850/39887 | 0x7109D0 | 0x723510 | identical (18 ins). APMF only | SAME |
+| other AIProcess ids 39504/39484/39895/39257 | | | all identical bodies; 39286 (SetActorsDetectionEvent) codegen differs (register choice) with equal displacements, not used by MFO | SAME |
+| ProcessLists singleton 514167/400315 | 0x20F69B0 | 0x219E570 | in the rev 3 table; 441 code xrefs in each build | SAME (id mapped) |
+| ProcessLists highActorHandles (+0x30 data, +0x40 size) | +0x30/+0x40 | same | 41410 0x7738F0/0x786610 identical: `mov rcx,[rsi+0x30]` @773920/786640, `mov edi,[rsi+0x40]` @773974/786694; 41408 0x773630/0x786350 identical @773671/786391 | SAME |
+| B225: AMMO GetRuntimeData (RelocateMember 0x110 SE/AE, 0x100 VR) data.projectile/flags/damage | +0x110/+0x118/+0x11C | same | TESAmmo vslot 0x6 (Load) 0x263280/0x268B00 identical: `mov rax,[r14+0x110]` @263374/268BF4, `or byte [r14+0x118],4` @26367F/268EFF, `mov eax,[r14+0x11c]` @263385/268C05; vslot 0x19 `movzx eax,[rcx+0x118]` @263D70/2695F0; 75/83 TESAmmo slots identical | SAME |
+| B225: TESObjectCELL GetRuntimeData (+0x68, 1.7.104 > 1.6.629) worldSpace | +0x128 | +0x128 | TESObjectCELL vslot 0x24 0x2BEF40/0x2C4CC0 identical `mov rcx,[rbx+0x128]` @2BEF67/2C4CE7; 52/59 cell slots identical | SAME |
+| B225: GetActorRuntimeData in Scheduler/Evaluator/Hands | RT +0xE8 | RT +0xE8 | rows above | SAME |
+| PlayerCharacter-declared members used by MFO | none | none | grep native/: no GetPlayerRuntimeData / GetInfoRuntimeData / GetCrimeValue / GetRaceData / GetGameStatsData / PC event-sink accessors / tint / grab / PC crime vfuncs. Every `pc->`/`player->` use is Actor/REFR API (GetPosition, IsInCombat, GetLevel, GetActorRuntimeData().currentCombatTarget Scheduler.cpp:281 Probe.cpp:340, AsActorState LootTake.cpp:960 TeleportCompat.cpp:202, ...). PC subobjects 0x0..0x2D0 identical in both (COL offsets); 1.7.104 adds BSTEventSink<BSSystemEvent> at +0x2D8, so PC-own members move +8 (seen: 0x6B8->0x6C0, 0x8D0->0x8D8, 0x9C0->0x9C8, 0xAD0->0xAD8, 0xB0A->0xB12, 0xB10->0xB18, 0xBE0/0xBE4->+8 via the 403521 singleton). MFO reads none of them | SAME for everything MFO reads |
+
+#### Combat, magic casters, animation graph, form records
+
+| item | 1.6.1170 | 1.7.104 | proof (1.6.1170 / 1.7.104) | verdict |
+|---|---|---|---|---|
+| CombatController members below 0x68 (combatGroup 0x00, state 0x08, inventory 0x10, blackboard 0x18, behaviorController 0x20, attackerHandle 0x28, targetHandle 0x2C, previousTargetHandle 0x30, unk34/startedCombat 0x34, combatStyle 0x38, stoppedCombat/ignoring/inactive 0x40-0x43, unk44 0x44, aimControllers 0x50) | as declared | same | ctor 0x558070 / 0x55FEE0: 288 = 288 instructions, identical (stores +0x00,+0x10,+0x18,+0x20,+0x28,+0x2C,+0x34 word,+0x38,+0x40..+0x4C; state new(0xC0) stored at +0x08, 16:0x55816D) | SAME |
+| CombatController tail (fork GetRuntimeData arm, 1.7.104 offset 0x70) | new(0xE0), tail +0x68..+0xD8 | new(0xE0), same stores | same ctor pair; tail stores +0x68,+0x70,+0x78,+0x98,+0xB8,+0xC0,+0xC8 dword,+0xD0,+0xD8 identical; CMC GetMagicTarget slot 0x0A 0x81E020 / 0x833510 identical (reads +0xC8/+0xD0/+0xD8) | SAME (fork arm 0x70 correct) |
+| CombatState (isFleeing +0x04), size | new(0xC0), ctor 0x840A90 | new(0xC0), ctor 0x855990 | ctor pair identical 74 = 74 ins (stores +0x00, +0x0A, +0x0C); allocation size 0xC0 is an immediate inside the identical CC ctor. No reader of +0x04 cited (ctor does not write it) | SAME (ctor + size; byte +0x04 inferred from unchanged struct, no direct reader pair) |
+| CombatGroup::targets (BSTArray @0x08, elem 0xA8), lock @0x160, size 0x168 | as declared | same | ctor 0x803240 / 0x8180A0 identical (BSReadWriteLock init at +0x160, +0x150/+0x158/+0x15C); readers identical: 0x803A10/0x818870, 0x803DF0/0x818C50, 0x803EA0/0x818D00 (lea rbx,[rcx+0x160]; [rsi+8]; imul 0xA8), 0x805090/0x819EF0, 0x80BBD0/0x820AB0 | SAME |
+| CombatTarget::targetHandle @0x00 (elem 0xA8) | 0x00 | same | covered by the identical reader bodies above (stride 0xA8 immediates equal) | SAME |
+| MagicCaster desiredTarget 0x20, currentSpell 0x28, state 0x30, castingTimer 0x34 | as declared | same | base ctor 0x5BB410 / 0x5C9F50 identical (stores +0x20,+0x28,+0x30,+0x34); slot 0x01 CastSpellImmediate-path 0x5BB9C0 / 0x5CA500 identical (writes +0x20/+0x28/+0x30); ActorMagicCaster Update slot 0x1D 0x5B0DA0 / 0x5BF8D0 identical (reads +0x28, cmp [+0x30]) | SAME |
+| ActorMagicCaster vtable + ctor | 30 slots, ctor 0x5B05F0 | 30 slots, ctor 0x5BF120 | ctor identical 49 ins; 27/30 slots identical, 3 (0x13, 0x1B, 0x1C-area) differ only in `cmp ecx/edx, 0x16E` -> `0x174` (default-object count 366 -> 372, not a member offset); CheckCast slot 0x0A 0x5B1610 / 0x5C0150 identical | SAME |
+| MagicCaster vtable | 29 slots | 29 slots | 25/29 identical; 4 differ only in image-base-relative global table addresses (`[rdx+r10+0x3169ad0]` vs `+0x3211770`), no member offset | SAME |
+| CombatMagicCaster / Offensive / Restore vtables (incl. GetMagicTarget 0x0A) | 14 slots each | 14 slots each | 14/14 identical for all three | SAME |
+| Actor vslot 0x5C GetMagicCaster(slot) | magicCasters at this+0x1A8 (+slot*8), new(0x100) | same | 0x6C20D0 / 0x6D4B90 identical 56 ins | SAME |
+| MagicCaster vslot 0x01 (CastSpellImmediate) | slot 1 | slot 1 | ActorMagicCaster slot 1 0x5BB9C0 / 0x5CA500 identical; slot counts equal | SAME |
+| BSAnimationGraphManager graphs (BSTSmallArray @0x40: +0x40/+0x48/+0x50), RT @0xA0 (updateLock 0xA0, 0xA8) | as declared (AE arm) | same | vtable 2/2 identical; xref fns 0xBA35B0 / 0xBBFFD0 and 0xBA3850 / 0xBC0280 identical (lea [rdi+0x40], [rcx+0x40]/[+0x48]/[+0x50], [rdi+0xA0], [r14+0xA8]); 0xBA3690 / 0xBC00B0 ratio 0.966, differs only in a reordered compare/branch, same offsets | SAME |
+| Actor -> IAnimationGraphManagerHolder (MFO GetAnimationGraphManager) | base @0x38, holder slot 2 | same | Actor RTTI hierarchy identical (holder mdisp 0x38 both); Actor vt col 0x38 slot 2 0x6A3500 / 0x6B60B0 identical | SAME |
+| BShkbAnimationGraph -> BSTEventSource<BSAnimationGraphEvent> (MFO static_cast) | base @0x68 | base @0x68 | RTTI BaseClassArray both builds, hierarchy identical | SAME |
+| TESAmmo data @0x110 (projectile 0x110, flags 0x118, damage 0x11C) | as declared | same | GetPlayable slot 0x19 0x263D70 / 0x2695F0 `movzx eax, byte [rcx+0x118]` both; Load slot 6 0x263280 / 0x268B00: [r14+0x110], [r14+0x11C], or byte [r14+0x118],4 identical; vtable 75/83 identical, ctors (4 xref fns) identical | SAME |
+| TESObjectWEAP weaponData @0x168, criticalData @0x1A0 (0x1B8), TESAttackDamageForm @0xC0 | as declared | same | Load slot 6 0x284050 / 0x289810: lea rbx,[r12+0x168], [r12+0x190], [r12+0x194], [r12+0x1B8] identical (19 = 19 instance accesses in 0x168-0x1C0); base TESAttackDamageForm mdisp 0xC0 both; vtable 74/83 identical, rest only switch-table addressing; ctors 0x283780/0x288F40, 0x283B50/0x289310 identical | SAME |
+| TESObjectARMO armorRating @0x200, TESBipedModelForm @0xB0, BGSBipedObjectForm (slot mask) @0x1B0 | as declared | same | Load slot 6 0x278340 / 0x27DB00: [r12+0x200] (word/dword), [r12+0x1B8] identical; bases identical (0xB0, 0x1B0); vtable 74/83 identical, rest switch-table only; 3 ctor xrefs identical | SAME |
+| SpellItem data @0xC0 (size 0x28: spellType/chargeTime/castingType/delivery/range...) | as declared | same | GetData1/2 slots 0x6C/0x6D 0x14F770 / 0x154D00, 0x14F760 / 0x154CF0: `lea rax,[rcx+0xC0]`, data size `mov eax,0x28`, `[rcx+0xD4]` identical; vtable 107/113 identical (6 switch-table only); 4 ctor xrefs identical | SAME |
+| EffectSetting data @0x68 (EffectSettingData 0xF0: flags, archetype, primaryAV, secondaryAV, delivery, castingType, associatedSkill, projectileBase, explosion ...) | as declared | same | Load slot 6 0x144AC0 / 0x14A050: lea rcx,[r12+0x68], [r12+0xB8], [r12+0xE0], [r12+0x100], [r12+0x110], [r12+0x118] identical; vtable 55/59 identical (rest switch-table / int3 padding); 3 ctor xrefs identical | SAME |
+| TESNPC perks/perkCount (BGSPerkRankArray @0x138: perks +0x08 = 0x140, perkCount +0x10 = 0x148) | as declared | same | base BGSPerkRankArray mdisp 0x138 both; NPC Load 0x3B5070 / 0x3BC130 `lea rcx,[r12+0x138]`, `movups xmm1,[rbp+0x140]` identical; perk-array subobject vtable (col 0x138) slots 0-3 identical (reads [rax+0x10]); vtable 77/87 identical, others switch-table or PlayerCharacter-singleton fields | SAME |
+| TESObjectBOOK (data.teaches), BGSPerk (data.numRanks), ScrollItem, EnchantmentItem | as declared | same | vtables 74/83, 56/59, 107/113, 107/113 identical, remainder switch-table only; all ctor xrefs identical; hierarchies identical | SAME |
+
+#### References, extra data, cells, UI, form lookup
+
+| item | 1.6.1170 | 1.7.104 | proof (1.6.1170 / 1.7.104) | verdict |
+|---|---|---|---|---|
+| TESObjectREFR parentCell / loadedData / extraList | +0x60 / +0x68 / +0x70 | +0x60 / +0x68 / +0x70 | REFR ctor 0x2D7280 / 0x2DD7D0: identical store set (0x60, 0x68, `lea rcx,[rdi+0x70]; call ExtraDataList ctor` 0x151E90 / 0x157420); 1.7.104 only adds a redundant zero of data +0x48..+0x58 before the same stores. Readers: vtable slot 0x44 (+0x60) 0x2DD790 / 0x2E3D10, slot 0x45 (+0x70) 0x2DD8F0 / 0x2E3E70, bodies identical | SAME |
+| REFERENCE_RUNTIME_DATA (RT +0x90: unk88, refScale +0x98, modelState +0x9A, preDestroyed +0x9B) | RT +0x90 | RT +0x90 | same ctor stores 0x90/0x98/0x9A/0x9B both builds; vtable 162/162 slots, 150 bodies identical, the rest differ only in stack frame, jump tables, register allocation, or PlayerCharacter-singleton fields (0xAD0->0xAD8) | SAME |
+| TESObjectREFR data.location / angle | +0x54..0x5C / +0x48..0x50 | same | slot 0x6 (InitItemImpl) 0x2D7DE0 / 0x2DE330: identical r15 (this) displacement set, incl. movss [r15+0x48..0x5C] | SAME |
+| ExtraDataList ctor (fork #108) id 11583 | 0x151E90 | 0x157420 (table) | bodies identical 17/17 ins: vtable +0, zero +8/+0x10, lock ctor at +0x18 | SAME |
+| ExtraDataList heap size | 0x20 | 0x20 | 61 ctor call sites per build, 38 with `lea edx,[r9+0x20]` alloc size before the call (ex. 0x22273C / 0x22802C) | SAME (engine). FORK GAP: `ExtraDataList::GetRuntimeSize()` (src/RE/E/ExtraDataList.cpp:24) has arms only for 1.6.1170/1.5.97 and report_and_fails on 1.7.104. MFO never does `new ExtraDataList` (grep native: none), so not reachable from MFO |
+| TESObjectCELL GetRuntimeData base | +0x68 | +0x68 | cell ctor 0x2B2070 / 0x2B7CE0 identical (142 ins), store set identical: {0x40 cellFlags, 0x44 cellState, 0x68.., 0x80 navMeshes (RT+0x18), 0xB8, 0x120 spinLock (RT+0xB8), 0x128 worldSpace (RT+0xC0), 0x130..0x140}; 2nd vtable-ref fn 0x2B22A0 / 0x2B7F10 identical; vtable 59/59, 52 identical, rest jump tables / regalloc | SAME |
+| cell worldSpace / spinLock / navMeshes / cellFlags (MFO: Lotd.cpp:683,691; LootTake.cpp:902; IsInterior/ExteriorCell) | 0x128 / 0x120 / 0x80 / 0x40 | same | as above | SAME |
+| UI menuMap (BSTHashMap @0x128) | 0x128 | 0x128 | UI ctor 0xFA32F0 / 0x1169070 (176/176 ins, 2 rip-lea diffs only); this-store set identical {0x134, 0x13C, 0x140, 0x150, 0x158, 0x160, 0x168, 0x170, 0x17C, 0x1C0} | SAME |
+| UI numPausesGame | 0x160 | 0x160 | 0x3CA4C8 / 0x3D1588 `mov rax,[UI 0x20F6A00/0x219E5C0]; cmp dword [rax+0x160],0`, functions identical | SAME |
+| IMenu menuFlags (OnStack bit 0x40, used by IsMenuOpen) | +0x1C | +0x1C | 0x93504A / 0x94B6AA `test byte [rcx+0x1C],0x40` after `cmp [rcx+0x10],0` (uiMovie), same function (ratio 0.988) | SAME |
+| TESForm::LookupByID globals allForms 400507 / lock 400517 | 0x20FBB88 / 0x20FC018 | 0x21A3808 / 0x21A3C98 | engine fns using both: 0x1E01A0 / 0x1E5860 and 0x1E06A0 / 0x1E5D60, identical bodies | SAME |
+| LookupByEditorID globals 400509 / 400518 | 0x20FBFE0 / 0x20FC020 | 0x21A3C60 / 0x21A3CA0 | 0x1E0250 / 0x1E5910 identical | SAME |
+| TESDataHandler singleton 400269, files list +0xD60 (LookupModByName), +0xD70 | 0x20F6320, 0xD60, 0xD70 | 0x219DED8, 0xD60, 0xD70 | files walker 0x1C7180 / 0x1CC840 identical (`lea r10,[rcx+0xD60]`, TESFile +0x438 test); +0xD70 reader 0x606C90 / 0x619670 identical | SAME |
+| TESFile compileIndex / smallFileCompileIndex (LookupForm) | 0x478 / 0x47A | 0x478 / 0x47A | `mov/cmp byte [rcx+0x478],0xFF` leaf fns 0x1C7030,0x1C7040 / 0x1CC6F0,0x1CC700; `movzx [..+0x47A]` 3 sites each build 0x1C8D95,0x1C9BA3,0x1CA0EC / 0x1CE465,0x1CF273,0x1CF7BC (uniform +0x56D0) | SAME |
+| HasLineOfSight 53829 (CommonLib Actor::HasLineOfSight, Sightline) | 0x9BA120 | 0x9D19F0 | bodies identical (169 ins) | SAME |
+
+#### The Field Kit board: input trampoline, event layouts, ControlMap, renderer
+
+| item | 1.6.1170 | 1.7.104 | proof (1.6.1170 / 1.7.104) | verdict |
+|---|---|---|---|---|
+| 1a PollInputDevices (68617) +0x7B is the dispatch call | `E8` at +0x7B, rcx=rsi=manager, rdx=`lea [rsp+0x40]` filled at +0x6C/+0x73 from [queue+0x380] | `E8` at +0x7B, same registers, filled from [queue+0x558] | CD8FBB->CD9E00 / CF966B->CFA650. The same instruction offsets +0x00..+0xC8. Diffs: device loop 4->6 (+0x1E), queue head +0x380->+0x558 (+0x4C, +0x6C), manager +0xE0->+0xF0, +0x88->+0x98 | SAME (the call site and its ABI) |
+| 1b dispatch callee = BSTEventSource<InputEvent*> notify | uses src +0x10 (sinks size), +0x18/+0x28 (pendingRegisters), +0x48 lock, +0x50 notifying | identical | CD9E00 / CFA650, 199 vs 199 instructions, ratio 1.000 | SAME |
+| 1c `*a_events = nullptr` scope | the caller's stack slot [rsp+0x40] | the caller's stack slot [rsp+0x40] | +0x67 `lea rdx,[rsp+0x40]`, +0x73 store in both | SAME |
+| 1d queue singleton (407374) is the global PollInputDevices reads | 0x31B1468 | 0x325A7D8 | rip targets at +0x3E/+0x60/+0x80 in both = the table's 407374 | SAME |
+| 2a InputEvent device +0x08, eventType +0x0C, next +0x10 | | same | element ctors (eh-vector-ctor in manager init CD8C02 / CF91D2): 79E040/7B1350 (Button), CD9830/CF9F70 (Char), CD98F0/CFA070 (MouseMove), 95B3F0/972660 (Thumbstick) store dev at +8 and type at +0xC. Add* link at +0x10 (CDA9B0/CFB3D0) | SAME |
+| 2b INPUT_EVENT_TYPE values MFO compares (kButton 0, kMouseMove 1, kThumbstick 3) | Button 0, MouseMove 1, Char 2, Thumbstick 3, Connect 4, Kinect 5 | Button 0, MouseMove 1, Char 2, Thumbstick 3, Connect 4, Kinect 5. NEW kinds are APPENDED: 6 (0x90-byte Sixaxis-type event, ctor 7B1380, dev 2), 7 (MotionGesture, CFA030, dev 3), 8 (Amiibo, CF9A40, dev 2) | the ctor `mov [rcx+0xC], imm` values above | SAME for every value MFO reads. The new kinds 6/7/8 fail MFO's eventType tests and are skipped |
+| 2c ButtonEvent idCode +0x20, userEvent +0x18, value +0x28, heldDownSecs +0x2C (IsDown/IsUp/GetIDCode) | | same | AddButtonEvent CDA920/CFB340 (array base +0x20/+0x28): value elem+0x28, held +0x2C, device +0x08, idCode +0x20, userEvent +0x18. The two button helpers that call it, CDD010/D6F410 and CDD130/D6F530, are identical | SAME |
+| 2d MouseMoveEvent mouseInputX +0x28 / Y +0x2C, device 1 | | same | AddMouseMove CDAA30/CFB460 (elem 0x2A0 / 0x2A8). The only caller, CDE95A/E1316A, is identical | SAME |
+| 2e ThumbstickEvent xValue +0x28 / yValue +0x2C, idCode +0x20 (IsLeft = idCode kLeftThumbstick), device 2 | | same | AddThumbstick CDAAD0/CFB510 (elem 0x2D0 / 0x2D8). All 4 callers are identical (CDEC9A/E7AE0A, CDEE54/E7AFC4, CDFEF2/E7C062, CE00C9/E7C239) | SAME |
+| 2f INPUT_DEVICE stamped: keyboard 0, mouse 1, gamepad 2 | 0 / 1 / 2 | 0 / 1 / 2 | keyboard ctor CDDCC0/E124D0 `xor ecx,ecx; mov [rbx+8],ecx`. mouse ctor CDE780/E12F90 `[rbx+8]=1`. gamepad (BSGamepadDevice) CDAD40/CFBA80 `[rsi+8]=2` (CDAE18/CFBB58). Button events take device from [device+8] (helpers above). The device Process slot 2 is identical in BSWin32Keyboard/Mouse/GamepadDevice and BSPCGamepadDeviceHandler (9/9 slots identical). The other differing slots are tiny leaf functions whose bytes are equal (pdata artifact) | SAME. The enum GREW elsewhere: the default "none" device 5->7, Kinect 6->8. The virtual keyboard ctor CE02F0/E7C460 reuses the keyboard ctor (dev 0) in both builds. MFO matches only 0/1/2 |
+| 2g gamepad key codes (BSWin32GamepadDevice::Key::kB etc.) | | same | come from the identical gamepad Process and handler code above | SAME |
+| 3a ControlMap singleton (400863) | 0x30FDA10 | 0x31A5690 | the rip target at PollInputDevices+0x45 in both = table | SAME |
+| 3b ControlMap layout: controlMap[] +0x60 (18 contexts), enabledControls +0x120, stack +0x108/size +0x118, +0x128..0x12A, +0x12C | 18 ctx, 0x120 | 18 ctx, 0x120 (= the fork's 1.7.104 arm "as 1.6.1170") | ctor in CD4680/CEEAA0: memset +0x60 len 0x90 and +0x12C both. Mapping pass (68542, not in the table, the PollInputDevices+0x53 callee) CD4F70/CEF3B0 has the same displacement set {+0x60 ctx, +0x108, +0x118, +0x120, +0x128..+0x12A}. Push/Pop 68543/68544 identical. ToggleControls 68545 identical (parent) | SAME. One code diff in the ctor function: 1.7.104 passes `r8d=7` to the mappings loader (CEEBEB). No layout effect |
+| 3c GetMappedKey path: context->deviceMappings[device] (stride 0x18), UserEventMapping | ctx + dev*0x18 (+0x10 size) | same | mapping pass CD50EA / CEF52B `[ctx + dev*0x18 + 0x10]` | SAME (MFO reads index 0 = keyboard) |
+| 3d UserEvents singleton (402638), `shout` +0x98 | 0x315CC30 | 0x32048D0 | UserEvents ctor CDBF50/D04050: 430 vs 430 instructions, identical | SAME |
+| 4 Renderer (411393): data +0x10, forwarder +0x48, context +0x50, renderWindows +0x58, window0.swapChain +0x70 | | same | Init 77226 E423E0/1007B70 identical (writes this+0x48). CreateSwapChain 77228 E42E10/10085A0 reads [this+0x50], [this+0x48], `lea [this+0x70]` in both (only a data-global displacement differs, with an equal offset from the renderer: -0x1D60). 77236/77237/77238/77239 identical ([+0x70], [+0x58]). All 20 Renderer.cpp ids are in the table except one non-file-backed global row (16 0x3286A08, .bss) that is not a function | SAME |
+| 5 UI dependency | Board reads `UI::GameIsPaused()` (numPausesGame) at Board.cpp:918-919 only. No IsMenuOpen in Board.cpp | | | dependency on group C (UI) |
+| 6 sink fallback: BSInputDeviceManager singleton (402776), BSTEventSource at manager +0 | 0x315CEA0 | 0x3204B30 | manager init CD8AF0/CF90C0: the source region +0x00..+0x58 is built identically (+0x48 lock, +0x50 flag). Manager fields after the device array shift +0x10 (+0x80->+0x90, +0x88->+0x98, +0xE0->+0xF0, 4->6 devices). The notify body is identical (1b). The CommonLib BSTEventSource template (sinks +0x00, pendingRegisters +0x18, pendingUnregisters +0x30, lock +0x48, notifying +0x50) matches it | SAME for what Board uses (GetSingleton + AddEventSink). Board reads no manager field past the source |
+
+**What breaks:** this proof covers the 1.7.104.0 Steam executable only (the id table is bound to its PE
+timestamp and image size, so another 1.7.104 build is refused by the fork at load). A new MFO seat or a new
+CommonLib layout read needs its own 1.7.104 compare before it ships, exactly like 1.5.97 (`Runtime::Known()`
+includes 1.7.104 on the strength of this table). Re-run the compare if MFO starts reading a PlayerCharacter
+member (they move +8 on 1.7.104; use the fork's accessors) or constructs an `ExtraDataList` (needs the fork arm).
+
 ## 1. Actor control — Tier A primitives
 
 **Status: PROVEN (sibling).** Each has a working call site in shipped code.
