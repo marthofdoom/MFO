@@ -283,8 +283,11 @@ namespace MFO::ProgAllocator {
                 if (!(b.value > 0.0f) || !std::isfinite(b.value)) continue;   // never write 0
                 if (!IsKnownSkillAv(static_cast<std::uint32_t>(b.av))) continue;
                 bool ledgered = false;
+                // A settled entry (no points either way) owns nothing: hold it too.
+                // RecomputeSkills erases those, but returns early for a class-less
+                // follower, which would otherwise leave its drift uncancelled.
                 for (const auto& e : a_st.skills)
-                    if (e.av == b.av) { ledgered = true; break; }
+                    if (e.av == b.av && (e.autoPoints > 0.0f || e.manualPoints > 0.0f)) { ledgered = true; break; }
                 if (ledgered) continue;
                 const float cur = avo->GetBaseActorValue(b.av);
                 if (cur == b.value) continue;
