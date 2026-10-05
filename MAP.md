@@ -4948,7 +4948,9 @@ compiled in; a translator ships `Data/Interface/Translations/MFO_<LANGUAGE>.txt`
   `Reload` (publish).
 - **PRECEDENCE per key:** `MFO_<LANG>.txt` entry (read through `SKSE::Translation::Translate`, the
   game's Scaleform translator, which the ENGINE fills from every `Interface/Translations/*_<LANG>.txt`;
-  `Reload` calls `SKSE::Translation::ParseTranslation("MFO")` only if it found nothing) > the game's own
+  `Reload` calls `SKSE::Translation::ParseTranslation("MFO")` only if it found nothing AND the loader's translator is the
+  engine's `BSScaleformTranslator`; a translation plugin such as Scaleform Translation Plus Plus NG replaces it with its own
+  `GFxTranslator`, which `Translate` still reads through but the vanilla-class cast in `ParseTranslation` rejects: `TranslatorKind()`) > the game's own
   localized word for the few keys in `kGameTerms` (a `$key` of Skyrim_<LANG>.txt or a `gmst:` string;
   NON-English only, so an English game never changes spelling) > the English default.
 - **THREADING (CLAUDE.md #4):** `Reload` is MAIN THREAD only (`plugin.cpp` kDataLoaded, plus ONE
