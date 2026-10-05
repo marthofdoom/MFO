@@ -259,4 +259,46 @@ namespace MFO::ProgAllocator {
                                BaselineFloor(a_st, e.av), id, a_log);
         }
 
+        // ── engine auto-calc drift hold, UNLEDGERED skills (2026-10-04) ──────
+        // The engine's auto-calc (ACBS 0x10, often with PC level mult) recomputes a
+        // follower's skills from class weights x level on level-up and on load.
+        // ReconcileSkill only cancels that for skills with a ledger entry, so every
+        // other skill drifted freely (Jesper's Heavy/Light Armor 46 -> 100). MFO owns
+        // a managed follower's skill growth, so the same cancel now covers ALL 18:
+        // a skill with no ledger entry is held at its enrollment baseline. It routes
+        // through ReconcileSkill with a throwaway zero-point entry, so the baseline
+        // floor and the one SetBaseActorValue call site stay as they were. Same
+        // switch as the ledger path (cancelEngineAwards), same cadence (the drift
+        // watch). A baseline <= 0 (old save, never captured) is skipped, never
+        // written. LIMITATION: a skill another mod trains on a managed follower is
+        // held back too, exactly as a ledger skill's engine gains already are.
+        void HoldUnledgeredSkills(RE::Actor* a_actor, const ProgState& a_st) {
+            if (!g_econ.cancelEngineAwards || a_st.baseline.empty()) return;
+            auto* avo = a_actor->AsActorValueOwner();
+            if (!avo) return;
+            const auto id = a_actor->GetFormID();
+            static std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> s_lastLog;
+            const auto now = std::chrono::steady_clock::now();
+            for (const auto& b : a_st.baseline) {
+                if (!(b.value > 0.0f) || !std::isfinite(b.value)) continue;   // never write 0
+                if (!IsKnownSkillAv(static_cast<std::uint32_t>(b.av))) continue;
+                bool ledgered = false;
+                for (const auto& e : a_st.skills)
+                    if (e.av == b.av) { ledgered = true; break; }
+                if (ledgered) continue;
+                const float cur = avo->GetBaseActorValue(b.av);
+                if (cur == b.value) continue;
+                SkillAlloc tmp;
+                tmp.av = b.av;
+                ReconcileSkill(avo, tmp, 0.0f, b.value, id, /*log*/ false);
+                const std::uint64_t key = (static_cast<std::uint64_t>(id) << 8) | static_cast<std::uint8_t>(b.av);
+                auto& last = s_lastLog[key];
+                if (last.time_since_epoch().count() == 0 || now - last >= std::chrono::seconds(30)) {
+                    last = now;
+                    spdlog::info("[prog] {:08X} {} engine auto-calc drift {:.1f} -> {:.1f} cancelled",
+                                 id, AvName(b.av), cur, b.value);
+                }
+            }
+        }
+
 }

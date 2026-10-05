@@ -193,6 +193,7 @@ namespace MFO::ProgAllocator {
                             // and re-topped by the reconcile. Writes only on
                             // divergence, so the steady state is pure reads.
                             if (st.clsId != 0) RecomputeSkills(actor, st, /*log*/ true);
+                            HoldUnledgeredSkills(actor, st);   // engine auto-calc drift on the other skills
                             hmsTurn = true;   // HMS no longer waits for an add-on class
                         }
                     } else if (IsActiveFollower(id)) {

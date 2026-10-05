@@ -257,6 +257,7 @@ namespace MFO::ProgAllocator {
         std::vector<std::pair<RE::ActorValue, float>> WeightsFor(RE::Actor* a_actor,
                                                                  const ClassDef& a_def);
         void RecomputeSkills(RE::Actor* a_actor, ProgState& a_st, bool a_log);
+        void HoldUnledgeredSkills(RE::Actor* a_actor, const ProgState& a_st);
 
         // Perks (progression/PerkGate.cpp):
         int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base);
