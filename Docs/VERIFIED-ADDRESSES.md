@@ -10,13 +10,13 @@ nothing when one does not. At startup `REL::SelfCheck::Run` repeats the comparis
 game actually loaded. A row that fails refuses THAT seat by name in the log; the expected RVA is never
 used in place of the library's answer.
 
-Offline result of this generation: 1.6.1170.0 56/56 verified, 0 refused, 1.5.97.0 56/56 verified, 0 refused.
+Offline result of this generation: 1.6.1170.0 60/60 verified, 0 refused, 1.5.97.0 60/60 verified, 0 refused.
 
 1.7.104.0 has NO Address Library. Its column is OUR OWN id map: the MIT id table of the CommonLibSSE-NG fork
 (`data/mit-idtable-v1-1-7-104-0.bin`, revision 3, 17751 records, SkyrimSE.exe TimeDateStamp 0x6A8C7046; built into every plugin, it is
 what SelfCheck queries at runtime; authoritative) with the evidence CSVs beside it, keyed by
 the 1.6.1170 id, re-verified against the plaintext 1.7.104 executable by the same row-kind checks (see the script
-docstring). Offline result: 1.7.104.0 56/56 verified, 0 NOT verified (0 of them BY DESIGN: 1.5.97-only labels whose AE twin row carries the 1.7.104 fact). A not-verified seat has no row in the 1.7.104 table,
+docstring). Offline result: 1.7.104.0 60/61 verified, 1 NOT verified (0 of them BY DESIGN: 1.5.97-only labels whose AE twin row carries the 1.7.104 fact). A not-verified seat has no row in the 1.7.104 table,
 so `IsVerifiedAddress` is false and the seat is refused by name. The table of `Not verified on 1.7.104` is below.
 
 These rows prove the ADDRESSES. That each hooked slot holds the same function body on 1.7.104, and that every
@@ -82,13 +82,20 @@ CommonLib layout MFO reads is the same there, is proven separately in `Docs/ENGI
 | CommonLib.BSReadWriteLock.UnlockForRead | function | 68239 | 0xCC9380 | 66982 | 0xC07590 | 68239 | 0xCE3510 | signature (16 bytes, unique in .text) |  | CommonLib mit-3.7 fde0f3ae include/RE/T/TESForm.h LookupByID/LookupByEditorID (BSReadLockGuard) | ADDRESS-TABLE-2026-09-15.md ADDENDUM 2026-09-24 F1b |
 | Actuation.SummonCap.AddCommandedActor | ripref | 40056 | 0x717800 +0xA1 48 8B 05 00 33 A6 02 8B 88 40 03 00 00 D1 E9 | 38993 | 0x683D70 +0x51 48 8B 05 30 29 8A 02 8B 88 40 03 00 00 D1 E9 | 40056 | 0x72A370 +0xA1 48 8B 05 00 9A AF 02 8B 88 40 03 00 00 D1 E9 | signature (33 bytes, unique in .text) |  | native/cast/Summon.cpp SummonCapSkipped | mov rax,[rip+g]; mov ecx,[rax+0x340]; shr ecx,1 (then test cl,1: bit 1 set -> the engine skips the summon cap) |
 | Actuation.SummonCap.SkipFlagGlobal | ripref global | 403330 | 0x317ABA8 | 516851 | 0x2F266F8 | 403330 | 0x3223E18 | RIP-relative reference at Actuation.SummonCap.AddCommandedActor +0xA1 (id 40056) |  | native/cast/Summon.cpp SummonCapSkipped | mov rax,[rip+g]; mov ecx,[rax+0x340]; shr ecx,1 (then test cl,1: bit 1 set -> the engine skips the summon cap) |
+| PickupSound.Character.PlayPickUpSoundSlot | vtable | 207886 | 0x18A5558 | 261397 | 0x165DA40 | 207886 | 0x1923258 | RTTI .?AVCharacter@@ (COL offset 0) | 0xA3: 0x65FE90 / 0x5CF8E0 / 0x6728B0 | native/logistics/PickupSound.cpp Install (slot 0xA3 READ, not written: Actor::PlayPickUpSound) | Docs/ENGINE_NOTES.md section 0.50 (batch A 86e3haxqx, pickup sound at the follower) |
+| PickupSound.Actor.PlayPickUpSound | callsite | 37196 | 0x65FE90 +0x14A E8 | 36216 | 0x5CF8E0 +0x73 E8 | - | - | signature (30 bytes, unique in .text) |  | native/logistics/PickupSound.cpp Install (write_call<5> on the BuildSoundDataFromDescriptor call) | Docs/ENGINE_NOTES.md section 0.50 (batch A 86e3haxqx, pickup sound at the follower). 1.7.104: id 37196 is not in the MIT id table revision 3, so this row has no 1.7.104 entry; the function there is the raw-RVA row PickupSound.Actor.PlayPickUpSound.1_7_104 (0x6728B0, +0x14A -> 0xCCB320 = id 67666 checked at install) |
+| PickupSound.BSAudioManager.BuildSoundDataFromDescriptor | function | 67666 | 0xCB11A0 | 66404 | 0xBEF0B0 | 67666 | 0xCCB320 | signature (30 bytes, unique in .text) |  | native/logistics/PickupSound.cpp Install (the call site's rel32 must land here; the thunk forwards to it) | Docs/ENGINE_NOTES.md section 0.50 (batch A 86e3haxqx, pickup sound at the follower); bool(BSAudioManager*, BSSoundHandle&, BSISoundDescriptor*, u32 flags): flags & 7 replaces the descriptor's mode (1 = 3D HRTF, 2 = 2D, 4 = attenuated speaker; descriptor fill BGSStandardSoundDef vslot 1) |
+| PickupSound.BSSoundHandle.SetOutputModel | function | 67624 | 0xCAF660 | 66363 | 0xBED740 | 67624 | 0xCC97E0 | signature (18 bytes, unique in .text) |  | native/logistics/PickupSound.cpp Install (BuildCall::thunk, main thread, inside the MFO pickup scope only) | Docs/ENGINE_NOTES.md section 0.50 (batch A 86e3haxqx, pickup sound at the follower); void(BSSoundHandle*, BSISoundOutputModel* = BGSSoundOutput + 0x20), as the engine calls it (1.6.1170 0x97AD83 / 1.5.97 0x2864BE); NOT CommonLib's SetOutputModel(const BGSSoundOutput*), which passes the form itself |
+| PickupSound.Actor.PlayPickUpSound.1_7_104 | raw rva | - | - | - | - | - | 0x6728B0 | raw RVA: 1.6.1170 0x65FE90 signature (30 bytes) unique at the idmap RVA |  | native/logistics/PickupSound.cpp Install (1.7.104 only: Actor::PlayPickUpSound read from Character vtable slot 0xA3; evidence row in tools/verified_addresses/idmap-1.7.104-mfo.csv) |  |
 
 ## Not verified on 1.7.104
 
 These seats have NO row in the 1.7.104 table, so on 1.7.104 `SelfCheck::IsVerifiedAddress` / `IsVerifiedLabel` is false
 for them and the seat is refused. Nothing here is a failure on 1.6.1170 or 1.5.97.
 
-(none)
+| seat | 1.6.1170 id | reason |
+|---|---|---|
+| PickupSound.Actor.PlayPickUpSound | 37196 | id 37196 is not in the idmap |
 
 ## Slots and offsets that are not Address Library ids
 

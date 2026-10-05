@@ -19,7 +19,7 @@
 
 namespace MFO::VerifiedAddresses
 {
-	// 1.6.1170.0: 56 rows
+	// 1.6.1170.0: 60 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_6_1170[] = {
 		{ 207886, 0x18A5558, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 208040, 0x18AB9C0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -77,9 +77,13 @@ namespace MFO::VerifiedAddresses
 		{ 68239, 0xCC9380, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.UnlockForRead" },
 		{ 40056, 0x717800, 0xA1, 15, { 0x48, 0x8B, 0x05, 0x00, 0x33, 0xA6, 0x02, 0x8B, 0x88, 0x40, 0x03, 0x00, 0x00, 0xD1, 0xE9 }, "Actuation.SummonCap.AddCommandedActor" },
 		{ 403330, 0x317ABA8, 0x0, 0, {  }, "Actuation.SummonCap.SkipFlagGlobal" },
+		{ 207886, 0x18A5558, 0x0, 0, {  }, "PickupSound.Character.PlayPickUpSoundSlot" },
+		{ 37196, 0x65FE90, 0x0, 0, {  }, "PickupSound.Actor.PlayPickUpSound" },
+		{ 67666, 0xCB11A0, 0x0, 0, {  }, "PickupSound.BSAudioManager.BuildSoundDataFromDescriptor" },
+		{ 67624, 0xCAF660, 0x0, 0, {  }, "PickupSound.BSSoundHandle.SetOutputModel" },
 	};
 
-	// 1.5.97.0: 56 rows
+	// 1.5.97.0: 60 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_5_97[] = {
 		{ 261397, 0x165DA40, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 261916, 0x16635E0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -137,10 +141,15 @@ namespace MFO::VerifiedAddresses
 		{ 66982, 0xC07590, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.UnlockForRead" },
 		{ 38993, 0x683D70, 0x51, 15, { 0x48, 0x8B, 0x05, 0x30, 0x29, 0x8A, 0x02, 0x8B, 0x88, 0x40, 0x03, 0x00, 0x00, 0xD1, 0xE9 }, "Actuation.SummonCap.AddCommandedActor" },
 		{ 516851, 0x2F266F8, 0x0, 0, {  }, "Actuation.SummonCap.SkipFlagGlobal" },
+		{ 261397, 0x165DA40, 0x0, 0, {  }, "PickupSound.Character.PlayPickUpSoundSlot" },
+		{ 36216, 0x5CF8E0, 0x0, 0, {  }, "PickupSound.Actor.PlayPickUpSound" },
+		{ 66404, 0xBEF0B0, 0x0, 0, {  }, "PickupSound.BSAudioManager.BuildSoundDataFromDescriptor" },
+		{ 66363, 0xBED740, 0x0, 0, {  }, "PickupSound.BSSoundHandle.SetOutputModel" },
 	};
 
-	// 1.7.104.0: 56 rows
-	// 0 NOT VERIFIED on 1.7.104.0, deliberately absent from this table (the seat is refused):
+	// 1.7.104.0: 60 rows
+	// 1 NOT VERIFIED on 1.7.104.0, deliberately absent from this table (the seat is refused):
+	//   PickupSound.Actor.PlayPickUpSound (1.6.1170 id 37196): id 37196 is not in the idmap
 	inline constexpr REL::SelfCheck::Row kRows_1_7_104[] = {
 		{ 207886, 0x1923258, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 208040, 0x19296C0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -198,6 +207,10 @@ namespace MFO::VerifiedAddresses
 		{ 68239, 0xCE3510, 0x0, 0, {  }, "CommonLib.BSReadWriteLock.UnlockForRead" },
 		{ 40056, 0x72A370, 0xA1, 15, { 0x48, 0x8B, 0x05, 0x00, 0x9A, 0xAF, 0x02, 0x8B, 0x88, 0x40, 0x03, 0x00, 0x00, 0xD1, 0xE9 }, "Actuation.SummonCap.AddCommandedActor" },
 		{ 403330, 0x3223E18, 0x0, 0, {  }, "Actuation.SummonCap.SkipFlagGlobal" },
+		{ 207886, 0x1923258, 0x0, 0, {  }, "PickupSound.Character.PlayPickUpSoundSlot" },
+		{ 67666, 0xCCB320, 0x0, 0, {  }, "PickupSound.BSAudioManager.BuildSoundDataFromDescriptor" },
+		{ 67624, 0xCC97E0, 0x0, 0, {  }, "PickupSound.BSSoundHandle.SetOutputModel" },
+		{ 0, 0x6728B0, 0x0, 0, {  }, "PickupSound.Actor.PlayPickUpSound.1_7_104" },
 	};
 
 	inline constexpr REL::SelfCheck::Table kTables[] = {

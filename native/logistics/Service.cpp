@@ -910,10 +910,15 @@ namespace MFO::Logistics {
                         // (inventory delta) decides took vs no-op.
                         const RE::FormID refID = tref->GetFormID();
                         const RE::FormID folID = a_follower->GetFormID();
-                        auto doActivate = [refID, folID]() {
+                        auto doActivate = [refID, folID, flora]() {
                             auto* r = RE::TESForm::LookupByID<RE::TESObjectREFR>(refID);
                             auto* f = RE::TESForm::LookupByID<RE::Actor>(folID);
-                            if (r && f) r->ActivateRef(f, 0, nullptr, 1, false);   // full processing = the pickup
+                            if (r && f) {
+                                // 86e3haxqx: the engine's pickup sound for THIS activation plays at the
+                                // follower, not as the player's (logistics/PickupSound.cpp).
+                                const PickupSound::Scope sound(folID, refID, flora);
+                                r->ActivateRef(f, 0, nullptr, 1, false);   // full processing = the pickup
+                            }
                         };
                         if (!MainThread::IsInstalled()) {
                             // NO main-thread pump (VR): ActivateRef is a loose-item

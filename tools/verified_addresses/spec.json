@@ -892,6 +892,77 @@
    "global_seat": "Actuation.SummonCap.SkipFlagGlobal",
    "source": "native/cast/Summon.cpp SummonCapSkipped",
    "doc": "mov rax,[rip+g]; mov ecx,[rax+0x340]; shr ecx,1 (then test cl,1: bit 1 set -> the engine skips the summon cap)"
+  },
+  {
+   "seat": "PickupSound.Character.PlayPickUpSoundSlot",
+   "kind": "vtable",
+   "construct": "RE::VTABLE_Character[0]",
+   "rtti": ".?AVCharacter@@",
+   "col_offset": 0,
+   "ids": {
+    "1.6.1170": 207886,
+    "1.5.97": 261397
+   },
+   "slots": [
+    "0xA3"
+   ],
+   "source": "native/logistics/PickupSound.cpp Install (slot 0xA3 READ, not written: Actor::PlayPickUpSound)",
+   "doc": "Docs/ENGINE_NOTES.md section 0.50 (batch A 86e3haxqx, pickup sound at the follower)"
+  },
+  {
+   "seat": "PickupSound.Actor.PlayPickUpSound",
+   "kind": "callsite",
+   "construct": "Character vtable slot 0xA3 (read at runtime) + 0x14A (1.6.1170, 1.7.104) / + 0x73 (1.5.97)",
+   "ids": {
+    "1.6.1170": 37196,
+    "1.5.97": 36216
+   },
+   "sig": {
+    "1.6.1170": "48 85 D2 0F 84 ?? ?? ?? ?? 48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56 48 83 EC 70",
+    "1.5.97": "48 85 D2 0F 84 ?? ?? ?? ?? 57 48 83 EC 60 48 8B F9"
+   },
+   "source": "native/logistics/PickupSound.cpp Install (write_call<5> on the BuildSoundDataFromDescriptor call)",
+   "offset": {
+    "1.6.1170": "0x14A",
+    "1.5.97": "0x73"
+   },
+   "bytes": "E8",
+   "target": {
+    "1.6.1170": 67666,
+    "1.5.97": 66404
+   },
+   "runtime_bytes": false,
+   "doc": "Docs/ENGINE_NOTES.md section 0.50 (batch A 86e3haxqx, pickup sound at the follower). 1.7.104: id 37196 is not in the MIT id table revision 3, so this row has no 1.7.104 entry; the function there is the raw-RVA row PickupSound.Actor.PlayPickUpSound.1_7_104 (0x6728B0, +0x14A -> 0xCCB320 = id 67666 checked at install)"
+  },
+  {
+   "seat": "PickupSound.BSAudioManager.BuildSoundDataFromDescriptor",
+   "kind": "function",
+   "construct": "REL::RelocationID(66404, 67666) (= RE::Offset::BSAudioManager::BuildSoundDataFromDescriptor)",
+   "ids": {
+    "1.6.1170": 67666,
+    "1.5.97": 66404
+   },
+   "sig": {
+    "1.6.1170": "4C 8B DC 55 56 57 41 54 41 55 41 56 41 57 48 81 EC A0 00 00 00 48 C7 44 24 40 FE FF FF FF",
+    "1.5.97": "40 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 D9 48 81 EC A0 00 00 00 48 C7 45 C7 FE FF FF FF 48 89 9C 24 E0 00 00 00 41 8B F1"
+   },
+   "source": "native/logistics/PickupSound.cpp Install (the call site's rel32 must land here; the thunk forwards to it)",
+   "doc": "Docs/ENGINE_NOTES.md section 0.50 (batch A 86e3haxqx, pickup sound at the follower); bool(BSAudioManager*, BSSoundHandle&, BSISoundDescriptor*, u32 flags): flags & 7 replaces the descriptor's mode (1 = 3D HRTF, 2 = 2D, 4 = attenuated speaker; descriptor fill BGSStandardSoundDef vslot 1)"
+  },
+  {
+   "seat": "PickupSound.BSSoundHandle.SetOutputModel",
+   "kind": "function",
+   "construct": "REL::RelocationID(66363, 67624)",
+   "ids": {
+    "1.6.1170": 67624,
+    "1.5.97": 66363
+   },
+   "sig": {
+    "1.6.1170": "48 89 5C 24 08 57 48 83 EC 20 8B 39 48 8B DA 83 FF FF",
+    "1.5.97": "48 89 5C 24 08 57 48 83 EC 20 8B 39 48 8B DA 83 FF FF"
+   },
+   "source": "native/logistics/PickupSound.cpp Install (BuildCall::thunk, main thread, inside the MFO pickup scope only)",
+   "doc": "Docs/ENGINE_NOTES.md section 0.50 (batch A 86e3haxqx, pickup sound at the follower); void(BSSoundHandle*, BSISoundOutputModel* = BGSSoundOutput + 0x20), as the engine calls it (1.6.1170 0x97AD83 / 1.5.97 0x2864BE); NOT CommonLib's SetOutputModel(const BGSSoundOutput*), which passes the form itself"
   }
  ],
  "layout_facts": [
@@ -1020,6 +1091,13 @@
    "where": "cast/Summon.cpp SummonLimit / SummonOnMain",
    "verified_by": "disassembly of the engine's add-commanded-actor fn on both runtimes (1.5.97 0x683D70 id 38993, call at 0x683E11; 1.6.1170 0x717800 id 40056, call at 0x7178EC); GMST iMaxSummonedCreatures (int, default 1) and the round-half-up constant 0.5 identical on both; ActiveEffect +0x40 spell (both) and +0x70 elapsedSeconds (AE eviction compare) read in that fn; flags +0x7C verified by ActiveEffect::Dispel (1.5.97 0x53E380 / 1.6.1170 0x5AC880: bts [+0x7C] bit 0x12 = kDispelled); kInactive bit 15 is the CommonLib declaration; 1.7.104: Docs/ENGINE_NOTES.md section 0.49 (same value)",
    "gate": "cast paths: CastPathsVerified; main thread only; the skip-cap flag read is gated on the Actuation.SummonCap.* ripref rows"
+  }
+ ],
+ "raw_rvas": [
+  {
+   "seat": "PickupSound.Actor.PlayPickUpSound.1_7_104",
+   "rva": "0x65FE90",
+   "source": "native/logistics/PickupSound.cpp Install (1.7.104 only: Actor::PlayPickUpSound read from Character vtable slot 0xA3; evidence row in tools/verified_addresses/idmap-1.7.104-mfo.csv)"
   }
  ]
 }

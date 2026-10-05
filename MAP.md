@@ -638,7 +638,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   Guarded: `Targeting::InstallHook`, `MainThread::Install`, `CasterConsent::InstallHook` (per
   vtable) + `InstallCheckCastHook`, `CombatStyle` equip gate (per vtable), `Board::InstallInputHook`
   (refused -> sink + ControlMap path), `SyncControlBlock` ToggleControls, `ForceRefToNativeAvailable`
-  (refused -> Papyrus route), `Probe::StartCombatOn`. **What breaks:** a new id-based hook or
+  (refused -> Papyrus route), `Probe::StartCombatOn`, `logistics/PickupSound.cpp` `Install` (4 rows + the
+  1.7.104 raw-RVA row from `tools/verified_addresses/idmap-1.7.104-mfo.csv`; refused -> engine sound unchanged).
+  **What breaks:** a new id-based hook or
   call without a spec row + regenerated header refuses itself at startup (by design); a spec row
   whose id or RVA drifts makes the generator exit 1 and write nothing. Regenerate with
   `tools/verified_addresses/gen_verified_addresses.py` (Docs/VERIFIED-ADDRESSES.md "Regenerating");
@@ -2665,6 +2667,25 @@ module. Module layout:
   - `logistics/Logistics.h` (232) = the public API (unchanged, moved whole).
   - `logistics/Lockpick.cpp` (956, NEW LP-M1 2026-09-25, doors LP-M2 2026-09-26) = follower LOCKPICKING of chests: see the
     LOCKPICK entry below. Declared in `Logistics_internal.h` (`namespace Lockpick`, `:847`).
+  - `logistics/PickupSound.cpp` (NEW batch A 86e3haxqx, 2026-10-05) = **PICKUP SOUND AT THE FOLLOWER**, an
+    ENGINE SEAT (tier A). A `write_call<5>` call-site trampoline (its OWN `SKSE::Trampoline`, never Board's:
+    a second `AllocTrampoline` would release Board's block) on the `BuildSoundDataFromDescriptor` call inside
+    Actor::PlayPickUpSound (Character vslot 0xA3, READ from the verified vtable; +0x14A on 1.6.1170 / 1.7.104,
+    +0x73 on 1.5.97). `Install()` (public, `Logistics.h`) runs at PLUGIN LOAD (`plugin.cpp`, after
+    `Board::InstallInputHook`). `PickupSound::Scope` (`Logistics_internal.h`) is a thread_local scope held on
+    MAIN around the route-2b arrival `ActivateRef` in `logistics/Service.cpp` (the `doActivate` lambda); only
+    inside it does the thunk replace a non-attenuating SNDR output model with SOMMono01400 (Skyrim.esm
+    0005A28A) via `SetOutputModel` (id 66363 / 67624, called with the model's +0x20 subobject, NOT CommonLib's
+    form-pointer wrapper). Root cause + proof: `Docs/ENGINE_NOTES.md` section 0.50. Log tag `[pickupsnd]`.
+    **What breaks:** calling `RE::RelocationID(36216, 37196)` anywhere: id 37196 is NOT in the 1.7.104 MIT table
+    (revision 3) and an id miss is FATAL in the fork, which is why the function is read from the vtable slot.
+    Regenerating `native/VerifiedAddresses.h` must add `--idmap tools/verified_addresses/idmap-1.7.104-mfo.csv`
+    to the documented command (the generated doc's command does not list it); without it the 1.7.104 raw row
+    `PickupSound.Actor.PlayPickUpSound.1_7_104` disappears and the seat refuses itself on 1.7.104 (logged, safe).
+    A Scope taken anywhere but around MFO's own pickup ActivateRef would reposition that sound too.
+    Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B226 (misleading generated regenerate text / 1.7.104
+    comment, scope breadth, raw row without a byte check). `logistics/Lockpick.cpp` PlayAtFollower builds with
+    flags 0x11 (forced 3D) for the same reason; CommonLib's default 0x1A forces 2D.
   - `logistics/Lotd.cpp` (1641, past ~1500: plan a split round) + `logistics/Lotd.h` = LOTD awareness (feat/mfo-lotd, 2026-09-25):
     detection, the museum snapshot, the "Loot museum items" gambit and its deposit trip. Its own
     public header (plugin.cpp, Diagnostics.cpp, Board_FieldKit.cpp include it). See the LOTD section
