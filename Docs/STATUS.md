@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-10-01 UTC (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-10-06 UTC (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
@@ -24,7 +24,13 @@ Read it as history and this block as current.
   DEFERRED" notes below are superseded. Field observable: `[runtime] 1.7.104.0 supported ... (exact 1.7.104)`,
   `[selfcheck] ... 56/56 verified`.
 
-- **2026-10-05 SHIPPED v2.1.0 "Skyrim 1.7.104 support" (current version).** Stamp commit `2e8bb7b`, CI run 37379635412, DLL sha256
+- **2026-10-06 SHIPPED v2.2.0 "Animated casts in combat" (current version).** Stamp commit `3272a56`, CI run 37536760580, DLL sha256
+  `bbba8896...`, tag `v2.2.0`. Zip `releases/v2.2.0/MFO-v2.2.0.zip` (sha256 `fec989a7...`, NOT uploaded to Nexus yet, marth uploads;
+  paste text in the session scratchpad `release-2.2.0-nexus.txt`). Batch A (animated in-combat buff, held-heal, proxy and approach casts),
+  heal hold until fire, spells-only idle-hand floor, spell picker hide + MGEF tooltips, Enemy/Self targets, AUTO nature-undeclared guard.
+  Requires Harbinger v0.11.0 (ABI v20) for the full set. Progression add-on unchanged, not re-shipped. **FIELD-TEST PENDING**, deploy as
+  a pair with Harbinger v0.11.0.
+- **2026-10-05 SHIPPED v2.1.0 "Skyrim 1.7.104 support" (superseded by v2.2.0).** Stamp commit `2e8bb7b`, CI run 37379635412, DLL sha256
   `670222a5...`, tag `v2.1.0`. Zip `releases/v2.1.0/MFO-v2.1.0.zip` (NOT uploaded to Nexus yet, marth uploads). Includes everything
   merged since v2.0.16 (1.7.104, skill drift hold, mage clothing, HMS core, translations, lockpick sounds, heal starve fix, the
   Logistics MCM blank row fix). The i18n translator-kind import merge was reverted and is NOT in. Nexus kit (description +
