@@ -43,6 +43,7 @@
 #include "Actuation_internal.h"
 #include "apmf/APMFBridge.h"
 #include "ComposedCast.h"
+#include <algorithm>
 
 #include <chrono>
 #include <mutex>
@@ -72,6 +73,11 @@ namespace MFO::Actuation {
             int               rule      = kNoRule;
             bool              losHeld   = false;
             Clock::time_point losSince{};
+            // LoS-held ms ALREADY ELAPSED for the claim stamped `losAccumStamp` (the lock's claim
+            // stamp; a different stamp = a new claim = zero). NeverFiredRelease subtracts it, plus the
+            // hold in progress, from the claim's age so lost sight is not counted against the bound.
+            long long         losAccumMs = 0;
+            Clock::time_point losAccumStamp{};
             RE::FormID        displacing     = 0;
             int               displacingRule = kNoRule;
         };
@@ -151,6 +157,11 @@ namespace MFO::Actuation {
                              a_follower, HandWord(a_hand), a_spell, a_recipient, g_firingRule);
             } else if (v == Sightline::Verdict::Visible && hh.losHeld) {
                 hh.losHeld = false;
+                if (const auto stamp = CastLockClaimStamp(a_follower, a_hand, a_spell); stamp != Clock::time_point{}) {
+                    if (hh.losAccumStamp != stamp) { hh.losAccumStamp = stamp; hh.losAccumMs = 0; }
+                    hh.losAccumMs += std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         now - std::max(hh.losSince, stamp)).count();
+                }
                 spdlog::info("[heal-hand] {:08X} {} hand: line of sight to {:08X} is back after {} ms -- the "
                              "held heal {:08X} is free to fire",
                              a_follower, HandWord(a_hand), a_recipient,
@@ -188,11 +199,33 @@ namespace MFO::Actuation {
             const auto fid   = a_follower->GetFormID();
             const auto stamp = CastLockClaimStamp(fid, a_hand, a_spell);
             if (stamp == Clock::time_point{}) return false;   // no lock naming it: nothing to bound here
-            const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - stamp).count();
+            const auto now = Clock::now();
+            // MFO-B8 (a): the bound is kHoldLastSeenCapMs of LoS-FREE claim age. Time the heal spent
+            // held through lost sight (a real occlusion, field 2026-10-06: 2.8 s of a 4 s claim) is
+            // subtracted, so it cannot release a claim that is legitimately waiting for sight.
+            RE::FormID recip = 0;
+            long long  heldMs = 0;
+            if (const auto hit = g_healHands.find(fid); hit != g_healHands.end()) {
+                const auto& hh = hit->second.hand[a_hand];
+                recip = hh.recipient;
+                if (hh.losAccumStamp == stamp) heldMs += hh.losAccumMs;
+                if (hh.losHeld)
+                    heldMs += std::chrono::duration_cast<std::chrono::milliseconds>(now - std::max(hh.losSince, stamp)).count();
+            }
+            const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - stamp).count() - heldMs;
             if (ageMs < static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) return false;
             if (ComposedCast::ObservedFiring(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs))
                 return false;
-            if (CastInFlightOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand))) return false;
+            // THE IN-FLIGHT EXEMPTION, NARROWED (review 2026-10-06): a charge that is building or casting
+            // is kept, and so is a charged-and-WAITING one while its recipient reads Occluded (it fires
+            // when sight clears). A kReady charge held with the recipient VISIBLE (or unknown) is a heal
+            // that will not fire: not exempt, so it is bounded like a claim that never charged.
+            if (CastInFlightOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand))) {
+                const bool waiting = CastChargedWaitingOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand));
+                const bool occluded = recip != 0 &&
+                    Sightline::CheckWithin(fid, recip, kHealLosTrustSec, Sightline::Basis::Own) == Sightline::Verdict::Occluded;
+                if (!waiting || occluded) return false;
+            }
             if (ComposedCast::UndecidedFire(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs)) {
                 static std::unordered_map<std::uint64_t, Clock::time_point> s_noBoundLog;   // worker-serial
                 auto& logged = s_noBoundLog[(static_cast<std::uint64_t>(fid) << 1) | a_hand];
@@ -210,6 +243,7 @@ namespace MFO::Actuation {
                          "re-chosen next lap (a seat or proxy problem in Harbinger shows here; rule {})",
                          fid, HandWord(a_hand), a_spell, a_who, ageMs, APMFBridge::kObservedFiringRecencyMs,
                          g_firingRule);
+            HealHoldLapsed(fid, a_hand, "never-fired: the claim never fired within the never-observed bound (LoS-free)");
             ReleaseOwnHealClaim(a_follower, a_hand, a_spell, "it never fired within the never-observed window");
             return true;
         }
@@ -421,21 +455,40 @@ namespace MFO::Actuation {
         return r.any;
     }
 
-    void HealHoldLapsed(RE::FormID a_follower, const char* a_why) {
-        const auto it = g_healHoldLog.find(a_follower);
+    void HealHoldLapsed(RE::FormID a_follower, std::size_t a_hand, const char* a_why) {
+        const auto it = g_healHoldLog.find((static_cast<std::uint64_t>(a_follower) << 1) | a_hand);
         if (it == g_healHoldLog.end()) return;   // no hold was announced: nothing lapsed
-        spdlog::info("[heal-hold] {:08X} hold ENDED: {} (heal {:08X})", a_follower, a_why, it->second.first);
+        spdlog::info("[heal-hold] {:08X} {} hand hold ENDED: {} (heal {:08X})", a_follower, HandWord(a_hand), a_why,
+                     it->second.first);
         g_healHoldLog.erase(it);
     }
 
-    bool HealHoldChannelRuns(RE::Actor* a_follower, RE::FormID a_spell, RE::FormID a_proxy) {
-        const auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spell);
-        return sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
-               CastInFlightOnHand(a_follower, kHandLeft, a_spell, a_proxy);
+    bool HealHoldStands(RE::Actor* a_follower, std::size_t a_hand, int a_askerRule, const CastLock& a_lk) {
+        const auto fid = a_follower->GetFormID();
+        if (a_lk.spell == 0 || a_lk.owningRule == kNoRule || a_lk.owningRule >= a_askerRule) return false;
+        const auto ah = ApmfHand(a_hand);
+        if (APMFBridge::GetHealCastSpell(fid, ah) != a_lk.spell) {   // not a standing heal claim on this hand
+            HealHoldLapsed(fid, a_hand, "the heal claim was released (expiry, preempt or combat end; see the [heal] / [heal-hand] line)");
+            return false;
+        }
+        // HOLD THROUGH THE IN-FLIGHT PHASE (field 2026-10-06, marth: the other hand stays off offense until
+        // the heal is observed firing). No age cap and no in-flight exit. A concentration heal keeps the
+        // hold while its channel runs on this hand (offense on the other hand would interrupt it); a
+        // channel re-started on the same claim is not protected again (backlog MFO-B234).
+        const auto sinceClaim = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - a_lk.lastSeen);
+        if (!ComposedCast::ObservedFiring(fid, ah, a_lk.spell, static_cast<std::uint32_t>(sinceClaim.count())))
+            return true;
+        const auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_lk.spell);
+        if (sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+            CastInFlightOnHand(a_follower, a_hand, a_lk.spell, CastProxyOnHand(fid, a_hand)))
+            return true;
+        HealHoldLapsed(fid, a_hand, "the heal was observed firing");   // normal behaviour resumes
+        return false;
     }
 
     void HealHandEnded(RE::FormID a_follower, std::size_t a_hand, const char* a_why) {
-        if (a_hand == kHandLeft) HealHoldLapsed(a_follower, a_why);
+        HealHoldLapsed(a_follower, a_hand, a_why);
         APMFBridge::ReleaseHealApproach(a_follower, "the hand's heal claim ended", a_hand);   // ch.24
         const auto it = g_healHands.find(a_follower);
         if (it == g_healHands.end() || a_hand >= kHandCount) return;
@@ -608,9 +661,10 @@ namespace MFO::Actuation {
         if (!a_follower || a_hand >= kHandCount) return std::nullopt;
         if (ProxyUnlearnedRelease(a_follower, a_hand, a_spell))
             return Outcome{ Result::FailedOther, "animated heal released: its Harbinger proxy was un-taught", true };
-        // The never-observed bound: the RIGHT hand only here (the left lap has HealClaimNeedsRepair).
-        if (a_hand == kHandRight && NeverFiredRelease(a_follower, kHandRight, a_spell, "its recipient"))
-            return Outcome{ Result::FailedOther, "animated heal released: it never fired on the right hand", true };
+        // The never-observed bound, BOTH hands (field 2026-10-06: with the hold's age cap gone this is what
+        // keeps a left claim that never fires from starving offense; HealClaimNeedsRepair only WARNs).
+        if (NeverFiredRelease(a_follower, a_hand, a_spell, "its recipient"))
+            return Outcome{ Result::FailedOther, "animated heal released: it never fired", true };
         return std::nullopt;
     }
 
