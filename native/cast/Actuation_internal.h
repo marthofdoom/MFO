@@ -518,6 +518,12 @@ namespace MFO::Actuation {
         BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log = true);
         SelfCast BuffSelfClaim(RE::Actor* a_follower, RE::SpellItem* a_spell);
         std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        // BuffUpTransparent: true when the claim road would take this fire-and-forget buff but it is
+        // already up (a main-thread-latched read), so CastOn's self fork returns transparent BEFORE
+        // commitPreempt (a lower-ranked claim must not be torn down every lap, review F2).
+        // ResetBuffRoad: clears the road's session state (from ClearCastLocks).
+        bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        void ResetBuffRoad();
         // ANIMATED-HEAL CLAIM ROAD (animheal phase 2), defined in cast/Hands.cpp.
         // ReleaseOwnHealClaim: end THIS rule's heal claim on a_spell now (the claim
         // via ComposedCast::End, and the LEFT lock that names it) -- the recipient

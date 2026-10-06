@@ -701,6 +701,8 @@ namespace MFO::Actuation {
                 // persistently-true combat cast_self does not starve attack/drink/
                 // heal below it, and `lastFired`/`[eval] fired` never lies on a
                 // no-op tick.
+                if (BuffUpTransparent(a_follower, spell))   // F2: BEFORE the preempt (cast/BuffRoad.cpp)
+                    return { Result::NoOp, "self-buff already up (or its read is pending)", true };
                 commitPreempt();   // the claim happens inside CastSelfDirect
                 switch (CastSelfDirect(a_follower, spell)) {
                 case SelfCast::Applied:
@@ -1655,6 +1657,7 @@ namespace MFO::Actuation {
         g_healRepairLog.clear();
         g_healHoldLog.clear();
         g_unsightedCharge.clear();
+        ResetBuffRoad();             // feat/mfo-remaining-cast-kinds: cast/BuffRoad.cpp
         ResetHealRoad();             // feat/mfo-perhand-heal: the per-hand heal records (cast/HealRoad.cpp)
     }
 

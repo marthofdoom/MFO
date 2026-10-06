@@ -1289,3 +1289,11 @@ Raised against 259630e (`feat/mfo-harbinger-los-adopt`, Opus review MERGE, 2026-
 - **F6 (SEV-5):** `apmf/APMFBridge.h` is at ~1528 lines. The next brief that touches it proposes a split (its own round).
 - **F7 (SEV-5):** `SenseOf` failing (NoOrigin, bad args, a race to unarmed) falls back to `Sightline::MeasureNow` on the engine basis in `EngageOnSight.cpp` without a log line.
 - **Surfaced at edit time from:** MAP.md Sightline.cpp and EngageOnSight.cpp "What breaks".
+
+### MFO-B230 -- Self-buff claim road (cast/BuffRoad.cpp): deferred review findings F5, F7-F9
+Raised against d5c51e0 (`feat/mfo-remaining-cast-kinds`, Opus review FIX FIRST, 2026-10-05). F1 (never-fired bound), F2 (preempt before the already-up decline), F3 (Light effect / rowApprox), F4 (ward cap keeps its rank, lock channel clock) and F6 (main-thread latched up-read) were fixed in the follow-up round. Reviewer's log (verbatim, `agentlogs/review-buffroad.md`): "F5 SEV-4 (BuffRefreshGate keyed on road choice: config flip mid-claim leaves ward unbounded). F7-9 SEV-5 (logs/labels, revert clear, unguarded LEFT release)." The F9 wording below is the coordinator's relay.
+- **F5 (SEV-4):** `BuffRefreshGate` runs only while `ChooseBuffRoad` answers Claim. Flipping `bApmfCast` / `bLegacyCastHybrid` / `bEquipToCast` mid-claim sends the lap to the old refresh without the ward stream cap or the never-fired bound until the claim's own TTL ends it.
+- **F7 (SEV-5):** log and label wording: the `[buff]` lines share the heal road's labels in places, and `self-cast could not fire` (CastOn) is the label for a transparent BuffSelfClaim Declined.
+- **F8 (SEV-5):** `EndBuffClaim` releases the LEFT offense slot (`ReleaseCastClaimOnHand`) without checking the claim there is this spell's; the lock rank gate makes a stranger on LEFT unlikely, not impossible. (The revert-clear half is fixed: `ResetBuffRoad` from `ClearCastLocks`.)
+- **F9 (SEV-5):** the banner and the brief said a buff at an ally or the player and AUTO's beneficial fan are "logged" by the road; they never reach `ChooseBuffRoad`, so they are not. Fixed in the banner and MAP.md in this round.
+- **Surfaced at edit time from:** MAP.md `cast/BuffRoad.cpp` entry.

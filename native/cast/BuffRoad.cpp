@@ -30,13 +30,16 @@
 //   * A buff cast AT an ally or the player, and AUTO's beneficial fan at others: seat 0 flips the self
 //     bit, so the Armor / Cloak / ... caster would be built, but 0x0A (GetMagicTarget) is not seated
 //     on those types, so the engine would aim it at the combat target (a foe).
-// Those keep the direct road, with one `[buff]` line each naming the reason.
+// A self cast of a Light, Summon / Reanimate or rowless spell reaches ChooseBuffRoad and keeps the direct
+// road with one `[buff]` line naming the reason. A buff at an ally or the player, and AUTO's beneficial
+// fan, never pass through ChooseBuffRoad at all (they are NOT logged here); they keep their own roads.
 //
 // Worker-serial (#4), like every cast-road decision: the log dedup and the channel ledger are
 // unlocked on purpose.
 #include "Direct_internal.h"   // Actuation_internal.h + LogApmfRefusal
 #include "ComposedCast.h"
 #include "Loadout.h"
+#include "MainThread.h"
 #include "Runtime.h"
 #include "apmf/APMFBridge.h"
 
@@ -59,31 +62,87 @@ namespace MFO::Actuation {
             return true;
         }
 
-        // The concentration claim's per-channel bound (exact bounding covers every spell class): the
-        // drawn cap, keyed to the LEFT lock's claim stamp (CastLockClaimStamp) so a re-claim, which
-        // stamps a new lock, draws afresh. One entry per follower (one LEFT claim at a time).
-        struct Chan { RE::FormID spell = 0; std::chrono::steady_clock::time_point stamp; float cap = 0.0f; };
-        std::unordered_map<RE::FormID, Chan> g_chan;
+        // THE "BUFF IS UP" READ IS MADE ON THE MAIN THREAD (review F6): HasMagicEffect walks the live
+        // active-effect list, which the engine mutates on the main thread, so the worker never reads
+        // it. MainThread::Post makes the read and LATCHES the verdict per (follower, spell) under
+        // g_upMx; the worker reads the latch (the heal road's proxy-check shape, HealRoad.cpp
+        // ProxyUnlearnedRelease). A verdict is trusted for kUpTrustMs only, so a stale one is DROPPED
+        // (never applied to a later lap) and a fresh read is posted. At most one read is pending per
+        // key. ResetBuffRoad clears it all.
+        constexpr auto kUpTrust = std::chrono::milliseconds(2000);
+        struct UpLatch { bool pending = false; bool up = false; std::chrono::steady_clock::time_point at{}; };
+        std::mutex                                    g_upMx;
+        std::unordered_map<std::uint64_t, UpLatch>    g_up;   // under g_upMx
 
-        // True while the spell's costliest effect is on the caster (a duration buff already up).
-        bool EffectActive(RE::Actor* a_actor, RE::SpellItem* a_spell) {
-            auto* ei   = a_spell->GetCostliestEffectItem();
-            auto* mgef = ei ? ei->baseEffect : nullptr;
-            auto* mt   = a_actor->AsMagicTarget();
-            return mgef && mt && mt->HasMagicEffect(mgef);
+        enum class Up : std::uint8_t { Unknown, No, Yes };
+        Up BuffUp(RE::Actor* a_actor, RE::SpellItem* a_spell) {
+            const auto fid = a_actor->GetFormID();
+            const auto sid = a_spell->GetFormID();
+            const std::uint64_t key = (static_cast<std::uint64_t>(fid) << 32) | sid;
+            Up out = Up::Unknown;
+            bool post = false;
+            {
+                std::scoped_lock lock(g_upMx);
+                auto& l = g_up[key];
+                if (l.at.time_since_epoch().count() != 0 &&
+                    std::chrono::steady_clock::now() - l.at < kUpTrust)
+                    out = l.up ? Up::Yes : Up::No;
+                if (!l.pending && out == Up::Unknown) { l.pending = true; post = true; }
+            }
+            if (post)
+                MainThread::Post([fid, sid, key] {
+                    bool up = false;
+                    auto* a  = RE::TESForm::LookupByID<RE::Actor>(fid);
+                    auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sid);
+                    if (a && sp) {
+                        auto* ei   = sp->GetCostliestEffectItem();
+                        auto* mgef = ei ? ei->baseEffect : nullptr;
+                        auto* mt   = a->AsMagicTarget();
+                        up = mgef && mt && mt->HasMagicEffect(mgef);
+                    }
+                    std::scoped_lock lock(g_upMx);
+                    auto it = g_up.find(key);
+                    if (it == g_up.end()) return;   // reset while the read was queued: dropped
+                    it->second = { false, up, std::chrono::steady_clock::now() };
+                });
+            return out;
         }
 
+        // A claim that never fired is RELEASED once and then HELD OFF (review F1): per follower, the
+        // spell whose claim never fired this fight. The rule stays transparent for it until a state
+        // change (the follower loses its CombatController = the fight ended; revert via
+        // ResetBuffRoad). The g_unsightedCharge pattern. Worker-serial (#4).
+        std::unordered_map<RE::FormID, RE::FormID> g_neverFired;
+
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
-        // names it, the channel ledger, and (a_takeBack) MFO's equipped spell. Idempotent.
+        // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
         void EndBuffClaim(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_takeBack) {
             const auto id = a_actor->GetFormID();
             APMFBridge::ReleaseCastClaimOnHand(id, APMFBridge::kApmfHandLeft);
             ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
             ClearLeftCastLockIf(id, a_spell->GetFormID());
-            g_chan.erase(id);
             if (a_takeBack) Loadout::ReleaseSpellIf(id, a_spell->GetFormID());
         }
 
+    }
+
+    void ResetBuffRoad() {
+        g_roadLog.clear();
+        g_neverFired.clear();
+        std::scoped_lock lock(g_upMx);
+        g_up.clear();
+    }
+
+    bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !a_spell) return false;
+        if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) != BuffRoad::Claim) return false;
+        // A never-fired hold-off (F1) is transparent without a preempt too.
+        if (const auto nf = g_neverFired.find(a_follower->GetFormID());
+            nf != g_neverFired.end() && nf->second == a_spell->GetFormID())
+            return true;
+        if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) return false;
+        // Unknown (the read is posted, no verdict yet) is transparent too: a guess here would preempt.
+        return BuffUp(a_follower, a_spell) != Up::No;
     }
 
     BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log) {
@@ -109,8 +168,20 @@ namespace MFO::Actuation {
             return say(BuffRoad::DirectNoSeat, "not Self delivery (no 0x0A seat on the Armor / Cloak / Ward / ... "
                                                "casters: needs Harbinger)");
 
-        const auto row = ClassifyArchetype(a_spell).row;
-        switch (row) {
+        const auto arch = ClassifyArchetype(a_spell);
+        // F3: a spell with ANY Light effect, a Light shape, or several effects mapping to different rows
+        // (the classifier then picks the costliest, which can name Armor for a spell that also lights)
+        // may be built as the engine's Light caster: the spam shape. Direct, until Harbinger bounds Light.
+        bool anyLight = false;
+        for (auto* eff : a_spell->effects)
+            if (eff && eff->baseEffect && eff->baseEffect->data.archetype == RE::EffectArchetype::kLight)
+                anyLight = true;
+        if (anyLight || arch.shape == SpellShape::Light || arch.rowApprox)
+            return say(BuffRoad::DirectNoSeat, "a Light effect or an ambiguous row (several effects map to "
+                                               "different caster rows): the engine may build its Light caster, "
+                                               "the 55-light spam CTD shape of 2026-08-19; needs a Harbinger "
+                                               "bound for Light");
+        switch (arch.row) {
         case EngineRow::Armor: case EngineRow::Cloak: case EngineRow::Invisibility:
         case EngineRow::BoundItem: case EngineRow::Ward:
             break;
@@ -126,9 +197,11 @@ namespace MFO::Actuation {
         }
 
         // THE TEST IS THE OBJECT THE SEATS HANG OFF (CastTargetDirect's note): no controller, no caster.
-        if (!a_follower->GetActorRuntimeData().combatController)
+        if (!a_follower->GetActorRuntimeData().combatController) {
+            g_neverFired.erase(fid);   // the fight ended: a never-fired hold-off is a per-fight latch
             return say(BuffRoad::DirectNoCombat, "no combat controller (the animated cast needs the "
                                                  "follower's own combat AI)");
+        }
         return BuffRoad::Claim;
     }
 
@@ -141,9 +214,19 @@ namespace MFO::Actuation {
         // A duration buff already up is not cast again (the direct road's already-active guard; the
         // claim must not make the AI stack it). A concentration ward is ACTIVE while it channels, so
         // the guard is for fire-and-forget only; the channel is bounded by BuffRefreshGate.
-        if (!conc && EffectActive(a_follower, a_spell)) {
-            EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+        // A claim that never fired this fight stays released (review F1): transparent until the fight
+        // ends or the load reverts (the latch is cleared there). Never the direct road.
+        if (const auto nf = g_neverFired.find(id); nf != g_neverFired.end() && nf->second == spellID)
             return SelfCast::Declined;
+        // The up-read is made on the main thread and latched (F6); no verdict yet is a transparent
+        // no-cast this lap (the read is posted), never a guess.
+        if (!conc) {
+            const Up up = BuffUp(a_follower, a_spell);
+            if (up == Up::Yes) {
+                EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                return SelfCast::Declined;
+            }
+            if (up == Up::Unknown) return SelfCast::Declined;
         }
 
         std::string why;
@@ -178,22 +261,61 @@ namespace MFO::Actuation {
         if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) != BuffRoad::Claim) return std::nullopt;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
-        if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
-            const auto stamp = CastLockClaimStamp(id, kHandLeft, spellID);
-            if (stamp == std::chrono::steady_clock::time_point{}) return std::nullopt;   // no lock names it yet
-            auto& ch = g_chan[id];
-            if (ch.spell != spellID || ch.stamp != stamp)
-                ch = { spellID, stamp, DrawConcCap(CasterConsent::SpellKind::Buff) };
-            const float sec = std::chrono::duration<float>(std::chrono::steady_clock::now() - stamp).count();
-            if (sec < ch.cap) return std::nullopt;
-            // Past the drawn cap: release instead of renewing. The spell stays in the hand and the
-            // next lap re-claims while the rule wins (a re-stream, never a stop or a cooldown).
+        const bool conc    = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+
+        // NEVER FIRED (review F1), the heal road's NeverFiredRelease shape (HealRoad.cpp): the claim's
+        // lock stamp is older than kHoldLastSeenCapMs, no fire observed on LEFT within
+        // kObservedFiringRecencyMs, and nothing charging or casting. Released ONCE with a WARN and the
+        // rule held off for this fight (g_neverFired); NEVER the direct road (no decline-fallback).
+        // A claim that has fired, or is charging (a held charge is in flight), is never cut here.
+        if (const auto stamp = CastLockClaimStamp(id, kHandLeft, spellID);
+            stamp != std::chrono::steady_clock::time_point{}) {
+            const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - stamp).count();
+            if (ageMs >= static_cast<long long>(APMFBridge::kHoldLastSeenCapMs) &&
+                !ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
+                                              APMFBridge::kObservedFiringRecencyMs) &&
+                !CastInFlightOnHand(a_follower, kHandLeft, spellID, CastProxyOnHand(id, kHandLeft))) {
+                spdlog::warn("[buff] {:08X} {} ({:08X}) NEVER FIRED: claimed {} ms ago, no fire observed on the "
+                             "left hand in the last {} ms and nothing charging -- claim RELEASED and the rule "
+                             "held off for this fight (no direct fallback; the engine's {} caster did not fire "
+                             "it: see Harbinger's [ctcensus] verdict; rule {})",
+                             id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, ageMs,
+                             APMFBridge::kObservedFiringRecencyMs,
+                             EngineRowName(ClassifyArchetype(a_spell).row), g_firingRule);
+                g_neverFired[id] = spellID;
+                EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                return Outcome{ Result::NoOp, "self-buff claim never fired: released, held off this fight", true };
+            }
+        }
+
+        if (conc) {
+            // THE WARD'S STREAM CAP, on the lock's own channel clock (HealChannelCapped: the clock runs
+            // only while the engine channels it; a cap drawn once per channel from DrawConcCap's non-
+            // offense band, 8-15 s). Release + re-stream while the rule wins, never a stop or a
+            // cooldown. THE RANK STAYS (F4, MFO-B177's mechanism): the lock is kept with `restreamAt`
+            // for the gap to this rule's re-claim, so a lower-ranked rule cannot take the left hand on
+            // this transparent lap; HoldCastLock clears it on the re-claim.
+            float capSec = 0.0f;
+            if (!HealChannelCapped(a_follower, kHandLeft, spellID, capSec)) return std::nullopt;
             spdlog::info("[buff] {:08X} {:08X}: concentration self-buff reached its {:.1f} s stream cap -- claim "
-                         "released, re-streams while the rule wins", id, spellID, ch.cap);
-            EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/false);
+                         "released, re-streams while the rule wins (the spell stays in hand, the lock keeps "
+                         "its rank)", id, spellID, capSec);
+            APMFBridge::ReleaseCastClaimOnHand(id, APMFBridge::kApmfHandLeft);
+            ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
+            if (auto it = g_castLock.find(id); it != g_castLock.end()) {
+                auto& lk = it->second.hand[kHandLeft];
+                if (lk.spell == spellID && g_firingRule != kNoRule && lk.owningRule == g_firingRule) {
+                    lk.restreamAt   = std::chrono::steady_clock::now();
+                    lk.channelSince = {};
+                    lk.channelCap   = 0.0f;
+                } else {
+                    ClearLeftCastLockIf(id, spellID);
+                }
+            }
             return Outcome{ Result::NoOp, "self-buff stream cap", true };
         }
-        if (!EffectActive(a_follower, a_spell)) return std::nullopt;
+        if (BuffUp(a_follower, a_spell) != Up::Yes) return std::nullopt;
         spdlog::info("[buff] {:08X} {:08X}: self-buff is up -- claim released (the cast landed)", id, spellID);
         EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
         return Outcome{ Result::NoOp, "self-buff already up: claim released", true };
