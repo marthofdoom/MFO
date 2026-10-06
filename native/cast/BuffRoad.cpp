@@ -184,21 +184,6 @@ namespace MFO::Actuation {
             return true;
         }
 
-        // A SELF cast of a NON-kSelf, non-placement buff (marth 2026-10-05: "a self cast is valid if its needed, just
-        // needs to be animated"). Harbinger leaves a TARGET-0 claim of such a spell unresolved (APMF-B39: the seats would
-        // not serve it), but an EXPLICIT self FormID resolves to the claimant's handle (core/ControlMap.cpp), seat 0
-        // flips the row's self bit for the driven form and 0x0A answers the claimed target = the caster. It is
-        // therefore claimed like an ally buff with target = the caster's own FormID. Aimed, Touch and TargetActor
-        // are all served (marth 2026-10-05: "proxy aimed buffs, and touch buffs"): Harbinger's self-flip proxy
-        // (feat/apmf-self-delivery-proxy, no ABI bump) mints a kSelf copy of the spell for a claim whose target is
-        // the claimant's own FormID, so no ray is aimed at the shooter. A kTargetLocation non-placement spell
-        // stays direct (rune-shaped, batch D); a hostile spell is never a Buff kind (CasterConsent::ClassifySpell).
-        bool ExplicitSelfBuff(RE::SpellItem* a_spell) {
-            return a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
-                   a_spell->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&   // keeps the Task-1 target-0 claim
-                   !BuffPlacementSpell(a_spell);
-        }
-
         // A claim lap's label for the `[buff]` line: which kind of claim this is.
         const char* ClaimLabel(const SpellArchetype& a_arch, bool a_other) {
             switch (a_arch.row) {
@@ -233,6 +218,47 @@ namespace MFO::Actuation {
         if (!a_spell) return false;
         const auto shape = ClassifyArchetype(a_spell).shape;   // any Summon / Reanimate effect (Harbinger's IsPlacementSpell)
         return shape == SpellShape::Summon || shape == SpellShape::Reanimate;
+    }
+
+    // The static (spell-record-only) fallbacks of ChooseBuffRoad, shared with the board's spell picker
+    // (cast/SpellSupport.cpp) so the two can never disagree. Declared in Actuation.h.
+    // A SELF cast of a NON-kSelf, non-placement buff (marth 2026-10-05: "a self cast is valid if its needed, just
+    // needs to be animated"). Harbinger leaves a TARGET-0 claim of such a spell unresolved (APMF-B39: the seats would
+    // not serve it), but an EXPLICIT self FormID resolves to the claimant's handle (core/ControlMap.cpp), seat 0
+    // flips the row's self bit for the driven form and 0x0A answers the claimed target = the caster. It is
+    // therefore claimed like an ally buff with target = the caster's own FormID. Aimed, Touch and TargetActor
+    // are all served (marth 2026-10-05: "proxy aimed buffs, and touch buffs"): Harbinger's self-flip proxy
+    // (feat/apmf-self-delivery-proxy, no ABI bump) mints a kSelf copy of the spell for a claim whose target is
+    // the claimant's own FormID, so no ray is aimed at the shooter. A kTargetLocation non-placement spell
+    // stays direct (rune-shaped, batch D); a hostile spell is never a Buff kind (CasterConsent::ClassifySpell).
+    bool ExplicitSelfBuff(RE::SpellItem* a_spell) {
+        return a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
+               a_spell->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&   // keeps the Task-1 target-0 claim
+               !BuffPlacementSpell(a_spell);
+    }
+
+    const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch) {
+        if (!a_arch.rowApprox) return nullptr;
+        return "an ambiguous row (several effects map to different caster rows: "
+               "the engine may build a different caster than the one judged)";
+    }
+
+    const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
+        bool anyLight = false;
+        for (auto* eff : a_spell->effects)
+            if (eff && eff->baseEffect && eff->baseEffect->data.archetype == RE::EffectArchetype::kLight)
+                anyLight = true;
+        // Harbinger serves Light for kSelf delivery only, and refuses aimed Magelight.
+        if ((anyLight || a_arch.shape == SpellShape::Light || a_arch.row == EngineRow::Light) &&
+            a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf)
+            return "aimed / targeted Light (Magelight): Harbinger serves Light for Self delivery only";
+        return nullptr;
+    }
+
+    const char* BuffSelfRuneWhy(RE::SpellItem* a_spell, bool a_explicitSelf) {
+        if (a_explicitSelf && a_spell->GetDelivery() == RE::MagicSystem::Delivery::kTargetLocation)
+            return "self cast of a target-location buff: rune-shaped, Harbinger's self-flip proxy does not serve it (batch D)";
+        return nullptr;
     }
 
     bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
@@ -284,29 +310,20 @@ namespace MFO::Actuation {
         // A spell with several effects mapping to different rows (the classifier then picks the costliest,
         // which can name Armor for a spell that also lights) may be built as another caster than the one
         // the claim was judged for: the 55-light spam shape. Direct.
-        if (arch.rowApprox)
-            return say(BuffRoad::DirectNoSeat, "an ambiguous row (several effects map to different caster rows: "
-                                               "the engine may build a different caster than the one judged)");
-        bool anyLight = false;
-        for (auto* eff : a_spell->effects)
-            if (eff && eff->baseEffect && eff->baseEffect->data.archetype == RE::EffectArchetype::kLight)
-                anyLight = true;
+        if (const char* why = BuffAmbiguousRowWhy(arch))
+            return say(BuffRoad::DirectNoSeat, why);
         const auto delivery = a_spell->GetDelivery();
         if (!placement) {
-            // Harbinger serves Light for kSelf delivery only, and refuses aimed Magelight.
-            if ((anyLight || arch.shape == SpellShape::Light || arch.row == EngineRow::Light) &&
-                delivery != RE::MagicSystem::Delivery::kSelf)
-                return say(BuffRoad::DirectNoSeat, "aimed / targeted Light (Magelight): Harbinger serves Light "
-                                                   "for Self delivery only");
+            if (const char* why = BuffAimedLightWhy(a_spell, arch))
+                return say(BuffRoad::DirectNoSeat, why);
             // A self cast of a non-Self buff is claimed with the caster's own FormID as the target (see
             // ExplicitSelfBuff); Aimed / Touch / TargetActor drive Harbinger's self-flip proxy. Only a
             // kTargetLocation (non-placement, rune-shaped) spell stays direct.
             if (!other && !explicitSelf && delivery != RE::MagicSystem::Delivery::kSelf)
                 return say(BuffRoad::DirectNoSeat, "not Self delivery (a concentration self cast of a non-Self spell "
                                                    "keeps the target-0 claim of CastSelfDirect)");
-            if (explicitSelf && delivery == RE::MagicSystem::Delivery::kTargetLocation)
-                return say(BuffRoad::DirectNoSeat, "self cast of a target-location buff: rune-shaped, Harbinger's "
-                                                   "self-flip proxy does not serve it (batch D)");
+            if (const char* why = BuffSelfRuneWhy(a_spell, explicitSelf))
+                return say(BuffRoad::DirectNoSeat, why);
         }
         // needCap: the kinds that exist only with Harbinger's buff / summon / rowless seats. The native-row
         // self buffs (Armor / Cloak / Invisibility / BoundItem / Ward at self) need none.

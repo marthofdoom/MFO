@@ -651,6 +651,16 @@ namespace MFO::Actuation {
     // a_seat0 = model APMF seat 0 (STATUS.md:135, :186-188): the claim's driven form keys self=1, so a
     // heal-OTHER claim lands in the Restore row. Used for the HealClaim road only.
     SpellArchetype ClassifyArchetype(RE::SpellItem* a_spell, bool a_seat0 = false);
+    // The board's spell picker (cast/SpellSupport.cpp): true when MFO can cast a_spell only by the
+    // UNANIMATED direct fallback decided from the spell RECORD alone (never the fight situation), so the
+    // picker hides it. *a_reason (optional) gets a static literal. Pure form data: main-thread safe.
+    bool CastRoadUnsupported(RE::SpellItem* a_spell, const char** a_reason = nullptr);
+    // The static per-spell cases of ChooseBuffRoad (cast/BuffRoad.cpp), shared so the picker and the road
+    // cannot disagree. Each returns the reason literal, or nullptr when the case does not apply.
+    bool        ExplicitSelfBuff(RE::SpellItem* a_spell);
+    const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch);
+    const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch);
+    const char* BuffSelfRuneWhy(RE::SpellItem* a_spell, bool a_explicitSelf);
     const char* ShapeName(SpellShape a_shape);
     const char* EngineRowName(EngineRow a_row);
     // "<name> (<id>) shape=<s> predicted=<row>[...]" -- the [cfc] enrichment.

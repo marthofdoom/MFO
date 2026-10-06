@@ -574,6 +574,14 @@ per concern:
   SpellFire evidence `HandFireSink` (`:305`) / `HandFireWatch` (`:327`) / `HandFireTake` (`:346`, public); anon
   `HealOnHand` (`:88`), `RecipientLost` (`:108`), `NoteLosHold` (`:134`), `NeverFiredRelease` (`:171`),
   `ProxyUnlearnedRelease` (`:210`), `MaintainCompanion` (`:232`), the per-hand record `g_healHands`.
+- `cast/SpellSupport.cpp` (feat/mfo-hide-unsupported-spells 2026-10-06) = `CastRoadUnsupported(SpellItem*, const char** reason)` (public,
+  `cast/Actuation.h`): the board's spell-picker filter. True only for the STATIC (record-only) direct fallbacks of `ChooseBuffRoad`, via the SAME
+  helpers it calls (`BuffAmbiguousRowWhy` / `BuffAimedLightWhy` / `BuffSelfRuneWhy` / `ExplicitSelfBuff`, now exported from `cast/BuffRoad.cpp`):
+  ambiguous row, aimed Light (Magelight), non-placement target-location buff. Buff kind only; hostile runes are NOT hidden (CastOn `ownedCast`
+  has no delivery filter). WHAT BREAKS: changing a `ChooseBuffRoad` static case without changing its helper desyncs nothing (it calls them), but
+  adding a NEW static case there must also go through a shared helper + this predicate, or the picker keeps offering the spell. Board.cpp
+  (`SpellList` in PublishSnapshot) hides these, logs `[spell-support] hidden from picker` once per spell, and keeps one a rule already names,
+  suffixed " (unsupported)". Picker only: AUTO and casting untouched.
 - `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, widened by feat/mfo-claim-road-summon-ally-rowless 2026-10-05; batch A
   release gate checklist R6/R8/R9/R11) = THE ANIMATED BUFF CLAIM ROAD: `ChooseBuffRoad(follower, spell, log, recipient)` (NotBuff / Claim /
   DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCap / DirectNoCombat; one `[buff]` line per reason), `BuffClaim` (+ `BuffSelfClaim`
@@ -4878,6 +4886,7 @@ its perk/AV mutations are runtime-only. Safe to delete without touching saves; o
 ## 6. Board / UI / Papyrus — `Board.*`, `Papyrus.*`
 
 ### Board.cpp / Board_FieldKit.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
+**Spell picker filter (2026-10-06):** `SpellList` in `Board.cpp` PublishSnapshot (~:1640) skips `Actuation::CastRoadUnsupported` spells (`cast/SpellSupport.cpp`) unless an existing rule names them (then " (unsupported)" suffix).
 Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/

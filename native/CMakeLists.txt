@@ -61,6 +61,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/HealObs.cpp
     cast/Summon.cpp
     cast/BuffRoad.cpp
+    cast/SpellSupport.cpp
     cast/Archetype.cpp
     cast/SummonProbe.cpp
     cast/Auto.cpp

@@ -10,6 +10,7 @@
 #include <dxgi.h>
 #include <cmath>
 #include <cstring>
+#include <unordered_set>
 #include <filesystem>
 #undef GetObject
 
@@ -27,6 +28,7 @@
 #include "Followers.h"
 #include "Rapport.h"
 #include "Config.h"
+#include "cast/Actuation.h"   // CastRoadUnsupported: the spell picker hides spells MFO cannot cast animated
 #include "logistics/Logistics.h"   // IsLooting/IsTrading for the [C][L][T] activity glyphs
 #include "Forms.h"
 #include "State.h"
@@ -1624,6 +1626,11 @@ namespace MFO::Board {
                 r.logisticsSlots = SlotsForRank(it->second.rank, Table::Logistics);
                 FillRuleViews(r.combat,    it->second.combat());
                 FillRuleViews(r.logistics, it->second.logistics());
+                // Spells an existing rule already names: a now-hidden (unsupported) spell stays in the
+                // picker for such a rule, suffixed, so a saved choice never vanishes from view.
+                std::unordered_set<RE::FormID> ruleSpells;
+                for (const auto* rv : { &r.combat, &r.logistics })
+                    for (const auto& v : *rv) if (v.spell) ruleSpells.insert(v.spell);
                 // The follower's castable spells, for the board's picker. Same
                 // VisitSpells pattern the seed uses. Precompute the tooltip metrics
                 // HERE (main thread): CalculateMagickaCost is the ACTOR overload
@@ -1633,18 +1640,32 @@ namespace MFO::Board {
                 struct SpellList : RE::Actor::ForEachSpellVisitor {
                     std::vector<FollowerRow::SpellPick>* out;
                     RE::Actor*                           follower;
+                    const std::unordered_set<RE::FormID>* inUse = nullptr;
                     RE::BSContainer::ForEachResult Visit(RE::SpellItem* sp) override {
                         if (sp && MFO::Vocab::IsCastableSpell(sp)) {
+                            // Hide a spell MFO can only cast by the unanimated direct fallback (decided from
+                            // the record alone). Picker only: AUTO and casting are untouched.
+                            const char* why = nullptr;
+                            bool unsupported = false;
+                            if (MFO::Actuation::CastRoadUnsupported(sp, &why)) {
+                                static std::unordered_set<RE::FormID> s_logged;   // once per session per spell
+                                if (s_logged.insert(sp->GetFormID()).second)
+                                    spdlog::info("[spell-support] hidden from picker: {} {:08X} -- {}",
+                                                 sp->GetName() ? sp->GetName() : "?", sp->GetFormID(), why ? why : "?");
+                                if (!inUse || !inUse->count(sp->GetFormID())) return RE::BSContainer::ForEachResult::kContinue;
+                                unsupported = true;   // a rule already points at it: keep it, marked
+                            }
                             FollowerRow::SpellPick p;
                             p.id          = sp->GetFormID();
                             p.name        = sp->GetName() ? sp->GetName() : "?";
+                            if (unsupported) p.name += " (unsupported)";
                             p.magickaCost = follower ? static_cast<int>(sp->CalculateMagickaCost(follower) + 0.5f) : 0;
                             p.tooltip     = SpellTooltip(sp);
                             out->push_back(std::move(p));
                         }
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
-                } vis; vis.out = &r.knownSpells; vis.follower = a;
+                } vis; vis.out = &r.knownSpells; vis.follower = a; vis.inUse = &ruleSpells;
                 a->VisitSpells(vis);
 
                 // #4: teachable spells -- books in the PLAYER's pack whose spell
