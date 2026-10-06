@@ -1007,6 +1007,7 @@ namespace MFO::Scheduler {
                 g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
                 g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
                 APMFBridge::ReleasePursuitLeash(id, "combat ended");   // ch.23: the in-combat leash ends with the fight
+                APMFBridge::ReleaseHealApproach(id, "combat ended", APMFBridge::kApproachAnyHand, true);   // ch.24: and the held-heal approach
                 g_reachHold.erase(id);   // fix/mfo-unreachable-flyer: and its reach hold (no line: the fight is over)
 
                 // v1.0.30: the cast-control latch dies with the fight. The [cast]
@@ -1285,6 +1286,7 @@ namespace MFO::Scheduler {
 
             if (ServiceRetreat(f, id, dPlayer, pc != nullptr)) {
                 APMFBridge::ReleasePursuitLeash(id, "retreating");   // ch.23: the retreat has its own road
+                APMFBridge::ReleaseHealApproach(id, "retreating");   // ch.24: so does the held-heal approach
                 // While falling back, do NOT run the gambit table: a cast rule
                 // would fill the COMMAND alias (also priority 60) on the same
                 // actor and fight the retreat travel for the alias. A retreating

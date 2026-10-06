@@ -496,6 +496,16 @@ namespace MFO::APMFBridge {
     // never claimed when no leash can hold him (principle 7). Read-only; takes g_leashMx.
     bool PursuitLeashStanding(RE::FormID a_follower);
 
+    // ── ch.24 HELD-HEAL APPROACH (ABI v19, kIntent_CombatApproach): apmf/CombatApproach.cpp ──
+    // X = the held heal's recipient, R = fHealApproachRadius. One claim per follower; a no-op below
+    // ABI 19 / seat refused / recipient blocked this fight. Release: a_hand names the hand whose
+    // claim to end (kApproachAnyHand = whichever stands); a_fightOver also clears the per-fight
+    // never-re-file set. Worker-safe; own mutex (never g_mx).
+    inline constexpr std::size_t kApproachAnyHand = ~std::size_t{ 0 };
+    void ServiceHealApproach(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_recipient);
+    void ReleaseHealApproach(RE::FormID a_follower, const char* a_why,
+                             std::size_t a_hand = kApproachAnyHand, bool a_fightOver = false);
+
     // ── LOCKPICK HOLD (LP-M1, ClickUp 86e3edgha): ch.1 + ch.12 Idle v2 (ABI v17) ──
     // The pick window's two claims, filed together when a follower standing at a locked
     // chest starts to pick it (logistics/Lockpick.cpp): kIntent_MovementBlock (ch.1, the

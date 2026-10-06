@@ -5435,6 +5435,22 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `ChaseRadius` (measured from the follower, not the anchor); keeping it through a retreat.
     `PursuitLeashStanding` (`:142`, fix/mfo-unreachable-flyer) = a filed, not-ENDED claim exists;
     read only by the Scheduler's `[reach]` hold line.
+  - `apmf/CombatApproach.cpp` (NEW, feat/mfo-held-heal-approach 2026-10-05, ClickUp 86e3h871c; marth 2026-09-30: "instead of a
+    cap it should do loots moveto towards the actor") = the **ch.24 HELD-HEAL APPROACH** (ABI v19 `kIntent_CombatApproach`;
+    `APMF_API.h` mirrored from APMF d8bb76d, md5 a18db368). File-local `g_approach` (one claim per follower: hand, recipient, R)
+    + `g_approachBlocked` (per-fight never-re-file set) under its OWN `g_approachMx`. `ServiceHealApproach(follower, hand, recipient)`
+    files `{target = recipient, fval = fHealApproachRadius (`Config::g_healApproachRadius`, 384), ival = kApproach_Hold}`; the same
+    hand's NEW recipient Repoints, another hand's does nothing. Called ONLY from `cast/HealRoad.cpp` `NoteLosHold` once the held
+    heal's own-ray `Sightline::OccludedRun >= kHealLosAgreeingReadings`. `ReleaseHealApproach(follower, why, hand, fightOver)`: from
+    `NoteLosHold` (verdict no longer held), `HealHandEnded` (that hand's heal ended), the Scheduler (combat ended `fightOver`,
+    retreating) and `ReleaseHeldState` (dismissal). `SweepHealApproaches` (from `Tick` before `g_mx`): reads
+    `GetCombatApproachState`; Leashed (MFO's ch.23 leash: logged, not fought) releases + blocks; a claim Harbinger ENDED with
+    EngineDropped / TargetLost / Refused, or that never went live (15 unpaused sweeps), blocks that recipient for the fight;
+    heartbeat `[heal-approach] ... distance D / R` every 1.5 s. `ClearHealApproaches` from `ClearTransientState`. NO CAP: the held
+    heal stays held and `NeverFiredRelease` is unchanged. **What breaks:** a second claim per follower; re-filing a blocked
+    recipient (a loop against Harbinger's drop); taking `g_mx` here; exempting the held heal from `NeverFiredRelease` ("the approach
+    keeps it alive" re-creates the cap-less hold); raising `fHealApproachRadius`'s range without the MCM/ini/Config wiring
+    (`tools/audit_mcm.py`). Harbinger absent / < v19 / seat refused = no approach, behaviour as before.
   - `apmf/SpellAllowList.cpp` (398) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
     `MakePotionCand` (`:136`) + `SelectPotions` (`:169`, the potion trim, batch L),
     `AppendDenyExemptForms` (`:207`), `PublishSpellAllowList` (`:240`; appends MFO's own ConcProxy
