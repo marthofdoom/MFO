@@ -1256,3 +1256,11 @@ Raised against 7e17730 (`feat/mfo-pickup-sound-at-follower`, Opus tier-3 review 
 - SEV-5: the raw row carries no byte check, and only Install's runtime checks verify it. The generator could emit signature bytes for raw rows later.
 - Reasoning (author; the coordinator relayed severity and finding text only): none of the three changes behaviour today. The generator is shared byte-for-byte with APMF, so the SEV-4 fix is a two-repo generator round.
 - **Surfaced at edit time from:** MAP.md logistics `logistics/PickupSound.cpp` "What breaks".
+
+### MFO-B228 (SEV-5) -- press-latched click follow-ups
+Raised against deddf80 (`fix/mfo-ui-port-meo-drag`, Opus review MERGE), 2026-10-05. (B227 was not in this branch's copy of the file; check for a clash at merge.)
+- SEV-5: Selectable popup-close parity. A latched Selectable click closes its popup on the `Popup` window flag alone; ImGui's own condition also involves `!auto_selected` / `AutoClosePopups`. The two can differ in edge cases.
+- SEV-5: the skill-tree node selection ring (hover-steered `s_selNode`) and the popup target can briefly disagree after a latched click, because the latch fires on release, not on hover.
+- SEV-5: a stale latch can survive a tab or popup bounce within one held press (it is dropped only when no mouse button is down, or on a new press). A matching id plus rect slop is needed to fire, so the window is narrow.
+- SEV-5: the MAP.md note for `Board_Click.cpp` was first placed in the file-size paragraph; moved to the Board section in the round that raised this.
+- **Surfaced at edit time from:** MAP.md Board section "Press-latched clicks".

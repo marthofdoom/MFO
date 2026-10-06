@@ -1215,7 +1215,8 @@ namespace MFO::Board {
                                 ImGui::PopTextWrapPos();
                                 ImGui::Separator();
                                 ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
-                                if (Click::Selectable(Str::Label(Str::K::Pg_Confirm, "prespecok"))) {
+                                // Destructive confirm: stock ImGui on purpose, so sliding off before release still aborts it.
+                                if (ImGui::Selectable(Str::Label(Str::K::Pg_Confirm, "prespecok"))) {
                                     EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u, 0.0f };
                                     e.verbId = (int)AddonVerb::Respec;
                                     QueueEdit(e);

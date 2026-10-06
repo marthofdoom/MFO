@@ -30,7 +30,6 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
    before the split. Largest files after it: Logistics_Loot 2499, Logistics 2290,
    Packages 2214, Board 1718, cast/CastOn 1387, cast/Direct 1317, CasterConsent 1283,
    Board_Progression 1248, Board_FieldKit 1135, apmf/Bridge 1074 (sizes 2026-09-24).
-   `Board_Click.cpp` (+ `Click::` decls in `Board_internal.h`): press-latched replacements for every ImGui click widget the board uses (Button/SmallButton/Selectable/Checkbox/RadioButton/InvisibleButton). The raw-delta cursor (`Board.cpp` kMouseMove) drifts between press and release, so a release off the item used to lose the click; a new clickable in Board_*.cpp must call `Click::X`, not `ImGui::X`. Nav (gamepad) passes through ImGui's own return.
    None of these should sit in context — grep to a symbol, read a narrow window.
    *(File-size rule, CLAUDE.md "SOURCE FILE SIZE AND SPLITS": ~1500 lines = plan a
    split as its own round, 2500 = hard backstop; every split is proven with
@@ -4755,6 +4754,7 @@ its perk/AV mutations are runtime-only. Safe to delete without touching saves; o
 Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
+**Press-latched clicks:** `Board_Click.cpp` (+ `Click::` decls in `Board_internal.h`): press-latched replacements for every ImGui click widget the board uses (Button/SmallButton/Selectable/Checkbox/RadioButton/InvisibleButton). The raw-delta cursor (`Board.cpp` kMouseMove) drifts between press and release, so a release off the item used to lose the click; a new clickable in Board_*.cpp must call `Click::X`, not `ImGui::X`. Nav (gamepad) passes through ImGui's own return. Destructive confirms (respec Confirm `prespecok`, armed Delete `delarmed`) stay on stock `ImGui::` so sliding off still aborts. Open findings: Docs/REVIEW-BACKLOG.md MFO-B228.
 `imgui_impl_win32` = vendored, do not read.**
 - **DISPLAY TEXT is i18n keys (2026-10-01):** no wording a player reads lives in the three Board TUs (only symbols and the MFO brand stay literal)
   as a literal any more. See the `native/i18n/` entry (section 6, below this one): `Str::Get/Fmt/Label`, `VocabEntry.key`,

@@ -1145,7 +1145,9 @@ namespace MFO::Board {
                                 static std::uint32_t s_armed = 0;
                                 const bool armed = (s_armed == rv.uid);
                                 if (armed) ImGui::PushStyleColor(ImGuiCol_Button, skin.danger);
-                                if (Click::SmallButton(Str::Label(armed ? Str::K::Gb_DelSure : Str::K::Gb_Del,
+                                // Delete (and its armed confirm) stays on stock ImGui on purpose: sliding off
+                                // before release must still abort a destructive action.
+                                if (ImGui::SmallButton(Str::Label(armed ? Str::K::Gb_DelSure : Str::K::Gb_Del,
                                                                    armed ? "delarmed" : "del"))) {
                                     if (armed) { QueueEdit({ EditKind::Del, sel, selTable, rv.uid, 0 }); s_armed = 0; }
                                     else s_armed = rv.uid;

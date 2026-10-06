@@ -50,6 +50,9 @@ namespace MFO::Board::Click {
             }
             if (g_latch.active && released && g_latch.id == id) {
                 g_latch.active = false;
+                // A disabled item never fires, even if it was armed before it went disabled.
+                if (ImGui::GetCurrentContext()->LastItemData.ItemFlags & ImGuiItemFlags_Disabled)
+                    return false;
                 const float  slop = 24.0f * ImGui::GetIO().FontGlobalScale;
                 const ImVec2 m = ImGui::GetMousePos();
                 if (m.x >= g_latch.mn.x - slop && m.x <= g_latch.mx.x + slop &&
