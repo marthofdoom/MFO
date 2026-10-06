@@ -135,6 +135,16 @@ namespace MFO::Actuation {
             }
         }
 
+        // THE SELF-BUFF CLAIM ROAD (feat/mfo-remaining-cast-kinds, cast/BuffRoad.cpp): a Buff-kind
+        // Self-delivery spell with a native caster row (Armor, Cloak, Invisibility, BoundItem, Ward) is a
+        // ch.8b claim on the combat table, cast by the follower's own AI, animated. Combat table only
+        // (g_firingRule, the heal road's MFO-B173 rule: the OOC caller never mints a claim). Every other
+        // answer falls on to the stream below, and ChooseBuffRoad names why on a [buff] line. A claim
+        // lap never reaches the direct stream: BuffSelfClaim's Declined is a transparent no-cast.
+        if (selfKind != CasterConsent::SpellKind::Heal && g_firingRule != kNoRule &&
+            ChooseBuffRoad(a_follower, a_spell) == BuffRoad::Claim)
+            return BuffSelfClaim(a_follower, a_spell);
+
         // TASK 1 (feat/cast-gambit-concentration): a non-heal (Offense/Buff)
         // CONCENTRATION self-cast never reached the engine-seat path above --
         // ComposedCast::Try is HEAL-ONLY by design (ComposedCast.h; the

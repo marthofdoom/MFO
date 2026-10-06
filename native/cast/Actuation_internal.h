@@ -504,6 +504,27 @@ namespace MFO::Actuation {
         void HoldCastLock(RE::FormID a_follower, std::size_t a_hand,
                           RE::FormID a_spell, RE::FormID a_target);
         void ClearCastLockHand(RE::FormID a_follower, std::size_t a_hand);
+        // ANIMATED SELF-BUFF CLAIM ROAD (feat/mfo-remaining-cast-kinds), defined in cast/BuffRoad.cpp
+        // (its file banner carries the rows, the reasons and what needs Harbinger). Worker-serial (#4).
+        // ChooseBuffRoad: NotBuff (not a Buff-kind spell) / Claim (a ch.8b claim, cast by the follower's
+        // own AI) / DirectDegrade (Harbinger absent, claims or bEquipToCast off: silent) / DirectNoSeat,
+        // DirectNoRow (a kind Harbinger cannot serve yet: one [buff] line naming why) / DirectNoCombat
+        // (no CombatController). a_log false is the quiet predicate. COMBAT TABLE ONLY: asked by
+        // CastSelfDirect under g_firingRule != kNoRule, and by CastOn's in-flight refresh.
+        // BuffSelfClaim: the claim lap (already-up guard, Loadout::Prepare, consent, ClaimOffenseCast
+        // target 0 LEFT, [cfc] watch); Applied = claimed. BuffRefreshGate: on a refresh lap, ends the
+        // claim when a fire-and-forget buff is up or a concentration ward passes its drawn cap.
+        enum class BuffRoad : std::uint8_t { NotBuff, Claim, DirectNoCombat, DirectNoSeat, DirectNoRow, DirectDegrade };
+        BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log = true);
+        SelfCast BuffSelfClaim(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        // BuffUpTransparent: true when the claim road would take this fire-and-forget buff but it is
+        // already up (a main-thread-latched read), so CastOn's self fork returns transparent BEFORE
+        // commitPreempt (a lower-ranked claim must not be torn down every lap, review F2).
+        // ResetBuffRoad: clears the road's session state (from ClearCastLocks).
+        bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        void ResetBuffRoad();
+        void ResetBuffFollower(RE::FormID a_follower);   // ClearCastLock(follower): combat end / dismiss
         // ANIMATED-HEAL CLAIM ROAD (animheal phase 2), defined in cast/Hands.cpp.
         // ReleaseOwnHealClaim: end THIS rule's heal claim on a_spell now (the claim
         // via ComposedCast::End, and the LEFT lock that names it) -- the recipient

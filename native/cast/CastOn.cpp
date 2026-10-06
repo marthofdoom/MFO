@@ -540,6 +540,10 @@ namespace MFO::Actuation {
                                  true };
                     }
                 }
+                // A SELF-BUFF CLAIM's refresh (cast/BuffRoad.cpp): ends the claim once a fire-and-forget buff
+                // is up, and bounds a concentration ward's stream (release + re-stream past the drawn cap).
+                if (a_target == a_follower && handPlan.left && !handPlan.right)
+                    if (auto out = BuffRefreshGate(a_follower, spell)) return *out;
                 if (healClaim && handPlan.left != handPlan.right)   // review F2 / R2-2: proxy + never-observed gates
                     if (auto out = HealRefreshGate(a_follower, planHand, a_spellID)) return *out;
                 if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
@@ -697,6 +701,8 @@ namespace MFO::Actuation {
                 // persistently-true combat cast_self does not starve attack/drink/
                 // heal below it, and `lastFired`/`[eval] fired` never lies on a
                 // no-op tick.
+                if (BuffUpTransparent(a_follower, spell))   // F2: BEFORE the preempt (cast/BuffRoad.cpp)
+                    return { Result::NoOp, "self-buff already up (or its read is pending)", true };
                 commitPreempt();   // the claim happens inside CastSelfDirect
                 switch (CastSelfDirect(a_follower, spell)) {
                 case SelfCast::Applied:
@@ -1629,6 +1635,7 @@ namespace MFO::Actuation {
         g_lastPreemptLog.erase(a_follower);   // rank-preemption twin of g_lastLockLog
         g_lastInFlightLog.erase(a_follower);   // F9: the in-flight twin of g_lastLockLog
         g_lastApmfRefusal.erase(a_follower);
+        ResetBuffFollower(a_follower);   // feat/mfo-remaining-cast-kinds: the never-fired hold-off ends with the fight
         // F3-7: Actuation_Direct.cpp keeps an IDENTICAL refusal-log twin in its own
         // anon namespace; drop that follower's entries here too so the two maps
         // really do share a release point instead of only claiming to.
@@ -1651,6 +1658,7 @@ namespace MFO::Actuation {
         g_healRepairLog.clear();
         g_healHoldLog.clear();
         g_unsightedCharge.clear();
+        ResetBuffRoad();             // feat/mfo-remaining-cast-kinds: cast/BuffRoad.cpp
         ResetHealRoad();             // feat/mfo-perhand-heal: the per-hand heal records (cast/HealRoad.cpp)
     }
 
