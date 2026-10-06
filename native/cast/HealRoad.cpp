@@ -49,6 +49,7 @@
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace MFO::Actuation {
 
@@ -73,6 +74,9 @@ namespace MFO::Actuation {
             RE::FormID        recipient = 0;   // 0 = self
             int               rule      = kNoRule;
             bool              losHeld   = false;
+            // The rule stopped asking and the claim is only "holding to full" (set by HealSustainLap each
+            // tick, cleared when the rule asks again). HealHoldStands reads it: offense is freed while blind.
+            bool              stoppedAsking = false;
             Clock::time_point losSince{};
             // LoS-held ms ALREADY ELAPSED for the claim stamped `losAccumStamp` (the lock's claim
             // stamp; a different stamp = a new claim = zero). NeverFiredRelease subtracts it, plus the
@@ -97,6 +101,9 @@ namespace MFO::Actuation {
         std::unordered_map<RE::FormID, std::vector<RE::FormID>> g_healAsked;
         std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_healCont;
         std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_healStillLog;   // the 5 s "still holding" line
+        // FREE OFFENSE WHILE THE HEAL IS BLIND (marth 2026-10-06, field 1006c): key (follower << 1) | hand ->
+        // the hold was released for blindness and said so; HealHoldStands logs each change once. Worker-serial.
+        std::unordered_set<std::uint64_t> g_healBlindFreed;
         const char* g_healExit    = nullptr;
         bool        g_inHealSustain = false;   // the sustain replay's own lap must not count as "the rule asked"
 
@@ -564,7 +571,29 @@ namespace MFO::Actuation {
             }
             g_neverFiredLatch.erase(lit);   // fired (or another spell): the latch ends
         }
-        if (!fired) return true;
+        // FREE OFFENSE WHILE THE HEAL IS BLIND (marth 2026-10-06, 1006c: "Free offense while blind"). A heal held
+        // through lost line of sight cannot fire, and one only "holding to full" after its rule stopped asking is
+        // not a cast anyone is waiting on, so the other hand may cast offense. When it can fire again (sight back,
+        // or the rule asks again) the hold stands as before.
+        if (!fired) {
+            const auto hit = g_healHands.find(fid);
+            const bool losHeld = hit != g_healHands.end() && hit->second.hand[a_hand].active &&
+                                 hit->second.hand[a_hand].losHeld;
+            const bool stopped = hit != g_healHands.end() && hit->second.hand[a_hand].active &&
+                                 hit->second.hand[a_hand].stoppedAsking;
+            if (losHeld || stopped) {
+                if (g_healBlindFreed.insert(key).second)
+                    spdlog::info("[heal-hold] {:08X} {} hand heal {:08X}: offense freed: heal blind ({})", fid,
+                                 HandWord(a_hand), a_lk.spell,
+                                 losHeld ? "held through lost line of sight" : "rule stopped asking, holding to full");
+                return false;
+            }
+            if (g_healBlindFreed.erase(key))
+                spdlog::info("[heal-hold] {:08X} {} hand heal {:08X}: offense held again (the heal can fire)", fid,
+                             HandWord(a_hand), a_lk.spell);
+            return true;
+        }
+        g_healBlindFreed.erase(key);
         const auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_lk.spell);
         if (sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             CastInFlightOnHand(a_follower, a_hand, a_lk.spell, CastProxyOnHand(fid, a_hand)))
@@ -575,6 +604,7 @@ namespace MFO::Actuation {
 
     void HealHandEnded(RE::FormID a_follower, std::size_t a_hand, const char* a_why) {
         g_healCont.erase((static_cast<std::uint64_t>(a_follower) << 1) | a_hand);
+        g_healBlindFreed.erase((static_cast<std::uint64_t>(a_follower) << 1) | a_hand);
         g_healStillLog.erase((static_cast<std::uint64_t>(a_follower) << 1) | a_hand);
         HealHoldLapsed(a_follower, a_hand, a_why);
         APMFBridge::ReleaseHealApproach(a_follower, "the hand's heal claim ended", a_hand);   // ch.24
@@ -800,6 +830,7 @@ namespace MFO::Actuation {
             if (it == g_healHands.end()) break;
             const HealHand hh = it->second.hand[h];   // a copy: the replay below may erase the record
             if (!hh.active) continue;
+            it->second.hand[h].stoppedAsking = false;   // set below once the rule is seen not asking
             if (std::find(asked.begin(), asked.end(), hh.spell) != asked.end()) continue;   // the rule is asking
             // A live claim, OR the lock in its re-stream gap (a stream-cap or un-taught-proxy release keeps
             // the lock; the replay below re-claims it): HealOnHand answers both.
@@ -819,6 +850,7 @@ namespace MFO::Actuation {
             }
             const std::uint64_t key = (static_cast<std::uint64_t>(fid) << 1) | h;
             const auto stamp = CastLockClaimStamp(fid, h, hh.spell);
+            it->second.hand[h].stoppedAsking = true;
             if (const auto c = g_healCont.find(key); c == g_healCont.end() || c->second != stamp) {
                 g_healCont[key] = stamp;
                 spdlog::info("[heal-hold] {:08X} {} hand heal {:08X} for {:08X}: rule stopped asking at {}%: "
@@ -958,6 +990,7 @@ namespace MFO::Actuation {
         g_healHands.clear();
         g_healAsked.clear();
         g_healCont.clear();
+        g_healBlindFreed.clear();
         g_healStillLog.clear();
         g_neverFiredLatch.clear();
         g_handFireAttach.clear();
