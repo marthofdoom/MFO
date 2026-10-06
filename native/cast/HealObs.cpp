@@ -3,6 +3,7 @@
 // Cut from cast/Direct.cpp by the Direct.cpp split (2026-09-29, MFO-B152): a pure
 // move, proven function by function with tools/splitcheck.
 #include "Direct_internal.h"
+#include "ComposedCast.h"   // LastFireHand: the hand-aware fire sink (feat/mfo-perhand-heal)
 #include "apmf/APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
 #include <map>            // feat/mfo-animheal-p0 fix: ReadbackWarnDue gate (tuple key)
 #include <tuple>
@@ -113,11 +114,36 @@ namespace MFO::Actuation {
     }
 
     void HealObsNoteClaimFire(RE::FormID a_caster, RE::FormID a_firedForm) {
-        const RE::FormID spell = APMFBridge::GetHealCastSpell(a_caster);
-        if (spell == 0 || a_firedForm == 0) return;
-        const RE::FormID proxy = APMFBridge::GetHealCastProxy(a_caster);
-        if (a_firedForm != spell && (proxy == 0 || a_firedForm != proxy)) return;   // not the heal claim
-        const RE::FormID tgt       = APMFBridge::GetHealCastTarget(a_caster);
+        if (a_firedForm == 0) return;
+        // EITHER hand's heal claim (feat/mfo-perhand-heal). The event names no hand, and a
+        // Harbinger proxy is per OWNER, not per claim (review F4 on 9895a53), so two hands'
+        // claims can name the same form: then the per-hand anim-graph SpellFire decision
+        // NoteObservedCast just made (ComposedCast::LastFireHand, review R2-1) decides, and an
+        // undecidable fire is NOT attributed (no [heal-obs] line rather than a wrong one).
+        std::int32_t hand  = 0;
+        RE::FormID   spell = 0;
+        RE::FormID   match[2] = { 0, 0 };
+        const std::int32_t hands[2] = { APMFBridge::kApmfHandLeft, APMFBridge::kApmfHandRight };
+        for (int i = 0; i < 2; ++i) {
+            const RE::FormID sp = APMFBridge::GetHealCastSpell(a_caster, hands[i]);
+            if (sp == 0) continue;
+            const RE::FormID proxy = APMFBridge::GetHealCastProxy(a_caster, hands[i]);
+            if (a_firedForm == sp || (proxy != 0 && a_firedForm == proxy)) match[i] = sp;
+        }
+        if (match[0] && match[1]) {
+            hand = ComposedCast::LastFireHand(a_caster, a_firedForm);   // the anim-graph SpellFire decision
+            if (hand == 0) {
+                spdlog::debug("[heal-obs] {:08X} fire of {:08X} matches both hands' heal claims and no single "
+                              "hand's SpellFire event decided it -- not attributed", a_caster, a_firedForm);
+                return;
+            }
+            spell = match[hand == APMFBridge::kApmfHandLeft ? 0 : 1];
+        } else if (match[0] || match[1]) {
+            hand  = match[0] ? hands[0] : hands[1];
+            spell = match[0] ? match[0] : match[1];
+        }
+        if (spell == 0) return;   // not a heal claim
+        const RE::FormID tgt       = APMFBridge::GetHealCastTarget(a_caster, hand);
         const RE::FormID recipient = tgt == 0 ? a_caster : tgt;
         float hpLap = -1.0f;   // -1 = no lap stamp for this recipient: read at the fire instead
         {
@@ -126,13 +152,14 @@ namespace MFO::Actuation {
                 it != g_claimLap.end() && it->second.recipient == recipient)
                 hpLap = it->second.hp;
         }
-        MainThread::Post([a_caster, recipient, spell, a_firedForm, hpLap] {
+        const bool right = hand == APMFBridge::kApmfHandRight;
+        MainThread::Post([a_caster, recipient, spell, a_firedForm, hpLap, right] {
             auto* caster = RE::TESForm::LookupByID<RE::Actor>(a_caster);
             auto* target = RE::TESForm::LookupByID<RE::Actor>(recipient);
             auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(spell);
             auto* form   = RE::TESForm::LookupByID<RE::SpellItem>(a_firedForm);
             if (!caster || !target || !sp) return;
-            HealObsNote(caster, target, sp, form ? form : sp, "claim",
+            HealObsNote(caster, target, sp, form ? form : sp, right ? "claim(right)" : "claim",
                         hpLap >= 0.0f ? hpLap : Vocab::HealthPct(target), HealAttach::Instant);
         });
     }
@@ -154,8 +181,10 @@ namespace MFO::Actuation {
             // stream is the masked-failure shape; one on a released stream is expected.
             // THE CLAIM ROAD (animheal phase 2) has no MFO stream: the follower's own
             // AI channels it on a HAND caster, so the direct road's registries say
-            // nothing about it and its channel is read from the LEFT hand below.
-            const bool claimRoad = std::string_view(o.road) == "claim";
+            // nothing about it and its channel is read from the claim's hand below
+            // ("claim" = left, "claim(right)" = the right hand's second recipient).
+            const bool claimRoad = std::string_view(o.road).starts_with("claim");
+            const bool rightHand = std::string_view(o.road) == "claim(right)";
             const char* stream = claimRoad ? "n/a" : "none";
             if (o.conc && !claimRoad) {
                 if (o.caster == o.target) {
@@ -165,7 +194,7 @@ namespace MFO::Actuation {
                     stream = TargetStreamLive(o.caster, o.spell, o.target) ? "live" : "released";
                 }
             }
-            MainThread::Post([o, stream, claimRoad] {
+            MainThread::Post([o, stream, claimRoad, rightHand] {
                 auto* caster = RE::TESForm::LookupByID<RE::Actor>(o.caster);
                 auto* target = RE::TESForm::LookupByID<RE::Actor>(o.target);
                 auto* form   = RE::TESForm::LookupByID<RE::MagicItem>(o.castForm);
@@ -178,9 +207,10 @@ namespace MFO::Actuation {
                 const char* channel = "n/a";
                 int         st      = -1;
                 if (o.conc) {
-                    // Heals are LEFT always on the claim road (ClaimHealCast's hard rule).
-                    auto* inst = caster->GetMagicCaster(claimRoad ? RE::MagicSystem::CastingSource::kLeftHand
-                                                                  : RE::MagicSystem::CastingSource::kInstant);
+                    // The claim's own hand on the claim road (per hand, feat/mfo-perhand-heal).
+                    auto* inst = caster->GetMagicCaster(!claimRoad ? RE::MagicSystem::CastingSource::kInstant
+                                                        : rightHand ? RE::MagicSystem::CastingSource::kRightHand
+                                                                    : RE::MagicSystem::CastingSource::kLeftHand);
                     st = inst ? static_cast<int>(inst->state.get()) : -1;
                     channel = (inst && inst->currentSpell && inst->currentSpell->GetFormID() == o.castForm &&
                                inst->state.get() == RE::MagicCaster::State::kCasting)

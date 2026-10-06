@@ -223,8 +223,10 @@ namespace MFO::APMFBridge {
             APMF_API::Handle equipHandle   = APMF_API::kInvalidHandle;  RE::FormID equip  = 0;
             std::chrono::steady_clock::time_point equipRefreshed{};
             // heal-cast (ch.8b, kIntent_Cast/RequestCast, ported feat/mfo-cast-port)
-            // -- PER-CAST, TTL-bounded, single slot (LEFT always -- ClaimHealCast's
-            // own hard rule, never per-hand). Held by ComposedCast for the life of
+            // -- PER-CAST, TTL-bounded, PER-HAND (feat/mfo-perhand-heal, 2026-10-05,
+            // marth: "the other hand would be for a second hurting follower"): [0] =
+            // left, [1] = right, ONE recipient per hand, selected by ClaimHealCast's
+            // a_hand exactly like OffenseSlot. Held by ComposedCast for the life of
             // a claimed heal; refreshed every tick the gambit still wants it
             // (create-or-refresh on a spell/target/hand/concentration/stopPct
             // change -- RequestCast has no in-place re-point, so a CHANGE releases
@@ -236,7 +238,7 @@ namespace MFO::APMFBridge {
             // exclusive per tick for a given spell -- but each gets its own state
             // to avoid any cross-talk; a heal on LEFT and an offense claim on RIGHT
             // CAN now be concurrently live, feat/per-hand-cast-slots).
-            CastClaim heal;
+            CastClaim heal[2];
             // offense-cast (ch.8b, kIntent_Cast/RequestCast, PORTED feat/offense-
             // cast-seats, 2026-09-05, off the retired ch.8 kIntent_SelectSpell
             // gate-only claim this slot used to back -- see APMFBridge.h's
@@ -392,7 +394,8 @@ namespace MFO::APMFBridge {
             const auto& o = it->second;
             if (o.targetHandle == APMF_API::kInvalidHandle &&
                 o.packageHandle == APMF_API::kInvalidHandle && o.actionHandle == APMF_API::kInvalidHandle &&
-                o.equipHandle == APMF_API::kInvalidHandle && o.heal.handle == APMF_API::kInvalidHandle &&
+                o.equipHandle == APMF_API::kInvalidHandle && o.heal[0].handle == APMF_API::kInvalidHandle &&
+                o.heal[1].handle == APMF_API::kInvalidHandle &&
                 o.offense[0].handle == APMF_API::kInvalidHandle &&
                 o.offense[1].handle == APMF_API::kInvalidHandle &&
                 // F10: an entry holding ONLY the idle-hand floor must survive --

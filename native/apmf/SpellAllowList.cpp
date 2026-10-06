@@ -282,7 +282,7 @@ namespace MFO::APMFBridge {
         // consult this channel, so this is belt-and-braces for a proxy on a caster
         // the seat cannot resolve to a hand (an instant/kOther caster degrades to
         // the actor-wide read, where the per-hand exemption does not fire).
-        for (const auto& c : { o.offense[0], o.offense[1], o.heal })
+        for (const auto& c : { o.offense[0], o.offense[1], o.heal[0], o.heal[1] })
             if (c.proxy != 0) list.push_back(c.proxy);
         std::sort(list.begin(), list.end());
         list.erase(std::unique(list.begin(), list.end()), list.end());

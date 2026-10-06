@@ -465,7 +465,7 @@ releases **by eviction** with a non-actor XMarker.
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
-### native/cast/ — Fire / Roads / CastOn / Equip / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / SummonProbe / Archetype / Auto / Hands + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
+### native/cast/ — Fire / Roads / CastOn / Equip / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / SummonProbe / Archetype / Auto / Hands / HealRoad + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
 Only module that mutates actor state; main-thread only. **Layout = the wave-1 subsystem-folder
 split (2026-09-24, `refactor/subsystem-folders-wave1`, drained REVIEW-BACKLOG MFO-B37), a pure
 move proven function by function by `tools/splitcheck`; before it the family was
@@ -477,9 +477,10 @@ per concern:
 - `cast/Roads.cpp` (288) = the three delivery ROADS `CastOn` forks to: `ForceCast` (`:31`, the
   forced package cast), `ConcentrationCast` (`:129`, the bounded concentration stream entry) and
   `RestorationCastDirect` (`:269`).
-- `cast/CastOn.cpp` (1706 -- PAST the ~1500 "plan a split" mark after animheal phase 2's review round 3;
-  flagged, not split: the next brief that touches it proposes the split as its own round) = `CastOn` (`:123`, the AI-first hybrid of one spell at one target;
-  its heal-road block `:348-419`, see "ANIMATED HEAL CLAIM ROAD" below)
+- `cast/CastOn.cpp` (1657 -- still PAST the ~1500 "plan a split" mark; marth 2026-10-05: do NOT split it,
+  `CastOn()` is one 1550-line function; new heal-road logic goes in `cast/HealRoad.cpp` instead) = `CastOn` (`:123`, the AI-first hybrid of one spell at one target;
+  its heal-road call `HealRoadLap` `:368`, the in-flight `HealRefreshGate` (proxy + right never-observed bound) `:544`, the right-hand heal's Prepare-free return `:1013`, see "ANIMATED HEAL CLAIM ROAD" and
+  "PER-HAND HEAL ROAD" below)
   + its APMF-refusal log (`LogApmfRefusal` `:90`, anon; a twin lives in `cast/Direct.cpp:76`, extern via `cast/Direct_internal.h`)
   + `ClearCastLock`/`ClearCastLocks` (`cast/CastOn.cpp:1556`/`:1572`).
 - `cast/Equip.cpp` (1275) = THE WEAPON HOLD: `EquipWeapon` (`:377`, **PERK-DRIVEN since
@@ -566,7 +567,14 @@ per concern:
   adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
   `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
   Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
-- `cast/Hands.cpp` (1191) = THE PER-HAND CAST LOCK's implementation (moved whole) —
+- `cast/HealRoad.cpp` (569, feat/mfo-perhand-heal 2026-10-05) = THE PER-HAND HEAL ROAD, see "PER-HAND HEAL ROAD"
+  below: `HealRoadLap` (`:429`), `HealHandClaimed` (`:396`), `HealHandEnded` (`:361`), `HealHandsReconcile` (`:384`),
+  `HealRefreshGate` (`:529`), `RightHealRule` (`:539`, the equip side's right-hand rank read, honours the re-stream gap),
+  `ReleaseHealClaimsAllHands` (`:550`, public), `ResetHealRoad` (`:562`, from `ClearCastLocks`), the per-hand
+  SpellFire evidence `HandFireSink` (`:305`) / `HandFireWatch` (`:327`) / `HandFireTake` (`:346`, public); anon
+  `HealOnHand` (`:88`), `RecipientLost` (`:108`), `NoteLosHold` (`:134`), `NeverFiredRelease` (`:171`),
+  `ProxyUnlearnedRelease` (`:210`), `MaintainCompanion` (`:232`), the per-hand record `g_healHands`.
+- `cast/Hands.cpp` (1484) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
   `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
   `CastLockLive` `:332`), rank preemption (`CanPreemptHand` `:477`, `IncumbentTargetLost` `:561`,
@@ -863,7 +871,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     with its own spell is never held (its refresh must not starve). `[heal-hold]` logs once per claim
     (`g_healHoldLog`, cleared by `ClearCastLocks`). Lowers the F9 "an offense rule below gets its lap" text above for the pending case only.
   * **Telling "P1 worked" from "P1 starved offense" (MFO-B221):** re-mints restamp the lock's `lastSeen`, so the 4 s hold can re-arm per claim. In the field, `[heal-hold]` once per claim and a prompt `FIRED type=Restore` = worked. Repeated `[heal-hold]` lines with the `[cfc] kNeverFired` WARN and no fire = offense is starved by a heal that never starts (the WARN stays the loud signal).
-  * **Hand lock (`cast/Hands.cpp`)**: heals stay LEFT, offense keeps its PlanCastHand pick; rank is
+  * **Hand lock (`cast/Hands.cpp`)**: the first heal recipient stays LEFT (a second takes the RIGHT, "PER-HAND HEAL ROAD" below), offense keeps its PlanCastHand pick; rank is
     carried (`CanPreemptHand`, urgent heal mid-charge unchanged). `IncumbentTargetLost` (`:561`) now
     also calls a HEAL recipient lost at full health, beyond `HealInReach`, or measured Occluded within
     `kHealLosTrustSec` (3 s, = PickAlly's `kHealLosTrustS`; MFO-B162 drained), and
@@ -1012,6 +1020,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     in this round): the spots that still assume a heal is LEFT are the sweep's `o.heal` branch (`kApmfHandLeft` for `ObservedFiring` /
     `ClearWatchHand`), `CastOn`'s `ResolveCastHand(... HandPick::Left ...)` and `CastChargedWaitingOnHand(.., kHandLeft, ..)`, and
     the bridge's single `o.heal` slot (`ClaimHealCast`); `HealRecipientUnreachable` and the PickAlly/CastAuto incumbent tests are hand-agnostic.
+    **DONE 2026-10-05 (`feat/mfo-perhand-heal`): see "PER-HAND HEAL ROAD" below.**
     (b) `APMFBridge::Tick`'s heal sweep (`apmf/Bridge.cpp` ~:982, the `o.heal` branch of the FacetExpiry sweep, on the AddTask job
     worker) HOLDS a heal claim younger than `kHealHoldNeverObservedMs` (from `created`) that `ObservedFiring` has not seen fire, and
     EVERY release it does make logs `[heal] ... heal claim RELEASED by the expiry sweep` (handle, spell, target, age, stale ms),
@@ -1036,6 +1045,70 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     `owningRule` invents a heuristic marth ruled out; letting `OnFollowerHit` / `Tick` act while
     `HealTakesLeft` holds re-creates the per-hit shield thrash; judging the repair before the refresh
     re-creates the proxy overwrite; routing the repair back through PIN-VOID re-stamps `lastSeen`.
+- **PER-HAND HEAL ROAD (`feat/mfo-perhand-heal`, batch A, 2026-10-05).** marth 2026-09-30: "One per follower
+  is fine for this, the other hand would be for a second hurting follower"; "if another heal target is needed
+  the right hand loses its offensive spell and they both enter this state"; "Nothing should ever be locked up".
+  * **State per hand.** The bridge's heal slot is `Owned::heal[2]` (`apmf/APMFBridge_internal.h`, [0] left,
+    [1] right, `ClaimHealCast`'s `a_hand` picks it like `OffenseSlot`); accessors take a hand
+    (`GetHealCastSpell/Target/Proxy(fid, hand = kApmfHandEither)`: either = the left slot if live, else the
+    right; `IsHealCastActive` = any hand, `IsHealCastActiveOnHand`; `ReleaseHealCast` = both,
+    `ReleaseHealCastOnHand`; `RefreshHealCastClaim(fid, hand)`). The lock is the existing per-hand
+    `g_castLock` (rank = `owningRule`, carried). `ComposedCast::Try(.., a_hand)` holds / watches that hand's
+    slot; `End` = both hands, `EndHand(fid, hand)` (only the LEFT takes its spell back). `cast/HealRoad.cpp`'s
+    `g_healHands` records each hand's assignment and its held-through-lost-LoS state (`losHeld`).
+  * **Hand choice (`HealRoadLap`, every heal-claim lap).** The recipient already served with this spell ->
+    that hand; served with another spell -> that hand (old contest); the LEFT heals someone ELSE and the
+    right holds no heal and is not a weapon hand (`RightHandIsWeaponHand` = `WeaponHandExposure`) -> the
+    RIGHT (`Loadout::HandPick::Right`, `ResolveCastHand`'s Left mirror: free / own re-aim / `CanPreemptHand`
+    by rank, an urgent heal takes a lower offense mid-charge); else the LEFT (a third recipient re-aims the
+    left in its idle gap, MFO-B171). The right heal skips `Loadout::Prepare` (LEFT-only): Harbinger's
+    per-hand seats arm it (`CastOn` `:1013`). A left heal's Prepare (`a_healClaimLive`) answers AlreadyReady
+    only off the LEFT hand's copy (review F6).
+  * **Review round 1 (9895a53, F2/F3/F4/F6).** (F2) The companion and the RIGHT hand's in-flight refresh are
+    bounded by `NeverFiredRelease` (`HealRoad.cpp:167`): `kHoldLastSeenCapMs` from that hand's lock stamp, no
+    fire observed ON THAT HAND within `kObservedFiringRecencyMs`, nothing charging, recipient not held through
+    lost LoS (exemption removed in round 2) -> RELEASED with the WARN `[heal-hand] <f> RIGHT hand heal <s> for
+    <who> NEVER FIRED ...`. `ComposedCast::NoteObservedCast` and `HealObsNoteClaimFire` are hand-aware (the
+    round-1 `HandCastingForm` read of `currentSpell` was wrong and is replaced in round 2 below). (F3) A served right
+    heal and a right companion are released when a weapon now owns the right (`RightHandIsWeaponHand`), and
+    `EquipWeapon` holds off while a higher-ranked right heal claim stands (`cast/Equip.cpp:651`, `RightHealRule`).
+    Harbinger's F1 (proxy per owner) is fixed in APMF; until it lands, a right claim whose proxy was freed ends at
+    the F2 bound. Deferred: REVIEW-BACKLOG MFO-B227 (F5: exact-mode Prepare deselects a right heal; SEV-4/5).
+  * **Review round 2 (57bd5e7, R2-1..R2-4).** (R2-1) `currentSpell` is the SELECTED spell (ENGINE_NOTES 0.15), so
+    the hand of a fire comes from the anim graph's own `MLh_SpellFire_Event` / `MRh_SpellFire_Event`, counted on the
+    event thread by `HandFireSink` (attached by every heal lap, `HandFireWatch`) and consumed by
+    `ComposedCast::NoteObservedCast` (`ComposedCast.cpp:975`; passive `[hand-fire]` line per claimed cast). A fire
+    matching BOTH hands that no SpellFire event decides marks NEITHER and stamps both `UndecidedFire`, which keeps the
+    never-fired bound OFF (an unknown never releases a heal; WARN once per claim). `HealObsNoteClaimFire` reads the
+    same decision (`ComposedCast::LastFireHand`). (R2-2) On EITHER hand's in-flight refresh and on the companion,
+    `ProxyUnlearnedRelease`: `proxy != 0 && !actor->HasSpell(proxy)` -> released for a re-claim (re-stream gap keeps
+    the rank) so Harbinger re-mints and re-teaches it (covers APMF's PreSaveSweep un-teach). (R2-3) the `losHeld`
+    exemption is gone: only an in-flight (charging / charged-held) cast is exempt. (R2-4) `RightHealRule` honours the
+    re-stream gap lock. The right-hand equip held-off line has its own throttle.
+  * **Every lap, no caps.** `MaintainCompanion` re-judges THIS rule's heal on the other hand (dead /
+    essential-down / beyond reach / at threshold or full with nothing in flight -> released; stream cap ->
+    re-stream) or renews it in place (`RefreshOwnedCastOnHand` + `WatchClaim`), so one rule healing two
+    recipients keeps both while its picker names one per lap. `CastAuto`'s D8 keep is per hand (a
+    different lowest recipient takes the other hand). `PickAlly` / `CastAuto` treat either hand's recipient
+    as the incumbent (reach only).
+  * **Lines (once per change).** `[heal-hand] <f> RIGHT hand -> heal <spell> for <who> (rule N) -- SECOND
+    recipient: the left hand heals <who>[; the right hand held offense spell <s> (rule M) before]`;
+    `[heal-hand] <f> RIGHT hand returns to offense -- the heal <spell> for <who> ended: <why> (rule N)`;
+    `[heal-hand] <f> <LEFT|RIGHT> hand HOLDS heal <spell> for <who> through lost line of sight ...` and
+    `... line of sight to <who> is back after <ms> ms ...`. `HealHandsReconcile` (top of every `CastOn`)
+    logs an end released elsewhere (sweep / preempt / combat end). `[heal]` RELEASED lines name the hand.
+  * **Threading.** All worker-serial (#4): CastOn / CastAuto / the bridge Tick on the AddTask job worker;
+    `g_healHands` unlocked like `g_castLock`, cleared in `ClearCastLocks`; bridge reads under its `g_mx`.
+  * **What breaks if you change this:** reading the no-hand accessors as "the left" re-creates a right claim
+    nobody ends (Scheduler's caster-down / combat-end `End(id)` relies on either + both); routing the right
+    heal through `Loadout::Prepare` equips its spell into the LEFT over the first recipient's; dropping
+    `MaintainCompanion` lets the sweep release the recipient the picker did not name this lap (the claim
+    re-mints every other lap); letting a recipient take both hands breaks "one per hand"; taking the right
+    from a weapon breaks the weapon-hand hard rule. `Loadout::ReleaseSpell`'s take-back skips while the right
+    holds the same spell (`DeselectSpell` is not proven hand-scoped). `logistics/Service.cpp:329`'s
+    `leftReserved` reads `IsHealCastActive` (any hand), so a lone right heal also reserves the left (not
+    edited: the file is past 1500 lines). Open: right-hand arming by the seats alone is unproven in the field
+    (CAST-DELIVERY "Open item"). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B227.
 - **[heal-obs] + APPLY READ-BACK + MFO'S CONCPROXY ON THE ALLOW-LIST (`feat/mfo-animheal-p0`,
   2026-09-29; design scratchpad `animheal-design.md` phases 0a + 1m).** Field 0928c: Harbinger denied
   MFO's own ConcProxy forms 48 times on the INSTANT caster (`hand=?`) while MFO printed `effect applied` /

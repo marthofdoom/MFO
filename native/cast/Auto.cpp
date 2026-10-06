@@ -381,8 +381,11 @@ namespace MFO::Actuation {
                         sightWant.push_back(m->GetFormID());
                         // The STANDING claim's recipient is judged for reach only (marth
                         // 2026-09-30b: line of sight never drops it, the heal waits charged).
-                        const bool incumbent = APMFBridge::GetHealCastSpell(id) == a_spellID &&
-                                               APMFBridge::GetHealCastTarget(id) == m->GetFormID();
+                        // EITHER hand's standing claim (feat/mfo-perhand-heal).
+                        bool incumbent = false;
+                        for (const std::int32_t h : { APMFBridge::kApmfHandLeft, APMFBridge::kApmfHandRight })
+                            incumbent = incumbent || (APMFBridge::GetHealCastSpell(id, h) == a_spellID &&
+                                                      APMFBridge::GetHealCastTarget(id, h) == m->GetFormID());
                         if (incumbent ? HealRecipientUnreachable(a_follower, m, spell)
                                       : (!HealInReach(a_follower, m, spell) ||
                             Sightline::CheckWithin(id, m->GetFormID(), kHealLosTrustSec, Sightline::Basis::Own) ==
@@ -400,17 +403,25 @@ namespace MFO::Actuation {
                 probe(RE::PlayerCharacter::GetSingleton());
                 if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant), Sightline::Basis::Own);
 
-                // D8: a cast the engine is running on the standing claim's recipient
-                // finishes before anyone else is served.
+                // D8, PER HAND (feat/mfo-perhand-heal): a cast the engine is running on a
+                // hand's recipient finishes before that hand serves anyone else. A DIFFERENT
+                // lowest recipient no longer waits for it: CastOn's heal road gives him the
+                // other hand (or, with no free hand, holds him without re-pointing the cast,
+                // ResolveCastHand), and maintains the running claim meanwhile. With nobody
+                // else below the ceiling, the running cast's recipient is this lap's pick.
                 RE::Actor* pick = lowest;
-                if (APMFBridge::GetHealCastSpell(id) == a_spellID &&
-                    CastInFlightOnHand(a_follower, kHandLeft, a_spellID, APMFBridge::GetHealCastProxy(id))) {
-                    const auto t = APMFBridge::GetHealCastTarget(id);
-                    if (auto* cur = t == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(t))
-                        pick = cur;
+                for (const std::size_t h : { kHandLeft, kHandRight }) {
+                    if (pick) break;
+                    const std::int32_t ah = h == kHandLeft ? APMFBridge::kApmfHandLeft : APMFBridge::kApmfHandRight;
+                    if (APMFBridge::GetHealCastSpell(id, ah) == a_spellID &&
+                        CastInFlightOnHand(a_follower, h, a_spellID, APMFBridge::GetHealCastProxy(id, ah))) {
+                        const auto t = APMFBridge::GetHealCastTarget(id, ah);
+                        pick = t == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(t);
+                    }
                 }
                 if (!pick) {
-                    ReleaseOwnHealClaim(a_follower, a_spellID, "AUTO: nobody in reach needs this heal now");
+                    ReleaseOwnHealClaim(a_follower, kHandLeft, a_spellID, "AUTO: nobody in reach needs this heal now");
+                    ReleaseOwnHealClaim(a_follower, kHandRight, a_spellID, "AUTO: nobody in reach needs this heal now");
                     return { Result::NoOp,
                              outOfReach ? std::format("auto heal: {} in need, none in the spell's reach", outOfReach)
                                         : std::string("auto heal: nobody below threshold"),

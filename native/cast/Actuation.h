@@ -96,6 +96,20 @@ namespace MFO::Actuation {
     // right hand's lock is never touched. Worker-serial (#4).
     void ClearLeftCastLockIf(RE::FormID a_follower, RE::FormID a_spell);
 
+    // End EVERY hand's heal claim (feat/mfo-perhand-heal) and drop each hand's lock that
+    // names it, logging each per-hand end once ([heal-hand]). ComposedCast::ChooseHealRoad's
+    // road switch (kill switch / controller gone) is the caller. Worker-serial (#4).
+    void ReleaseHealClaimsAllHands(RE::FormID a_follower, const char* a_why);
+
+    // PER-HAND FIRE EVIDENCE (feat/mfo-perhand-heal, review R2-1; cast/HealRoad.cpp). A passive
+    // anim-graph sink counts each actor's MLh_/MRh_SpellFire_Event on the event thread.
+    // HandFireWatch (worker) (re)attaches it to a_follower's graphs via MainThread::Post, at
+    // most every 2 s. HandFireTake (worker; mutex) reports and CONSUMES which hands fired
+    // within a_windowMs since the last take, and returns whether any SpellFire event was
+    // ever seen for that follower.
+    void HandFireWatch(RE::Actor* a_follower);
+    bool HandFireTake(RE::FormID a_follower, std::uint32_t a_windowMs, bool& a_left, bool& a_right);
+
     // End a_follower's direct HEAL streams (MFO-B176): the self stream and the
     // on-target stream, each only when its spell is Heal-kind. ComposedCast::
     // Try calls it when a heal claim is minted (Claimed return, MFO-B192), so one actor never

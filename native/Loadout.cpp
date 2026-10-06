@@ -326,7 +326,11 @@ namespace MFO::Loadout {
         const auto now = std::chrono::steady_clock::now();
 
         const auto hands = Read(a_actor, a_spell);
-        if (hands.alreadyHolding) {
+        // The LEFT heal claim's Prepare (a_healClaimLive; every heal-claim caller passes it
+        // with the claim live) prepares the LEFT hand: the copy a second recipient's RIGHT
+        // heal holds is not this hand's (review F6 on 9895a53, feat/mfo-perhand-heal), so
+        // only the left answers "already holding" for it. Every other caller is unchanged.
+        if (hands.alreadyHolding && (!a_healClaimLive || hands.left == a_spell)) {
             // Spell already in hand: the AI window starts the first time a rule
             // WANTS this cast, not before. try_emplace -- re-arming every tick
             // would mean the window never elapses.
@@ -533,10 +537,16 @@ namespace MFO::Loadout {
         // test is also exact. By FormID, re-resolved there. VR has no pump (Post is
         // a documented no-op): run it direct there, as before.
         const RE::FormID spellID = spell->GetFormID();
-        auto takeBack = [a_actorID, spellID]() {
+        // A RIGHT-hand heal claim naming the SAME spell (a second heal recipient,
+        // feat/mfo-perhand-heal): DeselectSpell names a spell, not a hand, so it is
+        // not proven to leave the right hand's copy alone. Read on the worker.
+        const bool rightHealSame =
+            APMFBridge::GetHealCastSpell(a_actorID, APMFBridge::kApmfHandRight) == spellID;
+        auto takeBack = [a_actorID, spellID, rightHealSame]() {
             auto* a  = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
             auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(spellID);
             if (!a || !sp || a->GetEquippedObject(true) != sp) return;
+            if (rightHealSame && a->GetEquippedObject(false) == sp) return;   // skip: the right heal holds it
             a->DeselectSpell(sp);
             spdlog::debug("[loadout] {:08X} -- {} taken back", a_actorID,
                           sp->GetName() ? sp->GetName() : "?");

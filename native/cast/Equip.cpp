@@ -644,6 +644,24 @@ namespace MFO::Actuation {
                 }
                 return { Result::NoOp, "held off: a higher-ranked heal claim holds the left hand", true };
             }
+            // THE RIGHT HAND'S HEAL (feat/mfo-perhand-heal, review F3 on 9895a53): a live heal claim
+            // on the right that OUTRANKS this equip rule keeps the hand, by the same carried rank
+            // the left uses (no tenure). A higher-ranked equip rule takes it, and the heal road
+            // releases the right heal on its next lap (a weapon now owns the right hand).
+            if (const int healRule = RightHealRule(a_follower->GetFormID()); healRule < g_firingRule) {
+                const auto now = std::chrono::steady_clock::now();
+                // Its own throttle key (review round 2, SEV-5): not shared with the left's line.
+                static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_rightHeldOffLog;
+                auto& last = s_rightHeldOffLog[a_follower->GetFormID()];
+                if (now - last >= std::chrono::seconds(5)) {
+                    last = now;
+                    spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' HELD OFF -- a heal claim (rule {}) ranked "
+                                 "above rule {} holds the right hand for a second heal recipient",
+                                 a_follower->GetFormID(), a_ranged ? "ranged" : "melee",
+                                 best->GetName() ? best->GetName() : "?", healRule, g_firingRule);
+                }
+                return { Result::NoOp, "held off: a higher-ranked heal claim holds the right hand", true };
+            }
             const std::uint16_t bestDmg = best->GetAttackDamage();
             // Off-hand plan (one-hander in the right; offHand 2 -> a second one-
             // hander, 1 -> a shield), gated on bWeaponStyleControl. A live cast
@@ -1022,7 +1040,7 @@ namespace MFO::Actuation {
     bool HealClaimTakesLeftFrom(RE::Actor* a_follower, int a_holdRule) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         if (fid == 0) return false;
-        const RE::FormID heal = APMFBridge::GetHealCastSpell(fid);
+        const RE::FormID heal = APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft);   // the LEFT hand's heal
         if (heal == 0) {
             // THE STREAM CAP'S RE-STREAM GAP (MFO-B177): no claim stands for one lap,
             // but the heal's LEFT lock keeps its rank until the rule re-claims, and
@@ -1049,7 +1067,7 @@ namespace MFO::Actuation {
         // with no heal claim behind it) keeps the answer it always had. A heal lock
         // kept through its stream-cap re-stream gap (MFO-B177) is judged by rank,
         // like the claim it stands for.
-        if ((APMFBridge::GetHealCastSpell(fid) == 0 && HealRestreamRule(fid) == kNoRule) ||
+        if ((APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft) == 0 && HealRestreamRule(fid) == kNoRule) ||
             APMFBridge::IsOwnedCastActiveOnHand(fid, APMFBridge::kApmfHandLeft))
             return true;
         return HealClaimTakesLeftFrom(a_follower, a_holdRule);
