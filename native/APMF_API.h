@@ -179,7 +179,9 @@ namespace APMF_API {
     // channel for intent 24 and REFUSES the request (kInvalidHandle, "no channel serves
     // intent 24" in its log) -- the documented degrade. See "ABI v19: COMBAT APPROACH" at
     // the end of this header.
-    inline constexpr std::uint32_t kABIVersion = 19;
+    // ABI v20 (2026-10-06): kCastFlag_FloorSpellsOnly (CastFlags bit 7) only, no struct/slot.
+    // Gate on abiVersion >= 20 (Docs/INTEGRATION.md "Spells-only floor" has the why).
+    inline constexpr std::uint32_t kABIVersion = 20;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -1435,6 +1437,12 @@ namespace APMF_API {
                                              //   bOwnLineOfSight=0, or before kDataLoaded): keep your own test.
                                              //   An APMF older than v18 IGNORES this bit and casts with no
                                              //   test. Check abiVersion >= 18 before setting it.
+
+        kCastFlag_FloorSpellsOnly = 1u << 7, // ABI v20. Meaningful only with kCastFlag_DenyHandOnly: the floor
+                                             //   refuses spell/scroll/staff only. A one-hander, shield or torch in
+                                             //   that hand passes; a 2H, a bow or a no-hand item (unarmed) still
+                                             //   competes for the other hand and is refused while a claim holds it.
+                                             //   Gate on abiVersion >= 20. Docs/INTEGRATION.md "Spells-only floor".
 
         // ── Bits 8-15: STOP PERCENT (added in-place; the word is byte-frozen) ────
         // The seat that owns a concentration channel's duration is

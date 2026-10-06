@@ -48,6 +48,12 @@ namespace MFO::APMFBridge {
         // publish/consume contract cheaply.
         std::atomic<const APMF_API::APMF_API_v2*> g_apmf{ nullptr };
 
+        // The idle-hand floor's Harbinger gates (ReconcileHandFloorLocked's WEAPONS note).
+        // v19 is the first ABI whose builds may carry the hand-claim block (a floor then
+        // blocks weapons too); v20 adds kCastFlag_FloorSpellsOnly.
+        constexpr std::uint32_t kHandBlockFirstAbi  = 19;
+        constexpr std::uint32_t kFloorSpellsOnlyAbi = 20;
+
         std::mutex                             g_mx;
         std::unordered_map<RE::FormID, Owned>  g_owned;
         // ch.17 claim-refusal error throttle (once per refusal streak, per
@@ -526,6 +532,10 @@ namespace MFO::APMFBridge {
                           wantHand == kApmfHandLeft    ? APMF_API::kCastFlag_LeftHand : 0u) |
                          (wantConc     ? APMF_API::kCastFlag_Concentration : 0u) |
                          (wantDenyOnly ? APMF_API::kCastFlag_DenyHandOnly  : 0u) |
+                         // ABI v20: every MFO floor is a SPELLS-ONLY reservation (see
+                         // ReconcileHandFloorLocked's WEAPONS note): a one-hander stays in the hand.
+                         (wantDenyOnly && api->abiVersion >= kFloorSpellsOnlyAbi
+                              ? APMF_API::kCastFlag_FloorSpellsOnly : 0u) |
                          APMF_API::MakeStopPct(wantStopPct);
             req.ttlMs  = kHealCastTtlMs;
             // HARBINGER OWN LINE OF SIGHT (ABI v18, APMF_API.h kCastFlag_OwnLineOfSight): for a claim
@@ -693,12 +703,58 @@ namespace MFO::APMFBridge {
         // allow-list alone (MFO lists its ConcProxy forms there, SpellAllowList.cpp),
         // and this floor -- a ch.8b HAND claim -- has no say over it. What the floor
         // closes is the AI's deliberation on the floored hand, which is exactly and
-        // only what it claims to do. Weapons are untouched
-        // too -- the 0x0F seat is installed on the spell/staff selector vtables
-        // only (APMF core/EquipGate.cpp's own "weapon/fist item classes have no
-        // concrete header class to hook"), so a spellsword's off-hand steel is
-        // not disarmed by a floor.
+        // only what it claims to do.
+        //
+        // WEAPONS: THE FLOOR IS A SPELLS-ONLY RESERVATION (CORRECTED 2026-10-06,
+        // fix/mfo-floor-spells-only). This note used to say weapons are untouched
+        // because Harbinger hooks 0x0F only on the spell/staff selectors. That
+        // stopped being true at Harbinger 42758a7 (ABI v19): its hand-claim block
+        // (core/HandBlock.cpp 0x0F on the weapon-class items, plus its equip-sink
+        // step) refuses every weapon, shield, torch and unarmed equip into a hand a
+        // cast claim OR a deny-only floor holds. In the field (2026-10-06) Cicero's
+        // floored right hand refused his bow, swords and fists 119 times in 40 s.
+        // marth's ruling, "spells-only reservation": the floor exists to stop the
+        // engine starting a second SPELL in the idle hand, nothing else. So:
+        //   * ABI >= 20: MFO sets kCastFlag_FloorSpellsOnly on every floor. The
+        //     floor refuses spells, scrolls and staffs only: a one-handed weapon,
+        //     shield or torch in the floored hand passes. A two-hander, a bow, or
+        //     an item the engine has not given a hand (unarmed) still competes for
+        //     the driving hand too and is refused while that cast claim stands
+        //     (field: the bow's 32 and Unarmed's 22 refusals continue, correctly).
+        //   * ABI == 19: Harbinger may or may not carry the hand-claim block, and
+        //     it would ignore the flag if it does. MFO mints NO floor there (one
+        //     warning per session). The cost is the pre-floor behaviour: the AI
+        //     may start a second spell of its own in the idle hand. The other
+        //     choice, a floor that may disarm a melee follower for most of a
+        //     fight, is the worse one.
+        //   * ABI <= 18: no hand-claim block exists, the floor never touched
+        //     weapons, and MFO floors exactly as before (no flag to send).
+        // A hand MFO's own claim DRIVES still blocks every other equip, by
+        // Harbinger's rule ("taking a hand for an action means other actions on
+        // that hand are blocked for the duration").
         void ReconcileHandFloorLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower, Owned& o) {
+            // ABI v19 HAND-CLAIM BLOCK FALLBACK (see the WEAPONS note above): on a
+            // Harbinger that may block weapons into a floor and cannot be told to
+            // reserve spells only, no floor at all.
+            if (api->abiVersion >= kHandBlockFirstAbi && api->abiVersion < kFloorSpellsOnlyAbi) {
+                if (o.floor.handle != APMF_API::kInvalidHandle) {
+                    const auto hadHand = o.floor.hand;
+                    ReleaseClaimLocked(o.floor);
+                    spdlog::info("[apmf] {:08X} IDLE-HAND FLOOR released ({} hand) -- Harbinger ABI v{} cannot "
+                                 "reserve a hand against spells only.",
+                                 follower, hadHand == kApmfHandLeft ? "left" : "right", api->abiVersion);
+                }
+                static std::atomic<bool> s_warned{ false };
+                if (!s_warned.exchange(true))
+                    spdlog::warn("[apmf] IDLE-HAND FLOOR OFF for this session: Harbinger reports ABI v{}, which may "
+                                 "block weapons into a floored hand and has no spells-only floor (ABI v{}). MFO mints "
+                                 "no floor, so a melee follower's one-handed weapon is not refused there. The AI may start a second spell "
+                                 "of its own in the idle hand while MFO drives the other. Update Harbinger to fix "
+                                 "this. Logged once per session.",
+                                 api->abiVersion, kFloorSpellsOnlyAbi);
+                return;
+            }
+
             // A DualCast claim is mirrored into BOTH offense slots (see
             // ClaimOffenseCast), so it reads as both hands driven with no special
             // case. Heals are LEFT always (ClaimHealCast's own hard rule).
@@ -830,12 +886,17 @@ namespace MFO::APMFBridge {
                                   /*wantDenyOnly=*/true);
             o.floor.refreshed = std::chrono::steady_clock::now();
             if (announce && o.floor.handle != APMF_API::kInvalidHandle)
-                spdlog::info("[apmf] {:08X} IDLE-HAND FLOOR claimed ({} hand, deny-only) -- MFO drives the "
-                             "{} hand, so nothing un-gambited may arm on this one. It drives nothing and "
-                             "admits nothing (not even MFO's own spells); MFO's next gambit takes the hand "
+                spdlog::info("[apmf] {:08X} IDLE-HAND FLOOR claimed ({} hand, {}) -- MFO drives the "
+                             "{} hand, so no un-gambited spell may arm on this one. It drives nothing and "
+                             "admits no spell (not even MFO's own); {}. MFO's next gambit takes the hand "
                              "by the equal-basis tie rule, with no release/re-request gap.",
                              follower, wantHand == kApmfHandLeft ? "left" : "right",
-                             wantHand == kApmfHandLeft ? "right" : "left");
+                             api->abiVersion >= kFloorSpellsOnlyAbi ? "deny-only, spells-only" : "deny-only",
+                             wantHand == kApmfHandLeft ? "right" : "left",
+                             api->abiVersion >= kFloorSpellsOnlyAbi
+                                 ? "a one-handed weapon, shield or torch may go in it (a two-hander, bow or fists still "
+                                   "compete for the driving hand)"
+                                 : "this Harbinger predates the hand-claim block, so weapons were never blocked");
         }
 
     }

@@ -5315,12 +5315,13 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
 - **Module layout (wave-1 subsystem-folder split, 2026-09-24, a pure move proven function by
   function by `tools/splitcheck`; before it: one `APMFBridge.cpp`).** Other subsystems include
   ONLY `apmf/APMFBridge.h`. `APMF_API.h` (the byte-shared ABI header) stays at `native/`.
-  - `apmf/Bridge.cpp` (1095) = the CORE: the interface pointer `g_apmf` (`:49`) and the claim map
-    `g_mx`/`g_owned` (`:51-52`) + refusal sets, `FacetExpiry` (`:163`), the shared claim helpers
-    `EnsureClaimLocked` (`:174`), `ReleaseClaimLocked` (`:200`), `CastHeartbeatInterval` (`:241`),
-    `EnsureCastClaimLocked` (`:280`), the idle-hand floor `ReconcileHandFloorLocked` (`:672`),
-    `Acquire` (`:813`, requests ABI 10) / `Available` (`:853`) / `MaybeWarnAbsence` (`:871`), the expiry sweep
-    `Tick` (`:887`) and `ClearTransientState` (`:1046`).
+  - `apmf/Bridge.cpp` (1223) = the CORE: the interface pointer `g_apmf` (`:49`), the floor's ABI gates
+    `kHandBlockFirstAbi`/`kFloorSpellsOnlyAbi` (`:54-55`), the claim map
+    `g_mx`/`g_owned` (`:57-58`) + refusal sets, `FacetExpiry` (`:169`), the shared claim helpers
+    `EnsureClaimLocked` (`:180`), `ReleaseClaimLocked` (`:206`), `CastHeartbeatInterval` (`:247`),
+    `EnsureCastClaimLocked` (`:286`), the idle-hand floor `ReconcileHandFloorLocked` (`:732`),
+    `Acquire` (`:900`, requests ABI 10) / `Available` (`:940`) / `MaybeWarnAbsence` (`:958`), the expiry sweep
+    `Tick` (`:974`) and `ClearTransientState` (`:1172`).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
     `ClaimOffenseCast` `:83`, `RefreshOwnedCastOnHand` `:215`, `ReleaseCastClaimOnHand` `:311`,
     `ReleaseOffenseCast` `:326`) and heal (`ClaimHealCast` `:351`, `RefreshHealCastClaim` `:433`).
@@ -5640,12 +5641,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   `ComposedCast::End()`/a refused heal claim clear ONLY the left slot so a concurrent
   right-hand offense watch survives.
 - **THE IDLE-HAND FLOOR (F10, marth's design ruling 2026-09-08).** A THIRD claim this bridge makes,
-  internal — no entry point. `Owned::floor` (`apmf/APMFBridge_internal.h:281`) is a deny-only `kIntent_Cast` claim
+  internal — no entry point. `Owned::floor` (`apmf/APMFBridge_internal.h:283`) is a deny-only `kIntent_Cast` claim
   (`APMF_API::kCastFlag_DenyHandOnly`) standing on whichever ONE hand MFO's driving claims do NOT
   occupy, so nothing un-gambited can arm there (APMF leaving an unclaimed hand permissive is correct
   for a framework; MFO's design is that only gambited spells occur). Derived — not commanded — by
-  `ReconcileHandFloorLocked` (`apmf/Bridge.cpp:672`), called from ONE place: `Tick()`
-  (`apmf/Bridge.cpp:880`), after every expiry sweep, every pump (~133 ms), gated on `bApmfCast` +
+  `ReconcileHandFloorLocked` (`apmf/Bridge.cpp:732`), called from ONE place: `Tick()`
+  (`apmf/Bridge.cpp:1141`), after every expiry sweep, every pump (~133 ms), gated on `bApmfCast` +
   ABI ≥ 5. That pass also owns the floor's `refreshed` stamp and TTL heartbeat.
   **Exactly one hand driven → floor the other; both driven → none; NEITHER driven → NEITHER hand is
   floored** (not both: principle 4 — nothing was declared; it would mute followers with no cast gambit
@@ -5654,7 +5655,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   deny-only claim LOSE to a driving one at an EQUAL basis, so MFO's own next gambit takes the hand with
   no release/re-request gap and the floor stands underneath again when it ends. A floor at a higher
   basis would silence MFO's own casts (APMF warns loudly about it).
-  `EnsureCastClaimLocked` (`apmf/Bridge.cpp:280`) gained a `wantDenyOnly` parameter rather than a
+  `EnsureCastClaimLocked` (`apmf/Bridge.cpp:286`) gained a `wantDenyOnly` parameter rather than a
   parallel mint path, so the floor inherits the same liveness check / heartbeat / fail-closed split /
   `reqParam` mirror; `CastClaim::denyOnly` (`apmf/APMFBridge_internal.h:99`) is part of the claim's IDENTITY; the release
   sentinel is now "no spell AND not a floor". Both log throttles became **two entries per follower**
@@ -5663,8 +5664,24 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   driving claim → the actor-wide (`Hand::kUnknown`) allowance read starts denying everything; forget
   `ClearTransientState`/`EraseIfEmpty` and a floor outlives MFO's handle for it and holds a hand shut
   until APMF's TTL. It does NOT deny MFO's own direct force (`CastSpellImmediate` is `MagicCaster`
-  vtable slot 01, `CheckCast` is 0A — pinned `include/RE/M/MagicCaster.h:46,55`) and does NOT deny
-  weapons (APMF's 0x0F seat is on the spell/staff selector vtables only).
+  vtable slot 01, `CheckCast` is 0A — pinned `include/RE/M/MagicCaster.h:46,55`).
+  **WEAPONS: A SPELLS-ONLY RESERVATION (CORRECTED 2026-10-06, `fix/mfo-floor-spells-only`).** The old
+  line here ("does NOT deny weapons, APMF's 0x0F seat is on the spell/staff selectors only") stopped
+  being true at Harbinger 42758a7 (ABI v19): its hand-claim block refuses every weapon / shield / torch /
+  unarmed equip into a hand a cast claim OR a floor holds, and Cicero's floored right hand refused his
+  bow, swords and fists 119 times in 40 s (field 2026-10-06). marth's ruling: "spells-only reservation".
+  By Harbinger ABI: **>= 20** `EnsureCastClaimLocked` adds `APMF_API::kCastFlag_FloorSpellsOnly` to every
+  floor (spells, scrolls and staffs are refused; a one-handed weapon, shield or torch in the floored hand
+  passes; a two-hander, a bow or an item the engine has not given a hand (unarmed) still competes for the
+  driving hand too and is refused while that cast claim stands, so the field's bow 32 and Unarmed 22
+  refusals continue, correctly); **== 19** (a build that may carry the block and
+  cannot be told otherwise) `ReconcileHandFloorLocked` mints NO floor and releases a standing one, with a
+  once-per-session `IDLE-HAND FLOOR OFF` warning (the cost: the AI may start its own second spell in the
+  idle hand, the pre-F10 behaviour, judged less harmful than disarming a melee follower); **<= 18** (no
+  block exists) floors exactly as before. The `claimed` line says `deny-only, spells-only` on v20.
+  **What breaks:** dropping the flag on v20, or flooring on v19, re-disarms melee followers; a hand MFO's
+  own claim DRIVES still blocks every equip by Harbinger's rule, which is intended. Open backlog: MFO-B235
+  (the ABI-19 fallback also drops floors on pre-HandBlock v19 dev builds; accepted).
   **THE UNOBSERVED GATE (`fix/mfo-combat-restoration-direct`, 2026-09-21; RE-SIZED AND ARMED ON CHARGE
   `fix/mfo-spell-authority-0922`, 2026-09-22).** A driving claim earns the
   floor only while it can be believed to be driving: younger than **`kIdleFloorUnobservedMs`**
@@ -6811,9 +6828,11 @@ native seats) and ENGINE_NOTES §0.40.
     wedged caster cannot re-open the window every lap.
   - **It does NOT heartbeat.** This branch never calls `RefreshHealCastClaim`, so it
     adds no lifetime to the incumbent's claim — the hazard F1's own doc warns about.
-  - **Logs `LogHealHoldOffInFlight`** (`ComposedCast.cpp:242`), its OWN `[cfc]`
+  - **Logs `LogHealHoldOffInFlight`** (`ComposedCast.cpp:328`), its OWN `[cfc]`
     message, sharing F1's dedup map and 2 s window (the two holds are mutually
-    exclusive on any one call, so sharing cannot silence either).
+    exclusive on any one call, so sharing cannot silence either). Since 2026-10-06
+    (`fix/mfo-floor-spells-only`) it names the held-off heal's RECIPIENT and its HP%
+    (`Vocab::HealthPct`; `Try`'s `a_target`, or the follower for a self heal), log text only.
   - **Why HERE and not in the hand lock.** `ComposedCast::Try` is the ONE
     `ClaimHealCast` call site in `native/`; BOTH the Logistics OOC concentration
     dispatch (`logistics/Service.cpp:1161` → `CastTargetDirect`) and combat `CastOn`'s
