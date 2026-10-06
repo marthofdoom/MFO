@@ -4,6 +4,7 @@
 // enter combat + pin"; MFO's ch.21 claim table is apmf/CombatEntry.cpp.
 #include "PCH.h"
 #include "EngageOnSight.h"
+#include "APMF_API.h"             // AwareSense / AwareDetail bits (ABI v18 SenseActor)
 #include "apmf/APMFBridge.h"      // ch.21 entry table (CombatEntryOffered / RequestCombatEntry / ...)
 #include "Config.h"
 #include "Runtime.h"   // G1: Runtime::Known(), the exact-build gate
@@ -39,6 +40,13 @@ namespace MFO::EngageOnSight {
         // candidates per probe (the first VISIBLE one wins). Each measurement is one
         // engine HasLineOfSight plus, only on a CLEAR, MFO's 3-sample ray.
         constexpr int kMaxMeasured = 3;
+        // ABI v18 (Harbinger SenseActor): the same bound, sized from Harbinger's per-frame
+        // synchronous sight cap (kLosMaxSyncPairsPerFrame = 8 pairs). One probe may spend at most
+        // 4 candidate pairs here + 4 join-estimate pairs below = 8, so a lone follower never
+        // exhausts the frame; past the cap Harbinger answers kAwareDetail_SightDeferred (see
+        // RunProbe) and the next probe, 0.3 s on, asks again. Hearing / proximity / engaged cost
+        // no ray, so a pair sensed by those never needed the budget.
+        constexpr int kMaxMeasuredSensed = 4;
         // Status lines (why the gambit is not acting) are transition-only (#79) with
         // this floor between two lines for one follower, so a gate that flaps (the
         // player crouching, confidence at the floor) cannot flood the log.
@@ -57,6 +65,7 @@ namespace MFO::EngageOnSight {
         // high only holds the gambit back).
         constexpr float kJoinRadius      = 1500.0f;
         constexpr int   kMaxJoinMeasured = 6;
+        constexpr int   kMaxJoinSensed   = 4;   // ABI v18: see kMaxMeasuredSensed
 
         // ── MAIN-THREAD PROBE MIRROR ─────────────────────────────────────────────
         // Written by the main-thread probe, read by the worker. A real lock (#4:
@@ -70,7 +79,14 @@ namespace MFO::EngageOnSight {
             float      leash    = 0.0f;             // the leash the probe used
             float      range    = 0.0f;             // the effective reaction distance: min(leash, fEngageOnSightRange)
             int        measured = 0;                // sightline measurements made
-            int        occluded = 0;                // of those, OCCLUDED (or unknown)
+            int        occluded = 0;                // of those, OCCLUDED (or unknown); v18: senses == 0
+            // ABI v18 (Harbinger SenseActor): the chosen target's AwareSense / AwareDetail bits
+            // (0 / 0 when the probe used MFO's own Sightline), and how many candidates came back
+            // kAwareDetail_SightDeferred with no other sense (NOT "no sense": asked again next probe).
+            bool          sensed       = false;
+            std::uint32_t senses       = 0;
+            std::uint32_t detail       = 0;
+            int           deferred     = 0;
             // Given-up targets this probe found GONE: unresolvable, dead, disabled,
             // unloaded, no longer hostile to the player or him (the bare engine read), or
             // farther from the player than the FIXED ceiling fLeashMax. Never keyed on the
@@ -253,6 +269,38 @@ namespace MFO::EngageOnSight {
             return LocationTypes::Classify(a_loc) == LocationTypes::Kind::kCivilised;
         }
 
+        // Log text for SenseActor's bits (the ENGAGE line): "sight+hearing(noise)" etc.
+        std::string SenseText(std::uint32_t a_senses, std::uint32_t a_detail) {
+            std::string s;
+            const auto add = [&](const char* n) { if (!s.empty()) s += '+'; s += n; };
+            if (a_senses & APMF_API::kSense_Sight)     add("sight");
+            if (a_senses & APMF_API::kSense_Hearing) {
+                add("hearing");
+                if (a_detail & APMF_API::kAwareDetail_HeardNoise)  s += "(noise)";
+                if (a_detail & APMF_API::kAwareDetail_HeardCombat) s += "(combat)";
+            }
+            if (a_senses & APMF_API::kSense_Proximity) add("proximity");
+            if (a_senses & APMF_API::kSense_Engaged)   add("engaged");
+            if (s.empty()) s = "none";
+            if (a_detail & APMF_API::kAwareDetail_NearAnchor)    s += " [heard-by-you]";
+            if (a_detail & APMF_API::kAwareDetail_EngagedAnchor) s += " [fighting-you]";
+            if (a_detail & APMF_API::kAwareDetail_SightDeferred) s += " [sight-deferred]";
+            return s;
+        }
+
+        // The join estimate's "can a see b" (MAIN THREAD). ABI v18: SenseActor's SIGHT bit (omnidirectional
+        // own ray, no hearing: a sound is not a line of sight). kAwareDetail_SightDeferred (the frame's sync
+        // cap is spent) is NOT "no sense": the pair counts, the conservative side the budget code already
+        // takes. Falls back to MFO's own MeasureNow when Harbinger cannot answer.
+        bool JoinSees(bool a_v18, RE::FormID a_viewer, RE::FormID a_target) {
+            if (a_v18) {
+                APMFBridge::SenseReading s;
+                if (APMFBridge::SenseOf(a_viewer, a_target, 0, 0.0f, s))
+                    return (s.senses & APMF_API::kSense_Sight) || (s.detail & APMF_API::kAwareDetail_SightDeferred);
+            }
+            return Sightline::MeasureNow(a_viewer, a_target) == Sightline::Verdict::Visible;
+        }
+
         // MAIN THREAD ONLY (posted). The highActorHandles walk (resized by the main
         // thread, §0.30) and the sightline measurement (a physics query, §0.30) both
         // run here. Everything crosses back as FormIDs.
@@ -296,11 +344,27 @@ namespace MFO::EngageOnSight {
 
             r.candidates.reserve(found.size());
             for (const auto& [d, fid] : found) r.candidates.push_back(fid);
+            // ABI >= 18: Harbinger answers "does he SENSE it" (sight by its own omnidirectional ray,
+            // hearing, proximity, engaged), anchored on the player. Below it, or when Harbinger's
+            // service is not armed, MFO's own Sightline MeasureNow stays the test.
+            const bool v18 = APMFBridge::LosSupported();
+            const int  maxMeasured = v18 ? kMaxMeasuredSensed : kMaxMeasured;
             for (const auto& [d, fid] : found) {
-                if (r.measured >= kMaxMeasured) break;
+                if (r.measured >= maxMeasured) break;
                 if (std::find(a_givenUp.begin(), a_givenUp.end(), fid) != a_givenUp.end()) continue;
                 ++r.measured;
-                if (Sightline::MeasureNow(a_id, fid) != Sightline::Verdict::Visible) { ++r.occluded; continue; }
+                APMFBridge::SenseReading sr;
+                if (v18 && APMFBridge::SenseOf(a_id, fid, pc->GetFormID(), r.range, sr)) {
+                    if (sr.senses == 0) {
+                        // Deferred sight (the frame's sync cap spent, no fresh verdict) is not "no
+                        // sense": count it apart; the next probe asks again.
+                        if (sr.detail & APMF_API::kAwareDetail_SightDeferred) ++r.deferred; else ++r.occluded;
+                        continue;
+                    }
+                    r.sensed = true;
+                    r.senses = sr.senses;
+                    r.detail = sr.detail;
+                } else if (Sightline::MeasureNow(a_id, fid) != Sightline::Verdict::Visible) { ++r.occluded; continue; }
                 auto* t = RE::TESForm::LookupByID<RE::Actor>(fid);
                 r.chosen  = fid;
                 r.dSelf   = d;
@@ -315,7 +379,7 @@ namespace MFO::EngageOnSight {
                 r.joiners = 1;
                 auto* ct = RE::TESForm::LookupByID<RE::Actor>(r.chosen);
                 const auto cpos = ct ? ct->GetPosition() : RE::NiPoint3{};
-                int budget = kMaxJoinMeasured;
+                int budget = v18 ? kMaxJoinSensed : kMaxJoinMeasured;
                 for (const auto& [d, fid] : found) {
                     if (fid == r.chosen) continue;
                     if (std::find(a_givenUp.begin(), a_givenUp.end(), fid) != a_givenUp.end()) continue;
@@ -323,10 +387,10 @@ namespace MFO::EngageOnSight {
                     if (!o || !ct || o->GetPosition().GetDistance(cpos) > kJoinRadius) continue;
                     if (budget <= 0) { ++r.joiners; continue; }   // unmeasured: counts (conservative)
                     --budget;
-                    if (Sightline::MeasureNow(a_id, fid) == Sightline::Verdict::Visible) { ++r.joiners; continue; }
+                    if (JoinSees(v18, a_id, fid)) { ++r.joiners; continue; }
                     if (budget <= 0) { ++r.joiners; continue; }
                     --budget;
-                    if (Sightline::MeasureNow(r.chosen, fid) == Sightline::Verdict::Visible) ++r.joiners;
+                    if (JoinSees(v18, r.chosen, fid)) ++r.joiners;
                 }
             }
             // Given-up targets that are GONE (see ProbeResult::gone). Hostility here is the
@@ -505,13 +569,18 @@ namespace MFO::EngageOnSight {
                         // Preempt logistics the way player combat does: his loot trip ends now.
                         Logistics::ReleaseTravelOnCombat(a_f);
                         Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
-                        spdlog::info("[engage-on-sight] {} ({:08X}) ENGAGE {} ({:08X}): nearest visible enemy, "
-                                     "{:.0f}u from him (range {:.0f}u), {:.0f}u from you (leash {:.0f}u), sightline=VISIBLE "
-                                     "({} measured, {} not visible), {} candidate(s), {} would join; ch.21 entry "
+                        // ABI v18: the senses that fired (Harbinger SenseActor) replace the sightline text.
+                        const std::string basis = r.sensed
+                            ? fmt::format("senses={} (detail {:#x})", SenseText(r.senses, r.detail), r.detail)
+                            : std::string("sightline=VISIBLE");
+                        spdlog::info("[engage-on-sight] {} ({:08X}) ENGAGE {} ({:08X}): nearest {} enemy, "
+                                     "{:.0f}u from him (range {:.0f}u), {:.0f}u from you (leash {:.0f}u), {} "
+                                     "({} measured, {} not sensed/visible, {} sight-deferred), {} candidate(s), {} would join; ch.21 entry "
                                      "h={}; ch.20 pin: {}; in-combat confidence estimate {:.2f}; target aggression "
                                      "{:.0f}{}, {} unaggressive (Aggression 0) skipped",
-                                     NameOf(a_f), a_id, NameOf(t), r.chosen, r.dSelf, r.range, r.dPlayer, r.leash,
-                                     r.measured, r.occluded, r.candidates.size(), foes, h, pin, conf,
+                                     NameOf(a_f), a_id, NameOf(t), r.chosen, r.sensed ? "sensed" : "visible",
+                                     r.dSelf, r.range, r.dPlayer, r.leash, basis,
+                                     r.measured, r.occluded, r.deferred, r.candidates.size(), foes, h, pin, conf,
                                      r.chosenAggression,
                                      r.chosenUnaggressiveFighting ? " (unaggressive, but fighting the party: counts)" : "",
                                      r.unaggressiveSkipped);

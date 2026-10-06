@@ -3,6 +3,7 @@
 #include "Targeting.h"
 #include "Config.h"
 #include "CombatStyle.h"
+#include "Evaluator.h"   // Eval::HoldsBowOrStaff: the ch.20 pin's own-LoS flag
 #include "apmf/APMFBridge.h"   // ch.20 target pin: the pin route (Command/Clear/ClearAll/Current)
 
 // ONE Win32 symbol, declared by hand.
@@ -222,7 +223,10 @@ namespace MFO::Targeting {
             auto ptr = a_target.get();   // HOLD the NiPointer across the FormID read
             auto* foe = ptr.get();
             if (!foe) return CommandOutcome::Unavailable;
-            switch (APMFBridge::PinTarget(a_follower, foe->GetFormID(), a_target)) {
+            // Bow / staff followers pin with Harbinger's own line of sight (ABI v18, pause-while-not-
+            // visible); melee does not. Equipment read: the same one Evaluator makes on the worker.
+            const bool ownLos = Eval::HoldsBowOrStaff(RE::TESForm::LookupByID<RE::Actor>(a_follower));
+            switch (APMFBridge::PinTarget(a_follower, foe->GetFormID(), a_target, ownLos)) {
             case APMFBridge::PinResult::Pinned:
                 return CommandOutcome::Changed;
             case APMFBridge::PinResult::Unchanged:

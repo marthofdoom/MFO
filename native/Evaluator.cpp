@@ -209,7 +209,8 @@ namespace MFO::Eval {
         // the right hand holds a bow or crossbow (a ranged shot), or either hand holds a staff
         // (a staff "swing" casts its spell, so it is a spell measurement). A melee swing,
         // declared melee-only or not, stays on the engine basis.
-        bool HoldsBowOrStaff(RE::Actor* a_actor) {
+    }   // namespace -- HoldsBowOrStaff is public (Evaluator.h): the ch.20 pin asks it too
+    bool HoldsBowOrStaff(RE::Actor* a_actor) {
             if (!a_actor) return false;
             if (auto* r = a_actor->GetEquippedObject(false))
                 if (auto* w = r->As<RE::TESObjectWEAP>()) {
@@ -221,7 +222,8 @@ namespace MFO::Eval {
                     if (auto* w = o->As<RE::TESObjectWEAP>(); w && w->GetWeaponType() == RE::WEAPON_TYPE::kStaff)
                         return true;
             return false;
-        }
+    }
+    namespace {
 
         // Pick a foe from the follower's OWN COMBAT GROUP.
         //

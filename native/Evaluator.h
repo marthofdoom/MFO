@@ -55,4 +55,9 @@ namespace MFO::Eval {
     Choice Evaluate(RE::Actor* a_follower, const FollowerState& a_state,
                     Table a_table = Table::Combat, int a_startIndex = 0);
 
+    // True when the right hand holds a bow or crossbow, or either hand holds a staff: the
+    // ranged / spell swing. Evaluator's own-ray basis choice and the ch.20 target pin's
+    // own-line-of-sight flag (apmf/Excursion.cpp, via Targeting.cpp) share this one test.
+    bool HoldsBowOrStaff(RE::Actor* a_actor);
+
 }

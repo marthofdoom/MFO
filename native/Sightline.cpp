@@ -3,6 +3,7 @@
 #include "MainThread.h"
 #include "Runtime.h"   // G1: Runtime::Known(), the exact-build gate
 #include "Followers.h"   // TeammateInFireLine walks the maintained party list
+#include "apmf/APMFBridge.h"   // LosOf: Harbinger's own line of sight (ABI v18) answers Basis::Own
 #include <limits>        // SegDist's +inf sentinel -- NOT in the PCH (the v1.0.8/9 CI lesson)
 
 namespace MFO::Sightline {
@@ -261,6 +262,16 @@ namespace MFO::Sightline {
     }
 
     Verdict CheckWithin(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds, Basis a_basis) {
+        // HARBINGER OWN LINE OF SIGHT (ABI v18). Basis::Own = "our ray alone": with APMF >= v18
+        // that ray is Harbinger's (the same recipe, kLosFreshMs = 1 s trust, so a caller's longer
+        // window collapses to it). LosOf() is a lock-free any-thread read that also keeps the pair
+        // measured. It returns false below v18 / APMF absent / service unarmed: then MFO's own
+        // cache below answers, exactly as before. Basis::Engine (melee) never goes here.
+        if (a_basis == Basis::Own) {
+            APMFBridge::LosReading r;
+            if (APMFBridge::LosOf(a_viewer, a_target, r))
+                return r.ageMs > static_cast<std::uint32_t>(a_maxAgeSeconds * 1000.0f) ? Verdict::Unknown : r.verdict;
+        }
         std::lock_guard lk(g_mx);
         const auto it = g_cache.find(Key(a_viewer, a_target));
         if (it == g_cache.end()) return Verdict::Unknown;
@@ -270,6 +281,13 @@ namespace MFO::Sightline {
     }
 
     int OccludedRun(RE::FormID a_viewer, RE::FormID a_target, float a_maxAgeSeconds, Basis a_basis) {
+        if (a_basis == Basis::Own) {   // Harbinger's APMF_LosInfo::occludedRun (see CheckWithin)
+            APMFBridge::LosReading r;
+            if (APMFBridge::LosOf(a_viewer, a_target, r))
+                return (r.verdict == Verdict::Occluded &&
+                        r.ageMs <= static_cast<std::uint32_t>(a_maxAgeSeconds * 1000.0f))
+                           ? static_cast<int>(r.occludedRun) : 0;
+        }
         std::lock_guard lk(g_mx);
         const auto it = g_cache.find(Key(a_viewer, a_target));
         if (it == g_cache.end()) return 0;
@@ -281,6 +299,17 @@ namespace MFO::Sightline {
 
     void Want(RE::FormID a_viewer, std::vector<RE::FormID> a_targets, Basis a_basis) {
         if (!a_viewer || a_targets.empty()) return;
+        if (a_basis == Basis::Own) {
+            // Harbinger keeps a pair measured while somebody ASKS for it (GetLineOfSight is the ask),
+            // so with ABI >= 18 the "want" is a lock-free read per target and nothing is Posted.
+            // If the first ask says Harbinger cannot answer (below v18 / unarmed) fall through to
+            // MFO's own measurement below.
+            APMFBridge::LosReading r;
+            if (APMFBridge::LosOf(a_viewer, a_targets.front(), r)) {
+                for (std::size_t i = 1; i < a_targets.size(); ++i) APMFBridge::LosOf(a_viewer, a_targets[i], r);
+                return;
+            }
+        }
         auto& lastPost = g_lastPost[Idx(a_basis)];   // throttled per (pair, basis)
         {
             std::lock_guard lk(g_mx);
@@ -307,6 +336,10 @@ namespace MFO::Sightline {
 
     Verdict MeasureNow(RE::FormID a_viewer, RE::FormID a_target, Basis a_basis) {
         if (!a_viewer || !a_target || !Runtime::Known()) return Verdict::Unknown;   // G1: exact builds only (was VR-only)
+        if (a_basis == Basis::Own) {   // Harbinger's stored verdict (the first ask reads Unknown: fail-open)
+            APMFBridge::LosReading r;
+            if (APMFBridge::LosOf(a_viewer, a_target, r)) return r.verdict;
+        }
         auto* vf = RE::TESForm::LookupByID<RE::Actor>(a_viewer);
         auto* tf = RE::TESForm::LookupByID<RE::Actor>(a_target);
         // Measure() skips these without writing, and an older cache entry for the pair

@@ -528,7 +528,25 @@ namespace MFO::APMFBridge {
                          (wantDenyOnly ? APMF_API::kCastFlag_DenyHandOnly  : 0u) |
                          APMF_API::MakeStopPct(wantStopPct);
             req.ttlMs  = kHealCastTtlMs;
+            // HARBINGER OWN LINE OF SIGHT (ABI v18, APMF_API.h kCastFlag_OwnLineOfSight): for a claim
+            // aimed at ANOTHER actor (not self, not a deny-only floor) Harbinger's seat 0x06 answers
+            // YES only while its own ray to the target is VISIBLE, so the claim is never cast into a
+            // wall. RequestCast only (req.target set). MFO's own Sightline gating at the cast sites
+            // stays for this field cycle. Below v18 the bit is not set and nothing changes.
+            const bool ownLos = !wantDenyOnly && wantTarget != 0 && wantTarget != follower &&
+                                api->abiVersion >= 18 && LosSupported();
+            if (ownLos) req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
             c.handle = api->RequestCast(follower, kOwnBasis, &req);
+            if (ownLos && c.handle == APMF_API::kInvalidHandle) {
+                // Harbinger REFUSES the bit synchronously while its LoS service is not armed (APMF_API.h:
+                // "keep your own test"). That is the documented degrade, not a mask: log it and file the
+                // claim without the bit; MFO's Sightline gate (still in force) is the test.
+                spdlog::warn("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) refused WITH kCastFlag_OwnLineOfSight "
+                             "-- asking again without it (MFO's own Sightline gates this cast)",
+                             follower, wantSpell);
+                req.flags &= ~APMF_API::kCastFlag_OwnLineOfSight;
+                c.handle = api->RequestCast(follower, kOwnBasis, &req);
+            }
             // [cfc] dual-cast ask vs. observed outcome (marth 2026-09-06): the flag is a
             // HINT (APMF_API.h) -- APMF may still only arm one hand, and never reports which.
             // This distinguishes "asked for dual, claim granted" (engine may still degrade to

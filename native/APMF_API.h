@@ -72,7 +72,9 @@
 // player-Update thread). Called from anywhere else they do nothing and return
 // kQuery_NotMainThread. See the "ABI v11: SPACE QUERIES" section below. A
 // kCastFlag_AtPosition RequestEx is still safe from any thread: it is captured and
-// delivered on the game thread like every other request.
+// delivered on the game thread like every other request. ABI v18's SenseActor has the
+// same main-thread-only contract (it casts rays); its GetLineOfSight is safe from any
+// thread (a lock-free read). See "ABI v18: LINE OF SIGHT AND AWARENESS".
 //
 // ── Exceptions ──
 // NO exception ever crosses this boundary. Every APMF-side body (Request,
@@ -157,7 +159,17 @@ namespace APMF_API {
     // param.form on kIntent_Idle: an OLDER APMF does NOT refuse such a claim -- it ignores the
     // form and plays its form-free IdleForceDefaultState -- so an unchecked client gets the
     // wrong animation, silently. That is the degrade to avoid; check the version.
-    inline constexpr std::uint32_t kABIVersion = 17;
+    //
+    // ABI v18 (2026-10-05, ClickUp 86e3h6qj9) adds Harbinger's OWN LINE OF SIGHT and an
+    // AWARENESS query. Two new flag bits ride existing words: kCastFlag_OwnLineOfSight
+    // (CastFlags bit 6) and kTargetPin_OwnLineOfSight (kIntent_TargetPin's param.ival,
+    // bit 0, which v13..v17 accept and ignore). APMF_API_v18 appends TWO slots,
+    // GetLineOfSight (any thread) and SenseActor (main thread only), with their POD
+    // structs. A client must see abiVersion >= 18 before it calls either slot or sets
+    // either bit: an OLDER APMF ignores both bits WITHOUT a word (the cast fires, and the
+    // pin holds, with no line-of-sight test at all). See "ABI v18: LINE OF SIGHT AND
+    // AWARENESS" at the end of this header.
+    inline constexpr std::uint32_t kABIVersion = 18;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -455,7 +467,8 @@ namespace APMF_API {
                                      //       target selectors, vtable slot 6). A STANDING claim:
                                      //       no TTL, ended only by Release.
                                      //       Param: form = the TARGET actor's FormID (REQUIRED).
-                                     //       fval / ival / target / pos are not read.
+                                     //       ival = TargetPinFlags (ABI v18; 0 = none).
+                                     //       fval / target / pos are not read.
                                      //
                                      //       WHAT IT DOES. Each combat update the engine asks its
                                      //       target selectors which foe this actor should fight.
@@ -505,12 +518,20 @@ namespace APMF_API {
                                      //       consequences happen as the engine does them, and
                                      //       Release does not undo them.
                                      //
+                                     //       OWN LINE OF SIGHT (ABI v18): param.ival carries
+                                     //       TargetPinFlags (it was not read before v18). With
+                                     //       kTargetPin_OwnLineOfSight the pin ALSO pauses while
+                                     //       Harbinger's own ray from the actor to the target is
+                                     //       not VISIBLE (see that flag). Without it, unchanged.
+                                     //
                                      //       REFUSED SYNCHRONOUSLY (kInvalidHandle, logged): VR, a
                                      //       runtime other than 1.6.1170 / 1.5.97, [TargetPin]
                                      //       bTargetPin=0, a seat's address self-check failed,
                                      //       before kDataLoaded, param.form == 0, param.form == the
                                      //       actor itself, or the actor is the player (ch.20 pins
-                                     //       NPC combat targets only). REFUSED AT ENGAGE
+                                     //       NPC combat targets only), or (ABI v18)
+                                     //       kTargetPin_OwnLineOfSight while the line-of-sight
+                                     //       service is not armed. REFUSED AT ENGAGE
                                      //       (one Drain later; the handle is LIVE and inert, the log
                                      //       says why -- RELEASE IT): param.form is not an Actor.
                                      //       Repoint(handle, &param) moves the pin to a new target
@@ -1287,6 +1308,51 @@ namespace APMF_API {
                                              //   client owns resource cost (APMF charges no magicka, the
                                              //   same as every CastSpellImmediate).
 
+        // ── OWN LINE OF SIGHT (ABI v18, 2026-10-05; bit 6 was free) ─────────────
+        kCastFlag_OwnLineOfSight = 1u << 6,  // Judge this claim's line of sight with HARBINGER'S OWN RAY
+                                             //   (see "ABI v18: LINE OF SIGHT AND AWARENESS") instead of
+                                             //   none at all. RequestCast ONLY (req.flags, with req.target
+                                             //   set): the degenerate RequestEx(kIntent_Cast) form carries no
+                                             //   target, so the bit there is REFUSED (kInvalidHandle, logged),
+                                             //   never accepted as a silent no-op.
+                                             //
+                                             //   WHY. Without this bit the claim is the authority on WHETHER
+                                             //   to cast (seat 0x06 answers YES from the claim), so a claim
+                                             //   aimed at a target behind a wall is cast into the wall. The
+                                             //   engine's own Actor::HasLineOfSight cannot be asked instead:
+                                             //   for an NPC viewer it does not cast a ray, it returns a CACHED
+                                             //   per-(viewer, target) answer the engine refreshes on its own
+                                             //   schedule, stale or false for targets it does not keep warm
+                                             //   (allies, the player).
+                                             //
+                                             //   WHAT APMF DOES WITH IT, while the claim stands and its target
+                                             //   is another actor:
+                                             //   * seat 0x06 (CheckStartCast) answers YES only while the own-ray
+                                             //     verdict for (actor -> target) is VISIBLE and at most
+                                             //     kLosFreshMs old. Otherwise it answers NO: the AI does not
+                                             //     start this cast now, the claim STANDS, and the next poll
+                                             //     asks again. The first poll after a claim (or a Repoint to a
+                                             //     new target) registers the pair; its first verdict arrives
+                                             //     within a frame or two, so the first cast waits that long.
+                                             //   * seat 0x07 (CheckStopCast, a held channel) STOPS the channel
+                                             //     when the verdict is OCCLUDED on two consecutive measurements
+                                             //     (a single borderline reading does not cut a heal beam).
+                                             //     UNKNOWN or UNAVAILABLE never stop a running channel.
+                                             //   * UNAVAILABLE (the ray cannot be cast: no havok world, the
+                                             //     caster has no character controller, an unloaded target)
+                                             //     holds the start like OCCLUDED and is logged with its reason.
+                                             //     It is NEVER treated as visible.
+                                             //   A SELF target (target 0, or the actor itself), and a
+                                             //   kCastFlag_DenyHandOnly claim, have no line to judge: the bit is
+                                             //   ignored on them. Everything else about the claim is unchanged.
+                                             //
+                                             //   REFUSED SYNCHRONOUSLY (kInvalidHandle, logged) while the
+                                             //   line-of-sight service is not armed (VR, a runtime other than
+                                             //   1.6.1170 / 1.5.97 / 1.7.104, a self-check refusal, [Sightline]
+                                             //   bOwnLineOfSight=0, or before kDataLoaded): keep your own test.
+                                             //   An APMF older than v18 IGNORES this bit and casts with no
+                                             //   test. Check abiVersion >= 18 before setting it.
+
         // ── Bits 8-15: STOP PERCENT (added in-place; the word is byte-frozen) ────
         // The seat that owns a concentration channel's duration is
         // CombatMagicCaster::CheckStopCast (vfunc 0x07, core/CastSeats.cpp). Left
@@ -1430,7 +1496,9 @@ namespace APMF_API {
     //   target kIntent_Idle            ABI v17: optional reference to play the idle AT (read only
     //                                  when form != 0)
     //   form   kIntent_TargetPin       ABI v13: the TARGET actor (REQUIRED; 0 or the actor itself
-    //                                  is refused). No other field is read.
+    //                                  is refused).
+    //   ival   kIntent_TargetPin       ABI v18: a TargetPinFlags bitmask (0 = none). No other
+    //                                  field is read.
     //   form   kIntent_CombatEntry     ABI v14: the TARGET actor (REQUIRED; 0 or the actor itself
     //                                  is refused; the player may be the target, not the actor).
     //                                  No other field is read.
@@ -1977,6 +2045,272 @@ namespace APMF_API {
         //   claim is made again.
         //   A throw inside returns kLeg_None and writes nothing.
         std::uint32_t (*GetTravelLegState)(RE::FormID actor, APMF_TravelLegInfo* out);
+    };
+
+    // ── ABI v18: LINE OF SIGHT AND AWARENESS (2026-10-05, ClickUp 86e3h6qj9) ────
+    // marth 2026-09-30: "this really should be a flag sent to harbinger." marth
+    // 2026-10-05: "We also want harbinger line of sight for attack on sight ... we want
+    // the appearance of more senses than sight."
+    //
+    // THE OWN RAY. Harbinger's line of sight from a VIEWER actor to a TARGET actor is a
+    // physics ray test, never the engine's cached Actor::HasLineOfSight answer:
+    //   * FROM the viewer's eye point (the engine's own Actor::GetEyeVector origin). There
+    //     is NO view cone and NO facing test: a target behind the viewer is as visible as
+    //     one in front. Line of sight is geometry, not attention.
+    //   * TO three points on the target: its feet + 16 units, 55% and 90% of its height
+    //     (its bound height times its scale; 120 units when that reads as nothing). Each
+    //     ray ends short of its point by the TARGET's own size -- the horizontal half-diagonal
+    //     of its bound box times its scale, plus 16 units, never less than 48 (a humanoid's
+    //     value) and never more than 1024 -- so the target's own body (a giant's, a mammoth's
+    //     or a dragon's included) is never the thing that blocks it. A target closer than
+    //     that margin is VISIBLE.
+    //   * ON the character-controller collision layer, in the viewer's own collision group
+    //     (its own capsule is skipped): "could a walking body travel this line". Walls,
+    //     closed doors and tent walls block; an open doorway, a railing under the line or
+    //     a gate's gaps do not. ANOTHER ACTOR'S BODY on the line blocks that ray.
+    //   * VISIBLE when ANY of the three rays is clear (a target one stair up, or behind a
+    //     low sill, is seen); OCCLUDED only when all three are blocked.
+    //   * A target in a different havok world (an interior seen from outside) is
+    //     OCCLUDED with kLosWhy_OtherWorld.
+    //   * The ray cannot be cast (no attached cell or havok world, a viewer without a
+    //     character controller, an unloaded, disabled or deleted actor, a dead viewer, or
+    //     the engine's pick returning without casting): the verdict is UNAVAILABLE with its
+    //     reason. It is never reported as VISIBLE.
+    // This is MFO's field-proven Sightline own-ray recipe (2026-09-30), now Harbinger's.
+    //
+    // THREADING AND COST. Every ray runs on the game's MAIN thread (the player-Update
+    // thread APMF drains its own queue on). Each ray is one bhkWorld::PickObject call,
+    // which takes the havok world's READ lock itself around the cast (disassembly of all
+    // three builds: AE 0xE86560, SE 0xDA7580, 1.7.104 0x104BE80); Harbinger holds no lock
+    // of its own across a ray and takes no outer world lock. At most 3 rays per pair
+    // measurement. Cached pairs are re-measured at most once every kLosRefreshMs and at
+    // most kLosMaxPairsPerFrame pairs per frame (oldest first). SenseActor's synchronous
+    // sight test has its OWN per-frame cap, kLosMaxSyncPairsPerFrame: past it, the query
+    // answers from the pair's stored verdict (fresh only) or not at all
+    // (kAwareDetail_SightDeferred), and the pair is queued for the pump. So the main-thread
+    // cost is bounded at 3 x (kLosMaxPairsPerFrame + kLosMaxSyncPairsPerFrame) rays per frame
+    // whatever the clients ask.
+    //
+    // WHO KEEPS A PAIR MEASURED. A pair is measured while something ASKS for it: a
+    // GetLineOfSight call, a cast seat or target-pin seat reading it for a claim with an
+    // own-line-of-sight bit, or a SenseActor sight test. A pair nobody has asked for in
+    // kLosInterestMs is dropped. GetLineOfSight is a cheap lock-free read, so a client
+    // asks every time it needs the answer, and the asking is what keeps it warm.
+
+    enum LosVerdict : std::uint32_t {
+        kLos_Unknown     = 0,   // never measured yet, or the newest measurement is older than
+                                //   kLosFreshMs. NOT seen. Ask again: the ask itself queues it.
+        kLos_Visible     = 1,   // the own ray reached the target (see THE OWN RAY)
+        kLos_Occluded    = 2,   // every ray was blocked (or the target is in another havok world)
+        kLos_Unavailable = 3,   // the ray could not be cast; APMF_LosInfo::why says why
+        kLos_Unsupported = 4,   // the line-of-sight service is not armed (VR, a runtime other than
+                                //   1.6.1170 / 1.5.97 / 1.7.104, a self-check refusal, [Sightline]
+                                //   bOwnLineOfSight=0, or before kDataLoaded): keep your own test
+    };
+
+    enum LosWhy : std::uint32_t {
+        kLosWhy_None            = 0,
+        kLosWhy_BadArgs         = 1,   // viewer or target is 0, or they are the same actor
+        kLosWhy_ViewerNotLoaded = 2,   // the viewer is not a loaded, live actor
+        kLosWhy_TargetNotLoaded = 3,   // the target is not a loaded actor
+        kLosWhy_NoWorld         = 4,   // the viewer's cell is not attached or has no havok world
+        kLosWhy_NoController    = 5,   // the viewer has no character controller (its collision group
+                                       //   cannot be excluded, so its own capsule would block the ray)
+        kLosWhy_OtherWorld      = 6,   // (with kLos_Occluded) the target is in a different havok world
+        kLosWhy_TableFull       = 7,   // every tracked pair is in use; this pair is not measured yet
+        kLosWhy_PickSkipped     = 8,   // the engine skipped the ray (its own pick early-out, which
+                                       //   returns without casting); measured again at the next refresh
+    };
+
+    // GetLineOfSight output. EXACT LAYOUT (byte-shared): 24 bytes.
+    struct APMF_LosInfo {
+        std::uint32_t size;         // +0   the CALLER sets = sizeof(APMF_LosInfo)
+        std::uint32_t verdict;      // +4   a LosVerdict (the same value the call returns)
+        std::uint32_t ageMs;        // +8   milliseconds since the stored measurement; 0xFFFFFFFF = never
+        std::uint32_t occludedRun;  // +12  consecutive OCCLUDED measurements of this pair (0 after a VISIBLE)
+        std::uint32_t sample;       // +16  the ray that was clear: 1 feet, 2 torso, 3 head; 0 = none
+        std::uint32_t why;          // +20  a LosWhy (UNAVAILABLE's reason; kLosWhy_OtherWorld on OCCLUDED)
+    };
+    static_assert(sizeof(APMF_LosInfo) == 24, "APMF_LosInfo is 24 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_LosInfo, ageMs)       == 8,  "ageMs at +8");
+    static_assert(offsetof(APMF_LosInfo, occludedRun) == 12, "occludedRun at +12");
+    static_assert(offsetof(APMF_LosInfo, why)         == 20, "why at +20");
+
+    // The service's timings, named here because the contract depends on them.
+    inline constexpr std::uint32_t kLosFreshMs          = 1000;   // a verdict older than this reads kLos_Unknown
+    inline constexpr std::uint32_t kLosRefreshMs        = 250;    // a pair is re-measured at most this often
+    inline constexpr std::uint32_t kLosInterestMs       = 2000;   // a pair nobody asked for in this long is dropped
+    inline constexpr std::uint32_t kLosMaxPairsPerFrame = 8;      // pairs measured per frame, at most 3 rays each
+    inline constexpr std::uint32_t kLosMaxSyncPairsPerFrame = 8;  // SenseActor's own synchronous measurements per frame
+
+    // ── kIntent_TargetPin flags (param.ival, ABI v18) ──────────────────────────
+    // APPEND-ONLY: never renumber a bit; OR in a new bit at the next free position.
+    enum TargetPinFlags : std::uint32_t {
+        kTargetPin_None           = 0,
+        kTargetPin_OwnLineOfSight = 1u << 0,   // The pin ALSO PAUSES while Harbinger's own ray from the
+                                               //   actor to the pinned target is not VISIBLE (and at most
+                                               //   kLosFreshMs old): the engine's own pick stands for that
+                                               //   update, exactly like the existing pauses (no engine
+                                               //   target, target not in the group). It resumes when the
+                                               //   target is VISIBLE again. It never ends the pin. A bow or a
+                                               //   staff then shoots at what the actor can actually see,
+                                               //   instead of at a pinned foe behind a wall.
+                                               //   The first seat call registers the pair; until its first
+                                               //   verdict (a frame or two) the pin pauses.
+                                               //   REFUSED SYNCHRONOUSLY while the line-of-sight service is
+                                               //   not armed (see kLos_Unsupported). An APMF older than v18
+                                               //   ignores ival and pins with no test.
+    };
+
+    // ── AWARENESS (SenseActor) ─────────────────────────────────────────────────
+    // "Does this actor SENSE that one?" -- for an engage-on-sight gambit. OMNIDIRECTIONAL
+    // (no view cone, no facing anywhere) and MULTI-SENSE: each sense below is evaluated on
+    // its own and reported as a bit, so a client decides which ones count for it.
+    //
+    //   kSense_Sight      The OWN RAY (above) from the viewer to the target is VISIBLE and the
+    //                     target is within sightRange. Measured now, unless this pair was
+    //                     measured less than kLosRefreshMs ago (that verdict is reused), or this
+    //                     frame's kLosMaxSyncPairsPerFrame is spent (kAwareDetail_SightDeferred:
+    //                     a fresh stored verdict answers, else sight is not sensed this call). It
+    //                     also refreshes the pair for GetLineOfSight.
+    //   kSense_Hearing    Either route (AwareDetail says which):
+    //                     NOISE: the target made a NEW engine noise in the last
+    //                     kAwareNoiseWindowMs, of a level above 0, at a point within
+    //                     hearRadius of the viewer or of the anchor. The noise is the engine's
+    //                     own "detection event", the one record the engine keeps per actor of
+    //                     the last noise it made (written by AIProcess::SetActorsDetectionEvent:
+    //                     a spell's release, a projectile fired or landing, a hit, and the
+    //                     other engine noise sources; its level is the engine's own value).
+    //                     "New" means Harbinger saw that record change: the FIRST time a query
+    //                     names a target, Harbinger records its current noise as a baseline and
+    //                     hears nothing from it (a noise made before Harbinger ever looked is
+    //                     not heard; kAwareDetail_NoiseBaseline marks that call).
+    //                     COMBAT: the target is in combat (Actor::IsInCombat) within hearRadius
+    //                     of the viewer or of the anchor -- a fight is loud.
+    //   kSense_Proximity  The target is within proximityRadius of the viewer (3D distance),
+    //                     whatever is between them.
+    //   kSense_Engaged    The target is in combat and its current combat target IS the viewer
+    //                     or the anchor: it is fighting you.
+    // Nothing here decides hostility, faction or crime: that is the client's call. A target in
+    // a different cell space (interior vs exterior, another interior) senses nothing and sets
+    // kAwareDetail_OtherSpace. The engine's own detection (Actor::RequestDetectionLevel) is
+    // deliberately NOT a sense: its sight half is the facing, cone-limited test this replaces.
+    //
+    // THREADING: SYNCHRONOUS, TRUE MAIN THREAD ONLY (the sight ray), exactly like the v11 space
+    // queries. Any other thread returns kQuery_NotMainThread and does nothing. Cost: at most 3
+    // rays (none when the pair's verdict is younger than kLosRefreshMs, or once this frame's
+    // kLosMaxSyncPairsPerFrame synchronous measurements are spent), plus member reads.
+    // It claims nothing, holds nothing and changes nothing in the game.
+
+    enum AwareSense : std::uint32_t {
+        kSense_None      = 0,
+        kSense_Sight     = 1u << 0,
+        kSense_Hearing   = 1u << 1,
+        kSense_Proximity = 1u << 2,
+        kSense_Engaged   = 1u << 3,
+    };
+
+    enum AwareFlags : std::uint32_t {   // which senses to SKIP (0 = evaluate all four)
+        kAware_None        = 0,
+        kAware_NoSight     = 1u << 0,   // no ray at all
+        kAware_NoHearing   = 1u << 1,
+        kAware_NoProximity = 1u << 2,
+        kAware_NoEngaged   = 1u << 3,
+    };
+
+    enum AwareDetail : std::uint32_t {
+        kAwareDetail_None             = 0,
+        kAwareDetail_HeardNoise       = 1u << 0,   // hearing came from a new engine noise
+        kAwareDetail_HeardCombat      = 1u << 1,   // hearing came from the target being in combat nearby
+        kAwareDetail_NearAnchor       = 1u << 2,   // the listener that heard it was the ANCHOR, not the viewer
+        kAwareDetail_EngagedAnchor    = 1u << 3,   // the target is fighting the ANCHOR (not the viewer)
+        kAwareDetail_SightOutOfRange  = 1u << 4,   // no ray: the target is farther than sightRange
+        kAwareDetail_SightUnavailable = 1u << 5,   // the ray could not be cast (sightWhy says why)
+        kAwareDetail_OtherSpace       = 1u << 6,   // the target is in another cell space: nothing sensed
+        kAwareDetail_NoiseBaseline    = 1u << 7,   // first look at this target's noise: baseline recorded
+        kAwareDetail_NoiseRouteOff    = 1u << 8,   // [Awareness] bHearNoise=0: the NOISE route is off
+        kAwareDetail_SightReused      = 1u << 9,   // the sight verdict was a measurement < kLosRefreshMs old
+        kAwareDetail_SightDeferred    = 1u << 10,  // this frame's kLosMaxSyncPairsPerFrame was spent: no ray; the
+                                                   //   stored verdict answered if fresh, else sight is UNKNOWN (not
+                                                   //   seen) and the pair is queued for the pump
+    };
+
+    inline constexpr float         kAwareDefaultSightRange     = 4096.0f;   // sightRange 0 => this
+    inline constexpr float         kAwareMaxSightRange         = 8192.0f;   // clamped (logged)
+    inline constexpr float         kAwareDefaultHearRadius     = 1536.0f;   // hearRadius 0 => this
+    inline constexpr float         kAwareMaxHearRadius         = 8192.0f;   // clamped (logged)
+    inline constexpr float         kAwareDefaultProximity      = 256.0f;    // proximityRadius 0 => this
+    inline constexpr float         kAwareMaxProximity          = 2048.0f;   // clamped (logged)
+    inline constexpr std::uint32_t kAwareNoiseWindowMs         = 3000;      // a noise older than this is not heard
+
+    // SenseActor input. EXACT LAYOUT (byte-shared): 32 bytes.
+    struct APMF_AwarenessQuery {
+        std::uint32_t size;             // +0   = sizeof(APMF_AwarenessQuery)
+        RE::FormID    viewer;           // +4   REQUIRED. The loaded, live actor who senses.
+        RE::FormID    target;           // +8   REQUIRED. The loaded actor sensed (not the viewer).
+        RE::FormID    anchor;           // +12  OPTIONAL second LISTENER (0 = none), e.g. the player the
+                                        //      viewer follows: hearing and engaged also count it. Not
+                                        //      loaded = treated as none. Sight and proximity ignore it.
+        float         sightRange;       // +16  0 => kAwareDefaultSightRange; clamped to kAwareMaxSightRange
+        float         hearRadius;       // +20  0 => kAwareDefaultHearRadius; clamped to kAwareMaxHearRadius
+        float         proximityRadius;  // +24  0 => kAwareDefaultProximity; clamped to kAwareMaxProximity
+        std::uint32_t flags;            // +28  AwareFlags (senses to skip)
+    };
+    static_assert(sizeof(APMF_AwarenessQuery) == 32, "APMF_AwarenessQuery is 32 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_AwarenessQuery, anchor)          == 12, "anchor at +12");
+    static_assert(offsetof(APMF_AwarenessQuery, proximityRadius) == 24, "proximityRadius at +24");
+    static_assert(offsetof(APMF_AwarenessQuery, flags)           == 28, "flags at +28");
+
+    // SenseActor output. EXACT LAYOUT (byte-shared): 48 bytes.
+    struct APMF_AwarenessResult {
+        std::uint32_t size;           // +0   the CALLER sets = sizeof(APMF_AwarenessResult)
+        std::uint32_t status;         // +4   a QueryStatus (the same value the call returns)
+        std::uint32_t senses;         // +8   AwareSense bits that fired (0 = not sensed)
+        std::uint32_t detail;         // +12  AwareDetail bits
+        float         distance;       // +16  viewer -> target, 3D game units (-1 when not computed)
+        std::uint32_t sightVerdict;   // +20  the ray's LosVerdict (kLos_Unknown when no ray was cast)
+        std::uint32_t sightSample;    // +24  the clear ray: 1 feet, 2 torso, 3 head; 0 = none
+        std::uint32_t sightWhy;       // +28  a LosWhy for an UNAVAILABLE / OTHER-WORLD ray, else 0
+        std::int32_t  noiseLevel;     // +32  the engine's level value of the target's newest noise; -1 = none
+        float         noiseAgeSec;    // +36  seconds since Harbinger saw that noise appear; -1 = unknown/none
+        float         noiseDistance;  // +40  from that noise to the nearer listener; -1 = none
+        RE::FormID    engagedWith;    // +44  the viewer or anchor the target is fighting; 0 = none
+    };
+    static_assert(sizeof(APMF_AwarenessResult) == 48, "APMF_AwarenessResult is 48 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_AwarenessResult, distance)    == 16, "distance at +16");
+    static_assert(offsetof(APMF_AwarenessResult, noiseLevel)  == 32, "noiseLevel at +32");
+    static_assert(offsetof(APMF_AwarenessResult, engagedWith) == 44, "engagedWith at +44");
+
+    // The v18 interface: APMF_API_v12's members verbatim (prefix EXTENSION; v13..v17 added no
+    // slot), then TWO appended slots. This header is BYTE-SHARED with MFO: the declaration
+    // below is authoritative and must be mirrored byte-identically on the client side.
+    //
+    // WHY A BUMP (INVARIANTS #14b): new function-pointer slots need an `abiVersion >= 18`
+    // test before a client may call them, and the two new flag bits need the same test.
+    struct APMF_API_v18 : APMF_API_v12 {
+        // Harbinger's own-ray line of sight from `viewer` to `target` (see THE OWN RAY). Returns
+        // a LosVerdict and, when `out` is non-null and `out->size` covers the v18 layout, fills
+        // `*out` (nothing is written into a shorter struct; the verdict is still returned).
+        //   ANY THREAD, LOCK-FREE, NEVER BLOCKS AND NEVER CASTS A RAY ITSELF: it reads the
+        //   newest stored measurement and marks the pair as ASKED FOR. The main thread
+        //   measures asked-for pairs (THREADING AND COST above), so the FIRST call for a pair
+        //   returns kLos_Unknown and a call a frame or two later has the verdict. Keep asking
+        //   while you need it: a pair nobody asks for in kLosInterestMs is dropped.
+        //   kLos_Unknown also means "older than kLosFreshMs" (ageMs still says how old).
+        //   A throw inside returns kLos_Unknown and writes nothing.
+        std::uint32_t (*GetLineOfSight)(RE::FormID viewer, RE::FormID target, APMF_LosInfo* out);
+
+        // Does `q->viewer` sense `q->target` (see AWARENESS above)? Returns a QueryStatus and
+        // writes it, the senses and their details into `*out`. MAIN THREAD ONLY.
+        //   kQuery_Ok           evaluated (senses may be 0: not sensed)
+        //   kQuery_NotMainThread called off the main thread; nothing done
+        //   kQuery_BadArgs      a null pointer, a size below the v18 layout, viewer or target 0,
+        //                       viewer == target, or a negative / non-finite range
+        //   kQuery_Unsupported  the service is not armed (see kLos_Unsupported)
+        //   kQuery_NoOrigin     the viewer is not a loaded, live actor, or the target is not a
+        //                       loaded actor
+        //   kQuery_Failed       an exception was caught
+        std::uint32_t (*SenseActor)(const APMF_AwarenessQuery* q, APMF_AwarenessResult* out);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the

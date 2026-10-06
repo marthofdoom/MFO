@@ -243,7 +243,8 @@ namespace MFO::APMFBridge {
         return api && api->abiVersion >= kPinMinAbi;
     }
 
-    PinResult PinTarget(RE::FormID a_follower, RE::FormID a_target, RE::ActorHandle a_targetHandle) {
+    PinResult PinTarget(RE::FormID a_follower, RE::FormID a_target, RE::ActorHandle a_targetHandle,
+                        bool a_ownLos) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || api->abiVersion < kPinMinAbi) return PinResult::SeatAbsent;
         // APMF refuses these synchronously too; filtering them here keeps a synchronous
@@ -289,7 +290,23 @@ namespace MFO::APMFBridge {
 
         APMF_API::APMF_Param prm{};
         prm.form = a_target;   // REQUIRED: the target ACTOR. Nothing else is read.
-        const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_TargetPin, kOwnBasis, &prm);
+        // HARBINGER OWN LINE OF SIGHT (ABI v18): a bow or staff follower's pin also PAUSES while the
+        // own ray to the pinned foe is not VISIBLE (the engine's pick stands meanwhile), so he shoots
+        // what he can see, not a pinned foe behind a wall. Melee stays unflagged. Below v18 ival is
+        // ignored by APMF, so the bit is simply not set.
+        const bool ownLos = a_ownLos && api->abiVersion >= 18 && LosSupported();
+        if (ownLos) prm.ival |= static_cast<std::int32_t>(APMF_API::kTargetPin_OwnLineOfSight);
+        APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_TargetPin, kOwnBasis, &prm);
+        if (ownLos && h == APMF_API::kInvalidHandle) {
+            // The bit is REFUSED synchronously while Harbinger's LoS service is not armed (APMF_API.h
+            // kTargetPin_OwnLineOfSight). That must not read as "ch.20 seat absent" (Targeting would then
+            // drop the whole pin route for the session), so ask once more without the bit: the plain pin,
+            // exactly today's behaviour. A refusal of THAT one is the real seat-absent answer.
+            spdlog::warn("[target-pin] {:08X}: pin of {:08X} refused WITH kTargetPin_OwnLineOfSight -- "
+                         "asking again without it", a_follower, a_target);
+            prm.ival &= ~static_cast<decltype(prm.ival)>(APMF_API::kTargetPin_OwnLineOfSight);
+            h = api->RequestEx(a_follower, APMF_API::kIntent_TargetPin, kOwnBasis, &prm);
+        }
         if (h == APMF_API::kInvalidHandle) {
             // Synchronous refusal with valid params = the ch.20 seat is not installed
             // (VR, runtime, [TargetPin] bTargetPin=0, self-check). Session-stable: the
@@ -301,7 +318,8 @@ namespace MFO::APMFBridge {
         p.target  = a_target;
         p.targetH = a_targetHandle;
         g_pins.emplace(a_follower, p);
-        spdlog::info("[target-pin] {:08X}: PIN {:08X} (h={})", a_follower, a_target, h);
+        spdlog::info("[target-pin] {:08X}: PIN {:08X} (h={}){}", a_follower, a_target, h,
+                     (prm.ival & APMF_API::kTargetPin_OwnLineOfSight) ? " own-LoS (pauses while not visible)" : "");
         return PinResult::Pinned;
     }
 
