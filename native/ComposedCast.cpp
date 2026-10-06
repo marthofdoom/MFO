@@ -6,6 +6,7 @@
 #include "cast/Actuation.h"   // kHandLeft + CastInFlightOnHand -- THE one in-flight definition
 #include "Runtime.h"     // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "Loadout.h"     // animheal phase 2 (review F2): End() takes the heal spell back
+#include "Vocabulary.h"  // Vocab::HealthPct: the held-off heal's recipient HP% in the IN FLIGHT line
 
 #include <chrono>
 #include <unordered_map>
@@ -320,17 +321,24 @@ namespace MFO::ComposedCast {
         // every round-robin lap must not spam the log at scan rate, and the two
         // holds are mutually exclusive on any one call so sharing the map cannot
         // silence either.
+        // The held-off heal's RECIPIENT and its HP% (field 2026-10-06 ask: is someone
+        // dying while the heal waits?). `a_recipient` is Try()'s own a_target, or the
+        // follower itself for a self heal (Try's selfCast rule). HP% is Vocab::HealthPct,
+        // the same read the heal rules gate on, on this same worker.
         void LogHealHoldOffInFlight(RE::FormID a_fid, RE::FormID a_wanted,
-                                    RE::FormID a_incumbent, std::size_t a_slot, std::int64_t a_heldMs) {
+                                    RE::FormID a_incumbent, std::size_t a_slot, std::int64_t a_heldMs,
+                                    RE::Actor* a_recipient) {
             const auto now = Clock::now();
             auto& entry = g_lastHoldLog[a_fid];
             if (entry.spell == a_wanted && now - entry.when < kHoldLogEvery) return;
             entry.spell = a_wanted; entry.when = now;
-            spdlog::info("[cfc] {:08X} heal-cast HELD OFF (IN FLIGHT) -- spell {:08X} wants the "
-                         "heal slot, but the engine is CASTING incumbent spell {:08X} on the "
-                         "{} hand right now; the held-off spell was NOT delivered and the "
+            spdlog::info("[cfc] {:08X} heal-cast HELD OFF (IN FLIGHT) -- spell {:08X} (recipient {:08X} "
+                         "at {:.0f}% HP) wants the heal slot, but the engine is CASTING incumbent spell "
+                         "{:08X} on the {} hand right now; the held-off spell was NOT delivered and the "
                          "incumbent claim was NOT re-pointed ({} ms into this hold, cap {} ms)",
-                         a_fid, a_wanted, a_incumbent, a_slot == 0 ? "left" : "right", a_heldMs,
+                         a_fid, a_wanted, a_recipient ? a_recipient->GetFormID() : 0u,
+                         a_recipient ? Vocab::HealthPct(a_recipient) * 100.0f : -1.0f,
+                         a_incumbent, a_slot == 0 ? "left" : "right", a_heldMs,
                          kInFlightHoldCap.count());
         }
 
@@ -661,7 +669,8 @@ namespace MFO::ComposedCast {
                     if (heldFor < kInFlightHoldCap) {
                         LogHealHoldOffInFlight(
                             fid, spellID, incumbent.spell, slot,
-                            std::chrono::duration_cast<std::chrono::milliseconds>(heldFor).count());
+                            std::chrono::duration_cast<std::chrono::milliseconds>(heldFor).count(),
+                            a_target ? a_target : a_follower);
                         g_lastHold[fid] = HoldRecord{ spellID, incumbent.spell };
                         return TryResult::Held;
                     }

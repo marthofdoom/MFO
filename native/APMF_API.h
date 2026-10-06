@@ -179,7 +179,19 @@ namespace APMF_API {
     // channel for intent 24 and REFUSES the request (kInvalidHandle, "no channel serves
     // intent 24" in its log) -- the documented degrade. See "ABI v19: COMBAT APPROACH" at
     // the end of this header.
-    inline constexpr std::uint32_t kABIVersion = 19;
+    //
+    // ABI v20 (2026-10-06, field fix) adds ONE flag bit and NOTHING else: no intent, no
+    // struct, no function-pointer slot, no APMF_Param field (the v16 / v17 shape).
+    // kCastFlag_FloorSpellsOnly (CastFlags bit 7) makes a kCastFlag_DenyHandOnly floor
+    // reserve its hand against SPELLS only: weapons, shields, torches and unarmed pass,
+    // spells and staffs are still refused. WHY A BUMP for a bit (INVARIANTS #14b's
+    // exception): the v19 build that first refused weapons into a floored hand (the hand-claim
+    // block, core/HandBlock.cpp) IGNORES the bit, and that silent ignore IS the failure --
+    // a melee follower's floored hand stays disarmed for the floor's whole life, with no
+    // refusal and no word to the client. A client must see abiVersion >= 20 before it
+    // relies on the bit; below 20 it must decide for itself whether to floor at all. See
+    // the flag's own text.
+    inline constexpr std::uint32_t kABIVersion = 20;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -1435,6 +1447,43 @@ namespace APMF_API {
                                              //   bOwnLineOfSight=0, or before kDataLoaded): keep your own test.
                                              //   An APMF older than v18 IGNORES this bit and casts with no
                                              //   test. Check abiVersion >= 18 before setting it.
+
+        // ── SPELLS-ONLY FLOOR (ABI v20, 2026-10-06; bit 7 was free) ─────────────
+        kCastFlag_FloorSpellsOnly = 1u << 7, // Meaningful ONLY together with kCastFlag_DenyHandOnly:
+                                             //   the floor reserves its hand against SPELLS, not against
+                                             //   every other action. Ignored (no effect, no refusal) on a
+                                             //   claim without kCastFlag_DenyHandOnly: a driving cast claim
+                                             //   always blocks every other equip into its hand.
+                                             //
+                                             //   WHAT A FLOOR REFUSES, WITH AND WITHOUT THIS BIT. A
+                                             //   kCastFlag_DenyHandOnly floor refuses every SPELL and STAFF
+                                             //   on its hand, either way (core/CastGate.cpp 0x0A CheckCast,
+                                             //   core/EquipGate.cpp 0x0F on the magic/staff items): the
+                                             //   engine cannot start a spell cast in that hand. WITHOUT this
+                                             //   bit it also refuses every WEAPON, SHIELD, TORCH and the
+                                             //   unarmed off-hand block into that hand (the hand-claim block,
+                                             //   core/HandBlock.cpp 0x0F on the weapon-class items, and the
+                                             //   core/EquipSink.cpp step): "Harbinger taking a hand for an
+                                             //   action means other actions on that hand are blocked for the
+                                             //   duration". WITH this bit those pass: the AI keeps its sword,
+                                             //   bow, shield, torch or fists in the hand and fights with them,
+                                             //   and only a spell (or a staff, which casts one) is kept out.
+                                             //   A staff counts as a spell here at every seat.
+                                             //
+                                             //   WHY IT EXISTS (field 2026-10-06). A client that floors the
+                                             //   idle hand while its other hand drives a cast wants "no second
+                                             //   spell starts there", not "this hand is disarmed". Without the
+                                             //   bit, a melee follower whose one hand held a charged spell had
+                                             //   its other hand floored for 32.6 s of a 40 s fight and 119
+                                             //   equips of its bow, swords and fists refused.
+                                             //
+                                             //   COMPATIBILITY. A new bit in the frozen `flags` word, no
+                                             //   field moved. An APMF below v20 ignores it: a v19 APMF that
+                                             //   carries the hand-claim block then blocks weapons into the
+                                             //   floored hand (the failure above); an earlier v19 and every
+                                             //   APMF below v19 never blocked weapons for a floor at all. A
+                                             //   client cannot tell those two v19 builds apart, so check
+                                             //   abiVersion >= 20 before relying on the bit.
 
         // ── Bits 8-15: STOP PERCENT (added in-place; the word is byte-frozen) ────
         // The seat that owns a concentration channel's duration is
