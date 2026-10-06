@@ -40,6 +40,7 @@
 #include "ComposedCast.h"
 #include "Loadout.h"
 #include "MainThread.h"
+#include <unordered_set>
 #include "Runtime.h"
 #include "apmf/APMFBridge.h"
 
@@ -66,10 +67,12 @@ namespace MFO::Actuation {
         // active-effect list, which the engine mutates on the main thread, so the worker never reads
         // it. MainThread::Post makes the read and LATCHES the verdict per (follower, spell) under
         // g_upMx; the worker reads the latch (the heal road's proxy-check shape, HealRoad.cpp
-        // ProxyUnlearnedRelease). A verdict is trusted for kUpTrustMs only, so a stale one is DROPPED
-        // (never applied to a later lap) and a fresh read is posted. At most one read is pending per
-        // key. ResetBuffRoad clears it all.
-        constexpr auto kUpTrust = std::chrono::milliseconds(2000);
+        // ProxyUnlearnedRelease). STALE-WHILE-REVALIDATE (review R2-3, principle 9): the worker always
+        // gets the LAST verdict, or Unknown when there has never been one; a verdict older than
+        // kUpRefresh only posts a fresh read and is never discarded for its age (a party whose service
+        // lap exceeds any fixed window would otherwise never see a fresh verdict). At most one read is
+        // pending per key. ResetBuffRoad clears it all.
+        constexpr auto kUpRefresh = std::chrono::milliseconds(2000);
         struct UpLatch { bool pending = false; bool up = false; std::chrono::steady_clock::time_point at{}; };
         std::mutex                                    g_upMx;
         std::unordered_map<std::uint64_t, UpLatch>    g_up;   // under g_upMx
@@ -84,10 +87,12 @@ namespace MFO::Actuation {
             {
                 std::scoped_lock lock(g_upMx);
                 auto& l = g_up[key];
-                if (l.at.time_since_epoch().count() != 0 &&
-                    std::chrono::steady_clock::now() - l.at < kUpTrust)
-                    out = l.up ? Up::Yes : Up::No;
-                if (!l.pending && out == Up::Unknown) { l.pending = true; post = true; }
+                const bool seen = l.at.time_since_epoch().count() != 0;
+                if (seen) out = l.up ? Up::Yes : Up::No;
+                if (!l.pending && (!seen || std::chrono::steady_clock::now() - l.at >= kUpRefresh)) {
+                    l.pending = true;
+                    post = true;
+                }
             }
             if (post)
                 MainThread::Post([fid, sid, key] {
@@ -103,23 +108,26 @@ namespace MFO::Actuation {
                     std::scoped_lock lock(g_upMx);
                     auto it = g_up.find(key);
                     if (it == g_up.end()) return;   // reset while the read was queued: dropped
-                    it->second = { false, up, std::chrono::steady_clock::now() };
+                    it->second = { false, up, std::chrono::steady_clock::now() };   // pending cleared
                 });
             return out;
         }
 
         // A claim that never fired is RELEASED once and then HELD OFF (review F1): per follower, the
-        // spell whose claim never fired this fight. The rule stays transparent for it until a state
-        // change (the follower loses its CombatController = the fight ended; revert via
-        // ResetBuffRoad). The g_unsightedCharge pattern. Worker-serial (#4).
-        std::unordered_map<RE::FormID, RE::FormID> g_neverFired;
+        // spells whose claim NEVER fired this fight (a set, review R2-4: two rules must not ping-pong).
+        // A spell stays transparent until a state change: the follower loses its CombatController or
+        // ClearCastLock(follower) (combat end, dismiss), or the load reverts (ResetBuffRoad). The
+        // g_unsightedCharge pattern. Worker-serial (#4).
+        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_neverFired;
 
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
-        void EndBuffClaim(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_takeBack) {
+        // a_keepWatch: leave the [cfc] watch (its fight-wide `observed` latch) for a claim that HAS
+        // fired, so the re-claim does not read as never-fired (review R2-1).
+        void EndBuffClaim(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_takeBack, bool a_keepWatch = false) {
             const auto id = a_actor->GetFormID();
             APMFBridge::ReleaseCastClaimOnHand(id, APMFBridge::kApmfHandLeft);
-            ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
+            if (!a_keepWatch) ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
             ClearLeftCastLockIf(id, a_spell->GetFormID());
             if (a_takeBack) Loadout::ReleaseSpellIf(id, a_spell->GetFormID());
         }
@@ -133,12 +141,16 @@ namespace MFO::Actuation {
         g_up.clear();
     }
 
+    void ResetBuffFollower(RE::FormID a_follower) {
+        g_neverFired.erase(a_follower);
+    }
+
     bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell) {
         if (!a_follower || !a_spell) return false;
         if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) != BuffRoad::Claim) return false;
         // A never-fired hold-off (F1) is transparent without a preempt too.
         if (const auto nf = g_neverFired.find(a_follower->GetFormID());
-            nf != g_neverFired.end() && nf->second == a_spell->GetFormID())
+            nf != g_neverFired.end() && nf->second.count(a_spell->GetFormID()))
             return true;
         if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) return false;
         // Unknown (the read is posted, no verdict yet) is transparent too: a guess here would preempt.
@@ -216,7 +228,7 @@ namespace MFO::Actuation {
         // the guard is for fire-and-forget only; the channel is bounded by BuffRefreshGate.
         // A claim that never fired this fight stays released (review F1): transparent until the fight
         // ends or the load reverts (the latch is cleared there). Never the direct road.
-        if (const auto nf = g_neverFired.find(id); nf != g_neverFired.end() && nf->second == spellID)
+        if (const auto nf = g_neverFired.find(id); nf != g_neverFired.end() && nf->second.count(spellID))
             return SelfCast::Declined;
         // The up-read is made on the main thread and latched (F6); no verdict yet is a transparent
         // no-cast this lap (the read is posted), never a guess.
@@ -276,14 +288,25 @@ namespace MFO::Actuation {
                 !ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
                                               APMFBridge::kObservedFiringRecencyMs) &&
                 !CastInFlightOnHand(a_follower, kHandLeft, spellID, CastProxyOnHand(id, kHandLeft))) {
-                spdlog::warn("[buff] {:08X} {} ({:08X}) NEVER FIRED: claimed {} ms ago, no fire observed on the "
-                             "left hand in the last {} ms and nothing charging -- claim RELEASED and the rule "
-                             "held off for this fight (no direct fallback; the engine's {} caster did not fire "
-                             "it: see Harbinger's [ctcensus] verdict; rule {})",
+                // "NEVER fired" is the fight-wide latch (ObservedFiring with a 0 window: this spell
+                // fired once on this hand this fight, ComposedCast.cpp), NOT the recency window (review
+                // R2-1): an Invisibility broken by an attack, or a reactive ward idle between
+                // triggers, fired and worked.
+                if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID, 0)) {
+                    spdlog::info("[buff] {:08X} {} ({:08X}): fired earlier this fight, idle for {} ms with "
+                                 "nothing charging -- claim released (no hold-off; the rule re-claims when it "
+                                 "wants it again)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
+                                 ageMs);
+                    EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true, /*a_keepWatch=*/true);
+                    return Outcome{ Result::NoOp, "self-buff claim idle after a fire: released", true };
+                }
+                spdlog::warn("[buff] {:08X} {} ({:08X}) NEVER FIRED this fight: claimed {} ms ago, nothing "
+                             "charging -- claim RELEASED and the rule held off for this fight (no direct "
+                             "fallback; the engine's {} caster did not fire it: see Harbinger's [ctcensus] "
+                             "verdict; rule {})",
                              id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, ageMs,
-                             APMFBridge::kObservedFiringRecencyMs,
                              EngineRowName(ClassifyArchetype(a_spell).row), g_firingRule);
-                g_neverFired[id] = spellID;
+                g_neverFired[id].insert(spellID);
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
                 return Outcome{ Result::NoOp, "self-buff claim never fired: released, held off this fight", true };
             }
@@ -301,8 +324,7 @@ namespace MFO::Actuation {
             spdlog::info("[buff] {:08X} {:08X}: concentration self-buff reached its {:.1f} s stream cap -- claim "
                          "released, re-streams while the rule wins (the spell stays in hand, the lock keeps "
                          "its rank)", id, spellID, capSec);
-            APMFBridge::ReleaseCastClaimOnHand(id, APMFBridge::kApmfHandLeft);
-            ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
+            APMFBridge::ReleaseCastClaimOnHand(id, APMFBridge::kApmfHandLeft);   // the watch stays: it HAS fired
             if (auto it = g_castLock.find(id); it != g_castLock.end()) {
                 auto& lk = it->second.hand[kHandLeft];
                 if (lk.spell == spellID && g_firingRule != kNoRule && lk.owningRule == g_firingRule) {

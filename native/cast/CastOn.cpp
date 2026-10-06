@@ -1635,6 +1635,7 @@ namespace MFO::Actuation {
         g_lastPreemptLog.erase(a_follower);   // rank-preemption twin of g_lastLockLog
         g_lastInFlightLog.erase(a_follower);   // F9: the in-flight twin of g_lastLockLog
         g_lastApmfRefusal.erase(a_follower);
+        ResetBuffFollower(a_follower);   // feat/mfo-remaining-cast-kinds: the never-fired hold-off ends with the fight
         // F3-7: Actuation_Direct.cpp keeps an IDENTICAL refusal-log twin in its own
         // anon namespace; drop that follower's entries here too so the two maps
         // really do share a release point instead of only claiming to.
