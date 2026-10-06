@@ -5,6 +5,19 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.2.1 -- Heals that finish, and fixes from the field
+
+- **Needs Harbinger 0.11.1.** Install both together.
+- **Heals keep going until the target is full.** The rule's condition only decides when healing starts.
+- **Losing sight of a heal target makes the follower move closer.** This now works even inside the approach radius.
+- **Running out of magicka ends a held heal.**
+- **Offense can cast on the other hand while a held heal cannot see its target or is only topping up.**
+- **Combat spells wait until the follower is ready.** They no longer fire an unanimated cast at the start of a fight.
+- **A self-only buff is never cast at an enemy.**
+- **A follower's freshly charged attack spell is no longer cancelled by its own other attack spell.**
+- **Cloaks are back in the spell picker.**
+- **Updating no longer resets your MCM settings.** The 2.2.0 zip shipped a settings file that overwrote yours. The zip no longer carries it.
+
 ## v2.2.0 -- Animated casts in combat
 
 - **Requires Harbinger 0.11.0 for the full feature set.** Install both together. Without it MFO falls back to the old direct cast for the new casts below.

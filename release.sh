@@ -266,7 +266,7 @@ fi
 # 4. Stage in Data/ layout — zip root IS the virtual Data folder, so MO2
 #    installs it with zero manual placement.
 mkdir -p "$STAGE/pkg/SKSE/Plugins" "$STAGE/pkg/SEQ" \
-         "$STAGE/pkg/MCM/Config/MFO" "$STAGE/pkg/MCM/Settings" "$STAGE/pkg/Scripts"
+         "$STAGE/pkg/MCM/Config/MFO" "$STAGE/pkg/Scripts"
 cp out/MFO.esp             "$STAGE/pkg/"
 cp out/SEQ/MFO.seq         "$STAGE/pkg/SEQ/"
 cp out/SKSE/Plugins/MFO.ini "$STAGE/pkg/SKSE/Plugins/"
@@ -288,9 +288,12 @@ cp out/MCM/Config/MFO/config.json "$STAGE/pkg/MCM/Config/MFO/"
 # (Primary source: SkyUI/Precision/TDM/TrueHUD all ship this; MFO/MEO/MAO were
 # the only omitters. audit_mcm.py gates that this stays in sync with config.json.)
 cp out/MCM/Config/MFO/settings.ini "$STAGE/pkg/MCM/Config/MFO/"
-# Initial MCM Helper USER store -- still shipped for fresh installs so values are
-# complete on first launch (defaults file registers; user store overrides).
-cp out/MCM/Settings/MFO.ini       "$STAGE/pkg/MCM/Settings/"
+# MCM/Settings/MFO.ini is deliberately NOT shipped (2.2.1). It is the user's own
+# MCM Helper store: a zip that carries it overwrites every updating user's saved
+# settings (v2.2.0 did exactly that). A fresh install needs none: MCM Helper
+# creates the store from the defaults file above, and Config.cpp treats an absent
+# store as normal (EnsureMcmDefaults returns, ReadFile skips). The assert below
+# keeps it out for good.
 # The translation template (i18n, 86e3gmxmg). The engine loads every
 # Interface/Translations/*_<LANGUAGE>.txt, and MFO reads its $MFO_ keys from it.
 # Stale-template gate: it is generated from native/i18n/Strings_keys.h.
@@ -319,6 +322,10 @@ cp installer/README.md     "$STAGE/pkg/MFO-Synthesis-README.md"   # how to build
 ZIP="MFO-v${VER}.zip"
 rm -f "$ZIP"
 (cd "$STAGE/pkg" && zip -rq "$OLDPWD/$ZIP" .)
+if unzip -Z1 "$ZIP" | grep -q '^MCM/Settings/'; then
+    echo "ERROR: ${ZIP} contains MCM/Settings/ -- it would overwrite users' MCM settings." >&2
+    rm -f "$ZIP"; exit 1
+fi
 
 mkdir -p "$DEST"
 cp "$ZIP" "$DEST/"

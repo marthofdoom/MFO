@@ -37,7 +37,7 @@ echo "== native DLL from run $RUN_ID =="
 
 STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT
 mkdir -p "$STAGE/SKSE/Plugins" "$STAGE/SEQ" \
-         "$STAGE/MCM/Config/MFO" "$STAGE/MCM/Settings" "$STAGE/Scripts"
+         "$STAGE/MCM/Config/MFO" "$STAGE/Scripts"
 "$GH" run download "$RUN_ID" -n MFO-dll -D "$STAGE/SKSE/Plugins"
 [[ -f "$STAGE/SKSE/Plugins/MFO.dll" ]] || { echo "ERROR: artifact had no MFO.dll" >&2; exit 1; }
 echo "DLL: $(stat -c '%s bytes' "$STAGE/SKSE/Plugins/MFO.dll")"
@@ -57,7 +57,7 @@ cp -r out/SKSE/Plugins/MFO  "$STAGE/SKSE/Plugins/"    # baked board fonts (MEO p
 # the MCM never appears / every control reads -1 (2026-07-28 root cause).
 cp out/MCM/Config/MFO/config.json "$STAGE/MCM/Config/MFO/"
 cp out/MCM/Config/MFO/settings.ini "$STAGE/MCM/Config/MFO/"   # #55: the DEFAULTS file MCM Helper registers from
-cp out/MCM/Settings/MFO.ini       "$STAGE/MCM/Settings/"
+# MCM/Settings/MFO.ini is NOT shipped: it would overwrite the user's saved MCM settings (see release.sh).
 cp out/Scripts/MFO_MCM.pex        "$STAGE/Scripts/"
 cp THIRD-PARTY-NOTICES.md   "$STAGE/"    # ships with every build, INVARIANTS #42a
 
