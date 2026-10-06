@@ -421,6 +421,7 @@ namespace MFO::Followers {
         // runtime-only claims, released so neither outlives him. Idempotent no-ops when none.
         APMFBridge::ReleaseRetreatReentryDeny(id, "dismissed");
         APMFBridge::ReleasePursuitLeash(id, "dismissed");
+        APMFBridge::ReleaseHealApproach(id, "dismissed", APMFBridge::kApproachAnyHand, true);   // ch.24 held-heal approach
         // The Composed Forced Cast (OPT-IN bHealAnimPackage): runtime-only (no
         // serialized tail), but a dismissed follower's live heal-cast claim +
         // MFO-executed-cast bound must be released so neither outlives him. Both

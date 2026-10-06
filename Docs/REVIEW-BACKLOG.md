@@ -1300,3 +1300,11 @@ Raised against d5c51e0 (`feat/mfo-remaining-cast-kinds`, Opus review FIX FIRST, 
 - **R3-2 (SEV-4, raised against c0a6842):** release/re-claim churn after a fire. The claim is released as idle (or when the buff lands) and re-claimed when the rule wants it again. Fix later by keeping a fired claim standing between casts, like the heal road's `kBetweenCasts`, or by releasing it with `takeBack=false` plus `restreamAt`.
 - **R3-3 (SEV-5):** `ClearCastLock(follower)` also runs mid-fight on the Scheduler's `!castSeen` tick, so the never-fired hold-off and the fired set end there too, not only at the fight's end. The WARN now reads "held off until the next cast-rule reset".
 - **Surfaced at edit time from:** MAP.md `cast/BuffRoad.cpp` entry.
+
+### MFO-B231 -- Held-heal approach (apmf/CombatApproach.cpp): deferred review findings F5
+Raised against e8ba5a0 (`feat/mfo-held-heal-approach`, Opus review FIX FIRST; F1-F4 fixed in the follow-up round), 2026-10-05. (B231 was the next free id in this branch's copy of the file; check for a clash at merge.)
+- **F5a (SEV-5):** `apmf/APMFBridge.h` is at ~1538 lines (past the ~1500 plan-a-split line). Propose a split as its own brief (`apmf/` public header per claim family); this branch only added 10 declaration lines.
+- **F5b (SEV-5):** the `[heal-approach]` heartbeat logs every 1.5 s per standing claim while Approaching / Holding; chatty on a long approach. Thin it (state changes plus every ~5 s) once the field shape is known.
+- **F5c (SEV-5):** an MCM change of `fHealApproachRadius` reaches a standing claim only at its next Repoint (a recipient change); a new claim reads the live value.
+- **F5d (SEV-5):** `g_approachBlocked` / `g_approachRefileAfter` for a follower who dies mid-fight are cleared only by `ReleaseHealApproach(.., fightOver)` (dismissal, combat ended) or `ClearHealApproaches` (load / revert); a few FormIDs can linger until then.
+- **Surfaced at edit time from:** MAP.md `apmf/CombatApproach.cpp` entry.

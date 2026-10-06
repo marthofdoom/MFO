@@ -169,7 +169,17 @@ namespace APMF_API {
     // either bit: an OLDER APMF ignores both bits WITHOUT a word (the cast fires, and the
     // pin holds, with no line-of-sight test at all). See "ABI v18: LINE OF SIGHT AND
     // AWARENESS" at the end of this header.
-    inline constexpr std::uint32_t kABIVersion = 18;
+    //
+    // ABI v19 (2026-10-05, batch A) adds kIntent_CombatApproach (ch.24): the IN-COMBAT
+    // movement goal "stay within R of actor X while fighting". It rides the EXISTING
+    // RequestEx/Repoint/Release slots and reads the EXISTING param.target (X), param.fval
+    // (R) and param.ival (CombatApproachFlags). APMF_API_v19 appends ONE read-only slot,
+    // GetCombatApproachState, with its POD struct APMF_CombatApproachInfo. A client must see
+    // abiVersion >= 19 before it asks for the intent or calls the slot: an OLDER APMF has no
+    // channel for intent 24 and REFUSES the request (kInvalidHandle, "no channel serves
+    // intent 24" in its log) -- the documented degrade. See "ABI v19: COMBAT APPROACH" at
+    // the end of this header.
+    inline constexpr std::uint32_t kABIVersion = 19;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -714,6 +724,79 @@ namespace APMF_API {
                                      //
                                      //       FIELD STATUS: built, CI-verified, NOT yet observed on a
                                      //       deck (the "[ch.23] pursuit H" heartbeat counts the leaves).
+
+        kIntent_CombatApproach = 24, // ch.24 CLOSE to within R of an actor WHILE IN COMBAT -- the
+                                     //       in-combat MOVEMENT GOAL (ABI v19, batch A). Mode: DENY +
+                                     //       SUBSTITUTE of one UNWEIGHTED engine input (the combat
+                                     //       area), composed with the combat behaviour; never a
+                                     //       package, never a forced move.
+                                     //       Param: target = X, the reference to close on (REQUIRED;
+                                     //       an Actor or any loaded reference; the player is allowed;
+                                     //       0 or the actor itself refused); fval = R, game units
+                                     //       (REQUIRED, finite, > 0); ival = CombatApproachFlags.
+                                     //       form / pos are not read.
+                                     //
+                                     //       WHAT IT DOES. The engine's combat tree runs two parallel
+                                     //       halves, Movement and Action. The Movement half keeps the
+                                     //       actor inside its CURRENT COMBAT AREA: when the actor is
+                                     //       outside it, the movement selector picks the engine's own
+                                     //       Return To Combat Area branch (it paths back), and inside
+                                     //       it every movement leaf's destination is clamped to it.
+                                     //       While this claim is in force the actor's own standard
+                                     //       combat area is centred on X with radius R. So the actor
+                                     //       walks toward X in its combat gait, keeps fighting and
+                                     //       casting with both hands the whole way, and once within R
+                                     //       it keeps moving tactically inside R. The engine also reads
+                                     //       the area OUTSIDE movement: the attack and bash pick (an
+                                     //       attack whose end point is outside the area is rejected),
+                                     //       the target selector's score and the invisibility / bound
+                                     //       weapon cast decisions. Every one of those is answered
+                                     //       with the engine's OWN area, not the bound, so no other
+                                     //       action is dropped or changed by the claim. (Its
+                                     //       unreachable-target check and its weapon pickup belong to
+                                     //       the MOVEMENT half and follow the bound.)
+                                     //
+                                     //       THEY FORCE, THEY WIN. A package's HOLD POSITION area
+                                     //       outranks the standard area in the engine's own pick, and
+                                     //       still does: the claim then reads kApproachState_Yielded and
+                                     //       moves nothing. A fleeing actor, or one that is not high
+                                     //       process, has no standard area: kApproachState_Disabled.
+                                     //       A ch.23 PURSUIT LEASH on the same actor is respected:
+                                     //       when no point within R of X lies inside the leash, the
+                                     //       claim reads kApproachState_Leashed and moves nothing.
+                                     //
+                                     //       ENDS -- AND HARBINGER RELEASES THE CLAIM ITSELF (read why
+                                     //       with GetCombatApproachState): ARRIVAL (the engine's own
+                                     //       "inside the area" test, unless kApproach_Hold), the target
+                                     //       LOST (gone, dead, disabled, unloaded, another cell),
+                                     //       COMBAT ENDED after the area was applied, the engine
+                                     //       STOPPED updating the area (its own path back failed, it
+                                     //       deactivated the area; logged), the actor gone. Also a
+                                     //       client Release, an outranking ch.24 claim, a save load or
+                                     //       a new game. A claim made OUT of combat waits
+                                     //       (kApproachState_Waiting) and applies when combat starts.
+                                     //
+                                     //       REFUSED SYNCHRONOUSLY (kInvalidHandle, logged): an APMF
+                                     //       older than v19 ("no channel serves intent 24"), VR, a
+                                     //       runtime other than 1.6.1170 / 1.5.97 / 1.7.104,
+                                     //       [CombatApproach] bCombatApproach=0, a self-check refusal,
+                                     //       before kDataLoaded, target 0 or the actor itself, a radius
+                                     //       that is not a positive finite number, or the actor is the
+                                     //       player. A target that is not a loaded reference is found
+                                     //       at Engage: the claim is ended (kApproachState_TargetLost).
+                                     //
+                                     //       FIELD STATUS: built, CI-verified, NOT yet observed on a
+                                     //       deck (the "[ch.24]" heartbeat counts the seats).
+    };
+
+    // ── Combat approach flags (kIntent_CombatApproach's param.ival, ABI v19) ────
+    // APPEND-ONLY once shipped: never renumber an existing bit.
+    enum CombatApproachFlags : std::uint32_t {
+        kApproach_None = 0,
+        kApproach_Hold = 1u << 0,   // keep the bound after ARRIVAL: the claim does not end inside R;
+                                    //   the actor stays within R of X (moving tactically inside it)
+                                    //   until the client releases it or another end condition fires.
+                                    //   Without it the claim ENDS on arrival (kApproachState_Arrived).
     };
 
     // ── Travel flags (kIntent_Travel's param.ival, ABI v10) ─────────────────────
@@ -1508,12 +1591,18 @@ namespace APMF_API {
     //                                  is refused).
     //   fval   kIntent_PursuitLeash    ABI v16: the RADIUS in game units (REQUIRED, > 0; 0,
     //                                  negative or NaN is refused). No other field is read.
+    //   target kIntent_CombatApproach  ABI v19: X, the reference to close on (REQUIRED; 0 or the
+    //                                  actor itself is refused; the player is allowed).
+    //   fval   kIntent_CombatApproach  ABI v19: R, the radius in game units (REQUIRED, finite, > 0).
+    //   ival   kIntent_CombatApproach  ABI v19: a CombatApproachFlags bitmask (0 = end on arrival).
+    //                                  form / pos are not read.
     //   none   every other Intent      accepted, not yet read by the channel
     //
-    // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15) and
-    // kIntent_PursuitLeash (ABI v16); it stays reserved for a
+    // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15),
+    // kIntent_PursuitLeash (ABI v16) and kIntent_CombatApproach (ABI v19); it stays reserved for a
     // future per-request bias on ch.11, scale on ch.1a, factor on ch.16. target is read by
-    // kIntent_PursuitLeash (ABI v16, the anchor) and was by kIntent_SelectSpell (retired).
+    // kIntent_PursuitLeash (ABI v16, the anchor), kIntent_CombatApproach (ABI v19, X) and was
+    // by kIntent_SelectSpell (retired).
     // pos is read by
     // kIntent_Cast with kCastFlag_AtPosition and by kIntent_Travel with kTravel_ToPosition
     // (both ABI v11). Without its flag, kIntent_Travel refuses a non-zero pos.
@@ -2311,6 +2400,85 @@ namespace APMF_API {
         //                       loaded actor
         //   kQuery_Failed       an exception was caught
         std::uint32_t (*SenseActor)(const APMF_AwarenessQuery* q, APMF_AwarenessResult* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v19: COMBAT APPROACH (kIntent_CombatApproach, ch.24)
+    // ═════════════════════════════════════════════════════════════════════════════
+    // What ch.24 is doing for an actor, or why it stopped. APPEND-ONLY: never renumber.
+    //
+    // Unlike ch.19's leg, a ch.24 claim that ENDS is RELEASED BY HARBINGER (the ch.20 / ch.22
+    // model), so a lower-ranked approach claim on the same actor can take over. The state
+    // below stays readable after the end, until the actor's next ch.24 claim or a load.
+    enum CombatApproachState : std::uint32_t {
+        kApproachState_None        = 0,   // no ch.24 state for this actor since the last load (or ch.24
+                                          //   is not installed)
+        kApproachState_Waiting     = 1,   // the claim stands; the actor is not in combat yet (the bound
+                                          //   applies when combat starts)
+        kApproachState_Approaching = 2,   // the bound is in force and the engine reports the actor OUTSIDE
+                                          //   it (its own Return To Combat Area branch is selectable)
+        kApproachState_Holding     = 3,   // the bound is in force and the actor is inside it
+                                          //   (kApproach_Hold, or arrival not yet confirmed)
+        kApproachState_Yielded     = 4,   // NOT applied: a higher-priority combat area (a package's HOLD
+                                          //   POSITION) owns the actor's bound. Resumes when it goes.
+        kApproachState_Disabled    = 5,   // NOT applied: the engine disabled the actor's standard area
+                                          //   (the actor is fleeing or not high process). Resumes after.
+        kApproachState_Leashed     = 6,   // NOT applied: a ch.23 pursuit leash on the actor excludes every
+                                          //   point within R of X. Resumes when the geometry allows it.
+        kApproachState_Arrived     = 7,   // ENDED: the engine reports the actor inside R of X (no Hold flag)
+        kApproachState_TargetLost  = 8,   // ENDED: X is gone, dead, disabled, unloaded, in another cell
+                                          //   space, or was never a loaded reference
+        kApproachState_CombatEnded = 9,   // ENDED: the actor left combat after the bound was applied
+        kApproachState_EngineDropped = 10,// ENDED: the engine stopped updating the bound for 3 s while the
+                                          //   actor was in combat -- its own path back to X failed (it
+                                          //   deactivates the area) or its combat update stopped. Logged.
+        kApproachState_ActorGone   = 11,  // ENDED: the actor died, unloaded or lost its 3D
+        kApproachState_Released    = 12,  // the claim was released by the client, outranked, or dropped
+        kApproachState_Refused     = 13,  // ENDED: a Repoint declared target 0, the actor itself, or a radius
+                                          //   that is not a positive finite number (RequestEx refuses these
+                                          //   synchronously; a Repoint is only seen on the game thread)
+    };
+
+    // GetCombatApproachState output. EXACT LAYOUT (byte-shared): 48 bytes, every field 4 bytes.
+    // The CALLER sets `size` = sizeof(APMF_CombatApproachInfo) as compiled against its header.
+    // THE SIZE RULE (frozen, the APMF_TravelLegInfo rule): APMF fills the v19 fields when
+    // `size` >= kCombatApproachInfoV19Size (48, never changes) and writes nothing into a
+    // smaller struct; a field a later ABI appends is written only when it lies entirely inside
+    // the caller's `size`.
+    struct APMF_CombatApproachInfo {
+        std::uint32_t size;          // +0   the CALLER sets = sizeof(APMF_CombatApproachInfo)
+        std::uint32_t state;         // +4   a CombatApproachState (the same value the call returns)
+        RE::FormID    actor;         // +8   the actor asked about
+        RE::FormID    target;        // +12  X as declared (0 on kApproachState_None)
+        float         radius;        // +16  R as declared
+        float         distance;      // +20  actor -> X, 3D game units, at the last update (-1 = unknown)
+        std::uint32_t msInState;     // +24  milliseconds since this state began (saturates)
+        std::uint32_t seq;           // +28  one never-reset counter, changes on every state change of this
+                                     //        actor's approach (compare for inequality)
+        std::uint32_t ownerHandle;   // +32  the kIntent_CombatApproach claim handle this state belongs to
+        std::uint32_t flags;         // +36  the claim's CombatApproachFlags
+        std::uint32_t applied;       // +40  how many times the engine's own area update carried the bound
+                                     //        for this claim (0 = the seat never applied it: proof, not hope)
+        std::uint32_t engineInside;  // +44  the engine's last own "is the actor inside its area" answer for
+                                     //        this bound: 0 = not seen yet, 1 = outside, 2 = inside
+    };
+    inline constexpr std::uint32_t kCombatApproachInfoV19Size = 48;
+    static_assert(sizeof(APMF_CombatApproachInfo) == 48, "APMF_CombatApproachInfo is 48 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_CombatApproachInfo, distance)    == 20, "distance at +20");
+    static_assert(offsetof(APMF_CombatApproachInfo, ownerHandle) == 32, "ownerHandle at +32");
+    static_assert(offsetof(APMF_CombatApproachInfo, engineInside) == 44, "engineInside at +44");
+
+    // The v19 interface: APMF_API_v18's members verbatim (prefix EXTENSION), then ONE appended
+    // slot. This header is BYTE-SHARED with MFO: mirror it byte-identically.
+    //
+    // WHY A BUMP (INVARIANTS #14b): a new intent a client must not send to an older APMF, and a
+    // new function-pointer slot, both need an `abiVersion >= 19` test.
+    struct APMF_API_v19 : APMF_API_v18 {
+        // What ch.24 is doing with `actor`'s combat approach, or why it ended. Returns a
+        // CombatApproachState and, when `out` is non-null and `out->size` covers the v19
+        // layout, fills `*out`. Read-only; ANY THREAD (a copy under APMF's own lock, no game
+        // call). A throw inside returns kApproachState_None and writes nothing.
+        std::uint32_t (*GetCombatApproachState)(RE::FormID actor, APMF_CombatApproachInfo* out);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the

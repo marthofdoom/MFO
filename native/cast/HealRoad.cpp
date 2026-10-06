@@ -27,8 +27,10 @@
 // runs every lap, higher-ranked rules preempt at once, and the drop conditions are
 // checked every lap. Line of sight never ends a claim (reach only, 2026-09-30b): the
 // claim stands, the engine charges and fires when sight clears. That waiting state is
-// now PER HAND (`HealHand::losHeld`), logged when it starts and when sight returns, so
-// a later round can add a move-to on top of it.
+// now PER HAND (`HealHand::losHeld`), logged when it starts and when sight returns. On
+// two agreeing Occluded reads NoteLosHold also files Harbinger's ch.24 combat approach
+// (apmf/CombatApproach.cpp: close on the recipient, the heal still held, no cap); it is
+// released when sight returns or the hand's heal ends (HealHandEnded).
 //
 // THREADING (#4). Everything in this file runs on the SKSE AddTask job worker, serial
 // with CastOn / CastAuto / the bridge's Tick (the same worker every g_castLock access
@@ -133,7 +135,11 @@ namespace MFO::Actuation {
         // it starts and once when sight is back; Unknown changes nothing. Self: no line.
         void NoteLosHold(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_spell, RE::FormID a_recipient) {
             auto& hh = g_healHands[a_follower].hand[a_hand];
-            if (a_recipient == 0) { hh.losHeld = false; return; }
+            if (a_recipient == 0) {
+                hh.losHeld = false;
+                APMFBridge::ReleaseHealApproach(a_follower, "the hand's heal is now a self-heal", a_hand);
+                return;
+            }
             const auto v = Sightline::CheckWithin(a_follower, a_recipient, kHealLosTrustSec, Sightline::Basis::Own);
             const auto now = Clock::now();
             if (v == Sightline::Verdict::Occluded && !hh.losHeld) {
@@ -150,6 +156,16 @@ namespace MFO::Actuation {
                              a_follower, HandWord(a_hand), a_recipient,
                              std::chrono::duration_cast<std::chrono::milliseconds>(now - hh.losSince).count(),
                              a_spell);
+            }
+            // ch.24: two agreeing Occluded reads on the own ray (the same bar the heal pick uses) file
+            // the approach toward the recipient; any state that is not "held" releases this hand's.
+            if (hh.losHeld) {
+                if (Sightline::OccludedRun(a_follower, a_recipient, kHealLosTrustSec, Sightline::Basis::Own) >=
+                    kHealLosAgreeingReadings)
+                    APMFBridge::ServiceHealApproach(a_follower, a_hand, a_recipient);
+            } else {
+                APMFBridge::ReleaseHealApproach(a_follower, "the held heal is no longer held through lost sight",
+                                                a_hand);
             }
         }
 
@@ -406,6 +422,7 @@ namespace MFO::Actuation {
     }
 
     void HealHandEnded(RE::FormID a_follower, std::size_t a_hand, const char* a_why) {
+        APMFBridge::ReleaseHealApproach(a_follower, "the hand's heal claim ended", a_hand);   // ch.24
         const auto it = g_healHands.find(a_follower);
         if (it == g_healHands.end() || a_hand >= kHandCount) return;
         auto& hh = it->second.hand[a_hand];
@@ -604,6 +621,10 @@ namespace MFO::Actuation {
                 it->second.hand[h] = CastLock{};
             HealHandEnded(a_follower, h, a_why);
         }
+    }
+
+    bool HealStandsOnHand(RE::FormID a_follower, std::size_t a_hand) {
+        return a_hand < kHandCount && HealOnHand(a_follower, a_hand).found;
     }
 
     void ResetHealRoad() {

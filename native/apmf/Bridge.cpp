@@ -921,6 +921,7 @@ namespace MFO::APMFBridge {
         // retreat's single StopCombat through Packages once a deny reads live).
         SweepReentryDenies();
         SweepPursuitLeashes();
+        SweepHealApproaches();
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(g_mx);
         // ch.20 target pins: notice a pin Harbinger ended (IsClaimLive false) so the
@@ -1157,6 +1158,7 @@ namespace MFO::APMFBridge {
         ClearCombatEntriesLocked();   // ch.21 entries: same (never saved on APMF's side either)
         ClearReentryDenies();         // ch.22 retreat denies: same (Harbinger never saves them)
         ClearPursuitLeashes();        // ch.23 leashes: same
+        ClearHealApproaches();        // ch.24 held-heal approaches: same
         g_equipAuthRefused.clear();
         g_selectOverflow.clear();
         g_selectRefused.clear();
