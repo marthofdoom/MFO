@@ -1442,3 +1442,11 @@ Raised against `d006496` (`fix/mfo-post-2.2.0`, Opus review, nothing above SEV-3
 - **A5 remainder (SEV-4):** the exit tokens other than `preempted` (rank preempt, weapon-owns-right: fixed) are classified from free text or set only at some release sites; any release site that does not go through `ReleaseWithExit` logs `released-elsewhere`.
 - **A7 (SEV-5):** `g_healAsked` entries from a follower's last combat tick survive until his next combat tick. Harmless.
 - **Surfaced at edit time from:** MAP.md `cast/HealRoad.cpp` entry.
+
+### MFO-B239 -- 1006c offense fixes review leftovers (item 1 / 2 / 3)
+Raised against `f51c579` (`fix/mfo-offense-1006c`, Opus review MERGE OK), 2026-10-06. Reviewer's text paraphrased by the coordinator.
+- **SEV-5:** `s_selfBuffFoeLog` (cast/CastOn.cpp, the once-per-(follower, spell) self-buff-at-a-foe warning) is not cleared on reload.
+- **SEV-5:** when `sinceClaim` is 0 ms the "ever fired" latch can answer the freshness check in `CanPreemptHand`.
+- **SEV-3 (watch in the field):** a blind concentration heal whose channel starts while offense is mid-charge on the other hand could be interrupted.
+- **SEV-3 (accepted):** a direct-road lock (no APMF claim to observe) stays fresh until the 6 s `kInFlightHoldCap`, and the waiter clock can stretch a higher rule's wait to about 12 s.
+- **Surfaced at edit time from:** MAP.md "FIELD 1006c OFFENSE FIXES" bullet.

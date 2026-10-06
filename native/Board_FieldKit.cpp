@@ -1113,7 +1113,7 @@ namespace MFO::Board {
                                         // with it (marth 2026-10-06). A saved Auto then highlights no option.
                                         if (!rv.natureUndeclared)
                                             opts.push_back({ (std::uint8_t)Vocab::Subject::Self,    0, &kAutoLbl });
-                                        if (selTable == 0)
+                                        if (selTable == 0 && !rv.selfDeliveredBuff)
                                             opts.push_back({ (std::uint8_t)Vocab::Subject::Enemy,   0, &kEnemyLbl });
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::Caster,      0, &kSelfLbl });
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::Player,      0, &who->playerName });
