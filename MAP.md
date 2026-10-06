@@ -57,7 +57,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 |---|---|---|
 | **Co-save (5 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1` (`Serialization.h`). PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
-| **`ResetAllState` teardown order** | `Serialization.cpp:680-746` | `StopPump()` MUST run first (`:686`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
+| **`ResetAllState` teardown order** | `Serialization.cpp:711-784` | `StopPump()` MUST run first (`:717`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
 | **The worker pump** | `Diagnostics.cpp` | One sleeper thread (`SleeperLoop`, 133 ms) drives the *entire* per-follower tick (`Scheduler::Tick`/`Loadout::Tick`/`Probe::Tick`) via `AddTask`. `kPumpMs` is the evaluator deadline, not a HUD constant. StopPump-before-clear is the linchpin invariant. |
 | **Combat vfunc hooks** | `Targeting.cpp`, `CasterConsent.cpp`, `CombatStyle.cpp` | Three engine vtable hooks, install-once at `plugin.cpp:299-301`, VR-refused. Run on the **combat thread**. Any `CombatController` member touched there must be `< 0x68` (AE +8 layout bug; static_asserts). Signature mismatch corrupts every actor's combat/cast call. |
@@ -130,7 +130,10 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   reader kept forever (`Serialization.cpp:499`). **v5 (T#78) APPENDS `mfoEnabled`
   as one u8 right after `combatClassOverride`, read gated `if(version>=5)`; a
   pre-v5 record has none and defaults `true` — every existing follower stays
-  MFO-enabled, v1–v4 byte-identical.**
+  MFO-enabled, v1–v4 byte-identical.** Still v5 (2026-10-06, value space only): `subjectSelector`
+  may hold Enemy=3 / Caster=4, and a gambit's `flags` byte gains bit 1 = "enabled, appended subject"
+  (bit 0 written clear for those, so an older DLL loads them DISABLED); the reader is
+  `enabled = flags & 3`. Every earlier record holds 0/1 there.
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
   Write `Serialization.cpp:223-254`, read `ReadStockRecord` `:286-346`. Owner: `logistics/Upkeep.cpp` (the accessors).
@@ -472,8 +475,10 @@ move proven function by function by `tools/splitcheck`; before it the family was
 `Actuation.cpp` + `Actuation_Direct.cpp` (split 2026-08-31) + `Actuation_Hands.cpp` (split
 2026-09-08).** Other subsystems include ONLY the public header `cast/Actuation.h`. One file
 per concern:
-- `cast/Fire.cpp` (383) = the combat-rule DISPATCH: `Fire` (`:104`) + its verbs, and the #68
-  resolution ladder `ResolveCastTarget` (`:64`) with its anon helper `NearestAlly` (`:25`).
+- `cast/Fire.cpp` = the combat-rule DISPATCH: `Fire` (`:170`) + its verbs, and the #68
+  resolution ladder `ResolveCastTarget` (`:85`; rung 0 = the absolute Enemy / Caster subjects) with its
+  anon helper `NearestAlly` (`:25`) and the public `CommandedEnemy` (`:58`, the "Enemy (gambit target)"
+  foe = `Targeting::Current`, worker-safe: Current is locked on both routes).
 - `cast/Roads.cpp` (288) = the three delivery ROADS `CastOn` forks to: `ForceCast` (`:31`, the
   forced package cast), `ConcentrationCast` (`:129`, the bounded concentration stream entry) and
   `RestorationCastDirect` (`:269`).
@@ -542,7 +547,7 @@ per concern:
 - `cast/Summon.cpp` (383) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
   `CastSummonOnce` (`:315`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
   `g_summonMx`/`g_summon`/`g_summonPosted` (`:68-69`, `:79`) is extern (ClearSelfCasts clears it).
-- `cast/Auto.cpp` (724) = the AUTO fan-out `CastAuto` (`:308`; its claim-road heal SERIES `:325`, see
+- `cast/Auto.cpp` = the AUTO fan-out `CastAuto` (`:308`; FIRST gate: a nature-undeclared spell (`SpellNatureUndeclared`) is a transparent NoOp + one `[auto]` WARN (mutex-guarded once-set), never self; the rule's TARGET (Enemy / Self / an ally / the player) or a selector condition names who instead; its claim-road heal SERIES `:353`, see
   "ANIMATED HEAL CLAIM ROAD" below) with its pacing `g_autoCast` (`:22`)
   and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:193`), and
   `IsSummonSpell` (`:269`, public; it lives here because `CastAuto` inlines it).
@@ -574,6 +579,23 @@ per concern:
   SpellFire evidence `HandFireSink` (`:305`) / `HandFireWatch` (`:327`) / `HandFireTake` (`:346`, public); anon
   `HealOnHand` (`:88`), `RecipientLost` (`:108`), `NoteLosHold` (`:134`), `NeverFiredRelease` (`:171`),
   `ProxyUnlearnedRelease` (`:210`), `MaintainCompanion` (`:232`), the per-hand record `g_healHands`.
+- `cast/SpellSupport.cpp` (feat/mfo-hide-unsupported-spells 2026-10-06) = `CastRoadUnsupported(SpellItem*, const char** reason)` (public,
+  `cast/Actuation.h`): the board's spell-picker filter. True only for the STATIC (record-only) direct fallbacks of `ChooseBuffRoad`, via the SAME
+  helpers it calls (`BuffAmbiguousRowWhy` / `BuffAimedLightWhy` / `BuffSelfRuneWhy` / `ExplicitSelfBuff`, now exported from `cast/BuffRoad.cpp`):
+  ambiguous row, aimed Light (Magelight). Buff kind only; a target-location buff is NOT hidden (only its SELF cast goes direct; at an ally it claims); hostile runes are NOT hidden (CastOn `ownedCast`
+  has no delivery filter). WHAT BREAKS: changing a `ChooseBuffRoad` static case without changing its helper desyncs nothing (it calls them), but
+  adding a NEW static case there must also go through a shared helper + this predicate, or the picker keeps offering the spell. Board.cpp
+  (`SpellList` in PublishSnapshot) hides these, logs `[spell-support] hidden from picker` once per spell, and keeps one a rule already names,
+  suffixed " (unsupported)". Picker only: AUTO and casting untouched.
+  `SpellNatureUndeclared(SpellItem*)` (same file `:60`, `cast/Actuation.h`): a Buff-kind, non-placement, non-Self-delivery spell with AT
+  LEAST ONE effect archetype Script or enemy-control (Calm / Frenzy / Demoralize / Paralysis / TurnUndead), i.e. its record does not say
+  who it is for (Apocalypse leech curses, vanilla Pacify / Calm). Every other archetype (Invisibility = Fade Other, Cloak, fortifies,
+  Light, Rally ...) is a declared ally buff and keeps AUTO's party behaviour (the first cut keyed on the predicted row NoRow / Script and
+  caught Fade Other: fixed 2026-10-06). `ClassifySpell` and its enum are untouched. Readers: `CastAuto` (NoOp + one `[auto]` WARN per
+  follower+spell, never self) and Board (list hint + AUTO target label, keys `Gb_SpellNatureHint` / `Gb_SubjAutoUndeclared`). CastOn does
+  NOT read it (the earlier Enemy retarget is gone): the TARGET picker's "Enemy (gambit target)" subject (`Vocab::Subject::Enemy`,
+  `CommandedEnemy`) names the commanded foe for ANY spell, and a foe SELECTOR condition names its own foe. WHAT BREAKS: widening the
+  predicate silently stops AUTO casting those spells. Open findings: MFO-B236.
 - `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, widened by feat/mfo-claim-road-summon-ally-rowless 2026-10-05; batch A
   release gate checklist R6/R8/R9/R11) = THE ANIMATED BUFF CLAIM ROAD: `ChooseBuffRoad(follower, spell, log, recipient)` (NotBuff / Claim /
   DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCap / DirectNoCombat; one `[buff]` line per reason), `BuffClaim` (+ `BuffSelfClaim`
@@ -4878,6 +4900,7 @@ its perk/AV mutations are runtime-only. Safe to delete without touching saves; o
 ## 6. Board / UI / Papyrus — `Board.*`, `Papyrus.*`
 
 ### Board.cpp / Board_FieldKit.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
+**Spell picker filter (2026-10-06):** `SpellList` in `Board.cpp` PublishSnapshot (~:1640) skips `Actuation::CastRoadUnsupported` spells (`cast/SpellSupport.cpp`) unless an existing rule names them (then " (unsupported)" suffix).
 Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
@@ -4991,6 +5014,10 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
     namespace: `kClassNames` (`:46`), the picker-submenu predicates `IsFoeCond`/
     `IsPotionLootAct`/`IsMiscLootAct` (`:56`), `PushSkin` (`:73`),
     `DrawSpellHoverTooltip` (`:135`). Future panel work lands here, NOT in Board.cpp.
+    The act.cast_target TARGET popup (`##target`) offers Auto, **Enemy (gambit target)** (combat table
+    only), **Self**, the player, Ally: Nearest, then each other follower; Enemy / Self queue `SetSubject`
+    with the appended `Vocab::Subject::Enemy` / `Caster` (labels `Gb_SubjEnemy` / `Gb_SubjSelf`, also
+    in `Board.cpp` FillRuleViews). See the Vocabulary.h entry for their resolution + downgrade contract.
   * `Board_Progression.cpp` (1248) = the hosted progression tab body, ONE function
     `DrawProgressionTab` — called from `DrawFieldKit` (`Board_FieldKit.cpp:1062`);
     future progression-tab work lands here.
@@ -7022,7 +7049,7 @@ older `Diagnostics.cpp:NNN` cross-references elsewhere in this map read low.)
   `SetupLog` (the 1 s background flusher is gone) — the only policy that keeps the
   tail through a fast-fail, a hang+kill or an OS teardown, which no handler sees.
 - **StopPump-before-clear invariant:** `StopPump()` (`:1074`) is the FIRST statement
-  in `ResetAllState` (`Serialization.cpp:686`) and runs at kPreLoadGame
+  in `ResetAllState` (`Serialization.cpp:717`) and runs at kPreLoadGame
   (`plugin.cpp:369`). It clears `g_pumpRunning`, bumps `g_pumpEpoch` (strands mid-
   sleep threads), then spin-waits ≤2000 ms on `g_tickActive` (`:1092`) so any in-
   flight tick finishes before the maps are wiped (concurrent map insert+clear = UB).
@@ -7204,10 +7231,25 @@ The gambit opcode **strings are a frozen co-save contract (#10)** — written ve
 (`Vocabulary.h:136`). Renaming any `kCond*`/`kAct*`
 is a **schema migration, not an edit** (old saves carry the old string; the `==`
 compares silently stop matching). Adding an opcode requires wiring in Evaluator +
-Actuation + Board's picker or it's inert. **`Subject` enum** (Self=0/Player=1/
-NearestAlly=2, `:37`) is serialized as the raw `subject` byte (read `cast/Fire.cpp:80`,
-`Board.cpp:850,858-863`) — reordering reinterprets every saved byte (a specific follower is
-carried as `subjectActorForm`, NOT an enum value, precisely to keep the enum frozen).
+Actuation + Board's picker or it's inert. **`Subject` enum** (Self=0 [= AUTO on a cast_target
+row]/Player=1/NearestAlly=2, APPENDED 2026-10-06: Enemy=3/Caster=4, `:37`) is serialized as the raw
+`subject` byte (read `cast/Fire.cpp` `ResolveCastTarget` + `Fire`'s autoPick, `logistics/Service.cpp`
+cast_target block + `selfPkg`, `Scheduler.cpp` retreat-heal `selfRule`, `Board.cpp` FillRuleViews label,
+`Board_FieldKit.cpp` TARGET popup) — reordering reinterprets every saved byte (a specific follower is
+carried as `subjectActorForm`, NOT an enum value, precisely to keep the enum frozen). **Enemy / Caster
+(the TARGET picker's "Enemy (gambit target)" / "Self")** are ABSOLUTE (rung 0 of `ResolveCastTarget`,
+they override a selector's pick): Enemy = `Actuation::CommandedEnemy` (`Targeting::Current`, alive /
+enabled / hostile, else nullptr -> Fire NoOps "target Enemy: no commanded target", logistics skips;
+never self, never the player), any spell; Caster = the follower, the act.cast_self road (Fire ->
+`CastOn(f,spell,f)`; logistics `casterPick` -> `selfPkg`; retreat-heal counts it). Enemy is offered on
+the COMBAT table only. **DOWNGRADE contract:** `Vocab::IsAppendedSubject` -> the FLWR writer stores the
+rule's enabled bit in flags **bit 1** with bit 0 CLEAR, so an older DLL (reads bit 0) loads it DISABLED
+instead of running it at its player-fallback rung; the reader takes bit0|bit1 (no version bump, see
+`Serialization.h` v5 note). **What breaks:** a new appended subject not added to `IsAppendedSubject`
+loses that downgrade guard; making Enemy fall back to the player / self re-creates the Lamb-of-Mara
+self-curse. An AUTO target on a nature-undeclared spell never casts, even with a selector target (Fire /
+logistics `AutoNatureUndeclared`), and the TARGET popup does not offer Auto for it (`RuleView::natureUndeclared`).
+Open findings: MFO-B236.
 `Pct`/`HealthPct`/etc. (`:214`) use permanent+temporary AV — changing the max formula
 re-times every "HP below X%" rule + Confidence.
 `kActLootMuseum` ("act.loot_museum", LOTD, 2026-09-25) is an APPENDED opcode; it is wired

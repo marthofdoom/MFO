@@ -176,6 +176,14 @@ namespace MFO {
     //        Read ONLY when version >= 5; a pre-v5 record never wrote it, so it
     //        defaults to true (FollowerState{}) -- every existing follower stays
     //        MFO-enabled. Byte-identical for v1-v4 saves.
+    //   (still v5, 2026-10-06, VALUE-SPACE only, no layout change): subjectSelector may hold the
+    //        appended Vocab::Subject values Enemy (3) / Caster (4), and the per-gambit flags
+    //        byte gains bit 1 = "enabled, appended subject" (bit 0 is then written CLEAR, so an
+    //        older DLL, which reads bit 0 only, loads such a rule DISABLED). Readers take
+    //        enabled = bit0 | bit1; every earlier record holds 0 or 1 there and reads unchanged.
+    //        Deliberately NOT a bump: an older DLL skips a newer-version FLWR whole.
+    //        A round trip through an older DLL leaves Enemy/Self rules DISABLED (it saves them with
+    //        flags 0); re-enabling one there runs it at the older DLL's player fallback (MFO-B236).
     //
     // The v1 block was briefly deleted WITHOUT a bump, on the reasoning that no
     // save had ever held an MFO record. True at the time; it stopped being true

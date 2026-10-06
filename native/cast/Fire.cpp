@@ -45,6 +45,25 @@ namespace MFO::Actuation {
 
     }
 
+    // THE "ENEMY" TARGET (marth 2026-10-06: "that enemy must be the highest gambits target"; the
+    // TARGET picker's "Enemy (gambit target)"). The foe MFO's own targeting gambits commanded:
+    // Targeting::Current, the Harbinger ch.20 pin (pin route) or the latch (degrade), which the
+    // highest-ranked winning Attack / foe-selector rule set. Never another selector's pick, never a
+    // guess. nullptr when nothing is commanded, or the commanded actor is dead / disabled / no longer
+    // hostile to the follower. THREADING: Targeting::Current is internally locked on both routes
+    // (the latch's shared_mutex; APMFBridge's pin-table mutex) and this TU already writes it from the
+    // job worker (Targeting::CommandEx in the Attack verb), so the worker read is the existing
+    // contract, the same read Scheduler's [deadtgt] makes. The handle's actor is read like every
+    // other selector target on this tick.
+    RE::Actor* CommandedEnemy(RE::Actor* a_follower) {
+        if (!a_follower) return nullptr;
+        const auto ptr = Targeting::Current(a_follower->GetFormID()).get();
+        auto* foe = ptr.get();
+        if (!foe || foe == a_follower || foe->IsDead() || foe->IsDisabled() || !foe->IsHostileToActor(a_follower))
+            return nullptr;
+        return foe;
+    }
+
     // THE RESOLUTION LADDER (#68) -- PUBLIC so combat (Fire) AND logistics
     // (out-of-combat cast_target) resolve a manual target the SAME way. Given a
     // cast-target choice, decides WHO gets cast at, first rung to match wins:
@@ -59,9 +78,18 @@ namespace MFO::Actuation {
     //       nobody. a_outIsFallbackPlayer marks this rung so CastOn's out-of-
     //       range skip knows to WAIVE it -- a fallback must always fire, never
     //       quietly vanish because the player happens to be far away.
+    //   0   (before all of these) the two ABSOLUTE subjects (marth 2026-10-06): Caster -> the
+    //       follower himself; Enemy -> CommandedEnemy, or nullptr when none is commanded (the
+    //       ONE rung that resolves to nobody: callers NoOp / skip the rule, never the player).
     RE::Actor* ResolveCastTarget(RE::Actor* a_follower, const Eval::Choice& a_choice,
                                  bool& a_outIsFallbackPlayer) {
         a_outIsFallbackPlayer = false;
+        // Rung 0. SetSubject clears subjectActorForm, so an Enemy / Caster row never names an actor.
+        switch (static_cast<Vocab::Subject>(a_choice.subject)) {
+        case Vocab::Subject::Caster: return a_follower;
+        case Vocab::Subject::Enemy:  return CommandedEnemy(a_follower);
+        default: break;
+        }
         if (auto ptr = a_choice.target.get(); ptr.get()) return ptr.get();
 
         auto* player = RE::PlayerCharacter::GetSingleton();
@@ -89,7 +117,8 @@ namespace MFO::Actuation {
             // rule ("when dark -> cast Magelight") lights up around the player
             // instead of resolving to nobody (the #68 bug) or to the caster.
             // Deliberate self-casting is the separate "Cast on self" action
-            // (kActCastSelf), which never routes through this ladder. A stale
+            // (kActCastSelf), which never routes through this ladder, or the
+            // explicit Self pick (Subject::Caster, rung 0 above). A stale
             // specific-follower sentinel (0xFF) lands here too and correctly
             // falls through rather than disarming the rule.
             break;
@@ -304,6 +333,13 @@ namespace MFO::Actuation {
             // Ally: Nearest / a specific follower) or a selector that chose a foe
             // keeps the single-target ladder path below, unchanged.
             auto tp = a_choice.target.get();
+            // An AUTO target on a nature-undeclared spell never casts, selector target or not (marth
+            // 2026-10-06: "Auto doesnt even show up for these spells"). Transparent; the board labels it.
+            if (a_choice.subjectActorForm == 0 &&
+                static_cast<Vocab::Subject>(a_choice.subject) == Vocab::Subject::Self)
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
+                    sp && AutoNatureUndeclared(a_follower, sp))
+                    return { Result::NoOp, "auto: spell nature undeclared in its record (pick Enemy, Ally or Self)", true };
             const bool autoPick =
                 a_choice.subjectActorForm == 0 &&
                 static_cast<Vocab::Subject>(a_choice.subject) == Vocab::Subject::Self &&
@@ -330,6 +366,12 @@ namespace MFO::Actuation {
             // target above it is range-checked inside CastOn.
             bool isFallbackPlayer = false;
             auto* target = ResolveCastTarget(a_follower, a_choice, isFallbackPlayer);
+            // Target "Enemy (gambit target)" with no commanded foe: wait, transparently. Never the
+            // caster, never the player (marth 2026-10-06). Any spell, not only a nature-undeclared one.
+            if (!target && static_cast<Vocab::Subject>(a_choice.subject) == Vocab::Subject::Enemy)
+                return { Result::NoOp, "target Enemy: no commanded target", true };
+            // Target "Self" (Subject::Caster) resolved to the follower: CastOn(follower, spell, follower)
+            // is the exact call act.cast_self makes above (the self road, the hand lock, the bounds).
             return CastOn(a_follower, a_choice.actionParam, target, !isFallbackPlayer);
         }
 

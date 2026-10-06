@@ -1084,7 +1084,7 @@ namespace MFO::Board {
                                         track();
 
                                         // Option list, rebuilt fresh each frame the
-                                        // popup is open: Self, the player by name,
+                                        // popup is open: Auto, Enemy, Self, the player by name,
                                         // Ally: Nearest, then every OTHER active
                                         // follower by name. form==0 means "use kind
                                         // (the Subject enum)"; form!=0 means "this
@@ -1102,14 +1102,26 @@ namespace MFO::Board {
                                         // Not static: the text is translated, a reload republishes it.
                                         const std::string kAutoLbl = Str::Get(Str::K::Gb_SubjAutoInfer);
                                         const std::string kAllyLbl = Str::Get(Str::K::Gb_SubjAlly);
+                                        // marth 2026-10-06: "Enemy (gambit target)" = the foe MFO's
+                                        // targeting gambits commanded (cast/Fire.cpp CommandedEnemy), combat
+                                        // table only (out of combat nothing is commanded); "Self" = the caster,
+                                        // the act.cast_self road. Both appended Vocab::Subject values.
+                                        const std::string kEnemyLbl = Str::Get(Str::K::Gb_SubjEnemy);
+                                        const std::string kSelfLbl  = Str::Get(Str::K::Gb_SubjSelf);
                                         std::vector<TargetOpt> opts;
-                                        opts.push_back({ (std::uint8_t)Vocab::Subject::Self,        0, &kAutoLbl });
+                                        // No Auto for a nature-undeclared spell: AUTO does not know what to do
+                                        // with it (marth 2026-10-06). A saved Auto then highlights no option.
+                                        if (!rv.natureUndeclared)
+                                            opts.push_back({ (std::uint8_t)Vocab::Subject::Self,    0, &kAutoLbl });
+                                        if (selTable == 0)
+                                            opts.push_back({ (std::uint8_t)Vocab::Subject::Enemy,   0, &kEnemyLbl });
+                                        opts.push_back({ (std::uint8_t)Vocab::Subject::Caster,      0, &kSelfLbl });
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::Player,      0, &who->playerName });
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::NearestAlly, 0, &kAllyLbl });
                                         for (const auto& al : who->alliesForPicker)
                                             opts.push_back({ 0, al.first, &al.second });
 
-                                        int curT = 0;
+                                        int curT = rv.natureUndeclared ? -1 : 0;   // a saved Auto matches nothing
                                         if (rv.subjectActorForm != 0) {
                                             for (int k = 0; k < (int)opts.size(); ++k)
                                                 if (opts[k].form == rv.subjectActorForm) { curT = k; break; }

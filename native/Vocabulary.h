@@ -43,7 +43,27 @@ namespace MFO::Vocab {
         // separately as Gambit::subjectActorForm (a FormID), because the
         // roster is open-ended and a frozen enum cannot name a follower.
         NearestAlly = 2,
+        // APPENDED (marth 2026-10-06, the TARGET picker's "Enemy (gambit target)" and "Self").
+        // The byte is persisted raw in the FLWR record, so these values are FROZEN: never
+        // renumber them, only append after them.
+        //   Enemy  = the follower's commanded target (Targeting::Current: the pin / latch MFO's
+        //            highest targeting gambit set). None commanded -> the rule NoOps
+        //            transparently, never a self cast and never the player fallback.
+        //   Caster = the follower himself: the same CastOn self road as act.cast_self
+        //            (Subject::Self = 0 is NOT the caster on a cast_target row, it is AUTO).
+        // Both are ABSOLUTE: they override a selector's pick for the tick (the condition stays a
+        // gate). DOWNGRADE: an older MFO.dll does not know them, so the FLWR writer stores such a
+        // rule's enabled bit in flags bit 1, not bit 0 (Serialization.cpp). The older reader sees
+        // the rule DISABLED instead of running it at its player-fallback rung.
+        Enemy       = 3,
+        Caster      = 4,
     };
+
+    // True for a subject value an MFO.dll older than the Enemy / Caster append cannot read.
+    [[nodiscard]] inline constexpr bool IsAppendedSubject(std::uint8_t a_subject) {
+        return a_subject == static_cast<std::uint8_t>(Subject::Enemy) ||
+               a_subject == static_cast<std::uint8_t>(Subject::Caster);
+    }
 
     // ── conditions (stable opcode strings) ──────────────────────────────────
     inline constexpr const char* kCondAlways        = "cond.always";

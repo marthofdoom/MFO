@@ -93,7 +93,11 @@ MFO_STR(Gb_MagickaCost,     "Magicka cost: {1}", 1)
 MFO_STR(Gb_WhatItDoes,      "What it does:", 0)
 MFO_STR(Gb_SubjAuto,        "Auto", 0)   // target column when MFO picks who
 MFO_STR(Gb_SubjAutoInfer,   "Auto (infer from spell)", 0)   // in the target list
+MFO_STR(Gb_SubjAutoUndeclared, "Auto: unknown use, set the target to Enemy, Ally or Self", 0)   // target column for an AUTO rule whose spell record does not say who it is for
+MFO_STR(Gb_SpellNatureHint, "{1}  (set the target to Enemy, Ally or Self)", 1)   // {1}=spell name. Spell list entry whose record does not say who it is for
 MFO_STR(Gb_SubjAlly,        "Ally: Nearest", 0)
+MFO_STR(Gb_SubjEnemy,       "Enemy (gambit target)", 0)   // target list: the foe the follower's targeting gambits commanded
+MFO_STR(Gb_SubjSelf,        "Self", 0)   // target list: the casting follower himself
 MFO_STR(Gb_SubjPlayer,      "Player", 0)   // only if the game gives no player name
 MFO_STR(Gb_SubjGone,        "(follower gone)", 0)
 MFO_STR(Gb_Up,              "up", 0)       // small button, keep it short

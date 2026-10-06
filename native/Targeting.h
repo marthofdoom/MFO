@@ -54,10 +54,13 @@ namespace MFO::Targeting {
     void Clear(RE::FormID a_follower);
     void ClearAll();
 
-    // The follower's current latch, or an empty handle when none. MAIN THREAD
-    // (shared-lock read). Exists for the scheduler's retarget hesitation
-    // (GAMBIT_FLAIR #5): a target SWITCH must be distinguishable from a first
-    // engagement without mutating the latch.
+    // The follower's current latch, or an empty handle when none. Main thread OR
+    // the job worker: both routes are internally locked (the latch's shared_mutex;
+    // APMFBridge's pin-table mutex), and the worker already reads it (Scheduler's
+    // [deadtgt], the "Enemy (gambit target)" cast subject, Actuation::CommandedEnemy)
+    // and writes it (the Attack verb's CommandEx). Exists for the scheduler's retarget
+    // hesitation (GAMBIT_FLAIR #5): a target SWITCH must be distinguishable from a
+    // first engagement without mutating the latch.
     RE::ActorHandle Current(RE::FormID a_follower);
 
     bool IsHooked();

@@ -147,8 +147,13 @@ namespace MFO::Actuation {
     // combat Fire path and the out-of-combat Logistics cast_target path resolve a
     // manual target identically -- a logistics "Cast on target, Target=Ally: Nearest
     // ally" rule fires instead of being silently dropped. Main-thread / worker.
+    // Rung 0 (before the selector): Subject::Caster -> the follower; Subject::Enemy ->
+    // CommandedEnemy, which may be nullptr (no commanded foe): the caller skips the rule.
     RE::Actor* ResolveCastTarget(RE::Actor* a_follower, const Eval::Choice& a_choice,
                                  bool& a_outIsFallbackPlayer);
+    // The "Enemy (gambit target)" subject: the follower's commanded target (Targeting::Current),
+    // alive, enabled and hostile to him, else nullptr. Worker-safe (Targeting::Current is locked).
+    RE::Actor* CommandedEnemy(RE::Actor* a_follower);
 
     // FORCED SELF-CAST — the UNIVERSAL direct trigger (Docs/SPEC-self-cast-forced.md).
     // Fires an authored `act.cast_self` (concentration OR fire-and-forget) as a
@@ -459,6 +464,9 @@ namespace MFO::Actuation {
     // also keeps via the default. It is a HEAL-only narrowing: buffs with no status
     // condition (Candlelight) fan to the whole party regardless.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold = 1.0f);
+    // True (+ one deduped [auto] WARN) when a_spell is SpellNatureUndeclared: an AUTO-target rule with it
+    // never casts, even when a selector named a target (cast/Auto.cpp; Fire, logistics service).
+    bool AutoNatureUndeclared(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
     // SUMMON LIVENESS (v1.1.1). A conjured familiar/atronach or a reanimated corpse
     // is a separate COMMANDED ACTOR, not a caster-side magic effect, so the OOC
@@ -651,6 +659,21 @@ namespace MFO::Actuation {
     // a_seat0 = model APMF seat 0 (STATUS.md:135, :186-188): the claim's driven form keys self=1, so a
     // heal-OTHER claim lands in the Restore row. Used for the HealClaim road only.
     SpellArchetype ClassifyArchetype(RE::SpellItem* a_spell, bool a_seat0 = false);
+    // The board's spell picker (cast/SpellSupport.cpp): true when MFO can cast a_spell only by the
+    // UNANIMATED direct fallback decided from the spell RECORD alone (never the fight situation), so the
+    // picker hides it. *a_reason (optional) gets a static literal. Pure form data: main-thread safe.
+    bool CastRoadUnsupported(RE::SpellItem* a_spell, const char** a_reason = nullptr);
+    // True when the spell's nature (for an enemy / an ally / self) cannot be read from its record: a Buff-kind,
+    // non-placement, non-Self-delivery spell with at least one Script or enemy-control (Calm / Frenzy /
+    // Demoralize / Paralysis / TurnUndead) effect archetype. AUTO does not cast it (cast/Auto.cpp) and the
+    // board marks it. Pure form data.
+    bool SpellNatureUndeclared(RE::SpellItem* a_spell);
+    // The static per-spell cases of ChooseBuffRoad (cast/BuffRoad.cpp), shared so the picker and the road
+    // cannot disagree. Each returns the reason literal, or nullptr when the case does not apply.
+    bool        ExplicitSelfBuff(RE::SpellItem* a_spell);
+    const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch);
+    const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch);
+    const char* BuffSelfRuneWhy(RE::SpellItem* a_spell, bool a_explicitSelf);
     const char* ShapeName(SpellShape a_shape);
     const char* EngineRowName(EngineRow a_row);
     // "<name> (<id>) shape=<s> predicted=<row>[...]" -- the [cfc] enrichment.

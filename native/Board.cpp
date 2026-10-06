@@ -9,7 +9,9 @@
 #include <d3d11.h>
 #include <dxgi.h>
 #include <cmath>
+#include <cctype>
 #include <cstring>
+#include <unordered_set>
 #include <filesystem>
 #undef GetObject
 
@@ -27,6 +29,7 @@
 #include "Followers.h"
 #include "Rapport.h"
 #include "Config.h"
+#include "cast/Actuation.h"   // CastRoadUnsupported: the spell picker hides spells MFO cannot cast animated
 #include "logistics/Logistics.h"   // IsLooting/IsTrading for the [C][L][T] activity glyphs
 #include "Forms.h"
 #include "State.h"
@@ -207,25 +210,53 @@ namespace MFO::Board {
 
     namespace {   // ── the anonymous namespace RESUMES ───────────────────────
 
-        // A concise "what it does" line for a spell, synthesized from its costliest
-        // effect (effect name + magnitude/duration/area). Spells carry no authored
-        // DESC field -- the game composes the magic-menu tooltip from effects -- so
-        // this mirrors that. MAIN-THREAD only (pure form-data reads; called from
-        // PublishSnapshot), cached into the row so the render thread never re-reads.
+        // Replace every <tag> (case-insensitive) in a_text with a_value: the DNAM placeholders the
+        // vanilla magic menu fills (<mag>, <dur>, <area>).
+        inline void ReplaceDescTag(std::string& a_text, std::string_view a_tag, const std::string& a_value) {
+            for (std::size_t i = 0; i + a_tag.size() <= a_text.size();) {
+                bool match = a_text[i] == '<';
+                for (std::size_t k = 0; match && k < a_tag.size(); ++k)
+                    match = std::tolower(static_cast<unsigned char>(a_text[i + k])) == a_tag[k];
+                if (match) { a_text.replace(i, a_tag.size(), a_value); i += a_value.size(); }
+                else ++i;
+            }
+        }
+
+        // The "what it does" text for a spell, composed the way the vanilla magic menu does: for EACH
+        // effect (hide-in-UI effects skipped), the MGEF description (DNAM, EffectSetting::
+        // magicItemDescription) with <mag> / <dur> / <area> filled from the effect item (integers), the
+        // effects joined by newlines. An effect with no description falls back to its name plus numbers
+        // (the previous single-effect text). Spells carry no authored DESC of their own. MAIN-THREAD only
+        // (pure form-data reads; called from PublishSnapshot), cached into the row so the render thread
+        // never re-reads.
         inline std::string SpellTooltip(RE::SpellItem* a_spell) {
             if (!a_spell) return {};
-            auto* eff  = a_spell->GetCostliestEffectItem();
-            auto* mgef = eff ? eff->baseEffect : nullptr;
-            if (!eff || !mgef) return {};
-            std::string s = (mgef->GetFullName() && *mgef->GetFullName()) ? mgef->GetFullName() : "";
-            const int mag  = static_cast<int>(eff->GetMagnitude() + 0.5f);
-            const int dur  = static_cast<int>(eff->effectItem.duration);
-            const int area = static_cast<int>(eff->effectItem.area);
-            if (mag  > 0) { if (!s.empty()) s += ' '; s += std::to_string(mag); }
-            // Display text (i18n keys): this runs on main, the table read is lock-free.
-            if (dur  > 0) { s += " " + Str::Fmt(Str::K::Spell_For, { dur }); }
-            if (area > 0) { s += " " + Str::Fmt(Str::K::Spell_In,  { area }); }
-            return s;
+            std::string out;
+            for (auto* eff : a_spell->effects) {
+                auto* mgef = eff ? eff->baseEffect : nullptr;
+                if (!mgef) continue;
+                if (mgef->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kHideInUI)) continue;
+                const int mag  = static_cast<int>(eff->GetMagnitude() + 0.5f);
+                const int dur  = static_cast<int>(eff->effectItem.duration);
+                const int area = static_cast<int>(eff->effectItem.area);
+                std::string line;
+                if (const char* d = mgef->magicItemDescription.c_str(); d && *d) {
+                    line = d;
+                    ReplaceDescTag(line, "<mag>",  std::to_string(mag));
+                    ReplaceDescTag(line, "<dur>",  std::to_string(dur));
+                    ReplaceDescTag(line, "<area>", std::to_string(area));
+                } else {
+                    line = (mgef->GetFullName() && *mgef->GetFullName()) ? mgef->GetFullName() : "";
+                    if (mag  > 0) { if (!line.empty()) line += ' '; line += std::to_string(mag); }
+                    // Display text (i18n keys): this runs on main, the table read is lock-free.
+                    if (dur  > 0) { line += " " + Str::Fmt(Str::K::Spell_For, { dur }); }
+                    if (area > 0) { line += " " + Str::Fmt(Str::K::Spell_In,  { area }); }
+                }
+                if (line.empty()) continue;
+                if (!out.empty()) out += '\n';
+                out += line;
+            }
+            return out;
         }
 
         // The single-monitor problem: with the full panel open, input is
@@ -1239,6 +1270,9 @@ namespace MFO::Board {
             // (main thread) so the draw call never touches an engine pointer.
             v.subject = g.subjectSelector;
             v.subjectActorForm = g.subjectActorForm;
+            if (g.actionOpcode == Vocab::kActCastTarget && v.spell)
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(v.spell))
+                    v.natureUndeclared = MFO::Actuation::SpellNatureUndeclared(sp);
             if (v.subjectActorForm) {
                 RE::Actor* act = nullptr;
                 if (auto* f = RE::TESForm::LookupByID(v.subjectActorForm)) act = f->As<RE::Actor>();
@@ -1250,8 +1284,15 @@ namespace MFO::Board {
                         v.subjectName = pc->GetName() ? pc->GetName() : Str::Get(Str::K::Gb_SubjPlayer);
                     break;
                 case Vocab::Subject::NearestAlly: v.subjectName = Str::Get(Str::K::Gb_SubjAlly); break;
+                case Vocab::Subject::Enemy:       v.subjectName = Str::Get(Str::K::Gb_SubjEnemy); break;
+                case Vocab::Subject::Caster:      v.subjectName = Str::Get(Str::K::Gb_SubjSelf); break;
                 case Vocab::Subject::Self:
-                default:                          v.subjectName = Str::Get(Str::K::Gb_SubjAuto); break;   // #68: subject 0 = Auto ladder, not self
+                default:
+                    v.subjectName = Str::Get(Str::K::Gb_SubjAuto);   // #68: subject 0 = Auto ladder, not self
+                    // AUTO never casts a spell whose record does not say who it is for (cast/Auto.cpp,
+                    // Fire, logistics): the saved Auto stays, inert and labelled.
+                    if (v.natureUndeclared) v.subjectName = Str::Get(Str::K::Gb_SubjAutoUndeclared);
+                    break;   // #68: subject 0 = Auto ladder, not self
                 }
             }
             a_out.push_back(std::move(v));
@@ -1624,6 +1665,11 @@ namespace MFO::Board {
                 r.logisticsSlots = SlotsForRank(it->second.rank, Table::Logistics);
                 FillRuleViews(r.combat,    it->second.combat());
                 FillRuleViews(r.logistics, it->second.logistics());
+                // Spells an existing rule already names: a now-hidden (unsupported) spell stays in the
+                // picker for such a rule, suffixed, so a saved choice never vanishes from view.
+                std::unordered_set<RE::FormID> ruleSpells;
+                for (const auto* rv : { &r.combat, &r.logistics })
+                    for (const auto& v : *rv) if (v.spell) ruleSpells.insert(v.spell);
                 // The follower's castable spells, for the board's picker. Same
                 // VisitSpells pattern the seed uses. Precompute the tooltip metrics
                 // HERE (main thread): CalculateMagickaCost is the ACTOR overload
@@ -1633,18 +1679,34 @@ namespace MFO::Board {
                 struct SpellList : RE::Actor::ForEachSpellVisitor {
                     std::vector<FollowerRow::SpellPick>* out;
                     RE::Actor*                           follower;
+                    const std::unordered_set<RE::FormID>* inUse = nullptr;
                     RE::BSContainer::ForEachResult Visit(RE::SpellItem* sp) override {
                         if (sp && MFO::Vocab::IsCastableSpell(sp)) {
+                            // Hide a spell MFO can only cast by the unanimated direct fallback (decided from
+                            // the record alone). Picker only: AUTO and casting are untouched.
+                            const char* why = nullptr;
+                            bool unsupported = false;
+                            if (MFO::Actuation::CastRoadUnsupported(sp, &why)) {
+                                static std::unordered_set<RE::FormID> s_logged;   // once per session per spell
+                                if (s_logged.insert(sp->GetFormID()).second)
+                                    spdlog::info("[spell-support] hidden from picker: {} {:08X} -- {}",
+                                                 sp->GetName() ? sp->GetName() : "?", sp->GetFormID(), why ? why : "?");
+                                if (!inUse || !inUse->count(sp->GetFormID())) return RE::BSContainer::ForEachResult::kContinue;
+                                unsupported = true;   // a rule already points at it: keep it, marked
+                            }
                             FollowerRow::SpellPick p;
                             p.id          = sp->GetFormID();
                             p.name        = sp->GetName() ? sp->GetName() : "?";
+                            if (unsupported) p.name += " (unsupported)";
+                            if (MFO::Actuation::SpellNatureUndeclared(sp))
+                                p.name = Str::Fmt(Str::K::Gb_SpellNatureHint, { p.name });   // not hidden: a hint
                             p.magickaCost = follower ? static_cast<int>(sp->CalculateMagickaCost(follower) + 0.5f) : 0;
                             p.tooltip     = SpellTooltip(sp);
                             out->push_back(std::move(p));
                         }
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
-                } vis; vis.out = &r.knownSpells; vis.follower = a;
+                } vis; vis.out = &r.knownSpells; vis.follower = a; vis.inUse = &ruleSpells;
                 a->VisitSpells(vis);
 
                 // #4: teachable spells -- books in the PLAYER's pack whose spell
@@ -1660,6 +1722,7 @@ namespace MFO::Board {
                         auto* sp = book->data.teaches.spell;
                         if (!sp || !MFO::Vocab::IsCastableSpell(sp)) continue;
                         if (a->HasSpell(sp)) continue;   // already known -> not teachable
+                        if (MFO::Actuation::CastRoadUnsupported(sp)) continue;   // hidden from the picker: not teachable through it either
                         r.teachableSpells.push_back({ sp->GetFormID(), book->GetFormID(),
                                                       sp->GetName() ? sp->GetName() : "?",
                                                       static_cast<int>(sp->CalculateMagickaCost(a) + 0.5f),

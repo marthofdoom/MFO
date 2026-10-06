@@ -4,6 +4,7 @@
 // Split out of the old native/Actuation*.cpp by the wave-1 subsystem-folder split
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
+#include <unordered_set>
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
 #include "CastBounds.h"     // Reset the MFO-executed-cast bound beside ConcProxy::Reset()
@@ -308,6 +309,29 @@ namespace MFO::Actuation {
     // cast, touches only actors (follower-agnostic), and needs no animation
     // (deferred project-wide). Friendly fire is structurally impossible: the
     // effect is placed on the CHOSEN actor, never launched as a projectile.
+    // The AUTO gate for a nature-undeclared spell (see CastAuto): true + one deduped [auto] WARN per
+    // (follower, spell). Also read by Fire and the logistics service for an Auto rule a selector named a
+    // target for (marth 2026-10-06: "Auto doesnt even show up for these spells, since it doesnt know what
+    // to auto"): such a rule never casts, whatever its condition picked.
+    bool AutoNatureUndeclared(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !a_spell || !SpellNatureUndeclared(a_spell)) return false;
+        const auto id = a_follower->GetFormID();
+        const auto spellID = a_spell->GetFormID();
+        // once per follower + spell per session. Locked: the callers run on the job worker today (combat
+        // Fire / CastAuto and the logistics service), the lock keeps the set honest if a caller ever moves.
+        static std::mutex                        s_undeclaredMx;
+        static std::unordered_set<std::uint64_t> s_undeclaredLog;
+        bool first = false;
+        {
+            std::scoped_lock lk(s_undeclaredMx);
+            first = s_undeclaredLog.insert((static_cast<std::uint64_t>(id) << 32) | spellID).second;
+        }
+        if (first)
+            spdlog::warn("[auto] {} ({:08X}): nature undeclared in the spell record -- set the rule's target "
+                         "to Enemy, Ally or Self", a_spell->GetName() ? a_spell->GetName() : "?", spellID);
+        return true;
+    }
+
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold) {
             // RUNTIME GATE (Runtime::CastPathsVerified(): exactly 1.6.1170 or 1.5.97, G1, or 1.7.104, F2b)
             // -- mirrors CastOn / CastSelfDirect (the former T#67 SE crash gate; see
@@ -324,6 +348,17 @@ namespace MFO::Actuation {
             const auto id      = a_follower->GetFormID();
             const auto kind    = CasterConsent::ClassifySpell(spell);
             const bool hostile = (kind == CasterConsent::SpellKind::Offense);
+
+            // NATURE UNDECLARED (marth 2026-10-06: "for a spell whose nature can't be read from the record, AUTO
+            // does not cast and asks for a target"). An Apocalypse leech curse (non-hostile effects, Script, Aimed)
+            // classifies as a Buff, and the buff series below put Lamb of Mara on the caster himself. AUTO never
+            // guesses: a transparent NoOp and one loud line per (follower, spell). NEVER a fall back to self. The
+            // rule's TARGET picks who instead (Vocab::Subject): "Enemy (gambit target)" = the follower's commanded
+            // foe (CommandedEnemy, cast/Fire.cpp), "Self" = the caster, an ally by name / Ally: Nearest / the
+            // player. A foe or ally SELECTOR condition also names its target and never reaches AUTO (Fire's
+            // autoPick), so "Foe: undead -> Lamb of Mara" casts at the undead foe the selector chose.
+            if (AutoNatureUndeclared(a_follower, spell))
+                return { Result::NoOp, "auto: spell nature undeclared in its record (pick Enemy, Ally or Self)", true };
 
             // ── AUTO HEAL ON THE ANIMATED CLAIM ROAD: A SERIES OF REAL CASTS ─────
             // (animheal phase 2, 2026-09-30, marth: "lowest-HP eligible recipient

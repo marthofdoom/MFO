@@ -61,7 +61,7 @@ namespace MFO::Board {
     // #68: written into a Gambit's subjectSelector when SetSubjectActor picks
     // a SPECIFIC follower, so a stale subject value from an earlier Self/
     // Player/NearestAlly pick cannot linger and mislead. Deliberately OUTSIDE
-    // Vocab::Subject's real range (0/1/2) -- ResolveCastTarget's switch falls
+    // Vocab::Subject's real range (0..4) -- ResolveCastTarget's switch falls
     // into its `default:` case (Self) if the specific actor ever becomes
     // unavailable, exactly the same graceful demotion an unrecognised value
     // would get anyway.
