@@ -142,6 +142,19 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** SEV-5, no carve-out; a render-side latch masks nothing but is polish.
 - **Fix shape when drained:** none required; if drained, a render-side "respec queued" latch that hides the free label until the next snapshot.
 
+### MFO-B16 — after the MFO armor swap and before the vendor sale, the engine's rating-only auto-equip and `EquipBestOwnedGear` disagree; a worn off-class piece can flip back and forth until sold
+- **Raised:** Fable tier-2 review of `bb77b69` (`fix/mfo-armor-class-score`), SEV-4, PLAUSIBLE.
+- **Finding (verbatim):** `native/Logistics_Economy.cpp:352-376` — `EquipBestOwnedGear` rated branch, every `ServiceFollower` tick (no combat gate on the rated branch). Before this commit MFO's owned-upgrade judge and the engine's auto-equip both ranked by raw rating, so they never fought. Now: a light follower wearing steel (31) who owns leather (26 → 52) gets leather put on by MFO. The engine's own follower auto-equip re-evaluates "best armor" by raw rating on inventory adds (every loot pickup) and on default-outfit re-apply (cell load), and will put the steel back; MFO re-swaps within ≤ N×133 ms. The un-wear the author relies on (redundant-inferior force-sell) only fires inside `EconomyProbe` — a vendor visit. Until then the body slot is contested, event-paced (not per-frame), each flip emitting `[equip] OWNED` + `[armor]` + two `[armor-obs]` lines. Also `FitsCarryWeight` (pre-existing) gates the swap on an owned pick — an over-encumbered follower never gets the light piece worn by MFO and the sale strips him to the engine's choice.
+- **Wave-2 location (2026-09-25, `native/logistics/`):** `EquipBestOwnedGear` is `native/logistics/EquipAuthority.cpp:132` (its rated branch follows).
+- **Reviewer's reasoning (verbatim):** Not a crash, not co-save, converges at the first vendor. The brief said "No engine deny", so this window is a design consequence the brief accepted, not a defect the author could close. It IS what the next field cycle exercises — the `[armor-obs]` probe is precisely the instrument that will measure the flip rate. Read the first deck log for `[armor-obs] ... EQUIP '<heavy>'` lines that are NOT preceded by an MFO `[equip]` line (engine re-wears).
+- **Why it was NOT fixed:** the fix is an engine equip-best deny/steer (new mechanism, principles 1/2) to be sized FROM the probe, not before it (Fable diagnosis 2026-09-14). marth informed.
+- **Fix shape when drained:** measure the flip rate from `[armor-obs]`; if the engine re-wears, either (a) drop/sell the off-class piece without a vendor once a better-scored owned piece is worn, or (b) portal+deny on the engine's equip-best for followers MFO dresses.
+- **Surfaced at edit time from:** MAP.md `EquipBestOwnedGear` / ARMOR CLASS BY SKILL "What breaks".
+
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CONFIRMED -- equip-auth mode=observe-only on the deck (MFO.1 12:40:26.828); SPID outfit re-wear at 12:51:31 and 12:54:02 left Adelinda's Shrouded Cowl (13) over the helmet (18) until 13:52:34 and mage Jesper's off-class Ebony Helmet EQUIP at 12:54:02.454 never unequipped; MFO logged 'left to the APMF equip declaration' 232x/38x. Decision task filed (needs-decision).
+
+- REOPENED 2026-10-06 (Opus spot-check): back to LIVE as "stopgap (a) to build". Its field verdict is the SPID outfit re-wear, the outfit re-apply case the rework keeps on deny. marth: "Task is obsoleted by later task, A is an acceptable stopgap"; stopgap (a), drop or sell the off-class piece without a vendor once a better-scored owned piece is worn, is unbuilt and has no other tracker.
+
 ### MFO-B17 — armor SEV-5 notes from the same review (`bb77b69`)
 - (a) `ArmorClassSuits` (`Logistics_Loot.cpp:303-310`) is now dead code with changed semantics (BASE AV); zero callers. Delete or keep as the named predicate; never re-call on a hot path.
 - (b) The "allocator and wardrobe agree" comment (`Logistics_Loot.cpp:201-210`, `Logistics_internal.h:373-376`) overstates: on an exact skill tie the wardrobe takes the perk vote, `DominantArmorSkill` goes straight to light. Doc fix.
@@ -306,6 +319,16 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** the 1.5.97 pass brief said "cap relaxed — report, do not split". The file was already over the cap on `main` (the dual-wield / combat-pick work of 2026-09-13 took it from ~2480 to 2605); this branch added 17 comment lines.
 - **Fix shape when drained (verbatim):** a dedicated split brief for `Actuation.cpp` — candidates are the weapon equip block (`WeaponRolesFor` `:1677`, `IsOneHandMelee` `:1685`, `PickOffHandWeapon` `:1695`, `EquipLeftHeld` `:1748`, `EquipWeapon` `:1782`, the `g_forcedWeapon` ledger + `ReconcileForcedWeapon`/`CoLoadForcedWeapons`) into an `Actuation_Equip.cpp` next to `Actuation_Direct.cpp`/`Actuation_Hands.cpp`, shared state through `Actuation_internal.h`, as the two earlier splits did. Full adversarial Fable review, one field cycle on 1.6.1170 before the next feature lands on it.
 - **DRAINED by `refactor/subsystem-folders-wave1` (2026-09-24), pending that branch's tier-A review + field cycle.** The dedicated split brief (marth 2026-09-24, "Go with the subsystem folders, tool first") moved the whole Actuation family to `native/cast/` by concern; the equip block this entry names is `cast/Equip.cpp` (`EquipWeapon`, the weapon-style helpers, the `g_forcedWeapon` ledger, `ReconcileForcedWeapon`, the FWPN co-save), largest file `cast/CastOn.cpp` at 1387 lines. The same wave split `APMFBridge.cpp` (the file MFO-B40's addendum asked to include) into `native/apmf/` and `ProgAllocator.cpp` into `native/progression/`. Proof: `tools/splitcheck` function-by-function over the CI builds + `tools/splitcheck/linecheck.py`. Close this entry when that review comes back clean.
+
+### MFO-B39 — `bApmfEquipAuthority` is the first per-feature APMF toggle in the MCM; conflicts with the recorded consolidation plan
+- **Raised:** Fable tier-3 review of `c66dc80` (`feat/mfo-equip-authority`), SEV-5 (F12). marth's call.
+- **Severity:** SEV-5 (policy)
+- **Finding (verbatim):** F12 (bApmfEquipAuthority is the first per-feature APMF toggle in the MCM, conflicts with the recorded consolidation plan — marth call).
+- **Reviewer's reasoning:** memory `mcm-apmf-toggle-consolidation` records the plan to drop per-feature APMF toggles and keep ONE global force-fallback in Debug (default OFF); `bApmfCast`/`bApmfLootTravel`/`bApmfRetreat` are INI-only, this one is exposed in the MCM General tab.
+- **Why it was NOT fixed:** the brief asked for the MCM toggle by name; the consolidation is marth's decision, not a review fix.
+- **Fix shape when drained (verbatim):** either move `bApmfEquipAuthority` to INI-only beside the other three, or fold all four into the planned single Debug-tab fallback switch. The INI key name is frozen either way (MCM-Helper persistence identity).
+
+- REOPENED 2026-10-06 (Opus spot-check): back to LIVE. `g_apmfEquipAuthority` gates the whole ch.17 channel, not only the declaration road (`apmf/Equip.cpp:91,114,196,246`, release in `apmf/Bridge.cpp:1157`), including the outfit re-apply deny that ClickUp 86e3jwmk7 keeps, and that task never mentions the toggle.
 
 ### MFO-B40 — `Actuation.cpp` 2803: the split brief (MFO-B37) should precede the v8 re-mirror
 - **Raised:** Fable tier-3 review of `c66dc80` (`feat/mfo-equip-authority`), SEV-5 hygiene (F13).
@@ -704,19 +727,6 @@ Raised against `db9790c` (`fix/mfo-floor-spells-only`, Opus tier-3 review, nothi
 
 - CLOSED 2026-10-06 (triage): OBSOLETE -- accepted in the entry itself: the ABI-19 no-floor fallback only affects unreleased dev builds d8bb76d..46f4ce1, no release carries ABI 19 (`apmf/Bridge.cpp:54` `kHandBlockFirstAbi=19`, `:739` handles v19 vs the spells-only v20), and marth's spells-only floor ruling replaced the hand-block floor.
 
-### MFO-B16 — after the MFO armor swap and before the vendor sale, the engine's rating-only auto-equip and `EquipBestOwnedGear` disagree; a worn off-class piece can flip back and forth until sold
-- **Raised:** Fable tier-2 review of `bb77b69` (`fix/mfo-armor-class-score`), SEV-4, PLAUSIBLE.
-- **Finding (verbatim):** `native/Logistics_Economy.cpp:352-376` — `EquipBestOwnedGear` rated branch, every `ServiceFollower` tick (no combat gate on the rated branch). Before this commit MFO's owned-upgrade judge and the engine's auto-equip both ranked by raw rating, so they never fought. Now: a light follower wearing steel (31) who owns leather (26 → 52) gets leather put on by MFO. The engine's own follower auto-equip re-evaluates "best armor" by raw rating on inventory adds (every loot pickup) and on default-outfit re-apply (cell load), and will put the steel back; MFO re-swaps within ≤ N×133 ms. The un-wear the author relies on (redundant-inferior force-sell) only fires inside `EconomyProbe` — a vendor visit. Until then the body slot is contested, event-paced (not per-frame), each flip emitting `[equip] OWNED` + `[armor]` + two `[armor-obs]` lines. Also `FitsCarryWeight` (pre-existing) gates the swap on an owned pick — an over-encumbered follower never gets the light piece worn by MFO and the sale strips him to the engine's choice.
-- **Wave-2 location (2026-09-25, `native/logistics/`):** `EquipBestOwnedGear` is `native/logistics/EquipAuthority.cpp:132` (its rated branch follows).
-- **Reviewer's reasoning (verbatim):** Not a crash, not co-save, converges at the first vendor. The brief said "No engine deny", so this window is a design consequence the brief accepted, not a defect the author could close. It IS what the next field cycle exercises — the `[armor-obs]` probe is precisely the instrument that will measure the flip rate. Read the first deck log for `[armor-obs] ... EQUIP '<heavy>'` lines that are NOT preceded by an MFO `[equip]` line (engine re-wears).
-- **Why it was NOT fixed:** the fix is an engine equip-best deny/steer (new mechanism, principles 1/2) to be sized FROM the probe, not before it (Fable diagnosis 2026-09-14). marth informed.
-- **Fix shape when drained:** measure the flip rate from `[armor-obs]`; if the engine re-wears, either (a) drop/sell the off-class piece without a vendor once a better-scored owned piece is worn, or (b) portal+deny on the engine's equip-best for followers MFO dresses.
-- **Surfaced at edit time from:** MAP.md `EquipBestOwnedGear` / ARMOR CLASS BY SKILL "What breaks".
-
-- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CONFIRMED -- equip-auth mode=observe-only on the deck (MFO.1 12:40:26.828); SPID outfit re-wear at 12:51:31 and 12:54:02 left Adelinda's Shrouded Cowl (13) over the helmet (18) until 13:52:34 and mage Jesper's off-class Ebony Helmet EQUIP at 12:54:02.454 never unequipped; MFO logged 'left to the APMF equip declaration' 232x/38x. Decision task filed (needs-decision).
-
-- CLOSED 2026-10-06 (triage): SUPERSEDED by ClickUp 86e3jwmk7 -- marth's ruling on 86e39411u (2026-10-06): "Task is obsoleted by later task, A is an acceptable stopgap". The weighting rework replaces the engine-equip-best fight this entry records (the duplicate task 86e3m3v2n is closed with that ruling); the stopgap is fix shape (a), drop or sell the off-class piece without a vendor.
-
 ### MFO-B38 — "one judge" holds for the RATED armor branch only; mage-mode may stock a piece legacy wore
 - **Raised:** Fable tier-3 review of `c66dc80` (`feat/mfo-equip-authority`), SEV-4 (F11).
 - **Severity:** SEV-4
@@ -726,16 +736,6 @@ Raised against `db9790c` (`fix/mfo-floor-spells-only`, Opus tier-3 review, nothi
 - **Fix shape when drained (verbatim):** carry the mage branch's thrash guard into the declaration (only declare the mage pick when EquipBestOwnedGear's guard would have let it through), or drop the guard from legacy so both roads agree.
 
 - CLOSED 2026-10-06 (triage): SUPERSEDED by ClickUp 86e3jwmk7 -- mismatch between the legacy mage-apparel equip's thrash guard and the SetEquipSet declaration (`logistics/EquipAuthority.cpp` `RefreshEquipDeclaration`); the rework retires the deny+declaration road ("most of the declaration path") and biases the engine's own equip scoring instead.
-
-### MFO-B39 — `bApmfEquipAuthority` is the first per-feature APMF toggle in the MCM; conflicts with the recorded consolidation plan
-- **Raised:** Fable tier-3 review of `c66dc80` (`feat/mfo-equip-authority`), SEV-5 (F12). marth's call.
-- **Severity:** SEV-5 (policy)
-- **Finding (verbatim):** F12 (bApmfEquipAuthority is the first per-feature APMF toggle in the MCM, conflicts with the recorded consolidation plan — marth call).
-- **Reviewer's reasoning:** memory `mcm-apmf-toggle-consolidation` records the plan to drop per-feature APMF toggles and keep ONE global force-fallback in Debug (default OFF); `bApmfCast`/`bApmfLootTravel`/`bApmfRetreat` are INI-only, this one is exposed in the MCM General tab.
-- **Why it was NOT fixed:** the brief asked for the MCM toggle by name; the consolidation is marth's decision, not a review fix.
-- **Fix shape when drained (verbatim):** either move `bApmfEquipAuthority` to INI-only beside the other three, or fold all four into the planned single Debug-tab fallback switch. The INI key name is frozen either way (MCM-Helper persistence identity).
-
-- CLOSED 2026-10-06 (triage): SUPERSEDED by ClickUp 86e3jwmk7 -- policy question about the MCM toggle that enables the declaration road (`bApmfEquipAuthority`, `Config.h:326`). The rework retires that road, so the toggle's fate (INI-only, folded into one Debug fallback, or removed) is decided there. The INI key name stays frozen either way.
 
 ### MFO-B136 (SEV-4) -- mage apparel set: a piece that can never stay worn is re-sent every 3 s
 Raised against cc4e895 (`fix/mfo-museum-priority`, narrow final check), 2026-09-28. Reviewer's finding (verbatim from `agentlogs/review-mfo-museum-priority.md`, narrow check, (1)): "a piece that can never stay worn loops. If a script unequips it or the engine keeps stripping it, the MFO-B63 check re-sends every 3 s indefinitely. Main's single pick had the same behaviour; the set extends it to up to 6 slots at once. For Jesper this means strip, then re-dress every ~5 s, which is the \"a strip must not change the set\" intent." Reasoning: `MageBestPerSlot` declares by ownership, not by what is worn, so the MFO-B63 drift re-send re-dresses any stripped set piece. Pre-existing shape, widened. Surfaced at edit time from: MAP.md §7 equip authority.
