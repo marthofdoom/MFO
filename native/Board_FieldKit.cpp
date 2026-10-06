@@ -457,7 +457,7 @@ namespace MFO::Board {
                             ImGui::TableNextColumn();
                             ImGui::PushID(static_cast<int>(r.id));
                             bool en = r.mfoEnabled;
-                            if (ImGui::Checkbox("##mfo", &en))
+                            if (Click::Checkbox("##mfo", &en))
                                 QueueEdit({ EditKind::SetMfoEnabled, r.id, 0, 0u,
                                             en ? 1.0f : 0.0f });
                             if (ImGui::IsItemHovered())
@@ -597,7 +597,7 @@ namespace MFO::Board {
                         // ── PARTY CONTEXT BAR ───────────────────────────
                         ImGui::AlignTextToFramePadding();
                         ImGui::BeginDisabled(party.size() < 2);
-                        if (ImGui::SmallButton("<##prevf")) switchFollower(-1);
+                        if (Click::SmallButton("<##prevf")) switchFollower(-1);
                         ImGui::EndDisabled();
                         ImGui::SameLine();
                         ImGui::PushFont(g_fontHead);
@@ -617,11 +617,11 @@ namespace MFO::Board {
                         {
                             const int curClass = std::clamp<int>(who->combatClassOverride, 0, 3);
                             std::string cl = Str::Fmt(Str::K::Gb_ClassBtn, { ClassName(curClass) }) + "###classbtn";
-                            if (ImGui::SmallButton(cl.c_str())) ImGui::OpenPopup("##class");
+                            if (Click::SmallButton(cl.c_str())) ImGui::OpenPopup("##class");
                         }
                         ImGui::SameLine();
                         ImGui::BeginDisabled(party.size() < 2);
-                        if (ImGui::SmallButton(">##nextf")) switchFollower(+1);
+                        if (Click::SmallButton(">##nextf")) switchFollower(+1);
                         ImGui::EndDisabled();
                         ImGui::SameLine();
                         ImGui::TextDisabled("  %s", Str::Get(Str::K::Gb_SwitchHint));
@@ -639,9 +639,9 @@ namespace MFO::Board {
 
                         // Combat / Logistics PAGE selector (FFXII flips pages the
                         // same way). Segmented radios, not a dropdown.
-                        if (ImGui::RadioButton(Str::Label(Str::K::Gb_PageCombat, "pgcombat"), combat)) selTable = 0;
+                        if (Click::RadioButton(Str::Label(Str::K::Gb_PageCombat, "pgcombat"), combat)) selTable = 0;
                         ImGui::SameLine();
-                        if (ImGui::RadioButton(Str::Label(Str::K::Gb_PageLogistics, "pglogi"), !combat)) selTable = 1;
+                        if (Click::RadioButton(Str::Label(Str::K::Gb_PageLogistics, "pglogi"), !combat)) selTable = 1;
                         ImGui::SameLine();
                         ImGui::TextDisabled("%s", Str::Fmt(Str::K::Gb_SlotsUsed, { (int)rules.size(), slots }).c_str());
                         ImGui::Separator();
@@ -674,7 +674,7 @@ namespace MFO::Board {
                                 for (int k = 0; k < count; ++k) {
                                     const bool cur = (k == current);
                                     ImGui::PushID(k);
-                                    if (ImGui::Selectable(labelAt(k), cur)) {
+                                    if (Click::Selectable(labelAt(k), cur)) {
                                         onPick(k);
                                         ImGui::CloseCurrentPopup();
                                     }
@@ -818,7 +818,7 @@ namespace MFO::Board {
                                 // ON / OFF toggle
                                 ImGui::TableNextColumn();
                                 bool en = rv.enabled;
-                                if (ImGui::Checkbox("##en", &en))
+                                if (Click::Checkbox("##en", &en))
                                     QueueEdit({ EditKind::Toggle, sel, selTable, rv.uid, 0 });
                                 track();
 
@@ -828,7 +828,7 @@ namespace MFO::Board {
                                     std::string cl = Str::Fmt(Str::K::Gb_WhenRow,
                                                               { labelFor(rv.condOp, condTab, condN) });
                                     ImGui::PushStyleColor(ImGuiCol_Text, skin.accent);
-                                    const bool clicked = ImGui::Selectable(cl.c_str());
+                                    const bool clicked = Click::Selectable(cl.c_str());
                                     ImGui::PopStyleColor();
                                     if (clicked) ImGui::OpenPopup("##cond");
                                     track();
@@ -882,7 +882,7 @@ namespace MFO::Board {
                                         ImGui::TextDisabled("-");
                                     } else {
                                         const std::string vs = ValueText(pk, rv.param);
-                                        if (ImGui::Selectable(vs.c_str())) ImGui::OpenPopup("##val");
+                                        if (Click::Selectable(vs.c_str())) ImGui::OpenPopup("##val");
                                         track();
 
                                         std::vector<std::pair<float, std::string>> pv;
@@ -922,7 +922,7 @@ namespace MFO::Board {
                                     const bool wait = (rv.actOp == Vocab::kActWait);
                                     if (wait) ImGui::PushStyleColor(ImGuiCol_Text,
                                         ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-                                    const bool clicked = ImGui::Selectable(al.c_str());
+                                    const bool clicked = Click::Selectable(al.c_str());
                                     if (wait) ImGui::PopStyleColor();
                                     if (clicked) ImGui::OpenPopup("##act");
                                     track();
@@ -992,7 +992,7 @@ namespace MFO::Board {
                                     } else {
                                         const char* cur = rv.spellName.empty()
                                                           ? Str::Get(Str::K::Gb_PickSpell) : rv.spellName.c_str();
-                                        if (ImGui::Selectable(cur)) ImGui::OpenPopup("##spell");
+                                        if (Click::Selectable(cur)) ImGui::OpenPopup("##spell");
                                         track();
                                         if (!rv.fail.empty() && ImGui::IsItemHovered())
                                             ImGui::SetTooltip("%s", Str::Fmt(Str::K::Gb_LastFail, { rv.fail }).c_str());
@@ -1024,7 +1024,7 @@ namespace MFO::Board {
                                                 const auto& sp = who->knownSpells[k];
                                                 const bool curSel = sp.id == rv.spell;
                                                 ImGui::PushID((int)sp.id);   // dup names -> unique IDs
-                                                if (ImGui::Selectable(sp.name.c_str(), curSel)) {
+                                                if (Click::Selectable(sp.name.c_str(), curSel)) {
                                                     EditCmd e{ EditKind::SetSpell, sel, selTable, rv.uid, 0 };
                                                     e.spell = sp.id;
                                                     QueueEdit(e);
@@ -1046,7 +1046,7 @@ namespace MFO::Board {
                                                         ? Str::Fmt(Str::K::Gb_TeachArmed, { t.name })
                                                         : Str::Fmt(Str::K::Gb_Spellbook, { t.name });
                                                     ImGui::PushID((int)t.book);   // dup names -> unique IDs
-                                                    if (ImGui::Selectable(lbl.c_str(), false,
+                                                    if (Click::Selectable(lbl.c_str(), false,
                                                                           ImGuiSelectableFlags_DontClosePopups)) {
                                                         if (armed) {
                                                             EditCmd e{ EditKind::TeachSpell, sel, selTable, rv.uid, 0 };
@@ -1080,7 +1080,7 @@ namespace MFO::Board {
                                     } else {
                                         const char* cur = rv.subjectName.empty()
                                                           ? Str::Get(Str::K::Gb_SubjAuto) : rv.subjectName.c_str();
-                                        if (ImGui::Selectable(cur)) ImGui::OpenPopup("##target");
+                                        if (Click::Selectable(cur)) ImGui::OpenPopup("##target");
                                         track();
 
                                         // Option list, rebuilt fresh each frame the
@@ -1136,15 +1136,17 @@ namespace MFO::Board {
                                 // REORDER / DELETE (kept on buttons so reorder does
                                 // not fight the shoulder party-switch, per spec).
                                 ImGui::TableNextColumn();
-                                if (ImGui::SmallButton(Str::Label(Str::K::Gb_Up, "up"))) QueueEdit({ EditKind::MoveUp, sel, selTable, rv.uid, 0 });
+                                if (Click::SmallButton(Str::Label(Str::K::Gb_Up, "up"))) QueueEdit({ EditKind::MoveUp, sel, selTable, rv.uid, 0 });
                                 track();
                                 ImGui::SameLine();
-                                if (ImGui::SmallButton(Str::Label(Str::K::Gb_Down, "dn"))) QueueEdit({ EditKind::MoveDown, sel, selTable, rv.uid, 0 });
+                                if (Click::SmallButton(Str::Label(Str::K::Gb_Down, "dn"))) QueueEdit({ EditKind::MoveDown, sel, selTable, rv.uid, 0 });
                                 track();
                                 ImGui::SameLine();
                                 static std::uint32_t s_armed = 0;
                                 const bool armed = (s_armed == rv.uid);
                                 if (armed) ImGui::PushStyleColor(ImGuiCol_Button, skin.danger);
+                                // Delete (and its armed confirm) stays on stock ImGui on purpose: sliding off
+                                // before release must still abort a destructive action.
                                 if (ImGui::SmallButton(Str::Label(armed ? Str::K::Gb_DelSure : Str::K::Gb_Del,
                                                                    armed ? "delarmed" : "del"))) {
                                     if (armed) { QueueEdit({ EditKind::Del, sel, selTable, rv.uid, 0 }); s_armed = 0; }
@@ -1212,7 +1214,7 @@ namespace MFO::Board {
 
                         const bool full = (int)rules.size() >= slots;
                         ImGui::BeginDisabled(full);
-                        if (ImGui::Button(Str::Label(Str::K::Gb_AddRule, "addrule")))
+                        if (Click::Button(Str::Label(Str::K::Gb_AddRule, "addrule")))
                             QueueEdit({ EditKind::Add, sel, selTable, 0u, 0 });
                         ImGui::EndDisabled();
                         if (full) { ImGui::SameLine();

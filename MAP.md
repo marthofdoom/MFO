@@ -4827,6 +4827,7 @@ its perk/AV mutations are runtime-only. Safe to delete without touching saves; o
 Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
 funnels all rule edits through a main-thread-drained edit queue. **ImGui/
+**Press-latched clicks:** `Board_Click.cpp` (+ `Click::` decls in `Board_internal.h`): press-latched replacements for every ImGui click widget the board uses (Button/SmallButton/Selectable/Checkbox/RadioButton/InvisibleButton). The raw-delta cursor (`Board.cpp` kMouseMove) drifts between press and release, so a release off the item used to lose the click; a new clickable in Board_*.cpp must call `Click::X`, not `ImGui::X`. Nav (gamepad) passes through ImGui's own return. Destructive confirms (respec Confirm `prespecok`, armed Delete `delarmed`) stay on stock `ImGui::` so sliding off still aborts. Open findings: Docs/REVIEW-BACKLOG.md MFO-B228.
 `imgui_impl_win32` = vendored, do not read.**
 - **DISPLAY TEXT is i18n keys (2026-10-01):** no wording a player reads lives in the three Board TUs (only symbols and the MFO brand stay literal)
   as a literal any more. See the `native/i18n/` entry (section 6, below this one): `Str::Get/Fmt/Label`, `VocabEntry.key`,
