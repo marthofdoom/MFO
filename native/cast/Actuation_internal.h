@@ -592,15 +592,22 @@ namespace MFO::Actuation {
         };
         HealRepair HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell);
         // HealPendingHoldsOffense (fix/mfo-heal-starve-retreat, P1): is a STRICTLY HIGHER-RANKED
-        // heal claim (lower rule index than a_askerRule) standing on the LEFT hand PENDING, i.e.
-        // not in flight on the hand and not observed firing since its claim stamp, and younger
-        // than kHoldLastSeenCapMs? Then a lower-ranked OFFENSE rule must not take the other
+        // heal claim (lower rule index than a_askerRule) standing on the LEFT hand and not yet
+        // observed firing since its claim stamp (pending OR charging; a concentration channel
+        // holds too)? No age cap (2026-10-06): it ends on the observed fire or the claim's
+        // release. Then a lower-ranked OFFENSE rule must not take the other
         // hand or pin a foe (that drops Bridge.cpp's idle-hand floor, and the engine then
         // sat on the heal for ~10 s, field 2026-10-01). Derived from the lock + claim + watch,
         // no state of its own and no timer: the bound is the existing claim-age cap, past
-        // which the kNeverFired WARN is the loud signal and offense resumes. Logs `[heal-hold]`
-        // once per claim. Worker-serial (#4).
+        // the claim's own never-fired bound releases it and offense resumes. Logs `[heal-hold]`
+        // once per claim and once for the exit. Worker-serial (#4).
         bool HealPendingHoldsOffense(RE::Actor* a_follower, int a_askerRule, RE::FormID a_askerSpell);
+        // fix/mfo-heal-hold-until-fire (cast/HealRoad.cpp): the hold's two helpers. HealHoldLapsed logs
+        // ONE `[heal-hold]` line naming why a live hold ended (no-op when none is live) and clears
+        // g_healHoldLog's entry. HealHoldChannelRuns: a CONCENTRATION heal still in flight on the left
+        // hand (the hold outlasts its first fire so offense cannot interrupt the channel).
+        void HealHoldLapsed(RE::FormID a_follower, const char* a_why);
+        bool HealHoldChannelRuns(RE::Actor* a_follower, RE::FormID a_spell, RE::FormID a_proxy);
 
         // ── THE PER-HAND HEAL ROAD (feat/mfo-perhand-heal, cast/HealRoad.cpp) ──────────
         // marth 2026-09-30: "One per follower is fine for this, the other hand would be for

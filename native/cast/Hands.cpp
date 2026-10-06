@@ -1000,14 +1000,22 @@ namespace MFO::Actuation {
             return false;
         const auto& lk = it->second.hand[kHandLeft];
         if (lk.spell == 0 || lk.owningRule == kNoRule || lk.owningRule >= a_askerRule) return false;
-        if (APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft) != lk.spell) return false;   // not a standing LEFT HEAL claim
+        if (APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft) != lk.spell) {   // not a standing LEFT HEAL claim
+            HealHoldLapsed(fid, "the heal claim was released (expiry, never-fired bound, preempt or combat end; see the [heal] / [heal-hand] line)");
+            return false;
+        }
+        // HOLD THROUGH THE IN-FLIGHT PHASE (field 2026-10-06, marth: the other hand stays off offense
+        // until the heal is observed firing). No age cap and no in-flight exit: the exits are an
+        // observed fire on this hand since the claim (a concentration heal keeps the hold while its
+        // channel runs) or the claim's release, which the never-fired bound also ends.
         const auto age = std::chrono::steady_clock::now() - lk.lastSeen;
-        if (age >= std::chrono::milliseconds(APMFBridge::kHoldLastSeenCapMs)) return false;   // capped: kNeverFired WARN speaks
-        if (CastInFlightOnHand(a_follower, kHandLeft, lk.spell, CastProxyOnHand(fid, kHandLeft))) return false;   // running
         const auto sinceClaim = std::chrono::duration_cast<std::chrono::milliseconds>(age);
         if (ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, lk.spell,
-                                         static_cast<std::uint32_t>(sinceClaim.count())))
-            return false;   // fired since this claim: normal behaviour resumes
+                                         static_cast<std::uint32_t>(sinceClaim.count())) &&
+            !HealHoldChannelRuns(a_follower, lk.spell, CastProxyOnHand(fid, kHandLeft))) {
+            HealHoldLapsed(fid, "the heal was observed firing");   // normal behaviour resumes
+            return false;
+        }
         // The held rule's own idle right-hand claim is released THIS lap, so the idle-hand floor
         // engages (otherwise the FacetExpiry sweep, ~2.8 s, eats the 4 s hold).
         bool released = false;
@@ -1021,7 +1029,7 @@ namespace MFO::Actuation {
         if (e.first != lk.spell || e.second != lk.lastSeen) {
             e = { lk.spell, lk.lastSeen };
             spdlog::info("[heal-hold] {:08X} rule {} held off: heal claim pending (rule {}, spell {:08X}, "
-                         "not yet fired or charging){}",
+                         "not yet fired, charging or channelling){}",
                          fid, a_askerRule, lk.owningRule, lk.spell,
                          released ? "; its own idle right-hand claim was released so the floor engages" : "");
         } else if (released) {

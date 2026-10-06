@@ -891,10 +891,9 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   * **HEAL PENDING HOLDS OFFENSE (`fix/mfo-heal-starve-retreat`, P1, field 2026-10-01, MFO-B196 is the same-hand rank-inversion sibling; MFO-B216/B217 are the deferred P3/bleed items; B220-B222 the review's deferred findings).**
     `HealPendingHoldsOffense` (`cast/Hands.cpp:975`, declared `cast/Actuation_internal.h`; exempts the asker only while ITS OWN right-hand cast RUNS, and releases the held rule's idle right-hand claim that lap) is asked by `CastOn` for an
     OFFENSE spell right after the unsighted-charge block (`cast/CastOn.cpp:459`), before the hand plan: a STRICTLY
-    higher-ranked (lower index) heal claim on the LEFT lock that is not in flight, not observed firing since its
-    stamp, and younger than `kHoldLastSeenCapMs` makes the offense rule a transparent NoOp, so no right-hand claim and no
-    ch.6/ch.20 pin, and `apmf/Bridge.cpp:787`'s IDLE-HAND FLOOR stays. No state of its own, no timer (the bound is the
-    existing claim-age cap, past which the kNeverFired WARN speaks). An offense rule already holding the right hand
+    higher-ranked (lower index) heal claim on the LEFT lock that is not yet observed firing since its
+    stamp (pending OR charging; no age cap, field 2026-10-06; a concentration heal keeps the hold while its channel runs, `HealHoldChannelRuns`) makes the offense rule a transparent NoOp, so no right-hand claim and no
+    ch.6/ch.20 pin, and `apmf/Bridge.cpp:787`'s IDLE-HAND FLOOR stays. No state of its own, no timer (the exits are the observed fire or the claim's release, incl. the never-fired bound; `HealHoldLapsed` in `cast/HealRoad.cpp` logs `[heal-hold] ... hold ENDED` once). An offense rule already holding the right hand
     with its own spell is never held (its refresh must not starve). `[heal-hold]` logs once per claim
     (`g_healHoldLog`, cleared by `ClearCastLocks`). Lowers the F9 "an offense rule below gets its lap" text above for the pending case only.
   * **Telling "P1 worked" from "P1 starved offense" (MFO-B221):** re-mints restamp the lock's `lastSeen`, so the 4 s hold can re-arm per claim. In the field, `[heal-hold]` once per claim and a prompt `FIRED type=Restore` = worked. Repeated `[heal-hold]` lines with the `[cfc] kNeverFired` WARN and no fire = offense is starved by a heal that never starts (the WARN stays the loud signal).

@@ -421,7 +421,21 @@ namespace MFO::Actuation {
         return r.any;
     }
 
+    void HealHoldLapsed(RE::FormID a_follower, const char* a_why) {
+        const auto it = g_healHoldLog.find(a_follower);
+        if (it == g_healHoldLog.end()) return;   // no hold was announced: nothing lapsed
+        spdlog::info("[heal-hold] {:08X} hold ENDED: {} (heal {:08X})", a_follower, a_why, it->second.first);
+        g_healHoldLog.erase(it);
+    }
+
+    bool HealHoldChannelRuns(RE::Actor* a_follower, RE::FormID a_spell, RE::FormID a_proxy) {
+        const auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spell);
+        return sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+               CastInFlightOnHand(a_follower, kHandLeft, a_spell, a_proxy);
+    }
+
     void HealHandEnded(RE::FormID a_follower, std::size_t a_hand, const char* a_why) {
+        if (a_hand == kHandLeft) HealHoldLapsed(a_follower, a_why);
         APMFBridge::ReleaseHealApproach(a_follower, "the hand's heal claim ended", a_hand);   // ch.24
         const auto it = g_healHands.find(a_follower);
         if (it == g_healHands.end() || a_hand >= kHandCount) return;
