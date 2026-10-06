@@ -105,7 +105,7 @@ namespace MFO::Actuation {
     // tick; returns the bitmask (1 << hand) of heals still standing. ReleaseUnheldCastHands: Scheduler's
     // "no cast rule held" release for the hands NOT in that mask. HealHandsCombatEnded: closes every heal
     // record at combat end ([heal-hold] ... combat-ended). Worker-serial (#4).
-    unsigned HealSustainLap(RE::Actor* a_follower);
+    unsigned HealSustainLap(RE::Actor* a_follower, const std::vector<int>& a_matchedRules);
     void ReleaseUnheldCastHands(RE::FormID a_follower, unsigned a_keepMask);
     void HealHandsCombatEnded(RE::FormID a_follower);
     // Does a heal stand on a_hand (a live claim, or the re-stream gap's lock)? The ch.24 approach

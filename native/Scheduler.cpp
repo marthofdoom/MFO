@@ -1474,6 +1474,7 @@ namespace MFO::Scheduler {
         const bool windowActive = inWindow && firedRuleNow >= 0;
 
         bool castSeen   = false;   // H3: some cast rule's condition held this tick
+        std::vector<int> matchedCast;   // the cast rules whose condition held this tick (incl. suppressed / cannot-act): HealSustainLap's "the rule is still asking"
         int  handClaim  = 0;       // H2: 0 = none, 1 = melee, 2 = ranged
         int  wantStance = 0;       // combat-style ownership: the equip stance that won
         // T#76: the equip gambit's CONDITION held this tick (0=none,1=melee,
@@ -1517,7 +1518,7 @@ namespace MFO::Scheduler {
             // still tried first (transparent ones fall through as usual), so a
             // dying follower's rule-1 heal preempts exactly as before.
             if (windowActive && choice.ruleIndex >= firedRuleNow) {
-                if (isCast) castSeen = true;   // its condition held: keep the loan (H3)
+                if (isCast) { castSeen = true; matchedCast.push_back(choice.ruleIndex); }   // its condition held: keep the loan (H3)
                 // T#76: same shape for the equip force-hold -- the equip rule's
                 // condition held this tick (that is why Evaluate returned it),
                 // the scan just stopped at it inside its own suppression window.
@@ -1550,7 +1551,7 @@ namespace MFO::Scheduler {
             // now fires, waits out its grace, sits debounced, or fails (the
             // failure paths self-release internally). Only a tick where NO
             // cast condition held releases the loan, after the loop.
-            if (isCast) castSeen = true;
+            if (isCast) { castSeen = true; matchedCast.push_back(choice.ruleIndex); }
 
             // HE CANNOT ACT (fix/mfo-can-act): bleeding out, down, knocked down,
             // paralysed or in a kill move. The rule is passed over TRANSPARENTLY and
@@ -1871,7 +1872,7 @@ namespace MFO::Scheduler {
         // and their AI cannot cast what they are not holding either way.
         // HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (ClickUp 86e3m36qr): a standing heal no rule asked for
         // this tick is kept and driven on by HealSustainLap; its hand(s) are exempt from the release below.
-        const unsigned healHeld = Actuation::HealSustainLap(f);
+        const unsigned healHeld = Actuation::HealSustainLap(f, matchedCast);
         if (!castSeen) {
             if (healHeld == 0) Loadout::ReleaseSpell(id);   // a held heal's spell stays in hand
             // Crisp release of the APMF offense-cast facet-CLAIM (per-cast, ch.8b

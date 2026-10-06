@@ -782,7 +782,7 @@ namespace MFO::Actuation {
     // Scheduler::Tick, on the worker, before its "no cast rule held" release; the cadence is the rule's own
     // lap cadence (principle 9: nothing new is sized). Returns the bitmask (1 << hand) of the hands whose
     // heal still stands after the lap, so the caller does not release them with the rest.
-    unsigned HealSustainLap(RE::Actor* a_follower) {
+    unsigned HealSustainLap(RE::Actor* a_follower, const std::vector<int>& a_matchedRules) {
         if (!a_follower) return 0;
         const auto fid = a_follower->GetFormID();
         std::vector<RE::FormID> asked;
@@ -799,12 +799,15 @@ namespace MFO::Actuation {
             const HealHand hh = it->second.hand[h];   // a copy: the replay below may erase the record
             if (!hh.active) continue;
             if (std::find(asked.begin(), asked.end(), hh.spell) != asked.end()) continue;   // the rule is asking
-            const auto ah = ApmfHand(h);
-            if (APMFBridge::GetHealCastSpell(fid, ah) != hh.spell) continue;                 // no live claim
+            // A live claim, OR the lock in its re-stream gap (a stream-cap or un-taught-proxy release keeps
+            // the lock; the replay below re-claims it): HealOnHand answers both.
+            if (const auto standing = HealOnHand(fid, h); !standing.found || standing.spell != hh.spell) continue;
             const auto lit = g_castLock.find(fid);
             if (lit == g_castLock.end()) continue;
             const auto& lk = lit->second.hand[h];
             if (lk.spell != hh.spell || lk.owningRule == kNoRule) continue;
+            // The owning rule's condition held this tick (suppression window, cannot-act): it IS asking.
+            if (std::find(a_matchedRules.begin(), a_matchedRules.end(), lk.owningRule) != a_matchedRules.end()) continue;
             auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(hh.spell);
             RE::Actor* rcp = hh.recipient == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(hh.recipient);
             if (!sp) continue;
@@ -835,7 +838,7 @@ namespace MFO::Actuation {
                 Scope scope(lk.owningRule);
                 (void)CastOn(a_follower, hh.spell, rcp, /*a_rangeGate=*/false);
             }
-            if (APMFBridge::GetHealCastSpell(fid, ah) == hh.spell) mask |= 1u << h;
+            if (const auto after = HealOnHand(fid, h); after.found && after.spell == hh.spell) mask |= 1u << h;
         }
         return mask;
     }
