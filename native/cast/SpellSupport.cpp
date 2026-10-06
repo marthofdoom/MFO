@@ -81,4 +81,15 @@ namespace MFO::Actuation {
         return false;
     }
 
+    // A Buff-kind, non-placement spell delivered to Self (Inferno / Apocalypse: archetype Script, Self,
+    // non-hostile). Its effect lands on the caster, so a rule that aims it at a foe is a mis-set target
+    // (CastOn refuses it; the board does not offer "Enemy (gambit target)" for it). Disjoint from
+    // SpellNatureUndeclared, which requires a non-Self delivery. Pure form data: any thread.
+    bool SelfDeliveredBuff(RE::SpellItem* a_spell) {
+        if (!a_spell || a_spell->effects.empty()) return false;
+        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff) return false;
+        if (BuffPlacementSpell(a_spell)) return false;
+        return a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+    }
+
 }

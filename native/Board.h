@@ -37,6 +37,9 @@ namespace MFO::Board {
         // A cast_target row whose spell is Actuation::SpellNatureUndeclared (main thread, FillRuleViews):
         // the TARGET popup does not offer Auto for it (marth 2026-10-06).
         bool         natureUndeclared = false;
+        // A cast_target row whose spell is Actuation::SelfDeliveredBuff: no "Enemy (gambit target)" pick (CastOn
+        // refuses such a spell at a foe).
+        bool         selfDeliveredBuff = false;
         bool        enabled = true;
         bool        lastFired = false;
         std::string fail;

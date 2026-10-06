@@ -1272,7 +1272,10 @@ namespace MFO::Board {
             v.subjectActorForm = g.subjectActorForm;
             if (g.actionOpcode == Vocab::kActCastTarget && v.spell)
                 if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(v.spell))
+                {
                     v.natureUndeclared = MFO::Actuation::SpellNatureUndeclared(sp);
+                    v.selfDeliveredBuff = MFO::Actuation::SelfDeliveredBuff(sp);
+                }
             if (v.subjectActorForm) {
                 RE::Actor* act = nullptr;
                 if (auto* f = RE::TESForm::LookupByID(v.subjectActorForm)) act = f->As<RE::Actor>();

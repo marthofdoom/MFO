@@ -676,6 +676,9 @@ namespace MFO::Actuation {
     // Demoralize / Paralysis / TurnUndead) effect archetype. AUTO does not cast it (cast/Auto.cpp) and the
     // board marks it. Pure form data.
     bool SpellNatureUndeclared(RE::SpellItem* a_spell);
+    // True for a Buff-kind, non-placement, Self-delivery spell (Inferno). CastOn refuses it at a hostile
+    // recipient; the board's TARGET picker does not offer "Enemy (gambit target)" for it. Pure form data.
+    bool SelfDeliveredBuff(RE::SpellItem* a_spell);
     // The static per-spell cases of ChooseBuffRoad (cast/BuffRoad.cpp), shared so the picker and the road
     // cannot disagree. Each returns the reason literal, or nullptr when the case does not apply.
     bool        ExplicitSelfBuff(RE::SpellItem* a_spell);

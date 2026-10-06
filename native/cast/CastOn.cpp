@@ -9,6 +9,7 @@
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
+#include <unordered_set>
 #include <limits>         // rank preemption: kNoRule sentinel (numeric_limits<int>::max)
 
 namespace MFO::Actuation {
@@ -395,6 +396,16 @@ namespace MFO::Actuation {
             const bool buffKind = !healClaim && CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Buff;
             RE::Actor* const buffRecip =
                 (buffKind && a_target && a_target != a_follower && !BuffPlacementSpell(spell)) ? a_target : nullptr;
+            // A SELF-DELIVERED BUFF AIMED AT A FOE (field 1006c: Inferno, claimed at a foe through the delivery-flip
+            // proxy, 3 claims, none fired, left hand held ~13.5 s). The player chose the target, so it is neither
+            // cast at the enemy nor silently self-cast: a transparent NoOp and one deduped warning.
+            if (buffRecip && buffRecip->IsHostileToActor(a_follower) && SelfDeliveredBuff(spell)) {
+                static std::unordered_set<std::uint64_t> s_selfBuffFoeLog;   // worker-serial, like the lock it guards
+                if (s_selfBuffFoeLog.insert((static_cast<std::uint64_t>(id) << 32) | a_spellID).second)
+                    spdlog::warn("[buff] {}: a self-delivered buff can't be cast at an enemy -- set the rule's "
+                                 "target to Self", spell->GetName() ? spell->GetName() : "?");
+                return { Result::NoOp, "a self-delivered buff can't be cast at an enemy", true };
+            }
             HandPlan handPlan;
             // ONE lambda, because the in-flight gate below may have to run this a
             // SECOND time: if the claim its hand-pin was based on turns out to be
