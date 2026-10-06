@@ -1279,3 +1279,13 @@ Raised against deddf80 (`fix/mfo-ui-port-meo-drag`, Opus review MERGE), 2026-10-
 - SEV-5: a stale latch can survive a tab or popup bounce within one held press (it is dropped only when no mouse button is down, or on a new press). A matching id plus rect slop is needed to fire, so the window is narrow.
 - SEV-5: the MAP.md note for `Board_Click.cpp` was first placed in the file-size paragraph; moved to the Board section in the round that raised this.
 - **Surfaced at edit time from:** MAP.md Board section "Press-latched clicks".
+
+### MFO-B229 -- Harbinger own-LoS adoption: deferred review findings F2-F7
+Raised against 259630e (`feat/mfo-harbinger-los-adopt`, Opus review MERGE, 2026-10-05). F1 (SEV-3, `LosSupported` did not probe whether the service is armed) was fixed in the follow-up round. Reviewer text is summarised from its log (`agentlogs/review-mfo-los-adopt.md`: "PinTarget Unchanged path keeps flag across weapon swap (SEV-4); interest window 2s vs round-robin N*133ms -> N>=16 cold (SEV-4); OccludedRun has no callers") plus the coordinator's relay of F2-F7.
+- **F2 (SEV-4):** the ch.20 pin's `kTargetPin_OwnLineOfSight` is fixed at pin creation. The `PinTarget` Unchanged path keeps the flag across a weapon swap (bow to sword or back), so it changes only on the next target change or re-pin.
+- **F3 (SEV-4):** Harbinger drops a pair nobody asked for in `kLosInterestMs` (2 s). The round-robin service asks a given follower's pairs every N x 133 ms, so a party of 16 or more reads cold (Unknown, fail-open) for part of each lap.
+- **F4 (SEV-4):** `RefuseHealApplyOnMain` (`cast/CanAct.cpp`) now reads Harbinger's STORED verdict through `MeasureNow(Own)` (typically <= 250 ms old, up to 1 s, Unknown on the first ask) instead of measuring synchronously.
+- **F5 (SEV-5):** the `[los]` change lines for Own pairs no longer appear at ABI 18 (the Own path bypasses `Sightline::Measure`), so field analysis loses them. `Sightline::OccludedRun(Own)`'s Harbinger branch has no callers today (dead).
+- **F6 (SEV-5):** `apmf/APMFBridge.h` is at ~1528 lines. The next brief that touches it proposes a split (its own round).
+- **F7 (SEV-5):** `SenseOf` failing (NoOrigin, bad args, a race to unarmed) falls back to `Sightline::MeasureNow` on the engine basis in `EngageOnSight.cpp` without a log line.
+- **Surfaced at edit time from:** MAP.md Sightline.cpp and EngageOnSight.cpp "What breaks".

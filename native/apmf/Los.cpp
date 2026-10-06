@@ -62,8 +62,16 @@ namespace MFO::APMFBridge {
         if (!Config::g_apmfCast.load()) return false;
         const auto* api = ApiV18();
         if (!api) return false;
-        // State 3 (service unarmed) is set by LosOf/SenseOf on the verdict they see; it
-        // is not latched here, so a service that arms later (kDataLoaded) is used.
+        // ARMED PROBE (APMF core/Sightline.cpp GetLineOfSight, verified against APMF main):
+        // with the service not armed (VR, an unverified runtime, [Sightline] bOwnLineOfSight=0,
+        // before kDataLoaded) the call returns kLos_Unsupported FIRST, before it reads any
+        // argument, and with armed it never returns Unsupported. (0, 0, nullptr) is a free,
+        // lock-free, no-ask probe. Not latched: a service that arms later is used.
+        if (!api->GetLineOfSight) return false;
+        if (api->GetLineOfSight(0, 0, nullptr) == APMF_API::kLos_Unsupported) {
+            NoteState(3, api->abiVersion);
+            return false;
+        }
         return true;
     }
 

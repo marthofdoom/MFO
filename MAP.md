@@ -2228,6 +2228,7 @@ rule in the header. Called only from the Scheduler hook above.
   an MFO direct `StartCombat` road for Harbinger absent (the brief: inert); counting every enemy in
   the leash for the confidence gate (dormant draugr on other floors block it forever); dropping
   the `NoteWaitRule` calls in `logistics/Service.cpp` (a Wait rule no longer stops this gambit).
+  **Open backlog: MFO-B229** (F7: a failed `SenseOf` falls back to `MeasureNow` silently; F3: a party >= 16 reads cold).
   Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B111..MFO-B113.
 
 ### Gait.cpp / Gait.h — travel-package speed byte (low risk)
@@ -2581,7 +2582,9 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   `param.ival` bit 0) for `Eval::HoldsBowOrStaff` followers (flag chosen in `Targeting.cpp` `CommandEx`; same retry).
   MFO's client-side Own gating at the cast sites STAYS for this field cycle (removed in a later round).
   **What breaks:** reading `Basis::Own` from the cache while ABI >= 18 (nobody fills it); calling `SenseOf` off the main
-  thread (`kQuery_NotMainThread`); treating `Unknown`/`Unavailable` as seen.
+  thread (`kQuery_NotMainThread`); treating `Unknown`/`Unavailable` as seen. **Open backlog: MFO-B229** (F2-F7: pin flag
+  fixed for the pin's life, party >= 16 reads cold, `RefuseHealApplyOnMain` staleness, lost `[los]` lines + dead
+  `OccludedRun` branch, `APMFBridge.h` split due, silent `SenseOf` fallback).
 - **Two-stage Measure (`Basis::Engine` only).** `CustomRay` (was `CustomRayConfirmsOcclusion`, MAIN
   THREAD ONLY) is MFO's own `bhkWorld::PickObject` point-raycast, fired by
   `Measure` ONLY when the engine `HasLineOfSight` already said CLEAR — so the

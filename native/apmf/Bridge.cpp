@@ -538,12 +538,16 @@ namespace MFO::APMFBridge {
             if (ownLos) req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
             c.handle = api->RequestCast(follower, kOwnBasis, &req);
             if (ownLos && c.handle == APMF_API::kInvalidHandle) {
-                // Harbinger REFUSES the bit synchronously while its LoS service is not armed (APMF_API.h:
-                // "keep your own test"). That is the documented degrade, not a mask: log it and file the
-                // claim without the bit; MFO's Sightline gate (still in force) is the test.
-                spdlog::warn("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) refused WITH kCastFlag_OwnLineOfSight "
-                             "-- asking again without it (MFO's own Sightline gates this cast)",
-                             follower, wantSpell);
+                // LosSupported() already probed the service as armed, so this is only a RACE (it
+                // disarmed between the probe and the call) or a refusal for another reason. Ask once
+                // more without the bit (MFO's own Sightline gate is still in force); a refusal of
+                // THAT one is the real answer. The warn is once per session and names no cause: it
+                // does not know it was the flag.
+                static std::atomic<bool> s_warned{ false };
+                if (!s_warned.exchange(true))
+                    spdlog::warn("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) refused with kCastFlag_OwnLineOfSight "
+                                 "set (cause not known: service disarmed mid-call or another refusal) -- asking again "
+                                 "without it. Logged once per session.", follower, wantSpell);
                 req.flags &= ~APMF_API::kCastFlag_OwnLineOfSight;
                 c.handle = api->RequestCast(follower, kOwnBasis, &req);
             }

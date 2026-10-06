@@ -298,12 +298,16 @@ namespace MFO::APMFBridge {
         if (ownLos) prm.ival |= static_cast<std::int32_t>(APMF_API::kTargetPin_OwnLineOfSight);
         APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_TargetPin, kOwnBasis, &prm);
         if (ownLos && h == APMF_API::kInvalidHandle) {
-            // The bit is REFUSED synchronously while Harbinger's LoS service is not armed (APMF_API.h
-            // kTargetPin_OwnLineOfSight). That must not read as "ch.20 seat absent" (Targeting would then
-            // drop the whole pin route for the session), so ask once more without the bit: the plain pin,
-            // exactly today's behaviour. A refusal of THAT one is the real seat-absent answer.
-            spdlog::warn("[target-pin] {:08X}: pin of {:08X} refused WITH kTargetPin_OwnLineOfSight -- "
-                         "asking again without it", a_follower, a_target);
+            // LosSupported() probed the service as armed, so this is a RACE (disarmed mid-call) or a
+            // refusal for another reason. A refusal must not read as "ch.20 seat absent" if it was
+            // only the bit (Targeting would drop the pin route for the session), so ask once more
+            // without it: the plain pin, today's behaviour. A refusal of THAT one is the real answer.
+            // Warn once per session; the cause is not known.
+            static std::atomic<bool> s_warned{ false };
+            if (!s_warned.exchange(true))
+                spdlog::warn("[target-pin] {:08X}: pin of {:08X} refused with kTargetPin_OwnLineOfSight set (cause "
+                             "not known) -- asking again without it. Logged once per session.",
+                             a_follower, a_target);
             prm.ival &= ~static_cast<decltype(prm.ival)>(APMF_API::kTargetPin_OwnLineOfSight);
             h = api->RequestEx(a_follower, APMF_API::kIntent_TargetPin, kOwnBasis, &prm);
         }
