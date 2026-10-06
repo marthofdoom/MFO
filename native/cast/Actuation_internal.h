@@ -609,6 +609,11 @@ namespace MFO::Actuation {
         // HealHoldLapsed: the once-per-hold exit line + g_healHoldLog erase (no-op when none is live).
         bool HealHoldStands(RE::Actor* a_follower, std::size_t a_hand, int a_askerRule, const CastLock& a_lk);
         void HealHoldLapsed(RE::FormID a_follower, std::size_t a_hand, const char* a_why);
+        // The never-fired LATCH (cast/HealRoad.cpp): set when NeverFiredRelease frees a hand's claim; while
+        // set for that (follower, hand, spell) HealHoldStands is false, so the heal's re-claim next lap
+        // does not re-arm the hold. Cleared by an observed fire on the hand, ClearHealNeverFired (a
+        // follower's combat end / dismissal, from ClearCastLock) and ResetHealRoad (revert).
+        void ClearHealNeverFired(RE::FormID a_follower);
 
         // ── THE PER-HAND HEAL ROAD (feat/mfo-perhand-heal, cast/HealRoad.cpp) ──────────
         // marth 2026-09-30: "One per follower is fine for this, the other hand would be for

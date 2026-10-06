@@ -1655,6 +1655,7 @@ namespace MFO::Actuation {
     // spots the offense-cast claim itself is crisply released from). Idempotent
     // (erase-miss -> no-op), worker-serial, no lock (#4).
     void ClearCastLock(RE::FormID a_follower) {
+        ClearHealNeverFired(a_follower);   // cast/HealRoad.cpp: the hold's never-fired latch ends with the fight
         g_castLock.erase(a_follower);
         g_lastLockLog.erase(a_follower);
         g_lastPreemptLog.erase(a_follower);   // rank-preemption twin of g_lastLockLog

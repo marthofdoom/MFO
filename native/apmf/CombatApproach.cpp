@@ -194,6 +194,13 @@ namespace MFO::APMFBridge {
         c.lastSeq   = 0;
     }
 
+    bool HealApproachBlocked(RE::FormID a_follower, RE::FormID a_recipient) {
+        if (!ApproachApi() || g_approachSeatRefused.load(std::memory_order_relaxed)) return true;
+        std::scoped_lock lock(g_approachMx);
+        const auto bit = g_approachBlocked.find(a_follower);
+        return bit != g_approachBlocked.end() && bit->second.count(a_recipient) != 0;
+    }
+
     void ReleaseHealApproach(RE::FormID a_follower, const char* a_why, std::size_t a_hand, bool a_fightOver) {
         APMF_API::Handle h = APMF_API::kInvalidHandle;
         RE::FormID       x = 0;
