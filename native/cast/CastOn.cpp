@@ -161,6 +161,25 @@ namespace MFO::Actuation {
                          std::format("spell {:08X} not in load order", a_spellID), true };
             }
 
+            // NATURE-UNDECLARED spell at an ENEMY (marth 2026-10-06: "that enemy must be the highest gambits
+            // target"). Such a spell (cast/SpellSupport.cpp) classifies as a Buff, so a foe named by a rule's
+            // selector would otherwise be judged as an "ally-buff" recipient of whichever foe that selector chose.
+            // The enemy is the follower's CURRENT target as MFO's own targeting gambits commanded it
+            // (Targeting::Current: the pin / latch the highest targeting rule set), never another selector's
+            // pick; with none commanded the cast waits (transparent), never a self cast. The claim road below
+            // (ChooseBuffRoad / BuffClaim, recipient = that foe; Harbinger ABI 19 serves a rowless / Script
+            // claim at another actor) is unchanged. Self / Ally / Player picks are untouched.
+            bool natureEnemy = false;
+            if (a_target && a_target != a_follower && a_target != RE::PlayerCharacter::GetSingleton() &&
+                a_target->IsHostileToActor(a_follower) && SpellNatureUndeclared(spell)) {
+                const auto curPtr = Targeting::Current(a_follower->GetFormID()).get();
+                auto* cur = curPtr.get();
+                if (!cur || cur->IsDead() || cur->IsDisabled() || !cur->IsHostileToActor(a_follower))
+                    return { Result::NoOp, "nature-undeclared spell at an enemy: no commanded target yet", true };
+                a_target   = cur;
+                natureEnemy = true;
+            }
+
             // #68 OUT-OF-RANGE SKIP, obvious targets only (a_rangeGate).
             // Self and Touch delivery are CONTACT/self spells -- there is no
             // "aimed" range to exceed, so they are never out of range no
@@ -758,6 +777,9 @@ namespace MFO::Actuation {
                 commitPreempt();   // the claim happens inside BuffClaim
                 if (BuffClaim(a_follower, spell, buffRecip) == SelfCast::Applied) {
                     lockHands(a_spellID, lockTargetKey);
+                    if (natureEnemy)
+                        spdlog::info("[auto] nature-undeclared {} -> ENEMY {:08X} via buff claim (animated)",
+                                     spell->GetName() ? spell->GetName() : "?", a_target->GetFormID());
                     return { Result::Fired, "buff claim (animated)" };
                 }
                 return { Result::FailedOther, "buff claim could not be made", true };

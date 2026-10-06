@@ -655,6 +655,10 @@ namespace MFO::Actuation {
     // UNANIMATED direct fallback decided from the spell RECORD alone (never the fight situation), so the
     // picker hides it. *a_reason (optional) gets a static literal. Pure form data: main-thread safe.
     bool CastRoadUnsupported(RE::SpellItem* a_spell, const char** a_reason = nullptr);
+    // True when the spell's nature (for an enemy / an ally / self) cannot be read from its record: a Buff-kind,
+    // non-placement, non-Self-delivery spell whose predicted row for another actor is NoRow or Script.
+    // AUTO does not cast it (cast/Auto.cpp) and the board marks it. Pure form data.
+    bool SpellNatureUndeclared(RE::SpellItem* a_spell);
     // The static per-spell cases of ChooseBuffRoad (cast/BuffRoad.cpp), shared so the picker and the road
     // cannot disagree. Each returns the reason literal, or nullptr when the case does not apply.
     bool        ExplicitSelfBuff(RE::SpellItem* a_spell);

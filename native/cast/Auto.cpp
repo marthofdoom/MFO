@@ -4,6 +4,7 @@
 // Split out of the old native/Actuation*.cpp by the wave-1 subsystem-folder split
 // (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 #include "Actuation_internal.h"
+#include <unordered_set>
 #include "ComposedCast.h"   // the Composed Forced Cast executor -- replaces the deleted
                             // HealAnimFill package route at the two cast plug-ins below
 #include "CastBounds.h"     // Reset the MFO-executed-cast bound beside ConcProxy::Reset()
@@ -324,6 +325,20 @@ namespace MFO::Actuation {
             const auto id      = a_follower->GetFormID();
             const auto kind    = CasterConsent::ClassifySpell(spell);
             const bool hostile = (kind == CasterConsent::SpellKind::Offense);
+
+            // NATURE UNDECLARED (marth 2026-10-06: "for a spell whose nature can't be read from the record, AUTO
+            // does not cast and asks for a target"). An Apocalypse leech curse (non-hostile effects, Script, Aimed)
+            // classifies as a Buff, and the buff series below put Lamb of Mara on the caster himself. AUTO never
+            // guesses: a transparent NoOp and one loud line per (follower, spell). NEVER a fall back to self. An
+            // explicit Enemy / Ally / Self pick takes CastOn, which retargets an Enemy pick to the follower's
+            // current target (cast/CastOn.cpp).
+            if (SpellNatureUndeclared(spell)) {
+                static std::unordered_set<std::uint64_t> s_undeclaredLog;   // once per follower + spell per session
+                if (s_undeclaredLog.insert((static_cast<std::uint64_t>(id) << 32) | a_spellID).second)
+                    spdlog::warn("[auto] {} ({:08X}): nature undeclared in the spell record -- set the rule's target "
+                                 "to Enemy, Ally or Self", spell->GetName() ? spell->GetName() : "?", a_spellID);
+                return { Result::NoOp, "auto: spell nature undeclared in its record (pick Enemy, Ally or Self)", true };
+            }
 
             // ── AUTO HEAL ON THE ANIMATED CLAIM ROAD: A SERIES OF REAL CASTS ─────
             // (animheal phase 2, 2026-09-30, marth: "lowest-HP eligible recipient

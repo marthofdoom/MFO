@@ -1282,7 +1282,14 @@ namespace MFO::Board {
                     break;
                 case Vocab::Subject::NearestAlly: v.subjectName = Str::Get(Str::K::Gb_SubjAlly); break;
                 case Vocab::Subject::Self:
-                default:                          v.subjectName = Str::Get(Str::K::Gb_SubjAuto); break;   // #68: subject 0 = Auto ladder, not self
+                default:
+                    v.subjectName = Str::Get(Str::K::Gb_SubjAuto);   // #68: subject 0 = Auto ladder, not self
+                    // AUTO never casts a spell whose record does not say who it is for (cast/Auto.cpp).
+                    if (g.actionOpcode == Vocab::kActCastTarget && v.spell)
+                        if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(v.spell);
+                            sp && MFO::Actuation::SpellNatureUndeclared(sp))
+                            v.subjectName = Str::Get(Str::K::Gb_SubjAutoUndeclared);
+                    break;   // #68: subject 0 = Auto ladder, not self
                 }
             }
             a_out.push_back(std::move(v));
@@ -1688,6 +1695,8 @@ namespace MFO::Board {
                             p.id          = sp->GetFormID();
                             p.name        = sp->GetName() ? sp->GetName() : "?";
                             if (unsupported) p.name += " (unsupported)";
+                            if (MFO::Actuation::SpellNatureUndeclared(sp))
+                                p.name = Str::Fmt(Str::K::Gb_SpellNatureHint, { p.name });   // not hidden: a hint
                             p.magickaCost = follower ? static_cast<int>(sp->CalculateMagickaCost(follower) + 0.5f) : 0;
                             p.tooltip     = SpellTooltip(sp);
                             out->push_back(std::move(p));

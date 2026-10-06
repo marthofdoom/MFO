@@ -42,4 +42,21 @@ namespace MFO::Actuation {
         return true;
     }
 
+    // A spell whose NATURE (for an enemy, for an ally, for self) cannot be read from its record
+    // (marth 2026-10-06: AUTO does not cast it and asks for a target). The Apocalypse leech curses are the
+    // shape: every effect non-hostile and non-detrimental, archetype Script, Aimed delivery, AV -1, so
+    // ClassifySpell says Buff while the author meant a curse for a foe. True when ALL hold: a Buff kind (every
+    // effect non-hostile / non-detrimental, not a heal), not a placement (summon / reanimate), delivery not
+    // Self, and the predicted engine row for (archetype, AV, other, non-hostile) is NoRow or Script (the set
+    // the engine's own AI never casts at another actor). The row is the one BuffRoad judges an ally buff by
+    // (ClassifyArchetype with seat 0). ClassifySpell and its enum are untouched. Pure form data.
+    bool SpellNatureUndeclared(RE::SpellItem* a_spell) {
+        if (!a_spell || a_spell->effects.empty()) return false;
+        if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff) return false;
+        if (BuffPlacementSpell(a_spell)) return false;
+        if (a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf) return false;
+        const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/true);
+        return arch.row == EngineRow::NoRow || arch.row == EngineRow::Script;
+    }
+
 }

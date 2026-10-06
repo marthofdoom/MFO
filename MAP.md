@@ -542,7 +542,7 @@ per concern:
 - `cast/Summon.cpp` (383) = SUMMONS: `CasterHasLiveSummon` (`:33`), the one-shot
   `CastSummonOnce` (`:315`) and its main-thread `SummonOnMain` (`:171`); the verdict ledger
   `g_summonMx`/`g_summon`/`g_summonPosted` (`:68-69`, `:79`) is extern (ClearSelfCasts clears it).
-- `cast/Auto.cpp` (724) = the AUTO fan-out `CastAuto` (`:308`; its claim-road heal SERIES `:325`, see
+- `cast/Auto.cpp` = the AUTO fan-out `CastAuto` (`:308`; FIRST gate: a nature-undeclared spell (`SpellNatureUndeclared`) is a transparent NoOp + one `[auto]` WARN, never self; its claim-road heal SERIES `:340`, see
   "ANIMATED HEAL CLAIM ROAD" below) with its pacing `g_autoCast` (`:22`)
   and `g_beneficialRecast` (`:36`), `ApplyEffectFromTo` (`:77`), `ShouldApplyTo` (`:193`), and
   `IsSummonSpell` (`:269`, public; it lives here because `CastAuto` inlines it).
@@ -582,6 +582,12 @@ per concern:
   adding a NEW static case there must also go through a shared helper + this predicate, or the picker keeps offering the spell. Board.cpp
   (`SpellList` in PublishSnapshot) hides these, logs `[spell-support] hidden from picker` once per spell, and keeps one a rule already names,
   suffixed " (unsupported)". Picker only: AUTO and casting untouched.
+  `SpellNatureUndeclared(SpellItem*)` (same file, `cast/Actuation.h`; feat/mfo-hide-unsupported-spells commit B): a Buff-kind, non-placement,
+  non-Self-delivery spell whose predicted row for another actor (ClassifyArchetype seat 0) is NoRow / Script, i.e. its record does not say
+  who it is for (Apocalypse leech curses). `ClassifySpell` and its enum are untouched. Readers: `CastAuto` (NoOp + one `[auto]` WARN per
+  follower+spell, never self), `CastOn` (an Enemy pick is retargeted to `Targeting::Current`, log `[auto] nature-undeclared ... -> ENEMY`),
+  Board (list hint + AUTO target label, keys `Gb_SpellNatureHint` / `Gb_SubjAutoUndeclared`). There is NO Enemy subject on the board: "Enemy" =
+  a foe-selector condition. WHAT BREAKS: widening the predicate silently stops AUTO casting those spells.
 - `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, widened by feat/mfo-claim-road-summon-ally-rowless 2026-10-05; batch A
   release gate checklist R6/R8/R9/R11) = THE ANIMATED BUFF CLAIM ROAD: `ChooseBuffRoad(follower, spell, log, recipient)` (NotBuff / Claim /
   DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCap / DirectNoCombat; one `[buff]` line per reason), `BuffClaim` (+ `BuffSelfClaim`
