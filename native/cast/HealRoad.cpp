@@ -46,6 +46,7 @@
 #include <algorithm>
 
 #include <chrono>
+#include <cstring>
 #include <mutex>
 #include <unordered_map>
 
@@ -84,6 +85,38 @@ namespace MFO::Actuation {
         struct FollowerHealHands { HealHand hand[kHandCount]; };
         std::unordered_map<RE::FormID, FollowerHealHands> g_healHands;
 
+        // HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (marth 2026-10-06, ClickUp 86e3m36qr: "We dont want to
+        // end the heal claim in harbinger until that person is full healed. lost sight can interrupt the cast,
+        // thats expected but the goal isnt achieved, for heals the gambit is when they START healing").
+        // The rule's condition only starts a heal. g_healAsked: the heal spells a rule ASKED for this follower
+        // this tick (HealNoteAsked, from CastOn's heal lap); HealSustainLap consumes it once per tick and, for
+        // a standing heal nobody asked for, replays the lap itself. g_healCont: claims already announced as
+        // "continuing past the rule" (per (follower, hand), keyed by the claim's lock stamp, so one line per
+        // claim). g_healExit: the exit token HealHandEnded names in its [heal-hold] line (set by the release
+        // sites around their ReleaseOwnHealClaim call; null = classified from the free text). All worker-serial.
+        std::unordered_map<RE::FormID, std::vector<RE::FormID>> g_healAsked;
+        std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_healCont;
+        const char* g_healExit    = nullptr;
+        bool        g_inHealSustain = false;   // the sustain replay's own lap must not count as "the rule asked"
+
+        bool ReleaseWithExit(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell, const char* a_why,
+                             const char* a_token, bool a_keepSpell = false) {
+            g_healExit = a_token;
+            const bool r = ReleaseOwnHealClaim(a_follower, a_hand, a_spell, a_why, a_keepSpell);
+            g_healExit = nullptr;
+            return r;
+        }
+        // RecipientLost's fixed texts -> the [heal-hold] exit token (nullptr: leave it to the classifier).
+        const char* LostToken(const char* a_why) {
+            if (!a_why) return nullptr;
+            if (std::strstr(a_why, "full health") || std::strstr(a_why, "HP threshold")) return "full";
+            if (std::strstr(a_why, "dead") || std::strstr(a_why, "essential-down")) return "dead";
+            if (std::strstr(a_why, "gone") || std::strstr(a_why, "left the")) return "gone";
+            if (std::strstr(a_why, "beyond")) return "out-of-reach";
+            if (std::strstr(a_why, "equip gambit") || std::strstr(a_why, "weapon now owns")) return "preempted";
+            return nullptr;
+        }
+
         // WHAT HEAL STANDS ON A HAND: a live claim (the bridge's per-hand slot), or, in the
         // concentration stream cap's one-lap re-stream gap (MFO-B177), the lock that keeps
         // the hand and its rank for the re-claim. `found` false = no heal on that hand.
@@ -111,12 +144,14 @@ namespace MFO::Actuation {
         // him, or kHandCount when none does yet (no cast of his can be in flight then).
         //   * dead / gone / essential-down (a heal does not land: fix/mfo-lifestate);
         //   * beyond the heal's REACH (never line of sight: the claim waits charged);
-        //   * at or above the rule's own HP threshold, or at full health -- unless a cast
+        //   * at or above the rule's own HP threshold (only while NO claim serves him yet: the
+        //     threshold starts a heal, it does not end one), or at full health -- unless a cast
         //     at him is in flight on that hand (D8: it finishes first).
         const char* RecipientLost(RE::Actor* a_follower, RE::Actor* a_recipient, RE::SpellItem* a_spell,
                                   std::size_t a_hand) {
-            if (!a_recipient || a_recipient->IsDead() || a_recipient->IsDisabled())
-                return "the recipient is dead or gone";
+            if (!a_recipient) return "the recipient is gone";
+            if (a_recipient->IsDead()) return "the recipient is dead";
+            if (a_recipient->IsDisabled()) return "the recipient is gone (disabled)";
             if (const auto* rst = a_recipient->AsActorState();
                 rst && rst->GetLifeState() == RE::ACTOR_LIFE_STATE::kEssentialDown)
                 return "the recipient is essential-down (a heal does not land on it)";
@@ -127,8 +162,10 @@ namespace MFO::Actuation {
                                   CastInFlightOnHand(a_follower, a_hand, a_spell->GetFormID(),
                                                      CastProxyOnHand(fid, a_hand));
             const float hp = Vocab::HealthPct(a_recipient);
-            if (g_firingAllyThreshold >= 0.0f && hp >= std::min(g_firingAllyThreshold, Vocab::kHealFull) &&
-                !inFlight)
+            // THE RULE'S THRESHOLD ONLY STARTS A HEAL (marth 2026-10-06): once a claim serves him (a_hand < kHandCount)
+            // the only HP exit is FULL. The threshold still gates a recipient no claim serves yet.
+            if (a_hand >= kHandCount && g_firingAllyThreshold >= 0.0f &&
+                hp >= std::min(g_firingAllyThreshold, Vocab::kHealFull))
                 return "the recipient is at or above the rule's HP threshold";
             if (hp >= Vocab::kHealFull && !inFlight)
                 return "the recipient is at full health";
@@ -213,9 +250,11 @@ namespace MFO::Actuation {
             // subtracted, so it cannot release a claim that is legitimately waiting for sight.
             RE::FormID recip = 0;
             long long  heldMs = 0;
+            bool       approachBlocked = false;   // held through lost sight with the ch.24 approach unable to bring it back
             if (const auto hit = g_healHands.find(fid); hit != g_healHands.end()) {
                 const auto& hh = hit->second.hand[a_hand];
                 recip = hh.recipient;
+                approachBlocked = recip != 0 && hh.losHeld && APMFBridge::HealApproachBlocked(fid, recip);
                 // SEV-3 (review round 2): the exclusion lasts only while the ch.24 approach can still bring
                 // sight back. Blocked (EngineDropped / TargetLost / Leashed / never-live) or no approach at
                 // all (below ABI 19, seat refused): nothing is excluded and the plain bound applies.
@@ -274,7 +313,8 @@ namespace MFO::Actuation {
             // Latch BEFORE the lapse/release below: the re-claim next lap must not re-arm the hold.
             g_neverFiredLatch[(static_cast<std::uint64_t>(fid) << 1) | a_hand] = { a_spell, false };
             HealHoldLapsed(fid, a_hand, "never-fired: the claim never fired within the never-observed bound (LoS-free)");
-            ReleaseOwnHealClaim(a_follower, a_hand, a_spell, "it never fired within the never-observed window");
+            ReleaseWithExit(a_follower, a_hand, a_spell, "it never fired within the never-observed window",
+                            approachBlocked ? "approach-blocked" : "never-fired");
             return true;
         }
 
@@ -381,7 +421,7 @@ namespace MFO::Actuation {
                      a_follower->GetPosition().GetDistance(rcp->GetPosition()) > Config::g_sharedRadius.load())
                 gone = "the recipient left the shared radius";
             if (const char* lost = gone ? gone : RecipientLost(a_follower, rcp, sp, a_hand)) {
-                ReleaseOwnHealClaim(a_follower, a_hand, hs, lost);
+                ReleaseWithExit(a_follower, a_hand, hs, lost, gone ? "gone" : LostToken(lost));
                 return;
             }
             if (sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
@@ -533,12 +573,20 @@ namespace MFO::Actuation {
     }
 
     void HealHandEnded(RE::FormID a_follower, std::size_t a_hand, const char* a_why) {
+        g_healCont.erase((static_cast<std::uint64_t>(a_follower) << 1) | a_hand);
         HealHoldLapsed(a_follower, a_hand, a_why);
         APMFBridge::ReleaseHealApproach(a_follower, "the hand's heal claim ended", a_hand);   // ch.24
         const auto it = g_healHands.find(a_follower);
         if (it == g_healHands.end() || a_hand >= kHandCount) return;
         auto& hh = it->second.hand[a_hand];
         if (hh.active) {
+            // ONE [heal-hold] line per heal lifetime, naming why it ended (full / dead / gone / combat-ended /
+            // preempted / never-fired / approach-blocked; out-of-reach and released-elsewhere are said as such).
+            const char* token = g_healExit ? g_healExit
+                                           : (a_why && std::strstr(a_why, "combat")) ? "combat-ended"
+                                                                                     : "released-elsewhere";
+            spdlog::info("[heal-hold] {:08X} {} hand heal {:08X} for {:08X} lifetime ENDED: {} ({})",
+                         a_follower, HandWord(a_hand), hh.spell, Who(a_follower, hh.recipient), token, a_why);
             const std::string held = hh.losHeld
                 ? std::format("; it was held through lost line of sight for {} ms",
                               std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - hh.losSince).count())
@@ -563,8 +611,14 @@ namespace MFO::Actuation {
         for (std::size_t h = 0; h < kHandCount; ++h) {
             if (!it->second.hand[h].active) continue;
             if (HealOnHand(a_follower, h).found) continue;
+            // A lock that now names ANOTHER spell = a higher gambit took the hand (preempted); else unknown.
+            const auto lit = g_castLock.find(a_follower);
+            const bool taken = lit != g_castLock.end() && lit->second.hand[h].spell != 0 &&
+                               lit->second.hand[h].spell != it->second.hand[h].spell;
+            g_healExit = taken ? "preempted" : nullptr;
             HealHandEnded(a_follower, h, "its claim was released elsewhere (the [heal] / [eval] line above "
                                          "names why: expiry sweep, a higher-ranked rule, combat end)");
+            g_healExit = nullptr;
             if (g_healHands.find(a_follower) == g_healHands.end()) return;   // erased with the last record
         }
     }
@@ -614,6 +668,12 @@ namespace MFO::Actuation {
 
         HealHandsReconcile(id);
         HandFireWatch(a_follower);   // the per-hand SpellFire evidence for this follower (R2-1)
+        // A RULE ASKED for this heal this tick (HealSustainLap's "did the rule keep asking" signal). Not the
+        // sustain replay's own lap, and not the OOC caller (kNoRule: no rule, no hold-past-the-rule).
+        if (!g_inHealSustain && g_firingRule != kNoRule) {
+            auto& v = g_healAsked[id];
+            if (std::find(v.begin(), v.end(), spellID) == v.end()) v.push_back(spellID);
+        }
 
         // WHICH HAND ALREADY SERVES THIS RECIPIENT? With this spell (the incumbent: its
         // claim or its re-stream gap), or with another spell (a different rule's heal on
@@ -640,7 +700,7 @@ namespace MFO::Actuation {
         // released now, even mid-cast; transparent either way, the rules below run. Not a
         // fallback: nothing else casts this heal this lap.
         if (const char* lost = RecipientLost(a_follower, recipient, a_spell, servedOn)) {
-            if (servedOn < kHandCount) ReleaseOwnHealClaim(a_follower, servedOn, spellID, lost);
+            if (servedOn < kHandCount) ReleaseWithExit(a_follower, servedOn, spellID, lost, LostToken(lost));
             return Outcome{ Result::FailedOther, std::format("animated heal not cast: {}", lost), true };
         }
 
@@ -680,8 +740,8 @@ namespace MFO::Actuation {
         // never a weapon hand here (RightHandIsWeaponHand above), so it has no such gate.
         if (a_hand == kHandLeft) {
             if (const int holdRule = LeftHoldRule(id); holdRule < g_firingRule) {
-                ReleaseOwnHealClaim(a_follower, kHandLeft, spellID,
-                                    "an equip gambit ranked above this rule holds the left hand");
+                ReleaseWithExit(a_follower, kHandLeft, spellID,
+                                "an equip gambit ranked above this rule holds the left hand", "preempted");
                 const auto now = Clock::now();
                 auto& last = g_healOutrankLog[id];
                 if (now - last >= std::chrono::seconds(5)) {
@@ -711,6 +771,121 @@ namespace MFO::Actuation {
         if (NeverFiredRelease(a_follower, a_hand, a_spell, "its recipient"))
             return Outcome{ Result::FailedOther, "animated heal released: it never fired", true };
         return std::nullopt;
+    }
+
+    // THE SUSTAIN LAP (marth 2026-10-06, ClickUp 86e3m36qr): a heal claim the rule is NO LONGER asking for
+    // (its condition stopped holding, AUTO named nobody, a different rule won the lap) is kept and driven
+    // to the recipient's full health by replaying CastOn's own lap for it, as the owning rule (g_firingRule
+    // = the lock's owner, no ally threshold), so the refresh, the left-hand repair, the never-fired bound,
+    // the reach / life-state exits and the hold-through-lost-sight all run exactly as when the rule asks.
+    // The only HP exit on that road is FULL (RecipientLost). Called once per follower per combat tick from
+    // Scheduler::Tick, on the worker, before its "no cast rule held" release; the cadence is the rule's own
+    // lap cadence (principle 9: nothing new is sized). Returns the bitmask (1 << hand) of the hands whose
+    // heal still stands after the lap, so the caller does not release them with the rest.
+    unsigned HealSustainLap(RE::Actor* a_follower) {
+        if (!a_follower) return 0;
+        const auto fid = a_follower->GetFormID();
+        std::vector<RE::FormID> asked;
+        if (const auto ait = g_healAsked.find(fid); ait != g_healAsked.end()) {
+            asked = std::move(ait->second);
+            g_healAsked.erase(ait);
+        }
+        if (g_healHands.find(fid) == g_healHands.end()) return 0;
+        HealHandsReconcile(fid);
+        unsigned mask = 0;
+        for (std::size_t h = 0; h < kHandCount; ++h) {
+            const auto it = g_healHands.find(fid);
+            if (it == g_healHands.end()) break;
+            const HealHand hh = it->second.hand[h];   // a copy: the replay below may erase the record
+            if (!hh.active) continue;
+            if (std::find(asked.begin(), asked.end(), hh.spell) != asked.end()) continue;   // the rule is asking
+            const auto ah = ApmfHand(h);
+            if (APMFBridge::GetHealCastSpell(fid, ah) != hh.spell) continue;                 // no live claim
+            const auto lit = g_castLock.find(fid);
+            if (lit == g_castLock.end()) continue;
+            const auto& lk = lit->second.hand[h];
+            if (lk.spell != hh.spell || lk.owningRule == kNoRule) continue;
+            auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(hh.spell);
+            RE::Actor* rcp = hh.recipient == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(hh.recipient);
+            if (!sp) continue;
+            if (!rcp) {
+                ReleaseWithExit(a_follower, h, hh.spell, "the recipient is gone", "gone");
+                continue;
+            }
+            const std::uint64_t key = (static_cast<std::uint64_t>(fid) << 1) | h;
+            const auto stamp = CastLockClaimStamp(fid, h, hh.spell);
+            if (const auto c = g_healCont.find(key); c == g_healCont.end() || c->second != stamp) {
+                g_healCont[key] = stamp;
+                spdlog::info("[heal-hold] {:08X} {} hand heal {:08X} for {:08X}: rule stopped asking at {}%: "
+                             "holding to full",
+                             fid, HandWord(h), hh.spell, Who(fid, hh.recipient),
+                             static_cast<int>(Vocab::HealthPct(rcp) * 100.0f));
+            }
+            // The replay: this rule's own heal lap, no threshold. Its outcome is the lap's own business
+            // (a claim refresh answers NoOp/transparent); the claim either stands after it or ended with
+            // its [heal-hold] exit line.
+            struct Scope {
+                int savedRule; float savedThr;
+                Scope(int r) : savedRule(g_firingRule), savedThr(g_firingAllyThreshold) {
+                    g_firingRule = r; g_firingAllyThreshold = -1.0f; g_inHealSustain = true;
+                }
+                ~Scope() { g_firingRule = savedRule; g_firingAllyThreshold = savedThr; g_inHealSustain = false; }
+            };
+            {
+                Scope scope(lk.owningRule);
+                (void)CastOn(a_follower, hh.spell, rcp, /*a_rangeGate=*/false);
+            }
+            if (APMFBridge::GetHealCastSpell(fid, ah) == hh.spell) mask |= 1u << h;
+        }
+        return mask;
+    }
+
+    // The Scheduler's "no cast rule's condition held" release, for every hand EXCEPT the ones HealSustainLap
+    // is holding: ends the hand's claim + watch and drops its lock.
+    void ReleaseUnheldCastHands(RE::FormID a_follower, unsigned a_keepMask) {
+        for (std::size_t h = 0; h < kHandCount; ++h) {
+            if (a_keepMask & (1u << h)) continue;
+            ComposedCast::EndHand(a_follower, ApmfHand(h));
+            ComposedCast::ClearWatchHand(a_follower, ApmfHand(h));
+            ClearCastLockHand(a_follower, h);
+        }
+    }
+
+    // AUTO's heal series: the standing heal of a_spell whose recipient is not full yet, or null. The series'
+    // pick falls back to it when nobody is below the rule's ceiling any more (the rule only starts a heal).
+    RE::Actor* HealHeldRecipient(RE::Actor* a_follower, RE::FormID a_spell) {
+        if (!a_follower || a_spell == 0) return nullptr;
+        const auto fid = a_follower->GetFormID();
+        const auto it  = g_healHands.find(fid);
+        if (it == g_healHands.end()) return nullptr;
+        for (std::size_t h = 0; h < kHandCount; ++h) {
+            const auto& hh = it->second.hand[h];
+            if (!hh.active || hh.spell != a_spell || APMFBridge::GetHealCastSpell(fid, ApmfHand(h)) != a_spell) continue;
+            RE::Actor* rcp = hh.recipient == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(hh.recipient);
+            if (!rcp || rcp->IsDead() || rcp->IsDisabled() || Vocab::HealthPct(rcp) >= Vocab::kHealFull) continue;
+            const std::uint64_t key = (static_cast<std::uint64_t>(fid) << 1) | h;
+            const auto stamp = CastLockClaimStamp(fid, h, a_spell);
+            if (const auto c = g_healCont.find(key); c == g_healCont.end() || c->second != stamp) {
+                g_healCont[key] = stamp;
+                spdlog::info("[heal-hold] {:08X} {} hand heal {:08X} for {:08X}: rule stopped asking at {}%: "
+                             "holding to full",
+                             fid, HandWord(h), a_spell, Who(fid, hh.recipient),
+                             static_cast<int>(Vocab::HealthPct(rcp) * 100.0f));
+            }
+            return rcp;
+        }
+        return nullptr;
+    }
+
+    // Combat ended (Scheduler's non-combat branch): every heal record ends here with its [heal-hold] line.
+    void HealHandsCombatEnded(RE::FormID a_follower) {
+        if (g_healHands.find(a_follower) == g_healHands.end()) return;
+        for (std::size_t h = 0; h < kHandCount; ++h) {
+            g_healExit = "combat-ended";
+            HealHandEnded(a_follower, h, "the follower left combat");
+            g_healExit = nullptr;
+            if (g_healHands.find(a_follower) == g_healHands.end()) break;
+        }
     }
 
     int RightHealRule(RE::FormID a_follower) {
@@ -747,6 +922,8 @@ namespace MFO::Actuation {
 
     void ResetHealRoad() {
         g_healHands.clear();
+        g_healAsked.clear();
+        g_healCont.clear();
         g_neverFiredLatch.clear();
         g_handFireAttach.clear();
         {

@@ -1026,6 +1026,7 @@ namespace MFO::Scheduler {
                 // last fight would hold off the FIRST cast rule of the next one.
                 // The heal claim ends with the fight too (animheal phase 2, review F6),
                 // by state rather than by the FacetExpiry sweep. No-op when none stands.
+                Actuation::HealHandsCombatEnded(id);   // [heal-hold] ... combat-ended, once per heal record
                 ComposedCast::End(id);
                 Actuation::ClearCastLock(id);
                 // Weapon-stance ownership dies with the fight too. The live CSTY
@@ -1868,8 +1869,11 @@ namespace MFO::Scheduler {
         // dismissal (Followers::Refresh), and revert/load (ClearTransient-
         // State). The SPELL still releases on H3 -- hand occupancy is pacing,
         // and their AI cannot cast what they are not holding either way.
+        // HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (ClickUp 86e3m36qr): a standing heal no rule asked for
+        // this tick is kept and driven on by HealSustainLap; its hand(s) are exempt from the release below.
+        const unsigned healHeld = Actuation::HealSustainLap(f);
         if (!castSeen) {
-            Loadout::ReleaseSpell(id);
+            if (healHeld == 0) Loadout::ReleaseSpell(id);   // a held heal's spell stays in hand
             // Crisp release of the APMF offense-cast facet-CLAIM (per-cast, ch.8b
             // kIntent_Cast, PORTED feat/offense-cast-seats off the retired ch.8
             // kIntent_SelectSpell claim this call used to release) the moment no
@@ -1885,17 +1889,18 @@ namespace MFO::Scheduler {
             // "no cast rule wants it" signal, so the seats cannot drive one more
             // heal at a recipient that no longer qualifies while the ~2.45 s
             // FacetExpiry sweep catches up. No-op when no heal claim stands.
-            ComposedCast::End(id);
+            if (healHeld == 0) ComposedCast::End(id);
             // Clear the shared [cfc] silent-claim watch this claim armed
             // (Actuation::CastOn's ComposedCast::WatchClaim call) -- a no-op if
             // nothing was armed (heal claims clear their own watch via
             // ComposedCast::End instead).
-            ComposedCast::ClearWatch(id);
+            if (healHeld == 0) ComposedCast::ClearWatch(id);
             // Task 2: no cast rule's condition held this tick at all, so
             // whatever the lock was protecting is no longer being requested
             // either -- release it now rather than riding out its own
             // live-check/staleness window.
-            Actuation::ClearCastLock(id);
+            if (healHeld == 0) Actuation::ClearCastLock(id);
+            else Actuation::ReleaseUnheldCastHands(id, healHeld);   // the held heal's hand(s) stay
         }
 
         const char* name = f->GetName() ? f->GetName() : "?";   // flair #11

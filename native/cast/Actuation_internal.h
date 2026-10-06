@@ -642,6 +642,10 @@ namespace MFO::Actuation {
         // HealHandsReconcile: drop (and log once) every per-hand record whose claim ended
         // elsewhere (expiry sweep, preempt, combat end). Cheap: one map lookup when none.
         void HealHandsReconcile(RE::FormID a_follower);
+        // HealRoad.cpp: heal claims last until the recipient is FULL (ClickUp 86e3m36qr).
+        // HealHeldRecipient is AUTO's fallback pick. (HealSustainLap / ReleaseUnheldCastHands /
+        // HealHandsCombatEnded are public: Actuation.h.)
+        RE::Actor* HealHeldRecipient(RE::Actor* a_follower, RE::FormID a_spell);
         // Does a weapon own the follower's right hand (live grip, a live claim, a force-hold
         // coming back, or a Melee/Ranged class without weapon-style control)? cast/Hands.cpp.
         bool RightHandIsWeaponHand(RE::Actor* a_follower);

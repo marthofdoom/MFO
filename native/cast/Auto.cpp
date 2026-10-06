@@ -454,6 +454,9 @@ namespace MFO::Actuation {
                         pick = t == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(t);
                     }
                 }
+                // THE RULE ONLY STARTS A HEAL (ClickUp 86e3m36qr): a standing claim whose recipient is not full
+                // yet stays this lap's pick although nobody is below the ceiling any more.
+                if (!pick) pick = HealHeldRecipient(a_follower, a_spellID);
                 if (!pick) {
                     ReleaseOwnHealClaim(a_follower, kHandLeft, a_spellID, "AUTO: nobody in reach needs this heal now");
                     ReleaseOwnHealClaim(a_follower, kHandRight, a_spellID, "AUTO: nobody in reach needs this heal now");
