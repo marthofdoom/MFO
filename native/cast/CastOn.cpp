@@ -540,6 +540,10 @@ namespace MFO::Actuation {
                                  true };
                     }
                 }
+                // A SELF-BUFF CLAIM's refresh (cast/BuffRoad.cpp): ends the claim once a fire-and-forget buff
+                // is up, and bounds a concentration ward's stream (release + re-stream past the drawn cap).
+                if (a_target == a_follower && handPlan.left && !handPlan.right)
+                    if (auto out = BuffRefreshGate(a_follower, spell)) return *out;
                 if (healClaim && handPlan.left != handPlan.right)   // review F2 / R2-2: proxy + never-observed gates
                     if (auto out = HealRefreshGate(a_follower, planHand, a_spellID)) return *out;
                 if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
