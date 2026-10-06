@@ -67,6 +67,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **DELIBERATELY NOT FIXED, and this is the point:** the reviewer's instruction was "report only; do not resize from n=2." Resizing now means guessing from two samples. **The action here is a MEASUREMENT, not an edit.**
 - **Tension with rule 9's carve-out, stated openly:** the carve-out says anything the next field cycle exercises is never deferrable. That carve-out exists to stop a deferred FIX from corrupting the next test. Here the next field cycle IS the remedy — the heal path exercises this constant directly, so the deck log answers it. Read it from the next heal cycle rather than editing the number first.
 
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CLOSED (sizing holds per the Opus final report; the one long claim was a LoS-held approach the bound excludes) -- the 4000 ms constant is exceeded: heal 0x2F3B8 claim-to-first-fire n=9 was 409,425,482,773,1193,2333,2557,3147,5109 ms, and 'NEVER FIRED' released at 4377ms (14:39:11, census #5.1 BUILT not fired) while the re-claim fired at #5.3 14:39:15.588.
+
 ### MFO-B8 — one constant now answers three questions sized by three DIFFERENT measurements
 - **Raised:** Fable review of `e1e55fb` (F-3, SEV-5), self-flagged by the author first.
 - **Severity:** SEV-5
@@ -148,6 +150,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** the fix is an engine equip-best deny/steer (new mechanism, principles 1/2) to be sized FROM the probe, not before it (Fable diagnosis 2026-09-14). marth informed.
 - **Fix shape when drained:** measure the flip rate from `[armor-obs]`; if the engine re-wears, either (a) drop/sell the off-class piece without a vendor once a better-scored owned piece is worn, or (b) portal+deny on the engine's equip-best for followers MFO dresses.
 - **Surfaced at edit time from:** MAP.md `EquipBestOwnedGear` / ARMOR CLASS BY SKILL "What breaks".
+
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CONFIRMED -- equip-auth mode=observe-only on the deck (MFO.1 12:40:26.828); SPID outfit re-wear at 12:51:31 and 12:54:02 left Adelinda's Shrouded Cowl (13) over the helmet (18) until 13:52:34 and mage Jesper's off-class Ebony Helmet EQUIP at 12:54:02.454 never unequipped; MFO logged 'left to the APMF equip declaration' 232x/38x. Decision task filed (needs-decision).
 
 ### MFO-B17 — armor SEV-5 notes from the same review (`bb77b69`)
 - (a) `ArmorClassSuits` (`Logistics_Loot.cpp:303-310`) is now dead code with changed semantics (BASE AV); zero callers. Delete or keep as the named predicate; never re-call on a hot path.
@@ -294,6 +298,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** coordinator call 2026-09-15: log LEVEL is marth's call; only `minting` is INFO today (`LeftoverWhy` → the `spdlog::info`/`warn` split at the LEFTOVER issue site, `native/MEOBridge.cpp`).
 - **Fix shape when drained (verbatim):** suggest INFO for kOffDomain and kDuplicateCopy; keep stuck / capacity / support-limit / refused / unclassified at WARN.
 - **Addendum (Fable round 2 on `9dacc0e`, coordinator 2026-09-15):** `support-limit` belongs on the by-design-steady-state list too (a loose second support gem with every dual-socket item already holding one warns every 60 s on a condition MFO cannot change); same call, same fix shape.
+
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CONFIRMED -- 51 off-domain LEFTOVER warnings across two sessions; level decision filed as a needs-decision task.
 
 ### MFO-B35 — the duplicate-copy deferral is redundant per MEO's in-place mint and starves the worn item while a spare copy is carried
 - **Raised:** Fable round 2 on `9dacc0e` (`fix/mfo-meo-no-loose-gems`), SEV-4, PLAUSIBLE, pre-existing guard (the deferral predates the branch; the branch narrowed it to UNWORN copies).
@@ -1173,8 +1179,12 @@ Raised against ce1b54c (`fix/mfo-cosave-readers`, Opus tier-3 review, verdict ME
 Raised against 86c9984 (Opus field diagnosis of the 2026-10-01 session, `field1001/diagnosis.md`), deferred from `fix/mfo-heal-starve-retreat`. Verbatim: "The four OOC refusals (E1-E4) are the designed main-thread re-check (`native/cast/CanAct.cpp:228-251`, `RefuseHealApplyOnMain` -> `Sightline::MeasureNow(..., Basis::Own)`), and each is preceded by an `OCCLUDED (own ray)` line a few ms earlier, so the refusal itself is consistent. E1/E2/E4 at 1100-2100 units in a fight are plausibly genuine. E3 (Adelinda, 198 units) is suspect: the ray (`native/Sightline.cpp:103-163`, `CustomRay`) collides on layer `kCharController` from the eye to three target points and calls the pair occluded only if all three hit, so another actor's capsule standing between (player / Cicero) would occlude a teammate at arm's length. The log cannot say what was hit. Note also the pick/refusal disagreement: logistics rule 0 fired on a target the main-thread ray then refused, every time (the pick trusts a cached verdict, the apply re-measures). The refusal is correct behaviour (principle: no heal through walls), the cost is a 3 s refresh lost each time. **Confidence: low** that anything is wrong here." Reviewer's fix shape: only if NEEDS LOCAL 4.3 shows the hit is a teammate capsule, exclude party-member actor capsules from the heal LoS ray (or use a static-geometry layer), never drop the refusal. Settling log: on an `OCCLUDED (own ray)` verdict for a HEAL recipient, log the hit body's owner per sample.
 - **Surfaced at edit time from:** MAP.md "ANIMATED HEAL CLAIM ROAD".
 
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): STILL NEEDS DATA -- 9 OOC heal LoS refusals at distances 678-2867u, none short-range, so the 198u case did not recur; needed: an OOC heal refusal under ~300u (logging gap: [los] OCCLUDED lines name no hit body, APMF's own ray).
+
 ### MFO-B217 (SEV-5) -- `[bleed]` transition logger prints DOWN for raw life state 9
 Raised against 86c9984 (same diagnosis), deferred from `fix/mfo-heal-starve-retreat`. Verbatim: "`[bleed] ... DOWN (?(9) ...) hp 100% ... no MFO heal landed on him while down` (Cicero 08:40:13, 08:56:08; Jesper 08:40:16, 08:40:38): raw life state 9 appears during IdleGive / IdleLockPick (APMF ch.12 lines at the same times). `NoteUnknownLifeState` says "not a down state" but `LifeUp` (`native/cast/CanAct.cpp:88-90`) counts only Alive/Reanimate as up, so the transition logger prints DOWN. Misleading diagnostics, no behavioural effect seen (0 `cannot act` refusals)." Fix shape (tier C): make the unnamed raw value(s) the logger calls DOWN agree with `NoteUnknownLifeState` (treat 9 as up, or stop claiming "not a down state").
+
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CONFIRMED (still seen) -- MFO.1 12:46:14.716 and 12:55:03.870 print Cicero DOWN '?(9)' at hp 100%.
 ### MFO-B210 (SEV-5/SEV-4, OPEN) -- ranged kind by perks + ammo: what the first cut does NOT do
 Raised by the author of `feat/mfo-ranged-kind-ammo` (ClickUp 86e3940yd), 2026-10-01, against 8f8901b. Round 2 drained the relic items and added the crossbow item-type perk signal. Recorded, not fixed (rule 9):
 - **Perk bias is neutral for vanilla keyword perks.** Both vanilla bows and crossbows carry `WeapTypeBow`, so keyword-conditioned Archery perks bias both alike. Round 2 added `kWkCrossbow` and the right-hand `GetEquippedItemType` 7/12 votes, so item-type-conditioned perks do separate them.
@@ -1232,6 +1242,8 @@ Raised against c773a4ff (`fix/mfo-heal-starve-retreat`, Opus review, F4), 2026-1
 
 ### MFO-B221 (SEV-4) -- field watch: P1 hold can re-arm per claim and starve offense
 Raised against c773a4ff (same review, F5). Finding: re-mints restamp `lastSeen`, so a heal that never starts can re-arm the 4 s hold each claim. `kNeverFired` stays the loud signal. A field watch, not a code change: see MAP.md "Telling P1 worked from P1 starved offense".
+
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CLOSED -- 9 hold-arms, 3 ENDED fired, 1 NEVER FIRED (14:39:11.508 -> 14:39:13.239 'no hold -- never-fired bound released it'); no repeated hold+kNeverFired starvation pattern seen; needed: a long offense-starved fight with a healer to rule the re-arm out.
 
 ### MFO-B222 (SEV-5) -- a B177 restream-gap kept heal lock survives the retreat
 Raised against c773a4ff (same review, F7). Finding: a heal lock kept through the stream-cap restream gap (B177, `restreamAt`) is not cleared when the retreat fills, because `ReleaseHealClaimForRetreat` only acts on a standing claim. Harmless until the gap window lapses.
@@ -1298,6 +1310,8 @@ Raised against 9895a53 (`feat/mfo-perhand-heal`, Opus tier-A review, 2026-10-05)
   - **SEV-4 (pre-existing, not changed):** `Loadout::Prepare` calls `Actor::HasSpell` on the job worker (the same class as T1).
   - **SEV-5:** `[hand-fire]` volume on offense casts; HealObs drops the attribution when both hands fired; `LastFireHand` can be stale for a later fire of the same form; `g_handFire` and `g_handFireAttach` never shrink within a session (cleared only on load).
 
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CLOSED (S1 only) -- 1 NEITHER-hand line (MFO.1 12:41:53.390 Jesper 02003F52) but the right hand FIRED at 12:42:06/18/28 per APMF ctcensus, so no dead hand; the F5 and other parts were not covered.
+
 ### MFO-B228 (SEV-5) -- press-latched click follow-ups
 Raised against deddf80 (`fix/mfo-ui-port-meo-drag`, Opus review MERGE), 2026-10-05. (B227 was not in this branch's copy of the file; check for a clash at merge.)
 - SEV-5: Selectable popup-close parity. A latched Selectable click closes its popup on the `Popup` window flag alone; ImGui's own condition also involves `!auto_selected` / `AutoClosePopups`. The two can differ in edge cases.
@@ -1338,6 +1352,8 @@ Raised against 6b29d4c (`feat/mfo-claim-road-summon-ally-rowless`), recorded at 
 - **R2-1 (SEV-3, fixed in the follow-up round):** the explicit-self kTargetActor claim (a non-kSelf buff at the caster, target = his own FormID) has an UNPROVEN landing. Harbinger's STATUS predicts a "hand stuck" for a self-aimed delivery, and a fire that never lands re-casts until the magicka runs dry. Bounded now for every buff claim: a first observed fire with the up-read still No after `kHoldLastSeenCapMs` releases the claim with a `[buff] ... FIRED but NEVER LANDED` WARN and holds the rule off for the fight. Concentration is excluded from `ExplicitSelfBuff` and keeps the Task-1 target-0 claim. **Field observable:** a `[buff] <fid> <name> (<spell>): self-buff CLAIM at <the caster's own id>` line, then a `[cast]` SpellFire for that spell, then a visible effect on the caster (or the NEVER LANDED WARN).
 - **Surfaced at edit time from:** MAP.md `cast/BuffRoad.cpp` entry ("Open findings: MFO-B230, MFO-B232").
 
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): STILL NEEDS DATA -- R2-1 CLOSED (Lamb of Mara claim at own id 12:46:35, LANDED +1600ms, FIRED via Script) but N3 Reanimate had 0 log lines; needed: a Reanimate cast in the field.
+
 ### MFO-B231 -- Held-heal approach (apmf/CombatApproach.cpp): deferred review findings F5
 Raised against e8ba5a0 (`feat/mfo-held-heal-approach`, Opus review FIX FIRST; F1-F4 fixed in the follow-up round), 2026-10-05. (B231 was the next free id in this branch's copy of the file; check for a clash at merge.)
 - **F5a (SEV-5):** `apmf/APMFBridge.h` is at ~1538 lines (past the ~1500 plan-a-split line). Propose a split as its own brief (`apmf/` public header per claim family); this branch only added 10 declaration lines.
@@ -1346,11 +1362,15 @@ Raised against e8ba5a0 (`feat/mfo-held-heal-approach`, Opus review FIX FIRST; F1
 - **F5d (SEV-5):** `g_approachBlocked` / `g_approachRefileAfter` for a follower who dies mid-fight are cleared only by `ReleaseHealApproach(.., fightOver)` (dismissal, combat ended) or `ClearHealApproaches` (load / revert); a few FormIDs can linger until then.
 - **Surfaced at edit time from:** MAP.md `apmf/CombatApproach.cpp` entry.
 
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CLOSED (no thinning needed) -- heal-approach ran (31 lines over 7 claims) with no failure seen but the F5b-specific datum is not in the logs; needed: a LoS-held heal approach with the F5b condition logged.
+
 ### MFO-B233 -- Self-flip proxy has no capability signal (cast/BuffRoad.cpp)
 Raised against 2f48f5c (`feat/mfo-self-proxy-aimed-touch`, Opus review MERGE), 2026-10-06.
 - **DECIDED (coordinator): no ABI bump.** Released Harbinger 0.10.0 is ABI 17, below MFO's ABI >= 19 gate, and every future release contains the self-flip proxy (APMF main 46f4ce1). Only unreleased dev builds between d8bb76d and 46f4ce1 fall in the gap, and BuffRoad's never-fired / fired-but-never-landed releases (MFO-B232 R2-1) bound that loudly.
 - **SEV-3 (F1, open, needs its own brief):** MFO's beneficial filter is looser than Harbinger's self-flip gate. `CasterConsent::ClassifySpell` (CasterConsent.cpp:35) rejects only `IsHostile() || IsDetrimental()` effects; Harbinger also refuses unflagged Calm / Frenzy / Demoralize / Paralysis / Stagger archetypes (Pacify, MS08KematuParalysis, MG08 Ancano / Tolfdir). Such a spell reaches Claim in MFO (falls to NoRow); Harbinger then logs "NO self-flip proxy; the seats aim the original form at the caster", which never fires per APMF-B39 and is caught by the never-fired release. Still safer than the old DirectNoSeat force-cast onto the caster. Fix in ClassifySpell (also feeds the slider and AUTO's beneficial-to-party choice), NOT in ExplicitSelfBuff (declining there would send it back to the direct self cast).
 - SEV-4: the BuffRoad.cpp comment "a hostile spell is never a Buff kind" holds only for flagged effects.
+
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): STILL NEEDS DATA -- 0 'NO self-flip proxy' lines, so no refusal was seen, but the capability signal itself was not exercised; needed: a self-flip cast on a runtime or spell where the proxy is unavailable.
 
 ### MFO-B234 -- A re-started concentration channel on the same claim is not protected again (cast/HealRoad.cpp)
 Raised against `fix/mfo-heal-hold-until-fire`, 2026-10-06.
