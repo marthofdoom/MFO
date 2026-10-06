@@ -180,6 +180,90 @@ namespace MFO::Actuation {
             return a_ae->elapsedSeconds < a_appearSec;
         }
 
+    }   // namespace (reopened below)
+
+    // MAIN THREAD ONLY. THE THREE QUESTIONS A SUMMON RULE ASKS BEFORE IT CASTS, without casting
+    // (feat/mfo-claim-road-summon-ally-rowless): is this spell's creature live, is it still
+    // LANDING, is the list at its summon LIMIT. SummonOnMain makes the direct cast on Clear; the
+    // animated claim road (cast/BuffRoad.cpp's main-thread up-read) uses the verdict as its "up"
+    // test. Reads only; the one write is none (g_summon is read under its leaf mutex).
+    SummonGateInfo SummonGate(RE::Actor* f, RE::SpellItem* sp) {
+        SummonGateInfo out;
+        if (!f || !sp) { out.v = SummonGateVerdict::Live; return out; }   // nothing to cast for: blocked
+        const auto  a_id      = f->GetFormID();
+        const auto  a_spellID = sp->GetFormID();
+        const auto  now       = SelfClock::now();
+        const float appear    = GmstFloat("fMagicSummonMaxAppearTime", 4.0f);
+        SummonState st{};
+        {
+            std::lock_guard lk(g_summonMx);
+            if (const auto it = g_summon.find(RecastKey(a_id, a_spellID)); it != g_summon.end()) st = it->second;
+        }
+        // 1. PER SPELL: a live creature from THIS spell blocks only this spell.
+        if (CasterHasLiveSummon(f, sp)) { out.v = SummonGateVerdict::Live; return out; }
+        // 2. LANDING: read the engine. An appearing effect of THIS spell on
+        //    the caster; else (no effect yet) the fallback floor after our
+        //    own last cast (appear time + margin).
+        bool ownEffect = false, ownAppearing = false;
+        int  otherAppearing = 0;
+        std::vector<RE::FormID> otherSpellsWithEffect;
+        if (auto* mt = f->AsMagicTarget()) {
+            if (auto* list = mt->GetActiveEffectList()) {
+                for (auto* ae : *list) {
+                    if (!ae || !ae->spell) continue;
+                    if (!skyrim_cast<RE::SummonCreatureEffect*>(ae)) continue;
+                    const bool mine = ae->spell == sp;
+                    if (mine) ownEffect = true;
+                    else      otherSpellsWithEffect.push_back(ae->spell->GetFormID());
+                    if (SummonAppearing(ae, appear)) {
+                        if (mine) ownAppearing = true;
+                        else      ++otherAppearing;
+                    }
+                }
+            }
+        }
+        if (ownAppearing ||
+            (!ownEffect && SecSince(st.lastCast, now) < appear + kSummonAppearMarginSec)) {
+            out.v = SummonGateVerdict::Landing;
+            return out;
+        }
+        // 3. THE LIST'S SUMMON LIMIT. listed = EVERY commandedActors entry,
+        //    the raw count the engine itself compares (1.5.97 0x683E45 /
+        //    1.6.1170 0x7178F5 read [middleHigh+0x110] and never check
+        //    liveness; Reanimate thralls count too). Counting only live ones
+        //    would let MFO cast into a dead-but-listed slot and the engine
+        //    would then evict a LIVE older summon. pending = OTHER summon
+        //    spells this follower cast that are still appearing (engine
+        //    effect), or whose effect does not exist yet but were cast inside
+        //    the fallback floor. A lower-ranked summon already out keeps its
+        //    slot until it dies -- that is the list's rule.
+        int live = 0;
+        if (auto* proc = f->GetActorRuntimeData().currentProcess; proc && proc->middleHigh)
+            live = static_cast<int>(proc->middleHigh->commandedActors.size());
+        int pendingFloor = 0;
+        {
+            std::lock_guard lk(g_summonMx);
+            for (const auto& [k, s] : g_summon) {
+                if (static_cast<RE::FormID>(k >> 32) != a_id) continue;
+                const auto other = static_cast<RE::FormID>(k & 0xFFFFFFFFu);
+                if (other == a_spellID) continue;
+                if (SecSince(s.lastCast, now) >= appear + kSummonAppearMarginSec) continue;
+                if (std::find(otherSpellsWithEffect.begin(), otherSpellsWithEffect.end(), other) !=
+                    otherSpellsWithEffect.end())
+                    continue;   // its effect exists: counted by the engine read instead
+                ++pendingFloor;
+            }
+        }
+        const int  pending = otherAppearing + pendingFloor;
+        const int  limit   = SummonLimit(f, sp);
+        const bool noCap   = SummonCapSkipped();
+        out.live = live; out.pending = pending; out.limit = limit; out.noCap = noCap;
+        if (!noCap && live + pending >= limit) out.v = SummonGateVerdict::Limit;
+        return out;
+    }
+
+    namespace {
+
         // MAIN THREAD. The whole decision + cast for one summon rule.
         void SummonOnMain(RE::FormID a_id, RE::FormID a_spellID, int a_rule,
                           const std::string& a_table, const std::string& a_target) {
@@ -213,70 +297,22 @@ namespace MFO::Actuation {
                              a_id, name, a_spellID, a_rule, a_table, a_target, a_why);
             };
 
-            // 1. PER SPELL: a live creature from THIS spell blocks only this spell.
-            if (CasterHasLiveSummon(f, sp)) {
+            // 1-3. PER SPELL live / LANDING / THE LIST'S SUMMON LIMIT: SummonGate (the claim road's
+            // up-read asks the SAME three questions without casting).
+            const auto gate = SummonGate(f, sp);
+            if (gate.v == SummonGateVerdict::Live) {
                 setVerdict(SummonVerdict::Live);
                 skipLog("this spell's creature is still alive");
                 return;
             }
-            // 2. LANDING: read the engine. An appearing effect of THIS spell on
-            //    the caster; else (no effect yet) the fallback floor after our
-            //    own last cast (appear time + margin).
-            bool ownEffect = false, ownAppearing = false;
-            int  otherAppearing = 0;
-            std::vector<RE::FormID> otherSpellsWithEffect;
-            if (auto* mt = f->AsMagicTarget()) {
-                if (auto* list = mt->GetActiveEffectList()) {
-                    for (auto* ae : *list) {
-                        if (!ae || !ae->spell) continue;
-                        if (!skyrim_cast<RE::SummonCreatureEffect*>(ae)) continue;
-                        const bool mine = ae->spell == sp;
-                        if (mine) ownEffect = true;
-                        else      otherSpellsWithEffect.push_back(ae->spell->GetFormID());
-                        if (SummonAppearing(ae, appear)) {
-                            if (mine) ownAppearing = true;
-                            else      ++otherAppearing;
-                        }
-                    }
-                }
-            }
-            if (ownAppearing ||
-                (!ownEffect && SecSince(st.lastCast, now) < appear + kSummonAppearMarginSec)) {
+            if (gate.v == SummonGateVerdict::Landing) {
                 setVerdict(SummonVerdict::Landing);
                 skipLog("this spell's creature is still appearing");
                 return;
             }
-            // 3. THE LIST'S SUMMON LIMIT. listed = EVERY commandedActors entry,
-            //    the raw count the engine itself compares (1.5.97 0x683E45 /
-            //    1.6.1170 0x7178F5 read [middleHigh+0x110] and never check
-            //    liveness; Reanimate thralls count too). Counting only live ones
-            //    would let MFO cast into a dead-but-listed slot and the engine
-            //    would then evict a LIVE older summon. pending = OTHER summon
-            //    spells this follower cast that are still appearing (engine
-            //    effect), or whose effect does not exist yet but were cast inside
-            //    the fallback floor. A lower-ranked summon already out keeps its
-            //    slot until it dies -- that is the list's rule.
-            int live = 0;
-            if (auto* proc = f->GetActorRuntimeData().currentProcess; proc && proc->middleHigh)
-                live = static_cast<int>(proc->middleHigh->commandedActors.size());
-            int pendingFloor = 0;
-            {
-                std::lock_guard lk(g_summonMx);
-                for (const auto& [k, s] : g_summon) {
-                    if (static_cast<RE::FormID>(k >> 32) != a_id) continue;
-                    const auto other = static_cast<RE::FormID>(k & 0xFFFFFFFFu);
-                    if (other == a_spellID) continue;
-                    if (SecSince(s.lastCast, now) >= appear + kSummonAppearMarginSec) continue;
-                    if (std::find(otherSpellsWithEffect.begin(), otherSpellsWithEffect.end(), other) !=
-                        otherSpellsWithEffect.end())
-                        continue;   // its effect exists: counted by the engine read instead
-                    ++pendingFloor;
-                }
-            }
-            const int  pending = otherAppearing + pendingFloor;
-            const int  limit   = SummonLimit(f, sp);
-            const bool noCap = SummonCapSkipped();
-            if (!noCap && live + pending >= limit) {
+            const int  live  = gate.live, pending = gate.pending, limit = gate.limit;
+            const bool noCap = gate.noCap;
+            if (gate.v == SummonGateVerdict::Limit) {
                 setVerdict(SummonVerdict::Limit);
                 if (SecSince(st.lastLimitLog, now) >= 10.0f) {
                     {

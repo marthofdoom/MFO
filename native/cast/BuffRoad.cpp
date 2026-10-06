@@ -9,7 +9,7 @@
 // cast makes (APMFBridge::ClaimOffenseCast); the spell goes into the LEFT hand with Loadout::Prepare
 // (the proven "once equipped it never failed" half) and consent is latched, as on every other claim.
 //
-// WHY ONLY THESE ROWS (Harbinger Docs/STATUS.md "What the engine does", read from APMF main 7fd5908).
+// WHY THESE ROWS NEED NO NEW SEAT (the original scope; Harbinger Docs/STATUS.md "What the engine does", read from APMF main 7fd5908).
 // The engine builds a caster only for a spell whose highest-scoring effect has a row in its 23-row
 // table. A SELF-delivery spell keys its own row natively (no seat 0 needed). Harbinger seats WHETHER /
 // WHERE / HOW LONG (0x06 / 0x0A / 0x07 / 0x0D) on the Restore and Offensive casters ONLY; 0x0F (the
@@ -19,20 +19,28 @@
 // "Q-L"). It is NEVER masked: a claim that does not fire stays loud through the same `[cfc]`
 // silent-claim warning every claim has, and nothing re-routes it to the direct road.
 //
-// WHAT IS NOT HERE, and what it needs from Harbinger (stated in the report, not hacked in MFO):
-//   * Light (Candlelight): excluded. MFO's own equipped Light spell left in the hand let the AI spam
-//     it (55 lights, ShadowSceneNode CTD, deck 2026-08-19); the claim road leaves the spell to the AI
-//     between casts, so it stays direct until a seat can bound it.
-//   * Summon / Reanimate: Harbinger's summon seat task (ClickUp 86e3dvkwm: a cast seat on
-//     CombatMagicCasterSummon, its self-claim match, classify skipping summons).
-//   * A spell with NO row (Muffle, fortify / resist, Night Eye, Detect Life, Calm / Frenzy / Courage,
-//     cures): no caster is ever built; only a seat-0 row substitution in Harbinger could serve it.
-//   * A buff cast AT an ally or the player, and AUTO's beneficial fan at others: seat 0 flips the self
-//     bit, so the Armor / Cloak / ... caster would be built, but 0x0A (GetMagicTarget) is not seated
-//     on those types, so the engine would aim it at the combat target (a foe).
-// A self cast of a Light, Summon / Reanimate or rowless spell reaches ChooseBuffRoad and keeps the direct
-// road with one `[buff]` line naming the reason. A buff at an ally or the player, and AUTO's beneficial
-// fan, never pass through ChooseBuffRoad at all (they are NOT logged here); they keep their own roads.
+// FROM feat/mfo-claim-road-summon-ally-rowless (Harbinger main ff2f884 seats 0x06 / 0x07 / 0x0A / 0x0D on
+// Ward, Summon, Cloak, Light, Invisibility, BoundItem, Armor and Script) the road also serves, behind
+// APMFBridge::CastSeatsSupported() (ABI >= 18: no capability bit exists, see its note):
+//   * SUMMON / REANIMATE (a placement spell, target 0): Harbinger places it natively; the engine decides
+//     WHETHER (a Reanimate needs a corpse it finds itself, so a claim that never fires is the
+//     never-fired release's case, F1 below). "Up" is SummonGate (cast/Summon.cpp: live / landing / the
+//     summon LIMIT), made on the main thread like every up-read here.
+//   * ROWLESS spells (Muffle, fortify / resist, Night Eye, Detect Life, cures, Courage ...): claimed
+//     normally, served by Harbinger's Script row ("served as Script" on its side). An INSTANT rowless spell
+//     has no effect to read, so its claim ends once a fire is observed (one cast per claim).
+//   * LIGHT: a kSelf Candlelight now rides the claim (Harbinger's 0x06 also requires "not already
+//     applied", which bounds the 55-light spam of 2026-08-19). Aimed / targeted Light (Magelight) and any
+//     ambiguous (rowApprox) row stay direct.
+//   * A BUFF AT AN ALLY OR THE PLAYER (a_recipient): claim target = the recipient (ClaimOffenseCast), the
+//     delivery-flip proxy + seat 0 key the row and 0x0A / 0x0D aim at the recipient. One claim at a time on
+//     the LEFT hand; AUTO's beneficial fan (cast/Auto.cpp) is a SERIES, lowest HP first, each recipient
+//     handed to CastOn. The heal road's second-recipient RIGHT hand is NOT reused (it would need
+//     HealRoad surgery); a buff's recipients take the LEFT in turn.
+// Below ABI 18 those kinds keep the direct road with one `[buff]` line (DirectNoCap): on an older Harbinger such
+// a claim never fires and the never-fired release has no direct fallback, so claiming there would silently
+// stop the cast. A self Armor / Cloak / Invisibility / BoundItem / Ward claim needs none of it (native rows).
+// A concentration cast at another recipient keeps its own claim road (cast/DirectTarget.cpp).
 //
 // Worker-serial (#4), like every cast-road decision: the log dedup and the channel ledger are
 // unlocked on purpose.
@@ -65,45 +73,62 @@ namespace MFO::Actuation {
 
         // THE "BUFF IS UP" READ IS MADE ON THE MAIN THREAD (review F6): HasMagicEffect walks the live
         // active-effect list, which the engine mutates on the main thread, so the worker never reads
-        // it. MainThread::Post makes the read and LATCHES the verdict per (follower, spell) under
+        // it. MainThread::Post makes the read and LATCHES the verdict per (recipient, spell) under
         // g_upMx; the worker reads the latch (the heal road's proxy-check shape, HealRoad.cpp
         // ProxyUnlearnedRelease). STALE-WHILE-REVALIDATE (review R2-3, principle 9): the worker always
         // gets the LAST verdict, or Unknown when there has never been one; a verdict older than
         // kUpRefresh only posts a fresh read and is never discarded for its age (a party whose service
         // lap exceeds any fixed window would otherwise never see a fresh verdict). At most one read is
         // pending per key. ResetBuffRoad clears it all.
+        // The RECIPIENT is the actor the effect lands on (the follower for a self buff, the ally or the
+        // player for a buff at one). A SUMMON / REANIMATE spell's "up" is SummonGate on the caster
+        // (live, landing, or the summon LIMIT: Blocked), not a magic effect on the recipient.
         constexpr auto kUpRefresh = std::chrono::milliseconds(2000);
-        struct UpLatch { bool pending = false; bool up = false; std::chrono::steady_clock::time_point at{}; };
+        enum class Up : std::uint8_t { Unknown, No, Yes, Blocked };   // Blocked: a summon the list's limit refuses
+        struct UpLatch { bool pending = false; Up up = Up::Unknown; std::chrono::steady_clock::time_point at{}; };
         std::mutex                                    g_upMx;
         std::unordered_map<std::uint64_t, UpLatch>    g_up;   // under g_upMx
 
-        enum class Up : std::uint8_t { Unknown, No, Yes };
-        Up BuffUp(RE::Actor* a_actor, RE::SpellItem* a_spell) {
-            const auto fid = a_actor->GetFormID();
+        // (recipient, spell): one id for "this spell on this actor", the key of every per-spell set below.
+        constexpr std::uint64_t SK(RE::FormID a_recipient, RE::FormID a_spell) {
+            return (static_cast<std::uint64_t>(a_recipient) << 32) | a_spell;
+        }
+
+        Up BuffUp(RE::Actor* a_recipient, RE::SpellItem* a_spell, bool a_placement) {
+            const auto rid = a_recipient->GetFormID();
             const auto sid = a_spell->GetFormID();
-            const std::uint64_t key = (static_cast<std::uint64_t>(fid) << 32) | sid;
+            const std::uint64_t key = SK(rid, sid);
             Up out = Up::Unknown;
             bool post = false;
             {
                 std::scoped_lock lock(g_upMx);
                 auto& l = g_up[key];
                 const bool seen = l.at.time_since_epoch().count() != 0;
-                if (seen) out = l.up ? Up::Yes : Up::No;
+                if (seen) out = l.up;
                 if (!l.pending && (!seen || std::chrono::steady_clock::now() - l.at >= kUpRefresh)) {
                     l.pending = true;
                     post = true;
                 }
             }
             if (post)
-                MainThread::Post([fid, sid, key] {
-                    bool up = false;
-                    auto* a  = RE::TESForm::LookupByID<RE::Actor>(fid);
+                MainThread::Post([rid, sid, key, a_placement] {
+                    Up up = Up::No;
+                    auto* a  = RE::TESForm::LookupByID<RE::Actor>(rid);
                     auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sid);
                     if (a && sp) {
-                        auto* ei   = sp->GetCostliestEffectItem();
-                        auto* mgef = ei ? ei->baseEffect : nullptr;
-                        auto* mt   = a->AsMagicTarget();
-                        up = mgef && mt && mt->HasMagicEffect(mgef);
+                        if (a_placement) {
+                            // a summon / reanimate: the CASTER's own gate (the recipient is the caster)
+                            switch (SummonGate(a, sp).v) {
+                            case SummonGateVerdict::Clear: up = Up::No; break;
+                            case SummonGateVerdict::Limit: up = Up::Blocked; break;
+                            default:                       up = Up::Yes; break;   // live or landing
+                            }
+                        } else {
+                            auto* ei   = sp->GetCostliestEffectItem();
+                            auto* mgef = ei ? ei->baseEffect : nullptr;
+                            auto* mt   = a->AsMagicTarget();
+                            up = (mgef && mt && mt->HasMagicEffect(mgef)) ? Up::Yes : Up::No;
+                        }
                     }
                     std::scoped_lock lock(g_upMx);
                     auto it = g_up.find(key);
@@ -118,7 +143,7 @@ namespace MFO::Actuation {
         // A spell stays transparent until a state change: the follower loses its CombatController or
         // ClearCastLock(follower) (combat end, dismiss), or the load reverts (ResetBuffRoad). The
         // g_unsightedCharge pattern. Worker-serial (#4).
-        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_neverFired;
+        std::unordered_map<RE::FormID, std::unordered_set<std::uint64_t>> g_neverFired;   // follower -> SK(recipient, spell)
 
         // BUFFROAD'S OWN "FIRED THIS FIGHT" SET (review R3-1): the [cfc] watch's `observed` latch is
         // wiped by six things (EndBuffClaim's own watch clear, WatchArmed's re-arm for another spell,
@@ -127,7 +152,7 @@ namespace MFO::Actuation {
         // refresh lap, or the up-read says the buff landed; it is the ONLY input to the
         // fired-earlier / never-fired split. Erased by ResetBuffFollower / ResetBuffRoad.
         // Worker-serial (#4).
-        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_fired;
+        std::unordered_map<RE::FormID, std::unordered_set<std::uint64_t>> g_fired;   // follower -> SK(recipient, spell)
 
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
@@ -137,6 +162,29 @@ namespace MFO::Actuation {
             ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
             ClearLeftCastLockIf(id, a_spell->GetFormID());
             if (a_takeBack) Loadout::ReleaseSpellIf(id, a_spell->GetFormID());
+        }
+
+
+        // An INSTANT spell (no effect has a duration, not a concentration stream) leaves nothing a "buff is
+        // up" read can see (a cure, a dispel, an instant restore): its claim ends once a fire is observed.
+        bool InstantSpell(RE::SpellItem* a_spell) {
+            if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) return false;
+            for (auto* eff : a_spell->effects)
+                if (eff && eff->effectItem.duration > 0) return false;
+            return true;
+        }
+
+        // A claim lap's label for the `[buff]` line: which kind of claim this is.
+        const char* ClaimLabel(const SpellArchetype& a_arch, bool a_other) {
+            switch (a_arch.row) {
+            case EngineRow::Summon:    return "summon";
+            case EngineRow::Reanimate: return "reanimate";
+            case EngineRow::NoRow: case EngineRow::Unknown: case EngineRow::Script:
+                return a_other ? "rowless ally-buff (served as Script by Harbinger)"
+                               : "rowless self-buff (served as Script by Harbinger)";
+            case EngineRow::Light:     return a_other ? "light at an ally" : "light";
+            default:                   return a_other ? "ally-buff" : "self-buff";
+            }
         }
 
     }
@@ -154,19 +202,28 @@ namespace MFO::Actuation {
         g_fired.erase(a_follower);
     }
 
-    bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell) {
-        if (!a_follower || !a_spell) return false;
-        if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) != BuffRoad::Claim) return false;
-        // A never-fired hold-off (F1) is transparent without a preempt too.
-        if (const auto nf = g_neverFired.find(a_follower->GetFormID());
-            nf != g_neverFired.end() && nf->second.count(a_spell->GetFormID()))
-            return true;
-        if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) return false;
-        // Unknown (the read is posted, no verdict yet) is transparent too: a guess here would preempt.
-        return BuffUp(a_follower, a_spell) != Up::No;
+    bool BuffPlacementSpell(RE::SpellItem* a_spell) {
+        if (!a_spell) return false;
+        const auto shape = ClassifyArchetype(a_spell).shape;   // any Summon / Reanimate effect (Harbinger's IsPlacementSpell)
+        return shape == SpellShape::Summon || shape == SpellShape::Reanimate;
     }
 
-    BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log) {
+    bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
+        if (!a_follower || !a_spell) return false;
+        const bool other = a_recipient && a_recipient != a_follower;
+        RE::Actor* recip = other ? a_recipient : a_follower;
+        if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? recip : nullptr) != BuffRoad::Claim) return false;
+        // A never-fired hold-off (F1) is transparent without a preempt too.
+        if (const auto nf = g_neverFired.find(a_follower->GetFormID());
+            nf != g_neverFired.end() && nf->second.count(SK(recip->GetFormID(), a_spell->GetFormID())))
+            return true;
+        if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) return false;
+        if (InstantSpell(a_spell)) return false;   // nothing an up-read could see
+        // Unknown (the read is posted, no verdict yet) is transparent too: a guess here would preempt.
+        return BuffUp(recip, a_spell, BuffPlacementSpell(a_spell)) != Up::No;
+    }
+
+    BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log, RE::Actor* a_recipient) {
         if (!a_follower || !a_spell) return BuffRoad::NotBuff;
         if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff) return BuffRoad::NotBuff;
         const auto fid     = a_follower->GetFormID();
@@ -183,39 +240,60 @@ namespace MFO::Actuation {
             !Config::g_apmfCast.load() || Config::g_legacyCastHybrid.load() || !Config::g_equipToCast.load())
             return BuffRoad::DirectDegrade;
 
-        // Only a Self-delivery spell keys its own row natively; anything else would need seat 0
-        // (and 0x0A on the caster type) for a target the engine cannot be told about.
-        if (a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf)
-            return say(BuffRoad::DirectNoSeat, "not Self delivery (no 0x0A seat on the Armor / Cloak / Ward / ... "
-                                               "casters: needs Harbinger)");
+        const bool other = a_recipient && a_recipient != a_follower;
+        // A concentration cast at another recipient keeps its own claim road (cast/DirectTarget.cpp); quiet.
+        if (other && a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+            return BuffRoad::DirectNoSeat;
 
-        const auto arch = ClassifyArchetype(a_spell);
-        // F3: a spell with ANY Light effect, a Light shape, or several effects mapping to different rows
-        // (the classifier then picks the costliest, which can name Armor for a spell that also lights)
-        // may be built as the engine's Light caster: the spam shape. Direct, until Harbinger bounds Light.
+        // A buff at another recipient is keyed with seat 0's self flip (a_seat0: the claim's driven form),
+        // as the heal claim road is; a self buff keys its own row natively.
+        const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other);
+        const bool placement = arch.shape == SpellShape::Summon || arch.shape == SpellShape::Reanimate;
+        if (other && placement)   // CastOn hands a placement spell the follower as its recipient; defensive
+            return say(BuffRoad::DirectNoSeat, "a summon / reanimate names no recipient (target 0)");
+
+        // A spell with several effects mapping to different rows (the classifier then picks the costliest,
+        // which can name Armor for a spell that also lights) may be built as another caster than the one
+        // the claim was judged for: the 55-light spam shape. Direct.
+        if (arch.rowApprox)
+            return say(BuffRoad::DirectNoSeat, "an ambiguous row (several effects map to different caster rows: "
+                                               "the engine may build a different caster than the one judged)");
         bool anyLight = false;
         for (auto* eff : a_spell->effects)
             if (eff && eff->baseEffect && eff->baseEffect->data.archetype == RE::EffectArchetype::kLight)
                 anyLight = true;
-        if (anyLight || arch.shape == SpellShape::Light || arch.rowApprox)
-            return say(BuffRoad::DirectNoSeat, "a Light effect or an ambiguous row (several effects map to "
-                                               "different caster rows): the engine may build its Light caster, "
-                                               "the 55-light spam CTD shape of 2026-08-19; needs a Harbinger "
-                                               "bound for Light");
+        const auto delivery = a_spell->GetDelivery();
+        if (!placement) {
+            // Harbinger serves Light for kSelf delivery only, and refuses aimed Magelight.
+            if ((anyLight || arch.shape == SpellShape::Light || arch.row == EngineRow::Light) &&
+                delivery != RE::MagicSystem::Delivery::kSelf)
+                return say(BuffRoad::DirectNoSeat, "aimed / targeted Light (Magelight): Harbinger serves Light "
+                                                   "for Self delivery only");
+            // A self cast of a non-Self spell would need the engine told a target it cannot be told (a
+            // non-self-delivered spell claimed on the caster is refused on Harbinger's side).
+            if (!other && delivery != RE::MagicSystem::Delivery::kSelf)
+                return say(BuffRoad::DirectNoSeat, "not Self delivery (no 0x0A aim for a self claim of a "
+                                                   "non-Self spell)");
+        }
+        // needCap: the kinds that exist only with Harbinger's buff / summon / rowless seats. The native-row
+        // self buffs (Armor / Cloak / Invisibility / BoundItem / Ward at self) need none.
+        bool needCap = other;
         switch (arch.row) {
         case EngineRow::Armor: case EngineRow::Cloak: case EngineRow::Invisibility:
         case EngineRow::BoundItem: case EngineRow::Ward:
             break;
-        case EngineRow::Light:
-            return say(BuffRoad::DirectNoSeat, "Light row: a spell left in the hand let the AI spam it "
-                                               "(55-light CTD 2026-08-19); needs a Harbinger seat to bound it");
-        case EngineRow::Summon: case EngineRow::Reanimate:
-            return say(BuffRoad::DirectNoSeat, "Summon/Reanimate row: needs Harbinger's summon seat "
-                                               "(ClickUp 86e3dvkwm)");
+        case EngineRow::Light: case EngineRow::Summon: case EngineRow::Reanimate:
+        case EngineRow::NoRow: case EngineRow::Unknown: case EngineRow::Script:
+            needCap = true;   // Light / placement / rowless (Harbinger serves a rowless spell as Script)
+            break;
         default:
-            return say(BuffRoad::DirectNoRow, "no native caster row (the engine builds no caster for it; "
-                                              "needs a Harbinger seat-0 row substitution)");
+            return say(BuffRoad::DirectNoRow, "its row belongs to another road (Offensive / Restore / Stagger / "
+                                              "Disarm / TargetEffect / Paralyze)");
         }
+        if (needCap && !APMFBridge::CastSeatsSupported())
+            return say(BuffRoad::DirectNoCap, "Harbinger lacks the buff / summon / rowless seats (ABI < 18): this "
+                                              "kind stays direct until Harbinger is updated (an older Harbinger "
+                                              "would never fire the claim)");
 
         // THE TEST IS THE OBJECT THE SEATS HANG OFF (CastTargetDirect's note): no controller, no caster.
         if (!a_follower->GetActorRuntimeData().combatController) {
@@ -226,10 +304,16 @@ namespace MFO::Actuation {
         return BuffRoad::Claim;
     }
 
-    SelfCast BuffSelfClaim(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+    SelfCast BuffClaim(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
+        const bool other = a_recipient && a_recipient != a_follower;
+        RE::Actor* recip = other ? a_recipient : a_follower;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
+        const auto rid     = recip->GetFormID();
+        const auto sk      = SK(rid, spellID);
         const bool conc    = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+        const bool placement = BuffPlacementSpell(a_spell);
+        const bool instant   = InstantSpell(a_spell);
         NoteArchetypeRoad(a_follower, a_spell, ArchRoad::ConcClaim);   // [archetype] probe (passive)
 
         // A duration buff already up is not cast again (the direct road's already-active guard; the
@@ -237,15 +321,20 @@ namespace MFO::Actuation {
         // the guard is for fire-and-forget only; the channel is bounded by BuffRefreshGate.
         // A claim that never fired this fight stays released (review F1): transparent until the fight
         // ends or the load reverts (the latch is cleared there). Never the direct road.
-        if (const auto nf = g_neverFired.find(id); nf != g_neverFired.end() && nf->second.count(spellID))
+        if (const auto nf = g_neverFired.find(id); nf != g_neverFired.end() && nf->second.count(sk))
             return SelfCast::Declined;
         // The up-read is made on the main thread and latched (F6); no verdict yet is a transparent
-        // no-cast this lap (the read is posted), never a guess.
-        if (!conc) {
-            const Up up = BuffUp(a_follower, a_spell);
+        // no-cast this lap (the read is posted), never a guess. An INSTANT spell has nothing to read.
+        if (!conc && !instant) {
+            const Up up = BuffUp(recip, a_spell, placement);
             if (up == Up::Yes) {
-                g_fired[id].insert(spellID);   // R3-1: it landed
+                g_fired[id].insert(sk);   // R3-1: it landed
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                return SelfCast::Declined;
+            }
+            if (up == Up::Blocked) {   // a summon the commanded-actor list refuses: not cast, not "fired"
+                EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                spdlog::debug("[buff] {:08X} {:08X}: summon limit reached -- not claimed", id, spellID);
                 return SelfCast::Declined;
             }
             if (up == Up::Unknown) return SelfCast::Declined;
@@ -264,31 +353,65 @@ namespace MFO::Actuation {
         CasterConsent::Want(id, spellID);
 
         // target 0 = self (Harbinger resolves a self claim to the claimant for a Self-delivery spell,
-        // APMF 85a8f2f); LEFT, the hand Prepare equipped; stopPct 0 (a heal-only concept).
-        if (!APMFBridge::ClaimOffenseCast(id, spellID, /*target=*/0, APMFBridge::kApmfHandLeft, conc, /*stopPct=*/0)) {
+        // APMF 85a8f2f, and a placement spell's target 0 to the claimant too); a buff at another recipient
+        // names that actor. LEFT, the hand Prepare equipped; stopPct 0 (a heal-only concept).
+        const RE::FormID target = other ? rid : 0;
+        if (!APMFBridge::ClaimOffenseCast(id, spellID, target, APMFBridge::kApmfHandLeft, conc, /*stopPct=*/0)) {
             // Present and capable means APMF REFUSED: fail closed, loudly, never the direct road.
-            LogApmfRefusal(id, "self-buff cast", spellID, /*target=*/0, "left");
+            LogApmfRefusal(id, "buff cast", spellID, target, "left");
             return SelfCast::Declined;
         }
         ComposedCast::WatchClaim(id, spellID, APMFBridge::kApmfHandLeft,
                                  APMFBridge::GetOffenseCastProxy(id, APMFBridge::kApmfHandLeft));
-        if (RoadLogDue(id, spellID, BuffRoad::Claim))
-            spdlog::info("[buff] {:08X} {} ({:08X}): self-buff CLAIM (animated; the engine's own {} caster "
+        if (RoadLogDue(id, spellID, BuffRoad::Claim)) {
+            const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other);
+            spdlog::info("[buff] {:08X} {} ({:08X}): {} CLAIM at {:08X} (animated; the engine's own {} caster "
                          "decides when it fires)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
-                         EngineRowName(ClassifyArchetype(a_spell).row));
+                         ClaimLabel(arch, other), rid, EngineRowName(arch.row));
+        }
         return SelfCast::Applied;
     }
 
-    std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell) {
-        if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false) != BuffRoad::Claim) return std::nullopt;
+    SelfCast BuffSelfClaim(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        return BuffClaim(a_follower, a_spell, nullptr);
+    }
+
+    std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
+        const bool other = a_recipient && a_recipient != a_follower;
+        RE::Actor* recip = other ? a_recipient : a_follower;
+        if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? recip : nullptr) != BuffRoad::Claim)
+            return std::nullopt;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
+        const auto rid     = recip->GetFormID();
+        const auto sk      = SK(rid, spellID);
         const bool conc    = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+        const bool placement = BuffPlacementSpell(a_spell);
+        const bool instant   = InstantSpell(a_spell);
 
         // R3-1: a fire observed within the recency window is recorded in BuffRoad's own set.
         if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
                                          APMFBridge::kObservedFiringRecencyMs))
-            g_fired[id].insert(spellID);
+            g_fired[id].insert(sk);
+
+        // AN INSTANT SPELL leaves no effect for an up-read to see (a cure, a dispel): its claim ends once a
+        // fire is observed SINCE THIS CLAIM (the lock's stamp, the shape CastOn's own bound uses), one cast
+        // per claim. The rule re-claims next lap if it still wins.
+        if (instant) {
+            if (const auto stamp = CastLockClaimStamp(id, kHandLeft, spellID);
+                stamp != std::chrono::steady_clock::time_point{}) {
+                const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - stamp).count();
+                if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
+                                                 static_cast<std::uint32_t>(ageMs + 1))) {
+                    g_fired[id].insert(sk);
+                    spdlog::info("[buff] {:08X} {} ({:08X}): instant cast fired -- claim released (one cast per "
+                                 "claim)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
+                    EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                    return Outcome{ Result::NoOp, "instant buff cast fired: claim released", true };
+                }
+            }
+        }
 
         // NEVER FIRED (review F1), the heal road's NeverFiredRelease shape (HealRoad.cpp): the claim's
         // lock stamp is older than kHoldLastSeenCapMs, no fire observed on LEFT within
@@ -307,23 +430,23 @@ namespace MFO::Actuation {
                 // (review R2-1) and NOT the [cfc] watch latch (R3-1, wiped by six things): an
                 // Invisibility broken by an attack, or a reactive ward idle between triggers, fired
                 // and worked.
-                if (const auto fi = g_fired.find(id); fi != g_fired.end() && fi->second.count(spellID)) {
+                if (const auto fi = g_fired.find(id); fi != g_fired.end() && fi->second.count(sk)) {
                     spdlog::info("[buff] {:08X} {} ({:08X}): fired earlier this fight, idle for {} ms with "
                                  "nothing charging -- claim released (no hold-off; the rule re-claims when it "
                                  "wants it again)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
                                  ageMs);
                     EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
-                    return Outcome{ Result::NoOp, "self-buff claim idle after a fire: released", true };
+                    return Outcome{ Result::NoOp, "buff claim idle after a fire: released", true };
                 }
-                spdlog::warn("[buff] {:08X} {} ({:08X}) NEVER FIRED this fight: claimed {} ms ago, nothing "
-                             "charging -- claim RELEASED and the rule held off until the next cast-rule reset "
-                             "(no direct fallback; the engine's {} caster did not fire it: see Harbinger's [ctcensus] "
-                             "verdict; rule {})",
-                             id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, ageMs,
-                             EngineRowName(ClassifyArchetype(a_spell).row), g_firingRule);
-                g_neverFired[id].insert(spellID);
+                spdlog::warn("[buff] {:08X} {} ({:08X}) at {:08X} NEVER FIRED this fight: claimed {} ms ago, "
+                             "nothing charging -- claim RELEASED and the rule held off until the next cast-rule "
+                             "reset (no direct fallback; the engine's {} caster did not fire it: see "
+                             "Harbinger's [ctcensus] verdict; rule {})",
+                             id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, rid, ageMs,
+                             EngineRowName(ClassifyArchetype(a_spell, /*a_seat0=*/other).row), g_firingRule);
+                g_neverFired[id].insert(sk);
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
-                return Outcome{ Result::NoOp, "self-buff claim never fired: released, held off this fight", true };
+                return Outcome{ Result::NoOp, "buff claim never fired: released, held off this fight", true };
             }
         }
 
@@ -352,11 +475,18 @@ namespace MFO::Actuation {
             }
             return Outcome{ Result::NoOp, "self-buff stream cap", true };
         }
-        if (BuffUp(a_follower, a_spell) != Up::Yes) return std::nullopt;
-        g_fired[id].insert(spellID);   // R3-1: it landed
-        spdlog::info("[buff] {:08X} {:08X}: self-buff is up -- claim released (the cast landed)", id, spellID);
+        if (instant) return std::nullopt;   // no up-read for an instant spell; the fire release is above
+        const Up up = BuffUp(recip, a_spell, placement);
+        if (up == Up::Blocked) {
+            spdlog::info("[buff] {:08X} {:08X}: the summon limit is reached -- claim released", id, spellID);
+            EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+            return Outcome{ Result::NoOp, "summon limit reached: claim released", true };
+        }
+        if (up != Up::Yes) return std::nullopt;
+        g_fired[id].insert(sk);   // R3-1: it landed
+        spdlog::info("[buff] {:08X} {:08X}: buff is up on {:08X} -- claim released (the cast landed)", id, spellID, rid);
         EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
-        return Outcome{ Result::NoOp, "self-buff already up: claim released", true };
+        return Outcome{ Result::NoOp, "buff already up: claim released", true };
     }
 
 }

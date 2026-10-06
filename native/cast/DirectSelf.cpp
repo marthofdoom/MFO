@@ -136,8 +136,9 @@ namespace MFO::Actuation {
         }
 
         // THE SELF-BUFF CLAIM ROAD (feat/mfo-remaining-cast-kinds, cast/BuffRoad.cpp): a Buff-kind
-        // Self-delivery spell with a native caster row (Armor, Cloak, Invisibility, BoundItem, Ward) is a
-        // ch.8b claim on the combat table, cast by the follower's own AI, animated. Combat table only
+        // Self-delivery spell with a native caster row (Armor, Cloak, Invisibility, BoundItem, Ward), and
+        // with Harbinger's buff seats (CastSeatsSupported) a kSelf Light, a summon / reanimate or a rowless
+        // spell, is a ch.8b claim on the combat table, cast by the follower's own AI, animated. Combat table only
         // (g_firingRule, the heal road's MFO-B173 rule: the OOC caller never mints a claim). Every other
         // answer falls on to the stream below, and ChooseBuffRoad names why on a [buff] line. A claim
         // lap never reaches the direct stream: BuffSelfClaim's Declined is a transparent no-cast.

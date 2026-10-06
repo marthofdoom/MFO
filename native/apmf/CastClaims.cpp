@@ -164,6 +164,14 @@ namespace MFO::APMFBridge {
         return api && api->abiVersion >= 5 && Config::g_apmfCast.load();
     }
 
+    // See APMFBridge.h. NOT a probe of the seats themselves (APMF_API.h carries no capability bit and
+    // no ABI bump for them); it is the release boundary: ABI v17 (APMF v0.10.0 and older) lacks the
+    // buff / summon / rowless seats, and the next release (ABI v18) carries them.
+    bool CastSeatsSupported() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= 18 && Config::g_apmfCast.load();
+    }
+
     // ── REFRESH A STANDING CAST CLAIM IN PLACE (F9, 2026-09-08) ─────────────────
     // See APMFBridge.h for the contract. The implementation is deliberately a
     // REPLAY of the claim's OWN stored tuple rather than a second refresh path:

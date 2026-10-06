@@ -574,23 +574,32 @@ per concern:
   SpellFire evidence `HandFireSink` (`:305`) / `HandFireWatch` (`:327`) / `HandFireTake` (`:346`, public); anon
   `HealOnHand` (`:88`), `RecipientLost` (`:108`), `NoteLosHold` (`:134`), `NeverFiredRelease` (`:171`),
   `ProxyUnlearnedRelease` (`:210`), `MaintainCompanion` (`:232`), the per-hand record `g_healHands`.
-- `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, batch A release gate checklist R6/R8) = THE ANIMATED SELF-BUFF
-  CLAIM ROAD: `ChooseBuffRoad` (NotBuff / Claim / DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCombat; one `[buff]` line
-  per reason), `BuffSelfClaim` (already-up guard, `Loadout::Prepare` LEFT, consent, `ClaimOffenseCast` target 0, `[cfc]` watch),
-  `BuffRefreshGate` (ends a fire-and-forget claim once the buff is up; bounds a concentration ward at a drawn `DrawConcCap`,
-  release + re-stream). Called from `CastSelfDirect` (`cast/DirectSelf.cpp`, combat table only, before the Task-1 conc claim)
-  and `CastOn`'s in-flight refresh (`cast/CastOn.cpp`, beside `HealRefreshGate`). Served rows: Armor, Cloak, Invisibility,
-  BoundItem, Ward (Self delivery). NOT served, direct with a `[buff]` reason for a self cast: Light, a Light effect or an
-  ambiguous (rowApprox) row (spam CTD, needs a Harbinger bound), Summon/Reanimate (Harbinger summon seat, ClickUp 86e3dvkwm),
-  rowless spells. A buff at an ally/player and AUTO's beneficial fan (no 0x0A seat on those caster types) never reach
-  `ChooseBuffRoad`, so they are NOT logged by it. Round 2 (review FIX FIRST): a never-fired claim (`kHoldLastSeenCapMs`, no fire on
-  LEFT, nothing in flight) is released once with a WARN and the rule held off per fight (`g_neverFired`, cleared at the fight end
-  and by `ResetBuffRoad`), never the direct road; the already-up decline is asked before `commitPreempt` (`BuffUpTransparent`);
-  the up-read is a main-thread latch (`BuffUp`); the ward cap rides the lock's `channelSince` and keeps rank via `restreamAt`.
-  Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B230. WHETHER it fires is the engine type's own CheckStartCast: UNPROVEN until
-  Harbinger's `[ctcensus]` verdicts exist. **What breaks if you change this:** taking the claim without `Prepare` leaves the
-  AI's equipped spell un-taken-back; dropping the already-up release re-casts the buff every lap; no kill switch of its own
-  (it rides `bApmfCast`, `bLegacyCastHybrid`, `bEquipToCast`).
+- `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, widened by feat/mfo-claim-road-summon-ally-rowless 2026-10-05; batch A
+  release gate checklist R6/R8/R9/R11) = THE ANIMATED BUFF CLAIM ROAD: `ChooseBuffRoad(follower, spell, log, recipient)` (NotBuff / Claim /
+  DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCap / DirectNoCombat; one `[buff]` line per reason), `BuffClaim` (+ `BuffSelfClaim`
+  wrapper: already-up guard, `Loadout::Prepare` LEFT, consent, `ClaimOffenseCast` target 0 for self / the recipient for a buff at an
+  ally or the player, `[cfc]` watch, a `[buff] ... <kind> CLAIM` line), `BuffRefreshGate` (ends a claim once the buff is up on its
+  recipient, an INSTANT spell fired, or a summon hit the list's limit; bounds a concentration ward at a drawn `DrawConcCap`), `BuffUpTransparent`,
+  `BuffPlacementSpell`. Called from `CastSelfDirect` (`cast/DirectSelf.cpp`, combat table only, before the Task-1 conc claim), from `CastOn`:
+  the in-flight refresh (beside `HealRefreshGate`) and the ALLY fork (just after the self fork: a Buff-kind fire-and-forget spell at an ally /
+  the player, or a summon / reanimate aimed at another target), from `Fire.cpp` (a combat-table summon: claim via CastOn's self fork, else
+  `CastSummonOnce`) and `CastAuto` (`cast/Auto.cpp`: a combat AUTO summon, and the AUTO beneficial-buff SERIES, lowest HP first, one recipient
+  per lap handed to CastOn; the heal series' shape). Kinds on the claim road: Armor, Cloak, Invisibility, BoundItem, Ward at self (native
+  rows, no seat needed); and, ONLY behind `APMFBridge::CastSeatsSupported()` (`apmf/CastClaims.cpp`, ABI >= 18: APMF v0.10.0 is ABI 17 and
+  lacks the seats, there is no capability bit): Summon / Reanimate (target 0, "up" = `SummonGate`, cast/Summon.cpp), rowless spells
+  (served by Harbinger as Script), kSelf Light (Candlelight), and any buff at an ally / the player. Direct with a `[buff]` reason: aimed Light,
+  an ambiguous (`rowApprox`) row, a self cast of a non-Self spell, a kind below ABI 18 (`DirectNoCap`), a concentration cast at another
+  recipient (its own claim road, `cast/DirectTarget.cpp`). Hostile rowless spells at a foe (Calm / Fear / Frenzy) already took CastOn's
+  owned-offense claim (`ownedCast`) and are unchanged. State is per (recipient, spell): `g_neverFired` / `g_fired` (SK key), the main-thread
+  up latch `g_up`. A never-fired claim (`kHoldLastSeenCapMs`, no fire on LEFT, nothing in flight) is released once with a WARN and held off
+  per fight (cleared at the fight end and by `ResetBuffRoad`), never the direct road; the already-up decline is asked before `commitPreempt`
+  (`BuffUpTransparent`); the ward cap rides the lock's `channelSince` and keeps rank via `restreamAt`. Open findings:
+  `Docs/REVIEW-BACKLOG.md` MFO-B230. WHETHER a claim fires is the engine type's own CheckStartCast: UNPROVEN until Harbinger's `[ctcensus]`
+  verdicts exist. **What breaks if you change this:** taking the claim without `Prepare` leaves the AI's equipped spell un-taken-back;
+  dropping the already-up release re-casts the buff every lap; dropping the `CastSeatsSupported` gate on the new kinds silently stops those casts
+  on an older Harbinger (the claim never fires, the never-fired release has no direct fallback); the AUTO series must keep its `AuthoredDuration > 0`
+  and sticky-recipient rules (an instant spell, or a trading lowest slot, re-claims forever); no kill switch of its own (it rides `bApmfCast`,
+  `bLegacyCastHybrid`, `bEquipToCast`, `bCastSelf` for the summon routes).
 - `cast/Hands.cpp` (1484) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
   `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
