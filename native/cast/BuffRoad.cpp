@@ -21,7 +21,7 @@
 //
 // FROM feat/mfo-claim-road-summon-ally-rowless (Harbinger main ff2f884 seats 0x06 / 0x07 / 0x0A / 0x0D on
 // Ward, Summon, Cloak, Light, Invisibility, BoundItem, Armor and Script) the road also serves, behind
-// APMFBridge::CastSeatsSupported() (ABI >= 18: no capability bit exists, see its note):
+// APMFBridge::CastSeatsSupported() (ABI >= 19: no capability bit exists, see its note):
 //   * SUMMON / REANIMATE (a placement spell, target 0): Harbinger places it natively; the engine decides
 //     WHETHER (a Reanimate needs a corpse it finds itself, so a claim that never fires is the
 //     never-fired release's case, F1 below). "Up" is SummonGate (cast/Summon.cpp: live / landing / the
@@ -37,7 +37,7 @@
 //     the LEFT hand; AUTO's beneficial fan (cast/Auto.cpp) is a SERIES, lowest HP first, each recipient
 //     handed to CastOn. The heal road's second-recipient RIGHT hand is NOT reused (it would need
 //     HealRoad surgery); a buff's recipients take the LEFT in turn.
-// Below ABI 18 those kinds keep the direct road with one `[buff]` line (DirectNoCap): on an older Harbinger such
+// Below ABI 19 those kinds keep the direct road with one `[buff]` line (DirectNoCap): on an older Harbinger such
 // a claim never fires and the never-fired release has no direct fallback, so claiming there would silently
 // stop the cast. A self Armor / Cloak / Invisibility / BoundItem / Ward claim needs none of it (native rows).
 // A concentration cast at another recipient keeps its own claim road (cast/DirectTarget.cpp).
@@ -291,7 +291,7 @@ namespace MFO::Actuation {
                                               "Disarm / TargetEffect / Paralyze)");
         }
         if (needCap && !APMFBridge::CastSeatsSupported())
-            return say(BuffRoad::DirectNoCap, "Harbinger lacks the buff / summon / rowless seats (ABI < 18): this "
+            return say(BuffRoad::DirectNoCap, "Harbinger lacks the buff / summon / rowless seats (ABI < 19): this "
                                               "kind stays direct until Harbinger is updated (an older Harbinger "
                                               "would never fire the claim)");
 

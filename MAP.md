@@ -585,10 +585,10 @@ per concern:
   the player, or a summon / reanimate aimed at another target), from `Fire.cpp` (a combat-table summon: claim via CastOn's self fork, else
   `CastSummonOnce`) and `CastAuto` (`cast/Auto.cpp`: a combat AUTO summon, and the AUTO beneficial-buff SERIES, lowest HP first, one recipient
   per lap handed to CastOn; the heal series' shape). Kinds on the claim road: Armor, Cloak, Invisibility, BoundItem, Ward at self (native
-  rows, no seat needed); and, ONLY behind `APMFBridge::CastSeatsSupported()` (`apmf/CastClaims.cpp`, ABI >= 18: APMF v0.10.0 is ABI 17 and
+  rows, no seat needed); and, ONLY behind `APMFBridge::CastSeatsSupported()` (`apmf/CastClaims.cpp`, ABI >= 19: ABI 18 may predate the seats, v0.10.0 is ABI 17 and
   lacks the seats, there is no capability bit): Summon / Reanimate (target 0, "up" = `SummonGate`, cast/Summon.cpp), rowless spells
   (served by Harbinger as Script), kSelf Light (Candlelight), and any buff at an ally / the player. Direct with a `[buff]` reason: aimed Light,
-  an ambiguous (`rowApprox`) row, a self cast of a non-Self spell, a kind below ABI 18 (`DirectNoCap`), a concentration cast at another
+  an ambiguous (`rowApprox`) row, a self cast of a non-Self spell, a kind below ABI 19 (`DirectNoCap`), a concentration cast at another
   recipient (its own claim road, `cast/DirectTarget.cpp`). Hostile rowless spells at a foe (Calm / Fear / Frenzy) already took CastOn's
   owned-offense claim (`ownedCast`) and are unchanged. State is per (recipient, spell): `g_neverFired` / `g_fired` (SK key), the main-thread
   up latch `g_up`. A never-fired claim (`kHoldLastSeenCapMs`, no fire on LEFT, nothing in flight) is released once with a WARN and held off

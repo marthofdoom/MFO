@@ -1300,3 +1300,9 @@ Raised against d5c51e0 (`feat/mfo-remaining-cast-kinds`, Opus review FIX FIRST, 
 - **R3-2 (SEV-4, raised against c0a6842):** release/re-claim churn after a fire. The claim is released as idle (or when the buff lands) and re-claimed when the rule wants it again. Fix later by keeping a fired claim standing between casts, like the heal road's `kBetweenCasts`, or by releasing it with `takeBack=false` plus `restreamAt`.
 - **R3-3 (SEV-5):** `ClearCastLock(follower)` also runs mid-fight on the Scheduler's `!castSeen` tick, so the never-fired hold-off and the fired set end there too, not only at the fight's end. The WARN now reads "held off until the next cast-rule reset".
 - **Surfaced at edit time from:** MAP.md `cast/BuffRoad.cpp` entry.
+
+### MFO-B231 -- Buff / summon / rowless claim road (cast/BuffRoad.cpp): deferred notes
+Raised against 6b29d4c (`feat/mfo-claim-road-summon-ally-rowless`), recorded at the follow-up commit. Surfaced at edit time from MAP.md `cast/BuffRoad.cpp`.
+- **N1 (SEV-4):** a hostile rowless spell at a foe (Calm / Fear / Frenzy) takes CastOn's owned-offense claim (`ownedCast`). On a Harbinger below ABI 19 that claim never fires (no Script-row seat). Pre-existing and loud (the `[cfc]` silent-claim warning), with no direct fallback by design; not gated here because that would change the offense road.
+- **N2 (SEV-5):** a buff at an ally or the player takes the LEFT hand, one recipient at a time (AUTO is a series, lowest HP first), instead of the heal road's RIGHT-hand second recipient (`cast/HealRoad.cpp`). Reusing that model needs real HealRoad surgery; revisit if serial buffing proves too slow in the field.
+- **N3 (SEV-5):** the WARN rate of a Reanimate claim with no corpse (never-fired release, then held off per fight) is unmeasured. It is bounded to one WARN per fight per (recipient, spell), but the cast-rule reset mid-fight (see R3-3 of MFO-B230) can repeat it.

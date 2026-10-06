@@ -270,10 +270,10 @@ namespace MFO::APMFBridge {
     // Does the resolved Harbinger carry the BUFF / SUMMON / ROWLESS cast seats (0x06 / 0x07 / 0x0A / 0x0D on
     // the Ward, Summon, Cloak, Light, Invisibility, BoundItem, Armor and Script casters; ally buff aim,
     // summon / reanimate native placement, Script-row service of a rowless spell)? There is NO capability
-    // bit and NO ABI bump for them (APMF main ff2f884: kABIVersion stays 18), so the gate is the RELEASE
-    // BOUNDARY: abiVersion >= 18 AND Config::g_apmfCast. The last release (APMF v0.10.0) is ABI 17 and
-    // lacks the seats; ABI 18 was first built on main a few commits BEFORE the seats (7fd5908 vs
-    // edb178c), so an unreleased dev build between the two is the one false positive. Any thread.
+    // bit and NO ABI bump for them (the seats landed at ff2f884 with kABIVersion still 18; ABI 19 followed), so the gate is the RELEASE
+    // BOUNDARY: abiVersion >= 19 AND Config::g_apmfCast. Harbinger main's order is 7fd5908 (ABI 18), ff2f884
+    // (the seats), d8bb76d (ABI 19), so any Harbinger reporting ABI >= 19 has the seats and ABI 18 may not.
+    // Exact, no false-positive window. Any thread.
     // Gates the NEW claim kinds only (cast/BuffRoad.cpp): below it they stay on the direct road, because
     // on an older Harbinger such a claim never fires and the never-fired release has no direct fallback.
     bool CastSeatsSupported();

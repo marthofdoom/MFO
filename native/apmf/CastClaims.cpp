@@ -166,10 +166,12 @@ namespace MFO::APMFBridge {
 
     // See APMFBridge.h. NOT a probe of the seats themselves (APMF_API.h carries no capability bit and
     // no ABI bump for them); it is the release boundary: ABI v17 (APMF v0.10.0 and older) lacks the
-    // buff / summon / rowless seats, and the next release (ABI v18) carries them.
+    // buff / summon / rowless seats. Harbinger main's order is 7fd5908 (ABI 18), ff2f884 (the seats), d8bb76d
+    // (ABI 19), so ABI >= 19 means the seats are present with no false-positive window (an ABI 18 build may
+    // predate them). The literal 19 is that fact, not a header constant: MFO's APMF_API.h mirror is still v18.
     bool CastSeatsSupported() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
-        return api && api->abiVersion >= 18 && Config::g_apmfCast.load();
+        return api && api->abiVersion >= 19 && Config::g_apmfCast.load();
     }
 
     // ── REFRESH A STANDING CAST CLAIM IN PLACE (F9, 2026-09-08) ─────────────────
