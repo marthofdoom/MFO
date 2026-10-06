@@ -583,6 +583,16 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** coordinator's call: leave it, record it.
 - **Fix shape when drained:** keep the bit until a player level-up has been credited (clear it in `PollWork` on `playerLeveled`), not on the first award.
 
+### MFO-B235 -- Enemy / Self cast targets (Vocab::Subject Enemy=3 / Caster=4): deferred review findings F-D..F-H
+Raised against `d8b0aa3` (`feat/mfo-hide-unsupported-spells`, Opus tier-3 review, nothing above SEV-3), 2026-10-06.
+Text below is the finding as relayed by the coordinator from the review.
+- **F-D (SEV-4):** on an older DLL, re-enabling such a rule runs it at the player fallback, and a round trip silently leaves it disabled. Document it in the Serialization.h v5 note. *Reasoning:* the flags-bit-1 guard only makes an older DLL load the rule disabled; the older DLL still cannot resolve Enemy / Self, and it saves the rule back with flags 0. Documented in the `Serialization.h` v5 note in the F-A commit.
+- **F-E (SEV-5):** the writer checks IsAppendedSubject without checking the action, so a stale subject on a non-cast row makes an older DLL load that row disabled. *Reasoning:* SetSubject leaves the subject byte when the action changes; only the downgrade case is affected.
+- **F-F (SEV-5):** a Caster-pick fire-and-forget cast with bCastSelf off logs as "ally/player (immediate)" (Service.cpp:1976). *Reasoning:* log wording only; the routing matches act.cast_self.
+- **F-G (SEV-5):** SpellNatureUndeclared triggers on ANY one effect, so a mixed ally buff is caught. *Reasoning:* a spell with a declared ally-buff effect plus one Script effect loses AUTO; the survey found no vanilla case.
+- **F-H (SEV-5):** the hint shows on cast_self/cast_player rows; the Fire.cpp comment "the exact call act.cast_self makes" is inaccurate (rangeGate=true; behaves the same). *Reasoning:* cosmetic; CastOn reads a_rangeGate only for a target other than the follower.
+- **Surfaced at edit time from:** MAP.md `Vocabulary.h` entry and the `cast/SpellSupport.cpp` entry.
+
 ## DRAINED
 
 ### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight

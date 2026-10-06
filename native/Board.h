@@ -34,6 +34,9 @@ namespace MFO::Board {
         std::uint8_t subject = 0;
         RE::FormID   subjectActorForm = 0;
         std::string  subjectName;
+        // A cast_target row whose spell is Actuation::SpellNatureUndeclared (main thread, FillRuleViews):
+        // the TARGET popup does not offer Auto for it (marth 2026-10-06).
+        bool         natureUndeclared = false;
         bool        enabled = true;
         bool        lastFired = false;
         std::string fail;

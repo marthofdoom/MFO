@@ -309,6 +309,29 @@ namespace MFO::Actuation {
     // cast, touches only actors (follower-agnostic), and needs no animation
     // (deferred project-wide). Friendly fire is structurally impossible: the
     // effect is placed on the CHOSEN actor, never launched as a projectile.
+    // The AUTO gate for a nature-undeclared spell (see CastAuto): true + one deduped [auto] WARN per
+    // (follower, spell). Also read by Fire and the logistics service for an Auto rule a selector named a
+    // target for (marth 2026-10-06: "Auto doesnt even show up for these spells, since it doesnt know what
+    // to auto"): such a rule never casts, whatever its condition picked.
+    bool AutoNatureUndeclared(RE::Actor* a_follower, RE::SpellItem* a_spell) {
+        if (!a_follower || !a_spell || !SpellNatureUndeclared(a_spell)) return false;
+        const auto id = a_follower->GetFormID();
+        const auto spellID = a_spell->GetFormID();
+        // once per follower + spell per session. Locked: the callers run on the job worker today (combat
+        // Fire / CastAuto and the logistics service), the lock keeps the set honest if a caller ever moves.
+        static std::mutex                        s_undeclaredMx;
+        static std::unordered_set<std::uint64_t> s_undeclaredLog;
+        bool first = false;
+        {
+            std::scoped_lock lk(s_undeclaredMx);
+            first = s_undeclaredLog.insert((static_cast<std::uint64_t>(id) << 32) | spellID).second;
+        }
+        if (first)
+            spdlog::warn("[auto] {} ({:08X}): nature undeclared in the spell record -- set the rule's target "
+                         "to Enemy, Ally or Self", a_spell->GetName() ? a_spell->GetName() : "?", spellID);
+        return true;
+    }
+
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold) {
             // RUNTIME GATE (Runtime::CastPathsVerified(): exactly 1.6.1170 or 1.5.97, G1, or 1.7.104, F2b)
             // -- mirrors CastOn / CastSelfDirect (the former T#67 SE crash gate; see
@@ -334,21 +357,8 @@ namespace MFO::Actuation {
             // foe (CommandedEnemy, cast/Fire.cpp), "Self" = the caster, an ally by name / Ally: Nearest / the
             // player. A foe or ally SELECTOR condition also names its target and never reaches AUTO (Fire's
             // autoPick), so "Foe: undead -> Lamb of Mara" casts at the undead foe the selector chose.
-            if (SpellNatureUndeclared(spell)) {
-                // once per follower + spell per session. Locked: CastAuto runs on the job worker today (combat
-                // Fire and the logistics service), the lock keeps the set honest if a caller ever moves.
-                static std::mutex                        s_undeclaredMx;
-                static std::unordered_set<std::uint64_t> s_undeclaredLog;
-                bool first = false;
-                {
-                    std::scoped_lock lk(s_undeclaredMx);
-                    first = s_undeclaredLog.insert((static_cast<std::uint64_t>(id) << 32) | a_spellID).second;
-                }
-                if (first)
-                    spdlog::warn("[auto] {} ({:08X}): nature undeclared in the spell record -- set the rule's target "
-                                 "to Enemy, Ally or Self", spell->GetName() ? spell->GetName() : "?", a_spellID);
+            if (AutoNatureUndeclared(a_follower, spell))
                 return { Result::NoOp, "auto: spell nature undeclared in its record (pick Enemy, Ally or Self)", true };
-            }
 
             // ── AUTO HEAL ON THE ANIMATED CLAIM ROAD: A SERIES OF REAL CASTS ─────
             // (animheal phase 2, 2026-09-30, marth: "lowest-HP eligible recipient

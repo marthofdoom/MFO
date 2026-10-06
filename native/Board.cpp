@@ -1270,6 +1270,9 @@ namespace MFO::Board {
             // (main thread) so the draw call never touches an engine pointer.
             v.subject = g.subjectSelector;
             v.subjectActorForm = g.subjectActorForm;
+            if (g.actionOpcode == Vocab::kActCastTarget && v.spell)
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(v.spell))
+                    v.natureUndeclared = MFO::Actuation::SpellNatureUndeclared(sp);
             if (v.subjectActorForm) {
                 RE::Actor* act = nullptr;
                 if (auto* f = RE::TESForm::LookupByID(v.subjectActorForm)) act = f->As<RE::Actor>();
@@ -1286,11 +1289,9 @@ namespace MFO::Board {
                 case Vocab::Subject::Self:
                 default:
                     v.subjectName = Str::Get(Str::K::Gb_SubjAuto);   // #68: subject 0 = Auto ladder, not self
-                    // AUTO never casts a spell whose record does not say who it is for (cast/Auto.cpp).
-                    if (g.actionOpcode == Vocab::kActCastTarget && v.spell)
-                        if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(v.spell);
-                            sp && MFO::Actuation::SpellNatureUndeclared(sp))
-                            v.subjectName = Str::Get(Str::K::Gb_SubjAutoUndeclared);
+                    // AUTO never casts a spell whose record does not say who it is for (cast/Auto.cpp,
+                    // Fire, logistics): the saved Auto stays, inert and labelled.
+                    if (v.natureUndeclared) v.subjectName = Str::Get(Str::K::Gb_SubjAutoUndeclared);
                     break;   // #68: subject 0 = Auto ladder, not self
                 }
             }

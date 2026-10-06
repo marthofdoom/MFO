@@ -333,6 +333,13 @@ namespace MFO::Actuation {
             // Ally: Nearest / a specific follower) or a selector that chose a foe
             // keeps the single-target ladder path below, unchanged.
             auto tp = a_choice.target.get();
+            // An AUTO target on a nature-undeclared spell never casts, selector target or not (marth
+            // 2026-10-06: "Auto doesnt even show up for these spells"). Transparent; the board labels it.
+            if (a_choice.subjectActorForm == 0 &&
+                static_cast<Vocab::Subject>(a_choice.subject) == Vocab::Subject::Self)
+                if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
+                    sp && AutoNatureUndeclared(a_follower, sp))
+                    return { Result::NoOp, "auto: spell nature undeclared in its record (pick Enemy, Ally or Self)", true };
             const bool autoPick =
                 a_choice.subjectActorForm == 0 &&
                 static_cast<Vocab::Subject>(a_choice.subject) == Vocab::Subject::Self &&

@@ -595,7 +595,7 @@ per concern:
   follower+spell, never self) and Board (list hint + AUTO target label, keys `Gb_SpellNatureHint` / `Gb_SubjAutoUndeclared`). CastOn does
   NOT read it (the earlier Enemy retarget is gone): the TARGET picker's "Enemy (gambit target)" subject (`Vocab::Subject::Enemy`,
   `CommandedEnemy`) names the commanded foe for ANY spell, and a foe SELECTOR condition names its own foe. WHAT BREAKS: widening the
-  predicate silently stops AUTO casting those spells.
+  predicate silently stops AUTO casting those spells. Open findings: MFO-B235.
 - `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, widened by feat/mfo-claim-road-summon-ally-rowless 2026-10-05; batch A
   release gate checklist R6/R8/R9/R11) = THE ANIMATED BUFF CLAIM ROAD: `ChooseBuffRoad(follower, spell, log, recipient)` (NotBuff / Claim /
   DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCap / DirectNoCombat; one `[buff]` line per reason), `BuffClaim` (+ `BuffSelfClaim`
@@ -7228,7 +7228,9 @@ rule's enabled bit in flags **bit 1** with bit 0 CLEAR, so an older DLL (reads b
 instead of running it at its player-fallback rung; the reader takes bit0|bit1 (no version bump, see
 `Serialization.h` v5 note). **What breaks:** a new appended subject not added to `IsAppendedSubject`
 loses that downgrade guard; making Enemy fall back to the player / self re-creates the Lamb-of-Mara
-self-curse.
+self-curse. An AUTO target on a nature-undeclared spell never casts, even with a selector target (Fire /
+logistics `AutoNatureUndeclared`), and the TARGET popup does not offer Auto for it (`RuleView::natureUndeclared`).
+Open findings: MFO-B235.
 `Pct`/`HealthPct`/etc. (`:214`) use permanent+temporary AV — changing the max formula
 re-times every "HP below X%" rule + Confidence.
 `kActLootMuseum` ("act.loot_museum", LOTD, 2026-09-25) is an APPENDED opcode; it is wired

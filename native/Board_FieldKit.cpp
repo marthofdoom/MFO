@@ -1109,7 +1109,10 @@ namespace MFO::Board {
                                         const std::string kEnemyLbl = Str::Get(Str::K::Gb_SubjEnemy);
                                         const std::string kSelfLbl  = Str::Get(Str::K::Gb_SubjSelf);
                                         std::vector<TargetOpt> opts;
-                                        opts.push_back({ (std::uint8_t)Vocab::Subject::Self,        0, &kAutoLbl });
+                                        // No Auto for a nature-undeclared spell: AUTO does not know what to do
+                                        // with it (marth 2026-10-06). A saved Auto then highlights no option.
+                                        if (!rv.natureUndeclared)
+                                            opts.push_back({ (std::uint8_t)Vocab::Subject::Self,    0, &kAutoLbl });
                                         if (selTable == 0)
                                             opts.push_back({ (std::uint8_t)Vocab::Subject::Enemy,   0, &kEnemyLbl });
                                         opts.push_back({ (std::uint8_t)Vocab::Subject::Caster,      0, &kSelfLbl });
@@ -1118,7 +1121,7 @@ namespace MFO::Board {
                                         for (const auto& al : who->alliesForPicker)
                                             opts.push_back({ 0, al.first, &al.second });
 
-                                        int curT = 0;
+                                        int curT = rv.natureUndeclared ? -1 : 0;   // a saved Auto matches nothing
                                         if (rv.subjectActorForm != 0) {
                                             for (int k = 0; k < (int)opts.size(); ++k)
                                                 if (opts[k].form == rv.subjectActorForm) { curT = k; break; }

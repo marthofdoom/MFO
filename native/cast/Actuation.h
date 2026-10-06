@@ -464,6 +464,9 @@ namespace MFO::Actuation {
     // also keeps via the default. It is a HEAL-only narrowing: buffs with no status
     // condition (Candlelight) fan to the whole party regardless.
     Outcome CastAuto(RE::Actor* a_follower, RE::FormID a_spellID, float a_healThreshold = 1.0f);
+    // True (+ one deduped [auto] WARN) when a_spell is SpellNatureUndeclared: an AUTO-target rule with it
+    // never casts, even when a selector named a target (cast/Auto.cpp; Fire, logistics service).
+    bool AutoNatureUndeclared(RE::Actor* a_follower, RE::SpellItem* a_spell);
 
     // SUMMON LIVENESS (v1.1.1). A conjured familiar/atronach or a reanimated corpse
     // is a separate COMMANDED ACTOR, not a caster-side magic effect, so the OOC

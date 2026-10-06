@@ -1540,6 +1540,12 @@ namespace MFO::Logistics {
                     // whole routing/cadence/magicka/already-active guard, so run it
                     // and fall through (fired -> stop this tick; NoOp -> next rule).
                     auto p = choice.target.get();
+                    // AUTO on a nature-undeclared spell never casts, selector target or not (as in Fire).
+                    if (choice.subjectActorForm == 0 &&
+                        static_cast<Vocab::Subject>(choice.subject) == Vocab::Subject::Self &&
+                        Actuation::AutoNatureUndeclared(a_follower, sp)) {
+                        start = choice.ruleIndex + 1; continue;
+                    }
                     const bool autoPick =
                         choice.subjectActorForm == 0 &&
                         static_cast<Vocab::Subject>(choice.subject) == Vocab::Subject::Self &&
