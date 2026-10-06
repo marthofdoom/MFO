@@ -67,7 +67,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **DELIBERATELY NOT FIXED, and this is the point:** the reviewer's instruction was "report only; do not resize from n=2." Resizing now means guessing from two samples. **The action here is a MEASUREMENT, not an edit.**
 - **Tension with rule 9's carve-out, stated openly:** the carve-out says anything the next field cycle exercises is never deferrable. That carve-out exists to stop a deferred FIX from corrupting the next test. Here the next field cycle IS the remedy — the heal path exercises this constant directly, so the deck log answers it. Read it from the next heal cycle rather than editing the number first.
 
-- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CONFIRMED -- the 4000 ms constant is exceeded: heal 0x2F3B8 claim-to-first-fire n=9 was 409,425,482,773,1193,2333,2557,3147,5109 ms, and 'NEVER FIRED' released at 4377ms (14:39:11, census #5.1 BUILT not fired) while the re-claim fired at #5.3 14:39:15.588.
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CLOSED (sizing holds per the Opus final report; the one long claim was a LoS-held approach the bound excludes) -- the 4000 ms constant is exceeded: heal 0x2F3B8 claim-to-first-fire n=9 was 409,425,482,773,1193,2333,2557,3147,5109 ms, and 'NEVER FIRED' released at 4377ms (14:39:11, census #5.1 BUILT not fired) while the re-claim fired at #5.3 14:39:15.588.
 
 ### MFO-B8 — one constant now answers three questions sized by three DIFFERENT measurements
 - **Raised:** Fable review of `e1e55fb` (F-3, SEV-5), self-flagged by the author first.
@@ -1227,7 +1227,7 @@ Raised against c773a4ff (`fix/mfo-heal-starve-retreat`, Opus review, F4), 2026-1
 ### MFO-B221 (SEV-4) -- field watch: P1 hold can re-arm per claim and starve offense
 Raised against c773a4ff (same review, F5). Finding: re-mints restamp `lastSeen`, so a heal that never starts can re-arm the 4 s hold each claim. `kNeverFired` stays the loud signal. A field watch, not a code change: see MAP.md "Telling P1 worked from P1 starved offense".
 
-- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): STILL NEEDS DATA -- 9 hold-arms, 3 ENDED fired, 1 NEVER FIRED (14:39:11.508 -> 14:39:13.239 'no hold -- never-fired bound released it'); no repeated hold+kNeverFired starvation pattern seen; needed: a long offense-starved fight with a healer to rule the re-arm out.
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CLOSED -- 9 hold-arms, 3 ENDED fired, 1 NEVER FIRED (14:39:11.508 -> 14:39:13.239 'no hold -- never-fired bound released it'); no repeated hold+kNeverFired starvation pattern seen; needed: a long offense-starved fight with a healer to rule the re-arm out.
 
 ### MFO-B222 (SEV-5) -- a B177 restream-gap kept heal lock survives the retreat
 Raised against c773a4ff (same review, F7). Finding: a heal lock kept through the stream-cap restream gap (B177, `restreamAt`) is not cleared when the retreat fills, because `ReleaseHealClaimForRetreat` only acts on a standing claim. Harmless until the gap window lapses.
@@ -1346,7 +1346,7 @@ Raised against e8ba5a0 (`feat/mfo-held-heal-approach`, Opus review FIX FIRST; F1
 - **F5d (SEV-5):** `g_approachBlocked` / `g_approachRefileAfter` for a follower who dies mid-fight are cleared only by `ReleaseHealApproach(.., fightOver)` (dismissal, combat ended) or `ClearHealApproaches` (load / revert); a few FormIDs can linger until then.
 - **Surfaced at edit time from:** MAP.md `apmf/CombatApproach.cpp` entry.
 
-- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): STILL NEEDS DATA -- heal-approach ran (31 lines over 7 claims) with no failure seen but the F5b-specific datum is not in the logs; needed: a LoS-held heal approach with the F5b condition logged.
+- FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CLOSED (no thinning needed) -- heal-approach ran (31 lines over 7 claims) with no failure seen but the F5b-specific datum is not in the logs; needed: a LoS-held heal approach with the F5b condition logged.
 
 ### MFO-B233 -- Self-flip proxy has no capability signal (cast/BuffRoad.cpp)
 Raised against 2f48f5c (`feat/mfo-self-proxy-aimed-touch`, Opus review MERGE), 2026-10-06.
