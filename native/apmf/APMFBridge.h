@@ -272,8 +272,8 @@ namespace MFO::APMFBridge {
     // summon / reanimate native placement, Script-row service of a rowless spell)? There is NO capability
     // bit and NO ABI bump for them (the seats landed at ff2f884 with kABIVersion still 18; ABI 19 followed), so the gate is the RELEASE
     // BOUNDARY: abiVersion >= 19 AND Config::g_apmfCast. Harbinger main's order is 7fd5908 (ABI 18), ff2f884
-    // (the seats), d8bb76d (ABI 19), so any Harbinger reporting ABI >= 19 has the seats and ABI 18 may not.
-    // Exact, no false-positive window. Any thread.
+    // (the seats), d8bb76d (ABI 19), so any MAIN build reporting ABI >= 19 has the seats and ABI 18 may not. (The unmerged feat/apmf-combat-moveto
+    // branch builds reported ABI 19 without the seats; merged and deleted, so no deck should carry one.) Any thread.
     // Gates the NEW claim kinds only (cast/BuffRoad.cpp): below it they stay on the direct road, because
     // on an older Harbinger such a claim never fires and the never-fired release has no direct fallback.
     bool CastSeatsSupported();
@@ -506,6 +506,16 @@ namespace MFO::APMFBridge {
     // ENDED)? The Scheduler's [reach] hold line reads it, so "holding by the player" is
     // never claimed when no leash can hold him (principle 7). Read-only; takes g_leashMx.
     bool PursuitLeashStanding(RE::FormID a_follower);
+
+    // ── ch.24 HELD-HEAL APPROACH (ABI v19, kIntent_CombatApproach): apmf/CombatApproach.cpp ──
+    // X = the held heal's recipient, R = fHealApproachRadius. One claim per follower; a no-op below
+    // ABI 19 / seat refused / recipient blocked this fight. Release: a_hand names the hand whose
+    // claim to end (kApproachAnyHand = whichever stands); a_fightOver also clears the per-fight
+    // never-re-file set. Worker-safe; own mutex (never g_mx).
+    inline constexpr std::size_t kApproachAnyHand = ~std::size_t{ 0 };
+    void ServiceHealApproach(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_recipient);
+    void ReleaseHealApproach(RE::FormID a_follower, const char* a_why,
+                             std::size_t a_hand = kApproachAnyHand, bool a_fightOver = false);
 
     // ── LOCKPICK HOLD (LP-M1, ClickUp 86e3edgha): ch.1 + ch.12 Idle v2 (ABI v17) ──
     // The pick window's two claims, filed together when a follower standing at a locked

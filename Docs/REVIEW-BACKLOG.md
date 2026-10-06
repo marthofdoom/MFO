@@ -1301,8 +1301,20 @@ Raised against d5c51e0 (`feat/mfo-remaining-cast-kinds`, Opus review FIX FIRST, 
 - **R3-3 (SEV-5):** `ClearCastLock(follower)` also runs mid-fight on the Scheduler's `!castSeen` tick, so the never-fired hold-off and the fired set end there too, not only at the fight's end. The WARN now reads "held off until the next cast-rule reset".
 - **Surfaced at edit time from:** MAP.md `cast/BuffRoad.cpp` entry.
 
-### MFO-B231 -- Buff / summon / rowless claim road (cast/BuffRoad.cpp): deferred notes
+### MFO-B232 -- Buff / summon / rowless claim road (cast/BuffRoad.cpp): deferred notes
 Raised against 6b29d4c (`feat/mfo-claim-road-summon-ally-rowless`), recorded at the follow-up commit. Surfaced at edit time from MAP.md `cast/BuffRoad.cpp`.
 - **N1 (SEV-4):** a hostile rowless spell at a foe (Calm / Fear / Frenzy) takes CastOn's owned-offense claim (`ownedCast`). On a Harbinger below ABI 19 that claim never fires (no Script-row seat). Pre-existing and loud (the `[cfc]` silent-claim warning), with no direct fallback by design; not gated here because that would change the offense road.
 - **N2 (SEV-5):** a buff at an ally or the player takes the LEFT hand, one recipient at a time (AUTO is a series, lowest HP first), instead of the heal road's RIGHT-hand second recipient (`cast/HealRoad.cpp`). Reusing that model needs real HealRoad surgery; revisit if serial buffing proves too slow in the field.
 - **N3 (SEV-5):** the WARN rate of a Reanimate claim with no corpse (never-fired release, then held off per fight) is unmeasured. It is bounded to one WARN per fight per (recipient, spell), but the cast-rule reset mid-fight (see R3-3 of MFO-B230) can repeat it.
+- **F4 (SEV-4, Opus review of 9c4f1dd):** a Light claim's take-back (`EndBuffClaim` -> `Loadout::ReleaseSpellIf`) can land inside `g_aiCastGrace`, so the AI may re-fire the Light spell it still holds once more. Bounded by Harbinger's already-applied 0x06; watch for stacked lights in the field.
+- **F5 (SEV-4):** a summon double-cast window: a direct `CastSummonOnce` one-shot and a claim for the same spell can overlap across a road flip (ABI / combat-controller change mid-fight), before `SummonGate` sees the first one landing.
+- **F6 (SEV-5):** a within-lap race: `BuffUpTransparent` (up-latch) and `BuffClaim` read the same latch at different instants in one lap, and the main-thread verdict can flip between them. Worst case is one extra transparent lap or one claim that the next refresh releases.
+- **Surfaced at edit time from:** MAP.md `cast/BuffRoad.cpp` entry ("Open findings: MFO-B230, MFO-B232").
+
+### MFO-B231 -- Held-heal approach (apmf/CombatApproach.cpp): deferred review findings F5
+Raised against e8ba5a0 (`feat/mfo-held-heal-approach`, Opus review FIX FIRST; F1-F4 fixed in the follow-up round), 2026-10-05. (B231 was the next free id in this branch's copy of the file; check for a clash at merge.)
+- **F5a (SEV-5):** `apmf/APMFBridge.h` is at ~1538 lines (past the ~1500 plan-a-split line). Propose a split as its own brief (`apmf/` public header per claim family); this branch only added 10 declaration lines.
+- **F5b (SEV-5):** the `[heal-approach]` heartbeat logs every 1.5 s per standing claim while Approaching / Holding; chatty on a long approach. Thin it (state changes plus every ~5 s) once the field shape is known.
+- **F5c (SEV-5):** an MCM change of `fHealApproachRadius` reaches a standing claim only at its next Repoint (a recipient change); a new claim reads the live value.
+- **F5d (SEV-5):** `g_approachBlocked` / `g_approachRefileAfter` for a follower who dies mid-fight are cleared only by `ReleaseHealApproach(.., fightOver)` (dismissal, combat ended) or `ClearHealApproaches` (load / revert); a few FormIDs can linger until then.
+- **Surfaced at edit time from:** MAP.md `apmf/CombatApproach.cpp` entry.

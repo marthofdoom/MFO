@@ -218,7 +218,8 @@ namespace MFO::Actuation {
             nf != g_neverFired.end() && nf->second.count(SK(recip->GetFormID(), a_spell->GetFormID())))
             return true;
         if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) return false;
-        if (InstantSpell(a_spell)) return false;   // nothing an up-read could see
+        // nothing an up-read could see -- except a placement spell, whose "up" is SummonGate whatever its duration
+        if (InstantSpell(a_spell) && !BuffPlacementSpell(a_spell)) return false;
         // Unknown (the read is posted, no verdict yet) is transparent too: a guess here would preempt.
         return BuffUp(recip, a_spell, BuffPlacementSpell(a_spell)) != Up::No;
     }
@@ -313,7 +314,7 @@ namespace MFO::Actuation {
         const auto sk      = SK(rid, spellID);
         const bool conc    = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
         const bool placement = BuffPlacementSpell(a_spell);
-        const bool instant   = InstantSpell(a_spell);
+        const bool instant   = !placement && InstantSpell(a_spell);   // a zero-duration summon still gets SummonGate
         NoteArchetypeRoad(a_follower, a_spell, ArchRoad::ConcClaim);   // [archetype] probe (passive)
 
         // A duration buff already up is not cast again (the direct road's already-active guard; the
@@ -387,7 +388,7 @@ namespace MFO::Actuation {
         const auto sk      = SK(rid, spellID);
         const bool conc    = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
         const bool placement = BuffPlacementSpell(a_spell);
-        const bool instant   = InstantSpell(a_spell);
+        const bool instant   = !placement && InstantSpell(a_spell);   // a zero-duration summon still gets SummonGate
 
         // R3-1: a fire observed within the recency window is recorded in BuffRoad's own set.
         if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,

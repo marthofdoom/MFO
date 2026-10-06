@@ -736,6 +736,19 @@
             "sourceType": "ModSettingFloat",
             "defaultValue": 4000.0
           }
+        },
+        {
+          "id": "fHealApproachRadius:General",
+          "text": "Held-heal approach radius (units)",
+          "type": "slider",
+          "help": "When a heal is held because the follower cannot see the person it is aimed at, he walks toward them until within this distance (needs Harbinger/APMF with ABI 19). ~384 = about half a room.",
+          "valueOptions": {
+            "min": 64.0,
+            "max": 2048.0,
+            "step": 32.0,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 384.0
+          }
         }
       ]
     },

@@ -929,6 +929,9 @@ namespace MFO::Config {
     // scared floor is ~one room and the confident ceiling is several rooms.
     inline std::atomic<float> g_leashMin{ 512.0f };    // scared: ~one room from the player
     inline std::atomic<float> g_leashMax{ 4000.0f };   // confident: several rooms, near a full cell
+    // Held-heal approach (Harbinger ch.24, ABI v19; apmf/CombatApproach.cpp): the radius R a follower
+    // whose heal is held behind a wall closes to around the recipient. fHealApproachRadius, game units.
+    inline std::atomic<float> g_healApproachRadius{ 384.0f };
     // Combat chase radius (#22): how far from HIMSELF a follower engages a foe,
     // confidence-scaled. Floor well above melee so he always fights an adjacent
     // foe; ceiling lets a bold follower range the field. Stops the distance-blind

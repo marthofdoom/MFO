@@ -106,6 +106,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/CombatEntry.cpp
     apmf/ReentryDeny.cpp
     apmf/PursuitLeash.cpp
+    apmf/CombatApproach.cpp
     apmf/SpellAllowList.cpp
     apmf/Deposit.cpp
     apmf/Los.cpp

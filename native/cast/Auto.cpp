@@ -459,13 +459,20 @@ namespace MFO::Actuation {
                 const float radius  = Config::g_sharedRadius.load();
                 const auto  selfPos = a_follower->GetPosition();
                 RE::Actor*  pick    = nullptr;
-                // the standing claim's recipient (the LEFT lock of THIS spell), while it is still a member
+                // ONE SERIES, ONE ROAD (review F1): the caster joins the series only when HIS own road is the
+                // claim too (a non-Self buff at himself is the direct self stream, which re-locks every lap
+                // and would pin the pick on him all fight).
+                const bool casterOk = ChooseBuffRoad(a_follower, spell, /*a_log=*/false, nullptr) == BuffRoad::Claim;
+                // the standing claim's recipient (the LEFT lock of THIS spell), while it is still a member.
+                // STICKY ONLY WHILE THE CLAIM IS LIVE (review F1): a lock alone also names a dead claim or a
+                // direct-road lock, which would pin one recipient for a whole buff duration.
                 if (const auto lk = g_castLock.find(id);
                     lk != g_castLock.end() && lk->second.hand[kHandLeft].spell == a_spellID &&
+                    APMFBridge::IsOwnedCastActiveOnHand(id, APMFBridge::kApmfHandLeft) &&
                     CastLockClaimStamp(id, kHandLeft, a_spellID) != std::chrono::steady_clock::time_point{}) {
                     const RE::FormID held = lk->second.hand[kHandLeft].target;
                     auto* cur = held == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(held);
-                    if (cur && !cur->IsDead() && !cur->IsDisabled() && cur->Is3DLoaded() &&
+                    if (cur && (cur != a_follower || casterOk) && !cur->IsDead() && !cur->IsDisabled() && cur->Is3DLoaded() &&
                         (cur == a_follower || selfPos.GetDistance(cur->GetPosition()) <= radius))
                         pick = cur;
                 }
@@ -474,6 +481,7 @@ namespace MFO::Actuation {
                 std::vector<RE::FormID> sightWant;
                 auto probe = [&](RE::Actor* m) {
                     if (pick || !m || m->IsDead() || m->IsDisabled() || !m->Is3DLoaded()) return;
+                    if (m == a_follower && !casterOk) return;
                     if (m != a_follower) {
                         if (selfPos.GetDistance(m->GetPosition()) > radius) return;
                         sightWant.push_back(m->GetFormID());
