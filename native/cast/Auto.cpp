@@ -461,9 +461,9 @@ namespace MFO::Actuation {
                 RE::Actor*  pick    = nullptr;
                 // ONE SERIES, ONE ROAD (review F1; marth 2026-10-05: "a self cast is valid if its needed, just
                 // needs to be animated"): the caster is a candidate like any ally, and his own cast is an animated
-                // claim (a kSelf buff at self, a non-kSelf kTargetActor buff with his own FormID as the target).
-                // Only a buff that cannot be animated at him (an aimed / touch / area non-Self buff, a rowApprox
-                // row: ChooseBuffRoad logs the `[buff] ... DIRECT road` reason) leaves him out, because his road
+                // claim (a kSelf buff at self, an aimed / touch / target-actor buff with his own FormID as the
+                // target, driving Harbinger's self-flip proxy). Only a buff that cannot be animated at him (a
+                // kTargetLocation non-placement buff, a rowApprox row: ChooseBuffRoad logs the `[buff] ... DIRECT road` reason) leaves him out, because his road
                 // would be the direct self stream, which re-locks every lap and pins the pick on him all fight.
                 const bool casterOk = ChooseBuffRoad(a_follower, spell, /*a_log=*/false, nullptr) == BuffRoad::Claim;
                 if (!casterOk) {
