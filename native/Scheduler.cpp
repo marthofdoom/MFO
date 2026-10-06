@@ -1611,7 +1611,20 @@ namespace MFO::Scheduler {
                 }
             }
 
-            outcome = Actuation::Fire(f, choice);
+            // COMBAT-START TIMING (field 2026-10-06 14:25:25, marth: "Its only in combat gambits, so him casting
+            // it out of combat is a timing issue"): a combat-table cast whose follower is in combat by MFO's own
+            // reckoning but whose combat controller is not up yet must WAIT, transparently, never take the
+            // out-of-combat direct / fan road (unanimated, all targets at once). Once the controller is up the
+            // normal animated claim road applies. Logistics' OOC casts and the retreat self-heal keep their
+            // direct road (they do not pass through here).
+            const bool castOp = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
+                                op == Vocab::kActCastPlayer;
+            if (castOp && f->IsInCombat() && !f->GetActorRuntimeData().combatController)
+                outcome = { Actuation::Result::NoOp,
+                            "waiting for his combat controller (a combat gambit's cast never takes the direct road)",
+                            true };
+            else
+                outcome = Actuation::Fire(f, choice);
 
             if (outcome.transparent) {
                 // A satisfied equip (transparent NoOp on an equip action) is
