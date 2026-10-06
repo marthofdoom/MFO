@@ -574,6 +574,18 @@ per concern:
   SpellFire evidence `HandFireSink` (`:305`) / `HandFireWatch` (`:327`) / `HandFireTake` (`:346`, public); anon
   `HealOnHand` (`:88`), `RecipientLost` (`:108`), `NoteLosHold` (`:134`), `NeverFiredRelease` (`:171`),
   `ProxyUnlearnedRelease` (`:210`), `MaintainCompanion` (`:232`), the per-hand record `g_healHands`.
+- `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, batch A release gate checklist R6/R8) = THE ANIMATED SELF-BUFF
+  CLAIM ROAD: `ChooseBuffRoad` (NotBuff / Claim / DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCombat; one `[buff]` line
+  per reason), `BuffSelfClaim` (already-up guard, `Loadout::Prepare` LEFT, consent, `ClaimOffenseCast` target 0, `[cfc]` watch),
+  `BuffRefreshGate` (ends a fire-and-forget claim once the buff is up; bounds a concentration ward at a drawn `DrawConcCap`,
+  release + re-stream). Called from `CastSelfDirect` (`cast/DirectSelf.cpp`, combat table only, before the Task-1 conc claim)
+  and `CastOn`'s in-flight refresh (`cast/CastOn.cpp`, beside `HealRefreshGate`). Served rows: Armor, Cloak, Invisibility,
+  BoundItem, Ward (Self delivery). NOT served, direct with a `[buff]` reason: Light (spam CTD, needs a Harbinger bound),
+  Summon/Reanimate (Harbinger summon seat, ClickUp 86e3dvkwm), rowless spells, any buff at an ally/player and AUTO's
+  beneficial fan (no 0x0A seat on those caster types). WHETHER it fires is the engine type's own CheckStartCast: UNPROVEN until
+  Harbinger's `[ctcensus]` verdicts exist. **What breaks if you change this:** taking the claim without `Prepare` leaves the
+  AI's equipped spell un-taken-back; dropping the already-up release re-casts the buff every lap; no kill switch of its own
+  (it rides `bApmfCast`, `bLegacyCastHybrid`, `bEquipToCast`).
 - `cast/Hands.cpp` (1484) = THE PER-HAND CAST LOCK's implementation (moved whole) —
   `HoldCastLock`/`ClearCastLockHand` (`:62`/`:92`), the liveness ladder (`ClaimLiveOnHand` `:104`,
   `CastInFlightOnHand` `:266` (PUBLIC since 2.0.5, declared in the public header),
