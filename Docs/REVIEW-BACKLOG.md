@@ -595,6 +595,14 @@ Text below is the finding as relayed by the coordinator from the review.
 
 ## DRAINED
 
+### Drain batch `b795839` (`fix/mfo-post-2.2.0`, tier B/C items of MFO-B226..B236; the originals stay in the open list for the findings NOT drained)
+- **MFO-B227 F5 (SEV-3) DRAINED by `b795839`:** `Loadout::Prepare`'s level-4 right-hand `DeselectSpell` skips a spell (or its proxy) that a RIGHT-hand heal claim names.
+- **MFO-B229 F7 (SEV-5) DRAINED by `b795839`:** `EngageOnSight.cpp` says once per session when `SenseOf` fails and the own-ray fallback runs.
+- **MFO-B230 F8 (SEV-5) DRAINED by `b795839`:** `EndBuffClaim` leaves the LEFT offense claim alone when the left lock names a different spell.
+- **MFO-B231 F5b (SEV-5) DRAINED by `b795839`:** the `[heal-approach]` heartbeat is 5 s (state changes still log at once).
+- **MFO-B233 SEV-4 (comment) DRAINED by `b795839`:** the BuffRoad.cpp "hostile spell is never a Buff kind" comment now says flagged only.
+- **MFO-B236 F-F, F-H (SEV-5) DRAINED by `b795839`:** the OOC Caster-pick cast logs "self (immediate)"; the Fire.cpp comment is accurate about `a_rangeGate`.
+
 ### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight
 - **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
 - **Severity:** SEV-4
