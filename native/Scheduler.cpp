@@ -1026,6 +1026,7 @@ namespace MFO::Scheduler {
                 // last fight would hold off the FIRST cast rule of the next one.
                 // The heal claim ends with the fight too (animheal phase 2, review F6),
                 // by state rather than by the FacetExpiry sweep. No-op when none stands.
+                Actuation::HealHandsCombatEnded(id);   // [heal-hold] ... combat-ended, once per heal record
                 ComposedCast::End(id);
                 Actuation::ClearCastLock(id);
                 // Weapon-stance ownership dies with the fight too. The live CSTY
@@ -1473,6 +1474,7 @@ namespace MFO::Scheduler {
         const bool windowActive = inWindow && firedRuleNow >= 0;
 
         bool castSeen   = false;   // H3: some cast rule's condition held this tick
+        std::vector<int> matchedCast;   // the cast rules whose condition held this tick (incl. suppressed / cannot-act): HealSustainLap's "the rule is still asking"
         int  handClaim  = 0;       // H2: 0 = none, 1 = melee, 2 = ranged
         int  wantStance = 0;       // combat-style ownership: the equip stance that won
         // T#76: the equip gambit's CONDITION held this tick (0=none,1=melee,
@@ -1516,7 +1518,7 @@ namespace MFO::Scheduler {
             // still tried first (transparent ones fall through as usual), so a
             // dying follower's rule-1 heal preempts exactly as before.
             if (windowActive && choice.ruleIndex >= firedRuleNow) {
-                if (isCast) castSeen = true;   // its condition held: keep the loan (H3)
+                if (isCast) { castSeen = true; matchedCast.push_back(choice.ruleIndex); }   // its condition held: keep the loan (H3)
                 // T#76: same shape for the equip force-hold -- the equip rule's
                 // condition held this tick (that is why Evaluate returned it),
                 // the scan just stopped at it inside its own suppression window.
@@ -1549,7 +1551,7 @@ namespace MFO::Scheduler {
             // now fires, waits out its grace, sits debounced, or fails (the
             // failure paths self-release internally). Only a tick where NO
             // cast condition held releases the loan, after the loop.
-            if (isCast) castSeen = true;
+            if (isCast) { castSeen = true; matchedCast.push_back(choice.ruleIndex); }
 
             // HE CANNOT ACT (fix/mfo-can-act): bleeding out, down, knocked down,
             // paralysed or in a kill move. The rule is passed over TRANSPARENTLY and
@@ -1609,7 +1611,20 @@ namespace MFO::Scheduler {
                 }
             }
 
-            outcome = Actuation::Fire(f, choice);
+            // COMBAT-START TIMING (field 2026-10-06 14:25:25, marth: "Its only in combat gambits, so him casting
+            // it out of combat is a timing issue"): a combat-table cast whose follower is in combat by MFO's own
+            // reckoning but whose combat controller is not up yet must WAIT, transparently, never take the
+            // out-of-combat direct / fan road (unanimated, all targets at once). Once the controller is up the
+            // normal animated claim road applies. Logistics' OOC casts and the retreat self-heal keep their
+            // direct road (they do not pass through here).
+            const bool castOp = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
+                                op == Vocab::kActCastPlayer;
+            if (castOp && f->IsInCombat() && !f->GetActorRuntimeData().combatController)
+                outcome = { Actuation::Result::NoOp,
+                            "waiting for his combat controller (a combat gambit's cast never takes the direct road)",
+                            true };
+            else
+                outcome = Actuation::Fire(f, choice);
 
             if (outcome.transparent) {
                 // A satisfied equip (transparent NoOp on an equip action) is
@@ -1868,8 +1883,11 @@ namespace MFO::Scheduler {
         // dismissal (Followers::Refresh), and revert/load (ClearTransient-
         // State). The SPELL still releases on H3 -- hand occupancy is pacing,
         // and their AI cannot cast what they are not holding either way.
+        // HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (ClickUp 86e3m36qr): a standing heal no rule asked for
+        // this tick is kept and driven on by HealSustainLap; its hand(s) are exempt from the release below.
+        const unsigned healHeld = Actuation::HealSustainLap(f, matchedCast);
         if (!castSeen) {
-            Loadout::ReleaseSpell(id);
+            if (healHeld == 0) Loadout::ReleaseSpell(id);   // a held heal's spell stays in hand
             // Crisp release of the APMF offense-cast facet-CLAIM (per-cast, ch.8b
             // kIntent_Cast, PORTED feat/offense-cast-seats off the retired ch.8
             // kIntent_SelectSpell claim this call used to release) the moment no
@@ -1885,17 +1903,18 @@ namespace MFO::Scheduler {
             // "no cast rule wants it" signal, so the seats cannot drive one more
             // heal at a recipient that no longer qualifies while the ~2.45 s
             // FacetExpiry sweep catches up. No-op when no heal claim stands.
-            ComposedCast::End(id);
+            if (healHeld == 0) ComposedCast::End(id);
             // Clear the shared [cfc] silent-claim watch this claim armed
             // (Actuation::CastOn's ComposedCast::WatchClaim call) -- a no-op if
             // nothing was armed (heal claims clear their own watch via
             // ComposedCast::End instead).
-            ComposedCast::ClearWatch(id);
+            if (healHeld == 0) ComposedCast::ClearWatch(id);
             // Task 2: no cast rule's condition held this tick at all, so
             // whatever the lock was protecting is no longer being requested
             // either -- release it now rather than riding out its own
             // live-check/staleness window.
-            Actuation::ClearCastLock(id);
+            if (healHeld == 0) Actuation::ClearCastLock(id);
+            else Actuation::ReleaseUnheldCastHands(id, healHeld);   // the held heal's hand(s) stay
         }
 
         const char* name = f->GetName() ? f->GetName() : "?";   // flair #11

@@ -579,10 +579,23 @@ per concern:
   SpellFire evidence `HandFireSink` (`:305`) / `HandFireWatch` (`:327`) / `HandFireTake` (`:346`, public); anon
   `HealOnHand` (`:88`), `RecipientLost` (`:108`), `NoteLosHold` (`:134`), `NeverFiredRelease` (`:171`),
   `ProxyUnlearnedRelease` (`:210`), `MaintainCompanion` (`:232`), the per-hand record `g_healHands`.
+  **Round 2 (same branch):** `HealSustainLap(f, matchedRules)` also sustains a hand in its re-stream gap (stream cap / un-taught proxy re-claim) and treats a rule matched this tick (suppression window, cannot-act: `Scheduler.cpp` `matchedCast`) as asking; `HealHeldOutOfMagicka` (CastOn magicka / reserve gates) ends a held heal with token `out-of-magicka`; `HealHandPreempted` (`Hands.cpp` `PreemptHand`) and the weapon-owns-right releases log `preempted`; a `[heal-hold] still holding` line every 5 s; ch.24 approach TIGHTENS R while Holding and occluded (`apmf/CombatApproach.cpp`, closes MFO-B234); the combat table's cast waits (transparent) while `IsInCombat()` and no combat controller (`Scheduler.cpp` before `Fire`). Open: MFO-B237.
+  **HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (post-2.2.0, ClickUp 86e3m36qr; the file is now ~890 lines, lines above drifted):**
+  the rule's condition / threshold only STARTS a heal. `HealSustainLap` (`:785`, public, called once per follower per combat tick from
+  `Scheduler.cpp:1874` just before the `!castSeen` release) replays `CastOn` as the lock's owning rule (no ally threshold) for a standing
+  claim no rule asked for that tick (`g_healAsked`, noted by `HealRoadLap`), so refresh / repair / never-fired / reach / LoS-hold all run as
+  when the rule asks; the only HP exit is `Vocab::kHealFull` (`RecipientLost` no longer applies the rule threshold once a claim serves him).
+  `ReleaseUnheldCastHands` + the `healHeld` mask keep the held hand out of the `!castSeen` release (`Loadout::ReleaseSpell`, `ComposedCast::End`,
+  `ClearCastLock`); `HealHeldRecipient` (`:856`) is AUTO's fallback pick (`Auto.cpp` heal series, instead of "nobody below threshold" release);
+  `HealHandsCombatEnded` closes records at combat end. `HealHandEnded` (`:575`) now logs ONE `[heal-hold] ... lifetime ENDED: <token>` line per
+  heal (full / dead / gone / out-of-reach / combat-ended / preempted / never-fired / approach-blocked / released-elsewhere), token from `g_healExit`
+  (set around `ReleaseWithExit`) or classified; "rule stopped asking at NN%: holding to full" is logged once per claim. Depended-on-by: any new
+  heal release site should go through `ReleaseWithExit` with a token; a claim released while the rule is NOT asking is replayed next tick only
+  if `g_healHands` still has it.
 - `cast/SpellSupport.cpp` (feat/mfo-hide-unsupported-spells 2026-10-06) = `CastRoadUnsupported(SpellItem*, const char** reason)` (public,
   `cast/Actuation.h`): the board's spell-picker filter. True only for the STATIC (record-only) direct fallbacks of `ChooseBuffRoad`, via the SAME
   helpers it calls (`BuffAmbiguousRowWhy` / `BuffAimedLightWhy` / `BuffSelfRuneWhy` / `ExplicitSelfBuff`, now exported from `cast/BuffRoad.cpp`):
-  ambiguous row, aimed Light (Magelight). Buff kind only; a target-location buff is NOT hidden (only its SELF cast goes direct; at an ally it claims); hostile runes are NOT hidden (CastOn `ownedCast`
+  aimed Light (Magelight) ONLY (the ambiguous-row case was removed post-2.2.0: Flame / Frost / Lightning Cloak show again). Buff kind only; a target-location buff is NOT hidden (only its SELF cast goes direct; at an ally it claims); hostile runes are NOT hidden (CastOn `ownedCast`
   has no delivery filter). WHAT BREAKS: changing a `ChooseBuffRoad` static case without changing its helper desyncs nothing (it calls them), but
   adding a NEW static case there must also go through a shared helper + this predicate, or the picker keeps offering the spell. Board.cpp
   (`SpellList` in PublishSnapshot) hides these, logs `[spell-support] hidden from picker` once per spell, and keeps one a rule already names,

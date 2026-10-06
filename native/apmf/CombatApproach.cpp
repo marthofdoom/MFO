@@ -30,6 +30,7 @@
 #include "cast/Actuation.h"   // HealStandsOnHand -- the sweep's "its heal ended elsewhere" test
 #include "Packages.h"   // IsRetreating -- the sweep's retreat backstop
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -48,11 +49,33 @@ namespace MFO::APMFBridge {
         // Same never-live floor as the sibling tables (see apmf/ReentryDeny.cpp, PursuitLeash.cpp).
         constexpr std::uint32_t kApproachNeverLiveSweeps = 15;
         // Heartbeat while a claim is Approaching / Holding: distance falling is the proof.
-        constexpr std::chrono::milliseconds kApproachBeatMs{ 1500 };
+        constexpr std::chrono::milliseconds kApproachBeatMs{ 5000 };   // MFO-B231 F5b: was 1500; state changes (seq) still log at once
         // A claim Harbinger ended with CombatEnded is not re-filed for this long (one re-file per few seconds).
         constexpr std::chrono::seconds kApproachRefileGap{ 4 };
 
+        // marth 2026-10-06 (closes MFO-B234): "without line of sight it stops the actual cast and healing, but
+        // without full health its still active in harbinger and will restart the second line of sight is
+        // restored, which wont be long because losing LOS restarts the healing moveto." The ch.24 bound is
+        // (X, R): a follower already inside R is "Holding" and never moves, so an occluded recipient inside R
+        // would be waited on forever. While the heal is held through lost sight the bound is therefore TIGHTENED:
+        // R' = min(fHealApproachRadius, max(kApproachMinRadius, 0.6 x the current distance)), filed with the
+        // claim and Repointed (every kApproachTightenGap) while the state reads Holding and sight is still lost.
+        // Occlusion thus counts as "not arrived": he keeps closing until sight returns (the claim is then
+        // released, as before) or the floor is reached.
+        constexpr float                    kApproachMinRadius = 128.0f;
+        constexpr float                    kApproachTightenFrac = 0.6f;
+        constexpr std::chrono::seconds     kApproachTightenGap{ 3 };
+
+        float TightRadius(RE::FormID a_follower, RE::FormID a_recipient, float a_radius) {
+            const auto* f = RE::TESForm::LookupByID<RE::Actor>(a_follower);
+            const auto* r = RE::TESForm::LookupByID<RE::Actor>(a_recipient);
+            if (!f || !r) return a_radius;
+            const float d = f->GetPosition().GetDistance(r->GetPosition());
+            return std::min(a_radius, std::max(kApproachMinRadius, kApproachTightenFrac * d));
+        }
+
         struct ApproachClaim {
+            std::chrono::steady_clock::time_point lastTighten{};
             APMF_API::Handle handle         = APMF_API::kInvalidHandle;
             std::size_t      hand           = 0;      // the hand whose held heal filed it
             RE::FormID       recipient      = 0;      // X as last sent
@@ -154,7 +177,7 @@ namespace MFO::APMFBridge {
         if (it == g_approach.end()) {
             APMF_API::APMF_Param prm{};
             prm.target = a_recipient;                 // X
-            prm.fval   = radius;                      // R, game units
+            prm.fval   = TightRadius(a_follower, a_recipient, radius);   // R, game units (tightened: see kApproachMinRadius)
             prm.ival   = APMF_API::kApproach_Hold;    // stay close: MFO releases when sight returns
             const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_CombatApproach, kOwnBasis, &prm);
             if (h == APMF_API::kInvalidHandle) {
@@ -171,26 +194,47 @@ namespace MFO::APMFBridge {
             c.handle    = h;
             c.hand      = a_hand;
             c.recipient = a_recipient;
-            c.radius    = radius;
+            c.radius    = prm.fval;
+            c.lastTighten = std::chrono::steady_clock::now();
             g_approach.emplace(a_follower, c);
             spdlog::info("[heal-approach] {:08X}: ch.24 combat approach CLAIMED (h={}, X {:08X}, R {:.0f}, Hold) "
                          "-- the held heal on the {} hand stays held; he walks toward the recipient",
-                         a_follower, h, a_recipient, radius, a_hand == 0 ? "LEFT" : "RIGHT");
+                         a_follower, h, a_recipient, prm.fval, a_hand == 0 ? "LEFT" : "RIGHT");
             return;
         }
         auto& c = it->second;
         if (c.handle == APMF_API::kInvalidHandle) return;
         if (c.hand != a_hand) return;                 // ONE claim per follower: the first hand's recipient owns it
-        if (c.recipient == a_recipient) return;       // nothing changed: no Repoint churn
+        if (c.recipient == a_recipient) {
+            // Sight is still lost and he is inside the bound (Holding): close in (see kApproachMinRadius).
+            const auto now = std::chrono::steady_clock::now();
+            if (now - c.lastTighten < kApproachTightenGap) return;
+            if (ReadState(api, a_follower).state != APMF_API::kApproachState_Holding) return;   // still walking
+            const float r2 = TightRadius(a_follower, a_recipient, radius);
+            if (r2 >= c.radius - 1.0f) return;
+            APMF_API::APMF_Param tp{};
+            tp.target = a_recipient;
+            tp.fval   = r2;
+            tp.ival   = APMF_API::kApproach_Hold;
+            api->Repoint(c.handle, &tp);
+            spdlog::info("[heal-approach] {:08X}: ch.24 approach to {:08X} TIGHTENED R {:.0f} -> {:.0f} (inside the "
+                         "bound but sight is still lost: the heal's move-to restarts)",
+                         a_follower, a_recipient, c.radius, r2);
+            c.radius      = r2;
+            c.lastTighten = now;
+            c.lastSeq     = 0;
+            return;
+        }
         APMF_API::APMF_Param prm{};
         prm.target = a_recipient;
-        prm.fval   = radius;
+        prm.fval   = TightRadius(a_follower, a_recipient, radius);
         prm.ival   = APMF_API::kApproach_Hold;
         api->Repoint(c.handle, &prm);
         spdlog::info("[heal-approach] {:08X}: ch.24 combat approach X {:08X} -> {:08X} (Repoint, h={}, R {:.0f})",
-                     a_follower, c.recipient, a_recipient, c.handle, radius);
+                     a_follower, c.recipient, a_recipient, c.handle, prm.fval);
         c.recipient = a_recipient;
-        c.radius    = radius;
+        c.radius    = prm.fval;
+        c.lastTighten = std::chrono::steady_clock::now();
         c.lastSeq   = 0;
     }
 

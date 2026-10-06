@@ -165,8 +165,14 @@ namespace MFO::Actuation {
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
         void EndBuffClaim(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_takeBack) {
             const auto id = a_actor->GetFormID();
-            APMFBridge::ReleaseCastClaimOnHand(id, APMFBridge::kApmfHandLeft);
-            ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
+            // MFO-B230 F8: the LEFT offense slot is released unless the left lock names a DIFFERENT spell
+            // (a stranger's claim holds it); no lock, or this spell's lock, releases as before.
+            const auto lit = g_castLock.find(id);
+            const RE::FormID leftLock = lit == g_castLock.end() ? 0 : lit->second.hand[kHandLeft].spell;
+            if (leftLock == 0 || leftLock == a_spell->GetFormID()) {
+                APMFBridge::ReleaseCastClaimOnHand(id, APMFBridge::kApmfHandLeft);
+                ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
+            }
             ClearLeftCastLockIf(id, a_spell->GetFormID());
             if (const auto fs = g_fireSeen.find(id); fs != g_fireSeen.end())
                 for (auto it = fs->second.begin(); it != fs->second.end();)
@@ -230,7 +236,8 @@ namespace MFO::Actuation {
     // are all served (marth 2026-10-05: "proxy aimed buffs, and touch buffs"): Harbinger's self-flip proxy
     // (feat/apmf-self-delivery-proxy, no ABI bump) mints a kSelf copy of the spell for a claim whose target is
     // the claimant's own FormID, so no ray is aimed at the shooter. A kTargetLocation non-placement spell
-    // stays direct (rune-shaped, batch D); a hostile spell is never a Buff kind (CasterConsent::ClassifySpell).
+    // stays direct (rune-shaped, batch D); a FLAGGED hostile / detrimental spell is never a Buff kind (CasterConsent::ClassifySpell tests the
+    // effect flags only; an unflagged Calm / Frenzy / Demoralize / Paralysis archetype can still classify Buff: MFO-B233 F1).
     bool ExplicitSelfBuff(RE::SpellItem* a_spell) {
         return a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
                a_spell->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&   // keeps the Task-1 target-0 claim

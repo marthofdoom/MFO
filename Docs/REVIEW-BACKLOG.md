@@ -593,7 +593,23 @@ Text below is the finding as relayed by the coordinator from the review.
 - **F-H (SEV-5):** the hint shows on cast_self/cast_player rows; the Fire.cpp comment "the exact call act.cast_self makes" is inaccurate (rangeGate=true; behaves the same). *Reasoning:* cosmetic; CastOn reads a_rangeGate only for a target other than the follower.
 - **Surfaced at edit time from:** MAP.md `Vocabulary.h` entry and the `cast/SpellSupport.cpp` entry.
 
+### MFO-B238 (SEV-4 x3, SEV-5 x2) -- heal hold round 2 review (a687fd2): deferred R1-R3, spots 2-3
+Raised against `a687fd2` (`fix/mfo-post-2.2.0`, Opus tier-B round 2, MERGE OK), 2026-10-06. Text as relayed by the coordinator.
+- R1 (SEV-4): at the 128u approach floor with sight still lost (recipient behind a wall / on another floor) the follower holds there; the never-fired bound stays off because the approach is not "blocked", so the heal holds until combat ends. Matches marth ruling (c); the 5 s still-holding line shows it. Possible follow-up for marth: treat "at the floor and still occluded" as approach-blocked.
+- R2 (SEV-5): out of magicka during a restream gap: ReleaseOwnHealClaim returns early (no claim stands), HealHandEnded is not called, the record ends next tick as released-elsewhere instead of out-of-magicka. Log token only.
+- R3 (SEV-4, pre-existing): the un-taught-proxy path can cycle claim -> HasSpell check -> restream release -> re-claim with a fresh stamp, each shorter than the never-fired cap; sustain now also runs it after the rule stops asking. Only if Harbinger keeps failing to teach the proxy; each cycle WARNs.
+- Spot 2 (SEV-5): a held heal from a rule BELOW a suppression window is never evaluated, so it reads as "stopped asking" (false log line only; behaviour correct).
+- Spot 3 (SEV-4): the combat-start gate (IsInCombat() with no combat controller) never casts if the controller never comes up; transparent, lower rules run, but the only trace is the chain reason. Recommendation: one WARN per fight once the wait passes a few seconds; no direct-road fallback (marth ruling d).
+
 ## DRAINED
+
+### Drain batch `b795839` (`fix/mfo-post-2.2.0`, tier B/C items of MFO-B226..B236; the originals stay in the open list for the findings NOT drained)
+- **MFO-B227 F5 (SEV-3) DRAINED by `b795839`:** `Loadout::Prepare`'s level-4 right-hand `DeselectSpell` skips a spell (or its proxy) that a RIGHT-hand heal claim names.
+- **MFO-B229 F7 (SEV-5) DRAINED by `b795839`:** `EngageOnSight.cpp` says once per session when `SenseOf` fails and the own-ray fallback runs.
+- **MFO-B230 F8 (SEV-5) DRAINED by `b795839`:** `EndBuffClaim` leaves the LEFT offense claim alone when the left lock names a different spell.
+- **MFO-B231 F5b (SEV-5) DRAINED by `b795839`:** the `[heal-approach]` heartbeat is 5 s (state changes still log at once).
+- **MFO-B233 SEV-4 (comment) DRAINED by `b795839`:** the BuffRoad.cpp "hostile spell is never a Buff kind" comment now says flagged only.
+- **MFO-B236 F-F, F-H (SEV-5) DRAINED by `b795839`:** the OOC Caster-pick cast logs "self (immediate)"; the Fire.cpp comment is accurate about `a_rangeGate`.
 
 ### MFO-B55 — a foe-keyed equip hold still releases through the T#76 dwell during an own-OOC stretch inside a party fight
 - **Raised:** Fable tier-B review of `dea438f` (`fix/mfo-party-combat-gate`), SEV-4.
@@ -1340,8 +1356,16 @@ Raised against 2f48f5c (`feat/mfo-self-proxy-aimed-touch`, Opus review MERGE), 2
 Raised against `fix/mfo-heal-hold-until-fire`, 2026-10-06.
 - **SEV-5 (accepted under marth's ruling "for now yes", open):** `HealHoldStands` ends the hold on the first observed fire since the claim stamp unless a concentration channel is still in flight on the hand. A channel that dips out of flight and is re-started on the SAME claim (no re-stamp) finds the hold already ended and lapsed, so offense on the other hand can interrupt the second channel. Fix would need a per-claim "channel running" latch.
 - **SEV-4 caveat:** a LoS-held span closes only on a Visible verdict (an Unknown keeps it accruing), so the exclusion in `NeverFiredRelease` can over-count an Unknown stretch. Bounded by `HealApproachBlocked` (no exclusion once the ch.24 approach is blocked or unavailable).
+- **DECIDED by marth 2026-10-06, DRAINED by `f1bbd83` (`fix/mfo-post-2.2.0`):** "without line of sight it stops the actual cast and healing, but without full health its still active in harbinger and will restart the second line of sight is restored, which wont be long because losing LOS restarts the healing moveto." The held heal's ch.24 approach now keeps closing while sight is lost: `apmf/CombatApproach.cpp` TIGHTENS R (min of fHealApproachRadius and max(128, 0.6 x the current distance)) while the state reads Holding and the recipient is still Occluded, so occlusion counts as not arrived. The claim stays throughout; the never-fired bound still excludes LoS time only while the approach is live (`HealApproachBlocked`).
 - SEV-3 (round-3 review of 0c9b0a5, marth's call): when Harbinger's ch.24 approach reaches the radius and HOLDS but the recipient stays occluded inside it (field 2026-10-06: walked 474 -> 341 vs R 384), the recipient is never marked blocked, so LoS-held time stays excluded and offense stays held until sight returns or the heal rule stops matching. Literal to marth's "exclude LoS-held time". If "nothing locked up" should win here: stop excluding LoS time once the approach has held at the radius with the recipient still Occluded for one more bound.
 
 ### MFO-B235 -- Idle-hand floor on Harbinger ABI 19 (apmf/Bridge.cpp): deferred review finding F7
 Raised against `db9790c` (`fix/mfo-floor-spells-only`, Opus tier-3 review, nothing above SEV-3), 2026-10-06.
 - F7 (SEV-5, accepted): "The ABI-19 no-floor fallback also drops floors on ABI-19 dev builds d8bb76d..46f4ce1, which don't have HandBlock. No release has ABI 19, so this is accepted." Reasoning: MFO cannot tell a v19 build with the hand-claim block from one without it, and only unreleased dev builds report v19. On those pre-HandBlock builds the AI may start its own second spell in the idle hand while MFO drives the other.
+
+### MFO-B237 -- heal-until-full review leftovers (A4, A5 remainder, A7)
+Raised against `d006496` (`fix/mfo-post-2.2.0`, Opus review, nothing above SEV-3 after the A1/A2 fixes), 2026-10-06. Reviewer's text as relayed by the coordinator.
+- **A4 (SEV-4):** with a heal held, `Loadout::ReleaseSpell` is skipped entirely (Scheduler `!castSeen` block). `g_mfoSpell` can name a left-hand offense spell from a claim `ReleaseUnheldCastHands` just ended, and that spell stays equipped and unclaimed for the whole hold. Suggested fix: call `ReleaseSpell` unless `g_mfoSpell` is one of the held heal spells.
+- **A5 remainder (SEV-4):** the exit tokens other than `preempted` (rank preempt, weapon-owns-right: fixed) are classified from free text or set only at some release sites; any release site that does not go through `ReleaseWithExit` logs `released-elsewhere`.
+- **A7 (SEV-5):** `g_healAsked` entries from a follower's last combat tick survive until his next combat tick. Harmless.
+- **Surfaced at edit time from:** MAP.md `cast/HealRoad.cpp` entry.

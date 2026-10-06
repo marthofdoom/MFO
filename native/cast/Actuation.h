@@ -100,6 +100,14 @@ namespace MFO::Actuation {
     // names it, logging each per-hand end once ([heal-hand]). ComposedCast::ChooseHealRoad's
     // road switch (kill switch / controller gone) is the caller. Worker-serial (#4).
     void ReleaseHealClaimsAllHands(RE::FormID a_follower, const char* a_why);
+    // HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (ClickUp 86e3m36qr; cast/HealRoad.cpp). HealSustainLap:
+    // once per follower per combat tick, replays the heal lap for a standing claim no rule asked for this
+    // tick; returns the bitmask (1 << hand) of heals still standing. ReleaseUnheldCastHands: Scheduler's
+    // "no cast rule held" release for the hands NOT in that mask. HealHandsCombatEnded: closes every heal
+    // record at combat end ([heal-hold] ... combat-ended). Worker-serial (#4).
+    unsigned HealSustainLap(RE::Actor* a_follower, const std::vector<int>& a_matchedRules);
+    void ReleaseUnheldCastHands(RE::FormID a_follower, unsigned a_keepMask);
+    void HealHandsCombatEnded(RE::FormID a_follower);
     // Does a heal stand on a_hand (a live claim, or the re-stream gap's lock)? The ch.24 approach
     // sweep's "its heal ended outside the heal road" test. Worker only; takes the bridge's g_mx
     // inside, so the caller must not hold g_mx.

@@ -371,7 +371,9 @@ namespace MFO::Actuation {
             if (!target && static_cast<Vocab::Subject>(a_choice.subject) == Vocab::Subject::Enemy)
                 return { Result::NoOp, "target Enemy: no commanded target", true };
             // Target "Self" (Subject::Caster) resolved to the follower: CastOn(follower, spell, follower)
-            // is the exact call act.cast_self makes above (the self road, the hand lock, the bounds).
+            // takes the same road act.cast_self does above (the self road, the hand lock, the bounds); the one
+            // difference is a_rangeGate (true here, act.cast_self passes the default), which CastOn reads only
+            // for a target other than the follower, so the two behave the same.
             return CastOn(a_follower, a_choice.actionParam, target, !isFallbackPlayer);
         }
 

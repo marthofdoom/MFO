@@ -3,9 +3,11 @@
 // cant do properly on the spell list").
 //
 // ONLY the cases ChooseBuffRoad (cast/BuffRoad.cpp) decides from the SPELL RECORD alone, through the
-// SAME helpers it calls (BuffAmbiguousRowWhy / BuffAimedLightWhy):
-//   * an ambiguous row (several effects mapping to different caster rows),
+// SAME helper it calls (BuffAimedLightWhy):
 //   * aimed / targeted Light (Magelight; Self Light stays).
+// An ambiguous row (several effects mapping to different caster rows) is NOT hidden any more (marth
+// 2026-10-06 agreed to show the Flame / Frost / Lightning Cloaks again): it still takes the direct road
+// at cast time (ChooseBuffRoad's direct answer), the picker just lists it.
 // A target-location (rune-shaped) buff is NOT hidden: only a SELF cast of it goes direct (BuffSelfRuneWhy);
 // at an ally it takes the claim road, so it is situational.
 // Situational fallbacks (no recipient, self-concentration of a non-Self spell, no combat controller,
@@ -33,10 +35,8 @@ namespace MFO::Actuation {
         // ChooseBuffRoad keys the row with seat 0's self flip for any non-Self buff (ally recipient or
         // explicit self); a Self-delivery spell has self=1 either way.
         const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/delivery != RE::MagicSystem::Delivery::kSelf);
-        const char* why = BuffAmbiguousRowWhy(arch);
-        if (!why && !placement) {
-            why = BuffAimedLightWhy(a_spell, arch);
-        }
+        const char* why = nullptr;
+        if (!placement) why = BuffAimedLightWhy(a_spell, arch);
         if (!why) return false;
         if (a_reason) *a_reason = why;
         return true;
