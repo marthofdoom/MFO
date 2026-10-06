@@ -5,6 +5,23 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.2.0 -- Animated casts in combat
+
+- **Requires Harbinger 0.11.0 for the full feature set.** Install both together. Without it MFO falls back to the old direct cast for the new casts below.
+- **Followers cast in combat with the real animation.** Buffs, wards, cloaks, bound weapons, invisibility, summons, reanimates and self buffs aimed at the caster now play the game's own cast animation. They go through Harbinger instead of being fired from nowhere. Light spells and a few ambiguous ones stay on the direct cast.
+- **Buffs on allies and the player are animated too.** A follower buffs the party in a series, lowest health first, and includes themself. A buff that never lands is dropped instead of retried forever.
+- **Heals are no longer interrupted.** A healer holds attack spells off the other hand until the heal is seen firing, so the game stops cancelling it. This works per hand. A second hurting ally can take the right hand, and the follower goes back to attacking once everyone is served. A heal that never fires lets go and stops blocking the attacks.
+- **A healer walks toward an ally they cannot see.** When the heal recipient is behind cover, the follower closes the distance while their other hand keeps fighting. They stop when sight returns or the heal ends. The distance is the new `fHealApproachRadius` in the MCM (384 by default).
+- **A melee follower keeps a one-handed weapon while the other hand casts.** The idle hand is reserved for spells only, so a sword or mace is no longer refused. This needs Harbinger 0.11.0.
+- **The spell picker hides spells MFO cannot cast properly.** Spells that would only fire without the animation, like an aimed Magelight, no longer show in the picker or the teach list. A buff that targets a location stays listed.
+- **Spell tooltips show the real effect description.** The text comes from each effect's own description with the magnitude, duration and area filled in. Hidden effects are skipped. The old name and numbers only appear when a spell has no description.
+- **New Enemy and Self targets.** A TARGET rule can now aim at the gambit's enemy or at the caster. Enemy is offered on the combat table.
+- **AUTO no longer guesses on a spell whose purpose the record does not declare.** Spells like Lamb of Mara and Pacify are never cast on AUTO, and the picker offers no Auto for them. Pick a target yourself and they cast as asked.
+- **Going back to 2.1.0 turns the rules that use the new targets off.** They load disabled instead of aiming at the player.
+- **Followers use their own line of sight and hearing in a fight.** MFO now asks Harbinger whether a follower can see or hear an enemy, instead of trusting the game's saved answer. This needs Harbinger 0.11.0.
+- **Pickups play at the follower.** When MFO makes a follower pick something up, the sound comes from the follower. Lockpick sounds are fixed to play at them as well.
+- **Board clicks no longer get lost.** A click released near the item it started on now counts, even when the mouse drifts a little. Destructive confirms still use the normal click.
+
 ## v2.1.0 -- Skyrim 1.7.104 support
 
 - **MFO supports Skyrim 1.7.104 (Steam).** There is no Address Library for 1.7.104, so MFO carries its own table of game addresses for it inside the DLL. You install nothing extra. Every hook, address and game structure MFO uses was checked by hand against the 1.7.104 game files. Two game structures moved in 1.7.104 (the player and the script engine), and MFO handles both. Nobody has played MFO on 1.7.104 yet, so please report anything odd. Harbinger supports 1.7.104 in its own update. `MFO.log` names the game version and the table revision at startup.
