@@ -988,47 +988,44 @@ namespace MFO::Actuation {
         if (fid == 0 || a_askerRule == kNoRule) return false;
         const auto it = g_castLock.find(fid);
         if (it == g_castLock.end()) return false;
-        // Exempt ONLY a RUNNING cast of the asker's own (review F1): a right-hand claim standing
-        // between casts or never fired is not a cast to protect, and exempting it by lock spell
-        // alone kept the floor released (the E6 shape, 09:06:10-11).
-        // Owned by the ASKER's rule too (R2-1): a lower rule casting the same spell as a higher
-        // rule's right-hand claim must not release that other rule's claim.
-        const auto& rlk = it->second.hand[kHandRight];
-        const bool askerHoldsRight = rlk.spell == a_askerSpell && rlk.owningRule == a_askerRule;
-        if (askerHoldsRight &&
-            CastInFlightOnHand(a_follower, kHandRight, a_askerSpell, CastProxyOnHand(fid, kHandRight)))
-            return false;
-        const auto& lk = it->second.hand[kHandLeft];
-        if (lk.spell == 0 || lk.owningRule == kNoRule || lk.owningRule >= a_askerRule) return false;
-        if (APMFBridge::GetHealCastSpell(fid, APMFBridge::kApmfHandLeft) != lk.spell) return false;   // not a standing LEFT HEAL claim
-        const auto age = std::chrono::steady_clock::now() - lk.lastSeen;
-        if (age >= std::chrono::milliseconds(APMFBridge::kHoldLastSeenCapMs)) return false;   // capped: kNeverFired WARN speaks
-        if (CastInFlightOnHand(a_follower, kHandLeft, lk.spell, CastProxyOnHand(fid, kHandLeft))) return false;   // running
-        const auto sinceClaim = std::chrono::duration_cast<std::chrono::milliseconds>(age);
-        if (ComposedCast::ObservedFiring(fid, APMFBridge::kApmfHandLeft, lk.spell,
-                                         static_cast<std::uint32_t>(sinceClaim.count())))
-            return false;   // fired since this claim: normal behaviour resumes
-        // The held rule's own idle right-hand claim is released THIS lap, so the idle-hand floor
-        // engages (otherwise the FacetExpiry sweep, ~2.8 s, eats the 4 s hold).
-        bool released = false;
-        if (askerHoldsRight) {
-            APMFBridge::ReleaseCastClaimOnHand(fid, APMFBridge::kApmfHandRight);
-            ClearCastLockHand(fid, kHandRight);
-            ComposedCast::ClearWatchHand(fid, APMFBridge::kApmfHandRight);   // as the unsighted-charge release does
-            released = true;
+        // EITHER hand's heal holds the OTHER hand's offense (marth 2026-10-06: one spell at a time).
+        for (const std::size_t h : { kHandLeft, kHandRight }) {
+            const std::size_t o = h == kHandLeft ? kHandRight : kHandLeft;   // the offense hand
+            // Exempt ONLY a RUNNING cast of the asker's own (review F1): a claim on the offense hand
+            // standing between casts or never fired is not a cast to protect, and exempting it by lock
+            // spell alone kept the floor released (the E6 shape, 09:06:10-11).
+            // Owned by the ASKER's rule too (R2-1): a lower rule casting the same spell as a higher
+            // rule's claim there must not release that other rule's claim.
+            const auto& olk = it->second.hand[o];
+            const bool askerHoldsOther = olk.spell == a_askerSpell && olk.owningRule == a_askerRule;
+            if (askerHoldsOther && CastInFlightOnHand(a_follower, o, a_askerSpell, CastProxyOnHand(fid, o))) continue;
+            const auto& lk = it->second.hand[h];
+            if (!HealHoldStands(a_follower, h, a_askerRule, lk)) continue;   // HealRoad.cpp: exits + their log
+            // The held rule's own idle claim on the other hand is released THIS lap, so the idle-hand
+            // floor engages (otherwise the FacetExpiry sweep, ~2.8 s, eats the hold).
+            bool released = false;
+            if (askerHoldsOther) {
+                const std::int32_t oh = o == kHandLeft ? APMFBridge::kApmfHandLeft : APMFBridge::kApmfHandRight;
+                APMFBridge::ReleaseCastClaimOnHand(fid, oh);
+                ClearCastLockHand(fid, o);
+                ComposedCast::ClearWatchHand(fid, oh);   // as the unsighted-charge release does
+                released = true;
+            }
+            const char* hw = h == kHandLeft ? "left" : "right";
+            auto& e = g_healHoldLog[(static_cast<std::uint64_t>(fid) << 1) | h];
+            if (e.first != lk.spell || e.second != lk.lastSeen) {
+                e = { lk.spell, lk.lastSeen };
+                spdlog::info("[heal-hold] {:08X} rule {} held off: {} heal claim pending (rule {}, spell {:08X}, "
+                             "not yet fired, charging or channelling){}",
+                             fid, a_askerRule, hw, lk.owningRule, lk.spell,
+                             released ? "; its own idle other-hand claim was released so the floor engages" : "");
+            } else if (released) {
+                spdlog::info("[heal-hold] {:08X} rule {}: idle other-hand claim released ({} heal claim still pending)",
+                             fid, a_askerRule, hw);
+            }
+            return true;
         }
-        auto& e = g_healHoldLog[fid];
-        if (e.first != lk.spell || e.second != lk.lastSeen) {
-            e = { lk.spell, lk.lastSeen };
-            spdlog::info("[heal-hold] {:08X} rule {} held off: heal claim pending (rule {}, spell {:08X}, "
-                         "not yet fired or charging){}",
-                         fid, a_askerRule, lk.owningRule, lk.spell,
-                         released ? "; its own idle right-hand claim was released so the floor engages" : "");
-        } else if (released) {
-            spdlog::info("[heal-hold] {:08X} rule {}: idle right-hand claim released (heal claim still pending)",
-                         fid, a_askerRule);
-        }
-        return true;
+        return false;
     }
 
     // P2 (fix/mfo-heal-starve-retreat): the retreat trigger's two questions. Public (Actuation.h).

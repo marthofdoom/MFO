@@ -514,6 +514,11 @@ namespace MFO::APMFBridge {
     // never-re-file set. Worker-safe; own mutex (never g_mx).
     inline constexpr std::size_t kApproachAnyHand = ~std::size_t{ 0 };
     void ServiceHealApproach(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_recipient);
+    // Can the ch.24 approach NOT bring sight back to a_recipient for a_follower right now? True when no approach
+    // is possible (below ABI 19, the seat refused) or Harbinger gave up on / refused / never served that recipient
+    // this fight (EngineDropped / TargetLost / Leashed / Refused / never-live). cast/HealRoad.cpp's never-fired
+    // bound stops excluding held-through-lost-sight time for such a claim. Worker-safe; own mutex.
+    bool HealApproachBlocked(RE::FormID a_follower, RE::FormID a_recipient);
     void ReleaseHealApproach(RE::FormID a_follower, const char* a_why,
                              std::size_t a_hand = kApproachAnyHand, bool a_fightOver = false);
 

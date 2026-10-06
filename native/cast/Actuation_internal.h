@@ -363,7 +363,7 @@ namespace MFO::Actuation {
         inline std::unordered_map<RE::FormID, HealRepairLogSlots> g_healRepairLog;
         // g_healHoldLog: HealPendingHoldsOffense's `[heal-hold]` line, once per claim (keyed by
         // the claim's lock stamp, so a re-claim logs again). Revert-cleared by ClearCastLocks.
-        inline std::unordered_map<RE::FormID, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> g_healHoldLog;
+        inline std::unordered_map<std::uint64_t, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> g_healHoldLog;   // key (fid << 1) | heal hand
 
         // An offense charge that sat fully charged on an unsighted foe past the never-
         // observed bound was RELEASED (CastOn, in-flight refresh). Its (spell, target)
@@ -591,16 +591,29 @@ namespace MFO::Actuation {
             explicit operator bool() const { return why != nullptr; }
         };
         HealRepair HealClaimNeedsRepair(RE::Actor* a_follower, RE::SpellItem* a_spell);
-        // HealPendingHoldsOffense (fix/mfo-heal-starve-retreat, P1): is a STRICTLY HIGHER-RANKED
-        // heal claim (lower rule index than a_askerRule) standing on the LEFT hand PENDING, i.e.
-        // not in flight on the hand and not observed firing since its claim stamp, and younger
-        // than kHoldLastSeenCapMs? Then a lower-ranked OFFENSE rule must not take the other
-        // hand or pin a foe (that drops Bridge.cpp's idle-hand floor, and the engine then
-        // sat on the heal for ~10 s, field 2026-10-01). Derived from the lock + claim + watch,
-        // no state of its own and no timer: the bound is the existing claim-age cap, past
-        // which the kNeverFired WARN is the loud signal and offense resumes. Logs `[heal-hold]`
-        // once per claim. Worker-serial (#4).
+        // HealPendingHoldsOffense (fix/mfo-heal-starve-retreat, P1; per hand since
+        // fix/mfo-heal-hold-until-fire): is a STRICTLY HIGHER-RANKED heal claim (lower rule index than
+        // a_askerRule) standing on EITHER hand and not yet observed firing since its claim stamp
+        // (pending OR charging; a concentration channel holds too)? Then a lower-ranked OFFENSE rule
+        // must not take the OTHER hand or pin a foe (that drops Bridge.cpp's idle-hand floor, and the
+        // engine interrupts the heal: field 2026-10-01 and 2026-10-06; marth: one spell at a time for
+        // now). No age cap. It ends on the observed fire or the claim's release; a claim that never
+        // fires is released by HealRoad.cpp's NeverFiredRelease (LoS-free kHoldLastSeenCapMs, both
+        // hands), which is the starvation bound. Derived from the lock + claim + watch, no state of
+        // its own and no timer. Logs `[heal-hold]` once per claim and once for the exit.
         bool HealPendingHoldsOffense(RE::Actor* a_follower, int a_askerRule, RE::FormID a_askerSpell);
+        // fix/mfo-heal-hold-until-fire (cast/HealRoad.cpp): the hold's helpers. HealHoldStands: does
+        // a_hand's heal claim (lock a_lk, rank above a_askerRule) still hold the OTHER hand off offense?
+        // False (and ONE `[heal-hold] ... hold ENDED` line naming the exit) once the claim is gone or
+        // the heal was observed firing (a concentration heal keeps it while its channel runs).
+        // HealHoldLapsed: the once-per-hold exit line + g_healHoldLog erase (no-op when none is live).
+        bool HealHoldStands(RE::Actor* a_follower, std::size_t a_hand, int a_askerRule, const CastLock& a_lk);
+        void HealHoldLapsed(RE::FormID a_follower, std::size_t a_hand, const char* a_why);
+        // The never-fired LATCH (cast/HealRoad.cpp): set when NeverFiredRelease frees a hand's claim; while
+        // set for that (follower, hand, spell) HealHoldStands is false, so the heal's re-claim next lap
+        // does not re-arm the hold. Cleared by an observed fire on the hand, ClearHealNeverFired (a
+        // follower's combat end / dismissal, from ClearCastLock) and ResetHealRoad (revert).
+        void ClearHealNeverFired(RE::FormID a_follower);
 
         // ── THE PER-HAND HEAL ROAD (feat/mfo-perhand-heal, cast/HealRoad.cpp) ──────────
         // marth 2026-09-30: "One per follower is fine for this, the other hand would be for
