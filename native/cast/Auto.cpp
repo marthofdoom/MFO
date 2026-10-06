@@ -329,12 +329,22 @@ namespace MFO::Actuation {
             // NATURE UNDECLARED (marth 2026-10-06: "for a spell whose nature can't be read from the record, AUTO
             // does not cast and asks for a target"). An Apocalypse leech curse (non-hostile effects, Script, Aimed)
             // classifies as a Buff, and the buff series below put Lamb of Mara on the caster himself. AUTO never
-            // guesses: a transparent NoOp and one loud line per (follower, spell). NEVER a fall back to self. An
-            // explicit Enemy / Ally / Self pick takes CastOn, which retargets an Enemy pick to the follower's
-            // current target (cast/CastOn.cpp).
+            // guesses: a transparent NoOp and one loud line per (follower, spell). NEVER a fall back to self. The
+            // rule's TARGET picks who instead (Vocab::Subject): "Enemy (gambit target)" = the follower's commanded
+            // foe (CommandedEnemy, cast/Fire.cpp), "Self" = the caster, an ally by name / Ally: Nearest / the
+            // player. A foe or ally SELECTOR condition also names its target and never reaches AUTO (Fire's
+            // autoPick), so "Foe: undead -> Lamb of Mara" casts at the undead foe the selector chose.
             if (SpellNatureUndeclared(spell)) {
-                static std::unordered_set<std::uint64_t> s_undeclaredLog;   // once per follower + spell per session
-                if (s_undeclaredLog.insert((static_cast<std::uint64_t>(id) << 32) | a_spellID).second)
+                // once per follower + spell per session. Locked: CastAuto runs on the job worker today (combat
+                // Fire and the logistics service), the lock keeps the set honest if a caller ever moves.
+                static std::mutex                        s_undeclaredMx;
+                static std::unordered_set<std::uint64_t> s_undeclaredLog;
+                bool first = false;
+                {
+                    std::scoped_lock lk(s_undeclaredMx);
+                    first = s_undeclaredLog.insert((static_cast<std::uint64_t>(id) << 32) | a_spellID).second;
+                }
+                if (first)
                     spdlog::warn("[auto] {} ({:08X}): nature undeclared in the spell record -- set the rule's target "
                                  "to Enemy, Ally or Self", spell->GetName() ? spell->GetName() : "?", a_spellID);
                 return { Result::NoOp, "auto: spell nature undeclared in its record (pick Enemy, Ally or Self)", true };

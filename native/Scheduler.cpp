@@ -1309,7 +1309,13 @@ namespace MFO::Scheduler {
                         const Eval::Choice sc = Eval::Evaluate(f, rec->second, Table::Combat, start);
                         if (sc.ruleIndex < 0) break;
                         start = sc.ruleIndex + 1;
-                        if (sc.actionOpcode != Vocab::kActCastSelf) continue;
+                        // act.cast_self, or a cast_target row whose TARGET is "Self" (Subject::Caster,
+                        // 2026-10-06): the same self road (Fire -> CastOn(f, spell, f)), self by definition.
+                        const bool selfRule =
+                            sc.actionOpcode == Vocab::kActCastSelf ||
+                            (sc.actionOpcode == Vocab::kActCastTarget && sc.subjectActorForm == 0 &&
+                             static_cast<Vocab::Subject>(sc.subject) == Vocab::Subject::Caster);
+                        if (!selfRule) continue;
                         auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sc.actionParam);
                         if (!sp || !Actuation::HealsHealth(sp)) continue;
                         // The EXACT decision CastOn will make: only a package-free direct road runs here

@@ -147,8 +147,13 @@ namespace MFO::Actuation {
     // combat Fire path and the out-of-combat Logistics cast_target path resolve a
     // manual target identically -- a logistics "Cast on target, Target=Ally: Nearest
     // ally" rule fires instead of being silently dropped. Main-thread / worker.
+    // Rung 0 (before the selector): Subject::Caster -> the follower; Subject::Enemy ->
+    // CommandedEnemy, which may be nullptr (no commanded foe): the caller skips the rule.
     RE::Actor* ResolveCastTarget(RE::Actor* a_follower, const Eval::Choice& a_choice,
                                  bool& a_outIsFallbackPlayer);
+    // The "Enemy (gambit target)" subject: the follower's commanded target (Targeting::Current),
+    // alive, enabled and hostile to him, else nullptr. Worker-safe (Targeting::Current is locked).
+    RE::Actor* CommandedEnemy(RE::Actor* a_follower);
 
     // FORCED SELF-CAST — the UNIVERSAL direct trigger (Docs/SPEC-self-cast-forced.md).
     // Fires an authored `act.cast_self` (concentration OR fire-and-forget) as a
@@ -656,8 +661,9 @@ namespace MFO::Actuation {
     // picker hides it. *a_reason (optional) gets a static literal. Pure form data: main-thread safe.
     bool CastRoadUnsupported(RE::SpellItem* a_spell, const char** a_reason = nullptr);
     // True when the spell's nature (for an enemy / an ally / self) cannot be read from its record: a Buff-kind,
-    // non-placement, non-Self-delivery spell whose predicted row for another actor is NoRow or Script.
-    // AUTO does not cast it (cast/Auto.cpp) and the board marks it. Pure form data.
+    // non-placement, non-Self-delivery spell with at least one Script or enemy-control (Calm / Frenzy /
+    // Demoralize / Paralysis / TurnUndead) effect archetype. AUTO does not cast it (cast/Auto.cpp) and the
+    // board marks it. Pure form data.
     bool SpellNatureUndeclared(RE::SpellItem* a_spell);
     // The static per-spell cases of ChooseBuffRoad (cast/BuffRoad.cpp), shared so the picker and the road
     // cannot disagree. Each returns the reason literal, or nullptr when the case does not apply.

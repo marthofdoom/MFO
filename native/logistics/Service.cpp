@@ -1550,7 +1550,10 @@ namespace MFO::Logistics {
                         if (acted) break;
                         start = choice.ruleIndex + 1; continue;
                     }
-                    if (p.get()) {
+                    // Target Enemy / Self (appended Vocab::Subject) are ABSOLUTE: they override a selector's
+                    // pick, so they always take the ladder (its rung 0). Enemy with no commanded foe -> nullptr
+                    // -> next rule (out of combat the board does not offer Enemy).
+                    if (p.get() && !Vocab::IsAppendedSubject(choice.subject)) {
                         tgt = p.get();
                     } else {
                         // NOT auto, and no selector target this tick: a MANUAL pick
@@ -1577,7 +1580,12 @@ namespace MFO::Logistics {
                 // magicka, self-paced channel, NO package/equip/animation), NOT the
                 // silent immediate apply -- so self never takes the immediate route
                 // while the gate is on. `selfPkg` is a legacy name for that route.
-                const bool selfPkg   = (op == Vocab::kActCastSelf) && Config::g_castSelf.load();
+                // Target "Self" (Subject::Caster) on a cast_target row resolved tgt to the follower above:
+                // it takes exactly the act.cast_self routing (marth 2026-10-06: "A self cast is valid if its
+                // needed"), never the immediate apply that a cast_self with bCastSelf on never takes.
+                const bool casterPick = op == Vocab::kActCastTarget && tgt == a_follower &&
+                                        static_cast<Vocab::Subject>(choice.subject) == Vocab::Subject::Caster;
+                const bool selfPkg   = (op == Vocab::kActCastSelf || casterPick) && Config::g_castSelf.load();
 
                 // ── CONCENTRATION -> DIRECT FORCE (package-lock-proof) ──────────
                 // marth's ruling after the deck fail: OOC concentration delivery

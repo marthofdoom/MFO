@@ -1281,6 +1281,8 @@ namespace MFO::Board {
                         v.subjectName = pc->GetName() ? pc->GetName() : Str::Get(Str::K::Gb_SubjPlayer);
                     break;
                 case Vocab::Subject::NearestAlly: v.subjectName = Str::Get(Str::K::Gb_SubjAlly); break;
+                case Vocab::Subject::Enemy:       v.subjectName = Str::Get(Str::K::Gb_SubjEnemy); break;
+                case Vocab::Subject::Caster:      v.subjectName = Str::Get(Str::K::Gb_SubjSelf); break;
                 case Vocab::Subject::Self:
                 default:
                     v.subjectName = Str::Get(Str::K::Gb_SubjAuto);   // #68: subject 0 = Auto ladder, not self

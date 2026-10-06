@@ -8,6 +8,7 @@
 #include "logistics/Logistics.h"
 #include "Loadout.h"
 #include "Targeting.h"
+#include "Vocabulary.h"   // IsAppendedSubject: the FLWR flags byte for an Enemy / Caster target
 #include "CasterConsent.h"
 #include "CombatStyle.h"
 #include "cast/Actuation.h"   // T#76: revert drops the equip force-hold records
@@ -186,7 +187,15 @@ namespace MFO {
                         break;
                     }
                     a_intfc->WriteRecordData(g.actionParamForm);
-                    const std::uint8_t flags = g.enabled ? 1u : 0u;
+                    // flags bit 0 = enabled. bit 1 = enabled, for a rule whose subjectSelector is an
+                    // APPENDED Vocab::Subject (Enemy / Caster, 2026-10-06), and then bit 0 stays CLEAR:
+                    // an older MFO.dll reads only bit 0, so it loads that rule DISABLED rather than
+                    // resolving the unknown subject to its player-fallback rung (a curse or a damage
+                    // spell aimed at the player). No version bump: the layout is unchanged, and a v6
+                    // FLWR would make an older DLL skip (and on its next save destroy) every follower.
+                    const bool appendedSubj = Vocab::IsAppendedSubject(g.subjectSelector);
+                    const std::uint8_t flags =
+                        !g.enabled ? 0u : (appendedSubj ? 2u : 1u);
                     a_intfc->WriteRecordData(flags);
                 }
                 if (!flwrOk) break;   // out of the table loop
@@ -468,7 +477,9 @@ namespace MFO {
                         if (!a_intfc->ReadRecordData(rawParam)) return;
                         std::uint8_t flags = 0;
                         if (!a_intfc->ReadRecordData(flags)) return;
-                        g.enabled = (flags & 1u) != 0;
+                        // bit 0 OR bit 1 (the appended-subject enabled bit, see the writer). Every
+                        // record written before 2026-10-06 holds 0 or 1 here, so it reads unchanged.
+                        g.enabled = (flags & 3u) != 0;
 
                         if (rawParam != 0) {
                             RE::FormID resolvedParam = 0;

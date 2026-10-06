@@ -133,6 +133,11 @@ Gambit conditions and actions serialize as `cond.ally_hp_below`, not as index
 7. *Failure:* reordering the vocabulary silently scrambles every save's rule
 lists — and MFO's vocabulary is expected to grow every phase.
 `INHERITED` (MEO §12) + `DESIGN` (`ARCHITECTURE.md` §8.2).
+*Standing exception (2026-10-06 note):* the cast target `Vocab::Subject` IS persisted as a raw
+ordinal byte (`subjectSelector`). It is therefore APPEND-ONLY: never renumber Self=0 / Player=1 /
+NearestAlly=2 / Enemy=3 / Caster=4. A value an older DLL cannot read must be listed in
+`Vocab::IsAppendedSubject`, which makes the FLWR writer store that rule's enabled bit in flags bit 1
+(bit 0 clear), so the older DLL loads the rule DISABLED rather than mis-resolving it.
 
 **#11 — Bound every count, bail on short reads, clamp at ingestion.**
 Rule count clamped to the rank's slot maximum; rank clamped to `[1,5]`. A
