@@ -120,14 +120,21 @@ namespace MFO::Actuation {
         // g_unsightedCharge pattern. Worker-serial (#4).
         std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_neverFired;
 
+        // BUFFROAD'S OWN "FIRED THIS FIGHT" SET (review R3-1): the [cfc] watch's `observed` latch is
+        // wiped by six things (EndBuffClaim's own watch clear, WatchArmed's re-arm for another spell,
+        // APMFBridge::Tick's expiry sweep, the Scheduler's ClearWatch, dismissal, End/EndHand), so it
+        // is not a fight-wide record. A spell is inserted whenever a fire is observed recently on a
+        // refresh lap, or the up-read says the buff landed; it is the ONLY input to the
+        // fired-earlier / never-fired split. Erased by ResetBuffFollower / ResetBuffRoad.
+        // Worker-serial (#4).
+        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>> g_fired;
+
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
-        // a_keepWatch: leave the [cfc] watch (its fight-wide `observed` latch) for a claim that HAS
-        // fired, so the re-claim does not read as never-fired (review R2-1).
-        void EndBuffClaim(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_takeBack, bool a_keepWatch = false) {
+        void EndBuffClaim(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_takeBack) {
             const auto id = a_actor->GetFormID();
             APMFBridge::ReleaseCastClaimOnHand(id, APMFBridge::kApmfHandLeft);
-            if (!a_keepWatch) ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
+            ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
             ClearLeftCastLockIf(id, a_spell->GetFormID());
             if (a_takeBack) Loadout::ReleaseSpellIf(id, a_spell->GetFormID());
         }
@@ -137,12 +144,14 @@ namespace MFO::Actuation {
     void ResetBuffRoad() {
         g_roadLog.clear();
         g_neverFired.clear();
+        g_fired.clear();
         std::scoped_lock lock(g_upMx);
         g_up.clear();
     }
 
     void ResetBuffFollower(RE::FormID a_follower) {
         g_neverFired.erase(a_follower);
+        g_fired.erase(a_follower);
     }
 
     bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell) {
@@ -235,6 +244,7 @@ namespace MFO::Actuation {
         if (!conc) {
             const Up up = BuffUp(a_follower, a_spell);
             if (up == Up::Yes) {
+                g_fired[id].insert(spellID);   // R3-1: it landed
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
                 return SelfCast::Declined;
             }
@@ -275,6 +285,11 @@ namespace MFO::Actuation {
         const auto spellID = a_spell->GetFormID();
         const bool conc    = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
 
+        // R3-1: a fire observed within the recency window is recorded in BuffRoad's own set.
+        if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
+                                         APMFBridge::kObservedFiringRecencyMs))
+            g_fired[id].insert(spellID);
+
         // NEVER FIRED (review F1), the heal road's NeverFiredRelease shape (HealRoad.cpp): the claim's
         // lock stamp is older than kHoldLastSeenCapMs, no fire observed on LEFT within
         // kObservedFiringRecencyMs, and nothing charging or casting. Released ONCE with a WARN and the
@@ -288,21 +303,21 @@ namespace MFO::Actuation {
                 !ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
                                               APMFBridge::kObservedFiringRecencyMs) &&
                 !CastInFlightOnHand(a_follower, kHandLeft, spellID, CastProxyOnHand(id, kHandLeft))) {
-                // "NEVER fired" is the fight-wide latch (ObservedFiring with a 0 window: this spell
-                // fired once on this hand this fight, ComposedCast.cpp), NOT the recency window (review
-                // R2-1): an Invisibility broken by an attack, or a reactive ward idle between
-                // triggers, fired and worked.
-                if (ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID, 0)) {
+                // "NEVER fired" is BuffRoad's own fired-this-fight set (g_fired), NOT the recency window
+                // (review R2-1) and NOT the [cfc] watch latch (R3-1, wiped by six things): an
+                // Invisibility broken by an attack, or a reactive ward idle between triggers, fired
+                // and worked.
+                if (const auto fi = g_fired.find(id); fi != g_fired.end() && fi->second.count(spellID)) {
                     spdlog::info("[buff] {:08X} {} ({:08X}): fired earlier this fight, idle for {} ms with "
                                  "nothing charging -- claim released (no hold-off; the rule re-claims when it "
                                  "wants it again)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
                                  ageMs);
-                    EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true, /*a_keepWatch=*/true);
+                    EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
                     return Outcome{ Result::NoOp, "self-buff claim idle after a fire: released", true };
                 }
                 spdlog::warn("[buff] {:08X} {} ({:08X}) NEVER FIRED this fight: claimed {} ms ago, nothing "
-                             "charging -- claim RELEASED and the rule held off for this fight (no direct "
-                             "fallback; the engine's {} caster did not fire it: see Harbinger's [ctcensus] "
+                             "charging -- claim RELEASED and the rule held off until the next cast-rule reset "
+                             "(no direct fallback; the engine's {} caster did not fire it: see Harbinger's [ctcensus] "
                              "verdict; rule {})",
                              id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, ageMs,
                              EngineRowName(ClassifyArchetype(a_spell).row), g_firingRule);
@@ -338,6 +353,7 @@ namespace MFO::Actuation {
             return Outcome{ Result::NoOp, "self-buff stream cap", true };
         }
         if (BuffUp(a_follower, a_spell) != Up::Yes) return std::nullopt;
+        g_fired[id].insert(spellID);   // R3-1: it landed
         spdlog::info("[buff] {:08X} {:08X}: self-buff is up -- claim released (the cast landed)", id, spellID);
         EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
         return Outcome{ Result::NoOp, "self-buff already up: claim released", true };
