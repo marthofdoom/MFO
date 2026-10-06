@@ -53,8 +53,9 @@
 // pump in Tick(); released with the other claims in ClearTransientState(). Full working
 // (including why "neither" and not "both") at ReconcileHandFloorLocked in the .cpp.
 // It is a SPELLS-ONLY reservation (fix/mfo-floor-spells-only, 2026-10-06): on Harbinger
-// ABI >= 20 it carries kCastFlag_FloorSpellsOnly, so weapons, shields, torches and fists
-// stay in the floored hand; on ABI 19 (whose hand-claim block may disarm a floored hand)
+// ABI >= 20 it carries kCastFlag_FloorSpellsOnly, so a one-handed weapon, shield or torch
+// passes into the floored hand (a two-hander, a bow or unarmed still competes for the
+// driving hand and is refused while that claim stands); on ABI 19 (whose hand-claim block may disarm a floored hand)
 // MFO mints NO floor; on ABI <= 18 the floor never touched weapons and is minted as before.
 //
 // Claim lifecycles: casting = PER-CAST (refreshed each winning cast tick; released

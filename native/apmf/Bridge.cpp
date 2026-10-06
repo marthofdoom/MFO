@@ -533,7 +533,7 @@ namespace MFO::APMFBridge {
                          (wantConc     ? APMF_API::kCastFlag_Concentration : 0u) |
                          (wantDenyOnly ? APMF_API::kCastFlag_DenyHandOnly  : 0u) |
                          // ABI v20: every MFO floor is a SPELLS-ONLY reservation (see
-                         // ReconcileHandFloorLocked's WEAPONS note): weapons stay in the hand.
+                         // ReconcileHandFloorLocked's WEAPONS note): a one-hander stays in the hand.
                          (wantDenyOnly && api->abiVersion >= kFloorSpellsOnlyAbi
                               ? APMF_API::kCastFlag_FloorSpellsOnly : 0u) |
                          APMF_API::MakeStopPct(wantStopPct);
@@ -716,8 +716,11 @@ namespace MFO::APMFBridge {
         // marth's ruling, "spells-only reservation": the floor exists to stop the
         // engine starting a second SPELL in the idle hand, nothing else. So:
         //   * ABI >= 20: MFO sets kCastFlag_FloorSpellsOnly on every floor. The
-        //     floor refuses spells and staffs only; a spellsword's or a melee
-        //     follower's steel, bow, shield, torch or fists stay in the hand.
+        //     floor refuses spells, scrolls and staffs only: a one-handed weapon,
+        //     shield or torch in the floored hand passes. A two-hander, a bow, or
+        //     an item the engine has not given a hand (unarmed) still competes for
+        //     the driving hand too and is refused while that cast claim stands
+        //     (field: the bow's 32 and Unarmed's 22 refusals continue, correctly).
         //   * ABI == 19: Harbinger may or may not carry the hand-claim block, and
         //     it would ignore the flag if it does. MFO mints NO floor there (one
         //     warning per session). The cost is the pre-floor behaviour: the AI
@@ -745,7 +748,7 @@ namespace MFO::APMFBridge {
                 if (!s_warned.exchange(true))
                     spdlog::warn("[apmf] IDLE-HAND FLOOR OFF for this session: Harbinger reports ABI v{}, which may "
                                  "block weapons into a floored hand and has no spells-only floor (ABI v{}). MFO mints "
-                                 "no floor, so a melee follower keeps its weapon hand. The AI may start a second spell "
+                                 "no floor, so a melee follower's one-handed weapon is not refused there. The AI may start a second spell "
                                  "of its own in the idle hand while MFO drives the other. Update Harbinger to fix "
                                  "this. Logged once per session.",
                                  api->abiVersion, kFloorSpellsOnlyAbi);
@@ -891,7 +894,8 @@ namespace MFO::APMFBridge {
                              api->abiVersion >= kFloorSpellsOnlyAbi ? "deny-only, spells-only" : "deny-only",
                              wantHand == kApmfHandLeft ? "right" : "left",
                              api->abiVersion >= kFloorSpellsOnlyAbi
-                                 ? "weapons, shields, torches and fists stay in the hand"
+                                 ? "a one-handed weapon, shield or torch may go in it (a two-hander, bow or fists still "
+                                   "compete for the driving hand)"
                                  : "this Harbinger predates the hand-claim block, so weapons were never blocked");
         }
 

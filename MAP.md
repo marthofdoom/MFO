@@ -5671,13 +5671,17 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   unarmed equip into a hand a cast claim OR a floor holds, and Cicero's floored right hand refused his
   bow, swords and fists 119 times in 40 s (field 2026-10-06). marth's ruling: "spells-only reservation".
   By Harbinger ABI: **>= 20** `EnsureCastClaimLocked` adds `APMF_API::kCastFlag_FloorSpellsOnly` to every
-  floor (weapons stay, spells and staffs are refused); **== 19** (a build that may carry the block and
+  floor (spells, scrolls and staffs are refused; a one-handed weapon, shield or torch in the floored hand
+  passes; a two-hander, a bow or an item the engine has not given a hand (unarmed) still competes for the
+  driving hand too and is refused while that cast claim stands, so the field's bow 32 and Unarmed 22
+  refusals continue, correctly); **== 19** (a build that may carry the block and
   cannot be told otherwise) `ReconcileHandFloorLocked` mints NO floor and releases a standing one, with a
   once-per-session `IDLE-HAND FLOOR OFF` warning (the cost: the AI may start its own second spell in the
   idle hand, the pre-F10 behaviour, judged less harmful than disarming a melee follower); **<= 18** (no
   block exists) floors exactly as before. The `claimed` line says `deny-only, spells-only` on v20.
   **What breaks:** dropping the flag on v20, or flooring on v19, re-disarms melee followers; a hand MFO's
-  own claim DRIVES still blocks every equip by Harbinger's rule, which is intended.
+  own claim DRIVES still blocks every equip by Harbinger's rule, which is intended. Open backlog: MFO-B235
+  (the ABI-19 fallback also drops floors on pre-HandBlock v19 dev builds; accepted).
   **THE UNOBSERVED GATE (`fix/mfo-combat-restoration-direct`, 2026-09-21; RE-SIZED AND ARMED ON CHARGE
   `fix/mfo-spell-authority-0922`, 2026-09-22).** A driving claim earns the
   floor only while it can be believed to be driving: younger than **`kIdleFloorUnobservedMs`**
