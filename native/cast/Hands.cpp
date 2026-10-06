@@ -556,13 +556,48 @@ namespace MFO::Actuation {
         // the waiter never waits on a timer of its own, only on the incumbent's
         // charge (or the cap that bounds a stuck one).
         bool CanPreemptHand(RE::Actor* a_follower, std::size_t a_hand, CastLock& a_lock,
-                            bool a_urgentHeal) {
+                            bool a_urgentHeal, RE::FormID a_askerSpell) {
             const auto fid = a_follower ? a_follower->GetFormID() : 0;
             if (fid == 0) return false;
             // RANK, COMPARED -- not inferred from arrival order. Strictly higher
             // (lower index) only: an equal index is the incumbent ITSELF (see
             // IsOwnRetarget below), and a lower rank is held off exactly as before.
             if (g_firingRule >= a_lock.owningRule) return false;
+            // A FRESH OFFENSE INCUMBENT IS NOT PREEMPTED BY A HIGHER OFFENSE RULE (field 1006c: Jesper's rule 6
+            // took rule 7's hand 4 times in a fight, each time before the incumbent's claim had its window,
+            // so neither cast). Fresh = claimed less than kInFlightHoldCap ago (APMF's cast TTL, the longest one
+            // cast may stand: a FLOOR, principle 9, so a stuck claim is never held past it) and not yet
+            // observed firing since its claim stamp (`lastSeen`, frozen at the first claim, as
+            // IncumbentHealCastDone reads it). Offense over offense only: a heal (urgent or not) and any
+            // non-offense asker keep the rules below, and once the window has passed gambit order rules.
+            if (!a_urgentHeal && a_lock.spell != 0 && a_lock.lastSeen.time_since_epoch().count() != 0) {
+                auto* askSp = RE::TESForm::LookupByID<RE::SpellItem>(a_askerSpell);
+                auto* incSp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
+                if (askSp && incSp && CasterConsent::ClassifySpell(askSp) == CasterConsent::SpellKind::Offense &&
+                    CasterConsent::ClassifySpell(incSp) == CasterConsent::SpellKind::Offense) {
+                    const auto now = std::chrono::steady_clock::now();
+                    const auto age = now - a_lock.lastSeen;
+                    if (age < kInFlightHoldCap) {
+                        const std::int32_t apmfHand = (a_hand == kHandLeft) ? APMFBridge::kApmfHandLeft
+                                                                            : APMFBridge::kApmfHandRight;
+                        const auto sinceClaim = std::chrono::duration_cast<std::chrono::milliseconds>(age);
+                        if (!ComposedCast::ObservedFiring(fid, apmfHand, a_lock.spell,
+                                                          static_cast<std::uint32_t>(sinceClaim.count()))) {
+                            auto& said = g_freshKeptLog[(static_cast<std::uint64_t>(fid) << 16) ^
+                                                        (static_cast<std::uint64_t>(g_firingRule & 0xFF) << 8) ^
+                                                        static_cast<std::uint64_t>(a_lock.owningRule & 0xFF)];
+                            if (said != a_lock.lastSeen) {
+                                said = a_lock.lastSeen;
+                                spdlog::info("[eval] {:08X} rule {} kept the hand: incumbent rule {} is fresh "
+                                             "(spell {:08X}, claimed {} ms ago, not yet fired)",
+                                             fid, g_firingRule, a_lock.owningRule, a_lock.spell,
+                                             sinceClaim.count());
+                            }
+                            return false;
+                        }
+                    }
+                }
+            }
             if (!CastInFlightOnHand(a_follower, a_hand, a_lock.spell, CastProxyOnHand(fid, a_hand))) {
                 g_preemptWhy[a_hand] = "the caster was idle between casts";
                 return true;
@@ -1241,7 +1276,7 @@ namespace MFO::Actuation {
         };
         auto outranks = [&](std::size_t h) {
             return lockIt != g_castLock.end() &&
-                   CanPreemptHand(a_follower, h, lockIt->second.hand[h], a_urgentHeal);
+                   CanPreemptHand(a_follower, h, lockIt->second.hand[h], a_urgentHeal, a_spell);
         };
 
         // ── HOLDING A RE-AIM STILL HAS TO KEEP THE CLAIM ALIVE ──────────────

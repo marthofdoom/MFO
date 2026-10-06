@@ -1687,6 +1687,7 @@ namespace MFO::Actuation {
     // revert call site, rather than adding a new one.
     void ClearCastLocks() {
         g_castLock.clear();
+        g_freshKeptLog.clear();
         g_lastLockLog.clear();
         g_lastPreemptLog.clear();
         g_lastInFlightLog.clear();   // F9

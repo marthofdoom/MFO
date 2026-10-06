@@ -364,6 +364,10 @@ namespace MFO::Actuation {
         // g_healHoldLog: HealPendingHoldsOffense's `[heal-hold]` line, once per claim (keyed by
         // the claim's lock stamp, so a re-claim logs again). Revert-cleared by ClearCastLocks.
         inline std::unordered_map<std::uint64_t, std::pair<RE::FormID, std::chrono::steady_clock::time_point>> g_healHoldLog;   // key (fid << 1) | heal hand
+        // g_freshKeptLog: CanPreemptHand's `[eval] rule N kept the hand: incumbent rule M is fresh` line, once per
+        // (follower, asker rule, incumbent rule), re-armed by a new incumbent claim stamp. Worker-serial;
+        // cleared by ClearCastLocks.
+        inline std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_freshKeptLog;
 
         // An offense charge that sat fully charged on an unsighted foe past the never-
         // observed bound was RELEASED (CastOn, in-flight refresh). Its (spell, target)
