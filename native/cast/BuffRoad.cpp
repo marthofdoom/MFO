@@ -157,7 +157,7 @@ namespace MFO::Actuation {
         // FIRED BUT NEVER LANDED (review R2-1; marth: every spell is exactly bounded). Per follower, SK(recipient,
         // spell) -> when a fire of this claim was FIRST observed. The refresh lap releases the claim (WARN, held off
         // for the fight) when the up-read has still not said Yes kHoldLastSeenCapMs after that: a claim that fires but
-        // never lands (an unproven explicit-self kTargetActor, a projectile at its own shooter) would otherwise be
+        // never lands (an explicit-self claim whose self-flip proxy did not land, or an older Harbinger without that proxy aiming a projectile at its own shooter) would otherwise be
         // re-cast until the magicka runs dry, holding LEFT. Erased when the claim ends. Worker-serial (#4).
         std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>> g_fireSeen;
 
@@ -188,8 +188,11 @@ namespace MFO::Actuation {
         // needs to be animated"). Harbinger leaves a TARGET-0 claim of such a spell unresolved (APMF-B39: the seats would
         // not serve it), but an EXPLICIT self FormID resolves to the claimant's handle (core/ControlMap.cpp), seat 0
         // flips the row's self bit for the driven form and 0x0A answers the claimed target = the caster. It is
-        // therefore claimed like an ally buff with target = the caster's own FormID. Only kTargetActor is judged
-        // safe: an aimed or area delivery would be a ray at its own shooter (ControlMap's F1/F2 note).
+        // therefore claimed like an ally buff with target = the caster's own FormID. Aimed, Touch and TargetActor
+        // are all served (marth 2026-10-05: "proxy aimed buffs, and touch buffs"): Harbinger's self-flip proxy
+        // (feat/apmf-self-delivery-proxy, no ABI bump) mints a kSelf copy of the spell for a claim whose target is
+        // the claimant's own FormID, so no ray is aimed at the shooter. A kTargetLocation non-placement spell
+        // stays direct (rune-shaped, batch D); a hostile spell is never a Buff kind (CasterConsent::ClassifySpell).
         bool ExplicitSelfBuff(RE::SpellItem* a_spell) {
             return a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
                    a_spell->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&   // keeps the Task-1 target-0 claim
@@ -296,13 +299,14 @@ namespace MFO::Actuation {
                 return say(BuffRoad::DirectNoSeat, "aimed / targeted Light (Magelight): Harbinger serves Light "
                                                    "for Self delivery only");
             // A self cast of a non-Self buff is claimed with the caster's own FormID as the target (see
-            // ExplicitSelfBuff); only kTargetActor is served. Aimed / touch / area stay direct.
+            // ExplicitSelfBuff); Aimed / Touch / TargetActor drive Harbinger's self-flip proxy. Only a
+            // kTargetLocation (non-placement, rune-shaped) spell stays direct.
             if (!other && !explicitSelf && delivery != RE::MagicSystem::Delivery::kSelf)
                 return say(BuffRoad::DirectNoSeat, "not Self delivery (a concentration self cast of a non-Self spell "
                                                    "keeps the target-0 claim of CastSelfDirect)");
-            if (explicitSelf && delivery != RE::MagicSystem::Delivery::kTargetActor)
-                return say(BuffRoad::DirectNoSeat, "self cast of an aimed / touch / area buff: Harbinger cannot aim it "
-                                                   "at the caster without a ray at its own shooter");
+            if (explicitSelf && delivery == RE::MagicSystem::Delivery::kTargetLocation)
+                return say(BuffRoad::DirectNoSeat, "self cast of a target-location buff: rune-shaped, Harbinger's "
+                                                   "self-flip proxy does not serve it (batch D)");
         }
         // needCap: the kinds that exist only with Harbinger's buff / summon / rowless seats. The native-row
         // self buffs (Armor / Cloak / Invisibility / BoundItem / Ward at self) need none.

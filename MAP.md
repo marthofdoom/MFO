@@ -587,9 +587,9 @@ per concern:
   per lap handed to CastOn; the heal series' shape). Kinds on the claim road: Armor, Cloak, Invisibility, BoundItem, Ward at self (native
   rows, no seat needed); and, ONLY behind `APMFBridge::CastSeatsSupported()` (`apmf/CastClaims.cpp`, ABI >= 19: ABI 18 may predate the seats, v0.10.0 is ABI 17 and
   lacks the seats, there is no capability bit): Summon / Reanimate (target 0, "up" = `SummonGate`, cast/Summon.cpp), rowless spells
-  (served by Harbinger as Script), kSelf Light (Candlelight), and any buff at an ally / the player. A self cast of a non-kSelf kTargetActor buff is claimed with the caster's own FormID as the target (`ExplicitSelfBuff`: Harbinger resolves an explicit self
-  target, not target 0, to the claimant's handle). Direct with a `[buff]` reason: aimed Light,
-  an ambiguous (`rowApprox`) row, a self cast of an aimed / touch / area non-Self spell, a kind below ABI 19 (`DirectNoCap`), a concentration cast at another
+  (served by Harbinger as Script), kSelf Light (Candlelight), and any buff at an ally / the player. A self cast of a non-kSelf Aimed / Touch / TargetActor buff is claimed with the caster's own FormID as the target (`ExplicitSelfBuff`: Harbinger resolves an explicit self
+  target, not target 0, to the claimant's handle, and its self-flip proxy (feat/apmf-self-delivery-proxy, NO ABI bump, so no capability signal: gate is ABI >= 19 only; an unreleased dev Harbinger between d8bb76d and 46f4ce1 would aim at the caster, bounded by the fired-but-never-landed release) drives a kSelf copy). Direct with a `[buff]` reason: aimed Light,
+  an ambiguous (`rowApprox`) row, a self cast of a kTargetLocation non-placement (rune-shaped, batch D) non-Self spell, a kind below ABI 19 (`DirectNoCap`), a concentration cast at another
   recipient (its own claim road, `cast/DirectTarget.cpp`). Hostile rowless spells at a foe (Calm / Fear / Frenzy) already took CastOn's
   owned-offense claim (`ownedCast`) and are unchanged. State is per (recipient, spell): `g_neverFired` / `g_fired` (SK key), the main-thread
   up latch `g_up`. A never-fired claim (`kHoldLastSeenCapMs`, no fire on LEFT, nothing in flight) is released once with a WARN and held off
