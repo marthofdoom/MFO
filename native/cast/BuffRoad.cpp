@@ -154,6 +154,13 @@ namespace MFO::Actuation {
         // Worker-serial (#4).
         std::unordered_map<RE::FormID, std::unordered_set<std::uint64_t>> g_fired;   // follower -> SK(recipient, spell)
 
+        // FIRED BUT NEVER LANDED (review R2-1; marth: every spell is exactly bounded). Per follower, SK(recipient,
+        // spell) -> when a fire of this claim was FIRST observed. The refresh lap releases the claim (WARN, held off
+        // for the fight) when the up-read has still not said Yes kHoldLastSeenCapMs after that: a claim that fires but
+        // never lands (an unproven explicit-self kTargetActor, a projectile at its own shooter) would otherwise be
+        // re-cast until the magicka runs dry, holding LEFT. Erased when the claim ends. Worker-serial (#4).
+        std::unordered_map<RE::FormID, std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point>> g_fireSeen;
+
         // End this follower's buff claim on a_spell: the claim, its [cfc] watch, the LEFT lock that
         // names it, and (a_takeBack) MFO's equipped spell. Idempotent.
         void EndBuffClaim(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_takeBack) {
@@ -161,6 +168,9 @@ namespace MFO::Actuation {
             APMFBridge::ReleaseCastClaimOnHand(id, APMFBridge::kApmfHandLeft);
             ComposedCast::ClearWatchHand(id, APMFBridge::kApmfHandLeft);
             ClearLeftCastLockIf(id, a_spell->GetFormID());
+            if (const auto fs = g_fireSeen.find(id); fs != g_fireSeen.end())
+                for (auto it = fs->second.begin(); it != fs->second.end();)
+                    it = (static_cast<RE::FormID>(it->first & 0xFFFFFFFFu) == a_spell->GetFormID()) ? fs->second.erase(it) : std::next(it);
             if (a_takeBack) Loadout::ReleaseSpellIf(id, a_spell->GetFormID());
         }
 
@@ -181,7 +191,9 @@ namespace MFO::Actuation {
         // therefore claimed like an ally buff with target = the caster's own FormID. Only kTargetActor is judged
         // safe: an aimed or area delivery would be a ray at its own shooter (ControlMap's F1/F2 note).
         bool ExplicitSelfBuff(RE::SpellItem* a_spell) {
-            return a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf && !BuffPlacementSpell(a_spell);
+            return a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
+                   a_spell->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&   // keeps the Task-1 target-0 claim
+                   !BuffPlacementSpell(a_spell);
         }
 
         // A claim lap's label for the `[buff]` line: which kind of claim this is.
@@ -203,6 +215,7 @@ namespace MFO::Actuation {
         g_roadLog.clear();
         g_neverFired.clear();
         g_fired.clear();
+        g_fireSeen.clear();
         std::scoped_lock lock(g_upMx);
         g_up.clear();
     }
@@ -210,6 +223,7 @@ namespace MFO::Actuation {
     void ResetBuffFollower(RE::FormID a_follower) {
         g_neverFired.erase(a_follower);
         g_fired.erase(a_follower);
+        g_fireSeen.erase(a_follower);
     }
 
     bool BuffPlacementSpell(RE::SpellItem* a_spell) {
@@ -283,6 +297,9 @@ namespace MFO::Actuation {
                                                    "for Self delivery only");
             // A self cast of a non-Self buff is claimed with the caster's own FormID as the target (see
             // ExplicitSelfBuff); only kTargetActor is served. Aimed / touch / area stay direct.
+            if (!other && !explicitSelf && delivery != RE::MagicSystem::Delivery::kSelf)
+                return say(BuffRoad::DirectNoSeat, "not Self delivery (a concentration self cast of a non-Self spell "
+                                                   "keeps the target-0 claim of CastSelfDirect)");
             if (explicitSelf && delivery != RE::MagicSystem::Delivery::kTargetActor)
                 return say(BuffRoad::DirectNoSeat, "self cast of an aimed / touch / area buff: Harbinger cannot aim it "
                                                    "at the caster without a ray at its own shooter");
@@ -407,6 +424,11 @@ namespace MFO::Actuation {
                                          APMFBridge::kObservedFiringRecencyMs))
             g_fired[id].insert(sk);
 
+        // R2-1: remember when this claim's fire was first observed (the bound below).
+        if (!conc && !instant && ComposedCast::ObservedFiring(id, APMFBridge::kApmfHandLeft, spellID,
+                                                              APMFBridge::kObservedFiringRecencyMs))
+            g_fireSeen[id].emplace(sk, std::chrono::steady_clock::now());
+
         // AN INSTANT SPELL leaves no effect for an up-read to see (a cure, a dispel): its claim ends once a
         // fire is observed SINCE THIS CLAIM (the lock's stamp, the shape CastOn's own bound uses), one cast
         // per claim. The rule re-claims next lap if it still wins.
@@ -495,7 +517,26 @@ namespace MFO::Actuation {
             EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
             return Outcome{ Result::NoOp, "summon limit reached: claim released", true };
         }
-        if (up != Up::Yes) return std::nullopt;
+        if (up != Up::Yes) {
+            // FIRED BUT NEVER LANDED (R2-1): a fire was observed and the up-read still says No after the cap.
+            if (const auto fs = g_fireSeen.find(id); fs != g_fireSeen.end()) {
+                if (const auto it = fs->second.find(sk); it != fs->second.end() && up == Up::No) {
+                    const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - it->second).count();
+                    if (ageMs >= static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) {
+                        spdlog::warn("[buff] {:08X} {} ({:08X}) at {:08X} FIRED but NEVER LANDED: first fire observed "
+                                     "{} ms ago, the buff is still not up -- claim RELEASED and the rule held off "
+                                     "until the next cast-rule reset (no direct fallback; rule {})",
+                                     id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, rid, ageMs,
+                                     g_firingRule);
+                        g_neverFired[id].insert(sk);
+                        EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                        return Outcome{ Result::NoOp, "buff claim fired but never landed: released, held off this fight", true };
+                    }
+                }
+            }
+            return std::nullopt;
+        }
         g_fired[id].insert(sk);   // R3-1: it landed
         spdlog::info("[buff] {:08X} {:08X}: buff is up on {:08X} -- claim released (the cast landed)", id, spellID, rid);
         EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);

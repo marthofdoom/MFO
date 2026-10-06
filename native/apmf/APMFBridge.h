@@ -273,7 +273,7 @@ namespace MFO::APMFBridge {
     // bit and NO ABI bump for them (the seats landed at ff2f884 with kABIVersion still 18; ABI 19 followed), so the gate is the RELEASE
     // BOUNDARY: abiVersion >= 19 AND Config::g_apmfCast. Harbinger main's order is 7fd5908 (ABI 18), ff2f884
     // (the seats), d8bb76d (ABI 19), so any MAIN build reporting ABI >= 19 has the seats and ABI 18 may not. (The unmerged feat/apmf-combat-moveto
-    // branch builds reported ABI 19 without the seats; merged and deleted, so no deck should carry one.) Any thread.
+    // branch builds reported ABI 19 without the seats; merged: do not deploy a branch build.) Any thread.
     // Gates the NEW claim kinds only (cast/BuffRoad.cpp): below it they stay on the direct road, because
     // on an older Harbinger such a claim never fires and the never-fired release has no direct fallback.
     bool CastSeatsSupported();

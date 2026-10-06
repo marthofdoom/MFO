@@ -465,7 +465,19 @@ namespace MFO::Actuation {
                 // Only a buff that cannot be animated at him (an aimed / touch / area non-Self buff, a rowApprox
                 // row: ChooseBuffRoad logs the `[buff] ... DIRECT road` reason) leaves him out, because his road
                 // would be the direct self stream, which re-locks every lap and pins the pick on him all fight.
-                const bool casterOk = ChooseBuffRoad(a_follower, spell, /*a_log=*/true, nullptr) == BuffRoad::Claim;
+                const bool casterOk = ChooseBuffRoad(a_follower, spell, /*a_log=*/false, nullptr) == BuffRoad::Claim;
+                if (!casterOk) {
+                    // one deduped line per (caster, spell); ChooseBuffRoad's own `[buff]` line names the reason
+                    static std::unordered_map<std::uint64_t, SelfClock::time_point> s_exclLog;
+                    auto& last = s_exclLog[(static_cast<std::uint64_t>(id) << 32) | a_spellID];
+                    const auto t = SelfClock::now();
+                    if (std::chrono::duration<float>(t - last).count() >= 15.0f) {
+                        last = t;
+                        ChooseBuffRoad(a_follower, spell, /*a_log=*/true, nullptr);
+                        spdlog::info("[buff] {:08X} {:08X}: caster excluded from the AUTO buff series (his own road is "
+                                     "not a claim, see the reason above)", id, a_spellID);
+                    }
+                }
                 // the standing claim's recipient (the LEFT lock of THIS spell), while it is still a member.
                 // STICKY ONLY WHILE THE CLAIM IS LIVE (review F1): a lock alone also names a dead claim or a
                 // direct-road lock, which would pin one recipient for a whole buff duration.

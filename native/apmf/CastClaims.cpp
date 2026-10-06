@@ -169,7 +169,7 @@ namespace MFO::APMFBridge {
     // buff / summon / rowless seats. Harbinger main's order is 7fd5908 (ABI 18), ff2f884 (the seats), d8bb76d
     // (ABI 19), so ABI >= 19 means the seats are present in every MAIN build (an ABI 18 build may predate them). The
     // one exception was the unmerged feat/apmf-combat-moveto branch, whose builds reported ABI 19 WITHOUT the seats; it is
-    // merged and deleted, so no deck should carry one. The literal 19 is that fact, not a header constant.
+    // merged: do not deploy a branch build. The literal 19 is that fact, not a header constant.
     bool CastSeatsSupported() {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         return api && api->abiVersion >= 19 && Config::g_apmfCast.load();
