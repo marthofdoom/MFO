@@ -1710,6 +1710,7 @@ namespace MFO::Board {
                         auto* sp = book->data.teaches.spell;
                         if (!sp || !MFO::Vocab::IsCastableSpell(sp)) continue;
                         if (a->HasSpell(sp)) continue;   // already known -> not teachable
+                        if (MFO::Actuation::CastRoadUnsupported(sp)) continue;   // hidden from the picker: not teachable through it either
                         r.teachableSpells.push_back({ sp->GetFormID(), book->GetFormID(),
                                                       sp->GetName() ? sp->GetName() : "?",
                                                       static_cast<int>(sp->CalculateMagickaCost(a) + 0.5f),
