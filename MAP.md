@@ -579,6 +579,7 @@ per concern:
   SpellFire evidence `HandFireSink` (`:305`) / `HandFireWatch` (`:327`) / `HandFireTake` (`:346`, public); anon
   `HealOnHand` (`:88`), `RecipientLost` (`:108`), `NoteLosHold` (`:134`), `NeverFiredRelease` (`:171`),
   `ProxyUnlearnedRelease` (`:210`), `MaintainCompanion` (`:232`), the per-hand record `g_healHands`.
+  **Round 2 (same branch):** `HealSustainLap(f, matchedRules)` also sustains a hand in its re-stream gap (stream cap / un-taught proxy re-claim) and treats a rule matched this tick (suppression window, cannot-act: `Scheduler.cpp` `matchedCast`) as asking; `HealHeldOutOfMagicka` (CastOn magicka / reserve gates) ends a held heal with token `out-of-magicka`; `HealHandPreempted` (`Hands.cpp` `PreemptHand`) and the weapon-owns-right releases log `preempted`; a `[heal-hold] still holding` line every 5 s; ch.24 approach TIGHTENS R while Holding and occluded (`apmf/CombatApproach.cpp`, closes MFO-B234); the combat table's cast waits (transparent) while `IsInCombat()` and no combat controller (`Scheduler.cpp` before `Fire`). Open: MFO-B237.
   **HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (post-2.2.0, ClickUp 86e3m36qr; the file is now ~890 lines, lines above drifted):**
   the rule's condition / threshold only STARTS a heal. `HealSustainLap` (`:785`, public, called once per follower per combat tick from
   `Scheduler.cpp:1874` just before the `!castSeen` release) replays `CastOn` as the lock's owning rule (no ally threshold) for a standing
