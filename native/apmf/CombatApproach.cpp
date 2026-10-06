@@ -27,6 +27,7 @@
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
 #include "Config.h"
+#include "cast/Actuation.h"   // HealStandsOnHand -- the sweep's "its heal ended elsewhere" test
 #include "Packages.h"   // IsRetreating -- the sweep's retreat backstop
 
 #include <atomic>
@@ -48,6 +49,8 @@ namespace MFO::APMFBridge {
         constexpr std::uint32_t kApproachNeverLiveSweeps = 15;
         // Heartbeat while a claim is Approaching / Holding: distance falling is the proof.
         constexpr std::chrono::milliseconds kApproachBeatMs{ 1500 };
+        // A claim Harbinger ended with CombatEnded is not re-filed for this long (one re-file per few seconds).
+        constexpr std::chrono::seconds kApproachRefileGap{ 4 };
 
         struct ApproachClaim {
             APMF_API::Handle handle         = APMF_API::kInvalidHandle;
@@ -63,6 +66,9 @@ namespace MFO::APMFBridge {
         std::unordered_map<RE::FormID, ApproachClaim>                       g_approach;   // guarded by g_approachMx
         // follower -> recipients Harbinger gave up on / refused / never served THIS fight.
         std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>      g_approachBlocked;   // guarded by g_approachMx
+
+        // follower -> earliest time a new claim may be filed (after a CombatEnded end).
+        std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_approachRefileAfter;   // guarded by g_approachMx
 
         std::atomic<bool> g_approachSeatRefused{ false };   // session-stable, like the ch.21 / ch.22 / ch.23 tables
 
@@ -104,6 +110,10 @@ namespace MFO::APMFBridge {
             return info;
         }
 
+        bool IsEndState(std::uint32_t a_state) {
+            return a_state >= APMF_API::kApproachState_Arrived && a_state <= APMF_API::kApproachState_Refused;
+        }
+
         // A reason that must not be answered by filing the same recipient again in this fight.
         bool BlocksRecipient(std::uint32_t a_state) {
             return a_state == APMF_API::kApproachState_EngineDropped ||
@@ -121,10 +131,26 @@ namespace MFO::APMFBridge {
         if (!(radius > 0.0f) || !std::isfinite(radius)) return;   // Harbinger refuses these; never send one
 
         std::scoped_lock lock(g_approachMx);
-        if (const auto bit = g_approachBlocked.find(a_follower);
-            bit != g_approachBlocked.end() && bit->second.count(a_recipient))
-            return;   // the loop guard: Harbinger gave up on this recipient this fight
         const auto it = g_approach.find(a_follower);
+        if (const auto bit = g_approachBlocked.find(a_follower);
+            bit != g_approachBlocked.end() && bit->second.count(a_recipient)) {
+            // The loop guard: Harbinger gave up on this recipient this fight. A claim on THIS hand that still
+            // names the OLD recipient must not keep its bound standing while the hand is aimed elsewhere.
+            if (it != g_approach.end() && it->second.hand == a_hand && it->second.recipient != a_recipient) {
+                const RE::FormID old = it->second.recipient;
+                const auto h = it->second.handle;
+                g_approach.erase(it);
+                if (h != APMF_API::kInvalidHandle) api->Release(h);   // APMF's lock only, never g_mx
+                spdlog::info("[heal-approach] {:08X}: ch.24 approach to {:08X} released (the hand's recipient is now "
+                             "{:08X}, which Harbinger gave up on this fight)", a_follower, old, a_recipient);
+            }
+            return;
+        }
+        if (it == g_approach.end()) {
+            if (const auto rit = g_approachRefileAfter.find(a_follower);
+                rit != g_approachRefileAfter.end() && std::chrono::steady_clock::now() < rit->second)
+                return;   // CombatEnded just ended one: not more than one re-file per few seconds
+        }
         if (it == g_approach.end()) {
             APMF_API::APMF_Param prm{};
             prm.target = a_recipient;                 // X
@@ -173,7 +199,7 @@ namespace MFO::APMFBridge {
         RE::FormID       x = 0;
         {
             std::scoped_lock lock(g_approachMx);
-            if (a_fightOver) g_approachBlocked.erase(a_follower);
+            if (a_fightOver) { g_approachBlocked.erase(a_follower); g_approachRefileAfter.erase(a_follower); }
             const auto it = g_approach.find(a_follower);
             if (it == g_approach.end()) return;
             if (a_hand != kApproachAnyHand && it->second.hand != a_hand) return;   // another hand's claim stands
@@ -191,6 +217,7 @@ namespace MFO::APMFBridge {
         const auto* api = ApproachApi();
         if (!api) return;
         std::vector<RE::FormID> retreating;
+        std::vector<std::pair<RE::FormID, std::size_t>> standing;   // (follower, hand) to re-check below
         {
             std::scoped_lock lock(g_approachMx);
             if (g_approach.empty()) return;
@@ -205,7 +232,7 @@ namespace MFO::APMFBridge {
                 const auto info = ReadState(api, fid);
                 if (live) {
                     c.everLive = true;
-                    if (info.state == APMF_API::kApproachState_Leashed) {
+                    if (info.ownerHandle == c.handle && info.state == APMF_API::kApproachState_Leashed) {
                         spdlog::info("[heal-approach] {:08X}: ch.24 approach to {:08X} is LEASHED by MFO's ch.23 "
                                      "pursuit leash (no point within R {:.0f} of him lies inside it) -- not "
                                      "fought; released and not re-filed for him this fight, the held heal waits",
@@ -229,16 +256,22 @@ namespace MFO::APMFBridge {
                         c.lastSeq  = info.seq;
                         c.lastBeat = now;
                     }
+                    standing.emplace_back(fid, c.hand);
                     continue;
                 }
-                // Not live: Harbinger ended it (or it never went live).
-                if (!c.everLive) {
+                // Not live: Harbinger ended it (or it never went live). The state is THIS claim's only when
+                // its ownerHandle says so; a never-live claim whose own end state is already readable took
+                // the ended branch (it did go live and end between two sweeps).
+                const bool ours = info.ownerHandle == c.handle;
+                if (!c.everLive && !(ours && IsEndState(info.state))) {
                     spdlog::warn("[heal-approach] {:08X}: ch.24 approach to {:08X} NEVER WENT LIVE (h={}, {} unpaused "
                                  "sweeps) -- released; not re-filed for him this fight. APMF's log should say why.",
                                  fid, c.recipient, c.handle, c.unpausedSweeps);
                     g_approachBlocked[fid].insert(c.recipient);
                 } else {
-                    const bool block = BlocksRecipient(info.state);
+                    const bool block = ours && BlocksRecipient(info.state);
+                    if (ours && info.state == APMF_API::kApproachState_CombatEnded)
+                        g_approachRefileAfter[fid] = now + kApproachRefileGap;
                     spdlog::info("[heal-approach] {:08X}: ch.24 approach to {:08X} ENDED BY HARBINGER: {} (distance "
                                  "{:.0f} / R {:.0f}, h={}){}",
                                  fid, c.recipient, StateWord(info.state), info.distance, info.radius, c.handle,
@@ -252,6 +285,13 @@ namespace MFO::APMFBridge {
             for (const auto fid : done) g_approach.erase(fid);
         }
         for (const auto fid : retreating) ReleaseHealApproach(fid, "retreating", kApproachAnyHand, false);
+        // F1: a heal that ended OUTSIDE the heal road (the bridge's per-hand expiry after the ally was healed
+        // by a potion or another healer, ComposedCast::End on the cannot-act path) never reaches HealHandEnded.
+        // g_approachMx is dropped here: HealStandsOnHand takes the bridge's g_mx.
+        for (const auto& [fid, hand] : standing)
+            if (!Actuation::HealStandsOnHand(fid, hand))
+                ReleaseHealApproach(fid, "its heal ended outside the heal road (expiry / cannot-act / healed elsewhere)",
+                                    hand, false);
     }
 
     void ClearHealApproaches() {
@@ -261,6 +301,7 @@ namespace MFO::APMFBridge {
             if (api && c.handle != APMF_API::kInvalidHandle) api->Release(c.handle);
         g_approach.clear();
         g_approachBlocked.clear();
+        g_approachRefileAfter.clear();
     }
 
 }

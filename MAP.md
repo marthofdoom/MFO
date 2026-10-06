@@ -5450,7 +5450,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     heal stays held and `NeverFiredRelease` is unchanged. **What breaks:** a second claim per follower; re-filing a blocked
     recipient (a loop against Harbinger's drop); taking `g_mx` here; exempting the held heal from `NeverFiredRelease` ("the approach
     keeps it alive" re-creates the cap-less hold); raising `fHealApproachRadius`'s range without the MCM/ini/Config wiring
-    (`tools/audit_mcm.py`). Harbinger absent / < v19 / seat refused = no approach, behaviour as before.
+    (`tools/audit_mcm.py`); skipping the sweep's `Actuation::HealStandsOnHand` re-check (a heal ended by the bridge's expiry or `ComposedCast::End` would leave the follower bound within R for the fight). Harbinger absent / < v19 / seat refused = no approach, behaviour as before. Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B231.
   - `apmf/SpellAllowList.cpp` (398) = the ch.8 cast-select refusal: `SpellAllowListUsable` (`:49`),
     `MakePotionCand` (`:136`) + `SelectPotions` (`:169`, the potion trim, batch L),
     `AppendDenyExemptForms` (`:207`), `PublishSpellAllowList` (`:240`; appends MFO's own ConcProxy

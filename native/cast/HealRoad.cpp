@@ -623,6 +623,10 @@ namespace MFO::Actuation {
         }
     }
 
+    bool HealStandsOnHand(RE::FormID a_follower, std::size_t a_hand) {
+        return a_hand < kHandCount && HealOnHand(a_follower, a_hand).found;
+    }
+
     void ResetHealRoad() {
         g_healHands.clear();
         g_handFireAttach.clear();

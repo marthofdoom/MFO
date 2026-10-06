@@ -100,6 +100,10 @@ namespace MFO::Actuation {
     // names it, logging each per-hand end once ([heal-hand]). ComposedCast::ChooseHealRoad's
     // road switch (kill switch / controller gone) is the caller. Worker-serial (#4).
     void ReleaseHealClaimsAllHands(RE::FormID a_follower, const char* a_why);
+    // Does a heal stand on a_hand (a live claim, or the re-stream gap's lock)? The ch.24 approach
+    // sweep's "its heal ended outside the heal road" test. Worker only; takes the bridge's g_mx
+    // inside, so the caller must not hold g_mx.
+    bool HealStandsOnHand(RE::FormID a_follower, std::size_t a_hand);
 
     // PER-HAND FIRE EVIDENCE (feat/mfo-perhand-heal, review R2-1; cast/HealRoad.cpp). A passive
     // anim-graph sink counts each actor's MLh_/MRh_SpellFire_Event on the event thread.
