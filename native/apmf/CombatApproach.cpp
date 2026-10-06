@@ -48,7 +48,7 @@ namespace MFO::APMFBridge {
         // Same never-live floor as the sibling tables (see apmf/ReentryDeny.cpp, PursuitLeash.cpp).
         constexpr std::uint32_t kApproachNeverLiveSweeps = 15;
         // Heartbeat while a claim is Approaching / Holding: distance falling is the proof.
-        constexpr std::chrono::milliseconds kApproachBeatMs{ 1500 };
+        constexpr std::chrono::milliseconds kApproachBeatMs{ 5000 };   // MFO-B231 F5b: was 1500; state changes (seq) still log at once
         // A claim Harbinger ended with CombatEnded is not re-filed for this long (one re-file per few seconds).
         constexpr std::chrono::seconds kApproachRefileGap{ 4 };
 

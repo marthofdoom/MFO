@@ -4,6 +4,7 @@
 #include "Followers.h"
 #include "CasterConsent.h"   // v1.0.32: StartCooldown mirrors into the hook's permit
 #include "MainThread.h"      // animheal phase 2 (review F2): the DeselectSpell runs on the MAIN thread
+#include "apmf/APMFBridge.h"   // MFO-B227 F5: a right-hand heal claim's spell is not deselected
 #include "ComposedCast.h"    // review round 2 (marth's ruling): HealTakesLeft suspends the left-hand automation
 
 namespace MFO::Loadout {
@@ -374,9 +375,16 @@ namespace MFO::Loadout {
                     // only: looser levels deliberately leave a category (heals,
                     // buffs...) to the AI's own hand (CastExempt), and stripping the
                     // other hand there would take that category away too.
+                    // MFO-B227 F5: not while a RIGHT-hand heal claim names that spell (or its proxy): that
+                    // claim IS the right hand's cast (the per-hand heal road's second recipient).
                     if (castLvl >= 4 && hands.right && hands.right != a_spell) {
-                        if (auto* other = hands.right->As<RE::SpellItem>())
-                            a_actor->DeselectSpell(other);
+                        const auto rid = hands.right->GetFormID();
+                        const bool rightHealClaim =
+                            APMFBridge::GetHealCastSpell(id, APMFBridge::kApmfHandRight) == rid ||
+                            APMFBridge::GetHealCastProxy(id, APMFBridge::kApmfHandRight) == rid;
+                        if (!rightHealClaim)
+                            if (auto* other = hands.right->As<RE::SpellItem>())
+                                a_actor->DeselectSpell(other);
                     }
 
                     g_equipClock.try_emplace(id, now);

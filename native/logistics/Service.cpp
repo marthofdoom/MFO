@@ -1979,7 +1979,7 @@ namespace MFO::Logistics {
                                                         std::chrono::duration<float>(dur));
                     const char* route =
                           op == Vocab::kActCastPlayer                   ? "player (immediate)"
-                        : (op == Vocab::kActCastTarget && immediate)    ? "ally/player (immediate)"
+                        : (op == Vocab::kActCastTarget && immediate && !casterPick) ? "ally/player (immediate)"
                         : immediate                                     ? "self (immediate)"
                                                                         : "foe (package)";
                     spdlog::info("[logistics] {:08X} OOC cast {:08X} ({}), refresh in {:.0f}s",

@@ -292,12 +292,23 @@ namespace MFO::EngageOnSight {
         // own ray, no hearing: a sound is not a line of sight). kAwareDetail_SightDeferred (the frame's sync
         // cap is spent) is NOT "no sense": the pair counts, the conservative side the budget code already
         // takes. Falls back to MFO's own MeasureNow when Harbinger cannot answer.
+        // MFO-B229 F7: SenseOf failing (no origin, bad args, a race to unarmed) falls back to MFO's own ray;
+        // said ONCE per session (main thread only, like SenseOf itself) so the field shows the fallback ran.
+        void NoteSenseFallback(bool a_v18) {
+            static bool s_said = false;
+            if (!a_v18 || s_said) return;
+            s_said = true;
+            spdlog::info("[engage-on-sight] Harbinger SenseOf could not answer (no origin / bad args / service unarmed): "
+                         "falling back to MFO's own sightline measure (said once)");
+        }
+
         bool JoinSees(bool a_v18, RE::FormID a_viewer, RE::FormID a_target) {
             if (a_v18) {
                 APMFBridge::SenseReading s;
                 if (APMFBridge::SenseOf(a_viewer, a_target, 0, 0.0f, s))
                     return (s.senses & APMF_API::kSense_Sight) || (s.detail & APMF_API::kAwareDetail_SightDeferred);
             }
+            NoteSenseFallback(a_v18);
             return Sightline::MeasureNow(a_viewer, a_target) == Sightline::Verdict::Visible;
         }
 
@@ -364,7 +375,7 @@ namespace MFO::EngageOnSight {
                     r.sensed = true;
                     r.senses = sr.senses;
                     r.detail = sr.detail;
-                } else if (Sightline::MeasureNow(a_id, fid) != Sightline::Verdict::Visible) { ++r.occluded; continue; }
+                } else if (NoteSenseFallback(v18), Sightline::MeasureNow(a_id, fid) != Sightline::Verdict::Visible) { ++r.occluded; continue; }
                 auto* t = RE::TESForm::LookupByID<RE::Actor>(fid);
                 r.chosen  = fid;
                 r.dSelf   = d;
