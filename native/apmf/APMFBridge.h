@@ -4,6 +4,7 @@
 #include <vector>   // DeclareEquipSet's declared worn set
 #include "APMF_API.h"   // APMF_EquipEntry -- DeclareEquipSet's entry type (ABI v8); EquipCategory bits (v9)
 #include "Loadout.h"   // Loadout::HandPick -- HandFor's argument type below
+#include "Sightline.h"   // Sightline::Verdict -- LosOf's result type (ABI v18, apmf/Los.cpp)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // APMF integration — MFO as an APMF client (Phase 3: the OWNED cast gambit). APMF
@@ -411,7 +412,11 @@ namespace MFO::APMFBridge {
     // The third (the seat is installed) is only observable as a synchronous refusal of
     // the first pin (APMF ControlMap::EnqueueRequest), reported as PinResult::SeatAbsent.
     bool TargetPinOffered();
-    PinResult PinTarget(RE::FormID a_follower, RE::FormID a_target, RE::ActorHandle a_targetHandle);
+    // a_ownLos (ABI v18): the follower is a bow/staff user, so the pin carries
+    // kTargetPin_OwnLineOfSight (it pauses while Harbinger's own ray to the foe is not VISIBLE).
+    // Ignored below v18; melee passes false.
+    PinResult PinTarget(RE::FormID a_follower, RE::FormID a_target, RE::ActorHandle a_targetHandle,
+                        bool a_ownLos = false);
     // Release this follower's pin (live or ended) and forget it. No-op when none.
     void ReleaseTargetPin(RE::FormID a_follower);
     void ReleaseAllTargetPins();
@@ -1487,4 +1492,37 @@ namespace MFO::APMFBridge {
     void ReleaseDeposit(RE::FormID a_follower);
     // Revert / load (pump drained): release every deposit claim and forget them.
     void ClearDepositClaims();
+    // ── HARBINGER LINE OF SIGHT + AWARENESS (ABI v18, feat/mfo-harbinger-los-adopt) -- apmf/Los.cpp ──
+    // Contract: APMF_API.h "ABI v18: LINE OF SIGHT AND AWARENESS". Below v18 (or with
+    // Config::g_apmfCast off) every call here reports "not usable" and the caller keeps
+    // MFO's own Sightline: the documented degrade, never a decline-fallback.
+    //
+    // LosSupported: APMF present AND abiVersion >= 18 AND Config::g_apmfCast. Any thread.
+    bool LosSupported();
+    // The claim builders (Bridge.cpp, Excursion.cpp) gate the own-LoS cast/pin flags on this too.
+    struct LosReading {
+        Sightline::Verdict verdict     = Sightline::Verdict::Unknown;  // only Visible counts as visible
+        std::uint32_t      ageMs       = 0xFFFFFFFFu;                  // 0xFFFFFFFF = never measured
+        std::uint32_t      occludedRun = 0;                            // consecutive OCCLUDED measurements
+    };
+    // ANY THREAD (GetLineOfSight is a lock-free read that also marks the pair asked-for).
+    // True = a verdict reading was produced (it may be Unknown: first ask, or older than
+    // kLosFreshMs; Unavailable also maps to Unknown, never Visible). False = Harbinger's
+    // service cannot answer (ABI < 18, APMF absent, or kLos_Unsupported): keep Sightline.
+    bool LosOf(RE::FormID a_viewer, RE::FormID a_target, LosReading& a_out);
+
+    // SenseActor result (MAIN THREAD ONLY). Fields mirror APMF_AwarenessResult.
+    struct SenseReading {
+        std::uint32_t senses       = 0;   // APMF_API::AwareSense bits
+        std::uint32_t detail       = 0;   // APMF_API::AwareDetail bits
+        float         distance     = -1.0f;
+        std::uint32_t sightVerdict = 0;   // APMF_API::LosVerdict of the ray (Unknown when none cast)
+        RE::FormID    engagedWith  = 0;
+    };
+    // True = kQuery_Ok and a_out filled. False = not usable (ABI < 18, not on the main
+    // thread, unsupported service, bad/unloaded pair): the caller keeps its own test.
+    // a_sightRange 0 => Harbinger's default; hearing/proximity ranges are left at 0
+    // (Harbinger's defaults). a_anchor is the second listener (the player), 0 = none.
+    bool SenseOf(RE::FormID a_viewer, RE::FormID a_target, RE::FormID a_anchor, float a_sightRange,
+                 SenseReading& a_out);
 }

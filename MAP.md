@@ -2200,11 +2200,19 @@ rule in the header. Called only from the Scheduler hook above.
   a civilised LocType first = civilised (20 Skyrim.esm keywords resolved once by FormID; the
   LocTypeHold* family is excluded because it tags wilderness). Player's location civilised -> the
   probe lands with no candidates (`civilStandDown`); an enemy's location civilised -> skipped. Sorts nearest
-  to him first; `Sightline::MeasureNow` on at most 3 non-given-up candidates, first VISIBLE wins;
+  to him first; `Sightline::MeasureNow` on at most 3 non-given-up candidates, first VISIBLE wins
+  (**ABI >= 18 (feat/mfo-harbinger-los-adopt): `APMFBridge::SenseOf` = Harbinger `SenseActor`, viewer = him,
+  anchor = the player (0x14), `sightRange` = `ProbeResult::range`, hearing/proximity left at Harbinger's
+  defaults: OMNIDIRECTIONAL sight + hearing + proximity + engaged; he engages when `senses != 0`, at most
+  `kMaxMeasuredSensed` = 4 candidates (+ `kMaxJoinSensed` = 4 join pairs = Harbinger's 8-pair per-frame sync
+  cap); `kAwareDetail_SightDeferred` with no sense counts `ProbeResult::deferred`, never "no sense"; the ENGAGE
+  line prints `senses=` / `detail`. Hostility / crime / unaggressive / civilised filters stay MFO's. Below 18 or
+  `kQuery_Unsupported`: the MeasureNow path above, unchanged.**);
   THE JOIN ESTIMATE (`:335`, review of 72a7964): `joiners` = the chosen target + every other
   non-given-up candidate within `kJoinRadius` (1500u, a design constant -- the engine has no
   ally-join radius setting) of it that he or the chosen target can see (`MeasureNow`, at most
-  `kMaxJoinMeasured` = 6, unmeasured ones count); it feeds the confidence gate. Also reports which
+  `kMaxJoinMeasured` = 6, unmeasured ones count; v18: `JoinSees` = SenseActor's SIGHT bit only, a deferred
+  sight counts); it feeds the confidence gate. Also reports which
   given-up targets are GONE (dead / disabled / unloaded / unresolvable / no longer
   hostile by the bare engine read / past `g_leashMax` from the player). Writes under `g_probeMx`
   (a leaf), generation-checked (`g_gen`), older posts never overwrite newer.
@@ -2220,6 +2228,7 @@ rule in the header. Called only from the Scheduler hook above.
   an MFO direct `StartCombat` road for Harbinger absent (the brief: inert); counting every enemy in
   the leash for the confidence gate (dormant draugr on other floors block it forever); dropping
   the `NoteWaitRule` calls in `logistics/Service.cpp` (a Wait rule no longer stops this gambit).
+  **Open backlog: MFO-B229** (F7: a failed `SenseOf` falls back to `MeasureNow` silently; F3: a party >= 16 reads cold).
   Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B111..MFO-B113.
 
 ### Gait.cpp / Gait.h — travel-package speed byte (low risk)
@@ -2553,10 +2562,29 @@ Raycast runs only on the main thread, results cached, worker reads the cache.
   staff cast is a spell) is equipped (`HoldsBowOrStaff`, `PickFoe`'s `a_ownRay`); a melee swing stays Engine, `cast/CanAct.cpp` (HealInReach,
   RefuseHealApplyOnMain), `cast/Roads.cpp`, `cast/DirectTarget.cpp`, `cast/CastOn.cpp`, `cast/Auto.cpp`,
   `cast/Hands.cpp` (OccludedRun), `cast/HealObs.cpp`, `logistics/Service.cpp` OOC casts. **Engine callers:**
-  `EngageOnSight.cpp` (MeasureNow), melee-only PickFoe. A NEW spell/ranged Sightline caller must pass `Basis::Own`
+  `EngageOnSight.cpp` (MeasureNow; ABI >= 18 it asks Harbinger's SenseActor instead), melee-only PickFoe. A NEW spell/ranged Sightline caller must pass `Basis::Own`
   on its `Want` AND its `Check`/`CheckWithin`/`OccludedRun` (mismatched basis reads a slot nobody fills = Unknown).
   Worst-case rate: <= 1 Measure per (pair, basis) per 0.3 s, <= 3 picks each, worldLock read-held per ray exactly as
   before, `g_mx` never held across a ray. `MeasureNow` is unthrottled (its callers bound it).
+- **HARBINGER OWN LINE OF SIGHT (ABI >= 18, feat/mfo-harbinger-los-adopt, ClickUp 86e3h6qj9).** `Basis::Own`
+  is answered by `APMFBridge::LosOf` (`apmf/Los.cpp`, = `APMF_API_v18::GetLineOfSight`, ANY thread, lock-free) INSIDE
+  `Sightline.cpp`: `CheckWithin` / `Check` / `OccludedRun` / `MeasureNow` read it (Visible only if
+  `kLos_Visible`; Occluded; Unknown AND Unavailable -> Unknown = fail-open; `ageMs` bounded by the caller's
+  window but Harbinger's own freshness is `kLosFreshMs` = 1 s, so PickAlly/HealRoad's 3 s `kHealLosTrustS` collapses
+  to 1 s; `occludedRun` = `APMF_LosInfo::occludedRun`), and `Want(Own)` is just the lock-free ask that keeps the pair
+  measured (nothing Posted, no `g_lastPost` stamp). So the ~25 Own callers (Evaluator PickAlly/PickFoe, cast/Auto,
+  CanAct, CastOn, DirectTarget, Hands, HealObs, Roads, HealRoad, logistics/Service) are UNCHANGED call sites.
+  `LosOf` returns false (-> MFO's own cache below, exactly as before) when APMF is absent, ABI < 18,
+  `Config::g_apmfCast` is off, or the service says `kLos_Unsupported` (state change logged once, `[apmf] ABI v..`).
+  `Basis::Engine` (melee) never goes there. Claims: `apmf/Bridge.cpp` ORs `kCastFlag_OwnLineOfSight` into every
+  `RequestCast` with a target that is not self and not deny-only (retry once without it if Harbinger refuses the bit
+  = unarmed service); `apmf/Excursion.cpp` `PinTarget(.., a_ownLos)` sets `kTargetPin_OwnLineOfSight` (ch.20
+  `param.ival` bit 0) for `Eval::HoldsBowOrStaff` followers (flag chosen in `Targeting.cpp` `CommandEx`; same retry).
+  MFO's client-side Own gating at the cast sites STAYS for this field cycle (removed in a later round).
+  **What breaks:** reading `Basis::Own` from the cache while ABI >= 18 (nobody fills it); calling `SenseOf` off the main
+  thread (`kQuery_NotMainThread`); treating `Unknown`/`Unavailable` as seen. **Open backlog: MFO-B229** (F2-F7: pin flag
+  fixed for the pin's life, party >= 16 reads cold, `RefuseHealApplyOnMain` staleness, lost `[los]` lines + dead
+  `OccludedRun` branch, `APMFBridge.h` split due, silent `SenseOf` fallback).
 - **Two-stage Measure (`Basis::Engine` only).** `CustomRay` (was `CustomRayConfirmsOcclusion`, MAIN
   THREAD ONLY) is MFO's own `bhkWorld::PickObject` point-raycast, fired by
   `Measure` ONLY when the engine `HasLineOfSight` already said CLEAR — so the
@@ -5273,6 +5301,8 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   - `apmf/Equip.cpp` (274) = equipment: the ch.15 weapon-order claim (`ClaimEquipment` `:37`,
     `WeaponHandActive` `:65`) and the ch.17 authority (`EquipAuthoritySupported` `:89`,
     `ClaimEquipAuthority` `:111`, `DeclareEquipScope` `:196`, `DeclareEquipSet` `:246`).
+  - `apmf/Los.cpp` (~110) = Harbinger line of sight + awareness (ABI v18): `LosSupported` / `LosOf` (GetLineOfSight,
+    any thread) / `SenseOf` (SenseActor, main thread only); consumers `Sightline.cpp` (Basis::Own), `EngageOnSight.cpp`.
   - `apmf/Deposit.cpp` (234) = the LOTD deposit trip's three claims (feat/mfo-lotd), keyed by
     follower, own mutex `s_mx` (never `g_mx`): `DepositSupported:99` (ABI >= 17: an older APMF
     ignores an idle form and plays the v1 idle, silently), `ClaimDepositTravel:106` (ch.19, its OWN

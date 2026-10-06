@@ -528,7 +528,29 @@ namespace MFO::APMFBridge {
                          (wantDenyOnly ? APMF_API::kCastFlag_DenyHandOnly  : 0u) |
                          APMF_API::MakeStopPct(wantStopPct);
             req.ttlMs  = kHealCastTtlMs;
+            // HARBINGER OWN LINE OF SIGHT (ABI v18, APMF_API.h kCastFlag_OwnLineOfSight): for a claim
+            // aimed at ANOTHER actor (not self, not a deny-only floor) Harbinger's seat 0x06 answers
+            // YES only while its own ray to the target is VISIBLE, so the claim is never cast into a
+            // wall. RequestCast only (req.target set). MFO's own Sightline gating at the cast sites
+            // stays for this field cycle. Below v18 the bit is not set and nothing changes.
+            const bool ownLos = !wantDenyOnly && wantTarget != 0 && wantTarget != follower &&
+                                api->abiVersion >= 18 && LosSupported();
+            if (ownLos) req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
             c.handle = api->RequestCast(follower, kOwnBasis, &req);
+            if (ownLos && c.handle == APMF_API::kInvalidHandle) {
+                // LosSupported() already probed the service as armed, so this is only a RACE (it
+                // disarmed between the probe and the call) or a refusal for another reason. Ask once
+                // more without the bit (MFO's own Sightline gate is still in force); a refusal of
+                // THAT one is the real answer. The warn is once per session and names no cause: it
+                // does not know it was the flag.
+                static std::atomic<bool> s_warned{ false };
+                if (!s_warned.exchange(true))
+                    spdlog::warn("[apmf] {:08X} kIntent_Cast claim (spell {:08X}) refused with kCastFlag_OwnLineOfSight "
+                                 "set (cause not known: service disarmed mid-call or another refusal) -- asking again "
+                                 "without it. Logged once per session.", follower, wantSpell);
+                req.flags &= ~APMF_API::kCastFlag_OwnLineOfSight;
+                c.handle = api->RequestCast(follower, kOwnBasis, &req);
+            }
             // [cfc] dual-cast ask vs. observed outcome (marth 2026-09-06): the flag is a
             // HINT (APMF_API.h) -- APMF may still only arm one hand, and never reports which.
             // This distinguishes "asked for dual, claim granted" (engine may still degrade to
