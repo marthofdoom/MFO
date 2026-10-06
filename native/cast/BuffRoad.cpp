@@ -174,6 +174,16 @@ namespace MFO::Actuation {
             return true;
         }
 
+        // A SELF cast of a NON-kSelf, non-placement buff (marth 2026-10-05: "a self cast is valid if its needed, just
+        // needs to be animated"). Harbinger leaves a TARGET-0 claim of such a spell unresolved (APMF-B39: the seats would
+        // not serve it), but an EXPLICIT self FormID resolves to the claimant's handle (core/ControlMap.cpp), seat 0
+        // flips the row's self bit for the driven form and 0x0A answers the claimed target = the caster. It is
+        // therefore claimed like an ally buff with target = the caster's own FormID. Only kTargetActor is judged
+        // safe: an aimed or area delivery would be a ray at its own shooter (ControlMap's F1/F2 note).
+        bool ExplicitSelfBuff(RE::SpellItem* a_spell) {
+            return a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf && !BuffPlacementSpell(a_spell);
+        }
+
         // A claim lap's label for the `[buff]` line: which kind of claim this is.
         const char* ClaimLabel(const SpellArchetype& a_arch, bool a_other) {
             switch (a_arch.row) {
@@ -248,7 +258,8 @@ namespace MFO::Actuation {
 
         // A buff at another recipient is keyed with seat 0's self flip (a_seat0: the claim's driven form),
         // as the heal claim road is; a self buff keys its own row natively.
-        const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other);
+        const bool explicitSelf = !other && ExplicitSelfBuff(a_spell);   // keyed like an ally claim (seat 0 flip)
+        const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other || explicitSelf);
         const bool placement = arch.shape == SpellShape::Summon || arch.shape == SpellShape::Reanimate;
         if (other && placement)   // CastOn hands a placement spell the follower as its recipient; defensive
             return say(BuffRoad::DirectNoSeat, "a summon / reanimate names no recipient (target 0)");
@@ -270,15 +281,15 @@ namespace MFO::Actuation {
                 delivery != RE::MagicSystem::Delivery::kSelf)
                 return say(BuffRoad::DirectNoSeat, "aimed / targeted Light (Magelight): Harbinger serves Light "
                                                    "for Self delivery only");
-            // A self cast of a non-Self spell would need the engine told a target it cannot be told (a
-            // non-self-delivered spell claimed on the caster is refused on Harbinger's side).
-            if (!other && delivery != RE::MagicSystem::Delivery::kSelf)
-                return say(BuffRoad::DirectNoSeat, "not Self delivery (no 0x0A aim for a self claim of a "
-                                                   "non-Self spell)");
+            // A self cast of a non-Self buff is claimed with the caster's own FormID as the target (see
+            // ExplicitSelfBuff); only kTargetActor is served. Aimed / touch / area stay direct.
+            if (explicitSelf && delivery != RE::MagicSystem::Delivery::kTargetActor)
+                return say(BuffRoad::DirectNoSeat, "self cast of an aimed / touch / area buff: Harbinger cannot aim it "
+                                                   "at the caster without a ray at its own shooter");
         }
         // needCap: the kinds that exist only with Harbinger's buff / summon / rowless seats. The native-row
         // self buffs (Armor / Cloak / Invisibility / BoundItem / Ward at self) need none.
-        bool needCap = other;
+        bool needCap = other || explicitSelf;
         switch (arch.row) {
         case EngineRow::Armor: case EngineRow::Cloak: case EngineRow::Invisibility:
         case EngineRow::BoundItem: case EngineRow::Ward:
@@ -354,9 +365,10 @@ namespace MFO::Actuation {
         CasterConsent::Want(id, spellID);
 
         // target 0 = self (Harbinger resolves a self claim to the claimant for a Self-delivery spell,
-        // APMF 85a8f2f, and a placement spell's target 0 to the claimant too); a buff at another recipient
-        // names that actor. LEFT, the hand Prepare equipped; stopPct 0 (a heal-only concept).
-        const RE::FormID target = other ? rid : 0;
+        // APMF 85a8f2f, and a placement spell's target 0 to the claimant too); a buff at another recipient, or a
+        // non-kSelf buff at the caster (explicitSelf), names that actor. LEFT, the hand Prepare equipped; stopPct 0 (a heal-only concept).
+        const bool explicitSelf = !other && ExplicitSelfBuff(a_spell);
+        const RE::FormID target = (other || explicitSelf) ? rid : 0;
         if (!APMFBridge::ClaimOffenseCast(id, spellID, target, APMFBridge::kApmfHandLeft, conc, /*stopPct=*/0)) {
             // Present and capable means APMF REFUSED: fail closed, loudly, never the direct road.
             LogApmfRefusal(id, "buff cast", spellID, target, "left");
@@ -365,7 +377,7 @@ namespace MFO::Actuation {
         ComposedCast::WatchClaim(id, spellID, APMFBridge::kApmfHandLeft,
                                  APMFBridge::GetOffenseCastProxy(id, APMFBridge::kApmfHandLeft));
         if (RoadLogDue(id, spellID, BuffRoad::Claim)) {
-            const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other);
+            const auto arch = ClassifyArchetype(a_spell, /*a_seat0=*/other || explicitSelf);
             spdlog::info("[buff] {:08X} {} ({:08X}): {} CLAIM at {:08X} (animated; the engine's own {} caster "
                          "decides when it fires)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
                          ClaimLabel(arch, other), rid, EngineRowName(arch.row));
@@ -444,7 +456,7 @@ namespace MFO::Actuation {
                              "reset (no direct fallback; the engine's {} caster did not fire it: see "
                              "Harbinger's [ctcensus] verdict; rule {})",
                              id, a_spell->GetName() ? a_spell->GetName() : "?", spellID, rid, ageMs,
-                             EngineRowName(ClassifyArchetype(a_spell, /*a_seat0=*/other).row), g_firingRule);
+                             EngineRowName(ClassifyArchetype(a_spell, /*a_seat0=*/other || ExplicitSelfBuff(a_spell)).row), g_firingRule);
                 g_neverFired[id].insert(sk);
                 EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
                 return Outcome{ Result::NoOp, "buff claim never fired: released, held off this fight", true };

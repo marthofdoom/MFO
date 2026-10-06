@@ -459,10 +459,13 @@ namespace MFO::Actuation {
                 const float radius  = Config::g_sharedRadius.load();
                 const auto  selfPos = a_follower->GetPosition();
                 RE::Actor*  pick    = nullptr;
-                // ONE SERIES, ONE ROAD (review F1): the caster joins the series only when HIS own road is the
-                // claim too (a non-Self buff at himself is the direct self stream, which re-locks every lap
-                // and would pin the pick on him all fight).
-                const bool casterOk = ChooseBuffRoad(a_follower, spell, /*a_log=*/false, nullptr) == BuffRoad::Claim;
+                // ONE SERIES, ONE ROAD (review F1; marth 2026-10-05: "a self cast is valid if its needed, just
+                // needs to be animated"): the caster is a candidate like any ally, and his own cast is an animated
+                // claim (a kSelf buff at self, a non-kSelf kTargetActor buff with his own FormID as the target).
+                // Only a buff that cannot be animated at him (an aimed / touch / area non-Self buff, a rowApprox
+                // row: ChooseBuffRoad logs the `[buff] ... DIRECT road` reason) leaves him out, because his road
+                // would be the direct self stream, which re-locks every lap and pins the pick on him all fight.
+                const bool casterOk = ChooseBuffRoad(a_follower, spell, /*a_log=*/true, nullptr) == BuffRoad::Claim;
                 // the standing claim's recipient (the LEFT lock of THIS spell), while it is still a member.
                 // STICKY ONLY WHILE THE CLAIM IS LIVE (review F1): a lock alone also names a dead claim or a
                 // direct-road lock, which would pin one recipient for a whole buff duration.
