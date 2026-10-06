@@ -164,6 +164,17 @@ namespace MFO::APMFBridge {
         return api && api->abiVersion >= 5 && Config::g_apmfCast.load();
     }
 
+    // See APMFBridge.h. NOT a probe of the seats themselves (APMF_API.h carries no capability bit and
+    // no ABI bump for them); it is the release boundary: ABI v17 (APMF v0.10.0 and older) lacks the
+    // buff / summon / rowless seats. Harbinger main's order is 7fd5908 (ABI 18), ff2f884 (the seats), d8bb76d
+    // (ABI 19), so ABI >= 19 means the seats are present in every MAIN build (an ABI 18 build may predate them). The
+    // one exception was the unmerged feat/apmf-combat-moveto branch, whose builds reported ABI 19 WITHOUT the seats; it is
+    // merged: do not deploy a branch build. The literal 19 is that fact, not a header constant.
+    bool CastSeatsSupported() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= 19 && Config::g_apmfCast.load();
+    }
+
     // ── REFRESH A STANDING CAST CLAIM IN PLACE (F9, 2026-09-08) ─────────────────
     // See APMFBridge.h for the contract. The implementation is deliberately a
     // REPLAY of the claim's OWN stored tuple rather than a second refresh path:

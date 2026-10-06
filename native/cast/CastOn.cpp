@@ -387,6 +387,12 @@ namespace MFO::Actuation {
             // fired) owns the lap's other hand too. Transparent, so rules below still run.
             if (offenseSpell && HealPendingHoldsOffense(a_follower, g_firingRule, a_spellID))
                 return { Result::NoOp, "offense held: a higher-ranked heal claim is pending", true };
+            // THE BUFF CLAIM ROAD's recipient (cast/BuffRoad.cpp): null = the follower himself (a self buff,
+            // and a summon / reanimate, which names no recipient: target 0); an ally or the player otherwise.
+            // buffKind: a Buff-kind spell (not a heal, not offense), the only kind the road judges.
+            const bool buffKind = !healClaim && CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Buff;
+            RE::Actor* const buffRecip =
+                (buffKind && a_target && a_target != a_follower && !BuffPlacementSpell(spell)) ? a_target : nullptr;
             HandPlan handPlan;
             // ONE lambda, because the in-flight gate below may have to run this a
             // SECOND time: if the claim its hand-pin was based on turns out to be
@@ -540,10 +546,11 @@ namespace MFO::Actuation {
                                  true };
                     }
                 }
-                // A SELF-BUFF CLAIM's refresh (cast/BuffRoad.cpp): ends the claim once a fire-and-forget buff
-                // is up, and bounds a concentration ward's stream (release + re-stream past the drawn cap).
-                if (a_target == a_follower && handPlan.left && !handPlan.right)
-                    if (auto out = BuffRefreshGate(a_follower, spell)) return *out;
+                // A BUFF CLAIM's refresh (cast/BuffRoad.cpp; self, at an ally / the player, a summon): ends the
+                // claim once a fire-and-forget buff is up on its recipient, and bounds a concentration ward's
+                // stream (release + re-stream past the drawn cap). buffRecip is null for a self buff.
+                if (!healClaim && handPlan.left && !handPlan.right)
+                    if (auto out = BuffRefreshGate(a_follower, spell, buffRecip)) return *out;
                 if (healClaim && handPlan.left != handPlan.right)   // review F2 / R2-2: proxy + never-observed gates
                     if (auto out = HealRefreshGate(a_follower, planHand, a_spellID)) return *out;
                 if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
@@ -736,6 +743,24 @@ namespace MFO::Actuation {
                     // below run (the follower is not stuck on a cast that can't go).
                     return { Result::FailedOther, "self-cast could not fire", true };
                 }
+            }
+
+            // THE BUFF CLAIM AT AN ALLY / THE PLAYER, and a SUMMON / REANIMATE rule aimed at another target
+            // (feat/mfo-claim-road-summon-ally-rowless, cast/BuffRoad.cpp): the self fork's sibling. Combat
+            // table only (g_firingRule, the heal road's MFO-B173 rule). A fire-and-forget Buff-kind spell is
+            // a ch.8b claim whose target is the recipient (target 0 for a placement spell), cast by the
+            // follower's OWN AI, animated; ChooseBuffRoad names the road for every other answer and the
+            // road falls on (restoration / concentration / the AI-first hybrid below), never a decline.
+            if (buffKind && a_target && a_target != a_follower && g_firingRule != kNoRule &&
+                ChooseBuffRoad(a_follower, spell, /*a_log=*/true, buffRecip) == BuffRoad::Claim) {
+                if (BuffUpTransparent(a_follower, spell, buffRecip))   // before the preempt, like the self fork
+                    return { Result::NoOp, "buff already up on its recipient (or its read is pending)", true };
+                commitPreempt();   // the claim happens inside BuffClaim
+                if (BuffClaim(a_follower, spell, buffRecip) == SelfCast::Applied) {
+                    lockHands(a_spellID, lockTargetKey);
+                    return { Result::Fired, "buff claim (animated)" };
+                }
+                return { Result::FailedOther, "buff claim could not be made", true };
             }
 
             // CONCENTRATION forks off HERE -- after the range and competence

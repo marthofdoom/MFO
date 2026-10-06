@@ -272,8 +272,15 @@ namespace MFO::Actuation {
         if (op == Vocab::kActCastSelf || op == Vocab::kActCastPlayer ||
             op == Vocab::kActCastTarget) {
             if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
-                sp && IsSummonSpell(sp))   // one-shot conjure, any target (fix/mfo-summon-oneshot)
+                sp && IsSummonSpell(sp)) {   // one-shot conjure, any target (fix/mfo-summon-oneshot)
+                // THE ANIMATED SUMMON CLAIM (feat/mfo-claim-road-summon-ally-rowless, cast/BuffRoad.cpp): with
+                // Harbinger's summon seats and a combat controller the summon is a self claim (target 0), cast
+                // by the follower's own AI through CastOn's self fork (the hand lock, the never-fired bound).
+                // Every other answer is the direct one-shot below, ChooseBuffRoad naming why on a [buff] line.
+                if (Config::g_castSelf.load() && ChooseBuffRoad(a_follower, sp) == BuffRoad::Claim)
+                    return CastOn(a_follower, a_choice.actionParam, a_follower);
                 return CastSummonOnce(a_follower, sp, a_choice.ruleIndex, "combat", op);
+            }
             if (auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_choice.actionParam);
                 sp && CasterHasLiveSummon(a_follower, sp)) {
                 return { Result::NoOp, "summon still live", true };

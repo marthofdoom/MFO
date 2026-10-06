@@ -432,6 +432,98 @@ namespace MFO::Actuation {
                 return out;
             }
 
+            // AUTO BENEFICIAL BUFF ON THE ANIMATED CLAIM ROAD: A SERIES, LOWEST HP FIRST
+            // (feat/mfo-claim-road-summon-ally-rowless; Harbinger's brief: "an AUTO beneficial fan as N claims,
+            // lowest HP first"). The heal series' shape (above) for a duration buff: one real cast with one
+            // hand, so ONE recipient is picked and handed to the single-target road (CastOn -> its self / ally
+            // buff fork, cast/BuffRoad.cpp), which owns the hand lock, the already-up transparency, the
+            // never-fired bound and the claim. The fan below is the DIRECT road and stays for everything
+            // else: out of combat, a summon, a hostile spell, an INSTANT beneficial spell (nothing an up-read
+            // could see, so a series would re-claim its first recipient forever), a concentration spell, and
+            // a world where the road is not a claim (Harbinger absent or older, rowApprox, aimed Light ...).
+            //   * the road is judged for ANOTHER recipient (the player is the probe: an ally needs the
+            //     strictest gate, the buff seats), so one lap never splits a party across two roads;
+            //   * candidates: the party, the player and the caster, alive and loaded, inside the shared radius,
+            //     an ally inside the spell's reach with line of sight (HealInReach is the reach+LoS test, not
+            //     heal-only), and NOT already carrying the buff (BuffUpTransparent: the main-thread latch; a
+            //     pending read skips the actor this lap, never a guess);
+            //   * the pick is the LOWEST health fraction; the STANDING claim's recipient keeps the pick until
+            //     its buff lands (BuffRefreshGate ends the claim), so two allies trading the lowest slot never
+            //     restart the claim before a cast fires;
+            //   * nobody needs it -> a transparent NoOp.
+            if (!hostile && g_firingRule != kNoRule && kind == CasterConsent::SpellKind::Buff &&
+                !SpellHealsHealth(spell) && spell->GetCastingType() != RE::MagicSystem::CastingType::kConcentration &&
+                !IsSummonSpell(spell) && AuthoredDuration(spell) > 0.0f && Config::g_castSelf.load() &&
+                ChooseBuffRoad(a_follower, spell, /*a_log=*/false, RE::PlayerCharacter::GetSingleton()) ==
+                    BuffRoad::Claim) {
+                const float radius  = Config::g_sharedRadius.load();
+                const auto  selfPos = a_follower->GetPosition();
+                RE::Actor*  pick    = nullptr;
+                // ONE SERIES, ONE ROAD (review F1; marth 2026-10-05: "a self cast is valid if its needed, just
+                // needs to be animated"): the caster is a candidate like any ally, and his own cast is an animated
+                // claim (a kSelf buff at self, a non-kSelf kTargetActor buff with his own FormID as the target).
+                // Only a buff that cannot be animated at him (an aimed / touch / area non-Self buff, a rowApprox
+                // row: ChooseBuffRoad logs the `[buff] ... DIRECT road` reason) leaves him out, because his road
+                // would be the direct self stream, which re-locks every lap and pins the pick on him all fight.
+                const bool casterOk = ChooseBuffRoad(a_follower, spell, /*a_log=*/false, nullptr) == BuffRoad::Claim;
+                if (!casterOk) {
+                    // one deduped line per (caster, spell); ChooseBuffRoad's own `[buff]` line names the reason
+                    static std::unordered_map<std::uint64_t, SelfClock::time_point> s_exclLog;
+                    auto& last = s_exclLog[(static_cast<std::uint64_t>(id) << 32) | a_spellID];
+                    const auto t = SelfClock::now();
+                    if (std::chrono::duration<float>(t - last).count() >= 15.0f) {
+                        last = t;
+                        ChooseBuffRoad(a_follower, spell, /*a_log=*/true, nullptr);
+                        spdlog::info("[buff] {:08X} {:08X}: caster excluded from the AUTO buff series (his own road is "
+                                     "not a claim, see the reason above)", id, a_spellID);
+                    }
+                }
+                // the standing claim's recipient (the LEFT lock of THIS spell), while it is still a member.
+                // STICKY ONLY WHILE THE CLAIM IS LIVE (review F1): a lock alone also names a dead claim or a
+                // direct-road lock, which would pin one recipient for a whole buff duration.
+                if (const auto lk = g_castLock.find(id);
+                    lk != g_castLock.end() && lk->second.hand[kHandLeft].spell == a_spellID &&
+                    APMFBridge::IsOwnedCastActiveOnHand(id, APMFBridge::kApmfHandLeft) &&
+                    CastLockClaimStamp(id, kHandLeft, a_spellID) != std::chrono::steady_clock::time_point{}) {
+                    const RE::FormID held = lk->second.hand[kHandLeft].target;
+                    auto* cur = held == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(held);
+                    if (cur && (cur != a_follower || casterOk) && !cur->IsDead() && !cur->IsDisabled() && cur->Is3DLoaded() &&
+                        (cur == a_follower || selfPos.GetDistance(cur->GetPosition()) <= radius))
+                        pick = cur;
+                }
+                RE::Actor* low   = nullptr;
+                float      lowHp = 2.0f;
+                std::vector<RE::FormID> sightWant;
+                auto probe = [&](RE::Actor* m) {
+                    if (pick || !m || m->IsDead() || m->IsDisabled() || !m->Is3DLoaded()) return;
+                    if (m == a_follower && !casterOk) return;
+                    if (m != a_follower) {
+                        if (selfPos.GetDistance(m->GetPosition()) > radius) return;
+                        sightWant.push_back(m->GetFormID());
+                        if (!HealInReach(a_follower, m, spell)) return;
+                    }
+                    const float hp = Vocab::HealthPct(m);
+                    if (hp >= lowHp) return;
+                    if (BuffUpTransparent(a_follower, spell, m == a_follower ? nullptr : m)) return;   // up, or read pending
+                    lowHp = hp; low = m;
+                };
+                // SEV-1 discipline: the lock-guarded FormID snapshot, never g_active (#4).
+                if (!pick) {
+                    if (auto snap = Followers::ActiveSnapshot())
+                        for (const RE::FormID fid : *snap)
+                            probe(RE::TESForm::LookupByID<RE::Actor>(fid));
+                    probe(RE::PlayerCharacter::GetSingleton());
+                    probe(a_follower);   // the caster is one of N (a no-op when the snapshot held him)
+                    if (!sightWant.empty()) Sightline::Want(id, std::move(sightWant), Sightline::Basis::Own);
+                    pick = low;
+                }
+                if (!pick)
+                    return { Result::NoOp, "auto buff: nobody in reach needs it (or the up-reads are pending)", true };
+                auto out = CastOn(a_follower, a_spellID, pick, /*a_rangeGate=*/false);
+                out.reason = std::format("auto buff (lowest first) at {:08X}: {}", pick->GetFormID(), out.reason);
+                return out;
+            }
+
             // AUTO ALLY-HEAL, CONCENTRATION -> SEQUENTIAL MOST-HURT (marth). A
             // concentration heal starts an ENGINE channel on the follower's caster,
             // and one caster sustains only ONE channel at a time -- so AUTO cannot fan
@@ -611,8 +703,14 @@ namespace MFO::Actuation {
             // dispatchers now send every summon to CastSummonOnce BEFORE they
             // reach CastAuto; this is the same single path, kept so no future
             // CastAuto caller can fan a summon out.)
-            if (IsSummonSpell(spell))
+            // (feat/mfo-claim-road-summon-ally-rowless) In combat, with the animated buff claim road
+            // chosen for it (cast/BuffRoad.cpp), the summon is that road's claim, via CastOn's self fork.
+            if (IsSummonSpell(spell)) {
+                if (g_firingRule != kNoRule && Config::g_castSelf.load() &&
+                    ChooseBuffRoad(a_follower, spell, /*a_log=*/true) == BuffRoad::Claim)
+                    return CastOn(a_follower, a_spellID, a_follower, /*a_rangeGate=*/false);
                 return CastSummonOnce(a_follower, spell, -1, "auto", "auto");
+            }
 
             // ENUMERATE the inferred set (worker-safe reads, same context/precedent
             // as Evaluator::PickFoe / PickAlly which run on this same tick). F1:

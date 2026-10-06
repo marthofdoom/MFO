@@ -504,25 +504,34 @@ namespace MFO::Actuation {
         void HoldCastLock(RE::FormID a_follower, std::size_t a_hand,
                           RE::FormID a_spell, RE::FormID a_target);
         void ClearCastLockHand(RE::FormID a_follower, std::size_t a_hand);
-        // ANIMATED SELF-BUFF CLAIM ROAD (feat/mfo-remaining-cast-kinds), defined in cast/BuffRoad.cpp
-        // (its file banner carries the rows, the reasons and what needs Harbinger). Worker-serial (#4).
+        // ANIMATED BUFF CLAIM ROAD (feat/mfo-remaining-cast-kinds; widened by feat/mfo-claim-road-summon-ally-rowless),
+        // defined in cast/BuffRoad.cpp (its file banner carries the rows, the reasons and the gate). Worker-serial (#4).
         // ChooseBuffRoad: NotBuff (not a Buff-kind spell) / Claim (a ch.8b claim, cast by the follower's
         // own AI) / DirectDegrade (Harbinger absent, claims or bEquipToCast off: silent) / DirectNoSeat,
-        // DirectNoRow (a kind Harbinger cannot serve yet: one [buff] line naming why) / DirectNoCombat
-        // (no CombatController). a_log false is the quiet predicate. COMBAT TABLE ONLY: asked by
-        // CastSelfDirect under g_firingRule != kNoRule, and by CastOn's in-flight refresh.
-        // BuffSelfClaim: the claim lap (already-up guard, Loadout::Prepare, consent, ClaimOffenseCast
-        // target 0 LEFT, [cfc] watch); Applied = claimed. BuffRefreshGate: on a refresh lap, ends the
-        // claim when a fire-and-forget buff is up or a concentration ward passes its drawn cap.
-        enum class BuffRoad : std::uint8_t { NotBuff, Claim, DirectNoCombat, DirectNoSeat, DirectNoRow, DirectDegrade };
-        BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log = true);
+        // DirectNoRow (a kind Harbinger cannot serve: one [buff] line naming why) / DirectNoCap (the kind needs
+        // Harbinger's buff / summon / rowless seats, APMFBridge::CastSeatsSupported(), and the resolved Harbinger
+        // is older) / DirectNoCombat (no CombatController). a_log false is the quiet predicate. a_recipient: null
+        // or the follower = a SELF buff (target 0); another actor = a buff AT that ally / the player (claim
+        // target = it). COMBAT TABLE ONLY: asked by CastSelfDirect and CastOn's ally fork under g_firingRule !=
+        // kNoRule, and by CastOn's in-flight refresh.
+        // BuffClaim / BuffSelfClaim: the claim lap (already-up guard, Loadout::Prepare, consent, ClaimOffenseCast
+        // LEFT, [cfc] watch); Applied = claimed. BuffRefreshGate: on a refresh lap, ends the claim when a
+        // fire-and-forget buff is up (or an instant spell fired, or a summon hit the limit), or a concentration
+        // ward passes its drawn cap; a claim that never fires is released once and held off per fight.
+        // BuffPlacementSpell: a Summon / Reanimate spell (target 0, the caster is its own recipient).
+        enum class BuffRoad : std::uint8_t { NotBuff, Claim, DirectNoCombat, DirectNoSeat, DirectNoRow, DirectDegrade, DirectNoCap };
+        BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log = true,
+                                RE::Actor* a_recipient = nullptr);
+        SelfCast BuffClaim(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
         SelfCast BuffSelfClaim(RE::Actor* a_follower, RE::SpellItem* a_spell);
-        std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell,
+                                               RE::Actor* a_recipient = nullptr);
+        bool BuffPlacementSpell(RE::SpellItem* a_spell);
         // BuffUpTransparent: true when the claim road would take this fire-and-forget buff but it is
-        // already up (a main-thread-latched read), so CastOn's self fork returns transparent BEFORE
-        // commitPreempt (a lower-ranked claim must not be torn down every lap, review F2).
+        // already up on the recipient (a main-thread-latched read), so CastOn's self / ally fork returns
+        // transparent BEFORE commitPreempt (a lower-ranked claim must not be torn down every lap, review F2).
         // ResetBuffRoad: clears the road's session state (from ClearCastLocks).
-        bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell);
+        bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient = nullptr);
         void ResetBuffRoad();
         void ResetBuffFollower(RE::FormID a_follower);   // ClearCastLock(follower): combat end / dismiss
         // ANIMATED-HEAL CLAIM ROAD (animheal phase 2), defined in cast/Hands.cpp.
@@ -829,6 +838,13 @@ namespace MFO::Actuation {
             SelfClock::time_point lastSkipLog{};  // main: "still alive" / "landing" throttle
             SelfClock::time_point lastLimitLog{}; // main: "limit reached" throttle
         };
+        // SummonGate (cast/Summon.cpp, MAIN THREAD ONLY): the three questions a summon rule asks before
+        // it casts -- Live (this spell's creature is up), Landing (still appearing), Limit (the
+        // commanded-actor list is full) or Clear -- WITHOUT casting. SummonOnMain casts on Clear; the
+        // animated claim road's up-read (cast/BuffRoad.cpp) treats a non-Clear verdict as "do not claim".
+        enum class SummonGateVerdict : std::uint8_t { Clear, Live, Landing, Limit };
+        struct SummonGateInfo { SummonGateVerdict v = SummonGateVerdict::Clear; int live = 0, pending = 0, limit = 0; bool noCap = false; };
+        SummonGateInfo SummonGate(RE::Actor* a_caster, RE::SpellItem* a_spell);
         extern std::mutex                                     g_summonMx;
         extern std::unordered_map<std::uint64_t, SummonState> g_summon;
         extern std::unordered_map<std::uint64_t, SelfClock::time_point> g_summonPosted;
