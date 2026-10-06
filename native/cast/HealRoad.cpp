@@ -104,6 +104,10 @@ namespace MFO::Actuation {
         // FREE OFFENSE WHILE THE HEAL IS BLIND (marth 2026-10-06, field 1006c): key (follower << 1) | hand ->
         // the hold was released for blindness and said so; HealHoldStands logs each change once. Worker-serial.
         std::unordered_set<std::uint64_t> g_healBlindFreed;
+        // AUTO's heal series served this lap only through HealHeldRecipient (nobody below the ceiling: just
+        // topping up). Key (follower << 32) | spell; set there, consumed by HealRoadLap's asked branch so that
+        // lap does not clear `stoppedAsking`. Worker-serial.
+        std::unordered_set<std::uint64_t> g_autoTopUp;
         const char* g_healExit    = nullptr;
         bool        g_inHealSustain = false;   // the sustain replay's own lap must not count as "the rule asked"
 
@@ -705,6 +709,11 @@ namespace MFO::Actuation {
         if (!g_inHealSustain && g_firingRule != kNoRule) {
             auto& v = g_healAsked[id];
             if (std::find(v.begin(), v.end(), spellID) == v.end()) v.push_back(spellID);
+            // The rule IS asking (not AUTO's top-up fallback): its hands are no longer "holding to full".
+            if (g_autoTopUp.erase((static_cast<std::uint64_t>(id) << 32) | spellID) == 0)
+                if (const auto hit = g_healHands.find(id); hit != g_healHands.end())
+                    for (auto& hh : hit->second.hand)
+                        if (hh.active && hh.spell == spellID) hh.stoppedAsking = false;
         }
 
         // WHICH HAND ALREADY SERVES THIS RECIPIENT? With this spell (the incumbent: its
@@ -830,7 +839,6 @@ namespace MFO::Actuation {
             if (it == g_healHands.end()) break;
             const HealHand hh = it->second.hand[h];   // a copy: the replay below may erase the record
             if (!hh.active) continue;
-            it->second.hand[h].stoppedAsking = false;   // set below once the rule is seen not asking
             if (std::find(asked.begin(), asked.end(), hh.spell) != asked.end()) continue;   // the rule is asking
             // A live claim, OR the lock in its re-stream gap (a stream-cap or un-taught-proxy release keeps
             // the lock; the replay below re-claims it): HealOnHand answers both.
@@ -907,10 +915,13 @@ namespace MFO::Actuation {
         const auto it  = g_healHands.find(fid);
         if (it == g_healHands.end()) return nullptr;
         for (std::size_t h = 0; h < kHandCount; ++h) {
-            const auto& hh = it->second.hand[h];
+            auto& hh = it->second.hand[h];
             if (!hh.active || hh.spell != a_spell || APMFBridge::GetHealCastSpell(fid, ApmfHand(h)) != a_spell) continue;
             RE::Actor* rcp = hh.recipient == 0 ? a_follower : RE::TESForm::LookupByID<RE::Actor>(hh.recipient);
             if (!rcp || rcp->IsDead() || rcp->IsDisabled() || Vocab::HealthPct(rcp) >= Vocab::kHealFull) continue;
+            // AUTO is only topping up: the heal is "holding to full", so offense is freed while it is blind.
+            hh.stoppedAsking = true;
+            g_autoTopUp.insert((static_cast<std::uint64_t>(fid) << 32) | a_spell);
             const std::uint64_t key = (static_cast<std::uint64_t>(fid) << 1) | h;
             const auto stamp = CastLockClaimStamp(fid, h, a_spell);
             if (const auto c = g_healCont.find(key); c == g_healCont.end() || c->second != stamp) {
@@ -991,6 +1002,7 @@ namespace MFO::Actuation {
         g_healAsked.clear();
         g_healCont.clear();
         g_healBlindFreed.clear();
+        g_autoTopUp.clear();
         g_healStillLog.clear();
         g_neverFiredLatch.clear();
         g_handFireAttach.clear();

@@ -570,7 +570,10 @@ namespace MFO::Actuation {
             // observed firing since its claim stamp (`lastSeen`, frozen at the first claim, as
             // IncumbentHealCastDone reads it). Offense over offense only: a heal (urgent or not) and any
             // non-offense asker keep the rules below, and once the window has passed gambit order rules.
-            if (!a_urgentHeal && a_lock.spell != 0 && a_lock.lastSeen.time_since_epoch().count() != 0) {
+            // The incumbent's APMF claim must actually STAND (ClaimLiveOnHand): a refused or ended claim whose
+            // lock is merely still live is an idle hand, taken at once as before.
+            if (!a_urgentHeal && a_lock.spell != 0 && a_lock.lastSeen.time_since_epoch().count() != 0 &&
+                ClaimLiveOnHand(fid, a_hand)) {
                 auto* askSp = RE::TESForm::LookupByID<RE::SpellItem>(a_askerSpell);
                 auto* incSp = RE::TESForm::LookupByID<RE::SpellItem>(a_lock.spell);
                 if (askSp && incSp && CasterConsent::ClassifySpell(askSp) == CasterConsent::SpellKind::Offense &&
