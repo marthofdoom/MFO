@@ -593,6 +593,14 @@ Text below is the finding as relayed by the coordinator from the review.
 - **F-H (SEV-5):** the hint shows on cast_self/cast_player rows; the Fire.cpp comment "the exact call act.cast_self makes" is inaccurate (rangeGate=true; behaves the same). *Reasoning:* cosmetic; CastOn reads a_rangeGate only for a target other than the follower.
 - **Surfaced at edit time from:** MAP.md `Vocabulary.h` entry and the `cast/SpellSupport.cpp` entry.
 
+### MFO-B238 (SEV-4 x3, SEV-5 x2) -- heal hold round 2 review (a687fd2): deferred R1-R3, spots 2-3
+Raised against `a687fd2` (`fix/mfo-post-2.2.0`, Opus tier-B round 2, MERGE OK), 2026-10-06. Text as relayed by the coordinator.
+- R1 (SEV-4): at the 128u approach floor with sight still lost (recipient behind a wall / on another floor) the follower holds there; the never-fired bound stays off because the approach is not "blocked", so the heal holds until combat ends. Matches marth ruling (c); the 5 s still-holding line shows it. Possible follow-up for marth: treat "at the floor and still occluded" as approach-blocked.
+- R2 (SEV-5): out of magicka during a restream gap: ReleaseOwnHealClaim returns early (no claim stands), HealHandEnded is not called, the record ends next tick as released-elsewhere instead of out-of-magicka. Log token only.
+- R3 (SEV-4, pre-existing): the un-taught-proxy path can cycle claim -> HasSpell check -> restream release -> re-claim with a fresh stamp, each shorter than the never-fired cap; sustain now also runs it after the rule stops asking. Only if Harbinger keeps failing to teach the proxy; each cycle WARNs.
+- Spot 2 (SEV-5): a held heal from a rule BELOW a suppression window is never evaluated, so it reads as "stopped asking" (false log line only; behaviour correct).
+- Spot 3 (SEV-4): the combat-start gate (IsInCombat() with no combat controller) never casts if the controller never comes up; transparent, lower rules run, but the only trace is the chain reason. Recommendation: one WARN per fight once the wait passes a few seconds; no direct-road fallback (marth ruling d).
+
 ## DRAINED
 
 ### Drain batch `b795839` (`fix/mfo-post-2.2.0`, tier B/C items of MFO-B226..B236; the originals stay in the open list for the findings NOT drained)
