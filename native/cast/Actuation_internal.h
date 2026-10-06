@@ -645,6 +645,8 @@ namespace MFO::Actuation {
         // HealRoad.cpp: heal claims last until the recipient is FULL (ClickUp 86e3m36qr).
         // HealHeldRecipient is AUTO's fallback pick. (HealSustainLap / ReleaseUnheldCastHands /
         // HealHandsCombatEnded are public: Actuation.h.)
+        void HealHeldOutOfMagicka(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why);   // CastOn's magicka gates
+        void HealHandPreempted(RE::FormID a_follower, std::size_t a_hand, const char* a_why);     // PreemptHand
         RE::Actor* HealHeldRecipient(RE::Actor* a_follower, RE::FormID a_spell);
         // Does a weapon own the follower's right hand (live grip, a live claim, a force-hold
         // coming back, or a Melee/Ranged class without weapon-style control)? cast/Hands.cpp.

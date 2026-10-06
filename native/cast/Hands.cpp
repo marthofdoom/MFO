@@ -802,7 +802,10 @@ namespace MFO::Actuation {
         const std::int32_t apmfHand = a_hand == kHandLeft ? APMFBridge::kApmfHandLeft
                                                           : APMFBridge::kApmfHandRight;
         if (lostSpell != 0 && APMFBridge::GetHealCastSpell(fid, apmfHand) == lostSpell)
+        {
             ComposedCast::EndHand(fid, apmfHand);   // that hand's heal claim (feat/mfo-perhand-heal)
+            HealHandPreempted(fid, a_hand, "a higher-ranked rule took the hand");   // [heal-hold] ... preempted
+        }
         lock = CastLock{};
         if (dualIncumbent) other = CastLock{};
         const auto now = std::chrono::steady_clock::now();

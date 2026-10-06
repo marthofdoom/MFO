@@ -259,6 +259,7 @@ namespace MFO::Actuation {
                     // never runs -- leaving a spell they cannot afford in their
                     // hand for their AI to keep trying.
                     Loadout::ReleaseSpell(a_follower->GetFormID());
+                    HealHeldOutOfMagicka(a_follower, a_spellID, "the caster ran out of magicka for the next cast");
                     spdlog::debug("[eval] {:08X} has {:.0f} magicka, needs {:.0f}",
                                   a_follower->GetFormID(), have, cost);
                     // TRANSPARENT: this is the spellsword flow -- reserve/empty
@@ -285,6 +286,7 @@ namespace MFO::Actuation {
                         : 0.0f;
                     if (mx > 0.0f && (have - cost) < reserve * mx) {
                         Loadout::ReleaseSpell(a_follower->GetFormID());
+                        HealHeldOutOfMagicka(a_follower, a_spellID, "the caster is at the magicka reserve floor");
                         return { Result::FailedSkill,
                                  std::format("magicka reserve (floor {:.0f})", reserve * mx),
                                  true };   // transparent -- fall to steel (§3.5)

@@ -96,6 +96,7 @@ namespace MFO::Actuation {
         // sites around their ReleaseOwnHealClaim call; null = classified from the free text). All worker-serial.
         std::unordered_map<RE::FormID, std::vector<RE::FormID>> g_healAsked;
         std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_healCont;
+        std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_healStillLog;   // the 5 s "still holding" line
         const char* g_healExit    = nullptr;
         bool        g_inHealSustain = false;   // the sustain replay's own lap must not count as "the rule asked"
 
@@ -437,7 +438,7 @@ namespace MFO::Actuation {
             // A WEAPON NOW OWNS THE RIGHT (review F3): the weapon-hand hard rule wins, the
             // right heal is released and its recipient re-picks a hand next lap.
             if (a_hand == kHandRight && RightHandIsWeaponHand(a_follower)) {
-                ReleaseOwnHealClaim(a_follower, a_hand, hs, "a weapon now owns the right hand");
+                ReleaseWithExit(a_follower, a_hand, hs, "a weapon now owns the right hand", "preempted");
                 return;
             }
             if (ProxyUnlearnedRelease(a_follower, a_hand, hs)) return;
@@ -574,6 +575,7 @@ namespace MFO::Actuation {
 
     void HealHandEnded(RE::FormID a_follower, std::size_t a_hand, const char* a_why) {
         g_healCont.erase((static_cast<std::uint64_t>(a_follower) << 1) | a_hand);
+        g_healStillLog.erase((static_cast<std::uint64_t>(a_follower) << 1) | a_hand);
         HealHoldLapsed(a_follower, a_hand, a_why);
         APMFBridge::ReleaseHealApproach(a_follower, "the hand's heal claim ended", a_hand);   // ch.24
         const auto it = g_healHands.find(a_follower);
@@ -711,7 +713,7 @@ namespace MFO::Actuation {
         // LEFT, which re-aims only in its idle gap (MFO-B171), as before.
         if (servedOn == kHandRight && onHand[kHandRight].claim && RightHandIsWeaponHand(a_follower)) {
             // A WEAPON NOW OWNS THE RIGHT (review F3): release; the recipient re-picks next lap.
-            ReleaseOwnHealClaim(a_follower, kHandRight, spellID, "a weapon now owns the right hand");
+            ReleaseWithExit(a_follower, kHandRight, spellID, "a weapon now owns the right hand", "preempted");
             return Outcome{ Result::FailedOther, "animated heal not cast: a weapon now owns the right hand", true };
         }
         if (servedOn < kHandCount) {
@@ -824,6 +826,17 @@ namespace MFO::Actuation {
                              fid, HandWord(h), hh.spell, Who(fid, hh.recipient),
                              static_cast<int>(Vocab::HealthPct(rcp) * 100.0f));
             }
+            {   // every 5 s while the hold stands: a heal that never reaches full shows up in the field
+                const auto nowT = std::chrono::steady_clock::now();
+                auto& last = g_healStillLog[key];
+                if (last == std::chrono::steady_clock::time_point{}) last = nowT;
+                else if (nowT - last >= std::chrono::seconds(5)) {
+                    last = nowT;
+                    spdlog::info("[heal-hold] {:08X} {} hand: still holding {:08X} HP {}%",
+                                 fid, HandWord(h), Who(fid, hh.recipient),
+                                 static_cast<int>(Vocab::HealthPct(rcp) * 100.0f));
+                }
+            }
             // The replay: this rule's own heal lap, no threshold. Its outcome is the lap's own business
             // (a claim refresh answers NoOp/transparent); the claim either stands after it or ended with
             // its [heal-hold] exit line.
@@ -880,6 +893,24 @@ namespace MFO::Actuation {
         return nullptr;
     }
 
+    // CastOn's magicka / reserve gate fires before the heal lap: a HELD heal (claim standing under the
+    // asking rule) ends here, explicitly and at once, instead of expiring as released-elsewhere. marth
+    // 2026-10-06: "Its allowed to drop after running out of magicka".
+    void HealHeldOutOfMagicka(RE::Actor* a_follower, RE::FormID a_spell, const char* a_why) {
+        if (!a_follower) return;
+        const auto it = g_healHands.find(a_follower->GetFormID());
+        if (it == g_healHands.end()) return;
+        for (std::size_t h = 0; h < kHandCount; ++h)
+            if (it->second.hand[h].active && it->second.hand[h].spell == a_spell)
+                ReleaseWithExit(a_follower, h, a_spell, a_why, "out-of-magicka");
+    }
+
+    void HealHandPreempted(RE::FormID a_follower, std::size_t a_hand, const char* a_why) {
+        g_healExit = "preempted";
+        HealHandEnded(a_follower, a_hand, a_why);
+        g_healExit = nullptr;
+    }
+
     // Combat ended (Scheduler's non-combat branch): every heal record ends here with its [heal-hold] line.
     void HealHandsCombatEnded(RE::FormID a_follower) {
         if (g_healHands.find(a_follower) == g_healHands.end()) return;
@@ -927,6 +958,7 @@ namespace MFO::Actuation {
         g_healHands.clear();
         g_healAsked.clear();
         g_healCont.clear();
+        g_healStillLog.clear();
         g_neverFiredLatch.clear();
         g_handFireAttach.clear();
         {
