@@ -24,6 +24,11 @@ Read it as history and this block as current.
   DEFERRED" notes below are superseded. Field observable: `[runtime] 1.7.104.0 supported ... (exact 1.7.104)`,
   `[selfcheck] ... 56/56 verified`.
 
+- **2026-10-07 CUT v2.2.2 "Retreat needs a sustained low, and is off by default" (DRAFT release, current version).** Stamp commit `de3dcf6`, CI run
+  37561372378, DLL sha256 `e7b24335...`, tag `v2.2.2`. Zip `releases/v2.2.2/MFO-v2.2.2.zip`. DRAFT, marth publishes; Nexus text in the session
+  scratchpad `release-2.2.2-nexus.txt`. Retreat trigger needs ~1.5 s below the floor, one hit capped, magicka out of Vitality, never out of combat;
+  bAutoRetreat defaults OFF (existing settings kept; engage on sight idles while it is off). Zip still excludes `MCM/Settings/MFO.ini`.
+  Requires Harbinger v0.11.2. **FIELD-TEST PENDING.** v2.2.1 draft is superseded.
 - **2026-10-07 CUT v2.2.1 "Heals that finish, and fixes from the field" (DRAFT release, current version).** Stamp commit `15ff497`, CI run
   37549235165, DLL sha256 `c316c502...`, tag `v2.2.1`. Zip `releases/v2.2.1/MFO-v2.2.1.zip` (sha256 `faac6836...`). GitHub release is a DRAFT,
   marth publishes it after the Deck test; Nexus text in the session scratchpad `release-2.2.1-nexus.txt`. Heal holds until full, lost-LoS
