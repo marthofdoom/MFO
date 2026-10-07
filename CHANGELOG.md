@@ -5,6 +5,12 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.2.2 -- Retreat needs a sustained low, and is off by default
+
+- **Followers no longer retreat after a single hard hit.** Retreat needs a sustained low confidence, ignores magicka, and never happens while you are out of combat.
+- **Auto retreat is off by default while retreat is reworked.** Existing settings are kept. Engage on sight also stays idle while retreat is off.
+- **Needs Harbinger 0.11.2.** Install both together.
+
 ## v2.2.1 -- Heals that finish, and fixes from the field
 
 - **Needs Harbinger 0.11.1.** Install both together.
