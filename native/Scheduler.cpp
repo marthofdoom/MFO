@@ -1278,7 +1278,7 @@ namespace MFO::Scheduler {
             }
         }
 
-        // ── AUTO-RETREAT (leash safety, bAutoRetreat, default ON) ────────────
+        // ── AUTO-RETREAT (leash safety, bAutoRetreat, default OFF) ────────────
         // The confidence leash taken to its conclusion: a follower who is badly
         // outmatched (confidence below threshold -- by the leash tenet he WANTS
         // to be at the player's side) AND far from the player in combat falls

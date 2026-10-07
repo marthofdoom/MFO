@@ -809,7 +809,7 @@ namespace MFO::Config {
     // (or a fill is declined) a cooldown gates the next one, and after arrival
     // he STAYS at your side while the fight's confidence is still under the
     // floor (Scheduler.cpp kRetreatCooldown* / kRetreatStayMax). bAutoRetreat.
-    inline std::atomic<bool>  g_autoRetreat{ true };
+    inline std::atomic<bool>  g_autoRetreat{ false };
 
     // ENGAGE ON SIGHT (ClickUp 86e3errnu, 2026-09-25): the hidden, built-in
     // out-of-combat gambit "nearest visible enemy". Not a Gambit record, not in

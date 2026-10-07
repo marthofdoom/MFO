@@ -402,10 +402,10 @@
           "id": "bAutoRetreat:General",
           "text": "Auto-retreat when outmatched",
           "type": "toggle",
-          "help": "ON (default): a follower who is badly outmatched (low confidence -- foe count, level and health feed it) AND far from you in combat falls back to your side, the confidence leash taken to its conclusion. Fires once per fight; the follower stops gambitting while falling back. OFF: they fight on wherever the gambit table sends them (author your own fall-back rule instead). Anniversary Edition only (like walk-to-loot); does nothing on Special Edition 1.5.97.",
+          "help": "OFF by default while retreat is reworked (existing saved settings are kept). ON: a follower who is badly outmatched (low confidence -- foe count, level and health feed it) AND far from you in combat falls back to your side, the confidence leash taken to its conclusion. Fires once per fight; the follower stops gambitting while falling back. OFF: they fight on wherever the gambit table sends them (author your own fall-back rule instead). Anniversary Edition only (like walk-to-loot); does nothing on Special Edition 1.5.97.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
-            "defaultValue": 1
+            "defaultValue": 0
           }
         },
         {

@@ -448,7 +448,7 @@ namespace MFO::Config {
             { "fLootRadius", "3000.000000" },
             { "bLootTravel", "1" },            { "bLootInPlayerHomes", "0" },
             { "bLootSpecialItems", "1" },      { "bLootLOTD", "0" },
-            { "bEconomy", "1" },               { "bAutoRetreat", "1" },
+            { "bEconomy", "1" },               { "bAutoRetreat", "0" },
             { "bEngageOnSight", "0" },         { "bEngageOnSightSneaking", "0" },
             { "fEngageOnSightRange", "2000.000000" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
