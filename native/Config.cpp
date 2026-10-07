@@ -383,7 +383,7 @@ namespace MFO::Config {
             g_mageWearRobes      = true;    // #21 mage clothing/jewelry dress-up -- ON (loot + buy)
             g_mageApparelStrictSchool = false;  // #21 strict top-2-school apparel filter -- OFF (value-driven default)
             g_meoAwareGems       = false;   // effect-aware gem optimization -- OFF (conservation still always runs)
-            g_autoRetreat        = true;
+            g_autoRetreat        = false;   // OFF while retreat is reworked (marth 2026-10-06; ClickUp 86e3m5feu)
             g_engageOnSight      = false;   // hidden OOC gambit "nearest visible enemy" -- OFF by default
             g_engageOnSightSneaking = false;   // ...and not while the player sneaks, unless asked
             g_engageOnSightRange = 2000.0f;   // reaction distance from the follower
