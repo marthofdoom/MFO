@@ -51,7 +51,11 @@ namespace MFO::Confidence {
         const float hp = Vocab::HealthPct(a_follower);
         const float st = Vocab::StaminaPct(a_follower);
         const float mg = Vocab::MagickaPct(a_follower);
-        return 0.6f * hp + 0.2f * st + 0.2f * mg;
+        // Magicka is NOT a vitality input (retreat trigger fix): a mage spends it by casting,
+        // which is working as intended, not losing. hp:stamina keep the old 3:1 ratio
+        // (0.6:0.2) renormalised to sum 1.
+        (void)mg;
+        return 0.75f * hp + 0.25f * st;
     }
 
     // The fight multiplier for a WEIGHTED foe load (one even foe = 1.0). ONE
@@ -93,6 +97,10 @@ namespace MFO::Confidence {
     inline constexpr double      kTrendMaxGap   = 10.0;   // s, a gap past this restarts the ring
     inline constexpr float       kTrendTtdSafe  = 20.0f;  // s to death at which Trend reaches 1
     inline constexpr float       kTrendFloor    = 0.30f;  // Trend never drops below this
+    // One hit must not read as a sustained bleed: the net loss counted over a window is capped
+    // at this fraction of max HP (a 50% hit reads as 25% -> 5%/s, not 10%/s). Sustained loss
+    // keeps being re-read every service, and the retreat trigger needs it to persist.
+    inline constexpr float       kTrendBurstCap = 0.25f;
     inline constexpr float       kTrendRateEps  = 0.002f; // /s (0.2%/s): below this = not losing
 
     namespace detail {
@@ -138,7 +146,8 @@ namespace MFO::Confidence {
         }
         const double span = nw.t - old->t;
         if (span < kTrendMinSpan) return 0.0f;
-        return std::max(0.0f, static_cast<float>((old->hp - nw.hp) / std::max(span, kTrendWindow)));
+        const float lost = std::min(kTrendBurstCap, static_cast<float>(old->hp - nw.hp));
+        return std::max(0.0f, lost / static_cast<float>(std::max(span, kTrendWindow)));
     }
 
     // The trend factor for a loss rate a_rate (/s) at health a_hpPct: time to

@@ -192,6 +192,11 @@ namespace MFO::Scheduler {
             // P2: when the retreat trigger first held off for the follower's own cast in
             // flight (epoch == not holding). Bounds the delay, see kRetreatCastDeferMs.
             std::chrono::steady_clock::time_point castDeferSince{};
+            // Retreat trigger persistence: the unpaused service clock when confidence first read
+            // below the floor on a run of consecutive own services (< 0 = not below), and the
+            // number of such samples. The fill needs kRetreatBelowSecs of it AND >= 2 samples.
+            double        belowSince   = -1.0;
+            std::uint32_t belowSamples = 0;
         };
         std::unordered_map<RE::FormID, RetreatNote> g_retreatNotes;
         // [retreat-heal] line dedup (3 s per follower).
@@ -414,6 +419,11 @@ namespace MFO::Scheduler {
         // 0.25 floor admitted 4; v2 at 0.25 would admit ~10). ONE definition, passed
         // to EngageOnSight::Service like the retreat floor was.
         constexpr float kEngageConfidence = kRetreatConfidence + 0.15f;
+        // The retreat fires only after confidence has stayed under the floor for this long on
+        // consecutive own services (not one sample). Samples come once per OWN service, every
+        // N x 133 ms (N = active roster), so at N > 11 two samples already span more than this;
+        // hence also >= 2 samples.
+        constexpr double kRetreatBelowSecs = 1.5;
         constexpr float kRetreatMinDist    = 400.0f;
         constexpr float kRetreatArriveDist = 200.0f;
         constexpr float kRetreatTimeout    = 30.0f;
@@ -1268,7 +1278,7 @@ namespace MFO::Scheduler {
             }
         }
 
-        // ── AUTO-RETREAT (leash safety, bAutoRetreat, default ON) ────────────
+        // ── AUTO-RETREAT (leash safety, bAutoRetreat, default OFF) ────────────
         // The confidence leash taken to its conclusion: a follower who is badly
         // outmatched (confidence below threshold -- by the leash tenet he WANTS
         // to be at the player's side) AND far from the player in combat falls
@@ -1341,12 +1351,18 @@ namespace MFO::Scheduler {
 
             auto& note = g_retreatNotes[id];
             if (Config::g_autoRetreat.load() && note.rearmLaps == 0 && now >= note.rearmAt &&
-                f->IsInCombat() && pc && dPlayer > kRetreatMinDist) {
+                f->IsInCombat() && pc && pc->IsInCombat() && dPlayer > kRetreatMinDist) {
                 // Read BEFORE the fill: the fill posts a StopCombat, and once it
                 // lands Of() loses the combat/foe multiplier, so any later read
                 // would log a misleading 0.8-1.0 (assess-confidence-leash step 4).
                 const float conf = Confidence::Of(f);
-                if (conf < kRetreatConfidence) {
+                if (conf >= kRetreatConfidence) { note.belowSince = -1.0; note.belowSamples = 0; }
+                else {
+                    if (note.belowSince < 0.0) { note.belowSince = g_serviceClock; note.belowSamples = 0; }
+                    ++note.belowSamples;
+                }
+                const double belowFor = note.belowSince < 0.0 ? 0.0 : g_serviceClock - note.belowSince;
+                if (conf < kRetreatConfidence && belowFor >= kRetreatBelowSecs && note.belowSamples >= 2) {
                     // P2 (field 2026-10-01): a cast in flight finishes (the heal rule's own D8).
                     // Delay the fill while the follower's own cast is live, one sense lap at a
                     // time, bounded by kRetreatCastDeferMs from the first delay so a held charge
@@ -1370,7 +1386,9 @@ namespace MFO::Scheduler {
                     }
                     if (!deferFill) {
                     note.castDeferSince = {};
-                    const int foes = CombatSense::FoeCount(f);
+                    int         foes = 0;
+                    const float load = CombatSense::FoeLoad(f, &foes);
+                    const float loss = Confidence::HpLossRate(id);
                     if (Packages::RetreatFill(f)) {
                         Actuation::ReleaseHealClaimForRetreat(f);
                         note.phase           = RetreatPhase::Travel;
@@ -1380,7 +1398,9 @@ namespace MFO::Scheduler {
                         note.skipStay        = false;
                         note.fightConf       = conf;
                         spdlog::info("[retreat] {:08X}: falling back -- confidence={:.2f} (pre-StopCombat) "
-                                     "foes={} dPlayer={:.0f}", id, conf, foes, dPlayer);
+                                     "foes={} load={:.2f} hpLoss={:.1f}%/s belowFloor={:.1f}s/{}samples dPlayer={:.0f}",
+                                     id, conf, foes, load, loss * 100.0f, belowFor, note.belowSamples, dPlayer);
+                        note.belowSince = -1.0; note.belowSamples = 0;
                     } else {
                         // NOT silent (principle 7) and NOT one-per-fight: the fill
                         // failed (RetreatFill logged why), so wait out the cooldown
@@ -1392,6 +1412,8 @@ namespace MFO::Scheduler {
                     }
                     }   // !deferFill
                 }
+            } else {
+                note.belowSince = -1.0; note.belowSamples = 0;   // gate not met: the run restarts
             }
         }
 
