@@ -2125,6 +2125,13 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   frozen `fightConf` benches a foe-count retreat; replacing the probe with `CombatSense::FoeCount` reads 0 the moment
   StopCombat lands (same self-cancel). The Confidence formula is v2 since
   feat/mfo-confidence-v2 (weighted foe load + HP trend; section 3, CombatSense.h / Confidence.h). Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B102..MFO-B108 and MFO-B110.
+  **TRIGGER FIX (fix/mfo-retreat-trigger, field 2026-10-06; `bAutoRetreat` now DEFAULTS OFF, key unchanged, saved values kept).**
+  The fill (`Scheduler.cpp` AUTO-RETREAT block, `kRetreatBelowSecs` 1.5) needs `Of()` under `kRetreatConfidence` on >= 2
+  consecutive own services spanning 1.5 s of `g_serviceClock` (`RetreatNote::belowSince/belowSamples`, reset when the gate or
+  the floor is not met) AND the player in combat. `HpLossRate` caps the net loss per window at `kTrendBurstCap` 0.25 so one hit
+  is not a bleed; `Vitality` = 0.75 hp + 0.25 stamina (magicka removed). The `[retreat] falling back` line logs conf, foes, load,
+  hpLoss, time below floor. What breaks: lowering the cap or the persistence re-opens the one-hit retreat; the Engage-on-sight
+  bar (`OfFacing`) shares Vitality/Trend, so it moved too.
   **ch.22 RE-ENTRY DENY (feat/mfo-reentry-leash 2026-09-25, Harbinger >= v15; `apmf/ReentryDeny.cpp`).**
   `RetreatFill` claims the deny instead of posting its StopCombat (`Packages.cpp:2194/:2253`, an
   in-place edit, the file did not grow); the bridge sweep posts the SINGLE StopCombat on the first
