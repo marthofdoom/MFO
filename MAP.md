@@ -4185,6 +4185,13 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
 - **The in-transit ledger is a FLOOR (principle 9).** An entry (base, count, the DropoffCrate
   count read at the deposit, the crate) stays until DropoffCrate holds baseline + count (ARRIVED) or
   no open slot accepts the base (displayed); never a timer. Session-only (MFO-B119).
+- **MUSEUM GEM STRIP (`fix/mfo-museum-strip-gems`, 2026-10-06; marth: gemmed items were donated).** `TransferOnMain`
+  (`logistics/Lotd.cpp`) now live-queries `MEOBridge::CarriedGems` (main thread) first; a planned item whose base
+  carries any MEO gem is HELD BACK (never RemoveItem'd), its gems extracted via `MEOBridge::UnsocketItemGems` (the
+  sell path's mechanism, `Economy.cpp` gemHold) and `[museum] stripped N gem(s) from '<item>' before donation` is
+  logged; MEO ABI < 3 (cannot unsocket) = loud warn + skipped. All-held pass = transfer result 3, `Phase::Settling`
+  waits `kIdleSettle` then returns to `Giving` (re-plans from live state; `kTripMax` bounds it). Deposit proof =
+  the item reads gem-free in the live query. Before this fix NO strip existed on the museum road (only sell).
 - **L2 gambit** `act.loot_museum` (`Vocabulary.h`, APPENDED) → `Service.cpp:1397` → `RunGambit:1231`
   (`LootNearby(Category::Museum)`; the deposit is `PriorityDeposit`'s, above); `Category::Museum` APPENDED
   (`Logistics_internal.h`, Valuables-tier dibs via `TierReleased`'s default path, dibs-deferred in

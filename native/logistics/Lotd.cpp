@@ -35,6 +35,7 @@
 #include "TeleportCompat.h"     // the confidence leash (the crate must be inside it, like a loot target)
 #include "apmf/APMFBridge.h"    // the deposit trip's Harbinger claims (apmf/Deposit.cpp)
 #include "cast/Actuation.h"      // ForcedHoldFor: a worn kept relic under an MFO hold is not shipped (MFO-B126)
+#include "MEOBridge.h"           // the museum gem strip: MEO gems never go into the crate (fix/mfo-museum-strip-gems)
 #include "Loadout.h"             // LeftHandSlot: a worn LEFT-hand relic is unequipped from that slot before the transfer
 #include "PlayerGiven.h"         // a player-given item is never shipped (batch L review round)
 #include "Scheduler.h"           // ServiceClock(): the UNPAUSED clock the give idle's confirmation window runs on
@@ -1247,10 +1248,37 @@ namespace MFO::Lotd {
                 return n;
             };
             std::int32_t moved = 0;
+            std::int32_t heldForGems = 0;   // items kept back this pass until MEO has stripped their gems
             std::string names;
+            // MUSEUM GEM STRIP (fix/mfo-museum-strip-gems, marth: "followers are still donating gemmed
+            // items to the museum instead of stripping them first"). A relic carrying MEO gems NEVER
+            // goes into the crate: its gems are extracted to the follower's own inventory
+            // (MEOBridge::UnsocketItemGems, the sell path's mechanism, Economy.cpp gemHold) and the
+            // item is held back; it ships on a later pass once the live query reads it gem-free.
+            // The live query (MAIN thread) is the proof, not the worker's cache.
+            MEO_API::GemInfo gemBuf[64];
+            const std::uint32_t gemN = std::min<std::uint32_t>(MEOBridge::CarriedGems(f, gemBuf, 64), 64);
+            if (gemN > 0) MEOBridge::RefreshCarriedGems(f);   // the strip reads the cache: make it current
             for (const auto& it : a_items) {
                 auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(it.base);
                 if (!obj) continue;
+                {
+                    std::unordered_set<std::uint16_t> uids;
+                    std::int32_t gems = 0;
+                    for (std::uint32_t i = 0; i < gemN; ++i)
+                        if (gemBuf[i].itemBase == it.base) { ++gems; uids.insert(gemBuf[i].itemUid); }
+                    if (gems > 0) {
+                        ++heldForGems;
+                        if (!MEOBridge::CarriedGemUnsocketSupported()) {
+                            spdlog::warn("[museum] {:08X}: '{}' carries {} gem(s) and MEO cannot unsocket (ABI < 3) -- "
+                                         "NOT donated", a_follower, NameOf(obj), gems);
+                            continue;
+                        }
+                        for (const auto u : uids) MEOBridge::UnsocketItemGems(f, it.base, u);
+                        spdlog::info("[museum] stripped {} gem(s) from '{}' before donation", gems, NameOf(obj));
+                        continue;   // deposited on a later pass, once the strip landed and it reads gem-free
+                    }
+                }
                 // The player-given record is mutex-guarded (PlayerGiven.cpp): re-checked here.
                 if (PlayerGiven::IsPlayerGiven(a_follower, it.base)) continue;
                 std::int32_t have = 0;
@@ -1301,10 +1329,13 @@ namespace MFO::Lotd {
                 spdlog::info("[lotd] {:08X}: DEPOSITED {} item(s) -> crate {:08X} ('{}'): {} (LOTD ships them to "
                              "DropoffCrate some game hours later; the ledger holds them until they arrive)",
                              a_follower, moved, a_crate, st, names);
+            else if (heldForGems > 0)
+                spdlog::info("[museum] {:08X}: {} item(s) held back for MEO to finish stripping their gems; nothing "
+                             "deposited this pass", a_follower, heldForGems);
             else
                 spdlog::warn("[lotd] {:08X}: transfer into crate {:08X} moved NOTHING ({} planned item(s))",
                              a_follower, a_crate, a_items.size());
-            a_result->store(moved > 0 ? 1 : 2);
+            a_result->store(moved > 0 ? 1 : (heldForGems > 0 ? 3 : 2));   // 3 = retry once the strip lands
             RefreshMainSupplyOnMain();   // the ledger and the player's counts changed: republish now
         }
     }
@@ -1741,6 +1772,11 @@ namespace MFO::Lotd {
                 EndTripLocked(fid, a_now, "the transfer was skipped or moved nothing (see the transfer line)", false,
                               CrateCd::Full);
                 return false;
+            }
+            if (r == 3) {   // everything held for a gem strip: wait for MEO's queued unsockets, then re-plan
+                if (a_now - trip.settleFrom < kIdleSettle) return true;
+                trip.phase = Phase::Giving;   // the give idle is still live; kTripMax bounds the retries
+                return true;
             }
             if (r == 0 || a_now - trip.settleFrom < kIdleSettle) return true;   // not run yet / idle still playing
             Logistics::g_grabGrow.erase(cid);   // delivered -> stale grow verdict (the loot road's rule)
