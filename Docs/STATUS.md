@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-10-06 UTC (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-10-07 UTC (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
@@ -24,7 +24,13 @@ Read it as history and this block as current.
   DEFERRED" notes below are superseded. Field observable: `[runtime] 1.7.104.0 supported ... (exact 1.7.104)`,
   `[selfcheck] ... 56/56 verified`.
 
-- **2026-10-06 SHIPPED v2.2.0 "Animated casts in combat" (current version).** Stamp commit `3272a56`, CI run 37536760580, DLL sha256
+- **2026-10-07 CUT v2.2.1 "Heals that finish, and fixes from the field" (DRAFT release, current version).** Stamp commit `15ff497`, CI run
+  37549235165, DLL sha256 `c316c502...`, tag `v2.2.1`. Zip `releases/v2.2.1/MFO-v2.2.1.zip` (sha256 `faac6836...`). GitHub release is a DRAFT,
+  marth publishes it after the Deck test; Nexus text in the session scratchpad `release-2.2.1-nexus.txt`. Heal holds until full, lost-LoS
+  approach, out-of-magicka exit, offense frees while a held heal is blind, combat casts wait for the controller, self buff never at an
+  enemy, no own-rule offense preempt, cloaks back in the picker. **The zip no longer ships `MCM/Settings/MFO.ini`** (2.2.0 did and reset
+  every updater's MCM settings; `release.sh` now asserts it stays out). Requires Harbinger v0.11.1. **FIELD-TEST PENDING.**
+- **2026-10-06 SHIPPED v2.2.0 "Animated casts in combat" (superseded by v2.2.1; its zip wrongly shipped MCM/Settings/MFO.ini).** Stamp commit `3272a56`, CI run 37536760580, DLL sha256
   `bbba8896...`, tag `v2.2.0`. Zip `releases/v2.2.0/MFO-v2.2.0.zip` (sha256 `fec989a7...`, NOT uploaded to Nexus yet, marth uploads;
   paste text in the session scratchpad `release-2.2.0-nexus.txt`). Batch A (animated in-combat buff, held-heal, proxy and approach casts),
   heal hold until fire, spells-only idle-hand floor, spell picker hide + MGEF tooltips, Enemy/Self targets, AUTO nature-undeclared guard.
