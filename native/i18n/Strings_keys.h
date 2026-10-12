@@ -86,6 +86,12 @@ MFO_STR(Gb_FmtDist,         "{1}u", 1)       // a distance value in game units, 
 MFO_STR(Gb_PickSpell,       "(pick spell)", 0)
 MFO_STR(Gb_LastFail,        "last: {1}", 1)   // tooltip, {1}=why the last cast failed
 MFO_STR(Gb_NoSpells,        "No spells known, no spellbooks carried", 0)
+MFO_STR(Gb_SchoolAlteration, "Alteration", 0)   // spell picker group headers
+MFO_STR(Gb_SchoolConjuration, "Conjuration", 0)
+MFO_STR(Gb_SchoolDestruction, "Destruction", 0)
+MFO_STR(Gb_SchoolIllusion,  "Illusion", 0)
+MFO_STR(Gb_SchoolRestoration, "Restoration", 0)
+MFO_STR(Gb_SchoolOther,     "Other", 0)
 MFO_STR(Gb_TeachHeader,     "Teach from spellbook (consumes it):", 0)
 MFO_STR(Gb_TeachArmed,      "{1}  Teach? This DESTROYS the book.", 1)   // {1}=spell name. Shown after the first click
 MFO_STR(Gb_Spellbook,       "{1}  (spellbook)", 1)   // {1}=spell name
