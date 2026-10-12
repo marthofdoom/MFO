@@ -818,7 +818,7 @@ namespace MFO::Config {
     // (Confidence::LeashRadius, measured from the player) enters combat against
     // the nearest one through Harbinger ch.21 (kIntent_CombatEntry, ABI v14).
     // No MFO direct road: Harbinger absent / older than v14 = inert. Runs only
-    // while g_autoRetreat is ON (a follower who starts a fight can break it
+    // whether or not g_autoRetreat is on (marth 2026-10-11: run it without retreat; it used to need it, as a follower who starts a fight could break it
     // off). EngageOnSight.cpp. bEngageOnSight (default OFF).
     inline std::atomic<bool>  g_engageOnSight{ false };
     // Whether the gambit also fires while the PLAYER is sneaking (marth's open

@@ -481,11 +481,10 @@ namespace MFO::EngageOnSight {
                    now);
             return false;
         }
-        if (!Config::g_autoRetreat.load()) {
-            Status(note, a_f, a_id, "standing down: bAutoRetreat is OFF (the gambit runs only while a follower "
-                                    "who starts a fight can break it off)", now);
-            return false;
-        }
+        // marth 2026-10-11: engage-on-sight runs WITHOUT auto-retreat ("a, run it without retreat"). It
+        // used to stand down while bAutoRetreat was OFF (a follower who starts a fight could break it
+        // off); retreat is off by default until its rework (ClickUp 86e3m5feu), so the gate made the
+        // gambit dead. A follower who engages now fights the fight out, as vanilla followers do.
         if (!APMFBridge::CombatEntryOffered()) {
             Status(note, a_f, a_id, "inert: Harbinger ch.21 combat entry unavailable (Harbinger absent, older "
                                     "than ABI 14, or its ch.21 seat refused) -- MFO has no direct road", now);
