@@ -1508,6 +1508,26 @@ namespace MFO::APMFBridge {
     // drained (so no worker tick races the map).
     void ClearTransientState();
 
+    // ── ch.25 CAST GUARD (ABI v21, kIntent_CastGuard) -- apmf/CastGuard.cpp ──────────
+    // marth 2026-10-12 ("Add to Harbinger's API"): MFO's friendly-fire hold and its Exact
+    // concentration bound, which MFO's own CheckCast / CheckStartCast hooks enforced,
+    // are ONE Harbinger claim per follower in client mode (Harbinger enforces them at
+    // the 0x0A / 0x06 seats it owns). Recipe: APMF Docs/INTEGRATION.md "Cast guards".
+    //
+    // Is the channel served -- Harbinger present at ABI >= 21? Any thread.
+    bool CastGuardSupported();
+    // Worker (the Scheduler's party-combat service, every lap). a_lineOfFire =
+    // kCastGuard_LineOfFire (bFriendlyFireHold), with MFO's decay kept: the bit is
+    // dropped on every 4th lap (MFO held 3 casts, then let one through). a_channelBound =
+    // kCastGuard_ChannelRight|Left (Exact, conc spell gambit-managed or no cast gambit).
+    // Claims (RequestEx, fval 6 s), heartbeats (Repoint renews the window and carries the
+    // bits), re-requests a handle Harbinger no longer knows, and RELEASES when no guard
+    // applies. A refusal is logged as an error once and that guard is not asked again
+    // this session: no MFO hook stands in. No-op below ABI 21.
+    void ServiceCastGuard(RE::FormID a_follower, bool a_lineOfFire, bool a_channelBound);
+    // Worker. Drop the follower's guard (CasterConsent::Clear: combat end, dismissal).
+    void ReleaseCastGuard(RE::FormID a_follower);
+
     // ── LOTD MUSEUM DEPOSIT (feat/mfo-lotd, ClickUp 86e3edghj L3) -- apmf/Deposit.cpp ──
     // The three facet claims ONE deposit trip rides, keyed by follower: ch.19 travel to
     // the crate, ch.1 hold while the idle plays, ch.12 Idle v2 (IdleGive AT the crate).

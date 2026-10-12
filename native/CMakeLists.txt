@@ -110,6 +110,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/PursuitLeash.cpp
     apmf/CombatApproach.cpp
     apmf/SpellAllowList.cpp
+    apmf/CastGuard.cpp
     apmf/Deposit.cpp
     apmf/Los.cpp
     imgui_impl_win32.cpp

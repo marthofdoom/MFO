@@ -1232,6 +1232,28 @@ namespace MFO::Scheduler {
                         gambits.push_back(g.actionParamForm);
                 }
             }
+            // ch.25 CAST GUARD (Harbinger client mode, ABI >= 21; a no-op otherwise --
+            // MFO's own CheckCast hook carries both guards then, see CasterConsent::
+            // InstallHook). The friendly-fire hold (bFriendlyFireHold) and the Exact
+            // concentration bound on the AI's own channel, which applies where the
+            // allow-list cannot refuse the spell: a gambit-managed concentration
+            // spell, or a follower with no cast gambit (no allow-list at all). Same
+            // switches the hook read: bCasterHook gated both (it gated the install).
+            if (APMFBridge::CastGuardSupported()) {
+                const bool hookOn = Config::g_casterHook.load();
+                bool channel = false;
+                if (hookOn && Config::g_castControl.load() >= 4 && Config::g_casterMode.load() != 0) {
+                    channel = gambits.empty();
+                    for (const auto sid : gambits) {
+                        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sid);
+                        if (sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                            channel = true;
+                            break;
+                        }
+                    }
+                }
+                APMFBridge::ServiceCastGuard(id, hookOn && Config::g_friendlyFireHold.load(), channel);
+            }
             CasterConsent::NoteGambits(id, std::move(gambits));
         }
 
