@@ -445,9 +445,9 @@ namespace MFO::MEOBridge {
         // when nothing else fits, and the first thing a swap-up evicts.
         //
         // Relevance by MEO's gem class:
-        //   Skill   4 when it fortifies a skill this follower USES (the school he casts, the
-        //           weapon in either hand, Block with a shield, the body armor's type,
-        //           Unarmed with empty hands), else 1 in his own theme (Arcane for a caster,
+        //   Skill   4 when it fortifies a skill on the follower's PERK DIRECTION (BuildGemRoles:
+        //           the equip side's weapon class / off-hand / armor class, his invested and
+        //           cast schools; worn gear only where no direction exists), else 1 in his own theme (Arcane for a caster,
         //           Martial otherwise), else 0. KNOWN LIMIT: GemTheme carries no skill id,
         //           so WHICH skill is read from the gem's gid/name (gated to kGemClass_Skill).
         //   Linear  weapon domain (on-hit damage / weakness, any theme) 3. Armor domain
@@ -461,31 +461,74 @@ namespace MFO::MEOBridge {
             bool caster = false;
             std::vector<const char*> skillWords;   // matched case-insensitively on gid OR name
         };
+        // Followers whose perk-direction fallback (worn gear) was already logged. MAIN THREAD ONLY,
+        // like g_stuck (the pass runs there; VR runs it inline on the worker). Cleared on revert.
+        std::unordered_set<RE::FormID> g_gemDirFallbackLogged;
+
+        // The skills a Skill-class gem may fortify for this follower. PERK DIRECTION FIRST (marth
+        // 2026-10-12): the GemSkill bits the worker computed from the equip side's own answers
+        // (GemReconcilePrefs.skills / .known, Logistics::GemReconcilePrefsFor). The gear in his
+        // hands RIGHT NOW is read only for a group with no direction yet (weapon kind, off-hand,
+        // armor class), and that fallback is logged once per follower.
         GemRoles BuildGemRoles(RE::Actor* a_actor, const GemReconcilePrefs& a_p) {
             GemRoles r;
             r.caster = a_p.caster;
             auto add = [&](std::initializer_list<const char*> a_w) { for (const char* w : a_w) r.skillWords.push_back(w); };
-            if (a_p.caster) if (const char* sw = SchoolWord(a_p.school); *sw) add({ sw });
-            auto weaponSkill = [&](const RE::TESObjectWEAP* w) {
-                if (!w) return;
-                if (w->IsBow() || w->IsCrossbow())                                        add({ "archery" });
-                else if (w->IsOneHandedSword() || w->IsOneHandedDagger() ||
-                         w->IsOneHandedAxe() || w->IsOneHandedMace())                     add({ "onehanded", "one handed", "one-handed" });
-                else if (w->IsTwoHandedSword() || w->IsTwoHandedAxe())                    add({ "twohanded", "two handed", "two-handed" });
-                else if (w->IsHandToHandMelee() && !a_p.caster)                           add({ "unarmed" });
+            // Schools: invested (top two school skills, the mage-apparel answer) + the one he casts.
+            if (a_p.caster) {
+                static constexpr std::uint32_t kBySchoolBit[5] = {
+                    static_cast<std::uint32_t>(RE::ActorValue::kAlteration), static_cast<std::uint32_t>(RE::ActorValue::kConjuration),
+                    static_cast<std::uint32_t>(RE::ActorValue::kDestruction), static_cast<std::uint32_t>(RE::ActorValue::kIllusion),
+                    static_cast<std::uint32_t>(RE::ActorValue::kRestoration) };
+                for (int b = 0; b < 5; ++b)
+                    if (a_p.schoolMask & (1u << b)) add({ SchoolWord(kBySchoolBit[b]) });
+                if (const char* sw = SchoolWord(a_p.school); *sw) add({ sw });
+            }
+            auto addSkills = [&](std::uint32_t a_bits) {
+                if (a_bits & kGsOneHanded)  add({ "onehanded", "one handed", "one-handed" });
+                if (a_bits & kGsTwoHanded)  add({ "twohanded", "two handed", "two-handed" });
+                if (a_bits & kGsArchery)    add({ "archery" });
+                if (a_bits & kGsUnarmed)    add({ "unarmed" });
+                if (a_bits & kGsBlock)      add({ "block" });
+                if (a_bits & kGsHeavyArmor) add({ "heavyarmor", "heavy armor" });
+                if (a_bits & kGsLightArmor) add({ "lightarmor", "light armor" });
+            };
+            addSkills(a_p.skills & a_p.known);
+
+            // ── WORN-GEAR FALLBACK, per group without a direction ──
+            std::uint32_t worn = 0;
+            auto weaponBits = [&](const RE::TESObjectWEAP* w) -> std::uint32_t {
+                if (!w) return 0;
+                if (w->IsBow() || w->IsCrossbow())                            return kGsArchery;
+                if (w->IsOneHandedSword() || w->IsOneHandedDagger() ||
+                    w->IsOneHandedAxe() || w->IsOneHandedMace())              return kGsOneHanded;
+                if (w->IsTwoHandedSword() || w->IsTwoHandedAxe())             return kGsTwoHanded;
+                if (w->IsHandToHandMelee() && !a_p.caster)                    return kGsUnarmed;
+                return 0;
             };
             auto* right = a_actor ? a_actor->GetEquippedObject(false) : nullptr;
             auto* left  = a_actor ? a_actor->GetEquippedObject(true)  : nullptr;
-            weaponSkill(right ? right->As<RE::TESObjectWEAP>() : nullptr);
+            worn |= weaponBits(right ? right->As<RE::TESObjectWEAP>() : nullptr);
             if (left) {
-                if (auto* sh = left->As<RE::TESObjectARMO>(); sh && sh->IsShield()) add({ "block" });
-                else weaponSkill(left->As<RE::TESObjectWEAP>());
+                if (auto* sh = left->As<RE::TESObjectARMO>(); sh && sh->IsShield()) worn |= kGsBlock;
+                else worn |= weaponBits(left->As<RE::TESObjectWEAP>());
             }
-            if (!right && !left && !a_p.caster) add({ "unarmed" });
+            if (!right && !left && !a_p.caster) worn |= kGsUnarmed;
             if (auto* body = a_actor ? a_actor->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) : nullptr) {
-                if (body->IsHeavyArmor())      add({ "heavyarmor", "heavy armor" });
-                else if (body->IsLightArmor()) add({ "lightarmor", "light armor" });
+                if (body->IsHeavyArmor())      worn |= kGsHeavyArmor;
+                else if (body->IsLightArmor()) worn |= kGsLightArmor;
             }
+            std::uint32_t missing = 0;
+            for (const std::uint32_t g : { static_cast<std::uint32_t>(kGsWeaponGroup), static_cast<std::uint32_t>(kGsBlockGroup),
+                                           static_cast<std::uint32_t>(kGsArmorGroup) })
+                if (!(a_p.known & g)) missing |= g;
+            addSkills(worn & missing);
+            if (missing && a_actor && g_gemDirFallbackLogged.insert(a_actor->GetFormID()).second)
+                spdlog::info("[meo] gem choice {:08X} '{}': no perk direction yet for {}{}{}-- using the worn gear there (worn skills 0x{:02X}); "
+                             "direction skills 0x{:02X} known 0x{:02X}",
+                             a_actor->GetFormID(), a_actor->GetName() ? a_actor->GetName() : "?",
+                             (missing & kGsWeaponGroup) ? "weapon kind " : "", (missing & kGsBlockGroup) ? "off-hand " : "",
+                             (missing & kGsArmorGroup) ? "armor class " : "", worn & missing, a_p.skills, a_p.known);
             return r;
         }
 
@@ -1250,6 +1293,7 @@ namespace MFO::MEOBridge {
         g_extractRequested.clear();
         g_stuck.clear();            // reconcile stall detector: keyed by FormID, session-scoped (main thread, like its writer)
         g_leftover.clear();         // reconcile LEFTOVER rate-limit: same domain as g_stuck
+        g_gemDirFallbackLogged.clear();   // F3 worn-gear fallback log-once: same domain as g_stuck
         g_removalHold.clear();      // GemRules removal holds: session-scoped
     }
 

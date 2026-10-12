@@ -384,3 +384,64 @@ namespace MFO::Logistics::GemRules {
         g_probeCount.store(0);
     }
 }
+
+namespace MFO::Logistics {
+
+    // F3 PERK DIRECTION (marth 2026-10-12: "Gems need to recognize the perk direction, why one handed
+    // on a two handed dude."). The gem reconcile runs on the MAIN thread, but these answers are WORKER
+    // reads (the follower's inventory, the perk-vote mirror, g_followers state), so they are taken here,
+    // on the worker, and ride the prefs into the posted pass. Each group is the SAME answer gear
+    // choice uses, never re-derived, so a gem and the gear it sits in cannot disagree:
+    //   weapon kind  ComputeWeaponRoles: melee class (the wardrobe's 1H/2H call, which the perk votes
+    //                refine into kinds), the ranged role, plus StyleVotes::unarmed (progression-granted
+    //                hand-to-hand perks, what ShedOffRoleWeapon acts on);
+    //   off-hand     WeaponRoles::offHand (1 shield -> Block, 2 dual wield -> no Block); 0 = no direction;
+    //   armor class  ArmorPrefFor().heavyClass (base skill, perk votes on a tie); no direction only
+    //                when both skills AND both votes tie (the light-by-default case);
+    //   schools      TopTwoSchoolMask (the mage-apparel answer) + the school his cast gambits use.
+    // Computed only when the themed tier-2 pass can use it (bMeoAwareGems ON and MEO v4).
+    MEOBridge::GemReconcilePrefs GemReconcilePrefsFor(RE::Actor* a_follower, const FollowerState& a_state) {
+        MEOBridge::GemReconcilePrefs p;
+        p.caster = IsCasterFollower(a_state);
+        if (p.caster) {
+            int castGambits = 0;
+            p.school = static_cast<std::uint32_t>(TargetMagicSchool(a_state, castGambits));
+        }
+        if (!a_follower || !Config::g_meoAwareGems.load() || !MEOBridge::GemThemeSupported()) return p;
+
+        std::uint32_t skills = 0, known = 0;
+        const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+        const auto        votes = StyleVotesFor(a_follower);
+        if (roles.melee != WepClass::Other || roles.doRanged || votes.unarmed > 0) {
+            known |= MEOBridge::kGsWeaponGroup;
+            if (roles.melee == WepClass::OneHand)      skills |= MEOBridge::kGsOneHanded;
+            else if (roles.melee == WepClass::TwoHand) skills |= MEOBridge::kGsTwoHanded;
+            if (roles.doRanged)                        skills |= MEOBridge::kGsArchery;
+            if (votes.unarmed > 0)                     skills |= MEOBridge::kGsUnarmed;
+        }
+        if (roles.offHand != 0) {
+            known |= MEOBridge::kGsBlockGroup;
+            if (roles.offHand == 1) skills |= MEOBridge::kGsBlock;
+        }
+        const ArmorPref ap = ArmorPrefFor(a_follower);
+        if (ap.heavySkill != ap.lightSkill || ap.heavyVotes != ap.lightVotes) {
+            known  |= MEOBridge::kGsArmorGroup;
+            skills |= ap.heavyClass ? MEOBridge::kGsHeavyArmor : MEOBridge::kGsLightArmor;
+        }
+        p.skills = static_cast<std::uint16_t>(skills);
+        p.known  = static_cast<std::uint16_t>(known);
+        if (p.caster) {
+            std::uint8_t mask = TopTwoSchoolMask(a_follower);
+            switch (static_cast<RE::ActorValue>(p.school)) {
+            case RE::ActorValue::kAlteration:  mask |= 1u << 0; break;
+            case RE::ActorValue::kConjuration: mask |= 1u << 1; break;
+            case RE::ActorValue::kDestruction: mask |= 1u << 2; break;
+            case RE::ActorValue::kIllusion:    mask |= 1u << 3; break;
+            case RE::ActorValue::kRestoration: mask |= 1u << 4; break;
+            default: break;
+            }
+            p.schoolMask = mask;
+        }
+        return p;
+    }
+}

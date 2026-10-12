@@ -136,9 +136,30 @@ namespace MFO::MEOBridge {
     // management cadence, so the next pass never re-issues a socket that already
     // landed. Domain is matched here (armor<->armor, weapon<->weapon, support fits
     // either) so MEO never rejects the queued socket into a retry loop.
+    // F3 PERK DIRECTION (marth 2026-10-12: "Gems need to recognize the perk direction, why one handed
+    // on a two handed dude."): the skills a Skill-class gem may fortify, as the EQUIP side judges them.
+    // Filled on the logistics worker by Logistics::GemReconcilePrefsFor from the same answers gear
+    // choice uses (ComputeWeaponRoles, ArmorPrefFor, StyleVotesFor, TopTwoSchoolMask), so gem choice
+    // and gear choice cannot disagree. `known` says which question HAS a direction; a group without
+    // one falls back to the worn gear in the pass (logged once per follower).
+    enum GemSkill : std::uint16_t {
+        kGsOneHanded  = 1u << 0,
+        kGsTwoHanded  = 1u << 1,
+        kGsArchery    = 1u << 2,
+        kGsUnarmed    = 1u << 3,
+        kGsBlock      = 1u << 4,
+        kGsHeavyArmor = 1u << 5,
+        kGsLightArmor = 1u << 6,
+        kGsWeaponGroup = kGsOneHanded | kGsTwoHanded | kGsArchery | kGsUnarmed,
+        kGsBlockGroup  = kGsBlock,
+        kGsArmorGroup  = kGsHeavyArmor | kGsLightArmor,
+    };
     struct GemReconcilePrefs {
         bool          caster = false;   // IsCasterFollower
         std::uint32_t school = 0;       // dominant TargetMagicSchool (RE::ActorValue ordinal); kNone = 0
+        std::uint16_t skills = 0;       // GemSkill bits the follower's direction names
+        std::uint16_t known  = 0;       // GemSkill GROUPS that have a direction (else worn-gear fallback)
+        std::uint8_t  schoolMask = 0;   // caster: invested + cast schools, bits 0 Alt 1 Conj 2 Dest 3 Illu 4 Rest
     };
 
     // ── GEM THEME (MEO ABI v4, F3 relevance round) ──────────────────────────
