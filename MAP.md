@@ -4472,8 +4472,8 @@ board edit queue's progression verbs collapsed to ONE generic carrier `EditKind:
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
 (`progression/Allocator.cpp:596-603`), so re-tuning the add-on's declared verdicts (the
 `MFOP_EntryPointVerdicts` GLOBs in `MFO_GenerateESP.py`, read via
-`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`Progression.cpp:485`) silently changes which
-saved perks survive a load (with an auto §17 refund). The verdicts are ESL DATA now, not a
+`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`Progression.cpp:554`) silently changes which
+saved perks survive a load (with an auto §17 refund). **HasPerk-reference index (86e3kddjp/86e3haxr4):** `BuildHasPerkIndex` (`Progression.cpp:~515`, run in `Init` before `BuildCatalog`) scans MGEF/SPEL/ENCH conditions for a positive `HasPerk` on Self/Target in a list with no narrow player pin; `ClassifyRank` returns `kEffective` for an entry-less perk (or an ability entry with no spell) in that set, with a `[prog] ... effective on HasPerk reference` line per reclassified rank. Other entry-less perks stay marginal. It changes which perks the allocator spends on. The verdicts are ESL DATA now, not a
 DLL table — changing them is a generator+regen change, not a code edit.
 **STYLE FACTS (2026-09-13, marth: "primary weapon, armor and wielding style are
 determined by perks") — the classifier's one extension, still no verdict.**
