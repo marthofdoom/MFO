@@ -399,6 +399,9 @@ namespace MFO::Actuation {
 
     }
 
+    // The silver gambit's road to the same declaration (cast/EquipSilver.cpp, ClickUp 86e3p2gp9).
+    void DeclareLedger(RE::Actor* a_follower, const char* a_why) { DeclareFromLedger(a_follower, a_why); }
+
         Outcome EquipWeapon(RE::Actor* a_follower, bool a_ranged) {
             // BOTH HANDS decide "already holding" (T#75). The old guard read only
             // the RIGHT hand -- but a caster keeps a SPELL there, so the melee
@@ -833,14 +836,22 @@ namespace MFO::Actuation {
         if (!a_follower) return;
         const auto id = a_follower->GetFormID();
         ForcedHold hold;
+        bool hadHold = false;
         {
             std::scoped_lock lk(g_forcedMx);
             g_shieldRank.erase(id);   // MFO-B186: the equip rule's hold is over, its shield rank with it
             auto it = g_forcedWeapon.find(id);
-            if (it == g_forcedWeapon.end()) return;
-            hold = it->second;
-            g_forcedWeapon.erase(it);
+            if (it != g_forcedWeapon.end()) {
+                hold = it->second;
+                g_forcedWeapon.erase(it);
+                hadHold = true;
+            }
         }
+        // SILVER (ClickUp 86e3p2gp9): every release closes the silver episode; when the hold's
+        // right hand was the silver gambit's weapon, the MAIN weapon it replaced is what goes back
+        // on below (never the silver one, never nothing). Outside g_forcedMx (its own lock).
+        const RE::FormID silverMain = SilverHoldEnded(id, hold.right);
+        if (!hadHold) return;
         g_offHandRetryAt.erase(id);   // next combat's off-hand top-up starts fresh
         g_leftHeldRefusal.erase(id);  // ... and a refused hold is reported afresh
         // forceEquip=true on the UNequip. CORRECTED 2026-09-22 (disassembly, Fable
@@ -897,10 +908,16 @@ namespace MFO::Actuation {
         // then), skipped for a dead/disabled follower, skipped for an item the follower
         // no longer owns (sold/handed back between the hops), and skipped for a hand
         // something has ALREADY put a weapon into -- it re-arms, it never evicts.
-        if (a_standDown && (hold.left || hold.right) && MainThread::IsInstalled()) {
-            const RE::FormID rightID = hold.right ? hold.right->GetFormID() : 0;
-            const RE::FormID leftID  = hold.left  ? hold.left->GetFormID()  : 0;
-            auto reArm = [id, rightID, leftID]() {
+        // SILVER (ClickUp 86e3p2gp9): a released silver hold re-arms the MAIN weapon it replaced in
+        // its place, on EVERY release (the silver weapon is never what comes back, and the follower
+        // is never left without his main weapon); the left hand only on a stand-down, as before,
+        // and the sheathe only on a stand-down.
+        if ((a_standDown || silverMain != 0) && (hold.left || hold.right) && MainThread::IsInstalled()) {
+            const RE::FormID rightID = silverMain ? silverMain : (hold.right ? hold.right->GetFormID() : 0);
+            const RE::FormID leftID  = (a_standDown && hold.left) ? hold.left->GetFormID() : 0;
+            const bool standDown = a_standDown;
+            const bool silverBack = silverMain != 0;
+            auto reArm = [id, rightID, leftID, standDown, silverBack]() {
                 auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
                 auto* mgr   = RE::ActorEquipManager::GetSingleton();
                 if (!actor || !mgr || actor->IsDead() || actor->IsDisabled()) return;
@@ -940,10 +957,12 @@ namespace MFO::Actuation {
                 // is (an equipped weapon is drawn on the body, an unequipped one is
                 // not). If this one line ever proves to fight the AI, deleting it
                 // costs nothing and the fix still stands.
-                if (!actor->IsInCombat()) actor->DrawWeaponMagicHands(false);
+                if (standDown && !actor->IsInCombat()) actor->DrawWeaponMagicHands(false);
                 if (put)
-                    spdlog::info("[equip] {:08X}: stand-down re-arm -- {} weapon(s) put back NON-forced "
-                                 "and sheathed (the hold is over; the AI owns them again)", id, put);
+                    spdlog::info("[equip] {:08X}: {} re-arm -- {} weapon(s) put back NON-forced{}{} (the hold is "
+                                 "over; the AI owns them again)", id, standDown ? "stand-down" : "release", put,
+                                 silverBack ? ", the main weapon in place of the silver one" : "",
+                                 standDown ? " and sheathed" : "");
             };
             MainThread::Post([reArm]() { MainThread::Post(reArm); });
         }
@@ -1187,6 +1206,7 @@ namespace MFO::Actuation {
         g_lastLedgerDeclared.clear();   // round 4: the declaration road's ledger mirror + bound set
         g_boundSeen.clear();
         g_lastB41At.clear();
+        ClearSilverEpisodes();      // the silver gambit's episodes (cast/EquipSilver.cpp), session-scoped like the ledger
         std::scoped_lock lk(g_forcedMx);
         g_forcedWeapon.clear();
         g_shieldRank.clear();

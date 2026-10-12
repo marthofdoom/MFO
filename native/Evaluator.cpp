@@ -33,7 +33,7 @@ namespace MFO::Eval {
                    a_op == Vocab::kCondFoeFleeing    ||
                    a_op == Vocab::kCondFoeWeakFire   || a_op == Vocab::kCondFoeWeakFrost ||
                    a_op == Vocab::kCondFoeWeakShock  || a_op == Vocab::kCondFoeIsMechanical ||
-                   a_op == Vocab::kCondFoeMultipleWithin;
+                   a_op == Vocab::kCondFoeMultipleWithin || a_op == Vocab::kCondFoeIsUnholy;
         }
 
         // Weak to an element = its resist actor-value is negative (a race trait
@@ -476,6 +476,11 @@ namespace MFO::Eval {
                         if (!RaceHasKeyword(foe, "ActorTypeDragon")) continue;
                     } else if (a_op == Vocab::kCondFoeIsMechanical) {
                         if (!FoeIsMechanical(foe)) continue;
+                    } else if (a_op == Vocab::kCondFoeIsUnholy) {
+                        // What the load order's silver bonuses hit (ClickUp 86e3p2gp9): the live
+                        // SilverPerk / silver-enchantment conditions, pre-read once; plain race /
+                        // keyword / faction reads here, fit for the group lock (#23).
+                        if (!Logistics::IsUnholy(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeMultipleWithin) {
                         // CENTRE of a cluster: most other foes within the distance wins;
                         // ties go to the one nearest the follower (the + dist term, always

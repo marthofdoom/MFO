@@ -292,6 +292,16 @@ namespace MFO::Logistics {
                 }
             }
 
+            // THE SILVER SLOT (ClickUp 86e3p2gp9, logistics/Silver.cpp): tracked independently of
+            // the main weapon -- the best owned silver melee weapon and the best one-handed one are
+            // never sold or dropped, whatever the class buckets above decided (a follower with an
+            // act.equip_silver rule only).
+            {
+                const auto [silverBest, silverOneHand] = TrackedSilver(a_follower, a_state);
+                if (silverBest)    keepWeapons.insert(silverBest);
+                if (silverOneHand) keepWeapons.insert(silverOneHand);
+            }
+
             out.roles      = keepRoles;
             out.weapons    = std::move(keepWeapons);
             out.armor      = std::move(keepArmor);

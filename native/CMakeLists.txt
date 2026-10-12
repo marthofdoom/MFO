@@ -54,6 +54,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/Roads.cpp
     cast/CastOn.cpp
     cast/Equip.cpp
+    cast/EquipSilver.cpp
     cast/Direct.cpp
     cast/DirectSelf.cpp
     cast/DirectTarget.cpp
@@ -86,6 +87,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/Lotd.cpp
     logistics/PlayerGiven.cpp
     logistics/SwapUp.cpp
+    logistics/Silver.cpp
     logistics/Lockpick.cpp
     logistics/PickupSound.cpp
     Loadout.cpp

@@ -708,6 +708,17 @@ namespace MFO::Actuation {
         Outcome CastOn(RE::Actor* a_follower, RE::FormID a_spellID, RE::Actor* a_target,
                        bool a_rangeGate = false);                                 // cast/CastOn.cpp
         Outcome EquipWeapon(RE::Actor* a_follower, bool a_ranged);                  // cast/Equip.cpp
+        // SILVER (ClickUp 86e3p2gp9): act.equip_silver, and the hooks the force-hold ledger's
+        // lifecycle calls (cast/EquipSilver.cpp).
+        Outcome EquipSilver(RE::Actor* a_follower);                                 // cast/EquipSilver.cpp
+        // ReleaseForcedWeapon closes the follower's silver episode (if any) with the hold it just
+        // erased; returns the MAIN weapon to re-arm when that hold's right hand was the silver
+        // gambit's weapon, else 0. Also called with a null hold (no ledger entry) to close it.
+        RE::FormID SilverHoldEnded(RE::FormID a_follower, const RE::TESBoundObject* a_heldRight);   // cast/EquipSilver.cpp
+        void ClearSilverEpisodes();                                                  // cast/EquipSilver.cpp
+        // The ch.17 equip declaration from the ledger (Equip.cpp's anon DeclareFromLedger, named
+        // for cast/EquipSilver.cpp). Worker-serial.
+        void DeclareLedger(RE::Actor* a_follower, const char* a_why);              // cast/Equip.cpp
 
         // The direct road's shared clock + stream state (were anon in Actuation_Direct.cpp):
         using SelfClock = std::chrono::steady_clock;

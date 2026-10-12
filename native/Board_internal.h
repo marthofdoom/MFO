@@ -184,6 +184,7 @@ namespace MFO::Board {
         { Vocab::kCondFoeIsUndead, Str::K::Cond_FoeIsUndead,        ParamKind::None    },
         { Vocab::kCondFoeIsDragon, Str::K::Cond_FoeIsDragon,        ParamKind::None    },
         { Vocab::kCondFoeIsMechanical, Str::K::Cond_FoeIsMechanical,   ParamKind::None    },
+        { Vocab::kCondFoeIsUnholy, Str::K::Cond_FoeIsUnholy,        ParamKind::None    },
         { Vocab::kCondFoeIsCaster, Str::K::Cond_FoeIsCaster, ParamKind::None    },
         { Vocab::kCondFoeIsRanged, Str::K::Cond_FoeIsRanged,        ParamKind::None    },
         { Vocab::kCondFoeWeakerThanMe, Str::K::Cond_FoeWeakerThanMe, ParamKind::None },
@@ -227,6 +228,7 @@ namespace MFO::Board {
         { Vocab::kActDrinkMagickaPotion, Str::K::Act_DrinkMagickaPotion },
         { Vocab::kActEquipRanged, Str::K::Act_EquipRanged },
         { Vocab::kActEquipMelee, Str::K::Act_EquipMelee },
+        { Vocab::kActEquipSilver, Str::K::Act_EquipSilver },
         { Vocab::kActPowerAttack, Str::K::Act_PowerAttack },
         { Vocab::kActFlee, Str::K::Act_Flee },
     };

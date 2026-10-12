@@ -149,6 +149,11 @@ namespace MFO::Vocab {
     // to the one nearest the follower (Evaluator.cpp PickFoe). param = units (Distance).
     // APPENDED; frozen serialization string (#10), saved as a string like every opcode.
     inline constexpr const char* kCondFoeMultipleWithin  = "cond.foe_multiple_within";
+    // UNHOLY selector (ClickUp 86e3p2gp9, marth named it 2026-10-12): the nearest foe the load
+    // order's SILVER bonuses hit -- the live SilverPerk's target conditions or the silver
+    // enchantment effect's (logistics/Silver.cpp Logistics::IsUnholy; fallback undead, vampires,
+    // werewolves). Pairs with act.equip_silver. APPENDED; frozen serialization string (#10).
+    inline constexpr const char* kCondFoeIsUnholy        = "cond.foe_is_unholy";
     // ALLY SELECTOR -- the lowest-HP teammate under `param` pct; chooses that
     // ally as the target (for Cast at ally / Heal Other). Walks the maintained
     // teammate list, not a world sweep.
@@ -171,6 +176,12 @@ namespace MFO::Vocab {
     // the FOE's local frame, so "away from foe" is inexpressible -- it flanked/circled
     // instead (Fable). Needs a real travel-away package; deferred to #35.
     inline constexpr const char* kActEquipTorch  = "act.equip_torch";
+    // SWITCH TO SILVER (ClickUp 86e3p2gp9, marth 2026-10-12): put the follower's best owned silver
+    // melee weapon (Logistics::BestSilverWeapon) in the MAIN weapon's hand(s), off-hand untouched,
+    // through the same force-hold ledger / Harbinger declaration act.equip_melee uses; when the
+    // condition goes false the main weapon comes back (cast/EquipSilver.cpp). A melee equip for the
+    // Scheduler's hand claim and stance (category 1). APPENDED; frozen serialization string (#10).
+    inline constexpr const char* kActEquipSilver = "act.equip_silver";
 
     // ── LOGISTICS TABLE (DESIGN §4.8) ───────────────────────────────────────
     // A SEPARATE non-combat table (State::logistics() == tables[1]). It runs on

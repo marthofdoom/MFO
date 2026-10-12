@@ -603,6 +603,11 @@ Raised against `162c1dd` (`fix/mfo-gates-client-only`, Opus tier-3 review, MERGE
 - SEV-4: the client-mode claims (ServiceOrderClaim's ch.15, ServiceCastGuard's ch.25) are refreshed only on the Scheduler laps that reach their call sites; an early-return lap (suppression / ready-beat / down) skips the refresh, leaving the bridge's FacetExpiry sweep (ch.15) or Harbinger's 6 s window (ch.25) as the backstop.
 - **Surfaced at edit time from:** MAP.md "Combat vfunc hooks" row.
 
+### MFO-B244 (SEV-4, needs marth's call) -- silver gambit review (102e24c)
+Raised against `102e24c` (`feat/mfo-silver-gambit`, Opus review, F5), 2026-10-12. Text as relayed by the coordinator.
+- F5: the silver LOOT restock runs even with the economy off (`logistics/LootEquipment.cpp` `ctx.wantSilver` rides act.loot_equipment only; the BUY side is gated on bEconomyBuyGear). Left as is pending marth's ruling on whether "if the economy is on" also gates looting one.
+- **Surfaced at edit time from:** MAP.md `logistics/Silver.cpp` entry.
+
 ## DRAINED
 
 ### Drain batch `b795839` (`fix/mfo-post-2.2.0`, tier B/C items of MFO-B226..B236; the originals stay in the open list for the findings NOT drained)

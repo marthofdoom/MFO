@@ -39,7 +39,8 @@ namespace MFO::TradeBridge {
         // NOT ride the quota mechanism -- see PlanBuy).
         enum Kind : std::int32_t {
             kPotHealth = 0, kPotStamina, kPotMagicka, kArrows, kBolts,
-            kWeaponMelee, kWeaponRanged, kArmor, kMageApparel, kSpellTome
+            kWeaponMelee, kWeaponRanged, kArmor, kMageApparel, kSpellTome,
+            kWeaponSilver   // APPENDED (86e3p2gp9): the silver slot's restock, single best pick
         };
         std::int32_t kind  = 0;
         std::int32_t quota = 0;
@@ -129,6 +130,14 @@ namespace MFO::TradeBridge {
         // Round 1 (review of 4f23c30): the rank is damage, VALUE breaking a tie, so
         // the bar is the pair (ammoBarDmg, ammoBarValue).
         std::int32_t  ammoBarValue   = 0;
+        // -- APPENDED 2026-10-12 (THE SILVER SLOT, ClickUp 86e3p2gp9; append-only) --
+        // Worker-computed (Logistics::WantsSilverWeapon) under bEconomyBuyGear: the follower has an
+        // enabled act.equip_silver rule and owns no silver melee weapon. PlanBuy then buys ONE
+        // silver melee weapon (Logistics::IsSilverMeleeWeapon), the best affordable by
+        // WeaponBuyScore, under the same comfortably-affordable reserve as every gear buy.
+        bool          wantSilver     = false;
+        // ... one-handed only: his off-hand is in use (Logistics::SilverNeedsOneHand, review F2).
+        bool          silverOneHand  = false;
     };
 
     // THE rated-armor score, shared with Logistics::ArmorScore (loot / keep /

@@ -1536,6 +1536,10 @@ namespace MFO::Scheduler {
         // false" and yank the weapon. equipHeld == 0 after the scan == the
         // condition went false / was superseded -> release both holds.
         int  equipHeld  = 0;
+        // SILVER (ClickUp 86e3p2gp9): the act.equip_silver rule's condition held this tick (same
+        // four sites as equipHeld). It is a melee equip for everything above (category 1), and its
+        // own switch-back to the main weapon reads this (Actuation::ReconcileSilver, below).
+        bool silverHeld = false;
         bool stopped    = false;   // scan ended on a Fired / opaque hold
         bool suppressed = false;   // scan stopped at the suppression window
         std::string chain;         // 1.4: skip-chain, e.g. "0(no potion),2(satisfied)"
@@ -1560,7 +1564,8 @@ namespace MFO::Scheduler {
                                   op == Vocab::kActCastPlayer) &&
                                  !Actuation::IsSummonSpell(
                                      RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam));
-            const bool isEquip = op == Vocab::kActEquipMelee || op == Vocab::kActEquipRanged;
+            const bool isSilver = op == Vocab::kActEquipSilver;   // a melee equip (category 1) everywhere below
+            const bool isEquip = op == Vocab::kActEquipMelee || op == Vocab::kActEquipRanged || isSilver;
 
             // SUPPRESSION IS POSITIONAL, NEVER ABSOLUTE (INVARIANTS #26) --
             // and it survives the scan unchanged: during a window the scan
@@ -1575,6 +1580,7 @@ namespace MFO::Scheduler {
                 // the scan just stopped at it inside its own suppression window.
                 // Keep the force-hold; do NOT read this as "condition false".
                 if (isEquip) equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                silverHeld = silverHeld || isSilver;
                 suppressed = true;
                 break;
             }
@@ -1614,6 +1620,7 @@ namespace MFO::Scheduler {
             // down logs once.
             if (cannotAct) {
                 if (isEquip) equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                silverHeld = silverHeld || isSilver;
                 chain += std::format("{}{}(cannot act: {})", chain.empty() ? "" : ",",
                                      choice.ruleIndex, cannotAct);
                 start = choice.ruleIndex + 1;
@@ -1684,6 +1691,7 @@ namespace MFO::Scheduler {
                 const bool satisfiedEquip =
                     isEquip && outcome.result == Actuation::Result::NoOp;
                 if (satisfiedEquip) handClaim = wantStance = equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                if (satisfiedEquip) silverHeld = silverHeld || isSilver;
                 chain += std::format("{}{}({})", chain.empty() ? "" : ",",
                                      choice.ruleIndex,
                                      satisfiedEquip ? "satisfied" : outcome.reason.c_str());
@@ -1693,8 +1701,10 @@ namespace MFO::Scheduler {
 
             // A FIRED equip is the winning stance too (the satisfied case above
             // handles an already-correct hand; this is the real swap).
-            if (isEquip && outcome.result == Actuation::Result::Fired)
+            if (isEquip && outcome.result == Actuation::Result::Fired) {
                 wantStance = equipHeld = (op == Vocab::kActEquipRanged) ? 2 : 1;
+                silverHeld = silverHeld || isSilver;
+            }
 
             stopped = true;                    // Fired or opaque hold -> done
             break;
@@ -1761,6 +1771,21 @@ namespace MFO::Scheduler {
                         break;
                     }
                 }
+            }
+        }
+        // SILVER (ClickUp 86e3p2gp9): the silver rule's OWN truth, by the same two ways -- the scan
+        // ran to completion, or an act.equip_silver rule sat above the stop and did not hold. Its
+        // own, because another melee equip holding the hand (equipHeld == 1) must not keep the
+        // silver weapon in it once the foe is no longer Unholy. Deliberately NOT folded into
+        // equipCondKnownFalse above: a false silver rule above the stop says nothing about an
+        // act.equip_melee rule below it, whose hold must survive its unknown laps as before.
+        bool silverKnownFalse = !silverHeld && condKnownFalse;
+        if (!silverHeld && !silverKnownFalse) {
+            if (const auto r2 = g_followers.find(id); r2 != g_followers.end()) {
+                const auto& rules = r2->second.combat();
+                const int stopIdx = (choice.ruleIndex < 0) ? static_cast<int>(rules.size()) : choice.ruleIndex;
+                for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i)
+                    if (rules[i].actionOpcode == Vocab::kActEquipSilver) { silverKnownFalse = true; break; }
             }
         }
         // MFO-B55 FIX: a "known false" that came from a target-relative equip
@@ -1900,6 +1925,10 @@ namespace MFO::Scheduler {
         // exists to close). Keep the hold on an unknown tick OR within the commit
         // dwell; combat-end / death / dismissal / revert still release
         // unconditionally elsewhere.
+        // SILVER FIRST (ClickUp 86e3p2gp9): once its rule is known false for its own dwell, the
+        // silver hold is turned back into the main weapon BEFORE the general reconcile below, so
+        // that reconcile sees the main weapon (or no hold), never a silver hold to strip bare.
+        Actuation::ReconcileSilver(f, silverHeld, silverKnownFalse, equipCondKnownFalse && equipHeld == 0);
         Actuation::ReconcileForcedWeapon(f, equipHeld, equipReleaseOK);
         // AnyActive() is a lock-free atomic mirror -- keep the common no-stance
         // tick off g_mx (the module's own discipline). The kill-switch also drops

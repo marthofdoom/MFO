@@ -252,4 +252,33 @@ namespace MFO::Logistics {
     // no load leaves the map empty, same as every other save-scoped map.
     void ClearStockGear();
 
+    // ── THE SILVER WEAPON (ClickUp 86e3p2gp9, logistics/Silver.cpp; full doc there) ──
+    // Unholy = what the load order's silver bonuses hit: the LIVE SilverPerk's target-tab
+    // conditions OR the LIVE silver-enchantment effect's conditions, interpreted (HasKeyword /
+    // GetIsRace / GetInFaction), fallback undead / vampire / werewolf. Pure reads after a
+    // one-time build: safe on any thread, including inside the combat group's read lock.
+    bool IsUnholy(RE::Actor* a_actor);
+    // Build the silver / Unholy rule tables now (kDataLoaded, main thread) and log them. Every
+    // reader above also builds on first use (std::call_once), so this only moves the one-time
+    // form lookups and log lines out of the combat group's lock and into the startup log.
+    void PrimeSilverRules();
+    // A weapon carrying a keyword the SilverPerk's weapon tab tests (fallback WeapMaterialSilver)
+    // or the silver enchantment effect. Pure form read, any thread.
+    bool IsSilverWeapon(const RE::TESObjectWEAP* a_weap);
+    // ... and usable by the silver gambit: melee (no bow / crossbow / staff / fists), playable.
+    bool IsSilverMeleeWeapon(const RE::TESObjectWEAP* a_weap);
+    // The follower's best owned silver melee weapon by the loot judge's WeaponScore (a_state
+    // null -> plain damage); a_oneHandOnly -> one-handers only. Inventory walk: worker / main pump.
+    RE::TESObjectWEAP* BestSilverWeapon(RE::Actor* a_follower, const FollowerState* a_state, bool a_oneHandOnly);
+    // THE TRACKED SLOT: {best silver melee, best one-handed silver} for a follower whose combat
+    // table holds an act.equip_silver rule (enabled or not), else {null, null}. Never sold,
+    // dropped or handed back (SwapUp keep set, ShedOffRoleWeapon). Not saved: recomputed.
+    std::pair<RE::TESBoundObject*, RE::TESBoundObject*> TrackedSilver(RE::Actor* a_follower, const FollowerState& a_state);
+    // RESTOCK: an ENABLED act.equip_silver rule and no silver melee weapon owned (loot / buy one).
+    // (an owned TWO-handed silver weapon does not count when SilverNeedsOneHand.)
+    bool WantsSilverWeapon(RE::Actor* a_follower, const FollowerState& a_state);
+    // The off-hand is in use for him (WeaponRoles::offHand != 0: a shield or a second weapon by perks,
+    // or a caster's spell hand): the restock (loot / buy) takes ONE-handed silver weapons only.
+    bool SilverNeedsOneHand(RE::Actor* a_follower, const FollowerState& a_state);
+
 }

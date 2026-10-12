@@ -379,6 +379,7 @@ namespace MFO::Actuation {
 
         if (op == Vocab::kActEquipRanged) return EquipWeapon(a_follower, true);
         if (op == Vocab::kActEquipMelee)  return EquipWeapon(a_follower, false);
+        if (op == Vocab::kActEquipSilver) return EquipSilver(a_follower);   // cast/EquipSilver.cpp (86e3p2gp9)
         // kActEquipTorch moved to the LOGISTICS table (#35, marth: never needed in
         // combat) -- handled by Logistics::ServiceFollower now, not here.
 
