@@ -48,7 +48,7 @@ Most **Foe** conditions are also **selectors** — they choose the target the ac
 - `Foe: Spellcaster → …` or `Foe: Ranged → …` — go after the backliners. These read what the foe is *actually holding right now*, not their character sheet.
 - `Foe: Targeting player → Attack` — a bodyguard rule: they peel whatever's on you.
 - `Foe: Targeting me (melee)` / `Foe: Targeting me (ranged)` — react to *who's hitting you and how.*
-- `Foe: Unholy → Switch to silver weapon` — silver goes in the main hand while the target is hurt more by silver (judged from the silver weapons and enchantments in your load order, with undead, werewolves and vampires as the fallback). The main weapon returns 2 seconds after the target stops being Unholy. A follower keeps and restocks a silver weapon for this.
+- `Foe: Unholy → Switch to silver weapon`: silver goes in the main hand while the target is hurt more by silver (judged from the silver weapons and enchantments in your load order, with undead, werewolves and vampires as the fallback). The main weapon returns 2 seconds after the target stops being Unholy. A follower keeps and restocks a silver weapon for this.
 - `Foe: Blocking → …` (turtling — power-attack it), `Foe: Fleeing → …` (finish or let go), `Foe: Weaker than me`, `Foe: Undead`, `Foe: Dragon`.
 - `Foe: Target within` / `Foe: Target beyond` — range-gate a line, measured to the foe they're currently fighting.
 - `Foe: Count at least (N) → …` — react to being swarmed. **This one is a gate, not a selector** — it counts but picks nobody, so pair it with `Flee to player`, `Wait`, an equip or a self-cast, not with `Attack`.
