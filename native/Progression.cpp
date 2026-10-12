@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Progression.h"
 #include "Config.h"
+#include "MEOBridge.h"   // F3: the no-catalog skill-rank walk is gated on its only consumer (MEO v4 gem choice)
 #include "i18n/Strings.h"   // SpellEffectsText (moved from Board.cpp): the Spell_For/Spell_In display keys
 #include "Forms.h"   // §18.6 (v1.1: addon manifests self-declare via their own keyword)
 // DELIBERATE component-1 -> component-2 dependency (approved 2026-09-14): TallyStyleVotes
@@ -1319,25 +1320,37 @@ namespace MFO::Progression {
         };
         if (!g_catalog.built) {
             // NO CATALOG (add-on absent; marth 2026-10-12 Q3, F3 gem relevance): only the per-skill
-            // investment, from the follower's OWN perks in the engine's skill trees (the AVIF perkTree
-            // BFS the catalog itself walks, CollectNodes, over kSkills). Per node the HIGHEST rank held
-            // counts that many ranks along its nextPerk chain: the CountNativeTreeRanks idiom
-            // (progression/PerkGate.cpp), which walks the catalog and so counts nothing here. Every
-            // style vote stays zero (no classified facts without the catalog), so gear choice is
-            // unchanged. MAIN THREAD like the rest of this tally; it reaches the worker through the
-            // same StyleVotesFor mirror (logistics/Gear.cpp, 10 s refresh).
-            auto* avl = RE::ActorValueList::GetSingleton();
-            if (!avl) return v;
-            for (const auto& sk : kSkills) {
-                const int si = static_cast<int>(sk.av) - static_cast<int>(RE::ActorValue::kOneHanded);
+            // investment, from the follower's OWN perks in the engine's skill trees. Per node the
+            // HIGHEST rank held counts that many ranks along its nextPerk chain: the
+            // CountNativeTreeRanks idiom (progression/PerkGate.cpp), which walks the catalog and so
+            // counts nothing here. Every style vote stays zero, so gear choice is unchanged.
+            // GATED on its only consumer (Logistics::GemReconcilePrefsFor: bMeoAwareGems ON and
+            // MEO v4), since gear code calls StyleVotesFor for every follower regardless (review
+            // SEV-4 on 66b1bd5). MAIN THREAD like the rest of this tally; it reaches the worker
+            // through the same StyleVotesFor mirror (logistics/Gear.cpp, 10 s refresh).
+            if (!Config::g_meoAwareGems.load() || !MEOBridge::GemThemeSupported()) return v;
+            // The 18 trees' node lists, built ONCE on the first tally (in game, so after
+            // kDataLoaded; the AVIF perk trees are immutable from then on). Magic static.
+            static const std::array<std::vector<RE::BGSSkillPerkTreeNode*>, std::size(kSkills)> s_nodes = [] {
+                std::array<std::vector<RE::BGSSkillPerkTreeNode*>, std::size(kSkills)> out{};
+                if (auto* avl = RE::ActorValueList::GetSingleton())
+                    for (std::size_t k = 0; k < std::size(kSkills); ++k)
+                        out[k] = CollectNodes(avl->GetActorValue(kSkills[k].av));
+                return out;
+            }();
+            const auto ownsPerk = [&](RE::BGSPerk* a_perk) {
+                return (base && base->GetPerkIndex(a_perk).has_value()) || a_actor->HasPerk(a_perk);
+            };
+            for (std::size_t k = 0; k < std::size(kSkills); ++k) {
+                const int si = static_cast<int>(kSkills[k].av) - static_cast<int>(RE::ActorValue::kOneHanded);
                 if (si < 0 || si >= 18) continue;
-                for (auto* node : CollectNodes(avl->GetActorValue(sk.av))) {
+                for (auto* node : s_nodes[k]) {
                     if (!node) continue;
                     int rankNo = 0, have = 0;
                     for (RE::BGSPerk* r = node->perk; r && rankNo < 16; r = r->nextPerk) {
                         if (rankNo > 0 && r == node->perk) break;   // looped chain (as BuildSkill guards)
                         ++rankNo;
-                        if (owns(r->GetFormID())) have = rankNo;   // the chain is rank order: keep the highest held
+                        if (ownsPerk(r)) have = rankNo;   // the chain is rank order: keep the highest held
                     }
                     v.skillRanks[si] += have;
                 }
