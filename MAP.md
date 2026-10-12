@@ -991,6 +991,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
       PIN-VOID and NO `lockHands`: the lock keeps `lastSeen` (IncumbentHealCastDone's "fired since
       claimed" window) and its rank/waiter state (R2-3). Transparent, like the refresh. Gated on
       `bEquipToCast`.
+    - **MFO-B227 left-weapon debt (marth 2026-10-11, `Loadout.cpp` Prepare Caster branch + `Debt::healWeapon` + Tick):** a LEFT heal claim's spell that displaces a left WEAPON (heal only in the right hand reads Caster) books it as `displacedLeft` (unless MFO's own yield held it or a left debt is open); Tick gives it back as soon as `GetHealCastSpell(left)==0 && !HealRestreamGap` (not only at combat end). Loadout.cpp now includes `cast/Actuation.h`.
     - **`Loadout::Prepare(a_healClaimLive)`** (`Loadout.cpp:421`, R2-1): an open gear debt no longer
       refuses a re-equip into an EMPTY left hand (no two-hander in the right) under a live heal claim;
       nothing is displaced, so the ledger is left as it is. Before, the debt gate Debounced every repair
