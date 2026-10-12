@@ -771,18 +771,29 @@ namespace MFO::Actuation {
             return w && (w->IsBow() || w->IsCrossbow());
         }
 
-        // A launcher is in the right hand (or MFO's ledger holds one there) RIGHT NOW: the moment a new heal claim
-        // would displace it. Records the answer for the claim's life (true inserts, false erases).
+        // Is the follower a launcher user as this NEW claim starts? A launcher in the right hand or the ledger says
+        // yes; a non-launcher WEAPON in the right hand (or the ledger) says no and erases the earlier answer (bow
+        // -> sword is melee mode). An EMPTY right hand or a SPELL in it says nothing and KEEPS this fight's earlier
+        // answer: during and just after a heal the bow is out of the hand (unequipped by the single-left Prepare,
+        // the spell in the right for a dual heal, the full floor refusing its return), so back-to-back heals in one
+        // burst must not lose the classification (the mace would come back). Cleared at fight end.
         bool LauncherAtNewClaim(RE::Actor* a_follower) {
             const auto fid = a_follower->GetFormID();
-            bool now = IsLauncher(a_follower->GetEquippedObject(false));
-            if (!now) {
+            const auto* rightObj = a_follower->GetEquippedObject(false);
+            const auto* rightW   = rightObj ? rightObj->As<RE::TESObjectWEAP>() : nullptr;
+            bool launcher = IsLauncher(rightObj);
+            bool otherWeapon = rightW && !launcher;
+            if (!launcher) {
                 std::scoped_lock lk(g_forcedMx);
                 const auto h = g_forcedWeapon.find(fid);
-                now = h != g_forcedWeapon.end() && IsLauncher(h->second.right);
+                if (h != g_forcedWeapon.end() && h->second.right) {
+                    if (IsLauncher(h->second.right)) launcher = true;
+                    else if (h->second.right->As<RE::TESObjectWEAP>()) otherWeapon = true;
+                }
             }
-            if (now) g_launcherSeen.insert(fid); else g_launcherSeen.erase(fid);
-            return now;
+            if (launcher) { g_launcherSeen.insert(fid); return true; }
+            if (otherWeapon) { g_launcherSeen.erase(fid); return false; }
+            return g_launcherSeen.count(fid) != 0;
         }
 
         // For a NEW claim. a_dual: the pool covers the dual cast. Returns whether this is a launcher user.
@@ -941,7 +952,8 @@ namespace MFO::Actuation {
             }
             // A launcher user's single-hand LEFT heal (the short pool, a standing single claim, or the re-stream
             // gap) keeps the bridge's FULL right floor up. CastOn's dual->single fallback stamps it too.
-            if (!a_dual) HealNoteLauncherFloor(a_follower);
+            // The dual heal's one-lap re-stream gap (a_dual via HealHand::dual, no claim standing) is covered too.
+            if (!a_dual || !onHand[kHandLeft].claim) HealNoteLauncherFloor(a_follower);
         }
 
         // [heal-obs]'s "HP before" for a claim fire (HealObsClaimLap).

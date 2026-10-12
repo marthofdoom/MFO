@@ -1631,5 +1631,19 @@ MAP.md (ARCHERS HEAL BY DUAL-CASTING).
 - **(SEV-5)** A dual heal is `heal[0].hand == kApmfHandDualCast` in the LEFT slot only. Future readers that map a claim's
   `hand` to a watch slot (`WatchSlot`, silentPastGate's `c.hand == kApmfHandLeft ? Left : Right`) will read it as RIGHT.
   Map DualCast to the left slot there before adding such a reader.
+- **(SEV-4/5, round 3 notes)** (a) The renewed `archerFloor` stamp keeps a launcher user weaponless for as long as a
+  heal keeps being attempted without firing (each lap re-stamps before Try's result is known). (b) `silentPastGate` is
+  skipped for the archer floor, so a silent driver does not drop it. (c) `NoteArcherRightFloor` creates the `g_owned`
+  entry itself; an entry holding only the stamp is erased by the next `EraseIfEmpty` unless a floor stands. (d) ABI 19:
+  the full floor is minted there where MFO previously minted none; untested on a real ABI 19 Harbinger.
 - **(SEV-5)** `kObservedFiringRecencyMs` 5000 rests on two inter-fire gaps (1.35 s, 3.78 s; n=2). Re-measure from the
   next field log before trusting it as more than a floor.
+
+### MFO-B253 (SEV-5, OPEN, tools) -- cosave_roundtrip leftovers from the M3 review (raised against d8f6a68)
+Opus review of `fix/mfo-m3-cosave-tool`, MERGE OK; everything above SEV-5 was fixed in the closing round. Left open:
+- The seeded v<8 retro never exercises the `HmsNpcRates` unreadable branch, the `fNPCHealthLevelBonus <= 0`
+  branch, or the fixed-stat / grant-history SKIP branch (README lists them). Fix shape: more seed variants.
+- `_fdsign` / `_dsign` / `_ldsign` CRT imports are unmodelled (logged by name only).
+- The "engine call not modelled" fault names the immediate caller (`report_and_fail`), not the MFO function that
+  started the chain. Fix shape: walk the emulated stack for return addresses.
+- The GMST placeholder values are not LoreRim's real ones. Re-run on the Deck's real v6/v7 saves when it is awake.
