@@ -6,7 +6,7 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-10-07 UTC (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-10-12 UTC (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
@@ -24,6 +24,12 @@ Read it as history and this block as current.
   DEFERRED" notes below are superseded. Field observable: `[runtime] 1.7.104.0 supported ... (exact 1.7.104)`,
   `[selfcheck] ... 56/56 verified`.
 
+- **2026-10-12 RELEASED v2.3.0 "Gems, heal reach and Harbinger client mode" (PUBLISHED, current version).** Cut from main `2576701` plus the release
+  commit. Heal reach (LoreRim Requiem 30u), decision rulings, MEO gem rules (`[gems]` status line), engage on sight without retreat, double cursor
+  fix, loot reachability, offense approach (1024 standoff, touch 128, 15 s regular movement), Harbinger client mode (cast guard ch.25, no MFO hooks
+  on Harbinger seats). Requires Harbinger v0.12.0 (ABI 21). Docs refreshed at the cut: README (status, retreat default, requirements, what is
+  new), new `Docs/INI-REFERENCE.md`, CHANGELOG. **Standing rule (marth 2026-10-12): every GitHub release updates the README and all relevant
+  docs.** The zip still excludes `MCM/Settings/MFO.ini`. Deploy as a pair with Harbinger v0.12.0. FIELD-TEST PENDING.
 - **2026-10-07 CUT v2.2.2 "Retreat needs a sustained low, and is off by default" (DRAFT release, current version).** Stamp commit `de3dcf6`, CI run
   37561372378, DLL sha256 `e7b24335...`, tag `v2.2.2`. Zip `releases/v2.2.2/MFO-v2.2.2.zip`. DRAFT, marth publishes; Nexus text in the session
   scratchpad `release-2.2.2-nexus.txt`. Retreat trigger needs ~1.5 s below the floor, one hit capped, magicka out of Vitality, never out of combat;

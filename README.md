@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.0.0, released** (see [`VERSION`](VERSION) and the
+**Status: v2.3.0, released** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -17,7 +17,7 @@ mod is playable end to end. Follower detection, Rapport, the in-game board, and 
 logistics actuation are built and field-tested. Followers cast (their own AI,
 animated, at chosen targets), attack, drink, restock, loot, and *walk* to loot,
 up to **four followers sweeping a battlefield at once**, and fall back to your
-side on their own when badly outmatched. They run their own **economy**, selling
+side on their own when badly outmatched (auto-retreat is off by default while it is reworked). They run their own **economy**, selling
 their junk and buying, wearing, and managing their own gear out of their own
 gold. A follower's **class shapes its Health, Magicka and Stamina growth** on
 level up (a mage gains Magicka, an archer gains Stamina), fixed-stat unique
@@ -116,8 +116,11 @@ to survive on their own right now. Healthy in an easy zone, they push ahead and
 range out to loot; hurt, or in a hard fight, they pull back and fight at your
 side. You never see a number. You just feel a companion get bold clearing a
 bandit camp and wary in a dragon's lair. Taken to its conclusion, a follower
-who is badly outmatched and far from you **auto-retreats** to your side (on by
-default; a combat-sense rule can override it). It tunes on the **Behaviour
+who has stayed badly outmatched and far from you **auto-retreats** to your side
+(**off by default** since 2.2.2 while retreat is reworked: turn on *Auto-retreat*
+in the MCM. It needs about a second and a half of sustained low confidence, a single
+hard hit does not trigger it, magicka is ignored and it never fires while you are
+out of combat). It tunes on the **Behaviour
 Layer** config page, and it's the model for how MFO adds realism: hidden
 variables you read through behaviour, not sliders.
 
@@ -179,6 +182,34 @@ leash and walk-to-loot.
 
 ---
 
+## What is new in 2.3.0
+
+- **MFO is a Harbinger client on the cast and equip seats.** The friendly-fire hold, the
+  concentration limit and weapon order are Harbinger requests now (cast guard, ch.25). That
+  removes about sixty seat conflicts per play session on a large list.
+- **Heal reach.** A heal ignores a nonsense spell range under 300 units (Requiem Magic Redone's
+  Heal Other is 30) and uses the projectile range, so allies far away are healed again.
+- **Decision rulings.** A blind heal at the approach floor is released after 5 seconds, a left
+  weapon a heal displaced is given back, AUTO refuses a spell only when every effect is
+  undeclared, and an AUTO buff series keeps the spell in hand between casts.
+- **Gem rules (needs MEO).** A follower never sells, drops, donates or removes a socketed item
+  through MFO. Gems come out first. Socketed loot that is not an upgrade is taken for its gems
+  and the gear is kept only if it passes the loot-to-sell value and weight rule. Loose gemmed gear
+  is recognised by MEO's exact title and fetched for its gems. `MFO.log` prints a `[gems]` line
+  at load and after an MCM change saying whether the rules are active.
+- **Engage on sight works without auto-retreat.**
+- **One mouse cursor.** The double cursor and the misclicks it caused are fixed.
+- **Loot reachability.** Followers skip loot on a navmesh island they cannot reach. An unknown
+  answer means go. The false NOT ENGAGED warning is gone.
+- **Offense approach.** When every foe of an offensive rule is out of sight the follower walks
+  toward the foe (standoff 1024 units, touch spells close to 128). Inside the standoff and still
+  blind it lets go for 15 seconds of regular movement instead of blocking the foe.
+
+Every INI key is listed in [`Docs/INI-REFERENCE.md`](Docs/INI-REFERENCE.md).
+The zip no longer ships `MCM/Settings/MFO.ini`, so updating keeps your MCM settings.
+
+---
+
 ## Requirements
 
 - **Skyrim 1.6.1170 (Anniversary Edition), 1.5.97 (Special Edition) or 1.7.104
@@ -192,10 +223,12 @@ leash and walk-to-loot.
   addresses for that version inside the DLL, so you install nothing extra.
 - **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)** — the control-layer
   framework MFO drives followers through. Install it for the full feature set.
-  This version wants Harbinger 0.9.10 (lockpicking, museum drop-offs, the fight
-  leash and the retreat's combat hold need it). MFO still runs with Harbinger
-  0.9.5 or newer, and without it MFO degrades to its older paths and says so in
-  the log.
+  This version wants **Harbinger 0.12.0** (ABI 21): the cast guard, the
+  animated casts, the equip claims, lockpicking and the fight leash all go through
+  it. Install the two together. With an older Harbinger MFO still runs, keeps one
+  small guard hook of its own and says so in the log. Without Harbinger MFO
+  degrades to its older paths and says so in the log. With Harbinger present MFO
+  installs **no hooks of its own** on the cast and equip seats.
 - **SKSE64**
 - **Address Library for SKSE Plugins** (1.6.1170 and 1.5.97 only, not needed on 1.7.104)
 - **SkyUI** and **MCM Helper** (version 9 or newer) — the settings menu
@@ -231,6 +264,9 @@ load under ≥ 1.0.26 — automatic, one load, nothing to do.)
 ---
 
 ## Docs
+
+- [`Docs/INI-REFERENCE.md`](Docs/INI-REFERENCE.md) — every `MFO.ini` key and its default.
+- [`CHANGELOG.md`](CHANGELOG.md) — what changed in each release.
 
 Start at [`CLAUDE.md`](CLAUDE.md), then [`MAP.md`](MAP.md).
 [`Docs/INDEX.md`](Docs/INDEX.md) sets the full read order and marks which

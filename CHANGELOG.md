@@ -5,6 +5,25 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.3.0 -- Gems, heal reach and Harbinger client mode
+
+- **Needs Harbinger 0.12.0.** Install both together.
+- **MFO now works as a Harbinger client.** With Harbinger present MFO installs no hooks of its own on the cast and equip seats. The friendly fire hold, the concentration limit and weapon order all go through Harbinger. A large mod list loses about sixty seat conflicts per session. With an older Harbinger MFO keeps one small guard hook.
+- **Heals reach allies again.** A spell range under 300 units is ignored and the projectile range is used. Requiem Magic Redone gives Heal Other a range of 30, which stopped followers healing anyone not at their feet.
+- **A heal on a target that dies lets the attack spell go.** The concentration claim is released at once.
+- **A blind heal at the approach floor is released after 5 seconds.**
+- **A left hand weapon that a heal pushed out is given back when the heal ends.**
+- **AUTO refuses a spell only when every effect of it is undeclared.**
+- **An AUTO buff series keeps the spell in hand between casts.** Changing the setting mid cast keeps the buff's safety limits.
+- **Gem rules for MEO.** A follower never sells, drops, donates or removes a socketed item. Gems are taken out first. Socketed loot that is not an upgrade is picked up for its gems. The gear is kept only if it passes the loot to sell value and weight rule, and with no such rule only the gems are kept. Loose gemmed gear is found by MEO's exact title and fetched for its gems.
+- **The log says whether the gem rules are active.** A `[gems]` line is printed at load and after an MCM change.
+- **Engage on sight works without auto retreat.**
+- **One mouse cursor.** The double cursor and the misclicks it caused are fixed.
+- **Followers skip loot they cannot reach.** A navmesh island check runs on the main thread and caches the answer. An unknown answer means go. The false NOT ENGAGED warning is gone.
+- **Followers move toward a foe they cannot see.** When every foe of an offensive rule is out of sight, the follower walks closer. The standoff is 1024 units and touch spells close to 128. Inside the standoff and still blind, the follower lets go for 15 seconds of regular movement.
+- **The readme and docs are updated.** New: a reference for every `MFO.ini` key.
+- **The MCM settings file is still not shipped.** Updating keeps your settings.
+
 ## v2.2.2 -- Retreat needs a sustained low, and is off by default
 
 - **Followers no longer retreat after a single hard hit.** Retreat needs a sustained low confidence, ignores magicka, and never happens while you are out of combat.
