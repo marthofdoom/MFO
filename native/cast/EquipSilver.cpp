@@ -48,10 +48,10 @@
 // melee stance) and ReconcileSilver ignores the Scheduler's silver truth for an ammo episode: it
 // restores after kSilverDwell once he holds no launcher, is out of combat, or his target is not Unholy
 // (the same target gate). SilverHoldEnded (every release: combat end, death, dismissal) restores too.
-// UNDER AN ENFORCED APMF EQUIP AUTHORITY with a launcher hold in the ledger, Ammo is an OWNED category
-// whose declaration is built in logistics/EquipAuthority.cpp from the worn ordinary ammo; that
-// declaration cannot name silver ammo yet, so the ammo road declines LOUDLY there (FailedOther) instead
-// of equipping into a refusal.
+// UNDER THE APMF EQUIP AUTHORITY with a launcher hold in the ledger, Ammo is an OWNED category whose
+// declaration is built in logistics/EquipAuthority.cpp (rule 2): it reads the open episode
+// (SilverAmmoEpisode) and names the silver ammo, so the road opens the episode and re-declares
+// (DeclareLedger) instead of a direct equip; the restore ends the episode and re-declares.
 //
 // THREADING: Fire / the Scheduler's reconcile run on the job worker (serial). g_silver has its own
 // small lock (never held across an engine call or together with g_forcedMx) because the revert
@@ -127,6 +127,14 @@ namespace MFO::Actuation {
             return w && (w->IsBow() || w->IsCrossbow());
         }
 
+        // Ammo is an owned APMF category while the equip authority is supported and his ledger holds a launcher.
+        bool AmmoUnderAuthority(RE::FormID a_id) {
+            if (!Config::g_weaponStyleControl.load() || !APMFBridge::EquipAuthoritySupported()) return false;
+            std::scoped_lock lk(g_forcedMx);
+            const auto h = g_forcedWeapon.find(a_id);
+            return h != g_forcedWeapon.end() && IsLauncher(h->second.right);
+        }
+
         // The ammo he has nocked right now (the inventory entry that is worn), and its stack count.
         RE::TESAmmo* WornAmmo(RE::Actor* a_actor, std::int32_t& a_outCount) {
             a_outCount = 0;
@@ -155,6 +163,8 @@ namespace MFO::Actuation {
             auto* prev = OwnedObject(actor, a_ep.ammoPrev);
             spdlog::info("[silver] {:08X}: {} -- silver ammo '{}' out, previous ammo '{}' back", a_id, a_why,
                          NameOf(worn), prev ? NameOf(prev) : "none (the AI nocks its own)");
+            // Episode already erased: under the authority the declaration reverts to the ordinary ammo and APMF equips it.
+            if (AmmoUnderAuthority(a_id)) { DeclareLedger(actor, "silver ammo ended"); return; }
             const RE::FormID silverId = a_ep.silver, prevId = prev ? a_ep.ammoPrev : 0;
             auto act = [a_id, silverId, prevId]() {
                 auto* a   = RE::TESForm::LookupByID<RE::Actor>(a_id);
@@ -208,21 +218,17 @@ namespace MFO::Actuation {
                 return { Result::FailedSkill, std::format("silver {} already nocked", kind), true };
             }
 
-            // Under an ENFORCED equip authority with a launcher hold in the ledger Ammo is an owned
-            // category and its declaration cannot name silver ammo (file header): decline loudly.
-            if (Config::g_weaponStyleControl.load() && APMFBridge::EquipAuthoritySupported() &&
-                APMFBridge::IsEquipAuthorityEnforced()) {
-                bool launcherHold = false;
-                { std::scoped_lock lk(g_forcedMx);
-                  if (auto h = g_forcedWeapon.find(id); h != g_forcedWeapon.end()) launcherHold = IsLauncher(h->second.right); }
-                if (launcherHold)
-                    return { Result::FailedOther, "silver ammo not equipped: the APMF equip authority owns Ammo under his launcher hold "
-                                                  "and its declaration cannot name silver ammo yet (logistics/EquipAuthority.cpp)", true };
-            }
+            // Under the equip authority with a launcher hold in the ledger, Ammo is an OWNED category:
+            // the episode below is what the declaration (logistics/EquipAuthority.cpp rule 2) names, and
+            // APMF equips the declared set -- no direct equip (EquipWeapon's rule).
+            const bool authority = AmmoUnderAuthority(id);
+            if (authority && !APMFBridge::ClaimEquipAuthority(id))
+                return { Result::FailedOther, "silver ammo not equipped: the equip authority refused the claim (MFO leaves the hands to the engine)", true };
 
             auto* mgr = RE::ActorEquipManager::GetSingleton();
             if (!mgr) return { Result::FailedOther, "no equip manager", true };
-            mgr->EquipObject(a_follower, best, nullptr, static_cast<std::uint32_t>(bestCount), nullptr, true, false);   // plain equip: no lock to leak
+            if (!authority)
+                mgr->EquipObject(a_follower, best, nullptr, static_cast<std::uint32_t>(bestCount), nullptr, true, false);   // plain equip: no lock to leak
             {
                 std::scoped_lock lk(g_silverMx);
                 auto [it, fresh] = g_silver.try_emplace(id);
@@ -232,6 +238,7 @@ namespace MFO::Actuation {
                 if (worn) it->second.ammoPrev = worn->GetFormID();   // the ammo the silver replaced (or the player's later pick)
                 it->second.trueAt = std::chrono::steady_clock::now();
             }
+            if (authority) DeclareLedger(a_follower, "gambit equip silver ammo");   // after the episode opens: the declaration names it
             spdlog::info("[silver] {:08X}: GAMBIT silver ammo -- '{}' x{} nocked ({}), replaces '{}'", id, NameOf(best), bestCount,
                          kind, worn ? NameOf(worn) : "none");
             return { Result::FailedSkill, std::format("nocked silver {}", kind), true };
@@ -474,6 +481,12 @@ namespace MFO::Actuation {
         }
         if (ep.direct || !a_heldRight || a_heldRight->GetFormID() != ep.silver) return 0;
         return ep.mainRight;
+    }
+
+    RE::FormID SilverAmmoEpisode(RE::FormID a_follower) {
+        std::scoped_lock lk(g_silverMx);
+        const auto it = g_silver.find(a_follower);
+        return (it != g_silver.end() && it->second.ammo) ? it->second.silver : 0;
     }
 
     void ClearSilverEpisodes() {

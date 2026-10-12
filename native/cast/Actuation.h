@@ -571,6 +571,9 @@ namespace MFO::Actuation {
     // a_mainHoldReleasable (review F3): no equip rule holds and that is KNOWN (equipCondKnownFalse, before its dwell);
     // then a main weapon that was an equip-gambit hold is re-armed non-forced, not restored as a hold.
     void ReconcileSilver(RE::Actor* a_follower, bool a_held, bool a_knownFalse, bool a_mainHoldReleasable);
+    // The silver AMMO the open silver-ammo episode of a_follower has nocked (0 = no ammo episode). Read by the
+    // equip-authority declaration (logistics/EquipAuthority.cpp, rule 2) on the worker; the episode map has its own lock.
+    RE::FormID SilverAmmoEpisode(RE::FormID a_follower);
 
     // The ledger as it stands NOW for a_follower: {right, left} hold FormIDs, 0 =
     // no hold in that hand (ABI v9, Fable F1 on 7857446). Read under g_forcedMx,

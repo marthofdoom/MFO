@@ -836,6 +836,14 @@ namespace MFO::Logistics {
                 else if (best && (!worn || best == worn || bestCount >= kAmmoDeclareMin))
                                                                      declared = best;       // (c)
                 else                                                 declared = worn ? worn : best;
+                // SILVER AMMO (86e3p2gp9): an open silver-ammo episode declares its silver ammo; with none open,
+                // a worn silver stack that only survived as a 'special' worn round yields to the ordinary best.
+                if (const RE::FormID sid = Actuation::SilverAmmoEpisode(id)) {
+                    auto* sa = RE::TESForm::LookupByID<RE::TESAmmo>(sid);
+                    if (sa && AmmoIsBolt(sa) == wantBolt && inv.find(sa) != inv.end()) declared = sa;
+                } else if (!pickAmmo && worn && declared == worn && IsSilverAmmo(worn) && best) {
+                    declared = best;
+                }
                 decl.Add(declared);
             }
 
