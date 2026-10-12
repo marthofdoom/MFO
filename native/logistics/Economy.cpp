@@ -9,6 +9,7 @@
 // tome-gate unlock, owned-gear equip pass, and the public GEAR/TOME buy
 // helpers shared with TradeBridge::PlanBuy (see Logistics.h).
 #include "Logistics_internal.h"
+#include "GemRules.h"
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
 #include "Lotd.h"                // LOTD: never sell a relic the museum still needs
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
@@ -794,7 +795,11 @@ namespace MFO::Logistics {
                     sdiag(obj, deniedWorn ? "force-sell (worn, category DENIED by our own declaration)"
                                           : "force-sell");
                 else if (entry && entry->IsWorn())          { sdiag(obj, "worn"); continue; }     // never sell worn gear
-                if (gemHold(entry, obj->GetFormID()))       { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
+                // MEO-AWARE (bMeoAwareGems + MEO): a socketed item NEVER sells, not even as-is on v2 --
+                // GemRules strips it through MEO and holds it until it reads gem-free. OFF: legacy gemHold.
+                if (GemRules::Active() ? GemRules::CheckRemovalCached(a_follower, obj, "sale") == GemRules::Verdict::Held
+                                       : gemHold(entry, obj->GetFormID()))
+                                                            { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
                 if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
                 // #21 speech-scaled sell price (base instance value * sellFraction).
                 const std::int32_t baseVal = entry ? entry->GetValue() : 0;

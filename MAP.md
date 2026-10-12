@@ -5187,6 +5187,21 @@ GetSocketCapacity/GetActorGems/MoveGems (`:55-75`). **Append-only** (`:54`); reo
 insert/resize breaks both DLLs. Threading is part of the ABI (queries main-thread,
 `MoveGems` any-thread). Only MEOBridge.cpp includes it.
 
+### logistics/GemRules.h / GemRules.cpp — MEO-aware gem rules (ClickUp 86e3p2gp8, marth 2026-10-11)
+Gated on `bMeoAwareGems` AND MEO ABI >= 2 (`GemRules::Active`, strip needs >= 3); OFF = legacy behaviour untouched.
+Uses only existing `MEO_API.h` calls via MEOBridge (+ `MEOBridge::CarriedGemCount`, `UnsocketItemGems` now returns the
+queued count). **A socketed item never leaves a follower through MFO:** every removal path calls
+`CheckRemovalCached` (worker) / `CheckRemovalLive` (main) and SKIPS on `Held` (gems stripped via MEO, retried on a
+later pass): Economy sell (`Economy.cpp` `gemHold` site), `Gear.cpp` KeepHeadClear, `Upkeep.cpp` heal-evict + shed drop,
+`Lotd.cpp` TransferOnMain (museum), `SwapUp.cpp` CommitSwapUpDrops. Ammo/book/lockpick removals are not gear.
+**Looting socketed gear:** `LootEquipment.cpp` falls back to `FindGemCandidate` (a non-upgrade weapon/armor with a
+nonzero ExtraUniqueID in the source container) when nothing is an upgrade; `TakeAndProbe` takes THAT instance,
+the main-thread probe strips its gems, then `Decide` keeps it (instance value >= `kMinSellValue` 50, sells normally)
+or returns it to the SOURCE CONTAINER. Loose world refs are NOT probed (cannot see gems before owning it; returning
+needs a DropObject). `PumpProbes` is called from `Service.cpp` (idle scan, next to the gem reconcile).
+State: `g_probed` worker-only set, `g_probes` main-thread-only; both cleared in `Serialization.cpp` revert.
+**What breaks:** a new item-removal path must call the guard; the cache is one scan stale (worker paths).
+
 ### MEOBridge.cpp / MEOBridge.h — optional MEO gem-transfer adapter
 Rides a follower's socketed gems onto looted gear on upgrade. Fully optional.
 `Acquire()` (`:61`) ← `plugin.cpp:289` (nullptr on absence/ABI-mismatch).

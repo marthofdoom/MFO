@@ -6,7 +6,8 @@
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "PCH.h"
 #include "Logistics.h"
-#include "Logistics_internal.h"   // the split modules' shared substrate
+#include "Logistics_internal.h"
+#include "GemRules.h"   // the split modules' shared substrate
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
@@ -2142,6 +2143,7 @@ namespace MFO::Logistics {
                 }
                 MEOBridge::RequestGemReconcile(a_follower, Config::g_meoAwareGems.load(), prefs);
             }
+            GemRules::PumpProbes(a_follower);   // looted-gear gem probes: keep or put back once the strip landed
             if (Config::g_economy.load() && Po3Present())
                 EconomyProbe(a_follower, a_state, now);
         }

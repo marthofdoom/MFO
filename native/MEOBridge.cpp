@@ -174,28 +174,40 @@ namespace MFO::MEOBridge {
 
     bool CarriedGemUnsocketSupported() { return g_meo && g_meo->Version() >= 3; }
 
-    void UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid) {
-        if (!g_meo || g_meo->Version() < 3 || !a_actor || a_base == 0 || a_uid == 0) return;
+    int CarriedGemCount(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
+        if (a_uid == 0 || a_base == 0) return 0;
+        std::scoped_lock lk(g_mx);
+        auto it = g_carriedGems.find(a_followerID);
+        if (it == g_carriedGems.end()) return 0;
+        auto gi = it->second.find(GemKey(a_base, a_uid));
+        return gi == it->second.end() ? 0 : static_cast<int>(gi->second.size());
+    }
+
+    int UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid) {
+        if (!g_meo || g_meo->Version() < 3 || !a_actor || a_base == 0 || a_uid == 0) return 0;
         const RE::FormID     fid = a_actor->GetFormID();
         const std::uint64_t  key = GemKey(a_base, a_uid);
         std::vector<std::uint8_t> slots;
         {
             std::scoped_lock lk(g_mx);
             auto& req = g_extractRequested[fid];
-            if (req.contains(key)) return;               // already queued this item's extract
+            if (req.contains(key)) return 0;            // already queued this item's extract
             auto it = g_carriedGems.find(fid);
-            if (it == g_carriedGems.end()) return;
+            if (it == g_carriedGems.end()) return 0;
             auto gi = it->second.find(key);
-            if (gi == it->second.end() || gi->second.empty()) return;
+            if (gi == it->second.end() || gi->second.empty()) return 0;
             slots.assign(gi->second.begin(), gi->second.end());   // copy out of the lock
             req.insert(key);                             // mark requested (pruned when it leaves the cache)
         }
         // UnsocketGem queues to the main thread -- safe from any thread. One per gem.
         // The bool means accepted for queuing (MEO_API.h); a false is a refusal.
+        int queued = 0;
         for (const std::uint8_t s : slots)
             if (!g_meo->UnsocketGem(a_actor, a_base, a_uid, s))
                 spdlog::warn("[meo] ungem-then-sell {:08X}/{} slot {} on {:08X} REFUSED by MEO (UnsocketGem returned false) -- see MEO.log",
                              a_base, a_uid, s, fid);
+            else ++queued;
+        return queued;
     }
 
     // ── GEM RECONCILE (ABI v3) — MAIN-THREAD re-socket of the follower's loose gems ──

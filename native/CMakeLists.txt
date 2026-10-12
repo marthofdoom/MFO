@@ -75,6 +75,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/Cast.cpp
     logistics/ClassResolve.cpp
     logistics/Economy.cpp
+    logistics/GemRules.cpp
     logistics/EquipAuthority.cpp
     logistics/LootTake.cpp
     logistics/Gear.cpp

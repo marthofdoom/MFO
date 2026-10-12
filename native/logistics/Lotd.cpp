@@ -25,7 +25,8 @@
 // NOTHING IS SAVED (no co-save record, no new serialized field).
 #include "PCH.h"
 #include "Logistics.h"
-#include "Logistics_internal.h"   // LootNearby, Category, SlotIndexOf, FitsCarryWeight, IsStockGear, ...
+#include "Logistics_internal.h"
+#include "GemRules.h"   // LootNearby, Category, SlotIndexOf, FitsCarryWeight, IsStockGear, ...
 #include "Lotd.h"
 #include "Config.h"
 #include "Forms.h"
@@ -1278,6 +1279,10 @@ namespace MFO::Lotd {
                 // IsPlayerPick is NOT re-checked here: g_playerPicks is an unlocked WORKER-only
                 // map (EquipAuthority.cpp); Shippable filtered it on the worker.
                 if (hold || have <= 0) continue;
+                // MEO-aware: a socketed relic is stripped first and donated once it reads gem-free
+                // (GemRules); until then it is skipped (a scan that moves nothing retries behind the
+                // crate cooldown, so the gems are never lost).
+                if (GemRules::CheckRemovalLive(f, obj, "museum donation") == GemRules::Verdict::Held) continue;
                 // A NOT-worn item moves only the unworn copies (no unequip); plain copies
                 // carry no extra list, so RemoveItem with a null list takes them first.
                 const std::int32_t movable = it.worn ? have : have - wornCopies;

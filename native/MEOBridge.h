@@ -96,7 +96,12 @@ namespace MFO::MEOBridge {
     // (banked XP intact). No-op if MEO < v3, the item isn't in the gem cache, or an
     // extract for it is already pending (de-duped so an async unsocket isn't
     // re-queued each scan). Any-thread (UnsocketGem queues to the main thread).
-    void UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid);
+    // Returns how many UnsocketGem calls were QUEUED (0 = nothing gemmed in the cache, or an
+    // extract for it is already pending): lets a caller log a strip once, not every scan.
+    int UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid);
+
+    // Worker-callable READ: filled gem slots of (a_base,a_uid) in a_followerID's cache (0 = none/unknown).
+    int CarriedGemCount(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid);
 
     // ── GEM RECONCILE (MEO ABI v3) — the follower re-sockets his OWN loose gems ──
     // The ungem-then-sell path (UnsocketItemGems) leaves a gem LOOSE in the

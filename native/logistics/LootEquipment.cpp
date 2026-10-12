@@ -12,6 +12,7 @@
 // ComputeWeaponRoles, WornInLogicalSlot, IsCreatureWeapon/IsCreatureArmor,
 // AcquireEquip) -- all still defined in Logistics_Loot.cpp.
 #include "Logistics_internal.h"
+#include "GemRules.h"
 
 namespace MFO::Logistics {
 
@@ -482,12 +483,21 @@ namespace MFO::Logistics {
                 return FitsCarryWeight(a_follower, best->GetWeight()) ||
                        (g_svc && PlanRoomForSwapUp(a_follower, *g_svc, best, best->GetGoldValue(), room));
             };
+            // GEMS COUNT AS BETTER GEAR (marth, ClickUp 86e3p2gp8; GemRules.h): with MEO-aware gems
+            // on, gear in this body that may carry socketed gems and is NOT an upgrade is still
+            // worth a take -- the gems are. It is taken, stripped, and kept or put back by GemRules.
             if (a_peek) {
                 if (best && fitsOrRoom()) return true;
+                if (GemRules::FindGemCandidate(a_follower, a_src).obj) return true;
                 return ammoTarget > 0 &&
                        SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ true);
             }
             if (best && !fitsOrRoom()) best = nullptr;   // does not fit, nothing superseded frees the room
+            if (!best) {
+                if (const auto gc = GemRules::FindGemCandidate(a_follower, a_src); gc.obj &&
+                    GemRules::TakeAndProbe(a_follower, a_src, gc))
+                    return true;
+            }
             if (!best)
                 return ammoTarget > 0 &&
                        SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ false);

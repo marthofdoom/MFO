@@ -4,6 +4,7 @@
 // Split out of the old native/Logistics*.cpp by the wave-2 subsystem-folder split
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "Logistics_internal.h"
+#include "GemRules.h"
 #include "Lotd.h"             // HoldFromSale: the museum-relic pool rule for the ranged pick
 #include "PlayerGiven.h"      // IsPlayerEquipped: ... unless the PLAYER put it on him
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
@@ -338,6 +339,8 @@ namespace MFO::Logistics {
             }
             for (auto& h : hits) {
                 const char* nm = h.armo->GetFullName();
+                // MEO-aware: a socketed piece never leaves him (GemRules): strip, retry next pass.
+                if (GemRules::CheckRemovalLive(a_actor, h.armo, "evict") == GemRules::Verdict::Held) continue;
                 eq->UnequipObject(a_actor, h.armo);
                 if (h.count > 0) {
                     if (h.del) a_actor->RemoveItem(h.armo, h.count, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
