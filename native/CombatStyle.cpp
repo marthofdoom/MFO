@@ -6,6 +6,8 @@
 #include "Forms.h"
 #include "apmf/APMFBridge.h"      // IsOwnedCastActive -- stand the gate down where APMF's
                              // T2a CheckShouldEquip hook now owns it (Phase 2)
+#include "cast/Actuation.h"       // ForcedHoldFor -- client mode: a ledger hold's ch.15 claim is
+                             // ReconcileForcedWeapon's; ServiceOrderClaim owns only the rest
 
 namespace MFO::CombatStyle {
 
@@ -53,6 +55,43 @@ namespace MFO::CombatStyle {
             g_equipOrders.store(n, std::memory_order_relaxed);
         }
 
+        // HARBINGER CLIENT MODE (fix/mfo-gates-client-only, 2026-10-11). Set ONCE at
+        // kDataLoaded by InstallEquipGate, from APMFBridge::Available() (the bridge is
+        // acquired earlier in the same handler, plugin.cpp). true = Harbinger is
+        // present, the equip gate (InstallEquipGate) is NOT installed, and an equip order is expressed as
+        // Harbinger's ch.15 kIntent_Equipment claim instead (ServiceOrderClaim). Read
+        // on the worker only.
+        std::atomic<bool> g_gateClientMode{ false };
+
+        // Client mode: the weapon the ch.15 claim names when no ledger hold exists
+        // (the equip rule is satisfied by a weapon the AI itself equipped, so
+        // ReconcileForcedWeapon has nothing to claim). Harbinger's t2a denies every
+        // spell/staff while the claim stands whatever WEAP it names (a spell/staff
+        // FormID never equals it), so the form only has to be a real weapon in hand.
+        // Right hand first, then left; a staff is magic, never the order's weapon.
+        RE::FormID HeldOrderWeapon(RE::Actor* a_actor) {
+            for (const bool left : { false, true }) {
+                auto* w = a_actor->GetEquippedObject(left);
+                auto* weap = w ? w->As<RE::TESObjectWEAP>() : nullptr;
+                if (weap && !weap->IsStaff()) return weap->GetFormID();
+            }
+            return 0;
+        }
+
+        // Client mode: drop the ch.15 claim ServiceOrderClaim made, IF it is ours. A
+        // ledger hold's claim belongs to ReconcileForcedWeapon / ReleaseForcedWeapon
+        // (cast/Equip.cpp), so with a ledger standing nothing is touched here. Without
+        // one, a standing claim can only be ServiceOrderClaim's (every ledger release
+        // path releases the claim with it). Worker; never under g_mx.
+        void ReleaseOrderClaimIfOurs(RE::FormID a_follower) {
+            const auto hold = Actuation::ForcedHoldFor(a_follower);
+            if (hold.first != 0 || hold.second != 0) return;
+            if (!APMFBridge::IsEquipmentClaimActive(a_follower)) return;
+            APMFBridge::ReleaseEquipment(a_follower);
+            spdlog::info("[wstyle] {:08X}: equip order over -- Harbinger ch.15 equipment claim released "
+                         "(client mode)", a_follower);
+        }
+
         RE::TESCombatStyle* StyleFor(Stance a_stance) {
             switch (a_stance) {
                 case Stance::Melee:  return Forms::g_meleeStyle;
@@ -98,11 +137,20 @@ namespace MFO::CombatStyle {
     }
 
     void Clear(RE::FormID a_follower) {
-        std::lock_guard<std::mutex> lk(g_mx);
-        if (g_owned.erase(a_follower) != 0) {
-            g_count.store(g_owned.size(), std::memory_order_relaxed);
-            RecountEquipOrders();
+        bool wasOrder = false;
+        {
+            std::lock_guard<std::mutex> lk(g_mx);
+            if (const auto it = g_owned.find(a_follower); it != g_owned.end()) {
+                wasOrder = it->second.equipOrder;
+                g_owned.erase(it);
+                g_count.store(g_owned.size(), std::memory_order_relaxed);
+                RecountEquipOrders();
+            }
         }
+        // Client mode: the order's ch.15 claim ends with it (combat end, death,
+        // dismissal), not at the bridge's expiry sweep. Outside g_mx.
+        if (wasOrder && g_gateClientMode.load(std::memory_order_relaxed))
+            ReleaseOrderClaimIfOurs(a_follower);
     }
 
     void ClearAll() {
@@ -134,6 +182,35 @@ namespace MFO::CombatStyle {
         std::lock_guard<std::mutex> lk(g_mx);
         const auto it = g_owned.find(a_follower);
         return it != g_owned.end() && it->second.equipOrder;
+    }
+
+    void ServiceOrderClaim(RE::Actor* a_follower) {
+        if (!a_follower || !g_gateClientMode.load(std::memory_order_relaxed)) return;
+        const auto id = a_follower->GetFormID();
+        if (!HoldsEquipOrder(id)) {
+            ReleaseOrderClaimIfOurs(id);   // the order released / flipped to a cast stance
+            return;
+        }
+        // A ledger hold: ReconcileForcedWeapon (run just before this, same lap)
+        // already claimed and refreshed ch.15 naming the forced weapon.
+        const auto hold = Actuation::ForcedHoldFor(id);
+        if (hold.first != 0 || hold.second != 0) return;
+        const RE::FormID weap = HeldOrderWeapon(a_follower);
+        if (weap == 0) {
+            // Nothing in hand to name: no claim this lap (the equip rule's own
+            // EquipWeapon forces one, and that ledger hold is claimed by Reconcile).
+            if (APMFBridge::IsEquipmentClaimActive(id)) {
+                APMFBridge::ReleaseEquipment(id);
+                spdlog::info("[wstyle] {:08X}: equip order holds but no weapon is in hand -- Harbinger "
+                             "ch.15 equipment claim released until one is (client mode)", id);
+            }
+            return;
+        }
+        const bool fresh = !APMFBridge::IsEquipmentClaimActive(id);
+        APMFBridge::ClaimEquipment(id, weap);   // claims, re-points or refreshes (FacetExpiry)
+        if (fresh && APMFBridge::IsEquipmentClaimActive(id))
+            spdlog::info("[wstyle] {:08X}: equip order held on the AI's own weapon {:08X} -- Harbinger ch.15 "
+                         "equipment claim made, so its t2a denies spell/staff re-arms (client mode)", id, weap);
     }
 
     void ApplyTick(RE::Actor* a_actor, RE::CombatController* a_cc) {
@@ -358,6 +435,23 @@ namespace MFO::CombatStyle {
 
     void InstallEquipGate() {
         if (g_gateHooked.exchange(true)) return;
+        // HARBINGER CLIENT MODE (fix/mfo-gates-client-only). With Harbinger present
+        // this gate's slot 0x0F is Harbinger's own t2a seat, and writing it as well
+        // produced the seat-conflict errors in Harbinger's census (LoreRim). Every
+        // case this gate decides is a Harbinger request instead: an equip order is
+        // the ch.15 kIntent_Equipment claim (ReconcileForcedWeapon for a ledger hold,
+        // ServiceOrderClaim for an order on the AI's own weapon), the latched-spell
+        // loan is the ch.8b cast claim t2a exempts, and the owned-cast / equipment
+        // stand-downs were already Harbinger's. The gate's code below runs ONLY when
+        // Harbinger is absent (MFO's legacy road, never a fallback when Harbinger
+        // declines). Below the ABI floor the bridge requests (10, apmf/Bridge.cpp
+        // Acquire), Harbinger reads as absent here, and ch.15 is older than that.
+        if (APMFBridge::Available()) {
+            g_gateClientMode.store(true, std::memory_order_relaxed);
+            spdlog::info("[wstyle] CheckShouldEquip equip gate (0x0F): not installed (Harbinger client mode) "
+                         "-- equip orders go to Harbinger as the ch.15 equipment claim");
+            return;
+        }
         // VR GUARD, mirroring Targeting / CasterConsent: these vtable indices
         // are verified against the SE/AE pinned headers only.
         // G1: EXACT builds only (was VR-only).
@@ -433,8 +527,8 @@ namespace MFO::CombatStyle {
             g_gateOrig[vt.address()] = vt.write_vfunc(kCheckShouldEquip, &EquipGateThunk);
             ++n;
         }
-        spdlog::info("[wstyle] CheckShouldEquip equip gate hooked on {} spell/staff "
-                     "inventory-item vtable(s)", n);
+        spdlog::info("[wstyle] CheckShouldEquip equip gate (0x0F): installed (Harbinger absent) on {} "
+                     "spell/staff inventory-item vtable(s)", n);
     }
 
 }

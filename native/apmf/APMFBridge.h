@@ -1462,9 +1462,10 @@ namespace MFO::APMFBridge {
     // APMF's documented degrade for a longer list is "the excess are treated as
     // non-exempt", i.e. DENIED -- which on this channel would silently disarm a
     // follower. So a list that does not FIT is not truncated: no claim is held at
-    // all for that follower, an error names the counts, and the cast-time deny
-    // carries the load exactly as it did before this existed (#7: an unmasked
-    // failure diagnoses in one field cycle).
+    // all for that follower, and an error names the counts. Nothing refuses his
+    // non-gambit spells then: with Harbinger present MFO's own cast-time deny is
+    // not installed (fix/mfo-gates-client-only), so the error says so (#7: an
+    // unmasked failure diagnoses in one field cycle).
     //
     // LIFETIME = the deny's lifetime, IN COMBAT ONLY. `g_ctrl` is populated only
     // from the Scheduler's PARTY-COMBAT service and erased by

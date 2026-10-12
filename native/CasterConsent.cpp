@@ -1074,12 +1074,47 @@ namespace MFO::CasterConsent {
                 return;
             }
             g_castOrig[vt.address()] = vt.write_vfunc(kCheckCast, &CheckCastThunk);
-            spdlog::info("[consent] CheckCast deny hooked (ActorMagicCaster vtable[0], pre-charge)");
+            spdlog::info("[consent] CheckCast gate (0x0A): installed (Harbinger absent) on ActorMagicCaster "
+                         "vtable[0], pre-charge");
         }
 
     }
 
     void InstallHook() {
+        // HARBINGER CLIENT MODE (fix/mfo-gates-client-only, 2026-10-11). With Harbinger
+        // present, slot 0x06 on the CombatMagicCaster vtables is its ch.8b cast seat
+        // and slot 0x0A on ActorMagicCaster its t2c seat; writing them as well
+        // produced the seat-conflict errors in Harbinger's census (LoreRim). Neither
+        // hook is installed then, and the cases they decide are Harbinger requests:
+        //   * exclusivity + continuous cast control (non-gambit spells) -> the ch.8
+        //     allow-list (NoteGambits -> APMFBridge::PublishSpellAllowList), enforced
+        //     by Harbinger at t2a and t2c;
+        //   * the latched spell's consent / force-YES -> the ch.8b kIntent_Cast claims
+        //     (ClaimOffenseCast / heal / buff), which drive the AI's own cast;
+        //   * the client-claim stand-downs were Harbinger's already.
+        // TWO CASES HAVE NO HARBINGER INTENT and are INACTIVE in client mode (stopped,
+        // they need a Harbinger API addition, logged below): the friendly-fire hold
+        // (a per-cast line-of-fire deny of an offensive spell), and the Exact
+        // concentration bound (ConcUnboundedDeny) where the allow-list does not
+        // already refuse the spell: a GAMBIT concentration spell (the allow-list is
+        // actor-wide and must admit it for MFO's own direct stream on the instant
+        // caster, so it cannot refuse the AI's hand channel of it), and any
+        // concentration spell of a follower with no cast gambit (no allow-list is
+        // published for him at all). The code below runs ONLY when
+        // Harbinger is absent (MFO's legacy road, never a fallback when Harbinger
+        // declines). Below the ABI floor the bridge requests (10, apmf/Bridge.cpp
+        // Acquire) Harbinger reads as absent; the allow-list (4) and kIntent_Cast (5)
+        // are older than that.
+        if (APMFBridge::Available()) {
+            spdlog::info("[consent] CheckStartCast gate (0x06): not installed (Harbinger client mode) -- cast "
+                         "exclusivity is Harbinger's ch.8 allow-list, the gambit cast its ch.8b claim");
+            spdlog::info("[consent] CheckCast gate (0x0A): not installed (Harbinger client mode)");
+            spdlog::warn("[consent] Harbinger client mode: the friendly-fire hold (bFriendlyFireHold) and the "
+                         "Exact concentration bound on the AI's own channel (a gambit concentration spell, or "
+                         "any one of a follower with no cast gambit) are INACTIVE -- no Harbinger intent "
+                         "expresses them yet");
+            return;
+        }
         if (!Config::g_casterHook.load()) {
             spdlog::info("[consent] bCasterHook=0 -- CheckStartCast hook NOT installed");
             return;
@@ -1135,8 +1170,8 @@ namespace MFO::CasterConsent {
             ++n;
         }
         InstallCheckCastHook();   // v1.0.36: pre-charge deny (no wrong-spell animation)
-        spdlog::info("[consent] CheckStartCast hooked on {} caster vtable(s), mode={}",
-                     n, Config::g_casterMode.load() == 0 ? "LOG" : "FORCE");
+        spdlog::info("[consent] CheckStartCast gate (0x06): installed (Harbinger absent) on {} caster "
+                     "vtable(s), mode={}", n, Config::g_casterMode.load() == 0 ? "LOG" : "FORCE");
     }
 
     bool IsHooked() { return g_hooked.load(); }

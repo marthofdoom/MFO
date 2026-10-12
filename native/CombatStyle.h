@@ -116,4 +116,16 @@ namespace MFO::CombatStyle {
     // other vtable hook (indices unverified there).
     void InstallEquipGate();
 
+    // HARBINGER CLIENT MODE (fix/mfo-gates-client-only): with Harbinger present the
+    // gate above is not installed, and an equip order is expressed as Harbinger's
+    // ch.15 kIntent_Equipment claim, whose t2a seat denies the same spell/staff
+    // re-arms. A LEDGER hold (cast/Equip.cpp g_forcedWeapon) is claimed by
+    // ReconcileForcedWeapon; THIS covers the rest: an order held on a weapon the AI
+    // itself equipped ("already holding that category", no ledger). Claims or
+    // refreshes naming the weapon in hand, and releases once the order is gone
+    // (Clear releases too). Call once per combat service lap, AFTER
+    // ReconcileForcedWeapon and ReleaseEquipOrder. Worker. No-op when Harbinger is
+    // absent (the gate is installed then).
+    void ServiceOrderClaim(RE::Actor* a_follower);
+
 }

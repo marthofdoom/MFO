@@ -1883,6 +1883,9 @@ namespace MFO::Scheduler {
             CombatStyle::ReleaseEquipOrder(id);
             g_meleeClampTrueAt.erase(id);   // dwell consumed -> reset for the next clamp
         }
+        // Harbinger client mode: the equip order as Harbinger's ch.15 claim where no
+        // ledger hold carries one (no-op with Harbinger absent: the gate is installed).
+        CombatStyle::ServiceOrderClaim(f);
 
         // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through
         // aware). A gambit spell stays in the follower's hand only while some

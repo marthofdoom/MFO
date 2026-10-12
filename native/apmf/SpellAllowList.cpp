@@ -291,8 +291,10 @@ namespace MFO::APMFBridge {
         // degrade for a longer list is "the excess are treated as non-exempt", i.e.
         // DENIED, which on this channel would silently disarm the follower. So a
         // list that does not fit means NO GATE for this follower at all, said once
-        // per follower per overflow streak, and the cast-time deny carries the load
-        // exactly as it did before this gate existed. POTIONS are the exception by
+        // per follower per overflow streak. With Harbinger present MFO's own cast-time
+        // deny is NOT installed (fix/mfo-gates-client-only: Harbinger client mode), so
+        // nothing refuses this follower's non-gambit spells until the list fits --
+        // the error says so rather than claiming a deny that is not there. POTIONS are the exception by
         // design (SelectPotions: the best of each category is kept in the budget the
         // other forms leave), so this path now fires only when the NON-potion forms
         // alone (gambit spells, staves, scrolls, powers, proxies) do not fit.
@@ -302,9 +304,9 @@ namespace MFO::APMFBridge {
                               "kMaxSpellAllowList {} -- the gate is NOT claimed for this follower (a "
                               "truncated list would DENY the excess and disarm him). {} gambit spell(s) "
                               "+ the deny-exempt staves/scrolls/powers + live proxies + MFO's ConcProxy forms ({} combat "
-                              "potion(s) carried, none fit). MFO's cast-time deny still applies, so "
-                              "nothing is muted -- but the candidate-refusal gate is INERT for this "
-                              "follower until the list fits (see Docs/REVIEW-BACKLOG.md MFO-B65).",
+                              "potion(s) carried, none fit). Nothing is muted, but NOTHING refuses his "
+                              "non-gambit spells either (Harbinger client mode: MFO's own cast gate is "
+                              "not installed) until the list fits (see Docs/REVIEW-BACKLOG.md MFO-B65).",
                               a_follower, list.size(), APMF_API::kMaxSpellAllowList, a_spells.size(),
                               potions.size());
             // Release inside the lock we already hold, not through the public
@@ -359,7 +361,8 @@ namespace MFO::APMFBridge {
                 if (g_selectRefused.insert(a_follower).second)
                     spdlog::warn("[cast-select] {:08X}: APMF refused the gate-only kIntent_SelectSpell "
                                  "claim (RequestEx returned kInvalidHandle) -- no candidate refusal for "
-                                 "this follower; MFO's cast-time deny carries the load.", a_follower);
+                                 "this follower, and no MFO deny either (Harbinger client mode: MFO's own "
+                                 "cast gate is not installed).", a_follower);
                 o.selectList.clear();
                 EraseIfEmpty(g_owned.find(a_follower));
                 return false;
