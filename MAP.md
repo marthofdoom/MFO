@@ -600,8 +600,9 @@ per concern:
   adding a NEW static case there must also go through a shared helper + this predicate, or the picker keeps offering the spell. Board.cpp
   (`SpellList` in PublishSnapshot) hides these, logs `[spell-support] hidden from picker` once per spell, and keeps one a rule already names,
   suffixed " (unsupported)". Picker only: AUTO and casting untouched.
-  `SpellNatureUndeclared(SpellItem*)` (same file `:60`, `cast/Actuation.h`): a Buff-kind, non-placement, non-Self-delivery spell with AT
-  LEAST ONE effect archetype Script or enemy-control (Calm / Frenzy / Demoralize / Paralysis / TurnUndead), i.e. its record does not say
+  `SpellNatureUndeclared(SpellItem*)` (same file `:60`, `cast/Actuation.h`): a Buff-kind, non-placement, non-Self-delivery spell where
+  EVERY effect archetype is Script or enemy-control (Calm / Frenzy / Demoralize / Paralysis / TurnUndead; marth 2026-10-11: one declared
+  effect keeps AUTO, MFO-B236 F-G), i.e. its record does not say
   who it is for (Apocalypse leech curses, vanilla Pacify / Calm). Every other archetype (Invisibility = Fade Other, Cloak, fortifies,
   Light, Rally ...) is a declared ally buff and keeps AUTO's party behaviour (the first cut keyed on the predicted row NoRow / Script and
   caught Fade Other: fixed 2026-10-06). `ClassifySpell` and its enum are untouched. Readers: `CastAuto` (NoOp + one `[auto]` WARN per
