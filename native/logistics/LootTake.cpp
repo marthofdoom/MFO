@@ -461,16 +461,20 @@ namespace MFO::Logistics {
         // specific category already owns. GetGoldValue()/GetWeight() are
         // TESForm-level reads (same API LootJewelry/SoulGems already use via
         // t.obj->GetWeight()), so no per-subclass accessor is needed.
+        // The loot-to-sell gambit's value/weight rule, shared (GemRules reuses it for stripped gear).
+        bool ValuableRatioClears(float a_value, float a_weight) {
+            if (a_value <= 0.0f) return false;
+            const float ratio = a_weight > 0.0f ? a_value / a_weight : a_value;   // weightless & valuable still counts
+            return ratio >= Config::g_valuablesRatio.load();
+        }
+
         bool IsValuableMisc(RE::TESBoundObject* a_obj) {
             constexpr RE::FormID kGold001 = 0x0000000F;
             if (!a_obj->As<RE::TESObjectMISC>()) return false;   // MISC only
             if (a_obj->GetFormID() == kGold001 || IsCoinLoot(a_obj)) return false;   // Gold tier
             if (IsSoulGemItem(a_obj)) return false;                                   // SoulGems tier
             const float value = static_cast<float>(std::max<std::int32_t>(a_obj->GetGoldValue(), 0));
-            if (value <= 0.0f) return false;
-            const float weight = a_obj->GetWeight();
-            const float ratio = weight > 0.0f ? value / weight : value;   // weightless & valuable still counts
-            return ratio >= Config::g_valuablesRatio.load();
+            return ValuableRatioClears(value, a_obj->GetWeight());
         }
 
         // Take all "valuable" MISC items on a corpse/container -- grabbed and

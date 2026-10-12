@@ -380,8 +380,7 @@ namespace MFO::Logistics {
                 auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
                 if (!a || !a->IsPlayerTeammate() || !a->Is3DLoaded()) continue;
                 if (done->count(id)) continue;
-                KeepHeadClear(a);
-                done->insert(id);
+                if (!KeepHeadClear(a)) done->insert(id);   // a Held (gems being stripped) piece retries next pass
             }
             if (--(*tries) > 0) MainThread::Post(*self);
             else                *self = nullptr;   // break the self-capture cycle (running fn is the pump's copy)

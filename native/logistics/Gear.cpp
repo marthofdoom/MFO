@@ -4,6 +4,7 @@
 // Split out of the old native/Logistics*.cpp by the wave-2 subsystem-folder split
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "Logistics_internal.h"
+#include "GemRules.h"
 #include "Lotd.h"             // HoldFromSale: the museum-relic pool rule for the ranged pick
 #include "PlayerGiven.h"      // IsPlayerEquipped: ... unless the PLAYER put it on him
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
@@ -269,11 +270,12 @@ namespace MFO::Logistics {
         //     follower's rings/amulets/body aren't stripped on a null-resolve.
         // Main-thread only (equip + inventory mutation). PluginKey handles ESL/FE
         // light plugins (top byte 0xFE -> id>>12, else id>>24).
-        void KeepHeadClear(RE::Actor* a_actor) {
+        // Returns true if a socketed piece was HELD (GemRules stripping it): the caller retries later.
+        bool KeepHeadClear(RE::Actor* a_actor) {
             auto* race   = a_actor->GetRace();
             auto* eq     = RE::ActorEquipManager::GetSingleton();
             auto* player = RE::PlayerCharacter::GetSingleton();
-            if (!race || !eq || !player) return;
+            if (!race || !eq || !player) return false;
             auto pluginKey = [](RE::FormID a_id) -> std::uint32_t {
                 return ((a_id >> 24) == 0xFEu) ? (a_id >> 12) : (a_id >> 24);
             };
@@ -336,8 +338,15 @@ namespace MFO::Logistics {
                 // is LEFT ALONE -- see isJewelrySlot above for why. Non-playable
                 // creature junk is still deleted in ANY slot (jewelry included) above.
             }
+            bool held = false;
+            std::vector<GemRules::HoldKey> touched;
             for (auto& h : hits) {
                 const char* nm = h.armo->GetFullName();
+                // MEO-aware: a socketed piece never leaves him (GemRules): strip, retry next pass.
+                if (GemRules::CheckRemovalLive(a_actor, h.armo, "evict", GemRules::Reason::Evict, &touched) == GemRules::Verdict::Held) {
+                    held = true;
+                    continue;
+                }
                 eq->UnequipObject(a_actor, h.armo);
                 if (h.count > 0) {
                     if (h.del) a_actor->RemoveItem(h.armo, h.count, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
@@ -347,6 +356,8 @@ namespace MFO::Logistics {
                              a_actor->GetFormID(), h.del ? "DELETED" : "returned-to-player",
                              h.why, nm ? nm : "?", h.armo->GetFormID(), h.count);
             }
+            GemRules::ReleaseHoldsExcept(a_actor->GetFormID(), GemRules::Reason::Evict, touched);   // no longer an evict candidate
+            return held;
         }
 
         // The worker-side read of a follower's perk STYLE VOTES (mirror doc in

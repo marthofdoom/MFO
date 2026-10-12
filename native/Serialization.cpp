@@ -22,6 +22,7 @@
 #include "Board.h"
 #include "progression/ProgAllocator.h"
 #include "logistics/PlayerGiven.h"   // 86e3faccn: the 'PGIV' player-given relic record
+#include "logistics/GemRules.h"   // revert: clear the looted-gear gem probes
 #include <unordered_set>   // T#69: stock-gear per-follower sets (kRecStock)
 
 // P0: the co-save. Schema in ARCHITECTURE.md §7; rules in INVARIANTS.md §B.
@@ -775,6 +776,7 @@ namespace MFO {
                                               // and a resumed RunTrade with a stale token
                                               // fails SAFE (GetVendorChest -> none -> abort)
         MEOBridge::ClearTransientState();   // audit: pending gem-move map was never cleared
+        Logistics::GemRules::ClearTransient();   // looted-gear gem probes (main-thread ledger) + the probed-key set
         Diagnostics::ResetAttackObserve();  // [atk-obs] slot table is session-scoped like every sibling (worker drained above)
         Probe::ReleaseAll();                // audit: watch handles outlived a revert (were
                                             // cleared only at kPostLoadGame, not here)

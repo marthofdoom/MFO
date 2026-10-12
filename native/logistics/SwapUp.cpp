@@ -55,6 +55,7 @@
 // RemoveItem into the SOURCE container (the LootAmmo trade that has shipped for
 // months) -- no world drop, no 3D, so no MainThread::Post hop is needed.
 #include "Logistics_internal.h"
+#include "GemRules.h"
 #include "Lotd.h"          // LOTD: HoldFromSale -- a needed relic is never sold or dropped
 #include <cmath>          // std::ceil: the gambit's N is a float param
 #include <limits>         // std::numeric_limits: the "short of the target" cutoff
@@ -653,6 +654,9 @@ namespace MFO::Logistics {
             for (const auto& d : a_plan) {
                 const std::int32_t n = std::min(d.count, HeldCount(a_follower, d.obj));
                 if (n <= 0) continue;
+                // MEO-aware: a socketed piece is never dropped (GemRules); it stays carried and the
+                // sell path strips it before it sells.
+                if (GemRules::CheckRemovalCached(a_follower, d.obj, "swap-up drop", GemRules::Reason::SwapUp) == GemRules::Verdict::Held) continue;
                 a_follower->RemoveItem(d.obj, n, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_src);
                 freed += d.weight * n;
                 if (!names.empty()) names += ", ";

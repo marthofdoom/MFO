@@ -6,7 +6,8 @@
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "PCH.h"
 #include "Logistics.h"
-#include "Logistics_internal.h"   // the split modules' shared substrate
+#include "Logistics_internal.h"
+#include "GemRules.h"   // the split modules' shared substrate
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "Config.h"
@@ -910,14 +911,19 @@ namespace MFO::Logistics {
                         // (inventory delta) decides took vs no-op.
                         const RE::FormID refID = tref->GetFormID();
                         const RE::FormID folID = a_follower->GetFormID();
-                        auto doActivate = [refID, folID, flora]() {
+                        // MEO-aware: a loose item recognised as gemmed by its MEO title is probed after the pickup.
+                        const bool gemLoose = GemRules::NoteLoosePickup(tref);
+                        const bool gemSell  = gemLoose && GemRules::SellGambitActive();
+                        auto doActivate = [refID, folID, flora, gemLoose, gemSell]() {
                             auto* r = RE::TESForm::LookupByID<RE::TESObjectREFR>(refID);
                             auto* f = RE::TESForm::LookupByID<RE::Actor>(folID);
                             if (r && f) {
                                 // 86e3haxqx: the engine's pickup sound for THIS activation plays at the
                                 // follower, not as the player's (logistics/PickupSound.cpp).
                                 const PickupSound::Scope sound(folID, refID, flora);
+                                const auto cap = gemLoose ? GemRules::CaptureLoose(r) : GemRules::LooseCapture{};
                                 r->ActivateRef(f, 0, nullptr, 1, false);   // full processing = the pickup
+                                if (gemLoose) GemRules::BeginLooseProbe(f, cap, gemSell);
                             }
                         };
                         if (!MainThread::IsInstalled()) {
@@ -2142,6 +2148,7 @@ namespace MFO::Logistics {
                 }
                 MEOBridge::RequestGemReconcile(a_follower, Config::g_meoAwareGems.load(), prefs);
             }
+            GemRules::PumpProbes(a_follower);   // looted-gear gem probes: keep or put back once the strip landed
             if (Config::g_economy.load() && Po3Present())
                 EconomyProbe(a_follower, a_state, now);
         }

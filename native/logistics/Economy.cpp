@@ -9,6 +9,7 @@
 // tome-gate unlock, owned-gear equip pass, and the public GEAR/TOME buy
 // helpers shared with TradeBridge::PlanBuy (see Logistics.h).
 #include "Logistics_internal.h"
+#include "GemRules.h"
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
 #include "Lotd.h"                // LOTD: never sell a relic the museum still needs
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
@@ -652,6 +653,7 @@ namespace MFO::Logistics {
                 const char*         passTag;   // sdiag label once the vendor filter clears it
             };
             std::vector<SellCandidate> sellCandidates;
+            std::vector<GemRules::HoldKey> saleTouched;   // items the sale path checked this scan (GemRules holds)
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 if (obj->GetFormID() == 0x0000000F) { purse += static_cast<int>(data.first); continue; }
@@ -794,7 +796,11 @@ namespace MFO::Logistics {
                     sdiag(obj, deniedWorn ? "force-sell (worn, category DENIED by our own declaration)"
                                           : "force-sell");
                 else if (entry && entry->IsWorn())          { sdiag(obj, "worn"); continue; }     // never sell worn gear
-                if (gemHold(entry, obj->GetFormID()))       { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
+                // MEO-AWARE (bMeoAwareGems + MEO): a socketed item NEVER sells, not even as-is on v2 --
+                // GemRules strips it through MEO and holds it until it reads gem-free. OFF: legacy gemHold.
+                if (GemRules::Active() ? GemRules::CheckRemovalCached(a_follower, obj, "sale", GemRules::Reason::Sale, &saleTouched) == GemRules::Verdict::Held
+                                       : gemHold(entry, obj->GetFormID()))
+                                                            { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
                 if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
                 // #21 speech-scaled sell price (base instance value * sellFraction).
                 const std::int32_t baseVal = entry ? entry->GetValue() : 0;
@@ -803,6 +809,8 @@ namespace MFO::Logistics {
                     static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
                     armo && IsJewelryPiece(armo), kwf, "SELL" });
             }
+            // An item the sale path no longer considers is no longer on its way out: let go of its hold.
+            GemRules::ReleaseHoldsExcept(fid, GemRules::Reason::Sale, saleTouched);
             // OBSOLETE AMMO -- THE SWAP-UP RULE (86e3ebfu3, logistics/SwapUp.cpp;
             // marth: "lower arrows are worthless when better ones are available ...
             // slated for sale when obsolete"). Per kind the follower is judged on

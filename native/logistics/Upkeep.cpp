@@ -6,7 +6,8 @@
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "PCH.h"
 #include "Logistics.h"
-#include "Logistics_internal.h"   // the split modules' shared substrate
+#include "Logistics_internal.h"
+#include "GemRules.h"   // the split modules' shared substrate
 #include "Evaluator.h"
 #include "Runtime.h"   // G1: Runtime::Known(), the exact-build gate
 #include "Vocabulary.h"
@@ -276,6 +277,9 @@ namespace MFO::Logistics {
                 std::int32_t haveBad = 0;
                 for (auto& [obj, data] : fol->GetInventory())
                     if (obj == badObj) { haveBad = data.first; break; }
+                // MEO-aware: a socketed weapon never leaves him (GemRules): strip it, retry next pass.
+                if (haveBad > 0 && GemRules::CheckRemovalLive(fol, badObj, "heal-evict", GemRules::Reason::Heal) == GemRules::Verdict::Held)
+                    haveBad = 0;
                 if (haveBad > 0) {
                     if (creature)
                         fol->RemoveItem(badObj, haveBad, RE::ITEM_REMOVE_REASON::kRemove,
@@ -293,6 +297,24 @@ namespace MFO::Logistics {
             else                           doHeal();   // VR: pump is a no-op, keep the direct path
             return;   // one hand per call
         }
+    }
+
+    // Engine DropObject for ONE instance at an exact world position + angle (GemRules returns a
+    // stripped loose item where it lay). MAIN THREAD, exact builds only. The vfunc ABI (slot 0xCB,
+    // sret pointer return) is the one proven in ShedOffRoleWeapon below -- read its long note;
+    // the wrapper RE::Actor::DropObject must NOT be used. False = not dropped (logged by caller).
+    bool DropObjectAt(RE::Actor* a_fol, RE::TESBoundObject* a_item, RE::ExtraDataList* a_xl,
+                      const RE::NiPoint3& a_loc, const RE::NiPoint3& a_rot) {
+        using DropObjectFn = RE::ObjectRefHandle* (*)(
+            RE::Actor*, RE::ObjectRefHandle*, const RE::TESBoundObject*, RE::ExtraDataList*,
+            std::int32_t, const RE::NiPoint3*, const RE::NiPoint3*);
+        if (!a_fol || !a_item || !MainThread::IsInstalled() || !Runtime::Known()) return false;
+        constexpr std::size_t slot = 0xCB;
+        auto* vtbl = *reinterpret_cast<std::uintptr_t**>(a_fol);
+        auto  fn   = reinterpret_cast<DropObjectFn>(vtbl[slot]);
+        RE::ObjectRefHandle dropped;
+        fn(a_fol, &dropped, a_item, a_xl, 1, &a_loc, &a_rot);
+        return static_cast<bool>(dropped);
     }
 
     // SHED OFF-ROLE WEAPONS (marth). A follower carrying a weapon of a role they
@@ -480,6 +502,8 @@ namespace MFO::Logistics {
             auto* form = RE::TESForm::LookupByID(itemID);
             auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
             if (!fol || !item) return;
+            // MEO-aware: a socketed weapon is never shed (GemRules): strip it, shed it on a later pass.
+            if (GemRules::CheckRemovalLive(fol, item, "shed", GemRules::Reason::Shed) == GemRules::Verdict::Held) return;
             // DropObject removes from the actor AND places the world ref in one
             // engine call (nullptr drop-loc/rotate -> the engine drops it at the
             // actor's feet).

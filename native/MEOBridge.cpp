@@ -8,7 +8,10 @@
 #include <cstring>  // reconcile: MEO's tool-name blocklist (strstr), mirrored
 #include <format>   // reconcile: the pass-count suffix on the socket line
 #include <limits>   // reconcile: best/weakest gem sentinels
+#include <map>
 #include <mutex>
+#include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>   // Build B: per-item gem slots copied out of the lock for UnsocketGem
@@ -129,16 +132,28 @@ namespace MFO::MEOBridge {
         return g_meo->GetActorGemsCarried(a_actor, a_out, a_max);   // MAIN-THREAD ONLY
     }
 
+    void PruneGoneHolds(RE::Actor* a_actor);   // below: removal holds whose item has left the pack
+
     void RefreshCarriedGems(RE::Actor* a_actor) {
         if (!a_actor) return;
         const RE::FormID fid = a_actor->GetFormID();
         std::unordered_map<std::uint64_t, std::unordered_set<std::uint8_t>> gems;   // GemKey -> filled slots
+        // CarriedGems returns the TRUE count; a truncated read would let items past the buffer read
+        // gem-free (gem loss under the MEO-aware rules), so re-read with a buffer sized to the count.
         constexpr std::uint32_t kMax = 64;
-        MEO_API::GemInfo buf[kMax];
-        const std::uint32_t n = std::min(CarriedGems(a_actor, buf, kMax), kMax);   // 0 if MEO < v2
+        MEO_API::GemInfo small[kMax];
+        std::vector<MEO_API::GemInfo> big;
+        const MEO_API::GemInfo* buf = small;
+        std::uint32_t n = CarriedGems(a_actor, small, kMax);   // 0 if MEO < v2
+        if (n > kMax) {
+            big.resize(n);
+            n   = std::min(CarriedGems(a_actor, big.data(), n), static_cast<std::uint32_t>(big.size()));
+            buf = big.data();
+        } else n = std::min(n, kMax);
         for (std::uint32_t i = 0; i < n; ++i)
             if (buf[i].itemBase != 0 && buf[i].itemUid != 0)
                 gems[GemKey(buf[i].itemBase, buf[i].itemUid)].insert(buf[i].slot);
+        PruneGoneHolds(a_actor);
         std::scoped_lock lk(g_mx);
         // Drop extract-requests for items that are no longer gemmed (extract landed
         // -> a future re-gem may re-request); prune before replacing the cache.
@@ -174,28 +189,92 @@ namespace MFO::MEOBridge {
 
     bool CarriedGemUnsocketSupported() { return g_meo && g_meo->Version() >= 3; }
 
-    void UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid) {
-        if (!g_meo || g_meo->Version() < 3 || !a_actor || a_base == 0 || a_uid == 0) return;
+    namespace {
+        using HoldKey = std::tuple<RE::FormID, RE::FormID, std::uint16_t>;   // follower, base, uid
+        std::map<HoldKey, std::uint8_t> g_removalHold;                       // -> GemRules::Reason bits; under g_mx
+    }
+    bool HoldForRemoval(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid, std::uint8_t a_reason) {
+        if (a_uid == 0 || a_base == 0) return true;
+        std::scoped_lock lk(g_mx);
+        auto& bits = g_removalHold[{ a_followerID, a_base, a_uid }];
+        const bool had = (bits & a_reason) != 0;
+        bits |= a_reason;
+        return had;
+    }
+    bool RemovalHeld(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
+        std::scoped_lock lk(g_mx);
+        const auto it = g_removalHold.find({ a_followerID, a_base, a_uid });
+        return it != g_removalHold.end() && it->second != 0;
+    }
+    void ReleaseHolds(RE::FormID a_followerID, std::uint8_t a_reason,
+                      const std::vector<std::pair<RE::FormID, std::uint16_t>>& a_keep) {
+        std::scoped_lock lk(g_mx);
+        for (auto it = g_removalHold.lower_bound({ a_followerID, 0, 0 });
+             it != g_removalHold.end() && std::get<0>(it->first) == a_followerID;) {
+            const bool kept = std::find(a_keep.begin(), a_keep.end(),
+                                        std::make_pair(std::get<1>(it->first), std::get<2>(it->first))) != a_keep.end();
+            if (!kept) it->second &= static_cast<std::uint8_t>(~a_reason);
+            it = it->second == 0 ? g_removalHold.erase(it) : std::next(it);
+        }
+    }
+    // MAIN THREAD (from RefreshCarriedGems): a hold whose item no longer sits in the follower's pack is done.
+    void PruneGoneHolds(RE::Actor* a_actor) {
+        const RE::FormID fid = a_actor->GetFormID();
+        std::vector<HoldKey> mine;
+        {
+            std::scoped_lock lk(g_mx);
+            for (auto it = g_removalHold.lower_bound({ fid, 0, 0 });
+                 it != g_removalHold.end() && std::get<0>(it->first) == fid; ++it)
+                mine.push_back(it->first);
+        }
+        if (mine.empty()) return;
+        std::set<std::pair<RE::FormID, std::uint16_t>> present;
+        for (auto& [o, d] : a_actor->GetInventory()) {
+            auto* e = d.second.get();
+            if (!o || !e || !e->extraLists) continue;
+            for (auto* xl : *e->extraLists)
+                if (auto* u = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr)
+                    present.insert({ o->GetFormID(), u->uniqueID });
+        }
+        std::scoped_lock lk(g_mx);
+        for (const auto& k : mine)
+            if (!present.contains({ std::get<1>(k), std::get<2>(k) })) g_removalHold.erase(k);
+    }
+
+    int CarriedGemCount(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
+        if (a_uid == 0 || a_base == 0) return 0;
+        std::scoped_lock lk(g_mx);
+        auto it = g_carriedGems.find(a_followerID);
+        if (it == g_carriedGems.end()) return 0;
+        auto gi = it->second.find(GemKey(a_base, a_uid));
+        return gi == it->second.end() ? 0 : static_cast<int>(gi->second.size());
+    }
+
+    int UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid) {
+        if (!g_meo || g_meo->Version() < 3 || !a_actor || a_base == 0 || a_uid == 0) return 0;
         const RE::FormID     fid = a_actor->GetFormID();
         const std::uint64_t  key = GemKey(a_base, a_uid);
         std::vector<std::uint8_t> slots;
         {
             std::scoped_lock lk(g_mx);
             auto& req = g_extractRequested[fid];
-            if (req.contains(key)) return;               // already queued this item's extract
+            if (req.contains(key)) return 0;            // already queued this item's extract
             auto it = g_carriedGems.find(fid);
-            if (it == g_carriedGems.end()) return;
+            if (it == g_carriedGems.end()) return 0;
             auto gi = it->second.find(key);
-            if (gi == it->second.end() || gi->second.empty()) return;
+            if (gi == it->second.end() || gi->second.empty()) return 0;
             slots.assign(gi->second.begin(), gi->second.end());   // copy out of the lock
             req.insert(key);                             // mark requested (pruned when it leaves the cache)
         }
         // UnsocketGem queues to the main thread -- safe from any thread. One per gem.
         // The bool means accepted for queuing (MEO_API.h); a false is a refusal.
+        int queued = 0;
         for (const std::uint8_t s : slots)
             if (!g_meo->UnsocketGem(a_actor, a_base, a_uid, s))
                 spdlog::warn("[meo] ungem-then-sell {:08X}/{} slot {} on {:08X} REFUSED by MEO (UnsocketGem returned false) -- see MEO.log",
                              a_base, a_uid, s, fid);
+            else ++queued;
+        return queued;
     }
 
     // ── GEM RECONCILE (ABI v3) — MAIN-THREAD re-socket of the follower's loose gems ──
@@ -643,6 +722,8 @@ namespace MFO::MEOBridge {
             for (std::size_t idx = 0; idx < items.size(); ++idx) {
                 auto& item = items[idx];
                 auto& rec  = recs[idx];
+                // GemRules: an item on its way out (sale / evict / museum) takes no gem back.
+                if (RemovalHeld(a_actor->GetFormID(), item.base, item.uid)) continue;
                 const int emptyCount = g_meo->GetEmptySocketCount(a_actor, item.base, item.uid);
                 rec.emptyAtStart = std::max(emptyCount, 0);
                 // Tier 1 (conservation) only FILLS empty sockets -- if none, skip. Tier 2
@@ -996,6 +1077,7 @@ namespace MFO::MEOBridge {
         g_extractRequested.clear();
         g_stuck.clear();            // reconcile stall detector: keyed by FormID, session-scoped (main thread, like its writer)
         g_leftover.clear();         // reconcile LEFTOVER rate-limit: same domain as g_stuck
+        g_removalHold.clear();      // GemRules removal holds: session-scoped
     }
 
     GemPreview PreviewWithGems(RE::Actor* a_actor, RE::TESBoundObject* a_candidateBase) {

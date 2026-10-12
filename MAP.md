@@ -5187,6 +5187,28 @@ GetSocketCapacity/GetActorGems/MoveGems (`:55-75`). **Append-only** (`:54`); reo
 insert/resize breaks both DLLs. Threading is part of the ABI (queries main-thread,
 `MoveGems` any-thread). Only MEOBridge.cpp includes it.
 
+### logistics/GemRules.h / GemRules.cpp — MEO-aware gem rules (ClickUp 86e3p2gp8, marth 2026-10-11)
+Gated on `bMeoAwareGems` AND MEO ABI >= 2 (`GemRules::Active`, strip needs >= 3); OFF = legacy behaviour untouched.
+Uses only existing `MEO_API.h` calls via MEOBridge (+ `MEOBridge::CarriedGemCount`, `UnsocketItemGems` now returns the
+queued count). **A socketed item never leaves a follower through MFO:** every removal path calls
+`CheckRemovalCached` (worker) / `CheckRemovalLive` (main) and SKIPS on `Held` (gems stripped via MEO, retried on a
+later pass): Economy sell (`Economy.cpp` `gemHold` site), `Gear.cpp` KeepHeadClear, `Upkeep.cpp` heal-evict + shed drop,
+`Lotd.cpp` TransferOnMain (museum), `SwapUp.cpp` CommitSwapUpDrops. Ammo/book/lockpick removals are not gear.
+**Looting socketed gear:** `LootEquipment.cpp` falls back to `FindGemCandidate` (a non-upgrade weapon/armor with a
+nonzero ExtraUniqueID in the source container) when nothing is an upgrade; `TakeAndProbe` takes THAT instance,
+the main-thread probe strips its gems, then `Decide` keeps it only if the follower has a loot-valuables (to sell) gambit AND the item clears its value/weight rule (`ValuableRatioClears`, `LootTake.cpp`, `fValuablesRatio`); no gambit = gems only, gear always returned
+or returns it to the SOURCE CONTAINER. Loose world refs are NOT probed (cannot see gems before owning it; returning
+needs a DropObject). `PumpProbes` is called from `Service.cpp` (idle scan, next to the gem reconcile).
+State: `g_probed` worker-only set, `g_probes` main-thread-only; both cleared in `Serialization.cpp` revert.
+**Loose world gear:** `LootScan.cpp` Equipment case also accepts a loose ref whose ExtraTextDisplayData is MEO's exact
+socketed title (`LooseNamedGemmed`: "[Support N . ]Gem N[ + Gem N] BaseName", N = I..V, ExtraUniqueID != 0); the usual
+`LooseRefBarred` source bar still applies. `Service.cpp` doActivate captures uid/pos/angle, `BeginLooseProbe` strips after the
+pickup, and `Decide` drops it back with `DropObjectAt` (`Upkeep.cpp`, same 0xCB vfunc as the shed) at its original position/angle.
+Container candidates are likewise only MEO-titled instances; an item that never had gems always goes back.
+**Re-socket guard:** every `CheckRemoval*` arms `MEOBridge::HoldForRemoval` (reason bit; the first check returns Held) and `ReconcileLooseGems` skips held items,
+so strip -> re-socket -> sell cannot happen. A hold is NOT time-based: it ends when the item leaves the follower (`PruneGoneHolds` in `RefreshCarriedGems`), on `ReleaseHoldsExcept` (Economy sale sweep, KeepHeadClear, `Lotd::NoteKeptForDeposit`), or at revert. `KeepHeadClear` returns true on Held so `SweepBeastHeadsOnLoad` retries. Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B242.
+**What breaks:** a new item-removal path must call the guard; the cache is one scan stale (worker paths).
+
 ### MEOBridge.cpp / MEOBridge.h — optional MEO gem-transfer adapter
 Rides a follower's socketed gems onto looted gear on upgrade. Fully optional.
 `Acquire()` (`:61`) ← `plugin.cpp:289` (nullptr on absence/ABI-mismatch).
