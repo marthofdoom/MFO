@@ -2990,7 +2990,7 @@ module. Module layout:
   (mage-apparel scoring, `VendorTrades:193`, `UnlockCollegeTomes:232`,
   `BuildBuyThresholds:298`, `EconomyProbe:451`, public buy helpers `MageApparelBuyKey:1003`
   et al) and `logistics/EquipAuthority.cpp` (`ComputeOwnedGearPick:44`,
-  `EquipBestOwnedWeapon:178` (MFO-B28/B32: an owned in-class primary upgrade over the held weapon goes
+  `EquipBestOwnedWeapon:178` (MFO-B28/B32: an owned in-class primary upgrade over the held weapon goes Open review findings: Docs/REVIEW-BACKLOG.md MFO-B248.
   through `AcquireEquip(a_src=nullptr, forceStock=false)` so its gems carry; strictly better, ~5 s scan cadence;
   STAYS OUT while a gambit force-hold stands (`ForcedHoldFor`), the player is in combat, a silver episode is
   open, the held weapon is bound or the player's choice (PlayerGiven / IsPlayerEquipped / excluded artifact),

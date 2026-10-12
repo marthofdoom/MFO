@@ -1577,3 +1577,13 @@ Raised against 4bf1441 (`feat/mfo-m1b-spell-sort`, Opus review, `scratchpad/agen
 - (SEV-5) Gamepad UP scrolls only to the focused Selectable, so the header above can stay out of view one step.
 - (SEV-5) The 4-key comparator lambda is duplicated per list; the "(unsupported)" suffix is still hardcoded English
   (pre-existing).
+
+### MFO-B248 (SEV-5 x3) -- M1a review deferred items
+Raised against a930f00 (`fix/mfo-m1a-equip-gem-backlog`, Opus review round 2, `scratchpad/agentlogs/review-m1a.md`),
+2026-10-12. MERGE OK.
+- (SEV-5) `s_declined` and `s_nextWeapUp` (logistics/EquipAuthority.cpp, B28) are not cleared on revert/load; a stale
+  declined {held, best} pair can suppress one legitimate upgrade for the session. Clear on revert or time-bound it.
+- (SEV-5) The held-silver gate blocks a follower whose ORDINARY primary is a looted silver weapon from the
+  out-of-combat upgrade. Narrow to an actual silver episode (needs a public `SilverWeaponEpisode` query).
+- (SEV-5, pre-existing root) Under bWeaponStyleControl off (direct mode) a silver weapon left in the hand after combat
+  stays: `SilverHoldEnded` returns 0 for direct episodes and never restores the main weapon. B28 used to mask it.
