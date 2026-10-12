@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Progression.h"
 #include "Config.h"
+#include "i18n/Strings.h"   // SpellEffectsText (moved from Board.cpp): the Spell_For/Spell_In display keys
 #include "Forms.h"   // §18.6 (v1.1: addon manifests self-declare via their own keyword)
 // DELIBERATE component-1 -> component-2 dependency (approved 2026-09-14): TallyStyleVotes
 // counts the UNARMED vote off MFO's own allocation record (ProgAllocator::g_prog), the
@@ -409,6 +410,98 @@ namespace MFO::Progression {
             return false;
         }
 
+        // ── OWNER FACTS off one condition list (PerkOwnerFacts, Progression.h) ──
+        // Mechanical read of whose state a condition names, filed beside
+        // ReadStyleFacts at every call site. CONTEXT: kSelf = the condition's
+        // Subject IS the perk's owner (an ability effect, an EP owner tab);
+        // kOther = the Subject is a struck/other actor (a cloaked spell, an EP
+        // target tab). Nothing is derived or rewritten (P1, marth Q1): a pin or
+        // PlayerRef run-on inside the perk's own conditions only sets `remap`,
+        // and ClassifyRank's caller shows that rank as "part player-only".
+        // Pins use the same NARROW shape as ConditionPlayerGated (== literal 1,
+        // not OR'd) so a "player OR teammate" group is never read as a pin.
+        enum class OwnerCtx : std::uint8_t { kSelf, kOther };
+
+        void NoteRemap(PerkOwnerFacts& a_out, OwnerRemap a_r) {
+            if (a_r > a_out.remap) a_out.remap = a_r;
+        }
+
+        void ReadOwnerFacts(const RE::TESCondition& a_cond, OwnerCtx a_ctx, PerkOwnerFacts& a_out) {
+            using Fn = RE::FUNCTION_DATA::FunctionID;
+            using Op = RE::CONDITION_ITEM_DATA::OpCode;
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            bool prevOR = false;
+            for (auto* it = a_cond.head; it; it = it->next) {
+                const auto& d  = it->data;
+                const bool curOR      = d.flags.isOR;
+                const bool memberOfOr = prevOR || curOR;
+                prevOR = curOR;
+                const auto fn = d.functionData.function.get();
+
+                // A run-on PlayerRef: object kRef resolving to the player.
+                if (d.object.get() == RE::CONDITIONITEMOBJECT::kRef) {
+                    auto ref = d.runOnRef.get();
+                    if (player && ref && ref.get() == static_cast<RE::TESObjectREFR*>(player)) {
+                        a_out.playerRefRunOn = true;
+                        NoteRemap(a_out, OwnerRemap::kDerive);
+                    }
+                }
+
+                if (fn == Fn::kGetIsID || fn == Fn::kGetIsReference) {
+                    if (memberOfOr || d.flags.opCode != Op::kEqualTo ||
+                        d.flags.global || d.comparisonValue.f != 1.0f)
+                        continue;
+                    auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
+                    if (form && (form->GetFormID() == 0x14 || form->GetFormID() == 0x7)) {
+                        (a_ctx == OwnerCtx::kSelf ? a_out.selfPin : a_out.otherPin) = true;
+                        NoteRemap(a_out, OwnerRemap::kDerive);
+                    }
+                } else if (fn == Fn::kGetDistance || fn == Fn::kGetInSameCell) {
+                    // PlayerRef as a PARAMETER (param 0 is an object-ref form pointer).
+                    auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
+                    if (form && form->GetFormID() == 0x14) {
+                        a_out.playerRefParam = true;
+                        // On the owner: the player's state is read where the owner's
+                        // is meant (a later phase derives it). Against another actor
+                        // there is no owner-agnostic form.
+                        NoteRemap(a_out, a_ctx == OwnerCtx::kSelf ? OwnerRemap::kDerive
+                                                                  : OwnerRemap::kUnsupported);
+                    }
+                } else if (fn == Fn::kGetPlayerTeammate) {
+                    a_out.teammateTest = true;
+                } else if (fn == Fn::kGetPlayerTeammateCount) {
+                    a_out.partyCount = true;
+                } else if (fn == Fn::kGetCombatGroupMemberCount) {
+                    // "Fighting alone": a hard requirement that admits a group of 1
+                    // and excludes a group of 2 or more (<= 1, < 2, == 1).
+                    if (!memberOfOr && !d.flags.global && Admits(d, 1.0f) && !Admits(d, 2.0f))
+                        a_out.aloneGate = true;
+                } else if (fn == Fn::kIsHostileToActor) {
+                    if (!d.functionData.params[0]) a_out.hostileNullParam = true;
+                }
+            }
+        }
+
+        // An ability/applied spell: every effect's own list and its MGEF's list
+        // (EffectSetting::conditions, today unread by the style walk), then a
+        // kCloak effect's associated spell (data.associatedForm) in the OTHER
+        // context. Depth-capped against a malformed self-referencing record.
+        void ReadSpellOwnerFacts(RE::SpellItem* a_spell, OwnerCtx a_ctx, PerkOwnerFacts& a_out, int a_depth) {
+            if (!a_spell || a_depth > 3) return;
+            for (auto* eff : a_spell->effects) {
+                if (!eff) continue;
+                ReadOwnerFacts(eff->conditions, a_ctx, a_out);
+                auto* mgef = eff->baseEffect;
+                if (!mgef) continue;
+                ReadOwnerFacts(mgef->conditions, a_ctx, a_out);
+                if (mgef->data.archetype == RE::EffectSetting::Archetype::kCloak) {
+                    a_out.cloak = true;
+                    if (auto* assoc = mgef->data.associatedForm ? mgef->data.associatedForm->As<RE::SpellItem>() : nullptr)
+                        ReadSpellOwnerFacts(assoc, OwnerCtx::kOther, a_out, a_depth + 1);
+                }
+            }
+        }
+
         // §2.3 skill-req extraction, DISPLAY ONLY: the first perkConditions
         // item testing GetBaseActorValue on kSelf with >= (or >) gives the
         // human string. The FormID kept beside it is what §5 enforcement
@@ -696,7 +789,10 @@ namespace MFO::Progression {
                     rank.verdict = ClassifyRank(r, why);
                     // Style facts for this rank: the union over its entries
                     // (frozen with the catalog; TallyStyleVotes reads them).
-                    for (const auto& f : WalkPerkEntries(r)) rank.style.Merge(f.style);
+                    for (const auto& f : WalkPerkEntries(r)) {
+                        rank.style.Merge(f.style);
+                        rank.owner.Merge(f.owner);
+                    }
                     // STYLE FACTS ARE NEVER MARGINAL (2026-09-14). A rank whose
                     // conditions name a weapon kind / armor class / hand shape
                     // is an EQUIPMENT-DECIDING perk: marth's "primary weapon,
@@ -718,6 +814,42 @@ namespace MFO::Progression {
                         rank.verdict = Verdict::kEffective;
                         Append(why, "style-facts");
                         ++a_out.stylePromotedRanks;
+                    }
+                    // OWNER REMAP (P1, marth Q1+Q2): with no derived records a rank
+                    // whose own conditions pin the PLAYER (or run on PlayerRef) does
+                    // not work for a follower owner, so it is NOT promoted; a rank
+                    // that is effective today but carries such a part is shown
+                    // MARGINAL ("part player-only"). A rank that is already dead
+                    // (every effect player-only) keeps its dead verdict. A style-fact
+                    // rank stays effective (equipment-deciding, see above). Marginal
+                    // keeps the NODE in the catalog, so the load-time drop oracle
+                    // (Allocator FindNode) never loses a saved rank to this demotion.
+                    if (rank.owner.remap != OwnerRemap::kNone) {
+                        if (rank.owner.remap == OwnerRemap::kDerive) ++a_out.ownerDerive;
+                        else ++a_out.ownerUnsupported;
+                        if (rank.verdict == Verdict::kEffective && !rank.style.Any()) {
+                            rank.verdict = Verdict::kMarginal;
+                            Append(why, "part-player-only");
+                            ++a_out.ownerDemotedRanks;
+                        }
+                    }
+                    if (rank.owner.cloak)        ++a_out.ownerCloak;
+                    if (rank.owner.partyCount)   ++a_out.ownerPartyCount;
+                    if (rank.owner.teammateTest) ++a_out.ownerTeammate;
+                    if (rank.owner.hostileNullParam) ++a_out.ownerHostileNull;
+                    // Q7: the "fighting alone" family can never fire while following
+                    // (the player is an ally). It is RECOGNISED and counted but NOT
+                    // demoted to dead: a dead rank filters its node out of the
+                    // catalog, and the load-time drop oracle (Allocator.cpp, FindNode)
+                    // would then silently drop a saved allocation of it. Held for
+                    // marth's call -- see the P1 report.
+                    if (rank.owner.aloneGate) {
+                        ++a_out.aloneGateRanks;
+                        spdlog::info("[prog] {} ({:08X}) rank {}: fighting-alone gate (GetCombatGroupMemberCount <= 1) "
+                                     "-- never fires while following; verdict {} kept (not made dead: saved-rank drop risk)",
+                                     view.name, rank.perkFormID, rankNo + 1,
+                                     rank.verdict == Verdict::kEffective ? "effective"
+                                     : rank.verdict == Verdict::kMarginal ? "marginal" : "dead");
                     }
                     if (rankNo == 0) firstWhy = why;
                     if (rank.verdict < best) best = rank.verdict;   // kEffective < kMarginal < kDead
@@ -823,6 +955,8 @@ namespace MFO::Progression {
             }
 
             g_catalog.skills.reserve(std::size(kSkills));
+            int ownerDerive = 0, ownerUnsupported = 0, ownerCloak = 0, ownerParty = 0,
+                ownerMate = 0, ownerHostile = 0;
             for (const auto& sk : kSkills) {
                 SkillTree tree;
                 BuildSkill(avl->GetActorValue(sk.av), sk.av, sk.name, tree);
@@ -830,6 +964,11 @@ namespace MFO::Progression {
                 g_catalog.totalRanks     += tree.totalRanks;
                 g_catalog.effectiveRanks += tree.effectiveRanks;
                 g_catalog.stylePromotedRanks += tree.stylePromotedRanks;
+                g_catalog.ownerDemotedRanks  += tree.ownerDemotedRanks;
+                g_catalog.aloneGateRanks     += tree.aloneGateRanks;
+                ownerDerive += tree.ownerDerive;       ownerUnsupported += tree.ownerUnsupported;
+                ownerCloak  += tree.ownerCloak;        ownerParty += tree.ownerPartyCount;
+                ownerMate   += tree.ownerTeammate;     ownerHostile += tree.ownerHostileNull;
                 g_catalog.keptPerks      += static_cast<int>(tree.nodes.size());
                 g_catalog.filteredPerks  += static_cast<int>(tree.filtered.size());
                 for (const auto& n : tree.nodes)
@@ -837,6 +976,12 @@ namespace MFO::Progression {
 
                 g_catalog.skills.push_back(std::move(tree));
             }
+            // The owner-remap census (P1): ALWAYS one line, zeros included.
+            spdlog::info("[prog] owner-remap census: facts by shape (ranks) derive={} unsupported={} cloak={} "
+                         "partyCount={} teammateTest={} hostileNullParam={} | {} effective rank(s) shown MARGINAL "
+                         "(part player-only) | {} rank(s) behind a fighting-alone gate (recognised, verdict unchanged)",
+                         ownerDerive, ownerUnsupported, ownerCloak, ownerParty, ownerMate, ownerHostile,
+                         g_catalog.ownerDemotedRanks, g_catalog.aloneGateRanks);
             // Publish LAST: everything above is complete before anyone can
             // observe built == true. After this line the catalog is frozen —
             // no code path writes it again this session.
@@ -896,6 +1041,18 @@ namespace MFO::Progression {
                          g_catalog.totalRanks, g_catalog.effectiveRanks, ratio, g_catalog.stylePromotedRanks);
         }
 
+
+        // Replace every <tag> (case-insensitive) in a_text with a_value: the DNAM placeholders the
+        // vanilla magic menu fills (<mag>, <dur>, <area>).
+        inline void ReplaceDescTag(std::string& a_text, std::string_view a_tag, const std::string& a_value) {
+            for (std::size_t i = 0; i + a_tag.size() <= a_text.size();) {
+                bool match = a_text[i] == '<';
+                for (std::size_t k = 0; match && k < a_tag.size(); ++k)
+                    match = std::tolower(static_cast<unsigned char>(a_text[i + k])) == a_tag[k];
+                if (match) { a_text.replace(i, a_tag.size(), a_value); i += a_value.size(); }
+                else ++i;
+            }
+        }
     }
 
     // ── GENERAL host primitive: the perk-entry WALK (add-on-AGNOSTIC) ────────
@@ -903,6 +1060,43 @@ namespace MFO::Progression {
 
     const char* EntryPointName(std::uint32_t a_index) {
         return a_index < std::size(kEntryPointNames) ? kEntryPointNames[a_index] : "";
+    }
+
+    // The "what it does" text for a spell, composed the way the vanilla magic menu does: for EACH
+    // effect (hide-in-UI effects skipped), the MGEF description (DNAM, EffectSetting::
+    // magicItemDescription) with <mag> / <dur> / <area> filled from the effect item (integers), the
+    // effects joined by newlines. An effect with no description falls back to its name plus numbers
+    // (the previous single-effect text). Spells carry no authored DESC of their own. MAIN-THREAD only
+    // (pure form-data reads; called from PublishSnapshot), cached into the row so the render thread
+    // never re-reads.
+    std::string SpellEffectsText(RE::SpellItem* a_spell) {
+        if (!a_spell) return {};
+        std::string out;
+        for (auto* eff : a_spell->effects) {
+            auto* mgef = eff ? eff->baseEffect : nullptr;
+            if (!mgef) continue;
+            if (mgef->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kHideInUI)) continue;
+            const int mag  = static_cast<int>(eff->GetMagnitude() + 0.5f);
+            const int dur  = static_cast<int>(eff->effectItem.duration);
+            const int area = static_cast<int>(eff->effectItem.area);
+            std::string line;
+            if (const char* d = mgef->magicItemDescription.c_str(); d && *d) {
+                line = d;
+                ReplaceDescTag(line, "<mag>",  std::to_string(mag));
+                ReplaceDescTag(line, "<dur>",  std::to_string(dur));
+                ReplaceDescTag(line, "<area>", std::to_string(area));
+            } else {
+                line = (mgef->GetFullName() && *mgef->GetFullName()) ? mgef->GetFullName() : "";
+                if (mag  > 0) { if (!line.empty()) line += ' '; line += std::to_string(mag); }
+                // Display text (i18n keys): this runs on main, the table read is lock-free.
+                if (dur  > 0) { line += " " + Str::Fmt(Str::K::Spell_For, { dur }); }
+                if (area > 0) { line += " " + Str::Fmt(Str::K::Spell_In,  { area }); }
+            }
+            if (line.empty()) continue;
+            if (!out.empty()) out += '\n';
+            out += line;
+        }
+        return out;
     }
 
     std::vector<PerkEntryFact> WalkPerkEntries(RE::BGSPerk* a_perk) {
@@ -938,6 +1132,7 @@ namespace MFO::Progression {
                 // never tests the hands, so the empty-hand read alone would
                 // miss the one unarmed perk every vanilla-tree list has.
                 // Engine data the record itself carries, no overhaul assumed.
+                if (ab) ReadSpellOwnerFacts(ab, OwnerCtx::kSelf, f.owner, 0);
                 if (ab)
                     for (auto* eff : ab->effects) {
                         if (!eff) continue;
@@ -960,8 +1155,13 @@ namespace MFO::Progression {
                 {
                     const std::size_t tabs = std::min<std::size_t>(ep->entryData.numArgs,
                                                                    ep->conditions.size());
-                    for (std::size_t t = 0; t < tabs; ++t)
+                    for (std::size_t t = 0; t < tabs; ++t) {
                         ReadStyleFacts(ep->conditions[t], f.style);
+                        // Tab 0 is the perk-owner tab (self context); later tabs
+                        // (target, weapon ...) name another actor.
+                        ReadOwnerFacts(ep->conditions[t],
+                                       t == 0 ? OwnerCtx::kSelf : OwnerCtx::kOther, f.owner);
+                    }
                 }
             } else {
                 f.kind = PerkEntryKind::kOther;

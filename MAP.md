@@ -4563,6 +4563,31 @@ tally already runs) via a deliberate, commented component-1→component-2 includ
 `Logistics::ShedOffRoleWeapon` (fists rule). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md`
 MFO-B14** (SEV-4) — the per-list empty-hand rule also matches a "left hand empty"-only
 one-hand perk (no keyword, no right-hand test); tightening shape recorded there.
+**PERK OWNER REMAP, PHASE 1 (2026-10-12, `feat/mfo-perk-owner-remap-p1`; design `perk-owner-remap-design.md`, marth Q1=P1 only):**
+a perk's OWNER is whoever holds it; inside the perk's own records "the player" means the owner. P1 only RECOGNISES and
+DESCRIBES; no record is derived or minted and no actor changes. `PerkOwnerFacts` / `OwnerRemap` (`Progression.h`, beside
+`PerkStyleFacts`) are filled by `ReadOwnerFacts` / `ReadSpellOwnerFacts` (`Progression.cpp`, grep them; context kSelf =
+ability effect or EP tab 0, kOther = cloaked spell or later EP tabs), called from `WalkPerkEntries` beside every
+`ReadStyleFacts` and recursing into `EffectSetting::conditions` and a kCloak MGEF's `data.associatedForm` spell (depth <= 3).
+Facts: selfPin/otherPin (GetIsID/GetIsReference Player == 1), playerRefRunOn (object kRef resolving to the player),
+playerRefParam (GetDistance/GetInSameCell with PlayerRef), teammateTest (453), partyCount (454), aloneGate (709 admitting 1
+and excluding 2), hostileNullParam (719, p1 NULL), cloak. `remap` kDerive (pin / run-on / self param) or kUnsupported
+(PlayerRef param against another actor). Unioned per rank into `RankView::owner` in `BuildSkill`.
+**Verdict:** a rank that is effective today (and carries no style fact) with remap != kNone is demoted to MARGINAL ("part
+player-only", `Pk_PlayerOnlyPart`), counted in `ownerDemotedRanks` and the always-logged `[prog] owner-remap census` line. A
+rank already dead stays dead. NOTHING is promoted. Marginal keeps the node in `nodes`, so the load-time drop oracle
+(`Allocator.cpp` `FindNode`, ~:614) never drops a saved rank on this change. **The fighting-alone family (aloneGate, Q7) is
+recognised and logged but NOT made dead**: a dead-everywhere node is filtered out of the catalog and the oracle would then
+drop its saved allocations; held for marth. What breaks if you change this: `effectiveRanks` feeds the section-15 follower
+pool scale, so demotions shift perk-point scaling.
+**Description:** `OwnerDescription` (`progression/BoardViews.cpp`, called per node from `BuildNodeViews`, main thread) builds
+`BoardNodeView::description` per focused follower: raw DESC (or, when empty, `Progression::SpellEffectsText` of the
+perk's ability spells), Layer 2 phrase rewrite via the `Pk_Rw*` Str keys (only while `Pk_RwOn` is "1", skipped under the
+Guard), then the Layer 1 targets line (`Pk_TargetsParty` for a cloak, `Pk_TargetsSelf` for another ability perk) or
+`Pk_PlayerOnlyPart`. The node popup (`Board_Progression.cpp`) draws it, falling back to the catalog's raw DESC. The old
+`Board.cpp` `SpellTooltip` / `ReplaceDescTag` moved unchanged to `Progression.cpp` as `Progression::SpellEffectsText`.
+Later phases (derived records, enacted EPs, the reverse shape) are NOT implemented.
+
 **STYLE-FACT RANKS ARE NEVER MARGINAL (2026-09-14, `fix/mfo-deck-0914-helmet-offhand-verdict-meo`):**
 at the rank build (`BuildSkill`, right after the `rank.style` merge) a rank with
 `rank.style.Any()` whose `ClassifyRank` verdict is not `kEffective` is PROMOTED to

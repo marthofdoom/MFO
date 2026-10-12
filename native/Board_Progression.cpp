@@ -1134,10 +1134,15 @@ namespace MFO::Board {
                                                          { Str::Arg::F(who->unspentPerk, 0) }).c_str());
                                             if (nd.verdict == Progression::Verdict::kMarginal)
                                                 ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_Marginal));
-                                            if (!nd.description.empty()) {
+                                            // P1: the owner-perspective text built for this follower
+                                            // (empty = no node state: the catalog's raw DESC).
+                                            const std::string& descShown =
+                                                (stv && !stv->description.empty()) ? stv->description
+                                                                                   : nd.description;
+                                            if (!descShown.empty()) {
                                                 ImGui::PushTextWrapPos(
                                                     ImGui::GetCursorPosX() + 380.0f);
-                                                ImGui::TextUnformatted(nd.description.c_str());
+                                                ImGui::TextUnformatted(descShown.c_str());
                                                 ImGui::PopTextWrapPos();
                                             }
                                             for (int rr = 0; rr < (int)nd.ranks.size(); ++rr)
