@@ -170,8 +170,8 @@ TLS_ARR = FAKE + 0x11000
 TLS_BLOCKS = FAKE + 0x20000
 
 
-_MATH1 = {"ceilf": lambda x: float(math.ceil(x)) if math.isfinite(x) else x,
-          "floorf": lambda x: float(math.floor(x)) if math.isfinite(x) else x,
+_MATH1 = {"ceilf": lambda x: math.copysign(float(math.ceil(x)), x) if math.isfinite(x) else x,
+          "floorf": lambda x: math.copysign(float(math.floor(x)), x) if math.isfinite(x) else x,
           "sqrtf": lambda x: math.sqrt(x) if x >= 0 else float("nan"),
           "sinf": math.sin, "cosf": math.cos,
           "acosf": lambda x: math.acos(x) if -1 <= x <= 1 else float("nan")}
@@ -212,9 +212,9 @@ class Emu:
                 uc.mem_write(imp.address, struct.pack("<Q", slot))
                 self.imports[slot] = (entry.dll.decode(), name)
                 slot += 16
-        # placeholder GMSTs for the HMS retro (HmsNpcRates): iAVDhmsLevelUp = 10 (int), fNPCHealthLevelBonus = 5.0
+        # placeholder GMSTs for the HMS retro (HmsNpcRates): iAVDhmsLevelUp = 10 (int), fNPCHealthLevelBonus = 3.25
         uc.mem_write(GMST_I + 8, struct.pack("<i", 10))
-        uc.mem_write(GMST_F + 8, struct.pack("<f", 5.0))
+        uc.mem_write(GMST_F + 8, struct.pack("<f", 3.25))
         self.halt = None
         self.calls = []            # recorded stub calls
         self.written = []          # (type, version, bytes)
@@ -271,6 +271,11 @@ class Emu:
             uc.emu_start(addr, MAGIC_RET, count=limit)
             if self.halt:
                 msg, self.halt = self.halt, None
+                self.faults.append(msg)
+                raise Stop(msg)
+            if uc.reg_read(UC_X86_REG_RIP) != MAGIC_RET:
+                # the run stopped short of the return address (instruction limit exhausted): never a pass
+                msg = f"run did not finish: stopped at {self.where(uc.reg_read(UC_X86_REG_RIP))} after the {limit}-instruction limit"
                 self.faults.append(msg)
                 raise Stop(msg)
         except UcError as e:
@@ -359,12 +364,15 @@ class Emu:
         if name == "lround":
             # double arg; round half away from zero; result in rax
             d = struct.unpack("<d", struct.pack("<Q", uc.reg_read(UC_X86_REG_XMM0) & 0xFFFFFFFFFFFFFFFF))[0]
-            return self.ret(int(math.floor(abs(d) + 0.5)) * (-1 if d < 0 else 1))
+            self.calls.append(("math", name))
+            f = math.floor(abs(d))
+            return self.ret((f + (1 if abs(d) - f >= 0.5 else 0)) * (-1 if d < 0 else 1))     # half away from zero
         if name in _MATH2:
             y = struct.unpack("<f", struct.pack("<I", uc.reg_read(UC_X86_REG_XMM1) & 0xFFFFFFFF))[0]
             r = _MATH2[name](x, y)
         else:
             r = _MATH1[name](x)
+        self.calls.append(("math", name))
         uc.reg_write(UC_X86_REG_XMM0, struct.unpack("<I", struct.pack("<f", r))[0])
         return self.ret(0)
 
@@ -442,7 +450,13 @@ class Emu:
         def gsc_get_setting():
             name = self.cstr(self.reg(UC_X86_REG_RDX), 64)
             self.calls.append(("GetSetting", name))
-            self.ret({"iAVDhmsLevelUp": GMST_I, "fNPCHealthLevelBonus": GMST_F}.get(name, 0))
+            hit = {"iAVDhmsLevelUp": GMST_I, "fNPCHealthLevelBonus": GMST_F}.get(name)
+            if hit is None:
+                # a missing model is a FAULT, never a "not found" answer that both builds agree on
+                self.halt = f"engine call not modelled: GameSettingCollection::GetSetting({name!r})"
+                self.uc.emu_stop()
+                return
+            self.ret(hit)
 
         def engine_error():
             # SKSE::stl::report_and_error: reached only when an unmodelled engine/Address Library call failed
@@ -579,9 +593,13 @@ def main():
                          "the MFO-B13 round-up corner; A and B are then EXPECTED to differ (autoPoints only)")
     ap.add_argument("saves", nargs="+")
     args = ap.parse_args()
+    dgs = [int(x) for x in args.downgrade.split(",") if x.strip()]
+    if any(v not in (6, 7) for v in dgs):
+        ap.error("--downgrade accepts only 6 and/or 7")
     sa, sb = Symbols(args.a), Symbols(args.b)
     summary = Counter()
     out = []
+    n_synth = 0
     for path in args.saves:
         try:
             cs = parse(path)
@@ -594,18 +612,20 @@ def main():
             continue
         recs0 = {t: (v, d) for t, v, d in mfo if t in ("PRGN", "FWPN")}
         jobs = [(os.path.basename(path), recs0)]
-        for dv in [int(x) for x in args.downgrade.split(",") if x.strip()]:
+        for dv in dgs:
             if recs0.get("PRGN", (None, None))[0] == 8:
                 r2 = dict(recs0)
                 r2["PRGN"] = (dv, downgrade_prgn(recs0["PRGN"][1], dv, args.seed_retro, args.seed_fraction))
-                jobs.append((os.path.basename(path) + f" [SYNTHETIC v{dv}" + (" seeded" if args.seed_retro else "") + (" fraction" if args.seed_fraction else "") + "]", r2))
+                n_synth += 1
+                jobs.append((os.path.basename(path) + f" [SYNTHETIC v{dv}" + (" seeded" if args.seed_retro else "") + (" fraction" if args.seed_fraction and dv < 7 else "") + "]", r2))
         for label, recs in jobs:
             ra = run_one(sa, args.a, recs)
             rb = run_one(sb, args.b, recs)
             same_w = ra["written"] == rb["written"]
             same_c = ra["calls"] == rb["calls"]
-            ok = same_w and same_c and not ra["faults"] and not rb["faults"]
-            summary["IDENTICAL" if ok else "DIFFERENT" if not (ra["faults"] or rb["faults"]) else "FAULT"] += 1
+            init_bad = bool(ra.get("init_faults") or rb.get("init_faults"))
+            ok = same_w and same_c and not ra["faults"] and not rb["faults"] and not init_bad
+            summary["IDENTICAL" if ok else "DIFFERENT" if not (ra["faults"] or rb["faults"] or init_bad) else "FAULT"] += 1
             if ra.get("init_faults") or rb.get("init_faults"):
                 print("   init faults A:", ra.get("init_faults"), " B:", rb.get("init_faults"))
             prgn_in = recs.get("PRGN")
@@ -646,6 +666,12 @@ def main():
     if args.json:
         json.dump({"summary": summary, "rows": out}, open(args.json, "w"), indent=1, default=str)
     ok = set(summary) <= {"IDENTICAL", "no MFO record"}
+    if args.downgrade and n_synth == 0:
+        print("ERROR: --downgrade produced no synthetic job (no save carries a v8 PRGN)")
+        ok = False
+    if summary["IDENTICAL"] + summary["DIFFERENT"] + summary["FAULT"] == 0:
+        print("ERROR: nothing was compared (no save with an MFO record)")
+        ok = False
     if args.selftest:
         ok = selftest(args, sa) and ok
     sys.exit(0 if ok else 1)
@@ -699,6 +725,9 @@ def selftest(args, sa):
         ra, rb = run_one(sa, args.a, recs), run_one(sp, d, recs)
         total += 1
         diff += ra["written"] != rb["written"]
+    if total == 0 and no_prgn == 0:
+        print("SELFTEST: FAIL -- no save was compared at all")
+        return False
     if total == 0:
         print(f"SELFTEST: N/A -- none of the {no_prgn} save(s) with an MFO record carries a PRGN record, so the "
               f"patched PRGN version has nothing to change (not a pass, not a hole)")

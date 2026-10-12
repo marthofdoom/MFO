@@ -90,11 +90,15 @@ only, no proof given: NOT mergeable for a split); 1 = `FAIL`.
 `cosave_roundtrip`: 0 = every save identical (and the self-test saw its
 planted change, or reported N/A because no save carries a PRGN record), else 1.
 The emulator models the CRT float math and the two GMST reads the PRGN v<8 retro makes
-(`GameSettingCollection`; placeholder values iAVDhmsLevelUp 10, fNPCHealthLevelBonus 5, the same in both
-builds). Any other engine/Address Library call that fails stops with "engine call not modelled:
-SKSE::stl::report_and_error called from ..." (a FAULT, never a pass); it used to surface as an unmapped read
+(`GameSettingCollection`; placeholder values iAVDhmsLevelUp 10, fNPCHealthLevelBonus 3.25, the same in both
+builds; a GetSetting for any other name is a FAULT). Any other engine/Address Library call that fails stops with "engine call not modelled:
+SKSE::stl::report_and_error called from ..." (a FAULT, never a pass; so is any init-phase fault and any run that stops short of its return address, e.g. on the
+instruction limit); it used to surface as an unmapped read
 inside `std::basic_regex`, which CommonLib's error reporter builds. `--downgrade` payloads are SYNTHETIC
-(labelled in the output): real v6/v7 co-saves are only on the Deck. `selftest`: 0 = every case behaved, 1 = a hole. A
+(labelled in the output): real v6/v7 co-saves are only on the Deck. `--downgrade` takes only 6 and/or 7 and errors
+if it produced no job (no v8 PRGN). Unexercised by the seeded retro: `HmsNpcRates` unreadable and
+`fNPCHealthLevelBonus <= 0` (NPCs already at the player's rate) branches, and the fixed-stat / grant-history SKIP
+branch. `_fdsign/_dsign/_ldsign` CRT imports are unmodelled (logged by name only). `selftest`: 0 = every case behaved, 1 = a hole. A
 case whose structure the pair does not have is `N/A` (not applicable, no
 candidate), never a pass and never a hole; only N7b, N7c, N13, N13b, N15,
 N17, N18, N18b and N18c may report it, and the summary names them. N7b/N7c run

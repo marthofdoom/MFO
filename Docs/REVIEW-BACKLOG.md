@@ -1601,3 +1601,12 @@ F7 were fixed on the branch. Cross-referenced from MAP.md (progression/ ROSTER R
   `ForgetFollower`'s perk removal (like Respec's, which does the same) removes the held rank form whenever it is on
   the base; it cannot tell MFO's grant from a native grant of the same form (SPID/Requiem). Fix shape when drained:
   a per-session record of the forms MFO actually AddPerk'd.
+
+### MFO-B251 (SEV-5, OPEN, tools) -- cosave_roundtrip leftovers from the M3 review (raised against d8f6a68)
+Opus review of `fix/mfo-m3-cosave-tool`, MERGE OK; everything above SEV-5 was fixed in the closing round. Left open:
+- The seeded v<8 retro never exercises the `HmsNpcRates` unreadable branch, the `fNPCHealthLevelBonus <= 0`
+  branch, or the fixed-stat / grant-history SKIP branch (README lists them). Fix shape: more seed variants.
+- `_fdsign` / `_dsign` / `_ldsign` CRT imports are unmodelled (logged by name only).
+- The "engine call not modelled" fault names the immediate caller (`report_and_fail`), not the MFO function that
+  started the chain. Fix shape: walk the emulated stack for return addresses.
+- The GMST placeholder values are not LoreRim's real ones. Re-run on the Deck's real v6/v7 saves when it is awake.
