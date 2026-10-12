@@ -8,9 +8,6 @@
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
-#include "logistics/Logistics_internal.h" // 2026-09-13: EquipWeapon consumes THE weapon-style decision
-                          // (ComputeWeaponRoles / WeaponScore) -- not in Logistics.h, and that
-                          // header was outside the change's boundary. First non-Logistics include.
 #include "logistics/Lotd.h"   // HoldFromSale: a museum relic is never the combat pick while another weapon serves
 #include "logistics/PlayerGiven.h"   // IsPlayerEquipped: a relic the player put on him stays his pick (batch L review)
 #include <chrono>         // Task 2: the firing-spell gambit lock's own timestamps
@@ -95,10 +92,10 @@ namespace MFO::Actuation {
         // THE inventory-side decision, read off the same g_followers record the
         // Scheduler drives this tick from (worker-serial, #4 -- GetBaseClass's
         // own path). No record (Fire is public) -> default roles: no votes.
-        Logistics::WeaponRoles WeaponRolesFor(RE::Actor* a_follower) {
+        Logistics::CombatWeaponStyle WeaponRolesFor(RE::Actor* a_follower) {
             const auto it = g_followers.find(a_follower->GetFormID());
             if (it == g_followers.end()) return {};
-            return Logistics::ComputeWeaponRoles(a_follower, it->second);
+            return Logistics::CombatStyleFor(a_follower, it->second);
         }
 
         // Sword / dagger / war axe / mace (TESObjectWEAP's own WEAPON_TYPE tests)
@@ -138,7 +135,7 @@ namespace MFO::Actuation {
         // copy: count >= 2 -- with ONE copy the engine would MOVE it out of the
         // right hand). Same eligibility as the right: no staff, no non-playable
         // creature gear, daggers only for a bMageDaggersOnly base mage.
-        RE::TESObjectWEAP* PickOffHandWeapon(RE::Actor* a_follower, const Logistics::WeaponRoles& a_roles,
+        RE::TESObjectWEAP* PickOffHandWeapon(RE::Actor* a_follower, const Logistics::CombatWeaponStyle& a_roles,
                                              bool a_daggerMelee, const RE::TESObjectWEAP* a_right) {
             RE::TESObjectWEAP* best = nullptr; float bestScore = 0.0f;
             for (auto& [obj, data] : a_follower->GetInventory()) {
@@ -149,7 +146,7 @@ namespace MFO::Actuation {
                 if (a_daggerMelee && w->GetWeaponType() != RE::WEAPON_TYPE::kOneHandDagger) continue;
                 if (w == a_right && data.first < 2) continue;         // the right hand's only copy
                 if (IsMuseumRelic(a_follower, w)) continue;           // LOTD: carried for the museum (no fallback: the left is optional)
-                const float score = Logistics::WeaponScore(a_roles, w);
+                const float score = Logistics::CombatWeaponScore(a_roles, w);
                 if (!best || score >= bestScore) { bestScore = score; best = w; }
             }
             return best;
@@ -482,7 +479,7 @@ namespace MFO::Actuation {
             const auto emptyWhileAmmoElsewhere = [&](RE::TESForm* a_held) {
                 auto* hw = (a_ranged && a_held) ? a_held->As<RE::TESObjectWEAP>() : nullptr;
                 if (!hw) return false;
-                const Logistics::AmmoOwned have = Logistics::CountAmmoOwned(a_follower);
+                const Logistics::CombatAmmo have = Logistics::CombatAmmoOwned(a_follower);
                 if (have.For(hw) > 0) return false;
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
@@ -518,7 +515,7 @@ namespace MFO::Actuation {
                     if (rightW && IsOneHandMelee(rightW) && !leftW && due &&
                         !LeftReservedForCast(a_follower, g_firingRule) && !Loadout::OwesLeft(id)) {
                         g_offHandRetryAt[id] = now + kOffHandRetry;
-                        const Logistics::WeaponRoles roles = WeaponRolesFor(a_follower);
+                        const Logistics::CombatWeaponStyle roles = WeaponRolesFor(a_follower);
                         // TRANSPARENT either way (Fable F5 on f771399): a refill is a
                         // side effect of a SATISFIED rule, not this tick's action. A
                         // Fired here armed the Scheduler's suppression window (rules
@@ -597,9 +594,9 @@ namespace MFO::Actuation {
             // behaviour with no preferred kind: plain damage). The ammo family is matched from the
             // weapon's own record (Logistics::RangedUsesBolts), the same test ComputeWeaponRoles
             // used to set wantCrossbow, so loot/buy chase the ammo of THIS pick.
-            const Logistics::WeaponRoles roles = WeaponRolesFor(a_follower);
-            const Logistics::AmmoOwned ammoOwned = a_ranged ? Logistics::CountAmmoOwned(a_follower)
-                                                            : Logistics::AmmoOwned{};
+            const Logistics::CombatWeaponStyle roles = WeaponRolesFor(a_follower);
+            const Logistics::CombatAmmo ammoOwned = a_ranged ? Logistics::CombatAmmoOwned(a_follower)
+                                                            : Logistics::CombatAmmo{};
             // LOTD (field 2026-09-26): a museum relic competes only in its own pool,
             // used when NOTHING else of the category is carried.
             RE::TESObjectWEAP* best = nullptr; float bestScore = 0.0f;
@@ -610,8 +607,8 @@ namespace MFO::Actuation {
                 if (!eligible(w)) continue;   // staff / non-playable / category / mage daggers (above)
                 // `>=` on the float score orders EXACTLY as the old `>=` on the
                 // uint16 damage did when no kind is preferred (last equal wins).
-                const float score = a_ranged ? Logistics::RangedPickScore(roles, w, ammoOwned)
-                                             : Logistics::WeaponScore(roles, w);
+                const float score = a_ranged ? Logistics::CombatRangedScore(roles, w, ammoOwned)
+                                             : Logistics::CombatWeaponScore(roles, w);
                 if (IsMuseumRelic(a_follower, w)) {
                     if (score >= bestRelicScore) { bestRelicScore = score; bestRelic = w; }
                     continue;
@@ -780,7 +777,7 @@ namespace MFO::Actuation {
             const auto nm = [](RE::TESBoundObject* o) { return o && o->GetName() ? o->GetName() : "?"; };
             spdlog::info("[equip] {:08X}: GAMBIT equip {} '{}' dmg={}{}{}{}{}", a_follower->GetFormID(),
                          a_ranged ? "ranged" : "melee", nm(best), bestDmg,
-                         Logistics::WeaponScore(roles, best) != static_cast<float>(bestDmg) ? " (perk-preferred kind)" : "",
+                         Logistics::CombatWeaponScore(roles, best) != static_cast<float>(bestDmg) ? " (perk-preferred kind)" : "",
                          offHandW  ? (offHandHeld
                                         ? std::format(" + off-hand '{}' (dual wield by perks)", nm(offHandW))
                                         : std::format(" off-hand '{}' NOT held ({} null)", nm(offHandW),

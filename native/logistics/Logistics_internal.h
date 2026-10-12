@@ -875,27 +875,8 @@ namespace MFO::Logistics {
     // declaration names exactly what that pass would wear.
     RE::TESBoundObject* ComputeOwnedGearPick(RE::Actor* a_follower, const FollowerState& a_state,
                                              ArmorPref& a_outPref, bool& a_outMageMode);
-    // The APMF equip authority is SUPPORTED (APMF present, ABI >= 9, bApmfEquipAuthority):
-    // the direct equip sites stay out, claimed or refused (no decline-fallback, 2026-09-28).
-    bool EquipAuthorityLive(RE::FormID a_follower);
-    // Rebuild the declared worn set and SEND it iff it changed (never a forced
-    // re-issue, F3). a_holdRight/a_holdLeft: Actuation's ForcedHold ledger (ABI
-    // v9: 0 = no hold, the hand is NOT owned and carries no entry -- never "read
-    // the hand"; every road passes the ledger, Actuation::ForcedHoldFor OOC);
-    // a_leftReserved: a cast holds/claims the left, so nothing left (not owned,
-    // not declared); a_judgeArmor: include the owned-armor upgrade pick
-    // (the OOC service road) -- the combat road passes false and declares worn
-    // armor as is (F9). Worker only (#4). Claims on first use (re-validating a
-    // kept handle, F2); releases when the gate is off.
-    void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
-                                 RE::FormID a_holdRight, RE::FormID a_holdLeft,
-                                 bool a_leftReserved, bool a_judgeArmor, const char* a_why);
-    // The bound WEAP forms whose BoundItemEffect is live on a_follower right now
-    // (sorted, deduped; worker, read-only). The declaration carries them while
-    // live; Actuation's in-combat lap compares this to trigger a re-declaration.
-    std::vector<RE::FormID> LiveBoundWeapons(RE::Actor* a_follower);
+    // EquipAuthorityLive / RefreshEquipDeclaration / LiveBoundWeapons / ResendEquipDeclaration: public, Logistics.h (MFO-B19).
     void ForgetEquipDeclaration(RE::FormID a_follower);   // one follower's change detector (dismiss)
-    void ResendEquipDeclaration(RE::FormID a_follower);   // drop ONLY the change detector so the next rebuild is sent (MFO-B41); player picks kept
     void ClearEquipDeclarations();                        // all (revert / load)
 
     // ── added by the wave-2 folder split (2026-09-25): helpers that were

@@ -298,4 +298,51 @@ namespace MFO::Logistics {
     // (a_peek: would it take anything, no move).
     bool TakeSilverAmmoFrom(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt, bool a_peek);
 
+    // ── COMBAT WEAPON SEAM for cast/Equip.cpp (MFO-B19) ───────────────────────────────────
+    // cast/Equip.cpp used to include Logistics_internal.h for THE weapon-style decision. These thin
+    // wrappers (defined in EquipAuthority.cpp, over the internal inline WeaponRoles / WeaponScore /
+    // RangedPickScore / AmmoOwned, which stay where they are) are the whole surface it needs, so the
+    // internal header is no longer included from another subsystem. Worker domain, like
+    // ComputeWeaponRoles (reads the follower's inventory + g_followers contents, #4).
+
+    // The perk-style fields of WeaponRoles the combat pick consumes: preferKinds (Progression::WeaponKind
+    // bits, 0 = no preference) and offHand (0 none/tie, 1 shield, 2 dual wield). Default = no votes.
+    struct CombatWeaponStyle {
+        std::uint16_t preferKinds = 0;
+        std::uint8_t  offHand     = 0;
+    };
+    // Rounds carried per ammo family (mirror of the internal AmmoOwned; For() picks the family by the
+    // weapon's own record, the same test the internal one runs).
+    struct CombatAmmo {
+        int arrows = 0, bolts = 0;
+        int For(const RE::TESObjectWEAP* a_w) const { return (a_w && a_w->GetWeaponType() == RE::WEAPON_TYPE::kCrossbow) ? bolts : arrows; }
+    };
+    CombatWeaponStyle CombatStyleFor(RE::Actor* a_follower, const FollowerState& a_state);   // wraps ComputeWeaponRoles
+    CombatAmmo        CombatAmmoOwned(RE::Actor* a_follower);                                // wraps CountAmmoOwned
+    // The in-role melee score every judge compares (damage x the perk-style bias): wraps WeaponScore.
+    float CombatWeaponScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon);
+    // The ranged pick score (WeaponScore plus the has-ammo tier): wraps RangedPickScore.
+    float CombatRangedScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon, const CombatAmmo& a_ammo);
+
+    // The APMF equip authority is SUPPORTED (APMF present, ABI >= 9, bApmfEquipAuthority):
+    // the direct equip sites stay out, claimed or refused (no decline-fallback, 2026-09-28).
+    bool EquipAuthorityLive(RE::FormID a_follower);
+    // Rebuild the declared worn set and SEND it iff it changed (never a forced
+    // re-issue, F3). a_holdRight/a_holdLeft: Actuation's ForcedHold ledger (ABI
+    // v9: 0 = no hold, the hand is NOT owned and carries no entry -- never "read
+    // the hand"; every road passes the ledger, Actuation::ForcedHoldFor OOC);
+    // a_leftReserved: a cast holds/claims the left, so nothing left (not owned,
+    // not declared); a_judgeArmor: include the owned-armor upgrade pick
+    // (the OOC service road) -- the combat road passes false and declares worn
+    // armor as is (F9). Worker only (#4). Claims on first use (re-validating a
+    // kept handle, F2); releases when the gate is off.
+    void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
+                                 RE::FormID a_holdRight, RE::FormID a_holdLeft,
+                                 bool a_leftReserved, bool a_judgeArmor, const char* a_why);
+    // The bound WEAP forms whose BoundItemEffect is live on a_follower right now
+    // (sorted, deduped; worker, read-only). The declaration carries them while
+    // live; Actuation's in-combat lap compares this to trigger a re-declaration.
+    std::vector<RE::FormID> LiveBoundWeapons(RE::Actor* a_follower);
+    void ResendEquipDeclaration(RE::FormID a_follower);   // drop ONLY the change detector so the next rebuild is sent (MFO-B41); player picks kept
+
 }

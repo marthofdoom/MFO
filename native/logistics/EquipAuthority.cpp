@@ -270,6 +270,37 @@ namespace MFO::Logistics {
             AcquireEquip(a_follower, pick, nullptr, myWeap, /*forceStock*/false);   // already owned -> no transfer
         }
 
+        // ── COMBAT WEAPON SEAM (MFO-B19, declared in Logistics.h): thin wrappers over the internal inline
+        // WeaponRoles / WeaponScore / RangedPickScore / AmmoOwned so cast/Equip.cpp no longer includes
+        // Logistics_internal.h. Same arithmetic, no new behaviour.
+        namespace {
+            WeaponRoles RolesOf(const CombatWeaponStyle& a_style) {
+                WeaponRoles r;
+                r.preferKinds = a_style.preferKinds;
+                r.offHand     = a_style.offHand;
+                return r;
+            }
+        }
+
+        CombatWeaponStyle CombatStyleFor(RE::Actor* a_follower, const FollowerState& a_state) {
+            const WeaponRoles r = ComputeWeaponRoles(a_follower, a_state);
+            return { r.preferKinds, r.offHand };
+        }
+
+        CombatAmmo CombatAmmoOwned(RE::Actor* a_follower) {
+            const AmmoOwned a = CountAmmoOwned(a_follower);
+            return { a.arrows, a.bolts };
+        }
+
+        float CombatWeaponScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon) {
+            return WeaponScore(RolesOf(a_style), a_weapon);
+        }
+
+        float CombatRangedScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon,
+                                const CombatAmmo& a_ammo) {
+            return RangedPickScore(RolesOf(a_style), a_weapon, AmmoOwned{ a_ammo.arrows, a_ammo.bolts });
+        }
+
         // ── APMF EQUIP AUTHORITY: THE DECLARATION (feat/mfo-equip-authority, 2026-09-15) ──
         // Port #1 of an MFO engine mechanism into APMF (ch.17, ABI v7). MFO no
         // longer holds a follower's gear by force-equipping it and hoping the
