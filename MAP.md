@@ -1494,8 +1494,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **RESIDUAL, non-default config (NARROWED, MFO-B3, `fix/mfo-logic-bundle2`):** the ledger is only WRITTEN
   while `bWeaponStyleControl` is on, so with the switch off `WeaponHandExposure` (`cast/Hands.cpp:184`) also
   reads the declared role: `Followers::GetBaseClass` Melee (1) or Ranged (2) counts as "a weapon owns the right
-  hand". Consulted ONLY with the switch off (switch-ON answer is the ledger answer, unchanged). Not covered: an
-  Auto (0) hybrid with the switch off: reading its gambit table needs a new `Followers` read-only accessor (no record getter exists outside `Followers.cpp`), so it stays open.
+  hand". Consulted ONLY with the switch off (switch-ON answer is the ledger answer, unchanged). An Auto (0) hybrid with the
+  switch off is now covered too (MFO-B3 drained): `Followers::HasEnabledEquipWeaponGambit` (`Followers.cpp`, beside `GetBaseClass`, same serial-worker domain) is true for an enabled `act.equip_melee`/`act.equip_ranged` combat rule.
   `g_forcedWeapon` is read under `g_forcedMx` here like every other access — the map has an OFF-THREAD
   reader (the SKSE save callback, `CoSaveForcedWeapons`), so "the writers are worker-serial" is not
   sufficient. Its declaration comment used to assert BOTH "no lock (#4)" and "guard every access"; the

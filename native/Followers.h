@@ -167,6 +167,11 @@ namespace MFO::Followers {
     // BoardEditScope tripwire, item 2b) and is a no-op for a non-persistable id.
     std::uint8_t GetBaseClass(RE::FormID a_actorID);
     std::uint8_t GetBaseClass(RE::Actor* a_actor);
+    // True when the follower's COMBAT table holds an ENABLED act.equip_melee or
+    // act.equip_ranged rule (MFO-B3: the durable "a weapon owns the right hand"
+    // declaration of an Auto (0) hybrid, which GetBaseClass cannot give). Same
+    // threading domain as GetBaseClass: reads g_followers, serial-worker only (#4).
+    bool HasEnabledEquipWeaponGambit(RE::FormID a_actorID);
     // The T#78 per-follower MFO master switch (FollowerState::mfoEnabled) —
     // UNCHECKED = "unmanage, don't touch" (marth 2026-09-13): progression stops
     // every actor write for that follower too. OFF-WORKER SAFE: reads the

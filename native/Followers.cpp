@@ -559,6 +559,15 @@ namespace MFO::Followers {
     std::uint8_t GetBaseClass(RE::Actor* a_actor) {
         return a_actor ? GetBaseClass(a_actor->GetFormID()) : std::uint8_t{ 0 };
     }
+    bool HasEnabledEquipWeaponGambit(RE::FormID a_actorID) {
+        const auto it = g_followers.find(a_actorID);
+        if (it == g_followers.end()) return false;
+        for (const auto& g : it->second.combat())
+            if (g.enabled && (g.actionOpcode == Vocab::kActEquipMelee ||
+                              g.actionOpcode == Vocab::kActEquipRanged))
+                return true;
+        return false;
+    }
     bool IsMfoEnabled(RE::FormID a_actorID) {
         std::lock_guard<std::mutex> lk(g_mx);   // the IsTrackedFast road, never g_followers
         return g_mfoOff.find(a_actorID) == g_mfoOff.end();
