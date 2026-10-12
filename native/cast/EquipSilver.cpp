@@ -42,6 +42,7 @@
 // clear and ReleaseForcedWeapon reach it from the ledger's lifecycle.
 #include "Actuation_internal.h"
 #include "apmf/APMFBridge.h"   // the equip authority + ch.15 claim, exactly as EquipWeapon uses them
+#include "CombatSense.h"      // FoeCount: the target gate's "foes remain" (MFO-B55 unknown)
 #include <chrono>
 #include <mutex>
 
@@ -107,6 +108,29 @@ namespace MFO::Actuation {
         RE::TESForm* const heldRight = a_follower->GetEquippedObject(false);
         RE::TESForm* const heldLeft  = a_follower->GetEquippedObject(true);
         auto* rightW = heldRight ? heldRight->As<RE::TESObjectWEAP>() : nullptr;
+
+        // THE TARGET GATE (review F1 on 102e24c; marth: "when the TARGET is no longer Unholy"). The
+        // rule's condition only arms it; silver is for the foe he is FIGHTING: his own
+        // currentCombatTarget must be Unholy. Not Unholy -> transparent FailedSkill, so the
+        // Scheduler reads the silver rule as not holding (silverKnownFalse) and the 2 s dwell
+        // switches back. No usable target (null / dead / disabled / not hostile) while his group
+        // still has foes is UNKNOWN, not false (the MFO-B55 rule): an open episode or a silver
+        // weapon in hand is kept (transparent NoOp = held this lap); otherwise nothing is equipped.
+        {
+            auto  tp  = a_follower->GetActorRuntimeData().currentCombatTarget.get();
+            auto* tgt = tp.get();
+            const bool usable = tgt && !tgt->IsDead() && !tgt->IsDisabled() && tgt->IsHostileToActor(a_follower);
+            if (usable && !Logistics::IsUnholy(tgt))
+                return { Result::FailedSkill, "combat target is not Unholy", true };
+            if (!usable) {
+                bool episode = false;
+                { std::scoped_lock lk(g_silverMx); episode = g_silver.find(id) != g_silver.end(); }
+                const bool silverInHand = rightW && Logistics::IsSilverMeleeWeapon(rightW);
+                if ((episode || silverInHand) && CombatSense::FoeCount(a_follower) > 0)
+                    return { Result::NoOp, "no usable combat target, foes remain -- silver kept (unknown, not false)", true };
+                return { Result::FailedSkill, "no usable combat target", true };
+            }
+        }
 
         // SATISFIED: a silver melee weapon is already in the main hand. Transparent, like
         // EquipWeapon's "already holding" (the Scheduler reads it as the melee hand claim), and
@@ -199,7 +223,7 @@ namespace MFO::Actuation {
         return { Result::Fired, "switched to silver" };
     }
 
-    void ReconcileSilver(RE::Actor* a_follower, bool a_held, bool a_knownFalse) {
+    void ReconcileSilver(RE::Actor* a_follower, bool a_held, bool a_knownFalse, bool a_mainHoldReleasable) {
         if (!a_follower) return;
         const auto id  = a_follower->GetFormID();
         const auto now = std::chrono::steady_clock::now();
@@ -243,7 +267,11 @@ namespace MFO::Actuation {
             auto it = g_forcedWeapon.find(id);
             if (it != g_forcedWeapon.end() && it->second.right && it->second.right->GetFormID() == ep.silver) {
                 silverObj = it->second.right;
-                if (ep.mainHeld && mainObj) {
+                // Review F3 on 102e24c: a main hold whose own equip rule is ALSO released this lap
+                // (a_mainHoldReleasable = no equip rule holds and their truth is KNOWN false, dwell or not) is NOT restored -- the general
+                // reconcile right after would strip it again (unequip, equip, unequip, empty hand). It
+                // takes the non-forced re-arm below instead.
+                if (ep.mainHeld && mainObj && !a_mainHoldReleasable) {
                     it->second.right = mainObj;
                     it->second.rule  = ep.mainRule;
                     restoreHold = true;

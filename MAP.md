@@ -540,7 +540,11 @@ per concern:
   **What breaks:** folding silver into the general `equipCondKnownFalse` (a false silver rule above the stop would
   release an `act.equip_melee` hold below it on its unknown laps); moving `ReconcileSilver` after
   `ReconcileForcedWeapon` (the general release would strip the silver hold before the main weapon is restored);
-  writing `.left` here (the off-hand ruling).
+  writing `.left` here (the off-hand ruling). Review round 1 (102e24c): **THE TARGET GATE** -- `EquipSilver` acts
+  only while his own `currentCombatTarget` is Unholy (not Unholy -> transparent FailedSkill, so `silverKnownFalse`
+  + the dwell switch back; no usable target with foes left = UNKNOWN, held, MFO-B55); `ReconcileSilver`'s 4th arg
+  (`equipCondKnownFalse && equipHeld == 0`) re-arms a main equip-gambit hold NON-forced instead of restoring a hold
+  the general reconcile would strip on the same lap.
 - **The DIRECT-DELIVERY road = five files + `cast/Direct_internal.h`** (the Direct.cpp split,
   2026-09-29, `split/cast-direct`, the Direct.cpp part of MFO-B152: a pure move of the old 1879-line `cast/Direct.cpp`,
   proven by `tools/splitcheck`, TU map `tools/splitcheck/tumaps/wave3.txt`). `cast/Direct_internal.h` (83)
@@ -2936,7 +2940,10 @@ module. Module layout:
   after the build (any thread: the evaluator inside the combat group's read lock, PlanBuy on the VM thread); the
   inventory walks are worker / main pump. **What breaks:** calling `TESCondition::IsTrue` instead (engine code
   inside the group lock); widening `IsSilverMeleeWeapon` to bows (the gambit replaces the melee hand); dropping
-  the keep-set insertion (the silver weapon sells as a duplicate 1H/2H).
+  the keep-set insertion (the silver weapon sells as a duplicate 1H/2H). Review round 1 (102e24c): HasKeyword is the
+  engine's own `TESObjectREFR::HasKeyword` (quest-alias keywords too); `SilverNeedsOneHand` (`roles.offHand != 0` or
+  a caster) makes the restock (`WantsSilverWeapon`, loot `ctx.silverOneHand`, buy `BuyThresholds::silverOneHand`)
+  one-handed only. Open: MFO-B244 (loot restock with the economy off, marth's call).
 - `logistics/Cast.cpp` (314, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101` (weapon/shield/ammo/tome
   role signal, gambit based), `UsesMageClothing:116` (MAGE CLOTHING MODE, equip/clothing decisions

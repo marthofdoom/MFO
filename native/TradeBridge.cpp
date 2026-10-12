@@ -121,7 +121,9 @@ namespace MFO::TradeBridge {
                 if (auto* weap = a_form->As<RE::TESObjectWEAP>()) {
                     // THE SILVER SLOT (86e3p2gp9): while he owns none, a silver melee weapon is that
                     // restock first (a pure form read, safe on this VM thread).
-                    if (b.wantSilver && Logistics::IsSilverMeleeWeapon(weap)) return NeedCat::kWeaponSilver;
+                    if (b.wantSilver && Logistics::IsSilverMeleeWeapon(weap) &&
+                        (!b.silverOneHand || Logistics::WeaponBuyClass(weap->GetWeaponType()) == 0))
+                        return NeedCat::kWeaponSilver;
                     const int wc = Logistics::WeaponBuyClass(weap->GetWeaponType());  // 0=1H 1=2H 2=Ranged 3=Other
                     if (b.meleeClass != 3 && wc == b.meleeClass) return NeedCat::kWeaponMelee;
                     if (b.doRanged && wc == 2) {

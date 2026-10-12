@@ -60,7 +60,8 @@ namespace MFO::Logistics {
             // no circular dependency on the roles derived further down.
             const std::uint8_t baseClass = a_state ? a_state->combatClassOverride : 0;
             // THE SILVER SLOT (ClickUp 86e3p2gp9): restock one silver melee weapon when he owns none.
-            ctx.wantSilver = a_state && WantsSilverWeapon(a_follower, *a_state);
+            ctx.wantSilver    = a_state && WantsSilverWeapon(a_follower, *a_state);
+            ctx.silverOneHand = ctx.wantSilver && SilverNeedsOneHand(a_follower, *a_state);
 
             // ── MAGIC LOADOUT (v1.0.29) ─────────────────────────────────────
             // Gambit-driven magic-user detection. A magic user gets two loot
@@ -250,7 +251,8 @@ namespace MFO::Logistics {
                     weap->GetAttackDamage() > ctx.myBackupDmg)
                     return true;
                 // THE SILVER SLOT (86e3p2gp9): any silver melee weapon while he owns none.
-                if (ctx.wantSilver && IsSilverMeleeWeapon(weap)) return true;
+                if (ctx.wantSilver && IsSilverMeleeWeapon(weap) && (!ctx.silverOneHand || wc == WepClass::OneHand))
+                    return true;
                 return false;
             }
             return false;
@@ -454,6 +456,7 @@ namespace MFO::Logistics {
                     }
                     // THE SILVER SLOT (86e3p2gp9): restock -- the best silver melee weapon here.
                     if (ctx.wantSilver && IsSilverMeleeWeapon(weap) &&
+                        (!ctx.silverOneHand || wc == WepClass::OneHand) &&
                         WeaponScore(ctx.roles, weap) > bestSilverScore) {
                         bestSilverScore = WeaponScore(ctx.roles, weap);
                         bestSilver      = obj;

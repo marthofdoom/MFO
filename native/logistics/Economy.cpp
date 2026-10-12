@@ -376,6 +376,7 @@ namespace MFO::Logistics {
                 // THE SILVER SLOT (ClickUp 86e3p2gp9): an enabled act.equip_silver rule and no silver
                 // melee weapon owned -> PlanBuy buys the best affordable one (gear buy only).
                 buy.wantSilver       = WantsSilverWeapon(a_follower, a_state);
+                buy.silverOneHand    = buy.wantSilver && SilverNeedsOneHand(a_follower, a_state);   // review F2
                 buy.doRanged      = doRanged;
                 buy.wantCrossbow  = wantCrossbow;
                 buy.rangedBaseDmg = myRangedDmg;

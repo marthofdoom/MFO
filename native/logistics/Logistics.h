@@ -275,6 +275,10 @@ namespace MFO::Logistics {
     // dropped or handed back (SwapUp keep set, ShedOffRoleWeapon). Not saved: recomputed.
     std::pair<RE::TESBoundObject*, RE::TESBoundObject*> TrackedSilver(RE::Actor* a_follower, const FollowerState& a_state);
     // RESTOCK: an ENABLED act.equip_silver rule and no silver melee weapon owned (loot / buy one).
+    // (an owned TWO-handed silver weapon does not count when SilverNeedsOneHand.)
     bool WantsSilverWeapon(RE::Actor* a_follower, const FollowerState& a_state);
+    // The off-hand is in use for him (WeaponRoles::offHand != 0: a shield or a second weapon by perks,
+    // or a caster's spell hand): the restock (loot / buy) takes ONE-handed silver weapons only.
+    bool SilverNeedsOneHand(RE::Actor* a_follower, const FollowerState& a_state);
 
 }

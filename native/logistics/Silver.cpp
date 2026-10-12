@@ -14,8 +14,8 @@
 //     ActorTypeGhost) and the winning MGEF is also Berserkyr's (two Berserkyr werebear factions
 //     OR ActorTypeUndead OR ActorTypeGhost OR WerewolfFaction). Vanilla vampire races all carry
 //     ActorTypeUndead, so vampires are covered through it.
-//     Interpreted functions: HasKeyword (race or base NPC keyword, the engine's actor keyword
-//     read), GetIsRace, GetInFaction -- run on Subject only, a literal comparison value. Anything
+//     Interpreted functions: HasKeyword (the engine's own actor keyword read, TESObjectREFR::
+//     HasKeyword: race, base NPC and quest-alias keywords), GetIsRace, GetInFaction -- run on Subject only, a literal comparison value. Anything
 //     else is an UNKNOWN item: logged once, LOUDLY, and evaluated FALSE (fails toward "not
 //     unholy", the evaluator's fail-closed rule). With neither record readable (or nothing in
 //     them this file understands) the FALLBACK is marth's: ActorTypeUndead, Vampire, or
@@ -245,11 +245,12 @@ namespace MFO::Logistics {
             return g_rules;
         }
 
-        // The engine's actor HasKeyword reads the base NPC's keywords and its race's; read both.
+        // The engine's OWN actor keyword read (review F4 on 102e24c): TESObjectREFR::HasKeyword ->
+        // the HasKeywordHelper vfunc 0x48 (fork 57be9d67, RE/T/TESObjectREFR.h:428 / Actor.h:290), the
+        // function the HasKeyword condition itself uses -- race, base NPC AND quest-alias keywords.
+        // A data read, fit for the combat group's read lock like IsInFaction beside it.
         bool ActorHasKeyword(RE::Actor* a_actor, const RE::BGSKeyword* a_kw) {
-            if (auto* race = a_actor->GetRace(); race && race->HasKeyword(a_kw)) return true;
-            const auto* npc = a_actor->GetActorBase();
-            return npc && npc->HasKeyword(a_kw);
+            return a_kw && a_actor->HasKeyword(a_kw);
         }
 
         float ItemValue(const Item& a_item, RE::Actor* a_actor) {
@@ -329,11 +330,22 @@ namespace MFO::Logistics {
         return { BestSilverWeapon(a_follower, &a_state, false), BestSilverWeapon(a_follower, &a_state, true) };
     }
 
+    bool SilverNeedsOneHand(RE::Actor* a_follower, const FollowerState& a_state) {
+        return a_follower && (ComputeWeaponRoles(a_follower, a_state).offHand != 0 || IsCasterFollower(a_state));
+    }
+
     bool WantsSilverWeapon(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower || !HasSilverRule(a_state, /*a_enabledOnly*/ true)) return false;
+        // Review F2 on 102e24c: only a silver weapon the gambit can USE counts as owned -- with the
+        // off-hand in use (a shield / second weapon by perks, or a caster's spell hand) that is a
+        // one-hander, so a lone silver greatsword does not end the restock.
+        const bool oneHand = SilverNeedsOneHand(a_follower, a_state);
         for (auto& [obj, data] : a_follower->GetInventory()) {
             if (!obj || data.first <= 0) continue;
-            if (IsSilverMelee(obj->As<RE::TESObjectWEAP>())) return false;
+            auto* w = obj->As<RE::TESObjectWEAP>();
+            if (!IsSilverMelee(w)) continue;
+            if (oneHand && WeaponClassOf(w->GetWeaponType()) != WepClass::OneHand) continue;
+            return false;
         }
         return true;
     }

@@ -568,7 +568,9 @@ namespace MFO::Actuation {
     // known-false the silver weapon leaves the main hand and the main weapon it replaced comes
     // back: as the force-hold it was (an equip gambit's), else re-armed non-forced. No open
     // silver episode -> no-op. Worker-serial, like Fire.
-    void ReconcileSilver(RE::Actor* a_follower, bool a_held, bool a_knownFalse);
+    // a_mainHoldReleasable (review F3): no equip rule holds and that is KNOWN (equipCondKnownFalse, before its dwell);
+    // then a main weapon that was an equip-gambit hold is re-armed non-forced, not restored as a hold.
+    void ReconcileSilver(RE::Actor* a_follower, bool a_held, bool a_knownFalse, bool a_mainHoldReleasable);
 
     // The ledger as it stands NOW for a_follower: {right, left} hold FormIDs, 0 =
     // no hold in that hand (ABI v9, Fable F1 on 7857446). Read under g_forcedMx,

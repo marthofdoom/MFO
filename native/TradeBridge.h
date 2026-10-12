@@ -136,6 +136,8 @@ namespace MFO::TradeBridge {
         // silver melee weapon (Logistics::IsSilverMeleeWeapon), the best affordable by
         // WeaponBuyScore, under the same comfortably-affordable reserve as every gear buy.
         bool          wantSilver     = false;
+        // ... one-handed only: his off-hand is in use (Logistics::SilverNeedsOneHand, review F2).
+        bool          silverOneHand  = false;
     };
 
     // THE rated-armor score, shared with Logistics::ArmorScore (loot / keep /

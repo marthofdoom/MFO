@@ -1928,7 +1928,7 @@ namespace MFO::Scheduler {
         // SILVER FIRST (ClickUp 86e3p2gp9): once its rule is known false for its own dwell, the
         // silver hold is turned back into the main weapon BEFORE the general reconcile below, so
         // that reconcile sees the main weapon (or no hold), never a silver hold to strip bare.
-        Actuation::ReconcileSilver(f, silverHeld, silverKnownFalse);
+        Actuation::ReconcileSilver(f, silverHeld, silverKnownFalse, equipCondKnownFalse && equipHeld == 0);
         Actuation::ReconcileForcedWeapon(f, equipHeld, equipReleaseOK);
         // AnyActive() is a lock-free atomic mirror -- keep the common no-stance
         // tick off g_mx (the module's own discipline). The kill-switch also drops

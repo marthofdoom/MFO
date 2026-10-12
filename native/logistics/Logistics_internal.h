@@ -549,6 +549,7 @@ namespace MFO::Logistics {
             // melee weapon owned (Logistics::WantsSilverWeapon) -> one silver melee weapon is loot,
             // STOCKED (never equipped in place: the gambit puts it in the hand when it is wanted).
             bool          wantSilver        = false;
+            bool          silverOneHand     = false;   // ... one-handed only (SilverNeedsOneHand, review F2)
         };
 
         // ── the looting dispatcher ──────────────────────────────────────────
