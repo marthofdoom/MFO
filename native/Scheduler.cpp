@@ -1183,6 +1183,7 @@ namespace MFO::Scheduler {
         if (ownCombat) g_stallProbe.erase(id);   // [stall-probe]: only while own combat is OFF
         else           StallProbe(f, id);
         DeadTgtService(f, id, ownCombat);   // [deadtgt]: passive, ClickUp 86e3eb078
+        APMFBridge::ReleaseOffenseCastOnDeadTarget(id);   // ClickUp 86e3eb078: a dead target ends the channel at once
 
         // OWNED MODEL: keep this follower's APMF combat-target claim (if any) alive for
         // the WHOLE fight. Refreshes the expiry timestamp only (no create, no re-point)

@@ -45,16 +45,29 @@ namespace MFO::Actuation {
         // when set, else the longest projectile range of its effects
         // (EffectSetting::data.projectileBase->data.range), else 0 (= none known).
         // Plain field reads, worker-safe.
-        float AimedReachOf(const RE::SpellItem* a_spell) {
+        // A reach below this is "no data", not a reach (LoreRim 2026-10-10: Requiem Magic
+        // Redone sets Heal Other's SPIT range to 30.0, which capped every ally heal at 30
+        // units). Falls through to the projectile range, then to no cap.
+        constexpr float kMinSaneReach = 300.0f;
+
+        float AimedReachOf(const RE::SpellItem* a_spell, const char** a_src = nullptr) {
+            if (a_src) *a_src = "none";
             if (!a_spell) return 0.0f;
-            if (a_spell->data.range > 0.0f) return a_spell->data.range;
+            if (a_spell->data.range >= kMinSaneReach) {
+                if (a_src) *a_src = "spell range";
+                return a_spell->data.range;
+            }
             float proj = 0.0f;
             for (auto* eff : a_spell->effects) {
                 auto* base = eff ? eff->baseEffect : nullptr;
                 auto* p    = base ? base->data.projectileBase : nullptr;
                 if (p && p->data.range > proj) proj = p->data.range;
             }
-            return proj;
+            if (proj >= kMinSaneReach) {
+                if (a_src) *a_src = "projectile range";
+                return proj;
+            }
+            return 0.0f;
         }
 
         // HEAL OTHER, Skyrim.esm 0x00012FD2 (the base game's own aimed ally heal:
@@ -198,7 +211,8 @@ namespace MFO::Actuation {
                      id, name, LifeStr(life), heldSec, LifeStr(was), hp * 100.0f, heal, flips);
     }
 
-    float HealReach(RE::SpellItem* a_spell) {
+    float HealReach(RE::SpellItem* a_spell, const char** a_src) {
+        if (a_src) *a_src = "none";
         if (!a_spell) return 0.0f;
         float reach = 0.0f;
         switch (a_spell->data.delivery) {
@@ -207,10 +221,10 @@ namespace MFO::Actuation {
             // marth 2026-09-29 (option B): a Self / Touch heal delivered to an ALLY
             // reaches as far as Heal Other, the aimed ally heal. (A self-heal on the
             // caster never asks: HealInReach / RefuseHealApplyOnMain pass self.)
-            reach = AimedReachOf(RE::TESForm::LookupByID<RE::SpellItem>(kHealOther));
+            reach = AimedReachOf(RE::TESForm::LookupByID<RE::SpellItem>(kHealOther), a_src);
             break;
         default:
-            reach = AimedReachOf(a_spell);
+            reach = AimedReachOf(a_spell, a_src);
             break;
         }
         return reach > 0.0f ? reach : std::numeric_limits<float>::max();
