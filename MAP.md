@@ -2940,7 +2940,6 @@ module. Module layout:
   its own rule (skills pick armor/weapon type, perks pick usage, marth 2026-10-01) and does NOT
   call this. **What breaks:** a second Auto rule elsewhere; calling it off the worker / main
   pump (it reads `FollowerState`); changing a weight changes every Auto follower's HMS split.
-  Open review findings: Docs/REVIEW-BACKLOG.md MFO-B245 (silver ammo damage field check; IsSilverAmmo vs REQ_WeaponType_SilverArrow; restore-to-best under the authority).
 - `logistics/Silver.cpp` (472, ClickUp 86e3p2gp9, 2026-10-12) — **THE SILVER WEAPON knowledge** (API in
   `logistics/Logistics.h`). `IsUnholy` (`:305`, the `cond.foe_is_unholy` selector's test): the LIVE SilverPerk
   (Skyrim.esm `0x10D685`) weapon-damage entries' TARGET tab (2) and the LIVE silver-enchantment MGEF
@@ -2978,6 +2977,7 @@ module. Module layout:
   sell pass skips it; PlanBuy's ammo swap-up skips it. `AmmoIsSpecialBase` (`logistics/SwapUp.cpp:319`) also
   returns true for `IsSilverAmmo`: silver ammo is a 'special' round, outside the ordinary ladder (`AmmoCutoff`,
   `HeldAmmo`, the loose-ammo take set, the authority's best pick).
+  Open review findings: Docs/REVIEW-BACKLOG.md MFO-B245 (silver ammo damage field check; IsSilverAmmo vs REQ_WeaponType_SilverArrow; restore-to-best under the authority).
 - `logistics/Cast.cpp` (314, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101` (weapon/shield/ammo/tome
   role signal, gambit based), `UsesMageClothing:116` (MAGE CLOTHING MODE, equip/clothing decisions
