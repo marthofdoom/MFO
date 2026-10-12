@@ -340,6 +340,7 @@ namespace MFO::Progression {
         // Owner-remap census (P1): effective ranks shown MARGINAL because part
         // of them is player-only; ranks whose owner tab is a "fighting alone"
         // gate (recognised, NOT demoted -- see BuildSkill).
+        int scaleEffectiveRanks{ 0 };   // effectiveRanks as it was BEFORE the owner remap (the section-15 scale input)
         int ownerDemotedRanks{ 0 };
         int aloneGateRanks{ 0 };
         int ownerDerive{ 0 };        // ranks by remap kind (all ranks, any verdict)
@@ -359,6 +360,7 @@ namespace MFO::Progression {
         int totalRanks{ 0 };
         int effectiveRanks{ 0 };
         int stylePromotedRanks{ 0 };   // sum over skills (see SkillTree)
+        int scaleEffectiveRanks{ 0 };   // sum over skills (see SkillTree)
         int ownerDemotedRanks{ 0 };
         int aloneGateRanks{ 0 };
     };

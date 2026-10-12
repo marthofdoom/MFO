@@ -614,6 +614,15 @@ namespace MFO::ProgAllocator {
                     auto ref = FindNode(resolvedPerk);
                     if (!ref.node || rank > ref.node->ranks.size()) {
                         ++droppedPerk;
+                        // LOUD, once per follower and node: the drop is not silent. Name the
+                        // perk (a filtered node keeps its name + reason in the catalog).
+                        std::string pname = "?", why = "not in this session's catalog";
+                        for (const auto& t : Progression::Get().skills)
+                            for (const auto& fp : t.filtered)
+                                if (fp.perkFormID == resolvedPerk) { pname = fp.name; why = fp.reason; }
+                        spdlog::warn("[cosave] DROPPED saved perk alloc {} ({:08X}) rank {} on follower {:08X}: {} -- "
+                                     "{} perk point(s) returned (section-17 derived pool)",
+                                     pname, resolvedPerk, rank, resolvedID, why, rank);
                         continue;
                     }
                 }

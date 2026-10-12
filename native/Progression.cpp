@@ -824,6 +824,10 @@ namespace MFO::Progression {
                     // rank stays effective (equipment-deciding, see above). Marginal
                     // keeps the NODE in the catalog, so the load-time drop oracle
                     // (Allocator FindNode) never loses a saved rank to this demotion.
+                    // The section-15 scale input: the effective count AS IT WAS before the
+                    // owner remap (marth: keep the scale as before), taken before any
+                    // demotion or fighting-alone death below.
+                    if (rank.verdict == Verdict::kEffective) ++a_out.scaleEffectiveRanks;
                     if (rank.owner.remap != OwnerRemap::kNone) {
                         if (rank.owner.remap == OwnerRemap::kDerive) ++a_out.ownerDerive;
                         else ++a_out.ownerUnsupported;
@@ -837,19 +841,15 @@ namespace MFO::Progression {
                     if (rank.owner.partyCount)   ++a_out.ownerPartyCount;
                     if (rank.owner.teammateTest) ++a_out.ownerTeammate;
                     if (rank.owner.hostileNullParam) ++a_out.ownerHostileNull;
-                    // Q7: the "fighting alone" family can never fire while following
-                    // (the player is an ally). It is RECOGNISED and counted but NOT
-                    // demoted to dead: a dead rank filters its node out of the
-                    // catalog, and the load-time drop oracle (Allocator.cpp, FindNode)
-                    // would then silently drop a saved allocation of it. Held for
-                    // marth's call -- see the P1 report.
+                    // Q7 (marth: dead + refund): the "fighting alone" family can never fire
+                    // while following (the player is an ally), so the rank is DEAD. A node
+                    // whose every rank is dead is filtered out; a saved allocation of it is
+                    // then dropped by the load-time oracle (Allocator.cpp FindNode miss) and
+                    // refunded by the derived section-17 pool (PerkPointsAvailable).
                     if (rank.owner.aloneGate) {
                         ++a_out.aloneGateRanks;
-                        spdlog::info("[prog] {} ({:08X}) rank {}: fighting-alone gate (GetCombatGroupMemberCount <= 1) "
-                                     "-- never fires while following; verdict {} kept (not made dead: saved-rank drop risk)",
-                                     view.name, rank.perkFormID, rankNo + 1,
-                                     rank.verdict == Verdict::kEffective ? "effective"
-                                     : rank.verdict == Verdict::kMarginal ? "marginal" : "dead");
+                        rank.verdict = Verdict::kDead;
+                        Append(why, "fighting-alone gate (GetCombatGroupMemberCount <= 1): never fires while following");
                     }
                     if (rankNo == 0) firstWhy = why;
                     if (rank.verdict < best) best = rank.verdict;   // kEffective < kMarginal < kDead
@@ -966,6 +966,7 @@ namespace MFO::Progression {
                 g_catalog.stylePromotedRanks += tree.stylePromotedRanks;
                 g_catalog.ownerDemotedRanks  += tree.ownerDemotedRanks;
                 g_catalog.aloneGateRanks     += tree.aloneGateRanks;
+                g_catalog.scaleEffectiveRanks += tree.scaleEffectiveRanks;
                 ownerDerive += tree.ownerDerive;       ownerUnsupported += tree.ownerUnsupported;
                 ownerCloak  += tree.ownerCloak;        ownerParty += tree.ownerPartyCount;
                 ownerMate   += tree.ownerTeammate;     ownerHostile += tree.ownerHostileNull;
@@ -979,9 +980,9 @@ namespace MFO::Progression {
             // The owner-remap census (P1): ALWAYS one line, zeros included.
             spdlog::info("[prog] owner-remap census: facts by shape (ranks) derive={} unsupported={} cloak={} "
                          "partyCount={} teammateTest={} hostileNullParam={} | {} effective rank(s) shown MARGINAL "
-                         "(part player-only) | {} rank(s) behind a fighting-alone gate (recognised, verdict unchanged)",
+                         "(part player-only) | {} rank(s) behind a fighting-alone gate (made DEAD) | scale ranks {} (pre-remap effective)",
                          ownerDerive, ownerUnsupported, ownerCloak, ownerParty, ownerMate, ownerHostile,
-                         g_catalog.ownerDemotedRanks, g_catalog.aloneGateRanks);
+                         g_catalog.ownerDemotedRanks, g_catalog.aloneGateRanks, g_catalog.scaleEffectiveRanks);
             // Publish LAST: everything above is complete before anyone can
             // observe built == true. After this line the catalog is frozen —
             // no code path writes it again this session.
@@ -1003,7 +1004,7 @@ namespace MFO::Progression {
                              "ranks {} player / {} follower-effective{}",
                              StaticName(tree.av), tree.skillName,
                              tree.nodes.size(), marginal, tree.filtered.size(),
-                             tree.totalRanks, tree.effectiveRanks,
+                             tree.totalRanks, tree.scaleEffectiveRanks,
                              (tree.nodes.empty() && tree.filtered.empty()) ? "  [NO TREE on this AVIF]" : "");
                 for (const auto& f : tree.filtered)
                     spdlog::info("[prog]   filtered: {} ({:08X}) — {}", f.name, f.perkFormID, f.reason);
@@ -1033,12 +1034,12 @@ namespace MFO::Progression {
                 }
             }
             const double ratio = g_catalog.totalRanks > 0
-                                     ? static_cast<double>(g_catalog.effectiveRanks) / g_catalog.totalRanks
+                                     ? static_cast<double>(g_catalog.scaleEffectiveRanks) / g_catalog.totalRanks
                                      : 0.0;
             spdlog::info("[prog] census: {} perks kept ({} marginal), {} filtered | ranks {} player / "
                          "{} follower-effective (§15 scarcity ratio {:.2f}) | {} rank(s) effective on style-facts alone",
                          g_catalog.keptPerks, g_catalog.marginalPerks, g_catalog.filteredPerks,
-                         g_catalog.totalRanks, g_catalog.effectiveRanks, ratio, g_catalog.stylePromotedRanks);
+                         g_catalog.totalRanks, g_catalog.scaleEffectiveRanks, ratio, g_catalog.stylePromotedRanks);
         }
 
 
