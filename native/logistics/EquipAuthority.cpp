@@ -825,9 +825,9 @@ namespace MFO::Logistics {
                 }
                 // SILVER AMMO (86e3p2gp9): the declaration flips silver<->ordinary at an episode open / close, and the
                 // rebuild can run before APMF's swap lands; that worn ammo is NOT a player pick. Never record one while
-                // the worn ammo is silver, an episode is open, or a declaration was sent within kDeclDriftHold.
+                // an episode is open or a declaration was sent within kDeclDriftHold.
                 const auto sentAt = g_lastDeclSentAt.find(id);
-                const bool ammoSwapInFlight = (worn && IsSilverAmmo(worn)) || Actuation::SilverAmmoEpisode(id) != 0 ||
+                const bool ammoSwapInFlight = Actuation::SilverAmmoEpisode(id) != 0 ||
                     (sentAt != g_lastDeclSentAt.end() &&
                      std::chrono::steady_clock::now() - sentAt->second < kDeclDriftHold);
                 if (worn && !ammoSwapInFlight && APMFBridge::IsEquipAuthorityEnforced() && ammoWasOwned &&
