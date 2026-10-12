@@ -25,6 +25,7 @@ Read it as history and this block as current.
   `[selfcheck] ... 56/56 verified`.
 
 - **2026-10-12 RELEASED v2.3.0 "Gems, heal reach and Harbinger client mode" (PUBLISHED, current version).** Cut from main `2576701` plus the release
+  Stamp commit `7c08c30`, CI run 38216009063, tag `v2.3.0`, DLL sha256 `1dbdf79f...`.
   commit. Heal reach (LoreRim Requiem 30u), decision rulings, MEO gem rules (`[gems]` status line), engage on sight without retreat, double cursor
   fix, loot reachability, offense approach (1024 standoff, touch 128, 15 s regular movement), Harbinger client mode (cast guard ch.25, no MFO hooks
   on Harbinger seats). Requires Harbinger v0.12.0 (ABI 21). Docs refreshed at the cut: README (status, retreat default, requirements, what is
