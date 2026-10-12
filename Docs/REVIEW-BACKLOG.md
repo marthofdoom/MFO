@@ -307,7 +307,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** as above — the guard defends against a path MEO's own code cannot take for the instance MFO targets.
 - **Why it was NOT fixed:** coordinator call 2026-09-15: round returned nothing above SEV-3, cycle ended (rule 9); the deferral is loud (LEFTOVER `duplicate-copy` every 60 s) and cannot corrupt the next test.
 - **Fix shape when drained (verbatim):** drop the dupDeferred branch and kDuplicateCopy (keep mintedBases one-per-base-per-pass).
-- CLOSED 2026-10-12 (`fix/mfo-m1a-equip-gem-backlog`): premise verified in MEO `native/plugin.cpp` `ApiEnsureInstanceXList` (:9647-9658 mints in place on a worn, uid-less, un-enchanted xList; :9665-9672 drop-stamp-pickup only when none exists). The deferral in `MEOBridge.cpp` is narrowed to `item.xlEnchanted`, which the foreign-enchant skip filters earlier, so it is currently unreachable (kept as a guard; `kDuplicateCopy` classifier retained).
+- CLOSED 2026-10-12 (`fix/mfo-m1a-equip-gem-backlog`): premise verified in MEO `native/plugin.cpp` `ApiEnsureInstanceXList` (:9638-9655 mints in place on a worn, uid-less, un-enchanted xList; :9656-9677 drop-stamp-pickup only when none exists). The deferral and the `kDuplicateCopy` class are removed from `MEOBridge.cpp` (`mintedBases` kept).
+- OPEN (SEV-4, deferred, raised by the Opus review of bb925fa): a one-frame race remains between MFO's worn-xList read on the worker/main pass and MEO's main-thread mint (a spare copy could be picked if the worn xList changes in that frame). Not fixed here.
 
 ### MFO-B36 — the swap-up never decrements `avail[loot]`, so two items can evict their weakest for one loose copy
 - **Raised:** Fable round 2 on `9dacc0e` (`fix/mfo-meo-no-loose-gems`), SEV-5, CONFIRMED.

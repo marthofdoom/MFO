@@ -2991,8 +2991,10 @@ module. Module layout:
   `BuildBuyThresholds:298`, `EconomyProbe:451`, public buy helpers `MageApparelBuyKey:1003`
   et al) and `logistics/EquipAuthority.cpp` (`ComputeOwnedGearPick:44`,
   `EquipBestOwnedWeapon:178` (MFO-B28/B32: an owned in-class primary upgrade over the held weapon goes
-  through `AcquireEquip(a_src=nullptr, forceStock=false)` so its gems carry; out of combat, strictly better,
-  rate-limited 5 s; backup / trueSecond / silver stay stock-only on the loot side and never reach it; no weapon
+  through `AcquireEquip(a_src=nullptr, forceStock=false)` so its gems carry; strictly better, ~5 s scan cadence;
+  STAYS OUT while a gambit force-hold stands (`ForcedHoldFor`), the player is in combat, a silver episode is
+  open, the held weapon is bound or the player's choice (PlayerGiven / IsPlayerEquipped / excluded artifact),
+  and in the B134 no-claim state; a declined equip is not retried for the same {held, candidate}; backup / trueSecond / silver stay stock-only on the loot side and never reach it; no weapon
   enforcement, `AcquireEquip`'s B134 stock rule still applies), `EquipBestOwnedGear:212`,
   `CombatStyleFor:285` (the B19 wrappers), `EquipAuthorityLive:581`, `LiveBoundWeapons:614`,
   `RefreshEquipDeclaration:635`).
@@ -5480,10 +5482,12 @@ it is not:
   `fix/mfo-loot-m1`), so a later item cannot evict for the same copy and the LEFTOVER
   line's `leftN = avail[i]` already excludes it (its socket opens next pass); the old
   `swapPending` count is gone — subtracting it too would count the copy twice. Open
-  note: **MFO-B35 CLOSED (narrowed)**: the duplicate-copy deferral now applies only to a worn
-  xList carrying an enchant (`item.xlEnchanted`), the one case MEO's in-place uid-0 mint
-  (`ApiEnsureInstanceXList`, MEO `native/plugin.cpp:9647-9658`) cannot cover; the foreign-enchant skip
-  above already filters it, so a spare copy no longer starves the worn item. When no considered item has an empty socket
+  note: **MFO-B35 CLOSED**: the duplicate-copy deferral and the `kDuplicateCopy` LEFTOVER class are
+  REMOVED (the fix shape the backlog named; `mintedBases` one-per-base-per-pass stays). MEO's uid-0 path
+  (`ApiEnsureInstanceXList`, MEO `native/plugin.cpp:9638-9655`) mints in place on a worn, uid-less,
+  un-enchanted xList and takes the drop path (`:9656-9677`) only when none exists; every item reaching the
+  slot loop has such an xList (the foreign-enchant skip drops the others), so a spare copy no longer
+  starves the worn item. Open SEV-4: a one-frame race, see the backlog When no considered item has an empty socket
   NOTHING is logged: that is the invariant holding. Classification relies on the slot
   loop's exhaustiveness: it re-picks until `pickGem` returns -1, so on a non-deferred
   item with sockets left every fitting gem in stock is in `excluded`; the deferral

@@ -510,7 +510,6 @@ namespace MFO::MEOBridge {
             kStuck,           // every compatible empty socket is backed off for it
             kCapacity,        // compatible sockets existed but other gems filled them this pass
             kRefused,         // MEO refused the SocketGem outright this pass (returned false)
-            kDuplicateCopy,   // the only compatible empty sockets are on a uid-0 item with a duplicate copy carried (deferred)
             kMinting,         // the only compatible empty sockets are on a uid-0 item that took its first gem this pass (the rest fill next pass)
             kSupportLimit,    // a support gem: a dual-socket item is open but already holds (or was just given) its one support gem
             kUnclassified,    // a compatible, un-deferred empty socket exists and the gem was neither issued nor stuck -- a bug, never dropped
@@ -521,7 +520,6 @@ namespace MFO::MEOBridge {
             case LeftoverWhy::kStuck:         return "stuck (every compatible empty socket is backed off for it -- see the STUCK line)";
             case LeftoverWhy::kCapacity:      return "capacity (compatible sockets existed but other gems filled them this pass)";
             case LeftoverWhy::kRefused:       return "refused (MEO refused the socket request outright this pass -- see MEO.log)";
-            case LeftoverWhy::kDuplicateCopy: return "duplicate-copy (its only compatible empty sockets are on an un-minted item with a second copy carried; deferred until the copy leaves)";
             case LeftoverWhy::kMinting:       return "minting (its only compatible empty sockets are on an un-minted item that took its first gem this pass, or whose twin worn instance took the base's one uid-0 request; the rest fill next pass)";
             case LeftoverWhy::kSupportLimit:  return "support-limit (a dual-socket item is open but already holds its one support gem)";
             default:                          return "unclassified";
@@ -575,15 +573,7 @@ namespace MFO::MEOBridge {
                     if (auto* w = eq->As<RE::TESObjectWEAP>(); w && MeoSocketableWeapon(w)) addItem(w, false, hand);
             for (const auto s : kMeoArmorSlots)
                 if (auto* w = a_actor->GetWornArmor(s); w && MeoSocketableArmor(w)) addItem(w, true, -1);
-            auto wornCopies = [&](RE::FormID b) { std::int32_t n = 0; for (const auto& it : items) if (it.base == b) ++n; return n; };
 
-            // Total inventory count of a base (worn copies included) -- used to defer
-            // ambiguous uid-0 SocketGem targeting when a duplicate copy is carried.
-            auto invBaseCount = [&](RE::FormID b) -> std::int32_t {
-                for (auto& [obj, data] : a_actor->GetInventory())
-                    if (obj && obj->GetFormID() == b) return data.first;
-                return 0;
-            };
 
             // Stall detector inputs: a fingerprint of this pass's loose-gem set and
             // worn set -- "the follower's inventory changed" lifts a backoff early.
@@ -699,8 +689,7 @@ namespace MFO::MEOBridge {
                 ItemFit fitNow{};       // ... plus any support gem ISSUED to it this pass
                 int  emptyAtStart = 0;  // GetEmptySocketCount at the top of the pass
                 int  issued       = 0;  // SocketGem requests queued to it this pass
-                bool considered   = false;   // reached the slot loop (eligible, socketable, not foreign-enchanted, not dup-deferred)
-                bool dupDeferred  = false;   // uid 0 + an UNWORN duplicate copy carried: no request this pass
+                bool considered   = false;   // reached the slot loop (eligible, socketable, not foreign-enchanted)
                 bool mintIssued   = false;   // uid 0: took its ONE socket this pass, the rest wait for the uid
                 bool mintWait     = false;   // uid 0: another worn instance of the same base took the uid-0 request this pass
                 bool refused      = false;   // a SocketGem returned false on it this pass (see the tripwire note at the issue site)
@@ -770,19 +759,15 @@ namespace MFO::MEOBridge {
                 // socket, so fill only ONE slot this pass; the rest fill next pass once
                 // WornUid returns the minted uid (avoids ambiguous uid-0 targeting).
                 const bool mintGuard = (item.uid == 0);
-                // DUPLICATE-COPY DEFERRAL, NARROWED (MFO-B35). MEO's uid-0 path (ApiEnsureInstanceXList,
-                // MEO native/plugin.cpp:9647-9658) mints IN PLACE on the first xList that is WORN, has no
-                // ExtraUniqueID and no kEnchantment, and falls through to the drop-stamp-pickup of an
-                // UNWORN copy (:9665-9672) only when no such worn xList exists. Every item that reaches
-                // here has exactly that xList (addItem located it worn, uid 0, and the foreign-enchant
-                // skip above dropped the enchanted ones), so a carried spare copy is never a candidate
-                // and no longer starves the worn item. The one case the in-place mint cannot cover is a
-                // worn xList carrying an enchant; the skip above already stops that, this keeps the
-                // deferral for it should that skip ever change. A second WORN copy (the dual-wield
-                // pair) mints on a worn xList too; only ONE uid-0 request per base per pass, the
-                // other instance waits (mintedBases below).
-                if (mintGuard && item.xlEnchanted && invBaseCount(item.base) > wornCopies(item.base)) { rec.dupDeferred = true; continue; }
-                rec.considered = true;   // classifier order: dupDeferred is tested first, then mintWait/mintIssued/refused, then excluded
+                // NO duplicate-copy deferral (MFO-B35). MEO's uid-0 path (ApiEnsureInstanceXList, MEO
+                // native/plugin.cpp:9638-9655) mints IN PLACE on the first xList that is WORN, has no
+                // ExtraUniqueID and no kEnchantment, and takes the drop-stamp-pickup of an UNWORN copy
+                // (:9656-9677) only when no such worn xList exists. Every item that reaches here has
+                // exactly that xList (addItem located it worn and uid 0, and the foreign-enchant skip
+                // above dropped the enchanted ones), so a carried spare copy is never a candidate. A
+                // second WORN copy (the dual-wield pair) mints on a worn xList too; only ONE uid-0
+                // request per base per pass, the other instance waits (mintedBases below).
+                rec.considered = true;   // classifier order: mintWait/mintIssued/refused are tested first, then excluded
                 if (mintGuard && mintedBases.contains(item.base)) { rec.mintWait = true; continue; }
 
                 // Loose entries EXCLUDED for THIS item this pass: a gem whose socket
@@ -976,17 +961,17 @@ namespace MFO::MEOBridge {
             for (auto& kv : leftMap) kv.second.seen = false;
             bool anyEmpty = false;
             for (const auto& rec : recs)
-                if (rec.considered || rec.dupDeferred) if (rec.emptyAtStart - rec.issued > 0) { anyEmpty = true; break; }
+                if (rec.considered) if (rec.emptyAtStart - rec.issued > 0) { anyEmpty = true; break; }
             if (anyEmpty) {
                 for (std::uint32_t i = 0; i < nLoose; ++i) {
                     // Copies a swap-out was issued FOR this pass are already out of
                     // avail[] (MFO-B36 reservation): the REST of a stack still count.
                     std::uint32_t leftN = avail[i];
                     if (leftN == 0) continue;
-                    bool compatNow = false, stuck = false, refused = false, dup = false, minting = false, supportLimit = false, hole = false;
+                    bool compatNow = false, stuck = false, refused = false, minting = false, supportLimit = false, hole = false;
                     for (std::size_t idx = 0; idx < items.size(); ++idx) {
                         const auto& rec = recs[idx];
-                        if (!(rec.considered || rec.dupDeferred) || rec.emptyAtStart - rec.issued <= 0) continue;
+                        if (!rec.considered || rec.emptyAtStart - rec.issued <= 0) continue;
                         if (!fits(loose[i], rec.fitNow)) {
                             // A support gem kept out only by the item's one support seat.
                             if (loose[i].isSupport && rec.fitNow.capacity >= 2) supportLimit = true;
@@ -995,7 +980,6 @@ namespace MFO::MEOBridge {
                         compatNow = true;
                         // ORDER MATTERS: the deferrals are tested before `excluded`, because a
                         // deferred item never ran its slot loop and so never excluded anything.
-                        if (rec.dupDeferred)       { dup = true;     continue; }
                         if (rec.mintWait || rec.mintIssued) { minting = true; continue; }
                         if (rec.refused)           { refused = true; continue; }
                         if (rec.excluded.contains(i) || socketBackedOff(items[idx].base, items[idx].uid, loose[i].gemBase)) { stuck = true; continue; }
@@ -1007,13 +991,12 @@ namespace MFO::MEOBridge {
                         // was it ever open this pass (then other gems took it), or never?
                         bool wasOpen = false;
                         for (const auto& rec : recs)
-                            if ((rec.considered || rec.dupDeferred) && rec.emptyAtStart > 0 && fits(loose[i], rec.fitAtStart)) { wasOpen = true; break; }
+                            if (rec.considered && rec.emptyAtStart > 0 && fits(loose[i], rec.fitAtStart)) { wasOpen = true; break; }
                         why = supportLimit ? LeftoverWhy::kSupportLimit
                             : wasOpen      ? LeftoverWhy::kCapacity : LeftoverWhy::kOffDomain;
                     } else if (hole)    why = LeftoverWhy::kUnclassified;
                     else if (stuck)     why = LeftoverWhy::kStuck;
                     else if (refused)   why = LeftoverWhy::kRefused;
-                    else if (dup)       why = LeftoverWhy::kDuplicateCopy;
                     else if (minting)   why = LeftoverWhy::kMinting;
                     else                why = LeftoverWhy::kUnclassified;
 

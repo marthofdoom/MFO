@@ -877,8 +877,8 @@ namespace MFO::Progression {
                     // not work for a follower owner, so it is NOT promoted; a rank
                     // that is effective today but carries such a part is shown
                     // MARGINAL ("part player-only"). A rank that is already dead
-                    // (every effect player-only) keeps its dead verdict. A style-fact
-                    // rank stays effective (equipment-deciding, see above). Marginal
+                    // (every effect player-only) keeps its dead verdict. A rank with a
+                    // FIRING style fact stays effective (equipment-deciding, see above). Marginal
                     // keeps the NODE in the catalog, so the load-time drop oracle
                     // (Allocator FindNode) never loses a saved rank to this demotion.
                     // The section-15 scale input: the effective count AS IT WAS before the
@@ -888,7 +888,7 @@ namespace MFO::Progression {
                     if (rank.owner.remap != OwnerRemap::kNone) {
                         if (rank.owner.remap == OwnerRemap::kDerive) ++a_out.ownerDerive;
                         else ++a_out.ownerUnsupported;
-                        if (rank.verdict == Verdict::kEffective && !rank.style.Any()) {
+                        if (rank.verdict == Verdict::kEffective && !styleFires) {   // same firing-style notion as the B25 promotion above
                             rank.verdict = Verdict::kMarginal;
                             Append(why, "part-player-only");
                             ++a_out.ownerDemotedRanks;

@@ -315,7 +315,7 @@ namespace MFO::Logistics {
     // weapon's own record, the same test the internal one runs).
     struct CombatAmmo {
         int arrows = 0, bolts = 0;
-        int For(const RE::TESObjectWEAP* a_w) const { return (a_w && a_w->GetWeaponType() == RE::WEAPON_TYPE::kCrossbow) ? bolts : arrows; }
+        int For(const RE::TESObjectWEAP* a_w) const;   // defined in EquipAuthority.cpp over RangedUsesBolts (cannot drift)
     };
     CombatWeaponStyle CombatStyleFor(RE::Actor* a_follower, const FollowerState& a_state);   // wraps ComputeWeaponRoles
     CombatAmmo        CombatAmmoOwned(RE::Actor* a_follower);                                // wraps CountAmmoOwned

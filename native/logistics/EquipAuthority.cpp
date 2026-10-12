@@ -173,10 +173,32 @@ namespace MFO::Logistics {
         // and are never an "upgrade over the held weapon", so this branch cannot reach them. No weapon
         // ENFORCEMENT is added: AcquireEquip's own B134 rule still stocks instead of equipping when equip
         // authority is supported but no claim stands, and weapons stay observe-only under the declaration.
-        // Out of combat only, strictly better only (no flip), and rate-limited per follower so a pending
-        // main-thread equip is not re-posted (and a second gem move queued) before it lands.
+        // STAYS OUT of every hold or choice that is not MFO's to override: a standing gambit force-hold in
+        // either hand (ForcedHoldFor), the PLAYER in combat (the follower's own IsInCombat flaps and
+        // serviceOwnOoc services laps inside a party fight), an open silver episode (its silver weapon in
+        // hand, or silver ammo nocked), a bound weapon, and a held weapon the PLAYER chose (given,
+        // put on through the menu, or an excluded artifact while bLootSpecialItems is off: player agency).
+        // Strictly better only (no flip). A per-follower ~5 s scan cadence sits in front of the inventory
+        // walk; an equip AcquireEquip declined (B134 no-claim stock, cross-role) is not retried for the
+        // same {held, candidate} pair, so it neither spams the log nor re-walks.
         static void EquipBestOwnedWeapon(RE::Actor* a_follower, const FollowerState& a_state, RE::TESObjectWEAP* a_myWeap) {
             if (!a_follower || !a_myWeap || a_follower->IsInCombat()) return;
+            const auto id = a_follower->GetFormID();
+            if (auto* pcc = RE::PlayerCharacter::GetSingleton(); pcc && pcc->IsInCombat()) return;
+            if (const auto hold = Actuation::ForcedHoldFor(id); hold.first != 0 || hold.second != 0) return;
+            if (Actuation::SilverAmmoEpisode(id) != 0 || IsSilverMeleeWeapon(a_myWeap)) return;
+            if (a_myWeap->IsBound()) return;
+            if (PlayerGiven::IsPlayerGiven(id, a_myWeap->GetFormID()) ||
+                PlayerGiven::IsPlayerEquipped(id, a_myWeap->GetFormID()) ||
+                (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(a_myWeap->GetFormID()))) return;
+            // B134 state: equip authority supported but no claim stands -> AcquireEquip only stocks.
+            if (APMFBridge::EquipAuthoritySupported() && !APMFBridge::IsEquipAuthorityClaimed(id)) return;
+            static std::unordered_map<RE::FormID, Clock::time_point> s_nextWeapUp;
+            static std::unordered_map<RE::FormID, std::pair<RE::FormID, RE::FormID>> s_declined;   // {held, candidate}
+            const auto now = Clock::now();
+            auto& nxt = s_nextWeapUp[id];
+            if (nxt.time_since_epoch().count() != 0 && now < nxt) return;
+            nxt = now + std::chrono::seconds(5);
             const EquipmentContext ctx = BuildEquipmentContext(a_follower, &a_state);
             if (ctx.meleeTargetClass == WepClass::Other) return;   // no melee role (pure caster / ranged user)
             if (WeaponClassOf(a_myWeap->GetWeaponType()) != ctx.meleeTargetClass) return;   // never cross-class
@@ -188,25 +210,25 @@ namespace MFO::Logistics {
             for (auto& [obj, data] : a_follower->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
                 auto* w = obj->As<RE::TESObjectWEAP>();
-                if (!w || w == a_myWeap || IsCreatureWeapon(w)) continue;
+                if (!w || w == a_myWeap || IsCreatureWeapon(w) || w->IsBound()) continue;
                 if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
-                if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
+                // the combat pick's relic rule (cast/Equip.cpp IsMuseumRelic), so the two agree
+                if (Lotd::HoldFromSale(id, w) && !PlayerGiven::IsPlayerEquipped(id, w->GetFormID())) continue;
                 if (w == leftForm && data.first < 2) continue;           // his only copy is in the left hand
                 if (WeaponClassOf(w->GetWeaponType()) != ctx.meleeTargetClass) continue;
                 const float sc = WeaponScore(ctx.roles, w);
                 if (sc > bestScore) { bestScore = sc; best = obj; }
             }
             if (!best || !FitsCarryWeight(a_follower, best->GetWeight())) return;
-            static std::unordered_map<RE::FormID, Clock::time_point> s_nextWeapUp;
-            const auto id  = a_follower->GetFormID();
-            const auto now = Clock::now();
-            auto& nxt = s_nextWeapUp[id];
-            if (nxt.time_since_epoch().count() != 0 && now < nxt) return;
-            nxt = now + std::chrono::seconds(5);
+            const std::pair<RE::FormID, RE::FormID> pair{ a_myWeap->GetFormID(), best->GetFormID() };
+            if (const auto it = s_declined.find(id); it != s_declined.end() && it->second == pair) return;
             spdlog::info("[equip] {:08X}: OWNED weapon '{}' score={:.1f} <- held '{}' score={:.1f}",
                          id, best->GetName() ? best->GetName() : "?", bestScore,
                          a_myWeap->GetName() ? a_myWeap->GetName() : "?", heldScore);
-            AcquireEquip(a_follower, best, nullptr, a_myWeap, /*forceStock*/false);   // already owned -> no transfer
+            if (AcquireEquip(a_follower, best, nullptr, a_myWeap, /*forceStock*/false))   // already owned -> no transfer
+                s_declined.erase(id);
+            else
+                s_declined[id] = pair;   // declined: not retried until the held weapon or the best candidate changes
         }
 
         void EquipBestOwnedGear(RE::Actor* a_follower, const FollowerState& a_state) {
@@ -286,6 +308,8 @@ namespace MFO::Logistics {
             const WeaponRoles r = ComputeWeaponRoles(a_follower, a_state);
             return { r.preferKinds, r.offHand };
         }
+
+        int CombatAmmo::For(const RE::TESObjectWEAP* a_w) const { return RangedUsesBolts(a_w) ? bolts : arrows; }
 
         CombatAmmo CombatAmmoOwned(RE::Actor* a_follower) {
             const AmmoOwned a = CountAmmoOwned(a_follower);
