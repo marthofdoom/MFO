@@ -192,7 +192,7 @@ leash and walk-to-loot.
 - **Decision rulings.** A blind heal at the approach floor is released after 5 seconds, a left
   weapon a heal displaced is given back, AUTO refuses a spell only when every effect is
   undeclared, and an AUTO buff series keeps the spell in hand between casts.
-- **Gem rules (needs MEO).** A follower never sells, drops, donates or removes a socketed item
+- **Gem rules (needs MEO and the MEO-aware gems setting, `bMeoAwareGems`).** A follower never sells, drops, donates or removes a socketed item
   through MFO. Gems come out first. Socketed loot that is not an upgrade is taken for its gems
   and the gear is kept only if it passes the loot-to-sell value and weight rule. Loose gemmed gear
   is recognised by MEO's exact title and fetched for its gems. `MFO.log` prints a `[gems]` line
