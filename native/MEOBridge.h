@@ -100,6 +100,12 @@ namespace MFO::MEOBridge {
     // extract for it is already pending): lets a caller log a strip once, not every scan.
     int UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid);
 
+    // REMOVAL HOLD (GemRules): while an item is on its way out of the follower (sale, evict, museum),
+    // the gem reconcile must not re-socket gems into it. Refreshed by every GemRules check; lapses 30 s
+    // after the last one (the retry cadence is ~1 s). Any thread.
+    void HoldForRemoval(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid);
+    bool RemovalHeld(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid);
+
     // Worker-callable READ: filled gem slots of (a_base,a_uid) in a_followerID's cache (0 = none/unknown).
     int CarriedGemCount(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid);
 

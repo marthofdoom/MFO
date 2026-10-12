@@ -39,5 +39,20 @@ namespace MFO::Logistics::GemRules {
     // when none are pending).
     void PumpProbes(RE::Actor* a_follower);
 
+    // ── LOOSE world gear (marth: "the naming scheme should identify gemmed gear as loose items") ──
+    // WORKER (LootScan, Category::Equipment): is this loose ref MEO-named as socketed? Matches MEO's
+    // exact title "[Support N . ]Gem N[ + Gem N...] BaseName" (N = I..V) AND a nonzero ExtraUniqueID.
+    // Unidentified loose gear stays ignored. Returns false for an item already picked up once.
+    bool LooseNamedGemmed(RE::TESObjectREFR* a_ref, RE::TESBoundObject* a_base);
+    // WORKER (Service, just before the activate is posted): true if this ref was recognised by name;
+    // records it as taken so a returned item is never re-recognised.
+    bool NoteLoosePickup(RE::TESObjectREFR* a_ref);
+    // MAIN THREAD, before/after the pickup ActivateRef: capture the ref's uid/position/angle, then
+    // register the probe once the item is (or is about to be) in his pack.
+    struct LooseCapture { RE::FormID base = 0; std::uint16_t uid = 0; RE::NiPoint3 pos{}; RE::NiPoint3 rot{}; };
+    LooseCapture CaptureLoose(RE::TESObjectREFR* a_ref);
+    void BeginLooseProbe(RE::Actor* a_follower, const LooseCapture& a_cap, bool a_sellGambit);
+    bool SellGambitActive();   // WORKER: does the serviced follower have a loot-valuables (to sell) gambit?
+
     void ClearTransient();   // revert (pump drained)
 }

@@ -813,6 +813,8 @@ namespace MFO::Logistics {
     bool RunExcursionScan(RE::Actor* a_follower, const FollowerState& a_state,
                           Clock::time_point a_now);
     bool IsValuableMisc(RE::TESBoundObject* a_obj);
+    bool DropObjectAt(RE::Actor* a_fol, RE::TESBoundObject* a_item, RE::ExtraDataList* a_xl,
+                      const RE::NiPoint3& a_loc, const RE::NiPoint3& a_rot);   // Upkeep.cpp: exact-position engine drop (GemRules)
     bool ValuableRatioClears(float a_value, float a_weight);   // the loot-valuables gambit's value/weight rule (Config::g_valuablesRatio)
     bool IsQuestObjectInstance(RE::InventoryEntryData* a_entry);
     bool IsQuestObjectRef(RE::TESObjectREFR* a_ref);

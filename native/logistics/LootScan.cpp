@@ -3,6 +3,7 @@
 // Split out of the old native/Logistics*.cpp by the wave-2 subsystem-folder split
 // (2026-09-25): a pure move, proven function by function with tools/splitcheck.
 #include "Logistics_internal.h"
+#include "GemRules.h"
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 #include "TeleportCompat.h"    // follower-teleport mod leash clamp (86e3ec824)
 
@@ -380,6 +381,10 @@ namespace MFO::Logistics {
                                         equipCtxBuilt = true;
                                     }
                                     if (LooseEquipmentQualifies(a_follower, base, equipCtx))
+                                        lootable = loose = true;
+                                    // MEO-aware (GemRules): unidentified loose gear stays ignored, but MEO's own
+                                    // title marks a SOCKETED one -- it is fetched for its gems (same source bar below).
+                                    else if (GemRules::LooseNamedGemmed(ref, base))
                                         lootable = loose = true;
                                 }
                                 break;

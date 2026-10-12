@@ -299,6 +299,24 @@ namespace MFO::Logistics {
         }
     }
 
+    // Engine DropObject for ONE instance at an exact world position + angle (GemRules returns a
+    // stripped loose item where it lay). MAIN THREAD, exact builds only. The vfunc ABI (slot 0xCB,
+    // sret pointer return) is the one proven in ShedOffRoleWeapon below -- read its long note;
+    // the wrapper RE::Actor::DropObject must NOT be used. False = not dropped (logged by caller).
+    bool DropObjectAt(RE::Actor* a_fol, RE::TESBoundObject* a_item, RE::ExtraDataList* a_xl,
+                      const RE::NiPoint3& a_loc, const RE::NiPoint3& a_rot) {
+        using DropObjectFn = RE::ObjectRefHandle* (*)(
+            RE::Actor*, RE::ObjectRefHandle*, const RE::TESBoundObject*, RE::ExtraDataList*,
+            std::int32_t, const RE::NiPoint3*, const RE::NiPoint3*);
+        if (!a_fol || !a_item || !MainThread::IsInstalled() || !Runtime::Known()) return false;
+        constexpr std::size_t slot = 0xCB;
+        auto* vtbl = *reinterpret_cast<std::uintptr_t**>(a_fol);
+        auto  fn   = reinterpret_cast<DropObjectFn>(vtbl[slot]);
+        RE::ObjectRefHandle dropped;
+        fn(a_fol, &dropped, a_item, a_xl, 1, &a_loc, &a_rot);
+        return static_cast<bool>(dropped);
+    }
+
     // SHED OFF-ROLE WEAPONS (marth). A follower carrying a weapon of a role they
     // do NOT maintain -- a 2H on a 1H fighter, a crossbow on a bow user, any ranged
     // on a melee-only fighter -- lets their game AI equip the wrong thing "of its

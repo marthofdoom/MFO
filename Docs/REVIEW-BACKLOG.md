@@ -1472,3 +1472,13 @@ Raised against `f51c579` (`fix/mfo-offense-1006c`, Opus review MERGE OK), 2026-1
 - **SEV-3 (watch in the field):** a blind concentration heal whose channel starts while offense is mid-charge on the other hand could be interrupted.
 - **SEV-3 (accepted):** a direct-road lock (no APMF claim to observe) stays fresh until the 6 s `kInFlightHoldCap`, and the waiter clock can stretch a higher rule's wait to about 12 s.
 - **Surfaced at edit time from:** MAP.md "FIELD 1006c OFFENSE FIXES" bullet.
+
+### MFO-B242 (SEV-4 x3, SEV-5 x2) -- MEO gem rules review (51617e0, Opus BLOCK; SEV-2/3 fixed in the follow-up)
+Raised against `51617e0` (`feat/mfo-meo-gem-rules`), 2026-10-12. Reviewer's text paraphrased by the coordinator.
+- **SEV-4:** `GemRules.cpp` `FindOwned` / `Decide` read `InventoryEntryData::GetValue()`, the value of the whole entry (stack), not one copy.
+- **SEV-4:** `Decide` does not check whether the source container was deleted (`IsDeleted`), only `IsDisabled`.
+- **SEV-4:** the worker-side `RemoveItem` out of a container (`TakeAndProbe`) can race a player looting the same container at the same moment.
+- **SEV-5:** `g_probed` (worker-only set of probed source/base/uid keys) grows without bound until revert.
+- **SEV-5:** `#include "GemRules.h"` landed on the trailing-comment line of the neighbouring include in Lotd.cpp / Service.cpp / Upkeep.cpp, so the comment now sits on the wrong line.
+- **Surfaced at edit time from:** MAP.md `logistics/GemRules.h` entry.
+

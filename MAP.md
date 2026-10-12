@@ -5200,6 +5200,13 @@ the main-thread probe strips its gems, then `Decide` keeps it only if the follow
 or returns it to the SOURCE CONTAINER. Loose world refs are NOT probed (cannot see gems before owning it; returning
 needs a DropObject). `PumpProbes` is called from `Service.cpp` (idle scan, next to the gem reconcile).
 State: `g_probed` worker-only set, `g_probes` main-thread-only; both cleared in `Serialization.cpp` revert.
+**Loose world gear:** `LootScan.cpp` Equipment case also accepts a loose ref whose ExtraTextDisplayData is MEO's exact
+socketed title (`LooseNamedGemmed`: "[Support N . ]Gem N[ + Gem N] BaseName", N = I..V, ExtraUniqueID != 0); the usual
+`LooseRefBarred` source bar still applies. `Service.cpp` doActivate captures uid/pos/angle, `BeginLooseProbe` strips after the
+pickup, and `Decide` drops it back with `DropObjectAt` (`Upkeep.cpp`, same 0xCB vfunc as the shed) at its original position/angle.
+Container candidates are likewise only MEO-titled instances; an item that never had gems always goes back.
+**Re-socket guard:** every `CheckRemoval*` refreshes `MEOBridge::HoldForRemoval` (30 s) and `ReconcileLooseGems` skips held items,
+so strip -> re-socket -> sell cannot happen. Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B242.
 **What breaks:** a new item-removal path must call the guard; the cache is one scan stale (worker paths).
 
 ### MEOBridge.cpp / MEOBridge.h — optional MEO gem-transfer adapter

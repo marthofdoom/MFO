@@ -133,9 +133,18 @@ namespace MFO::MEOBridge {
         if (!a_actor) return;
         const RE::FormID fid = a_actor->GetFormID();
         std::unordered_map<std::uint64_t, std::unordered_set<std::uint8_t>> gems;   // GemKey -> filled slots
+        // CarriedGems returns the TRUE count; a truncated read would let items past the buffer read
+        // gem-free (gem loss under the MEO-aware rules), so re-read with a buffer sized to the count.
         constexpr std::uint32_t kMax = 64;
-        MEO_API::GemInfo buf[kMax];
-        const std::uint32_t n = std::min(CarriedGems(a_actor, buf, kMax), kMax);   // 0 if MEO < v2
+        MEO_API::GemInfo small[kMax];
+        std::vector<MEO_API::GemInfo> big;
+        const MEO_API::GemInfo* buf = small;
+        std::uint32_t n = CarriedGems(a_actor, small, kMax);   // 0 if MEO < v2
+        if (n > kMax) {
+            big.resize(n);
+            n   = std::min(CarriedGems(a_actor, big.data(), n), static_cast<std::uint32_t>(big.size()));
+            buf = big.data();
+        } else n = std::min(n, kMax);
         for (std::uint32_t i = 0; i < n; ++i)
             if (buf[i].itemBase != 0 && buf[i].itemUid != 0)
                 gems[GemKey(buf[i].itemBase, buf[i].itemUid)].insert(buf[i].slot);
@@ -173,6 +182,20 @@ namespace MFO::MEOBridge {
     bool CarriedGemsSupported() { return g_meo && g_meo->Version() >= 2; }
 
     bool CarriedGemUnsocketSupported() { return g_meo && g_meo->Version() >= 3; }
+
+    namespace { std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_removalHold; }   // under g_mx
+    void HoldForRemoval(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
+        if (a_uid == 0 || a_base == 0) return;
+        const auto now = std::chrono::steady_clock::now();
+        std::scoped_lock lk(g_mx);
+        std::erase_if(g_removalHold, [&](const auto& kv) { return kv.second < now; });
+        g_removalHold[(static_cast<std::uint64_t>(a_followerID) << 32) ^ GemKey(a_base, a_uid)] = now + std::chrono::seconds(30);
+    }
+    bool RemovalHeld(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
+        std::scoped_lock lk(g_mx);
+        const auto it = g_removalHold.find((static_cast<std::uint64_t>(a_followerID) << 32) ^ GemKey(a_base, a_uid));
+        return it != g_removalHold.end() && it->second >= std::chrono::steady_clock::now();
+    }
 
     int CarriedGemCount(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
         if (a_uid == 0 || a_base == 0) return 0;
@@ -655,6 +678,8 @@ namespace MFO::MEOBridge {
             for (std::size_t idx = 0; idx < items.size(); ++idx) {
                 auto& item = items[idx];
                 auto& rec  = recs[idx];
+                // GemRules: an item on its way out (sale / evict / museum) takes no gem back.
+                if (RemovalHeld(a_actor->GetFormID(), item.base, item.uid)) continue;
                 const int emptyCount = g_meo->GetEmptySocketCount(a_actor, item.base, item.uid);
                 rec.emptyAtStart = std::max(emptyCount, 0);
                 // Tier 1 (conservation) only FILLS empty sockets -- if none, skip. Tier 2
