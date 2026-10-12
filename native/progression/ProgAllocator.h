@@ -359,16 +359,6 @@ namespace MFO::ProgAllocator {
         // (P3) run for this follower yet? Reset by ClearAll; the poll retries
         // until the actor resolves.
         bool applied{ false };
-        // runtime-only, never serialized (roster removal, ClickUp 86e3eewaf):
-        // MFO has CHANGED this follower's base perk list THIS SESSION (a
-        // GrantRank, a ReapplyFollower AddPerk, or a StripNativePerks removal).
-        // Base perk edits do not survive a load (P3), and every record is built
-        // fresh by CoSaveLoad / Enroll / the HMS-only create, so false here
-        // proves the base holds only what the load order authored: the removal
-        // then has no perk to take back and no strip to restore. Unlike
-        // `applied` / `nativeHeld`, the unmanaged (T#78 OFF) poll branch never
-        // clears it: an OFF toggle leaves MFO's perks on the base.
-        bool baseTouched{ false };
     };
 
     // Keyed on the actor's persistent FormID (the g_followers discipline).
@@ -424,17 +414,18 @@ namespace MFO::ProgAllocator {
     // base TESNPC, settles the actor (ApplyPerksFromBase) and CLEARS the record
     // (nativeHeld=false). MFO's own grants are untouched (Respec / ForgetFollower
     // remove those). Called by ForgetFollower (the Follower-tab roster removal,
-    // ClickUp 86e3eewaf + 86e3940zh). The strip is per-session (P3: base perk
-    // edits do not survive a load), so a save loaded without MFO already has
-    // every native back; this is the in-session restore. MAIN THREAD. Returns
+    // ClickUp 86e3eewaf + 86e3940zh). Base perk edits are not written to the
+    // save, but they DO persist in memory across a same-session reload (review
+    // F1), so this runs whenever the record lists a strip. MAIN THREAD. Returns
     // false when the actor is null / unenrolled. Idempotent (a perk already on
     // the base skips).
     bool RestoreNativePerks(RE::Actor* a_actor);
 
     // ROSTER REMOVAL (ClickUp 86e3eewaf): undo everything progression did to
     // this follower's actor, then ERASE his g_prog record (PRGN) and his HMS
-    // fire mask. Undo order: MFO's granted perk ranks off the base, then
-    // RestoreNativePerks, then every ledgered skill back to the natural MFO
+    // fire mask. Undo order: MFO's granted perk ranks off the base (Respec's
+    // removal, ungated), then RestoreNativePerks, then every ledgered skill MFO
+    // still holds (live base == lastWrittenBase) back to the natural MFO
     // measured (the single ReconcileSkill write site, 0 points), then the HMS
     // take-back (UndoHms: see Hms.cpp for what can and cannot be taken back).
     // Each step logs what it did and what it could not undo. MAIN THREAD

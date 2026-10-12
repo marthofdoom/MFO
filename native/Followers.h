@@ -83,7 +83,8 @@ namespace MFO::Followers {
     // follower who is NOT currently following, after undoing what MFO did to him.
     // Three hops, each on the domain that owns what it touches:
     //  1. WORKER (this call, from Board ApplyEdits): refuse unless he has a record,
-    //     is persistable, is NOT tracked (not following) and is not already in
+    //     is persistable, is NOT following (not tracked AND not IsEligibleFollower:
+    //     a waiting / other-cell teammate is still a follower) and is not already in
     //     flight; then ReleaseHeldState (the dismissal release road: aliases, APMF
     //     claims, equip declaration, force-hold, gear restore) and mark him pending;
     //     then MainThread::Post the undo.
@@ -97,8 +98,10 @@ namespace MFO::Followers {
     // No co-save layout or version changes: the next save simply omits him.
     // Returns false (with a named [roster] line) when refused. WORKER only (#4/#74).
     bool RequestRosterRemoval(RE::FormID a_actorID);
-    // Worker only. Applies the main thread's verdicts (step 3 above). Called at the
-    // top of Refresh; idempotent and cheap when nothing is in flight.
+    // Applies the main thread's verdicts (step 3 above). Called at the top of Refresh:
+    // on the WORKER, and once on the MAIN thread at kPostLoadGame (plugin.cpp's Refresh)
+    // with the pump stopped, when the queue is always empty (ResetAllState cleared it
+    // and the epoch moved). Idempotent and cheap when nothing is in flight.
     void DrainRosterRemovals();
 
     // False for runtime (0xFF) FormIDs, which must NEVER be persisted

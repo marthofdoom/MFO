@@ -1766,6 +1766,7 @@ namespace MFO::Board {
                 // Current cell name, else the location name (retained followers only). Worker-side
                 // read-only lookups copied into the snapshot, so the render thread never touches the actor.
                 if (auto* a = f->As<RE::Actor>()) {
+                    r.stillFollower = Followers::IsEligibleFollower(a);   // 86e3eewaf F3: worker read, flags + AVs
                     if (auto* c = a->GetParentCell(); c && c->GetName() && *c->GetName()) {
                         r.cell = c->GetName();
                     } else if (auto* loc = a->GetCurrentLocation(); loc && loc->GetName() && *loc->GetName()) {

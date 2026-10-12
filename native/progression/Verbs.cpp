@@ -387,38 +387,36 @@ namespace MFO::ProgAllocator {
         }
         auto& st = it->second;
         spdlog::info("[roster] {:08X} '{}': undoing progression ({}, {} perk alloc(s), {} stripped native(s), "
-                     "{} skill ledger(s), base perks touched this session: {})",
+                     "{} skill ledger(s))",
                      a_actorID, NameOf(actor), st.enrolled ? "enrolled" : "HMS-only", st.perks.size(),
-                     st.strippedPerks.size(), st.skills.size(), st.baseTouched);
+                     st.strippedPerks.size(), st.skills.size());
 
-        // 1+2. PERKS. Base perk edits do not survive a load (P3), so only a base MFO
-        // touched THIS session holds anything of ours. MFO's grants come off first (the
-        // Respec removal: the held rank form, GetPerkIndex-guarded), THEN the natives MFO
-        // stripped go back on (RestoreNativePerks, 86e3940zh), so a native rank MFO later
-        // granted as its own ends up back on the base, natively.
-        if (st.baseTouched) {
-            int removed = 0;
-            for (const auto& p : st.perks) {
-                auto ref = FindNode(p.nodePerkID);
-                RE::BGSPerk* held = nullptr;
-                if (ref.node && p.rank >= 1 && p.rank <= ref.node->ranks.size())
-                    held = PerkByID(ref.node->ranks[p.rank - 1].perkFormID);
-                if (!held) held = PerkByID(p.nodePerkID);   // off-catalog: best effort on the node id
-                if (held && base->GetPerkIndex(held).has_value()) {
-                    base->RemovePerk(held);
-                    ++removed;
-                    spdlog::info("[roster] {:08X}: MFO perk '{}' ({:08X}) removed", a_actorID, NameOf(held),
-                                 held->GetFormID());
-                }
+        // 1+2. PERKS. Base perk edits are not written to the save, but they DO persist
+        // in memory across a same-session reload (review F1: the SPID pattern), so no
+        // "this session" gate can tell whether MFO's grants are on the base. Respec's
+        // own removal, ungated: the held rank form, GetPerkIndex-guarded (a form not on
+        // the base is skipped). THEN the natives MFO stripped go back on
+        // (RestoreNativePerks, 86e3940zh, idempotent: it re-adds only recorded natives
+        // missing from the base), so a native rank MFO later granted as its own ends up
+        // back on the base. Known limit, shared with Respec (backlog MFO-B249 F6): an
+        // allocated rank form the load order now ALSO grants natively is removed too.
+        int removed = 0;
+        for (const auto& p : st.perks) {
+            auto ref = FindNode(p.nodePerkID);
+            RE::BGSPerk* held = nullptr;
+            if (ref.node && p.rank >= 1 && p.rank <= ref.node->ranks.size())
+                held = PerkByID(ref.node->ranks[p.rank - 1].perkFormID);
+            if (!held) held = PerkByID(p.nodePerkID);   // off-catalog: best effort on the node id
+            if (held && base->GetPerkIndex(held).has_value()) {
+                base->RemovePerk(held);
+                ++removed;
+                spdlog::info("[roster] {:08X}: MFO perk '{}' ({:08X}) removed", a_actorID, NameOf(held),
+                             held->GetFormID());
             }
-            if (removed) actor->ApplyPerksFromBase();
-            st.perks.clear();
-            if (st.enrolled) RestoreNativePerks(actor);
-        } else if (!st.perks.empty() || !st.strippedPerks.empty()) {
-            spdlog::info("[roster] {:08X}: base perk list untouched this session -- MFO's {} grant(s) and {} "
-                         "strip(s) did not survive the load, the base already holds only the load order's perks",
-                         a_actorID, st.perks.size(), st.strippedPerks.size());
         }
+        if (removed) actor->ApplyPerksFromBase();
+        st.perks.clear();
+        if (st.enrolled) RestoreNativePerks(actor);
 
         // 3. SKILLS (base AVs persist in the save: taken back now).
         const int skillsChanged = UndoSkills(actor, st);

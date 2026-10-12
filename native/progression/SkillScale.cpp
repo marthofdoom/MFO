@@ -328,6 +328,17 @@ namespace MFO::ProgAllocator {
             for (auto& e : a_st.skills) {
                 if (e.lastWrittenBase < 0.0f) continue;   // MFO never wrote this skill
                 const float before = avo->GetBaseActorValue(e.av);
+                // Review F2 (mirrors UndoHms): only a base that still reads what MFO last
+                // wrote is MFO's to take back. Anything else was written since (an engine
+                // auto-calc slam, another mod, the player's console), most of all on a T#78
+                // OFF follower MFO stopped reconciling. REVERT mode would otherwise write
+                // the enrollment baseline over it regardless of the live value.
+                if (before != e.lastWrittenBase) {
+                    spdlog::warn("[roster] {:08X} skill {} NOT UNDONE: base {:.1f} is not what MFO last wrote "
+                                 "({:.1f}); something else changed it since, MFO leaves it", id, AvName(e.av),
+                                 before, e.lastWrittenBase);
+                    continue;
+                }
                 ReconcileSkill(avo, e, 0.0f, BaselineFloor(a_st, e.av), id, /*log*/ false);
                 const float after = avo->GetBaseActorValue(e.av);
                 if (after != before) ++changed;

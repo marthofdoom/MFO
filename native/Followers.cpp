@@ -15,6 +15,7 @@
 #include "Diagnostics.h"  // F7: CurrentPumpEpoch / PumpTickGate for its AddTask body
 #include "progression/ProgAllocator.h"   // 86e3eewaf: ForgetFollower (the main-thread progression undo)
 #include "logistics/PlayerGiven.h"        // 86e3eewaf: Forget (his PGIV entries)
+#include "Rapport.h"                      // review F5: DrainPendingSpends (the respec debit, worker side)
 #include <mutex>                          // 86e3eewaf: g_rosterMx (main -> worker verdict hand-back)
 #include "Forms.h"
 #include "Config.h"
@@ -471,10 +472,17 @@ namespace MFO::Followers {
             spdlog::info("[roster] {:08X}: remove refused -- no MFO record", id);
             return false;
         }
-        if (IsTracked(id)) {
+        // NOT FOLLOWING = not tracked AND not an eligible follower (review F3): IsTracked
+        // only sees the high process list, so a teammate told to wait or left in another
+        // cell is untracked yet still a follower, and the next sweep that sees him would
+        // re-adopt him with a default record. IsEligibleFollower is the teammate gate
+        // minus the dismissed-custom-follower quirks (flags + actor values, no 3D / no
+        // process: the read Lotd already makes on this worker for unloaded teammates).
+        if (IsTracked(id) || IsEligibleFollower(RE::TESForm::LookupByID<RE::Actor>(id))) {
             // A follower in the party would be re-adopted on the next sweep with default
             // data; the T#78 MFO switch is the "keep him, leave him alone" road.
-            spdlog::info("[roster] {:08X}: remove refused -- he is following right now (dismiss him first)", id);
+            spdlog::info("[roster] {:08X}: remove refused -- he is still a follower (in the party, waiting, "
+                         "or in another cell); dismiss him first", id);
             return false;
         }
         if (g_rosterPending.count(id)) {
@@ -507,9 +515,9 @@ namespace MFO::Followers {
                 return;
             }
             bool ok = false;
-            if (IsTrackedFast(id)) {
-                spdlog::warn("[roster] {:08X}: REMOVAL ABORTED -- he re-joined the party before the undo ran; "
-                             "every record is kept", id);
+            if (IsTrackedFast(id) || IsEligibleFollower(RE::TESForm::LookupByID<RE::Actor>(id))) {
+                spdlog::warn("[roster] {:08X}: REMOVAL ABORTED -- he is a follower again (re-joined) before the "
+                             "undo ran; every record is kept", id);
             } else {
                 ok = ProgAllocator::ForgetFollower(id);   // step 2: undo + erase PRGN, main thread
             }
@@ -562,8 +570,10 @@ namespace MFO::Followers {
     }
 
     void Refresh() {
-        // Roster removal step 3 (86e3eewaf): apply the main thread's undo verdicts on
-        // this worker before the sweep reads g_followers.
+        // The main thread's queued g_followers work, applied HERE on the record's owning
+        // domain before the sweep reads the map (#4/#74): the respec rapport debits
+        // (review F5), then roster removal step 3 (86e3eewaf).
+        Rapport::DrainPendingSpends();
         DrainRosterRemovals();
         auto* pl = RE::ProcessLists::GetSingleton();
         if (!pl) {

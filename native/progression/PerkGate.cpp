@@ -300,10 +300,7 @@ namespace MFO::ProgAllocator {
                     }
                 }
             }
-            if (stripped) {
-                a_actor->ApplyPerksFromBase();
-                a_st.baseTouched = true;   // roster removal: a strip to restore this session
-            }
+            if (stripped) a_actor->ApplyPerksFromBase();
             a_st.nativeHeld = true;
             // §17 debit = tree ranks STILL natively held (unstrippable), never MFO's.
             a_st.nativeTreePerksAtEnroll = static_cast<std::uint16_t>(
@@ -455,7 +452,6 @@ namespace MFO::ProgAllocator {
             }
             a_base->AddPerk(target, 1);
             a_actor->ApplyPerksFromBase();
-            a_st.baseTouched = true;   // roster removal: an MFO grant on the base this session
 
             auto* alloc = FindAlloc(a_st, a_node.perkFormID);
             if (!alloc) {
@@ -524,10 +520,7 @@ namespace MFO::ProgAllocator {
                 ++reAdded;
                 changed = true;
             }
-            if (changed) {
-                a_actor->ApplyPerksFromBase();
-                a_st.baseTouched = true;   // roster removal: MFO's grants re-added this session
-            }
+            if (changed) a_actor->ApplyPerksFromBase();
 
             RecomputeSkills(a_actor, a_st, /*log*/ false);
             RecomputeHMS(a_actor, a_st, /*log*/ false);   // §HMS: capture baseline / hold target

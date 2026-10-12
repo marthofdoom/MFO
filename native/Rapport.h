@@ -18,8 +18,17 @@ namespace MFO::Rapport {
 
     // Deduct rapport (clamped at 0) and log any rank change. The progression
     // respec's price tag (§15: −500 rapport). NOT fRapportRate-scaled — a
-    // cost is a price, not an accrual. Main thread only.
+    // cost is a price, not an accrual. CALLABLE FROM ANY THREAD (its caller,
+    // the respec, runs on the TRUE main thread): it only ENQUEUES the debit
+    // under a leaf mutex; the worker applies it in DrainPendingSpends, so no
+    // main-thread code touches g_followers (#4/#74, item 2b; review F5 of the
+    // roster removal, whose worker erase frees map nodes).
     void Spend(RE::FormID a_actorID, float a_amount, const char* a_reason);
+
+    // WORKER (the g_followers domain; also the kPostLoadGame main call of
+    // Followers::Refresh, pump stopped). Applies every queued Spend in order.
+    // Called at the top of Followers::Refresh.
+    void DrainPendingSpends();
 
     // Counters for the diagnostic dump (TEST_GUIDE 2C/2D). Without these the
     // combat-dispatch volume question cannot be answered at all.
@@ -54,7 +63,8 @@ namespace MFO::Rapport {
     // Callable from any thread.
     bool QuashAllyPair(RE::FormID a_actor, RE::FormID a_target);
 
-    // Save-scoped; called from RevertCallback.
+    // Save-scoped; called from RevertCallback. Also drops queued Spends (a debit
+    // queued in save A must never land on save B's same-FormID follower).
     void ResetSessionCounters();
 
 }

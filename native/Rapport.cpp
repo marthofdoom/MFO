@@ -417,6 +417,24 @@ namespace MFO::Rapport {
         return g_lastKill;
     }
 
+    namespace {
+        // Queued debits (review F5, roster removal 86e3eewaf). Spend's caller, the
+        // progression respec, runs on the TRUE main thread; g_followers belongs to
+        // the worker (#4/#74). A main-thread find() concurrent with the worker's
+        // erase (DrainRosterRemovals) or insert (Refresh) is a data race, so the
+        // debit rides this queue to the worker. g_spendMx is a strict LEAF. The
+        // epoch tag drops a debit that a revert / load overtook.
+        struct PendingSpend {
+            RE::FormID    id;
+            float         amount;
+            std::string   reason;
+            std::uint64_t epoch;
+        };
+        std::mutex                g_spendMx;
+        std::vector<PendingSpend> g_pendingSpends;
+    }
+    void ApplySpend(RE::FormID a_actorID, float a_amount, const char* a_reason);
+
     void ResetSessionCounters() {
         // Save-scoped: without this the kills/hr denominator includes main-menu
         // time and every previously-loaded save in the same process.
@@ -429,6 +447,8 @@ namespace MFO::Rapport {
         // load, so a stale entry from the LAST save would silently swallow the
         // next session's first quash of that pair for up to the window.
         { std::scoped_lock lk(g_quashMx); g_quashNext.clear(); }
+        // Queued respec debits (F5): never carried into the next save.
+        { std::scoped_lock lk(g_spendMx); g_pendingSpends.clear(); }
     }
 
     double SessionMinutes() {
@@ -491,19 +511,41 @@ namespace MFO::Rapport {
         }
     }
 
+
     void Spend(RE::FormID a_actorID, float a_amount, const char* a_reason) {
         // The DEBIT twin of Award, added for the progression respec (§15:
         // respec is free of gold but costs rapport — the follower resents the
         // reset). Deliberately NOT rate-scaled: a cost is a price tag, not an
         // accrual, and fRapportRate must not discount it.
         if (a_amount <= 0.0f) return;
-        // item 2b: Spend's sole caller is the progression respec, which runs on
-        // the MAIN thread (Board prog edit -> MainThread::Post). TryEnsureRecord
-        // would INSERT (g_followers rehash vs the worker) if the record were
-        // absent, but a respec targets an enrolled, board-addressable follower
-        // that Refresh already TryEnsureRecord'd, so it FINDS, never inserts. The
-        // BoardEditScope tripwire (Board.cpp) logs a HAZARD if that breaks. (Award
-        // above legitimately inserts — it runs on the worker via the queued sinks.)
+        std::scoped_lock lk(g_spendMx);
+        g_pendingSpends.push_back({ a_actorID, a_amount, a_reason ? a_reason : "", Diagnostics::CurrentPumpEpoch() });
+    }
+
+    void DrainPendingSpends() {
+        std::vector<PendingSpend> todo;
+        {
+            std::scoped_lock lk(g_spendMx);
+            if (g_pendingSpends.empty()) return;
+            todo.swap(g_pendingSpends);
+        }
+        const auto epoch = Diagnostics::CurrentPumpEpoch();
+        for (const auto& p : todo) {
+            if (p.epoch != epoch) {
+                spdlog::info("[rapport] {:08X} spend -{:.0f} ('{}') dropped: a revert / load intervened",
+                             p.id, p.amount, p.reason);
+                continue;
+            }
+            ApplySpend(p.id, p.amount, p.reason.c_str());
+        }
+    }
+
+    void ApplySpend(RE::FormID a_actorID, float a_amount, const char* a_reason) {
+        // WORKER: the g_followers domain. A respec targets an enrolled follower
+        // whose record exists, so this FINDS; were it gone (removed from the
+        // roster since), TryEnsureRecord would re-seed one on the worker, which is
+        // legal here, but the roster removal only accepts a follower who is not
+        // following and a respec only a party member, so the two do not meet.
         auto* rec = Followers::TryEnsureRecord(a_actorID);
         if (!rec) return;
         auto& st = *rec;

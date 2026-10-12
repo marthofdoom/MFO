@@ -280,8 +280,10 @@ namespace MFO::Board {
             // only edges fed while OPEN; the guard is belt-and-suspenders on top of
             // the fact that the opening DOWN was seen while closed and never fed.
             static bool s_r1Guard = false;
+            static std::uint32_t s_openSeq = 0;   // 86e3eewaf F7: bumps per open (disarms the roster confirm)
             if (g_justOpened.exchange(false)) {
                 s_r1Guard = true; s_prevNavBusy = true;
+                ++s_openSeq;
                 // STUCK-KEY SWEEP (v1.0.59). The press that CLOSED the last
                 // session (B / Esc) never gets its release fed: the hook stops
                 // feeding the instant g_open is false and the close grace
@@ -419,12 +421,19 @@ namespace MFO::Board {
                     // back out). The row button only ARMS it; the footer shows what will
                     // be deleted plus Remove / Cancel. Disarmed when the armed follower is
                     // gone or following again (removal is offered only off the party).
-                    static RE::FormID s_removeArmed = 0;
-                    static bool       s_removeFocus = false;   // land nav on Cancel once, on arming
+                    static RE::FormID    s_removeArmed = 0;
+                    static bool          s_removeFocus = false;   // land nav on Cancel once, on arming
+                    // F7: an arm never outlives the board session it was made in, nor a
+                    // revert / load (the pump epoch is atomic, safe on the render thread).
+                    static std::uint32_t s_removeSeq   = 0;
+                    static std::uint64_t s_removeEpoch = 0;
+                    if (s_removeArmed && (s_removeSeq != s_openSeq ||
+                                          s_removeEpoch != Diagnostics::CurrentPumpEpoch()))
+                        s_removeArmed = 0;
                     const FollowerRow* armedRow = nullptr;
                     if (s_removeArmed) {
                         for (const auto& r : snap.rows)
-                            if (r.id == s_removeArmed && !r.active) { armedRow = &r; break; }
+                            if (r.id == s_removeArmed && !r.active && !r.stillFollower) { armedRow = &r; break; }
                         if (!armedRow) s_removeArmed = 0;
                     }
 
@@ -567,18 +576,23 @@ namespace MFO::Board {
                             // never reach the tooltip that says why. Here it can, and a
                             // press on the greyed button does nothing. Arming only: the
                             // destructive press is the footer's Remove.
+                            // "Following" = active OR a retained row still an eligible
+                            // follower (waiting / other cell, review F3).
                             ImGui::TableNextColumn();
                             ImGui::PushID(static_cast<int>(r.id));
-                            if (r.active) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.45f);
+                            const bool following = r.active || r.stillFollower;
+                            if (following) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.45f);
                             const bool removePressed = Click::SmallButton(Str::Label(Str::K::Fk_Remove, "rosterremove"));
-                            if (r.active) ImGui::PopStyleVar();
-                            if (removePressed && !r.active) {
+                            if (following) ImGui::PopStyleVar();
+                            if (removePressed && !following) {
                                 s_removeArmed = r.id;
                                 s_removeFocus = true;
+                                s_removeSeq   = s_openSeq;
+                                s_removeEpoch = Diagnostics::CurrentPumpEpoch();
                             }
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("%s", Str::Get(r.active ? Str::K::Fk_TipRemoveFollowing
-                                                                          : Str::K::Fk_TipRemove));
+                                ImGui::SetTooltip("%s", Str::Get(following ? Str::K::Fk_TipRemoveFollowing
+                                                                           : Str::K::Fk_TipRemove));
                             ImGui::PopID();
                         }
                         ImGui::EndTable();

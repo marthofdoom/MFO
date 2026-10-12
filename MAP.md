@@ -4694,18 +4694,17 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     `SetBoardFocus` (`:94`), `CopyBoardViews`/`CopyBoardTabViews` (`:96`/`:105`),
     `PublishBoardViews` (`:119`).
   - (2026-10-12, ClickUp 86e3eewaf) ROSTER REMOVAL undo, main thread, called only from
-    `ForgetFollower` (`Verbs.cpp:374`): `UndoSkills` (`SkillScale.cpp:321`, every ledgered skill
-    through the ONE `ReconcileSkill` write site with 0 points, so the baseline floor still holds) and
-    `UndoHms` (`Hms.cpp:637`: a FIXED-STAT / grant-history follower's H/M/S back to `hmsBaseline` when
-    the live base still reads `hmsHeld`; a LEVELING follower, or any record with `hmsWithheld > 0`, is
-    LEFT and logged WARN: the engine's per-pool split was never recorded and its next auto-calc
-    level-up re-slams its own values). `ProgState::baseTouched` (`ProgAllocator.h:371`, runtime-only,
-    never serialized) is set by `GrantRank`, a `ReapplyFollower` AddPerk and a non-empty
-    `StripNativePerks`; ForgetFollower takes perks back / restores natives only when it is set (P3:
-    base perk edits do not survive a load). **What breaks:** clearing `baseTouched` anywhere but a fresh
-    record (e.g. in the unmanaged poll branch, which DOES clear `applied`/`nativeHeld`) leaves MFO's
-    perks on the base after a removal; a second SetBaseActorValue site in SkillScale breaks the floor
-    guarantee UndoSkills relies on.
+    `ForgetFollower` (`Verbs.cpp`): MFO's allocated rank forms off the base (Respec's removal,
+    UNGATED: base perk edits are not saved but DO persist in memory across a same-session reload,
+    review F1), then `RestoreNativePerks` (idempotent), then `UndoSkills` (`SkillScale.cpp`, every
+    ledgered skill whose live base still equals `lastWrittenBase` through the ONE `ReconcileSkill`
+    write site with 0 points; a skill changed since is LEFT + logged, review F2) and `UndoHms`
+    (`Hms.cpp`: a FIXED-STAT / grant-history follower's H/M/S back to `hmsBaseline` when the live
+    base still reads `hmsHeld`; a LEVELING follower, or any record with `hmsWithheld > 0`, is LEFT
+    and logged WARN: the engine's per-pool split was never recorded). Open: REVIEW-BACKLOG
+    **MFO-B249** (F4 level-capped auto-calc followers keep the reshape; F6 natively re-granted rank
+    form removed, as Respec). **What breaks:** a second SetBaseActorValue site in SkillScale breaks
+    the floor guarantee UndoSkills relies on.
   - (2026-10-04) `HoldUnledgeredSkills` (`progression/SkillScale.cpp`, end of file, declared in `ProgAllocator_internal.h`) holds every baselined skill WITHOUT a ledger entry at its enrollment baseline (engine auto-calc drift cancel), via a throwaway entry through `ReconcileSkill`. Called from `Poll.cpp` drift watch right after `RecomputeSkills`. Gated by `cancelEngineAwards`; baseline <= 0 skipped. No co-save change.
   - (2026-10-01) `Poll.cpp` `DumpLedgerOnce` (READ-ONLY `[prog] ledger` dump, once per load per follower, keyed on `g_pollGen`) is called at the end of `PollWork`'s per-follower body; it writes nothing.
   - `progression/Poll.cpp` (224) = the level poll: `Unmanaged` (`:35`), `PollWork` (`:43`),
@@ -5083,7 +5082,9 @@ its perk/AV mutations are runtime-only. Safe to delete without touching saves; o
 ### Board.cpp / Board_FieldKit.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
 **Remove from roster (2026-10-12, ClickUp 86e3eewaf):** the Followers table's 9th column (`Board_FieldKit.cpp`,
 `Fk_ColRoster`) holds a `remove` button per row: GREYED by style alpha (not `BeginDisabled`, so gamepad nav can
-still focus it and read the why-tooltip) for an active row, where a press does nothing. On a retained row it ARMS
+still focus it and read the why-tooltip) for an active row or a retained row with `FollowerRow::stillFollower`
+(`IsEligibleFollower`, filled in PublishSnapshot, review F3), where a press does nothing. The arm is dropped on
+every board open (`s_openSeq`) and on a revert / load (pump epoch), review F7. On a retained row it ARMS
 `s_removeArmed`; the confirm lives IN THE PAGE below the table (wrapped `Fk_RemoveConfirm` + stock-ImGui `Remove`
 `rosterremoveyes` + `Cancel`, nav lands on Cancel once via `SetKeyboardFocusHere`; footer height measured from
 the wrapped text). Remove queues `EditKind::RemoveFromRoster`; `ApplyEdits` (`Board.cpp:1356`) hands it to
@@ -7422,13 +7423,18 @@ concurrency question (distinct threads, mutual exclusion UNPROVEN).
   `Packages::RetreatEvictIf`. Several release engine-serialized alias fills — removing
   any leaves a latch that re-fills on every future load. **ROSTER REMOVAL (86e3eewaf):**
   `RequestRosterRemoval` (`Followers.cpp:469`, worker, from Board `ApplyEdits` `EditKind::RemoveFromRoster`
-  `Board.cpp:1356`) refuses unless the id has a record and is NOT tracked; runs `ReleaseHeldState`
+  `Board.cpp`) refuses unless the id has a record, is NOT tracked AND is not `IsEligibleFollower` (a
+  waiting / other-cell teammate is still a follower, review F3; re-checked on the main hop); runs `ReleaseHeldState`
   (`:367`), marks `g_rosterPending`, `MainThread::Post`s `ProgAllocator::ForgetFollower` (epoch-checked
   with `Diagnostics::CurrentPumpEpoch`), whose verdict comes back through the `g_rosterMx` queue (a
   leaf lock) to `DrainRosterRemovals` (`:517`), called at the TOP of `Refresh` (`:562`): erase the FLWR
   record + this file's runtime maps + MSTK + PGIV, republish the mirrors. The queue (not a gated
   AddTask) is deliberate: `PausePump` (SaveCallback) makes a gate fail and would DROP a hop, leaving a
-  half-removed follower. `ClearTransientState` clears the pending set and the queue. **What breaks:**
+  half-removed follower. `ClearTransientState` clears the pending set and the queue. **`Rapport::Spend`
+  is QUEUED (review F5):** its caller, the progression Respec, runs on the TRUE main thread, so the debit
+  rides a leaf-locked, epoch-tagged queue to `Rapport::DrainPendingSpends`, called at the top of `Refresh`
+  just before `DrainRosterRemovals`; no progression main-thread closure touches `g_followers` any more
+  (`ResetSessionCounters` drops the queue on revert). Open: MFO-B249. **What breaks:**
   erasing `g_followers` on the main thread (the brief-level shorthand "main thread") races the
   worker's iteration (#4/#74, the item-2b hazard); moving the drain after the sweep lets one Refresh
   see a record the main thread already undid. Callers `plugin.cpp:357`,
