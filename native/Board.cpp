@@ -210,55 +210,6 @@ namespace MFO::Board {
 
     namespace {   // ── the anonymous namespace RESUMES ───────────────────────
 
-        // Replace every <tag> (case-insensitive) in a_text with a_value: the DNAM placeholders the
-        // vanilla magic menu fills (<mag>, <dur>, <area>).
-        inline void ReplaceDescTag(std::string& a_text, std::string_view a_tag, const std::string& a_value) {
-            for (std::size_t i = 0; i + a_tag.size() <= a_text.size();) {
-                bool match = a_text[i] == '<';
-                for (std::size_t k = 0; match && k < a_tag.size(); ++k)
-                    match = std::tolower(static_cast<unsigned char>(a_text[i + k])) == a_tag[k];
-                if (match) { a_text.replace(i, a_tag.size(), a_value); i += a_value.size(); }
-                else ++i;
-            }
-        }
-
-        // The "what it does" text for a spell, composed the way the vanilla magic menu does: for EACH
-        // effect (hide-in-UI effects skipped), the MGEF description (DNAM, EffectSetting::
-        // magicItemDescription) with <mag> / <dur> / <area> filled from the effect item (integers), the
-        // effects joined by newlines. An effect with no description falls back to its name plus numbers
-        // (the previous single-effect text). Spells carry no authored DESC of their own. MAIN-THREAD only
-        // (pure form-data reads; called from PublishSnapshot), cached into the row so the render thread
-        // never re-reads.
-        inline std::string SpellTooltip(RE::SpellItem* a_spell) {
-            if (!a_spell) return {};
-            std::string out;
-            for (auto* eff : a_spell->effects) {
-                auto* mgef = eff ? eff->baseEffect : nullptr;
-                if (!mgef) continue;
-                if (mgef->data.flags.all(RE::EffectSetting::EffectSettingData::Flag::kHideInUI)) continue;
-                const int mag  = static_cast<int>(eff->GetMagnitude() + 0.5f);
-                const int dur  = static_cast<int>(eff->effectItem.duration);
-                const int area = static_cast<int>(eff->effectItem.area);
-                std::string line;
-                if (const char* d = mgef->magicItemDescription.c_str(); d && *d) {
-                    line = d;
-                    ReplaceDescTag(line, "<mag>",  std::to_string(mag));
-                    ReplaceDescTag(line, "<dur>",  std::to_string(dur));
-                    ReplaceDescTag(line, "<area>", std::to_string(area));
-                } else {
-                    line = (mgef->GetFullName() && *mgef->GetFullName()) ? mgef->GetFullName() : "";
-                    if (mag  > 0) { if (!line.empty()) line += ' '; line += std::to_string(mag); }
-                    // Display text (i18n keys): this runs on main, the table read is lock-free.
-                    if (dur  > 0) { line += " " + Str::Fmt(Str::K::Spell_For, { dur }); }
-                    if (area > 0) { line += " " + Str::Fmt(Str::K::Spell_In,  { area }); }
-                }
-                if (line.empty()) continue;
-                if (!out.empty()) out += '\n';
-                out += line;
-            }
-            return out;
-        }
-
         // The single-monitor problem: with the full panel open, input is
         // swallowed, so you cannot watch it WHILE fighting -- which is exactly
         // when rapport ticks and vitals move. This compact readout draws every
@@ -1712,7 +1663,7 @@ namespace MFO::Board {
                             if (MFO::Actuation::SpellNatureUndeclared(sp))
                                 p.name = Str::Fmt(Str::K::Gb_SpellNatureHint, { p.name });   // not hidden: a hint
                             p.magickaCost = follower ? static_cast<int>(sp->CalculateMagickaCost(follower) + 0.5f) : 0;
-                            p.tooltip     = SpellTooltip(sp);
+                            p.tooltip     = Progression::SpellEffectsText(sp);
                             out->push_back(std::move(p));
                         }
                         return RE::BSContainer::ForEachResult::kContinue;
@@ -1737,7 +1688,7 @@ namespace MFO::Board {
                         r.teachableSpells.push_back({ sp->GetFormID(), book->GetFormID(),
                                                       sp->GetName() ? sp->GetName() : "?",
                                                       static_cast<int>(sp->CalculateMagickaCost(a) + 0.5f),
-                                                      SpellTooltip(sp) });
+                                                      Progression::SpellEffectsText(sp) });
                     }
                 }
             }

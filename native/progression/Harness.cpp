@@ -110,7 +110,7 @@ namespace MFO::ProgAllocator {
                          "lastPlayerLevel {}",
                          g_econ.levelsPerPerkPoint, g_econ.skillPointsPerLevel,
                          g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
-                         g_econ.respecRapportCost, g_econ.skillCap, c.effectiveRanks,
+                         g_econ.respecRapportCost, g_econ.skillCap, c.scaleEffectiveRanks,
                          c.totalRanks, g_lastPlayerLevel);
         }
 

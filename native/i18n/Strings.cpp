@@ -50,6 +50,7 @@ namespace MFO::Str {
         struct Table {
             std::vector<Entry> e;
             bool               overrides = false;
+            bool               english = true;   // the active language is English (the compiled defaults ARE its text)
         };
 
         std::atomic<const Table*> g_table{ nullptr };
@@ -202,6 +203,7 @@ namespace MFO::Str {
             }
             a_hits = Fill(*t, a_english, a_rejected);
             t->overrides = a_hits > 0;
+            t->english = a_english;
             return t;
         }
 
@@ -225,6 +227,14 @@ namespace MFO::Str {
         if (i >= static_cast<std::size_t>(K::Count_)) return "";
         if (const Table* t = g_table.load(std::memory_order_acquire)) return t->e[i].text.c_str();
         return kDefaults[i].en;
+    }
+
+    bool LanguageSupplies(K k) {
+        const auto i = static_cast<std::size_t>(k);
+        if (i >= static_cast<std::size_t>(K::Count_)) return false;
+        const Table* t = g_table.load(std::memory_order_acquire);
+        if (!t || t->english) return true;   // English: the compiled default is the language's own text
+        return t->e[i].src == Src::Mfo;
     }
 
     std::string Fmt(K k, std::initializer_list<Arg> args) {

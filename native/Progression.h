@@ -174,6 +174,42 @@ namespace MFO::Progression {
         }
     };
 
+    // ── OWNER FACTS: whose state a condition reads (mechanical, no verdict) ──
+    // Perk rule (marth 2026-10-12): a perk's OWNER is whoever holds it. Inside
+    // a perk's own records "the player" means the owner, because the author
+    // assumed owner == player. P1 only RECOGNISES the shapes (no record is
+    // derived, no actor changes). `remap` is what a later phase would have to
+    // substitute; with no derived records (Q1) every non-kNone rank is "part
+    // player-only" and the verdict is shown MARGINAL.
+    enum class OwnerRemap : std::uint8_t {
+        kNone        = 0,   // the shape already works for a follower owner
+        kDerive      = 1,   // a player pin / PlayerRef run-on inside the perk's own conditions
+        kUnsupported = 2,   // a PlayerRef parameter in an effect-on-other context: no owner-agnostic form
+    };
+    struct PerkOwnerFacts {
+        bool selfPin{ false };          // GetIsID/GetIsReference Player == 1 on the owner (ability effect / EP owner tab)
+        bool playerRefRunOn{ false };   // a condition run on PlayerRef (object kRef resolving to the player)
+        bool playerRefParam{ false };   // PlayerRef as a function PARAMETER (GetDistance, GetInSameCell)
+        bool otherPin{ false };         // the same pin, but inside a cloaked spell / EP target tab
+        bool teammateTest{ false };     // GetPlayerTeammate (453) on the struck actor
+        bool partyCount{ false };       // GetPlayerTeammateCount (454)
+        bool aloneGate{ false };        // a condition on the OWNER (self context, Subject, no swapTarget) tests GetCombatGroupMemberCount (709)
+                                        // admitting 1 and excluding 2+: "fighting alone". Per condition list; a RANK dies only
+                                        // when every firing entry is aloneGated (PerkEntryFact)
+        bool hostileNullParam{ false }; // IsHostileToActor (719) with a NULL parameter
+        bool cloakHostile{ false };     // a kCloak's associated spell carries a MGEF flagged hostile (a damage aura)
+        bool cloak{ false };            // a kCloak (35) effect: the engine casts from the owner onto nearby actors, caster skipped
+        OwnerRemap remap{ OwnerRemap::kNone };
+        void Merge(const PerkOwnerFacts& a_o) {
+            selfPin = selfPin || a_o.selfPin; playerRefRunOn = playerRefRunOn || a_o.playerRefRunOn;
+            playerRefParam = playerRefParam || a_o.playerRefParam; otherPin = otherPin || a_o.otherPin;
+            teammateTest = teammateTest || a_o.teammateTest; partyCount = partyCount || a_o.partyCount;
+            aloneGate = aloneGate || a_o.aloneGate; hostileNullParam = hostileNullParam || a_o.hostileNullParam;
+            cloak = cloak || a_o.cloak; cloakHostile = cloakHostile || a_o.cloakHostile;
+            if (a_o.remap > remap) remap = a_o.remap;
+        }
+    };
+
     struct PerkEntryFact {
         PerkEntryKind kind{ PerkEntryKind::kOther };
         std::uint32_t entryPointIndex{ 0 };   // meaningful iff kind==kEntryPoint
@@ -185,6 +221,9 @@ namespace MFO::Progression {
                                               // (whether they MATTER is the verdict)
         int           rawType{ -1 };          // GetType() int — unknown-type diagnostics
         PerkStyleFacts style;                 // what the entry's conditions name (above)
+        PerkOwnerFacts owner;                 // whose state the entry's conditions read (above)
+        bool          aloneGated{ false };    // EVERY effect (ability) / the owner tab (entry point) sits behind a
+                                              // fighting-alone gate on the owner: this entry never fires while following
     };
     // Walk a perk's entry points. Add-on-agnostic; safe on any BGSPerk (empty
     // for null / entry-less). CommonLib-churn-resistant (int GetType() compares).
@@ -192,6 +231,12 @@ namespace MFO::Progression {
     // The engine enum name for a BGSEntryPoint index (a general fact — the
     // canonical member names of the frozen 92-value engine enum); "" out of range.
     const char* EntryPointName(std::uint32_t a_index);
+
+    // The "what it does" text of a spell: for each non-hidden effect the MGEF
+    // description (DNAM) with <mag>/<dur>/<area> filled, joined by newlines.
+    // MOVED here unchanged from Board.cpp (SpellTooltip) so the board views can
+    // reuse it for a perk whose DESC is empty. MAIN-THREAD only (form-data reads).
+    std::string SpellEffectsText(RE::SpellItem* a_spell);
 
     // v1.1 residual #3: read an add-on's DECLARED entry-point verdicts off its
     // manifest FLST (the sub-FLST whose front form is a keyword whose editor-id
@@ -231,6 +276,9 @@ namespace MFO::Progression {
         // Union of every entry's style facts for THIS rank (WalkPerkEntries,
         // frozen at build like everything else here). Value-only.
         PerkStyleFacts style;
+        // Union of every entry's OWNER facts for THIS rank (same walk). A rank
+        // whose remap is not kNone is "part player-only" for a follower owner.
+        PerkOwnerFacts owner;
     };
 
     // One perk-carrying tree node — everything the board needs to draw and
@@ -239,6 +287,12 @@ namespace MFO::Progression {
         RE::FormID    perkFormID{ 0 };    // rank 1
         std::string   name;
         std::string   description;
+        // Owner-remap P1, precomputed at kDataLoaded (main thread) so the board view
+        // never re-walks the perk: rank 1 carries an added-ability entry, and the
+        // text of those abilities' effects (SpellEffectsText), the fallback for an
+        // empty DESC.
+        bool          hasAbility{ false };
+        std::string   effectsText;
         std::uint32_t gridX{ 0 };         // integer grid — controller nav
         std::uint32_t gridY{ 0 };
         float         hpos{ 0.0f };       // float dome coords — layout
@@ -294,6 +348,19 @@ namespace MFO::Progression {
         // an equipment-deciding perk is never marginal). 0 with a complete
         // verdict table; nonzero is the "stale/absent verdicts" tell.
         int stylePromotedRanks{ 0 };
+        // Owner-remap census (P1): effective ranks shown MARGINAL because part
+        // of them is player-only; ranks made DEAD because every firing entry
+        // sits behind the "fighting alone" gate (marth Q7, dead + refund).
+        int scaleEffectiveRanks{ 0 };   // effectiveRanks as it was BEFORE the owner remap (the section-15 scale input)
+        int ownerDemotedRanks{ 0 };
+        int aloneGateRanks{ 0 };
+        int ownerDerive{ 0 };        // ranks by remap kind (all ranks, any verdict)
+        int ownerUnsupported{ 0 };
+        int ownerCloak{ 0 };
+        int ownerPartyCount{ 0 };
+        int ownerTeammate{ 0 };
+        int ownerHostileNull{ 0 };
+        int ownerRunOn{ 0 };         // ranks with a run-on-PlayerRef condition (shows whether runOnRef is populated)
     };
 
     struct Catalog {
@@ -305,6 +372,9 @@ namespace MFO::Progression {
         int totalRanks{ 0 };
         int effectiveRanks{ 0 };
         int stylePromotedRanks{ 0 };   // sum over skills (see SkillTree)
+        int scaleEffectiveRanks{ 0 };   // sum over skills (see SkillTree)
+        int ownerDemotedRanks{ 0 };
+        int aloneGateRanks{ 0 };
     };
 
     // ── API ─────────────────────────────────────────────────────────────────

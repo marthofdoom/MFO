@@ -4597,6 +4597,29 @@ tally already runs) via a deliberate, commented component-1→component-2 includ
 `Logistics::ShedOffRoleWeapon` (fists rule). **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md`
 MFO-B14** (SEV-4) — the per-list empty-hand rule also matches a "left hand empty"-only
 one-hand perk (no keyword, no right-hand test); tightening shape recorded there.
+**PERK OWNER REMAP, PHASE 1 (2026-10-12, `feat/mfo-perk-owner-remap-p1`; design `perk-owner-remap-design.md`, marth Q1=P1 only):**
+a perk's OWNER is whoever holds it; inside the perk's own records "the player" means the owner. P1 only RECOGNISES and
+DESCRIBES; no record is derived or minted and no actor changes. `PerkOwnerFacts` / `OwnerRemap` (`Progression.h`, beside
+`PerkStyleFacts`) are filled by `ReadOwnerFacts` / `ReadSpellOwnerFacts` (`Progression.cpp`, grep them; context kSelf =
+ability effect or EP tab 0, kOther = cloaked spell or later EP tabs), called from `WalkPerkEntries` beside every
+`ReadStyleFacts` and recursing into `EffectSetting::conditions` and a kCloak MGEF's `data.associatedForm` spell (depth <= 3).
+Facts: selfPin/otherPin (GetIsID/GetIsReference Player == 1), playerRefRunOn (object kRef resolving to the player),
+playerRefParam (GetDistance/GetInSameCell with PlayerRef), teammateTest (453), partyCount (454), aloneGate (709 admitting 1
+and excluding 2), hostileNullParam (719, p1 NULL), cloak. `remap` kDerive (pin / run-on / self param) or kUnsupported
+(PlayerRef param against another actor). Unioned per rank into `RankView::owner` in `BuildSkill`.
+**Verdict:** a rank that is effective today (and carries no style fact) with remap != kNone is demoted to MARGINAL ("part
+player-only", `Pk_PlayerOnlyPart`), counted in `ownerDemotedRanks` and the always-logged `[prog] owner-remap census` line. A
+rank already dead stays dead. NOTHING is promoted. Marginal keeps the node in `nodes`, so the load-time drop oracle
+(`Allocator.cpp` `FindNode`, ~:614) never drops a saved rank on this change. **The fighting-alone family (aloneGate, Q7: marth "dead + refund") is made DEAD** in `BuildSkill` (why = "fighting-alone gate"). An all-dead node is filtered, so on load the existing oracle (`Allocator.cpp` `FindNode` miss, ~:614) drops a saved allocation of it, with no exemption, and the derived section-17 pool refunds it (`PerkPointsAvailable` = floor(level/N) - `AllocatedRanks`, `ProgAllocator_internal.h:238`; the dropped alloc is never pushed to `st.perks`). The drop now logs a `[cosave] DROPPED saved perk alloc` warning per follower and node, naming the perk and the points returned. What breaks if you change this: the section-15 scale input is `SkillTree/Catalog::scaleEffectiveRanks`, the effective count taken BEFORE the owner remap (demotions and aloneGate deaths do not lower it); `effectiveRanks` is the post-remap count and is not read for point income (income is the derived pool).
+**Description:** `OwnerDescription` (`progression/BoardViews.cpp`, called per node from `BuildNodeViews`, main thread) builds
+`BoardNodeView::description` per focused follower: raw DESC (or, when empty, `Progression::SpellEffectsText` of the
+perk's ability spells), Layer 2 phrase rewrite via the `Pk_Rw*` Str keys (only while `Pk_RwOn` is "1", skipped under the
+Guard), then the Layer 1 targets line (`Pk_TargetsParty` for a cloak, `Pk_TargetsSelf` for another ability perk) or
+`Pk_PlayerOnlyPart`. The node popup (`Board_Progression.cpp`) draws it, falling back to the catalog's raw DESC. The old
+`Board.cpp` `SpellTooltip` / `ReplaceDescTag` moved unchanged to `Progression.cpp` as `Progression::SpellEffectsText`.
+**Review-round fixes (P1):** `aloneGate` is set only for a self-context condition run on the Subject (object kSelf, no swapTarget); a rank dies only if EVERY firing entry is `PerkEntryFact::aloneGated` (ability: every effect gated; EP: owner tab 0), so "+X always, +Y when alone" survives. selfPin requires the Subject too. The cloak Party line needs a non-hostile assoc spell (`cloakHostile`) or `hostileNullParam`. `PerkNodeView::hasAbility/effectsText` are precomputed at kDataLoaded; `BoardViews.cpp` caches the rewritten text per (follower, language table) in `g_descCache`. `Str::LanguageSupplies(K)` (Strings.h) says whether the active language's own table supplies a key (English always); Layer 2 requires it for `Pk_RwOn`. The census adds `runOnPlayerRef=` (shows whether `runOnRef` is populated). `Board_Progression.cpp` keeps every node the focused follower owns (and its parents) when "show marginal" is off. Open (backlog, not fixed): mixed nodes (F3) and Apply-spell EPs 51/52/67/69 (F7).
+Later phases (derived records, enacted EPs, the reverse shape) are NOT implemented.
+
 **STYLE-FACT RANKS ARE NEVER MARGINAL (2026-09-14, `fix/mfo-deck-0914-helmet-offhand-verdict-meo`):**
 at the rank build (`BuildSkill`, right after the `rank.style` merge) a rank with
 `rank.style.Any()` whose `ClassifyRank` verdict is not `kEffective` is PROMOTED to

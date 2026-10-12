@@ -252,3 +252,16 @@ MFO_STR(Act_LootValuables, "Loot valuables and gold (to sell)", 0)
 MFO_STR(Act_LootMuseum, "Loot museum items", 0)
 MFO_STR(Act_EquipTorch, "Equip torch", 0)
 MFO_STR(Act_CastPlayer, "Cast on player", 0)
+
+// == Perk descriptions, owner perspective ==
+MFO_STR(Pk_TargetsSelf, "Affects: {1}", 1)   // {1}=the follower's name
+MFO_STR(Pk_TargetsParty, "Affects: nearby allies, you included, not {1}", 1)   // {1}=the follower's name
+MFO_STR(Pk_PlayerOnlyPart, "part player-only", 0)   // shown under a perk some of whose effects only work for the player
+MFO_STR(Pk_RwOn, "1", 0)   // "1" = rewrite the perk text with the patterns below. A language that does not supply the patterns sets this to 0 and gets only the targets line
+MFO_STR(Pk_RwPlayer, "the player", 0)   // the phrase that means "the perk's owner" in the game's perk text; replaced by the follower's name
+MFO_STR(Pk_RwAllies, "your followers|your allies|your companions|your teammates", 0)   // phrases separated by |; each becomes the next key
+MFO_STR(Pk_RwAlliesTo, "allies (you included)", 0)
+MFO_STR(Pk_RwPairs, "you are=>they are|you were=>they were|you have=>they have|yourself=>themself|your=>their", 0)   // from=>to pairs separated by |, whole words, case kept
+MFO_STR(Pk_RwYouSubj, "they", 0)   // "you" before a verb
+MFO_STR(Pk_RwYouObj, "them", 0)   // "you" anywhere else
+MFO_STR(Pk_RwYouNonVerb, "to|from|with|for|in|on|at|by|of|and|than|as|if|when|while|against|near|around|into|over|under", 0)   // words after which "you" is NOT followed by a verb; separated by |

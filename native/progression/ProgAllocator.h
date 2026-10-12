@@ -455,6 +455,10 @@ namespace MFO::ProgAllocator {
         bool         native{ false };    // owned by the load order, not MFO (§4.1 boundary)
         bool         available{ false }; // §5 gate passes NOW (points + prereq + conditions)
         std::string  whyNot;             // locked reason (empty when owned/available/no class)
+        // Owner-perspective description (P1): the catalog's raw DESC rewritten for THIS
+        // follower plus the targets line, built on the main thread at publish and read
+        // by the render thread. Empty = no node state for it; draw the raw catalog text.
+        std::string  description;
     };
     struct BoardSkillLine {
         std::string    name;

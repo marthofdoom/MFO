@@ -61,6 +61,11 @@ namespace MFO::Str {
     // RAW template (with its {N} tokens): use Fmt() to render those.
     const char* Get(K k);
 
+    // True when the ACTIVE language's own text supplies this key: always for English (the compiled
+    // default is its text), otherwise only when an MFO_<LANGUAGE>.txt entry exists. A missing key in
+    // another language silently falls back to the English default; this tells the two apart.
+    bool LanguageSupplies(K k);
+
     // Render a key's template with args. Extra args are ignored, a missing
     // arg renders empty. Safe by construction (see the header comment).
     std::string Fmt(K k, std::initializer_list<Arg> args);
