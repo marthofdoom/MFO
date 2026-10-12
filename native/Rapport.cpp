@@ -542,10 +542,13 @@ namespace MFO::Rapport {
 
     void ApplySpend(RE::FormID a_actorID, float a_amount, const char* a_reason) {
         // WORKER: the g_followers domain. A respec targets an enrolled follower
-        // whose record exists, so this FINDS; were it gone (removed from the
-        // roster since), TryEnsureRecord would re-seed one on the worker, which is
-        // legal here, but the roster removal only accepts a follower who is not
-        // following and a respec only a party member, so the two do not meet.
+        // whose record exists, so this FINDS. Respec does NOT check that the follower
+        // is active, so a respec and a roster removal of the same follower can both be
+        // in flight. Safety rests on FIFO ordering: the respec's main closure queues
+        // this debit before any later removal's main hop runs, and Refresh drains the
+        // spends BEFORE DrainRosterRemovals, so the debit lands on the record before it
+        // is erased (and the removal then erases it). Were the record already gone,
+        // TryEnsureRecord would re-seed one on the worker, which is legal here.
         auto* rec = Followers::TryEnsureRecord(a_actorID);
         if (!rec) return;
         auto& st = *rec;

@@ -25,9 +25,10 @@ namespace MFO::Rapport {
     // roster removal, whose worker erase frees map nodes).
     void Spend(RE::FormID a_actorID, float a_amount, const char* a_reason);
 
-    // WORKER (the g_followers domain; also the kPostLoadGame main call of
-    // Followers::Refresh, pump stopped). Applies every queued Spend in order.
-    // Called at the top of Followers::Refresh.
+    // WORKER (the g_followers domain), or the main thread while the worker is
+    // drained: the kPostLoadGame Refresh (pump stopped) and SaveCallback right after
+    // PausePump (review N1). Applies every queued Spend in order. Called at the top
+    // of Followers::Refresh and in SaveCallback before the FLWR pass.
     void DrainPendingSpends();
 
     // Counters for the diagnostic dump (TEST_GUIDE 2C/2D). Without these the

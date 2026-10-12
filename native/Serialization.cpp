@@ -95,6 +95,13 @@ namespace MFO {
         // return still resumes; no epoch bump, so gameplay resumes untouched.
         Diagnostics::PausePump();
         struct ResumeGuard { ~ResumeGuard() { Diagnostics::ResumePump(); } } _resume;
+        // Review N1 (roster removal round): apply any queued respec rapport debits NOW,
+        // before the FLWR pass. Rapport::Spend is deferred to the worker (F5), so a save
+        // in the window after a respec would write PRGN with the respec applied but FLWR
+        // without the debit, and the load would drop the queued debit: a free respec.
+        // Legal here for the same reason this callback may read g_followers at all: the
+        // worker is drained (PausePump). No layout change.
+        Rapport::DrainPendingSpends();
 
         if (!a_intfc->OpenRecord(kRecFollowers, kSchemaVersion)) {
             spdlog::error("[cosave] OpenRecord('{}') failed -- NOTHING SAVED", "FLWR");
