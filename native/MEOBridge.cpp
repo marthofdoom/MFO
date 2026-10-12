@@ -191,6 +191,17 @@ namespace MFO::MEOBridge {
 
     bool CarriedGemUnsocketSupported() { return g_meo && g_meo->Version() >= 3; }
 
+    // ── GEM THEME (MEO ABI v4, F3) ── the ONLY call site of IMEO::GetGemTheme.
+    // THE VERSION GATE IS MANDATORY: GetGemTheme is vtable slot 10, and on a v3 MEO
+    // slot 10 is the scalar deleting destructor, so calling it there frees MEO's
+    // interface object and corrupts the heap. Any thread (MEO reads only its
+    // immutable catalog); false before MEO's catalog is ready or for an unknown gid.
+    bool GemThemeSupported() { return g_meo && g_meo->Version() >= 4; }
+    bool GemThemeOf(const char* a_gid, MEO_API::GemTheme& a_out) {
+        if (!g_meo || g_meo->Version() < 4 || !a_gid || !*a_gid) return false;
+        return g_meo->GetGemTheme(a_gid, &a_out);
+    }
+
     namespace {
         using HoldKey = std::tuple<RE::FormID, RE::FormID, std::uint16_t>;   // follower, base, uid
         std::map<HoldKey, std::uint8_t> g_removalHold;                       // -> GemRules::Reason bits; under g_mx
@@ -361,7 +372,7 @@ namespace MFO::MEOBridge {
             }
         }
 
-        // Class-preference bonus for a gem (effect-aware tier only). HEURISTIC on the
+        // LEGACY (MEO < v4 only; v4 uses RelevanceV4 below, F3). Class-preference bonus for a gem (effect-aware tier only). HEURISTIC on the
         // gem's gid/name text: MEO's gem catalog is not shared with MFO, so this is a
         // soft ranking and MAGNITUDE is the tie-break. Bigger = more wanted. (Flagged
         // for tuning against MEO's real gid set -- see the build report.)
@@ -416,6 +427,198 @@ namespace MFO::MEOBridge {
             if (std::strcmp(a_supportGid, "focus") == 0) return IsElementalGid(a_normalGid);
             if (std::strcmp(a_supportGid, "echo") == 0)  return a_itemIsArmor || IsElementalGid(a_normalGid);
             return false;   // conduit (see above) or an unknown support
+        }
+
+        // ── F3 RELEVANCE (MEO ABI v4, marth 2026-10-12; REVIEW-BACKLOG MFO-B203 F3) ──
+        // With MEO v4 the gem's catalog classification (GemThemeOf) replaces the text
+        // heuristic above (GemBonus / IsElementalGid / LinkWorks, which now run ONLY on an
+        // older MEO). The heuristic missed frost, the weapon-skill fortifies, rated Fortify
+        // Magicka Rate above Fortify One-Handed for a warrior, put Fortify Health at 0 for a
+        // caster, and read "magickadamage" (a Drain weapon gem) and "unarmed" as magic.
+        //
+        // SCORE = relevance x 100 + sub-order x 10 + level (1..5). Relevance is the class
+        // preference; the sub-order ranks gems INSIDE one relevance tier (marth 2026-10-12, so
+        // inventory order never decides); the level is the cross-family value scale (raw
+        // magnitudes are not comparable across families: Weakness 10..50 vs Fire 8.5..29.8);
+        // magnitude stays the last tie-break. A support gem scores 0 of its own and earns one
+        // relevance step (kLinkV4) only through a working Focus/Echo link (F2). An INACTIVE gem
+        // (its effect record did not resolve) scores kInertRel.
+        //
+        // Relevance by MEO's gem class:
+        //   Skill   4 (1 for Alchemy / Smithing / Enchanting / Speech / Pickpocket / Lockpicking,
+        //           marth Q2) when the skill it fortifies is on the follower's PERK DIRECTION (GemRoles:
+        //           the equip side's weapon class / off-hand / armor class, every other skill by
+        //           its owned perk ranks, a caster's invested + cast schools; the worn gear only
+        //           where an equip-side group has no direction), else 0. The theme is NOT used
+        //           (marth: "light armor could be on anyone depending on meo config. But thats perk
+        //           weighted"). Sub-order = owned perk ranks in that skill (capped at 9). KNOWN
+        //           LIMIT: GemTheme carries no skill id, so WHICH skill is read from the gem's
+        //           gid/name through kGemSkillWords (gated to kGemClass_Skill).
+        //   Linear  weapon domain (on-hit damage / weakness, any theme) 3. Armor domain: own theme
+        //           (Arcane for a caster, Martial otherwise) 3, a caster's Martial 2, a non-caster's
+        //           Arcane 0, other 1; sub-order Health > Stamina > Stamina Rate > Heal Rate > Carry
+        //           and Magicka > Magicka Rate (marth 2026-10-12, catalog gids). FIRST HEALTH: while
+        //           the follower has no OTHER Fortify Health gem socketed, Fortify Health is 5, above
+        //           a used skill (marth: "if at least one health gem skill wins").
+        //   Absorb 3, Resist 2, Stagger 2, Control 1; Binary, SoulTrap, Other, unknown 0.
+        constexpr int kInertRel = -10;
+        constexpr int kLinkV4   = 100;   // one relevance step, the v4 scale's "+1"
+
+        // The skill a Skill-class gem fortifies, matched case-insensitively on its gid OR name.
+        // bit = 1 << (RE::ActorValue - kOneHanded) (GemReconcilePrefs), or kGemSkillUnarmed.
+        // lowTier (marth 2026-10-12 Q2): crafting / social / thief-utility skills, relevance 1.
+        struct GemSkillWords { std::uint32_t bit; const char* words[3]; bool lowTier; };
+        constexpr GemSkillWords kGemSkillWords[] = {
+            { 1u << 0,  { "onehanded", "one handed", "one-handed" }, false },
+            { 1u << 1,  { "twohanded", "two handed", "two-handed" }, false },
+            { 1u << 2,  { "archery", "marksman", nullptr },          false },
+            { 1u << 3,  { "block", nullptr, nullptr },               false },
+            { 1u << 4,  { "smithing", nullptr, nullptr },            true  },
+            { 1u << 5,  { "heavyarmor", "heavy armor", nullptr },    false },
+            { 1u << 6,  { "lightarmor", "light armor", nullptr },    false },
+            { 1u << 7,  { "pickpocket", nullptr, nullptr },          true  },
+            { 1u << 8,  { "lockpicking", nullptr, nullptr },         true  },
+            { 1u << 9,  { "sneak", nullptr, nullptr },               false },
+            { 1u << 10, { "alchemy", nullptr, nullptr },             true  },
+            { 1u << 11, { "speech", "persuasion", "articulation" },  true  },
+            { 1u << 12, { "alteration", nullptr, nullptr },          false },
+            { 1u << 13, { "conjuration", nullptr, nullptr },         false },
+            { 1u << 14, { "destruction", nullptr, nullptr },         false },
+            { 1u << 15, { "illusion", nullptr, nullptr },            false },
+            { 1u << 16, { "restoration", nullptr, nullptr },         false },
+            { 1u << 17, { "enchanting", nullptr, nullptr },          true  },
+            { kGemSkillUnarmed, { "unarmed", "pugilist", nullptr },  false },
+        };
+        // Index into kGemSkillWords of the skill this gem fortifies, or -1.
+        int GemSkillIndex(const char* a_gid, const char* a_name) {
+            for (int s = 0; s < static_cast<int>(std::size(kGemSkillWords)); ++s)
+                for (const char* w : kGemSkillWords[s].words)
+                    if (w && (ContainsCI(a_gid, w) || ContainsCI(a_name, w))) return s;
+            return -1;
+        }
+        // The catalog's Fortify Health family (ruling 3) and the Linear sub-order (ruling 1).
+        bool IsHealthGid(const char* a_gid) { return a_gid && std::strcmp(a_gid, "fortifyhealth") == 0; }
+        int LinearSubOrder(const char* a_gid) {
+            static constexpr struct { const char* gid; int sub; } kOrder[] = {
+                { "fortifyhealth", 4 }, { "fortifystamina", 3 }, { "fortifystaminarate", 2 },
+                { "fortifyhealrate", 1 }, { "fortifycarry", 0 },
+                { "fortifymagicka", 1 }, { "fortifymagickarate", 0 } };
+            if (!a_gid) return 0;
+            for (const auto& o : kOrder) if (std::strcmp(a_gid, o.gid) == 0) return o.sub;
+            return 0;
+        }
+
+        struct GemRoles {
+            bool          caster = false;
+            std::uint32_t skills = 0;          // skill bits on the direction (incl. the worn fallback)
+            std::uint8_t  skillRanks[18]{};    // owned perk ranks per skill (the weight)
+        };
+        // Followers whose perk-direction fallback (worn gear) was already logged. MAIN THREAD ONLY,
+        // like g_stuck (the pass runs there; VR runs it inline on the worker). Cleared on revert.
+        std::unordered_set<RE::FormID> g_gemDirFallbackLogged;
+
+        // PERK DIRECTION FIRST (marth 2026-10-12): the skill bits the worker computed from the equip
+        // side's own answers (GemReconcilePrefs, Logistics::GemReconcilePrefsFor). The gear worn RIGHT
+        // NOW is read only for an equip-side group with no direction yet (weapon kind, off-hand,
+        // armor class), and that fallback is logged once per follower. Empty hands are NO signal
+        // (review SEV-4: the unequip -> equip window); Unarmed comes only from the perk direction.
+        // MAIN THREAD (the pass): GetEquippedObject / GetWornArmor.
+        GemRoles BuildGemRoles(RE::Actor* a_actor, const GemReconcilePrefs& a_p) {
+            GemRoles r;
+            r.caster = a_p.caster;
+            r.skills = a_p.skills;
+            std::copy(std::begin(a_p.skillRanks), std::end(a_p.skillRanks), std::begin(r.skillRanks));
+            static constexpr std::uint32_t k1H = 1u << 0, k2H = 1u << 1, kArch = 1u << 2, kBlock = 1u << 3,
+                                    kHeavy = 1u << 5, kLight = 1u << 6;
+            std::uint32_t missing = 0;
+            if (!(a_p.known & kGdWeapon)) missing |= k1H | k2H | kArch;
+            if (!(a_p.known & kGdBlock))  missing |= kBlock;
+            if (!(a_p.known & kGdArmor))  missing |= kHeavy | kLight;
+            if (!missing) return r;
+            std::uint32_t worn = 0;
+            auto weaponBits = [](const RE::TESObjectWEAP* w) -> std::uint32_t {
+                if (!w) return 0;
+                if (w->IsBow() || w->IsCrossbow())                            return kArch;
+                if (w->IsOneHandedSword() || w->IsOneHandedDagger() ||
+                    w->IsOneHandedAxe() || w->IsOneHandedMace())              return k1H;
+                if (w->IsTwoHandedSword() || w->IsTwoHandedAxe())             return k2H;
+                return 0;   // staff, hand-to-hand, nothing: no signal
+            };
+            auto* right = a_actor ? a_actor->GetEquippedObject(false) : nullptr;
+            auto* left  = a_actor ? a_actor->GetEquippedObject(true)  : nullptr;
+            worn |= weaponBits(right ? right->As<RE::TESObjectWEAP>() : nullptr);
+            if (left) {
+                if (auto* sh = left->As<RE::TESObjectARMO>(); sh && sh->IsShield()) worn |= kBlock;
+                else worn |= weaponBits(left->As<RE::TESObjectWEAP>());
+            }
+            if (auto* body = a_actor ? a_actor->GetWornArmor(RE::BGSBipedObjectForm::BipedObjectSlot::kBody) : nullptr) {
+                if (body->IsHeavyArmor())      worn |= kHeavy;
+                else if (body->IsLightArmor()) worn |= kLight;
+            }
+            r.skills |= worn & missing;
+            if (a_actor && g_gemDirFallbackLogged.insert(a_actor->GetFormID()).second)
+                spdlog::info("[meo] gem choice {:08X} '{}': no perk direction yet for {}{}{}-- using the worn gear there "
+                             "(worn skills 0x{:05X}); direction skills 0x{:05X} groups 0x{:X}",
+                             a_actor->GetFormID(), a_actor->GetName() ? a_actor->GetName() : "?",
+                             (missing & (k1H | k2H | kArch)) ? "weapon kind " : "", (missing & kBlock) ? "off-hand " : "",
+                             (missing & (kHeavy | kLight)) ? "armor class " : "", worn & missing, a_p.skills, a_p.known);
+            return r;
+        }
+
+        // a_firstHealth: the follower has no OTHER Fortify Health gem socketed (ruling 3).
+        // a_sub receives the sub-order inside the returned tier.
+        int RelevanceV4(const MEO_API::GemTheme& a_t, const char* a_gid, const char* a_name, const GemRoles& a_r,
+                        bool a_firstHealth, int& a_sub) {
+            a_sub = 0;
+            if (a_t.isSupport) return 0;
+            if (!a_t.active)   return kInertRel;
+            const std::uint8_t ownTheme = a_r.caster ? MEO_API::kTheme_Arcane : MEO_API::kTheme_Martial;
+            switch (a_t.gemClass) {
+            case MEO_API::kGemClass_Skill: {
+                const int s = GemSkillIndex(a_gid, a_name);
+                if (s < 0 || !(a_r.skills & kGemSkillWords[s].bit)) return 0;
+                if (s < 18) a_sub = std::min<int>(a_r.skillRanks[s], 9);
+                // marth 2026-10-12 Q2: crafting / social / thief-utility skills stay perk-weighted
+                // but sit one tier BELOW combat, armor and Sneak (5 Alchemy ranks never beat
+                // One-Handed or a second Health gem).
+                return kGemSkillWords[s].lowTier ? 1 : 4;
+            }
+            case MEO_API::kGemClass_Linear:
+                if (!a_t.isArmor)              return 3;
+                a_sub = LinearSubOrder(a_gid);
+                // marth 2026-10-12 Q4 confirmed: the first Health gem outranks a caster's Magicka too.
+                if (a_firstHealth && IsHealthGid(a_gid)) return 5;
+                if (a_t.theme == ownTheme)     return 3;
+                if (a_r.caster && a_t.theme == MEO_API::kTheme_Martial) return 2;
+                if (!a_r.caster && a_t.theme == MEO_API::kTheme_Arcane) return 0;
+                return 1;
+            case MEO_API::kGemClass_Absorb:  return 3;
+            case MEO_API::kGemClass_Resist:  return 2;
+            case MEO_API::kGemClass_Stagger: return 2;
+            case MEO_API::kGemClass_Control: return 1;
+            default:                         return 0;   // Binary, SoulTrap, Other, any value this build does not know
+            }
+        }
+        int ScoreV4(int a_rel, int a_sub, std::uint8_t a_level) {
+            return a_rel * 100 + std::clamp(a_sub, 0, 9) * 10 + std::clamp<int>(a_level, 1, 5);
+        }
+        // LinkWorks from MEO's own classification (MEO RebuildInstanceEnchant: Focus lifts a
+        // linked elemental gem, Echo on a weapon an elemental gem and on armor any linked gem).
+        // A Conduit is never a working link for MFO (marth 2026-10-12: "They won't use conduit").
+        bool LinkWorksV4(const char* a_supportGid, const char* a_normalGid, bool a_itemIsArmor) {
+            MEO_API::GemTheme s{}, p{};
+            if (!GemThemeOf(a_supportGid, s) || !GemThemeOf(a_normalGid, p)) return false;
+            if (!s.isSupport || p.isSupport || !p.active || p.isArmor != a_itemIsArmor) return false;
+            switch (s.supportType) {
+            case MEO_API::kSupport_Focus: return p.elements != 0;
+            case MEO_API::kSupport_Echo:  return a_itemIsArmor || p.elements != 0;
+            default:                      return false;   // Conduit, or a value this build does not know
+            }
+        }
+        // Is this a CONDUIT support gem? MEO's support type on v4, its catalog gid below v4.
+        bool IsConduitGem(const char* a_gid, bool a_themed) {
+            if (a_themed) { MEO_API::GemTheme t{}; return GemThemeOf(a_gid, t) && t.supportType == MEO_API::kSupport_Conduit; }
+            return ContainsCI(a_gid, "conduit");
         }
 
         // ── THE WORN SET: MEO's OWN eligibility, mirrored (marth 2026-09-14) ─────
@@ -492,10 +695,14 @@ namespace MFO::MEOBridge {
         // hold a support gem (:9272 "item already holds a support gem"). Before
         // this the pass treated support as fitting everything, so a Focus picked
         // for a single-socket ring was accepted, failed in MEO.log, and went STUCK.
-        struct ItemFit { int capacity; bool isArmor; bool hasSupport; bool hasConduit; };
+        // CONDUIT (marth 2026-10-12, "They won't use conduit"): MFO never sockets a Conduit
+        // (the pass's `fits` refuses it) and never admits an off-domain gem through one, in
+        // either tier, on any MEO version: a gem fits only its own domain. A Conduit the PLAYER
+        // placed is never evicted (the swap-up's protectedGem).
+        struct ItemFit { int capacity; bool isArmor; bool hasSupport; };
         bool GemFits(const MEO_API::LooseGemInfo& a_g, const ItemFit& a_f) {
             if (a_g.isSupport) return a_f.capacity >= 2 && !a_f.hasSupport;
-            return a_g.isArmor == a_f.isArmor || a_f.hasConduit;
+            return a_g.isArmor == a_f.isArmor;
         }
 
         // ── THE LEFTOVER LINE ──────────────────────────────────────────────────
@@ -512,16 +719,18 @@ namespace MFO::MEOBridge {
             kRefused,         // MEO refused the SocketGem outright this pass (returned false)
             kMinting,         // the only compatible empty sockets are on a uid-0 item that took its first gem this pass (the rest fill next pass)
             kSupportLimit,    // a support gem: a dual-socket item is open but already holds (or was just given) its one support gem
+            kConduit,         // a Conduit: followers never socket one (marth 2026-10-12)
             kUnclassified,    // a compatible, un-deferred empty socket exists and the gem was neither issued nor stuck -- a bug, never dropped
         };
         const char* LeftoverWord(LeftoverWhy a_w) {
             switch (a_w) {
-            case LeftoverWhy::kOffDomain:     return "off-domain (no worn item of its domain has an empty socket)";
+            case LeftoverWhy::kOffDomain:     return "off-domain (no worn item of its domain has an empty socket; MFO never places a gem through a Conduit)";
             case LeftoverWhy::kStuck:         return "stuck (every compatible empty socket is backed off for it -- see the STUCK line)";
             case LeftoverWhy::kCapacity:      return "capacity (compatible sockets existed but other gems filled them this pass)";
             case LeftoverWhy::kRefused:       return "refused (MEO refused the socket request outright this pass -- see MEO.log)";
             case LeftoverWhy::kMinting:       return "minting (its only compatible empty sockets are on an un-minted item that took its first gem this pass, or whose twin worn instance took the base's one uid-0 request; the rest fill next pass)";
             case LeftoverWhy::kSupportLimit:  return "support-limit (a dual-socket item is open but already holds its one support gem)";
+            case LeftoverWhy::kConduit:       return "conduit (followers never socket a Conduit, marth 2026-10-12)";
             default:                          return "unclassified";
             }
         }
@@ -547,6 +756,56 @@ namespace MFO::MEOBridge {
             std::uint32_t avail[kMaxLoose];
             for (std::uint32_t i = 0; i < nLoose; ++i)
                 avail[i] = loose[i].count ? loose[i].count : 1u;
+
+            // F3: MEO v4's gem classification, or the gid heuristic on an older MEO (said once).
+            const bool themed = GemThemeSupported();
+            {
+                static bool s_modeLogged = false;   // main thread (VR: the worker's inline pass), like g_stuck
+                if (!s_modeLogged) {
+                    s_modeLogged = true;
+                    if (themed)
+                        spdlog::info("[meo] gem choice uses MEO's gem theme (ABI {}): class relevance on the perk direction", g_meo->Version());
+                    else
+                        spdlog::info("[meo] gem theme API absent (MEO ABI {}, needs 4) -- gem choice FALLS BACK to the gid heuristic (tier 2)",
+                                     g_meo->Version());
+                }
+            }
+            MEO_API::GemTheme lth[kMaxLoose]{};
+            bool lknown[kMaxLoose] = {};
+            bool lconduit[kMaxLoose] = {};   // a loose Conduit: never socketed (marth 2026-10-12)
+            for (std::uint32_t i = 0; i < nLoose; ++i) {
+                lknown[i]   = themed && GemThemeOf(loose[i].gid, lth[i]);
+                lconduit[i] = loose[i].isSupport &&
+                              (lknown[i] ? lth[i].supportType == MEO_API::kSupport_Conduit : ContainsCI(loose[i].gid, "conduit"));
+            }
+            const bool v4Choice = themed && a_effectAware;
+            const GemRoles roles = v4Choice ? BuildGemRoles(a_actor, a_prefs) : GemRoles{};
+            // FIRST HEALTH (marth 2026-10-12, ruling 3): Fortify Health gems socketed on his worn gear,
+            // counted at the start of the pass (GetActorGems: MAIN THREAD, v1) and kept current as
+            // this pass issues sockets / swap-outs of one.
+            int healthSocketed = 0;
+            if (v4Choice) {
+                constexpr std::uint32_t kMaxWorn = 32;
+                MEO_API::GemInfo worn[kMaxWorn];
+                const std::uint32_t nWorn = std::min(g_meo->GetActorGems(a_actor, worn, kMaxWorn), kMaxWorn);
+                for (std::uint32_t w = 0; w < nWorn; ++w) if (IsHealthGid(worn[w].gid)) ++healthSocketed;
+            }
+            // The gem-choice value of loose gem i (it only ever fits its own domain): GemBonus on an
+            // older MEO, the v4 score otherwise. a_healthOthers = Fortify Health gems that stay
+            // socketed if this one goes in (the swap-up excludes its evictee). Its link bonus (F2)
+            // is added by the caller (linkValue).
+            auto looseValue = [&](std::uint32_t i, int a_healthOthers) -> int {
+                if (!themed) return GemBonus(loose[i].gid, loose[i].name, loose[i].isArmor, loose[i].isSupport, a_prefs);
+                if (loose[i].isSupport) return 0;
+                int sub = 0;
+                if (!lknown[i]) return ScoreV4(0, 0, loose[i].level);
+                const int rel = RelevanceV4(lth[i], loose[i].gid, loose[i].name, roles, a_healthOthers <= 0, sub);
+                return ScoreV4(rel, sub, loose[i].level);
+            };
+            const int linkValue = themed ? kLinkV4 : 1;
+            auto linkWorks = [&](const char* a_sup, const char* a_norm, bool a_itemIsArmor) {
+                return themed ? LinkWorksV4(a_sup, a_norm, a_itemIsArmor) : LinkWorks(a_sup, a_norm, a_itemIsArmor);
+            };
 
             // 2) The follower's WORN socketable gear (weapons + armor), filtered by
             //    MEO's own eligibility (see the worn-set note above). Worn is the
@@ -696,17 +955,14 @@ namespace MFO::MEOBridge {
                 std::unordered_set<std::uint32_t> excluded;   // loose entries stuck/backed off on THIS item
             };
             std::vector<ItemPass> recs(items.size());
-            // MFO-B203 (F1): TIER 2 NEVER ADMITS AN OFF-DOMAIN GEM THROUGH A CONDUIT. MEO maps an
-            // off-domain gem to a same-theme sibling in the item's domain and leaves it INERT
-            // when it has none (ConduitSibling, plugin.cpp:1819, 2024-2030: Martial / Drain /
-            // Utility themes have no cross-domain sibling), and MEO_API carries gids, not themes.
-            // Modelling the sibling map would duplicate MEO's catalog, so tier 2 takes the
-            // simplest rule: a socketed Conduit does not widen the domain. Tier 1 keeps the
-            // Conduit admission (its job is only "fill an open socket"). Every fit test in a
-            // pass (pick, swap-up candidate, LEFTOVER) goes through this one lambda.
-            auto fits = [&](const MEO_API::LooseGemInfo& a_g, ItemFit a_f) {
-                if (a_effectAware) a_f.hasConduit = false;
-                return GemFits(a_g, a_f);
+            // MFO-B203 (F1) / MFO-B34, marth 2026-10-12 "They won't use conduit": NO TIER, on
+            // any MEO version, ever sockets a Conduit or admits an off-domain gem through one
+            // (MEO would leave a no-sibling off-domain gem INERT, ConduitSibling plugin.cpp:1819).
+            // A gem fits its own domain only, a support only a free dual-socket seat, and a
+            // Conduit nothing. The conservative side of ApiSocketGem. Every fit test in a pass
+            // (pick, swap-up candidate, LEFTOVER) goes through this one lambda.
+            auto fits = [&](std::uint32_t i, const ItemFit& a_f) {
+                return !lconduit[i] && GemFits(loose[i], a_f);
             };
             std::unordered_set<RE::FormID> mintedBases;    // bases that took a uid-0 SocketGem this pass (one per base per pass)
 
@@ -731,7 +987,7 @@ namespace MFO::MEOBridge {
                 // GetGemDetails(base, uid 0) scans EVERY minted instance of the base (MEO
                 // plugin.cpp:9144), so a dual-wield twin that already has gems would be read as
                 // this item's: capacity inflated past the real one (SocketGem slot >= cap is
-                // refused) and hasSupport/hasConduit inherited. Skip the call for uid 0.
+                // refused) and hasSupport inherited. Skip the call for uid 0.
                 const std::uint32_t trueDet = item.uid ? g_meo->GetGemDetails(a_actor, item.base, item.uid, det, kMaxDet) : 0u;
                 const std::uint32_t nDet    = std::min(trueDet, kMaxDet);
                 const int capacity          = static_cast<int>(trueDet) + emptyCount;
@@ -744,15 +1000,14 @@ namespace MFO::MEOBridge {
                 if (item.xlEnchanted && (item.uid == 0 || trueDet == 0)) continue;
 
                 std::unordered_set<std::uint8_t> filled;
-                bool hasSupport = false, hasConduit = false;
+                bool hasSupport = false;
                 for (std::uint32_t i = 0; i < nDet; ++i) {
                     filled.insert(det[i].slot);
                     if (det[i].isSupport) {
                         hasSupport = true;
-                        if (ContainsCI(det[i].gid, "conduit")) hasConduit = true;   // MEO GemCatalog.h gid "conduit"
                     }
                 }
-                rec.fitAtStart = ItemFit{ capacity, item.isArmor, hasSupport, hasConduit };
+                rec.fitAtStart = ItemFit{ capacity, item.isArmor, hasSupport };
                 rec.fitNow     = rec.fitAtStart;
 
                 // A WORN item never gemmed (uid 0): MEO mints the uid on the FIRST
@@ -782,18 +1037,18 @@ namespace MFO::MEOBridge {
                     if (!a_effectAware) {
                         // tier 1 conservation: first fitting loose gem in stock.
                         for (std::uint32_t i = 0; i < nLoose; ++i)
-                            if (avail[i] > 0 && !excluded.contains(i) && fits(loose[i], rec.fitNow)) { pick = static_cast<int>(i); break; }
+                            if (avail[i] > 0 && !excluded.contains(i) && fits(i, rec.fitNow)) { pick = static_cast<int>(i); break; }
                     } else {
-                        // tier 2 effect-aware: best by (class bonus, base magnitude).
+                        // tier 2 effect-aware: best by (class value, base magnitude); the v4
+                        // value already carries the level (F3).
                         int bestB = std::numeric_limits<int>::min(); float bestM = -1.0f;
                         for (std::uint32_t i = 0; i < nLoose; ++i) {
-                            if (avail[i] == 0 || excluded.contains(i) || !fits(loose[i], rec.fitNow)) continue;
-                            // F2: a support is worth +1 only when it would LINK with the item's one normal gem
+                            if (avail[i] == 0 || excluded.contains(i) || !fits(i, rec.fitNow)) continue;
+                            // F2: a support is worth one step only when it would LINK with the item's one normal gem
                             // (normalGids: socketed + issued this pass) and that link works.
-                            const int bo = GemBonus(loose[i].gid, loose[i].name,
-                                                    loose[i].isArmor, loose[i].isSupport, a_prefs) +
+                            const int bo = looseValue(i, healthSocketed) +
                                            (loose[i].isSupport && normalGids.size() == 1 && !rec.fitNow.hasSupport &&
-                                            LinkWorks(loose[i].gid, normalGids[0], item.isArmor) ? 1 : 0);
+                                            linkWorks(loose[i].gid, normalGids[0], item.isArmor) ? linkValue : 0);
                             if (bo > bestB || (bo == bestB && loose[i].magnitude > bestM)) {
                                 bestB = bo; bestM = loose[i].magnitude; pick = static_cast<int>(i);
                             }
@@ -829,10 +1084,8 @@ namespace MFO::MEOBridge {
                         ++rec.issued;
                         if (mintGuard) mintedBases.insert(item.base);
                         if (!loose[pick].isSupport) normalGids.push_back(loose[pick].gid);
-                        if (loose[pick].isSupport) {
-                            rec.fitNow.hasSupport = true;   // one support per item (MEO :9272)
-                            if (ContainsCI(loose[pick].gid, "conduit")) rec.fitNow.hasConduit = true;   // MEO runs the queue in order: it lands before a later off-domain request
-                        }
+                        if (loose[pick].isSupport) rec.fitNow.hasSupport = true;   // one support per item (MEO :9272); never a Conduit (fits)
+                        if (IsHealthGid(loose[pick].gid)) ++healthSocketed;       // ruling 3: it is no longer the first
                         spdlog::info("[meo] reconcile socket '{}' -> {:08X}/{} slot {} on {:08X} (queued{})",
                                      loose[pick].name, item.base, item.uid, slot, a_actor->GetFormID(),
                                      passOf(key) > 1 ? std::format(", pass {}", passOf(key)) : std::string{});
@@ -859,28 +1112,45 @@ namespace MFO::MEOBridge {
                     // MFO-B203 (F2): what is socketed now. LINKED = exactly 1 support + 1 normal
                     // (MEO plugin.cpp:1960-1990). A LINKED support is protected ONLY while its link
                     // works (linkWorksNow): an inert last-resort Focus/Echo is worth 0 and is an ordinary
-                    // eviction candidate, or a better gem would stay loose forever. A linked CONDUIT and
-                    // its partner are protected ONLY when the partner is off-domain (the Conduit is what
-                    // makes it work, its orphan goes inert, plugin.cpp:2003; such a pair comes from tier 1
-                    // or the player). A Conduit on a same-domain partner just passes it through and is an
-                    // ordinary candidate (bonus 0, magnitude 0). The partner of a working Focus/Echo may
-                    // be evicted, but only for a candidate that keeps the link working (per candidate below).
+                    // eviction candidate, or a better gem would stay loose forever. The partner of a
+                    // working Focus/Echo may be evicted, but only for a candidate that keeps the link
+                    // working (per candidate below).
+                    // CONDUIT (marth 2026-10-12, "They won't use conduit"): MFO never sockets a Conduit or
+                    // an off-domain gem, so any socketed Conduit and any off-domain gem (only a Conduit
+                    // admits one) were placed by the PLAYER (or carried over by MEO's gear move). The
+                    // swap-up NEVER evicts them. A SAME-domain gem next to a player's Conduit passes
+                    // through MEO unchanged and stays an ordinary, upgradable candidate (review SEV-5).
                     int nSup = 0, nNorm = 0;
                     std::uint32_t supIdx = 0, normIdx = 0;
                     for (std::uint32_t i = 0; i < nDet; ++i) {
                         if (det[i].isSupport) { ++nSup; supIdx = i; } else { ++nNorm; normIdx = i; }
                     }
                     const bool linkedNow     = nSup == 1 && nNorm == 1;
-                    const bool conduitLinked = linkedNow && ContainsCI(det[supIdx].gid, "conduit");
-                    const bool linkWorksNow  = linkedNow && LinkWorks(det[supIdx].gid, det[normIdx].gid, item.isArmor);
-                    const bool conduitHolds  = conduitLinked && det[normIdx].isArmor != item.isArmor;   // off-domain partner
+                    const bool linkWorksNow  = linkedNow && linkWorks(det[supIdx].gid, det[normIdx].gid, item.isArmor);
+                    auto protectedGem = [&](std::uint32_t i) {
+                        if (det[i].isSupport) return IsConduitGem(det[i].gid, themed) || (linkedNow && linkWorksNow);
+                        return det[i].isArmor != item.isArmor;   // off-domain: a Conduit's (player's) partner
+                    };
+                    // The gem-choice value of socketed gem i (GemBonus below v4); same formula as the
+                    // loose value, with the Fortify Health count excluding itself (ruling 3). Only ever
+                    // called for an in-domain normal gem or a non-Conduit support (protectedGem).
+                    auto detValue = [&](std::uint32_t i) -> int {
+                        if (!themed) return GemBonus(det[i].gid, det[i].name, det[i].isArmor, det[i].isSupport, a_prefs);
+                        if (det[i].isSupport) return 0;
+                        MEO_API::GemTheme t{};
+                        if (!GemThemeOf(det[i].gid, t)) return ScoreV4(0, 0, det[i].level);
+                        int sub = 0;
+                        const int healthOthers = healthSocketed - (IsHealthGid(det[i].gid) ? 1 : 0);
+                        const int rel = RelevanceV4(t, det[i].gid, det[i].name, roles, healthOthers <= 0, sub);
+                        return ScoreV4(rel, sub, det[i].level);
+                    };
                     bool          haveWeak = false;
                     std::uint32_t weakIdx = 0;
                     int   weakB = std::numeric_limits<int>::max();
                     float weakM = std::numeric_limits<float>::max();
                     for (std::uint32_t i = 0; i < nDet; ++i) {
-                        if (linkedNow && (det[i].isSupport ? (linkWorksNow || conduitHolds) : conduitHolds)) continue;   // protected (see above)
-                        const int bo = GemBonus(det[i].gid, det[i].name, det[i].isArmor, det[i].isSupport, a_prefs);
+                        if (protectedGem(i)) continue;   // protected (see above)
+                        const int bo = detValue(i);
                         // F9: like with like, the socketed gem's BASE magnitude against the
                         // loose gem's base magnitude (effectiveMagnitude carries a Focus boost).
                         if (bo < weakB || (bo == weakB && det[i].baseMagnitude < weakM)) {
@@ -892,38 +1162,27 @@ namespace MFO::MEOBridge {
                     const char* stayGid = (nDet == 2) ? det[1 - weakIdx].gid : nullptr;
                     const bool  stayIsSupport = nDet == 2 && det[1 - weakIdx].isSupport;
                     // The candidate must fit the item WITHOUT the evictee (Fable SEV-2 on
-                    // 1efa3e3): evicting the Conduit un-admits every off-domain gem, so an
-                    // off-domain candidate admitted THROUGH that Conduit would be refused
-                    // next pass, the Conduit re-socketed, and the pair would cycle every
-                    // ~2.4 s with the empty count moving each time (invisible to the stall
-                    // detector). Likewise a support evictee frees the item's one support seat.
+                    // 1efa3e3): a support evictee frees the item's one support seat. (The Conduit
+                    // half of that rule is moot: a Conduit is never evicted and never admits.)
                     ItemFit sansEvictee = rec.fitNow;
-                    // A merely QUEUED Conduit must not license an eviction (Fable SEV-4 on
-                    // 9dacc0e): if MEO refuses it inside its task, the evictee was unsocketed
-                    // for nothing and our own fingerprint change lifts the back-off -- churn.
-                    // The slot path keeps the queued shortcut (a refused Conduit there costs
-                    // nothing that is not already cleared); the swap-up judges LANDED state.
-                    sansEvictee.hasConduit = rec.fitAtStart.hasConduit;
-                    if (det[weakIdx].isSupport) {
-                        sansEvictee.hasSupport = false;
-                        if (ContainsCI(det[weakIdx].gid, "conduit")) sansEvictee.hasConduit = false;
-                    }
+                    if (det[weakIdx].isSupport) sansEvictee.hasSupport = false;
+                    // Ruling 3 for the candidate: the Fortify Health gems that stay if weakIdx goes.
+                    const int healthOthers = healthSocketed - (IsHealthGid(det[weakIdx].gid) ? 1 : 0);
                     int   loot = -1;
                     int   lootB = std::numeric_limits<int>::min();
                     float lootM = -1.0f;
                     for (std::uint32_t i = 0; i < nLoose; ++i) {
-                        if (avail[i] == 0 || !fits(loose[i], sansEvictee)) continue;
+                        if (avail[i] == 0 || !fits(i, sansEvictee)) continue;
                         // Never make room for a gem MEO keeps refusing on this item
                         // (excluded this pass, or its socket key is still held from
                         // an earlier pass) -- the self-driven unsocket/re-socket loop.
                         if (excluded.contains(i) || socketKeyHeld(item.base, item.uid, loose[i].gemBase)) continue;
                         // Replacing the partner of a WORKING Focus/Echo must keep that link working.
-                        if (linkWorksNow && weakIdx == normIdx && !LinkWorks(det[supIdx].gid, loose[i].gid, item.isArmor)) continue;
-                        // A loose support is worth +1 only if it would link with the gem that stays.
-                        const int bo = GemBonus(loose[i].gid, loose[i].name,
-                                                loose[i].isArmor, loose[i].isSupport, a_prefs) +
+                        if (linkWorksNow && weakIdx == normIdx && !linkWorks(det[supIdx].gid, loose[i].gid, item.isArmor)) continue;
+                        // A loose support is worth one step only if it would link with the gem that stays.
+                        const int bo = looseValue(i, healthOthers) +
                                        (loose[i].isSupport && stayGid && !stayIsSupport &&
-                                        LinkWorks(loose[i].gid, stayGid, item.isArmor) ? 1 : 0);
+                                        linkWorks(loose[i].gid, stayGid, item.isArmor) ? linkValue : 0);
                         if (bo > lootB || (bo == lootB && loose[i].magnitude > lootM)) {
                             lootB = bo; lootM = loose[i].magnitude; loot = static_cast<int>(i);
                         }
@@ -942,6 +1201,8 @@ namespace MFO::MEOBridge {
                             // out of avail[] now, so the LEFTOVER line below no longer counts it
                             // (its socket opens next pass) -- no separate swap-pending exemption.
                             --avail[static_cast<std::uint32_t>(loot)];
+                            if (IsHealthGid(det[weakIdx].gid)) --healthSocketed;   // ruling 3: one fewer stays
+                            if (IsHealthGid(loose[loot].gid))  ++healthSocketed;   // ... and the reserved one counts now
                             spdlog::info("[meo] reconcile swap-out '{}' (slot {}) on {:08X} -- '{}' will re-fill (queued{})",
                                          det[weakIdx].name, det[weakIdx].slot, a_actor->GetFormID(), loose[loot].name,
                                          passOf(ukey) > 1 ? std::format(", pass {}", passOf(ukey)) : std::string{});
@@ -972,9 +1233,10 @@ namespace MFO::MEOBridge {
                     for (std::size_t idx = 0; idx < items.size(); ++idx) {
                         const auto& rec = recs[idx];
                         if (!rec.considered || rec.emptyAtStart - rec.issued <= 0) continue;
-                        if (!fits(loose[i], rec.fitNow)) {
-                            // A support gem kept out only by the item's one support seat.
-                            if (loose[i].isSupport && rec.fitNow.capacity >= 2) supportLimit = true;
+                        if (!fits(i, rec.fitNow)) {
+                            // A support gem kept out only by the item's one support seat (a Conduit is
+                            // kept out by the ruling instead, classified below).
+                            if (loose[i].isSupport && !lconduit[i] && rec.fitNow.capacity >= 2) supportLimit = true;
                             continue;
                         }
                         compatNow = true;
@@ -986,12 +1248,13 @@ namespace MFO::MEOBridge {
                         hole = true;   // an open, compatible, un-deferred socket the pass walked past
                     }
                     LeftoverWhy why;
-                    if (!compatNow) {
+                    if (lconduit[i]) why = LeftoverWhy::kConduit;   // never socketed (marth 2026-10-12)
+                    else if (!compatNow) {
                         // Nothing of its kind is open now: kept out by the support seat, or
                         // was it ever open this pass (then other gems took it), or never?
                         bool wasOpen = false;
                         for (const auto& rec : recs)
-                            if (rec.considered && rec.emptyAtStart > 0 && fits(loose[i], rec.fitAtStart)) { wasOpen = true; break; }
+                            if (rec.considered && rec.emptyAtStart > 0 && fits(i, rec.fitAtStart)) { wasOpen = true; break; }
                         why = supportLimit ? LeftoverWhy::kSupportLimit
                             : wasOpen      ? LeftoverWhy::kCapacity : LeftoverWhy::kOffDomain;
                     } else if (hole)    why = LeftoverWhy::kUnclassified;
@@ -1006,11 +1269,12 @@ namespace MFO::MEOBridge {
                     if (fresh || ls.inventoryKey != inventoryKey || now >= ls.at + kStuckBackoff) {
                         ls.at = now;
                         ls.inventoryKey = inventoryKey;
-                        // A one-pass mint deferral and an off-domain gem (a by-design steady state that
-                        // repeats every 60 s; marth 2026-10-11, MFO-B33) are info; every other class is a
+                        // A one-pass mint deferral, an off-domain gem (a by-design steady state that
+                        // repeats every 60 s; marth 2026-10-11, MFO-B33) and a Conduit (never socketed,
+                        // marth 2026-10-12) are info; every other class is a
                         // broken invariant the user needs to see (warn).
                         const char* actorName = a_actor->GetName() ? a_actor->GetName() : "?";
-                        if (why == LeftoverWhy::kMinting || why == LeftoverWhy::kOffDomain)
+                        if (why == LeftoverWhy::kMinting || why == LeftoverWhy::kOffDomain || why == LeftoverWhy::kConduit)
                             spdlog::info("[meo] reconcile LEFTOVER {:08X} '{}' {:08X} '{}' x{} -- {}",
                                          a_actor->GetFormID(), actorName, loose[i].gemBase, loose[i].name, leftN, LeftoverWord(why));
                         else
@@ -1066,6 +1330,7 @@ namespace MFO::MEOBridge {
         g_extractRequested.clear();
         g_stuck.clear();            // reconcile stall detector: keyed by FormID, session-scoped (main thread, like its writer)
         g_leftover.clear();         // reconcile LEFTOVER rate-limit: same domain as g_stuck
+        g_gemDirFallbackLogged.clear();   // F3 worn-gear fallback log-once: same domain as g_stuck
         g_removalHold.clear();      // GemRules removal holds: session-scoped
     }
 

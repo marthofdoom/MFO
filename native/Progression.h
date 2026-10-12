@@ -398,7 +398,7 @@ namespace MFO::Progression {
     // PerkStyleFacts as one vote each. Perks outside the catalog (hidden
     // engine perks, creature perks, dead player-UI perks) never vote; a
     // catalog perk conditioned on nothing classifiable votes for nothing.
-    // Empty (all zero) when the catalog is not built (addon absent).
+    // When the catalog is not built (addon absent) only skillRanks is filled (below).
     // MAIN THREAD ONLY: reads the base's live perk array, which the allocator
     // mutates on the main thread (AddPerk/RemovePerk realloc it), and the
     // allocator's own record (ProgAllocator::g_prog, main-thread, no lock).
@@ -415,6 +415,11 @@ namespace MFO::Progression {
                                   // an unenrolled follower whatever he holds.
         int classified{ 0 };      // owned ranks that carried ANY fact
         int owned{ 0 };           // owned catalog ranks in total (diagnostics)
+        int skillRanks[18]{};     // owned ranks per SKILL TREE, by (tree AV - kOneHanded): the perk
+                                  // investment per skill (F3 gem relevance, marth 2026-10-12:
+                                  // "lockpicking is also perkweighted"). With NO catalog (add-on
+                                  // absent) this is the ONLY field filled, from the follower's own
+                                  // perks in the engine's skill trees (marth Q3).
     };
     StyleVotes TallyStyleVotes(RE::Actor* a_actor);
 

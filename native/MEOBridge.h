@@ -136,11 +136,33 @@ namespace MFO::MEOBridge {
     // management cadence, so the next pass never re-issues a socket that already
     // landed. Domain is matched here (armor<->armor, weapon<->weapon, support fits
     // either) so MEO never rejects the queued socket into a retry loop.
+    // F3 PERK DIRECTION (marth 2026-10-12: "Gems need to recognize the perk direction, why one handed
+    // on a two handed dude." / "lockpicking is also perkweighted"): the skills a Skill-class gem may
+    // fortify. Filled on the logistics WORKER by Logistics::GemReconcilePrefsFor (logistics/Gear.cpp)
+    // from the answers gear choice already uses (ComputeWeaponRoles, ArmorPrefFor, StyleVotesFor,
+    // TopTwoSchoolMask), so gem choice and gear choice cannot disagree, and copied into the posted
+    // main-thread pass. Skill bit i = RE::ActorValue(kOneHanded + i) (18 skills); bit 18 = Unarmed.
+    inline constexpr std::uint32_t kGemSkillUnarmed = 1u << 18;
+    // The questions whose answer is the EQUIP side's (weapon kind, off-hand, armor class). A group
+    // without a direction falls back to the worn gear in the pass (logged once per follower). Every
+    // other skill's direction is its owned perk ranks.
+    enum GemDirGroup : std::uint8_t { kGdWeapon = 1u << 0, kGdBlock = 1u << 1, kGdArmor = 1u << 2 };
     struct GemReconcilePrefs {
         bool          caster = false;   // IsCasterFollower
         std::uint32_t school = 0;       // dominant TargetMagicSchool (RE::ActorValue ordinal); kNone = 0
+        std::uint32_t skills = 0;       // skill bits on the follower's direction (see above)
+        std::uint8_t  known  = 0;       // GemDirGroup bits that HAVE a direction
+        std::uint8_t  skillRanks[18]{}; // owned perk ranks per skill (StyleVotes::skillRanks, clamped): the weight
     };
 
+    // ── GEM THEME (MEO ABI v4, F3 relevance round) ──────────────────────────
+    // MEO's catalog classification of a gem family (theme, class, element bits,
+    // domain, support type, Conduit sibling), keyed by gid. GemThemeOf is the ONLY
+    // road to IMEO::GetGemTheme: it checks Version() >= 4 first (on a v3 MEO that
+    // vtable slot is the destructor). Any thread. false = MEO < v4, the catalog is
+    // not built yet, or the gid is unknown (a_out untouched).
+    bool GemThemeSupported();
+    bool GemThemeOf(const char* a_gid, MEO_API::GemTheme& a_out);
     // Is the reconcile usable (MEO present, ABI >= 3)? Tier 1 no-ops below this.
     bool GemReconcileSupported();
 
