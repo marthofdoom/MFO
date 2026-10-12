@@ -333,7 +333,8 @@ namespace MFO::EngageOnSight {
             if (!base->aiData.aggroRadius[RE::ACTOR_AGGRO_RADIUS::kWarnAndAttack] &&
                 !base->aiData.aggroRadius[RE::ACTOR_AGGRO_RADIUS::kAttack])
                 return false;
-            return ReactionOf(a, a_pc) != RE::FIGHT_REACTION::kAlly || ReactionOf(a, a_self) != RE::FIGHT_REACTION::kAlly;
+            // Ally / Friend to EITHER party member = not territorial (ReactionOf folds Friend into kAlly).
+            return ReactionOf(a, a_pc) != RE::FIGHT_REACTION::kAlly && ReactionOf(a, a_self) != RE::FIGHT_REACTION::kAlly;
         }
 
         // ENEMY TEST (marth 2026-10-12: "game's hostility + territorial"; field 2026-10-12: the old
@@ -343,8 +344,8 @@ namespace MFO::EngageOnSight {
         // is ALREADY FIGHTING THE PARTY (FightingParty -- marth 2026-09-26: "If I attack a deer it's
         // marked"), or the engine's IsHostileToActor says it is hostile to the player OR to him, or
         // it is TERRITORIAL. Never engaged proactively unless FightingParty: a Confidence-0
-        // (Cowardly) creature, a non-combatant (giant, mammoth, carriage driver, ferryman, servant:
-        // the Config skip list), and any crime-faction actor (guards, townsfolk). a_why names the
+        // (Cowardly) creature and any crime-faction actor (guards, townsfolk); the Config skip list
+        // (giant, mammoth, carriage driver, ferryman, servant ...) bars only the TERRITORIAL term. a_why names the
         // skip reason for the log (static text, never owned).
         bool IsEnemy(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc, const char*& a_why) {
             if (a->IsCommandedActor()) {
@@ -368,11 +369,14 @@ namespace MFO::EngageOnSight {
             }
             if (FightingParty(a)) return true;   // fighting the party: counts, whatever else it is
             if (ConfidenceOf(a) <= 0.0f) { a_why = "cowardly"; return false; }
-            if (IsNonCombatant(a)) { a_why = "non-combatant (skip list: giant / mammoth / carriage / ferry / servant)"; return false; }
-            if (!a->IsHostileToActor(a_pc) && !a->IsHostileToActor(a_self) && !IsTerritorial(a, a_self, a_pc)) {
-                a_why = "not hostile (engine: no; territorial: no)";
-                return false;
+            // The skip list applies ONLY to the territorial term: anything the game already judges
+            // hostile (aggressive giant bosses, Aggression-2 bandit wolves, ...) is engaged.
+            if (a->IsHostileToActor(a_pc) || a->IsHostileToActor(a_self)) {
+                if (a->GetCrimeFaction()) { a_why = "crime faction"; return false; }
+                return true;
             }
+            if (IsNonCombatant(a)) { a_why = "not hostile (engine: no); territorial barred: skip list (giant / mammoth / carriage / ferry / servant ...)"; return false; }
+            if (!IsTerritorial(a, a_self, a_pc)) { a_why = "not hostile (engine: no; territorial: no)"; return false; }
             if (a->GetCrimeFaction()) { a_why = "crime faction"; return false; }
             return true;
         }
