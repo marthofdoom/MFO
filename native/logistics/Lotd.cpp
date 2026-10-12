@@ -1282,7 +1282,7 @@ namespace MFO::Lotd {
                 // MEO-aware: a socketed relic is stripped first and donated once it reads gem-free
                 // (GemRules); until then it is skipped (a scan that moves nothing retries behind the
                 // crate cooldown, so the gems are never lost).
-                if (GemRules::CheckRemovalLive(f, obj, "museum donation") == GemRules::Verdict::Held) continue;
+                if (Logistics::GemRules::CheckRemovalLive(f, obj, "museum donation") == Logistics::GemRules::Verdict::Held) continue;
                 // A NOT-worn item moves only the unworn copies (no unequip); plain copies
                 // carry no extra list, so RemoveItem with a null list takes them first.
                 const std::int32_t movable = it.worn ? have : have - wornCopies;
