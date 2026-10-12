@@ -286,6 +286,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Wave-2 location (2026-09-25, `native/logistics/`):** `AcquireEquip` (`native/logistics/Gear.cpp:640`) callers: `native/logistics/LootEquipment.cpp:473`, `native/logistics/EquipAuthority.cpp:185`.
 
 ### MFO-B33 — LEFTOVER `off-domain` / `duplicate-copy` WARN every 60 s in by-design steady states
+- **DECIDED + FIXED 2026-10-11 (marth: drop to INFO):** the `off-domain` LEFTOVER line is info (MEOBridge.cpp), as the mint deferral already was; the other classes stay WARN. ClickUp 86e3m3v36.
 - **Raised:** Fable tier-3 review of `1efa3e3` (`fix/mfo-meo-no-loose-gems`), SEV-5 #3, record only.
 - **Finding (verbatim):** kOffDomain and kDuplicateCopy WARN every 60 s in by-design steady states (one loose armor gem, all armor full, a weapon socket open); suggest INFO; marth's call.
 - **Reviewer's reasoning:** the invariant is "no loose gem while a socket it FITS is open"; an off-domain gem with only an off-domain socket open is not a broken invariant, and a junk copy that never sells (economy off) is a steady state, so both warn on a condition the user cannot act on from MFO's side.
@@ -561,6 +562,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained:** keep the bit until a player level-up has been credited (clear it in `PollWork` on `playerLeveled`), not on the first award.
 
 ### MFO-B236 -- Enemy / Self cast targets (Vocab::Subject Enemy=3 / Caster=4): deferred review findings F-D..F-H
+- **F-G DECIDED + FIXED 2026-10-11 (marth: AUTO refuses only when ALL effects are undeclared):** `SpellNatureUndeclared` (cast/SpellSupport.cpp) now returns true only when every effect is Script / Calm / Frenzy / Demoralize / Paralysis / TurnUndead; one declared effect keeps AUTO's party behaviour. ClickUp 86e3m3q0j.
 Raised against `d8b0aa3` (`feat/mfo-hide-unsupported-spells`, Opus tier-3 review, nothing above SEV-3), 2026-10-06.
 Text below is the finding as relayed by the coordinator from the review.
 - **F-D (SEV-4):** on an older DLL, re-enabling such a rule runs it at the player fallback, and a round trip silently leaves it disabled. Document it in the Serialization.h v5 note. *Reasoning:* the flags-bit-1 guard only makes an older DLL load the rule disabled; the older DLL still cannot resolve Enemy / Self, and it saves the rule back with flags 0. Documented in the `Serialization.h` v5 note in the F-A commit.
@@ -572,6 +574,7 @@ Text below is the finding as relayed by the coordinator from the review.
 - TRIAGE 2026-10-06: F-D is CLOSED: the downgrade behaviour is documented in the `Serialization.h` v5 note (`native/Serialization.h:185-186`). F-G has its own needs-decision task (ClickUp 86e3m3q0j). F-E stays LIVE.
 
 ### MFO-B238 (SEV-4 x3, SEV-5 x2) -- heal hold round 2 review (a687fd2): deferred R1-R3, spots 2-3
+- **R1 DECIDED + FIXED 2026-10-11:** same change as the MFO-B234 SEV-3 bullet (5 s at the floor, still occluded -> approach-blocked release). ClickUp 86e3m450a.
 Raised against `a687fd2` (`fix/mfo-post-2.2.0`, Opus tier-B round 2, MERGE OK), 2026-10-06. Text as relayed by the coordinator.
 - R1 (SEV-4): at the 128u approach floor with sight still lost (recipient behind a wall / on another floor) the follower holds there; the never-fired bound stays off because the approach is not "blocked", so the heal holds until combat ends. Matches marth ruling (c); the 5 s still-holding line shows it. Possible follow-up for marth: treat "at the floor and still occluded" as approach-blocked.
 - R2 (SEV-5): out of magicka during a restream gap: ReleaseOwnHealClaim returns early (no claim stands), HealHandEnded is not called, the record ends next tick as released-elsewhere instead of out-of-magicka. Log token only.
@@ -586,6 +589,13 @@ Raised against `f3a0f97` (`fix/mfo-heal-reach`, Opus tier-B review, MERGE OK), 2
 - SEV-4: a real heal reach of 300u or less is now uncapped (0 already meant no cap); a fallback to vanilla Heal Other reach would be tighter.
 - SEV-4: the PickAlly reach-drop latch clears only out of combat inside the drop branch, so it logs about once per follower per session, not per fight. Log only.
 - SEV-4: ReleaseOffenseCastOnDeadTarget calls the whole ReleaseOffenseCast; with two per-hand offense claims on different targets, one death drops both. ReleaseCastClaimOnHand would be per hand.
+
+### MFO-B241 (SEV-4 x4) -- rulings 2026-10-11 review (0c1046c)
+Raised against `0c1046c` (`fix/mfo-rulings-1011`, Opus review, MERGE OK), 2026-10-11. Text as relayed.
+- SEV-4 (item 1): a held heal that ends some other way leaves its approach-stuck entry until fight end, so a later claim on the same recipient is released once and skips the in-flight exemption.
+- SEV-4 (item 1): kApproachFloorGiveUp uses the wall clock, so a menu pause counts toward the 5 s (APMF fixed the same issue in its review F2).
+- SEV-4 (item 4): healWeapon is not reset by the normal booking path (Loadout.cpp:527) or the already-paid path; a stale flag (two-hander stow keeping the entry) could hand back a later ordinary weapon debt early.
+- SEV-4 (item 6): after a fan series ends, the spell stays in hand while the AUTO rule matches; released when no cast rule matches (Scheduler.cpp:1913) or at combat end. Fits the ruling.
 
 ## DRAINED
 
@@ -1359,6 +1369,7 @@ Raised against 7e17730 (`feat/mfo-pickup-sound-at-follower`, Opus tier-3 review 
 - **Surfaced at edit time from:** MAP.md logistics `logistics/PickupSound.cpp` "What breaks".
 
 ### MFO-B227 -- per-hand heal road: deferred review findings (F5 SEV-3 + SEV-4/SEV-5)
+- **LEFT-WEAPON SHAPE DECIDED + FIXED 2026-10-11 (marth: give the weapon back when the heal ends, tracked as owed gear):** `Loadout::Prepare`'s Caster branch books a left weapon displaced by a live left heal claim as gear debt (`Debt::healWeapon`); `Loadout::Tick` returns it once no heal claim stands on the left. ClickUp 86e3m3q0b.
 Raised against 9895a53 (`feat/mfo-perhand-heal`, Opus tier-A review, 2026-10-05). F1 (Harbinger proxy is one slot per OWNER, freed by the departing claim) is fixed in APMF by a separate agent; F2/F3/F4/F6 were fixed in the follow-up round. Deferred here, verbatim from the reviewer's log (`agentlogs/review-perhand-heal.md`; the review's full prose went to the coordinator, so these are its recorded lines):
 - **F5 (SEV-3, deferred by the coordinator: `iCastControl` is 2 on LoreRim, exact mode is not in the test plan):** "castLvl>=4 Prepare deselects right heal -> SEV-3." `Loadout::Prepare`'s Caster branch at cast-control level 4 `DeselectSpell`s the RIGHT hand's spell when it is not the spell being prepared, so an offense or second-recipient Prepare for the LEFT can strip a right-hand heal claim's spell. Fix shape: skip the deselect while a right-hand heal claim names that spell (`APMFBridge::GetHealCastSpell(fid, kApmfHandRight)`).
 - **SEV-4 (the non-F6 half):** "Prepare AlreadyReady via right-hand copy -> false repair log -> SEV-3/4." F6 fixed the heal-claim Prepare; a non-heal caller (offense) still answers AlreadyReady off either hand's copy (unchanged, pre-existing).
@@ -1384,6 +1395,7 @@ Raised against deddf80 (`fix/mfo-ui-port-meo-drag`, Opus review MERGE), 2026-10-
 - **Surfaced at edit time from:** MAP.md Board section "Press-latched clicks".
 
 ### MFO-B229 -- Harbinger own-LoS adoption: deferred review findings F2-F7
+- **F2-F4 RULED 2026-10-11, NOT IMPLEMENTED (STOP, needs the APMF side):** marth: "Never. Line of sight is checked each time." MFO's adoption (`Sightline::CheckWithin/OccludedRun/MeasureNow` Basis::Own via `APMFBridge::LosOf`, apmf/Los.cpp) can only read what Harbinger's `GetLineOfSight` serves: a lock-free STORED verdict kept measured by the ask, with a 2 s interest window (APMF_API.h ~2192); it never casts a ray, and `SenseActor` (which does) is main-thread-only and answers awareness, not a heal pair verdict. A fresh per-decision measurement needs a new APMF ABI slot (controller-agent area). ClickUp 86e3m3q0d left open.
 Raised against 259630e (`feat/mfo-harbinger-los-adopt`, Opus review MERGE, 2026-10-05). F1 (SEV-3, `LosSupported` did not probe whether the service is armed) was fixed in the follow-up round. Reviewer text is summarised from its log (`agentlogs/review-mfo-los-adopt.md`: "PinTarget Unchanged path keeps flag across weapon swap (SEV-4); interest window 2s vs round-robin N*133ms -> N>=16 cold (SEV-4); OccludedRun has no callers") plus the coordinator's relay of F2-F7.
 - **F2 (SEV-4):** the ch.20 pin's `kTargetPin_OwnLineOfSight` is fixed at pin creation. The `PinTarget` Unchanged path keeps the flag across a weapon swap (bow to sword or back), so it changes only on the next target change or re-pin.
 - **F3 (SEV-4):** Harbinger drops a pair nobody asked for in `kLosInterestMs` (2 s). The round-robin service asks a given follower's pairs every N x 133 ms, so a party of 16 or more reads cold (Unknown, fail-open) for part of each lap.
@@ -1394,6 +1406,8 @@ Raised against 259630e (`feat/mfo-harbinger-los-adopt`, Opus review MERGE, 2026-
 - **Surfaced at edit time from:** MAP.md Sightline.cpp and EngageOnSight.cpp "What breaks".
 
 ### MFO-B230 -- Self-buff claim road (cast/BuffRoad.cpp): deferred review findings F5, F7-F9
+- **R3-2 DECIDED + FIXED 2026-10-11 (marth: keep the hand claimed between a buff's casts, "only in fanning though"):** only for AUTO's buff series: `g_autoBuffSeries` (Auto.cpp sets it around its CastOn) makes `BuffRefreshGate` end a landed / idle claim with takeBack=false, so the next recipient finds the spell already in hand. Single-target buff rules release as before. The spell stays in hand after the series runs out of recipients until the normal release (rule stops / combat end). ClickUp 86e3m3q0g.
+- **F5 DECIDED + FIXED 2026-10-11 (marth: a config change mid-claim keeps the running claim's safety limits):** `BuffRefreshGate` (cast/BuffRoad.cpp) keeps bounding a standing claim (lock names the spell on LEFT) when a config flip makes `ChooseBuffRoad` answer DirectDegrade; the ward stream cap and the never-fired bound still run. ClickUp 86e3m3q0e.
 Raised against d5c51e0 (`feat/mfo-remaining-cast-kinds`, Opus review FIX FIRST, 2026-10-05). F1 (never-fired bound), F2 (preempt before the already-up decline), F3 (Light effect / rowApprox), F4 (ward cap keeps its rank, lock channel clock) and F6 (main-thread latched up-read) were fixed in the follow-up round. Reviewer's log (verbatim, `agentlogs/review-buffroad.md`): "F5 SEV-4 (BuffRefreshGate keyed on road choice: config flip mid-claim leaves ward unbounded). F7-9 SEV-5 (logs/labels, revert clear, unguarded LEFT release)." The F9 wording below is the coordinator's relay.
 - **F5 (SEV-4):** `BuffRefreshGate` runs only while `ChooseBuffRoad` answers Claim. Flipping `bApmfCast` / `bLegacyCastHybrid` / `bEquipToCast` mid-claim sends the lap to the old refresh without the ward stream cap or the never-fired bound until the claim's own TTL ends it. A mid-claim config flip skips the never-fired bound too.
 - **F7 (SEV-5):** log and label wording: the `[buff]` lines share the heal road's labels in places, and `self-cast could not fire` (CastOn) is the label for a transparent BuffSelfClaim Declined.
@@ -1436,6 +1450,7 @@ Raised against 2f48f5c (`feat/mfo-self-proxy-aimed-touch`, Opus review MERGE), 2
 - FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): STILL NEEDS DATA -- 0 'NO self-flip proxy' lines, so no refusal was seen, but the capability signal itself was not exercised; needed: a self-flip cast on a runtime or spell where the proxy is unavailable.
 
 ### MFO-B234 -- A re-started concentration channel on the same claim is not protected again (cast/HealRoad.cpp)
+- **SEV-3 bullet DECIDED + FIXED 2026-10-11 (marth: after 5 s at the approach floor with the recipient still out of sight, count the approach as blocked, release the heal with exit token approach-blocked, let it re-claim later):** `ServiceHealApproach` (apmf/CombatApproach.cpp) times the floor, marks the recipient blocked + stuck; `NeverFiredRelease` (cast/HealRoad.cpp) takes the stuck mark (`HealApproachStuckTake`) and releases. ClickUp 86e3m450a.
 Raised against `fix/mfo-heal-hold-until-fire`, 2026-10-06.
 - **SEV-5 (accepted under marth's ruling "for now yes", open):** `HealHoldStands` ends the hold on the first observed fire since the claim stamp unless a concentration channel is still in flight on the hand. A channel that dips out of flight and is re-started on the SAME claim (no re-stamp) finds the hold already ended and lapsed, so offense on the other hand can interrupt the second channel. Fix would need a per-claim "channel running" latch.
 - **SEV-4 caveat:** a LoS-held span closes only on a Visible verdict (an Unknown keeps it accruing), so the exclusion in `NeverFiredRelease` can over-count an Unknown stretch. Bounded by `HealApproachBlocked` (no exclusion once the ch.24 approach is blocked or unavailable).

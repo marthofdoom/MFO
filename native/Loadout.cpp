@@ -5,6 +5,7 @@
 #include "CasterConsent.h"   // v1.0.32: StartCooldown mirrors into the hook's permit
 #include "MainThread.h"      // animheal phase 2 (review F2): the DeselectSpell runs on the MAIN thread
 #include "apmf/APMFBridge.h"   // MFO-B227 F5: a right-hand heal claim's spell is not deselected
+#include "cast/Actuation.h"   // MFO-B227: HealRestreamGap (a heal-displaced left weapon waits out the re-stream gap)
 #include "ComposedCast.h"    // review round 2 (marth's ruling): HealTakesLeft suspends the left-hand automation
 
 namespace MFO::Loadout {
@@ -33,6 +34,10 @@ namespace MFO::Loadout {
             // must not undo a live heal claim).
             bool  hitDeferred = false;
             bool  giveBackDeferredLogged = false;   // one log line per deferred 2H give-back
+            // MFO-B227 (marth 2026-10-11): displacedLeft is a WEAPON a LEFT heal claim's spell took over
+            // (Prepare's Caster branch). Tick gives it back as soon as no heal claim stands on the left,
+            // not only at combat end.
+            bool  healWeapon = false;
         };
         std::unordered_map<RE::FormID, Debt> g_debt;
 
@@ -358,9 +363,31 @@ namespace MFO::Loadout {
                     // POINT OF NO RETURN (F1): the left hand is taken on the next
                     // line, so MFO's own left weapon hold yields here and not
                     // earlier. No debt is booked on this branch (spell->spell swap).
-                    if (a_yieldLeft) a_yieldLeft(a_actor, nullptr, nullptr);
+                    // MFO-B227 (marth 2026-10-11): a LEFT heal claim's spell takes the left over a WEAPON the
+                    // follower holds there (the heal only sat in the RIGHT hand, which reads as Caster). That
+                    // weapon is owed back: booked as gear debt, given back when the heal claim ends (Tick).
+                    // MFO's own left weapon hold (the yield) is not the follower's gear: no debt for it.
+                    RE::TESBoundObject* healDisplaced = nullptr;
+                    if (a_healClaimLive && hands.left && hands.left != a_spell && hands.left->As<RE::TESObjectWEAP>())
+                        healDisplaced = hands.left->As<RE::TESBoundObject>();
+                    if (a_yieldLeft) {
+                        RE::TESBoundObject* yl = nullptr;
+                        RE::TESBoundObject* yr = nullptr;
+                        if (a_yieldLeft(a_actor, &yl, &yr) && yl && yl == healDisplaced) healDisplaced = nullptr;
+                    }
                     m->EquipSpell(a_actor, a_spell, LeftHandSlot());
                     a_actor->DrawWeaponMagicHands(true);
+                    if (healDisplaced) {
+                        auto& hd = g_debt[id];
+                        if (!hd.displacedLeft) {   // never overwrite an unpaid left debt
+                            hd.displacedLeft = healDisplaced;
+                            hd.leftWasShield = false;
+                            hd.healWeapon    = true;
+                            hd.hitDeferred   = false;
+                            spdlog::info("[loadout] {:08X} heal claim took the LEFT hand over weapon {:08X}: booked as "
+                                         "owed gear, given back when the heal ends", id, healDisplaced->GetFormID());
+                        }
+                    }
 
                     // EXACT MODE (level 4) ONLY: neutralize a competing spell left in
                     // the OTHER (right) hand. EquipSpell above only ever targets the
@@ -720,6 +747,15 @@ namespace MFO::Loadout {
                     }
                     continue;
                 }
+                restoreAll.push_back(id);
+                continue;
+            }
+
+            // A WEAPON a left heal claim displaced (MFO-B227) comes back as soon as no heal claim
+            // stands on the left (the re-stream gap counts as standing), not only at combat end.
+            if (debt.displacedLeft && debt.healWeapon && !debt.leftWasShield &&
+                APMFBridge::GetHealCastSpell(id, APMFBridge::kApmfHandLeft) == 0 &&
+                !Actuation::HealRestreamGap(id)) {
                 restoreAll.push_back(id);
                 continue;
             }

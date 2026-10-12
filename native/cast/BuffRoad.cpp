@@ -437,10 +437,19 @@ namespace MFO::Actuation {
     std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
         const bool other = a_recipient && a_recipient != a_follower;
         RE::Actor* recip = other ? a_recipient : a_follower;
-        if (ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? recip : nullptr) != BuffRoad::Claim)
-            return std::nullopt;
         const auto id      = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
+        // THE SAFETY LIMITS FOLLOW THE CLAIM, NOT THE CONFIG (marth 2026-10-11, MFO-B230 F5): a mid-claim flip
+        // of bApmfCast / bLegacyCastHybrid / bEquipToCast makes ChooseBuffRoad answer DirectDegrade, but a
+        // claim this road filed still stands (its lock names the spell on LEFT), and its ward stream cap and
+        // never-fired bound must keep running until the claim ends. Every other non-Claim road is the record
+        // or the situation, not a config flip: nothing to bound.
+        if (const auto road = ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? recip : nullptr);
+            road != BuffRoad::Claim) {
+            if (road != BuffRoad::DirectDegrade ||
+                CastLockClaimStamp(id, kHandLeft, spellID) == std::chrono::steady_clock::time_point{})
+                return std::nullopt;
+        }
         const auto rid     = recip->GetFormID();
         const auto sk      = SK(rid, spellID);
         const bool conc    = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
@@ -498,7 +507,7 @@ namespace MFO::Actuation {
                                  "nothing charging -- claim released (no hold-off; the rule re-claims when it "
                                  "wants it again)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
                                  ageMs);
-                    EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                    EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/!g_autoBuffSeries);   // R3-2: a fan series keeps the spell in hand
                     return Outcome{ Result::NoOp, "buff claim idle after a fire: released", true };
                 }
                 spdlog::warn("[buff] {:08X} {} ({:08X}) at {:08X} NEVER FIRED this fight: claimed {} ms ago, "
@@ -567,7 +576,7 @@ namespace MFO::Actuation {
         }
         g_fired[id].insert(sk);   // R3-1: it landed
         spdlog::info("[buff] {:08X} {:08X}: buff is up on {:08X} -- claim released (the cast landed)", id, spellID, rid);
-        EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+        EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/!g_autoBuffSeries);   // R3-2: a fan series keeps the spell in hand
         return Outcome{ Result::NoOp, "buff already up: claim released", true };
     }
 

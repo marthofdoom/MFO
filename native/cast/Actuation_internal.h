@@ -523,6 +523,12 @@ namespace MFO::Actuation {
         // fire-and-forget buff is up (or an instant spell fired, or a summon hit the limit), or a concentration
         // ward passes its drawn cap; a claim that never fires is released once and held off per fight.
         // BuffPlacementSpell: a Summon / Reanimate spell (target 0, the caster is its own recipient).
+        // AUTO FAN SERIES FLAG (marth 2026-10-11, MFO-B230 R3-2: "only in fanning though"): true only while
+        // CastAuto's beneficial-buff SERIES hands its pick to CastOn. BuffRefreshGate then ends a claim whose
+        // buff landed (or went idle after a fire) WITHOUT taking the spell back, so the series' next recipient
+        // finds it already in hand (Loadout::Prepare answers AlreadyReady: no un-equip / re-equip churn). Any
+        // single-target buff rule leaves it false and releases as before. Worker-serial (#4).
+        inline bool g_autoBuffSeries = false;
         enum class BuffRoad : std::uint8_t { NotBuff, Claim, DirectNoCombat, DirectNoSeat, DirectNoRow, DirectDegrade, DirectNoCap };
         BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log = true,
                                 RE::Actor* a_recipient = nullptr);

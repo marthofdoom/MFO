@@ -557,7 +557,9 @@ namespace MFO::Actuation {
                 }
                 if (!pick)
                     return { Result::NoOp, "auto buff: nobody in reach needs it (or the up-reads are pending)", true };
-                auto out = CastOn(a_follower, a_spellID, pick, /*a_rangeGate=*/false);
+                // MFO-B230 R3-2: inside the series a landed buff's claim ends WITHOUT taking the spell back.
+                struct SeriesScope { SeriesScope() { g_autoBuffSeries = true; } ~SeriesScope() { g_autoBuffSeries = false; } };
+                Outcome out = [&] { SeriesScope scope; return CastOn(a_follower, a_spellID, pick, /*a_rangeGate=*/false); }();
                 out.reason = std::format("auto buff (lowest first) at {:08X}: {}", pick->GetFormID(), out.reason);
                 return out;
             }

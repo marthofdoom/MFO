@@ -600,8 +600,9 @@ per concern:
   adding a NEW static case there must also go through a shared helper + this predicate, or the picker keeps offering the spell. Board.cpp
   (`SpellList` in PublishSnapshot) hides these, logs `[spell-support] hidden from picker` once per spell, and keeps one a rule already names,
   suffixed " (unsupported)". Picker only: AUTO and casting untouched.
-  `SpellNatureUndeclared(SpellItem*)` (same file `:60`, `cast/Actuation.h`): a Buff-kind, non-placement, non-Self-delivery spell with AT
-  LEAST ONE effect archetype Script or enemy-control (Calm / Frenzy / Demoralize / Paralysis / TurnUndead), i.e. its record does not say
+  `SpellNatureUndeclared(SpellItem*)` (same file `:60`, `cast/Actuation.h`): a Buff-kind, non-placement, non-Self-delivery spell where
+  EVERY effect archetype is Script or enemy-control (Calm / Frenzy / Demoralize / Paralysis / TurnUndead; marth 2026-10-11: one declared
+  effect keeps AUTO, MFO-B236 F-G), i.e. its record does not say
   who it is for (Apocalypse leech curses, vanilla Pacify / Calm). Every other archetype (Invisibility = Fade Other, Cloak, fortifies,
   Light, Rally ...) is a declared ally buff and keeps AUTO's party behaviour (the first cut keyed on the predicted row NoRow / Script and
   caught Fade Other: fixed 2026-10-06). `ClassifySpell` and its enum are untouched. Readers: `CastAuto` (NoOp + one `[auto]` WARN per
@@ -614,7 +615,7 @@ per concern:
   DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCap / DirectNoCombat; one `[buff]` line per reason), `BuffClaim` (+ `BuffSelfClaim`
   wrapper: already-up guard, `Loadout::Prepare` LEFT, consent, `ClaimOffenseCast` target 0 for self / the recipient for a buff at an
   ally or the player, `[cfc]` watch, a `[buff] ... <kind> CLAIM` line), `BuffRefreshGate` (ends a claim once the buff is up on its
-  recipient, an INSTANT spell fired, or a summon hit the list's limit; bounds a concentration ward at a drawn `DrawConcCap`), `BuffUpTransparent`,
+  recipient, an INSTANT spell fired, or a summon hit the list's limit; bounds a concentration ward at a drawn `DrawConcCap`; keyed on the standing claim, so a mid-claim config flip (road DirectDegrade) keeps both bounds, MFO-B230 F5 marth 2026-10-11; inside CastAuto's buff SERIES (`g_autoBuffSeries`, set around its CastOn call) a landed / idle claim ends WITHOUT `a_takeBack`, so the series' next recipient finds the spell in hand, MFO-B230 R3-2 marth 2026-10-11 "only in fanning though"), `BuffUpTransparent`,
   `BuffPlacementSpell`. Called from `CastSelfDirect` (`cast/DirectSelf.cpp`, combat table only, before the Task-1 conc claim), from `CastOn`:
   the in-flight refresh (beside `HealRefreshGate`) and the ALLY fork (just after the self fork: a Buff-kind fire-and-forget spell at an ally /
   the player, or a summon / reanimate aimed at another target), from `Fire.cpp` (a combat-table summon: claim via CastOn's self fork, else
@@ -929,7 +930,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     OFFENSE spell right after the unsighted-charge block (`cast/CastOn.cpp:459`), before the hand plan: a STRICTLY
     higher-ranked (lower index) heal claim on EITHER hand's lock (the hold keeps the OTHER hand off offense) that is not yet observed firing since its
     stamp (pending OR charging; no age cap, field 2026-10-06; a concentration heal keeps the hold while its channel runs, `HealHoldChannelRuns`) makes the offense rule a transparent NoOp, so no right-hand claim and no
-    ch.6/ch.20 pin, and `apmf/Bridge.cpp:787`'s IDLE-HAND FLOOR stays. No state of its own, no timer (the exits are the observed fire or the claim's release; the never-fired bound is `NeverFiredRelease` (`cast/HealRoad.cpp`, armed for BOTH hands in `HealRefreshGate`, `kHoldLastSeenCapMs` of LoS-FREE claim age per `HealHand::losAccumMs`, a kReady charge held with the recipient visible is NOT exempt; the LoS exclusion stops once `APMFBridge::HealApproachBlocked` says the ch.24 approach cannot bring sight; a release sets `g_neverFiredLatch` so the re-claim does not re-arm the hold until it fires, cleared by `ClearCastLock` / `ResetHealRoad`); `HealHoldLapsed` logs `[heal-hold] ... hold ENDED` once, naming observed-fire / claim-released / never-fired). An offense rule already holding the right hand
+    ch.6/ch.20 pin, and `apmf/Bridge.cpp:787`'s IDLE-HAND FLOOR stays. No state of its own, no timer (the exits are the observed fire or the claim's release; the never-fired bound is `NeverFiredRelease` (`cast/HealRoad.cpp`, armed for BOTH hands in `HealRefreshGate`, `kHoldLastSeenCapMs` of LoS-FREE claim age per `HealHand::losAccumMs`, a kReady charge held with the recipient visible is NOT exempt; the LoS exclusion stops once `APMFBridge::HealApproachBlocked` says the ch.24 approach cannot bring sight; AT THE APPROACH FLOOR (`apmf/CombatApproach.cpp` `ServiceHealApproach`: Holding, R cannot tighten, sight still lost `kApproachFloorGiveUp` 5 s) the approach is marked blocked and `HealApproachStuckTake` (consumed once) makes `NeverFiredRelease` release at once with exit token `approach-blocked`, bypassing the age / in-flight gates (marth 2026-10-11, MFO-B234 / B238 R1); a release sets `g_neverFiredLatch` so the re-claim does not re-arm the hold until it fires, cleared by `ClearCastLock` / `ResetHealRoad`); `HealHoldLapsed` logs `[heal-hold] ... hold ENDED` once, naming observed-fire / claim-released / never-fired). An offense rule already holding the right hand
     with its own spell is never held (its refresh must not starve). `[heal-hold]` logs once per claim
     (`g_healHoldLog`, cleared by `ClearCastLocks`). Lowers the F9 "an offense rule below gets its lap" text above for the pending case only.
   * **Telling "P1 worked" from "P1 starved offense" (MFO-B221):** re-mints restamp the lock's `lastSeen`, so the hold re-arms per claim (no age cap since 2026-10-06; a never-fired claim is released by `NeverFiredRelease`, which logs the `[heal-hand] ... NEVER FIRED` WARN and a `[heal-hold] ... hold ENDED: never-fired` line). In the field, `[heal-hold]` once per claim and a prompt `FIRED type=Restore` = worked. Repeated `[heal-hold]` lines with the `[cfc] kNeverFired` WARN and no fire = offense is starved by a heal that never starts (the WARN stays the loud signal; a concentration channel re-started on the same claim is not protected again, accepted under marth's ruling, MFO-B234).
@@ -990,6 +991,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
       PIN-VOID and NO `lockHands`: the lock keeps `lastSeen` (IncumbentHealCastDone's "fired since
       claimed" window) and its rank/waiter state (R2-3). Transparent, like the refresh. Gated on
       `bEquipToCast`.
+    - **MFO-B227 left-weapon debt (marth 2026-10-11, `Loadout.cpp` Prepare Caster branch + `Debt::healWeapon` + Tick):** a LEFT heal claim's spell that displaces a left WEAPON (heal only in the right hand reads Caster) books it as `displacedLeft` (unless MFO's own yield held it or a left debt is open); Tick gives it back as soon as `GetHealCastSpell(left)==0 && !HealRestreamGap` (not only at combat end). Loadout.cpp now includes `cast/Actuation.h`.
     - **`Loadout::Prepare(a_healClaimLive)`** (`Loadout.cpp:421`, R2-1): an open gear debt no longer
       refuses a re-equip into an EMPTY left hand (no two-hander in the right) under a live heal claim;
       nothing is displaced, so the ledger is left as it is. Before, the debt gate Debounced every repair
