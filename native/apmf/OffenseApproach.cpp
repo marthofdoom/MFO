@@ -53,6 +53,10 @@ namespace MFO::APMFBridge {
         constexpr std::chrono::seconds  kTightenGap{ 3 };
         constexpr std::chrono::seconds  kFloorGiveUp{ 5 };
         constexpr std::chrono::seconds  kRefileGap{ 4 };
+        // marth 2026-10-12: inside the standoff, still occluded, nothing more the approach can do (no strafe): release
+        // the claim so the engine's own combat movement runs, and do not re-claim for THAT follower+foe for this long.
+        // NOT a fight-long block: after it, the normal flow may claim again.
+        constexpr std::int64_t          kOffenseRegularMoveMs = 15000;
 
         struct Claim {
             APMF_API::Handle handle = APMF_API::kInvalidHandle;
@@ -70,6 +74,8 @@ namespace MFO::APMFBridge {
         std::unordered_map<RE::FormID, Claim>                             g_off;          // guarded by g_offMx
         std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>    g_offBlocked;   // follower -> foes given up on this fight
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_offRefileAfter;
+        struct Regular { RE::FormID foe = 0; std::chrono::steady_clock::time_point until{}; };
+        std::unordered_map<RE::FormID, Regular> g_offRegular;   // follower -> foe whose re-claim is suppressed; g_offMx
         std::atomic<bool> g_offSeatRefused{ false };
 
         const APMF_API::APMF_API_v19* OffApi() {
@@ -130,6 +136,10 @@ namespace MFO::APMFBridge {
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(g_offMx);
         auto it = g_off.find(a_follower);
+        if (const auto rg = g_offRegular.find(a_follower); rg != g_offRegular.end()) {
+            if (rg->second.foe == a_foe && now < rg->second.until) return;   // regular movement window
+            g_offRegular.erase(rg);
+        }
         if (const auto bit = g_offBlocked.find(a_follower); bit != g_offBlocked.end() && bit->second.count(a_foe)) {
             if (it != g_off.end() && it->second.foe != a_foe) {
                 const auto h = it->second.handle;
@@ -173,11 +183,11 @@ namespace MFO::APMFBridge {
             if (r2 >= c.radius - 1.0f) {
                 if (c.floorSince == std::chrono::steady_clock::time_point{}) { c.floorSince = now; return; }
                 if (now - c.floorSince < kFloorGiveUp) return;
-                spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} is BLOCKED at the floor (R {:.0f}, Holding, "
-                             "sight still lost for {} s) -- released and not re-filed for him this fight",
-                             a_follower, a_foe, c.radius,
-                             std::chrono::duration_cast<std::chrono::seconds>(now - c.floorSince).count());
-                g_offBlocked[a_follower].insert(a_foe);
+                spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} inside standoff and still occluded: regular "
+                             "movement for {} s (R {:.0f}, Holding, no sight for {} s; standoff={:.0f} ({})) -- released, not blocked",
+                             a_follower, a_foe, kOffenseRegularMoveMs / 1000, c.radius,
+                             std::chrono::duration_cast<std::chrono::seconds>(now - c.floorSince).count(), standoff, standoffWhy);
+                g_offRegular[a_follower] = Regular{ a_foe, now + std::chrono::milliseconds(kOffenseRegularMoveMs) };
                 const auto h = c.handle;
                 g_off.erase(it);
                 api->Release(h);
@@ -205,7 +215,7 @@ namespace MFO::APMFBridge {
         RE::FormID       x = 0;
         {
             std::scoped_lock lock(g_offMx);
-            if (a_fightOver) { g_offBlocked.erase(a_follower); g_offRefileAfter.erase(a_follower); }
+            if (a_fightOver) { g_offBlocked.erase(a_follower); g_offRefileAfter.erase(a_follower); g_offRegular.erase(a_follower); }
             const auto it = g_off.find(a_follower);
             if (it == g_off.end()) return;
             h = it->second.handle;
@@ -290,6 +300,7 @@ namespace MFO::APMFBridge {
         g_off.clear();
         g_offBlocked.clear();
         g_offRefileAfter.clear();
+        g_offRegular.clear();
     }
 
 }

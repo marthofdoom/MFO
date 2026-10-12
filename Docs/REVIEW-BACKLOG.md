@@ -1496,4 +1496,6 @@ Raised against `51617e0` (`feat/mfo-meo-gem-rules`), 2026-10-12. Reviewer's text
 - **SEV-4:** `logistics/Service.cpp` (2163 lines) and `apmf/APMFBridge.h` (1577 lines) are past the ~1500-line plan-a-split line; propose the split as its own brief.
 - **SEV-4:** `NavConnected` only follows links to meshes of the follower's and the ref's own cells; exterior cross-cell targets read Unknown (no Island), by design.
 - **SEV-5:** touch-spell standoff reuses the approach's tightening floor (128); no dedicated touch-reach constant exists.
+- **SEV-4:** the 30 s navmesh reach cache (`logistics/LootReach.cpp`) is keyed on the follower but not his position; a follower who changes islands within 30 s reads the old verdict.
+- **SEV-3:** worst case about 5-8 ms in one frame when 4 pending fills land in the same main-thread drain. Option: one compute per drain (re-post the rest).
 - **Surfaced at edit time from:** MAP.md loot failure model (e) and `apmf/OffenseApproach.cpp`.

@@ -5532,7 +5532,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     foe)`, only when `a_ownRay`); that call is also the refresh. Released by `ReleaseOffenseApproach`: sighted candidate returns (same `PickFoe`, fresh Sightline
     verdict, nothing reused), foe dead/disabled / no ask for `kStaleMs` 3.5 s / retreat / Harbinger ended it (`SweepOffenseApproaches` from `Tick`), combat end (`Scheduler.cpp`),
     dismissal (`Followers.cpp`), `ClearOffenseApproaches` from `ClearTransientState`. Bounds copied from the heal approach (R = tightened `fHealApproachRadius` but NEVER below `kOffenseStandoff` 1024 (a Touch spell: 128, `PickFoe`'s `a_touchSpell`); logs `standoff=<u> (ranged|touch spell)`; a 'sight returned' release sets a 4 s refile gap, Repoint
-    every 3 s, ch.23 Leashed -> blocked, 5 s at the floor -> blocked). Logs `[offense-approach]`. OWN mutex `g_offMx`, never nested with `g_approachMx`: a held-heal
+    every 3 s, ch.23 Leashed -> blocked, 5 s at the floor inside the standoff -> RELEASED with regular movement for `kOffenseRegularMoveMs` 15 s for that follower+foe, not blocked). Logs `[offense-approach]`. OWN mutex `g_offMx`, never nested with `g_approachMx`: a held-heal
     claim wins the one ch.24 slot (`HealApproachStands` checked before `g_offMx`; `ServiceHealApproach` releases ours first). What breaks: filing from anywhere that is not the
     all-occluded fallback re-creates a walk with no sight reason; a third lock order here deadlocks with the heal table.
   - `apmf/CombatApproach.cpp` (NEW, feat/mfo-held-heal-approach 2026-10-05, ClickUp 86e3h871c; marth 2026-09-30: "instead of a
