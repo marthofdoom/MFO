@@ -797,8 +797,8 @@ namespace MFO::Logistics {
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
     AmmoOwned   CountAmmoOwned(RE::Actor* a_follower);   // same family test ComputeWeaponRoles uses
     Progression::StyleVotes StyleVotesFor(RE::Actor* a_follower);
-    // defined in logistics/GemRules.cpp: the gem reconcile's preferences, incl. the F3 perk direction
-    // (MEOBridge::GemSkill bits) from THIS file's own answers (ComputeWeaponRoles, ArmorPrefFor,
+    // defined in logistics/Gear.cpp: the gem reconcile's preferences, incl. the F3 perk direction
+    // (skill bits + owned perk ranks) from the equip side's own answers (ComputeWeaponRoles, ArmorPrefFor,
     // StyleVotesFor, TopTwoSchoolMask). WORKER, like they are.
     MEOBridge::GemReconcilePrefs GemReconcilePrefsFor(RE::Actor* a_follower, const FollowerState& a_state);
     bool IsCreatureWeapon(const RE::TESObjectWEAP* a_w);

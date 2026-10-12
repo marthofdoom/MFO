@@ -784,4 +784,69 @@ namespace MFO::Logistics {
             return equipIt;
         }
 
+        // ── F3 GEM PERK DIRECTION (marth 2026-10-12: "Gems need to recognize the perk direction, why
+        // one handed on a two handed dude." / "lockpicking is also perkweighted") ─────────────────
+        // The gem reconcile runs on the MAIN thread, but these answers are WORKER reads (the follower's
+        // inventory in ComputeWeaponRoles, the perk-vote mirror, g_followers state), so they are taken
+        // here, on the worker, and ride the prefs into the posted pass. Each group is THIS file's own
+        // answer for gear, never re-derived, so a gem and the gear it sits in cannot disagree:
+        //   weapon kind  ComputeWeaponRoles: melee class (1H/2H) + ranged role, plus StyleVotes::unarmed
+        //                (progression-granted hand-to-hand perks, what ShedOffRoleWeapon acts on);
+        //   off-hand     WeaponRoles::offHand (1 shield -> Block, 2 dual wield -> no Block; 0 = none);
+        //   armor class  ArmorPrefFor().heavyClass; no direction only when both skills AND both votes tie;
+        //   every other skill (schools, Sneak, Lockpicking, Pickpocket, Speech, crafting): its OWNED
+        //                PERK RANKS (StyleVotes::skillRanks); a caster's TopTwoSchoolMask + cast school too.
+        // skillRanks also carries the weight for every skill. Computed only when the themed tier-2 pass
+        // can use it (bMeoAwareGems ON and MEO v4); otherwise just caster + school (the legacy inputs).
+        MEOBridge::GemReconcilePrefs GemReconcilePrefsFor(RE::Actor* a_follower, const FollowerState& a_state) {
+            MEOBridge::GemReconcilePrefs p;
+            p.caster = IsCasterFollower(a_state);
+            if (p.caster) {
+                int castGambits = 0;
+                p.school = static_cast<std::uint32_t>(TargetMagicSchool(a_state, castGambits));
+            }
+            if (!a_follower || !Config::g_meoAwareGems.load() || !MEOBridge::GemThemeSupported()) return p;
+
+            auto bit = [](RE::ActorValue a_av) {
+                return 1u << (static_cast<std::uint32_t>(a_av) - static_cast<std::uint32_t>(RE::ActorValue::kOneHanded));
+            };
+            std::uint32_t skills = 0;
+            std::uint8_t  known  = 0;
+            const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+            const auto        votes = StyleVotesFor(a_follower);
+            if (roles.melee != WepClass::Other || roles.doRanged || votes.unarmed > 0) {
+                known |= MEOBridge::kGdWeapon;
+                if (roles.melee == WepClass::OneHand)      skills |= bit(RE::ActorValue::kOneHanded);
+                else if (roles.melee == WepClass::TwoHand) skills |= bit(RE::ActorValue::kTwoHanded);
+                if (roles.doRanged)                        skills |= bit(RE::ActorValue::kArchery);
+                if (votes.unarmed > 0)                     skills |= MEOBridge::kGemSkillUnarmed;
+            }
+            if (roles.offHand != 0) {
+                known |= MEOBridge::kGdBlock;
+                if (roles.offHand == 1) skills |= bit(RE::ActorValue::kBlock);
+            }
+            const ArmorPref ap = ArmorPrefFor(a_follower);
+            if (ap.heavySkill != ap.lightSkill || ap.heavyVotes != ap.lightVotes) {
+                known  |= MEOBridge::kGdArmor;
+                skills |= bit(ap.heavyClass ? RE::ActorValue::kHeavyArmor : RE::ActorValue::kLightArmor);
+            }
+            // Group skills are the equip side's; every other skill is on the direction by owned perks.
+            const std::uint32_t groupSkills = bit(RE::ActorValue::kOneHanded) | bit(RE::ActorValue::kTwoHanded) |
+                                              bit(RE::ActorValue::kArchery) | bit(RE::ActorValue::kBlock) |
+                                              bit(RE::ActorValue::kHeavyArmor) | bit(RE::ActorValue::kLightArmor);
+            for (int i = 0; i < 18; ++i) {
+                p.skillRanks[i] = static_cast<std::uint8_t>(std::clamp(votes.skillRanks[i], 0, 255));
+                if (votes.skillRanks[i] > 0 && !(groupSkills & (1u << i))) skills |= 1u << i;
+            }
+            if (p.caster) {
+                const std::uint8_t top2 = TopTwoSchoolMask(a_follower);   // bit 0 Alt .. 4 Rest
+                for (int b = 0; b < 5; ++b)
+                    if (top2 & (1u << b)) skills |= bit(static_cast<RE::ActorValue>(static_cast<int>(RE::ActorValue::kAlteration) + b));
+                const auto cast = static_cast<RE::ActorValue>(p.school);
+                if (cast >= RE::ActorValue::kAlteration && cast <= RE::ActorValue::kRestoration) skills |= bit(cast);
+            }
+            p.skills = skills;
+            p.known  = known;
+            return p;
+        }
 }

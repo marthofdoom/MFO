@@ -1325,6 +1325,9 @@ namespace MFO::Progression {
                 int have = 0;
                 for (int r = static_cast<int>(node.ranks.size()); r >= 1; --r)
                     if (owns(node.ranks[static_cast<std::size_t>(r - 1)].perkFormID)) { have = r; break; }
+                if (const int si = static_cast<int>(tree.av) - static_cast<int>(RE::ActorValue::kOneHanded);
+                    have > 0 && si >= 0 && si < 18)
+                    v.skillRanks[si] += have;
                 for (int k = 0; k < have; ++k) {
                     const auto& st = node.ranks[static_cast<std::size_t>(k)].style;
                     ++v.owned;

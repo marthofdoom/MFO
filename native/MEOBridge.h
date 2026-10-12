@@ -137,29 +137,22 @@ namespace MFO::MEOBridge {
     // landed. Domain is matched here (armor<->armor, weapon<->weapon, support fits
     // either) so MEO never rejects the queued socket into a retry loop.
     // F3 PERK DIRECTION (marth 2026-10-12: "Gems need to recognize the perk direction, why one handed
-    // on a two handed dude."): the skills a Skill-class gem may fortify, as the EQUIP side judges them.
-    // Filled on the logistics worker by Logistics::GemReconcilePrefsFor from the same answers gear
-    // choice uses (ComputeWeaponRoles, ArmorPrefFor, StyleVotesFor, TopTwoSchoolMask), so gem choice
-    // and gear choice cannot disagree. `known` says which question HAS a direction; a group without
-    // one falls back to the worn gear in the pass (logged once per follower).
-    enum GemSkill : std::uint16_t {
-        kGsOneHanded  = 1u << 0,
-        kGsTwoHanded  = 1u << 1,
-        kGsArchery    = 1u << 2,
-        kGsUnarmed    = 1u << 3,
-        kGsBlock      = 1u << 4,
-        kGsHeavyArmor = 1u << 5,
-        kGsLightArmor = 1u << 6,
-        kGsWeaponGroup = kGsOneHanded | kGsTwoHanded | kGsArchery | kGsUnarmed,
-        kGsBlockGroup  = kGsBlock,
-        kGsArmorGroup  = kGsHeavyArmor | kGsLightArmor,
-    };
+    // on a two handed dude." / "lockpicking is also perkweighted"): the skills a Skill-class gem may
+    // fortify. Filled on the logistics WORKER by Logistics::GemReconcilePrefsFor (logistics/Gear.cpp)
+    // from the answers gear choice already uses (ComputeWeaponRoles, ArmorPrefFor, StyleVotesFor,
+    // TopTwoSchoolMask), so gem choice and gear choice cannot disagree, and copied into the posted
+    // main-thread pass. Skill bit i = RE::ActorValue(kOneHanded + i) (18 skills); bit 18 = Unarmed.
+    inline constexpr std::uint32_t kGemSkillUnarmed = 1u << 18;
+    // The questions whose answer is the EQUIP side's (weapon kind, off-hand, armor class). A group
+    // without a direction falls back to the worn gear in the pass (logged once per follower). Every
+    // other skill's direction is its owned perk ranks.
+    enum GemDirGroup : std::uint8_t { kGdWeapon = 1u << 0, kGdBlock = 1u << 1, kGdArmor = 1u << 2 };
     struct GemReconcilePrefs {
         bool          caster = false;   // IsCasterFollower
         std::uint32_t school = 0;       // dominant TargetMagicSchool (RE::ActorValue ordinal); kNone = 0
-        std::uint16_t skills = 0;       // GemSkill bits the follower's direction names
-        std::uint16_t known  = 0;       // GemSkill GROUPS that have a direction (else worn-gear fallback)
-        std::uint8_t  schoolMask = 0;   // caster: invested + cast schools, bits 0 Alt 1 Conj 2 Dest 3 Illu 4 Rest
+        std::uint32_t skills = 0;       // skill bits on the follower's direction (see above)
+        std::uint8_t  known  = 0;       // GemDirGroup bits that HAVE a direction
+        std::uint8_t  skillRanks[18]{}; // owned perk ranks per skill (StyleVotes::skillRanks, clamped): the weight
     };
 
     // ── GEM THEME (MEO ABI v4, F3 relevance round) ──────────────────────────

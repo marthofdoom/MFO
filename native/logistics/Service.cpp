@@ -2146,7 +2146,7 @@ namespace MFO::Logistics {
             // Posts to the main thread inside; a full no-op when MEO < v3 (the loose
             // gem simply stays as it does today -- no regression).
             if (MEOBridge::GemReconcileSupported()) {
-                const MEOBridge::GemReconcilePrefs prefs = GemReconcilePrefsFor(a_follower, a_state);   // GemRules.cpp (F3 perk direction)
+                const MEOBridge::GemReconcilePrefs prefs = GemReconcilePrefsFor(a_follower, a_state);   // Gear.cpp (F3 perk direction)
                 MEOBridge::RequestGemReconcile(a_follower, Config::g_meoAwareGems.load(), prefs);
             }
             GemRules::PumpProbes(a_follower);   // looted-gear gem probes: keep or put back once the strip landed

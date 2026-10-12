@@ -415,6 +415,9 @@ namespace MFO::Progression {
                                   // an unenrolled follower whatever he holds.
         int classified{ 0 };      // owned ranks that carried ANY fact
         int owned{ 0 };           // owned catalog ranks in total (diagnostics)
+        int skillRanks[18]{};     // owned ranks per SKILL TREE, by (tree AV - kOneHanded): the perk
+                                  // investment per skill (F3 gem relevance, marth 2026-10-12:
+                                  // "lockpicking is also perkweighted")
     };
     StyleVotes TallyStyleVotes(RE::Actor* a_actor);
 
