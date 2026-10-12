@@ -1602,7 +1602,7 @@ F7 were fixed on the branch. Cross-referenced from MAP.md (progression/ ROSTER R
   the base; it cannot tell MFO's grant from a native grant of the same form (SPID/Requiem). Fix shape when drained:
   a per-session record of the forms MFO actually AddPerk'd.
 
-### MFO-B251 (SEV-5, OPEN, tools) -- cosave_roundtrip leftovers from the M3 review (raised against d8f6a68)
+### MFO-B253 (SEV-5, OPEN, tools) -- cosave_roundtrip leftovers from the M3 review (raised against d8f6a68)
 Opus review of `fix/mfo-m3-cosave-tool`, MERGE OK; everything above SEV-5 was fixed in the closing round. Left open:
 - The seeded v<8 retro never exercises the `HmsNpcRates` unreadable branch, the `fNPCHealthLevelBonus <= 0`
   branch, or the fixed-stat / grant-history SKIP branch (README lists them). Fix shape: more seed variants.
