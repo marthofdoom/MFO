@@ -13,6 +13,8 @@
 // file-local in its module.
 
 #include "PCH.h"
+#include <map>
+#include <tuple>
 #include "Actuation.h"
 #include "Vocabulary.h"
 #include "Config.h"
@@ -798,6 +800,7 @@ namespace MFO::Actuation {
         // AUTO's pacing + beneficial-recast state (defined in cast/Auto.cpp; ClearSelfCasts
         // in cast/Direct.cpp clears them on revert):
         extern std::unordered_map<RE::FormID, SelfClock::time_point> g_autoCast;
+        extern std::map<std::tuple<RE::FormID, RE::FormID, RE::FormID>, SelfClock::time_point> g_autoConcFan;   // M2
         struct BeneficialRecast {
             SelfClock::time_point lastCast{};
             float                 windowSec = 0.0f;

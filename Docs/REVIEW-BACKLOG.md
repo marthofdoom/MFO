@@ -34,7 +34,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning for deferral:** not fixable in general without an APMF dry-run / "can you serve this?" query. Recorded so the next reader does not assume F2 is closed.
 
 ### MFO-B3 — right-first hand selection fails toward RIGHT when `bWeaponStyleControl` is OFF
-- **NARROWED** (`fix/mfo-logic-bundle2`): with the switch off `WeaponHandExposure` falls back to `Followers::GetBaseClass` Melee/Ranged (switch ON unchanged). STILL OPEN: an Auto (0) hybrid with the switch off; reading its equip gambits needs a new read-only `Followers` accessor (no new plumbing taken in a small-fix round).
+- **DRAINED** (`fix/mfo-bucket3`, 2026-10-11): the Auto (0) hybrid is covered by `Followers::HasEnabledEquipWeaponGambit` (enabled act.equip_melee/ranged combat rule). Earlier NARROWED note follows. (`fix/mfo-logic-bundle2`): with the switch off `WeaponHandExposure` falls back to `Followers::GetBaseClass` Melee/Ranged (switch ON unchanged). STILL OPEN: an Auto (0) hybrid with the switch off; reading its equip gambits needs a new read-only `Followers` accessor (no new plumbing taken in a small-fix round).
 - **Raised:** Fable review of `1044816` (finding C, SEV-4). Recorded at the site and in MAP.md by `625f3b7`.
 - **Severity:** SEV-4 (non-default config only; default is ON, `Config.h:505`)
 - **Finding:** `WeaponHandExposure` depends on a `g_forcedWeapon` entry, and `EquipWeapon` writes one only under `Config::g_weaponStyleControl` (the kill-switch-off branch is a plain `EquipObject`, no ledger); `ReconcileForcedWeapon` releases unconditionally when off. So with that feature off, a melee/hybrid follower in the transient-unarmed gap still lands RIGHT — the 2026-09-05 "cast never left rest" shape.
@@ -1505,3 +1505,8 @@ Raised against `51617e0` (`feat/mfo-meo-gem-rules`), 2026-10-12. Reviewer's text
 - **SEV-4:** the 30 s navmesh reach cache (`logistics/LootReach.cpp`) is keyed on the follower but not his position; a follower who changes islands within 30 s reads the old verdict.
 - **SEV-3:** worst case about 5-8 ms in one frame when 4 pending fills land in the same main-thread drain. Option: one compute per drain (re-post the rest).
 - **Surfaced at edit time from:** MAP.md loot failure model (e) and `apmf/OffenseApproach.cpp`.
+
+## Bucket 3 (fix/mfo-bucket3, Opus review of 082bcb1)
+- **SEV-4 (C1):** a perk referenced only by player-only spells is still marked effective (the entry-less perk rule in `Progression.cpp` does not check that an NPC can satisfy the spell side).
+- **SEV-4 (C2):** an equip gambit that never fires still pushes casts to the left hand (the B3 right-first gate counts an enabled equip gambit, not one that actually fires).
+- **Surfaced at edit time from:** MAP.md `Progression.cpp` and `cast/Hands.cpp` entries.

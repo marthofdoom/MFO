@@ -8,6 +8,7 @@
 // includes PCH.h only). Do not "fix" this by reverting to the held-perk walk.
 #include "progression/ProgAllocator.h"
 #include <array>     // v1.1 residual #3: the classifier's add-on-declared verdict table
+#include <unordered_set>   // 86e3kddjp: the HasPerk-reference index
 
 // The production catalog reader. See Progression.h for the contract;
 // Docs/FOLLOWER-PROGRESSION-ESL-DESIGN.md §1/§2/§3 for the design.
@@ -489,6 +490,54 @@ namespace MFO::Progression {
             return true;
         }
 
+        // ── 86e3kddjp: the HasPerk-reference index ──────────────────────────
+        // Perks that carry no entry (or whose ability entry has no spell) can still
+        // be real on an NPC: Adamant's Combustion / Wildfire / Deep Freeze / Power
+        // Surge are tested by HasPerk (function 448) in the conditions of ~40 fire,
+        // frost and shock MGEFs, SPELs and staffs' ENCHs, and the test runs on the
+        // caster. A perk is "referenced" if at least one such condition names it,
+        // is not a negative test, runs on Self or Target, and sits in a list with no
+        // narrow player-pin (ConditionPlayerGated). Perk prerequisites
+        // (perkConditions) and COBJ conditions are deliberately NOT read. Built ONCE
+        // by Init() before BuildCatalog, read-only after (freeze-then-publish).
+        std::unordered_set<RE::FormID> g_hasPerkRefs;
+
+        void IndexHasPerkRefs(const RE::TESCondition& a_cond) {
+            if (!a_cond.head || ConditionPlayerGated(a_cond)) return;
+            for (auto* it = a_cond.head; it; it = it->next) {
+                const auto& d = it->data;
+                if (d.functionData.function.get() != RE::FUNCTION_DATA::FunctionID::kHasPerk)
+                    continue;
+                if (d.object.get() != RE::CONDITIONITEMOBJECT::kSelf &&
+                    d.object.get() != RE::CONDITIONITEMOBJECT::kTarget)
+                    continue;
+                if (!PositiveTest(d)) continue;
+                auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
+                if (form) g_hasPerkRefs.insert(form->GetFormID());
+            }
+        }
+
+        void BuildHasPerkIndex() {
+            auto* dh = RE::TESDataHandler::GetSingleton();
+            if (!dh) return;
+            int mgef = 0, spel = 0, ench = 0;
+            for (auto* m : dh->GetFormArray<RE::EffectSetting>())
+                if (m) { IndexHasPerkRefs(m->conditions); ++mgef; }
+            for (auto* sp : dh->GetFormArray<RE::SpellItem>())
+                if (sp) {
+                    ++spel;
+                    for (auto* eff : sp->effects) if (eff) IndexHasPerkRefs(eff->conditions);
+                }
+            for (auto* en : dh->GetFormArray<RE::EnchantmentItem>())
+                if (en) {
+                    ++ench;
+                    for (auto* eff : en->effects) if (eff) IndexHasPerkRefs(eff->conditions);
+                }
+            spdlog::info("[prog] HasPerk reference index: {} perk(s) referenced by NPC-satisfiable "
+                         "conditions ({} MGEF, {} SPEL, {} ENCH scanned)",
+                         g_hasPerkRefs.size(), mgef, spel, ench);
+        }
+
         // A rank is effective iff >=1 entry is effective. a_outWhy is only
         // meaningful when the verdict is NOT effective — it names every
         // non-effective entry so the dump can explain the filter.
@@ -504,6 +553,7 @@ namespace MFO::Progression {
         // diagnosable; with the shipped add-on present all 92 are declared.
         Verdict ClassifyRank(RE::BGSPerk* a_rank, std::string& a_outWhy) {
             bool anyMarginal = false;
+            bool abilityNoSpell = false;   // 86e3kddjp: an ability entry with no spell behind it
             std::string why;
             int n = 0;
             for (const auto& f : WalkPerkEntries(a_rank)) {
@@ -514,6 +564,7 @@ namespace MFO::Progression {
                     break;
                 case PerkEntryKind::kAbility:
                     if (f.firesForNpc) return Verdict::kEffective;
+                    if (!*f.name) abilityNoSpell = true;
                     Append(why, std::format("ability:{}(player-gated)",
                                             *f.name ? f.name : "<no spell>"));
                     break;
@@ -542,6 +593,15 @@ namespace MFO::Progression {
                     Append(why, std::format("unknownEntryType{}(marginal)", f.rawType));
                     break;
                 }
+            }
+            // 86e3kddjp: an entry-less perk, or one whose ability entry has no spell,
+            // is EFFECTIVE when a spell/effect/enchantment condition an NPC can satisfy
+            // tests HasPerk on it (g_hasPerkRefs). Otherwise it falls to the rules below.
+            if ((n == 0 || abilityNoSpell) && g_hasPerkRefs.count(a_rank->GetFormID())) {
+                spdlog::info("[prog] {} ({:08X}): effective on HasPerk reference ({})",
+                             NameOf(a_rank), a_rank->GetFormID(),
+                             n == 0 ? "no entries" : "ability entry has no spell");
+                return Verdict::kEffective;
             }
             if (n == 0) {
                 // Entry-less perks: MARGINAL, not dead (round-4 acceptance
@@ -1135,6 +1195,7 @@ namespace MFO::Progression {
         const bool dump = Config::g_progCatalogDump.load();
         if (!g_detected && !dump) return;   // no consumer this session
 
+        BuildHasPerkIndex();   // 86e3kddjp: before BuildCatalog, ClassifyRank reads it
         BuildCatalog();
         if (g_catalog.built)
             spdlog::info("[prog] catalog built: {} skill trees, {} perks kept ({} marginal), "

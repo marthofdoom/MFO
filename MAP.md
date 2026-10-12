@@ -1494,8 +1494,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   **RESIDUAL, non-default config (NARROWED, MFO-B3, `fix/mfo-logic-bundle2`):** the ledger is only WRITTEN
   while `bWeaponStyleControl` is on, so with the switch off `WeaponHandExposure` (`cast/Hands.cpp:184`) also
   reads the declared role: `Followers::GetBaseClass` Melee (1) or Ranged (2) counts as "a weapon owns the right
-  hand". Consulted ONLY with the switch off (switch-ON answer is the ledger answer, unchanged). Not covered: an
-  Auto (0) hybrid with the switch off: reading its gambit table needs a new `Followers` read-only accessor (no record getter exists outside `Followers.cpp`), so it stays open.
+  hand". Consulted ONLY with the switch off (switch-ON answer is the ledger answer, unchanged). An Auto (0) hybrid with the
+  switch off is now covered too (MFO-B3 drained): `Followers::HasEnabledEquipWeaponGambit` (`Followers.cpp`, beside `GetBaseClass`, same serial-worker domain) is true for an enabled `act.equip_melee`/`act.equip_ranged` combat rule.
   `g_forcedWeapon` is read under `g_forcedMx` here like every other access — the map has an OFF-THREAD
   reader (the SKSE save callback, `CoSaveForcedWeapons`), so "the writers are worker-serial" is not
   sufficient. Its declaration comment used to assert BOTH "no lock (#4)" and "guard every access"; the
@@ -1873,7 +1873,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   magicka deduct — NOT the single-holder foe package), **collecting FormIDs never
   raw `Actor*` past the combat-group read-lock (UAF)**, per-cast magicka with
   reserve floor (cost clamped to available, never negative magicka), one broadcast
-  per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). **#3/#6b:** a
+  per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). **M2 (86e3d6dp0, 2026-10-11):** a CONCENTRATION fan is billed for time: `ConcFanChargeSec` (`cast/Auto.cpp`) reads `g_autoConcFan` (per caster/target/spell last-fan clock, worker-serial, cleared in `ClearSelfCasts`) and passes `chargeSec` (1 s on a new/lapsed stream, else the gap since the last fan, capped by the sustain window) into `ApplyEffectFromTo`, which deducts `cost x chargeSec`; log reads `(cost C x S s = X)`. The tail after the last fan is unbilled (no settle on this road). M1 (regen) and M3 (wards) are NOT done (need marth/field). **#3/#6b:** a
   BENEFICIAL DURATION buff (light/ward/fortify) is additionally held off by a
   per-`(caster,spellID)` `g_beneficialRecast` window sized to the spell's authored
   duration × `fBeneficialRecastFrac` × a per-fire ±`fBeneficialRecastJitter` jitter
@@ -4472,8 +4472,8 @@ board edit queue's progression verbs collapsed to ONE generic carrier `EditKind:
 oracle — `CoSaveLoad` drops any perk alloc whose node is no longer in `Get()`
 (`progression/Allocator.cpp:596-603`), so re-tuning the add-on's declared verdicts (the
 `MFOP_EntryPointVerdicts` GLOBs in `MFO_GenerateESP.py`, read via
-`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`Progression.cpp:485`) silently changes which
-saved perks survive a load (with an auto §17 refund). The verdicts are ESL DATA now, not a
+`ReadEntryPointVerdicts`→`g_verdicts`) or `ClassifyRank` (`Progression.cpp:554`) silently changes which
+saved perks survive a load (with an auto §17 refund). **HasPerk-reference index (86e3kddjp/86e3haxr4):** `BuildHasPerkIndex` (`Progression.cpp:~515`, run in `Init` before `BuildCatalog`) scans MGEF/SPEL/ENCH conditions for a positive `HasPerk` on Self/Target in a list with no narrow player pin; `ClassifyRank` returns `kEffective` for an entry-less perk (or an ability entry with no spell) in that set, with a `[prog] ... effective on HasPerk reference` line per reclassified rank. Other entry-less perks stay marginal. It changes which perks the allocator spends on. The verdicts are ESL DATA now, not a
 DLL table — changing them is a generator+regen change, not a code edit.
 **STYLE FACTS (2026-09-13, marth: "primary weapon, armor and wielding style are
 determined by perks") — the classifier's one extension, still no verdict.**

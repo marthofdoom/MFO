@@ -174,10 +174,11 @@ namespace MFO::Actuation {
         // "declared melee" read MeleeOnly makes, Fire.cpp) means a weapon owns that
         // follower's right hand and the equip gambit will put it back. That signal
         // does not depend on the feature, the hands or any claim, so it holds in the
-        // transient-unarmed gap. It is consulted ONLY when the switch is off, so the
-        // switch-ON answer is exactly the ledger answer as before. Not covered: an
-        // Auto (0) hybrid with the switch off, whose role is resolved from the live
-        // loadout and has no durable declaration in the gap.
+        // transient-unarmed gap. An Auto (0) hybrid is covered by its gambit table: an
+        // ENABLED act.equip_melee / act.equip_ranged combat rule
+        // (Followers::HasEnabledEquipWeaponGambit) is its durable declaration. It is
+        // consulted ONLY when the switch is off, so the switch-ON answer is exactly
+        // the ledger answer as before.
         //
         // A pure caster never has an entry, so right-first still applies to
         // exactly the follower marth's ruling was about ("theres two hands, auto
@@ -196,7 +197,10 @@ namespace MFO::Actuation {
             // Switch OFF: no ledger is ever written, so fall back to the declared role (MFO-B3).
             if (!Config::g_weaponStyleControl.load()) {
                 const auto cls = Followers::GetBaseClass(a_follower->GetFormID());   // worker-serial, #4
-                return cls == 1 || cls == 2;   // Melee / Ranged: a weapon owns the right hand
+                if (cls == 1 || cls == 2) return true;   // Melee / Ranged: a weapon owns the right hand
+                // Auto (0) hybrid: its role is resolved live, but an enabled equip-melee / equip-ranged
+                // gambit is the durable declaration that a weapon is coming back (MFO-B3).
+                return cls == 0 && Followers::HasEnabledEquipWeaponGambit(a_follower->GetFormID());
             }
             return false;
         }

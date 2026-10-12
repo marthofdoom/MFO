@@ -22,6 +22,12 @@ namespace MFO::Actuation {
         // (the g_followers discipline #4); cleared with g_selfCast on revert.
         std::unordered_map<RE::FormID, SelfClock::time_point> g_autoCast;
 
+        // M2 (ClickUp 86e3d6dp0): the last fan of a CONCENTRATION spell per
+        // (caster, target, spell), so the next fan bills the seconds the stream
+        // actually channeled since (see ConcFanChargeSec) instead of one flat cast.
+        // Worker-serial like g_autoCast; cleared with it on revert.
+        std::map<std::tuple<RE::FormID, RE::FormID, RE::FormID>, SelfClock::time_point> g_autoConcFan;
+
         // fix #3/#6: BENEFICIAL DURATION recast suppression. Keyed on
         // (casterFormID<<32 | spellID): the last time this caster fired this
         // beneficial buff, plus the JITTERED window it must wait before re-firing.
@@ -63,6 +69,38 @@ namespace MFO::Actuation {
             return a_authoredDuration * frac * (1.0f + dist(rng));
         }
 
+        // M2 (86e3d6dp0): seconds to bill for ONE AUTO fan of a concentration spell.
+        // The fan pins a REAL effect for a_window seconds and re-fans every
+        // fCastCooldown, so a flat one-second charge per fan billed ~1 s per ~4 s
+        // channeled (the 4x under-charge DirectTarget warns about). First fan of a
+        // stream (none recorded, or the last one lapsed past a_window): one second,
+        // as the direct road's first beat. Later fans: the gap since the last fan,
+        // which the pinned effect covered (billed up to a_window). The tail after
+        // the final fan is NOT billed (no settle on this road): the same residual
+        // the one-per-fan charge always had, now bounded by one window.
+        // Worker-serial (g_autoConcFan).
+        float ConcFanChargeSec(RE::FormID a_caster, RE::FormID a_target, RE::FormID a_spell,
+                               float a_window, float a_interval, SelfClock::time_point a_now) {
+            if (g_autoConcFan.size() > 32) {
+                for (auto it = g_autoConcFan.begin(); it != g_autoConcFan.end();)
+                    it = (a_now - it->second > std::chrono::seconds(10)) ? g_autoConcFan.erase(it) : std::next(it);
+            }
+            auto& last = g_autoConcFan[{ a_caster, a_target, a_spell }];
+            float sec = kConcApplyPeriod;
+            if (last != SelfClock::time_point{}) {
+                const float gap = std::chrono::duration<float>(a_now - last).count();
+                // F-b: AUTO re-fans at the first tick at/after a_interval (fCastCooldown),
+                // so a normally paced fan lands a little PAST a_interval -- and a 4 s
+                // interval is not <= the 4 s utility window. Lapse = longer than the
+                // pacing interval plus a 1 s tick margin (or the window, if larger).
+                // The bill is capped at a_window: the pinned effect covers no more.
+                if (gap <= std::max(a_window, a_interval + 1.0f))
+                    sec = std::clamp(gap, 0.0f, a_window);
+            }
+            last = a_now;
+            return sec;
+        }
+
         // Apply a_spell's effect FROM a caster TO an arbitrary target, hands-free
         // (CastSpellImmediate, kInstant), and deduct the caster's REAL magicka
         // cost (§56: CastSpellImmediate spends nothing, so we deduct). This is
@@ -76,8 +114,8 @@ namespace MFO::Actuation {
         // would defeat the hostile DoT burst-vs-tail recast the worker approved.
         // a_hostile only tunes the log label. (Sole caller: CastAuto's fan-out. A summon never comes here: CastSummonOnce casts it itself on the main thread.)
         void ApplyEffectFromTo(RE::FormID a_casterID, RE::FormID a_targetID,
-                               RE::FormID a_spellID, bool a_hostile) {
-            MainThread::Post([a_casterID, a_targetID, a_spellID, a_hostile] {
+                               RE::FormID a_spellID, bool a_hostile, float a_chargeSec) {
+            MainThread::Post([a_casterID, a_targetID, a_spellID, a_hostile, a_chargeSec] {
                 auto* caster = RE::TESForm::LookupByID<RE::Actor>(a_casterID);
                 auto* target = RE::TESForm::LookupByID<RE::Actor>(a_targetID);
                 auto* sp     = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
@@ -149,19 +187,20 @@ namespace MFO::Actuation {
                     return;
                 }
                 const float cost  = sp->CalculateMagickaCost(caster);
-                // #6: clamp to the current pool so a deduct never drives magicka
-                // negative (AUTO validates N casts against ONE worker snapshot).
-                const float spend = avo ? std::min(cost, before) : 0.0f;
+                // M2: a concentration fan bills a_chargeSec x the per-second cost (1 for
+                // everything else). #6: clamp to the current pool so a deduct never drives
+                // magicka negative (AUTO validates N casts against ONE worker snapshot).
+                const float spend = avo ? std::min(cost * a_chargeSec, before) : 0.0f;
                 if (avo && spend > 0.0f)
                     avo->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
                                            RE::ActorValue::kMagicka, -spend);
                 const float after = avo ? avo->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
                 spdlog::info("[cast] {:08X} {} AUTO {} {} ({:08X}) -> {:08X} -- effect applied, "
-                             "magicka {:.0f}->{:.0f} (cost {:.0f})",
+                             "magicka {:.0f}->{:.0f} (cost {:.0f} x {:.1f} s = {:.0f})",
                              a_casterID, caster->GetName() ? caster->GetName() : "?",
                              a_hostile ? "HOSTILE" : "BENEFICIAL",
                              sp->GetName() ? sp->GetName() : "?", a_spellID, a_targetID,
-                             before, after, cost);
+                             before, after, cost, a_chargeSec, cost * a_chargeSec);
                 if (heal) {
                     NoteHealLanded(a_targetID, a_casterID, a_spellID);   // [bleed]
                     HealObsNote(caster, target, sp, sp, "AUTO", hpBefore, attach);
@@ -719,7 +758,9 @@ namespace MFO::Actuation {
                 a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
                                                   RE::ActorValue::kMagicka);
             const float floor   = (reserve > 0.0f && mx > 0.0f) ? reserve * mx : 0.0f;
-            auto affordable = [&] { return cost <= budget && (budget - cost) >= floor; };
+            // F-a: the budget check and deduct use the SAME per-target bill as the real
+            // deduct (cost x chargeSec, M2), so a reserve floor holds on a long fan.
+            auto affordable = [&](float a_sec) { return cost * a_sec <= budget && (budget - cost * a_sec) >= floor; };
 
             // AUTO-fan budget honesty (SEV-3): a CONCENTRATION + Self spell fanned
             // to a NON-caster is SILENTLY SKIPPED by ApplyEffectFromTo (it would leak
@@ -861,12 +902,18 @@ namespace MFO::Actuation {
 
             int fired = 0, skipped = 0;
             for (const auto tgtID : targets) {
-                if (!affordable()) { ++skipped; break; }   // insufficient magicka -> stop the fan-out
                 if (hostile && Sightline::Check(id, tgtID, Sightline::Basis::Own) == Sightline::Verdict::Occluded) {
                     ++skipped; continue;                    // no line of sight -- fail-open on Unknown
                 }
-                ApplyEffectFromTo(id, tgtID, a_spellID, hostile);
-                budget -= cost;
+                const bool isConc = spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+                const float chargeSec = isConc
+                    ? ConcFanChargeSec(id, tgtID, a_spellID,
+                                       CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Heal
+                                           ? kConcHealCap : kConcUtilityHold, interval, now)
+                    : 1.0f;
+                if (!affordable(chargeSec)) { ++skipped; break; }   // insufficient magicka -> stop the fan-out
+                ApplyEffectFromTo(id, tgtID, a_spellID, hostile, chargeSec);
+                budget -= cost * chargeSec;
                 ++fired;
             }
 
