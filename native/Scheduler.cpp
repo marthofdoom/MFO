@@ -119,8 +119,7 @@ namespace MFO::Scheduler {
             bool rangeRuleEvaluated = false;
             for (int i = 0; i < static_cast<int>(a_rules.size()) && i < a_stopIdx; ++i) {
                 const auto& r = a_rules[i];
-                if (r.actionOpcode != Vocab::kActEquipMelee && r.actionOpcode != Vocab::kActEquipRanged &&
-                    r.actionOpcode != Vocab::kActEquipSilver) continue;
+                if (r.actionOpcode != Vocab::kActEquipMelee && r.actionOpcode != Vocab::kActEquipRanged) continue;
                 if (r.conditionOpcode == Vocab::kCondFoeWithinRange || r.conditionOpcode == Vocab::kCondFoeBeyondRange) {
                     rangeRuleEvaluated = true;
                     break;
@@ -1767,8 +1766,7 @@ namespace MFO::Scheduler {
                                         : choice.ruleIndex;
                 for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i) {
                     const auto& aop = rules[i].actionOpcode;
-                    if (aop == Vocab::kActEquipMelee || aop == Vocab::kActEquipRanged ||
-                        aop == Vocab::kActEquipSilver) {
+                    if (aop == Vocab::kActEquipMelee || aop == Vocab::kActEquipRanged) {
                         equipCondKnownFalse = true;   // evaluated above the stop, did not hold
                         break;
                     }
@@ -1778,7 +1776,9 @@ namespace MFO::Scheduler {
         // SILVER (ClickUp 86e3p2gp9): the silver rule's OWN truth, by the same two ways -- the scan
         // ran to completion, or an act.equip_silver rule sat above the stop and did not hold. Its
         // own, because another melee equip holding the hand (equipHeld == 1) must not keep the
-        // silver weapon in it once the foe is no longer Unholy.
+        // silver weapon in it once the foe is no longer Unholy. Deliberately NOT folded into
+        // equipCondKnownFalse above: a false silver rule above the stop says nothing about an
+        // act.equip_melee rule below it, whose hold must survive its unknown laps as before.
         bool silverKnownFalse = !silverHeld && condKnownFalse;
         if (!silverHeld && !silverKnownFalse) {
             if (const auto r2 = g_followers.find(id); r2 != g_followers.end()) {
