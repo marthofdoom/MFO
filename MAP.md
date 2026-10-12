@@ -518,6 +518,29 @@ per concern:
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
   field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
   keeps a relic out of the declared set (MFO-B126).
+- `cast/EquipSilver.cpp` (291, ClickUp 86e3p2gp9, 2026-10-12) = **act.equip_silver, "Switch to silver
+  weapon", and the switch BACK.** `EquipSilver` (`:104`, from `Fire`): satisfied (transparent NoOp) while a silver
+  melee weapon (`Logistics::IsSilverMeleeWeapon`) is in the RIGHT hand; else picks
+  `Logistics::BestSilverWeapon` (one-handed only when the left hand holds something and the main weapon is not
+  two-handed: the off-hand is never touched, `.left` never written), the same two heal-rank gates as
+  `EquipWeapon`, the same authority rule (supported but refused -> transparent NoOp, nothing touched), then the
+  SAME ledger road: old right hold force-unequipped, `.right = silver` + rank stamp, `DeclareLedger` (= Equip.cpp's
+  anon `DeclareFromLedger`, `cast/Equip.cpp:403`) with the authority, forced `EquipObject` without it, plain
+  `EquipObject` with `bWeaponStyleControl` off. The first switch opens an EPISODE (`g_silver`, own `g_silverMx`,
+  never nested with `g_forcedMx`): the main right-hand weapon it replaced and whether that was an MFO hold (+ its
+  rank). `ReconcileSilver` (`:202`, public, `cast/Actuation.h`) is called by the Scheduler (`Scheduler.cpp:1931`)
+  just BEFORE `ReconcileForcedWeapon` with the silver rule's OWN truth (`silverHeld` `:1542`, `silverKnownFalse`
+  `:1782`, the positional rule, deliberately NOT folded into `equipCondKnownFalse`); after 2 s known-false
+  (`kSilverDwell`): if the ledger's right is still the silver weapon, a main that was a hold is RESTORED as that
+  hold (declared / forced), else `.right` is cleared (ch.15 `ReleaseEquipment` when the entry empties, re-declared)
+  and the main weapon is re-armed NON-forced two main-thread hops later. `SilverHoldEnded` (`:276`) is asked by
+  `ReleaseForcedWeapon` (`cast/Equip.cpp:853`) on EVERY release: a released silver hold re-arms the MAIN weapon
+  (never the silver one; left hand + sheathe only on a stand-down). `ClearSilverEpisodes` (`:286`) from
+  `ClearForcedWeapons`. Nothing saved (FWPN layout unchanged: the silver hold is an ordinary right-hand pair).
+  **What breaks:** folding silver into the general `equipCondKnownFalse` (a false silver rule above the stop would
+  release an `act.equip_melee` hold below it on its unknown laps); moving `ReconcileSilver` after
+  `ReconcileForcedWeapon` (the general release would strip the silver hold before the main weapon is restored);
+  writing `.left` here (the off-hand ruling).
 - **The DIRECT-DELIVERY road = five files + `cast/Direct_internal.h`** (the Direct.cpp split,
   2026-09-29, `split/cast-direct`, the Direct.cpp part of MFO-B152: a pure move of the old 1879-line `cast/Direct.cpp`,
   proven by `tools/splitcheck`, TU map `tools/splitcheck/tumaps/wave3.txt`). `cast/Direct_internal.h` (83)
@@ -2892,6 +2915,28 @@ module. Module layout:
   its own rule (skills pick armor/weapon type, perks pick usage, marth 2026-10-01) and does NOT
   call this. **What breaks:** a second Auto rule elsewhere; calling it off the worker / main
   pump (it reads `FollowerState`); changing a weight changes every Auto follower's HMS split.
+- `logistics/Silver.cpp` (343, ClickUp 86e3p2gp9, 2026-10-12) — **THE SILVER WEAPON knowledge** (API in
+  `logistics/Logistics.h`). `IsUnholy` (`:305`, the `cond.foe_is_unholy` selector's test): the LIVE SilverPerk
+  (Skyrim.esm `0x10D685`) weapon-damage entries' TARGET tab (2) and the LIVE silver-enchantment MGEF
+  (`0x10B116`)'s conditions, read once (`Build` `:164`, `std::call_once`, primed at kDataLoaded by
+  `PrimeSilverRules`, `[silver] Unholy rule from ...` lines) and INTERPRETED (`RuleTrue` `:266`: HasKeyword on
+  race + base NPC, GetIsRace, GetInFaction; Subject run-on + literal comparison only; OR binds tighter than AND);
+  an unknown function is logged and counts FALSE; nothing readable -> marth's fallback (ActorTypeUndead, Vampire,
+  WerewolfBeastRace, logged `[FALLBACK]`). Tuxborn (2026-10-12): Berserkyr's SilverPerk override (WerewolfBeastRace,
+  DLC2WerebearBeastRace, Undead, Ghost) + its MGEF override (two werebear factions, Undead, Ghost,
+  WerewolfFaction). `IsSilverWeapon` (`:294`): a positive keyword of the perk's WEAPON tab (fallback
+  WeapMaterialSilver) or the silver effect in its enchantment; `IsSilverMeleeWeapon` adds melee + playable.
+  THE TRACKED SLOT, recomputed, never saved: `BestSilverWeapon` (`:312`, WeaponScore), `TrackedSilver` (`:327`,
+  {best, best one-handed} for a table holding an act.equip_silver rule, enabled or not) -> `ComputeKeepSet`
+  (`logistics/SwapUp.cpp:300`, never sold / dropped) and `ShedOffRoleWeapon` (`logistics/Upkeep.cpp:429`, never
+  handed back); `WantsSilverWeapon` (`:332`, an ENABLED rule and none owned) -> loot (`ctx.wantSilver`,
+  `logistics/LootEquipment.cpp:63`, judge `:456`, loose twin `:253`, STOCKED never equipped in place) and buy
+  (`BuyThresholds::wantSilver` APPENDED, `logistics/Economy.cpp:378` under bEconomyBuyGear; `NeedCat::kWeaponSilver`
+  APPENDED, `TradeBridge.cpp:124` classify, `:312` one best affordable). Threading: the rule tables are immutable
+  after the build (any thread: the evaluator inside the combat group's read lock, PlanBuy on the VM thread); the
+  inventory walks are worker / main pump. **What breaks:** calling `TESCondition::IsTrue` instead (engine code
+  inside the group lock); widening `IsSilverMeleeWeapon` to bows (the gambit replaces the melee hand); dropping
+  the keep-set insertion (the silver weapon sells as a duplicate 1H/2H).
 - `logistics/Cast.cpp` (314, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101` (weapon/shield/ammo/tome
   role signal, gambit based), `UsesMageClothing:116` (MAGE CLOTHING MODE, equip/clothing decisions
@@ -7333,6 +7378,12 @@ handle+position, the FoeCount filters, #23; Is3DLoaded / IsHostileToActor after 
 `clusterOthers`, then the scan scores `-others*100000 + dist` (most others within X, tie to the foe nearest
 the follower; the normal 3D / hostile / chase-cap / LoS-preference / reach gates still apply to who may be
 chosen). Count >= 3 is fixed (2 others). `[cluster]` debug line, 5 s throttle. No serialized shape changed.
+`kCondFoeIsUnholy` ("cond.foe_is_unholy") and `kActEquipSilver` ("act.equip_silver") are APPENDED (ClickUp
+86e3p2gp9, 2026-10-12): Unholy is a foe SELECTOR (`IsFoeSelector`, `PickFoe` -> `Logistics::IsUnholy`), Board
+`kCondsCombat` after "Foe: Mechanical"; the action is combat-only (`kActsCombat` after "Equip melee weapon"),
+`Fire` -> `cast/EquipSilver.cpp`, a melee equip (category 1) for the Scheduler's hand claim / stance / equipHeld
+plus its own `silverHeld` / `silverKnownFalse`. No serialized shape changed; an older DLL reads both strings as
+unknown (fail-closed: never true / never fires).
 `kCondFoeIsRanged` keeps its string; its meaning WIDENED (field 0928c): a bow / crossbow, a staff in
 either hand, or a spell in either hand whose delivery is not Self or Touch. "Foe attacking me:
 ranged" follows it (MFO-B141, recorded: consistent with marth's intent); "Foe attacking me: melee" already excluded every caster and staff, so it is
