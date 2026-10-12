@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.5.0** (see [`VERSION`](VERSION) and the
+**Status: v2.6.0** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -181,6 +181,26 @@ requirement across these mods, not an afterthought. Settings live in an
 leash and walk-to-loot.
 
 ---
+
+## What is new in 2.6.0
+
+- **Remove a follower from the roster.** The Follower tab has a remove button with a confirm that works
+  on a gamepad. It is refused while the follower is following you or is still a teammate. It takes
+  back the perks, skills and health, magicka and stamina values MFO wrote, restores the native perks
+  MFO stripped, releases every claim and erases MFO's data for that follower, relic record included.
+  Values something else changed since are left alone. Spells learned from tomes, looted or bought
+  items, gem sockets and the stats of followers who level on their own cannot be undone. The log lists
+  them. Not yet tested in game.
+- **Gem choice follows perks.** Needs MEO 1.0.20 and `bMeoAwareGems` on. Skill gems follow the perk
+  direction, crafting and social gems sit one tier lower, and every follower gets one Health gem first.
+  Followers never use Conduit gems. Not yet tested in game.
+- **Better weapon and perk handling.** Out of combat a follower moves to their best owned weapon of the
+  right class, never over a weapon you gave or a silver, gambit, bound or museum weapon. Style-only
+  perks count as marginal.
+- **Spell pickers are sorted by school, then effect, with school headers.**
+- **Attack on sight finds territorial creatures** such as skeevers, wolves and bears, and never engages
+  first against cowards, crime factions or the `sEngageOnSightSkip` list. The log says why each actor
+  was skipped. Not yet tested in game.
 
 ## What is new in 2.5.0
 

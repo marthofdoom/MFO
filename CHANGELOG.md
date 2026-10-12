@@ -5,6 +5,23 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.6.0 -- Roster removal, gem choice and attack on sight
+
+- **Needs Harbinger 0.12.0 or newer (ABI 21).** Install it together with Harbinger 0.13.0. The new gem choice needs MEO 1.0.20.
+- **Remove a follower from MFO's roster.** The Follower tab has a new remove button. It asks for a confirm inside the page, and that works on a gamepad. It is refused while the follower is following you or is still your teammate. Not yet tested in game.
+- **Remove undoes what MFO did.** The perks MFO added are taken back and the native perks MFO stripped come back. The skill and health, magicka and stamina values MFO wrote are undone. A value that something else changed since is left alone.
+- **Remove erases MFO's data for that follower.** Every claim is released. The record of relics you gave them goes too.
+- **Remove cannot undo everything.** Spells learned from tomes, items looted or bought, gem sockets and the stats of followers who level on their own stay. The log lists them.
+- **Gem choice follows perks.** Needs MEO 1.0.20 and `bMeoAwareGems` on. Otherwise MFO behaves as before. Skill gems follow the follower's perk direction, so a two handed fighter gets no One-Handed gem. Crafting and social skill gems sit one tier lower. Not yet tested in game.
+- **Every follower gets one Health gem first.** After that the order is Health, Stamina, Stamina Rate, Heal Rate, Carry Weight. Casters go Magicka, then Magicka Rate. Without the progression add-on the follower's own perks count.
+- **Followers never use Conduit gems.** They never move a gem you placed because of one.
+- **Followers upgrade to their best owned weapon out of combat.** They move to the best weapon of the right class they own, so bought upgrades get their gems. It never overrides a weapon you gave or equipped, a silver or gambit weapon, a bound weapon or a museum relic.
+- **Perks that only change weapon or armor style now count as marginal.** They are buyable and still steer the choice.
+- **Spell pickers are sorted by school, then effect.** Each school has a header.
+- **Attack on sight finds territorial creatures.** Skeevers, wolves and bears with an aggro radius now count, along with anything the game treats as hostile. Not yet tested in game.
+- **Attack on sight never engages first.** Cowards, guards and townsfolk (crime factions) and the skip list are left alone. The skip list covers giants, mammoths, carriage drivers, ferrymen, servants, merchants and prisoners. Edit it in `sEngageOnSightSkip`.
+- **The log says why each nearby actor was skipped.**
+
 ## v2.5.0 -- Silver ammo and perks followers can use
 
 - **Needs Harbinger 0.12.0 or newer (ABI 21).** Install it together with Harbinger 0.13.0.
