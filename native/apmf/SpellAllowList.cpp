@@ -259,6 +259,18 @@ namespace MFO::APMFBridge {
     bool PublishSpellAllowList(RE::FormID a_follower, const std::vector<RE::FormID>& a_spells) {
         if (a_follower == 0) return false;
         if (a_spells.empty() || !SpellAllowListUsable()) {
+            // FIRST USE under a kill switch, Harbinger present: no allow-list means NO
+            // cast exclusivity at all (client mode: MFO's own cast gate is not
+            // installed). Said once per session, never silently (#7).
+            if (!a_spells.empty() && g_apmf.load(std::memory_order_relaxed) &&
+                (!Config::g_apmfSpellAllowList.load() || !Config::g_apmfCast.load())) {
+                static std::atomic<bool> s_warnedOff{ false };
+                if (!s_warnedOff.exchange(true))
+                    spdlog::warn("[cast-select] {:08X}: {} gambit spell(s) under cast control, but {} -- no "
+                                 "allow-list is claimed and cast exclusivity is INACTIVE (Harbinger client mode: "
+                                 "MFO's own cast gate is not installed)", a_follower, a_spells.size(),
+                                 !Config::g_apmfCast.load() ? "bApmfCast=0" : "bApmfSpellAllowList=0");
+            }
             ReleaseSpellAllowList(a_follower);   // idempotent; logs only when a claim stood
             return false;
         }

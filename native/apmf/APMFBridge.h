@@ -1517,9 +1517,11 @@ namespace MFO::APMFBridge {
     // Is the channel served -- Harbinger present at ABI >= 21? Any thread.
     bool CastGuardSupported();
     // Worker (the Scheduler's party-combat service, every lap). a_lineOfFire =
-    // kCastGuard_LineOfFire (bFriendlyFireHold), with MFO's decay kept: the bit is
-    // dropped on every 4th lap (MFO held 3 casts, then let one through). a_channelBound =
-    // kCastGuard_ChannelRight|Left (Exact, conc spell gambit-managed or no cast gambit).
+    // kCastGuard_LineOfFire (bFriendlyFireHold), held steady: MFO's old every-4th-cast
+    // decay is GONE (Harbinger holds while a friendly is in the line and re-checks at the
+    // release; a held-count decay would be a ch.25 item). a_channelBound =
+    // kCastGuard_ChannelRight|Left (iCastControl >= 1 with a gambit concentration spell --
+    // the old never-force-YES deny -- or Exact with no cast gambit).
     // Claims (RequestEx, fval 6 s), heartbeats (Repoint renews the window and carries the
     // bits), re-requests a handle Harbinger no longer knows, and RELEASES when no guard
     // applies. A refusal is logged as an error once and that guard is not asked again

@@ -1115,20 +1115,31 @@ namespace MFO::CasterConsent {
         // The full code below runs ONLY when Harbinger is absent (MFO's legacy road,
         // never a fallback when Harbinger declines). Below ABI 10 (the bridge's request
         // floor, apmf/Bridge.cpp Acquire) Harbinger reads as absent.
+        if (APMFBridge::Available()) {
+            // CAST EXCLUSIVITY in client mode is the ch.8 allow-list ONLY. Its two INI
+            // kill switches leave none at all (no MFO deny stands in): said here, and
+            // again at first use (APMFBridge::PublishSpellAllowList).
+            if (!Config::g_apmfSpellAllowList.load() || !Config::g_apmfCast.load()) {
+                spdlog::warn("[consent] CheckStartCast gate (0x06): not installed (Harbinger client mode) -- cast "
+                             "exclusivity is INACTIVE: {} turns off Harbinger's ch.8 allow-list and no MFO deny "
+                             "stands in", !Config::g_apmfCast.load() ? "bApmfCast=0" : "bApmfSpellAllowList=0");
+            } else {
+                spdlog::info("[consent] CheckStartCast gate (0x06): not installed (Harbinger client mode) -- cast "
+                             "exclusivity is Harbinger's ch.8 allow-list, the gambit cast its ch.8b claim");
+            }
+        }
         if (APMFBridge::Available() && APMFBridge::CastGuardSupported()) {
             const bool hookOn = Config::g_casterHook.load();
-            spdlog::info("[consent] CheckStartCast gate (0x06): not installed (Harbinger client mode) -- cast "
-                         "exclusivity is Harbinger's ch.8 allow-list, the gambit cast its ch.8b claim");
             spdlog::info("[consent] CheckCast gate (0x0A): not installed (Harbinger client mode) -- guards through "
-                         "Harbinger ch.25 kIntent_CastGuard: friendly-fire hold {}, Exact concentration bound {}",
-                         hookOn && Config::g_friendlyFireHold.load() ? "ACTIVE (LineOfFire, 3-held/1-open decay by lap)"
+                         "Harbinger ch.25 kIntent_CastGuard: friendly-fire hold {}, concentration bound {}",
+                         hookOn && Config::g_friendlyFireHold.load() ? "ACTIVE (LineOfFire, steady, no decay)"
                                                                     : "off (bFriendlyFireHold / bCasterHook)",
-                         hookOn ? "ACTIVE when iCastControl is Exact (ChannelRight|Left)" : "off (bCasterHook=0)");
+                         hookOn ? "ACTIVE (ChannelRight|Left: a gambit concentration spell at iCastControl >= 1, "
+                                  "any at Exact without a cast gambit)"
+                                : "off (bCasterHook=0)");
             return;
         }
         if (APMFBridge::Available()) {
-            spdlog::info("[consent] CheckStartCast gate (0x06): not installed (Harbinger client mode) -- cast "
-                         "exclusivity is Harbinger's ch.8 allow-list, the gambit cast its ch.8b claim");
             if (!Config::g_casterHook.load()) {
                 spdlog::warn("[consent] CheckCast gate (0x0A): not installed (bCasterHook=0) -- Harbinger is older "
                              "than ABI 21 (no ch.25 cast guard): the friendly-fire hold and the Exact concentration "
@@ -1151,7 +1162,8 @@ namespace MFO::CasterConsent {
             return;
         }
         if (!Config::g_casterHook.load()) {
-            spdlog::info("[consent] bCasterHook=0 -- CheckStartCast hook NOT installed");
+            spdlog::info("[consent] CheckStartCast gate (0x06) + CheckCast gate (0x0A): not installed (bCasterHook=0, "
+                         "Harbinger absent) -- no cast exclusivity, friendly-fire hold or concentration bound");
             return;
         }
         // VR GUARD, mirroring Targeting::InstallHook. These are SE/AE

@@ -26,19 +26,16 @@ namespace MFO::APMFBridge {
         // end, a stalled pump): then the guard dies on its own within it.
         constexpr float kGuardWindowSecs = 6.0f;
 
-        // MFO's friendly-fire DECAY, kept (CasterConsent kMaxFFHolds = 3: three held
-        // casts, then one let through so a tight formation never freezes a follower).
-        // Harbinger holds for as long as a friendly is in the line and reports no
-        // per-cast readback, so the decay is by service LAP: the line-of-fire bit is
-        // dropped on every (kDecayEvery)th lap, i.e. held 3 laps, open 1.
-        constexpr std::uint32_t kDecayEvery = 4;
+        // NO DECAY (review of 162c1dd). MFO's own hook let every 4th held cast through
+        // (CasterConsent kMaxFFHolds). Harbinger holds for as long as a friendly stands
+        // in the line and re-measures at the release, which is its documented stance, so
+        // the LineOfFire bit is kept steady and only Repoint'd. A held-count decay inside
+        // ch.25 would be a Harbinger item (no per-cast readback reaches the client).
 
         struct Guard {
             APMF_API::Handle handle   = APMF_API::kInvalidHandle;
             std::uint32_t    bits     = 0;   // what the handle carries now
-            std::uint32_t    laps     = 0;   // service laps with the line-of-fire bit wanted
-            bool             announced = false;   // CLAIMED logged (once per stretch of wanting a guard;
-                                                  // the decay lap's release + re-request is not re-logged)
+            bool             announced = false;   // CLAIMED logged (once per stretch of wanting a guard)
             std::chrono::steady_clock::time_point mintedAt{};
         };
         std::mutex                            g_guardMx;
@@ -73,12 +70,7 @@ namespace MFO::APMFBridge {
         {
             std::scoped_lock lock(g_guardMx);
             auto& g = g_guards[a_follower];
-            if (a_lineOfFire) {
-                // The decay lap: the bit is dropped for this one lap in kDecayEvery.
-                if (++g.laps % kDecayEvery != 0) want |= APMF_API::kCastGuard_LineOfFire;
-            } else {
-                g.laps = 0;
-            }
+            if (a_lineOfFire) want |= APMF_API::kCastGuard_LineOfFire;
             if (a_channelBound) want |= kChannel;
             want &= ~g_refusedBits;   // a guard Harbinger refused this session is not asked again
             h    = g.handle;
@@ -88,7 +80,7 @@ namespace MFO::APMFBridge {
                 // by Harbinger, so the handle is released instead).
                 g.handle = APMF_API::kInvalidHandle;
                 g.bits = 0;
-                if (!a_lineOfFire) g_guards.erase(a_follower);   // keep the decay count only while wanted
+                g_guards.erase(a_follower);
             } else if (h != APMF_API::kInvalidHandle) {
                 // A handle Harbinger no longer knows (its window lapsed, a release-all
                 // hotkey) would make Repoint a silent no-op: re-request.
@@ -101,8 +93,8 @@ namespace MFO::APMFBridge {
             return;
         }
         if (h != APMF_API::kInvalidHandle && !stale) {
-            // Heartbeat: Repoint renews the window and re-reads ival (the decay lap and
-            // an MCM change both ride it).
+            // Heartbeat: Repoint renews the window and re-reads ival (an MCM change
+            // rides it).
             APMF_API::APMF_Param p{};
             p.ival = static_cast<std::int32_t>(want);
             p.fval = kGuardWindowSecs;
