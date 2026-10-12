@@ -37,6 +37,7 @@ namespace MFO::Board {
                                          SetSubject, SetSubjectActor,   // #68
                                          SetClassOverride,   // #65
                                          SetMfoEnabled,      // T#78 per-follower MFO switch
+                                         RemoveFromRoster,   // 86e3eewaf: delete his MFO data (not following)
                                          AddonAction };   // v1.1 Phase 6c: ONE generic
                                                             // add-on-verb carrier. The specific
                                                             // verb rides EditCmd::verbId (an

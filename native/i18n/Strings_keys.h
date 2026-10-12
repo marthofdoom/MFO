@@ -54,6 +54,13 @@ MFO_STR(Fk_StateLooting,    "Looting", 0)
 MFO_STR(Fk_StateTrading,    "Trading", 0)
 MFO_STR(Fk_StateFollowing,  "following", 0)
 MFO_STR(Fk_TipVitalLine,    "{1} {2} / {3}", 3)   // one line of the vitals tooltip. {1}=H/M/S word, {2}=current, {3}=max
+MFO_STR(Fk_ColRoster,       "Roster", 0)   // column with the remove-from-roster button
+MFO_STR(Fk_Remove,          "remove", 0)   // the remove-from-roster button (arms the confirm below the table)
+MFO_STR(Fk_TipRemove,       "Remove from MFO's roster: deletes all MFO data for this follower and undoes MFO's changes to them", 0)
+MFO_STR(Fk_TipRemoveFollowing, "Only a follower who is not following can be removed. Dismiss them first, or untick MFO to keep them unmanaged.", 0)
+MFO_STR(Fk_RemoveConfirm,   "This deletes all MFO data for {1}, including progression. Cannot be undone.", 1)   // {1}=follower name
+MFO_STR(Fk_RemoveYes,       "Remove", 0)   // the confirm button
+MFO_STR(Fk_RemoveNo,        "Cancel", 0)
 
 // == Gambits tab ==
 MFO_STR(Gb_Tab,             "Gambits", 0)

@@ -1,6 +1,7 @@
 // progression/Verbs.cpp -- THE VERBS the board calls: Enroll, SetClass,
-// AllocatePerk / AllocateNextEligible, Respec, RestoreNativePerks, and the §16
-// manual skill points (SetManualSkills / ApplyManualSkillPoint).
+// AllocatePerk / AllocateNextEligible, Respec, RestoreNativePerks, the roster
+// removal undo (ForgetFollower), and the §16 manual skill points
+// (SetManualSkills / ApplyManualSkillPoint).
 // Split out of the old native/ProgAllocator.cpp by the wave-1 subsystem-folder
 // split (2026-09-24): a pure move, proven function by function with tools/splitcheck.
 // The allocator's contract and design references are at the top of
@@ -360,6 +361,81 @@ namespace MFO::ProgAllocator {
         if (!base || it == g_prog.end() || !it->second.enrolled) return false;
         const int n = RestoreNativePerksImpl(a_actor, base, it->second);
         spdlog::info("[prog] {}: safe-removal restore -- {} native perk(s) back, record cleared", NameOf(a_actor), n);
+        return true;
+    }
+
+    // ── ROSTER REMOVAL (ClickUp 86e3eewaf + 86e3940zh) ─────────────────────
+    // The Follower-tab "remove from roster" undo. Runs on the MAIN thread inside the
+    // closure Followers::RequestRosterRemoval posts, AFTER the worker already released
+    // his held engine state (Followers::ReleaseHeldState) and BEFORE the worker erases
+    // his FLWR / MSTK / PGIV entries. Deliberately NOT gated on Unmanaged (a T#78 OFF
+    // follower is removable too: OFF stops new writes, it never undid the old ones) nor
+    // on g_ready (an HMS-only record and the base AV writes exist without the add-on).
+    bool ForgetFollower(RE::FormID a_actorID) {
+        auto it = g_prog.find(a_actorID);
+        if (it == g_prog.end()) {
+            spdlog::info("[roster] {:08X}: no progression record -- nothing to undo", a_actorID);
+            return true;
+        }
+        auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_actorID);
+        auto* base  = actor ? actor->GetActorBase() : nullptr;
+        if (!actor || !base) {
+            spdlog::error("[roster] {:08X}: REMOVAL ABORTED -- the actor does not resolve, so MFO cannot undo "
+                          "its perks / skills / H/M/S on him; every record is KEPT (try again where he is loaded)",
+                          a_actorID);
+            return false;
+        }
+        auto& st = it->second;
+        spdlog::info("[roster] {:08X} '{}': undoing progression ({}, {} perk alloc(s), {} stripped native(s), "
+                     "{} skill ledger(s), base perks touched this session: {})",
+                     a_actorID, NameOf(actor), st.enrolled ? "enrolled" : "HMS-only", st.perks.size(),
+                     st.strippedPerks.size(), st.skills.size(), st.baseTouched);
+
+        // 1+2. PERKS. Base perk edits do not survive a load (P3), so only a base MFO
+        // touched THIS session holds anything of ours. MFO's grants come off first (the
+        // Respec removal: the held rank form, GetPerkIndex-guarded), THEN the natives MFO
+        // stripped go back on (RestoreNativePerks, 86e3940zh), so a native rank MFO later
+        // granted as its own ends up back on the base, natively.
+        if (st.baseTouched) {
+            int removed = 0;
+            for (const auto& p : st.perks) {
+                auto ref = FindNode(p.nodePerkID);
+                RE::BGSPerk* held = nullptr;
+                if (ref.node && p.rank >= 1 && p.rank <= ref.node->ranks.size())
+                    held = PerkByID(ref.node->ranks[p.rank - 1].perkFormID);
+                if (!held) held = PerkByID(p.nodePerkID);   // off-catalog: best effort on the node id
+                if (held && base->GetPerkIndex(held).has_value()) {
+                    base->RemovePerk(held);
+                    ++removed;
+                    spdlog::info("[roster] {:08X}: MFO perk '{}' ({:08X}) removed", a_actorID, NameOf(held),
+                                 held->GetFormID());
+                }
+            }
+            if (removed) actor->ApplyPerksFromBase();
+            st.perks.clear();
+            if (st.enrolled) RestoreNativePerks(actor);
+        } else if (!st.perks.empty() || !st.strippedPerks.empty()) {
+            spdlog::info("[roster] {:08X}: base perk list untouched this session -- MFO's {} grant(s) and {} "
+                         "strip(s) did not survive the load, the base already holds only the load order's perks",
+                         a_actorID, st.perks.size(), st.strippedPerks.size());
+        }
+
+        // 3. SKILLS (base AVs persist in the save: taken back now).
+        const int skillsChanged = UndoSkills(actor, st);
+
+        // 4. H/M/S (see UndoHms for what a leveling follower keeps until his next level).
+        UndoHms(actor, st);
+
+        // 5. ERASE. One main-thread closure: the poll, the board views and SaveCallback
+        // (all main thread) see the record whole or not at all.
+        g_prog.erase(it);
+        {
+            std::scoped_lock lk(g_hmsFireMx);
+            g_hmsFiredMask.erase(a_actorID);
+        }
+        PublishBoardViews();
+        spdlog::info("[roster] {:08X}: progression undone ({} skill base(s) changed) and PRGN record erased",
+                     a_actorID, skillsChanged);
         return true;
     }
 

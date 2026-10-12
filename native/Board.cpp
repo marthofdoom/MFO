@@ -1349,6 +1349,15 @@ namespace MFO::Board {
                 continue;
             }
 
+            // 86e3eewaf: remove from roster. A per-FOLLOWER edit (uid/table unused). This
+            // drain is the worker that owns g_followers; Followers::RequestRosterRemoval
+            // re-validates (record, not following, not in flight) and runs the three-hop
+            // release -> main-thread undo -> worker erase (contract in Followers.h).
+            if (c.kind == EditKind::RemoveFromRoster) {
+                Followers::RequestRosterRemoval(c.fid);
+                continue;
+            }
+
             auto it = g_followers.find(c.fid);
             if (it == g_followers.end()) continue;
             const int table = std::clamp(c.table, 0, 1);

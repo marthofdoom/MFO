@@ -739,4 +739,16 @@ namespace MFO::Logistics {
         g_stockGear.clear();
     }
 
+    void ForgetStockGear(RE::FormID a_followerID) {
+        std::size_t n = 0;
+        {
+            std::scoped_lock lk(g_stockMx);
+            if (const auto it = g_stockGear.find(a_followerID); it != g_stockGear.end()) {
+                n = it->second.size();
+                g_stockGear.erase(it);
+            }
+        }
+        spdlog::info("[stock] {:08X}: stock-gear snapshot forgotten ({} item(s), roster removal)", a_followerID, n);
+    }
+
 }

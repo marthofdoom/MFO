@@ -616,6 +616,87 @@ namespace MFO::ProgAllocator {
                          a_st.hmsTarget[0], a_st.hmsTarget[1], a_st.hmsTarget[2], taken);
         }
 
+        // ROSTER REMOVAL (ClickUp 86e3eewaf): take back the H/M/S base MFO's hold wrote,
+        // as far as it is MFO's OWN. MFO's hold writes the BASE (Followers::SetFollowerHMS),
+        // which persists in the save, so it is undone here and not left to a reload. What
+        // the hold put on top of the enrollment baseline (hmsBaseline, the pre-MFO base) is
+        // hmsCumulative, and it has two different owners:
+        //  * a FIXED-STAT follower (fixedStat, or a grant remainder = Phase-3 grant history):
+        //    the engine never awards him anything, so the cumulative is MFO's GRANT. Undo =
+        //    the base back to hmsBaseline, exactly the pre-MFO value.
+        //  * a LEVELING follower: the cumulative is the ENGINE's own per-level award, which
+        //    MFO only reshaped to the class profile and capped at the player's rate (the
+        //    rest is hmsWithheld). Nothing records the engine's own per-pool split, so it
+        //    cannot be rebuilt here. The engine re-slams its ABSOLUTE auto-calc values at the
+        //    follower's next level-up, which removes MFO's shape by itself. Until then the
+        //    base is left as MFO held it, and that is LOGGED (never masked).
+        // A pool whose live base no longer reads what MFO last held (hmsHeld) was changed by
+        // someone else since; MFO does not overwrite that, it logs it and leaves the pool.
+        // Lowering Health heals only the drop, the same guard RecomputeHMS uses, so current
+        // health never falls because of the removal. Main thread.
+        void UndoHms(RE::Actor* a_actor, ProgState& a_st) {
+            if (!a_actor) return;
+            const auto id = a_actor->GetFormID();
+            if (!a_st.hmsCaptured) {
+                spdlog::info("[roster] {:08X} HMS: no baseline captured, MFO never held H/M/S -- nothing to take back", id);
+                return;
+            }
+            const bool grantHistory = a_st.hmsGrantRemainder[0] != 0.0f ||
+                                      a_st.hmsGrantRemainder[1] != 0.0f ||
+                                      a_st.hmsGrantRemainder[2] != 0.0f;
+            float cur[3];
+            for (int p = 0; p < 3; ++p) cur[p] = Followers::GetFollowerHMS(a_actor, p);
+            // hmsWithheld > 0 = the ENGINE awarded this follower levels at some point (only an
+            // engine award is ever withheld). A fixed-stat follower WITH that history (he levelled,
+            // then stopped, e.g. at his level cap) holds engine awards and MFO grants mixed in one
+            // cumulative that nothing separates, so he takes the leveling road below: left + logged,
+            // never lowered below an engine award he really earned.
+            const bool engineHistory = a_st.hmsWithheld > 0.0f;
+            if ((!a_st.fixedStat && !grantHistory) || engineHistory) {
+                bool any = false;
+                for (int p = 0; p < 3; ++p) any = any || (a_st.hmsCumulative[p] != 0.0f);
+                if (!any) {
+                    spdlog::info("[roster] {:08X} HMS: base H {:.0f} M {:.0f} S {:.0f} is the enrollment base "
+                                 "(no award ever passed through) -- nothing to take back", id, cur[0], cur[1], cur[2]);
+                    return;
+                }
+                spdlog::warn("[roster] {:08X} HMS NOT UNDONE ({}): base H {:.0f} M {:.0f} S {:.0f} = "
+                             "enrollment base H {:.0f} M {:.0f} S {:.0f} + the ENGINE's own level awards reshaped by "
+                             "MFO (cumulative H {:.1f} M {:.1f} S {:.1f}, {:.1f} withheld at the player's rate). The "
+                             "engine's own per-pool split was never recorded; its next auto-calc level-up re-slams "
+                             "its own values and removes MFO's shape.",
+                             id, engineHistory && (a_st.fixedStat || grantHistory)
+                                     ? "fixed-stat now, but the engine awarded him levels before"
+                                     : "leveling follower",
+                             cur[0], cur[1], cur[2], a_st.hmsBaseline[0], a_st.hmsBaseline[1], a_st.hmsBaseline[2],
+                             a_st.hmsCumulative[0], a_st.hmsCumulative[1], a_st.hmsCumulative[2], a_st.hmsWithheld);
+                return;
+            }
+            for (int p = 0; p < 3; ++p) {
+                const float base = a_st.hmsBaseline[p];
+                if (cur[p] == base) continue;
+                if (cur[p] != a_st.hmsHeld[p]) {
+                    spdlog::warn("[roster] {:08X} HMS pool {} NOT UNDONE: base {:.0f} is not what MFO last held "
+                                 "({:.0f}); something else changed it since, MFO leaves it (enrollment base {:.0f})",
+                                 id, p, cur[p], a_st.hmsHeld[p], base);
+                    continue;
+                }
+                if (p == 0 && base < cur[0]) {
+                    // The RecomputeHMS Health guard: heal only the drop, never above full.
+                    const float drop = cur[0] - base;
+                    const float dmg  = std::max(0.0f, -a_actor->GetActorValueModifier(
+                                           RE::ACTOR_VALUE_MODIFIER::kDamage, RE::ActorValue::kHealth));
+                    const float heal = std::min(drop, dmg);
+                    if (heal > 0.0f)
+                        a_actor->AsActorValueOwner()->RestoreActorValue(RE::ACTOR_VALUE_MODIFIER::kDamage,
+                                                                        RE::ActorValue::kHealth, heal);
+                }
+                Followers::SetFollowerHMS(a_actor, p, base);
+                spdlog::info("[roster] {:08X} HMS pool {}: base {:.0f} -> {:.0f} (MFO's {} taken back)",
+                             id, p, cur[p], base, a_st.fixedStat ? "fixed-stat grant" : "grant history");
+            }
+        }
+
     // §HMS off-class usage (F3): the combat scheduler (worker thread) publishes a
     // FIRED combat gambit action's exercised pool here; HmsTrackBattle (main poll)
     // consumes it. Self-gating — a no-op when the feature is off or the action is

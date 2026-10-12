@@ -192,6 +192,19 @@ namespace MFO::PlayerGiven {
         g_rec.clear();
     }
 
+    void Forget(RE::FormID a_follower) {
+        std::size_t n = 0;
+        {
+            std::scoped_lock lk(g_mx);
+            if (const auto it = g_rec.find(a_follower); it != g_rec.end()) {
+                n = it->second.size();
+                g_rec.erase(it);
+            }
+        }
+        if (n) spdlog::info("[player-given] {:08X}: {} player-given relic record(s) forgotten (roster removal)",
+                            a_follower, n);
+    }
+
     // ── the 'PGIV' co-save record (Serialization.h has the layout) ──────────────
     namespace {
         constexpr std::uint32_t kMaxSavedFollowers = 4096;   // #11: bound every count
