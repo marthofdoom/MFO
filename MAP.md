@@ -615,7 +615,7 @@ per concern:
   DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCap / DirectNoCombat; one `[buff]` line per reason), `BuffClaim` (+ `BuffSelfClaim`
   wrapper: already-up guard, `Loadout::Prepare` LEFT, consent, `ClaimOffenseCast` target 0 for self / the recipient for a buff at an
   ally or the player, `[cfc]` watch, a `[buff] ... <kind> CLAIM` line), `BuffRefreshGate` (ends a claim once the buff is up on its
-  recipient, an INSTANT spell fired, or a summon hit the list's limit; bounds a concentration ward at a drawn `DrawConcCap`), `BuffUpTransparent`,
+  recipient, an INSTANT spell fired, or a summon hit the list's limit; bounds a concentration ward at a drawn `DrawConcCap`; keyed on the standing claim, so a mid-claim config flip (road DirectDegrade) keeps both bounds, MFO-B230 F5 marth 2026-10-11), `BuffUpTransparent`,
   `BuffPlacementSpell`. Called from `CastSelfDirect` (`cast/DirectSelf.cpp`, combat table only, before the Task-1 conc claim), from `CastOn`:
   the in-flight refresh (beside `HealRefreshGate`) and the ALLY fork (just after the self fork: a Buff-kind fire-and-forget spell at an ally /
   the player, or a summon / reanimate aimed at another target), from `Fire.cpp` (a combat-table summon: claim via CastOn's self fork, else
