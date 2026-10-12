@@ -361,6 +361,31 @@ namespace MFO::APMFBridge {
         EraseIfEmpty(it);
     }
 
+    // ClickUp 86e3eb078: a concentration offense claim channels on after its target dies
+    // (about 4 s until the claim's own sweeps notice). The Scheduler asks every combat lap.
+    bool ReleaseOffenseCastOnDeadTarget(RE::FormID a_follower) {
+        RE::FormID tgt[2] = { 0, 0 };
+        {
+            std::scoped_lock lock(g_mx);
+            const auto it = g_owned.find(a_follower);
+            if (it == g_owned.end()) return false;
+            for (int i = 0; i < 2; ++i) {
+                const auto& c = it->second.offense[i];
+                if (c.handle != APMF_API::kInvalidHandle && c.conc && !c.denyOnly) tgt[i] = c.target;
+            }
+        }
+        for (const RE::FormID id : tgt) {
+            if (!id) continue;
+            auto* t = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!t || !t->IsDead()) continue;
+            spdlog::info("[cast] {:08X} concentration offense on {:08X} '{}': target died: channel released",
+                         a_follower, id, t->GetName() ? t->GetName() : "");
+            ReleaseOffenseCast(a_follower);
+            return true;
+        }
+        return false;
+    }
+
     // ── heal-cast (per-cast, TTL-bounded, ch.8b, kIntent_Cast/RequestCast) ──────
     // Ported feat/mfo-cast-port (2026-09-05): APMF's feat/ai-cast-seats-impl
     // retired the kIntent_SelectSpell +ACT drive this used to ride (`ival`'s

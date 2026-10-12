@@ -374,7 +374,9 @@ namespace MFO::Actuation {
     //    heals on allies (ConcProxy, AUTO) and they reach as far as Heal Other would.
     //    A self-heal on the caster himself is never reach-checked.
     // HealReach returns the reach in units (a very large number = no cap of its own).
-    float HealReach(RE::SpellItem* a_spell);
+    // a_src (optional) receives where the reach came from ("spell range" / "projectile range" /
+    // "none"); a record value under 300 units is treated as no data.
+    float HealReach(RE::SpellItem* a_spell, const char** a_src = nullptr);
     // WORKER: in reach = distance <= HealReach AND the Sightline cache does not say
     // Occluded (Unknown passes: the fail-open every other LoS gate here takes; the
     // caller Want()s the pair). Always true for a_target == a_caster.

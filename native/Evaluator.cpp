@@ -611,7 +611,23 @@ namespace MFO::Eval {
                     if (incumbent) {
                         if (Actuation::HealRecipientUnreachable(a_self, ally, a_healSpell)) return;
                     } else {
-                        if (!Actuation::HealInReach(a_self, ally, a_healSpell)) return;
+                        if (!Actuation::HealInReach(a_self, ally, a_healSpell)) {
+                            // Once per fight per follower: say when REACH alone dropped the ally.
+                            const char* src = nullptr;
+                            const float reach = Actuation::HealReach(a_healSpell, &src);
+                            const float dist  = selfPos.GetDistance(ally->GetPosition());
+                            if (dist > reach) {
+                                static std::unordered_map<RE::FormID, bool> s_loggedFight;
+                                if (!a_self->IsInCombat()) s_loggedFight.erase(a_self->GetFormID());
+                                else if (!s_loggedFight[a_self->GetFormID()]) {
+                                    s_loggedFight[a_self->GetFormID()] = true;
+                                    spdlog::info("[heal] {:08X} dropped ally {:08X} for reach: dist {:.0f} > reach {:.0f} (source: {}, spell {:08X})",
+                                                 a_self->GetFormID(), ally->GetFormID(), dist, reach,
+                                                 src ? src : "?", a_healSpell->GetFormID());
+                                }
+                            }
+                            return;
+                        }
                         // A RECENT OCCLUDED STILL COUNTS (field 2026-09-29). HealInReach
                         // reads the 1 s cache, and past it an Occluded ages into Unknown,
                         // which passes. The re-measure this lap's Want asks for lands a

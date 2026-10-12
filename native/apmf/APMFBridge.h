@@ -348,6 +348,10 @@ namespace MFO::APMFBridge {
 
     void ReleaseOffenseCast(RE::FormID a_follower);
 
+    // Worker-safe. Release a_follower's concentration offense claim the moment its target is
+    // dead (ClickUp 86e3eb078); logs one [cast] line. True = released. No claim / target alive = false.
+    bool ReleaseOffenseCastOnDeadTarget(RE::FormID a_follower);
+
     // Worker-safe. Release ONLY the cast claim(s) standing on ONE hand -- the other
     // hand's independent claim, and every non-cast facet, are untouched. Added for
     // RANK PREEMPTION (marth 2026-09-08: the gambit list order IS the priority

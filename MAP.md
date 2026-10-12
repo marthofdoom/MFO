@@ -1232,6 +1232,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   before its rate limit), MFO-B157 (offensive `effect applied` after NOT ATTACHED), MFO-B158 (AUTO conc
   reads `stream=released`), MFO-B159 (kNoDuration MGEF false Absent), MFO-B160 (Auto.cpp's "never a
   projectile" comment), MFO-B163 (`hpRose` can be met by natural regen).
+- **HEAL REACH SANITY + DEAD-TARGET CHANNEL RELEASE (`fix/mfo-heal-reach`, LoreRim 2026-10-10).** `AimedReachOf` (`cast/CanAct.cpp:~48`) now treats a record range below `kMinSaneReach` (300u) as no data (Requiem sets Heal Other SPIT range 30.0) and falls to the projectile range, then to no cap; `HealReach(spell, &src)` reports the source. `Evaluator::PickAlly` logs `[heal] ... dropped ally ... for reach` once per fight per follower. ClickUp 86e3eb078: `APMFBridge::ReleaseOffenseCastOnDeadTarget` (`apmf/CastClaims.cpp`, called from `Scheduler.cpp` right after `DeadTgtService`) releases a concentration offense claim the lap its target is dead and logs `[cast] ... target died: channel released`.
 - **CAN-ACT + NORMAL HEAL REACH (`fix/mfo-can-act`, field 0928c, 2026-09-29).**
   Field: a BLEEDING-OUT Jesper (HP ~0, magicka full) fired rule 0's instant Close Greater Wounds at
   himself, Serana and the player and streamed Fast Healing at a downed Serana, reviving both. No road
