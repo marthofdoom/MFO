@@ -810,6 +810,13 @@ namespace MFO::CasterConsent {
         // needs the main thread, which it gates on explicitly (below).
         std::unordered_map<std::uintptr_t, std::uintptr_t> g_castOrig;
         std::atomic<bool> g_castHooked{ false };
+        // GUARD-ONLY MODE (fix/mfo-gates-client-only, round 2): Harbinger present at an
+        // ABI below 21 has no ch.25 cast guard, so this 0x0A hook is installed to keep
+        // the friendly-fire hold and the Exact concentration bound ONLY. Everything
+        // else this hook decides (exclusivity, continuous cast control) is Harbinger's
+        // ch.8 allow-list there and is skipped. Set once at kDataLoaded, before the hook
+        // is written; read on the cast threads.
+        std::atomic<bool> g_guardOnly{ false };
         constexpr std::size_t kCheckCast = 0x0A;   // the "can I cast this?" gate, PRE-charge
         // Captured at install (kDataLoaded = main thread). The friendly-fire world
         // walk only runs when SpellCast fires on this thread; off-main it is
@@ -1014,7 +1021,8 @@ namespace MFO::CasterConsent {
             // the mirror check in `thunk` above.
             RE::FormID want = 0;
             const bool exclusivityDeny = ShouldDeny(fid, a_spell, want);
-            if (exclusivityDeny && !APMFBridge::IsOwnedCastActive(fid)) {
+            if (exclusivityDeny && !APMFBridge::IsOwnedCastActive(fid) &&
+                !g_guardOnly.load(std::memory_order_relaxed)) {   // guard-only: Harbinger's allow-list
                 AbortLog(fid, actor, a_spell->GetFormID(), "exclusive");
                 return false;
             }
@@ -1030,7 +1038,8 @@ namespace MFO::CasterConsent {
             // in town), where MFO must stay completely hands-off -- g_ctrl
             // entries can outlive the fight by up to a service round before
             // the Scheduler's non-combat Clear sweeps them.
-            if (want == 0 && actor->IsInCombat()) {
+            if (want == 0 && actor->IsInCombat() &&
+                !g_guardOnly.load(std::memory_order_relaxed)) {   // guard-only: Harbinger's allow-list
                 if (RE::FormID gambit = 0; CtrlUnlatchedDeny(fid, a_spell, gambit)) {
                     AbortLog(fid, actor, a_spell->GetFormID(), "continuous cast control");
                     return false;
@@ -1074,14 +1083,87 @@ namespace MFO::CasterConsent {
                 return;
             }
             g_castOrig[vt.address()] = vt.write_vfunc(kCheckCast, &CheckCastThunk);
-            spdlog::info("[consent] CheckCast deny hooked (ActorMagicCaster vtable[0], pre-charge)");
+            if (!g_guardOnly.load(std::memory_order_relaxed))   // guard-only: InstallHook says it, loudly
+                spdlog::info("[consent] CheckCast gate (0x0A): installed (Harbinger absent) on ActorMagicCaster "
+                             "vtable[0], pre-charge; friendly-fire hold + Exact concentration bound by MFO's own hook");
         }
 
     }
 
     void InstallHook() {
+        // HARBINGER CLIENT MODE (fix/mfo-gates-client-only, 2026-10-11). With Harbinger
+        // present, slot 0x06 on the CombatMagicCaster vtables is its ch.8b cast seat
+        // and slot 0x0A on ActorMagicCaster its t2c seat; writing them as well
+        // produced the seat-conflict errors in Harbinger's census (LoreRim). Neither
+        // hook is installed then, and the cases they decide are Harbinger requests:
+        //   * exclusivity + continuous cast control (non-gambit spells) -> the ch.8
+        //     allow-list (NoteGambits -> APMFBridge::PublishSpellAllowList), enforced
+        //     by Harbinger at t2a and t2c;
+        //   * the latched spell's consent / force-YES -> the ch.8b kIntent_Cast claims
+        //     (ClaimOffenseCast / heal / buff), which drive the AI's own cast;
+        //   * the client-claim stand-downs were Harbinger's already.
+        //   * the friendly-fire hold and the Exact concentration bound on the AI's own
+        //     channel -> the ch.25 kIntent_CastGuard claim (ABI v21; marth 2026-10-12,
+        //     "Add to Harbinger's API"), filed per follower by the Scheduler's combat
+        //     service (APMFBridge::ServiceCastGuard): kCastGuard_LineOfFire, and
+        //     kCastGuard_ChannelRight|Left where the allow-list cannot refuse the spell
+        //     (a gambit-managed concentration spell, or a follower with no cast gambit).
+        // HARBINGER AT ABI 10..20 (no ch.25): GUARD-ONLY MODE -- the 0x0A hook alone is
+        // installed, for those two guards only (g_guardOnly skips its exclusivity and
+        // continuous-control denies, which are the allow-list's). It writes Harbinger's
+        // t2c seat, so that census conflict stays until Harbinger is updated; said loudly.
+        // The full code below runs ONLY when Harbinger is absent (MFO's legacy road,
+        // never a fallback when Harbinger declines). Below ABI 10 (the bridge's request
+        // floor, apmf/Bridge.cpp Acquire) Harbinger reads as absent.
+        if (APMFBridge::Available()) {
+            // CAST EXCLUSIVITY in client mode is the ch.8 allow-list ONLY. Its two INI
+            // kill switches leave none at all (no MFO deny stands in): said here, and
+            // again at first use (APMFBridge::PublishSpellAllowList).
+            if (!Config::g_apmfSpellAllowList.load() || !Config::g_apmfCast.load()) {
+                spdlog::warn("[consent] CheckStartCast gate (0x06): not installed (Harbinger client mode) -- cast "
+                             "exclusivity is INACTIVE: {} turns off Harbinger's ch.8 allow-list and no MFO deny "
+                             "stands in", !Config::g_apmfCast.load() ? "bApmfCast=0" : "bApmfSpellAllowList=0");
+            } else {
+                spdlog::info("[consent] CheckStartCast gate (0x06): not installed (Harbinger client mode) -- cast "
+                             "exclusivity is Harbinger's ch.8 allow-list, the gambit cast its ch.8b claim");
+            }
+        }
+        if (APMFBridge::Available() && APMFBridge::CastGuardSupported()) {
+            const bool hookOn = Config::g_casterHook.load();
+            spdlog::info("[consent] CheckCast gate (0x0A): not installed (Harbinger client mode) -- guards through "
+                         "Harbinger ch.25 kIntent_CastGuard: friendly-fire hold {}, concentration bound {}",
+                         hookOn && Config::g_friendlyFireHold.load() ? "ACTIVE (LineOfFire, steady, no decay)"
+                                                                    : "off (bFriendlyFireHold / bCasterHook)",
+                         hookOn ? "ACTIVE (ChannelRight|Left: a gambit concentration spell at iCastControl >= 1, "
+                                  "any at Exact without a cast gambit)"
+                                : "off (bCasterHook=0)");
+            return;
+        }
+        if (APMFBridge::Available()) {
+            if (!Config::g_casterHook.load()) {
+                spdlog::warn("[consent] CheckCast gate (0x0A): not installed (bCasterHook=0) -- Harbinger is older "
+                             "than ABI 21 (no ch.25 cast guard): the friendly-fire hold and the Exact concentration "
+                             "bound are INACTIVE");
+                return;
+            }
+            g_guardOnly.store(true, std::memory_order_relaxed);
+            InstallCheckCastHook();
+            if (g_castOrig.empty()) {
+                spdlog::error("[consent] CheckCast gate (0x0A): NOT installed (runtime / self-check) -- Harbinger is "
+                              "older than ABI 21 (no ch.25 cast guard): the friendly-fire hold and the Exact "
+                              "concentration bound are INACTIVE");
+            } else {
+                spdlog::warn("[consent] CheckCast gate (0x0A): installed in GUARD-ONLY mode -- Harbinger is older "
+                             "than ABI 21 (no ch.25 cast guard), so MFO's own hook carries the friendly-fire hold "
+                             "{} and the Exact concentration bound ONLY (exclusivity stays Harbinger's allow-list). "
+                             "This writes Harbinger's t2c seat: update Harbinger to drop the conflict.",
+                             Config::g_friendlyFireHold.load() ? "(on)" : "(bFriendlyFireHold=0: off)");
+            }
+            return;
+        }
         if (!Config::g_casterHook.load()) {
-            spdlog::info("[consent] bCasterHook=0 -- CheckStartCast hook NOT installed");
+            spdlog::info("[consent] CheckStartCast gate (0x06) + CheckCast gate (0x0A): not installed (bCasterHook=0, "
+                         "Harbinger absent) -- no cast exclusivity, friendly-fire hold or concentration bound");
             return;
         }
         // VR GUARD, mirroring Targeting::InstallHook. These are SE/AE
@@ -1135,8 +1217,8 @@ namespace MFO::CasterConsent {
             ++n;
         }
         InstallCheckCastHook();   // v1.0.36: pre-charge deny (no wrong-spell animation)
-        spdlog::info("[consent] CheckStartCast hooked on {} caster vtable(s), mode={}",
-                     n, Config::g_casterMode.load() == 0 ? "LOG" : "FORCE");
+        spdlog::info("[consent] CheckStartCast gate (0x06): installed (Harbinger absent) on {} caster "
+                     "vtable(s), mode={}", n, Config::g_casterMode.load() == 0 ? "LOG" : "FORCE");
     }
 
     bool IsHooked() { return g_hooked.load(); }
@@ -1162,6 +1244,7 @@ namespace MFO::CasterConsent {
         // that outlived the fight would mute something nothing in combat asked for.
         // Before g_mx for the same reason NoteGambits publishes before it.
         APMFBridge::ReleaseSpellAllowList(a_follower);
+        APMFBridge::ReleaseCastGuard(a_follower);   // ch.25 guard: same release points (no-op without one)
         std::unique_lock lk(g_mx);
         g_want.erase(a_follower);
         g_otherCast.erase(a_follower);       // the miss flag dies with the latch

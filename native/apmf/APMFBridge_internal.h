@@ -387,6 +387,7 @@ namespace MFO::APMFBridge {
         // ClearTransientState under g_mx (order g_mx -> table mutex; the tables never take g_mx).
         void SweepReentryDenies();
         void ClearReentryDenies();
+        void ClearCastGuards();       // apmf/CastGuard.cpp: ch.25 guards, released at kPreLoadGame / revert
         void SweepPursuitLeashes();
         void ClearPursuitLeashes();
         // ch.24 held-heal approach table (apmf/CombatApproach.cpp): own mutex, same call shape.

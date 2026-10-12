@@ -1222,6 +1222,7 @@ namespace MFO::APMFBridge {
         ClearPursuitLeashes();        // ch.23 leashes: same
         ClearHealApproaches();        // ch.24 held-heal approaches: same
         ClearOffenseApproaches();     // ch.24 offense approaches: same
+        ClearCastGuards();            // ch.25 cast guards: same (Harbinger never saves them)
         g_equipAuthRefused.clear();
         g_selectOverflow.clear();
         g_selectRefused.clear();

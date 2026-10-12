@@ -1233,6 +1233,32 @@ namespace MFO::Scheduler {
                         gambits.push_back(g.actionParamForm);
                 }
             }
+            // ch.25 CAST GUARD (Harbinger client mode, ABI >= 21; a no-op otherwise --
+            // MFO's own CheckCast hook carries both guards then, see CasterConsent::
+            // InstallHook). The friendly-fire hold (bFriendlyFireHold) and the
+            // concentration bound on the AI's own hand channel, filed where the
+            // allow-list cannot refuse the spell: a gambit concentration spell at ANY
+            // iCastControl >= 1 (the old 0x06 never-force-YES rule denied the AI's own
+            // attempt at the latched concentration spell at every level), and, at Exact
+            // only, a follower with no cast gambit (no allow-list at all;
+            // ConcUnboundedDeny was Exact-only). Same switches the hooks read:
+            // bCasterHook gated both (it gated the install), log mode turns both bounds off.
+            if (APMFBridge::CastGuardSupported()) {
+                const bool hookOn = Config::g_casterHook.load();
+                const int  lvl    = Config::g_castControl.load();
+                bool channel = false;
+                if (hookOn && lvl >= 1 && Config::g_casterMode.load() != 0) {
+                    channel = lvl >= 4 && gambits.empty();
+                    for (const auto sid : gambits) {
+                        auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(sid);
+                        if (sp && sp->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                            channel = true;
+                            break;
+                        }
+                    }
+                }
+                APMFBridge::ServiceCastGuard(id, hookOn && Config::g_friendlyFireHold.load(), channel);
+            }
             CasterConsent::NoteGambits(id, std::move(gambits));
         }
 
@@ -1885,6 +1911,9 @@ namespace MFO::Scheduler {
             CombatStyle::ReleaseEquipOrder(id);
             g_meleeClampTrueAt.erase(id);   // dwell consumed -> reset for the next clamp
         }
+        // Harbinger client mode: the equip order as Harbinger's ch.15 claim where no
+        // ledger hold carries one (no-op with Harbinger absent: the gate is installed).
+        CombatStyle::ServiceOrderClaim(f);
 
         // H3 -- SCAN-AWARE SPELL RELEASE (the frequency limiter, fall-through
         // aware). A gambit spell stays in the follower's hand only while some

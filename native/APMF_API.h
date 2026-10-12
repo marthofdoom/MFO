@@ -114,40 +114,14 @@ namespace APMF_API {
     // must see abiVersion >= 12 before it calls the slot or sets a gait bit: an older
     // APMF stores the unknown bits and walks at its authored speed without a word.
     //
-    // ABI v13 (2026-09-25) adds kIntent_TargetPin (ch.20) and NOTHING else: no struct,
-    // no function-pointer slot, no APMF_Param field. ch.20 rides the EXISTING
-    // RequestEx/Repoint/Release slots, exactly as ch.19 did at v10, so there is no
-    // APMF_API_v13 struct and a v12 client is byte-unaffected. A client must see
-    // abiVersion >= 13 before it asks for the intent: an OLDER APMF has no channel for
-    // intent 20 and REFUSES the request (kInvalidHandle, "no channel serves intent 20"
-    // in its log), which is the documented degrade -- keep your own targeting.
-    //
-    // ABI v14 (2026-09-25) adds kIntent_CombatEntry (ch.21) and NOTHING else: no struct,
-    // no function-pointer slot, no APMF_Param field -- the v10 / v13 shape again. ch.21
-    // rides the EXISTING RequestEx/Repoint/Release slots, so there is no APMF_API_v14
-    // struct and a v13 client is byte-unaffected. A client must see abiVersion >= 14
-    // before it asks for the intent: an OLDER APMF has no channel for intent 21 and
-    // REFUSES the request (kInvalidHandle, "no channel serves intent 21" in its log),
-    // which is the documented degrade -- start the fight your own way.
-    //
-    // ABI v15 (2026-09-25) adds kIntent_CombatReentryDeny (ch.22) and NOTHING else: no struct,
-    // no function-pointer slot, no APMF_Param field -- the v10 / v13 / v14 shape again. ch.22
-    // rides the EXISTING RequestEx/Repoint/Release slots and reads the EXISTING param.fval (the
-    // window in seconds), so there is no APMF_API_v15 struct and a v14 client is byte-unaffected.
-    // A client must see abiVersion >= 15 before it asks for the intent: an OLDER APMF has no
-    // channel for intent 22 and REFUSES the request (kInvalidHandle, "no channel serves intent
-    // 22" in its log), which is the documented degrade -- keep the actor out of combat your own
-    // way.
-    //
-    // ABI v16 (2026-09-25) adds kIntent_PursuitLeash (ch.23) and NOTHING else: no struct, no
-    // function-pointer slot, no APMF_Param field -- the v13 / v14 / v15 shape. ch.23 rides the
-    // EXISTING RequestEx/Repoint/Release slots and reads the EXISTING param.target (the ANCHOR
-    // actor) and param.fval (the radius, game units). A client must see abiVersion >= 16 before
-    // it asks for the intent: an OLDER APMF has no channel for intent 23 and REFUSES the request
-    // (kInvalidHandle, "no channel serves intent 23" in its log), which is the documented degrade
-    // -- keep your own leash. (An earlier, never-released v16 draft carried the leash as a ch.7
-    // category bit, kCombatActionCat_Pursuit; it was withdrawn before any release, so no client
-    // ever saw it. The leash is its own facet, arbitrated separately from ch.7.)
+    // ABI v13..v16 (2026-09-25) each add ONE intent and NOTHING else (no struct, no slot, no
+    // APMF_Param field; each rides RequestEx/Repoint/Release, a v(N-1) client is byte-unaffected):
+    // v13 kIntent_TargetPin (ch.20), v14 kIntent_CombatEntry (ch.21), v15 kIntent_CombatReentryDeny
+    // (ch.22, param.fval = the window in seconds), v16 kIntent_PursuitLeash (ch.23, param.target =
+    // the anchor, param.fval = the radius). A client must see abiVersion >= N before it asks for
+    // that intent: an OLDER APMF has no channel for it and REFUSES the request (kInvalidHandle, "no
+    // channel serves intent <n>" in its log) -- the documented degrade: do it your own way. (A
+    // withdrawn, never-released v16 draft carried the leash as ch.7 bit kCombatActionCat_Pursuit.)
     //
     // ABI v17 (2026-09-25) gives kIntent_Idle (ch.12) a FORM and a TARGET and NOTHING else: no
     // new intent, no struct, no function-pointer slot, no APMF_Param field. The idle rides the
@@ -181,7 +155,9 @@ namespace APMF_API {
     // the end of this header.
     // ABI v20 (2026-10-06): kCastFlag_FloorSpellsOnly (CastFlags bit 7) only, no struct/slot.
     // Gate on abiVersion >= 20 (Docs/INTEGRATION.md "Spells-only floor" has the why).
-    inline constexpr std::uint32_t kABIVersion = 20;
+    // ABI v21 (2026-10-12): kIntent_CastGuard (ch.25) + CastGuardFlags only, no struct/slot. An older
+    // APMF REFUSES intent 25 ("no channel serves intent 25"). Docs/INTEGRATION.md "Cast guards".
+    inline constexpr std::uint32_t kABIVersion = 21;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -789,6 +765,30 @@ namespace APMF_API {
                                      //
                                      //       FIELD STATUS: built, CI-verified, NOT yet observed on a
                                      //       deck (the "[ch.24]" heartbeat counts the seats).
+        kIntent_CastGuard     = 25,  // ch.25 GUARD this actor's own casts (ABI v21). Mode: DENY at the cast
+                                     //       gates (0x0A CheckCast on the two HAND casters, 0x06 CheckStartCast).
+                                     //       Param: ival = CastGuardFlags (>= 1 known bit, no unknown bit); fval =
+                                     //       TTL in SECONDS (0 => kCastDefaultTtlMs, clamped to kCastMaxTtlMs;
+                                     //       Repoint renews it like a cast claim). form/target/pos not read. The
+                                     //       winning live claim's bits apply; a deny stands only while its client
+                                     //       outranks "Engine" on the Cast facet (APMF_Sources.ini). REFUSED
+                                     //       (kInvalidHandle, logged): APMF < v21, the player, CheckCast gate not
+                                     //       installed, a bad ival / fval, kCastGuard_LineOfFire while unarmed.
+    };
+
+    // ── Cast guard flags (kIntent_CastGuard's param.ival, ABI v21). APPEND-ONLY. ──────
+    enum CastGuardFlags : std::uint32_t {
+        kCastGuard_LineOfFire   = 1u << 0,  // HOLD an OFFENSIVE cast (a hostile effect, not Self delivery) while a
+                                            //   FRIENDLY (not hostile to the caster; for a teammate caster also the
+                                            //   player and teammates) is in the open within 80u of the line to the aim,
+                                            //   or within the spell's area (EFIT feet x 64/3) + 64u of the aim (aim =
+                                            //   its driving cast claim's target, else its combat target). Measured each
+                                            //   frame. 0x06: NO unless a <= 250 ms measurement says clear; 0x0A (start,
+                                            //   release, channel ticks): refused when one says blocked.
+        kCastGuard_ChannelRight = 1u << 1,  // REFUSE the AI's own CONCENTRATION cast on the right / left HAND caster
+        kCastGuard_ChannelLeft  = 1u << 2,  //   (0x0A: start and every channel tick) unless a live kIntent_Cast claim
+                                            //   on that hand names that spell. The instant caster is never touched.
+        kCastGuard_All          = 0x7u,
     };
 
     // ── Combat approach flags (kIntent_CombatApproach's param.ival, ABI v19) ────
@@ -1603,15 +1603,15 @@ namespace APMF_API {
     //                                  actor itself is refused; the player is allowed).
     //   fval   kIntent_CombatApproach  ABI v19: R, the radius in game units (REQUIRED, finite, > 0).
     //   ival   kIntent_CombatApproach  ABI v19: a CombatApproachFlags bitmask (0 = end on arrival).
+    //   ival   kIntent_CastGuard       ABI v21: a CastGuardFlags bitmask. fval: the TTL in seconds.
     //                                  form / pos are not read.
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15),
-    // kIntent_PursuitLeash (ABI v16) and kIntent_CombatApproach (ABI v19); it stays reserved for a
-    // future per-request bias on ch.11, scale on ch.1a, factor on ch.16. target is read by
-    // kIntent_PursuitLeash (ABI v16, the anchor), kIntent_CombatApproach (ABI v19, X) and was
-    // by kIntent_SelectSpell (retired).
-    // pos is read by
+    // kIntent_PursuitLeash (ABI v16), kIntent_CombatApproach (ABI v19) and kIntent_CastGuard (ABI v21);
+    // it stays reserved for a future per-request bias on ch.11, scale on ch.1a, factor on ch.16. target
+    // is read by kIntent_PursuitLeash (ABI v16, the anchor), kIntent_CombatApproach (ABI v19, X) and
+    // was by kIntent_SelectSpell (retired). pos is read by
     // kIntent_Cast with kCastFlag_AtPosition and by kIntent_Travel with kTravel_ToPosition
     // (both ABI v11). Without its flag, kIntent_Travel refuses a non-zero pos.
     // ─────────────────────────────────────────────────────────────────────────────

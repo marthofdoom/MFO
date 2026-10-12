@@ -597,6 +597,12 @@ Raised against `0c1046c` (`fix/mfo-rulings-1011`, Opus review, MERGE OK), 2026-1
 - SEV-4 (item 4): healWeapon is not reset by the normal booking path (Loadout.cpp:527) or the already-paid path; a stale flag (two-hander stow keeping the entry) could hand back a later ordinary weapon debt early.
 - SEV-4 (item 6): after a fan series ends, the spell stays in hand while the AUTO rule matches; released when no cast rule matches (Scheduler.cpp:1913) or at combat end. Fits the ruling.
 
+### MFO-B243 (SEV-4 x2) -- Harbinger client-mode gates review (162c1dd)
+Raised against `162c1dd` (`fix/mfo-gates-client-only`, Opus tier-3 review, MERGE OK), 2026-10-12. Text as relayed by the coordinator.
+- SEV-4: `CombatStyle::ServiceOrderClaim` releases the ch.15 claim on a lap where the equip order holds but no weapon is in hand, leaving up to a one-lap gap (spell/staff re-arm not denied) before EquipWeapon's ledger hold is claimed by ReconcileForcedWeapon.
+- SEV-4: the client-mode claims (ServiceOrderClaim's ch.15, ServiceCastGuard's ch.25) are refreshed only on the Scheduler laps that reach their call sites; an early-return lap (suppression / ready-beat / down) skips the refresh, leaving the bridge's FacetExpiry sweep (ch.15) or Harbinger's 6 s window (ch.25) as the backstop.
+- **Surfaced at edit time from:** MAP.md "Combat vfunc hooks" row.
+
 ## DRAINED
 
 ### Drain batch `b795839` (`fix/mfo-post-2.2.0`, tier B/C items of MFO-B226..B236; the originals stay in the open list for the findings NOT drained)
