@@ -80,6 +80,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/LootTake.cpp
     logistics/Gear.cpp
     logistics/LootScan.cpp
+    logistics/LootReach.cpp
     logistics/LootEquipment.cpp
     logistics/TeleportCompat.cpp
     logistics/Lotd.cpp
@@ -109,6 +110,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/ReentryDeny.cpp
     apmf/PursuitLeash.cpp
     apmf/CombatApproach.cpp
+    apmf/OffenseApproach.cpp
     apmf/SpellAllowList.cpp
     apmf/Deposit.cpp
     apmf/Los.cpp

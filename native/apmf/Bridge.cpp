@@ -983,6 +983,7 @@ namespace MFO::APMFBridge {
         SweepReentryDenies();
         SweepPursuitLeashes();
         SweepHealApproaches();
+        SweepOffenseApproaches();
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(g_mx);
         // ch.20 target pins: notice a pin Harbinger ended (IsClaimLive false) so the
@@ -1220,6 +1221,7 @@ namespace MFO::APMFBridge {
         ClearReentryDenies();         // ch.22 retreat denies: same (Harbinger never saves them)
         ClearPursuitLeashes();        // ch.23 leashes: same
         ClearHealApproaches();        // ch.24 held-heal approaches: same
+        ClearOffenseApproaches();     // ch.24 offense approaches: same
         g_equipAuthRefused.clear();
         g_selectOverflow.clear();
         g_selectRefused.clear();

@@ -185,6 +185,8 @@ namespace MFO::MEOBridge {
         return g_carriedGems.contains(a_followerID);
     }
 
+    int AbiVersion() { return g_meo ? static_cast<int>(g_meo->Version()) : 0; }
+
     bool CarriedGemsSupported() { return g_meo && g_meo->Version() >= 2; }
 
     bool CarriedGemUnsocketSupported() { return g_meo && g_meo->Version() >= 3; }

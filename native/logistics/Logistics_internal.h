@@ -800,6 +800,12 @@ namespace MFO::Logistics {
     bool LootHere(RE::Actor* a_follower, RE::TESObjectREFR* a_ref,
                   Category a_cat, RE::ActorValue a_want);
     float NavmeshReach(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
+    // logistics/LootReach.cpp: navmesh CONNECTIVITY (follower tri -> ref tri). Island only when PROVEN
+    // disconnected inside fully-read meshes; every doubt is Unknown (proceed as before). WORKER.
+    enum class NavConn { Connected, Island, Unknown };
+    NavConn NavConnected(RE::Actor* a_follower, RE::TESObjectREFR* a_ref);
+    bool    NoteUnreachableOnce(RE::FormID a_ref);   // true the first time per ref (log once)
+    void    ClearUnreachableLog();                   // revert
     bool LooseRef(RE::TESObjectREFR* a_ref);
     bool HasLoot(RE::Actor* a_follower, RE::TESObjectREFR* a_ref,
                  Category a_cat, RE::ActorValue a_want);   // Logistics_Loot.cpp (the scan's peek)

@@ -19,6 +19,7 @@
 #include "CombatStyle.h"
 #include "progression/ProgAllocator.h"   // OnMenuClose — re-read the addon economy on MCM close
 #include "MainThread.h"      // [atk-obs]: graph sink attach/detach is main-thread work (#62-class)
+#include "logistics/GemRules.h"
 #include "logistics/Lotd.h"   // LOTD awareness: the toggle-on intro after an MCM re-read
 
 // Two Win32 symbols, declared by hand. <windows.h> is BANNED outside Board.cpp
@@ -163,6 +164,7 @@ namespace MFO::Diagnostics {
                         PumpTickGate gate(epoch);   // shared body shape; drains with StopPump
                         if (!gate) return;
                         Config::Read();
+                        Logistics::GemRules::LogStatus();   // [gems] status after an MCM change
                         Lotd::OnConfigRead();   // LOTD awareness turned ON -> the shipping intro
                         // Re-apply settings mirrored into derived UI state --
                         // the raw atomics are live, but g_showHud only reaches

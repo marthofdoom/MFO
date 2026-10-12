@@ -84,6 +84,9 @@ namespace MFO::MEOBridge {
     // gem-skip at all (worn + keepWeapons/keepArmor still protect worn gems).
     bool CarriedGemsSupported();
 
+    // The acquired MEO interface version (0 = MEO absent). For the [gems] status line.
+    int AbiVersion();
+
     // Worker-callable: does MEO support UNSOCKETING (ABI >= 3)? When true the sell
     // path UNGEMS-THEN-SELLS: it extracts a gemmed junk item's gems to the follower's
     // own inventory (UnsocketItemGems), so the item sells ungemmed on a later scan

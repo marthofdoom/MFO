@@ -740,6 +740,17 @@ namespace MFO::Logistics {
                                      a_follower->GetFormID(), rid);
                         continue;
                     }
+                    // CONNECTIVITY (LoreRim round 2): mesh near the ref is not mesh CONNECTED to the
+                    // follower. Island = proven disconnected in the decoded navmesh graph (LootReach.cpp);
+                    // skipped like the gate above (transient + grown grab), logged ONCE per ref.
+                    if (NavConnected(a_follower, ref) == NavConn::Island) {
+                        MarkTravelFailed(rid, a_now);
+                        NotePathFail(rid);
+                        if (NoteUnreachableOnce(rid))
+                            spdlog::info("[loot] {:08X}: {:08X} UNREACHABLE (navmesh island, no connected path) -- skipped",
+                                         a_follower->GetFormID(), rid);
+                        continue;
+                    }
                     // ROAD CHOICE, LEG BOUNDARY (A/B). A leg in flight FINISHES ON THE
                     // ROAD IT STARTED: the decision is the live ch.19 leg itself
                     // (APMF-side truth, one record per slot), never the switch, so a
@@ -795,6 +806,17 @@ namespace MFO::Logistics {
                         NotePathFail(rid);              // -> widen its grab radius
                         spdlog::info("[loot] {:08X}: {:08X} off-navmesh -- skipped (no path to it)",
                                      a_follower->GetFormID(), rid);
+                        continue;
+                    }
+                    // CONNECTIVITY (LoreRim round 2): mesh near the ref is not mesh CONNECTED to the
+                    // follower. Island = proven disconnected in the decoded navmesh graph (LootReach.cpp);
+                    // skipped like the gate above (transient + grown grab), logged ONCE per ref.
+                    if (NavConnected(a_follower, ref) == NavConn::Island) {
+                        MarkTravelFailed(rid, a_now);
+                        NotePathFail(rid);
+                        if (NoteUnreachableOnce(rid))
+                            spdlog::info("[loot] {:08X}: {:08X} UNREACHABLE (navmesh island, no connected path) -- skipped",
+                                         a_follower->GetFormID(), rid);
                         continue;
                     }
                     // ROAD CHOICE, EXCURSION START (A/B). The switch is read ONCE,
