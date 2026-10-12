@@ -1543,3 +1543,18 @@ merge, the SEV-3 false player pick, the re-nock churn and the SEV-3 silver-pick 
   the bought silver then counts as owned for the restock (pre-existing shape).
 - (SEV-5) Redundant IsSilverAmmo checks in AmmoObsolete / Economy off-kind / PlanBuy (AmmoIsSpecialBase pins anyway).
 - (SEV-5) The empty-trade memo signature ignores wantSilverAmmo (same shape as wantSilver).
+
+### MFO-B246 (SEV-4 x3, SEV-5 x2) -- perk owner remap P1 review, deferred items
+Raised against 28f4c4d / b312d91 (`feat/mfo-perk-owner-remap-p1`, Opus review two rounds,
+`scratchpad/agentlogs/review-perk-p1.md`), 2026-10-12. Final MERGE OK at b312d91. The SEV-2 co-save aloneGate breadth,
+the SEV-3 hostile-aura targets line, F4/F6/F8/F9/F10 were fixed on the branch.
+- (SEV-4, F3) Mixed nodes do not get "dead + refund": if rank N>1 is alone-gated but rank 1 is not, the node is kept,
+  a saved rank N is neither dropped nor refunded and the follower keeps the dead rank form; if rank 1 is gated but rank 2
+  is not, rank 2 is unreachable. Ask marth if it ever shows up in a census.
+- (SEV-4, F7) Apply*Spell EPs (51/52/67/69) and `perkConditions` are not recursed for owner facts (gap against the
+  design; conservative, nothing is demoted or killed through them).
+- (SEV-4) EP condition tab 0 = owner tab is the CK/xEdit convention (reviewer); not proven from the binary.
+  `runOnRef` population at kDataLoaded is unverified: watch the census `runOnPlayerRef=` counter.
+- (SEV-5, N1) On a follower switch `stateOk` is false for a frame, so `ownedAt` reads all-false and the board lays out
+  twice (brief selection re-clamp). Cosmetic.
+- (SEV-5, N2) `ReplaceYou` treats a "You" after a colon as a subject ("Bonus for: you" reads wrong). Rare.
