@@ -20,11 +20,6 @@ namespace MFO::Logistics::GemRules {
     namespace {
         using Clock = std::chrono::steady_clock;
 
-        // "Worth selling once gemless": the item's own instance value (tempering/enchant included)
-        // at or above this. No such floor existed in the sell path (it sells anything unkept), so
-        // this is the one new threshold -- marth's "dont even bother keeping gear that isnt worth
-        // selling gemless".
-        constexpr std::int32_t kMinSellValue = 50;
         // A strip that has not landed after this long is given up on (the item stays, gems on it).
         constexpr std::chrono::seconds kStripPatience{ 15 };
 
@@ -43,6 +38,7 @@ namespace MFO::Logistics::GemRules {
             RE::FormID    fol, base, src;
             std::uint16_t uid;
             Clock::time_point since;
+            bool          sellGambit;   // the follower had a loot-valuables (to sell) gambit when he took it
         };
         std::vector<Probe> g_probes;
         std::atomic<int>   g_probeCount{ 0 };
@@ -102,12 +98,16 @@ namespace MFO::Logistics::GemRules {
 
         // MAIN THREAD. Gems are out (or the item had none): keep it if it is worth selling gemless,
         // else put it back where it was found.
-        void Decide(RE::Actor* a_fol, RE::TESBoundObject* a_obj, std::uint16_t a_uid, RE::FormID a_srcID) {
+        void Decide(RE::Actor* a_fol, RE::TESBoundObject* a_obj, std::uint16_t a_uid, RE::FormID a_srcID, bool a_sellGambit) {
             std::int32_t value = 0;
             auto* xl = FindOwned(a_fol, a_obj, a_uid, value);
             if (!xl) return;   // already gone from him: nothing to decide
-            if (value >= kMinSellValue) {
-                spdlog::info("[gems] {:08X}: kept '{}' (worth {} gemless, sells normally)", a_fol->GetFormID(), NameOf(a_obj), value);
+            // marth: the sell floor is the loot-valuables (to sell) gambit's own value/weight rule; with
+            // no such gambit only the gems are kept and the gear always goes back.
+            const bool keep = a_sellGambit && ValuableRatioClears(static_cast<float>(value), a_obj->GetWeight());
+            if (keep) {
+                spdlog::info("[gems] {:08X}: kept '{}' (value {} / weight {:.1f} meets the loot-to-sell rule, sells normally)",
+                             a_fol->GetFormID(), NameOf(a_obj), value, a_obj->GetWeight());
                 return;
             }
             auto* src = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_srcID);
@@ -117,15 +117,16 @@ namespace MFO::Logistics::GemRules {
                 return;
             }
             a_fol->RemoveItem(a_obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, xl, src);
-            spdlog::info("[gems] returned '{}' to container {:08X} (not worth keeping gemless)", NameOf(a_obj), a_srcID);
+            spdlog::info("[gems] returned '{}' to container {:08X} (not worth keeping gemless: {})", NameOf(a_obj), a_srcID,
+                         a_sellGambit ? "below the loot-to-sell value/weight rule" : "no loot-to-sell gambit, gems only");
         }
 
-        void ProbeOnMain(RE::FormID a_fol, RE::FormID a_base, std::uint16_t a_uid, RE::FormID a_src) {
+        void ProbeOnMain(RE::FormID a_fol, RE::FormID a_base, std::uint16_t a_uid, RE::FormID a_src, bool a_sell) {
             auto* fol = RE::TESForm::LookupByID<RE::Actor>(a_fol);
             auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(a_base);
             if (!fol || !obj) return;
             MEOBridge::RefreshCarriedGems(fol);
-            if (!MEOBridge::IsCarriedGemmed(a_fol, a_base, a_uid)) { Decide(fol, obj, a_uid, a_src); return; }
+            if (!MEOBridge::IsCarriedGemmed(a_fol, a_base, a_uid)) { Decide(fol, obj, a_uid, a_src, a_sell); return; }
             const int n = MEOBridge::CarriedGemCount(a_fol, a_base, a_uid);
             if (!MEOBridge::CarriedGemUnsocketSupported()) {
                 spdlog::warn("[gems] {:08X}: looted '{}' is socketed and MEO cannot strip it (ABI < 3): kept as is", a_fol, NameOf(obj));
@@ -133,7 +134,7 @@ namespace MFO::Logistics::GemRules {
             }
             if (MEOBridge::UnsocketItemGems(fol, a_base, a_uid) > 0)
                 spdlog::info("[gems] stripped {} gem(s) from '{}' (looted gear)", n, NameOf(obj));
-            g_probes.push_back({ a_fol, a_base, a_src, a_uid, Clock::now() });
+            g_probes.push_back({ a_fol, a_base, a_src, a_uid, Clock::now(), a_sell });
             g_probeCount.store(static_cast<int>(g_probes.size()));
         }
 
@@ -149,7 +150,7 @@ namespace MFO::Logistics::GemRules {
                 if (!obj) { g_probes.erase(g_probes.begin() + i); continue; }
                 if (!MEOBridge::IsCarriedGemmed(a_fol, p.base, p.uid)) {
                     g_probes.erase(g_probes.begin() + i);
-                    Decide(fol, obj, p.uid, p.src);
+                    Decide(fol, obj, p.uid, p.src, p.sellGambit);
                     continue;
                 }
                 if (Clock::now() - p.since > kStripPatience) {
@@ -207,8 +208,9 @@ namespace MFO::Logistics::GemRules {
         a_src->RemoveItem(a_c.obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, a_c.xl, a_follower);
         if (!FindOwned(a_follower, a_c.obj, uid, v)) return false;
         spdlog::info("[gems] {:08X}: took '{}' from {:08X} to look for gems", fol, NameOf(a_c.obj), src);
-        if (MainThread::IsInstalled()) MainThread::Post([fol, base, uid, src]() { ProbeOnMain(fol, base, uid, src); });
-        else                           ProbeOnMain(fol, base, uid, src);   // VR: no pump, same as the other gem reads
+        const bool sell = g_svc && TableHasAction(g_svc->logistics(), Vocab::kActLootValuables);
+        if (MainThread::IsInstalled()) MainThread::Post([fol, base, uid, src, sell]() { ProbeOnMain(fol, base, uid, src, sell); });
+        else                           ProbeOnMain(fol, base, uid, src, sell);   // VR: no pump, same as the other gem reads
         return true;
     }
 

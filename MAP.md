@@ -5196,7 +5196,7 @@ later pass): Economy sell (`Economy.cpp` `gemHold` site), `Gear.cpp` KeepHeadCle
 `Lotd.cpp` TransferOnMain (museum), `SwapUp.cpp` CommitSwapUpDrops. Ammo/book/lockpick removals are not gear.
 **Looting socketed gear:** `LootEquipment.cpp` falls back to `FindGemCandidate` (a non-upgrade weapon/armor with a
 nonzero ExtraUniqueID in the source container) when nothing is an upgrade; `TakeAndProbe` takes THAT instance,
-the main-thread probe strips its gems, then `Decide` keeps it (instance value >= `kMinSellValue` 50, sells normally)
+the main-thread probe strips its gems, then `Decide` keeps it only if the follower has a loot-valuables (to sell) gambit AND the item clears its value/weight rule (`ValuableRatioClears`, `LootTake.cpp`, `fValuablesRatio`); no gambit = gems only, gear always returned
 or returns it to the SOURCE CONTAINER. Loose world refs are NOT probed (cannot see gems before owning it; returning
 needs a DropObject). `PumpProbes` is called from `Service.cpp` (idle scan, next to the gem reconcile).
 State: `g_probed` worker-only set, `g_probes` main-thread-only; both cleared in `Serialization.cpp` revert.
