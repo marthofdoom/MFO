@@ -1611,3 +1611,13 @@ F7 were fixed on the branch. Cross-referenced from MAP.md (progression/ ROSTER R
   `ForgetFollower`'s perk removal (like Respec's, which does the same) removes the held rank form whenever it is on
   the base; it cannot tell MFO's grant from a native grant of the same form (SPID/Requiem). Fix shape when drained:
   a per-session record of the forms MFO actually AddPerk'd.
+
+### MFO-B251 (SEV-5 x2) -- engage-on-sight hostility review, deferred items
+Raised against f1e4890 / b660df0 (`fix/mfo-eos-faction-hostility`, Opus review 3 rounds, `scratchpad/agentlogs/review-eos.md`),
+2026-10-12. MERGE OK. The SEV-1 (faction-only test), the SEV-3 territorial ally `||` and the SEV-4 skip list over-reach
+were fixed on the branch.
+- (SEV-5) `ReactionOf` (EngageOnSight.cpp, the data-only stand-in for the engine's one-direction faction reaction)
+  ignores reaction entries keyed by RACE, and has no relationship-rank step (`BGSRelationship::GetRelationship` has no
+  VerifiedAddresses row). A friend-by-relationship territorial NPC could read as Neutral.
+- (SEV-5) Field watch: the territorial term has no "radius entered" runtime flag (by marth's ruling), so a territorial
+  animal anywhere within leash and sight is engaged even when it has not noticed anyone. Watch the per-actor skip log.
