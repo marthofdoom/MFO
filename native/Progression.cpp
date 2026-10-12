@@ -448,8 +448,11 @@ namespace MFO::Progression {
                 }
 
                 if (fn == Fn::kGetIsID || fn == Fn::kGetIsReference) {
+                    // Only a pin on the Subject (object kSelf, no swapTarget) is the
+                    // owner pin; one run on the Target / combat target / a ref is not.
                     if (memberOfOr || d.flags.opCode != Op::kEqualTo ||
-                        d.flags.global || d.comparisonValue.f != 1.0f)
+                        d.flags.global || d.comparisonValue.f != 1.0f ||
+                        d.object.get() != RE::CONDITIONITEMOBJECT::kSelf || d.flags.swapTarget)
                         continue;
                     auto* form = static_cast<RE::TESForm*>(d.functionData.params[0]);
                     if (form && (form->GetFormID() == 0x14 || form->GetFormID() == 0x7)) {
@@ -474,12 +477,30 @@ namespace MFO::Progression {
                 } else if (fn == Fn::kGetCombatGroupMemberCount) {
                     // "Fighting alone": a hard requirement that admits a group of 1
                     // and excludes a group of 2 or more (<= 1, < 2, == 1).
-                    if (!memberOfOr && !d.flags.global && Admits(d, 1.0f) && !Admits(d, 2.0f))
+                    // Only on the OWNER (self context, Subject, no swapTarget): a count taken
+                    // on a target, a combat target or a struck actor is not "the owner fights alone".
+                    if (a_ctx == OwnerCtx::kSelf && d.object.get() == RE::CONDITIONITEMOBJECT::kSelf &&
+                        !d.flags.swapTarget &&
+                        !memberOfOr && !d.flags.global && Admits(d, 1.0f) && !Admits(d, 2.0f))
                         a_out.aloneGate = true;
                 } else if (fn == Fn::kIsHostileToActor) {
                     if (!d.functionData.params[0]) a_out.hostileNullParam = true;
                 }
             }
+        }
+
+        // F1(b): is EVERY effect of this ability behind the fighting-alone gate (on the
+        // effect's own list or its MGEF's)? An ability with one ungated effect still fires.
+        bool AbilityAloneGated(RE::SpellItem* a_spell) {
+            if (!a_spell || a_spell->effects.empty()) return false;
+            for (auto* eff : a_spell->effects) {
+                if (!eff) continue;
+                PerkOwnerFacts t;
+                ReadOwnerFacts(eff->conditions, OwnerCtx::kSelf, t);
+                if (eff->baseEffect) ReadOwnerFacts(eff->baseEffect->conditions, OwnerCtx::kSelf, t);
+                if (!t.aloneGate) return false;
+            }
+            return true;
         }
 
         // An ability/applied spell: every effect's own list and its MGEF's list
@@ -496,8 +517,11 @@ namespace MFO::Progression {
                 ReadOwnerFacts(mgef->conditions, a_ctx, a_out);
                 if (mgef->data.archetype == RE::EffectSetting::Archetype::kCloak) {
                     a_out.cloak = true;
-                    if (auto* assoc = mgef->data.associatedForm ? mgef->data.associatedForm->As<RE::SpellItem>() : nullptr)
+                    if (auto* assoc = mgef->data.associatedForm ? mgef->data.associatedForm->As<RE::SpellItem>() : nullptr) {
+                        for (auto* ae : assoc->effects)
+                            if (ae && ae->baseEffect && ae->baseEffect->IsHostile()) a_out.cloakHostile = true;
                         ReadSpellOwnerFacts(assoc, OwnerCtx::kOther, a_out, a_depth + 1);
+                    }
                 }
             }
         }
@@ -771,6 +795,16 @@ namespace MFO::Progression {
                     node->perk->TESDescription::GetDescription(buf, node->perk);
                     view.description = buf.c_str() ? buf.c_str() : "";
                 }
+                for (auto* entry : node->perk->perkEntries) {
+                    if (!entry || static_cast<int>(entry->GetType()) !=
+                                      static_cast<int>(RE::PERK_ENTRY_TYPE::kAbility))
+                        continue;
+                    view.hasAbility = true;
+                    const auto t = SpellEffectsText(static_cast<RE::BGSAbilityPerkEntry*>(entry)->ability);
+                    if (t.empty()) continue;
+                    if (!view.effectsText.empty()) view.effectsText += '\n';
+                    view.effectsText += t;
+                }
                 // Rank 1 gates the first take — its condition-authored
                 // prereqs are what the layout tiers by (round 4).
                 view.condPrereqPerkIDs = ExtractCondPrereqs(node->perk);
@@ -789,9 +823,18 @@ namespace MFO::Progression {
                     rank.verdict = ClassifyRank(r, why);
                     // Style facts for this rank: the union over its entries
                     // (frozen with the catalog; TallyStyleVotes reads them).
-                    for (const auto& f : WalkPerkEntries(r)) {
-                        rank.style.Merge(f.style);
-                        rank.owner.Merge(f.owner);
+                    bool gatedAll = false;   // F1(b): every FIRING entry behind the alone gate
+                    {
+                        bool anyFiring = false;
+                        gatedAll = true;
+                        for (const auto& f : WalkPerkEntries(r)) {
+                            rank.style.Merge(f.style);
+                            rank.owner.Merge(f.owner);
+                            if (f.kind == PerkEntryKind::kQuest || !f.firesForNpc) continue;
+                            anyFiring = true;
+                            if (!f.aloneGated) gatedAll = false;
+                        }
+                        gatedAll = anyFiring && gatedAll;
                     }
                     // STYLE FACTS ARE NEVER MARGINAL (2026-09-14). A rank whose
                     // conditions name a weapon kind / armor class / hand shape
@@ -841,12 +884,13 @@ namespace MFO::Progression {
                     if (rank.owner.partyCount)   ++a_out.ownerPartyCount;
                     if (rank.owner.teammateTest) ++a_out.ownerTeammate;
                     if (rank.owner.hostileNullParam) ++a_out.ownerHostileNull;
+                    if (rank.owner.playerRefRunOn)   ++a_out.ownerRunOn;
                     // Q7 (marth: dead + refund): the "fighting alone" family can never fire
                     // while following (the player is an ally), so the rank is DEAD. A node
                     // whose every rank is dead is filtered out; a saved allocation of it is
                     // then dropped by the load-time oracle (Allocator.cpp FindNode miss) and
                     // refunded by the derived section-17 pool (PerkPointsAvailable).
-                    if (rank.owner.aloneGate) {
+                    if (gatedAll) {
                         ++a_out.aloneGateRanks;
                         rank.verdict = Verdict::kDead;
                         Append(why, "fighting-alone gate (GetCombatGroupMemberCount <= 1): never fires while following");
@@ -956,7 +1000,7 @@ namespace MFO::Progression {
 
             g_catalog.skills.reserve(std::size(kSkills));
             int ownerDerive = 0, ownerUnsupported = 0, ownerCloak = 0, ownerParty = 0,
-                ownerMate = 0, ownerHostile = 0;
+                ownerMate = 0, ownerHostile = 0, ownerRunOn = 0;
             for (const auto& sk : kSkills) {
                 SkillTree tree;
                 BuildSkill(avl->GetActorValue(sk.av), sk.av, sk.name, tree);
@@ -970,6 +1014,7 @@ namespace MFO::Progression {
                 ownerDerive += tree.ownerDerive;       ownerUnsupported += tree.ownerUnsupported;
                 ownerCloak  += tree.ownerCloak;        ownerParty += tree.ownerPartyCount;
                 ownerMate   += tree.ownerTeammate;     ownerHostile += tree.ownerHostileNull;
+                ownerRunOn  += tree.ownerRunOn;
                 g_catalog.keptPerks      += static_cast<int>(tree.nodes.size());
                 g_catalog.filteredPerks  += static_cast<int>(tree.filtered.size());
                 for (const auto& n : tree.nodes)
@@ -978,10 +1023,10 @@ namespace MFO::Progression {
                 g_catalog.skills.push_back(std::move(tree));
             }
             // The owner-remap census (P1): ALWAYS one line, zeros included.
-            spdlog::info("[prog] owner-remap census: facts by shape (ranks) derive={} unsupported={} cloak={} "
+            spdlog::info("[prog] owner-remap census: facts by shape (ranks) derive={} unsupported={} runOnPlayerRef={} cloak={} "
                          "partyCount={} teammateTest={} hostileNullParam={} | {} effective rank(s) shown MARGINAL "
                          "(part player-only) | {} rank(s) behind a fighting-alone gate (made DEAD) | scale ranks {} (pre-remap effective)",
-                         ownerDerive, ownerUnsupported, ownerCloak, ownerParty, ownerMate, ownerHostile,
+                         ownerDerive, ownerUnsupported, ownerRunOn, ownerCloak, ownerParty, ownerMate, ownerHostile,
                          g_catalog.ownerDemotedRanks, g_catalog.aloneGateRanks, g_catalog.scaleEffectiveRanks);
             // Publish LAST: everything above is complete before anyone can
             // observe built == true. After this line the catalog is frozen —
@@ -1134,6 +1179,7 @@ namespace MFO::Progression {
                 // miss the one unarmed perk every vanilla-tree list has.
                 // Engine data the record itself carries, no overhaul assumed.
                 if (ab) ReadSpellOwnerFacts(ab, OwnerCtx::kSelf, f.owner, 0);
+                f.aloneGated = AbilityAloneGated(ab);
                 if (ab)
                     for (auto* eff : ab->effects) {
                         if (!eff) continue;
@@ -1157,6 +1203,11 @@ namespace MFO::Progression {
                     const std::size_t tabs = std::min<std::size_t>(ep->entryData.numArgs,
                                                                    ep->conditions.size());
                     for (std::size_t t = 0; t < tabs; ++t) {
+                        if (t == 0) {
+                            PerkOwnerFacts t0;
+                            ReadOwnerFacts(ep->conditions[0], OwnerCtx::kSelf, t0);
+                            f.aloneGated = t0.aloneGate;
+                        }
                         ReadStyleFacts(ep->conditions[t], f.style);
                         // Tab 0 is the perk-owner tab (self context); later tabs
                         // (target, weapon ...) name another actor.

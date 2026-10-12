@@ -116,6 +116,26 @@ namespace MFO::ProgAllocator {
                 while (ps > 0 && IsWordCh(a_text[ps - 1])) --ps;
                 const std::string prev = Lower(a_text.substr(ps, pe - ps));
                 bool after = std::find(nonVerb.begin(), nonVerb.end(), prev) != nonVerb.end();
+                // Contractions: you're / you'll / you've / you'd -> they're ... (the subject form).
+                if (i + 3 < a_text.size() && a_text[i + 3] == '\'') {
+                    std::size_t se = i + 4;
+                    while (se < a_text.size() && IsWordCh(a_text[se])) ++se;
+                    const std::string suf = Lower(a_text.substr(i + 4, se - (i + 4)));
+                    if (suf == "re" || suf == "ll" || suf == "ve" || suf == "d") {
+                        std::string to = subj;
+                        if (!to.empty() && std::isupper(static_cast<unsigned char>(a_text[i])))
+                            to[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(to[0])));
+                        a_text.replace(i, 3, to);
+                        i += to.size();
+                        continue;
+                    }
+                }
+                // Sentence-initial "You ..." is a subject ("You and ..." included).
+                bool sentenceStart = (pe == 0);
+                if (!sentenceStart) {
+                    const char pc = a_text[pe - 1];
+                    sentenceStart = (pc == '.' || pc == '!' || pc == '?' || pc == ':' || pc == '\n');
+                }
                 // Followed by a lowercase word that is not itself a preposition/conjunction: a verb.
                 std::size_t n = i + 3;
                 while (n < a_text.size() && a_text[n] == ' ') ++n;
@@ -125,7 +145,8 @@ namespace MFO::ProgAllocator {
                 const bool verbNext = n > i + 3 && ne > n &&
                                       std::islower(static_cast<unsigned char>(a_text[n])) &&
                                       std::find(nonVerb.begin(), nonVerb.end(), next) == nonVerb.end();
-                std::string to = (!after && verbNext) ? subj : obj;
+                const bool andNext = (next == "and");
+                std::string to = (!after && (verbNext || andNext || sentenceStart)) ? subj : obj;
                 if (!to.empty() && std::isupper(static_cast<unsigned char>(a_text[i])))
                     to[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(to[0])));
                 a_text.replace(i, 3, to);
@@ -150,44 +171,30 @@ namespace MFO::ProgAllocator {
         }
 
         // The description the board shows for a follower who OWNS this node's perk.
+        // Uses only the catalog's precomputed fields (no perk walk here).
         std::string OwnerDescription(const Progression::PerkNodeView& a_node, const std::string& a_owner) {
             Progression::PerkOwnerFacts u;
             for (const auto& r : a_node.ranks) u.Merge(r.owner);
             const bool playerOnlyPart = u.remap != Progression::OwnerRemap::kNone;
 
-            std::string text = a_node.description;
-            bool hasAbility = false;
-            if (auto* perk = RE::TESForm::LookupByID<RE::BGSPerk>(a_node.perkFormID)) {
-                std::string fromEffects;
-                for (const auto& f : Progression::WalkPerkEntries(perk)) {
-                    if (f.kind != Progression::PerkEntryKind::kAbility) continue;
-                    hasAbility = true;
-                }
-                if (text.empty())   // no authored DESC: the effects' own DNAM text
-                    for (auto* entry : perk->perkEntries) {
-                        if (!entry || static_cast<int>(entry->GetType()) !=
-                                          static_cast<int>(RE::PERK_ENTRY_TYPE::kAbility))
-                            continue;
-                        const auto t = Progression::SpellEffectsText(
-                            static_cast<RE::BGSAbilityPerkEntry*>(entry)->ability);
-                        if (t.empty()) continue;
-                        if (!fromEffects.empty()) fromEffects += '\n';
-                        fromEffects += t;
-                    }
-                if (text.empty()) text = std::move(fromEffects);
-            }
+            std::string text = a_node.description.empty() ? a_node.effectsText : a_node.description;
 
-            // Layer 2: only where the language supplies the patterns, never under the Guard.
-            if (!playerOnlyPart && std::string_view(Str::Get(Str::K::Pk_RwOn)) == "1")
+            // Layer 2: only where the ACTIVE language's own table supplies the patterns
+            // (English always does; another language must ship Pk_RwOn itself, or a missing
+            // key would run English patterns over foreign text). Never under the Guard.
+            if (!playerOnlyPart && Str::LanguageSupplies(Str::K::Pk_RwOn) &&
+                std::string_view(Str::Get(Str::K::Pk_RwOn)) == "1")
                 RewriteForOwner(text, a_owner);
 
-            // Layer 1: the targets line. A teammate test inside a cloak excludes the player
-            // itself, which the Party line would misstate, so it says nothing there.
+            // Layer 1: the targets line. The Party line is written only for a cloak that is
+            // not a damage aura (its MGEFs not flagged hostile, or gated on IsHostileToActor
+            // with a null parameter) and carries no teammate test (which excludes the player
+            // itself). Any other cloak says nothing rather than something false.
             std::string line;
             if (u.cloak) {
-                if (!u.teammateTest && !playerOnlyPart)
+                if (!u.teammateTest && !playerOnlyPart && (!u.cloakHostile || u.hostileNullParam))
                     line = Str::Fmt(Str::K::Pk_TargetsParty, { a_owner });
-            } else if (hasAbility && !playerOnlyPart) {
+            } else if (a_node.hasAbility && !playerOnlyPart) {
                 line = Str::Fmt(Str::K::Pk_TargetsSelf, { a_owner });
             }
             if (!line.empty()) {
@@ -200,6 +207,18 @@ namespace MFO::ProgAllocator {
             }
             return text;
         }
+
+        // Rewritten text cache, main thread only (BuildNodeViews runs on it). Keyed by the focused
+        // follower + name and the language table (Str::Get returns a pointer into the published
+        // table, which a Reload replaces); rebuilt when any of them changes.
+        struct DescCache {
+            RE::FormID               id{ 0 };
+            std::string              name;
+            const char*              stamp{ nullptr };
+            std::vector<std::string> text;
+            std::vector<char>        have;
+        };
+        DescCache g_descCache;
 
         // One BoardNodeView per catalog node, catalog order (skill-major) —
         // the render thread indexes by prefix sums off the same frozen
@@ -217,10 +236,25 @@ namespace MFO::ProgAllocator {
             a_out.reserve(total);
             const bool gateable = a_st && a_st->enrolled && FindClassDef(a_st->clsId) != nullptr;
             const std::string ownerName = (a_actor && a_actor->GetName()) ? a_actor->GetName() : "";
+            {
+                const RE::FormID id = a_actor ? a_actor->GetFormID() : 0;
+                const char* stamp = Str::Get(Str::K::Pk_RwPlayer);
+                if (g_descCache.id != id || g_descCache.name != ownerName ||
+                    g_descCache.stamp != stamp || g_descCache.have.size() != total) {
+                    g_descCache.id = id; g_descCache.name = ownerName; g_descCache.stamp = stamp;
+                    g_descCache.text.assign(total, std::string());
+                    g_descCache.have.assign(total, 0);
+                }
+            }
+            std::size_t flat = 0;
             for (const auto& tree : cat.skills) {
                 for (const auto& node : tree.nodes) {
                     BoardNodeView v;
-                    v.description = OwnerDescription(node, ownerName);
+                    if (!g_descCache.have[flat]) {
+                        g_descCache.text[flat] = OwnerDescription(node, ownerName);
+                        g_descCache.have[flat] = 1;
+                    }
+                    v.description = g_descCache.text[flat++];
                     if (a_st)
                         if (auto* al = FindAlloc(*a_st, node.perkFormID))
                             v.ownedRank = al->rank;

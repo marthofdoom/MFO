@@ -193,8 +193,11 @@ namespace MFO::Progression {
         bool otherPin{ false };         // the same pin, but inside a cloaked spell / EP target tab
         bool teammateTest{ false };     // GetPlayerTeammate (453) on the struck actor
         bool partyCount{ false };       // GetPlayerTeammateCount (454)
-        bool aloneGate{ false };        // GetCombatGroupMemberCount (709) admits 1 and excludes 2+: "fighting alone"
+        bool aloneGate{ false };        // a condition on the OWNER (self context, Subject, no swapTarget) tests GetCombatGroupMemberCount (709)
+                                        // admitting 1 and excluding 2+: "fighting alone". Per condition list; a RANK dies only
+                                        // when every firing entry is aloneGated (PerkEntryFact)
         bool hostileNullParam{ false }; // IsHostileToActor (719) with a NULL parameter
+        bool cloakHostile{ false };     // a kCloak's associated spell carries a MGEF flagged hostile (a damage aura)
         bool cloak{ false };            // a kCloak (35) effect: the engine casts from the owner onto nearby actors, caster skipped
         OwnerRemap remap{ OwnerRemap::kNone };
         void Merge(const PerkOwnerFacts& a_o) {
@@ -202,7 +205,7 @@ namespace MFO::Progression {
             playerRefParam = playerRefParam || a_o.playerRefParam; otherPin = otherPin || a_o.otherPin;
             teammateTest = teammateTest || a_o.teammateTest; partyCount = partyCount || a_o.partyCount;
             aloneGate = aloneGate || a_o.aloneGate; hostileNullParam = hostileNullParam || a_o.hostileNullParam;
-            cloak = cloak || a_o.cloak;
+            cloak = cloak || a_o.cloak; cloakHostile = cloakHostile || a_o.cloakHostile;
             if (a_o.remap > remap) remap = a_o.remap;
         }
     };
@@ -219,6 +222,8 @@ namespace MFO::Progression {
         int           rawType{ -1 };          // GetType() int — unknown-type diagnostics
         PerkStyleFacts style;                 // what the entry's conditions name (above)
         PerkOwnerFacts owner;                 // whose state the entry's conditions read (above)
+        bool          aloneGated{ false };    // EVERY effect (ability) / the owner tab (entry point) sits behind a
+                                              // fighting-alone gate on the owner: this entry never fires while following
     };
     // Walk a perk's entry points. Add-on-agnostic; safe on any BGSPerk (empty
     // for null / entry-less). CommonLib-churn-resistant (int GetType() compares).
@@ -282,6 +287,12 @@ namespace MFO::Progression {
         RE::FormID    perkFormID{ 0 };    // rank 1
         std::string   name;
         std::string   description;
+        // Owner-remap P1, precomputed at kDataLoaded (main thread) so the board view
+        // never re-walks the perk: rank 1 carries an added-ability entry, and the
+        // text of those abilities' effects (SpellEffectsText), the fallback for an
+        // empty DESC.
+        bool          hasAbility{ false };
+        std::string   effectsText;
         std::uint32_t gridX{ 0 };         // integer grid — controller nav
         std::uint32_t gridY{ 0 };
         float         hpos{ 0.0f };       // float dome coords — layout
@@ -338,8 +349,8 @@ namespace MFO::Progression {
         // verdict table; nonzero is the "stale/absent verdicts" tell.
         int stylePromotedRanks{ 0 };
         // Owner-remap census (P1): effective ranks shown MARGINAL because part
-        // of them is player-only; ranks whose owner tab is a "fighting alone"
-        // gate (recognised, NOT demoted -- see BuildSkill).
+        // of them is player-only; ranks made DEAD because every firing entry
+        // sits behind the "fighting alone" gate (marth Q7, dead + refund).
         int scaleEffectiveRanks{ 0 };   // effectiveRanks as it was BEFORE the owner remap (the section-15 scale input)
         int ownerDemotedRanks{ 0 };
         int aloneGateRanks{ 0 };
@@ -349,6 +360,7 @@ namespace MFO::Progression {
         int ownerPartyCount{ 0 };
         int ownerTeammate{ 0 };
         int ownerHostileNull{ 0 };
+        int ownerRunOn{ 0 };         // ranks with a run-on-PlayerRef condition (shows whether runOnRef is populated)
     };
 
     struct Catalog {

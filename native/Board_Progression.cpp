@@ -568,7 +568,21 @@ namespace MFO::Board {
                                 static int   s_selNode = -1;           // P1 explicit selection
                                 static bool  s_reclamp = false;        // pull selection into view once
                                 static double s_lastMoveT = 0.0;       // pad-move throttle
-                                if (s_layoutSkill != s_skillCur || s_layoutMarg != s_showMarginal) {
+                                // A node the focused follower OWNS is always kept (with its parents),
+                                // whatever its verdict: a perk demoted to marginal after it was taken
+                                // must not vanish from the board. The signature re-lays-out when
+                                // ownership changes.
+                                auto ownedAt = [&](int i) {
+                                    const auto* sv = stateAt(flatBase + (std::size_t)i);
+                                    return sv && (sv->ownedRank > 0 || sv->native);
+                                };
+                                static std::uint64_t s_layoutOwned = 0;
+                                std::uint64_t ownedSig = 1469598103934665603ull;
+                                if (!s_showMarginal)
+                                    for (int i = 0; i < (int)tree.nodes.size(); ++i)
+                                        ownedSig = (ownedSig ^ (ownedAt(i) ? 2u : 1u)) * 1099511628211ull;
+                                if (s_layoutSkill != s_skillCur || s_layoutMarg != s_showMarginal ||
+                                    s_layoutOwned != ownedSig) {
                                     // Same tree, different filter (marginal
                                     // toggle)? Keep the player's place.
                                     const bool sameSkill = (s_layoutSkill == s_skillCur);
@@ -582,7 +596,7 @@ namespace MFO::Board {
                                         std::vector<char> needed(n, 0);
                                         for (int i = 0; i < n; ++i)
                                             needed[i] = tree.nodes[i].verdict ==
-                                                        Progression::Verdict::kEffective;
+                                                        Progression::Verdict::kEffective || ownedAt(i);
                                         for (int guard = 0; guard < 64; ++guard) {
                                             bool changed = false;
                                             for (int i = 0; i < n; ++i) {
@@ -597,7 +611,7 @@ namespace MFO::Board {
                                         }
                                         for (int i = 0; i < n; ++i) {
                                             keep[i] = needed[i];
-                                            pass[i] = needed[i] &&
+                                            pass[i] = needed[i] && !ownedAt(i) &&
                                                       tree.nodes[i].verdict !=
                                                           Progression::Verdict::kEffective;
                                         }
@@ -723,6 +737,7 @@ namespace MFO::Board {
                                     }
                                     s_layoutSkill = s_skillCur;
                                     s_layoutMarg  = s_showMarginal;
+                                    s_layoutOwned = ownedSig;
                                 }
 
                                 ImGui::BeginChild("##ptcanvas", ImVec2(0.0f, 0.0f),
