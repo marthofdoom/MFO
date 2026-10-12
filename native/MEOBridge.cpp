@@ -445,7 +445,8 @@ namespace MFO::MEOBridge {
         // (its effect record did not resolve) scores kInertRel.
         //
         // Relevance by MEO's gem class:
-        //   Skill   4 when the skill it fortifies is on the follower's PERK DIRECTION (GemRoles:
+        //   Skill   4 (1 for Alchemy / Smithing / Enchanting / Speech / Pickpocket / Lockpicking,
+        //           marth Q2) when the skill it fortifies is on the follower's PERK DIRECTION (GemRoles:
         //           the equip side's weapon class / off-hand / armor class, every other skill by
         //           its owned perk ranks, a caster's invested + cast schools; the worn gear only
         //           where an equip-side group has no direction), else 0. The theme is NOT used
@@ -465,27 +466,28 @@ namespace MFO::MEOBridge {
 
         // The skill a Skill-class gem fortifies, matched case-insensitively on its gid OR name.
         // bit = 1 << (RE::ActorValue - kOneHanded) (GemReconcilePrefs), or kGemSkillUnarmed.
-        struct GemSkillWords { std::uint32_t bit; const char* words[3]; };
+        // lowTier (marth 2026-10-12 Q2): crafting / social / thief-utility skills, relevance 1.
+        struct GemSkillWords { std::uint32_t bit; const char* words[3]; bool lowTier; };
         constexpr GemSkillWords kGemSkillWords[] = {
-            { 1u << 0,  { "onehanded", "one handed", "one-handed" } },
-            { 1u << 1,  { "twohanded", "two handed", "two-handed" } },
-            { 1u << 2,  { "archery", "marksman", nullptr } },
-            { 1u << 3,  { "block", nullptr, nullptr } },
-            { 1u << 4,  { "smithing", nullptr, nullptr } },
-            { 1u << 5,  { "heavyarmor", "heavy armor", nullptr } },
-            { 1u << 6,  { "lightarmor", "light armor", nullptr } },
-            { 1u << 7,  { "pickpocket", nullptr, nullptr } },
-            { 1u << 8,  { "lockpicking", nullptr, nullptr } },
-            { 1u << 9,  { "sneak", nullptr, nullptr } },
-            { 1u << 10, { "alchemy", nullptr, nullptr } },
-            { 1u << 11, { "speech", "persuasion", "articulation" } },
-            { 1u << 12, { "alteration", nullptr, nullptr } },
-            { 1u << 13, { "conjuration", nullptr, nullptr } },
-            { 1u << 14, { "destruction", nullptr, nullptr } },
-            { 1u << 15, { "illusion", nullptr, nullptr } },
-            { 1u << 16, { "restoration", nullptr, nullptr } },
-            { 1u << 17, { "enchanting", nullptr, nullptr } },
-            { kGemSkillUnarmed, { "unarmed", "pugilist", nullptr } },
+            { 1u << 0,  { "onehanded", "one handed", "one-handed" }, false },
+            { 1u << 1,  { "twohanded", "two handed", "two-handed" }, false },
+            { 1u << 2,  { "archery", "marksman", nullptr },          false },
+            { 1u << 3,  { "block", nullptr, nullptr },               false },
+            { 1u << 4,  { "smithing", nullptr, nullptr },            true  },
+            { 1u << 5,  { "heavyarmor", "heavy armor", nullptr },    false },
+            { 1u << 6,  { "lightarmor", "light armor", nullptr },    false },
+            { 1u << 7,  { "pickpocket", nullptr, nullptr },          true  },
+            { 1u << 8,  { "lockpicking", nullptr, nullptr },         true  },
+            { 1u << 9,  { "sneak", nullptr, nullptr },               false },
+            { 1u << 10, { "alchemy", nullptr, nullptr },             true  },
+            { 1u << 11, { "speech", "persuasion", "articulation" },  true  },
+            { 1u << 12, { "alteration", nullptr, nullptr },          false },
+            { 1u << 13, { "conjuration", nullptr, nullptr },         false },
+            { 1u << 14, { "destruction", nullptr, nullptr },         false },
+            { 1u << 15, { "illusion", nullptr, nullptr },            false },
+            { 1u << 16, { "restoration", nullptr, nullptr },         false },
+            { 1u << 17, { "enchanting", nullptr, nullptr },          true  },
+            { kGemSkillUnarmed, { "unarmed", "pugilist", nullptr },  false },
         };
         // Index into kGemSkillWords of the skill this gem fortifies, or -1.
         int GemSkillIndex(const char* a_gid, const char* a_name) {
@@ -576,11 +578,15 @@ namespace MFO::MEOBridge {
                 const int s = GemSkillIndex(a_gid, a_name);
                 if (s < 0 || !(a_r.skills & kGemSkillWords[s].bit)) return 0;
                 if (s < 18) a_sub = std::min<int>(a_r.skillRanks[s], 9);
-                return 4;
+                // marth 2026-10-12 Q2: crafting / social / thief-utility skills stay perk-weighted
+                // but sit one tier BELOW combat, armor and Sneak (5 Alchemy ranks never beat
+                // One-Handed or a second Health gem).
+                return kGemSkillWords[s].lowTier ? 1 : 4;
             }
             case MEO_API::kGemClass_Linear:
                 if (!a_t.isArmor)              return 3;
                 a_sub = LinearSubOrder(a_gid);
+                // marth 2026-10-12 Q4 confirmed: the first Health gem outranks a caster's Magicka too.
                 if (a_firstHealth && IsHealthGid(a_gid)) return 5;
                 if (a_t.theme == ownTheme)     return 3;
                 if (a_r.caster && a_t.theme == MEO_API::kTheme_Martial) return 2;
@@ -1110,21 +1116,20 @@ namespace MFO::MEOBridge {
                     // working Focus/Echo may be evicted, but only for a candidate that keeps the link
                     // working (per candidate below).
                     // CONDUIT (marth 2026-10-12, "They won't use conduit"): MFO never sockets a Conduit or
-                    // an off-domain gem, so any socketed Conduit, its linked partner, and any off-domain
-                    // gem (only a Conduit admits one) were placed by the PLAYER (or carried over by MEO's
-                    // gear move). The swap-up NEVER evicts them: no Conduit logic ever unsockets a
-                    // player-placed gem.
+                    // an off-domain gem, so any socketed Conduit and any off-domain gem (only a Conduit
+                    // admits one) were placed by the PLAYER (or carried over by MEO's gear move). The
+                    // swap-up NEVER evicts them. A SAME-domain gem next to a player's Conduit passes
+                    // through MEO unchanged and stays an ordinary, upgradable candidate (review SEV-5).
                     int nSup = 0, nNorm = 0;
                     std::uint32_t supIdx = 0, normIdx = 0;
                     for (std::uint32_t i = 0; i < nDet; ++i) {
                         if (det[i].isSupport) { ++nSup; supIdx = i; } else { ++nNorm; normIdx = i; }
                     }
                     const bool linkedNow     = nSup == 1 && nNorm == 1;
-                    const bool conduitLinked = linkedNow && IsConduitGem(det[supIdx].gid, themed);
                     const bool linkWorksNow  = linkedNow && linkWorks(det[supIdx].gid, det[normIdx].gid, item.isArmor);
                     auto protectedGem = [&](std::uint32_t i) {
                         if (det[i].isSupport) return IsConduitGem(det[i].gid, themed) || (linkedNow && linkWorksNow);
-                        return conduitLinked || det[i].isArmor != item.isArmor;
+                        return det[i].isArmor != item.isArmor;   // off-domain: a Conduit's (player's) partner
                     };
                     // The gem-choice value of socketed gem i (GemBonus below v4); same formula as the
                     // loose value, with the Fortify Health count excluding itself (ruling 3). Only ever

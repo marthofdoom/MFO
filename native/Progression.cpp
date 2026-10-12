@@ -1307,7 +1307,7 @@ namespace MFO::Progression {
 
     StyleVotes TallyStyleVotes(RE::Actor* a_actor) {
         StyleVotes v;
-        if (!a_actor || !g_catalog.built) return v;
+        if (!a_actor) return v;
         auto* base = a_actor->GetActorBase();
         // Ownership = the base's perk index OR the actor's own list — the
         // OwnsExactPerk idiom (a follower's perks live on the TESNPC; HasPerk
@@ -1317,6 +1317,33 @@ namespace MFO::Progression {
             return perk && ((base && base->GetPerkIndex(perk).has_value()) ||
                             a_actor->HasPerk(perk));
         };
+        if (!g_catalog.built) {
+            // NO CATALOG (add-on absent; marth 2026-10-12 Q3, F3 gem relevance): only the per-skill
+            // investment, from the follower's OWN perks in the engine's skill trees (the AVIF perkTree
+            // BFS the catalog itself walks, CollectNodes, over kSkills). Per node the HIGHEST rank held
+            // counts that many ranks along its nextPerk chain: the CountNativeTreeRanks idiom
+            // (progression/PerkGate.cpp), which walks the catalog and so counts nothing here. Every
+            // style vote stays zero (no classified facts without the catalog), so gear choice is
+            // unchanged. MAIN THREAD like the rest of this tally; it reaches the worker through the
+            // same StyleVotesFor mirror (logistics/Gear.cpp, 10 s refresh).
+            auto* avl = RE::ActorValueList::GetSingleton();
+            if (!avl) return v;
+            for (const auto& sk : kSkills) {
+                const int si = static_cast<int>(sk.av) - static_cast<int>(RE::ActorValue::kOneHanded);
+                if (si < 0 || si >= 18) continue;
+                for (auto* node : CollectNodes(avl->GetActorValue(sk.av))) {
+                    if (!node) continue;
+                    int rankNo = 0, have = 0;
+                    for (RE::BGSPerk* r = node->perk; r && rankNo < 16; r = r->nextPerk) {
+                        if (rankNo > 0 && r == node->perk) break;   // looped chain (as BuildSkill guards)
+                        ++rankNo;
+                        if (owns(r->GetFormID())) have = rankNo;   // the chain is rank order: keep the highest held
+                    }
+                    v.skillRanks[si] += have;
+                }
+            }
+            return v;
+        }
         for (const auto& tree : g_catalog.skills) {
             for (const auto& node : tree.nodes) {
                 // Highest rank held: the engine's perk list carries only the

@@ -1493,6 +1493,14 @@ Raised against `f51c579` (`fix/mfo-offense-1006c`, Opus review MERGE OK), 2026-1
 - **SEV-3 (accepted):** a direct-road lock (no APMF claim to observe) stays fresh until the 6 s `kInFlightHoldCap`, and the waiter clock can stretch a higher rule's wait to about 12 s.
 - **Surfaced at edit time from:** MAP.md "FIELD 1006c OFFENSE FIXES" bullet.
 
+### MFO-B250 (SEV-3, OPEN, marth ruled) -- current-AV feedback lock-in in the weapon class and school picks
+- **Raised:** Opus tier-3 review round 2 of `a015450` (`feat/mfo-gem-relevance`), 2026-10-12. Reviewer's log (verbatim): "SEV-3 current-AV feedback lock-in (ComputeWeaponRoles + TopTwoSchoolMask use GetActorValue; ArmorPrefFor uses base on purpose)."
+- **What it means:** `ComputeWeaponRoles` (logistics/Gear.cpp) picks 1H vs 2H from the CURRENT One-Handed / Two-Handed values and `TopTwoSchoolMask` (logistics/Cast.cpp) the top two schools from the current school values, both including fortify buffs. A socketed Fortify One-Handed (or worn school gear) raises the value it is judged by, so the pick can lock onto whatever is already buffed. The F3 gem direction reuses both answers on purpose (gem choice must agree with gear choice), so it inherits this.
+- **marth's ruling (2026-10-12, Q1):** judge by BASE skill values; perks break ties.
+- **Why it was NOT fixed in the gem round:** it changes GEAR choice too (both functions feed the wardrobe / loot / buy / combat pick), so it gets its own brief and field cycle. The gem round must not change `ComputeWeaponRoles` or `TopTwoSchoolMask`.
+- **Fix shape:** `GetBaseActorValue` in both (the `ArmorPrefFor` read), and on an exact base tie the perk votes / `StyleVotes::skillRanks` decide.
+- **Surfaced at edit time from:** MAP.md §7 MEOBridge "F3 GEM RELEVANCE" and the `ComputeWeaponRoles` entry.
+
 ### MFO-B242 (SEV-4 x3, SEV-5 x2) -- MEO gem rules review (51617e0, Opus BLOCK; SEV-2/3 fixed in the follow-up)
 Raised against `51617e0` (`feat/mfo-meo-gem-rules`), 2026-10-12. Reviewer's text paraphrased by the coordinator.
 - **SEV-4:** `GemRules.cpp` `FindOwned` / `Decide` read `InventoryEntryData::GetValue()`, the value of the whole entry (stack), not one copy.
