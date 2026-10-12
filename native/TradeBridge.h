@@ -40,7 +40,8 @@ namespace MFO::TradeBridge {
         enum Kind : std::int32_t {
             kPotHealth = 0, kPotStamina, kPotMagicka, kArrows, kBolts,
             kWeaponMelee, kWeaponRanged, kArmor, kMageApparel, kSpellTome,
-            kWeaponSilver   // APPENDED (86e3p2gp9): the silver slot's restock, single best pick
+            kWeaponSilver,  // APPENDED (86e3p2gp9): the silver slot's restock, single best pick
+            kAmmoSilver     // APPENDED (86e3p2gp9, marth 2026-10-12): a ranged follower's silver ammo restock
         };
         std::int32_t kind  = 0;
         std::int32_t quota = 0;
@@ -138,6 +139,13 @@ namespace MFO::TradeBridge {
         bool          wantSilver     = false;
         // ... one-handed only: his off-hand is in use (Logistics::SilverNeedsOneHand, review F2).
         bool          silverOneHand  = false;
+        // -- APPENDED 2026-10-12 (SILVER AMMO, ClickUp 86e3p2gp9; append-only) --
+        // Worker-computed (Logistics::WantsSilverAmmo) under bEconomyBuyGear: a RANGED follower with an
+        // enabled act.equip_silver rule owns no silver ammo of his kind (silverAmmoBolt: bolts for a
+        // crossbow, arrows for a bow). PlanBuy then buys the best affordable silver ammo of that kind
+        // (Logistics::IsSilverAmmo), up to Logistics::kSilverAmmoStock rounds.
+        bool          wantSilverAmmo = false;
+        bool          silverAmmoBolt = false;
     };
 
     // THE rated-armor score, shared with Logistics::ArmorScore (loot / keep /

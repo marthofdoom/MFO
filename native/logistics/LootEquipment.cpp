@@ -64,6 +64,9 @@ namespace MFO::Logistics {
             ctx.wantSilver    = a_state && Config::g_economy.load() && Config::g_economyBuyGear.load() &&
                                 WantsSilverWeapon(a_follower, *a_state);
             ctx.silverOneHand = ctx.wantSilver && SilverNeedsOneHand(a_follower, *a_state);
+            // ... and the ranged follower's twin: silver AMMO of his kind (same gates).
+            ctx.wantSilverAmmo = a_state && Config::g_economy.load() && Config::g_economyBuyGear.load() &&
+                                 WantsSilverAmmo(a_follower, *a_state, ctx.silverAmmoBolt);
 
             // ── MAGIC LOADOUT (v1.0.29) ─────────────────────────────────────
             // Gambit-driven magic-user detection. A magic user gets two loot
@@ -507,6 +510,7 @@ namespace MFO::Logistics {
             if (a_peek) {
                 if (best && fitsOrRoom()) return true;
                 if (GemRules::FindGemCandidate(a_follower, a_src).obj) return true;
+                if (ctx.wantSilverAmmo && TakeSilverAmmoFrom(a_follower, a_src, ctx.silverAmmoBolt, /*a_peek*/ true)) return true;
                 return ammoTarget > 0 &&
                        SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ true);
             }
@@ -516,6 +520,9 @@ namespace MFO::Logistics {
                     GemRules::TakeAndProbe(a_follower, a_src, gc))
                     return true;
             }
+            if (!best && ctx.wantSilverAmmo &&
+                TakeSilverAmmoFrom(a_follower, a_src, ctx.silverAmmoBolt, /*a_peek*/ false))
+                return true;   // THE SILVER SLOT's ammo (stocked; the gambit nocks it when it is wanted)
             if (!best)
                 return ammoTarget > 0 &&
                        SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ false);

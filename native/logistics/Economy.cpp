@@ -377,6 +377,9 @@ namespace MFO::Logistics {
                 // melee weapon owned -> PlanBuy buys the best affordable one (gear buy only).
                 buy.wantSilver       = WantsSilverWeapon(a_follower, a_state);
                 buy.silverOneHand    = buy.wantSilver && SilverNeedsOneHand(a_follower, a_state);   // review F2
+                // ... a RANGED follower's silver slot is ammo of his kind (marth 2026-10-12): PlanBuy buys
+                // up to kSilverAmmoStock rounds when he owns none (same gear-buy gate).
+                buy.wantSilverAmmo   = WantsSilverAmmo(a_follower, a_state, buy.silverAmmoBolt);
                 buy.doRanged      = doRanged;
                 buy.wantCrossbow  = wantCrossbow;
                 buy.rangedBaseDmg = myRangedDmg;
@@ -877,6 +880,7 @@ namespace MFO::Logistics {
                                                                : HeldAmmo(a_follower, bolt);
                     for (const auto& s : offKind) {
                         if (s.pinned || s.count <= 0) continue;
+                        if (IsSilverAmmo(s.obj ? s.obj->As<RE::TESAmmo>() : nullptr)) continue;   // the silver slot's (86e3p2gp9): never sold
                         const auto unit = std::max<std::int32_t>(
                             1, static_cast<std::int32_t>(std::lround(s.value * sellFraction)));
                         sellCandidates.push_back(SellCandidate{

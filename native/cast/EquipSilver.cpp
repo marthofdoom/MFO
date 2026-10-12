@@ -37,6 +37,22 @@
 // ReleaseForcedWeapon, which asks SilverHoldEnded and re-arms the main weapon instead of the
 // silver one.
 //
+// RANGED FOLLOWERS USE SILVER AMMO (marth 2026-10-12: "for bows/crossbows it's silver ammo"). When the
+// main weapon in his hand is a bow or crossbow at the moment the gambit acts, nothing is swapped in
+// the weapon hand: the gambit nocks his best owned silver ammo of the launcher's kind (Logistics::
+// BestSilverAmmo: a bow takes arrows only, a crossbow bolts only) with a plain equip (no force-hold,
+// so no lock to leak), and the previous ammo is put back when the foe is no longer Unholy. The ammo
+// episode (Episode::ammo) is its OWN truth: the Scheduler reads act.equip_silver as a MELEE equip
+// (category 1 -- melee stance, melee hand claim) and only a Fired / satisfied outcome feeds that, so the
+// ammo road always returns a TRANSPARENT FailedSkill (the scan falls past it, an archer never gets the
+// melee stance) and ReconcileSilver ignores the Scheduler's silver truth for an ammo episode: it
+// restores after kSilverDwell once he holds no launcher, is out of combat, or his target is not Unholy
+// (the same target gate). SilverHoldEnded (every release: combat end, death, dismissal) restores too.
+// UNDER AN ENFORCED APMF EQUIP AUTHORITY with a launcher hold in the ledger, Ammo is an OWNED category
+// whose declaration is built in logistics/EquipAuthority.cpp from the worn ordinary ammo; that
+// declaration cannot name silver ammo yet, so the ammo road declines LOUDLY there (FailedOther) instead
+// of equipping into a refusal.
+//
 // THREADING: Fire / the Scheduler's reconcile run on the job worker (serial). g_silver has its own
 // small lock (never held across an engine call or together with g_forcedMx) because the revert
 // clear and ReleaseForcedWeapon reach it from the ledger's lifecycle.
@@ -56,6 +72,8 @@ namespace MFO::Actuation {
             bool       mainHeld  = false;     // ... was itself an MFO force-hold (an equip gambit's)
             int        mainRule  = kNoRule;   // ... and that hold's rank
             bool       direct    = false;     // bWeaponStyleControl off: plain equip, no ledger
+            bool       ammo      = false;     // a SILVER AMMO episode (silver = the ammo; ammoPrev = the ammo it replaced)
+            RE::FormID ammoPrev  = 0;
             std::chrono::steady_clock::time_point trueAt{};   // last lap the rule held (or was unknown)
         };
         std::mutex                              g_silverMx;
@@ -102,12 +120,131 @@ namespace MFO::Actuation {
         }
     }
 
+    namespace {
+
+        bool IsLauncher(const RE::TESForm* a_form) {
+            const auto* w = a_form ? a_form->As<RE::TESObjectWEAP>() : nullptr;
+            return w && (w->IsBow() || w->IsCrossbow());
+        }
+
+        // The ammo he has nocked right now (the inventory entry that is worn), and its stack count.
+        RE::TESAmmo* WornAmmo(RE::Actor* a_actor, std::int32_t& a_outCount) {
+            a_outCount = 0;
+            if (!a_actor) return nullptr;
+            for (auto& [obj, data] : a_actor->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* am = obj->As<RE::TESAmmo>();
+                auto* entry = data.second.get();
+                if (am && entry && entry->IsWorn()) { a_outCount = static_cast<std::int32_t>(data.first); return am; }
+            }
+            return nullptr;
+        }
+
+        // Put the previous ammo back (or, with none to put back, take the silver off and let the AI nock
+        // its own), on the main thread. Only while the silver ammo is still the worn one: anything else
+        // that changed the ammo since owns it now.
+        void RestoreSilverAmmo(RE::FormID a_id, const Episode& a_ep, const char* a_why) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(a_id);
+            if (!actor || actor->IsDead() || actor->IsDisabled()) return;
+            std::int32_t wornCount = 0;
+            auto* worn = WornAmmo(actor, wornCount);
+            if (!worn || worn->GetFormID() != a_ep.silver) {
+                spdlog::info("[silver] {:08X}: {} -- the ammo changed since the silver was nocked, nothing to put back", a_id, a_why);
+                return;
+            }
+            auto* prev = OwnedObject(actor, a_ep.ammoPrev);
+            spdlog::info("[silver] {:08X}: {} -- silver ammo '{}' out, previous ammo '{}' back", a_id, a_why,
+                         NameOf(worn), prev ? NameOf(prev) : "none (the AI nocks its own)");
+            const RE::FormID silverId = a_ep.silver, prevId = prev ? a_ep.ammoPrev : 0;
+            auto act = [a_id, silverId, prevId]() {
+                auto* a   = RE::TESForm::LookupByID<RE::Actor>(a_id);
+                auto* mgr = RE::ActorEquipManager::GetSingleton();
+                if (!a || !mgr || a->IsDead() || a->IsDisabled()) return;
+                if (prevId != 0) {
+                    auto* p = OwnedObject(a, prevId);
+                    if (!p) return;
+                    std::int32_t n = 1;
+                    auto inv = a->GetInventory();
+                    if (const auto it = inv.find(p); it != inv.end() && it->second.first > 0) n = it->second.first;
+                    mgr->EquipObject(a, p, nullptr, static_cast<std::uint32_t>(n), nullptr, true, false);   // forceEquip = FALSE
+                } else if (auto* sv = OwnedObject(a, silverId)) {
+                    mgr->UnequipObject(a, sv, nullptr, 1, nullptr, true, false);
+                }
+            };
+            if (MainThread::IsInstalled()) MainThread::Post(act); else act();
+        }
+
+        // THE AMMO EPISODE'S OWN TRUTH (the Scheduler's silver truth is a MELEE equip's and is ignored for
+        // an ammo episode): a launcher in the weapon hand, in a fight, and his target still Unholy -- or no
+        // usable target while his group still has foes (UNKNOWN, kept: the MFO-B55 rule).
+        bool AmmoEpisodeHolds(RE::Actor* a_follower) {
+            if (!IsLauncher(a_follower->GetEquippedObject(false))) return false;
+            const bool foes = CombatSense::FoeCount(a_follower) > 0;
+            if (!a_follower->IsInCombat() && !foes) return false;
+            auto  tp  = a_follower->GetActorRuntimeData().currentCombatTarget.get();
+            auto* tgt = tp.get();
+            const bool usable = tgt && !tgt->IsDead() && !tgt->IsDisabled() && tgt->IsHostileToActor(a_follower);
+            return usable ? Logistics::IsUnholy(tgt) : foes;
+        }
+
+        // The ranged road of act.equip_silver. ALWAYS a transparent non-NoOp outcome (see the file header).
+        Outcome EquipSilverAmmo(RE::Actor* a_follower, const RE::TESObjectWEAP* a_launcher) {
+            const auto id       = a_follower->GetFormID();
+            const bool wantBolt = a_launcher->IsCrossbow();
+            const char* kind    = wantBolt ? "bolts" : "arrows";
+            bool open = false, openAmmo = false;
+            { std::scoped_lock lk(g_silverMx); if (auto it = g_silver.find(id); it != g_silver.end()) { open = true; openAmmo = it->second.ammo; } }
+            if (open && !openAmmo)
+                return { Result::FailedSkill, "a melee silver episode is still open (it switches back first)", true };
+
+            std::int32_t wornCount = 0, bestCount = 0;
+            RE::TESAmmo* worn = WornAmmo(a_follower, wornCount);
+            RE::TESAmmo* best = Logistics::BestSilverAmmo(a_follower, wantBolt, &bestCount);
+            if (!best)
+                return { Result::FailedSkill, std::format("no silver {} carried", kind), true };   // transparent -- cannot act
+            // Already silver (this stack or another silver stack of his kind): nothing to do, no churn.
+            if (worn && Logistics::IsSilverAmmo(worn) && Logistics::AmmoIsBolt(worn) == wantBolt) {
+                if (openAmmo) { std::scoped_lock lk(g_silverMx); if (auto it = g_silver.find(id); it != g_silver.end()) it->second.trueAt = std::chrono::steady_clock::now(); }
+                return { Result::FailedSkill, std::format("silver {} already nocked", kind), true };
+            }
+
+            // Under an ENFORCED equip authority with a launcher hold in the ledger Ammo is an owned
+            // category and its declaration cannot name silver ammo (file header): decline loudly.
+            if (Config::g_weaponStyleControl.load() && APMFBridge::EquipAuthoritySupported() &&
+                APMFBridge::IsEquipAuthorityEnforced()) {
+                bool launcherHold = false;
+                { std::scoped_lock lk(g_forcedMx);
+                  if (auto h = g_forcedWeapon.find(id); h != g_forcedWeapon.end()) launcherHold = IsLauncher(h->second.right); }
+                if (launcherHold)
+                    return { Result::FailedOther, "silver ammo not equipped: the APMF equip authority owns Ammo under his launcher hold "
+                                                  "and its declaration cannot name silver ammo yet (logistics/EquipAuthority.cpp)", true };
+            }
+
+            auto* mgr = RE::ActorEquipManager::GetSingleton();
+            if (!mgr) return { Result::FailedOther, "no equip manager", true };
+            mgr->EquipObject(a_follower, best, nullptr, static_cast<std::uint32_t>(bestCount), nullptr, true, false);   // plain equip: no lock to leak
+            {
+                std::scoped_lock lk(g_silverMx);
+                auto [it, fresh] = g_silver.try_emplace(id);
+                it->second.ammo   = true;
+                it->second.silver = best->GetFormID();
+                it->second.direct = false;
+                if (worn) it->second.ammoPrev = worn->GetFormID();   // the ammo the silver replaced (or the player's later pick)
+                it->second.trueAt = std::chrono::steady_clock::now();
+            }
+            spdlog::info("[silver] {:08X}: GAMBIT silver ammo -- '{}' x{} nocked ({}), replaces '{}'", id, NameOf(best), bestCount,
+                         kind, worn ? NameOf(worn) : "none");
+            return { Result::FailedSkill, std::format("nocked silver {}", kind), true };
+        }
+    }
+
     Outcome EquipSilver(RE::Actor* a_follower) {
         if (!a_follower) return { Result::FailedOther, "no follower", true };
         const auto id = a_follower->GetFormID();
         RE::TESForm* const heldRight = a_follower->GetEquippedObject(false);
         RE::TESForm* const heldLeft  = a_follower->GetEquippedObject(true);
         auto* rightW = heldRight ? heldRight->As<RE::TESObjectWEAP>() : nullptr;
+        const bool launcher = IsLauncher(heldRight);   // a bow / crossbow in the weapon hand: the ammo road
 
         // THE TARGET GATE (review F1 on 102e24c; marth: "when the TARGET is no longer Unholy"). The
         // rule's condition only arms it; silver is for the foe he is FIGHTING: his own
@@ -126,11 +263,17 @@ namespace MFO::Actuation {
                 bool episode = false;
                 { std::scoped_lock lk(g_silverMx); episode = g_silver.find(id) != g_silver.end(); }
                 const bool silverInHand = rightW && Logistics::IsSilverMeleeWeapon(rightW);
-                if ((episode || silverInHand) && CombatSense::FoeCount(a_follower) > 0)
+                if ((episode || silverInHand) && CombatSense::FoeCount(a_follower) > 0) {
+                    if (launcher)   // never a NoOp for a ranged follower: the Scheduler would read a melee hand claim
+                        return { Result::FailedSkill, "no usable combat target, foes remain -- silver ammo kept (unknown, not false)", true };
                     return { Result::NoOp, "no usable combat target, foes remain -- silver kept (unknown, not false)", true };
+                }
                 return { Result::FailedSkill, "no usable combat target", true };
             }
         }
+
+        // A RANGED follower (bow / crossbow in the weapon hand) uses silver AMMO, never a melee swap.
+        if (launcher) return EquipSilverAmmo(a_follower, rightW);
 
         // SATISFIED: a silver melee weapon is already in the main hand. Transparent, like
         // EquipWeapon's "already holding" (the Scheduler reads it as the melee hand claim), and
@@ -229,9 +372,26 @@ namespace MFO::Actuation {
         const auto now = std::chrono::steady_clock::now();
         Episode ep;
         {
-            std::scoped_lock lk(g_silverMx);
+            std::unique_lock lk(g_silverMx);
             auto it = g_silver.find(id);
             if (it == g_silver.end()) return;
+            if (it->second.ammo) {
+                // A SILVER AMMO episode has its OWN truth (AmmoEpisodeHolds), never the Scheduler's melee one.
+                lk.unlock();
+                const bool holds = AmmoEpisodeHolds(a_follower);
+                Episode done;
+                {
+                    std::scoped_lock lk2(g_silverMx);
+                    auto it2 = g_silver.find(id);
+                    if (it2 == g_silver.end() || !it2->second.ammo) return;
+                    if (holds) { it2->second.trueAt = now; return; }
+                    if (now - it2->second.trueAt < kSilverDwell) return;
+                    done = it2->second;
+                    g_silver.erase(it2);
+                }
+                RestoreSilverAmmo(id, done, "no longer Unholy");
+                return;
+            }
             // Held, or truth UNKNOWN (a higher rule stopped the scan above it): the dwell clock
             // measures SUSTAINED known-false only (the T#76 dwell's rule).
             if (a_held || !a_knownFalse) { it->second.trueAt = now; return; }
@@ -302,11 +462,16 @@ namespace MFO::Actuation {
     }
 
     RE::FormID SilverHoldEnded(RE::FormID a_follower, const RE::TESBoundObject* a_heldRight) {
-        std::scoped_lock lk(g_silverMx);
+        std::unique_lock lk(g_silverMx);
         auto it = g_silver.find(a_follower);
         if (it == g_silver.end()) return 0;
         const Episode ep = it->second;
         g_silver.erase(it);
+        if (ep.ammo) {   // a silver AMMO episode: the previous ammo goes back (nothing to re-arm in the hand)
+            lk.unlock();
+            RestoreSilverAmmo(a_follower, ep, "silver hold released (combat end / release)");
+            return 0;
+        }
         if (ep.direct || !a_heldRight || a_heldRight->GetFormID() != ep.silver) return 0;
         return ep.mainRight;
     }
