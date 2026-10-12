@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.4.0, released** (see [`VERSION`](VERSION) and the
+**Status: v2.5.0, pending release** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -181,6 +181,20 @@ requirement across these mods, not an afterthought. Settings live in an
 leash and walk-to-loot.
 
 ---
+
+## What is new in 2.5.0
+
+- **Silver ammo for bows and crossbows.** Switch to silver weapon equips the best matching silver
+  arrows or bolts for an archer and puts the old ammo back afterwards. A follower with none restocks
+  20 from loot or buys a stack. Silver ammo is never sold or dropped. Restocking silver from loot
+  needs `bEconomy` and `bEconomyBuyGear`. On LoreRim and Requiem the bonus comes from the Unholy
+  creature's trait perks. With only the vanilla silver perk, silver arrows may add no damage.
+  Not yet tested in game.
+- **Perks a follower can use.** Perks that only work for the player show as marginal ("part
+  player-only"). The fighting alone perks (Lone Wolf, Solo, Maverick, One Man Legion) are dead, and a
+  follower who has one gets the points back. Perk text on the board is written from the follower's
+  point of view with an "Affects:" line (English only, other languages get the "Affects:" line).
+  Perk point income is unchanged. Not yet tested in game.
 
 ## What is new in 2.4.0
 

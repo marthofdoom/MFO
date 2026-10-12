@@ -5,6 +5,21 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.5.0 -- Silver ammo and perks followers can use
+
+- **Needs Harbinger 0.12.0 or newer (ABI 21).** Install it together with Harbinger 0.13.0.
+- **Switch to silver weapon uses silver ammo for bows and crossbows.** A follower with a bow or crossbow equips their best matching silver arrows or bolts, and the old ammo goes back afterwards. A pure archer no longer keeps a spare silver melee weapon. Not yet tested in game.
+- **A follower with no silver ammo restocks 20 from loot or buys a stack.** Silver ammo is never sold or dropped.
+- **Silver restocking from loot follows the gear buying rule.** Silver weapons and silver ammo are picked up only with `bEconomy` and `bEconomyBuyGear` on.
+- **Harbinger equips the silver ammo.** Under Harbinger's equip authority the ammo is declared, so Harbinger puts it on.
+- **Silver arrows need the right perks to do extra damage.** LoreRim and Requiem give the bonus through the Unholy creature's trait perks, which check the attacker's worn silver ammo. A load order with only the vanilla silver perk may get no extra damage from silver arrows.
+- **Perks that only work for the player show as marginal.** MFO now spots the parts of a perk that a follower cannot use. Such a perk reads "part player-only" instead of effective. Not yet tested in game.
+- **The fighting alone perks are dead for a follower.** Lone Wolf, Solo, Maverick and the One Man Legion family need the follower to be alone in its combat group. A follower who already has one loses it on load and gets the points back. The log says so.
+- **Perk descriptions on the board are written from the follower's point of view.** Each has an "Affects:" line. Leader says: "Affects: nearby allies, you included, not Lydia".
+- **The rewrite is English only.** Other languages get the "Affects:" line unless a translation supplies its own rewrite strings.
+- **Perks a follower owns stay visible** when marginal perks are hidden.
+- **Perk point income is unchanged.**
+
 ## v2.4.0 -- Silver weapons and cast fixes
 
 - **Needs Harbinger 0.12.0 or newer (ABI 21).** Install it together with Harbinger 0.13.0.
