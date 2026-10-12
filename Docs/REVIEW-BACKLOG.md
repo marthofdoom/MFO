@@ -1622,6 +1622,23 @@ were fixed on the branch.
 - (SEV-5) Field watch: the territorial term has no "radius entered" runtime flag (by marth's ruling), so a territorial
   animal anywhere within leash and sight is engaged even when it has not noticed anyone. Watch the per-actor skip log.
 
+### MFO-B252 (SEV-4/5 x3) -- archer dual-cast heal review, deferred items
+Raised against 447d2f8 (`fix/mfo-heal-archer-dualcast`, Opus review, `scratchpad/agentlogs/review-heal-archer.md`), 2026-10-12.
+The SEV-2s (decline vs ruling, session-long launcher memory) and SEV-3s were fixed on the branch. Cross-referenced from
+MAP.md (ARCHERS HEAL BY DUAL-CASTING).
+- **(SEV-4)** Exact mode (`iCastControl` 4): `Loadout.cpp:~424-430` strips a RIGHT-hand proxy from the hands; a dual
+  heal's proxy is armed on both hands, so exact-mode Prepare can deselect the right copy. Same family as MFO-B227.
+- **(SEV-5)** A dual heal is `heal[0].hand == kApmfHandDualCast` in the LEFT slot only. Future readers that map a claim's
+  `hand` to a watch slot (`WatchSlot`, silentPastGate's `c.hand == kApmfHandLeft ? Left : Right`) will read it as RIGHT.
+  Map DualCast to the left slot there before adding such a reader.
+- **(SEV-4/5, round 3 notes)** (a) The renewed `archerFloor` stamp keeps a launcher user weaponless for as long as a
+  heal keeps being attempted without firing (each lap re-stamps before Try's result is known). (b) `silentPastGate` is
+  skipped for the archer floor, so a silent driver does not drop it. (c) `NoteArcherRightFloor` creates the `g_owned`
+  entry itself; an entry holding only the stamp is erased by the next `EraseIfEmpty` unless a floor stands. (d) ABI 19:
+  the full floor is minted there where MFO previously minted none; untested on a real ABI 19 Harbinger.
+- **(SEV-5)** `kObservedFiringRecencyMs` 5000 rests on two inter-fire gaps (1.35 s, 3.78 s; n=2). Re-measure from the
+  next field log before trusting it as more than a floor.
+
 ### MFO-B253 (SEV-5, OPEN, tools) -- cosave_roundtrip leftovers from the M3 review (raised against d8f6a68)
 Opus review of `fix/mfo-m3-cosave-tool`, MERGE OK; everything above SEV-5 was fixed in the closing round. Left open:
 - The seeded v<8 retro never exercises the `HmsNpcRates` unreadable branch, the `fNPCHealthLevelBonus <= 0`

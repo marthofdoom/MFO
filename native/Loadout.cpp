@@ -260,29 +260,42 @@ namespace MFO::Loadout {
 
     }
 
+    namespace {
+        // Does a_actor own the REAL dual-casting perk for a_spell's OWN magic school? (The perk half of
+        // CanDualCast, shared with DualCastMagickaCost.)
+        bool OwnsDualCastPerk(RE::Actor* a_actor, RE::SpellItem* a_spell) {
+            if (!a_actor || !a_spell) return false;
+
+            // The spell's OWN school (same read as Logistics_Cast.cpp's
+            // TargetMagicSchool: the costliest effect's base MGEF "Magic Skill").
+            // A spell with no school (kNone) never dual-casts.
+            const auto* eff  = a_spell->GetCostliestEffectItem();
+            const auto* mgef = eff ? eff->baseEffect : nullptr;
+            const auto school = mgef ? mgef->data.associatedSkill : RE::ActorValue::kNone;
+
+            auto* perk = DualCastPerkForSchool(school);
+            auto* perkForm = perk ? perk->As<RE::BGSPerk>() : nullptr;
+            if (!perkForm) return false;
+
+            // Followers can carry a perk on their base TESNPC template (shared by
+            // multiple NPCs) as well as their own runtime perk list -- HasPerk
+            // alone under-reports the template case (the OwnsExactPerk idiom
+            // already used for the merchant-perk-bypass check, Logistics_
+            // Economy.cpp / ProgAllocator.cpp).
+            auto* base = a_actor->GetActorBase();
+            return a_actor->HasPerk(perkForm) ||
+                   (base && base->GetPerkIndex(perkForm).has_value());
+        }
+
+        // fMagicDualCastingCostMult -- hardcoded to Skyrim.esm's shipped value (2.8, not the Creation Kit's 1.5
+        // default) rather than read live, matching how fBarterMax/fBarterMin are already hardcoded to their
+        // vanilla GMST values elsewhere (Logistics_Economy.cpp) instead of introducing a new live-GMST-read
+        // pattern for one call site.
+        constexpr float kDualCastCostMult = 2.8f;
+    }
+
     bool CanDualCast(RE::Actor* a_actor, RE::SpellItem* a_spell) {
-        if (!a_actor || !a_spell) return false;
-
-        // The spell's OWN school (same read as Logistics_Cast.cpp's
-        // TargetMagicSchool: the costliest effect's base MGEF "Magic Skill").
-        // A spell with no school (kNone) never dual-casts.
-        const auto* eff  = a_spell->GetCostliestEffectItem();
-        const auto* mgef = eff ? eff->baseEffect : nullptr;
-        const auto school = mgef ? mgef->data.associatedSkill : RE::ActorValue::kNone;
-
-        auto* perk = DualCastPerkForSchool(school);
-        auto* perkForm = perk ? perk->As<RE::BGSPerk>() : nullptr;
-        if (!perkForm) return false;
-
-        // Followers can carry a perk on their base TESNPC template (shared by
-        // multiple NPCs) as well as their own runtime perk list -- HasPerk
-        // alone under-reports the template case (the OwnsExactPerk idiom
-        // already used for the merchant-perk-bypass check, Logistics_
-        // Economy.cpp / ProgAllocator.cpp).
-        auto* base = a_actor->GetActorBase();
-        const bool owns = a_actor->HasPerk(perkForm) ||
-                          (base && base->GetPerkIndex(perkForm).has_value());
-        if (!owns) return false;
+        if (!OwnsDualCastPerk(a_actor, a_spell)) return false;
 
         auto* avo = a_actor->AsActorValueOwner();
         if (!avo) return false;
@@ -290,15 +303,19 @@ namespace MFO::Loadout {
         // Dual-casting's real cost is CalculateMagickaCost's single-hand
         // figure (skill-discounted, per-actor, the SAME call every other
         // affordability gate in this codebase uses) times the vanilla GMST
-        // fMagicDualCastingCostMult -- hardcoded to Skyrim.esm's shipped
-        // value (2.8, not the Creation Kit's 1.5 default) rather than read
-        // live, matching how fBarterMax/fBarterMin are already hardcoded to
-        // their vanilla GMST values elsewhere (Logistics_Economy.cpp) instead
-        // of introducing a new live-GMST-read pattern for one call site.
-        constexpr float kDualCastCostMult = 2.8f;
+        // fMagicDualCastingCostMult (kDualCastCostMult above).
         const float singleCost = a_spell->CalculateMagickaCost(a_actor);
         const float have       = avo->GetActorValue(RE::ActorValue::kMagicka);
         return have >= singleCost * kDualCastCostMult;
+    }
+
+    float DualCastMagickaCost(RE::Actor* a_actor, RE::SpellItem* a_spell, bool& a_perk) {
+        a_perk = false;
+        if (!a_actor || !a_spell) return 0.0f;
+        a_perk = OwnsDualCastPerk(a_actor, a_spell);
+        // With the perk: the empowered dual cast, CalculateMagickaCost x the GMST mult (as CanDualCast). Without
+        // it a claim on both hands is two independent single-hand casts, one per hand, each at the single cost.
+        return a_spell->CalculateMagickaCost(a_actor) * (a_perk ? kDualCastCostMult : 2.0f);
     }
 
     HandPick PlanCastHand(RE::Actor* a_actor, RE::SpellItem* a_spell, bool a_weaponHandActive) {

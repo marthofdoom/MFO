@@ -113,6 +113,12 @@ namespace MFO::Loadout {
     // an unreadable effect, or a follower/spell that is null.
     bool CanDualCast(RE::Actor* a_actor, RE::SpellItem* a_spell);
 
+    // The magicka a DUAL cast of a_spell costs a_actor now (fix/mfo-heal-archer-dualcast): CalculateMagickaCost
+    // (the single-hand figure, PER SECOND for a concentration spell) times the vanilla fMagicDualCastingCostMult
+    // (2.8) when the actor owns the school's dual-casting perk (a_perk true), times 2 when it does not (a claim
+    // on both hands is then two single-hand casts). Pure read; 0 for a null actor or spell.
+    float DualCastMagickaCost(RE::Actor* a_actor, RE::SpellItem* a_spell, bool& a_perk);
+
     enum class Ready : std::uint8_t {
         AlreadyReady,   // spell is in hand -- cast now
         Equipped,       // we just put it in hand

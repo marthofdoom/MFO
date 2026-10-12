@@ -631,7 +631,7 @@ per concern:
   adding a `CastSpellImmediate` call site without a `CastBreadcrumb` loses the freeze-diagnosis line;
   `Archetype.cpp` must stay engine-call-free (it is called from the worker, main and combat threads).
   Follow-up phases P1-P5 and the mirror's known limits: `Docs/REVIEW-BACKLOG.md` MFO-B215.
-- `cast/HealRoad.cpp` (569, feat/mfo-perhand-heal 2026-10-05) = THE PER-HAND HEAL ROAD, see "PER-HAND HEAL ROAD"
+- `cast/HealRoad.cpp` (~1170; 569 at feat/mfo-perhand-heal 2026-10-05, line numbers below are from then; the 2026-10-12 archer dual-cast block `ArcherHealPlan` sits just above `HealRoadLap`) = THE PER-HAND HEAL ROAD, see "PER-HAND HEAL ROAD"
   below: `HealRoadLap` (`:429`), `HealHandClaimed` (`:396`), `HealHandEnded` (`:361`), `HealHandsReconcile` (`:384`),
   `HealRefreshGate` (`:529`), `RightHealRule` (`:539`, the equip side's right-hand rank read, honours the re-stream gap),
   `ReleaseHealClaimsAllHands` (`:550`, public), `ResetHealRoad` (`:562`, from `ClearCastLocks`), the per-hand
@@ -1208,6 +1208,31 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     the rank) so Harbinger re-mints and re-teaches it (covers APMF's PreSaveSweep un-teach). (R2-3) the `losHeld`
     exemption is gone: only an in-flight (charging / charged-held) cast is exempt. (R2-4) `RightHealRule` honours the
     re-stream gap lock. The right-hand equip held-off line has its own throttle.
+  * **ARCHERS HEAL BY DUAL-CASTING (`fix/mfo-heal-archer-dualcast`, marth 2026-10-12: "No melee swap ... But dual
+    casting preferred for bow users, assuming pool sufficient").** Field 12:11-12:14 (Auri): a LEFT heal claim made
+    Harbinger's hand block refuse the bow (`competes=Right+Left`), the right hand stayed open and the engine equipped
+    its best melee weapon. Now `HealRoadLap` (`cast/HealRoad.cpp`, new out-param `a_dual`) calls `ArcherHealPlan` for
+    a NEW claim: a bow / crossbow user (`LauncherUser`: right hand now, MFO's force-hold ledger, or seen in the right
+    hand earlier this fight, `g_launcherSeen`, cleared by `ResetHealRoad`) whose magicka covers
+    `Loadout::DualCastMagickaCost` (single cost x 2.8 with the school's dual-cast perk, x2 without; over the
+    `kHealCastTtlMs` window for a concentration spell) claims BOTH hands: `ComposedCast::Try(.., a_dual)` ->
+    `APMFBridge::ClaimHealCast(.., a_dual)` = ONE `kCastFlag_DualCast` claim stored in the LEFT heal slot ONLY (NOT
+    mirrored like a dual OFFENSE claim, so every per-hand heal reader keeps its single-left meaning; no ABI change).
+    The right hand is represented three ways: `APMFBridge::IsHealCastDual` (`apmf/CastClaims.cpp`; the idle-hand floor
+    derivation in `apmf/Bridge.cpp` counts it as both hands driven), `ClaimLiveOnHand(RIGHT)` / `CastProxyOnHand(RIGHT)`
+    (`cast/Hands.cpp`), and a SHADOW LOCK on the right that `CastOn` stamps because its plan is `HandPick::DualCast`
+    (`resolveHands`; a right held by a higher-ranked rule falls back to the old single-hand claim). `PreemptHand` on
+    either hand ends the whole dual heal; `HealHandEnded` clears the shadow lock. The mode is STICKY: `Try` and the
+    HealRoadLap keep a standing dual claim dual (a flip re-requests the claim and interrupts the charge; `HealHand::dual`
+    carries it across the stream cap's re-stream gap). Pool SHORT: a SINGLE-HAND LEFT heal plus a FULL right-hand floor (marth: "she holds no weapon while healing"): `APMFBridge::NoteArcherRightFloor` (`apmf/CastClaims.cpp`) stamps `Owned::archerFloor` each lap; while fresh, `ReconcileHandFloorLocked` (`apmf/Bridge.cpp`) mints the right floor WITHOUT `kCastFlag_FloorSpellsOnly` (`CastClaim::fullFloor`, part of the floor's identity), so Harbinger's HandBlock refuses weapons, shields and torches in it. Bridge-internal, no ABI change; the floor is kept through the stream cap's re-stream gap with no driving claim and is never dropped as "silent"; ABI >= 19 only. The same floor covers the dual->single fallback (`CastOn.resolveHands`, quiet `ResolveCastHand` probe, `HealNoteLauncherFloor`). "Launcher user" = a bow / crossbow in the right hand or the force-hold ledger WHEN THE NEW CLAIM DISPLACES IT (`g_launcherSeen`, erased at fight end by `ClearHealNeverFired`, so bow -> sword is melee mode). `RightHealRule` returns the left lock's rank for a dual heal (Equip.cpp holds off MFO's one-hand equip gambit). Open findings: MFO-B252. **What breaks:**
+    a new reader of `GetHealCastSpell(RIGHT)` will not see a dual heal (use `IsHealCastDual`); a `ResolveCastHand` plan
+    with `left && right` is now also a dual HEAL (the in-flight branch of `CastOn` gates on `healClaim`);
+    `RefreshOwnedCastOnHand(kApmfHandDualCast)` also replays the dual heal.
+  * **FIRE WATCHER (same branch).** `NeverFiredRelease` also counts the anim graph's SpellFire on that hand
+    (`HandFireSince`, `HealRoad.cpp`) as fire evidence; Harbinger's `ctcensus` NotifyStartCast is NOT exposed to MFO
+    (APMF_API.h carries no census callback), and the 12:13:13.994 start produced neither a TESSpellCastEvent nor a
+    SpellFire. `kHoldLastSeenCapMs` 4000 -> 6500 and `kObservedFiringRecencyMs` 4000 -> 5000 (de-aliased from
+    `kHealHoldNeverObservedMs`, `apmf/APMFBridge.h`, sized from the field numbers cited there).
   * **Every lap, no caps.** `MaintainCompanion` re-judges THIS rule's heal on the other hand (dead /
     essential-down / beyond reach / at threshold or full with nothing in flight -> released; stream cap ->
     re-stream) or renews it in place (`RefreshOwnedCastOnHand` + `WatchClaim`), so one rule healing two
