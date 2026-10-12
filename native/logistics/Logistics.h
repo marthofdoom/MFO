@@ -252,6 +252,11 @@ namespace MFO::Logistics {
     // no load leaves the map empty, same as every other save-scoped map.
     void ClearStockGear();
 
+    // Roster removal (ClickUp 86e3eewaf): drop ONE follower's stock set, so the next
+    // 'MSTK' write omits him and a later re-recruit snapshots his gear afresh (presence
+    // in the map is what "already snapshotted" means). Locks internally; any thread.
+    void ForgetStockGear(RE::FormID a_followerID);
+
     // ── THE SILVER WEAPON (ClickUp 86e3p2gp9, logistics/Silver.cpp; full doc there) ──
     // Unholy = what the load order's silver bonuses hit: the LIVE SilverPerk's target-tab
     // conditions OR the LIVE silver-enchantment effect's conditions, interpreted (HasKeyword /

@@ -306,4 +306,49 @@ namespace MFO::ProgAllocator {
             }
         }
 
+        // ROSTER REMOVAL (ClickUp 86e3eewaf). MFO's skill writes are BASE actor values,
+        // which persist in the save (see ReconcileSkill's header), so they are taken
+        // back here and not left to a reload. Each ledgered entry MFO ever wrote
+        // (lastWrittenBase >= 0) goes through the SAME single write site with ZERO
+        // points, so the base lands on the natural ReconcileSkill itself measures:
+        // the enrollment baseline under cancelEngineAwards (the default), else the
+        // ADOPT estimate (lastWrittenBase - points while the base still reads what MFO
+        // wrote; an engine slam since then already replaced MFO's value, and the
+        // reconcile leaves it). The baseline floor still applies, so this can never put
+        // a base below the follower's captured natural. LIMITATION, logged per skill
+        // below: under cancelEngineAwards MFO had also been cancelling the engine's own
+        // per-level skill growth (here and in HoldUnledgeredSkills); that growth is not
+        // recorded anywhere, so the follower returns to his ENROLLMENT skills and the
+        // engine re-applies its own values at his next auto-calc level-up, not now.
+        int UndoSkills(RE::Actor* a_actor, ProgState& a_st) {
+            auto* avo = a_actor ? a_actor->AsActorValueOwner() : nullptr;
+            if (!avo) return 0;
+            const auto id = a_actor->GetFormID();
+            int changed = 0;
+            for (auto& e : a_st.skills) {
+                if (e.lastWrittenBase < 0.0f) continue;   // MFO never wrote this skill
+                const float before = avo->GetBaseActorValue(e.av);
+                // Review F2 (mirrors UndoHms): only a base that still reads what MFO last
+                // wrote is MFO's to take back. Anything else was written since (an engine
+                // auto-calc slam, another mod, the player's console), most of all on a T#78
+                // OFF follower MFO stopped reconciling. REVERT mode would otherwise write
+                // the enrollment baseline over it regardless of the live value.
+                if (before != e.lastWrittenBase) {
+                    spdlog::warn("[roster] {:08X} skill {} NOT UNDONE: base {:.1f} is not what MFO last wrote "
+                                 "({:.1f}); something else changed it since, MFO leaves it", id, AvName(e.av),
+                                 before, e.lastWrittenBase);
+                    continue;
+                }
+                ReconcileSkill(avo, e, 0.0f, BaselineFloor(a_st, e.av), id, /*log*/ false);
+                const float after = avo->GetBaseActorValue(e.av);
+                if (after != before) ++changed;
+                spdlog::info("[roster] {:08X} skill {}: base {:.1f} -> {:.1f} (MFO's {:.0f} auto + {:.0f} manual "
+                             "point(s) taken back{})", id, AvName(e.av), before, after, e.autoPoints,
+                             e.manualPoints,
+                             g_econ.cancelEngineAwards ? "; the engine's own level growth was held off by MFO "
+                                                         "and returns at his next auto-calc level-up" : "");
+            }
+            return changed;
+        }
+
 }

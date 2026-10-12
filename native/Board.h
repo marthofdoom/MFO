@@ -70,6 +70,11 @@ namespace MFO::Board {
         std::uint8_t  logisticsRules = 0;
         bool          active = false;
         bool          teammate = false;
+        // 86e3eewaf (review F3): a RETAINED row whose actor is still an eligible
+        // follower (waiting, or in another cell, so out of the high process list).
+        // The roster removal is refused for him like for an active row; the button
+        // is greyed. Filled on the worker in PublishSnapshot; false for active rows.
+        bool          stillFollower = false;
         bool          commanded = false;
         bool          inCombat = false;
         // Activity glyphs for the HUD [C][L][T] strip + the Followers-tab status

@@ -152,6 +152,9 @@ namespace MFO::ProgAllocator {
         // PRGN v8 one-time RETROACTIVE player-rate parity, called by CoSaveLoad
         // for a record written by an older (v<8) PRGN. Main thread (load).
         void HmsRetroParity(RE::FormID a_id, ProgState& a_st);
+        // Roster removal (ClickUp 86e3eewaf): take back the H/M/S base MFO's hold
+        // wrote, as far as it is MFO's own. Main thread. Logs every pool it leaves.
+        void UndoHms(RE::Actor* a_actor, ProgState& a_st);
 
         // ── WAVE-1 SPLIT (2026-09-24): FILE-LOCAL -> SHARED, BODIES UNCHANGED ──────
         // The subsystem-folder split cut ProgAllocator.cpp by concern into
@@ -258,6 +261,9 @@ namespace MFO::ProgAllocator {
                                                                  const ClassDef& a_def);
         void RecomputeSkills(RE::Actor* a_actor, ProgState& a_st, bool a_log);
         void HoldUnledgeredSkills(RE::Actor* a_actor, const ProgState& a_st);
+        // Roster removal (ClickUp 86e3eewaf): every ledgered skill back to its
+        // natural (ReconcileSkill with 0 points). Returns how many bases changed.
+        int UndoSkills(RE::Actor* a_actor, ProgState& a_st);
 
         // Perks (progression/PerkGate.cpp):
         int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base);

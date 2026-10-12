@@ -13,6 +13,10 @@
 #include "logistics/Logistics.h"
 #include "MainThread.h"   // F7: the deferred dismissal restore under the APMF equip authority
 #include "Diagnostics.h"  // F7: CurrentPumpEpoch / PumpTickGate for its AddTask body
+#include "progression/ProgAllocator.h"   // 86e3eewaf: ForgetFollower (the main-thread progression undo)
+#include "logistics/PlayerGiven.h"        // 86e3eewaf: Forget (his PGIV entries)
+#include "Rapport.h"                      // review F5: DrainPendingSpends (the respec debit, worker side)
+#include <mutex>                          // 86e3eewaf: g_rosterMx (main -> worker verdict hand-back)
 #include "Forms.h"
 #include "Config.h"
 #include "Vocabulary.h"
@@ -207,7 +211,25 @@ namespace MFO::Followers {
                      found, absent, std::size(g_dismissedFactions));
     }
 
+    // ── ROSTER REMOVAL state (ClickUp 86e3eewaf; contract in Followers.h) ──────
+    namespace {
+        // Ids whose removal is in flight. WORKER domain, like g_followers (#4/#74);
+        // cleared by ClearTransientState on revert/load (pump drained).
+        std::unordered_set<RE::FormID> g_rosterPending;
+        // The main thread's undo verdicts, handed back to the worker. g_rosterMx is a
+        // strict LEAF (no MFO call is made while it is held).
+        struct RosterVerdict {
+            RE::FormID    id;
+            bool          ok;
+            std::uint64_t epoch;
+        };
+        std::mutex                 g_rosterMx;
+        std::vector<RosterVerdict> g_rosterDone;
+    }
+
     void ClearTransientState() {
+        g_rosterPending.clear();
+        { std::scoped_lock lk(g_rosterMx); g_rosterDone.clear(); }
         g_missStreak.clear();
         g_lastCombat.clear();
         g_stateSample.clear();   // [follower] state-line sample (position + time)
@@ -445,7 +467,114 @@ namespace MFO::Followers {
         Actuation::ClearCastLock(id);
     }
 
+    bool RequestRosterRemoval(RE::FormID id) {
+        if (!IsPersistableID(id) || g_followers.find(id) == g_followers.end()) {
+            spdlog::info("[roster] {:08X}: remove refused -- no MFO record", id);
+            return false;
+        }
+        // NOT FOLLOWING = not tracked AND not an eligible follower (review F3): IsTracked
+        // only sees the high process list, so a teammate told to wait or left in another
+        // cell is untracked yet still a follower, and the next sweep that sees him would
+        // re-adopt him with a default record. IsEligibleFollower is the teammate gate
+        // minus the dismissed-custom-follower quirks (flags + actor values, no 3D / no
+        // process: the read Lotd already makes on this worker for unloaded teammates).
+        if (IsTracked(id) || IsEligibleFollower(RE::TESForm::LookupByID<RE::Actor>(id))) {
+            // A follower in the party would be re-adopted on the next sweep with default
+            // data; the T#78 MFO switch is the "keep him, leave him alone" road.
+            spdlog::info("[roster] {:08X}: remove refused -- he is still a follower (in the party, waiting, "
+                         "or in another cell); dismiss him first", id);
+            return false;
+        }
+        if (g_rosterPending.count(id)) {
+            spdlog::info("[roster] {:08X}: remove already in flight", id);
+            return false;
+        }
+        if (!MainThread::IsInstalled()) {
+            spdlog::error("[roster] {:08X}: remove refused -- the main-thread pump is not installed, so the "
+                          "progression undo cannot run; nothing changed", id);
+            return false;
+        }
+        spdlog::info("[roster] {:08X}: REMOVE FROM ROSTER -- releasing held state, then the main-thread undo", id);
+        // Step 1: the dismissal release road, unchanged and idempotent (he was already
+        // released when he left the party; this repeats it for anything since).
+        ReleaseHeldState(id);
+        // What NO step undoes, said loudly once (never masked): MFO keeps no record of these,
+        // and each is the follower's own now (a consumed tome, a looted / bought / sold item).
+        spdlog::warn("[roster] {:08X}: NOT UNDONE by design -- spells he learned from tomes (board Teach, "
+                     "carried-tome auto-learn), items and gold MFO looted / bought / sold / moved for him, "
+                     "and gem socket changes made through MEO stay as they are (MFO keeps no record of them)", id);
+        g_rosterPending.insert(id);
+        // The pump epoch moves on every revert / load (StopPump / StartPump), and it is
+        // atomic, so the main closure can tell a stale post from a live one without
+        // reading worker or main-only state across threads.
+        const auto epoch = Diagnostics::CurrentPumpEpoch();
+        MainThread::Post([id, epoch]() {
+            if (Diagnostics::CurrentPumpEpoch() != epoch) {
+                spdlog::info("[roster] {:08X}: removal dropped -- a revert / load intervened (every record was "
+                             "reloaded from the save)", id);
+                return;
+            }
+            bool ok = false;
+            if (IsTrackedFast(id) || IsEligibleFollower(RE::TESForm::LookupByID<RE::Actor>(id))) {
+                spdlog::warn("[roster] {:08X}: REMOVAL ABORTED -- he is a follower again (re-joined) before the "
+                             "undo ran; every record is kept", id);
+            } else {
+                ok = ProgAllocator::ForgetFollower(id);   // step 2: undo + erase PRGN, main thread
+            }
+            std::scoped_lock lk(g_rosterMx);
+            g_rosterDone.push_back({ id, ok, epoch });
+        });
+        return true;
+    }
+
+    void DrainRosterRemovals() {
+        std::vector<RosterVerdict> done;
+        {
+            std::scoped_lock lk(g_rosterMx);
+            if (g_rosterDone.empty()) return;
+            done.swap(g_rosterDone);
+        }
+        const auto epoch = Diagnostics::CurrentPumpEpoch();
+        for (const auto& v : done) {
+            if (v.epoch != epoch) continue;   // a revert cleared everything it concerned
+            g_rosterPending.erase(v.id);
+            if (!v.ok) {
+                spdlog::warn("[roster] {:08X}: removal not completed -- FLWR / MSTK / PGIV records kept", v.id);
+                continue;
+            }
+            // Step 3 (worker, the domain that owns g_followers): the next save omits him
+            // from every record. Progression (PRGN) was erased on the main thread already,
+            // so a save landing between the two hops holds his FLWR record without PRGN,
+            // a state the readers have always accepted (the records are independent).
+            const bool rejoined = IsTracked(v.id);
+            const auto rapport  = [&] {
+                const auto it = g_followers.find(v.id);
+                return it != g_followers.end() ? it->second.rapport : 0u;
+            }();
+            g_followers.erase(v.id);
+            g_missStreak.erase(v.id);
+            g_lastCombat.erase(v.id);
+            g_stateSample.erase(v.id);
+            Logistics::ForgetStockGear(v.id);
+            PlayerGiven::Forget(v.id);
+            if (rejoined) {
+                // He came back between the main undo and this hop: give him what any new
+                // party member gets (a fresh default record), never a recordless follower.
+                TryEnsureRecord(v.id);
+                spdlog::warn("[roster] {:08X}: he re-joined during the removal -- data erased, fresh default record", v.id);
+            }
+            PublishActiveMirror();
+            spdlog::info("[roster] {:08X}: REMOVED from the roster -- FLWR (rapport {}), MSTK, PGIV and progression "
+                         "erased; the next save omits him", v.id, rapport);
+        }
+    }
+
     void Refresh() {
+        // The main thread's queued g_followers work, applied HERE on the record's owning
+        // domain before the sweep reads the map (#4/#74): the respec rapport debits
+        // (review F5), then roster removal step 3 (86e3eewaf).
+        Rapport::DrainPendingSpends();
+        DrainRosterRemovals();
         auto* pl = RE::ProcessLists::GetSingleton();
         if (!pl) {
             spdlog::warn("[follower] ProcessLists unavailable -- refresh skipped");

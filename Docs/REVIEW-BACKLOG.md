@@ -1587,3 +1587,17 @@ Raised against a930f00 (`fix/mfo-m1a-equip-gem-backlog`, Opus review round 2, `s
   out-of-combat upgrade. Narrow to an actual silver episode (needs a public `SilverWeaponEpisode` query).
 - (SEV-5, pre-existing root) Under bWeaponStyleControl off (direct mode) a silver weapon left in the hand after combat
   stays: `SilverHoldEnded` returns 0 for direct episodes and never restores the main weapon. B28 used to mask it.
+
+### MFO-B249 (SEV-4 x2) -- M2 roster removal review, deferred items
+Raised against db4c03a (`feat/mfo-m2-roster-remove`, ClickUp 86e3eewaf + 86e3940zh, Opus tier-3 review,
+`scratchpad/agentlogs/review-m2.md`), 2026-10-12. No SEV-1/2; the SEV-3s (F1 baseTouched premise, F2 UndoSkills
+over non-MFO writes, F3 not-tracked != not-following), F5 (main-thread g_followers access, threading carve-out) and
+F7 were fixed on the branch. Cross-referenced from MAP.md (progression/ ROSTER REMOVAL undo, Followers.cpp roster removal).
+- **F4 (SEV-4)** -- auto-calc followers at their level cap keep the reshaped HMS/skills. `UndoHms` leaves a LEVELING
+  follower's H/M/S (and `UndoSkills` puts REVERT-mode skills at the enrollment baseline) on the premise that the
+  engine re-slams its own auto-calc values at the follower's next level-up; a follower already at his level cap never
+  levels again, so MFO's reshape stays. Field check: remove one, save, reload, log base HMS + skills.
+- **F6 (SEV-4)** -- the allocated rank form is removed even when the load order now grants it natively.
+  `ForgetFollower`'s perk removal (like Respec's, which does the same) removes the held rank form whenever it is on
+  the base; it cannot tell MFO's grant from a native grant of the same form (SPID/Requiem). Fix shape when drained:
+  a per-session record of the forms MFO actually AddPerk'd.

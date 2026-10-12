@@ -1349,6 +1349,15 @@ namespace MFO::Board {
                 continue;
             }
 
+            // 86e3eewaf: remove from roster. A per-FOLLOWER edit (uid/table unused). This
+            // drain is the worker that owns g_followers; Followers::RequestRosterRemoval
+            // re-validates (record, not following, not in flight) and runs the three-hop
+            // release -> main-thread undo -> worker erase (contract in Followers.h).
+            if (c.kind == EditKind::RemoveFromRoster) {
+                Followers::RequestRosterRemoval(c.fid);
+                continue;
+            }
+
             auto it = g_followers.find(c.fid);
             if (it == g_followers.end()) continue;
             const int table = std::clamp(c.table, 0, 1);
@@ -1757,6 +1766,7 @@ namespace MFO::Board {
                 // Current cell name, else the location name (retained followers only). Worker-side
                 // read-only lookups copied into the snapshot, so the render thread never touches the actor.
                 if (auto* a = f->As<RE::Actor>()) {
+                    r.stillFollower = Followers::IsEligibleFollower(a);   // 86e3eewaf F3: worker read, flags + AVs
                     if (auto* c = a->GetParentCell(); c && c->GetName() && *c->GetName()) {
                         r.cell = c->GetName();
                     } else if (auto* loc = a->GetCurrentLocation(); loc && loc->GetName() && *loc->GetName()) {

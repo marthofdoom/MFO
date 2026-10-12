@@ -78,6 +78,32 @@ namespace MFO::Followers {
     // per-follower MFO-OFF toggle (Scheduler tick).
     void ReleaseHeldState(RE::FormID a_actorID);
 
+    // ── ROSTER REMOVAL (ClickUp 86e3eewaf + 86e3940zh) ──────────────────────
+    // The Follower-tab "remove from roster": delete EVERYTHING MFO holds for one
+    // follower who is NOT currently following, after undoing what MFO did to him.
+    // Three hops, each on the domain that owns what it touches:
+    //  1. WORKER (this call, from Board ApplyEdits): refuse unless he has a record,
+    //     is persistable, is NOT following (not tracked AND not IsEligibleFollower:
+    //     a waiting / other-cell teammate is still a follower) and is not already in
+    //     flight; then ReleaseHeldState (the dismissal release road: aliases, APMF
+    //     claims, equip declaration, force-hold, gear restore) and mark him pending;
+    //     then MainThread::Post the undo.
+    //  2. MAIN: ProgAllocator::ForgetFollower (perks, native-perk restore, skills,
+    //     H/M/S, then the PRGN record erased). An unresolvable actor or a re-join
+    //     ABORTS: nothing is erased, every record kept.
+    //  3. WORKER (DrainRosterRemovals, top of Refresh): erase the FLWR record, his
+    //     MSTK stock set, his PGIV entries and this file's runtime maps; republish
+    //     the mirrors. The hand-back is a mutex queue, not a gated AddTask, so a
+    //     save's PausePump cannot drop it.
+    // No co-save layout or version changes: the next save simply omits him.
+    // Returns false (with a named [roster] line) when refused. WORKER only (#4/#74).
+    bool RequestRosterRemoval(RE::FormID a_actorID);
+    // Applies the main thread's verdicts (step 3 above). Called at the top of Refresh:
+    // on the WORKER, and once on the MAIN thread at kPostLoadGame (plugin.cpp's Refresh)
+    // with the pump stopped, when the queue is always empty (ResetAllState cleared it
+    // and the epoch moved). Idempotent and cheap when nothing is in flight.
+    void DrainRosterRemovals();
+
     // False for runtime (0xFF) FormIDs, which must NEVER be persisted
     // (INVARIANTS #9). IsCommandedActor() does not cover this: a spawned or
     // cloned teammate is not commanded but still carries a 0xFF id, and

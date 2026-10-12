@@ -308,7 +308,8 @@ namespace MFO::ProgAllocator {
             return stripped;
         }
         // The safe-removal restore (public RestoreNativePerks): every recorded
-        // native rank back on the base, record cleared. Uncalled today.
+        // native rank back on the base, record cleared. Called by the roster
+        // removal (ForgetFollower, Verbs.cpp).
         int RestoreNativePerksImpl(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
             int restored = 0;
             for (const auto fid : a_st.strippedPerks) {

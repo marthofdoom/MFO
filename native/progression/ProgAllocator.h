@@ -412,12 +412,27 @@ namespace MFO::ProgAllocator {
     // when it's uninstalled"). Puts every native catalog perk MFO stripped from
     // this enrolled follower (ProgState::strippedPerks, PRGN v7) back on the
     // base TESNPC, settles the actor (ApplyPerksFromBase) and CLEARS the record
-    // (nativeHeld=false). Intended to run ONCE for every enrolled follower
-    // immediately before the mod is removed; MFO's own grants are untouched
-    // (Respec removes those). NOT wired to any verb yet — the Board/MCM
-    // uninstall verb is a separate brief. MAIN THREAD. Returns false when the
-    // actor is null / unenrolled. Idempotent (a perk already on the base skips).
+    // (nativeHeld=false). MFO's own grants are untouched (Respec / ForgetFollower
+    // remove those). Called by ForgetFollower (the Follower-tab roster removal,
+    // ClickUp 86e3eewaf + 86e3940zh). Base perk edits are not written to the
+    // save, but they DO persist in memory across a same-session reload (review
+    // F1), so this runs whenever the record lists a strip. MAIN THREAD. Returns
+    // false when the actor is null / unenrolled. Idempotent (a perk already on
+    // the base skips).
     bool RestoreNativePerks(RE::Actor* a_actor);
+
+    // ROSTER REMOVAL (ClickUp 86e3eewaf): undo everything progression did to
+    // this follower's actor, then ERASE his g_prog record (PRGN) and his HMS
+    // fire mask. Undo order: MFO's granted perk ranks off the base (Respec's
+    // removal, ungated), then RestoreNativePerks, then every ledgered skill MFO
+    // still holds (live base == lastWrittenBase) back to the natural MFO
+    // measured (the single ReconcileSkill write site, 0 points), then the HMS
+    // take-back (UndoHms: see Hms.cpp for what can and cannot be taken back).
+    // Each step logs what it did and what it could not undo. MAIN THREAD
+    // (g_prog + engine writes). Returns false, touching NOTHING, when the actor
+    // does not resolve (the caller aborts the removal and keeps every record).
+    // No record = nothing to undo = true.
+    bool ForgetFollower(RE::FormID a_actorID);
 
     // Revert/reload generation — bumped by ClearAll (revert) and OnPostLoad.
     // A board prog-edit captures this at post time and bails inside its

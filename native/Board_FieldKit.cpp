@@ -280,8 +280,10 @@ namespace MFO::Board {
             // only edges fed while OPEN; the guard is belt-and-suspenders on top of
             // the fact that the opening DOWN was seen while closed and never fed.
             static bool s_r1Guard = false;
+            static std::uint32_t s_openSeq = 0;   // 86e3eewaf F7: bumps per open (disarms the roster confirm)
             if (g_justOpened.exchange(false)) {
                 s_r1Guard = true; s_prevNavBusy = true;
+                ++s_openSeq;
                 // STUCK-KEY SWEEP (v1.0.59). The press that CLOSED the last
                 // session (B / Esc) never gets its release fed: the hook stops
                 // feeding the instant g_open is false and the close grace
@@ -414,10 +416,38 @@ namespace MFO::Board {
                     ImGui::TextDisabled("%s", Str::Fmt(Str::K::Fk_Tracked, { snap.rows.size() }).c_str());
                     ImGui::Spacing();
 
+                    // 86e3eewaf: the remove-from-roster confirm lives IN THE PAGE, below
+                    // the table (never a modal: the controller must always be able to
+                    // back out). The row button only ARMS it; the footer shows what will
+                    // be deleted plus Remove / Cancel. Disarmed when the armed follower is
+                    // gone or following again (removal is offered only off the party).
+                    static RE::FormID    s_removeArmed = 0;
+                    static bool          s_removeFocus = false;   // land nav on Cancel once, on arming
+                    // F7: an arm never outlives the board session it was made in, nor a
+                    // revert / load (the pump epoch is atomic, safe on the render thread).
+                    static std::uint32_t s_removeSeq   = 0;
+                    static std::uint64_t s_removeEpoch = 0;
+                    if (s_removeArmed && (s_removeSeq != s_openSeq ||
+                                          s_removeEpoch != Diagnostics::CurrentPumpEpoch()))
+                        s_removeArmed = 0;
+                    const FollowerRow* armedRow = nullptr;
+                    if (s_removeArmed) {
+                        for (const auto& r : snap.rows)
+                            if (r.id == s_removeArmed && !r.active && !r.stillFollower) { armedRow = &r; break; }
+                        if (!armedRow) s_removeArmed = 0;
+                    }
+
                     // Reserve the footer, or ScrollY takes the remaining height
                     // and pushes the hint line below the fold.
-                    const float footer = ImGui::GetFrameHeightWithSpacing() + 6.0f;
-                    if (ImGui::BeginTable("##followers", 8,
+                    // Armed: the wrapped warning (any translation length) + the button row.
+                    const std::string removeText = armedRow
+                        ? Str::Fmt(Str::K::Fk_RemoveConfirm, { armedRow->name }) : std::string{};
+                    const float removeTextH = armedRow
+                        ? ImGui::CalcTextSize(removeText.c_str(), nullptr, false,
+                                              ImGui::GetContentRegionAvail().x).y + ImGui::GetStyle().ItemSpacing.y
+                        : 0.0f;
+                    const float footer = ImGui::GetFrameHeightWithSpacing() + removeTextH + 6.0f;
+                    if (ImGui::BeginTable("##followers", 9,
                                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                           ImGuiTableFlags_ScrollY,
                                           ImVec2(0.0f, -footer))) {
@@ -444,6 +474,8 @@ namespace MFO::Board {
                             FitW(150.0f, { Str::Get(Str::K::Fk_ColVitals) }));
                         ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColDist), ImGuiTableColumnFlags_WidthFixed,
                             FitW(70.0f, { Str::Get(Str::K::Fk_ColDist) }));
+                        ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColRoster), ImGuiTableColumnFlags_WidthFixed,
+                            FitW(70.0f, { Str::Get(Str::K::Fk_ColRoster), Str::Get(Str::K::Fk_Remove) }));
                         ImGui::TableHeadersRow();
 
                         for (const auto& r : snap.rows) {
@@ -536,8 +568,51 @@ namespace MFO::Board {
                             ImGui::TableNextColumn();
                             if (r.active) ImGui::Text("%.0f", r.distance);
                             else          ImGui::TextDisabled("--");
+
+                            // 86e3eewaf: remove from roster. GREYED for a follower who is
+                            // following (he would be re-adopted with default data on the
+                            // next sweep). Greyed by alpha, NOT BeginDisabled: a disabled
+                            // item cannot take gamepad nav focus, so a controller could
+                            // never reach the tooltip that says why. Here it can, and a
+                            // press on the greyed button does nothing. Arming only: the
+                            // destructive press is the footer's Remove.
+                            // "Following" = active OR a retained row still an eligible
+                            // follower (waiting / other cell, review F3).
+                            ImGui::TableNextColumn();
+                            ImGui::PushID(static_cast<int>(r.id));
+                            const bool following = r.active || r.stillFollower;
+                            if (following) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.45f);
+                            const bool removePressed = Click::SmallButton(Str::Label(Str::K::Fk_Remove, "rosterremove"));
+                            if (following) ImGui::PopStyleVar();
+                            if (removePressed && !following) {
+                                s_removeArmed = r.id;
+                                s_removeFocus = true;
+                                s_removeSeq   = s_openSeq;
+                                s_removeEpoch = Diagnostics::CurrentPumpEpoch();
+                            }
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("%s", Str::Get(following ? Str::K::Fk_TipRemoveFollowing
+                                                                           : Str::K::Fk_TipRemove));
+                            ImGui::PopID();
                         }
                         ImGui::EndTable();
+                    }
+                    if (armedRow) {
+                        ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
+                        ImGui::TextWrapped("%s", removeText.c_str());
+                        ImGui::PopStyleColor();
+                        ImGui::PushStyleColor(ImGuiCol_Button, skin.danger);
+                        // Destructive confirm: stock ImGui on purpose, so sliding off before
+                        // release still aborts it (the gambit Delete / Respec rule).
+                        if (ImGui::SmallButton(Str::Label(Str::K::Fk_RemoveYes, "rosterremoveyes"))) {
+                            QueueEdit({ EditKind::RemoveFromRoster, armedRow->id, 0, 0u, 0.0f });
+                            s_removeArmed = 0;
+                        }
+                        ImGui::PopStyleColor();
+                        ImGui::SameLine();
+                        if (s_removeFocus) { ImGui::SetKeyboardFocusHere(); s_removeFocus = false; }
+                        if (Click::SmallButton(Str::Label(Str::K::Fk_RemoveNo, "rosterremoveno")))
+                            s_removeArmed = 0;
                     }
                     ImGui::EndTabItem();
                 }
