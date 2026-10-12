@@ -490,6 +490,11 @@ namespace MFO::Followers {
         // Step 1: the dismissal release road, unchanged and idempotent (he was already
         // released when he left the party; this repeats it for anything since).
         ReleaseHeldState(id);
+        // What NO step undoes, said loudly once (never masked): MFO keeps no record of these,
+        // and each is the follower's own now (a consumed tome, a looted / bought / sold item).
+        spdlog::warn("[roster] {:08X}: NOT UNDONE by design -- spells he learned from tomes (board Teach, "
+                     "carried-tome auto-learn), items and gold MFO looted / bought / sold / moved for him, "
+                     "and gem socket changes made through MEO stay as they are (MFO keeps no record of them)", id);
         g_rosterPending.insert(id);
         // The pump epoch moves on every revert / load (StopPump / StartPump), and it is
         // atomic, so the main closure can tell a stale post from a live one without

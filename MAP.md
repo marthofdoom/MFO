@@ -192,6 +192,15 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   `ProgAllocator::ClearAll`, well after `StopPump` `:706` and `MainThread::Clear`) and, belt and
   braces, at the top of `LoadCallback` (`:579`). Fifth independent record.
 
+**ROSTER REMOVAL erases entries, never layout (ClickUp 86e3eewaf, 2026-10-12).** The Follower-tab
+"remove" deletes one follower's FLWR record (`g_followers`, worker), PRGN record (`g_prog`, main,
+`ProgAllocator::ForgetFollower`), MSTK set (`Logistics::ForgetStockGear`), PGIV entries
+(`PlayerGiven::Forget`) and FWPN pairs (`Actuation::ReleaseForcedWeapon` via `ReleaseHeldState`).
+Every writer derives its count from the live map at save time, so the next save simply omits him; no
+version, field or reader changed. A save landing between the main hop (PRGN gone) and the worker hop
+(FLWR still there) holds FLWR without PRGN, which the independent readers have always accepted (an
+HMS-only PRGN record is created on demand). Contract: `Followers.h` (RequestRosterRemoval).
+
 **Ingestion discipline (INVARIANTS #8–#12), all enforced here:** every persisted
 FormID passes `ResolveFormID` or is DROPPED (`:367,447,511`); runtime `0xFF` IDs
 never written (`Followers::IsPersistableID` gate `:92,101,147,194,200`); string
@@ -2874,7 +2883,9 @@ module. Module layout:
     `CountPotions:144`, `EquipTorch:167`, `HealExcludedWeapon:206`,
     `ShedOffRoleWeapon:288`, `IsLooting:512`, `WalkingLootLeg:553`, the lifecycle hooks
     (`NoteInCombat:564`, `ClearTransientState:568`, `OnFollowerRemoved:613`) and the
-    MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`).
+    MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`,
+    `ForgetStockGear:742` = ONE follower's set, roster removal 86e3eewaf: presence in `g_stockGear`
+    means "already snapshotted", so the erase lets a re-recruit snapshot afresh).
   - `logistics/Sinks.cpp` = `BeastHeadSink`, `ContainerSink`, `GateLikeRef` (gate-like re-admit filter),
     `GateSink` (anonymous namespace), `RegisterSinks`, `SweepBeastHeadsOnLoad`. (The 86e3f9pkg
     player-drop record is GONE, 86e3faccn: what the player drops is fair game.) Line numbers: grep.
@@ -4222,6 +4233,7 @@ co-save record `'PGIV'` v1 (`CoSave:201` / `CoLoad:244`; layout in the co-save s
 player bits, so after a reload a relic the player gave (worn or not) still never ships and is never swapped
 out. Cleared by `ClearRecord:190` from `ResetAllState` (its own call after `ProgAllocator::ClearAll`, like
 `ClearStockGear`; no longer from `Logistics::ClearTransientState`) and at the top of `LoadCallback`.
+`Forget:195` drops ONE follower's entry (roster removal, 86e3eewaf, worker hop of `Followers::DrainRosterRemovals`).
 Consumers (all relic paths): `Lotd` `Shippable` / `TransferOnMain` (never ship a given relic),
 `KeptOffRoleWorn` (a worn relic ships only when NOT given, and only with `PlayerGiven::Installed()`),
 `cast/Equip.cpp` `IsMuseumRelic` (a player-equipped relic stays his pick) and `relicWithAlternative`
@@ -4670,6 +4682,19 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     `g_boardSnap`/`g_boardFocus` `:28-30`), `EnrollBlocker` (`:40`), `BuildNodeViews` (`:59`),
     `SetBoardFocus` (`:94`), `CopyBoardViews`/`CopyBoardTabViews` (`:96`/`:105`),
     `PublishBoardViews` (`:119`).
+  - (2026-10-12, ClickUp 86e3eewaf) ROSTER REMOVAL undo, main thread, called only from
+    `ForgetFollower` (`Verbs.cpp:374`): `UndoSkills` (`SkillScale.cpp:321`, every ledgered skill
+    through the ONE `ReconcileSkill` write site with 0 points, so the baseline floor still holds) and
+    `UndoHms` (`Hms.cpp:637`: a FIXED-STAT / grant-history follower's H/M/S back to `hmsBaseline` when
+    the live base still reads `hmsHeld`; a LEVELING follower, or any record with `hmsWithheld > 0`, is
+    LEFT and logged WARN: the engine's per-pool split was never recorded and its next auto-calc
+    level-up re-slams its own values). `ProgState::baseTouched` (`ProgAllocator.h:371`, runtime-only,
+    never serialized) is set by `GrantRank`, a `ReapplyFollower` AddPerk and a non-empty
+    `StripNativePerks`; ForgetFollower takes perks back / restores natives only when it is set (P3:
+    base perk edits do not survive a load). **What breaks:** clearing `baseTouched` anywhere but a fresh
+    record (e.g. in the unmanaged poll branch, which DOES clear `applied`/`nativeHeld`) leaves MFO's
+    perks on the base after a removal; a second SetBaseActorValue site in SkillScale breaks the floor
+    guarantee UndoSkills relies on.
   - (2026-10-04) `HoldUnledgeredSkills` (`progression/SkillScale.cpp`, end of file, declared in `ProgAllocator_internal.h`) holds every baselined skill WITHOUT a ledger entry at its enrollment baseline (engine auto-calc drift cancel), via a throwaway entry through `ReconcileSkill`. Called from `Poll.cpp` drift watch right after `RecomputeSkills`. Gated by `cancelEngineAwards`; baseline <= 0 skipped. No co-save change.
   - (2026-10-01) `Poll.cpp` `DumpLedgerOnce` (READ-ONLY `[prog] ledger` dump, once per load per follower, keyed on `g_pollGen`) is called at the end of `PollWork`'s per-follower body; it writes nothing.
   - `progression/Poll.cpp` (224) = the level poll: `Unmanaged` (`:35`), `PollWork` (`:43`),
@@ -4679,7 +4704,8 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     `OnHarnessHotkey` (`:121`).
   - `progression/Verbs.cpp` (447) = the verbs: `Enroll` (`:40`), `SetClass` (`:120`),
     `AllocatePerk` (`:173`), `AllocateNextEligible` (`:206`), `Respec` (`:266`), `HasFreeRespec`
-    (`:340`), `RestoreNativePerks` (`:345`), `SetManualSkills` (`:357`), `ApplyManualSkillPoint`
+    (`:340`), `RestoreNativePerks` (`:357`, now CALLED by ForgetFollower, 86e3940zh), `ForgetFollower`
+    (`:374`, the roster-removal undo + PRGN erase, 86e3eewaf), `SetManualSkills`, `ApplyManualSkillPoint`
     (`:396`); `FindTree` (`:30`) is file-local here.
   - `progression/Hms.cpp` (626) = §HMS — the BASE split `kBaseHmsByClass` (`:31`), `HmsProfile`
     (`:44`), the F3 fired-pool mirror consumers, `HmsTrackBattle` (`:140`), `RecomputeHMS` (`:197`),
@@ -5044,6 +5070,13 @@ its perk/AV mutations are runtime-only. Safe to delete without touching saves; o
 ## 6. Board / UI / Papyrus — `Board.*`, `Papyrus.*`
 
 ### Board.cpp / Board_FieldKit.cpp / Board_Progression.cpp / Board_internal.h / Board.h — the Field Kit overlay
+**Remove from roster (2026-10-12, ClickUp 86e3eewaf):** the Followers table's 9th column (`Board_FieldKit.cpp`,
+`Fk_ColRoster`) holds a `remove` button per row: GREYED by style alpha (not `BeginDisabled`, so gamepad nav can
+still focus it and read the why-tooltip) for an active row, where a press does nothing. On a retained row it ARMS
+`s_removeArmed`; the confirm lives IN THE PAGE below the table (wrapped `Fk_RemoveConfirm` + stock-ImGui `Remove`
+`rosterremoveyes` + `Cancel`, nav lands on Cancel once via `SetKeyboardFocusHere`; footer height measured from
+the wrapped text). Remove queues `EditKind::RemoveFromRoster`; `ApplyEdits` (`Board.cpp:1356`) hands it to
+`Followers::RequestRosterRemoval` (section 8). Disarmed when the row is gone or active again.
 **Spell picker filter (2026-10-06):** `SpellList` in `Board.cpp` PublishSnapshot (~:1640) skips `Actuation::CastRoadUnsupported` spells (`cast/SpellSupport.cpp`) unless an existing rule names them (then " (unsupported)" suffix).
 Hooks the **runtime D3D11 swapchain vtable** (no game offsets) + an input sink,
 draws live state via ImGui on the **render thread** from a mutex-guarded snapshot,
@@ -7372,7 +7405,18 @@ concurrency question (distinct threads, mutual exclusion UNPROVEN).
   calls `Loadout::Restore`, `Targeting::Clear`, `CombatStyle::Clear`,
   `CasterConsent::Clear`, `Packages::Release`, `Logistics::OnFollowerRemoved`,
   `Packages::RetreatEvictIf`. Several release engine-serialized alias fills — removing
-  any leaves a latch that re-fills on every future load. Callers `plugin.cpp:357`,
+  any leaves a latch that re-fills on every future load. **ROSTER REMOVAL (86e3eewaf):**
+  `RequestRosterRemoval` (`Followers.cpp:469`, worker, from Board `ApplyEdits` `EditKind::RemoveFromRoster`
+  `Board.cpp:1356`) refuses unless the id has a record and is NOT tracked; runs `ReleaseHeldState`
+  (`:367`), marks `g_rosterPending`, `MainThread::Post`s `ProgAllocator::ForgetFollower` (epoch-checked
+  with `Diagnostics::CurrentPumpEpoch`), whose verdict comes back through the `g_rosterMx` queue (a
+  leaf lock) to `DrainRosterRemovals` (`:517`), called at the TOP of `Refresh` (`:562`): erase the FLWR
+  record + this file's runtime maps + MSTK + PGIV, republish the mirrors. The queue (not a gated
+  AddTask) is deliberate: `PausePump` (SaveCallback) makes a gate fail and would DROP a hop, leaving a
+  half-removed follower. `ClearTransientState` clears the pending set and the queue. **What breaks:**
+  erasing `g_followers` on the main thread (the brief-level shorthand "main thread") races the
+  worker's iteration (#4/#74, the item-2b hazard); moving the drain after the sweep lets one Refresh
+  see a record the main thread already undid. Callers `plugin.cpp:357`,
   `Rapport.cpp:147`, `Diagnostics.cpp:253`. (Followers.h's per-symbol header comments
   predate the worker move — the DOMAIN is the serial worker/main pump, #4/#74.)
 
