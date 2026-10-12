@@ -153,10 +153,19 @@ namespace MFO::APMFBridge {
         }
     }
 
+    bool HealApproachStands(RE::FormID a_follower) {
+        std::scoped_lock lock(g_approachMx);
+        const auto it = g_approach.find(a_follower);
+        return it != g_approach.end() && it->second.handle != APMF_API::kInvalidHandle;
+    }
+
     void ServiceHealApproach(RE::FormID a_follower, std::size_t a_hand, RE::FormID a_recipient) {
         const auto* api = ApproachApi();
         if (!api || g_approachSeatRefused.load(std::memory_order_relaxed)) return;
         if (a_follower == 0 || a_recipient == 0 || a_recipient == a_follower) return;
+        // ONE ch.24 claim per follower: a held heal outranks the offense approach (apmf/OffenseApproach.cpp).
+        // Released BEFORE g_approachMx is taken (the two tables never nest).
+        ReleaseOffenseApproach(a_follower, "a held heal needs the ch.24 approach");
         const float radius = Config::g_healApproachRadius.load();
         if (!(radius > 0.0f) || !std::isfinite(radius)) return;   // Harbinger refuses these; never send one
 

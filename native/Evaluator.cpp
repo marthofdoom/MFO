@@ -535,8 +535,15 @@ namespace MFO::Eval {
             // fallback so an all-occluded pack never reads as "no foe".
             if (bestVis) {
                 best = bestVis;
+                // Sight is back (a fresh Sightline verdict, never a reused one): end the ch.24 offense approach.
+                if (a_ownRay) APMFBridge::ReleaseOffenseApproach(selfID, "sight returned: a candidate foe is in view");
             } else if (best && qualified > 0) {
                 LogOccludedFallback(a_self, qualified);
+                // Every candidate is occluded: walk toward the pinned foe to regain sight (ClickUp 86e3m5ff8).
+                if (a_ownRay) {
+                    if (auto bp = best.get())
+                        APMFBridge::ServiceOffenseApproach(selfID, bp->GetFormID());
+                }
             }
             // Held fire in a brawl: the only "foes" were non-hostile and nothing
             // real was selected. Log outside the group lock (throttled).

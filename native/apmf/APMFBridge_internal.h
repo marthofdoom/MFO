@@ -392,6 +392,9 @@ namespace MFO::APMFBridge {
         // ch.24 held-heal approach table (apmf/CombatApproach.cpp): own mutex, same call shape.
         void SweepHealApproaches();
         void ClearHealApproaches();
+        // ch.24 offense approach table (apmf/OffenseApproach.cpp): own mutex, same call shape.
+        void SweepOffenseApproaches();
+        void ClearOffenseApproaches();
 
         inline void EraseIfEmpty(std::unordered_map<RE::FormID, Owned>::iterator it) {
             const auto& o = it->second;

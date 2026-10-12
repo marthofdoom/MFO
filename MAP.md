@@ -5527,6 +5527,14 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `ChaseRadius` (measured from the follower, not the anchor); keeping it through a retreat.
     `PursuitLeashStanding` (`:142`, fix/mfo-unreachable-flyer) = a filed, not-ENDED claim exists;
     read only by the Scheduler's `[reach]` hold line.
+  - `apmf/OffenseApproach.cpp` (NEW, LoreRim round 2, ClickUp 86e3m5ff8) = the ch.24 OFFENSE APPROACH: the held-heal approach's twin for an offensive
+    cast/ranged rule whose EVERY candidate foe is occluded. Filed by `Evaluator.cpp` `PickFoe`'s all-occluded fallback (`ServiceOffenseApproach(self, pinned
+    foe)`, only when `a_ownRay`); that call is also the refresh. Released by `ReleaseOffenseApproach`: sighted candidate returns (same `PickFoe`, fresh Sightline
+    verdict, nothing reused), foe dead/disabled / no ask for `kStaleMs` 3.5 s / retreat / Harbinger ended it (`SweepOffenseApproaches` from `Tick`), combat end (`Scheduler.cpp`),
+    dismissal (`Followers.cpp`), `ClearOffenseApproaches` from `ClearTransientState`. Bounds copied from the heal approach (R = tightened `fHealApproachRadius`, Repoint
+    every 3 s, ch.23 Leashed -> blocked, 5 s at the floor -> blocked). Logs `[offense-approach]`. OWN mutex `g_offMx`, never nested with `g_approachMx`: a held-heal
+    claim wins the one ch.24 slot (`HealApproachStands` checked before `g_offMx`; `ServiceHealApproach` releases ours first). What breaks: filing from anywhere that is not the
+    all-occluded fallback re-creates a walk with no sight reason; a third lock order here deadlocks with the heal table.
   - `apmf/CombatApproach.cpp` (NEW, feat/mfo-held-heal-approach 2026-10-05, ClickUp 86e3h871c; marth 2026-09-30: "instead of a
     cap it should do loots moveto towards the actor") = the **ch.24 HELD-HEAL APPROACH** (ABI v19 `kIntent_CombatApproach`;
     `APMF_API.h` mirrored from APMF d8bb76d, md5 a18db368). File-local `g_approach` (one claim per follower: hand, recipient, R)
