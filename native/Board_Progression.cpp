@@ -1206,11 +1206,23 @@ namespace MFO::Board {
                             // ── FOOTER: RESPEC + HINTS ──────────────────
                             if (Click::Button(Str::Label(Str::K::Pg_Respec, "prespecbtn"))) ImGui::OpenPopup("##prespec");
                             ImGui::SameLine();
+                            // MFO-B15: after Confirm on the free respec, the snapshot row keeps
+                            // freeRespec=true for up to ~300 ms (queue -> worker -> main -> next
+                            // publish). Hide the free label for that window so a second Respec
+                            // cannot be confirmed under "no rapport is lost". Render-thread only;
+                            // time-bounded so a REFUSED respec (flag never clears) shows free again.
+                            static RE::FormID s_respecQueuedId = 0;
+                            static double     s_respecQueuedAt = 0.0;
+                            constexpr double  kRespecLatchSec  = 1.0;
+                            if (!who->freeRespec) s_respecQueuedId = 0;
+                            const bool freeShown = who->freeRespec &&
+                                !(s_respecQueuedId == who->id &&
+                                  ImGui::GetTime() - s_respecQueuedAt < kRespecLatchSec);
                             // The ONE free post-migration respec (ProgState::freeRespec,
                             // PRGN v7) — read from the SNAPSHOT row, never g_prog:
                             // BoardFollowerView::freeRespec is filled in PublishBoardViews
                             // on the main thread like every other who-> field here.
-                            if (who->freeRespec)
+                            if (freeShown)
                                 ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_RespecFree));
                             else
                                 ImGui::TextDisabled("%s", Str::Fmt(Str::K::Pg_RespecCost,
@@ -1226,7 +1238,7 @@ namespace MFO::Board {
                                 ImGui::PopStyleColor();
                                 ImGui::PopFont();
                                 ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 380.0f);
-                                if (who->freeRespec)
+                                if (freeShown)
                                     ImGui::TextWrapped("%s", Str::Fmt(Str::K::Pg_RespecBodyFree,
                                                        { who->name }).c_str());
                                 else
@@ -1240,6 +1252,7 @@ namespace MFO::Board {
                                     EditCmd e{ EditKind::AddonAction, s_psel, 0, 0u, 0.0f };
                                     e.verbId = (int)AddonVerb::Respec;
                                     QueueEdit(e);
+                                    if (who->freeRespec) { s_respecQueuedId = who->id; s_respecQueuedAt = ImGui::GetTime(); }
                                     ImGui::CloseCurrentPopup();
                                 }
                                 ImGui::PopStyleColor();
