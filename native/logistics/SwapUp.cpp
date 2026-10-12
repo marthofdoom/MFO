@@ -323,7 +323,8 @@ namespace MFO::Logistics {
             // of the ordinary damage ladder.
             if (!a_ammo) return false;
             const auto* proj = a_ammo->GetRuntimeData().data.projectile;
-            return proj && proj->data.explosionType;
+            // SILVER AMMO (86e3p2gp9, marth 2026-10-12) is the silver slot's: outside the ordinary ladder too.
+            return (proj && proj->data.explosionType) || IsSilverAmmo(a_ammo);
         }
 
         bool AmmoIsSpecial(const RE::TESAmmo* a_ammo, RE::InventoryEntryData* a_entry) {

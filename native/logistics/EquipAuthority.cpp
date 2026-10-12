@@ -823,7 +823,14 @@ namespace MFO::Logistics {
                         bestCount = static_cast<std::int32_t>(data.first); bestWorn = isWorn;
                     }
                 }
-                if (worn && APMFBridge::IsEquipAuthorityEnforced() && ammoWasOwned &&
+                // SILVER AMMO (86e3p2gp9): the declaration flips silver<->ordinary at an episode open / close, and the
+                // rebuild can run before APMF's swap lands; that worn ammo is NOT a player pick. Never record one while
+                // an episode is open or a declaration was sent within kDeclDriftHold.
+                const auto sentAt = g_lastDeclSentAt.find(id);
+                const bool ammoSwapInFlight = Actuation::SilverAmmoEpisode(id) != 0 ||
+                    (sentAt != g_lastDeclSentAt.end() &&
+                     std::chrono::steady_clock::now() - sentAt->second < kDeclDriftHold);
+                if (worn && !ammoSwapInFlight && APMFBridge::IsEquipAuthorityEnforced() && ammoWasOwned &&
                     !lastSentHas(worn->GetFormID()) && !ammoPicks.count(worn->GetFormID())) {
                     ammoPicks.insert(worn->GetFormID());
                     pickAmmo = worn; pickWorn = true;
@@ -836,6 +843,14 @@ namespace MFO::Logistics {
                 else if (best && (!worn || best == worn || bestCount >= kAmmoDeclareMin))
                                                                      declared = best;       // (c)
                 else                                                 declared = worn ? worn : best;
+                // SILVER AMMO (86e3p2gp9): an open silver-ammo episode declares its silver ammo; with none open,
+                // a worn silver stack that only survived as a 'special' worn round yields to the ordinary best.
+                if (const RE::FormID sid = Actuation::SilverAmmoEpisode(id)) {
+                    auto* sa = RE::TESForm::LookupByID<RE::TESAmmo>(sid);
+                    if (sa && AmmoIsBolt(sa) == wantBolt && inv.find(sa) != inv.end()) declared = sa;
+                } else if (!pickAmmo && worn && declared == worn && IsSilverAmmo(worn) && best) {
+                    declared = best;
+                }
                 decl.Add(declared);
             }
 

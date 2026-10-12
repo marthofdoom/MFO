@@ -518,8 +518,8 @@ per concern:
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
   field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
   keeps a relic out of the declared set (MFO-B126).
-- `cast/EquipSilver.cpp` (291, ClickUp 86e3p2gp9, 2026-10-12) = **act.equip_silver, "Switch to silver
-  weapon", and the switch BACK.** `EquipSilver` (`:104`, from `Fire`): satisfied (transparent NoOp) while a silver
+- `cast/EquipSilver.cpp` (531, ClickUp 86e3p2gp9, 2026-10-12) = **act.equip_silver, "Switch to silver
+  weapon", and the switch BACK.** `EquipSilver` (`:241`, from `Fire`): satisfied (transparent NoOp) while a silver
   melee weapon (`Logistics::IsSilverMeleeWeapon`) is in the RIGHT hand; else picks
   `Logistics::BestSilverWeapon` (one-handed only when the left hand holds something and the main weapon is not
   two-handed: the off-hand is never touched, `.left` never written), the same two heal-rank gates as
@@ -528,14 +528,14 @@ per concern:
   anon `DeclareFromLedger`, `cast/Equip.cpp:403`) with the authority, forced `EquipObject` without it, plain
   `EquipObject` with `bWeaponStyleControl` off. The first switch opens an EPISODE (`g_silver`, own `g_silverMx`,
   never nested with `g_forcedMx`): the main right-hand weapon it replaced and whether that was an MFO hold (+ its
-  rank). `ReconcileSilver` (`:202`, public, `cast/Actuation.h`) is called by the Scheduler (`Scheduler.cpp:1931`)
+  rank). `ReconcileSilver` (`:410`, public, `cast/Actuation.h`) is called by the Scheduler (`Scheduler.cpp:1931`)
   just BEFORE `ReconcileForcedWeapon` with the silver rule's OWN truth (`silverHeld` `:1542`, `silverKnownFalse`
   `:1782`, the positional rule, deliberately NOT folded into `equipCondKnownFalse`); after 2 s known-false
   (`kSilverDwell`): if the ledger's right is still the silver weapon, a main that was a hold is RESTORED as that
   hold (declared / forced), else `.right` is cleared (ch.15 `ReleaseEquipment` when the entry empties, re-declared)
-  and the main weapon is re-armed NON-forced two main-thread hops later. `SilverHoldEnded` (`:276`) is asked by
+  and the main weapon is re-armed NON-forced two main-thread hops later. `SilverHoldEnded` (`:505`) is asked by
   `ReleaseForcedWeapon` (`cast/Equip.cpp:853`) on EVERY release: a released silver hold re-arms the MAIN weapon
-  (never the silver one; left hand + sheathe only on a stand-down). `ClearSilverEpisodes` (`:286`) from
+  (never the silver one; left hand + sheathe only on a stand-down). `ClearSilverEpisodes` (`:526`) from
   `ClearForcedWeapons`. Nothing saved (FWPN layout unchanged: the silver hold is an ordinary right-hand pair).
   **What breaks:** folding silver into the general `equipCondKnownFalse` (a false silver rule above the stop would
   release an `act.equip_melee` hold below it on its unknown laps); moving `ReconcileSilver` after
@@ -545,6 +545,27 @@ per concern:
   + the dwell switch back; no usable target with foes left = UNKNOWN, held, MFO-B55); `ReconcileSilver`'s 4th arg
   (`equipCondKnownFalse && equipHeld == 0`) re-arms a main equip-gambit hold NON-forced instead of restoring a hold
   the general reconcile would strip on the same lap.
+  **RANGED = SILVER AMMO (marth 2026-10-12, "for bows/crossbows it's silver ammo"):** when the weapon hand holds a
+  bow / crossbow (`launcher`), `EquipSilver` goes to `EquipSilverAmmo` (`:206`) instead of the melee swap: it nocks
+  `Logistics::BestSilverAmmo` of the launcher's kind (bow = arrows, crossbow = bolts) with a plain, non-forced
+  `EquipObject` (no authority) or a declaration (authority, below) and opens an AMMO episode (`Episode::ammo`, `ammoPrev` = the ammo it replaced). It ALWAYS returns a
+  transparent FailedSkill / FailedOther, NEVER NoOp / Fired (the Scheduler reads act.equip_silver as a melee equip:
+  a NoOp / Fired would give an archer the melee stance and hand claim). The ammo episode has its OWN truth
+  (`AmmoEpisodeHolds`: launcher in hand, in a fight, target Unholy or unknown-with-foes); `ReconcileSilver` ignores
+  the Scheduler's silver args for it and, after `kSilverDwell`, `RestoreSilverAmmo` puts the previous ammo back on
+  the main thread; `SilverHoldEnded` (every release) restores too. UNDER THE APMF EQUIP AUTHORITY with a launcher hold in the
+  ledger (`AmmoUnderAuthority` `:136`, Ammo is an owned category) the road does NOT equip directly: it claims
+  (`ClaimEquipAuthority`; refused -> loud FailedOther), opens the episode, then `DeclareLedger`; the declaration
+  (`logistics/EquipAuthority.cpp:846`, rule 2) reads the episode through `Actuation::SilverAmmoEpisode`
+  (`cast/EquipSilver.cpp:520`, exported in `cast/Actuation.h`, takes only `g_silverMx`, worker) and names the
+  silver ammo. The restore erases the episode FIRST, then `DeclareLedger`: the declaration falls back to the
+  ordinary best ammo (so the restored ammo is the declaration's best, not necessarily `ammoPrev`); rule 2's
+  Review fixes: a melee episode first ENDS an open ammo episode (restore outside the lock) -- the kinds never merge; rule 2 records no ammo pick while the worn ammo is silver, an episode is open or a declaration was sent within `kDeclDriftHold`; the ammo road re-nocks at most every `kRenockFloor` (4 s) and never overwrites `ammoPrev` inside an episode.
+  second branch drops a worn silver stack that would otherwise survive as a 'special' worn round. **What breaks (ammo):** returning NoOp / Fired from the ammo road;
+  letting the Scheduler's `silverKnownFalse` end an ammo episode (it is a melee-equip truth); a forced ammo equip
+  (a lock with no ledger entry to release it); touching rule 2's ammo seam beyond its two branches (the Jesper-outfit
+  area: it is a read-only seam, no ledger entries).
+  Open review findings: Docs/REVIEW-BACKLOG.md MFO-B245 (silver ammo damage field check; IsSilverAmmo vs REQ_WeaponType_SilverArrow; restore-to-best under the authority).
 - **The DIRECT-DELIVERY road = five files + `cast/Direct_internal.h`** (the Direct.cpp split,
   2026-09-29, `split/cast-direct`, the Direct.cpp part of MFO-B152: a pure move of the old 1879-line `cast/Direct.cpp`,
   proven by `tools/splitcheck`, TU map `tools/splitcheck/tumaps/wave3.txt`). `cast/Direct_internal.h` (83)
@@ -2919,7 +2940,7 @@ module. Module layout:
   its own rule (skills pick armor/weapon type, perks pick usage, marth 2026-10-01) and does NOT
   call this. **What breaks:** a second Auto rule elsewhere; calling it off the worker / main
   pump (it reads `FollowerState`); changing a weight changes every Auto follower's HMS split.
-- `logistics/Silver.cpp` (343, ClickUp 86e3p2gp9, 2026-10-12) — **THE SILVER WEAPON knowledge** (API in
+- `logistics/Silver.cpp` (472, ClickUp 86e3p2gp9, 2026-10-12) — **THE SILVER WEAPON knowledge** (API in
   `logistics/Logistics.h`). `IsUnholy` (`:305`, the `cond.foe_is_unholy` selector's test): the LIVE SilverPerk
   (Skyrim.esm `0x10D685`) weapon-damage entries' TARGET tab (2) and the LIVE silver-enchantment MGEF
   (`0x10B116`)'s conditions, read once (`Build` `:164`, `std::call_once`, primed at kDataLoaded by
@@ -2944,6 +2965,19 @@ module. Module layout:
   engine's own `TESObjectREFR::HasKeyword` (quest-alias keywords too); `SilverNeedsOneHand` (`roles.offHand != 0` or
   a caster) makes the restock (`WantsSilverWeapon`, loot `ctx.silverOneHand`, buy `BuyThresholds::silverOneHand`)
   one-handed only. Open: MFO-B244 (loot restock with the economy off, marth's call).
+  **SILVER AMMO (marth 2026-10-12):** `IsSilverAmmo` (`:414`, the SAME keyword list as the weapon, read through
+  `TESAmmo::AsKeywordForm`; playable only; ammo has no enchantment; `[silver] silver ammo = ...` count line at
+  `Build`), `BestSilverAmmo` (`:418`, damage then value), `WantsSilverAmmo` (`:437`, enabled rule + he actually
+  fires a launcher (`UsesAmmoKind`) + owns none of his kind) -> loot (`ctx.wantSilverAmmo`,
+  `logistics/LootEquipment.cpp`, `TakeSilverAmmoFrom` `:444`, up to `kSilverAmmoStock` = 20 rounds, STOCKED) and buy
+  (`BuyThresholds::wantSilverAmmo` APPENDED, `NeedCat::kAmmoSilver` APPENDED, `TradeBridge.cpp` classify + one
+  best stack up to the stock), both under bEconomy + bEconomyBuyGear. A ranged-ONLY follower (no melee role) no
+  longer restocks a melee silver weapon (`WantsSilverWeapon`). PROTECTION: `AmmoObsolete`
+  (`logistics/Logistics_internal.h`) never retires silver ammo (sell list + loot shed) and Economy.cpp's off-kind
+  sell pass skips it; PlanBuy's ammo swap-up skips it. `AmmoIsSpecialBase` (`logistics/SwapUp.cpp:319`) also
+  returns true for `IsSilverAmmo`: silver ammo is a 'special' round, outside the ordinary ladder (`AmmoCutoff`,
+  `HeldAmmo`, the loose-ammo take set, the authority's best pick).
+  Open review findings: Docs/REVIEW-BACKLOG.md MFO-B245 (silver ammo damage field check; IsSilverAmmo vs REQ_WeaponType_SilverArrow; restore-to-best under the authority).
 - `logistics/Cast.cpp` (314, was `Logistics_Cast.cpp`) — mage-identity/school classifiers:
   `TargetMagicSchool:24`, `HasCastGambit:64`, `IsCasterFollower:101` (weapon/shield/ammo/tome
   role signal, gambit based), `UsesMageClothing:116` (MAGE CLOTHING MODE, equip/clothing decisions
@@ -3017,7 +3051,7 @@ module. Module layout:
     `PlanBuy`'s AMMO SWAP-UP pass (`TradeBridge.cpp:341`, AFTER the gear pass, before tomes): the
     best-ranked non-special ammo above the bar, up to the quantity minus what the supply pass
     already planned above the bar, never past a line's remaining stock, spend <= a QUARTER of the
-    remaining purse. The ch.17 declaration's ammo (`EquipAuthority.cpp:584`, rule 2): (a) a
+    remaining purse. The ch.17 declaration's ammo (`EquipAuthority.cpp:584`, rule 2; silver-ammo seam after (c) at `:846`, the false-pick guard at `:826`): (a) a
     PLAYER AMMO PICK -- recorded in `g_playerPicks` when, under enforcement with Ammo owned by the
     last declaration, a worn ammo that declaration did not carry appears (only the PlayerMenu path
     gets through) -- is declared while owned and pinned by `HeldAmmo`; (b) a worn special / bound

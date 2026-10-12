@@ -281,4 +281,21 @@ namespace MFO::Logistics {
     // or a caster's spell hand): the restock (loot / buy) takes ONE-handed silver weapons only.
     bool SilverNeedsOneHand(RE::Actor* a_follower, const FollowerState& a_state);
 
+    // ── SILVER AMMO (marth 2026-10-12: "for bows/crossbows it's silver ammo") ──
+    // A RANGED follower's silver slot is ammo, not a melee weapon (Silver.cpp header). Rounds the
+    // restock (loot take / buy) stocks for a follower owning none of his kind: one fight's volley.
+    inline constexpr std::int32_t kSilverAmmoStock = 20;
+    // A playable TESAmmo carrying a keyword the SilverPerk's weapon tab tests (fallback
+    // WeapMaterialSilver). Ammo has no enchantment. Pure form read, any thread.
+    bool IsSilverAmmo(const RE::TESAmmo* a_ammo);
+    // His best owned silver ammo of one kind (arrows / bolts; a bow takes arrows only, a crossbow bolts
+    // only): damage, value breaking a tie. a_outCount = the stack's count. Inventory walk: worker / main pump.
+    RE::TESAmmo* BestSilverAmmo(RE::Actor* a_follower, bool a_wantBolt, std::int32_t* a_outCount = nullptr);
+    // RESTOCK: an ENABLED act.equip_silver rule, he actually fires a bow / crossbow (a_outBolt = his
+    // kind) and owns no silver ammo of that kind. Loot / buy path (callers add the economy gates).
+    bool WantsSilverAmmo(RE::Actor* a_follower, const FollowerState& a_state, bool& a_outBolt);
+    // Loot: take up to kSilverAmmoStock of the best silver ammo of a_wantBolt's kind from a_src
+    // (a_peek: would it take anything, no move).
+    bool TakeSilverAmmoFrom(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt, bool a_peek);
+
 }

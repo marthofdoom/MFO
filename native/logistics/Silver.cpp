@@ -28,6 +28,23 @@
 //     enchantment carries the silver effect itself. Melee only for the gambit (bow / crossbow /
 //     staff never qualify): the silver bonus is a strike bonus and the gambit replaces the main
 //     weapon in the weapon hand.
+//   * SILVER AMMO (marth 2026-10-12: "for bows/crossbows it's silver ammo"): a RANGED follower (his
+//     main weapon is a bow or crossbow when the gambit acts, cast/EquipSilver.cpp) never swaps to a melee
+//     silver weapon; the gambit nocks his best owned silver ammo of his launcher's kind (a bow takes
+//     arrows only, a crossbow bolts only -- Logistics::AmmoIsBolt) and puts the previous ammo back when
+//     the foe is no longer Unholy. Silver ammo is recognised by the SAME rule source as the weapon: a
+//     keyword the live SilverPerk's WEAPON tab tests positively (fallback WeapMaterialSilver), read
+//     through TESAmmo::AsKeywordForm (TESAmmo derives only TESValueForm in our SE+AE+VR CommonLib
+//     configuration, the same reason Economy.cpp reads ammo keywords that way). Ammo carries no
+//     enchantment, so the silver-effect half of the weapon rule has no ammo twin. Playable ammo only.
+//     BestSilverAmmo ranks by damage, value breaking a tie (the ammo ladder's own rank). Protected:
+//     silver ammo is never offered by the sell list or retired by the swap-up ladder (AmmoObsolete,
+//     Logistics_internal.h; Economy.cpp's sell passes). RESTOCK (WantsSilverAmmo): an ENABLED silver
+//     rule, a follower who actually uses a bow/crossbow (the ammo-kind test the ammo ladder uses)
+//     and no silver ammo of his kind owned -> the loot judge takes up to kSilverAmmoStock rounds
+//     (TakeSilverAmmoFrom) and the buy planner buys up to that many (NeedCat::kAmmoSilver), both only
+//     under bEconomy + bEconomyBuyGear. A ranged-ONLY follower (no melee role) no longer restocks a
+//     melee silver weapon.
 //   * THE TRACKED SLOT: deterministic, so NOTHING IS SAVED -- the follower's best owned silver
 //     melee weapon (WeaponScore, the loot judge's own ranking), plus his best one-handed one
 //     (what the gambit uses when his off-hand is busy). A follower whose combat table holds an
@@ -36,7 +53,8 @@
 //     "Never replaced by best weapon logic": the keep set protects them whatever the 1H / 2H
 //     buckets decide.
 //   * RESTOCK: an ENABLED silver rule and no silver melee weapon owned -> the loot judge takes one
-//     (stocked, never equipped in place) and the buy planner buys one (under bEconomyBuyGear).
+//     (stocked, never equipped in place) and the buy planner buys one. Both only under bEconomy +
+//     bEconomyBuyGear (marth 2026-10-12: the loot restock follows the gear-buy rule).
 //
 // THREADING: the rule tables are built once under std::call_once and are immutable after, so
 // IsUnholy / IsSilverWeapon are safe on any thread (worker, the Papyrus VM thread's PlanBuy).
@@ -161,6 +179,16 @@ namespace MFO::Logistics {
             return r;
         }
 
+        // The ammo twin of the weapon keyword rule (a TESAmmo's keyword form is read at the runtime's own
+        // offset: TESAmmo::AsKeywordForm, see Economy.cpp's AmmoKeywords for why As<BGSKeywordForm> fails).
+        bool AmmoHasSilverKeyword(const Rules& a_rules, const RE::TESAmmo* a_ammo) {
+            const RE::BGSKeywordForm* kf = a_ammo ? a_ammo->AsKeywordForm() : nullptr;
+            if (!kf) return false;
+            for (auto* k : a_rules.silverKeywords)
+                if (kf->HasKeyword(k)) return true;
+            return false;
+        }
+
         void Build() {
             Rules out;
             // 1. SilverPerk: every weapon-damage entry point's WEAPON tab (1) names the silver
@@ -237,6 +265,19 @@ namespace MFO::Logistics {
             for (auto* k : out.silverKeywords) kws += (kws.empty() ? "" : ", ") + FormLabel(k);
             spdlog::info("[silver] silver weapon = keyword {}{}", kws.empty() ? "none" : kws,
                          out.silverEffect ? std::format(" or enchantment effect {}", FormLabel(out.silverEffect)) : "");
+            // Silver AMMO (same keywords): how many loaded ammo forms count, once.
+            {
+                std::size_t silverAmmo = 0, allAmmo = 0;
+                if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+                    for (auto* am : dh->GetFormArray<RE::TESAmmo>()) {
+                        if (!am) continue;
+                        ++allAmmo;
+                        if (AmmoSwapEligible(am) && AmmoHasSilverKeyword(out, am)) ++silverAmmo;
+                    }
+                }
+                spdlog::info("[silver] silver ammo = the same keyword(s) on a playable ammo form: {} of {} loaded ammo form(s)",
+                             silverAmmo, allAmmo);
+            }
             g_rules = std::move(out);
         }
 
@@ -288,6 +329,15 @@ namespace MFO::Logistics {
                 if (g.actionOpcode == Vocab::kActEquipSilver && (g.enabled || !a_enabledOnly)) return true;
             return false;
         }
+
+        // Does he actually fire a bow / crossbow (the ammo ladder's own UsesAmmoKind: a carried launcher
+        // is his stable ranged role, a magic user only with an equip-ranged gambit)? a_outBolt = his kind.
+        bool UsesLauncher(RE::Actor* a_follower, const FollowerState& a_state, const WeaponRoles& a_roles, bool& a_outBolt) {
+            (void)a_follower;
+            if (!a_roles.doRanged || !UsesAmmoKind(&a_state, a_roles, a_roles.wantCrossbow)) return false;
+            a_outBolt = a_roles.wantCrossbow;
+            return true;
+        }
     }
 
     void PrimeSilverRules() { (void)R(); }
@@ -336,6 +386,13 @@ namespace MFO::Logistics {
 
     bool WantsSilverWeapon(RE::Actor* a_follower, const FollowerState& a_state) {
         if (!a_follower || !HasSilverRule(a_state, /*a_enabledOnly*/ true)) return false;
+        // A ranged-ONLY follower (a launcher role, no melee role) uses silver AMMO, never a melee silver
+        // weapon (marth 2026-10-12): WantsSilverAmmo restocks him instead.
+        {
+            const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+            bool bolt = false;
+            if (roles.melee == WepClass::Other && UsesLauncher(a_follower, a_state, roles, bolt)) return false;
+        }
         // Review F2 on 102e24c: only a silver weapon the gambit can USE counts as owned -- with the
         // off-hand in use (a shield / second weapon by perks, or a caster's spell hand) that is a
         // one-hander, so a lone silver greatsword does not end the restock.
@@ -351,5 +408,65 @@ namespace MFO::Logistics {
     }
 
     bool IsSilverMeleeWeapon(const RE::TESObjectWEAP* a_weap) { return IsSilverMelee(a_weap); }
+
+    // ── SILVER AMMO (marth 2026-10-12: "for bows/crossbows it's silver ammo") ──
+
+    bool IsSilverAmmo(const RE::TESAmmo* a_ammo) {
+        return a_ammo && AmmoSwapEligible(a_ammo) && AmmoHasSilverKeyword(R(), a_ammo);
+    }
+
+    RE::TESAmmo* BestSilverAmmo(RE::Actor* a_follower, bool a_wantBolt, std::int32_t* a_outCount) {
+        if (a_outCount) *a_outCount = 0;
+        if (!a_follower) return nullptr;
+        RE::TESAmmo* best = nullptr; float bestDmg = 0.0f; std::int32_t bestVal = 0, bestCount = 0;
+        for (auto& [obj, data] : a_follower->GetInventory()) {
+            if (!obj || data.first <= 0) continue;
+            auto* am = obj->As<RE::TESAmmo>();
+            if (!am || AmmoIsBolt(am) != a_wantBolt || !IsSilverAmmo(am)) continue;
+            auto* entry = data.second.get();
+            const float        dmg = AmmoDamage(am);
+            const std::int32_t val = entry ? entry->GetValue() : 0;
+            if (!best || AmmoRankAbove(dmg, val, bestDmg, bestVal)) {
+                best = am; bestDmg = dmg; bestVal = val; bestCount = static_cast<std::int32_t>(data.first);
+            }
+        }
+        if (a_outCount) *a_outCount = bestCount;
+        return best;
+    }
+
+    bool WantsSilverAmmo(RE::Actor* a_follower, const FollowerState& a_state, bool& a_outBolt) {
+        if (!a_follower || !HasSilverRule(a_state, /*a_enabledOnly*/ true)) return false;
+        const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
+        if (!UsesLauncher(a_follower, a_state, roles, a_outBolt)) return false;
+        return BestSilverAmmo(a_follower, a_outBolt) == nullptr;   // owns none of his kind
+    }
+
+    bool TakeSilverAmmoFrom(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt, bool a_peek) {
+        if (!a_follower || !a_src) return false;
+        // Collect first, mutate after (RemoveItem dispatches TESContainerChangedEvent synchronously).
+        RE::TESBoundObject* best = nullptr; float bestDmg = 0.0f; std::int32_t bestVal = 0, bestCount = 0;
+        for (auto& [obj, data] : a_src->GetInventory()) {
+            if (!obj || data.first <= 0) continue;
+            auto* am = obj->As<RE::TESAmmo>();
+            if (!am || AmmoIsBolt(am) != a_wantBolt || !IsSilverAmmo(am)) continue;
+            auto* entry = data.second.get();
+            if (IsQuestObjectInstance(entry)) continue;   // quest ammo stays where it is
+            const float        dmg = AmmoDamage(am);
+            const std::int32_t val = entry ? entry->GetValue() : 0;
+            if (!best || AmmoRankAbove(dmg, val, bestDmg, bestVal)) {
+                best = obj; bestDmg = dmg; bestVal = val; bestCount = static_cast<std::int32_t>(data.first);
+            }
+        }
+        if (!best) return false;
+        // Up to the restock stock, halved until the carry weight allows it (never over-encumbered).
+        std::int32_t qty = std::min(bestCount, kSilverAmmoStock);
+        while (qty > 0 && !FitsCarryWeight(a_follower, best->GetWeight() * static_cast<float>(qty))) qty /= 2;
+        if (qty <= 0) return false;
+        if (a_peek) return true;
+        a_src->RemoveItem(best, qty, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
+        spdlog::info("[silver] {:08X}: SILVER AMMO restock -- took '{}' x{} from {:08X}", a_follower->GetFormID(),
+                     best->GetName() ? best->GetName() : "?", qty, a_src->GetFormID());
+        return true;
+    }
 
 }

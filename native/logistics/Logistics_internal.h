@@ -550,6 +550,10 @@ namespace MFO::Logistics {
             // STOCKED (never equipped in place: the gambit puts it in the hand when it is wanted).
             bool          wantSilver        = false;
             bool          silverOneHand     = false;   // ... one-handed only (SilverNeedsOneHand, review F2)
+            // SILVER AMMO (marth 2026-10-12): a RANGED follower with an enabled silver rule and no silver
+            // ammo of his kind (WantsSilverAmmo) -> up to kSilverAmmoStock rounds are loot (a body's stack).
+            bool          wantSilverAmmo    = false;
+            bool          silverAmmoBolt    = false;   // ... his kind: bolts (crossbow) vs arrows (bow)
         };
 
         // ── the looting dispatcher ──────────────────────────────────────────
@@ -1047,7 +1051,10 @@ namespace MFO::Logistics {
         return a_dmg > b_dmg || (a_dmg == b_dmg && a_val > b_val);
     }
     inline bool AmmoObsolete(const AmmoStack& a_s, const AmmoRank& a_cutoff) {
-        return a_cutoff.valid && !a_s.pinned && AmmoRankAbove(a_cutoff.dmg, a_cutoff.value, a_s.dmg, a_s.value);
+        // SILVER AMMO (marth 2026-10-12, Silver.cpp) is the silver slot's, outside the damage ladder's
+        // retirement: never obsolete, so it is never sold or dropped into a body.
+        return a_cutoff.valid && !a_s.pinned && !(a_s.obj && IsSilverAmmo(a_s.obj->As<RE::TESAmmo>())) &&
+               AmmoRankAbove(a_cutoff.dmg, a_cutoff.value, a_s.dmg, a_s.value);
     }
     bool  AmmoSwapEligible(const RE::TESAmmo* a_ammo);   // playable (a bound bow's arrows are not ours)
     bool  AmmoIsSpecialBase(const RE::TESAmmo* a_ammo);  // the projectile carries an explosion

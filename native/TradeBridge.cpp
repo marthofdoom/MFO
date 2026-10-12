@@ -111,6 +111,10 @@ namespace MFO::TradeBridge {
             if (auto* am = a_form->As<RE::TESAmmo>()) {
                 // Catalog-first, then the shared kNonBolt-flag fallback -- so uncatalogued
                 // vendor ammo still classifies and gets bought (P5).
+                // THE SILVER SLOT (86e3p2gp9): while a ranged follower owns none, silver ammo of his kind
+                // is that restock first (a pure form read, safe on this VM thread).
+                if (b.wantSilverAmmo && Logistics::IsSilverAmmo(am) && Logistics::AmmoIsBolt(am) == b.silverAmmoBolt)
+                    return NeedCat::kAmmoSilver;
                 return Logistics::AmmoIsBolt(am) ? NeedCat::kBolts : NeedCat::kArrows;
             }
             // ── #21 GEAR (Feature A): weapon/armor/mage-apparel upgrades. The
@@ -271,6 +275,7 @@ namespace MFO::TradeBridge {
             // ── GEAR (Feature A): at most ONE upgrade per category per window. ──
             std::size_t offHandIdx = SIZE_MAX;   // the second one-hander's plan line, named in buyPlan
             std::size_t silverIdx  = SIZE_MAX;   // the silver slot's plan line (86e3p2gp9), named in buyPlan
+            std::size_t silverAmmoIdx = SIZE_MAX;   // ... and its ammo line (silver ammo restock)
             if (b.buyGear) {
                 // MELEE weapon -- best WeaponScore (damage x perk-style bias, the
                 // loot judge's own ranking) above the owned in-class baseline.
@@ -322,6 +327,29 @@ namespace MFO::TradeBridge {
                             best = c.idx; bestScore = score; bestVal = c.value; }
                     }
                     if (best != SIZE_MAX) { buyOne(best, bestVal); silverIdx = best; }
+                }
+                // THE SILVER SLOT's AMMO (ClickUp 86e3p2gp9, marth 2026-10-12): a ranged follower owns no
+                // silver ammo of his kind -- buy the best affordable stack (damage, then value), up to
+                // kSilverAmmoStock rounds, held to the comfortably-affordable reserve like every gear buy.
+                if (b.wantSilverAmmo) {
+                    std::size_t best = SIZE_MAX; float bestDmg = -1.0f; int bestVal = 0, bestAvail = 0;
+                    for (auto& c : cands) {
+                        if (c.kind != NeedCat::kAmmoSilver || !affordReserve(c.value)) continue;
+                        auto* am = c.f->As<RE::TESAmmo>();
+                        const float dmg = am ? am->GetRuntimeData().data.damage : 0.0f;
+                        if (dmg > bestDmg || (dmg == bestDmg && c.value > bestVal)) {
+                            best = c.idx; bestDmg = dmg; bestVal = c.value; bestAvail = c.avail; }
+                    }
+                    if (best != SIZE_MAX) {
+                        std::int64_t qty = std::min<std::int64_t>(Logistics::kSilverAmmoStock, bestAvail - plan[best]);
+                        qty = std::min<std::int64_t>(qty, (o->budget / 2) / bestVal);
+                        if (qty > 0) {
+                            plan[best]  += static_cast<std::int32_t>(qty);
+                            o->budget   -= static_cast<std::int32_t>(qty) * bestVal;
+                            o->buySpent += static_cast<std::int32_t>(qty) * bestVal;
+                            silverAmmoIdx = best;
+                        }
+                    }
                 }
                 // RANGED weapon -- best damage above the owned baseline.
                 { std::size_t best = SIZE_MAX; int bestDmg = b.rangedBaseDmg, bestVal = 0;
@@ -421,7 +449,7 @@ namespace MFO::TradeBridge {
                     if (c.kind != kind) continue;
                     auto* am = c.f->As<RE::TESAmmo>();
                     if (!am || am->GetRuntimeData().data.flags.all(RE::AMMO_DATA::Flag::kNonPlayable) ||
-                        Logistics::AmmoIsSpecialBase(am)) continue;
+                        Logistics::AmmoIsSpecialBase(am) || Logistics::IsSilverAmmo(am)) continue;   // silver ammo is the silver slot's, not a ladder tier
                     const float dmg = am->GetRuntimeData().data.damage;
                     if (!aboveBar(dmg, c.value)) continue;
                     already += plan[c.idx];
@@ -474,7 +502,8 @@ namespace MFO::TradeBridge {
                     if (!names.empty()) names += ", ";
                     names += std::format("'{}' x{}{}", n && n->GetFullName() && *n->GetFullName() ? n->GetFullName() : "?", plan[i],
                                          i == offHandIdx ? " (second one-hander, dual wield)"
-                                         : i == silverIdx ? " (silver weapon slot)" : "");
+                                         : i == silverIdx ? " (silver weapon slot)"
+                                         : i == silverAmmoIdx ? " (silver ammo slot)" : "");
                 }
                 if (lines > 12) names += std::format(", +{} more", lines - 12);
                 o->buyPlan = std::move(names);
