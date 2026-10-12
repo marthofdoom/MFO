@@ -50,8 +50,9 @@ namespace MFO::Actuation {
     //     effect, so not a heal),
     //   * not a placement (summon / reanimate, BuffPlacementSpell),
     //   * delivery not Self,
-    //   * and AT LEAST ONE effect's archetype says nothing about an ally: Script (the record defers to a
-    //     Papyrus script), or an enemy-control archetype the record leaves non-hostile (Calm, Frenzy,
+    //   * and EVERY effect's archetype says nothing about an ally (marth 2026-10-11, MFO-B236 F-G: a mixed
+    //     spell with one declared ally-buff effect keeps AUTO's party behaviour): Script (the record defers
+    //     to a Papyrus script), or an enemy-control archetype the record leaves non-hostile (Calm, Frenzy,
     //     Demoralize, Paralysis, TurnUndead; vanilla Pacify / Calm, whose intent is a foe).
     // Every other archetype is a DECLARED ally buff and keeps AUTO's party behaviour: Invisibility (Fade
     // Other), Cloak, armor / ward / ValueModifier fortifies, Light, Rally ... (an earlier cut keyed this on
@@ -63,9 +64,11 @@ namespace MFO::Actuation {
         if (BuffPlacementSpell(a_spell)) return false;
         if (a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf) return false;
         using Arch = RE::EffectArchetypes::ArchetypeID;
+        std::size_t seen = 0;
         for (const auto* eff : a_spell->effects) {
             const auto* mgef = eff ? eff->baseEffect : nullptr;
             if (!mgef) continue;
+            ++seen;
             switch (mgef->GetArchetype()) {
             case Arch::kScript:
             case Arch::kCalm:
@@ -73,12 +76,12 @@ namespace MFO::Actuation {
             case Arch::kDemoralize:
             case Arch::kParalysis:
             case Arch::kTurnUndead:
-                return true;
-            default:
                 break;
+            default:
+                return false;   // one declared effect: the spell's nature is readable
             }
         }
-        return false;
+        return seen != 0;
     }
 
     // A Buff-kind, non-placement spell delivered to Self (Inferno / Apocalypse: archetype Script, Self,
