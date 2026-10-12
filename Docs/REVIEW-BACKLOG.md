@@ -238,7 +238,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** consistent with the brief's intent; marth's call whether a player-gated ability's style vote is worth a point. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** if marth says no, require `f.firesForNpc` (or `kind != kAbility`) on at least one style-carrying entry before promoting — i.e. promote on `rank.style.Any()` only when the fact came off an entry-point tab or an NPC-firing ability.
 - **Surfaced at edit time from:** MAP.md §5 Progression "STYLE-FACT RANKS ARE NEVER MARGINAL" What-breaks.
-- CLOSED 2026-10-12 (marth: a player-gated ability conditioned on a weapon/armor keyword must not promote): `Progression.cpp` `BuildSkill` promotes on style facts only when a firing entry (entry point, or an ability not pinned to the player) carries one (`styleFires`).
+- CLOSED 2026-10-12, marth's ruling "marginal: buyable, steers": `Progression.cpp` `BuildSkill` promotes a style-fact rank to effective only off a firing entry (`styleFires`); a rank whose style fact comes only off non-firing entries (player-gated ability conditioned on a weapon/armor keyword) is promoted dead -> marginal (marginal and effective unchanged), so it stays buyable, its vote steers, and a saved copy is never dropped on load.
 
 ### MFO-B26 — the reconcile back-off lifts on ANY inventory change, so under churn "one warn per 60 s" becomes "one warn per change + 3 passes"
 - **Raised:** Fable review of `b3ac577` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5 (c).

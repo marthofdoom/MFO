@@ -4627,7 +4627,7 @@ Guard), then the Layer 1 targets line (`Pk_TargetsParty` for a cloak, `Pk_Target
 Later phases (derived records, enacted EPs, the reverse shape) are NOT implemented.
 **Open review findings:** Docs/REVIEW-BACKLOG.md MFO-B246 (F3 mixed nodes; F7 Apply*Spell EPs unrecursed; tab-0 and runOnRef unproven; N1/N2).
 
-**STYLE-FACT RANKS ARE NEVER MARGINAL (2026-09-14, `fix/mfo-deck-0914-helmet-offhand-verdict-meo`):**
+**STYLE-FACT RANKS ARE PROMOTED (effective off a firing entry; at least marginal off non-firing ones, MFO-B25) (2026-09-14, `fix/mfo-deck-0914-helmet-offhand-verdict-meo`):**
 at the rank build (`BuildSkill`, right after the `rank.style` merge) a rank with
 `rank.style.Any()` whose `ClassifyRank` verdict is not `kEffective` is PROMOTED to
 `kEffective` (`"style-facts"` appended to its `why`; one `spdlog::debug` line per
@@ -4639,11 +4639,13 @@ an equipment-deciding perk → zero style votes), redeployed separately; this ma
 perk-style decision survive a missing or overhaul-odd verdict. The 92-row verdict
 table, `ReadEntryPointVerdicts`, `ClassifyRank` and the generator are untouched;
 every rank WITHOUT a style fact still follows the declared verdict. Consumers
-(allocator, board, census) unchanged — they read `verdict`. **MFO-B25 CLOSED (marth 2026-10-12):** the promotion also needs `styleFires` — a style
+(allocator, board, census) unchanged — they read `verdict`. **MFO-B25 CLOSED (marth 2026-10-12, "marginal: buyable, steers"):** `BuildSkill` tracks `styleFires` — a style
 fact that came off an entry which fires for an NPC (an entry-point tab, or an ability not pinned to
-the player; `BuildSkill`, the `WalkPerkEntries` loop). A player-gated ability conditioned on a
-weapon/armor keyword is no longer promoted, so no follower point buys a rank whose only follower
-effect is its style vote (its vote is still read if the rank is owned). **What breaks:**
+the player). Those ranks promote to effective as before. A rank whose style fact comes ONLY off non-firing
+entries (a player-gated ability conditioned on a weapon/armor keyword) is promoted to at least MARGINAL
+(dead -> marginal, marginal and effective unchanged): still buyable, its vote still steers, never
+filtered and never dropped on load; the auto-allocator ranks it below perks that really work. The debug
+line names the target verdict; both count in `stylePromotedRanks`. **What breaks:**
 renaming/renumbering `WeaponKind`/`ArmorKind` bits breaks `Logistics::WeaponKindOf` +
 `TradeBridge::BuyThresholds::preferKinds` (same bit space); calling `TallyStyleVotes`
 off the main thread races the allocator's perk writes (the Logistics mirror exists for

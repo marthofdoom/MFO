@@ -851,17 +851,24 @@ namespace MFO::Progression {
                     // truth off the perk record itself, so it is effective by
                     // definition; the declared verdict still rules every rank
                     // WITHOUT a style fact. Belt-and-braces to the ESL fix.
-                    // MFO-B25 (marth 2026-10-12): only a style fact that came off an entry which FIRES
-                    // for an NPC (an entry-point tab, or an ability not pinned to the player) promotes.
-                    // A player-gated ability conditioned on a weapon / armor keyword has no follower
-                    // effect but its vote, and is not worth a perk point: it keeps its declared verdict
-                    // (its vote is still read if the rank is owned, TallyStyleVotes is unchanged).
-                    if (rank.verdict != Verdict::kEffective && rank.style.Any() && styleFires) {
-                        spdlog::debug("[prog] {} ({:08X}) rank {}: {} -> effective on style-facts ({})",
+                    // MFO-B25 (marth 2026-10-12, "marginal: buyable, steers"): a style fact that came off
+                    // an entry which FIRES for an NPC (an entry-point tab, or an ability not pinned to the
+                    // player) promotes to effective, as above. A style fact that came ONLY off non-firing
+                    // entries (a player-gated ability conditioned on a weapon / armor keyword) promotes
+                    // to at least MARGINAL: dead -> marginal, marginal stays, effective stays. Follower
+                    // perks steer follower weapons, so the rank must stay buyable and its vote must
+                    // steer, and a dead rank would be filtered (a fully dead node drops saved
+                    // allocations on load). The auto-allocator ranks marginal below working perks.
+                    if (rank.verdict != Verdict::kEffective && rank.style.Any() &&
+                        (styleFires || rank.verdict == Verdict::kDead)) {
+                        const Verdict to = styleFires ? Verdict::kEffective : Verdict::kMarginal;
+                        spdlog::debug("[prog] {} ({:08X}) rank {}: {} -> {} on style-facts{} ({})",
                                       view.name, rank.perkFormID, rankNo + 1,
                                       rank.verdict == Verdict::kMarginal ? "marginal" : "dead",
+                                      to == Verdict::kEffective ? "effective" : "marginal",
+                                      to == Verdict::kEffective ? "" : " (non-firing entries only)",
                                       why.empty() ? "no reason recorded" : why);
-                        rank.verdict = Verdict::kEffective;
+                        rank.verdict = to;
                         Append(why, "style-facts");
                         ++a_out.stylePromotedRanks;
                     }
