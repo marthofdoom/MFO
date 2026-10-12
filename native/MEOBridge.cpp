@@ -770,14 +770,18 @@ namespace MFO::MEOBridge {
                 // socket, so fill only ONE slot this pass; the rest fill next pass once
                 // WornUid returns the minted uid (avoids ambiguous uid-0 targeting).
                 const bool mintGuard = (item.uid == 0);
-                // If an UNWORN duplicate copy of this base is carried (e.g. a junk copy
-                // awaiting sale), a uid-0 SocketGem could mint on the wrong instance and
-                // park the gem on to-be-sold junk (churn with economy on, permanent loss
-                // with it off). Defer until the copy is gone or the worn copy has a real
-                // uid. A second WORN copy (the dual-wield pair) is not junk: MEO's uid-0
-                // path mints on a worn xList (plugin.cpp:9143), so it lands on one of the
-                // pair; only ONE uid-0 request per base per pass, the other instance waits.
-                if (mintGuard && invBaseCount(item.base) > wornCopies(item.base)) { rec.dupDeferred = true; continue; }
+                // DUPLICATE-COPY DEFERRAL, NARROWED (MFO-B35). MEO's uid-0 path (ApiEnsureInstanceXList,
+                // MEO native/plugin.cpp:9647-9658) mints IN PLACE on the first xList that is WORN, has no
+                // ExtraUniqueID and no kEnchantment, and falls through to the drop-stamp-pickup of an
+                // UNWORN copy (:9665-9672) only when no such worn xList exists. Every item that reaches
+                // here has exactly that xList (addItem located it worn, uid 0, and the foreign-enchant
+                // skip above dropped the enchanted ones), so a carried spare copy is never a candidate
+                // and no longer starves the worn item. The one case the in-place mint cannot cover is a
+                // worn xList carrying an enchant; the skip above already stops that, this keeps the
+                // deferral for it should that skip ever change. A second WORN copy (the dual-wield
+                // pair) mints on a worn xList too; only ONE uid-0 request per base per pass, the
+                // other instance waits (mintedBases below).
+                if (mintGuard && item.xlEnchanted && invBaseCount(item.base) > wornCopies(item.base)) { rec.dupDeferred = true; continue; }
                 rec.considered = true;   // classifier order: dupDeferred is tested first, then mintWait/mintIssued/refused, then excluded
                 if (mintGuard && mintedBases.contains(item.base)) { rec.mintWait = true; continue; }
 
