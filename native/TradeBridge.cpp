@@ -336,7 +336,7 @@ namespace MFO::TradeBridge {
                     for (auto& c : cands) {
                         if (c.kind != NeedCat::kAmmoSilver || !affordReserve(c.value)) continue;
                         auto* am = c.f->As<RE::TESAmmo>();
-                        const float dmg = am ? Logistics::AmmoDamage(am) : 0.0f;
+                        const float dmg = am ? am->GetRuntimeData().data.damage : 0.0f;
                         if (dmg > bestDmg || (dmg == bestDmg && c.value > bestVal)) {
                             best = c.idx; bestDmg = dmg; bestVal = c.value; bestAvail = c.avail; }
                     }
