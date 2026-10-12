@@ -824,6 +824,7 @@ namespace MFO::Progression {
                     // Style facts for this rank: the union over its entries
                     // (frozen with the catalog; TallyStyleVotes reads them).
                     bool gatedAll = false;   // F1(b): every FIRING entry behind the alone gate
+                    bool styleFires = false; // MFO-B25: a style fact came off an entry that FIRES for an NPC
                     {
                         bool anyFiring = false;
                         gatedAll = true;
@@ -832,6 +833,7 @@ namespace MFO::Progression {
                             rank.owner.Merge(f.owner);
                             if (f.kind == PerkEntryKind::kQuest || !f.firesForNpc) continue;
                             anyFiring = true;
+                            if (f.style.Any()) styleFires = true;
                             if (!f.aloneGated) gatedAll = false;
                         }
                         gatedAll = anyFiring && gatedAll;
@@ -849,7 +851,12 @@ namespace MFO::Progression {
                     // truth off the perk record itself, so it is effective by
                     // definition; the declared verdict still rules every rank
                     // WITHOUT a style fact. Belt-and-braces to the ESL fix.
-                    if (rank.verdict != Verdict::kEffective && rank.style.Any()) {
+                    // MFO-B25 (marth 2026-10-12): only a style fact that came off an entry which FIRES
+                    // for an NPC (an entry-point tab, or an ability not pinned to the player) promotes.
+                    // A player-gated ability conditioned on a weapon / armor keyword has no follower
+                    // effect but its vote, and is not worth a perk point: it keeps its declared verdict
+                    // (its vote is still read if the rank is owned, TallyStyleVotes is unchanged).
+                    if (rank.verdict != Verdict::kEffective && rank.style.Any() && styleFires) {
                         spdlog::debug("[prog] {} ({:08X}) rank {}: {} -> effective on style-facts ({})",
                                       view.name, rank.perkFormID, rankNo + 1,
                                       rank.verdict == Verdict::kMarginal ? "marginal" : "dead",
