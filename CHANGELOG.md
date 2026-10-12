@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.6.1 -- Archers heal without dropping to melee
+
+- **Needs Harbinger 0.12.0 or newer (ABI 21).** Harbinger 0.13.0 is current.
+- **Archers dual-cast their heals.** A follower with a bow or crossbow heals with both hands when their magicka covers it. The game has no free hand to put a melee weapon in.
+- **Short on magicka, they still heal.** The heal goes in one hand and the other hand stays empty. They no longer swap to a mace or skip the heal.
+- **An archer stays an archer for the whole fight.** A heal that put the bow away does not change that. Drawing a melee weapon does.
+- **Heals that really fired are no longer cut short.** MFO now counts the hand's own spell fire as proof the heal went off. Its waits are sized from measured cast timings.
+
 ## v2.6.0 -- Roster removal, gem choice and attack on sight
 
 - **Needs Harbinger 0.12.0 or newer (ABI 21).** Install it together with Harbinger 0.13.0. The new gem choice needs MEO 1.0.20.
