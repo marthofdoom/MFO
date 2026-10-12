@@ -286,6 +286,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Wave-2 location (2026-09-25, `native/logistics/`):** `AcquireEquip` (`native/logistics/Gear.cpp:640`) callers: `native/logistics/LootEquipment.cpp:473`, `native/logistics/EquipAuthority.cpp:185`.
 
 ### MFO-B33 — LEFTOVER `off-domain` / `duplicate-copy` WARN every 60 s in by-design steady states
+- **DECIDED + FIXED 2026-10-11 (marth: drop to INFO):** the `off-domain` LEFTOVER line is info (MEOBridge.cpp), as the mint deferral already was; the other classes stay WARN. ClickUp 86e3m3v36.
 - **Raised:** Fable tier-3 review of `1efa3e3` (`fix/mfo-meo-no-loose-gems`), SEV-5 #3, record only.
 - **Finding (verbatim):** kOffDomain and kDuplicateCopy WARN every 60 s in by-design steady states (one loose armor gem, all armor full, a weapon socket open); suggest INFO; marth's call.
 - **Reviewer's reasoning:** the invariant is "no loose gem while a socket it FITS is open"; an off-domain gem with only an off-domain socket open is not a broken invariant, and a junk copy that never sells (economy off) is a steady state, so both warn on a condition the user cannot act on from MFO's side.
@@ -561,6 +562,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Fix shape when drained:** keep the bit until a player level-up has been credited (clear it in `PollWork` on `playerLeveled`), not on the first award.
 
 ### MFO-B236 -- Enemy / Self cast targets (Vocab::Subject Enemy=3 / Caster=4): deferred review findings F-D..F-H
+- **F-G DECIDED + FIXED 2026-10-11 (marth: AUTO refuses only when ALL effects are undeclared):** `SpellNatureUndeclared` (cast/SpellSupport.cpp) now returns true only when every effect is Script / Calm / Frenzy / Demoralize / Paralysis / TurnUndead; one declared effect keeps AUTO's party behaviour. ClickUp 86e3m3q0j.
 Raised against `d8b0aa3` (`feat/mfo-hide-unsupported-spells`, Opus tier-3 review, nothing above SEV-3), 2026-10-06.
 Text below is the finding as relayed by the coordinator from the review.
 - **F-D (SEV-4):** on an older DLL, re-enabling such a rule runs it at the player fallback, and a round trip silently leaves it disabled. Document it in the Serialization.h v5 note. *Reasoning:* the flags-bit-1 guard only makes an older DLL load the rule disabled; the older DLL still cannot resolve Enemy / Self, and it saves the rule back with flags 0. Documented in the `Serialization.h` v5 note in the F-A commit.

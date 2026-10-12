@@ -936,10 +936,11 @@ namespace MFO::MEOBridge {
                     if (fresh || ls.inventoryKey != inventoryKey || now >= ls.at + kStuckBackoff) {
                         ls.at = now;
                         ls.inventoryKey = inventoryKey;
-                        // A one-pass mint deferral is by design (info); every other class is a
+                        // A one-pass mint deferral and an off-domain gem (a by-design steady state that
+                        // repeats every 60 s; marth 2026-10-11, MFO-B33) are info; every other class is a
                         // broken invariant the user needs to see (warn).
                         const char* actorName = a_actor->GetName() ? a_actor->GetName() : "?";
-                        if (why == LeftoverWhy::kMinting)
+                        if (why == LeftoverWhy::kMinting || why == LeftoverWhy::kOffDomain)
                             spdlog::info("[meo] reconcile LEFTOVER {:08X} '{}' {:08X} '{}' x{} -- {}",
                                          a_actor->GetFormID(), actorName, loose[i].gemBase, loose[i].name, leftN, LeftoverWord(why));
                         else
