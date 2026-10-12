@@ -59,6 +59,8 @@ namespace MFO::Logistics {
             // read here, BEFORE mageMode, so mageMode can gate on it directly --
             // no circular dependency on the roles derived further down.
             const std::uint8_t baseClass = a_state ? a_state->combatClassOverride : 0;
+            // THE SILVER SLOT (ClickUp 86e3p2gp9): restock one silver melee weapon when he owns none.
+            ctx.wantSilver = a_state && WantsSilverWeapon(a_follower, *a_state);
 
             // ── MAGIC LOADOUT (v1.0.29) ─────────────────────────────────────
             // Gambit-driven magic-user detection. A magic user gets two loot
@@ -247,6 +249,8 @@ namespace MFO::Logistics {
                     (!ctx.daggersOnly || weap->GetWeaponType() == WT::kOneHandDagger) &&
                     weap->GetAttackDamage() > ctx.myBackupDmg)
                     return true;
+                // THE SILVER SLOT (86e3p2gp9): any silver melee weapon while he owns none.
+                if (ctx.wantSilver && IsSilverMeleeWeapon(weap)) return true;
                 return false;
             }
             return false;
@@ -305,6 +309,8 @@ namespace MFO::Logistics {
             std::int32_t        bestMageMetric= 0;         // value (+fortify mag for a school piece); higher = fancier
             RE::TESBoundObject* bestBackup    = nullptr;   // the mage's melee sidearm (upgrade past best owned)
             std::uint16_t       bestBackupDmg = myBackupDmg;   // beat his best-OWNED sidearm, not the wielded hand
+            RE::TESBoundObject* bestSilver    = nullptr;   // THE SILVER SLOT (86e3p2gp9): one silver melee weapon when he owns none
+            float               bestSilverScore = -1.0f;   // best by WeaponScore among this body's silver weapons
 
             for (auto& [obj, data] : a_src->GetInventory()) {
                 if (!obj || data.first <= 0) continue;
@@ -446,6 +452,12 @@ namespace MFO::Logistics {
                         bestBackupDmg = weap->GetAttackDamage();
                         bestBackup    = obj;
                     }
+                    // THE SILVER SLOT (86e3p2gp9): restock -- the best silver melee weapon here.
+                    if (ctx.wantSilver && IsSilverMeleeWeapon(weap) &&
+                        WeaponScore(ctx.roles, weap) > bestSilverScore) {
+                        bestSilverScore = WeaponScore(ctx.roles, weap);
+                        bestSilver      = obj;
+                    }
                 }
             }
 
@@ -456,6 +468,7 @@ namespace MFO::Logistics {
             // loadout). One item this tick (§4.3).
             RE::TESBoundObject* best = bestWeap    ? bestWeap
                                      : bestRanged  ? bestRanged
+                                     : bestSilver  ? bestSilver   // the silver slot, while he owns none (86e3p2gp9)
                                      : bestOffHand ? bestOffHand
                                      : bestBackup  ? bestBackup
                                      : bestMage    ? bestMage
@@ -514,8 +527,10 @@ namespace MFO::Logistics {
             // primary: equipped in place and its gems carried. The buy / owned-
             // upgrade pass calls the SAME AcquireEquip with a_src=nullptr.
             const bool trueSecond = best == bestOffHand && best != bestWeap;
+            // The silver weapon (86e3p2gp9) is STOCKED too, unless it is also the primary upgrade.
+            const bool silverStock = best == bestSilver && best != bestWeap;
             const bool equipped   = AcquireEquip(a_follower, best, a_src, myWeap,
-                                                 best == bestBackup || trueSecond);
+                                                 best == bestBackup || trueSecond || silverStock);
             // THE SWAP-UP RULE: commit the planned drops only now that the upgrade
             // is in his inventory (AcquireEquip's transfer is synchronous on this
             // worker). If it did not arrive, nothing is dropped -- and said so.

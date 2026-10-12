@@ -402,6 +402,7 @@ namespace {
             MFO::Progression::Init();       // addon detection + frozen perk catalog (§1/§2/§3); read-only pass
             MFO::ProgAllocator::Init();     // allocator economy + class lists from the addon ESL; inert if absent
             MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
+            MFO::Logistics::PrimeSilverRules();         // read the live SilverPerk / silver enchantment once ([silver] lines)
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
             MFO::Logistics::GemRules::LogStatus();   // [gems] rules ACTIVE / inactive (<why>)
             MFO::APMFBridge::Acquire();     // APMF cast-selection API (Phase 3); nullptr if APMF absent (degrades)

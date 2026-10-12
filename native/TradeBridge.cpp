@@ -119,6 +119,9 @@ namespace MFO::TradeBridge {
             // form to a category here -- the beats-baseline test is in PlanBuy.
             if (b.buyGear) {
                 if (auto* weap = a_form->As<RE::TESObjectWEAP>()) {
+                    // THE SILVER SLOT (86e3p2gp9): while he owns none, a silver melee weapon is that
+                    // restock first (a pure form read, safe on this VM thread).
+                    if (b.wantSilver && Logistics::IsSilverMeleeWeapon(weap)) return NeedCat::kWeaponSilver;
                     const int wc = Logistics::WeaponBuyClass(weap->GetWeaponType());  // 0=1H 1=2H 2=Ranged 3=Other
                     if (b.meleeClass != 3 && wc == b.meleeClass) return NeedCat::kWeaponMelee;
                     if (b.doRanged && wc == 2) {
@@ -265,6 +268,7 @@ namespace MFO::TradeBridge {
 
             // ── GEAR (Feature A): at most ONE upgrade per category per window. ──
             std::size_t offHandIdx = SIZE_MAX;   // the second one-hander's plan line, named in buyPlan
+            std::size_t silverIdx  = SIZE_MAX;   // the silver slot's plan line (86e3p2gp9), named in buyPlan
             if (b.buyGear) {
                 // MELEE weapon -- best WeaponScore (damage x perk-style bias, the
                 // loot judge's own ranking) above the owned in-class baseline.
@@ -301,6 +305,21 @@ namespace MFO::TradeBridge {
                             best = c.idx; bestScore = score; bestVal = c.value; }
                     }
                     if (best != SIZE_MAX) { buyOne(best, bestVal); offHandIdx = best; }
+                }
+                // THE SILVER SLOT (ClickUp 86e3p2gp9): he owns no silver melee weapon and an
+                // act.equip_silver rule wants one -- buy ONE, the best affordable by WeaponBuyScore
+                // (no owned baseline: he has none), cheaper on a tie.
+                if (b.wantSilver) {
+                    std::size_t best = SIZE_MAX; float bestScore = -1.0f; int bestVal = 0;
+                    for (auto& c : cands) {
+                        if (c.kind != NeedCat::kWeaponSilver || !affordReserve(c.value)) continue;
+                        auto* w = c.f->As<RE::TESObjectWEAP>();
+                        const float score = w ? Logistics::WeaponBuyScore(w, b.preferKinds) : 0.0f;
+                        if (score > bestScore ||
+                            (best != SIZE_MAX && score == bestScore && c.value < bestVal)) {
+                            best = c.idx; bestScore = score; bestVal = c.value; }
+                    }
+                    if (best != SIZE_MAX) { buyOne(best, bestVal); silverIdx = best; }
                 }
                 // RANGED weapon -- best damage above the owned baseline.
                 { std::size_t best = SIZE_MAX; int bestDmg = b.rangedBaseDmg, bestVal = 0;
@@ -452,7 +471,8 @@ namespace MFO::TradeBridge {
                     auto* n = a_forms[i] ? a_forms[i]->As<RE::TESFullName>() : nullptr;
                     if (!names.empty()) names += ", ";
                     names += std::format("'{}' x{}{}", n && n->GetFullName() && *n->GetFullName() ? n->GetFullName() : "?", plan[i],
-                                         i == offHandIdx ? " (second one-hander, dual wield)" : "");
+                                         i == offHandIdx ? " (second one-hander, dual wield)"
+                                         : i == silverIdx ? " (silver weapon slot)" : "");
                 }
                 if (lines > 12) names += std::format(", +{} more", lines - 12);
                 o->buyPlan = std::move(names);

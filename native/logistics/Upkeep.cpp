@@ -426,6 +426,7 @@ namespace MFO::Logistics {
             return false;
         };
 
+        const auto [silverBest, silverOneHand] = TrackedSilver(a_follower, a_state);   // never shed (86e3p2gp9)
         RE::TESBoundObject* shed = nullptr; std::int32_t shedCount = 0; int inRoleWeapons = 0;
         std::vector<RE::FormID> keptForDeposit;   // MFO-B126: handed to Lotd after the walk
         std::vector<RE::FormID> inRoleBases;      // ... with the in-role weapons Lotd re-checks at ship time
@@ -443,6 +444,8 @@ namespace MFO::Logistics {
             // management (the Gauldurbow fix) -- an off-role signature weapon
             // stays in the pack, not handed to the player.
             if (IsStockGear(a_follower->GetFormID(), obj->GetFormID())) continue;
+            // THE SILVER SLOT (ClickUp 86e3p2gp9): the tracked silver weapon is his whatever his role.
+            if (obj == silverBest || obj == silverOneHand) continue;
             if (!Config::g_lootSpecialItems.load() && socketed(data.second.get())) continue;
             // LOTD: a relic he carries for the museum's deposit trip is deposited, not
             // handed to the player (only when the trip can actually happen).

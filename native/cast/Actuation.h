@@ -561,6 +561,15 @@ namespace MFO::Actuation {
     // mid-fight, the kill switch, dismissal.
     void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown = false);
 
+    // SILVER SWITCH-BACK (ClickUp 86e3p2gp9, cast/EquipSilver.cpp). Called by the Scheduler on
+    // every combat lap, just BEFORE ReconcileForcedWeapon: a_held = an act.equip_silver rule's
+    // condition held this lap (fired, satisfied, in its window, cannot act); a_knownFalse = it is
+    // KNOWN not to (the scan ran to the end, or the rule sat above the stop). After 2 s of
+    // known-false the silver weapon leaves the main hand and the main weapon it replaced comes
+    // back: as the force-hold it was (an equip gambit's), else re-armed non-forced. No open
+    // silver episode -> no-op. Worker-serial, like Fire.
+    void ReconcileSilver(RE::Actor* a_follower, bool a_held, bool a_knownFalse);
+
     // The ledger as it stands NOW for a_follower: {right, left} hold FormIDs, 0 =
     // no hold in that hand (ABI v9, Fable F1 on 7857446). Read under g_forcedMx,
     // any worker-serial reader. THE OOC declaration road's source for the

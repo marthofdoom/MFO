@@ -545,6 +545,10 @@ namespace MFO::Logistics {
             bool          wantsRanged       = false;   // diagnostics only
             RE::ActorValue school           = RE::ActorValue::kNone;   // diagnostics only
             int           castGambits       = 0;        // diagnostics only
+            // THE SILVER SLOT (ClickUp 86e3p2gp9): an enabled act.equip_silver rule and no silver
+            // melee weapon owned (Logistics::WantsSilverWeapon) -> one silver melee weapon is loot,
+            // STOCKED (never equipped in place: the gambit puts it in the hand when it is wanted).
+            bool          wantSilver        = false;
         };
 
         // ── the looting dispatcher ──────────────────────────────────────────
