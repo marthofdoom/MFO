@@ -1223,10 +1223,8 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     (`cast/Hands.cpp`), and a SHADOW LOCK on the right that `CastOn` stamps because its plan is `HandPick::DualCast`
     (`resolveHands`; a right held by a higher-ranked rule falls back to the old single-hand claim). `PreemptHand` on
     either hand ends the whole dual heal; `HealHandEnded` clears the shadow lock. The mode is STICKY: `Try` and the
-    HealRoadLap keep a standing dual dual (a flip re-requests the claim and interrupts the charge; `HealHand::dual`
-    carries it across the stream cap's re-stream gap). Pool SHORT: no single-hand claim either (it is what hands the
-    right hand to a melee swap; a bow-preferring bias needs a Harbinger ABI change): the heal is declined that lap
-    (transparent, `[heal-hand] ... bow user: heal ... NOT claimed`, 5 s throttle) and the bow stays. **What breaks:**
+    HealRoadLap keep a standing dual claim dual (a flip re-requests the claim and interrupts the charge; `HealHand::dual`
+    carries it across the stream cap's re-stream gap). Pool SHORT: a SINGLE-HAND LEFT heal plus a FULL right-hand floor (marth: "she holds no weapon while healing"): `APMFBridge::NoteArcherRightFloor` (`apmf/CastClaims.cpp`) stamps `Owned::archerFloor` each lap; while fresh, `ReconcileHandFloorLocked` (`apmf/Bridge.cpp`) mints the right floor WITHOUT `kCastFlag_FloorSpellsOnly` (`CastClaim::fullFloor`, part of the floor's identity), so Harbinger's HandBlock refuses weapons, shields and torches in it. Bridge-internal, no ABI change; the floor is kept through the stream cap's re-stream gap with no driving claim and is never dropped as "silent"; ABI >= 19 only. The same floor covers the dual->single fallback (`CastOn.resolveHands`, quiet `ResolveCastHand` probe, `HealNoteLauncherFloor`). "Launcher user" = a bow / crossbow in the right hand or the force-hold ledger WHEN THE NEW CLAIM DISPLACES IT (`g_launcherSeen`, erased at fight end by `ClearHealNeverFired`, so bow -> sword is melee mode). `RightHealRule` returns the left lock's rank for a dual heal (Equip.cpp holds off MFO's one-hand equip gambit). Open findings: MFO-B252. **What breaks:**
     a new reader of `GetHealCastSpell(RIGHT)` will not see a dual heal (use `IsHealCastDual`); a `ResolveCastHand` plan
     with `left && right` is now also a dual HEAL (the in-flight branch of `CastOn` gates on `healClaim`);
     `RefreshOwnedCastOnHand(kApmfHandDualCast)` also replays the dual heal.

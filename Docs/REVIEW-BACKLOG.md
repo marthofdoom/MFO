@@ -1621,3 +1621,15 @@ were fixed on the branch.
   VerifiedAddresses row). A friend-by-relationship territorial NPC could read as Neutral.
 - (SEV-5) Field watch: the territorial term has no "radius entered" runtime flag (by marth's ruling), so a territorial
   animal anywhere within leash and sight is engaged even when it has not noticed anyone. Watch the per-actor skip log.
+
+### MFO-B252 (SEV-4/5 x3) -- archer dual-cast heal review, deferred items
+Raised against 447d2f8 (`fix/mfo-heal-archer-dualcast`, Opus review, `scratchpad/agentlogs/review-heal-archer.md`), 2026-10-12.
+The SEV-2s (decline vs ruling, session-long launcher memory) and SEV-3s were fixed on the branch. Cross-referenced from
+MAP.md (ARCHERS HEAL BY DUAL-CASTING).
+- **(SEV-4)** Exact mode (`iCastControl` 4): `Loadout.cpp:~424-430` strips a RIGHT-hand proxy from the hands; a dual
+  heal's proxy is armed on both hands, so exact-mode Prepare can deselect the right copy. Same family as MFO-B227.
+- **(SEV-5)** A dual heal is `heal[0].hand == kApmfHandDualCast` in the LEFT slot only. Future readers that map a claim's
+  `hand` to a watch slot (`WatchSlot`, silentPastGate's `c.hand == kApmfHandLeft ? Left : Right`) will read it as RIGHT.
+  Map DualCast to the left slot there before adding such a reader.
+- **(SEV-5)** `kObservedFiringRecencyMs` 5000 rests on two inter-fire gaps (1.35 s, 3.78 s; n=2). Re-measure from the
+  next field log before trusting it as more than a floor.

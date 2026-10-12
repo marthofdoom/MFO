@@ -1238,10 +1238,13 @@ shadow cast lock (stamped from a `HandPick::DualCast` plan) and `ClaimLiveOnHand
 HINT to the engine (APMF_API.h): a follower that cannot arm both hands casts single-hand, unmasked.
 **Pool:** `HealRoad.cpp ArcherHealPlan` compares current magicka to `Loadout::DualCastMagickaCost` (the real
 `CalculateMagickaCost`, x2.8 with the school's dual-cast perk, x2 without, over the `kHealCastTtlMs` window for a
-concentration spell). **Short pool:** no claim at all (transparent, one `bow user: heal ... NOT claimed` WARN per 5 s).
-A single-hand claim is exactly what hands the right hand to a melee swap, and keeping a ranged item preferred would need
-a Harbinger bias (ABI change), so ending the claim before it stands is the clean option. A bow user whose right hand a
-higher-ranked rule holds keeps the old single-hand claim (that rule owns the right hand, so there is no free hand).
+concentration spell). **Short pool:** a single-hand LEFT heal with a FULL right-hand floor (marth: "she holds no weapon
+while healing"). The bridge's idle-hand floor normally carries `kCastFlag_FloorSpellsOnly` (so a one-hander may enter
+the idle hand, which is how the mace got in); for a launcher user the heal road stamps `NoteArcherRightFloor` every lap
+and the floor is minted WITHOUT that bit, which Harbinger's HandBlock (`core/HandBlock.cpp` HeldFor) holds against every
+weapon, shield and torch. This is a bridge-internal floor mode on the existing ABI (no change), kept up through the
+re-stream gap and through the dual->single fallback (a bow user whose right hand a higher-ranked rule holds). A launcher
+user is a bow / crossbow in the right hand or the force-hold ledger when the new claim displaces it, per fight.
 **Mode is sticky** for a claim's life (a flip re-requests it and interrupts the charge). **Fire watcher:** Harbinger's
 census (`NotifyStartCast`) is not exposed to MFO; `NeverFiredRelease` now also counts the anim graph's SpellFire on the
 claim's hand, and `kHoldLastSeenCapMs` / `kObservedFiringRecencyMs` are 6500 / 5000 ms from the field numbers in

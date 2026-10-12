@@ -294,7 +294,12 @@ namespace MFO::Actuation {
             // (n=4), while the anim graph's own SpellFire event for the hand is counted at the moment of the
             // release (HandFireSink). A SpellFire on THIS hand since the claim, inside the recency window, is a
             // fire: the claim is not "never fired" just because its cast event is still in flight.
-            if (!approachStuck && HandFireSince(fid, a_hand, stamp, APMFBridge::kObservedFiringRecencyMs))
+            if (!approachStuck &&
+                (HandFireSince(fid, a_hand, stamp, APMFBridge::kObservedFiringRecencyMs) ||
+                 // a DUAL-CAST heal fires from BOTH hands: either hand's SpellFire is its fire
+                 (APMFBridge::IsHealCastDual(fid, a_spell) &&
+                  HandFireSince(fid, a_hand == kHandLeft ? kHandRight : kHandLeft, stamp,
+                                APMFBridge::kObservedFiringRecencyMs))))
                 return false;
             // THE IN-FLIGHT EXEMPTION, NARROWED (review 2026-10-06): a charge that is building or casting
             // is kept, and so is a charged-and-WAITING one while its recipient reads Occluded (it fires
@@ -738,75 +743,81 @@ namespace MFO::Actuation {
     }
 
     // ── ARCHERS HEAL BY DUAL-CASTING (fix/mfo-heal-archer-dualcast, marth 2026-10-12) ──────────────────────
-    // "No melee swap ... But dual casting preferred for bow users, assuming pool sufficient."
+    // "No melee swap ... But dual casting preferred for bow users, assuming pool sufficient." And, for the short
+    // pool, "she holds no weapon while healing".
     // THE FAILURE (field 12:11-12:14, Auri): a LEFT heal claim refuses the bow at Harbinger's hand block
     // (competes=Right+Left), the right hand stays open, and the engine equips its best MELEE weapon there, so the
     // stance hands off to melee while the heal stands. A claim on BOTH hands (kCastFlag_DualCast, the existing
-    // ABI bit; the engine's seats admit the claimed spell on either hand and the hand block refuses every weapon
-    // for a held hand) leaves the engine no free hand to put a mace in.
-    // WHO: a follower whose primary weapon is a bow or crossbow: one in the right hand now, one in MFO's
-    // force-hold ledger (the equip gambit's pick), or one seen in the right hand earlier in this fight (the
-    // claim pushes the bow out, so the live read alone would forget it on the next lap). Cleared with the road.
+    // ABI bit) leaves the engine no free hand; the hand block refuses every weapon for a held hand.
+    // WHO: a bow / crossbow user whose launcher is in the right hand, or in MFO's force-hold ledger, WHEN THIS
+    // HEAL CLAIM DISPLACES IT (decided once per NEW claim, kept for the claim's life, `g_launcherSeen`). A follower
+    // who has switched to a sword is in melee mode and is not one; the set is erased at fight end
+    // (ClearHealNeverFired) and by ResetHealRoad.
     // POOL SUFFICIENT = current magicka covers the spell's real dual cost (Loadout::DualCastMagickaCost: the
-    // single-hand cost CalculateMagickaCost x the vanilla dual-cast mult, 2.8 with the school's perk, 2 hands
-    // without) over the claim window: one cast for fire-and-forget, kHealCastTtlMs of per-second drain for a
-    // concentration spell (the window one claim stands before its heartbeat is re-judged).
-    // NOT SUFFICIENT: no single-hand claim either -- that claim is exactly what hands the right hand to a melee
-    // swap, and the only clean way to keep a ranged item preferred (a bow-preferring bias) needs a Harbinger ABI
-    // change. The heal is DECLINED this lap (transparent, loud once per 5 s); the claim never stands, so the bow
-    // is never refused and nothing is torn down. The rule asks again next lap and takes the dual claim the
-    // moment the pool allows. A dual claim already standing stays dual for its whole life (a mode flip
-    // re-requests the claim and interrupts the charge), and a bow user whose right hand a higher-ranked
-    // offense claim holds keeps the old single-hand claim (the right is not free for a melee swap then).
+    // single-hand cost x the vanilla dual-cast mult, 2.8 with the school's perk, 2 hands without) over the claim
+    // window: one cast for fire-and-forget, kHealCastTtlMs of per-second drain for a concentration spell.
+    // POOL SHORT: NOT a decline (marth: "keep trying", and a heal is worth casting). A SINGLE-HAND LEFT heal, with
+    // the bridge's right-hand idle floor made FULL (APMFBridge::NoteArcherRightFloor, no kCastFlag_FloorSpellsOnly,
+    // so Harbinger's HandBlock refuses weapons in that hand too): she holds no weapon while healing and the melee
+    // swap cannot happen. Existing ABI, bridge-internal floor mode. The same floor covers the dual->single
+    // fallback and the dual concentration heal's one-lap re-stream gap (floor kept without a driving claim).
+    // A dual claim already standing stays dual for its whole life (a mode flip re-requests the claim and
+    // interrupts the charge).
     namespace {
-        std::unordered_set<RE::FormID> g_launcherSeen;   // worker-serial; ResetHealRoad clears it
+        std::unordered_set<RE::FormID> g_launcherSeen;   // worker-serial; per fight (ClearHealNeverFired), ResetHealRoad
 
         bool IsLauncher(const RE::TESForm* a_form) {
             const auto* w = a_form ? a_form->As<RE::TESObjectWEAP>() : nullptr;
             return w && (w->IsBow() || w->IsCrossbow());
         }
 
-        bool LauncherUser(RE::Actor* a_follower) {
+        // A launcher is in the right hand (or MFO's ledger holds one there) RIGHT NOW: the moment a new heal claim
+        // would displace it. Records the answer for the claim's life (true inserts, false erases).
+        bool LauncherAtNewClaim(RE::Actor* a_follower) {
             const auto fid = a_follower->GetFormID();
-            bool seen = g_launcherSeen.count(fid) != 0;
-            if (!seen && IsLauncher(a_follower->GetEquippedObject(false))) seen = true;
-            if (!seen) {
+            bool now = IsLauncher(a_follower->GetEquippedObject(false));
+            if (!now) {
                 std::scoped_lock lk(g_forcedMx);
                 const auto h = g_forcedWeapon.find(fid);
-                seen = h != g_forcedWeapon.end() && IsLauncher(h->second.right);
+                now = h != g_forcedWeapon.end() && IsLauncher(h->second.right);
             }
-            if (seen) g_launcherSeen.insert(fid);
-            return seen;
+            if (now) g_launcherSeen.insert(fid); else g_launcherSeen.erase(fid);
+            return now;
         }
 
-        // nullopt = carry on (a_dual says which claim); an Outcome = declined (a bow user, pool short).
-        std::optional<Outcome> ArcherHealPlan(RE::Actor* a_follower, RE::SpellItem* a_spell, bool& a_dual) {
+        // For a NEW claim. a_dual: the pool covers the dual cast. Returns whether this is a launcher user.
+        bool ArcherHealPlan(RE::Actor* a_follower, RE::SpellItem* a_spell, bool& a_dual) {
             a_dual = false;
-            if (!LauncherUser(a_follower)) return std::nullopt;
+            if (!LauncherAtNewClaim(a_follower)) return false;
             bool perk = false;
             const float cost = Loadout::DualCastMagickaCost(a_follower, a_spell, perk);
             const bool  conc = a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
             const float need = conc ? cost * (static_cast<float>(APMFBridge::kHealCastTtlMs) / 1000.0f) : cost;
             const float have = a_follower->AsActorValueOwner()
                                    ? a_follower->AsActorValueOwner()->GetActorValue(RE::ActorValue::kMagicka) : 0.0f;
-            if (have >= need) { a_dual = true; return std::nullopt; }
+            if (have >= need) { a_dual = true; return true; }
             const auto fid = a_follower->GetFormID();
             static std::unordered_map<RE::FormID, Clock::time_point> s_log;   // worker-serial
             const auto now = Clock::now();
             auto& last = s_log[fid];
             if (now - last >= std::chrono::seconds(5)) {
                 last = now;
-                spdlog::warn("[heal-hand] {:08X} bow user: heal {:08X} NOT claimed -- the dual-cast pool is short "
-                             "(magicka {:.0f}, need {:.0f} = {:.1f} {} for {}); a single-hand claim would hand the "
-                             "right hand to a melee swap, so none is made and the bow stays (rule {})",
+                spdlog::info("[heal-hand] {:08X} bow user: heal {:08X} dual-cast pool short (magicka {:.0f}, need "
+                             "{:.0f} = {:.1f} {} for {}) -- single-hand LEFT heal with a FULL right-hand floor, so "
+                             "she holds no weapon while healing (rule {})",
                              fid, a_spell->GetFormID(), have, need, cost,
                              conc ? std::format("per second over the {:.0f} s claim window",
                                                 static_cast<float>(APMFBridge::kHealCastTtlMs) / 1000.0f)
                                   : std::string("per cast"),
                              perk ? "the perk-empowered dual cast" : "two single-hand casts", g_firingRule);
             }
-            return Outcome{ Result::FailedOther, "animated heal not cast: the dual-cast pool is short for a bow user", true };
+            return true;
         }
+    }
+
+    void HealNoteLauncherFloor(RE::Actor* a_follower) {
+        if (a_follower && g_launcherSeen.count(a_follower->GetFormID()))
+            APMFBridge::NoteArcherRightFloor(a_follower->GetFormID());
     }
 
     std::optional<Outcome> HealRoadLap(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
@@ -926,8 +937,11 @@ namespace MFO::Actuation {
                          (!hl.claim && hit != g_healHands.end() && hit->second.hand[kHandLeft].active &&
                           hit->second.hand[kHandLeft].dual && hit->second.hand[kHandLeft].spell == spellID);
             } else if (!hl.found) {
-                if (auto out = ArcherHealPlan(a_follower, a_spell, a_dual)) return out;
+                ArcherHealPlan(a_follower, a_spell, a_dual);
             }
+            // A launcher user's single-hand LEFT heal (the short pool, a standing single claim, or the re-stream
+            // gap) keeps the bridge's FULL right floor up. CastOn's dual->single fallback stamps it too.
+            if (!a_dual) HealNoteLauncherFloor(a_follower);
         }
 
         // [heal-obs]'s "HP before" for a claim fire (HealObsClaimLap).
@@ -1103,7 +1117,17 @@ namespace MFO::Actuation {
         // A live claim, OR the lock that keeps the hand through a re-stream / re-claim gap
         // (review R2-4): HealOnHand reads both, so the rank holds across the gap.
         const HandHeal hh = HealOnHand(a_follower, kHandRight);
-        if (!hh.found) return kNoRule;
+        if (!hh.found) {
+            // A DUAL-CAST heal (one claim, LEFT slot) holds the right hand too: its rank is the left lock's, so a
+            // higher-ranked dual heal holds off MFO's own one-hand equip gambit (Equip.cpp).
+            if (const RE::FormID dsp = APMFBridge::GetHealCastSpell(a_follower, APMFBridge::kApmfHandLeft);
+                dsp != 0 && APMFBridge::IsHealCastDual(a_follower, dsp)) {
+                const auto lit = g_castLock.find(a_follower);
+                if (lit != g_castLock.end() && lit->second.hand[kHandLeft].spell == dsp)
+                    return lit->second.hand[kHandLeft].owningRule;
+            }
+            return kNoRule;
+        }
         const auto it = g_castLock.find(a_follower);
         if (it == g_castLock.end()) return kNoRule;
         const auto& lk = it->second.hand[kHandRight];
@@ -1127,6 +1151,7 @@ namespace MFO::Actuation {
     }
 
     void ClearHealNeverFired(RE::FormID a_follower) {
+        g_launcherSeen.erase(a_follower);   // per FIGHT: a follower who switched bow -> sword is not a launcher user
         g_neverFiredLatch.erase((static_cast<std::uint64_t>(a_follower) << 1) | kHandLeft);
         g_neverFiredLatch.erase((static_cast<std::uint64_t>(a_follower) << 1) | kHandRight);
     }

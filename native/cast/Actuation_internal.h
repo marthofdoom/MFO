@@ -583,8 +583,8 @@ namespace MFO::Actuation {
         // claim's delivery-flip proxy is in the left hand any more (a shield
         // restored on hit, a 2H / bow given back, an equip-gambit declaration, the
         // spell taken back after a fire), or (b) the claim has not fired within
-        // APMFBridge::kHealClaimNeverObservedCapMs of being claimed -- the same VALUE as the
-        // hold path's kHoldLastSeenCapMs (refreshHeldOwnClaim), each named for its own intent. The caller then does not
+        // APMFBridge::kHealClaimNeverObservedCapMs (4000 ms) of being claimed -- the hold path's
+        // kHoldLastSeenCapMs (refreshHeldOwnClaim) is 6500 ms since 2026-10-12 (de-aliased), each named for its own intent. The caller then does not
         // refresh... (round 2) the caller Prepares the heal back into the left hand
         // right there, under the claim the refresh renewed, keeping the lock as it
         // is (no PIN-VOID, no lock re-stamp: R2-3), and returns transparent. Never a
@@ -668,6 +668,10 @@ namespace MFO::Actuation {
         // coming back, or a Melee/Ranged class without weapon-style control)? cast/Hands.cpp.
         bool RightHandIsWeaponHand(RE::Actor* a_follower);
         void ResetHealRoad();   // ClearCastLocks
+        // HealRoad.cpp: this follower is a bow / crossbow user whose heal claim displaced its launcher (the
+        // per-fight g_launcherSeen set): stamp the bridge's FULL right floor (APMFBridge::NoteArcherRightFloor).
+        // Called for a single-hand LEFT heal only; the dual heal needs no floor.
+        void HealNoteLauncherFloor(RE::Actor* a_follower);
         // HealRoad.cpp: did the anim graph's SpellFire event for a_hand land at or after a_since and within
         // a_withinMs of now? A peek (never consumes what HandFireTake hands to NoteObservedCast). Thread-safe.
         bool HandFireSince(RE::FormID a_follower, std::size_t a_hand, std::chrono::steady_clock::time_point a_since,
@@ -694,7 +698,9 @@ namespace MFO::Actuation {
         // ruling: a heal near the top must take the hand at once). CastOn decides it.
         std::optional<Outcome> ResolveCastHand(RE::Actor* a_follower, Loadout::HandPick a_pick,
                                                RE::FormID a_spell, RE::FormID a_target,
-                                               HandPlan& a_out, bool a_urgentHeal = false);
+                                               HandPlan& a_out, bool a_urgentHeal = false, bool a_quiet = false);
+        // a_quiet (DualCast only): a PROBE. On failure nothing is fed or logged (no refreshHeldOwnClaim, no
+        // LogCastLockHold); the returned Outcome's reason names the busy hand, for the caller's own line.
 
         // ── WAVE-1 SPLIT (2026-09-24): FILE-LOCAL -> SHARED, BODIES UNCHANGED ──────
         // The subsystem-folder split cut Actuation.cpp and Actuation_Direct.cpp by

@@ -286,7 +286,7 @@ namespace MFO::APMFBridge {
         void EnsureCastClaimLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
                                    CastClaim& c, RE::FormID wantSpell, RE::FormID wantTarget,
                                    std::int32_t wantHand, bool wantConc, std::uint32_t wantStopPct,
-                                   bool wantDenyOnly) {
+                                   bool wantDenyOnly, bool wantFullFloor) {
             // Which of the two per-follower log-throttle slots this claim uses --
             // see g_lastNeverLiveWarn's comment for why a floor and a driving
             // claim must never share one.
@@ -298,7 +298,7 @@ namespace MFO::APMFBridge {
             if (c.handle != APMF_API::kInvalidHandle && c.spell == wantSpell &&
                 c.target == wantTarget && c.hand == wantHand &&
                 c.conc == wantConc && c.stopPct == wantStopPct &&
-                c.denyOnly == wantDenyOnly) {
+                c.denyOnly == wantDenyOnly && c.fullFloor == wantFullFloor) {
                 // ABI v6 (cast-claim observability, 2026-09-06): do NOT trust a
                 // stored handle blindly on the unchanged fast path -- APMF
                 // auto-expires a claim at its own TTL with no notice to the
@@ -534,7 +534,9 @@ namespace MFO::APMFBridge {
                          (wantDenyOnly ? APMF_API::kCastFlag_DenyHandOnly  : 0u) |
                          // ABI v20: every MFO floor is a SPELLS-ONLY reservation (see
                          // ReconcileHandFloorLocked's WEAPONS note): a one-hander stays in the hand.
-                         (wantDenyOnly && api->abiVersion >= kFloorSpellsOnlyAbi
+                         // ...EXCEPT the launcher user's FULL right floor (Owned::archerFloor), which must refuse
+                         // the melee weapon the engine would otherwise put there.
+                         (wantDenyOnly && !wantFullFloor && api->abiVersion >= kFloorSpellsOnlyAbi
                               ? APMF_API::kCastFlag_FloorSpellsOnly : 0u) |
                          APMF_API::MakeStopPct(wantStopPct);
             req.ttlMs  = kHealCastTtlMs;
@@ -583,6 +585,7 @@ namespace MFO::APMFBridge {
                 c.spell = wantSpell; c.target = wantTarget; c.hand = wantHand;
                 c.conc  = wantConc;  c.stopPct = wantStopPct;
                 c.denyOnly = wantDenyOnly;
+                c.fullFloor = wantFullFloor;
                 // Fable SEV-1 (2026-09-06): the claim's AGE clock, stamped HERE
                 // and only here -- this is the single point where a NEW handle
                 // comes into existence. The unchanged-and-still-live fast path
@@ -736,7 +739,11 @@ namespace MFO::APMFBridge {
             // ABI v19 HAND-CLAIM BLOCK FALLBACK (see the WEAPONS note above): on a
             // Harbinger that may block weapons into a floor and cannot be told to
             // reserve spells only, no floor at all.
-            if (api->abiVersion >= kHandBlockFirstAbi && api->abiVersion < kFloorSpellsOnlyAbi) {
+            // LAUNCHER-USER FULL RIGHT FLOOR (see Owned::archerFloor): fresh stamp = the heal road is running a bow /
+            // crossbow user's single-hand left heal (or its re-stream gap). Needs the hand block (ABI >= 19).
+            const bool archer = api->abiVersion >= kHandBlockFirstAbi && o.archerFloor != std::chrono::steady_clock::time_point{} &&
+                                std::chrono::steady_clock::now() - o.archerFloor < FacetExpiry();
+            if (!archer && api->abiVersion >= kHandBlockFirstAbi && api->abiVersion < kFloorSpellsOnlyAbi) {
                 if (o.floor.handle != APMF_API::kInvalidHandle) {
                     const auto hadHand = o.floor.hand;
                     ReleaseClaimLocked(o.floor);
@@ -787,6 +794,8 @@ namespace MFO::APMFBridge {
             std::int32_t wantHand = 0;
             if (leftDriven && !rightDriven)      wantHand = kApmfHandRight;
             else if (rightDriven && !leftDriven) wantHand = kApmfHandLeft;
+            // The re-stream gap of a launcher user's heal: no claim stands for a lap, but the right hand must not open.
+            else if (archer && !leftDriven && !rightDriven) wantHand = kApmfHandRight;
 
             // THE UNOBSERVED GATE (fix/mfo-combat-restoration-direct, 2026-09-21).
             // A driving claim earns the floor only while it can be believed to be
@@ -848,7 +857,7 @@ namespace MFO::APMFBridge {
                                                                    : Actuation::kHandRight;
                 return !Actuation::CastInFlightOnHand(actor, hand, c.spell, c.proxy);
             };
-            if (wantHand != 0) {
+            if (wantHand != 0 && !archer) {   // (a launcher user's full floor is never dropped as 'silent': the melee weapon would take the hand)
                 const bool driverSilent =
                     wantHand == kApmfHandRight
                         ? (silentPastGate(o.offense[0]) && silentPastGate(o.heal[0]))   // left drives
@@ -885,10 +894,11 @@ namespace MFO::APMFBridge {
             // renewals below take EnsureCastClaimLocked's unchanged fast path,
             // whose own heartbeat line is already throttled to one per 5 s.
             const bool announce = o.floor.handle == APMF_API::kInvalidHandle ||
-                                  o.floor.hand   != wantHand;
+                                  o.floor.hand   != wantHand ||
+                                  o.floor.fullFloor != (archer && wantHand == kApmfHandRight);
             EnsureCastClaimLocked(api, follower, o.floor, /*wantSpell=*/0, /*wantTarget=*/0,
                                   wantHand, /*wantConc=*/false, /*wantStopPct=*/0,
-                                  /*wantDenyOnly=*/true);
+                                  /*wantDenyOnly=*/true, /*wantFullFloor=*/archer && wantHand == kApmfHandRight);
             o.floor.refreshed = std::chrono::steady_clock::now();
             if (announce && o.floor.handle != APMF_API::kInvalidHandle)
                 spdlog::info("[apmf] {:08X} IDLE-HAND FLOOR claimed ({} hand, {}) -- MFO drives the "
@@ -896,8 +906,10 @@ namespace MFO::APMFBridge {
                              "admits no spell (not even MFO's own); {}. MFO's next gambit takes the hand "
                              "by the equal-basis tie rule, with no release/re-request gap.",
                              follower, wantHand == kApmfHandLeft ? "left" : "right",
+                             archer ? "deny-only, FULL: a launcher user's heal, no weapon may take it" :
                              api->abiVersion >= kFloorSpellsOnlyAbi ? "deny-only, spells-only" : "deny-only",
                              wantHand == kApmfHandLeft ? "right" : "left",
+                             archer ? "no weapon, shield or torch may go in it (the launcher user holds no weapon while the heal stands)" :
                              api->abiVersion >= kFloorSpellsOnlyAbi
                                  ? "a one-handed weapon, shield or torch may go in it (a two-hander, bow or fists still "
                                    "compete for the driving hand)"

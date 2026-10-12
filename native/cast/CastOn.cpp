@@ -419,15 +419,18 @@ namespace MFO::Actuation {
             auto resolveHands = [&]() -> std::optional<Outcome> {
                 if (!offenseSpell && healDual) {
                     // Both hands, planned like an offense dual cast (the incumbent pin keeps a standing dual heal
-                    // on both). If the right is held by a higher-ranked rule the dual is not possible: the old
-                    // single-hand claim, the right hand being that rule's and not open to a melee swap.
-                    if (!ResolveCastHand(a_follower, Loadout::HandPick::DualCast, a_spellID, lockTargetKey,
-                                         handPlan, urgentHeal))
-                        return std::nullopt;
+                    // on both). A QUIET probe: if either hand is busy with a rule that keeps it, the dual is not
+                    // possible and the old single-hand LEFT claim follows -- with the FULL right floor (a launcher
+                    // user holds no weapon while healing), so the fallback can never open the right hand.
+                    const auto busy = ResolveCastHand(a_follower, Loadout::HandPick::DualCast, a_spellID,
+                                                      lockTargetKey, handPlan, urgentHeal, /*a_quiet=*/true);
+                    if (!busy) return std::nullopt;
                     healDual = false;
                     handPlan = HandPlan{};
-                    spdlog::info("[heal-hand] {:08X} bow user: the right hand is held by a higher-ranked rule, so "
-                                 "heal {:08X} takes the left hand alone (rule {})", id, a_spellID, g_firingRule);
+                    HealNoteLauncherFloor(a_follower);
+                    spdlog::info("[heal-hand] {:08X} bow user: dual-cast not possible ({}) -- heal {:08X} takes the "
+                                 "left hand alone, right hand under the full floor (rule {})",
+                                 id, busy->reason, a_spellID, g_firingRule);
                 }
                 if (!offenseSpell)
                     return ResolveCastHand(a_follower, healHand == kHandRight ? Loadout::HandPick::Right

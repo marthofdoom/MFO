@@ -97,6 +97,11 @@ namespace MFO::APMFBridge {
             // the request flags plus the `reqParam.form = 0` mirror the heartbeat
             // depends on.
             bool             denyOnly = false;
+            // A FULL idle-hand floor (fix/mfo-heal-archer-dualcast): a deny-only floor WITHOUT
+            // kCastFlag_FloorSpellsOnly, which Harbinger's hand block (core/HandBlock.cpp HeldFor) holds against
+            // every weapon, shield and torch too. Part of the identity like denyOnly. Only the launcher-user
+            // floor (Owned::archerFloor) is ever full.
+            bool             fullFloor = false;
             std::chrono::steady_clock::time_point refreshed{};
             // WHEN THIS HANDLE WAS REQUESTED -- the claim's own AGE clock, set
             // ONCE where `handle` is assigned below and never moved again while
@@ -281,6 +286,12 @@ namespace MFO::APMFBridge {
             // a second one (its `spell` stays 0 and its `denyOnly` stays true for
             // the claim's whole life).
             CastClaim floor;
+            // LAUNCHER-USER RIGHT FLOOR (fix/mfo-heal-archer-dualcast, marth 2026-10-12: "she holds no weapon while
+            // healing"): stamped each lap by the heal road (NoteArcherRightFloor) while a bow / crossbow user's
+            // single-hand LEFT heal stands or sits in its re-stream gap. While fresh (< FacetExpiry) the right
+            // floor is FULL (refuses weapons too, so the engine cannot put a melee weapon there) and is kept even
+            // with no driving claim standing for that gap. A bridge-internal mode: no ABI change.
+            std::chrono::steady_clock::time_point archerFloor{};
             // ── EQUIP AUTHORITY (ch.17, APMF v7; feat/mfo-equip-authority) ──
             // STANDING: no refresh stamp on purpose -- Tick() never sweeps it
             // (there is no cadence to size a window from; the claim ends only
@@ -355,7 +366,7 @@ namespace MFO::APMFBridge {
         void EnsureCastClaimLocked(const APMF_API::APMF_API_v5* api, RE::FormID follower,
                                    CastClaim& c, RE::FormID wantSpell, RE::FormID wantTarget,
                                    std::int32_t wantHand, bool wantConc, std::uint32_t wantStopPct,
-                                   bool wantDenyOnly = false);
+                                   bool wantDenyOnly = false, bool wantFullFloor = false);
 
         // Release one handle (thread-safe; no-ops a stale handle). Caller holds g_mx.
         // RE::FormID IS std::uint32_t (a plain alias, not a distinct type), so this

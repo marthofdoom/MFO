@@ -467,6 +467,12 @@ namespace MFO::APMFBridge {
                                        it->second.heal[1].handle != APMF_API::kInvalidHandle);
     }
 
+    void NoteArcherRightFloor(RE::FormID a_follower) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return;
+        std::scoped_lock lock(g_mx);
+        g_owned[a_follower].archerFloor = std::chrono::steady_clock::now();
+    }
+
     bool IsHealCastDual(RE::FormID a_follower, RE::FormID a_spell) {
         if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
         std::scoped_lock lock(g_mx);

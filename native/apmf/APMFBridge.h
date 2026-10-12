@@ -1334,6 +1334,12 @@ namespace MFO::APMFBridge {
     // (0 = any spell)? The dual heal is one claim in the left slot only (see ClaimHealCast); this is how a caller
     // learns the RIGHT hand is occupied by it. Same g_mx / worker-safe contract as the accessors above.
     bool IsHealCastDual(RE::FormID a_follower, RE::FormID a_spell = 0);
+    // LAUNCHER-USER FULL RIGHT FLOOR (fix/mfo-heal-archer-dualcast, marth 2026-10-12): the heal road calls this every
+    // lap it runs a bow / crossbow user's single-hand LEFT heal (or holds its re-stream gap). For FacetExpiry() after
+    // the last call the bridge's idle-hand floor on the right is FULL (no kCastFlag_FloorSpellsOnly, so Harbinger's
+    // hand block refuses weapons, shields and torches too) and stays up even with no driving claim standing. A
+    // bridge-internal floor mode: no ABI change. Worker-safe (g_mx).
+    void NoteArcherRightFloor(RE::FormID a_follower);
 
     // Worker- AND combat-thread-safe (SAME g_mx). The delivery-flip proxy FormID
     // APMF minted internally for a_follower's LIVE heal-cast claim (see

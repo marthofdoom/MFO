@@ -1223,7 +1223,7 @@ namespace MFO::Actuation {
     // not a wall for the rules below it).
     std::optional<Outcome> ResolveCastHand(RE::Actor* a_follower, Loadout::HandPick a_pick,
                                            RE::FormID a_spell, RE::FormID a_target,
-                                           HandPlan& a_out, bool a_urgentHeal) {
+                                           HandPlan& a_out, bool a_urgentHeal, bool a_quiet) {
         const auto fid = a_follower ? a_follower->GetFormID() : 0;
         // Both hands are resolved UP FRONT now (F8/F9, 2026-09-08) instead of
         // inside each case, because the incumbent test below has to see both
@@ -1361,11 +1361,13 @@ namespace MFO::Actuation {
         //     stood without being re-stated". Past it, stop feeding: the
         //     existing FacetExpiry sweep releases, and the next lap's re-aim
         //     proceeds normally.
-        // THE REAL BOUND IS THE SUM, NOT THE 4 s. Feeding stops at kHoldLastSeenCapMs (4000 ms when this was written, 6500 ms since 2026-10-12);
+        // THE REAL BOUND IS THE SUM, NOT THE CAP. Feeding stops at kHoldLastSeenCapMs (4000 ms when this
+        // was written, 6500 ms since 2026-10-12);
         // the CLAIM then dies when Tick()'s sweep sees `refreshed` go stale at
-        // FacetExpiry() -- so the hold actually stands ~4.8 s (0.77 s floor) to
-        // ~6.5 s (~2.45 s at the defaults) before the hand frees. Stated
-        // because "capped at 4 s" would be a comment the field could not
+        // FacetExpiry() -- so the hold actually stands ~7.3 s (0.77 s floor) to
+        // ~9 s (~2.45 s at the defaults) before the hand frees (was ~4.8-6.5 s
+        // at the 4000 ms cap). Stated
+        // because "capped at 6.5 s" would be a comment the field could not
         // reconcile with the log. A cast already CHARGING is exempt either way
         // (`inFlight`), so nothing in flight is cut short by this.
         // NOT A TENURE and NOT a re-litigation of marth's ruling: this caps how
@@ -1447,10 +1449,12 @@ namespace MFO::Actuation {
                           /*preemptRight=*/!rightFree && !mine(kHandRight) };
                 return std::nullopt;
             }
-            refreshHeldOwnClaim();
             const auto hand      = !leftFree ? kHandLeft : kHandRight;
             const auto busySpell = !leftFree ? busyL : busyR;
-            LogCastLockHold(fid, hand, a_spell, busySpell);
+            if (!a_quiet) {
+                refreshHeldOwnClaim();
+                LogCastLockHold(fid, hand, a_spell, busySpell);
+            }
             return Outcome{ Result::NoOp,
                 std::format("cast gambit locked -- dual-cast needs both hands, spell {:08X} "
                             "still firing ({} hand)", busySpell, HandName(hand)), true };
