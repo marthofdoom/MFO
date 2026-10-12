@@ -141,6 +141,14 @@ namespace MFO::MEOBridge {
         std::uint32_t school = 0;       // dominant TargetMagicSchool (RE::ActorValue ordinal); kNone = 0
     };
 
+    // ── GEM THEME (MEO ABI v4, F3 relevance round) ──────────────────────────
+    // MEO's catalog classification of a gem family (theme, class, element bits,
+    // domain, support type, Conduit sibling), keyed by gid. GemThemeOf is the ONLY
+    // road to IMEO::GetGemTheme: it checks Version() >= 4 first (on a v3 MEO that
+    // vtable slot is the destructor). Any thread. false = MEO < v4, the catalog is
+    // not built yet, or the gid is unknown (a_out untouched).
+    bool GemThemeSupported();
+    bool GemThemeOf(const char* a_gid, MEO_API::GemTheme& a_out);
     // Is the reconcile usable (MEO present, ABI >= 3)? Tier 1 no-ops below this.
     bool GemReconcileSupported();
 

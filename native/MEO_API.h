@@ -1,6 +1,6 @@
 #pragma once
 // ─────────────────────────────────────────────────────────────────────────────
-// MEO (marth's Enchanting Overhaul) — SKSE inter-plugin C++ API, v1.
+// MEO (marth's Enchanting Overhaul) — SKSE inter-plugin C++ API, v4.
 //
 // For SKSE-plugin consumers (e.g. MFO). Copy this header into your project. MEO
 // must be present in the load order; if it isn't, Request() returns nullptr and
@@ -20,8 +20,10 @@
 // QUERIES (GetSocketCapacity / GetActorGems / GetActorGemsCarried) on the MAIN THREAD
 // only — they read live game state (records, inventory, perk globals) without locking.
 // MoveGems is safe from ANY thread: it only captures a FormID and queues the work to
-// the main thread.
+// the main thread. GetGemTheme (ABI v4) is safe from ANY thread: it reads only MEO's
+// gem catalog, which is built once at kDataLoaded and never changes afterwards.
 // ─────────────────────────────────────────────────────────────────────────────
+#include <cstddef>
 #include <cstdint>
 
 namespace RE {
@@ -36,7 +38,9 @@ namespace MEO_API {
     // v3: + GetEmptySocketCount / GetGemDetails / GetLooseGems / SocketGem /
     //      UnsocketGem — a follower-management surface that reads and mutates a
     //      specific ACTOR's OWN inventory (never MEO's shared player pouch).
-    inline constexpr std::uint32_t kABIVersion = 3;
+    // v4: + GetGemTheme — a gem's catalog classification (theme, element, class,
+    //      domain, support type, Conduit sibling), keyed by gid.
+    inline constexpr std::uint32_t kABIVersion = 4;
 
     // One socketed gem on an actor's gear (worn or merely carried), as reported by
     // GetActorGems / GetActorGemsCarried. POD only — safe across the DLL boundary.
@@ -90,6 +94,72 @@ namespace MEO_API {
         std::uint16_t gemUid;     // instance uid (0 = plain/stacked, no banked XP)
         std::uint32_t count;      // stack count (1 for a banked instance; >=1 for a plain stack)
     };
+
+    // ── ABI v4: gem classification (GetGemTheme) ───────────────────────────────
+    // These values are MEO's own catalog taxonomy (GemCatalog.h meo::Theme /
+    // meo::GemClass / meo::SupportType), frozen here as numbers. MEO static_asserts
+    // that its enums match them, so they can only change by a new ABI version.
+    // A consumer must treat any value it does not know as "other" (never index a
+    // fixed-size table with it unchecked).
+
+    // Thematic bucket. Fire/Frost/Shock hold both the damage (weapon) and the
+    // resist (armor) gems of that element.
+    inline constexpr std::uint8_t kTheme_Fire    = 0;
+    inline constexpr std::uint8_t kTheme_Frost   = 1;
+    inline constexpr std::uint8_t kTheme_Shock   = 2;
+    inline constexpr std::uint8_t kTheme_Arcane  = 3;  // also Chaos, and the default of a minted family
+    inline constexpr std::uint8_t kTheme_Drain   = 4;
+    inline constexpr std::uint8_t kTheme_Martial = 5;
+    inline constexpr std::uint8_t kTheme_Roguish = 6;
+    inline constexpr std::uint8_t kTheme_Holy    = 7;
+    inline constexpr std::uint8_t kTheme_Utility = 8;  // also every support gem
+
+    // Mechanical family.
+    inline constexpr std::uint8_t kGemClass_Skill    = 0;  // fortifies a skill
+    inline constexpr std::uint8_t kGemClass_Linear   = 1;  // attribute / damage / rate
+    inline constexpr std::uint8_t kGemClass_Resist   = 2;
+    inline constexpr std::uint8_t kGemClass_Binary   = 3;  // on/off (Muffle, Waterbreathing)
+    inline constexpr std::uint8_t kGemClass_Absorb   = 4;
+    inline constexpr std::uint8_t kGemClass_Control  = 5;  // Fear / Banish / Turn Undead
+    inline constexpr std::uint8_t kGemClass_Stagger  = 6;
+    inline constexpr std::uint8_t kGemClass_SoulTrap = 7;
+    inline constexpr std::uint8_t kGemClass_Support  = 8;
+    inline constexpr std::uint8_t kGemClass_Other    = 9;
+
+    inline constexpr std::uint8_t kSupport_None    = 0;
+    inline constexpr std::uint8_t kSupport_Focus   = 1;
+    inline constexpr std::uint8_t kSupport_Conduit = 2;
+    inline constexpr std::uint8_t kSupport_Echo    = 3;
+
+    // Element bits (GemTheme::elements). The SAME rule MEO uses for the element
+    // perks and for Focus: theme Fire/Frost/Shock sets its bit, Chaos sets all three.
+    inline constexpr std::uint8_t kElement_Fire  = 1u << 0;
+    inline constexpr std::uint8_t kElement_Frost = 1u << 1;
+    inline constexpr std::uint8_t kElement_Shock = 1u << 2;
+
+    // One gem family's classification, as reported by GetGemTheme. It describes the
+    // FAMILY (every level and every instance of a gid is the same). POD, alignment 1,
+    // 72 bytes. Frozen: a later addition is a NEW struct, never a re-layout of this one.
+    struct GemTheme {
+        std::uint8_t theme;        // kTheme_*
+        std::uint8_t gemClass;     // kGemClass_*
+        std::uint8_t supportType;  // kSupport_* (kSupport_None for a normal gem)
+        std::uint8_t elements;     // kElement_* bits. Nonzero == a linked Focus boosts it.
+        bool         isArmor;      // domain: armor (else weapon). Same as GemInfo.isArmor.
+        bool         isSupport;    // Echo / Conduit / Focus
+        bool         minted;       // a runtime "x_" family from MEO's calibration (not in the
+                                   // compiled catalog). Never a Conduit sibling.
+        bool         active;       // the gem works in this load order (its effect record
+                                   // resolved, or it is a support). false = inert anywhere.
+        char         conduitSibling[64];  // gid of the gem whose effect this one takes on when
+                                          // it sits OFF-domain in an item linked to a Conduit
+                                          // (same theme, the other domain). "" = it is INERT
+                                          // off-domain, even with a Conduit. Always "" for a
+                                          // support gem and for an inactive gem.
+    };
+    static_assert(sizeof(GemTheme) == 72, "MEO_API::GemTheme layout is frozen");
+    static_assert(alignof(GemTheme) == 1, "MEO_API::GemTheme layout is frozen");
+    static_assert(offsetof(GemTheme, conduitSibling) == 8, "MEO_API::GemTheme layout is frozen");
 
     class IMEO {
     public:
@@ -176,6 +246,15 @@ namespace MEO_API {
         // for queuing.
         virtual bool UnsocketGem(RE::Actor* a_actor, RE::FormID a_itemBase,
                                  std::uint16_t a_itemUid, std::uint8_t a_slot) = 0;
+
+        // ── ABI v4 (check Version() >= 4 before calling) ────────────────────────
+        // The catalog classification of the gem family a_gid (the gid every GemInfo /
+        // GemDetail / LooseGemInfo carries, including minted "x_" families). Writes
+        // *a_out and returns true. Returns false, and writes nothing, when a_gid or
+        // a_out is null, the gid is unknown to this MEO, or the catalog is not built
+        // yet (before kDataLoaded). Safe from ANY thread: it reads only the catalog,
+        // which is immutable after kDataLoaded.
+        virtual bool GetGemTheme(const char* a_gid, GemTheme* a_out) = 0;
 
     protected:
         virtual ~IMEO() = default;
