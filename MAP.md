@@ -565,6 +565,7 @@ per concern:
   letting the Scheduler's `silverKnownFalse` end an ammo episode (it is a melee-equip truth); a forced ammo equip
   (a lock with no ledger entry to release it); touching rule 2's ammo seam beyond its two branches (the Jesper-outfit
   area: it is a read-only seam, no ledger entries).
+  Open review findings: Docs/REVIEW-BACKLOG.md MFO-B245 (silver ammo damage field check; IsSilverAmmo vs REQ_WeaponType_SilverArrow; restore-to-best under the authority).
 - **The DIRECT-DELIVERY road = five files + `cast/Direct_internal.h`** (the Direct.cpp split,
   2026-09-29, `split/cast-direct`, the Direct.cpp part of MFO-B152: a pure move of the old 1879-line `cast/Direct.cpp`,
   proven by `tools/splitcheck`, TU map `tools/splitcheck/tumaps/wave3.txt`). `cast/Direct_internal.h` (83)
@@ -2939,6 +2940,7 @@ module. Module layout:
   its own rule (skills pick armor/weapon type, perks pick usage, marth 2026-10-01) and does NOT
   call this. **What breaks:** a second Auto rule elsewhere; calling it off the worker / main
   pump (it reads `FollowerState`); changing a weight changes every Auto follower's HMS split.
+  Open review findings: Docs/REVIEW-BACKLOG.md MFO-B245 (silver ammo damage field check; IsSilverAmmo vs REQ_WeaponType_SilverArrow; restore-to-best under the authority).
 - `logistics/Silver.cpp` (472, ClickUp 86e3p2gp9, 2026-10-12) — **THE SILVER WEAPON knowledge** (API in
   `logistics/Logistics.h`). `IsUnholy` (`:305`, the `cond.foe_is_unholy` selector's test): the LIVE SilverPerk
   (Skyrim.esm `0x10D685`) weapon-damage entries' TARGET tab (2) and the LIVE silver-enchantment MGEF

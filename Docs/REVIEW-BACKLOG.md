@@ -1515,3 +1515,31 @@ Raised against `51617e0` (`feat/mfo-meo-gem-rules`), 2026-10-12. Reviewer's text
 - **SEV-4 (C1):** a perk referenced only by player-only spells is still marked effective (the entry-less perk rule in `Progression.cpp` does not check that an NPC can satisfy the spell side).
 - **SEV-4 (C2):** an equip gambit that never fires still pushes casts to the left hand (the B3 right-first gate counts an enabled equip gambit, not one that actually fires).
 - **Surfaced at edit time from:** MAP.md `Progression.cpp` and `cast/Hands.cpp` entries.
+
+### MFO-B245 (SEV-3 field check, SEV-4 x5, SEV-5 x4) -- silver ammo + silver loot economy gate review, deferred items
+Raised against 6332bdb / a006451 (`fix/mfo-silver-loot-economy-gate`, Opus review two rounds,
+`scratchpad/agentlogs/review-silver-ammo.md`), 2026-10-12. Final MERGE OK at a69cdc9. The SEV-2 bow->melee episode
+merge, the SEV-3 false player pick, the re-nock churn and the SEV-3 silver-pick suppression were fixed on the branch.
+- (SEV-3, FIELD CHECK) Confirm silver ammo actually changes damage. On LoreRim this is verified at the data level
+  (coordinator 2026-10-12): Requiem's RFTI_Trait_* perks on undead/vampire/werewolf/etc. test the ATTACKER's
+  `WornHasKeyword(REQ_WeaponType_SilverArrow)` (fn 682, tab 1) and the attacker weapon's `HasKeyword(WeapMaterialSilver)`
+  (fn 560, tab 2), so a follower wearing silver ammo gets the bonus. Vanilla SilverPerk tests the bow, not the ammo, so
+  on a vanilla-perk load order silver ammo may do nothing. Field: compare damage to an Unholy foe with and without.
+- (SEV-4) IsSilverAmmo uses WeapMaterialSilver / SilverPerk weapon-tab keywords; LoreRim's bonus keys on
+  REQ_WeaponType_SilverArrow. Every LoreRim REQ silver round also has WeapMaterialSilver, but Katana.esp
+  `AK69CommonLeadShot` (C76623) has only WeapMaterialSilver -> treated as silver, gets no Requiem bonus. Consider also
+  reading the keywords the load order's Unholy trait perks test on the attacker's worn ammo.
+- (SEV-4) A mid-fight bow-hold release (Equip.cpp ~1186) runs SilverHoldEnded: restore + re-nock churn bounded by
+  the hold-release dwell.
+- (SEV-4) Under the authority the restore goes to the declaration's best ammo, not ammoPrev; a non-pick special
+  round (explosive/enchanted) worn before the episode is lost to the ordinary best.
+- (SEV-4) `roles.melee == Other` counts a follower with an act.equip_melee rule but no melee weapon as ranged-only,
+  so he never restocks a silver melee weapon (keeping an owned one is unaffected).
+- (SEV-4) While an episode is open a player ammo pick is not recorded (the episode wins anyway); if APMF swaps the
+  player's ammo to silver during the episode, that choice is not remembered afterwards.
+- (SEV-5) EquipObject with the whole stack count for ammo; APMF's proven ammo equip passes 1
+  (APMF channels/EquipAuthority.cpp:352). A worker-read count can be stale by the time the queued equip runs.
+- (SEV-5) The SUPPLY "arrows below N" pass can buy silver arrows as ordinary kArrows when wantSilverAmmo is false;
+  the bought silver then counts as owned for the restock (pre-existing shape).
+- (SEV-5) Redundant IsSilverAmmo checks in AmmoObsolete / Economy off-kind / PlanBuy (AmmoIsSpecialBase pins anyway).
+- (SEV-5) The empty-trade memo signature ignores wantSilverAmmo (same shape as wantSilver).
