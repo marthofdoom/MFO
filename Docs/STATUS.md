@@ -24,7 +24,7 @@ Read it as history and this block as current.
   DEFERRED" notes below are superseded. Field observable: `[runtime] 1.7.104.0 supported ... (exact 1.7.104)`,
   `[selfcheck] ... 56/56 verified`.
 
-- **2026-10-12 RELEASED v2.4.0 "Silver weapons and cast fixes" (current version).** Cut from main `e1082bd` plus the stamp commit. Silver gambit (act.equip_silver, Foe: Unholy), bucket 3 (entry-less perks, right-first hand gate for Auto hybrid, AUTO concentration fan billing). Needs Harbinger 0.12.0+ (ABI 21 unchanged), deploy with Harbinger v0.13.0. Docs refreshed: README, Docs/GAMBIT-GUIDE.md, CHANGELOG. CI run, tag and hashes: releases/v2.4.0/MANIFEST.txt. FIELD-TEST PENDING.
+- **2026-10-12 RELEASED v2.4.0 "Silver weapons and cast fixes" (current version).** Stamp commit `21c272e`, CI run 38266888800, DLL sha256 `44e63d25d737`, published as Latest at https://github.com/marthofdoom/MFO/releases/tag/v2.4.0 (with Harbinger v0.13.0). Silver gambit (act.equip_silver, Foe: Unholy), bucket 3 (entry-less perks, right-first hand gate for Auto hybrid, AUTO concentration fan billing). Needs Harbinger 0.12.0+ (ABI 21 unchanged), deploy with Harbinger v0.13.0. Docs refreshed: README, Docs/GAMBIT-GUIDE.md, CHANGELOG. CI run, tag and hashes: releases/v2.4.0/MANIFEST.txt. FIELD-TEST PENDING.
 
 - **2026-10-12 RELEASED v2.3.0 "Gems, heal reach and Harbinger client mode" (PUBLISHED, current version).** Cut from main `2576701` plus the release
   Stamp commit `7c08c30`, CI run 38216009063, tag `v2.3.0`, DLL sha256 `1dbdf79f...`.
