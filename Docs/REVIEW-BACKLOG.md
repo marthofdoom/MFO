@@ -580,6 +580,13 @@ Raised against `a687fd2` (`fix/mfo-post-2.2.0`, Opus tier-B round 2, MERGE OK), 
 - Spot 3 (SEV-4): the combat-start gate (IsInCombat() with no combat controller) never casts if the controller never comes up; transparent, lower rules run, but the only trace is the chain reason. Recommendation: one WARN per fight once the wait passes a few seconds; no direct-road fallback (marth ruling d).
 - TRIAGE 2026-10-06 (NEEDS-DECISION): R1 is filed as ClickUp needs-decision task 86e3m450a together with the open SEV-3 bullet of MFO-B234 (same shape: at the approach floor, recipient still occluded). R2, R3 and spots 2-3 stay LIVE.
 
+### MFO-B240 (SEV-3 field-verify, SEV-4 x3) -- heal reach + dead-target channel review (f3a0f97)
+Raised against `f3a0f97` (`fix/mfo-heal-reach`, Opus tier-B review, MERGE OK), 2026-10-11. Text as relayed.
+- SEV-3 (field-verify): fix 2 releases only the APMF claim (`api->Release`); it does not interrupt the engine caster or clear the [cfc] watch / cast lock, and checks only IsDead() (not DeadTgtReason). The direct road already ends on death (DirectTarget.cpp:335). Confirm on the deck: `[cast] ... target died: channel released` next to `[deadtgt]`.
+- SEV-4: a real heal reach of 300u or less is now uncapped (0 already meant no cap); a fallback to vanilla Heal Other reach would be tighter.
+- SEV-4: the PickAlly reach-drop latch clears only out of combat inside the drop branch, so it logs about once per follower per session, not per fight. Log only.
+- SEV-4: ReleaseOffenseCastOnDeadTarget calls the whole ReleaseOffenseCast; with two per-hand offense claims on different targets, one death drops both. ReleaseCastClaimOnHand would be per hand.
+
 ## DRAINED
 
 ### Drain batch `b795839` (`fix/mfo-post-2.2.0`, tier B/C items of MFO-B226..B236; the originals stay in the open list for the findings NOT drained)
