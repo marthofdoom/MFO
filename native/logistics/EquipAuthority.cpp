@@ -823,7 +823,14 @@ namespace MFO::Logistics {
                         bestCount = static_cast<std::int32_t>(data.first); bestWorn = isWorn;
                     }
                 }
-                if (worn && APMFBridge::IsEquipAuthorityEnforced() && ammoWasOwned &&
+                // SILVER AMMO (86e3p2gp9): the declaration flips silver<->ordinary at an episode open / close, and the
+                // rebuild can run before APMF's swap lands; that worn ammo is NOT a player pick. Never record one while
+                // the worn ammo is silver, an episode is open, or a declaration was sent within kDeclDriftHold.
+                const auto sentAt = g_lastDeclSentAt.find(id);
+                const bool ammoSwapInFlight = (worn && IsSilverAmmo(worn)) || Actuation::SilverAmmoEpisode(id) != 0 ||
+                    (sentAt != g_lastDeclSentAt.end() &&
+                     std::chrono::steady_clock::now() - sentAt->second < kDeclDriftHold);
+                if (worn && !ammoSwapInFlight && APMFBridge::IsEquipAuthorityEnforced() && ammoWasOwned &&
                     !lastSentHas(worn->GetFormID()) && !ammoPicks.count(worn->GetFormID())) {
                     ammoPicks.insert(worn->GetFormID());
                     pickAmmo = worn; pickWorn = true;

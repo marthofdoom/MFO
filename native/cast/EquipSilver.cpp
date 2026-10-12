@@ -74,11 +74,16 @@ namespace MFO::Actuation {
             bool       direct    = false;     // bWeaponStyleControl off: plain equip, no ledger
             bool       ammo      = false;     // a SILVER AMMO episode (silver = the ammo; ammoPrev = the ammo it replaced)
             RE::FormID ammoPrev  = 0;
+            std::chrono::steady_clock::time_point lastNock{};   // the last time the ammo road nocked the silver ammo
+            bool       aiOverrideLogged = false;                // the engine AI re-chose its own ammo: said once per episode
             std::chrono::steady_clock::time_point trueAt{};   // last lap the rule held (or was unknown)
         };
         std::mutex                              g_silverMx;
         std::unordered_map<RE::FormID, Episode> g_silver;
         constexpr auto kSilverDwell = std::chrono::seconds(2);
+        // FLOOR between re-nocks inside ONE ammo episode (the engine AI may keep re-choosing its own ammo):
+        // a few seconds, so the road cannot re-equip silver every lap (principle 9: a floor, from the lap cadence).
+        constexpr auto kRenockFloor = std::chrono::seconds(4);
 
         // Two-hander / bow / crossbow: takes the left hand too (Equip.cpp's TakesBothHands twin).
         bool TakesBoth(const RE::TESForm* a_form) {
@@ -218,6 +223,22 @@ namespace MFO::Actuation {
                 return { Result::FailedSkill, std::format("silver {} already nocked", kind), true };
             }
 
+            // RE-NOCK FLOOR: inside an open episode the silver ammo is not worn (the AI re-chose its own) --
+            // say so once, and do not re-equip more often than kRenockFloor.
+            if (openAmmo) {
+                std::scoped_lock lk(g_silverMx);
+                if (auto it = g_silver.find(id); it != g_silver.end()) {
+                    if (!it->second.aiOverrideLogged) {
+                        it->second.aiOverrideLogged = true;
+                        spdlog::warn("[silver] {:08X}: the engine put its own ammo '{}' back over the silver while the episode is open -- "
+                                     "re-nocking at most every {} s", id, worn ? NameOf(worn) : "none",
+                                     std::chrono::duration_cast<std::chrono::seconds>(kRenockFloor).count());
+                    }
+                    if (std::chrono::steady_clock::now() - it->second.lastNock < kRenockFloor)
+                        return { Result::FailedSkill, "silver ammo re-nock held off (re-nock floor)", true };
+                }
+            }
+
             // Under the equip authority with a launcher hold in the ledger, Ammo is an OWNED category:
             // the episode below is what the declaration (logistics/EquipAuthority.cpp rule 2) names, and
             // APMF equips the declared set -- no direct equip (EquipWeapon's rule).
@@ -235,8 +256,9 @@ namespace MFO::Actuation {
                 it->second.ammo   = true;
                 it->second.silver = best->GetFormID();
                 it->second.direct = false;
-                if (worn) it->second.ammoPrev = worn->GetFormID();   // the ammo the silver replaced (or the player's later pick)
-                it->second.trueAt = std::chrono::steady_clock::now();
+                if (fresh && worn) it->second.ammoPrev = worn->GetFormID();   // the ammo the silver replaced; never overwritten while the episode is open
+                it->second.trueAt   = std::chrono::steady_clock::now();
+                it->second.lastNock = it->second.trueAt;
             }
             if (authority) DeclareLedger(a_follower, "gambit equip silver ammo");   // after the episode opens: the declaration names it
             spdlog::info("[silver] {:08X}: GAMBIT silver ammo -- '{}' x{} nocked ({}), replaces '{}'", id, NameOf(best), bestCount,
@@ -330,6 +352,18 @@ namespace MFO::Actuation {
                 mainWasHeld = rightW && h->second.right == rightW;
                 mainRule    = h->second.rule;
             }
+        }
+        // An open AMMO episode ends first (he is no longer on a launcher): erase, restore OUTSIDE the lock,
+        // then a FRESH melee episode opens below -- the two kinds never merge.
+        {
+            Episode endedAmmo; bool hadAmmo = false;
+            {
+                std::scoped_lock lk(g_silverMx);
+                if (auto it = g_silver.find(id); it != g_silver.end() && it->second.ammo) {
+                    endedAmmo = it->second; g_silver.erase(it); hadAmmo = true;
+                }
+            }
+            if (hadAmmo) RestoreSilverAmmo(id, endedAmmo, "main weapon is melee again");
         }
         RE::FormID mainId = 0;
         {
