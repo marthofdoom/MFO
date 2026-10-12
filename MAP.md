@@ -518,7 +518,7 @@ per concern:
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
   field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
   keeps a relic out of the declared set (MFO-B126).
-- `cast/EquipSilver.cpp` (496, ClickUp 86e3p2gp9, 2026-10-12) = **act.equip_silver, "Switch to silver
+- `cast/EquipSilver.cpp` (497, ClickUp 86e3p2gp9, 2026-10-12) = **act.equip_silver, "Switch to silver
   weapon", and the switch BACK.** `EquipSilver` (`:241`, from `Fire`): satisfied (transparent NoOp) while a silver
   melee weapon (`Logistics::IsSilverMeleeWeapon`) is in the RIGHT hand; else picks
   `Logistics::BestSilverWeapon` (one-handed only when the left hand holds something and the main weapon is not
@@ -528,14 +528,14 @@ per concern:
   anon `DeclareFromLedger`, `cast/Equip.cpp:403`) with the authority, forced `EquipObject` without it, plain
   `EquipObject` with `bWeaponStyleControl` off. The first switch opens an EPISODE (`g_silver`, own `g_silverMx`,
   never nested with `g_forcedMx`): the main right-hand weapon it replaced and whether that was an MFO hold (+ its
-  rank). `ReconcileSilver` (`:369`, public, `cast/Actuation.h`) is called by the Scheduler (`Scheduler.cpp:1931`)
+  rank). `ReconcileSilver` (`:376`, public, `cast/Actuation.h`) is called by the Scheduler (`Scheduler.cpp:1931`)
   just BEFORE `ReconcileForcedWeapon` with the silver rule's OWN truth (`silverHeld` `:1542`, `silverKnownFalse`
   `:1782`, the positional rule, deliberately NOT folded into `equipCondKnownFalse`); after 2 s known-false
   (`kSilverDwell`): if the ledger's right is still the silver weapon, a main that was a hold is RESTORED as that
   hold (declared / forced), else `.right` is cleared (ch.15 `ReleaseEquipment` when the entry empties, re-declared)
-  and the main weapon is re-armed NON-forced two main-thread hops later. `SilverHoldEnded` (`:464`) is asked by
+  and the main weapon is re-armed NON-forced two main-thread hops later. `SilverHoldEnded` (`:471`) is asked by
   `ReleaseForcedWeapon` (`cast/Equip.cpp:853`) on EVERY release: a released silver hold re-arms the MAIN weapon
-  (never the silver one; left hand + sheathe only on a stand-down). `ClearSilverEpisodes` (`:479`) from
+  (never the silver one; left hand + sheathe only on a stand-down). `ClearSilverEpisodes` (`:492`) from
   `ClearForcedWeapons`. Nothing saved (FWPN layout unchanged: the silver hold is an ordinary right-hand pair).
   **What breaks:** folding silver into the general `equipCondKnownFalse` (a false silver rule above the stop would
   release an `act.equip_melee` hold below it on its unknown laps); moving `ReconcileSilver` after
