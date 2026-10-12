@@ -2316,14 +2316,10 @@ rule in the header. Called only from the Scheduler hook above.
   2026-09-26; logged in the ENGAGE line), and `IsEnemy` (`:229`): not commanded
   by the player or a teammate, nor by a crime-faction commander unless it or the commander is
   fighting the party (`FightingParty` `:189`); not restrained / bleeding out / on an IgnoreCombat package;
-  **not UNAGGRESSIVE** (batch L, field 2026-09-26: followers killed elk, deer, rabbits and foxes):
-  `AggressionOf` (`:217`, the Aggression actor value, same read as `ToldToWait`) == 0 is skipped
-  BEFORE the hostility test UNLESS `FightingParty` (marth: "If I attack a deer it's marked"); the skips
-  are counted (`ProbeResult::unaggressiveSkipped`, in the "armed" status and the ENGAGE line, which
-  also carries the target's aggression and "(unaggressive, but fighting the party: counts)").
+  **ENEMY = FACTION HOSTILITY** (marth 2026-10-12, replaces the Aggression gate + `IsHostileToActor`; field: LoreRim/Requiem sets skeevers, wolves and bears to Aggression 0, territorial by aggro radius, so every skeever was skipped): `IsEnemy` -- `FightingParty` (`currentCombatTarget` is the player or a teammate) OR `FactionEnemy` to the player OR to him (`FactionReactsEnemy`: a pure data read of `TESFaction::reactions` XNAM entries with `fightReaction == kEnemy` against the other actor's factions, both directions, via `Actor::VisitFactions` = base + `ExtraFactionChanges`). Only Confidence 0 (Cowardly, `ConfidenceOf`) is prey, skipped unless `FightingParty` ("If I attack a deer it's marked"). Crime-faction rule unchanged. Every skip is logged per actor (`NoteSkip`: FormID, reason cowardly / not hostile / crime faction / ..., aggression, confidence), one line per actor per 30 s, map capped at 512. The ENGAGE line still carries the target's aggression and "(unaggressive, but fighting the party: counts)"; the skipped COUNT is gone (`unaggressiveSkipped` removed).
   Engage-on-sight ONLY: the in-combat target pickers (`Evaluator.cpp`) are deliberately untouched
   (marth's call);
-  `IsHostileToActor(player) || IsHostileToActor(him)` (hostile to him alone counts: CONFIRMED by
+  Enemy by faction to the player OR to him (hostile to him alone counts: CONFIRMED by
   marth, "yes, there will be fights without player involvement"); a CRIME-FACTION actor only when its `currentCombatTarget` is the player or
   a teammate. No ghost check (`IsGhost` is an unverified id call: backlog MFO-B111). TOWN / INN
   FILTER (marth 2026-09-25), off while `pc->IsInCombat()`: `IsCivilised` (`:229`, now `LocationTypes::Classify` in `native/LocationTypes.h`, shared with the lockpick load-door bar) walks the location chain

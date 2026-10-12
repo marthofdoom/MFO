@@ -100,11 +100,9 @@ namespace MFO::EngageOnSight {
             int  civilSkipped   = 0;
             // The chosen target plus the candidates that would plausibly join (kJoinRadius).
             int  joiners        = 0;
-            // UNAGGRESSIVE FILTER (field 2026-09-26): actors in range skipped because their
-            // Aggression actor value is 0 (wildlife: elk, deer, rabbits, foxes) and they
-            // are not fighting the party; the chosen target's Aggression and whether it
-            // was admitted as unaggressive-but-fighting-the-party, for the log lines.
-            int   unaggressiveSkipped = 0;
+            // The chosen target's Aggression and whether it was admitted as
+            // unaggressive-but-fighting-the-party, for the ENGAGE line. (Skipped actors are
+            // logged per actor, rate-limited, by IsEnemy's caller: SkipText / NoteSkip.)
             float chosenAggression    = 0.0f;
             bool  chosenUnaggressiveFighting = false;
         };
@@ -236,29 +234,94 @@ namespace MFO::EngageOnSight {
             return avo ? avo->GetActorValue(RE::ActorValue::kAggression) : 0.0f;
         }
 
-        // UNAGGRESSIVE (field 2026-09-26): an actor whose Aggression is 0 (Unaggressive:
-        // elk, deer, rabbits, foxes) is not an enemy, whatever IsHostileToActor says: the
-        // field log had followers charging and killing prey. Checked BEFORE the hostility
-        // test; a_unaggressive counts the skips for the log. EXCEPT one already FIGHTING
-        // THE PARTY (FightingParty: its currentCombatTarget is the player or a teammate --
-        // marth 2026-09-26: "If I attack a deer it's marked"): that one still counts, and
-        // the ENGAGE line says so.
-        bool IsEnemy(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc, int& a_unaggressive) {
+        float ConfidenceOf(RE::Actor* a) {
+            auto* avo = a->AsActorValueOwner();
+            return avo ? avo->GetActorValue(RE::ActorValue::kConfidence) : 0.0f;
+        }
+
+        // FACTION HOSTILITY (marth 2026-10-12: "enemy = faction hostility"). Does any faction
+        // of a_from list a faction of a_to with fight reaction Enemy? Pure data read of the
+        // XNAM reaction lists (TESFaction::reactions, TESReactionForm.h) over the actor's base
+        // + ExtraFactionChanges factions (Actor::VisitFactions): no engine call, no aggression.
+        // The engine's own IsHostileToActor (AE 0x679F10) weights Aggression, and Requiem sets
+        // wolves / skeevers / bears to Aggression 0 (territorial by aggro radius), so it named none
+        // of them. Main thread.
+        bool FactionReactsEnemy(RE::Actor* a_from, RE::Actor* a_to) {
+            std::vector<const RE::TESFaction*> toFactions;
+            a_to->VisitFactions([&](RE::TESFaction* f, std::int8_t) {
+                if (f) toFactions.push_back(f);
+                return false;
+            });
+            if (toFactions.empty()) return false;
+            bool enemy = false;
+            a_from->VisitFactions([&](RE::TESFaction* f, std::int8_t) {
+                if (!f) return false;
+                for (const auto* g : f->reactions) {
+                    if (g && g->fightReaction == RE::FIGHT_REACTION::kEnemy &&
+                        std::find(toFactions.begin(), toFactions.end(), g->form) != toFactions.end()) {
+                        enemy = true;
+                        return true;
+                    }
+                }
+                return false;
+            });
+            return enemy;
+        }
+
+        // Enemy to the party member a_b in EITHER direction (a's factions list b's as Enemy, or
+        // b's list a's). The engine's reaction table is per-direction in the data.
+        bool FactionEnemy(RE::Actor* a, RE::Actor* a_b) {
+            return FactionReactsEnemy(a, a_b) || FactionReactsEnemy(a_b, a);
+        }
+
+        // ENEMY TEST (marth 2026-10-12: "enemy = faction hostility"; field 2026-10-12: the old
+        // Aggression gate skipped every skeever in Dustman's Cairn on LoreRim, where Requiem
+        // sets them to Aggression 0). An actor is an enemy when its faction reaction to the
+        // player OR to him is Enemy, or it is already FIGHTING THE PARTY (FightingParty: its
+        // currentCombatTarget is the player or a teammate -- marth 2026-09-26: "If I attack a
+        // deer it's marked"). Only a truly cowardly creature (Confidence 0, Cowardly) is prey and
+        // is skipped unless it is fighting the party. The crime-faction rule is unchanged.
+        // a_why names the skip reason for the log (static text, never owned).
+        bool IsEnemy(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc, const char*& a_why) {
             if (a->IsCommandedActor()) {
                 auto cmd = a->GetCommandingActor();   // HOLD the NiPointer
-                if (cmd && (cmd->IsPlayerRef() || cmd->IsPlayerTeammate())) return false;
-                if (cmd && cmd->GetCrimeFaction() && !FightingParty(a) && !FightingParty(cmd.get())) return false;
+                if (cmd && (cmd->IsPlayerRef() || cmd->IsPlayerTeammate())) { a_why = "commanded by the party"; return false; }
+                if (cmd && cmd->GetCrimeFaction() && !FightingParty(a) && !FightingParty(cmd.get())) {
+                    a_why = "crime faction (commander)";
+                    return false;
+                }
             }
             if (const auto* st = a->AsActorState()) {
-                if (st->GetLifeState() == RE::ACTOR_LIFE_STATE::kRestrained || st->IsBleedingOut()) return false;
+                if (st->GetLifeState() == RE::ACTOR_LIFE_STATE::kRestrained || st->IsBleedingOut()) {
+                    a_why = "restrained / bleeding out";
+                    return false;
+                }
             }
             if (const auto* pkg = a->GetCurrentPackage();
-                pkg && pkg->packData.packFlags.any(RE::PACKAGE_DATA::GeneralFlag::kIgnoreCombat))
+                pkg && pkg->packData.packFlags.any(RE::PACKAGE_DATA::GeneralFlag::kIgnoreCombat)) {
+                a_why = "IgnoreCombat package";
                 return false;
-            if (AggressionOf(a) <= 0.0f && !FightingParty(a)) { ++a_unaggressive; return false; }
-            if (!a->IsHostileToActor(a_pc) && !a->IsHostileToActor(a_self)) return false;
-            if (a->GetCrimeFaction() && !FightingParty(a)) return false;
+            }
+            const bool fighting = FightingParty(a);
+            if (ConfidenceOf(a) <= 0.0f && !fighting) { a_why = "cowardly"; return false; }
+            if (!fighting && !FactionEnemy(a, a_pc) && !FactionEnemy(a, a_self)) { a_why = "not hostile"; return false; }
+            if (a->GetCrimeFaction() && !fighting) { a_why = "crime faction"; return false; }
             return true;
+        }
+
+        // Per-actor rate limit for the skip line (main thread only, like RunProbe): one line per
+        // actor per kSkipLogSecs. Bounded: the map is cleared past kSkipLogMax entries.
+        constexpr float kSkipLogSecs = 30.0f;
+        constexpr std::size_t kSkipLogMax = 512;
+        void NoteSkip(RE::Actor* a, const char* a_why) {
+            static std::unordered_map<RE::FormID, Clock::time_point> s_last;
+            const auto now = Clock::now();
+            auto it = s_last.find(a->GetFormID());
+            if (it != s_last.end() && std::chrono::duration<float>(now - it->second).count() < kSkipLogSecs) return;
+            if (s_last.size() >= kSkipLogMax) s_last.clear();
+            s_last[a->GetFormID()] = now;
+            spdlog::info("[engage-on-sight] skipped {} ({:08X}): {} (aggression {:.0f}, confidence {:.0f})",
+                         NameOf(a), a->GetFormID(), a_why, AggressionOf(a), ConfidenceOf(a));
         }
 
         // MAIN THREAD. TOWN / INN FILTER (marth 2026-09-25: "filter out enemies in Inns or
@@ -347,7 +410,8 @@ namespace MFO::EngageOnSight {
                 if (a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) continue;
                 if (a->GetPosition().GetDistance(pcPos) > a_leash) continue;   // the leash is from the PLAYER
                 if (a->GetPosition().GetDistance(selfPos) > r.range) continue;  // the reaction distance is from HIM
-                if (!IsEnemy(a, self, pc, r.unaggressiveSkipped)) continue;
+                const char* why = "";
+                if (!IsEnemy(a, self, pc, why)) { NoteSkip(a, why); continue; }
                 if (!pcFighting && IsCivilised(a->GetCurrentLocation())) { ++r.civilSkipped; continue; }
                 found.emplace_back(a->GetPosition().GetDistance(selfPos), a->GetFormID());
             }
@@ -544,11 +608,7 @@ namespace MFO::EngageOnSight {
                     Status(note, a_f, a_id, "standing down: the enemies in view are in a town/inn, player not fighting",
                            now, fmt::format(" -- {} skipped", r.civilSkipped));
                 else
-                    Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now,
-                           r.unaggressiveSkipped > 0
-                               ? fmt::format(" -- {} unaggressive (Aggression 0) actor(s) in range skipped",
-                                             r.unaggressiveSkipped)
-                               : std::string{});
+                    Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
             } else if (!note.givenUp.contains(r.chosen)) {
                 // The confidence gate on the IN-COMBAT estimate (review of 1c50696): the Of()
                 // he would read once fighting as many foes as the probe counted, against the
@@ -587,13 +647,12 @@ namespace MFO::EngageOnSight {
                                      "{:.0f}u from him (range {:.0f}u), {:.0f}u from you (leash {:.0f}u), {} "
                                      "({} measured, {} not sensed/visible, {} sight-deferred), {} candidate(s), {} would join; ch.21 entry "
                                      "h={}; ch.20 pin: {}; in-combat confidence estimate {:.2f}; target aggression "
-                                     "{:.0f}{}, {} unaggressive (Aggression 0) skipped",
+                                     "{:.0f}{}",
                                      NameOf(a_f), a_id, NameOf(t), r.chosen, r.sensed ? "sensed" : "visible",
                                      r.dSelf, r.range, r.dPlayer, r.leash, basis,
                                      r.measured, r.occluded, r.deferred, r.candidates.size(), foes, h, pin, conf,
                                      r.chosenAggression,
-                                     r.chosenUnaggressiveFighting ? " (unaggressive, but fighting the party: counts)" : "",
-                                     r.unaggressiveSkipped);
+                                     r.chosenUnaggressiveFighting ? " (unaggressive, but fighting the party: counts)" : "");
                         engaged = true;
                         break;
                     }
