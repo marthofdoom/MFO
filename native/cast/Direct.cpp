@@ -726,6 +726,7 @@ namespace MFO::Actuation {
         g_selfCast.clear();
         g_targetCast.clear();         // on-target direct-force streams, likewise
         g_autoCast.clear();           // AUTO fan-out pacing is session-scoped too
+        g_autoConcFan.clear();        // M2: AUTO concentration fan clocks likewise
         g_beneficialRecast.clear();   // fix #3/#6: per-buff recast windows likewise
         ConcProxy::Reset();           // null dangling 0xFF proxy forms + drop borrowed
                                       // source Effect* (cross-load UAF / double-free)

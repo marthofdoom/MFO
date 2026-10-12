@@ -1873,7 +1873,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   magicka deduct — NOT the single-holder foe package), **collecting FormIDs never
   raw `Actor*` past the combat-group read-lock (UAF)**, per-cast magicka with
   reserve floor (cost clamped to available, never negative magicka), one broadcast
-  per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). **#3/#6b:** a
+  per `fCastCooldown` (`g_autoCast`, cleared in `ClearSelfCasts`). **M2 (86e3d6dp0, 2026-10-11):** a CONCENTRATION fan is billed for time: `ConcFanChargeSec` (`cast/Auto.cpp`) reads `g_autoConcFan` (per caster/target/spell last-fan clock, worker-serial, cleared in `ClearSelfCasts`) and passes `chargeSec` (1 s on a new/lapsed stream, else the gap since the last fan, capped by the sustain window) into `ApplyEffectFromTo`, which deducts `cost x chargeSec`; log reads `(cost C x S s = X)`. The tail after the last fan is unbilled (no settle on this road). M1 (regen) and M3 (wards) are NOT done (need marth/field). **#3/#6b:** a
   BENEFICIAL DURATION buff (light/ward/fortify) is additionally held off by a
   per-`(caster,spellID)` `g_beneficialRecast` window sized to the spell's authored
   duration × `fBeneficialRecastFrac` × a per-fire ±`fBeneficialRecastJitter` jitter
