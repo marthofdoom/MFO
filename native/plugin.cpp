@@ -21,6 +21,7 @@
 #include "CombatStyle.h"
 #include "Packages.h"
 #include "logistics/Logistics.h"
+#include "logistics/GemRules.h"
 #include "logistics/Lotd.h"   // LOTD awareness: detection, sinks, post-load snapshot (feat/mfo-lotd)
 #include "logistics/PlayerGiven.h"   // the player-given / player-put-on record (batch L)
 #include "Gait.h"
@@ -402,6 +403,7 @@ namespace {
             MFO::ProgAllocator::Init();     // allocator economy + class lists from the addon ESL; inert if absent
             MFO::Logistics::ComputeWeakPotionFloor();   // derive the low-power potion cutoff from the load order
             MFO::MEOBridge::Acquire();      // MEO gem-transfer API (task #17); nullptr if MEO absent
+            MFO::Logistics::GemRules::LogStatus();   // [gems] rules ACTIVE / inactive (<why>)
             MFO::APMFBridge::Acquire();     // APMF cast-selection API (Phase 3); nullptr if APMF absent (degrades)
             MFO::Lotd::Detect();            // LOTD awareness: detect Legacy of the Dragonborn (after Forms + APMF)
             MFO::Diagnostics::RefreshFatalModules();   // [fatal]: every plugin DLL is loaded now -- resolve APMF.dll's range

@@ -5189,6 +5189,7 @@ insert/resize breaks both DLLs. Threading is part of the ABI (queries main-threa
 
 ### logistics/GemRules.h / GemRules.cpp — MEO-aware gem rules (ClickUp 86e3p2gp8, marth 2026-10-11)
 Gated on `bMeoAwareGems` AND MEO ABI >= 2 (`GemRules::Active`, strip needs >= 3); OFF = legacy behaviour untouched.
+`GemRules::LogStatus` logs `[gems] rules ACTIVE (MEO ABI n, strip available: yes/no)` / `inactive (<why>)`: once after `MEOBridge::Acquire` (`plugin.cpp`) and after each MCM re-read (`Diagnostics.cpp` MenuSink, after `Config::Read`). `MEOBridge::AbiVersion` feeds it.
 Uses only existing `MEO_API.h` calls via MEOBridge (+ `MEOBridge::CarriedGemCount`, `UnsocketItemGems` now returns the
 queued count). **A socketed item never leaves a follower through MFO:** every removal path calls
 `CheckRemovalCached` (worker) / `CheckRemovalLive` (main) and SKIPS on `Held` (gems stripped via MEO, retried on a

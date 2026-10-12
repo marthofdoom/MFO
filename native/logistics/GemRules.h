@@ -16,6 +16,10 @@ namespace MFO::Logistics::GemRules {
     // bMeoAwareGems && MEO present with ABI >= 2.
     bool Active();
 
+    // One INFO line: "[gems] rules ACTIVE (MEO ABI n, strip available: yes/no)" or "inactive (<why>)".
+    // Called once after the MEO interface is acquired and again after every MCM re-read.
+    void LogStatus();
+
     enum class Verdict { Clear, Held };
 
     // May ALL instances of a_obj leave a_actor? Held = at least one instance carries socketed

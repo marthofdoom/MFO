@@ -234,6 +234,20 @@ namespace MFO::Logistics::GemRules {
         return Config::g_meoAwareGems.load() && MEOBridge::CarriedGemsSupported();
     }
 
+    void LogStatus() {
+        const int abi = MEOBridge::AbiVersion();
+        if (Active()) {
+            spdlog::info("[gems] rules ACTIVE (MEO ABI {}, strip available: {})", abi,
+                         MEOBridge::CarriedGemUnsocketSupported() ? "yes" : "no");
+        } else if (!Config::g_meoAwareGems.load()) {
+            spdlog::info("[gems] rules inactive (bMeoAwareGems is OFF)");
+        } else if (abi == 0) {
+            spdlog::info("[gems] rules inactive (MEO not present)");
+        } else {
+            spdlog::info("[gems] rules inactive (MEO ABI {} < 2, cannot see socketed gems)", abi);
+        }
+    }
+
     Verdict CheckRemovalCached(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why, Reason a_reason,
                                std::vector<HoldKey>* a_touched) {
         return Check(a_actor, a_obj, a_why, false, a_reason, a_touched);
