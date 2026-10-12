@@ -103,13 +103,16 @@ namespace MFO::Board {
             std::string name;
             int         magickaCost = 0;   // spell->CalculateMagickaCost(follower)
             std::string tooltip;           // effect name + magnitude/duration/area
+            int         school = 5;        // picker grouping, 0..5: Alt, Conj, Dest, Ill, Rest, other
+            std::string effectKey;         // sort key inside a school (archetype, then effect name)
         };
         std::vector<SpellPick> knownSpells;
         // #4: spells the PLAYER carries a spellbook for that this follower does
         // NOT yet know -- offered in the picker as "Name (spellbook)", teachable
         // (consumes the book) on confirm. Same precomputed tooltip metrics.
         struct Teachable { RE::FormID spell = 0; RE::FormID book = 0; std::string name;
-                           int magickaCost = 0; std::string tooltip; };
+                           int magickaCost = 0; std::string tooltip;
+                           int school = 5; std::string effectKey; };
         std::vector<Teachable> teachableSpells;
         // #68: the cast-target picker's option list -- the PLAYER's live
         // name and every OTHER active follower by name (never this row's

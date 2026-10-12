@@ -1511,6 +1511,31 @@ namespace MFO::Board {
         }
     }
 
+    // Spell picker grouping (main thread, snapshot build): school from the costliest effect's base
+    // MGEF "Magic Skill" MEMBER (not the GetAssociatedSkill vfunc); effect key = archetype, then name.
+    static int SpellSchoolRank(const RE::MagicItem* sp, std::string* effectKey) {
+        const auto* eff  = sp ? sp->GetCostliestEffectItem() : nullptr;
+        const auto* mgef = eff ? eff->baseEffect : nullptr;
+        if (effectKey) {
+            effectKey->clear();
+            if (mgef) {
+                const char* n = mgef->GetName();
+                char buf[16];
+                std::snprintf(buf, sizeof buf, "%03u|", static_cast<unsigned>(mgef->data.archetype));
+                *effectKey = std::string(buf) + (n ? n : "");
+            }
+        }
+        if (!mgef) return 5;
+        switch (mgef->data.associatedSkill) {
+        case RE::ActorValue::kAlteration:  return 0;
+        case RE::ActorValue::kConjuration: return 1;
+        case RE::ActorValue::kDestruction: return 2;
+        case RE::ActorValue::kIllusion:    return 3;
+        case RE::ActorValue::kRestoration: return 4;
+        default:                           return 5;
+        }
+    }
+
     void PublishSnapshot() {
         ApplyEdits();       // main-thread: fold in whatever the editor queued
         EnsureRuleUIDs();   // every rule has a stable id before it is snapshotted
@@ -1664,12 +1689,20 @@ namespace MFO::Board {
                                 p.name = Str::Fmt(Str::K::Gb_SpellNatureHint, { p.name });   // not hidden: a hint
                             p.magickaCost = follower ? static_cast<int>(sp->CalculateMagickaCost(follower) + 0.5f) : 0;
                             p.tooltip     = Progression::SpellEffectsText(sp);
+                            p.school      = SpellSchoolRank(sp, &p.effectKey);
                             out->push_back(std::move(p));
                         }
                         return RE::BSContainer::ForEachResult::kContinue;
                     }
                 } vis; vis.out = &r.knownSpells; vis.follower = a; vis.inUse = &ruleSpells;
                 a->VisitSpells(vis);
+                std::stable_sort(r.knownSpells.begin(), r.knownSpells.end(),
+                    [](const FollowerRow::SpellPick& x, const FollowerRow::SpellPick& y) {
+                        if (x.school != y.school) return x.school < y.school;
+                        if (x.effectKey != y.effectKey) return x.effectKey < y.effectKey;
+                        if (x.name != y.name) return x.name < y.name;
+                        return x.magickaCost < y.magickaCost;
+                    });
 
                 // #4: teachable spells -- books in the PLAYER's pack whose spell
                 // this follower does not yet know. Offered in the picker as
@@ -1685,11 +1718,20 @@ namespace MFO::Board {
                         if (!sp || !MFO::Vocab::IsCastableSpell(sp)) continue;
                         if (a->HasSpell(sp)) continue;   // already known -> not teachable
                         if (MFO::Actuation::CastRoadUnsupported(sp)) continue;   // hidden from the picker: not teachable through it either
-                        r.teachableSpells.push_back({ sp->GetFormID(), book->GetFormID(),
-                                                      sp->GetName() ? sp->GetName() : "?",
-                                                      static_cast<int>(sp->CalculateMagickaCost(a) + 0.5f),
-                                                      Progression::SpellEffectsText(sp) });
+                        FollowerRow::Teachable t{ sp->GetFormID(), book->GetFormID(),
+                                                  sp->GetName() ? sp->GetName() : "?",
+                                                  static_cast<int>(sp->CalculateMagickaCost(a) + 0.5f),
+                                                  Progression::SpellEffectsText(sp) };
+                        t.school = SpellSchoolRank(sp, &t.effectKey);
+                        r.teachableSpells.push_back(std::move(t));
                     }
+                    std::stable_sort(r.teachableSpells.begin(), r.teachableSpells.end(),
+                        [](const FollowerRow::Teachable& x, const FollowerRow::Teachable& y) {
+                            if (x.school != y.school) return x.school < y.school;
+                            if (x.effectKey != y.effectKey) return x.effectKey < y.effectKey;
+                            if (x.name != y.name) return x.name < y.name;
+                            return x.magickaCost < y.magickaCost;
+                        });
                 }
             }
             r.combatSlots    = SlotsForRank(r.rank, Table::Combat);

@@ -1020,8 +1020,17 @@ namespace MFO::Board {
                                             ImGui::Separator();
                                             if (who->knownSpells.empty() && who->teachableSpells.empty())
                                                 ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_NoSpells));
+                                            static const Str::K kSchoolHdr[6] = {
+                                                Str::K::Gb_SchoolAlteration, Str::K::Gb_SchoolConjuration,
+                                                Str::K::Gb_SchoolDestruction, Str::K::Gb_SchoolIllusion,
+                                                Str::K::Gb_SchoolRestoration, Str::K::Gb_SchoolOther };
+                                            int lastSchool = -1;
                                             for (int k = 0; k < (int)who->knownSpells.size(); ++k) {
                                                 const auto& sp = who->knownSpells[k];
+                                                if (sp.school != lastSchool) {   // plain text: never focusable, so no nav trap
+                                                    lastSchool = sp.school;
+                                                    ImGui::TextDisabled("%s", Str::Get(kSchoolHdr[sp.school < 0 || sp.school > 5 ? 5 : sp.school]));
+                                                }
                                                 const bool curSel = sp.id == rv.spell;
                                                 ImGui::PushID((int)sp.id);   // dup names -> unique IDs
                                                 if (Click::Selectable(sp.name.c_str(), curSel)) {
@@ -1039,7 +1048,12 @@ namespace MFO::Board {
                                             if (!who->teachableSpells.empty()) {
                                                 ImGui::Separator();
                                                 ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_TeachHeader));
+                                                int lastTeachSchool = -1;
                                                 for (const auto& t : who->teachableSpells) {
+                                                    if (t.school != lastTeachSchool) {
+                                                        lastTeachSchool = t.school;
+                                                        ImGui::TextDisabled("%s", Str::Get(kSchoolHdr[t.school < 0 || t.school > 5 ? 5 : t.school]));
+                                                    }
                                                     const bool armed = (s_teachArmed == t.book);
                                                     if (armed) ImGui::PushStyleColor(ImGuiCol_Text, skin.danger);
                                                     const std::string lbl = armed
