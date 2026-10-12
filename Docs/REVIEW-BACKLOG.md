@@ -590,6 +590,13 @@ Raised against `f3a0f97` (`fix/mfo-heal-reach`, Opus tier-B review, MERGE OK), 2
 - SEV-4: the PickAlly reach-drop latch clears only out of combat inside the drop branch, so it logs about once per follower per session, not per fight. Log only.
 - SEV-4: ReleaseOffenseCastOnDeadTarget calls the whole ReleaseOffenseCast; with two per-hand offense claims on different targets, one death drops both. ReleaseCastClaimOnHand would be per hand.
 
+### MFO-B241 (SEV-4 x4) -- rulings 2026-10-11 review (0c1046c)
+Raised against `0c1046c` (`fix/mfo-rulings-1011`, Opus review, MERGE OK), 2026-10-11. Text as relayed.
+- SEV-4 (item 1): a held heal that ends some other way leaves its approach-stuck entry until fight end, so a later claim on the same recipient is released once and skips the in-flight exemption.
+- SEV-4 (item 1): kApproachFloorGiveUp uses the wall clock, so a menu pause counts toward the 5 s (APMF fixed the same issue in its review F2).
+- SEV-4 (item 4): healWeapon is not reset by the normal booking path (Loadout.cpp:527) or the already-paid path; a stale flag (two-hander stow keeping the entry) could hand back a later ordinary weapon debt early.
+- SEV-4 (item 6): after a fan series ends, the spell stays in hand while the AUTO rule matches; released when no cast rule matches (Scheduler.cpp:1913) or at combat end. Fits the ruling.
+
 ## DRAINED
 
 ### Drain batch `b795839` (`fix/mfo-post-2.2.0`, tier B/C items of MFO-B226..B236; the originals stay in the open list for the findings NOT drained)
