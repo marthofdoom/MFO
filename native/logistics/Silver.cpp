@@ -36,7 +36,8 @@
 //     "Never replaced by best weapon logic": the keep set protects them whatever the 1H / 2H
 //     buckets decide.
 //   * RESTOCK: an ENABLED silver rule and no silver melee weapon owned -> the loot judge takes one
-//     (stocked, never equipped in place) and the buy planner buys one (under bEconomyBuyGear).
+//     (stocked, never equipped in place) and the buy planner buys one. Both only under bEconomy +
+//     bEconomyBuyGear (marth 2026-10-12: the loot restock follows the gear-buy rule).
 //
 // THREADING: the rule tables are built once under std::call_once and are immutable after, so
 // IsUnholy / IsSilverWeapon are safe on any thread (worker, the Papyrus VM thread's PlanBuy).

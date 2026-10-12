@@ -60,7 +60,9 @@ namespace MFO::Logistics {
             // no circular dependency on the roles derived further down.
             const std::uint8_t baseClass = a_state ? a_state->combatClassOverride : 0;
             // THE SILVER SLOT (ClickUp 86e3p2gp9): restock one silver melee weapon when he owns none.
-            ctx.wantSilver    = a_state && WantsSilverWeapon(a_follower, *a_state);
+            // marth 2026-10-12: the loot restock follows the gear-buy rule (bEconomy + bEconomyBuyGear).
+            ctx.wantSilver    = a_state && Config::g_economy.load() && Config::g_economyBuyGear.load() &&
+                                WantsSilverWeapon(a_follower, *a_state);
             ctx.silverOneHand = ctx.wantSilver && SilverNeedsOneHand(a_follower, *a_state);
 
             // ── MAGIC LOADOUT (v1.0.29) ─────────────────────────────────────
