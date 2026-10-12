@@ -106,7 +106,10 @@ namespace MFO::Actuation {
             const std::int32_t h = (a_hand == kHandLeft) ? APMFBridge::kApmfHandLeft
                                                          : APMFBridge::kApmfHandRight;
             return APMFBridge::IsOwnedCastActiveOnHand(a_follower, h) ||
-                   APMFBridge::IsHealCastActiveOnHand(a_follower, h);   // per-hand heal slot
+                   APMFBridge::IsHealCastActiveOnHand(a_follower, h) ||   // per-hand heal slot
+                   // A DUAL-CAST HEAL (archers, cast/HealRoad.cpp) is one claim in the LEFT heal slot that
+                   // occupies BOTH hands: the right hand is live for as long as it stands.
+                   (a_hand == kHandRight && APMFBridge::IsHealCastDual(a_follower));
         }
 
     }   // anon
@@ -127,6 +130,9 @@ namespace MFO::Actuation {
             a_follower, a_hand == kHandLeft ? APMFBridge::kApmfHandLeft
                                             : APMFBridge::kApmfHandRight);
         if (offense != 0) return offense;
+        // A DUAL-CAST HEAL's one claim lives in the LEFT slot but the RIGHT hand casts its proxy too.
+        if (a_hand == kHandRight && APMFBridge::IsHealCastDual(a_follower))
+            return APMFBridge::GetHealCastProxy(a_follower, APMFBridge::kApmfHandLeft);
         return APMFBridge::GetHealCastProxy(a_follower, a_hand == kHandLeft ? APMFBridge::kApmfHandLeft
                                                                             : APMFBridge::kApmfHandRight);
     }
@@ -848,6 +854,14 @@ namespace MFO::Actuation {
             ComposedCast::EndHand(fid, apmfHand);   // that hand's heal claim (feat/mfo-perhand-heal)
             HealHandPreempted(fid, a_hand, "a higher-ranked rule took the hand");   // [heal-hold] ... preempted
         }
+        else if (lostSpell != 0 && a_hand == kHandRight && dualIncumbent &&
+                 APMFBridge::IsHealCastDual(fid, lostSpell))
+        {
+            // The RIGHT hand of a DUAL-CAST HEAL (one claim in the LEFT slot, a shadow lock here): taking it
+            // ends the whole dual cast, exactly as taking the left does.
+            ComposedCast::EndHand(fid, APMFBridge::kApmfHandLeft);
+            HealHandPreempted(fid, kHandLeft, "a higher-ranked rule took the right hand of the dual-cast heal");
+        }
         lock = CastLock{};
         if (dualIncumbent) other = CastLock{};
         const auto now = std::chrono::steady_clock::now();
@@ -1347,7 +1361,7 @@ namespace MFO::Actuation {
         //     stood without being re-stated". Past it, stop feeding: the
         //     existing FacetExpiry sweep releases, and the next lap's re-aim
         //     proceeds normally.
-        // THE REAL BOUND IS THE SUM, NOT THE 4 s. Feeding stops at 4000 ms;
+        // THE REAL BOUND IS THE SUM, NOT THE 4 s. Feeding stops at kHoldLastSeenCapMs (4000 ms when this was written, 6500 ms since 2026-10-12);
         // the CLAIM then dies when Tick()'s sweep sees `refreshed` go stale at
         // FacetExpiry() -- so the hold actually stands ~4.8 s (0.77 s floor) to
         // ~6.5 s (~2.45 s at the defaults) before the hand frees. Stated
@@ -1391,7 +1405,7 @@ namespace MFO::Actuation {
                 // unbounded for the ordinary case: any rule whose spell had
                 // landed even once could then hold its hand forever. The
                 // recency window (kObservedFiringRecencyMs) and the age cap below
-                // (kHoldLastSeenCapMs) are separately named; both are 4000 ms today.
+                // (kHoldLastSeenCapMs) are separately named; 5000 / 6500 ms since 2026-10-12 (APMFBridge.h).
                 const bool fired = ComposedCast::ObservedFiring(
                     fid, apmfHand, lk.spell, APMFBridge::kObservedFiringRecencyMs);
                 const auto  age  = std::chrono::duration_cast<std::chrono::milliseconds>(

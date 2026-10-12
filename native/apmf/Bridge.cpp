@@ -776,8 +776,13 @@ namespace MFO::APMFBridge {
             // (5 s per follower per slot) while the RequestCast traffic is not.
             const bool leftDriven  = o.offense[0].handle != APMF_API::kInvalidHandle ||
                                      o.heal[0].handle    != APMF_API::kInvalidHandle;
+            // A DUAL-CAST HEAL (fix/mfo-heal-archer-dualcast) lives in heal[0] alone but drives BOTH hands:
+            // nothing is left for a floor to close, so the right counts as driven too.
+            const bool dualHeal    = o.heal[0].handle != APMF_API::kInvalidHandle &&
+                                     o.heal[0].hand == kApmfHandDualCast;
             const bool rightDriven = o.offense[1].handle != APMF_API::kInvalidHandle ||
-                                     o.heal[1].handle    != APMF_API::kInvalidHandle;   // feat/mfo-perhand-heal
+                                     o.heal[1].handle    != APMF_API::kInvalidHandle ||   // feat/mfo-perhand-heal
+                                     dualHeal;
 
             std::int32_t wantHand = 0;
             if (leftDriven && !rightDriven)      wantHand = kApmfHandRight;

@@ -1225,6 +1225,28 @@ cast from. This needs a field observation (CLAUDE.md principle 5:
 disassembly/design proves a path exists, not that it runs) before it is
 trusted; flagged here rather than silently assumed correct.
 
+### ARCHER HEALS: DUAL-CAST, NEVER A MELEE SWAP (fix/mfo-heal-archer-dualcast, 2026-10-12)
+
+marth 2026-10-12: "No melee swap ... But dual casting preferred for bow users, assuming pool sufficient."
+**Failure (Auri, 12:11-12:14):** a heal claim on the LEFT hand only. Harbinger's hand block refuses every weapon that
+competes for a claimed hand, and a bow competes for Right+Left, so the bow was refused; the right hand had no claim, so
+the engine put its best MELEE weapon there and the stance went to melee while the heal stood.
+**Now:** for a bow / crossbow user the heal claims BOTH hands: one `RequestCast` with `kCastFlag_DualCast` (existing
+ABI bit, no Harbinger change), kept in the LEFT heal slot only (`APMFBridge::ClaimHealCast(.., a_dual)`, query
+`IsHealCastDual`), so the hand block refuses a melee weapon for the right hand too. MFO represents the right hand with a
+shadow cast lock (stamped from a `HandPick::DualCast` plan) and `ClaimLiveOnHand(RIGHT)`. The dual flag is still only a
+HINT to the engine (APMF_API.h): a follower that cannot arm both hands casts single-hand, unmasked.
+**Pool:** `HealRoad.cpp ArcherHealPlan` compares current magicka to `Loadout::DualCastMagickaCost` (the real
+`CalculateMagickaCost`, x2.8 with the school's dual-cast perk, x2 without, over the `kHealCastTtlMs` window for a
+concentration spell). **Short pool:** no claim at all (transparent, one `bow user: heal ... NOT claimed` WARN per 5 s).
+A single-hand claim is exactly what hands the right hand to a melee swap, and keeping a ranged item preferred would need
+a Harbinger bias (ABI change), so ending the claim before it stands is the clean option. A bow user whose right hand a
+higher-ranked rule holds keeps the old single-hand claim (that rule owns the right hand, so there is no free hand).
+**Mode is sticky** for a claim's life (a flip re-requests it and interrupts the charge). **Fire watcher:** Harbinger's
+census (`NotifyStartCast`) is not exposed to MFO; `NeverFiredRelease` now also counts the anim graph's SpellFire on the
+claim's hand, and `kHoldLastSeenCapMs` / `kObservedFiringRecencyMs` are 6500 / 5000 ms from the field numbers in
+`apmf/APMFBridge.h` (claim to first fire 0.63-2.85 s, fire to MFO's cast event 0.33-2.02 s, claim to observed 1.47-3.03 s).
+
 ### CastBounds — the HARD-ABORT fix (§2)
 
 `CasterConsent::ConcUnboundedDeny` hard-aborts a tracked follower's own

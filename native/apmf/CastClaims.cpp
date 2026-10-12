@@ -293,6 +293,9 @@ namespace MFO::APMFBridge {
             if (o.offense[1].handle != APMF_API::kInvalidHandle &&
                 o.offense[1].handle != o.offense[0].handle)
                 replayOffense(1);
+            // A DUAL-CAST HEAL (one claim, LEFT heal slot only -- see ClaimHealCast) is a "both hands" claim
+            // too: its heartbeat rides this call when the heal road's plan names both hands.
+            if (o.heal[0].hand == kApmfHandDualCast) replay(o.heal[0]);
         } else if (a_hand == kApmfHandLeft) {
             replayOffense(0);
             // A heal claim and an offense claim CAN both stand on one hand at once
@@ -395,7 +398,7 @@ namespace MFO::APMFBridge {
     // animated cast natively. See APMFBridge.h's doc comment above for the full
     // shape; this is just the claim plumbing.
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
-                       std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct) {
+                       std::int32_t a_hand, bool a_concentration, std::uint32_t a_stopPct, bool a_dual) {
         auto* api = g_apmf.load(std::memory_order_relaxed);
         // Executor toggle = the (repurposed) bHealAnimPackage key. APMF absent /
         // toggle off / no spell -> OFF, degrade to kInstant.
@@ -418,7 +421,12 @@ namespace MFO::APMFBridge {
         std::scoped_lock lock(g_mx);
         auto& o = g_owned[a_follower];
         auto& c = o.heal[OffenseSlot(a_hand)];   // per hand (feat/mfo-perhand-heal)
-        EnsureCastClaimLocked(v5, a_follower, c, a_spell, a_target, a_hand,
+        // A DUAL-CAST HEAL (archers, cast/HealRoad.cpp) is ONE claim with kCastFlag_DualCast that lives in the LEFT
+        // heal slot ONLY (NOT mirrored into the right slot the way ClaimOffenseCast mirrors a dual offense claim):
+        // every per-hand heal reader keeps its single left-claim meaning, and the right hand is answered by
+        // IsHealCastDual / the floor derivation below. The hand mode is part of the claim's identity, so switching
+        // between single and dual is a re-request; the heal road keeps a standing claim's mode sticky.
+        EnsureCastClaimLocked(v5, a_follower, c, a_spell, a_target, a_dual ? kApmfHandDualCast : a_hand,
                               a_concentration, a_stopPct);
         c.refreshed = std::chrono::steady_clock::now();
         const bool live = c.handle != APMF_API::kInvalidHandle;
@@ -457,6 +465,16 @@ namespace MFO::APMFBridge {
         const auto it = g_owned.find(a_follower);
         return it != g_owned.end() && (it->second.heal[0].handle != APMF_API::kInvalidHandle ||
                                        it->second.heal[1].handle != APMF_API::kInvalidHandle);
+    }
+
+    bool IsHealCastDual(RE::FormID a_follower, RE::FormID a_spell) {
+        if (!g_apmf.load(std::memory_order_relaxed) || a_follower == 0) return false;
+        std::scoped_lock lock(g_mx);
+        const auto it = g_owned.find(a_follower);
+        if (it == g_owned.end()) return false;
+        const CastClaim& c = it->second.heal[0];
+        return c.handle != APMF_API::kInvalidHandle && c.hand == kApmfHandDualCast &&
+               (a_spell == 0 || c.spell == a_spell);
     }
 
     bool IsHealCastActiveOnHand(RE::FormID a_follower, std::int32_t a_hand) {

@@ -642,12 +642,16 @@ namespace MFO::Actuation {
         // release), re-judges this lap's recipient (released claim + transparent outcome when
         // lost), applies the LEFT hand's equip-gambit rank gate, and names the hand this
         // recipient is served on (a_hand). nullopt = carry on with a_hand.
+        // a_dual (fix/mfo-heal-archer-dualcast): set when this lap's claim must be a DUAL-CAST heal (both hands,
+        // one claim in the LEFT slot) -- a bow / crossbow user with the pool for it, or a dual claim already
+        // standing for this spell. A bow user WITHOUT the pool is declined here (Outcome), never given a
+        // single-hand claim (marth 2026-10-12: no melee swap).
         std::optional<Outcome> HealRoadLap(RE::Actor* a_follower, RE::SpellItem* a_spell,
-                                           RE::Actor* a_target, std::size_t& a_hand);
+                                           RE::Actor* a_target, std::size_t& a_hand, bool& a_dual);
         // HealHandClaimed: a heal claim on a_hand was just minted or refreshed (Try ->
         // Claimed) for a_recipient (0 = self). Logs the hand's assignment once per change.
         void HealHandClaimed(RE::Actor* a_follower, std::size_t a_hand, RE::FormID a_spell,
-                             RE::FormID a_recipient);
+                             RE::FormID a_recipient, bool a_dual = false);
         // HealHandEnded: a_hand's heal claim ended (a_why). Logs once and drops the record;
         // a RIGHT hand "returns to offense". No-op when no record stands.
         void HealHandEnded(RE::FormID a_follower, std::size_t a_hand, const char* a_why);
@@ -664,6 +668,10 @@ namespace MFO::Actuation {
         // coming back, or a Melee/Ranged class without weapon-style control)? cast/Hands.cpp.
         bool RightHandIsWeaponHand(RE::Actor* a_follower);
         void ResetHealRoad();   // ClearCastLocks
+        // HealRoad.cpp: did the anim graph's SpellFire event for a_hand land at or after a_since and within
+        // a_withinMs of now? A peek (never consumes what HandFireTake hands to NoteObservedCast). Thread-safe.
+        bool HandFireSince(RE::FormID a_follower, std::size_t a_hand, std::chrono::steady_clock::time_point a_since,
+                           std::uint32_t a_withinMs);
         // Review round 1 (9895a53): the RIGHT hand's in-flight refresh is bounded by the
         // never-observed window (released with a WARN when it never fired; F2), and the
         // equip side asks the rank of a live right-hand heal claim before it puts a weapon

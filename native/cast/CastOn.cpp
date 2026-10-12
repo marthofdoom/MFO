@@ -367,8 +367,12 @@ namespace MFO::Actuation {
             // the LEFT hand's equip-gambit rank gate, and the hand this recipient is served
             // on: the LEFT, or the RIGHT for a second recipient while the left heals another.
             std::size_t healHand = kHandLeft;
+            // healDual (fix/mfo-heal-archer-dualcast, cast/HealRoad.cpp ArcherHealPlan): this lap's claim is a
+            // DUAL-CAST heal -- one claim on BOTH hands, kept in the LEFT slot -- for a bow / crossbow user, so the
+            // engine never gets a free right hand to equip a melee weapon in.
+            bool healDual = false;
             if (healClaim)
-                if (auto out = HealRoadLap(a_follower, spell, a_target, healHand)) return *out;
+                if (auto out = HealRoadLap(a_follower, spell, a_target, healHand, healDual)) return *out;
             // A FORCED OFFENSE CHARGE THAT NEVER FIRED ON AN UNSIGHTED FOE WAS RELEASED
             // (see the in-flight refresh below): refuse the same (spell, foe) while the
             // measured verdict stays Occluded, so the release is not a four second churn.
@@ -413,6 +417,18 @@ namespace MFO::Actuation {
             // lock state rather than carried forward (a heal pinned to the RIGHT
             // hand by a stale lock would otherwise claim and lock the wrong hand).
             auto resolveHands = [&]() -> std::optional<Outcome> {
+                if (!offenseSpell && healDual) {
+                    // Both hands, planned like an offense dual cast (the incumbent pin keeps a standing dual heal
+                    // on both). If the right is held by a higher-ranked rule the dual is not possible: the old
+                    // single-hand claim, the right hand being that rule's and not open to a melee swap.
+                    if (!ResolveCastHand(a_follower, Loadout::HandPick::DualCast, a_spellID, lockTargetKey,
+                                         handPlan, urgentHeal))
+                        return std::nullopt;
+                    healDual = false;
+                    handPlan = HandPlan{};
+                    spdlog::info("[heal-hand] {:08X} bow user: the right hand is held by a higher-ranked rule, so "
+                                 "heal {:08X} takes the left hand alone (rule {})", id, a_spellID, g_firingRule);
+                }
                 if (!offenseSpell)
                     return ResolveCastHand(a_follower, healHand == kHandRight ? Loadout::HandPick::Right
                                                                               : Loadout::HandPick::Left,
@@ -564,7 +580,7 @@ namespace MFO::Actuation {
                 // stream (release + re-stream past the drawn cap). buffRecip is null for a self buff.
                 if (!healClaim && handPlan.left && !handPlan.right)
                     if (auto out = BuffRefreshGate(a_follower, spell, buffRecip)) return *out;
-                if (healClaim && handPlan.left != handPlan.right)   // review F2 / R2-2: proxy + never-observed gates
+                if (healClaim && (handPlan.left || handPlan.right))   // review F2 / R2-2: proxy + never-observed gates (a dual heal's too: its LEFT slot)
                     if (auto out = HealRefreshGate(a_follower, planHand, a_spellID)) return *out;
                 if (APMFBridge::RefreshOwnedCastOnHand(id, claimHand)) {
                     // KEEP THE [cfc] WATCH TICKING. ComposedCast::WatchClaim's own
@@ -590,7 +606,7 @@ namespace MFO::Actuation {
                     if (handPlan.left)
                         ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandLeft,
                                                  CastProxyOnHand(id, kHandLeft));
-                    if (handPlan.right)
+                    if (handPlan.right && !(healClaim && handPlan.left))   // a dual heal's watch is the LEFT slot's only
                         ComposedCast::WatchClaim(id, a_spellID, APMFBridge::kApmfHandRight,
                                                  CastProxyOnHand(id, kHandRight));
                     // ── REPAIR, INSIDE THE REFRESH (review F1; round 2 R2-1, R2-3 and
@@ -615,7 +631,7 @@ namespace MFO::Actuation {
                     // under a live heal claim (a_healClaimLive), and a Debounced /
                     // Failed answer is said as such. Only where MFO equips spells at
                     // all (bEquipToCast, the normal path's own gate on Prepare).
-                    if (healClaim && handPlan.left && !handPlan.right && Config::g_equipToCast.load()) {
+                    if (healClaim && handPlan.left && Config::g_equipToCast.load()) {   // (a dual heal's left hand too)
                         if (const HealRepair rep = HealClaimNeedsRepair(a_follower, spell)) {
                             // In-hand shapes never Prepare (round 3, R3-1): the heal or
                             // APMF's proxy is already held; Prepare would equip the
@@ -1020,9 +1036,10 @@ namespace MFO::Actuation {
                                                  CasterConsent::ClassifySpell(spell),
                                                  /*stopPct=*/0,
                                                  healHand == kHandRight ? APMFBridge::kApmfHandRight
-                                                                        : APMFBridge::kApmfHandLeft);
+                                                                        : APMFBridge::kApmfHandLeft,
+                                                 healDual);
                     if (healClaim && composed == ComposedCast::TryResult::Claimed)
-                        HealHandClaimed(a_follower, healHand, a_spellID, lockTargetKey);   // [heal-hand], once per change
+                        HealHandClaimed(a_follower, healHand, a_spellID, lockTargetKey, healDual);   // [heal-hand], once per change
                     if (composed == ComposedCast::TryResult::ApmfRefused) {
                         // FAIL CLOSED, same reasoning as the offense ask above and
                         // DISTINCT from Held (which is another heal owning the slot, not

@@ -152,7 +152,7 @@ namespace MFO::ComposedCast {
         // firing it" while the seats were firing it perfectly. A diagnostic that
         // cries wolf on every claim is worse than none (principle 8). 3500 ms sits
         // above the measured charge latency and still strictly BELOW both
-        // kHealClaimNeverObservedCapMs / kHoldLastSeenCapMs (4000) and
+        // kHealClaimNeverObservedCapMs (4000) / kHoldLastSeenCapMs (6500 since 2026-10-12) and
         // kIdleFloorUnobservedMs (8000), so all three static_asserts below keep holding and the warning still precedes either
         // lift in the log.
         //
@@ -356,7 +356,8 @@ namespace MFO::ComposedCast {
     }
 
     TryResult Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
-                  CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct, std::int32_t a_hand) {
+                  CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct, std::int32_t a_hand,
+                  bool a_dual) {
         // PER HAND (feat/mfo-perhand-heal): a_hand is the heal slot this claim lives in
         // (left, or right for a second recipient); every hold and watch below is that hand's.
         const std::size_t slot = WatchSlot(a_hand);
@@ -696,8 +697,13 @@ namespace MFO::ComposedCast {
         // gambit's own configured heal threshold (0 = none -> full restoration);
         // see this file's Try() doc in ComposedCast.h. A `false` here is SPLIT
         // into ApmfRefused vs NotApplicable -- see the block inside the branch.
+        // STICKY DUAL (fix/mfo-heal-archer-dualcast): a dual claim already standing for this spell on the LEFT
+        // stays dual for any caller (the mode is part of the claim's identity: a flip re-requests it and
+        // interrupts the charge); a_dual only ever asks for the mode on a NEW claim, from the heal road.
+        const bool dual = a_hand == APMFBridge::kApmfHandLeft &&
+                          (a_dual || APMFBridge::IsHealCastDual(fid, spellID));
         if (!APMFBridge::ClaimHealCast(fid, spellID, targetID, a_hand,
-                                       isConcentration, a_stopPct)) {
+                                       isConcentration, a_stopPct, dual)) {
             DisarmHealHand(fid, a_hand);
             // Clear only THIS heal's hand slot (see End()'s own comment: a
             // concurrent watch on the OTHER hand must survive a refused/ended

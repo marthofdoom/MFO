@@ -167,7 +167,11 @@ namespace MFO::ComposedCast {
     // (cast/HealRoad.cpp). The hold, the in-flight hold and the watch are that hand's.
     TryResult Try(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target,
                   CasterConsent::SpellKind a_kind, std::uint32_t a_stopPct = 0,
-                  std::int32_t a_hand = APMFBridge::kApmfHandLeft);
+                  std::int32_t a_hand = APMFBridge::kApmfHandLeft, bool a_dual = false);
+    // a_dual (fix/mfo-heal-archer-dualcast): claim the heal for BOTH hands (APMFBridge::ClaimHealCast's a_dual;
+    // a_hand must be LEFT). Every bookkeeping record (watch, bounds, hold) stays the LEFT slot's. A standing
+    // dual claim for the same spell stays dual whatever a caller passes (the mode is sticky for the claim's
+    // life: a mode change re-requests the claim and interrupts a charge).
 
     // ── WHICH ROAD A HEAL TAKES (animheal phase 2, 2026-09-30) ─────────────────
     // ONE decision, asked by every heal caller (CastOn, CastAuto, CastSelfDirect,

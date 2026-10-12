@@ -1198,13 +1198,34 @@ namespace MFO::APMFBridge {
     //      ObservedFiring since the claim: claim-to-observed).
     inline constexpr std::uint32_t kHealClaimNeverObservedCapMs = kHealHoldNeverObservedMs;
     //  (b) hold age cap on `lastSeen`: need only exceed claim-to-first-CHARGE (inFlight
-    //      takes over from the first charge; measured 2.5-3.6 s).
-    inline constexpr std::uint32_t kHoldLastSeenCapMs = kHealHoldNeverObservedMs;
+    //      takes over from the first charge; measured 2.5-3.6 s). DE-ALIASED AND RE-SIZED
+    //      4000 -> 6500 ms (fix/mfo-heal-archer-dualcast, field 2026-10-12, Auri
+    //      483139C8, MFO.log vs APMF.log 12:02-12:15). The consumer that matters,
+    //      NeverFiredRelease, judges a heal claim by MFO's OWN fire evidence, and that
+    //      evidence trails the engine's release:
+    //        claim -> APMF ctcensus FIRED (NotifyStartCast): +632, +988, +1170, +1301,
+    //          +2851 ms (n=5);
+    //        FIRED -> MFO's TESSpellCastEvent ([cast] line): 0.54, 2.02, 0.33, 0.34 s
+    //          (n=4; the 2.02 s one: FIRED 12:13:16.655, [cast] 12:13:18.676);
+    //        claim -> MFO observed: 1.47, 1.68, 1.76, 2.77, 3.03 s (n=5; 2.95 s in the
+    //          2026-09-06 heal).
+    //      Worst chain measured = 2.85 s first fire + 2.02 s event lag = 4.87 s, and the
+    //      check runs on a worker lap (~1.2 s per follower), so a claim can sit 6.1 s
+    //      before its first fire is VISIBLE. 4000 ms released claims inside that window
+    //      (12:13:15.114 NEVER FIRED at 4128 ms, 12:14:29.943 at 4396 ms). 6500 ms
+    //      clears 6.1 s; a floor is safe, an expiry is not (principle 9). The cost is
+    //      the documented trade-off below (kHealHoldNeverObservedMs): a claim the engine
+    //      never fires holds its hand 2.5 s longer before NeverFiredRelease frees it.
+    //      Still ABOVE ComposedCast's kSilentWarnAfter (3500, static_asserted).
+    inline constexpr std::uint32_t kHoldLastSeenCapMs = 6500;
     //  (c) ObservedFiring recency window: must exceed the inter-fire idle gap of a
-    //      repeating claimed cast (caster kNone between fire N and charge N+1). Size
-    //      from the max kNone gap between consecutive SpellFire events (CASTER[L/R]
-    //      log); NO log has been read for it yet.
-    inline constexpr std::uint32_t kObservedFiringRecencyMs = kHealHoldNeverObservedMs;
+    //      repeating claimed cast (caster kNone between fire N and charge N+1). DE-ALIASED
+    //      AND SIZED 4000 -> 5000 ms from the same log (the first one the note said was
+    //      missing): consecutive MFO-observed fires of ONE standing claim were 1.35 s
+    //      apart (12:14:18.438 -> 12:14:19.789) and 3.78 s apart (12:02:03.559 ->
+    //      12:02:07.343); 5000 ms clears the 3.78 s gap by 1.2 s (one worker lap). A gap
+    //      longer than that is an idle claim and is released as "IDLE since its last fire".
+    inline constexpr std::uint32_t kObservedFiringRecencyMs = 5000;
 
     // THE IDLE-HAND FLOOR'S UNOBSERVED GATE (fix/mfo-combat-restoration-direct,
     // 2026-09-21). How long a DRIVING cast claim may stand with NO observed cast
@@ -1278,7 +1299,10 @@ namespace MFO::APMFBridge {
     // ComposedCast::TryResult::ApmfRefused vs ::NotApplicable.
     bool ClaimHealCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
                        std::int32_t a_hand = kApmfHandLeft, bool a_concentration = false,
-                       std::uint32_t a_stopPct = 0);
+                       std::uint32_t a_stopPct = 0, bool a_dual = false);
+    // a_dual (fix/mfo-heal-archer-dualcast, marth 2026-10-12): claim the heal for BOTH hands (kCastFlag_DualCast,
+    // the existing ABI bit -- no APMF change). The claim lives in the LEFT heal slot only (a_hand must be left),
+    // never mirrored into the right slot; IsHealCastDual reports it. The mode is part of the claim's identity.
 
     // Worker-safe. The heal twin of OffenseCastClaimSupported() above: true iff
     // APMF is present AND its interface carries the v5 RequestCast slot AND
@@ -1306,6 +1330,10 @@ namespace MFO::APMFBridge {
     // reads one hand's heal slot (feat/mfo-perhand-heal).
     bool IsHealCastActive(RE::FormID a_follower);
     bool IsHealCastActiveOnHand(RE::FormID a_follower, std::int32_t a_hand);
+    // Does a_follower's LEFT heal slot hold a LIVE DUAL-CAST claim (kCastFlag_DualCast, both hands) for a_spell
+    // (0 = any spell)? The dual heal is one claim in the left slot only (see ClaimHealCast); this is how a caller
+    // learns the RIGHT hand is occupied by it. Same g_mx / worker-safe contract as the accessors above.
+    bool IsHealCastDual(RE::FormID a_follower, RE::FormID a_spell = 0);
 
     // Worker- AND combat-thread-safe (SAME g_mx). The delivery-flip proxy FormID
     // APMF minted internally for a_follower's LIVE heal-cast claim (see
