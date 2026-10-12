@@ -6,7 +6,7 @@
 // the ref's triangle sit in ONE connected component of the decoded BSNavmesh graph?
 //
 // It is read-only over the same decoded data NearestNavmeshDist reads (attached cell + the cell's own
-// spinLock to COLLECT the meshes; BSTSmartPointer copies keep them alive). It is NOT an engine path
+// spinLock to COLLECT the raw mesh pointers, exactly as NearestNavmeshDist does). It is NOT an engine path
 // query (none exists in the pinned CommonLib and a real one needs a new engine address -- tier A).
 // CONSERVATIVE BY CONSTRUCTION: it answers Island ONLY when the flood fill from the follower's
 // triangle is EXHAUSTED inside meshes it could fully read, never met an unreadable/unloaded link,
@@ -21,10 +21,6 @@ namespace MFO::Logistics {
 
     namespace {
         using TriFlag = RE::BSNavmeshTriangle::TriangleFlag;
-
-        struct MeshRef {
-            RE::NavMesh* mesh = nullptr;
-        };
 
         // Triangle (xy) containing a_p whose plane z is closest to a_p.z; -1 if none within a_maxDz.
         int FindTriangle(RE::NavMesh* a_mesh, const RE::NiPoint3& a_p, float a_maxDz, float& a_bestDz) {
@@ -54,13 +50,13 @@ namespace MFO::Logistics {
             return best;
         }
 
-        void Collect(RE::TESObjectCELL* a_cell, std::vector<RE::BSTSmartPointer<RE::NavMesh>>& a_out) {
+        void Collect(RE::TESObjectCELL* a_cell, std::vector<RE::NavMesh*>& a_out) {
             if (!a_cell || !a_cell->IsAttached()) return;
             auto& rd = a_cell->GetRuntimeData();
             RE::BSSpinLockGuard lock(rd.spinLock);
             if (!rd.navMeshes) return;
             for (const auto& m : rd.navMeshes->navMeshes)
-                if (m) a_out.push_back(m);
+                if (m) a_out.push_back(m.get());
         }
 
         std::unordered_set<RE::FormID> g_unreachLogged;   // worker-only (the loot scan); logged-once set
@@ -73,7 +69,7 @@ namespace MFO::Logistics {
         if (!fc || !rc) return NavConn::Unknown;
         if (fc != rc && (fc->IsInteriorCell() || rc->IsInteriorCell())) return NavConn::Unknown;   // via a door: not judged
 
-        std::vector<RE::BSTSmartPointer<RE::NavMesh>> pool;
+        std::vector<RE::NavMesh*> pool;
         Collect(fc, pool);
         if (rc != fc) Collect(rc, pool);
         if (pool.empty()) return NavConn::Unknown;
@@ -84,8 +80,7 @@ namespace MFO::Logistics {
         RE::NavMesh* fm = nullptr; int ft = -1;
         RE::NavMesh* tm = nullptr; int tt = -1;
         float fdz = 1e9f, tdz = 1e9f;
-        for (auto& sp : pool) {
-            auto* m = sp.get();
+        for (auto* m : pool) {
             if (!m) continue;
             if (const int t = FindTriangle(m, fp, 150.0f, fdz); t >= 0) { fm = m; ft = t; }
             if (const int t = FindTriangle(m, tp, 150.0f, tdz); t >= 0) { tm = m; tt = t; }
