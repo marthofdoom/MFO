@@ -239,49 +239,113 @@ namespace MFO::EngageOnSight {
             return avo ? avo->GetActorValue(RE::ActorValue::kConfidence) : 0.0f;
         }
 
-        // FACTION HOSTILITY (marth 2026-10-12: "enemy = faction hostility"). Does any faction
-        // of a_from list a faction of a_to with fight reaction Enemy? Pure data read of the
-        // XNAM reaction lists (TESFaction::reactions, TESReactionForm.h) over the actor's base
-        // + ExtraFactionChanges factions (Actor::VisitFactions): no engine call, no aggression.
-        // The engine's own IsHostileToActor (AE 0x679F10) weights Aggression, and Requiem sets
-        // wolves / skeevers / bears to Aggression 0 (territorial by aggro radius), so it named none
-        // of them. Main thread.
-        bool FactionReactsEnemy(RE::Actor* a_from, RE::Actor* a_to) {
-            std::vector<const RE::TESFaction*> toFactions;
-            a_to->VisitFactions([&](RE::TESFaction* f, std::int8_t) {
-                if (f) toFactions.push_back(f);
+        // NEVER ENGAGED PROACTIVELY (marth 2026-10-12): giants, mammoths, carriage drivers,
+        // ferrymen, non-combatant servants -- unless FightingParty. The factions / races come
+        // from Config::g_engageOnSightSkip, resolved ONCE on the main thread (RunProbe) on first use.
+        struct SkipSet {
+            std::vector<RE::FormID> factions;
+            std::vector<RE::FormID> races;
+        };
+        const SkipSet& SkipSetOnce() {
+            static const SkipSet s_set = [] {
+                SkipSet out;
+                std::string text;
+                { std::lock_guard lk(Config::g_engageOnSightSkipMx); text = Config::g_engageOnSightSkip; }
+                auto* dh = RE::TESDataHandler::GetSingleton();
+                std::size_t pos = 0;
+                while (pos <= text.size()) {
+                    auto end = text.find(',', pos);
+                    if (end == std::string::npos) end = text.size();
+                    std::string tok = text.substr(pos, end - pos);
+                    pos = end + 1;
+                    const auto b = tok.find_first_not_of(" \t");
+                    if (b == std::string::npos) continue;
+                    tok = tok.substr(b, tok.find_last_not_of(" \t") - b + 1);
+                    RE::TESForm* form = nullptr;
+                    if (const auto bar = tok.find('|'); bar != std::string::npos) {
+                        try {
+                            const auto local = static_cast<RE::FormID>(std::stoul(tok.substr(bar + 1), nullptr, 0));
+                            if (dh) form = dh->LookupForm(local, tok.substr(0, bar));
+                        } catch (...) {}
+                    } else {
+                        form = RE::TESForm::LookupByEditorID(tok);
+                    }
+                    if (form && form->Is(RE::FormType::Faction)) out.factions.push_back(form->GetFormID());
+                    else if (form && form->Is(RE::FormType::Race)) out.races.push_back(form->GetFormID());
+                    else spdlog::info("[engage-on-sight] skip list: '{}' did not resolve to a faction or race (plugin absent?)", tok);
+                }
+                spdlog::info("[engage-on-sight] skip list resolved: {} faction(s), {} race(s) never engaged proactively",
+                             out.factions.size(), out.races.size());
+                return out;
+            }();
+            return s_set;
+        }
+
+        bool IsNonCombatant(RE::Actor* a) {
+            const auto& set = SkipSetOnce();
+            if (const auto* race = a->GetRace();
+                race && std::find(set.races.begin(), set.races.end(), race->GetFormID()) != set.races.end())
+                return true;
+            if (set.factions.empty()) return false;
+            bool hit = false;
+            a->VisitFactions([&](RE::TESFaction* f, std::int8_t a_rank) {
+                if (f && a_rank >= 0 && std::find(set.factions.begin(), set.factions.end(), f->GetFormID()) != set.factions.end())
+                    hit = true;
+                return hit;
+            });
+            return hit;
+        }
+
+        // FACTION REACTION STAND-IN for the engine's GetFactionReaction (AE 0x689F30, disassembled
+        // by the review of a40e2c3): ONE direction (a_from's own factions' XNAM lists), a_from's
+        // factions with rank < 0 skipped, no matching entry = Neutral, an Ally / Friend entry
+        // overrides Enemy. Data only, no engine call. NOT modelled: the relationship-rank-first
+        // step (BGSRelationship::GetRelationship is an id call with no VerifiedAddresses row).
+        // Returns fight reaction: kNeutral / kEnemy / kAlly (Ally and Friend both -> kAlly).
+        RE::FIGHT_REACTION ReactionOf(RE::Actor* a_from, RE::Actor* a_to) {
+            std::vector<const RE::TESForm*> toFactions;
+            a_to->VisitFactions([&](RE::TESFaction* f, std::int8_t a_rank) {
+                if (f && a_rank >= 0) toFactions.push_back(f);
                 return false;
             });
-            if (toFactions.empty()) return false;
-            bool enemy = false;
-            a_from->VisitFactions([&](RE::TESFaction* f, std::int8_t) {
-                if (!f) return false;
+            bool enemy = false, ally = false;
+            a_from->VisitFactions([&](RE::TESFaction* f, std::int8_t a_rank) {
+                if (!f || a_rank < 0) return false;
                 for (const auto* g : f->reactions) {
-                    if (g && g->fightReaction == RE::FIGHT_REACTION::kEnemy &&
-                        std::find(toFactions.begin(), toFactions.end(), g->form) != toFactions.end()) {
-                        enemy = true;
-                        return true;
-                    }
+                    if (!g || std::find(toFactions.begin(), toFactions.end(), g->form) == toFactions.end()) continue;
+                    if (g->fightReaction == RE::FIGHT_REACTION::kEnemy) enemy = true;
+                    else if (g->fightReaction == RE::FIGHT_REACTION::kAlly || g->fightReaction == RE::FIGHT_REACTION::kFriend) ally = true;
                 }
                 return false;
             });
-            return enemy;
+            return ally ? RE::FIGHT_REACTION::kAlly : enemy ? RE::FIGHT_REACTION::kEnemy : RE::FIGHT_REACTION::kNeutral;
         }
 
-        // Enemy to the party member a_b in EITHER direction (a's factions list b's as Enemy, or
-        // b's list a's). The engine's reaction table is per-direction in the data.
-        bool FactionEnemy(RE::Actor* a, RE::Actor* a_b) {
-            return FactionReactsEnemy(a, a_b) || FactionReactsEnemy(a_b, a);
+        // TERRITORIAL TERM (marth 2026-10-12): the engine's own IsHostileToActor tail without its
+        // runtime "radius entered" flag. Aggression 0 + the NPC's AIDT aggro-radius behaviour bit
+        // + a non-zero attack radius (aggroRadius[1] warn-and-attack or [2] attack) + a reaction
+        // to the player or him that is Neutral or Enemy (not Ally / Friend). This is what Requiem
+        // gives skeevers, wolves and bears. Main thread.
+        bool IsTerritorial(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc) {
+            if (AggressionOf(a) != 0.0f) return false;
+            const auto* base = a->GetActorBase();
+            if (!base || !base->aiData.aggroRadiusBehaviour) return false;
+            if (!base->aiData.aggroRadius[RE::ACTOR_AGGRO_RADIUS::kWarnAndAttack] &&
+                !base->aiData.aggroRadius[RE::ACTOR_AGGRO_RADIUS::kAttack])
+                return false;
+            return ReactionOf(a, a_pc) != RE::FIGHT_REACTION::kAlly || ReactionOf(a, a_self) != RE::FIGHT_REACTION::kAlly;
         }
 
-        // ENEMY TEST (marth 2026-10-12: "enemy = faction hostility"; field 2026-10-12: the old
-        // Aggression gate skipped every skeever in Dustman's Cairn on LoreRim, where Requiem
-        // sets them to Aggression 0). An actor is an enemy when its faction reaction to the
-        // player OR to him is Enemy, or it is already FIGHTING THE PARTY (FightingParty: its
-        // currentCombatTarget is the player or a teammate -- marth 2026-09-26: "If I attack a
-        // deer it's marked"). Only a truly cowardly creature (Confidence 0, Cowardly) is prey and
-        // is skipped unless it is fighting the party. The crime-faction rule is unchanged.
-        // a_why names the skip reason for the log (static text, never owned).
+        // ENEMY TEST (marth 2026-10-12: "game's hostility + territorial"; field 2026-10-12: the old
+        // Aggression gate skipped every skeever in Dustman's Cairn on LoreRim, where Requiem sets
+        // them to Aggression 0 and makes them territorial; a faction-Enemy-only test (a40e2c3) was
+        // blocked: LoreRim's faction data names almost no enemies). An actor is an enemy when it
+        // is ALREADY FIGHTING THE PARTY (FightingParty -- marth 2026-09-26: "If I attack a deer it's
+        // marked"), or the engine's IsHostileToActor says it is hostile to the player OR to him, or
+        // it is TERRITORIAL. Never engaged proactively unless FightingParty: a Confidence-0
+        // (Cowardly) creature, a non-combatant (giant, mammoth, carriage driver, ferryman, servant:
+        // the Config skip list), and any crime-faction actor (guards, townsfolk). a_why names the
+        // skip reason for the log (static text, never owned).
         bool IsEnemy(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc, const char*& a_why) {
             if (a->IsCommandedActor()) {
                 auto cmd = a->GetCommandingActor();   // HOLD the NiPointer
@@ -302,10 +366,14 @@ namespace MFO::EngageOnSight {
                 a_why = "IgnoreCombat package";
                 return false;
             }
-            const bool fighting = FightingParty(a);
-            if (ConfidenceOf(a) <= 0.0f && !fighting) { a_why = "cowardly"; return false; }
-            if (!fighting && !FactionEnemy(a, a_pc) && !FactionEnemy(a, a_self)) { a_why = "not hostile"; return false; }
-            if (a->GetCrimeFaction() && !fighting) { a_why = "crime faction"; return false; }
+            if (FightingParty(a)) return true;   // fighting the party: counts, whatever else it is
+            if (ConfidenceOf(a) <= 0.0f) { a_why = "cowardly"; return false; }
+            if (IsNonCombatant(a)) { a_why = "non-combatant (skip list: giant / mammoth / carriage / ferry / servant)"; return false; }
+            if (!a->IsHostileToActor(a_pc) && !a->IsHostileToActor(a_self) && !IsTerritorial(a, a_self, a_pc)) {
+                a_why = "not hostile (engine: no; territorial: no)";
+                return false;
+            }
+            if (a->GetCrimeFaction()) { a_why = "crime faction"; return false; }
             return true;
         }
 

@@ -830,6 +830,16 @@ namespace MFO::Config {
     // charges. The leash-from-player test on the enemy stays as it is.
     // fEngageOnSightRange (default 2000 units, MCM 500-4000 step 100).
     inline std::atomic<float> g_engageOnSightRange{ 2000.0f };
+    // NEVER-ENGAGED-PROACTIVELY list (marth 2026-10-12): giants, mammoths, carriage drivers,
+    // ferrymen and non-combatant servants. A comma-separated list of FACTION or RACE forms,
+    // each `Plugin.esp|0xLOCALFORMID` (load-order safe) or an EditorID; resolved ONCE by
+    // EngageOnSight on first use (a restart picks up an edit). sEngageOnSightSkip. The default
+    // is every vanilla FormID found by the 2026-10-12 LoreRim scan (EngageOnSight.cpp).
+    inline std::mutex   g_engageOnSightSkipMx;
+    inline std::string  g_engageOnSightSkip =
+        "Skyrim.esm|0x4359A,Skyrim.esm|0x4359B,Skyrim.esm|0x131F9,Skyrim.esm|0x131FF,"   // Giant/Mammoth faction + race
+        "Skyrim.esm|0x17F04,CFTO.esp|0xAA05,Dawnguard.esm|0x16849,"                      // carriage system, Kmod carriage, ferry system
+        "Skyrim.esm|0xB2D37";                                                             // Blackreach falmer servants (FSLE)
 
     // MAGIC LOADOUT (v1.0.29). A magic-user follower -- anyone with at least
     // one ENABLED cast gambit; role is GAMBIT-DRIVEN here, never skill-guessed

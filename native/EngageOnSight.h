@@ -16,11 +16,12 @@
 //
 // ENEMY (EngageOnSight.cpp IsEnemy): a loaded, enabled, living actor that is not
 // the player or a player teammate, not commanded by the player or a teammate, not
-// restrained, bleeding out or on an IgnoreCombat package, and an ENEMY BY FACTION to the
-// player OR to him (marth 2026-10-12: "enemy = faction hostility": one of its factions lists
-// one of theirs, or theirs one of its, with fight reaction Enemy -- Aggression plays no part,
-// so Requiem's Aggression-0 territorial skeevers / wolves / bears count) or already fighting
-// the party; only a Confidence-0 (Cowardly) creature is prey and skipped. Hostile to HIM alone
+// restrained, bleeding out or on an IgnoreCombat package, and hostile to the player
+// OR to him by the engine (IsHostileToActor), or TERRITORIAL (Aggression 0 with an aggro radius
+// and a non-allied reaction: Requiem's skeevers / wolves / bears), or already fighting the party
+// (marth 2026-10-12: "game's hostility + territorial"). Never engaged proactively unless it is
+// fighting the party: Confidence-0 (Cowardly) creatures, giants / mammoths / carriage drivers /
+// ferrymen / servants (the sEngageOnSightSkip list), crime-faction actors. Hostile to HIM alone
 // counts -- CONFIRMED by marth 2026-09-25: "yes, there will be fights without player
 // involvement". An actor with a CRIME FACTION -- or a commanded actor whose COMMANDER
 // has one -- counts only when it is already fighting the party. This is NOT the combat

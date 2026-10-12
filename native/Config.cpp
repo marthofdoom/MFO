@@ -227,6 +227,10 @@ namespace MFO::Config {
             else if (a_key == "bEngageOnSight")     setB(g_engageOnSight);          // default OFF
             else if (a_key == "bEngageOnSightSneaking") setB(g_engageOnSightSneaking);   // default OFF
             else if (a_key == "fEngageOnSightRange") setF(g_engageOnSightRange, 500.0f, 4000.0f);   // match the MCM slider
+            else if (a_key == "sEngageOnSightSkip") {
+                std::lock_guard lk(g_engageOnSightSkipMx);
+                g_engageOnSightSkip = a_val;
+            }
             else if (a_key == "bMagicLoadout")      setB(g_magicLoadout);
             else if (a_key == "bMageDaggersOnly")   setB(g_mageDaggersOnly);
             else if (a_key == "bBeastHeadFix")       setB(g_beastHeadFix);   // #62 default ON, debug kill-switch
