@@ -2850,9 +2850,11 @@ economy tree run on the **BSJobs worker**; 3D mutations marshalled to main via
 function by function with `tools/splitcheck`; before it: `Logistics.cpp` / `_Cast` /
 `_Economy` / `_Loot` / `_Loot_Equipment` / `_internal.h` / `Logistics.h` in `native/`,
 the v1.1 split pass + the 2026-09-06 `_Loot_Equipment` module).** Other subsystems include
-ONLY `logistics/Logistics.h`, except the cast family's weapon-style read
-(only `cast/Equip.cpp` still includes `logistics/Logistics_internal.h`,
-REVIEW-BACKLOG **MFO-B19**). Cross-module state/types/small helpers live as `inline`
+ONLY `logistics/Logistics.h` (MFO-B19 CLOSED: `cast/Equip.cpp`'s weapon-style read goes through the
+public `CombatWeaponStyle` / `CombatAmmo` + `CombatStyleFor` / `CombatAmmoOwned` / `CombatWeaponScore` /
+`CombatRangedScore` wrappers declared in `Logistics.h` and defined in `logistics/EquipAuthority.cpp`;
+`EquipAuthorityLive` / `RefreshEquipDeclaration` / `LiveBoundWeapons` / `ResendEquipDeclaration` are declared
+there too; the internal inline `WeaponRoles` / `WeaponScore` / `RangedPickScore` / `AmmoOwned` stay put). Cross-module state/types/small helpers live as `inline`
 members of `namespace MFO::Logistics` in `logistics/Logistics_internal.h` (ONE instance
 across the TUs); big cross-module helpers are declared there and defined in their home
 module. Module layout:
@@ -2988,8 +2990,14 @@ module. Module layout:
   (mage-apparel scoring, `VendorTrades:193`, `UnlockCollegeTomes:232`,
   `BuildBuyThresholds:298`, `EconomyProbe:451`, public buy helpers `MageApparelBuyKey:1003`
   et al) and `logistics/EquipAuthority.cpp` (`ComputeOwnedGearPick:44`,
-  `EquipBestOwnedGear:132`, `EquipAuthorityLive:341`, `LiveBoundWeapons:370`,
-  `RefreshEquipDeclaration:391`).
+  `EquipBestOwnedWeapon:178` (MFO-B28/B32: an owned in-class primary upgrade over the held weapon goes
+  through `AcquireEquip(a_src=nullptr, forceStock=false)` so its gems carry; strictly better, ~5 s scan cadence;
+  STAYS OUT while a gambit force-hold stands (`ForcedHoldFor`), the player is in combat, a silver episode is
+  open, the held weapon is bound or the player's choice (PlayerGiven / IsPlayerEquipped / excluded artifact),
+  and in the B134 no-claim state; a declined equip is not retried for the same {held, candidate}; backup / trueSecond / silver stay stock-only on the loot side and never reach it; no weapon
+  enforcement, `AcquireEquip`'s B134 stock rule still applies), `EquipBestOwnedGear:212`,
+  `CombatStyleFor:285` (the B19 wrappers), `EquipAuthorityLive:581`, `LiveBoundWeapons:614`,
+  `RefreshEquipDeclaration:635`).
 - **THE SWAP-UP RULE (`logistics/SwapUp.cpp`, 2026-09-25, `feat/mfo-swapup-ammo`, ClickUp
   86e3ebfu3; marth: "swap up needs to work in looting and shopping ... lower arrows are worthless
   when better ones are available, lowest removed first, or slated for sale when obsolete").** ONE
@@ -3118,7 +3126,7 @@ module. Module layout:
   no armor tie `ArmorClassSuits` is untouched; with the catalog unbuilt every
   vote is 0. **CONSUMERS ADDED 2026-09-13 (`feat/mfo-dualwield-combat-pick`):** the
   COMBAT equip `cast/Equip.cpp` `EquipWeapon` (`:336`) now picks by `WeaponScore`
-  too (via `logistics/Logistics_internal.h`, included from `cast/Equip.cpp`), and `offHand`
+  too (via the `Logistics::CombatWeaponScore` / `CombatRangedScore` wrappers in `logistics/Logistics.h`), and `offHand`
   STEERS: 2 → a second one-hander force-held in the left, 1 → best shield, under
   `MFO_MeleeStyle` DATA = `1|4` (`kAllowDualWielding`) — see §2 Actuation "COMBAT
   PICK + DUAL WIELD BY PERKS". **(SUPERSEDED 2026-10-01 by RANGED PICK
@@ -3238,7 +3246,7 @@ module. Module layout:
   `BuildBuyThresholds`). **CONSUMERS — ALL of them, by design ONE score:**
   `ArmorIsBetter` (`logistics/Gear.cpp:154`, candidate score vs worn score per
   slot; the `ArmorClassSuits` early-out is DELETED — `ArmorClassSuits:303` is kept
-  as the named category predicate, rebased on `ArmorPrefFor`, and has NO callers),
+  was kept as the named category predicate until MFO-B17 deleted it: zero callers),
   `CarriesSlotArmorAtLeast:371` (score, or a worn heavy 31 in the pack blocks the
   light 26), `LootEquipment:224` best-first (`bestArmorScore`) +
   `LooseEquipmentQualifies:177`, **`EquipBestOwnedGear` rated branch
@@ -3315,7 +3323,7 @@ module. Module layout:
   it and the follower stays in the engine's pick; `ArmorScoreOf` in `TradeBridge.h`
   and the inline `ArmorScore` must stay the same arithmetic or buy and loot
   disagree; `BuyThresholds` is append-only (do not move the new fields ahead of
-  `eligibleSchools`); `ArmorClassSuits` is dead code by design — do not re-add it
+  `eligibleSchools`); `ArmorClassSuits` was DELETED (MFO-B17 a, zero callers) — do not re-add it
   as a gate.
 - **THE DECLARED WORN SET — `RefreshEquipDeclaration` (`logistics/EquipAuthority.cpp`, beside
   `EquipBestOwnedGear`; `feat/mfo-equip-authority` 2026-09-15, PORT #1; SCOPED by
@@ -3522,7 +3530,7 @@ module. Module layout:
   `IsLOTDDropOff:614`, the faction-container bar `IsFactionServiceContainer:651`, the loose-item bar `LooseRefBarred:713`, `PlayerIsConsidering:729`,
   `TierReleased:724`, `LootHere:782`, `HasLoot:808`, `NavmeshReach:873`, `LooseRef:888`),
   `logistics/Gear.cpp` (the armor judge `ArmorPrefFor:43`, `ArmorScore:65`,
-  `LogArmorClassIfChanged:78`, `ArmorClassSuits:136`, `ArmorIsBetter:154`/`:195`,
+  `LogArmorClassIfChanged:78`, `ArmorIsBetter:~135`/`:~176` (`ArmorClassSuits` deleted, MFO-B17),
   `CarriesSlotArmorAtLeast:215`, `KeepHeadClear:270`, `StyleVotesFor:356`,
   `ComputeWeaponRoles:398`, `AcquireEquip:640`), `logistics/LootScan.cpp`
   (`LootNearby:71`, `StripCorpse:917`, `RunExcursionScan:982`). `LootEquipment` itself
@@ -4621,7 +4629,7 @@ Guard), then the Layer 1 targets line (`Pk_TargetsParty` for a cloak, `Pk_Target
 Later phases (derived records, enacted EPs, the reverse shape) are NOT implemented.
 **Open review findings:** Docs/REVIEW-BACKLOG.md MFO-B246 (F3 mixed nodes; F7 Apply*Spell EPs unrecursed; tab-0 and runOnRef unproven; N1/N2).
 
-**STYLE-FACT RANKS ARE NEVER MARGINAL (2026-09-14, `fix/mfo-deck-0914-helmet-offhand-verdict-meo`):**
+**STYLE-FACT RANKS ARE PROMOTED (effective off a firing entry; at least marginal off non-firing ones, MFO-B25) (2026-09-14, `fix/mfo-deck-0914-helmet-offhand-verdict-meo`):**
 at the rank build (`BuildSkill`, right after the `rank.style` merge) a rank with
 `rank.style.Any()` whose `ClassifyRank` verdict is not `kEffective` is PROMOTED to
 `kEffective` (`"style-facts"` appended to its `why`; one `spdlog::debug` line per
@@ -4633,10 +4641,13 @@ an equipment-deciding perk → zero style votes), redeployed separately; this ma
 perk-style decision survive a missing or overhaul-odd verdict. The 92-row verdict
 table, `ReadEntryPointVerdicts`, `ClassifyRank` and the generator are untouched;
 every rank WITHOUT a style fact still follows the declared verdict. Consumers
-(allocator, board, census) unchanged — they read `verdict`. **OPEN BACKLOG:
-`Docs/REVIEW-BACKLOG.md` MFO-B25** (SEV-5, marth's call) — a player-gated ability
-conditioned on a weapon/armor keyword is promoted too, so a follower point can buy a
-rank whose only follower effect is its style vote. **What breaks:**
+(allocator, board, census) unchanged — they read `verdict`. **MFO-B25 CLOSED (marth 2026-10-12, "marginal: buyable, steers"):** `BuildSkill` tracks `styleFires` — a style
+fact that came off an entry which fires for an NPC (an entry-point tab, or an ability not pinned to
+the player). Those ranks promote to effective as before. A rank whose style fact comes ONLY off non-firing
+entries (a player-gated ability conditioned on a weapon/armor keyword) is promoted to at least MARGINAL
+(dead -> marginal, marginal and effective unchanged): still buyable, its vote still steers, never
+filtered and never dropped on load; the auto-allocator ranks it below perks that really work. The debug
+line names the target verdict; both count in `stylePromotedRanks`. **What breaks:**
 renaming/renumbering `WeaponKind`/`ArmorKind` bits breaks `Logistics::WeaponKindOf` +
 `TradeBridge::BuyThresholds::preferKinds` (same bit space); calling `TallyStyleVotes`
 off the main thread races the allocator's perk writes (the Logistics mirror exists for
@@ -5476,8 +5487,12 @@ it is not:
   `fix/mfo-loot-m1`), so a later item cannot evict for the same copy and the LEFTOVER
   line's `leftN = avail[i]` already excludes it (its socket opens next pass); the old
   `swapPending` count is gone — subtracting it too would count the copy twice. Open
-  note: **MFO-B35** (the duplicate-copy deferral is redundant against MEO's in-place mint
-  and starves a worn item while a spare is carried). When no considered item has an empty socket
+  note: **MFO-B35 CLOSED**: the duplicate-copy deferral and the `kDuplicateCopy` LEFTOVER class are
+  REMOVED (the fix shape the backlog named; `mintedBases` one-per-base-per-pass stays). MEO's uid-0 path
+  (`ApiEnsureInstanceXList`, MEO `native/plugin.cpp:9638-9655`) mints in place on a worn, uid-less,
+  un-enchanted xList and takes the drop path (`:9656-9677`) only when none exists; every item reaching the
+  slot loop has such an xList (the foreign-enchant skip drops the others), so a spare copy no longer
+  starves the worn item. Open SEV-4: a one-frame race, see the backlog When no considered item has an empty socket
   NOTHING is logged: that is the invariant holding. Classification relies on the slot
   loop's exhaustiveness: it re-picks until `pickGem` returns -1, so on a non-deferred
   item with sockets left every fitting gem in stock is in `excluded`; the deferral

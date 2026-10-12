@@ -18,9 +18,9 @@ namespace MFO::Logistics {
         // player-handed -- through the SAME safe AcquireEquip step the loot judge
         // uses (MainThread::Post EquipObject, MEO gem carry, never DoReset3D). ONE
         // item per tick and idempotent (equips only when it beats what's worn), so
-        // once worn it no-ops -> no thrash. Apparel/armor only here; WEAPONS are left
-        // to the combat equip gambit (Loadout::Prepare picks the best in-class at
-        // combat), matching the loot judge's stock-not-equip rule for weapons.
+        // once worn it no-ops -> no thrash. Apparel/armor here; a better owned PRIMARY
+        // weapon is routed through the same step below (EquipBestOwnedWeapon, MFO-B28), the
+        // rest of the weapon choice is left to the combat equip gambit.
         namespace {
             // F10 (Fable round 2): the judged armor pick is computed ONCE per
             // logistics tick. EquipBestOwnedGear hands its pick here (0 = it ran
@@ -164,6 +164,73 @@ namespace MFO::Logistics {
             return pick;
         }
 
+        // OWNED PRIMARY WEAPON UPGRADE (MFO-B28 / B32). A weapon the follower OWNS (bought, handed, looted loose
+        // or as a stock) that out-scores the one in his right hand, in the SAME melee class, goes through the one
+        // acquire step with a_src == nullptr and forceStock false: AcquireEquip captures the replaced weapon's
+        // MEO gems and queues the move, exactly as the loot path does for a primary upgrade (LootEquipment.cpp,
+        // the `best == bestBackup || trueSecond || silverStock` split). Nothing else is routed here: the mage
+        // backup, a dual wielder's true second one-hander and the silver slot stay stock-only on the loot side
+        // and are never an "upgrade over the held weapon", so this branch cannot reach them. No weapon
+        // ENFORCEMENT is added: AcquireEquip's own B134 rule still stocks instead of equipping when equip
+        // authority is supported but no claim stands, and weapons stay observe-only under the declaration.
+        // STAYS OUT of every hold or choice that is not MFO's to override: a standing gambit force-hold in
+        // either hand (ForcedHoldFor), the PLAYER in combat (the follower's own IsInCombat flaps and
+        // serviceOwnOoc services laps inside a party fight), an open silver episode (its silver weapon in
+        // hand, or silver ammo nocked), a bound weapon, and a held weapon the PLAYER chose (given,
+        // put on through the menu, or an excluded artifact while bLootSpecialItems is off: player agency).
+        // Strictly better only (no flip). A per-follower ~5 s scan cadence sits in front of the inventory
+        // walk; an equip AcquireEquip declined (B134 no-claim stock, cross-role) is not retried for the
+        // same {held, candidate} pair, so it neither spams the log nor re-walks.
+        static void EquipBestOwnedWeapon(RE::Actor* a_follower, const FollowerState& a_state, RE::TESObjectWEAP* a_myWeap) {
+            if (!a_follower || !a_myWeap || a_follower->IsInCombat()) return;
+            const auto id = a_follower->GetFormID();
+            if (auto* pcc = RE::PlayerCharacter::GetSingleton(); pcc && pcc->IsInCombat()) return;
+            if (const auto hold = Actuation::ForcedHoldFor(id); hold.first != 0 || hold.second != 0) return;
+            if (Actuation::SilverAmmoEpisode(id) != 0 || IsSilverMeleeWeapon(a_myWeap)) return;
+            if (a_myWeap->IsBound()) return;
+            if (PlayerGiven::IsPlayerGiven(id, a_myWeap->GetFormID()) ||
+                PlayerGiven::IsPlayerEquipped(id, a_myWeap->GetFormID()) ||
+                (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(a_myWeap->GetFormID()))) return;
+            // B134 state: equip authority supported but no claim stands -> AcquireEquip only stocks.
+            if (APMFBridge::EquipAuthoritySupported() && !APMFBridge::IsEquipAuthorityClaimed(id)) return;
+            static std::unordered_map<RE::FormID, Clock::time_point> s_nextWeapUp;
+            static std::unordered_map<RE::FormID, std::pair<RE::FormID, RE::FormID>> s_declined;   // {held, candidate}
+            const auto now = Clock::now();
+            auto& nxt = s_nextWeapUp[id];
+            if (nxt.time_since_epoch().count() != 0 && now < nxt) return;
+            nxt = now + std::chrono::seconds(5);
+            const EquipmentContext ctx = BuildEquipmentContext(a_follower, &a_state);
+            if (ctx.meleeTargetClass == WepClass::Other) return;   // no melee role (pure caster / ranged user)
+            if (WeaponClassOf(a_myWeap->GetWeaponType()) != ctx.meleeTargetClass) return;   // never cross-class
+            const float heldScore = WeaponScore(ctx.roles, a_myWeap);
+            auto* leftEq   = a_follower->GetEquippedObject(true);
+            auto* leftForm = leftEq ? leftEq->As<RE::TESObjectWEAP>() : nullptr;   // a dual wielder's other hand
+            RE::TESBoundObject* best = nullptr;
+            float               bestScore = heldScore;
+            for (auto& [obj, data] : a_follower->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                auto* w = obj->As<RE::TESObjectWEAP>();
+                if (!w || w == a_myWeap || IsCreatureWeapon(w) || w->IsBound()) continue;
+                if (!Config::g_lootSpecialItems.load() && Catalog::IsExcluded(obj->GetFormID())) continue;
+                // the combat pick's relic rule (cast/Equip.cpp IsMuseumRelic), so the two agree
+                if (Lotd::HoldFromSale(id, w) && !PlayerGiven::IsPlayerEquipped(id, w->GetFormID())) continue;
+                if (w == leftForm && data.first < 2) continue;           // his only copy is in the left hand
+                if (WeaponClassOf(w->GetWeaponType()) != ctx.meleeTargetClass) continue;
+                const float sc = WeaponScore(ctx.roles, w);
+                if (sc > bestScore) { bestScore = sc; best = obj; }
+            }
+            if (!best || !FitsCarryWeight(a_follower, best->GetWeight())) return;
+            const std::pair<RE::FormID, RE::FormID> pair{ a_myWeap->GetFormID(), best->GetFormID() };
+            if (const auto it = s_declined.find(id); it != s_declined.end() && it->second == pair) return;
+            spdlog::info("[equip] {:08X}: OWNED weapon '{}' score={:.1f} <- held '{}' score={:.1f}",
+                         id, best->GetName() ? best->GetName() : "?", bestScore,
+                         a_myWeap->GetName() ? a_myWeap->GetName() : "?", heldScore);
+            if (AcquireEquip(a_follower, best, nullptr, a_myWeap, /*forceStock*/false))   // already owned -> no transfer
+                s_declined.erase(id);
+            else
+                s_declined[id] = pair;   // declined: not retried until the held weapon or the best candidate changes
+        }
+
         void EquipBestOwnedGear(RE::Actor* a_follower, const FollowerState& a_state) {
             if (!a_follower || Config::g_dollsMode.load()) return;
             auto* eqObj  = a_follower->GetEquippedObject(false);
@@ -172,7 +239,12 @@ namespace MFO::Logistics {
             bool      useMageApparel = false;
             RE::TESBoundObject* pick = ComputeOwnedGearPick(a_follower, a_state, armorPref, useMageApparel);
             g_handedPick = { a_follower->GetFormID(), pick ? pick->GetFormID() : 0, true };   // F10: for the declaration guard
-            if (!pick) return;
+            if (!pick) {
+                // No armor to wear this tick: one tick, one action, so the owned WEAPON upgrade (MFO-B28/B32)
+                // runs only when armor had nothing to do.
+                EquipBestOwnedWeapon(a_follower, a_state, myWeap);
+                return;
+            }
             // APMF EQUIP AUTHORITY (feat/mfo-equip-authority): with the standing
             // claim live, the DECLARATION is the equip path -- this tick's set
             // (RefreshEquipDeclaration, sent from ServiceFollower's tail) names
@@ -218,6 +290,39 @@ namespace MFO::Logistics {
                 nxt = now + std::chrono::seconds(5);
             }
             AcquireEquip(a_follower, pick, nullptr, myWeap, /*forceStock*/false);   // already owned -> no transfer
+        }
+
+        // ── COMBAT WEAPON SEAM (MFO-B19, declared in Logistics.h): thin wrappers over the internal inline
+        // WeaponRoles / WeaponScore / RangedPickScore / AmmoOwned so cast/Equip.cpp no longer includes
+        // Logistics_internal.h. Same arithmetic, no new behaviour.
+        namespace {
+            WeaponRoles RolesOf(const CombatWeaponStyle& a_style) {
+                WeaponRoles r;
+                r.preferKinds = a_style.preferKinds;
+                r.offHand     = a_style.offHand;
+                return r;
+            }
+        }
+
+        CombatWeaponStyle CombatStyleFor(RE::Actor* a_follower, const FollowerState& a_state) {
+            const WeaponRoles r = ComputeWeaponRoles(a_follower, a_state);
+            return { r.preferKinds, r.offHand };
+        }
+
+        int CombatAmmo::For(const RE::TESObjectWEAP* a_w) const { return RangedUsesBolts(a_w) ? bolts : arrows; }
+
+        CombatAmmo CombatAmmoOwned(RE::Actor* a_follower) {
+            const AmmoOwned a = CountAmmoOwned(a_follower);
+            return { a.arrows, a.bolts };
+        }
+
+        float CombatWeaponScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon) {
+            return WeaponScore(RolesOf(a_style), a_weapon);
+        }
+
+        float CombatRangedScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon,
+                                const CombatAmmo& a_ammo) {
+            return RangedPickScore(RolesOf(a_style), a_weapon, AmmoOwned{ a_ammo.arrows, a_ammo.bolts });
         }
 
         // ── APMF EQUIP AUTHORITY: THE DECLARATION (feat/mfo-equip-authority, 2026-09-15) ──

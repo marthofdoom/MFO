@@ -117,7 +117,8 @@ namespace MFO::ProgAllocator {
         // carries BOTH weapon skills (OneHanded/TwoHanded) or BOTH armor
         // skills (Heavy/Light), the DLL keeps only the DOMINANT one for this
         // follower — the HIGHER BASE SKILL, ties to OneHanded / Light (the
-        // Logistics ComputeWeaponRoles / ArmorClassSuits rule). That is how
+        // Logistics ComputeWeaponRoles rule; for armor the wardrobe, ArmorPrefFor,
+        // breaks an exact tie by perk votes first). That is how
         // "dominant weapon 40%" stays name-agnostic and author-tunable at
         // once: the author lists both siblings, the follower picks theirs.
         //
@@ -142,7 +143,8 @@ namespace MFO::ProgAllocator {
 
         RE::ActorValue DominantArmorSkill(RE::Actor* a_actor) {
             auto* avo = a_actor->AsActorValueOwner();
-            // Ties fall to LIGHT, the Logistics::ArmorClassSuits rule.
+            // Ties fall to LIGHT here; the wardrobe (Logistics::ArmorPrefFor) breaks an exact
+            // tie by perk votes first, then light (MFO-B17 b).
             if (avo && avo->GetBaseActorValue(RE::ActorValue::kHeavyArmor) >
                            avo->GetBaseActorValue(RE::ActorValue::kLightArmor))
                 return RE::ActorValue::kHeavyArmor;

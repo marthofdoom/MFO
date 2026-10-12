@@ -382,10 +382,11 @@ namespace MFO::Logistics {
         // 18, over light 13s), because every rated-armor compare MFO ran was
         // raw rating vs raw rating with NO class term, and the ENGINE's auto-
         // equip (highest rating per slot, skill-blind) was the actual wearer --
-        // MFO never un-wore anything. ArmorClassSuits was the only skill read
-        // and a candidate-side FILTER; the votes were consumed only on a tie.
-        // THE judge is now ArmorScore (Logistics_Loot.cpp, beside
-        // ArmorClassSuits) = rating x classBias x perkBias -- the armor twin of
+        // MFO never un-wore anything. The old ArmorClassSuits (since deleted,
+        // MFO-B17) was the only skill read and a candidate-side FILTER; the
+        // votes were consumed only on a tie.
+        // THE judge is now ArmorScore (logistics/Gear.cpp)
+        // = rating x classBias x perkBias -- the armor twin of
         // WeaponScore / kStyleBias above -- and EVERY rated-armor compare runs
         // on it: ArmorIsBetter, CarriesSlotArmorAtLeast, LootEquipment's best-
         // first pick, EquipBestOwnedGear's owned-upgrade pick (which is what
@@ -420,10 +421,13 @@ namespace MFO::Logistics {
 
         // A follower's armor preference: the two multipliers ArmorScoreOf
         // applies, plus the inputs (diagnostics for the [armor] line). Computed
-        // by ArmorPrefFor (Logistics_Loot.cpp) from BASE skills
+        // by ArmorPrefFor (logistics/Gear.cpp) from BASE skills
         // (GetBaseActorValue -- the same read as ProgAllocator's
-        // DominantArmorSkill, so the allocator and the wardrobe agree) and the
-        // perk-vote MIRROR (StyleVotesFor, never TallyStyleVotes off-main).
+        // DominantArmorSkill) and the perk-vote MIRROR (StyleVotesFor, never
+        // TallyStyleVotes off-main). The wardrobe and the allocator agree on the
+        // base-skill read but NOT on an exact skill tie: the wardrobe breaks it by
+        // the perk votes (light when those tie too), DominantArmorSkill goes
+        // straight to light (MFO-B17 b).
         // Compute it ONCE per scan and hand it to the pref-taking overloads
         // below; the Actor* overloads recompute it per call (AV reads + the
         // mirror lock) and are for single-candidate sites.
@@ -782,7 +786,6 @@ namespace MFO::Logistics {
     bool FitsCarryWeight(RE::Actor* a_follower, float a_addWeight);
     bool LootAmmo(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_wantBolt,
                   bool a_peek = false);
-    bool ArmorClassSuits(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     ArmorPref ArmorPrefFor(RE::Actor* a_follower);
     float ArmorScore(RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     void LogArmorClassIfChanged(RE::Actor* a_follower, const ArmorPref& a_pref);
@@ -875,27 +878,8 @@ namespace MFO::Logistics {
     // declaration names exactly what that pass would wear.
     RE::TESBoundObject* ComputeOwnedGearPick(RE::Actor* a_follower, const FollowerState& a_state,
                                              ArmorPref& a_outPref, bool& a_outMageMode);
-    // The APMF equip authority is SUPPORTED (APMF present, ABI >= 9, bApmfEquipAuthority):
-    // the direct equip sites stay out, claimed or refused (no decline-fallback, 2026-09-28).
-    bool EquipAuthorityLive(RE::FormID a_follower);
-    // Rebuild the declared worn set and SEND it iff it changed (never a forced
-    // re-issue, F3). a_holdRight/a_holdLeft: Actuation's ForcedHold ledger (ABI
-    // v9: 0 = no hold, the hand is NOT owned and carries no entry -- never "read
-    // the hand"; every road passes the ledger, Actuation::ForcedHoldFor OOC);
-    // a_leftReserved: a cast holds/claims the left, so nothing left (not owned,
-    // not declared); a_judgeArmor: include the owned-armor upgrade pick
-    // (the OOC service road) -- the combat road passes false and declares worn
-    // armor as is (F9). Worker only (#4). Claims on first use (re-validating a
-    // kept handle, F2); releases when the gate is off.
-    void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
-                                 RE::FormID a_holdRight, RE::FormID a_holdLeft,
-                                 bool a_leftReserved, bool a_judgeArmor, const char* a_why);
-    // The bound WEAP forms whose BoundItemEffect is live on a_follower right now
-    // (sorted, deduped; worker, read-only). The declaration carries them while
-    // live; Actuation's in-combat lap compares this to trigger a re-declaration.
-    std::vector<RE::FormID> LiveBoundWeapons(RE::Actor* a_follower);
+    // EquipAuthorityLive / RefreshEquipDeclaration / LiveBoundWeapons / ResendEquipDeclaration: public, Logistics.h (MFO-B19).
     void ForgetEquipDeclaration(RE::FormID a_follower);   // one follower's change detector (dismiss)
-    void ResendEquipDeclaration(RE::FormID a_follower);   // drop ONLY the change detector so the next rebuild is sent (MFO-B41); player picks kept
     void ClearEquipDeclarations();                        // all (revert / load)
 
     // ── added by the wave-2 folder split (2026-09-25): helpers that were

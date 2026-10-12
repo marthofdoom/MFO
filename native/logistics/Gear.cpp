@@ -126,25 +126,6 @@ namespace MFO::Logistics {
                          a_pref.heavyVotes, a_pref.lightVotes, a_pref.heavyBias, a_pref.lightBias, wornStr);
         }
 
-        // Class-membership predicate: does this piece belong to the follower's
-        // armor class? Clothing (no skill) always passes. NO LONGER GATES
-        // ArmorIsBetter (2026-09-14): the class is a BIAS inside ArmorScore, not a
-        // filter -- a follower with a bare slot takes off-class armor over
-        // nothing, and a real tier-up still wins. Kept as the one named
-        // statement of the category rule (ProgAllocator's DominantArmorSkill
-        // cites it) and rebased onto the SAME judge (ArmorPrefFor: base skill,
-        // perk-vote tiebreak, light default) so it can never disagree with the
-        // score. Creature armor is filtered upstream (IsCreatureArmor) at every
-        // caller, as before.
-        bool ArmorClassSuits(RE::Actor* a_follower, RE::TESObjectARMO* a_armo) {
-            using AT = RE::BGSBipedObjectForm::ArmorType;
-            if (!a_follower || !a_armo) return true;
-            const auto type = a_armo->GetArmorType();
-            if (type == AT::kClothing) return true;
-            const ArmorPref p = ArmorPrefFor(a_follower);
-            return (type == AT::kHeavyArmor) ? p.heavyClass : !p.heavyClass;
-        }
-
         // Is this candidate an upgrade over what the follower WEARS, judged by
         // ArmorScore on every armor slot it covers? A bare slot (nothing worn, or
         // rating-0 clothing) counts as an upgrade; a worn piece is displaced only

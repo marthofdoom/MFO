@@ -154,6 +154,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): CONFIRMED -- equip-auth mode=observe-only on the deck (MFO.1 12:40:26.828); SPID outfit re-wear at 12:51:31 and 12:54:02 left Adelinda's Shrouded Cowl (13) over the helmet (18) until 13:52:34 and mage Jesper's off-class Ebony Helmet EQUIP at 12:54:02.454 never unequipped; MFO logged 'left to the APMF equip declaration' 232x/38x. Decision task filed (needs-decision).
 
 - REOPENED 2026-10-06 (Opus spot-check): back to LIVE as "stopgap (a) to build". Its field verdict is the SPID outfit re-wear, the outfit re-apply case the rework keeps on deny. marth: "Task is obsoleted by later task, A is an acceptable stopgap"; stopgap (a), drop or sell the off-class piece without a vendor once a better-scored owned piece is worn, is unbuilt and has no other tracker.
+- M1a 2026-10-12: stopgap (a) NOT built, STOPPED per brief. There is no vendor-free SELL path (selling exists only as the `EconomyProbe` vendor trade, `logistics/Economy.cpp:~459`); the only vendor-free disposals in the code are a world DROP (`ShedOffRoleWeapon`'s `doDrop`, `logistics/Upkeep.cpp:~487`) and hand-to-player (`Upkeep.cpp:~287`), both barred by marth's 2026-10-12 "never dropped" ruling. Needs a decision (see the M1a report).
 
 ### MFO-B17 — armor SEV-5 notes from the same review (`bb77b69`)
 - (a) `ArmorClassSuits` (`Logistics_Loot.cpp:303-310`) is now dead code with changed semantics (BASE AV); zero callers. Delete or keep as the named predicate; never re-call on a hot path.
@@ -161,6 +162,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Wave-2 location (2026-09-25, `native/logistics/`):** (a) `ArmorClassSuits` is `native/logistics/Gear.cpp:136`; (b) the comment pair is in `native/logistics/Gear.cpp` (`ArmorPrefFor:43`) and `native/logistics/Logistics_internal.h:377`.
 - (c) `TradeBridge::BuyThresholds` (`TradeBridge.h:91-107`) is NOT byte-shared with the .pex (in-DLL only; the .pex sees the 10 natives). Append-only was honoured anyway; stop calling it byte-shared.
 - (d) Shields are half in the wear decision: `EquipBestOwnedGear:372-373` skips shields while keep buckets and force-sell score them; a worn heavy shield with an owned light one is force-sold at a vendor but MFO never puts the light one on. Pre-existing shape.
+- CLOSED 2026-10-12 (`fix/mfo-m1a-equip-gem-backlog`): (a) `ArmorClassSuits` deleted (grep: zero callers; only comments named it), declaration removed, MAP updated; (b) the "allocator and wardrobe agree" comment in `Logistics_internal.h` now states the exact-tie difference; (c) no source text calls `BuyThresholds` byte-shared (only this entry did), nothing to change; (d) skipped by decision (shields stay half in the wear decision). `SkillScale.cpp:120,145` comments still name `ArmorClassSuits` (outside that batch's file list).
 
 ### MFO-B19 — `Actuation.cpp` includes `Logistics_internal.h` for two symbols
 - **Raised:** Fable tier-3 review of `f771399` (`feat/mfo-dualwield-combat-pick`), SEV-5. F7.
@@ -175,6 +177,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **PARTLY DRAINED by `fix/mfo-cleanup-bundle1` (2026-10-01): the include is dropped from Fire/Roads/CastOn. `Equip.cpp` really uses `ComputeWeaponRoles`/`WeaponRoles` (and four more internal symbols), so the public seam in Logistics.h is still open.**
 - **Cheapest seam (Opus review of `fix/mfo-backlog-batch3`, 2026-10-01):** a public POD `{uint16 preferKinds; uint8 offHand}` in `Logistics.h`; a non-inline `CombatWeaponRolesFor(actor, const FollowerState&)` in `Gear.cpp`; reuse the existing non-inline `Logistics::WeaponBuyScore` (`Logistics.h:80`); and move the four equip-authority declarations (`EquipAuthorityLive`, `RefreshEquipDeclaration`, `LiveBoundWeapons`, `ResendEquipDeclaration`) into `Logistics.h`. About 15-20 header lines; its own brief.
 - **Out of scope here (MFO-B206, SEV-5):** `CoLoadForcedWeapons`' `weapon == 0` branch (Equip.cpp ~:1241-1242) still passes `nullptr` for the right hand.
+- CLOSED 2026-10-12 (`fix/mfo-m1a-equip-gem-backlog`): public seam in `logistics/Logistics.h` (`CombatWeaponStyle`, `CombatAmmo`, `CombatStyleFor`, `CombatAmmoOwned`, `CombatWeaponScore`, `CombatRangedScore`, plus the declarations of `EquipAuthorityLive` / `RefreshEquipDeclaration` / `LiveBoundWeapons` / `ResendEquipDeclaration`); wrappers defined in `logistics/EquipAuthority.cpp`; `cast/Equip.cpp` no longer includes `Logistics_internal.h`. The inline definitions did not move.
 
 ### MFO-B20 — `kMaxForcedWeapons` (64) is now a PAIR cap and the FWPN reader aborts the whole load above it
 - **Raised:** Fable tier-3 review of `f771399` (`feat/mfo-dualwield-combat-pick`), SEV-5. F8.
@@ -235,6 +238,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Why it was NOT fixed:** consistent with the brief's intent; marth's call whether a player-gated ability's style vote is worth a point. Deferred, not dropped.
 - **Fix shape when drained (verbatim):** if marth says no, require `f.firesForNpc` (or `kind != kAbility`) on at least one style-carrying entry before promoting — i.e. promote on `rank.style.Any()` only when the fact came off an entry-point tab or an NPC-firing ability.
 - **Surfaced at edit time from:** MAP.md §5 Progression "STYLE-FACT RANKS ARE NEVER MARGINAL" What-breaks.
+- CLOSED 2026-10-12, marth's ruling "marginal: buyable, steers": `Progression.cpp` `BuildSkill` promotes a style-fact rank to effective only off a firing entry (`styleFires`); a rank whose style fact comes only off non-firing entries (player-gated ability conditioned on a weapon/armor keyword) is promoted dead -> marginal (marginal and effective unchanged), so it stays buyable, its vote steers, and a saved copy is never dropped on load.
 
 ### MFO-B26 — the reconcile back-off lifts on ANY inventory change, so under churn "one warn per 60 s" becomes "one warn per change + 3 passes"
 - **Raised:** Fable review of `b3ac577` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-5 (c).
@@ -269,6 +273,7 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Surfaced at edit time from:** MAP.md §4 Logistics "CLOSED 2026-09-14 — THE SECOND ONE-HANDER" What-breaks + §7 MEOBridge gem-transfer entry.
 
 ---
+- CLOSED 2026-10-12 (`fix/mfo-m1a-equip-gem-backlog`, also covers B32 for owned/looted-to-pack weapons): `EquipBestOwnedWeapon` (`logistics/EquipAuthority.cpp`) routes an owned in-class primary upgrade over the held weapon through `AcquireEquip(nullptr, w, forceStock=false)`. Backup / true second / silver stay stock-only (loot side). No weapon enforcement added.
 
 ### MFO-B29 — on a FULLY-socketed item the back-off's expiry re-entry point is the swap-up, so the eviction bounce recurs every ~63 s while MEO keeps refusing, and the wiped key means the warn never escalates
 - **Raised:** Fable round-3 review of `64512aa` (`fix/mfo-deck-0914-helmet-offhand-verdict-meo`), SEV-4, CONFIRMED by trace.
@@ -302,6 +307,8 @@ here. A deferred finding that is not surfaced at edit time comes back as a highe
 - **Reviewer's reasoning:** as above — the guard defends against a path MEO's own code cannot take for the instance MFO targets.
 - **Why it was NOT fixed:** coordinator call 2026-09-15: round returned nothing above SEV-3, cycle ended (rule 9); the deferral is loud (LEFTOVER `duplicate-copy` every 60 s) and cannot corrupt the next test.
 - **Fix shape when drained (verbatim):** drop the dupDeferred branch and kDuplicateCopy (keep mintedBases one-per-base-per-pass).
+- CLOSED 2026-10-12 (`fix/mfo-m1a-equip-gem-backlog`): premise verified in MEO `native/plugin.cpp` `ApiEnsureInstanceXList` (:9638-9655 mints in place on a worn, uid-less, un-enchanted xList; :9656-9677 drop-stamp-pickup only when none exists). The deferral and the `kDuplicateCopy` class are removed from `MEOBridge.cpp` (`mintedBases` kept).
+- OPEN (SEV-4, deferred, raised by the Opus review of bb925fa): a one-frame race remains between MFO's worn-xList read on the worker/main pass and MEO's main-thread mint (a spare copy could be picked if the worn xList changes in that frame). Not fixed here.
 
 ### MFO-B36 — the swap-up never decrements `avail[loot]`, so two items can evict their weakest for one loose copy
 - **Raised:** Fable round 2 on `9dacc0e` (`fix/mfo-meo-no-loose-gems`), SEV-5, CONFIRMED.
