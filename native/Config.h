@@ -839,7 +839,13 @@ namespace MFO::Config {
     inline std::string  g_engageOnSightSkip =
         "Skyrim.esm|0x4359A,Skyrim.esm|0x4359B,Skyrim.esm|0x131F9,Skyrim.esm|0x131FF,"   // Giant/Mammoth faction + race
         "Skyrim.esm|0x17F04,CFTO.esp|0xAA05,Dawnguard.esm|0x16849,"                      // carriage system, Kmod carriage, ferry system
-        "Skyrim.esm|0xB2D37";                                                             // Blackreach falmer servants (FSLE)
+        "Skyrim.esm|0xB2D37,"                                                             // Blackreach falmer servants (FSLE)
+        "HearthFires.esm|0x7890,WaitCarriageInns.esp|0x847,CFTO.esp|0xDA68B,Skyrim.esm|0xDDDA8,"   // other carriage drivers
+        "Hendraheim - Tweaks and Enhancements.esp|0x9B1,"                                 // Hendraheim carriage driver
+        "Skyrim.esm|0xCD131,Skyrim.esm|0xA3909,Skyrim.esm|0xC2473,Meridia.esp|0x1B23C,"   // castle / palace / Dragonsreach / Meridia servants
+        "Hendraheim - Tweaks and Enhancements.esp|0xC1C,Hendraheim - Tweaks and Enhancements.esp|0xC1D,"   // Hendraheim servant, cleaner
+        "Skyrim.esm|0x51596,Skyrim.esm|0x522B6,"                                          // merchants, generic crime-faction townsfolk
+        "Skyrim.esm|0xAA784";                                                             // prisoners / trapped animals
 
     // MAGIC LOADOUT (v1.0.29). A magic-user follower -- anyone with at least
     // one ENABLED cast gambit; role is GAMBIT-DRIVEN here, never skill-guessed
