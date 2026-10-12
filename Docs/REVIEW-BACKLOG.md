@@ -1505,3 +1505,8 @@ Raised against `51617e0` (`feat/mfo-meo-gem-rules`), 2026-10-12. Reviewer's text
 - **SEV-4:** the 30 s navmesh reach cache (`logistics/LootReach.cpp`) is keyed on the follower but not his position; a follower who changes islands within 30 s reads the old verdict.
 - **SEV-3:** worst case about 5-8 ms in one frame when 4 pending fills land in the same main-thread drain. Option: one compute per drain (re-post the rest).
 - **Surfaced at edit time from:** MAP.md loot failure model (e) and `apmf/OffenseApproach.cpp`.
+
+## Bucket 3 (fix/mfo-bucket3, Opus review of 082bcb1)
+- **SEV-4 (C1):** a perk referenced only by player-only spells is still marked effective (the entry-less perk rule in `Progression.cpp` does not check that an NPC can satisfy the spell side).
+- **SEV-4 (C2):** an equip gambit that never fires still pushes casts to the left hand (the B3 right-first gate counts an enabled equip gambit, not one that actually fires).
+- **Surfaced at edit time from:** MAP.md `Progression.cpp` and `cast/Hands.cpp` entries.

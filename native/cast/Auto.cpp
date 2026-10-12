@@ -75,12 +75,12 @@ namespace MFO::Actuation {
         // channeled (the 4x under-charge DirectTarget warns about). First fan of a
         // stream (none recorded, or the last one lapsed past a_window): one second,
         // as the direct road's first beat. Later fans: the gap since the last fan,
-        // which the pinned effect covered in full (gap <= a_window). The tail after
+        // which the pinned effect covered (billed up to a_window). The tail after
         // the final fan is NOT billed (no settle on this road): the same residual
         // the one-per-fan charge always had, now bounded by one window.
         // Worker-serial (g_autoConcFan).
         float ConcFanChargeSec(RE::FormID a_caster, RE::FormID a_target, RE::FormID a_spell,
-                               float a_window, SelfClock::time_point a_now) {
+                               float a_window, float a_interval, SelfClock::time_point a_now) {
             if (g_autoConcFan.size() > 32) {
                 for (auto it = g_autoConcFan.begin(); it != g_autoConcFan.end();)
                     it = (a_now - it->second > std::chrono::seconds(10)) ? g_autoConcFan.erase(it) : std::next(it);
@@ -89,7 +89,13 @@ namespace MFO::Actuation {
             float sec = kConcApplyPeriod;
             if (last != SelfClock::time_point{}) {
                 const float gap = std::chrono::duration<float>(a_now - last).count();
-                if (gap <= a_window) sec = std::max(gap, 0.0f);
+                // F-b: AUTO re-fans at the first tick at/after a_interval (fCastCooldown),
+                // so a normally paced fan lands a little PAST a_interval -- and a 4 s
+                // interval is not <= the 4 s utility window. Lapse = longer than the
+                // pacing interval plus a 1 s tick margin (or the window, if larger).
+                // The bill is capped at a_window: the pinned effect covers no more.
+                if (gap <= std::max(a_window, a_interval + 1.0f))
+                    sec = std::clamp(gap, 0.0f, a_window);
             }
             last = a_now;
             return sec;
@@ -752,7 +758,9 @@ namespace MFO::Actuation {
                 a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary,
                                                   RE::ActorValue::kMagicka);
             const float floor   = (reserve > 0.0f && mx > 0.0f) ? reserve * mx : 0.0f;
-            auto affordable = [&] { return cost <= budget && (budget - cost) >= floor; };
+            // F-a: the budget check and deduct use the SAME per-target bill as the real
+            // deduct (cost x chargeSec, M2), so a reserve floor holds on a long fan.
+            auto affordable = [&](float a_sec) { return cost * a_sec <= budget && (budget - cost * a_sec) >= floor; };
 
             // AUTO-fan budget honesty (SEV-3): a CONCENTRATION + Self spell fanned
             // to a NON-caster is SILENTLY SKIPPED by ApplyEffectFromTo (it would leak
@@ -894,17 +902,18 @@ namespace MFO::Actuation {
 
             int fired = 0, skipped = 0;
             for (const auto tgtID : targets) {
-                if (!affordable()) { ++skipped; break; }   // insufficient magicka -> stop the fan-out
                 if (hostile && Sightline::Check(id, tgtID, Sightline::Basis::Own) == Sightline::Verdict::Occluded) {
                     ++skipped; continue;                    // no line of sight -- fail-open on Unknown
                 }
-                float chargeSec = 1.0f;
-                if (spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
-                    chargeSec = ConcFanChargeSec(id, tgtID, a_spellID,
-                                                 CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Heal
-                                                     ? kConcHealCap : kConcUtilityHold, now);
+                const bool isConc = spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
+                const float chargeSec = isConc
+                    ? ConcFanChargeSec(id, tgtID, a_spellID,
+                                       CasterConsent::ClassifySpell(spell) == CasterConsent::SpellKind::Heal
+                                           ? kConcHealCap : kConcUtilityHold, interval, now)
+                    : 1.0f;
+                if (!affordable(chargeSec)) { ++skipped; break; }   // insufficient magicka -> stop the fan-out
                 ApplyEffectFromTo(id, tgtID, a_spellID, hostile, chargeSec);
-                budget -= cost;
+                budget -= cost * chargeSec;
                 ++fired;
             }
 
