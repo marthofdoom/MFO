@@ -8,7 +8,10 @@
 #include <cstring>  // reconcile: MEO's tool-name blocklist (strstr), mirrored
 #include <format>   // reconcile: the pass-count suffix on the socket line
 #include <limits>   // reconcile: best/weakest gem sentinels
+#include <map>
 #include <mutex>
+#include <set>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>   // Build B: per-item gem slots copied out of the lock for UnsocketGem
@@ -129,6 +132,8 @@ namespace MFO::MEOBridge {
         return g_meo->GetActorGemsCarried(a_actor, a_out, a_max);   // MAIN-THREAD ONLY
     }
 
+    void PruneGoneHolds(RE::Actor* a_actor);   // below: removal holds whose item has left the pack
+
     void RefreshCarriedGems(RE::Actor* a_actor) {
         if (!a_actor) return;
         const RE::FormID fid = a_actor->GetFormID();
@@ -148,6 +153,7 @@ namespace MFO::MEOBridge {
         for (std::uint32_t i = 0; i < n; ++i)
             if (buf[i].itemBase != 0 && buf[i].itemUid != 0)
                 gems[GemKey(buf[i].itemBase, buf[i].itemUid)].insert(buf[i].slot);
+        PruneGoneHolds(a_actor);
         std::scoped_lock lk(g_mx);
         // Drop extract-requests for items that are no longer gemmed (extract landed
         // -> a future re-gem may re-request); prune before replacing the cache.
@@ -183,18 +189,56 @@ namespace MFO::MEOBridge {
 
     bool CarriedGemUnsocketSupported() { return g_meo && g_meo->Version() >= 3; }
 
-    namespace { std::unordered_map<std::uint64_t, std::chrono::steady_clock::time_point> g_removalHold; }   // under g_mx
-    void HoldForRemoval(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
-        if (a_uid == 0 || a_base == 0) return;
-        const auto now = std::chrono::steady_clock::now();
+    namespace {
+        using HoldKey = std::tuple<RE::FormID, RE::FormID, std::uint16_t>;   // follower, base, uid
+        std::map<HoldKey, std::uint8_t> g_removalHold;                       // -> GemRules::Reason bits; under g_mx
+    }
+    bool HoldForRemoval(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid, std::uint8_t a_reason) {
+        if (a_uid == 0 || a_base == 0) return true;
         std::scoped_lock lk(g_mx);
-        std::erase_if(g_removalHold, [&](const auto& kv) { return kv.second < now; });
-        g_removalHold[(static_cast<std::uint64_t>(a_followerID) << 32) ^ GemKey(a_base, a_uid)] = now + std::chrono::seconds(30);
+        auto& bits = g_removalHold[{ a_followerID, a_base, a_uid }];
+        const bool had = (bits & a_reason) != 0;
+        bits |= a_reason;
+        return had;
     }
     bool RemovalHeld(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
         std::scoped_lock lk(g_mx);
-        const auto it = g_removalHold.find((static_cast<std::uint64_t>(a_followerID) << 32) ^ GemKey(a_base, a_uid));
-        return it != g_removalHold.end() && it->second >= std::chrono::steady_clock::now();
+        const auto it = g_removalHold.find({ a_followerID, a_base, a_uid });
+        return it != g_removalHold.end() && it->second != 0;
+    }
+    void ReleaseHolds(RE::FormID a_followerID, std::uint8_t a_reason,
+                      const std::vector<std::pair<RE::FormID, std::uint16_t>>& a_keep) {
+        std::scoped_lock lk(g_mx);
+        for (auto it = g_removalHold.lower_bound({ a_followerID, 0, 0 });
+             it != g_removalHold.end() && std::get<0>(it->first) == a_followerID;) {
+            const bool kept = std::find(a_keep.begin(), a_keep.end(),
+                                        std::make_pair(std::get<1>(it->first), std::get<2>(it->first))) != a_keep.end();
+            if (!kept) it->second &= static_cast<std::uint8_t>(~a_reason);
+            it = it->second == 0 ? g_removalHold.erase(it) : std::next(it);
+        }
+    }
+    // MAIN THREAD (from RefreshCarriedGems): a hold whose item no longer sits in the follower's pack is done.
+    void PruneGoneHolds(RE::Actor* a_actor) {
+        const RE::FormID fid = a_actor->GetFormID();
+        std::vector<HoldKey> mine;
+        {
+            std::scoped_lock lk(g_mx);
+            for (auto it = g_removalHold.lower_bound({ fid, 0, 0 });
+                 it != g_removalHold.end() && std::get<0>(it->first) == fid; ++it)
+                mine.push_back(it->first);
+        }
+        if (mine.empty()) return;
+        std::set<std::pair<RE::FormID, std::uint16_t>> present;
+        for (auto& [o, d] : a_actor->GetInventory()) {
+            auto* e = d.second.get();
+            if (!o || !e || !e->extraLists) continue;
+            for (auto* xl : *e->extraLists)
+                if (auto* u = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr)
+                    present.insert({ o->GetFormID(), u->uniqueID });
+        }
+        std::scoped_lock lk(g_mx);
+        for (const auto& k : mine)
+            if (!present.contains({ std::get<1>(k), std::get<2>(k) })) g_removalHold.erase(k);
     }
 
     int CarriedGemCount(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid) {
@@ -1033,6 +1077,7 @@ namespace MFO::MEOBridge {
         g_extractRequested.clear();
         g_stuck.clear();            // reconcile stall detector: keyed by FormID, session-scoped (main thread, like its writer)
         g_leftover.clear();         // reconcile LEFTOVER rate-limit: same domain as g_stuck
+        g_removalHold.clear();      // GemRules removal holds: session-scoped
     }
 
     GemPreview PreviewWithGems(RE::Actor* a_actor, RE::TESBoundObject* a_candidateBase) {

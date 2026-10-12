@@ -100,11 +100,16 @@ namespace MFO::MEOBridge {
     // extract for it is already pending): lets a caller log a strip once, not every scan.
     int UnsocketItemGems(RE::Actor* a_actor, RE::FormID a_base, std::uint16_t a_uid);
 
-    // REMOVAL HOLD (GemRules): while an item is on its way out of the follower (sale, evict, museum),
-    // the gem reconcile must not re-socket gems into it. Refreshed by every GemRules check; lapses 30 s
-    // after the last one (the retry cadence is ~1 s). Any thread.
-    void HoldForRemoval(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid);
+    // REMOVAL HOLD (GemRules): while an item is on its way out of the follower (sale, evict, museum...),
+    // the gem reconcile must not re-socket gems into it. NOT time-based: a hold lasts until the item has
+    // left the follower (PruneGoneHolds, run by every RefreshCarriedGems), is released because the removal
+    // was abandoned (ReleaseHolds), or revert. a_reason is a GemRules::Reason bit. Any thread.
+    // HoldForRemoval returns true if this (item, reason) was ALREADY held (so a check may proceed).
+    bool HoldForRemoval(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid, std::uint8_t a_reason);
     bool RemovalHeld(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid);
+    // Drop a_reason from every hold of a_followerID except the (base,uid) pairs in a_keep.
+    void ReleaseHolds(RE::FormID a_followerID, std::uint8_t a_reason,
+                      const std::vector<std::pair<RE::FormID, std::uint16_t>>& a_keep);
 
     // Worker-callable READ: filled gem slots of (a_base,a_uid) in a_followerID's cache (0 = none/unknown).
     int CarriedGemCount(RE::FormID a_followerID, RE::FormID a_base, std::uint16_t a_uid);

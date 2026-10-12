@@ -22,9 +22,20 @@ namespace MFO::Logistics::GemRules {
     // gems (stripped via MEO, or unknown because the cache is cold) -> the caller SKIPS the item
     // and tries again on a later pass. Clear when inactive. a_why names the path for the log.
     // CACHED: any thread; reads the per-follower carried-gem cache (one scan stale).
-    Verdict CheckRemovalCached(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why);
+    // HOLDS (MEOBridge::HoldForRemoval): the first check of an item arms a hold (the gem reconcile then
+    // leaves it alone) and returns Held for that pass; a removal can only proceed on a later pass, once the
+    // item reads gem-free under an EXISTING hold. A hold ends when the item leaves the follower, or when the
+    // removal is abandoned (ReleaseHoldsExcept) -- never by time. a_touched collects the checked items so a
+    // sweep can release the rest.
+    enum class Reason : std::uint8_t { Sale = 1, Museum = 2, Evict = 4, Heal = 8, Shed = 16, SwapUp = 32 };
+    using HoldKey = std::pair<RE::FormID, std::uint16_t>;   // item base, uid
+    Verdict CheckRemovalCached(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why, Reason a_reason,
+                               std::vector<HoldKey>* a_touched = nullptr);
     // LIVE: MAIN THREAD ONLY; refreshes the cache first, so the read is current.
-    Verdict CheckRemovalLive(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why);
+    Verdict CheckRemovalLive(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why, Reason a_reason,
+                             std::vector<HoldKey>* a_touched = nullptr);
+    // The removal path is no longer a candidate for everything it did not touch this pass: let go of its holds.
+    void ReleaseHoldsExcept(RE::FormID a_follower, Reason a_reason, const std::vector<HoldKey>& a_touched);
 
     // ── looted gear ──────────────────────────────────────────────────────────
     // WORKER (LootEquipment). A weapon/armor in a_src that is not otherwise being taken but may

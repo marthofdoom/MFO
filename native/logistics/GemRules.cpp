@@ -80,7 +80,8 @@ namespace MFO::Logistics::GemRules {
             return nullptr;
         }
 
-        Verdict Check(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why, bool a_live) {
+        Verdict Check(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why, bool a_live, Reason a_reason,
+                      std::vector<HoldKey>* a_touched) {
             if (!Active() || !a_actor || !a_obj) return Verdict::Clear;
             const RE::FormID fid = a_actor->GetFormID();
             if (a_live) MEOBridge::RefreshCarriedGems(a_actor);
@@ -93,7 +94,17 @@ namespace MFO::Logistics::GemRules {
             }
             if (uids.empty()) return Verdict::Clear;   // no instance has a uid: MEO never socketed it
             // Whatever is about to leave takes no gem back from the reconcile (strip -> re-socket -> sell loop).
-            for (const auto uid : uids) MEOBridge::HoldForRemoval(fid, a_obj->GetFormID(), uid);
+            // A hold found live lets the check read the cache; one armed NOW returns Held for this pass.
+            bool armed = false;
+            for (const auto uid : uids) {
+                if (a_touched) a_touched->push_back({ a_obj->GetFormID(), uid });
+                if (!MEOBridge::HoldForRemoval(fid, a_obj->GetFormID(), uid, static_cast<std::uint8_t>(a_reason))) armed = true;
+            }
+            if (armed) {
+                MEOBridge::RequestCarriedGemRefresh(a_actor);
+                spdlog::debug("[gems] {:08X}: '{}' hold armed ({}), removal on a later pass", fid, NameOf(a_obj), a_why);
+                return Verdict::Held;
+            }
             if (!MEOBridge::CacheWarmed(fid)) {
                 MEOBridge::RequestCarriedGemRefresh(a_actor);
                 spdlog::debug("[gems] {:08X}: '{}' held ({}): carried-gem cache not warm yet", fid, NameOf(a_obj), a_why);
@@ -223,11 +234,16 @@ namespace MFO::Logistics::GemRules {
         return Config::g_meoAwareGems.load() && MEOBridge::CarriedGemsSupported();
     }
 
-    Verdict CheckRemovalCached(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why) {
-        return Check(a_actor, a_obj, a_why, false);
+    Verdict CheckRemovalCached(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why, Reason a_reason,
+                               std::vector<HoldKey>* a_touched) {
+        return Check(a_actor, a_obj, a_why, false, a_reason, a_touched);
     }
-    Verdict CheckRemovalLive(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why) {
-        return Check(a_actor, a_obj, a_why, true);
+    Verdict CheckRemovalLive(RE::Actor* a_actor, RE::TESBoundObject* a_obj, const char* a_why, Reason a_reason,
+                             std::vector<HoldKey>* a_touched) {
+        return Check(a_actor, a_obj, a_why, true, a_reason, a_touched);
+    }
+    void ReleaseHoldsExcept(RE::FormID a_follower, Reason a_reason, const std::vector<HoldKey>& a_touched) {
+        MEOBridge::ReleaseHolds(a_follower, static_cast<std::uint8_t>(a_reason), a_touched);
     }
 
     GemCandidate FindGemCandidate(RE::Actor* a_follower, RE::TESObjectREFR* a_src) {

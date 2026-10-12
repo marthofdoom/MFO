@@ -656,7 +656,7 @@ namespace MFO::Logistics {
                 if (n <= 0) continue;
                 // MEO-aware: a socketed piece is never dropped (GemRules); it stays carried and the
                 // sell path strips it before it sells.
-                if (GemRules::CheckRemovalCached(a_follower, d.obj, "swap-up drop") == GemRules::Verdict::Held) continue;
+                if (GemRules::CheckRemovalCached(a_follower, d.obj, "swap-up drop", GemRules::Reason::SwapUp) == GemRules::Verdict::Held) continue;
                 a_follower->RemoveItem(d.obj, n, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_src);
                 freed += d.weight * n;
                 if (!names.empty()) names += ", ";

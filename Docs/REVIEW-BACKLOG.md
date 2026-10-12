@@ -1480,5 +1480,10 @@ Raised against `51617e0` (`feat/mfo-meo-gem-rules`), 2026-10-12. Reviewer's text
 - **SEV-4:** the worker-side `RemoveItem` out of a container (`TakeAndProbe`) can race a player looting the same container at the same moment.
 - **SEV-5:** `g_probed` (worker-only set of probed source/base/uid keys) grows without bound until revert.
 - **SEV-5:** `#include "GemRules.h"` landed on the trailing-comment line of the neighbouring include in Lotd.cpp / Service.cpp / Upkeep.cpp, so the comment now sits on the wrong line.
+- **SEV-4:** the `DropObjectAt` path (non-null extra list, position and angle) has never been seen running in the field.
+- **SEV-4:** gear the PLAYER dropped carrying MEO's title is recognised as loose gemmed gear and gets its gems stripped.
+- **SEV-5:** (fixed in the hold rework, kept for the record) the first hold key had overlapping bits; the hold is now a (follower, base, uid) tuple.
+- **SEV-5:** the worker-only sets (`g_looseRefs`, `g_looseTaken`, `g_probed`) grow without bound within a session.
+- **SEV-5:** shed and swap-up holds (Reason::Shed / SwapUp) have no abandon point; they end when the item leaves the follower.
 - **Surfaced at edit time from:** MAP.md `logistics/GemRules.h` entry.
 

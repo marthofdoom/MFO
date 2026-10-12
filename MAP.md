@@ -5205,8 +5205,8 @@ socketed title (`LooseNamedGemmed`: "[Support N . ]Gem N[ + Gem N] BaseName", N 
 `LooseRefBarred` source bar still applies. `Service.cpp` doActivate captures uid/pos/angle, `BeginLooseProbe` strips after the
 pickup, and `Decide` drops it back with `DropObjectAt` (`Upkeep.cpp`, same 0xCB vfunc as the shed) at its original position/angle.
 Container candidates are likewise only MEO-titled instances; an item that never had gems always goes back.
-**Re-socket guard:** every `CheckRemoval*` refreshes `MEOBridge::HoldForRemoval` (30 s) and `ReconcileLooseGems` skips held items,
-so strip -> re-socket -> sell cannot happen. Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B242.
+**Re-socket guard:** every `CheckRemoval*` arms `MEOBridge::HoldForRemoval` (reason bit; the first check returns Held) and `ReconcileLooseGems` skips held items,
+so strip -> re-socket -> sell cannot happen. A hold is NOT time-based: it ends when the item leaves the follower (`PruneGoneHolds` in `RefreshCarriedGems`), on `ReleaseHoldsExcept` (Economy sale sweep, KeepHeadClear, `Lotd::NoteKeptForDeposit`), or at revert. `KeepHeadClear` returns true on Held so `SweepBeastHeadsOnLoad` retries. Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B242.
 **What breaks:** a new item-removal path must call the guard; the cache is one scan stale (worker paths).
 
 ### MEOBridge.cpp / MEOBridge.h — optional MEO gem-transfer adapter

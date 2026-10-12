@@ -781,7 +781,7 @@ namespace MFO::Logistics {
     bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     bool CarriesSlotArmorAtLeast(const ArmorPref& a_pref, RE::Actor* a_follower,
                                  RE::TESObjectARMO* a_armo);
-    void KeepHeadClear(RE::Actor* a_actor);
+    bool KeepHeadClear(RE::Actor* a_actor);   // true = a socketed piece was held (GemRules), retry later
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
     AmmoOwned   CountAmmoOwned(RE::Actor* a_follower);   // same family test ComputeWeaponRoles uses
     Progression::StyleVotes StyleVotesFor(RE::Actor* a_follower);

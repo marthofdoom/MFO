@@ -1282,7 +1282,7 @@ namespace MFO::Lotd {
                 // MEO-aware: a socketed relic is stripped first and donated once it reads gem-free
                 // (GemRules); until then it is skipped (a scan that moves nothing retries behind the
                 // crate cooldown, so the gems are never lost).
-                if (Logistics::GemRules::CheckRemovalLive(f, obj, "museum donation") == Logistics::GemRules::Verdict::Held) continue;
+                if (Logistics::GemRules::CheckRemovalLive(f, obj, "museum donation", Logistics::GemRules::Reason::Museum) == Logistics::GemRules::Verdict::Held) continue;
                 // A NOT-worn item moves only the unworn copies (no unequip); plain copies
                 // carry no extra list, so RemoveItem with a null list takes them first.
                 const std::int32_t movable = it.worn ? have : have - wornCopies;
@@ -1815,6 +1815,20 @@ namespace MFO::Lotd {
 
     void NoteKeptForDeposit(RE::FormID a_follower, std::vector<RE::FormID> a_kept, std::vector<RE::FormID> a_inRole,
                             std::vector<RE::FormID> a_keptUnworn) {
+        // MEO-aware: a relic he no longer keeps for the museum is no longer on its way out of him.
+        {
+            std::vector<Logistics::GemRules::HoldKey> keep;
+            if (auto* fol = RE::TESForm::LookupByID<RE::Actor>(a_follower)) {
+                for (auto& [o, d] : fol->GetInventory([&](RE::TESBoundObject& x) {
+                         return std::find(a_kept.begin(), a_kept.end(), x.GetFormID()) != a_kept.end(); })) {
+                    auto* e = d.second.get();
+                    if (e && e->extraLists)
+                        for (auto* xl : *e->extraLists)
+                            if (auto* u = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr) keep.push_back({ o->GetFormID(), u->uniqueID });
+                }
+            }
+            Logistics::GemRules::ReleaseHoldsExcept(a_follower, Logistics::GemRules::Reason::Museum, keep);
+        }
         if (a_kept.empty()) { g_keptForDeposit.erase(a_follower); return; }
         auto& rec  = g_keptForDeposit[a_follower];
         rec.kept   = std::unordered_set<RE::FormID>(a_kept.begin(), a_kept.end());

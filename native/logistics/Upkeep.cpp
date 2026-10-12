@@ -278,7 +278,7 @@ namespace MFO::Logistics {
                 for (auto& [obj, data] : fol->GetInventory())
                     if (obj == badObj) { haveBad = data.first; break; }
                 // MEO-aware: a socketed weapon never leaves him (GemRules): strip it, retry next pass.
-                if (haveBad > 0 && GemRules::CheckRemovalLive(fol, badObj, "heal-evict") == GemRules::Verdict::Held)
+                if (haveBad > 0 && GemRules::CheckRemovalLive(fol, badObj, "heal-evict", GemRules::Reason::Heal) == GemRules::Verdict::Held)
                     haveBad = 0;
                 if (haveBad > 0) {
                     if (creature)
@@ -503,7 +503,7 @@ namespace MFO::Logistics {
             auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
             if (!fol || !item) return;
             // MEO-aware: a socketed weapon is never shed (GemRules): strip it, shed it on a later pass.
-            if (GemRules::CheckRemovalLive(fol, item, "shed") == GemRules::Verdict::Held) return;
+            if (GemRules::CheckRemovalLive(fol, item, "shed", GemRules::Reason::Shed) == GemRules::Verdict::Held) return;
             // DropObject removes from the actor AND places the world ref in one
             // engine call (nullptr drop-loc/rotate -> the engine drops it at the
             // actor's feet).
