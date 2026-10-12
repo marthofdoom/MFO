@@ -5216,7 +5216,7 @@ funnels all rule edits through a main-thread-drained edit queue. **ImGui/
   Destruction, Illusion, Restoration, other; `effectKey` = archetype|effect name; name; cost)
   via `SpellSchoolRank` (`Board.cpp`, above `PublishSnapshot`; school = costliest effect's MGEF
   `data.associatedSkill` member). The picker (`Board_FieldKit.cpp` spell popup) draws a
-  `TextDisabled` school header on each change (`Gb_School*` keys; plain text, never focusable).
+  `TextDisabled` school header on each change (`Gb_School*` keys; plain text, never focusable). Open review findings: Docs/REVIEW-BACKLOG.md MFO-B247 (Board.cpp past the split line; header styling).
 - **`DrawHud`'s `[C][L][T]` strip (`:254`, marth 2026-09-06)** — persistent
   bracket SLOTS: the bracket is always drawn (`TextDisabled("[ ]")` when idle),
   only the letter+colour comes and goes, so the strip's width never shifts.

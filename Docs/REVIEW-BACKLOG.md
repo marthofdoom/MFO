@@ -1558,3 +1558,15 @@ the SEV-3 hostile-aura targets line, F4/F6/F8/F9/F10 were fixed on the branch.
 - (SEV-5, N1) On a follower switch `stateOk` is false for a frame, so `ownedAt` reads all-false and the board lays out
   twice (brief selection re-clamp). Cosmetic.
 - (SEV-5, N2) `ReplaceYou` treats a "You" after a colon as a subject ("Bonus for: you" reads wrong). Rare.
+
+### MFO-B247 (SEV-4 x2, SEV-5 x3) -- M1b spell picker sort review, deferred items
+Raised against 4bf1441 (`feat/mfo-m1b-spell-sort`, Opus review, `scratchpad/agentlogs/review-m1b.md`), 2026-10-12. MERGE OK.
+- (SEV-4) Scope: the 6 Str keys (`native/i18n/Strings_keys.h`) + regenerated `MFO_ENGLISH.txt` were outside the brief's
+  file list but required by Docs/TRANSLATING.md:67 and release.sh's template check; the commit message did not flag them.
+- (SEV-4) `native/Board.cpp` is 1987 lines (1945 on main), past the ~1500 plan-a-split line: the next brief touching it
+  proposes a split as its own round.
+- (SEV-5) School headers share the TextDisabled style of Gb_PickHint / Gb_TeachHeader; "Teach from spellbook" followed by
+  a school header reads flat. Indent or accent.
+- (SEV-5) Gamepad UP scrolls only to the focused Selectable, so the header above can stay out of view one step.
+- (SEV-5) The 4-key comparator lambda is duplicated per list; the "(unsupported)" suffix is still hardcoded English
+  (pre-existing).
