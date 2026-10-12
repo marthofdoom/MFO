@@ -65,6 +65,9 @@ namespace MFO::APMFBridge {
         constexpr float                    kApproachMinRadius = 128.0f;
         constexpr float                    kApproachTightenFrac = 0.6f;
         constexpr std::chrono::seconds     kApproachTightenGap{ 3 };
+        // marth 2026-10-11 (MFO-B234 / MFO-B238 R1): held at the floor (cannot tighten further) with sight still
+        // lost for this long, the approach counts as BLOCKED (the same bar as the never-fired bound's 5 s line).
+        constexpr std::chrono::seconds     kApproachFloorGiveUp{ 5 };
 
         float TightRadius(RE::FormID a_follower, RE::FormID a_recipient, float a_radius) {
             const auto* f = RE::TESForm::LookupByID<RE::Actor>(a_follower);
@@ -83,12 +86,16 @@ namespace MFO::APMFBridge {
             std::uint32_t    unpausedSweeps = 0;
             bool             everLive       = false;
             std::uint32_t    lastSeq        = 0;      // GetCombatApproachState's seq at the last log
+            std::chrono::steady_clock::time_point floorSince{};   // Holding with R at the floor since (zero = not)
             std::chrono::steady_clock::time_point lastBeat{};
         };
         std::mutex                                                          g_approachMx;
         std::unordered_map<RE::FormID, ApproachClaim>                       g_approach;   // guarded by g_approachMx
         // follower -> recipients Harbinger gave up on / refused / never served THIS fight.
         std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>      g_approachBlocked;   // guarded by g_approachMx
+        // follower -> recipients whose approach was just given up AT THE FLOOR (also in g_approachBlocked); the
+        // held heal takes the entry once (HealApproachStuckTake) and releases with `approach-blocked`.
+        std::unordered_map<RE::FormID, std::unordered_set<RE::FormID>>      g_approachStuck;     // guarded by g_approachMx
 
         // follower -> earliest time a new claim may be filed (after a CombatEnded end).
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_approachRefileAfter;   // guarded by g_approachMx
@@ -209,9 +216,26 @@ namespace MFO::APMFBridge {
             // Sight is still lost and he is inside the bound (Holding): close in (see kApproachMinRadius).
             const auto now = std::chrono::steady_clock::now();
             if (now - c.lastTighten < kApproachTightenGap) return;
-            if (ReadState(api, a_follower).state != APMF_API::kApproachState_Holding) return;   // still walking
+            if (ReadState(api, a_follower).state != APMF_API::kApproachState_Holding) { c.floorSince = {}; return; }   // still walking
             const float r2 = TightRadius(a_follower, a_recipient, radius);
-            if (r2 >= c.radius - 1.0f) return;
+            if (r2 >= c.radius - 1.0f) {
+                // AT THE FLOOR, Holding, sight still lost (marth 2026-10-11, MFO-B234 / B238 R1): he cannot
+                // close in any further. After kApproachFloorGiveUp the approach is counted BLOCKED.
+                if (c.floorSince == std::chrono::steady_clock::time_point{}) { c.floorSince = now; return; }
+                if (now - c.floorSince < kApproachFloorGiveUp) return;
+                spdlog::info("[heal-approach] {:08X}: ch.24 approach to {:08X} is BLOCKED at the floor (R {:.0f}, "
+                             "Holding, sight still lost for {} s) -- released and not re-filed for him this fight; "
+                             "the held heal is released (approach-blocked) and may claim again",
+                             a_follower, a_recipient, c.radius,
+                             std::chrono::duration_cast<std::chrono::seconds>(now - c.floorSince).count());
+                g_approachBlocked[a_follower].insert(a_recipient);
+                g_approachStuck[a_follower].insert(a_recipient);
+                const auto h = c.handle;
+                g_approach.erase(it);   // c is dead past here
+                api->Release(h);        // APMF's lock only, never g_mx
+                return;
+            }
+            c.floorSince = {};
             APMF_API::APMF_Param tp{};
             tp.target = a_recipient;
             tp.fval   = r2;
@@ -235,6 +259,7 @@ namespace MFO::APMFBridge {
         c.recipient = a_recipient;
         c.radius    = prm.fval;
         c.lastTighten = std::chrono::steady_clock::now();
+        c.floorSince  = {};
         c.lastSeq   = 0;
     }
 
@@ -245,12 +270,21 @@ namespace MFO::APMFBridge {
         return bit != g_approachBlocked.end() && bit->second.count(a_recipient) != 0;
     }
 
+    bool HealApproachStuckTake(RE::FormID a_follower, RE::FormID a_recipient) {
+        std::scoped_lock lock(g_approachMx);
+        const auto it = g_approachStuck.find(a_follower);
+        if (it == g_approachStuck.end()) return false;
+        const bool had = it->second.erase(a_recipient) != 0;
+        if (it->second.empty()) g_approachStuck.erase(it);
+        return had;
+    }
+
     void ReleaseHealApproach(RE::FormID a_follower, const char* a_why, std::size_t a_hand, bool a_fightOver) {
         APMF_API::Handle h = APMF_API::kInvalidHandle;
         RE::FormID       x = 0;
         {
             std::scoped_lock lock(g_approachMx);
-            if (a_fightOver) { g_approachBlocked.erase(a_follower); g_approachRefileAfter.erase(a_follower); }
+            if (a_fightOver) { g_approachBlocked.erase(a_follower); g_approachStuck.erase(a_follower); g_approachRefileAfter.erase(a_follower); }
             const auto it = g_approach.find(a_follower);
             if (it == g_approach.end()) return;
             if (a_hand != kApproachAnyHand && it->second.hand != a_hand) return;   // another hand's claim stands
@@ -352,6 +386,7 @@ namespace MFO::APMFBridge {
             if (api && c.handle != APMF_API::kInvalidHandle) api->Release(c.handle);
         g_approach.clear();
         g_approachBlocked.clear();
+        g_approachStuck.clear();
         g_approachRefileAfter.clear();
     }
 

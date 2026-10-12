@@ -263,10 +263,16 @@ namespace MFO::Actuation {
             RE::FormID recip = 0;
             long long  heldMs = 0;
             bool       approachBlocked = false;   // held through lost sight with the ch.24 approach unable to bring it back
+            bool       approachStuck   = false;   // the approach gave up AT THE FLOOR (Holding, still unseen, 5 s): marth 2026-10-11
             if (const auto hit = g_healHands.find(fid); hit != g_healHands.end()) {
                 const auto& hh = hit->second.hand[a_hand];
                 recip = hh.recipient;
                 approachBlocked = recip != 0 && hh.losHeld && APMFBridge::HealApproachBlocked(fid, recip);
+                // MFO-B234 / B238 R1 (marth 2026-10-11): at the approach floor with the recipient still out of
+                // sight for 5 s the approach counts as BLOCKED and the heal is released now (the plain bound's
+                // age / in-flight gates are bypassed), exit token approach-blocked. Taken once; it re-claims later.
+                approachStuck = recip != 0 && hh.losHeld && APMFBridge::HealApproachStuckTake(fid, recip);
+                if (approachStuck) approachBlocked = true;
                 // SEV-3 (review round 2): the exclusion lasts only while the ch.24 approach can still bring
                 // sight back. Blocked (EngineDropped / TargetLost / Leashed / never-live) or no approach at
                 // all (below ABI 19, seat refused): nothing is excluded and the plain bound applies.
@@ -277,20 +283,20 @@ namespace MFO::Actuation {
                 }
             }
             const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - stamp).count() - heldMs;
-            if (ageMs < static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) return false;
-            if (ComposedCast::ObservedFiring(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs))
+            if (!approachStuck && ageMs < static_cast<long long>(APMFBridge::kHoldLastSeenCapMs)) return false;
+            if (!approachStuck && ComposedCast::ObservedFiring(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs))
                 return false;
             // THE IN-FLIGHT EXEMPTION, NARROWED (review 2026-10-06): a charge that is building or casting
             // is kept, and so is a charged-and-WAITING one while its recipient reads Occluded (it fires
             // when sight clears). A kReady charge held with the recipient VISIBLE (or unknown) is a heal
             // that will not fire: not exempt, so it is bounded like a claim that never charged.
-            if (CastInFlightOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand))) {
+            if (!approachStuck && CastInFlightOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand))) {
                 const bool waiting = CastChargedWaitingOnHand(a_follower, a_hand, a_spell, CastProxyOnHand(fid, a_hand));
                 const bool occluded = recip != 0 &&
                     Sightline::CheckWithin(fid, recip, kHealLosTrustSec, Sightline::Basis::Own) == Sightline::Verdict::Occluded;
                 if (!waiting || occluded) return false;
             }
-            if (ComposedCast::UndecidedFire(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs)) {
+            if (!approachStuck && ComposedCast::UndecidedFire(fid, ApmfHand(a_hand), a_spell, APMFBridge::kObservedFiringRecencyMs)) {
                 static std::unordered_map<std::uint64_t, Clock::time_point> s_noBoundLog;   // worker-serial
                 auto& logged = s_noBoundLog[(static_cast<std::uint64_t>(fid) << 1) | a_hand];
                 if (logged != stamp) {   // once per claim (its lock stamp)
@@ -309,7 +315,12 @@ namespace MFO::Actuation {
                 default:                           return "Unknown";
                 }
             }();
-            if (ComposedCast::ObservedFiring(fid, ApmfHand(a_hand), a_spell, 0))
+            if (approachStuck)
+                spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {}: held at the approach floor with the recipient "
+                             "still out of sight for 5 s -- the approach is BLOCKED, heal RELEASED (approach-blocked), the "
+                             "hand is re-chosen next lap and the heal may claim again (recipient LoS {}; rule {})",
+                             fid, HandWord(a_hand), a_spell, a_who, los, g_firingRule);
+            else if (ComposedCast::ObservedFiring(fid, ApmfHand(a_hand), a_spell, 0))
                 spdlog::warn("[heal-hand] {:08X} {} hand heal {:08X} for {} IDLE since its last fire: claimed {} ms "
                              "ago (LoS-free), no fire observed on that hand in the last {} ms and nothing "
                              "charging -- RELEASED, the hand is re-chosen next lap (recipient LoS {}; rule {})",

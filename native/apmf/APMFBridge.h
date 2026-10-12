@@ -528,6 +528,10 @@ namespace MFO::APMFBridge {
     // this fight (EngineDropped / TargetLost / Leashed / Refused / never-live). cast/HealRoad.cpp's never-fired
     // bound stops excluding held-through-lost-sight time for such a claim. Worker-safe; own mutex.
     bool HealApproachBlocked(RE::FormID a_follower, RE::FormID a_recipient);
+    // marth 2026-10-11 (MFO-B234 / B238 R1): true ONCE after the approach to a_recipient was given up at the
+    // approach floor (Holding at the tightest R, sight still lost for 5 s); the entry is consumed. The held heal
+    // then releases with the exit token approach-blocked. Worker-safe; own mutex.
+    bool HealApproachStuckTake(RE::FormID a_follower, RE::FormID a_recipient);
     void ReleaseHealApproach(RE::FormID a_follower, const char* a_why,
                              std::size_t a_hand = kApproachAnyHand, bool a_fightOver = false);
 

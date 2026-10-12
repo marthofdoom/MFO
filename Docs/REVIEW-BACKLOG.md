@@ -574,6 +574,7 @@ Text below is the finding as relayed by the coordinator from the review.
 - TRIAGE 2026-10-06: F-D is CLOSED: the downgrade behaviour is documented in the `Serialization.h` v5 note (`native/Serialization.h:185-186`). F-G has its own needs-decision task (ClickUp 86e3m3q0j). F-E stays LIVE.
 
 ### MFO-B238 (SEV-4 x3, SEV-5 x2) -- heal hold round 2 review (a687fd2): deferred R1-R3, spots 2-3
+- **R1 DECIDED + FIXED 2026-10-11:** same change as the MFO-B234 SEV-3 bullet (5 s at the floor, still occluded -> approach-blocked release). ClickUp 86e3m450a.
 Raised against `a687fd2` (`fix/mfo-post-2.2.0`, Opus tier-B round 2, MERGE OK), 2026-10-06. Text as relayed by the coordinator.
 - R1 (SEV-4): at the 128u approach floor with sight still lost (recipient behind a wall / on another floor) the follower holds there; the never-fired bound stays off because the approach is not "blocked", so the heal holds until combat ends. Matches marth ruling (c); the 5 s still-holding line shows it. Possible follow-up for marth: treat "at the floor and still occluded" as approach-blocked.
 - R2 (SEV-5): out of magicka during a restream gap: ReleaseOwnHealClaim returns early (no claim stands), HealHandEnded is not called, the record ends next tick as released-elsewhere instead of out-of-magicka. Log token only.
@@ -1441,6 +1442,7 @@ Raised against 2f48f5c (`feat/mfo-self-proxy-aimed-touch`, Opus review MERGE), 2
 - FIELD VERDICT 2026-10-06 (Opus, Tuxborn deck logs): STILL NEEDS DATA -- 0 'NO self-flip proxy' lines, so no refusal was seen, but the capability signal itself was not exercised; needed: a self-flip cast on a runtime or spell where the proxy is unavailable.
 
 ### MFO-B234 -- A re-started concentration channel on the same claim is not protected again (cast/HealRoad.cpp)
+- **SEV-3 bullet DECIDED + FIXED 2026-10-11 (marth: after 5 s at the approach floor with the recipient still out of sight, count the approach as blocked, release the heal with exit token approach-blocked, let it re-claim later):** `ServiceHealApproach` (apmf/CombatApproach.cpp) times the floor, marks the recipient blocked + stuck; `NeverFiredRelease` (cast/HealRoad.cpp) takes the stuck mark (`HealApproachStuckTake`) and releases. ClickUp 86e3m450a.
 Raised against `fix/mfo-heal-hold-until-fire`, 2026-10-06.
 - **SEV-5 (accepted under marth's ruling "for now yes", open):** `HealHoldStands` ends the hold on the first observed fire since the claim stamp unless a concentration channel is still in flight on the hand. A channel that dips out of flight and is re-started on the SAME claim (no re-stamp) finds the hold already ended and lapsed, so offense on the other hand can interrupt the second channel. Fix would need a per-claim "channel running" latch.
 - **SEV-4 caveat:** a LoS-held span closes only on a Visible verdict (an Unknown keeps it accruing), so the exclusion in `NeverFiredRelease` can over-count an Unknown stretch. Bounded by `HealApproachBlocked` (no exclusion once the ch.24 approach is blocked or unavailable).
