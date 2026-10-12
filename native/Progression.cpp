@@ -824,6 +824,7 @@ namespace MFO::Progression {
                     // Style facts for this rank: the union over its entries
                     // (frozen with the catalog; TallyStyleVotes reads them).
                     bool gatedAll = false;   // F1(b): every FIRING entry behind the alone gate
+                    bool styleFires = false; // MFO-B25: a style fact came off an entry that FIRES for an NPC
                     {
                         bool anyFiring = false;
                         gatedAll = true;
@@ -832,6 +833,7 @@ namespace MFO::Progression {
                             rank.owner.Merge(f.owner);
                             if (f.kind == PerkEntryKind::kQuest || !f.firesForNpc) continue;
                             anyFiring = true;
+                            if (f.style.Any()) styleFires = true;
                             if (!f.aloneGated) gatedAll = false;
                         }
                         gatedAll = anyFiring && gatedAll;
@@ -849,12 +851,24 @@ namespace MFO::Progression {
                     // truth off the perk record itself, so it is effective by
                     // definition; the declared verdict still rules every rank
                     // WITHOUT a style fact. Belt-and-braces to the ESL fix.
-                    if (rank.verdict != Verdict::kEffective && rank.style.Any()) {
-                        spdlog::debug("[prog] {} ({:08X}) rank {}: {} -> effective on style-facts ({})",
+                    // MFO-B25 (marth 2026-10-12, "marginal: buyable, steers"): a style fact that came off
+                    // an entry which FIRES for an NPC (an entry-point tab, or an ability not pinned to the
+                    // player) promotes to effective, as above. A style fact that came ONLY off non-firing
+                    // entries (a player-gated ability conditioned on a weapon / armor keyword) promotes
+                    // to at least MARGINAL: dead -> marginal, marginal stays, effective stays. Follower
+                    // perks steer follower weapons, so the rank must stay buyable and its vote must
+                    // steer, and a dead rank would be filtered (a fully dead node drops saved
+                    // allocations on load). The auto-allocator ranks marginal below working perks.
+                    if (rank.verdict != Verdict::kEffective && rank.style.Any() &&
+                        (styleFires || rank.verdict == Verdict::kDead)) {
+                        const Verdict to = styleFires ? Verdict::kEffective : Verdict::kMarginal;
+                        spdlog::debug("[prog] {} ({:08X}) rank {}: {} -> {} on style-facts{} ({})",
                                       view.name, rank.perkFormID, rankNo + 1,
                                       rank.verdict == Verdict::kMarginal ? "marginal" : "dead",
+                                      to == Verdict::kEffective ? "effective" : "marginal",
+                                      to == Verdict::kEffective ? "" : " (non-firing entries only)",
                                       why.empty() ? "no reason recorded" : why);
-                        rank.verdict = Verdict::kEffective;
+                        rank.verdict = to;
                         Append(why, "style-facts");
                         ++a_out.stylePromotedRanks;
                     }
@@ -863,8 +877,8 @@ namespace MFO::Progression {
                     // not work for a follower owner, so it is NOT promoted; a rank
                     // that is effective today but carries such a part is shown
                     // MARGINAL ("part player-only"). A rank that is already dead
-                    // (every effect player-only) keeps its dead verdict. A style-fact
-                    // rank stays effective (equipment-deciding, see above). Marginal
+                    // (every effect player-only) keeps its dead verdict. A rank with a
+                    // FIRING style fact stays effective (equipment-deciding, see above). Marginal
                     // keeps the NODE in the catalog, so the load-time drop oracle
                     // (Allocator FindNode) never loses a saved rank to this demotion.
                     // The section-15 scale input: the effective count AS IT WAS before the
@@ -874,7 +888,7 @@ namespace MFO::Progression {
                     if (rank.owner.remap != OwnerRemap::kNone) {
                         if (rank.owner.remap == OwnerRemap::kDerive) ++a_out.ownerDerive;
                         else ++a_out.ownerUnsupported;
-                        if (rank.verdict == Verdict::kEffective && !rank.style.Any()) {
+                        if (rank.verdict == Verdict::kEffective && !styleFires) {   // same firing-style notion as the B25 promotion above
                             rank.verdict = Verdict::kMarginal;
                             Append(why, "part-player-only");
                             ++a_out.ownerDemotedRanks;
