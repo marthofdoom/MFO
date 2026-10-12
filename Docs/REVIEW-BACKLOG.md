@@ -1486,4 +1486,7 @@ Raised against `51617e0` (`feat/mfo-meo-gem-rules`), 2026-10-12. Reviewer's text
 - **SEV-5:** the worker-only sets (`g_looseRefs`, `g_looseTaken`, `g_probed`) grow without bound within a session.
 - **SEV-5:** shed and swap-up holds (Reason::Shed / SwapUp) have no abandon point; they end when the item leaves the follower.
 - **Surfaced at edit time from:** MAP.md `logistics/GemRules.h` entry.
+- Final check of f2ad1c7 (Opus, MERGE OK), SEV-4: heal/shed/swap-up holds have no abandon point; an item that stays and is later worn is never re-socketed (gems stay loose in the pack, not lost).
+- SEV-4: frame-scale stale window: a reconcile SocketGem queued into a WORN force-sell item just before its first arm can land after the refresh, so later scans read Clear and it may sell with that gem.
+- SEV-4: a socketed museum relic now costs two crate cooldowns (arm pass, then strip pass).
 
