@@ -783,7 +783,15 @@ namespace MFO::Board {
                     ImGui::GetIO().FontGlobalScale =
                         g_fontBody ? 1.0f : std::max(1.0f, g_bbH / 1080.0f);
 
-                if (g_cursorInit.exchange(false)) {
+                // ONE cursor position source. ImGui_ImplWin32_NewFrame (above) has
+                // already queued the OS cursor (GetCursorPos fallback: our WndProc
+                // never feeds the backend a WM_MOUSEMOVE, so it runs every frame)
+                // behind the raw-delta position Feed() queued, so the drawn cursor
+                // and the click point flipped between two positions (the "double
+                // cursor" + misclicks). Re-assert the raw-delta position LAST so it
+                // is the final event of every frame while the panel is up. The
+                // cursorInit flag is still consumed here (open-time first position).
+                if (g_cursorInit.exchange(false) || wantPanel) {
                     ImGui::GetIO().AddMousePosEvent(g_cursorX.load(), g_cursorY.load());
                 }
 
