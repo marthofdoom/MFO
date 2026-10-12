@@ -73,6 +73,11 @@ $V tools/splitcheck/splitcheck.py a/MFO-dll/MFO.dll a/MFO-dll/MFO.pdb b/MFO-dll/
     --proof a0/MFO-dll/MFO.dll a0/MFO-dll/MFO.pdb b0/MFO-dll/MFO.dll b0/MFO-dll/MFO.pdb [--json out.json]
 # 3. co-save behaviour (copy the saves first; the tool only reads them)
 $V tools/splitcheck/cosave_roundtrip.py --a a/MFO-dll --b b/MFO-dll --selftest saves/*.skse
+#    legacy migration (PRGN v<8): synthetic v6/v7 payloads re-encoded from v8 saves, with the HMS retro and the
+#    B13 fractional-share corner seeded (the second run EXPECTS A != B in the autoPoints fields only if A
+#    predates B13):
+$V tools/splitcheck/cosave_roundtrip.py --a a/MFO-dll --b b/MFO-dll --downgrade 6,7 --seed-retro saves/*.skse
+$V tools/splitcheck/cosave_roundtrip.py --a a/MFO-dll --b b/MFO-dll --downgrade 6 --seed-retro --seed-fraction saves/*.skse
 # 4. the tools on this pair
 $V tools/splitcheck/selftest.py --a a/MFO-dll --b b/MFO-dll --a0 a0/MFO-dll --b0 b0/MFO-dll \
     --tu-map tools/splitcheck/tumaps/<wave>.txt --work /tmp/st \
@@ -83,7 +88,13 @@ Exit codes. `linecheck`: 0 PASS, 1 FAIL. `splitcheck`: 0 = `PASS` (byte
 identical) or `PASS-PROVEN`; 3 = `PASS-EXPLAINED-UNPROVEN` (explained classes
 only, no proof given: NOT mergeable for a split); 1 = `FAIL`.
 `cosave_roundtrip`: 0 = every save identical (and the self-test saw its
-planted change), else 1. `selftest`: 0 = every case behaved, 1 = a hole. A
+planted change, or reported N/A because no save carries a PRGN record), else 1.
+The emulator models the CRT float math and the two GMST reads the PRGN v<8 retro makes
+(`GameSettingCollection`; placeholder values iAVDhmsLevelUp 10, fNPCHealthLevelBonus 5, the same in both
+builds). Any other engine/Address Library call that fails stops with "engine call not modelled:
+SKSE::stl::report_and_error called from ..." (a FAULT, never a pass); it used to surface as an unmapped read
+inside `std::basic_regex`, which CommonLib's error reporter builds. `--downgrade` payloads are SYNTHETIC
+(labelled in the output): real v6/v7 co-saves are only on the Deck. `selftest`: 0 = every case behaved, 1 = a hole. A
 case whose structure the pair does not have is `N/A` (not applicable, no
 candidate), never a pass and never a hole; only N7b, N7c, N13, N13b, N15,
 N17, N18, N18b and N18c may report it, and the summary names them. N7b/N7c run
