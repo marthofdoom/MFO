@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.3.0, released** (see [`VERSION`](VERSION) and the
+**Status: v2.4.0, released** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -182,6 +182,17 @@ leash and walk-to-loot.
 
 ---
 
+## What is new in 2.4.0
+
+- **Switch to silver weapon.** A new gambit action with a new condition, **Foe: Unholy**. While
+  the follower's target is Unholy (hurt more by the silver in your load order, or undead, werewolf
+  or vampire as a fallback), the best silver weapon they carry goes in the main hand. The main
+  weapon returns 2 seconds after. A follower keeps a silver weapon and restocks one by loot or buying.
+  Not yet tested in game.
+- **Perks with no listed effect count** when a perk condition a follower can meet refers to them.
+- **Right hand first** covers an Auto spell with weapon style control off.
+- **Concentration spells on Auto** are billed per second channeled.
+
 ## What is new in 2.3.0
 
 - **MFO is a Harbinger client on the cast and equip seats.** The friendly-fire hold, the
@@ -223,7 +234,7 @@ The zip no longer ships `MCM/Settings/MFO.ini`, so updating keeps your MCM setti
   addresses for that version inside the DLL, so you install nothing extra.
 - **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)** — the control-layer
   framework MFO drives followers through. Install it for the full feature set.
-  This version wants **Harbinger 0.12.0** (ABI 21): the cast guard, the
+  This version wants **Harbinger 0.12.0 or newer** (ABI 21, ship with 0.13.0): the cast guard, the
   animated casts, the equip claims, lockpicking and the fight leash all go through
   it. Install the two together. With an older Harbinger MFO still runs, keeps one
   small guard hook of its own and says so in the log. Without Harbinger MFO

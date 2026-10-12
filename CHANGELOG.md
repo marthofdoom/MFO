@@ -5,6 +5,15 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.4.0 -- Silver weapons and cast fixes
+
+- **Needs Harbinger 0.12.0 or newer (ABI 21).** Install it together with Harbinger 0.13.0.
+- **New gambit action: Switch to silver weapon.** It goes with a new condition, **Foe: Unholy**. A foe is Unholy when the silver weapons and enchantments in your load order hurt it more. If the load order has none, undead, werewolves and vampires count. While the follower's own target is Unholy, the best silver weapon they carry goes in the main weapon's hand. Two seconds after the target is no longer Unholy, the main weapon comes back. A one handed silver weapon is used when the off hand is busy, and that hand is left alone.
+- **A follower keeps a silver weapon for this.** It is never sold or replaced, and followers pick up or buy a silver weapon when they have none. Nothing new is saved, so old saves load as they were. Not yet tested in game.
+- **Perks with no listed effect now count.** A perk that adds no entry of its own, or an ability with no spell, is effective when a perk condition the follower can meet refers to it. Fire perk tiers are no longer marked marginal.
+- **Right hand first works for an Auto spell with weapon style control off.** The hand check follows the enabled equip gambit.
+- **Concentration spells on Auto are billed for the seconds they ran.** The follower pays for each second channeled since the last fan, inside the spell budget and reserve, instead of one flat cast. The lapse test allows the normal gap between casts.
+
 ## v2.3.0 -- Gems, heal reach and Harbinger client mode
 
 - **Needs Harbinger 0.12.0.** Install both together.
