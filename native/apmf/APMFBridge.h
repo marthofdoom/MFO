@@ -542,8 +542,11 @@ namespace MFO::APMFBridge {
     // refreshes / tightens a ch.24 approach toward a_foe (the pinned foe). Release when a sighted candidate returns,
     // the foe dies, the rule stops asking, retreat / combat end / dismissal. A held-heal approach on the same
     // follower takes precedence. No-op below ABI 19 / seat refused. Worker-safe; own mutex (never g_mx).
-    void ServiceOffenseApproach(RE::FormID a_follower, RE::FormID a_foe);
-    void ReleaseOffenseApproach(RE::FormID a_follower, const char* a_why, bool a_fightOver = false);
+    // a_touchSpell: the rule's spell has Touch delivery -> the goal closes to touch range; every other offensive spell
+    // holds the mage standoff (R never below kOffenseStandoff = 1024). a_refileGap: block a re-file for a few seconds
+    // (a "sight returned" release, so a lower rule that sees a foe cannot ping-pong the claim).
+    void ServiceOffenseApproach(RE::FormID a_follower, RE::FormID a_foe, bool a_touchSpell = false);
+    void ReleaseOffenseApproach(RE::FormID a_follower, const char* a_why, bool a_fightOver = false, bool a_refileGap = false);
 
     // ── LOCKPICK HOLD (LP-M1, ClickUp 86e3edgha): ch.1 + ch.12 Idle v2 (ABI v17) ──
     // The pick window's two claims, filed together when a follower standing at a locked

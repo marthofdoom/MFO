@@ -43,7 +43,12 @@ namespace MFO::APMFBridge {
         constexpr std::chrono::milliseconds kBeatMs{ 5000 };
         // The evaluator re-asks about once a second while the rule matches; three missed asks = it stopped.
         constexpr std::chrono::milliseconds kStaleMs{ 3500 };
+        // marth 2026-10-12: "Ignore spell range, always 1024" -- the offense approach never takes R below this and stops
+        // approaching at it. "Unless its a touch spell": a Touch spell closes to kTouchStandoff, which is the approach's
+        // own tightening floor (kMinRadius; no dedicated touch-reach constant exists in the code, NOT FOUND).
+        constexpr float                 kOffenseStandoff = 1024.0f;
         constexpr float                 kMinRadius = 128.0f;
+        constexpr float                 kTouchStandoff = kMinRadius;
         constexpr float                 kTightenFrac = 0.6f;
         constexpr std::chrono::seconds  kTightenGap{ 3 };
         constexpr std::chrono::seconds  kFloorGiveUp{ 5 };
@@ -73,12 +78,13 @@ namespace MFO::APMFBridge {
             return reinterpret_cast<const APMF_API::APMF_API_v19*>(api);
         }
 
-        float Tight(RE::FormID a_follower, RE::FormID a_foe, float a_radius) {
+        float Tight(RE::FormID a_follower, RE::FormID a_foe, float a_radius, bool a_touch) {
             const auto* f = RE::TESForm::LookupByID<RE::Actor>(a_follower);
             const auto* r = RE::TESForm::LookupByID<RE::Actor>(a_foe);
             if (!f || !r) return a_radius;
             const float d = f->GetPosition().GetDistance(r->GetPosition());
-            return std::min(a_radius, std::max(kMinRadius, kTightenFrac * d));
+            const float standoff = a_touch ? kTouchStandoff : kOffenseStandoff;
+            return std::max(standoff, std::min(a_radius, std::max(kMinRadius, kTightenFrac * d)));
         }
 
         const char* Word(std::uint32_t a_state) {
@@ -111,7 +117,9 @@ namespace MFO::APMFBridge {
         }
     }
 
-    void ServiceOffenseApproach(RE::FormID a_follower, RE::FormID a_foe) {
+    void ServiceOffenseApproach(RE::FormID a_follower, RE::FormID a_foe, bool a_touchSpell) {
+        const float standoff = a_touchSpell ? kTouchStandoff : kOffenseStandoff;
+        const char* standoffWhy = a_touchSpell ? "touch spell" : "ranged";
         const auto* api = OffApi();
         if (!api || g_offSeatRefused.load(std::memory_order_relaxed)) return;
         if (a_follower == 0 || a_foe == 0 || a_foe == a_follower) return;
@@ -137,7 +145,7 @@ namespace MFO::APMFBridge {
             if (const auto rit = g_offRefileAfter.find(a_follower); rit != g_offRefileAfter.end() && now < rit->second) return;
             APMF_API::APMF_Param prm{};
             prm.target = a_foe;
-            prm.fval   = Tight(a_follower, a_foe, radius);
+            prm.fval   = Tight(a_follower, a_foe, radius, a_touchSpell);
             prm.ival   = APMF_API::kApproach_Hold;
             const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_CombatApproach, kOwnBasis, &prm);
             if (h == APMF_API::kInvalidHandle) {
@@ -150,9 +158,9 @@ namespace MFO::APMFBridge {
             Claim c{};
             c.handle = h; c.foe = a_foe; c.radius = prm.fval; c.lastAsk = now; c.lastTighten = now;
             g_off.emplace(a_follower, c);
-            spdlog::info("[offense-approach] {:08X}: ch.24 combat approach CLAIMED (h={}, X {:08X}, R {:.0f}, Hold) -- every "
+            spdlog::info("[offense-approach] {:08X}: ch.24 combat approach CLAIMED (h={}, X {:08X}, R {:.0f}, Hold, standoff={:.0f} ({})) -- every "
                          "candidate foe is occluded; he walks toward the pinned foe to regain sight",
-                         a_follower, h, a_foe, prm.fval);
+                         a_follower, h, a_foe, prm.fval, standoff, standoffWhy);
             return;
         }
         auto& c = it->second;
@@ -161,7 +169,7 @@ namespace MFO::APMFBridge {
         if (c.foe == a_foe) {
             if (now - c.lastTighten < kTightenGap) return;
             if (Read(api, a_follower).state != APMF_API::kApproachState_Holding) { c.floorSince = {}; return; }
-            const float r2 = Tight(a_follower, a_foe, radius);
+            const float r2 = Tight(a_follower, a_foe, radius, a_touchSpell);
             if (r2 >= c.radius - 1.0f) {
                 if (c.floorSince == std::chrono::steady_clock::time_point{}) { c.floorSince = now; return; }
                 if (now - c.floorSince < kFloorGiveUp) return;
@@ -180,19 +188,19 @@ namespace MFO::APMFBridge {
             tp.target = a_foe; tp.fval = r2; tp.ival = APMF_API::kApproach_Hold;
             api->Repoint(c.handle, &tp);
             spdlog::info("[offense-approach] {:08X}: ch.24 approach to {:08X} TIGHTENED R {:.0f} -> {:.0f} (inside the bound "
-                         "but still no sight)", a_follower, a_foe, c.radius, r2);
+                         "but still no sight; standoff={:.0f} ({}))", a_follower, a_foe, c.radius, r2, standoff, standoffWhy);
             c.radius = r2; c.lastTighten = now; c.lastSeq = 0;
             return;
         }
         APMF_API::APMF_Param prm{};
-        prm.target = a_foe; prm.fval = Tight(a_follower, a_foe, radius); prm.ival = APMF_API::kApproach_Hold;
+        prm.target = a_foe; prm.fval = Tight(a_follower, a_foe, radius, a_touchSpell); prm.ival = APMF_API::kApproach_Hold;
         api->Repoint(c.handle, &prm);
-        spdlog::info("[offense-approach] {:08X}: ch.24 combat approach X {:08X} -> {:08X} (Repoint, h={}, R {:.0f})",
-                     a_follower, c.foe, a_foe, c.handle, prm.fval);
+        spdlog::info("[offense-approach] {:08X}: ch.24 combat approach X {:08X} -> {:08X} (Repoint, h={}, R {:.0f}, standoff={:.0f} ({}))",
+                     a_follower, c.foe, a_foe, c.handle, prm.fval, standoff, standoffWhy);
         c.foe = a_foe; c.radius = prm.fval; c.lastTighten = now; c.floorSince = {}; c.lastSeq = 0;
     }
 
-    void ReleaseOffenseApproach(RE::FormID a_follower, const char* a_why, bool a_fightOver) {
+    void ReleaseOffenseApproach(RE::FormID a_follower, const char* a_why, bool a_fightOver, bool a_refileGap) {
         APMF_API::Handle h = APMF_API::kInvalidHandle;
         RE::FormID       x = 0;
         {
@@ -203,6 +211,8 @@ namespace MFO::APMFBridge {
             h = it->second.handle;
             x = it->second.foe;
             g_off.erase(it);
+            // A "sight returned" release must not be undone next tick by the rule that still sees nothing (churn).
+            if (a_refileGap) g_offRefileAfter[a_follower] = std::chrono::steady_clock::now() + kRefileGap;
         }
         if (auto* api = g_apmf.load(std::memory_order_relaxed); api && h != APMF_API::kInvalidHandle) api->Release(h);
         spdlog::info("[offense-approach] {:08X}: ch.24 combat approach to {:08X} released ({})", a_follower, x, a_why);

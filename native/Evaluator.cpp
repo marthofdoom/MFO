@@ -245,9 +245,11 @@ namespace MFO::Eval {
         // so the picker reads the SAME line as the ch.23 hold and Fire (review U3).
         // a_ownRay: the rule casts a spell or swings as a non-melee-only (ranged) follower, so
         // the LoS preference uses Sightline::Basis::Own (MFO's ray), else the engine basis.
+        // a_touchSpell: the rule's spell has Touch delivery (the ch.24 offense approach then closes to touch range
+        // instead of holding the mage standoff).
         RE::ActorHandle PickFoe(RE::Actor* a_self, RE::Actor* a_player,
                                 const std::string& a_op, float a_param, bool a_reachGate,
-                                float a_reachSlack, bool a_ownRay) {
+                                float a_reachSlack, bool a_ownRay, bool a_touchSpell = false) {
             RE::ActorHandle best;
             if (!a_self) return best;
 
@@ -536,13 +538,13 @@ namespace MFO::Eval {
             if (bestVis) {
                 best = bestVis;
                 // Sight is back (a fresh Sightline verdict, never a reused one): end the ch.24 offense approach.
-                if (a_ownRay) APMFBridge::ReleaseOffenseApproach(selfID, "sight returned: a candidate foe is in view");
+                if (a_ownRay) APMFBridge::ReleaseOffenseApproach(selfID, "sight returned: a candidate foe is in view", false, true);
             } else if (best && qualified > 0) {
                 LogOccludedFallback(a_self, qualified);
                 // Every candidate is occluded: walk toward the pinned foe to regain sight (ClickUp 86e3m5ff8).
                 if (a_ownRay) {
                     if (auto bp = best.get())
-                        APMFBridge::ServiceOffenseApproach(selfID, bp->GetFormID());
+                        APMFBridge::ServiceOffenseApproach(selfID, bp->GetFormID(), a_touchSpell);
                 }
             }
             // Held fire in a brawl: the only "foes" were non-hostile and nothing
@@ -774,7 +776,14 @@ namespace MFO::Eval {
                                  // staff (either hand; a staff cast is a spell) is equipped. A melee swing stays Engine.
                                  g.actionOpcode == Vocab::kActCastTarget || g.actionOpcode == Vocab::kActCastSelf ||
                                      g.actionOpcode == Vocab::kActCastPlayer ||
-                                     (swing && HoldsBowOrStaff(a_follower)));
+                                     (swing && HoldsBowOrStaff(a_follower)),
+                                 // Touch delivery (marth: the mage standoff does not apply to a touch spell).
+                                 (g.actionOpcode == Vocab::kActCastTarget || g.actionOpcode == Vocab::kActCastSelf ||
+                                  g.actionOpcode == Vocab::kActCastPlayer) &&
+                                     [&] {
+                                         auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(g.actionParamForm);
+                                         return sp && sp->data.delivery == RE::MagicSystem::Delivery::kTouch;
+                                     }());
                 if (!chosen) continue;
             } else if (IsAllySelector(g.conditionOpcode)) {
                 // Same shape, ally side: true iff a wounded teammate is found,

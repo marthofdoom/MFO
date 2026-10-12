@@ -4034,10 +4034,10 @@ anonymous-namespace copy — that silently forks the instance).
   verdict); grab paths never consult the blocklist. Weakening (d) or removing the
   walk-skip re-opens the frozen-Erik churn loop; removing (a)'s sort key stalls
   followers on unreachable-first ordering again.
-  (e) **CONNECTIVITY pre-check (LoreRim round 2)**: `logistics/LootReach.cpp` `NavConnected` flood-fills the decoded
+  (e) **CONNECTIVITY pre-check (LoreRim round 2)**: `logistics/LootReach.cpp` `NavConnected` is a WORKER cache lookup (leaf mutex `g_reachMx`, 30 s TTL per ref, <=4 pending); a miss posts `ComputeOnMain` via `MainThread::Post` (review SEV-2: no navmesh read off-main) and answers Unknown until the verdict lands. `ComputeOnMain` flood-fills the decoded
   BSNavmesh triangle graph (follower tri -> ref tri; cross-mesh via `extraEdgeInfo` + `LookupByID<NavMesh>`); `Island` ONLY when
   exhausted inside fully-read meshes (any unloaded link / unfound triangle / differing interior cells / 40000-tri budget =
-  `Unknown` = proceed). Wired right after each of the two `NavmeshReach` gates in `LootScan.cpp` (transient fail + `NotePathFail`,
+  `Unknown` = proceed; also Unknown: a link leaving the follower/ref cells' meshes, a one-sided edge, a reached teleport-door triangle, 12000-tri budget). Wired right after each of the two `NavmeshReach` gates in `LootScan.cpp` (transient fail + `NotePathFail`,
   logged ONCE per ref via `NoteUnreachableOnce`, cleared in `Upkeep.cpp` revert). NOT an engine path query (none exists in the fork;
   a real one = new engine address, tier A). The edge-link index semantics (`triangles[e]` indexes `extraEdgeInfo` when the Link flag
   is set) follow the NVNM format and are UNPROVEN in the field. `Service.cpp` `TRAVEL PKG NOT ENGAGED` is suppressed once
@@ -5531,7 +5531,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     cast/ranged rule whose EVERY candidate foe is occluded. Filed by `Evaluator.cpp` `PickFoe`'s all-occluded fallback (`ServiceOffenseApproach(self, pinned
     foe)`, only when `a_ownRay`); that call is also the refresh. Released by `ReleaseOffenseApproach`: sighted candidate returns (same `PickFoe`, fresh Sightline
     verdict, nothing reused), foe dead/disabled / no ask for `kStaleMs` 3.5 s / retreat / Harbinger ended it (`SweepOffenseApproaches` from `Tick`), combat end (`Scheduler.cpp`),
-    dismissal (`Followers.cpp`), `ClearOffenseApproaches` from `ClearTransientState`. Bounds copied from the heal approach (R = tightened `fHealApproachRadius`, Repoint
+    dismissal (`Followers.cpp`), `ClearOffenseApproaches` from `ClearTransientState`. Bounds copied from the heal approach (R = tightened `fHealApproachRadius` but NEVER below `kOffenseStandoff` 1024 (a Touch spell: 128, `PickFoe`'s `a_touchSpell`); logs `standoff=<u> (ranged|touch spell)`; a 'sight returned' release sets a 4 s refile gap, Repoint
     every 3 s, ch.23 Leashed -> blocked, 5 s at the floor -> blocked). Logs `[offense-approach]`. OWN mutex `g_offMx`, never nested with `g_approachMx`: a held-heal
     claim wins the one ch.24 slot (`HealApproachStands` checked before `g_offMx`; `ServiceHealApproach` releases ours first). What breaks: filing from anywhere that is not the
     all-occluded fallback re-creates a walk with no sight reason; a third lock order here deadlocks with the heal table.

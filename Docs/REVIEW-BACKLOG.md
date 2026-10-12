@@ -1490,3 +1490,10 @@ Raised against `51617e0` (`feat/mfo-meo-gem-rules`), 2026-10-12. Reviewer's text
 - SEV-4: frame-scale stale window: a reconcile SocketGem queued into a WORN force-sell item just before its first arm can land after the refresh, so later scans read Clear and it may sell with that gem.
 - SEV-4: a socketed museum relic now costs two crate cooldowns (arm pass, then strip pass).
 
+
+## LoreRim round 2 (feat/mfo-lorerim-round2, Opus review of 8c68e4a)
+- **SEV-4:** the ch.24 offense approach (`apmf/OffenseApproach.cpp`) reads `fHealApproachRadius` for its tightening ceiling, so the heal setting also governs offense (the radius is now always raised to the 1024 standoff, so this only matters above 1024). Give offense its own config key when next touching it.
+- **SEV-4:** `logistics/Service.cpp` (2163 lines) and `apmf/APMFBridge.h` (1577 lines) are past the ~1500-line plan-a-split line; propose the split as its own brief.
+- **SEV-4:** `NavConnected` only follows links to meshes of the follower's and the ref's own cells; exterior cross-cell targets read Unknown (no Island), by design.
+- **SEV-5:** touch-spell standoff reuses the approach's tightening floor (128); no dedicated touch-reach constant exists.
+- **Surfaced at edit time from:** MAP.md loot failure model (e) and `apmf/OffenseApproach.cpp`.
