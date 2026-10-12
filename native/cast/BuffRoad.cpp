@@ -507,7 +507,7 @@ namespace MFO::Actuation {
                                  "nothing charging -- claim released (no hold-off; the rule re-claims when it "
                                  "wants it again)", id, a_spell->GetName() ? a_spell->GetName() : "?", spellID,
                                  ageMs);
-                    EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+                    EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/!g_autoBuffSeries);   // R3-2: a fan series keeps the spell in hand
                     return Outcome{ Result::NoOp, "buff claim idle after a fire: released", true };
                 }
                 spdlog::warn("[buff] {:08X} {} ({:08X}) at {:08X} NEVER FIRED this fight: claimed {} ms ago, "
@@ -576,7 +576,7 @@ namespace MFO::Actuation {
         }
         g_fired[id].insert(sk);   // R3-1: it landed
         spdlog::info("[buff] {:08X} {:08X}: buff is up on {:08X} -- claim released (the cast landed)", id, spellID, rid);
-        EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/true);
+        EndBuffClaim(a_follower, a_spell, /*a_takeBack=*/!g_autoBuffSeries);   // R3-2: a fan series keeps the spell in hand
         return Outcome{ Result::NoOp, "buff already up: claim released", true };
     }
 
