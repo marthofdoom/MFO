@@ -671,6 +671,7 @@ namespace MFO::Logistics {
         g_travelUnreach.clear();
         g_stallStrikes.clear();
         g_grabGrow.clear();   // grown-grab radii are per-session verdicts
+        ClearUnreachableLog();   // LootReach: logged-once unreachable set
         ClearGates();         // loot M1: GATED records are per-session skips
         g_actorDefer.clear(); // loot M1: actor-block reorder records
         g_idleCycles.clear();

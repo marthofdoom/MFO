@@ -757,7 +757,13 @@ namespace MFO::Logistics {
                 // swallowed by the previous leg's window. It stops entirely the
                 // moment the leg engages, so a healthy excursion prints one line at
                 // most. No re-assert, no retry, no fallback: it reports, nothing else.
-                if (tref && !tr.legEngaged && !inEngageWindow &&
+                // LoreRim round 2: on a CH19 leg the engagement truth is HARBINGER'S leg state, not MFO's
+                // curPkg probe. By the time this check runs (past kEngageWindow, ~3.5 s) Harbinger has often
+                // ENDED/released the leg (arrived, blocked, ...), so curPkg reads the follower's ordinary
+                // package (e.g. 0005C84B) and the line misreports a package that was never meant to run.
+                // Only a leg Harbinger still holds at Pending (never started) is a real NOT ENGAGED.
+                const bool ch19Speaks = ch19Mine && leg19.state != APMF_API::kLeg_Pending;
+                if (tref && !tr.legEngaged && !inEngageWindow && !ch19Speaks &&
                     (tr.nextLegPkgDiag.time_since_epoch().count() == 0 || now >= tr.nextLegPkgDiag)) {
                     tr.nextLegPkgDiag = now + std::chrono::seconds(4);
                     spdlog::warn("[loot] {:08X} leg->{:08X}: TRAVEL PKG NOT ENGAGED -- still on "

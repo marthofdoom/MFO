@@ -4034,6 +4034,14 @@ anonymous-namespace copy — that silently forks the instance).
   verdict); grab paths never consult the blocklist. Weakening (d) or removing the
   walk-skip re-opens the frozen-Erik churn loop; removing (a)'s sort key stalls
   followers on unreachable-first ordering again.
+  (e) **CONNECTIVITY pre-check (LoreRim round 2)**: `logistics/LootReach.cpp` `NavConnected` flood-fills the decoded
+  BSNavmesh triangle graph (follower tri -> ref tri; cross-mesh via `extraEdgeInfo` + `LookupByID<NavMesh>`); `Island` ONLY when
+  exhausted inside fully-read meshes (any unloaded link / unfound triangle / differing interior cells / 40000-tri budget =
+  `Unknown` = proceed). Wired right after each of the two `NavmeshReach` gates in `LootScan.cpp` (transient fail + `NotePathFail`,
+  logged ONCE per ref via `NoteUnreachableOnce`, cleared in `Upkeep.cpp` revert). NOT an engine path query (none exists in the fork;
+  a real one = new engine address, tier A). The edge-link index semantics (`triangles[e]` indexes `extraEdgeInfo` when the Link flag
+  is set) follow the NVNM format and are UNPROVEN in the field. `Service.cpp` `TRAVEL PKG NOT ENGAGED` is suppressed once
+  Harbinger's ch.19 leg state speaks (anything past Pending): it was a post-release misread of curPkg.
 - **Sinks** (`RegisterSinks` `logistics/Sinks.cpp:338` ← `plugin.cpp:297`; + `GateSink`, the loot-M1
   GATED re-admit on `TESOpenCloseEvent` / `TESActivateEvent` / `TESCellAttachDetachEvent`, see
   LOOT ROUND M1 above): `ContainerSink`
