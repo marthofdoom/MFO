@@ -1621,3 +1621,12 @@ were fixed on the branch.
   VerifiedAddresses row). A friend-by-relationship territorial NPC could read as Neutral.
 - (SEV-5) Field watch: the territorial term has no "radius entered" runtime flag (by marth's ruling), so a territorial
   animal anywhere within leash and sight is engaged even when it has not noticed anyone. Watch the per-actor skip log.
+
+### MFO-B253 (SEV-5, OPEN, tools) -- cosave_roundtrip leftovers from the M3 review (raised against d8f6a68)
+Opus review of `fix/mfo-m3-cosave-tool`, MERGE OK; everything above SEV-5 was fixed in the closing round. Left open:
+- The seeded v<8 retro never exercises the `HmsNpcRates` unreadable branch, the `fNPCHealthLevelBonus <= 0`
+  branch, or the fixed-stat / grant-history SKIP branch (README lists them). Fix shape: more seed variants.
+- `_fdsign` / `_dsign` / `_ldsign` CRT imports are unmodelled (logged by name only).
+- The "engine call not modelled" fault names the immediate caller (`report_and_fail`), not the MFO function that
+  started the chain. Fix shape: walk the emulated stack for return addresses.
+- The GMST placeholder values are not LoreRim's real ones. Re-run on the Deck's real v6/v7 saves when it is awake.

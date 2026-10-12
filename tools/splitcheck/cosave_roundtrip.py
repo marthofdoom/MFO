@@ -25,6 +25,7 @@ are compared.
 import argparse
 import bisect
 import json
+import math
 import os
 import struct
 import sys
@@ -32,7 +33,7 @@ from collections import Counter, defaultdict
 
 import pefile
 from unicorn import Uc, UcError, UC_ARCH_X86, UC_MODE_64, UC_HOOK_CODE, UC_HOOK_MEM_INVALID
-from unicorn.x86_const import (UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_R9,
+from unicorn.x86_const import (UC_X86_REG_XMM0, UC_X86_REG_XMM1, UC_X86_REG_RAX, UC_X86_REG_RCX, UC_X86_REG_RDX, UC_X86_REG_R8, UC_X86_REG_R9,
                                UC_X86_REG_RSP, UC_X86_REG_RIP, UC_X86_REG_GS_BASE)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -80,6 +81,80 @@ def parse(path):
     return {"format": fmt, "skse": skse, "runtime": rt, "plugins": plugins}
 
 
+def downgrade_prgn(data, to_ver, seed_retro=False, seed_fraction=False):
+    """Re-encode a v8 PRGN payload as v7 or v6 (layout from CoSaveLoad's readers). The only real v6/v7
+    saves are on the Deck, so this makes the legacy-migration path exercisable from v8 saves:
+    v8 -> v7 drops the per-follower v8 block (5 f32) and flag bit 64; v7 -> v6 also drops the per-skill
+    autoPoints f32 and the v7 block (granted, freeRespec, stripped list). Raises if the walk does not consume
+    the payload exactly (a layout this does not know).
+    seed_retro: ALSO force each follower into the shape HmsRetroParity acts on (captured, cumulative H/M/S
+    12/6/4, no fixed-stat flag, no grant remainder). The LoreRim saves have no such follower, so without it the
+    v<8 retro (the part of the migration that reads the engine GMSTs) is never reached.
+    seed_fraction (v6 only): each follower's first skill gets points = manual + 0.7, the cap-clamped fractional
+    natural MFO-B13's v<7 migration rounds UP (A: autoPoints 0.7, B: 1.0)."""
+    o, p = bytearray(), 0
+
+    def take(fmt):
+        nonlocal p
+        v = struct.unpack_from(fmt, data, p)
+        p += struct.calcsize(fmt)
+        return v
+
+    def copy(n):
+        nonlocal p
+        o.extend(data[p:p + n])
+        p += n
+
+    copy(2 + 4)                                     # lastPlayerLevel, playerHmsTotalLast
+    (count,) = take("<I")
+    o += struct.pack("<I", count)
+    for _ in range(count):
+        copy(4)                                     # actor formID
+        (flags,) = take("<B")
+        flags &= ~64                                # bit 64 (hmsRetroPending) is v8
+        if seed_retro:
+            flags &= ~32                            # no fixed-stat: the retro would SKIP it
+        o += struct.pack("<B", flags)
+        (plen,) = take("<H")
+        o += struct.pack("<H", plen)
+        copy(plen + 14)    # plugin, local u32, then 5 u16: level, shared, manualBaseline, manualApplied, manualExcluded
+        copy(2)                                     # nativeTreePerksAtEnroll
+        (pc,) = take("<H")
+        o += struct.pack("<H", pc)
+        copy(pc * 5)
+        (sc,) = take("<H")
+        o += struct.pack("<H", sc)
+        for _s in range(sc):
+            copy(16)                                # av, points, lastBase, manual
+            if seed_fraction and to_ver < 7 and _s == 0:
+                (manual,) = struct.unpack_from("<f", o, len(o) - 4)
+                struct.pack_into("<f", o, len(o) - 12, manual + 0.7)
+            if to_ver >= 7:
+                copy(4)                             # autoPoints
+            else:
+                take("<f")
+        (bc,) = take("<H")
+        o += struct.pack("<H", bc)
+        copy(bc * 8)
+        h0 = len(o)
+        copy(3 * 12 + 4 + 4 + 1 + 1 + 1 + 12 + 4)   # HMS block (v6 shape)
+        if seed_retro:
+            for pool, cum in enumerate((12.0, 6.0, 4.0)):
+                struct.pack_into("<f", o, h0 + pool * 12 + 8, cum)
+            o[h0 + 45] = 1                          # captured
+            o[h0 + 47:h0 + 59] = b"\0" * 12          # hmsGrantRemainder
+        (granted, respec, stripped) = take("<HBH")
+        if to_ver >= 7:
+            o += struct.pack("<HBH", granted, respec, stripped)
+            copy(stripped * 4)
+        else:
+            p += stripped * 4
+        p += 5 * 4                                  # v8 block: withheld, parityCredit, held[3]
+    if p != len(data):
+        raise ValueError(f"PRGN walk ended at {p} of {len(data)} bytes")
+    return bytes(o)
+
+
 STACK, STACK_SZ = 0x10000000, 0x200000
 HEAP, HEAP_SZ = 0x20000000, 0x10000000
 FAKE, FAKE_SZ = 0x40000000, 0x100000          # fake SKSE interface / fake logger / TEB / TLS
@@ -87,9 +162,20 @@ STUBS_BASE, STUBS_SZ = 0x50000000, 0x100000    # one 16-byte slot per import + M
 MAGIC_RET = STUBS_BASE + STUBS_SZ - 0x10
 INTFC = FAKE + 0x1000
 LOGGER = FAKE + 0x2000
+GSC = FAKE + 0x3000                            # fake GameSettingCollection
+GMST_I = FAKE + 0x3100                         # fake Setting {vtbl, data.i, name}
+GMST_F = FAKE + 0x3140                         # fake Setting {vtbl, data.f, name}
 TEB = FAKE + 0x10000
 TLS_ARR = FAKE + 0x11000
 TLS_BLOCKS = FAKE + 0x20000
+
+
+_MATH1 = {"ceilf": lambda x: math.copysign(float(math.ceil(x)), x) if math.isfinite(x) else x,
+          "floorf": lambda x: math.copysign(float(math.floor(x)), x) if math.isfinite(x) else x,
+          "sqrtf": lambda x: math.sqrt(x) if x >= 0 else float("nan"),
+          "sinf": math.sin, "cosf": math.cos,
+          "acosf": lambda x: math.acos(x) if -1 <= x <= 1 else float("nan")}
+_MATH2 = {"fmodf": lambda x, y: math.fmod(x, y) if y else float("nan")}
 
 
 class Stop(Exception):
@@ -126,6 +212,10 @@ class Emu:
                 uc.mem_write(imp.address, struct.pack("<Q", slot))
                 self.imports[slot] = (entry.dll.decode(), name)
                 slot += 16
+        # placeholder GMSTs for the HMS retro (HmsNpcRates): iAVDhmsLevelUp = 10 (int), fNPCHealthLevelBonus = 3.25
+        uc.mem_write(GMST_I + 8, struct.pack("<i", 10))
+        uc.mem_write(GMST_F + 8, struct.pack("<f", 3.25))
+        self.halt = None
         self.calls = []            # recorded stub calls
         self.written = []          # (type, version, bytes)
         self.cur_write = None
@@ -179,6 +269,15 @@ class Emu:
             uc.reg_write(r, v)
         try:
             uc.emu_start(addr, MAGIC_RET, count=limit)
+            if self.halt:
+                msg, self.halt = self.halt, None
+                self.faults.append(msg)
+                raise Stop(msg)
+            if uc.reg_read(UC_X86_REG_RIP) != MAGIC_RET:
+                # the run stopped short of the return address (instruction limit exhausted): never a pass
+                msg = f"run did not finish: stopped at {self.where(uc.reg_read(UC_X86_REG_RIP))} after the {limit}-instruction limit"
+                self.faults.append(msg)
+                raise Stop(msg)
         except UcError as e:
             rip = uc.reg_read(UC_X86_REG_RIP)
             self.faults.append(f"UcError {e} at {self.where(rip)}")
@@ -252,7 +351,29 @@ class Emu:
             return self.ret(0)
         if name in ("_Init_thread_header", "_Init_thread_footer", "_Init_thread_abort"):
             return self.ret(0)
+        if name in _MATH1 or name in _MATH2 or name == "lround":
+            return self.math(name)
         self.calls.append(("import", name))
+        return self.ret(0)
+
+    def math(self, name):
+        """CRT float math: result in xmm0 (an unmapped one left xmm0 as the caller's argument, which turned
+        MFO-B13's ceilf into a no-op and made the A/B diff look like a behaviour change)."""
+        uc = self.uc
+        x = struct.unpack("<f", struct.pack("<I", uc.reg_read(UC_X86_REG_XMM0) & 0xFFFFFFFF))[0]
+        if name == "lround":
+            # double arg; round half away from zero; result in rax
+            d = struct.unpack("<d", struct.pack("<Q", uc.reg_read(UC_X86_REG_XMM0) & 0xFFFFFFFFFFFFFFFF))[0]
+            self.calls.append(("math", name))
+            f = math.floor(abs(d))
+            return self.ret((f + (1 if abs(d) - f >= 0.5 else 0)) * (-1 if d < 0 else 1))     # half away from zero
+        if name in _MATH2:
+            y = struct.unpack("<f", struct.pack("<I", uc.reg_read(UC_X86_REG_XMM1) & 0xFFFFFFFF))[0]
+            r = _MATH2[name](x, y)
+        else:
+            r = _MATH1[name](x)
+        self.calls.append(("math", name))
+        uc.reg_write(UC_X86_REG_XMM0, struct.unpack("<I", struct.pack("<f", r))[0])
         return self.ret(0)
 
     # --- in-DLL function stubs ----------------------------------------------------
@@ -322,6 +443,31 @@ class Emu:
             self.calls.append(("log", lvl, fmt))
             self.ret(0)
 
+        def gsc_singleton():
+            self.calls.append(("engine", "GameSettingCollection::GetSingleton -> fake"))
+            self.ret(GSC)
+
+        def gsc_get_setting():
+            name = self.cstr(self.reg(UC_X86_REG_RDX), 64)
+            self.calls.append(("GetSetting", name))
+            hit = {"iAVDhmsLevelUp": GMST_I, "fNPCHealthLevelBonus": GMST_F}.get(name)
+            if hit is None:
+                # a missing model is a FAULT, never a "not found" answer that both builds agree on
+                self.halt = f"engine call not modelled: GameSettingCollection::GetSetting({name!r})"
+                self.uc.emu_stop()
+                return
+            self.ret(hit)
+
+        def engine_error():
+            # SKSE::stl::report_and_error: reached only when an unmodelled engine/Address Library call failed
+            # (REL::IDDatabase::load_file). Its body builds a std::regex through CRT/locale code the emulator
+            # does not model, which used to surface as an unmapped read INSIDE basic_regex and hid the cause.
+            # Stop right here and name the caller instead (a fault, never a pass).
+            rsp = self.reg(UC_X86_REG_RSP)
+            ra = struct.unpack("<Q", self.rd(rsp, 8))[0]
+            self.halt = f"engine call not modelled: SKSE::stl::report_and_error called from {self.where(ra)}"
+            self.uc.emu_stop()
+
         def noop(label):
             def h():
                 self.calls.append(("noop", label))
@@ -339,6 +485,9 @@ class Emu:
         for n in S.names_matching(r"^spdlog::logger::log_"):
             at([n], log_call)
         at(["MFO::MainThread::Post"], noop("MainThread::Post"))
+        at(["RE::GameSettingCollection::GetSingleton"], gsc_singleton)
+        at(["RE::GameSettingCollection::GetSetting"], gsc_get_setting)
+        at(["SKSE::stl::report_and_error"], engine_error)
 
 
 class Symbols:
@@ -434,11 +583,23 @@ def main():
     ap.add_argument("--b", required=True)
     ap.add_argument("--json")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--downgrade", default="",
+                    help="comma list of PRGN versions (6,7): ALSO run each v8 save with its PRGN re-encoded as that "
+                         "older version (SYNTHETIC legacy payload, labelled), to exercise the v<8 migration readers")
+    ap.add_argument("--seed-retro", action="store_true",
+                    help="with --downgrade: also seed each follower so the v<8 HMS retro (HmsRetroParity) acts")
+    ap.add_argument("--seed-fraction", action="store_true",
+                    help="with --downgrade 6: give each follower's first skill a fractional (points - manual), "
+                         "the MFO-B13 round-up corner; A and B are then EXPECTED to differ (autoPoints only)")
     ap.add_argument("saves", nargs="+")
     args = ap.parse_args()
+    dgs = [int(x) for x in args.downgrade.split(",") if x.strip()]
+    if any(v not in (6, 7) for v in dgs):
+        ap.error("--downgrade accepts only 6 and/or 7")
     sa, sb = Symbols(args.a), Symbols(args.b)
     summary = Counter()
     out = []
+    n_synth = 0
     for path in args.saves:
         try:
             cs = parse(path)
@@ -449,47 +610,68 @@ def main():
         if not mfo:
             summary["no MFO record"] += 1
             continue
-        recs = {t: (v, d) for t, v, d in mfo if t in ("PRGN", "FWPN")}
-        ra = run_one(sa, args.a, recs)
-        rb = run_one(sb, args.b, recs)
-        same_w = ra["written"] == rb["written"]
-        same_c = ra["calls"] == rb["calls"]
-        ok = same_w and same_c and not ra["faults"] and not rb["faults"]
-        summary["IDENTICAL" if ok else "DIFFERENT" if not (ra["faults"] or rb["faults"]) else "FAULT"] += 1
-        if ra.get("init_faults") or rb.get("init_faults"):
-            print("   init faults A:", ra.get("init_faults"), " B:", rb.get("init_faults"))
-        prgn_in = recs.get("PRGN")
-        prgn_out = [w for w in ra["written"] if w[0] == "PRGN"]
-        rt_equal = bool(prgn_in and prgn_out and prgn_in[0] == prgn_out[0][1] and prgn_in[1].hex() == prgn_out[0][2])
-        row = {"save": os.path.basename(path), "prgn_version_in": prgn_in[0] if prgn_in else None,
-               "prgn_bytes_in": len(prgn_in[1]) if prgn_in else 0, "identical": ok,
-               "written_identical": same_w, "calls_identical": same_c,
-               "a_faults": ra["faults"], "b_faults": rb["faults"],
-               "a_steps": ra["steps"], "b_steps": rb["steps"],
-               "save_reproduced_input_A": rt_equal,
-               "calls_n": len(ra["calls"]),
-               "engine_calls": sorted({str(c) for c in ra["calls"] if c[0] in ("engine", "LookupAddonForm", "import", "noop")})}
-        out.append(row)
-        print(f"{'OK  ' if ok else 'DIFF'} {row['save'][:70]:<70} PRGN v{row['prgn_version_in']} {row['prgn_bytes_in']}B "
-              f"load A/B {ra['steps'][0][1] if ra['steps'] else '-'}/{rb['steps'][0][1] if rb['steps'] else '-'} insns"
-              f"  faults {len(ra['faults'])}/{len(rb['faults'])}")
-        if not ok:
-            for f in (ra["faults"] + rb["faults"])[:3]:
-                print("      ", f[:200])
-            if not same_w:
-                print("       written A:", str(ra["written"])[:200])
-                print("       written B:", str(rb["written"])[:200])
-            if not same_c:
-                for i, (x, y) in enumerate(zip(ra["calls"], rb["calls"])):
-                    if x != y:
-                        print(f"       first call diff #{i}: A {x} | B {y}")
-                        break
-                else:
-                    print(f"       call count A {len(ra['calls'])} B {len(rb['calls'])}")
+        recs0 = {t: (v, d) for t, v, d in mfo if t in ("PRGN", "FWPN")}
+        jobs = [(os.path.basename(path), recs0)]
+        for dv in dgs:
+            if recs0.get("PRGN", (None, None))[0] == 8:
+                r2 = dict(recs0)
+                r2["PRGN"] = (dv, downgrade_prgn(recs0["PRGN"][1], dv, args.seed_retro, args.seed_fraction))
+                n_synth += 1
+                jobs.append((os.path.basename(path) + f" [SYNTHETIC v{dv}" + (" seeded" if args.seed_retro else "") + (" fraction" if args.seed_fraction and dv < 7 else "") + "]", r2))
+        for label, recs in jobs:
+            ra = run_one(sa, args.a, recs)
+            rb = run_one(sb, args.b, recs)
+            same_w = ra["written"] == rb["written"]
+            same_c = ra["calls"] == rb["calls"]
+            init_bad = bool(ra.get("init_faults") or rb.get("init_faults"))
+            ok = same_w and same_c and not ra["faults"] and not rb["faults"] and not init_bad
+            summary["IDENTICAL" if ok else "DIFFERENT" if not (ra["faults"] or rb["faults"] or init_bad) else "FAULT"] += 1
+            if ra.get("init_faults") or rb.get("init_faults"):
+                print("   init faults A:", ra.get("init_faults"), " B:", rb.get("init_faults"))
+            prgn_in = recs.get("PRGN")
+            prgn_out = [w for w in ra["written"] if w[0] == "PRGN"]
+            rt_equal = bool(prgn_in and prgn_out and prgn_in[0] == prgn_out[0][1] and prgn_in[1].hex() == prgn_out[0][2])
+            row = {"save": label, "prgn_version_in": prgn_in[0] if prgn_in else None,
+                   "prgn_bytes_in": len(prgn_in[1]) if prgn_in else 0, "identical": ok,
+                   "written_identical": same_w, "calls_identical": same_c,
+                   "a_faults": ra["faults"], "b_faults": rb["faults"],
+                   "a_steps": ra["steps"], "b_steps": rb["steps"],
+                   "save_reproduced_input_A": rt_equal,
+                   "calls_n": len(ra["calls"]),
+                   "engine_calls": sorted({str(c) for c in ra["calls"] if c[0] in ("engine", "LookupAddonForm", "import", "noop")})}
+            out.append(row)
+            print(f"{'OK  ' if ok else 'DIFF'} {row['save'][:40]:<40}{row['save'][row['save'].find(' [SYN'):] if 'SYNTHETIC' in row['save'] else '':<22} PRGN v{row['prgn_version_in']} {row['prgn_bytes_in']}B "
+                  f"load A/B {ra['steps'][0][1] if ra['steps'] else '-'}/{rb['steps'][0][1] if rb['steps'] else '-'} insns"
+                  f"  faults {len(ra['faults'])}/{len(rb['faults'])}")
+            if not ok:
+                for f in (ra["faults"] + rb["faults"])[:3]:
+                    print("      ", f[:200])
+                if not same_w:
+                    print("       written A:", str(ra["written"])[:200])
+                    print("       written B:", str(rb["written"])[:200])
+                    for (ta, va, ha), (tb, vb, hb) in zip(ra["written"], rb["written"]):
+                        if (ta, va, ha) != (tb, vb, hb):
+                            xa, xb = bytes.fromhex(ha), bytes.fromhex(hb)
+                            rngs = [i for i in range(min(len(xa), len(xb))) if xa[i] != xb[i]]
+                            print(f"       {ta} v{va}->v{vb}: len {len(xa)}/{len(xb)}, {len(rngs)} differing byte(s) at "
+                                  f"{rngs[:24]}")
+                if not same_c:
+                    for i, (x, y) in enumerate(zip(ra["calls"], rb["calls"])):
+                        if x != y:
+                            print(f"       first call diff #{i}: A {x} | B {y}")
+                            break
+                    else:
+                        print(f"       call count A {len(ra['calls'])} B {len(rb['calls'])}")
     print("\nSUMMARY:", dict(summary))
     if args.json:
         json.dump({"summary": summary, "rows": out}, open(args.json, "w"), indent=1, default=str)
     ok = set(summary) <= {"IDENTICAL", "no MFO record"}
+    if args.downgrade and n_synth == 0:
+        print("ERROR: --downgrade produced no synthetic job (no save carries a v8 PRGN)")
+        ok = False
+    if summary["IDENTICAL"] + summary["DIFFERENT"] + summary["FAULT"] == 0:
+        print("ERROR: nothing was compared (no save with an MFO record)")
+        ok = False
     if args.selftest:
         ok = selftest(args, sa) and ok
     sys.exit(0 if ok else 1)
@@ -527,7 +709,7 @@ def selftest(args, sa):
     open(os.path.join(d, "MFO.dll"), "wb").write(raw)
     shutil.copy(os.path.join(args.b, "MFO.pdb"), os.path.join(d, "MFO.pdb"))
     sp = Symbols(d)
-    diff = total = 0
+    diff = total = no_prgn = 0
     for path in args.saves:
         try:
             cs = parse(path)
@@ -537,12 +719,22 @@ def selftest(args, sa):
         if not mfo:
             continue
         recs = {t: (v, x) for t, v, x in mfo if t in ("PRGN", "FWPN")}
+        if "PRGN" not in recs:
+            no_prgn += 1               # nothing for the patched version to act on: not a fair test of the harness
+            continue
         ra, rb = run_one(sa, args.a, recs), run_one(sp, d, recs)
         total += 1
         diff += ra["written"] != rb["written"]
-    ok = total > 0 and diff == total
+    if total == 0 and no_prgn == 0:
+        print("SELFTEST: FAIL -- no save was compared at all")
+        return False
+    if total == 0:
+        print(f"SELFTEST: N/A -- none of the {no_prgn} save(s) with an MFO record carries a PRGN record, so the "
+              f"patched PRGN version has nothing to change (not a pass, not a hole)")
+        return True
+    ok = diff == total
     print(f"SELFTEST (B's PRGN record version {target.op_str} patched): {diff}/{total} saves DIFFERENT -> "
-          f"{'OK' if ok else 'HOLE'}")
+          f"{'OK' if ok else 'HOLE'}" + (f" ({no_prgn} save(s) without a PRGN record skipped: N/A)" if no_prgn else ""))
     return ok
 
 
