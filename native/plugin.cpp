@@ -358,6 +358,10 @@ namespace {
             MFO::Config::EnsureMcmDefaults();  // idempotent belt-and-suspenders (the real
                                                // seed ran at kInputLoaded, before MCM Helper)
             MFO::Config::Read();            // config first -- everything else reads it
+            spdlog::info("[equip] weapon weighting {} (bWeighWeapons={}; batch D) -- MFO equips weapons {}",
+                         MFO::Config::g_weighWeapons.load() ? "ON" : "OFF",
+                         MFO::Config::g_weighWeapons.load() ? 1 : 0,
+                         MFO::Config::g_weighWeapons.load() ? "through Harbinger when ABI >= 22" : "directly");
             MFO::Str::Reload("kDataLoaded");   // display text table (MAIN THREAD, published once;
                                                // the render thread only ever reads the immutable result)
             spdlog::info("[wstyle] bCstyReassert={} -- Numpad 7 (DIK {:#04x}) flips it live for the "

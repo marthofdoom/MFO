@@ -164,6 +164,7 @@ namespace MFO::Diagnostics {
                         PumpTickGate gate(epoch);   // shared body shape; drains with StopPump
                         if (!gate) return;
                         Config::Read();
+                        Actuation::ReconcileWeighSwitch();   // bWeighWeapons flipped OFF: nothing stays half-weighted
                         Logistics::GemRules::LogStatus();   // [gems] status after an MCM change
                         Lotd::OnConfigRead();   // LOTD awareness turned ON -> the shipping intro
                         // Re-apply settings mirrored into derived UI state --

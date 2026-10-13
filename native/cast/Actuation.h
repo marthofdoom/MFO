@@ -599,7 +599,10 @@ namespace MFO::Actuation {
     // torch EquipObject: each one becomes a ONE-SHOT PLACEMENT declared through ch.17 (below)
     // and, in combat, the ledger's choice is a ch.26 preference. False: today's roads (the
     // documented degrade: APMF absent, ABI < 22, bApmfEquipAuthority off). Any thread.
+    // ALSO requires Config::g_weighWeapons (INI bWeighWeapons, default OFF: batch D).
     bool WeighingEquips();
+    // Config re-read hook: if weighing is now off, release ch.26 claims and drop pending placements. Worker.
+    void ReconcileWeighSwitch();
     // The ch.17 hand for a placement of a_item: a one-hander (a staff included) names its hand
     // (a_leftHand), everything else is kEquipSlot_Default (a two-hander, a bow, a shield, a torch).
     std::uint8_t PlacementSlotFor(const RE::TESForm* a_item, bool a_leftHand);

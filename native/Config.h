@@ -340,6 +340,14 @@ namespace MFO::Config {
     // runtime-only, re-made on the first service after a load).
     inline std::atomic<bool>  g_apmfEquipAuthority{ true };
 
+    // WEAPON WEIGHTING (INI-only bWeighWeapons, batch D; marth 2026-10-12: "Lets revert armor and weapons to
+    // unweighted. Lets only focus on weights where they actually help us"). Default OFF. EXPERIMENTAL. ON =
+    // with Harbinger at ABI >= 22 MFO stops its direct weapon / shield / torch equips and uses ch.17 one-shot
+    // placements plus ch.26 preferences (Actuation::WeighingEquips, cast/EquipWeigh.cpp). OFF = MFO equips
+    // weapons itself, exactly the pre-W1 roads. Not in the MCM. Re-read with Config::Read (MCM close), and
+    // flipping it OFF mid-session drops every ch.26 claim and pending placement (Actuation::ReconcileWeighSwitch).
+    inline std::atomic<bool>  g_weighWeapons{ false };
+
     // WARN WHEN APMF IS ABSENT (MCM bWarnNoApmf). Default ON. 2.0.0 makes APMF
     // (Harbinger) a recommended companion; MFO still runs its full legacy
     // fallback without it, but a player who forgot to install it should know

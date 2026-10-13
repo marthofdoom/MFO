@@ -527,6 +527,7 @@ per concern:
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
   field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
   keeps a relic out of the declared set (MFO-B126).
+  **W1 IS PARKED (2026-10-12): `WeighingEquips()` also needs `Config::g_weighWeapons` (INI-only `bWeighWeapons`, default 0, batch D), so by default every W1 branch below is dead and the pre-W1 direct road runs.**
   **WEIGHTING W1 (2026-10-12, `feat/mfo-weighting-w1w2`; marth: "Direct equip is going. Harbinger has all the
   responsibility now.")** -- with Harbinger at ABI >= 22 (`WeighingEquips()`, cast/EquipWeigh.cpp) this file
   makes NO direct weapon / shield equip: `EquipShieldOnMain` becomes a ch.17 one-shot placement
@@ -555,8 +556,9 @@ per concern:
   hand. **What breaks:** dropping that lock check re-strips every follower's weapon on load under the authority;
   moving the check off the posted main-thread body (#62).
 - `cast/EquipWeigh.cpp` (NEW, 2026-10-12, weighting phase 1 W1) = **MFO's ch.26 consumer + the one-shot ch.17
-  placements + the D4 escalation.** Public (`cast/Actuation.h`): `WeighingEquips` (= `APMFBridge::
-  EquipPreferenceSupported`: ABI >= 22 AND the ch.17 authority supported), `PlacementSlotFor`, `WantPlacement`
+  placements + the D4 escalation.** Public (`cast/Actuation.h`): `WeighingEquips` (= `Config::g_weighWeapons` (INI `bWeighWeapons`, default OFF, batch D) AND `APMFBridge::
+  EquipPreferenceSupported`: ABI >= 22 AND the ch.17 authority supported), `ReconcileWeighSwitch` (called from the MCM-close
+  Config::Read task in Diagnostics.cpp: switch now off -> `ClearEquipPreferences` + drop placements + watch), `PlacementSlotFor`, `WantPlacement`
   (any thread, own `g_placeMx`), `PlacementPending`, `PendingPlacements` (worker; retires a placement that LANDED in
   its hand, is no longer owned / he is dead, was declared but did not land within `kPlaceTtl` 10 s -- a WARN, never
   retried -- or was never declared within `kPlaceWaitCap` 120 s because the ledger or a cast held its hand),

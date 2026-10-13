@@ -183,7 +183,38 @@ namespace MFO::Actuation {
         }
     }
 
-    bool WeighingEquips() { return APMFBridge::EquipPreferenceSupported(); }
+    bool WeighingEquips() { return Config::g_weighWeapons.load() && APMFBridge::EquipPreferenceSupported(); }
+
+    // bWeighWeapons flipped OFF at runtime (Config::Read on MCM close): nothing may stay half-weighted. Drops
+    // the pending ch.17 placements, the escalation watch and every ch.26 claim. A no-op while weighing is on
+    // or when there is nothing to drop. Worker-serial (the MCM-close task), like g_watch.
+    void ReconcileWeighSwitch() {
+        if (WeighingEquips()) return;
+        bool had = false;
+        std::vector<RE::FormID> held;   // followers whose last ch.17 declaration may still carry a placement
+        {
+            std::scoped_lock lk(g_placeMx);
+            had = !g_place.empty();
+            for (const auto& [fid, v] : g_place)
+                if (!v.empty()) held.push_back(fid);
+            g_place.clear();
+            g_skipLogged.clear();
+            g_failStreak.clear();
+        }
+        // Re-send each affected follower's declaration WITHOUT the dropped placement, or Harbinger keeps owning
+        // Shield|Left / Light|Left and, with ServicePreference now a no-op, nothing rebuilds it in combat.
+        for (const RE::FormID fid : held) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(fid);
+            if (!actor || !actor->Is3DLoaded()) continue;
+            Logistics::ResendEquipDeclaration(fid);
+            DeclareLedger(actor, "weighting off");
+        }
+        had = had || !g_watch.empty();
+        g_watch.clear();
+        g_emptyPrefLogged.clear();
+        APMFBridge::ClearEquipPreferences();
+        if (had) spdlog::info("[equip] weapon weighting switched OFF: ch.26 claims released, pending placements dropped");
+    }
 
     std::uint8_t PlacementSlotFor(const RE::TESForm* a_item, bool a_leftHand) {
         const auto* w = a_item ? a_item->As<RE::TESObjectWEAP>() : nullptr;
