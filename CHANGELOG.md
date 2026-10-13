@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Clearer equip logging.** A torch that does not land now says how many times in a row, and no longer blames Harbinger when something may have removed it. The torch skipped line names what is in the left hand and no longer repeats while MFO's own placement is waiting. A combat with nothing to prefer for weapons now says so once.
 - **Engage on sight drops a target that is too far away.** Needs the Harbinger build with held engagements. MFO now tells Harbinger how far the follower may react. It only starts a fight on a target inside 90 percent of that range, so a fight at the edge is not dropped at once. A target dropped for being too far is engaged again when it walks back in. With an older Harbinger, a target that ends far away is also engaged again when sighted again. A target past that range that is not hostile to you is dropped, and the follower's combat ends. Not yet tested in game.
 - **Harbinger now owns every weapon equip.** With a Harbinger at ABI 22 (the release after 0.13.0), MFO no longer puts weapons, shields or torches in a follower's hands itself. It tells Harbinger what it wants and Harbinger does the rest. With an older Harbinger MFO works as before. Not yet tested in game.
 - **In a fight the game picks MFO's weapon by its own rules.** MFO names the weapon for each hand. Harbinger raises that weapon's score just above the best other choice, so the follower's own AI equips it. A bow is still not drawn while the foe stands next to them.
