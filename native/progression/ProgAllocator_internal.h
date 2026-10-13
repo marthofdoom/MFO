@@ -275,6 +275,9 @@ namespace MFO::ProgAllocator {
         bool GrantRank(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st,
                        const Progression::PerkNodeView& a_node, int a_targetRank);
         void ReapplyFollower(RE::Actor* a_actor, ProgState& a_st);
+        // MAIN THREAD: rebuild the ReapplyPending mirror from g_prog (Allocator.cpp). Call after any
+        // change to a record's `applied`/`enrolled`.
+        void PublishReapplyPending();
 
         // Board-view state (defined in progression/BoardViews.cpp; the poll drives the
         // refresh, ClearAll drops the snapshot):

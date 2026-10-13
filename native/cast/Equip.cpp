@@ -204,6 +204,15 @@ namespace MFO::Actuation {
         // line. It is logged HERE, after the re-resolve null checks, so the line only claims
         // an equip that was actually issued (MFO-B22), never one the closure dropped.
         void EquipShieldOnMain(RE::FormID a_follower, RE::FormID a_shield, const char* a_logWhy = nullptr) {
+            // EQUIP-SELF-VIOLATIONS (marth 2026-10-13: "a claim binds its owner"): a shield MFO's OWN
+            // declaration denies (EquipAuthority.cpp noShieldUser) is never equipped by MFO -- Harbinger
+            // would refuse it. False without a claim / before a declaration went out, so the legacy road
+            // and a perk-voted shield user are unchanged.
+            if (APMFBridge::EquipAuthorityDenies(a_follower, APMF_API::kEquipCat_Shield)) {
+                spdlog::info("[equip] {:08X}: shield {:08X} NOT equipped -- the Shield category is denied by MFO's "
+                             "own equip declaration", a_follower, a_shield);
+                return;
+            }
             StampShieldRank(a_follower, a_shield);
             // WEIGHTING W1 (marth 2026-10-12, "Direct equip is going"): with Harbinger at ABI >= 22 the
             // shield is NOT equipped here. It is a one-shot ch.17 placement (Harbinger's equip pass puts it

@@ -530,6 +530,7 @@ namespace MFO::ProgAllocator {
                          a_actor->GetFormID(), NameOf(a_actor), reAdded, present, dropped,
                          nativeDeferred, changed ? "called" : "SKIPPED (no change)");
             a_st.applied = true;
+            PublishReapplyPending();   // EQUIP-SELF-VIOLATIONS: the equip declaration may now build from his perks
         }
 
 }

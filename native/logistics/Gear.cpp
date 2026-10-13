@@ -758,6 +758,22 @@ namespace MFO::Logistics {
                 spdlog::info("[equip] {:08X}: '{}' left to the APMF equip declaration (no direct EquipObject; "
                              "a refused claim is logged by [equip-auth])", a_follower->GetFormID(),
                              a_item->GetName() ? a_item->GetName() : "?");
+            } else if (equipIt && a_item->As<RE::TESObjectWEAP>() &&
+                       APMFBridge::EquipAuthorityOwns(a_follower->GetFormID(),
+                           [&] {
+                               // EQUIP-SELF-VIOLATIONS (marth 2026-10-13: "a claim binds its owner"): the hand
+                               // this weapon would take is OWNED by the declaration (a hold stands) and the
+                               // upgrade is not in the declared set -- a direct equip would be refused. Left to
+                               // the next combat equip gambit, which re-declares.
+                               auto* w = a_item->As<RE::TESObjectWEAP>();
+                               const bool twoHandOrRanged = w->IsBow() || w->IsCrossbow() ||
+                                                            w->IsTwoHandedSword() || w->IsTwoHandedAxe();
+                               return twoHandOrRanged ? (APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left)
+                                                      : static_cast<std::uint32_t>(APMF_API::kEquipCat_Right);
+                           }())) {
+                spdlog::info("[equip] {:08X}: weapon '{}' NOT equipped in place -- the declaration owns that hand "
+                             "(left to the next combat equip gambit)", a_follower->GetFormID(),
+                             a_item->GetName() ? a_item->GetName() : "?");
             } else if (equipIt && Actuation::WeighingEquips()) {
                 // WEIGHTING W1 (marth 2026-10-12, "Direct equip is going. Harbinger has all the responsibility
                 // now."): the weapon (equip-in-place: the RIGHT hand that holds the same role) is a one-shot

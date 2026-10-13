@@ -16,6 +16,7 @@
 #include "CasterConsent.h"  // ClassifySpell: beneficial-vs-hostile OOC cast routing
 #include "apmf/APMFBridge.h"   // IsHealCastActive: label the OOC concentration log (F1/F4 fix)
 #include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
+#include "Loadout.h"       // LeftHandSlot: the left-hand heal equip names its slot
 #include "Lotd.h"          // LOTD awareness: the deposit trip's lifecycle edges (feat/mfo-lotd)
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
@@ -251,6 +252,18 @@ namespace MFO::Logistics {
             auto* eq  = a_follower->GetEquippedObject(hand == 1);   // false=right, true=left
             auto* bad = eq ? eq->As<RE::TESObjectWEAP>() : nullptr;
             if (!bad || (!Catalog::IsExcluded(bad->GetFormID()) && !IsCreatureWeapon(bad))) continue;
+            // EQUIP-SELF-VIOLATIONS (marth 2026-10-13: "a claim binds its owner"): on the direct road a
+            // replacement equipped into a hand the declaration OWNS is off-set and refused, and the evict below
+            // would then leave the hand empty. Skip the heal while a hold owns that hand (retried next poll).
+            if (!Actuation::WeighingEquips() &&
+                APMFBridge::EquipAuthorityOwns(a_follower->GetFormID(),
+                    hand == 1 ? static_cast<std::uint32_t>(APMF_API::kEquipCat_Left)
+                              : static_cast<std::uint32_t>(APMF_API::kEquipCat_Right))) {
+                spdlog::info("[heal] {:08X} excluded '{}' NOT healed -- the equip declaration owns that hand "
+                             "(retried when the hold ends)", a_follower->GetFormID(),
+                             bad->GetName() ? bad->GetName() : "?");
+                continue;
+            }
             RE::TESBoundObject* best    = nullptr;
             std::uint16_t       bestDmg = 0;
             for (auto& [obj, data] : a_follower->GetInventory()) {
@@ -289,7 +302,8 @@ namespace MFO::Logistics {
             if (weighing && best)
                 Actuation::WantPlacement(folID, bestID, Actuation::PlacementSlotFor(best, hand == 1),
                                          "excluded-weapon heal: replacement");
-            auto doHeal = [folID, bestID, badID, creature, weighing]() {
+            const bool leftHand = hand == 1;
+            auto doHeal = [folID, bestID, badID, creature, weighing, leftHand]() {
                 auto* eq      = RE::ActorEquipManager::GetSingleton();
                 auto* fol     = RE::TESForm::LookupByID<RE::Actor>(folID);
                 auto* badForm = RE::TESForm::LookupByID(badID);
@@ -298,7 +312,8 @@ namespace MFO::Logistics {
                 RE::TESBoundObject* bestObj = nullptr;
                 if (bestID)
                     if (auto* f = RE::TESForm::LookupByID(bestID)) bestObj = f->As<RE::TESBoundObject>();
-                if (bestObj && !weighing) eq->EquipObject(fol, bestObj);   // auto-unequips the excluded one
+                if (bestObj && !weighing)   // auto-unequips the excluded one; a left-hand heal names the LEFT slot (slot-less targets Right)
+                    eq->EquipObject(fol, bestObj, nullptr, 1, leftHand ? Loadout::LeftHandSlot() : nullptr);
                 else                      eq->UnequipObject(fol, badObj);  // nothing real carried (or W1: Harbinger places the replacement) -- just take it off
                 std::int32_t haveBad = 0;
                 for (auto& [obj, data] : fol->GetInventory())

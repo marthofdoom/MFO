@@ -4612,6 +4612,14 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
 Puts a gambit spell in a follower's hand, records displaced gear as **transient
 debt**, hands it back on hit/combat-end/dismissal. Reconstructed from live state on
 load — no co-save record.
+- **EQUIP-SELF-VIOLATIONS (2026-10-13, `fix/mfo-equip-self-violations`):** "a claim binds its owner". `DeniedByDeclaration`
+  (shield + `APMFBridge::EquipAuthorityDenies(id, kEquipCat_Shield)`): `Prepare` books no `displacedLeft` debt for such a
+  shield, `EquipBack` (now `bool`) skips and logs it. The combat-end shield backstop in `Tick` keys on
+  `Scheduler::PartyCombat()` (`Scheduler.cpp`, worker-only `g_partyCombat`), not the follower's own `IsInCombat()`.
+  Sibling changes: `cast/Equip.cpp` `EquipShieldOnMain` refuses a denied shield; `logistics/Gear.cpp` weapon
+  equip-in-place skips an OWNED hand; `logistics/EquipAuthority.cpp` `RefreshEquipDeclaration` defers while
+  `ProgAllocator::ReapplyPending(id)` (mutex-guarded mirror, `PublishReapplyPending` in `progression/Allocator.cpp`, called on
+  reapply (`PerkGate.cpp`), poll, forget (`Verbs.cpp`), post-load, ClearAll).
 - **WEIGHTING W1 (2026-10-12):** under `Actuation::WeighingEquips()` (Harbinger ABI >= 22) the give-back
   (`EquipBack`: `RestoreOne`'s stowed two-hander and displaced left item, `OnFollowerHit`'s shield, `Tick`'s
   deferred shield, `Reconcile`'s load-time shield) is a ch.17 ONE-SHOT PLACEMENT (`Actuation::WantPlacement`,

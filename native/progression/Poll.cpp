@@ -272,6 +272,7 @@ namespace MFO::ProgAllocator {
             if (--g_pollFrames <= 0) {
                 g_pollFrames = kPollFrames;
                 PollWork();
+                PublishReapplyPending();   // PollWork re-arms/clears `applied` in several branches
             }
             // Board-view refresh (component 3): while the board is open,
             // republish on the open edge, on a follower-focus change (the tab

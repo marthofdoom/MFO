@@ -759,6 +759,8 @@ namespace MFO::Scheduler {
     double        LastTickMs()       { return g_lastTickMs.load(); }
     std::uint32_t TicksThisSession() { return g_ticks.load(); }
     double        ServiceClock()     { return g_serviceClock; }   // worker-only (#4), like its writer
+    bool PartyCombat() { return g_partyCombat; }   // worker-only, like g_partyCombat itself
+
     float ReachHoldSlack(RE::FormID a_follower) {                 // worker-only (#4), like g_reachHold
         return g_reachHold.contains(a_follower) ? -CombatSense::kReachHoldBand : 0.0f;
     }

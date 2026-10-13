@@ -1737,3 +1737,21 @@ Reviewer (verbatim): "the gambit board still offers Taunt in the action picker (
 
 ### MFO-B282 (SEV-5, OPEN, Taunt.cpp) -- the "[taunt] disabled" line never re-arms (raised against f916d41)
 Same review. Reviewer (verbatim): "`s_said` never re-arms. If the INI goes 0→1→0 within one session, the disabled line will not print again. Cosmetic."
+
+### MFO-B283 (SEV-4, OPEN, progression/Allocator.cpp / logistics/EquipAuthority.cpp) -- declaration deferred forever when MainThread is not installed (raised against 538e8be)
+Opus tier-3 review of `fix/mfo-equip-self-violations` @ 538e8be. Reviewer (verbatim): "if `MainThread` is not installed or `g_dead` (seat refused, VR), `PollTick` never runs. Every enrolled follower's declaration is then deferred forever and MFO equips nothing through the authority. This was already broken for progression, but now equipping fails too, without any warning (SEV-4)." Fix: a loud warning (or no deferral) when MainThread is absent.
+
+### MFO-B284 (SEV-5, OPEN, Scheduler.cpp) -- g_partyCombat stays stale while g_active is empty (raised against 538e8be)
+Same review. Reviewer (verbatim): "`Scheduler::Tick` returns early when `g_active` is empty (before the party-combat block), so the flag can stay stale while the party is empty. Debts for dismissed followers go through `Restore`, so the effect is benign (SEV-5)."
+
+### MFO-B285 (SEV-5, OPEN, logistics/Gear.cpp) -- owned-hand upgrade skip ordering vs weighing; one-cycle stale scope (raised against 538e8be)
+Same review. Reviewer (verbatim): "The skip comes before the weighing branch. Under weighing, the placement used to be 'kept pending' until the hold released ... Weighing is OFF in production ... so this is moot today." and "`EquipAuthorityOwns` reads the last scope sent. A just-released hold that hasn't been re-sent, or a pending right-hand placement or torch placement owning Left ... skips the upgrade for one cycle."
+
+### MFO-B286 (SEV-5, OPEN, cast/Equip.cpp / cast/EquipSilver.cpp) -- style-control toggle edge and re-arm ordering after a skipped DeclareLedger (raised against 538e8be)
+Same review. Reviewer (verbatim): "ON→OFF releases holds on the next reconcile (`Equip.cpp:1289`). A silver `!styleControl` plain equip in the same lap can hit a still-owned Right once, then succeeds." and "If the `DeclareLedger` send right before them was skipped (change detector, 3D-absent, deferral), APMF may still own Right with the silver in-set, and the main-weapon re-arm is refused."
+
+### MFO-B287 (SEV-5, OPEN, plugin.cpp / Loadout.cpp) -- load-time Reconcile can equip a shield the first declaration then unequips (raised against 538e8be)
+Same review. Reviewer (verbatim): "load-time `Loadout::Reconcile` (`plugin.cpp:519`, before any claim). It can equip a shield that the first declaration then makes APMF unequip, so there is one equip/unequip churn per load. This predates the branch."
+
+### MFO-B288 (SEV-5, OPEN, logistics/Upkeep.cpp) -- the "[heal] ... NOT healed" skip logs every service lap while the hold lasts (raised against 0d38508)
+Author's own note on the closing round: the skip in `HealExcludedWeapon` logs on every poll while a hold owns the hand. Rare case (an excluded weapon in a held hand); latch it per follower if it proves noisy.

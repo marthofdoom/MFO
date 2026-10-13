@@ -5,6 +5,7 @@
 #include "CasterConsent.h"   // v1.0.32: StartCooldown mirrors into the hook's permit
 #include "MainThread.h"      // animheal phase 2 (review F2): the DeselectSpell runs on the MAIN thread
 #include "apmf/APMFBridge.h"   // MFO-B227 F5: a right-hand heal claim's spell is not deselected
+#include "Scheduler.h"       // equip-self-violations: PartyCombat (the shield backstop keys on PARTY combat)
 #include "cast/Actuation.h"   // MFO-B227: HealRestreamGap (a heal-displaced left weapon waits out the re-stream gap)
 #include "ComposedCast.h"    // review round 2 (marth's ruling): HealTakesLeft suspends the left-hand automation
 
@@ -96,6 +97,13 @@ namespace MFO::Loadout {
             auto* armo = a_form ? a_form->As<RE::TESObjectARMO>() : nullptr;
             return armo && armo->IsShield();
         }
+
+        // True when the Shield category is in the `denied` mask of the declaration MFO last SENT on this
+        // follower's ch.17 claim (false without a claim or before a declaration has gone out) and a_obj
+        // is a shield. Shield is the only category MFO ever denies (EquipAuthority.cpp:803).
+        bool DeniedByDeclaration(RE::FormID a_id, RE::TESForm* a_obj) {
+            return IsShield(a_obj) && APMFBridge::EquipAuthorityDenies(a_id, APMF_API::kEquipCat_Shield);
+        }
     }
     // Declared in Loadout.h; defined below the anon namespace. Forward-declared
     // here so RestoreOne (anon, above the definition) can name it.
@@ -113,18 +121,28 @@ namespace MFO::Loadout {
         // same hand, placed by Harbinger's equip pass on his next declaration. a_direct = the DISMISSAL restore
         // (Restore): the ch.17 claim is already released and he is no longer serviced, so nothing would ever
         // declare a placement for him -- that one road keeps the direct call.
-        void EquipBack(RE::Actor* a_actor, RE::TESBoundObject* a_obj,
+        //
+        // EQUIP-SELF-VIOLATIONS (marth 2026-10-13: "a claim binds its owner"): an item MFO's OWN ch.17
+        // declaration denies (a shield on a no-shield follower) is NEVER given back -- Harbinger refuses
+        // that equip, and MFO must not make it. Returns whether an equip / placement was issued.
+        bool EquipBack(RE::Actor* a_actor, RE::TESBoundObject* a_obj,
                        const RE::BGSEquipSlot* a_slot = nullptr, bool a_direct = false) {
-            if (!a_actor || !a_obj) return;
+            if (!a_actor || !a_obj) return false;
+            if (DeniedByDeclaration(a_actor->GetFormID(), a_obj)) {
+                spdlog::info("[loadout] {:08X} give-back of {:08X} SKIPPED: its category is denied by MFO's own "
+                             "equip declaration", a_actor->GetFormID(), a_obj->GetFormID());
+                return false;
+            }
             if (!a_direct && Actuation::WeighingEquips()) {
                 const bool leftHand = a_slot != nullptr && a_slot == LeftHandSlot();
                 Actuation::WantPlacement(a_actor->GetFormID(), a_obj->GetFormID(),
                                          Actuation::PlacementSlotFor(a_obj, leftHand), "cast gear give-back");
-                return;
+                return true;
             }
             auto* mgr = RE::ActorEquipManager::GetSingleton();
-            if (!mgr) return;
+            if (!mgr) return false;
             mgr->EquipObject(a_actor, a_obj, nullptr, 1, a_slot);
+            return true;
         }
 
         // MFO-B22 (review of e06a54f, SEV-4): under weighting EquipBack only ASKS for a ch.17 placement, so
@@ -141,7 +159,7 @@ namespace MFO::Loadout {
             int n = 0;
             if (actor) {
                 if (it->second.stowedWeapon)  {
-                    EquipBack(actor, it->second.stowedWeapon, nullptr, a_direct);  ++n;
+                    if (EquipBack(actor, it->second.stowedWeapon, nullptr, a_direct)) ++n;
                     // ARM THE DEBOUNCE HERE, NOT AT STOW TIME. Both used to read
                     // the same clock, so the weapon was handed back at exactly
                     // the moment a re-stow became legal again -- a still-true
@@ -154,8 +172,7 @@ namespace MFO::Loadout {
                 if (auto* left = it->second.displacedLeft) {
                     // A weapon displaced from the LEFT hand returns to the LEFT hand
                     // (F2); anything else (shield, torch) keeps the default call.
-                    EquipBack(actor, left, left->As<RE::TESObjectWEAP>() ? LeftHandSlot() : nullptr, a_direct);
-                    ++n;
+                    if (EquipBack(actor, left, left->As<RE::TESObjectWEAP>() ? LeftHandSlot() : nullptr, a_direct)) ++n;
                 }
             }
             g_debt.erase(it);
@@ -530,6 +547,13 @@ namespace MFO::Loadout {
             willStowWeapon = hands.right ? hands.right->As<RE::TESBoundObject>() : nullptr;
         } else if (hands.left) {
             willDisplaceLeft = hands.left->As<RE::TESBoundObject>();
+            // EQUIP-SELF-VIOLATIONS: a shield MFO's own declaration denies is not a debt -- the engine
+            // equipped it against the declaration and the give-back would be a refused equip.
+            if (willDisplaceLeft && DeniedByDeclaration(id, willDisplaceLeft)) {
+                spdlog::info("[loadout] {:08X} displaced {:08X} is denied by MFO's own equip declaration "
+                             "-- no give-back debt booked", id, willDisplaceLeft->GetFormID());
+                willDisplaceLeft = nullptr;
+            }
         }
 
         // POINT OF NO RETURN (F1): every refusal above has had its say, the spell
@@ -699,8 +723,8 @@ namespace MFO::Loadout {
             return;
         }
 
-        EquipBack(actor, it->second.displacedLeft);
-        spdlog::info("[loadout] {:08X} took a hit -- shield {}", a_actorID, RestoreVerb());
+        if (EquipBack(actor, it->second.displacedLeft))
+            spdlog::info("[loadout] {:08X} took a hit -- shield {}", a_actorID, RestoreVerb());
         it->second.hitDeferred = false;
         it->second.displacedLeft = nullptr;
         it->second.leftWasShield = false;
@@ -798,7 +822,9 @@ namespace MFO::Loadout {
             // invariant is that MFO restores what it displaced, and a follower
             // who is never hit again would otherwise be permanently benched.
             // Combat ending is the honest deadline.
-            if (debt.displacedLeft && !actor->IsInCombat()) {
+            // Keyed on PARTY combat, not this follower's own flag (it flaps mid-fight: the 2026-10-13 deck
+            // shield restore at 11:45:23 landed in a live fight).
+            if (debt.displacedLeft && !Scheduler::PartyCombat()) {
                 restoreAll.push_back(id);
             }
         }
@@ -813,9 +839,9 @@ namespace MFO::Loadout {
             auto it = g_debt.find(id);   // re-found: an equip above may have dispatched events
             if (it == g_debt.end() || !it->second.displacedLeft || !it->second.leftWasShield) continue;
             if (auto* actor = RE::TESForm::LookupByID<RE::Actor>(id)) {
-                EquipBack(actor, it->second.displacedLeft);
-                spdlog::info("[loadout] {:08X} shield {} (the hit was deferred while a heal "
-                             "claim held the left hand)", id, RestoreVerb());
+                if (EquipBack(actor, it->second.displacedLeft))
+                    spdlog::info("[loadout] {:08X} shield {} (the hit was deferred while a heal "
+                                 "claim held the left hand)", id, RestoreVerb());
             }
             it->second.displacedLeft = nullptr;
             it->second.leftWasShield = false;
@@ -898,9 +924,9 @@ namespace MFO::Loadout {
                     if (armo && armo->IsShield() && data.first > 0) { shield = armo; break; }
                 }
                 if (shield) {
-                    EquipBack(a, shield);
-                    spdlog::info("[loadout] reconciled {:08X} {} -- spell removed, shield {}",
-                                 a->GetFormID(), a->GetName(), RestoreVerb());
+                    if (EquipBack(a, shield))
+                        spdlog::info("[loadout] reconciled {:08X} {} -- spell removed, shield {}",
+                                     a->GetFormID(), a->GetName(), RestoreVerb());
                     continue;
                 }
             }
