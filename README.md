@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.6.1** (see [`VERSION`](VERSION) and the
+**Status: v2.6.2** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -182,6 +182,15 @@ leash and walk-to-loot.
 
 ---
 
+## What is new in 2.6.2
+
+- **Needs Harbinger 0.13.1 or newer (ABI 24).** Install the two together.
+- **Taunt gambit.** A new Taunt action and a new condition, Foe: Targeting an ally. The follower plays a taunt animation and, once it has really played, nearby foes roll to be pulled onto him.
+- **Animated combat casts.** More combat casts now go through the follower's own casting, so they play the hand animation. Heals at the follower himself are real casts too. The combat substrate Harbinger uses for this ships on.
+- **Held engagements.** A fight MFO starts is held by Harbinger until the target is dead or MFO lets go. Engage on sight drops a target that is too far away.
+- **Weapon weighting is an off by default experiment** (`bWeighWeapons`).
+- Followers keep their weapon after loading a save made mid-fight, and the focus key no longer points followers at another follower.
+
 ## What is new in 2.6.1
 
 - Archers dual-cast their heals, and with too little magicka they heal one-handed with the other hand empty. They never swap to a melee weapon.
@@ -273,7 +282,7 @@ The zip no longer ships `MCM/Settings/MFO.ini`, so updating keeps your MCM setti
   addresses for that version inside the DLL, so you install nothing extra.
 - **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)** — the control-layer
   framework MFO drives followers through. Install it for the full feature set.
-  This version wants **Harbinger 0.12.0 or newer** (ABI 21, ship with 0.13.0): the cast guard, the
+  This version wants **Harbinger 0.13.1 or newer** (ABI 24): the cast guard, the
   animated casts, the equip claims, lockpicking and the fight leash all go through
   it. Install the two together. With an older Harbinger MFO still runs, keeps one
   small guard hook of its own and says so in the log. Without Harbinger MFO
