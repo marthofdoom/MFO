@@ -223,10 +223,9 @@ namespace MFO::Eval {
                         return true;
             return false;
     }
-    RE::Actor* CurrentTargetIfTrackable(RE::Actor* a_self) {
+    RE::NiPointer<RE::Actor> CurrentTargetIfTrackable(RE::Actor* a_self) {
         if (!a_self) return nullptr;
-        auto  tp  = a_self->GetActorRuntimeData().currentCombatTarget.get();
-        auto* tgt = tp.get();
+        auto tgt = a_self->GetActorRuntimeData().currentCombatTarget.get();
         if (!tgt || tgt->IsDead() || tgt->IsDisabled()) return nullptr;
         // The SAME trackability gates the group scan applies (3D loaded, present in the group's
         // targets and not kTargetLost): what ends a Harbinger ch.20 pin must also stop this path
@@ -301,11 +300,11 @@ namespace MFO::Eval {
                 // silver-hold demotion so both read ONE definition of "usable current target".
                 // ONE group read lock inside, nothing nested (#23); this branch returns before the
                 // chase-cap computation.
-                auto* tgt = CurrentTargetIfTrackable(a_self);
+                auto tgt = CurrentTargetIfTrackable(a_self);
                 if (!tgt) return best;
                 if (a_reachGate) {
                     CombatSense::ReachRead rr;
-                    if (CombatSense::OutOfMeleeReach(a_self, tgt, a_reachSlack, &rr)) {
+                    if (CombatSense::OutOfMeleeReach(a_self, tgt.get(), a_reachSlack, &rr)) {
                         LogReachSkip(a_self, tgt->GetHandle(), rr, {});
                         return best;
                     }
@@ -313,7 +312,7 @@ namespace MFO::Eval {
                 if (a_op == Vocab::kCondFoeIsUnholy) {
                     // What the load order's silver bonuses hit (ClickUp 86e3p2gp9): the live
                     // SilverPerk / silver-enchantment conditions, pre-read once. Outside the group lock.
-                    if (Logistics::IsUnholy(tgt)) best = tgt->GetHandle();
+                    if (Logistics::IsUnholy(tgt.get())) best = tgt->GetHandle();
                     return best;
                 }
                 const float d  = a_self->GetPosition().GetDistance(tgt->GetPosition());

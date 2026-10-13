@@ -64,7 +64,7 @@ namespace MFO::Eval {
     // disabled, 3D loaded, present in his combat group's targets and not kTargetLost, hostile to him (no
     // brawl partner). The one definition shared by the current-target selectors (Foe: Target within /
     // beyond, Foe targeted: Unholy) and the Scheduler's silver-hold demotion. Pure reads, one group read
-    // lock inside (#23); call it with no other lock held. The pointer is valid for the calling tick only.
-    RE::Actor* CurrentTargetIfTrackable(RE::Actor* a_self);
+    // lock inside (#23); call it with no other lock held. Returns a ref-counted pointer, so the actor stays alive for the caller's use.
+    RE::NiPointer<RE::Actor> CurrentTargetIfTrackable(RE::Actor* a_self);
 
 }
