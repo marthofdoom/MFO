@@ -177,11 +177,6 @@ namespace MFO::Logistics {
     bool EquipTorch(RE::Actor* a_follower) {
         if (auto* l = a_follower->GetEquippedObject(true); l && l->As<RE::TESObjectLIGH>())
             return false;
-        if (APMFBridge::EquipAuthorityOwns(a_follower->GetFormID(), APMF_API::kEquipCat_Left)) {
-            spdlog::info("[equip] {:08X}: torch skipped -- the equip authority owns the left hand (a hold stands)",
-                         a_follower->GetFormID());
-            return false;
-        }
         // MFO-B134: a REFUSED claim (supported channel, no claim standing) means MFO stays out.
         // Logged ONCE per follower per refusal streak (worker-serial set; cleared when the claim
         // stands again and in ClearTransientState), not every service lap.
@@ -204,11 +199,27 @@ namespace MFO::Logistics {
             // Capture FormIDs and re-resolve on the frame that runs.
             const RE::FormID folID   = a_follower->GetFormID();
             const RE::FormID lightID = light->GetFormID();
+            // Any placement of MFO's OWN still waiting (either hand) is not reported as a foreign hold.
+            if (Actuation::WeighingEquips() && Actuation::PlacementPending(a_follower->GetFormID())) return false;
+            if (APMFBridge::EquipAuthorityOwns(a_follower->GetFormID(), APMF_API::kEquipCat_Left)) {
+                // Rate-limited per follower (worker-serial); names what is ACTUALLY in the left hand.
+                static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_skipAt;
+                const auto now = std::chrono::steady_clock::now();
+                auto& at = s_skipAt[a_follower->GetFormID()];
+                if (at == std::chrono::steady_clock::time_point{} || now - at >= std::chrono::seconds(10)) {
+                    at = now;
+                    auto* l = a_follower->GetEquippedObject(true);
+                    spdlog::info("[equip] {:08X}: torch skipped -- the equip authority owns the left hand (a hold "
+                                 "stands); left hand holds {}", a_follower->GetFormID(),
+                                 l ? std::format("'{}' {:08X}", l->GetName() ? l->GetName() : "", l->GetFormID())
+                                   : std::string("empty"));
+                }
+                return false;
+            }
             // WEIGHTING W1 (marth 2026-10-12, "Direct equip is going. Harbinger has all the responsibility
             // now."): with Harbinger at ABI >= 22 the torch is a one-shot ch.17 placement (the declaration at
             // this service tick's tail carries it with Light owned; Harbinger's equip pass equips it).
             if (Actuation::WeighingEquips()) {
-                if (Actuation::PlacementPending(folID)) return false;   // already asked: let the other rules run
                 Actuation::WantPlacement(folID, lightID, APMF_API::kEquipSlot_Left, "torch upkeep");
                 return true;
             }

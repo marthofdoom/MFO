@@ -75,6 +75,10 @@ namespace MFO::Actuation {
         std::mutex                                       g_placeMx;
         std::unordered_map<RE::FormID, std::vector<Wish>> g_place;   // guarded by g_placeMx
         std::unordered_set<std::uint64_t>                 g_skipLogged;   // (follower << 32 | form), guarded by g_placeMx
+        // Consecutive did-NOT-land retirements per (follower << 32 | form); a landing erases it. Guarded by g_placeMx.
+        std::unordered_map<std::uint64_t, std::uint32_t>  g_failStreak;
+        // Followers whose empty ch.26 preference was said this combat episode (worker-serial, #4).
+        std::unordered_set<RE::FormID>                    g_emptyPrefLogged;
 
         const char* NameOf(RE::FormID a_form) {
             const auto* f = a_form ? RE::TESForm::LookupByID(a_form) : nullptr;
@@ -242,6 +246,10 @@ namespace MFO::Actuation {
             if (InHand(a_follower, w.form, w.slot)) {
                 spdlog::info("[equip-place] {:08X}: '{}' landed in the {} ({:.1f} s; {})", fid, NameOf(w.form),
                              HandName(w.slot), std::chrono::duration<float>(now - w.at).count(), w.why);
+                {
+                    std::scoped_lock lk(g_placeMx);
+                    g_failStreak.erase((static_cast<std::uint64_t>(fid) << 32) | w.form);
+                }
                 done.push_back(w.form);
             } else if (!owned || dead) {
                 spdlog::info("[equip-place] {:08X}: '{}' dropped -- {} ({})", fid, NameOf(w.form),
@@ -253,10 +261,16 @@ namespace MFO::Actuation {
                              std::chrono::duration_cast<std::chrono::seconds>(kPlaceWaitCap).count(), w.why);
                 done.push_back(w.form);
             } else if (w.declaredAt != Clock::time_point{} && now - w.declaredAt >= kPlaceTtl) {
-                spdlog::warn("[equip-place] {:08X}: '{}' did NOT land in the {} within {} s ({}) -- Harbinger's ch.17 "
-                             "equip pass did not place it (APMF.log [equip-auth] / [apmf][equip-obs] say why). Not "
-                             "retried, MFO makes no direct equip.", fid, NameOf(w.form), HandName(w.slot),
-                             std::chrono::duration_cast<std::chrono::seconds>(kPlaceTtl).count(), w.why);
+                std::uint32_t attempt;
+                {
+                    std::scoped_lock lk(g_placeMx);
+                    attempt = ++g_failStreak[(static_cast<std::uint64_t>(fid) << 32) | w.form];
+                }
+                spdlog::warn("[equip-place] {:08X}: '{}' did NOT land in the {} within {} s ({}), attempt {} in a row -- "
+                             "not seen in the hand at any check within that time (Harbinger may have placed it and "
+                             "something removed it: see APMF.log [equip-obs] op=unequip / [equip-auth] readback). Not "
+                             "retried here, MFO makes no direct equip.", fid, NameOf(w.form), HandName(w.slot),
+                             std::chrono::duration_cast<std::chrono::seconds>(kPlaceTtl).count(), w.why, attempt);
                 done.push_back(w.form);
             } else {
                 out.push_back({ w.form, w.slot });
@@ -292,8 +306,14 @@ namespace MFO::Actuation {
             std::scoped_lock lk(g_placeMx);
             g_place.erase(a_follower);
             std::erase_if(g_skipLogged, [a_follower](std::uint64_t k) { return (k >> 32) == a_follower; });
+            std::erase_if(g_failStreak, [a_follower](const auto& kv) { return (kv.first >> 32) == a_follower; });
         }
+        g_emptyPrefLogged.erase(a_follower);
         g_watch.erase(a_follower);   // worker: OnFollowerRemoved runs on the worker (Followers::ReleaseHeldState)
+    }
+
+    void NoteCombatEpisodeEnded(RE::FormID a_follower) {
+        g_emptyPrefLogged.erase(a_follower);   // worker-serial, like g_watch
     }
 
     void ClearWeighing() {
@@ -301,7 +321,9 @@ namespace MFO::Actuation {
             std::scoped_lock lk(g_placeMx);
             g_place.clear();
             g_skipLogged.clear();
+            g_failStreak.clear();
         }
+        g_emptyPrefLogged.clear();
         g_watch.clear();
     }
 
@@ -321,7 +343,15 @@ namespace MFO::Actuation {
         APMFBridge::DeclareEquipPreference(fid, entries, "combat lap");
         auto& w = g_watch[fid];
         const auto now = Clock::now();
-        if (entries.empty()) { g_watch.erase(fid); return; }
+        if (entries.empty()) {
+            g_watch.erase(fid);
+            if (!a_follower->IsInCombat()) g_emptyPrefLogged.erase(fid);   // the episode ended
+            else if (g_emptyPrefLogged.insert(fid).second)
+                spdlog::info("[equip-pref] {:08X}: ch.26: nothing to prefer (no gambit weapon hold, no shield top-up) "
+                             "-- the engine picks", fid);
+            return;
+        }
+        g_emptyPrefLogged.erase(fid);
         if (!SameDecl(w.watched, entries)) {   // a new declaration is a new episode
             const bool forced = APMFBridge::EquipPreferenceForced(fid);
             w = Watch{};
