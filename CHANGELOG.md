@@ -7,7 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
-- **Engage on sight drops a target that is too far away.** Needs the Harbinger build with held engagements. MFO now tells Harbinger how far the follower may react. A target past that range that is not hostile to you is dropped, and the follower's combat ends. Not yet tested in game.
+- **Engage on sight drops a target that is too far away.** Needs the Harbinger build with held engagements. MFO now tells Harbinger how far the follower may react. It only starts a fight on a target inside 90 percent of that range, so a fight at the edge is not dropped at once. A target dropped for being too far is engaged again when it walks back in. A target past that range that is not hostile to you is dropped, and the follower's combat ends. Not yet tested in game.
 - **The focus key no longer points followers at another follower.** When your combat target was one of your own followers, the rest were sent after them. That target is now skipped like it already was for the crosshair.
 - **Foe: Unholy is now Foe targeted: Unholy.** It checks only the foe the follower is fighting. It no longer looks for an Unholy foe nearby and switches the target to it. Existing rules keep working.
 - **Followers heal a downed ally in combat.** An essential ally on the ground was skipped by the heal. Now the heal keeps going until they are back on their feet and topped up.
