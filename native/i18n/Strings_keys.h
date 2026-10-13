@@ -211,6 +211,7 @@ MFO_STR(Cond_FoeIsUndead, "Foe: Undead", 0)
 MFO_STR(Cond_FoeIsDragon, "Foe: Dragon", 0)
 MFO_STR(Cond_FoeIsMechanical, "Foe: Mechanical", 0)
 MFO_STR(Cond_FoeIsUnholy, "Foe targeted: Unholy", 0)   // the foe the follower is fighting is one the load order's silver weapons hurt more (undead, werewolves, vampires, ...)
+MFO_STR(Cond_FoeAttackingAlly, "Foe: Targeting an ally", 0)   // the nearest foe whose target is the player, a teammate or a summon they command, but not this follower
 MFO_STR(Cond_FoeIsCaster, "Foe: Spellcaster", 0)
 MFO_STR(Cond_FoeIsRanged, "Foe: Ranged", 0)
 MFO_STR(Cond_FoeWeakerThanMe, "Foe: Weaker than me", 0)
@@ -247,6 +248,7 @@ MFO_STR(Act_DrinkMagickaPotion, "Drink magicka potion", 0)
 MFO_STR(Act_EquipRanged, "Equip ranged weapon", 0)
 MFO_STR(Act_EquipMelee, "Equip melee weapon", 0)
 MFO_STR(Act_EquipSilver, "Switch to silver weapon", 0)   // puts the follower's best silver weapon in the main hand; the main weapon comes back after
+MFO_STR(Act_Taunt, "Taunt", 0)   // plays a taunt animation, then nearby foes roll to turn on this follower for a while. Only offered with a melee weapon in the right hand
 MFO_STR(Act_PowerAttack, "Power attack", 0)
 MFO_STR(Act_Flee, "Flee to player", 0)
 MFO_STR(Act_LootArrows, "Loot arrows", 0)

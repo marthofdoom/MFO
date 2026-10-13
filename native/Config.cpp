@@ -256,6 +256,9 @@ namespace MFO::Config {
             else if (a_key == "fLeashMin")          setF(g_leashMin,       64.0f, 8192.0f);
             else if (a_key == "fLeashMax")          setF(g_leashMax,       64.0f, 8192.0f);
             else if (a_key == "fHealApproachRadius") setF(g_healApproachRadius, 64.0f, 2048.0f);
+            else if (a_key == "fTauntDuration")     setF(g_tauntDuration,  5.0f, 60.0f);    // taunt S2: MCM slider 5-60 s, default 15
+            else if (a_key == "fTauntRadius")       setF(g_tauntRadius,    256.0f, 2048.0f); // taunt S2: INI-only
+            else if (a_key == "iTauntMaxFoes")      setI(g_tauntMaxFoes,   1, 6);            // taunt S2: INI-only, total foes per taunt
             else if (a_key == "fChaseMin")          setF(g_chaseMin,       64.0f, 8192.0f);
             else if (a_key == "fChaseMax")          setF(g_chaseMax,       64.0f, 8192.0f);
             else if (a_key == "fMeleeReach")        setF(g_meleeReach,     32.0f, 1024.0f);
@@ -408,6 +411,9 @@ namespace MFO::Config {
             g_leashMin           = 512.0f;
             g_leashMax           = 4000.0f;
             g_healApproachRadius = 384.0f;
+            g_tauntDuration      = 15.0f;
+            g_tauntRadius        = 1024.0f;
+            g_tauntMaxFoes       = 4;
             g_chaseMin           = 600.0f;
             g_chaseMax           = 3000.0f;
             g_meleeReach         = 200.0f;
@@ -472,6 +478,7 @@ namespace MFO::Config {
             { "fExcursionMax", "60.000000" },  { "fNavmeshGate", "300.000000" },
             { "fLeashMin", "512.000000" },     { "fLeashMax", "4000.000000" },
             { "fHealApproachRadius", "384.000000" },
+            { "fTauntDuration", "15.000000" },
             { "fMeleeReach", "200.000000" },
             { "iMenuStyle", "0" },             { "bShowHud", "0" },
             { "iBoardKey", "-1" },             { "iHudKey", "-1" },

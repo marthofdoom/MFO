@@ -20,6 +20,7 @@
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
 #include "TauntProbe.h"    // taunt S0 passive probes (bTauntProbe)
+#include "Taunt.h"         // taunt S2: Taunt::Tick (every pump) / Clear
 #include "EngageOnSight.h" // the hidden OOC gambit "nearest visible enemy" (party-OOC branch)
 #include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
 #include <cstring>          // [deadtgt] strcmp on the CannotActReason strings
@@ -740,6 +741,7 @@ namespace MFO::Scheduler {
         g_stallProbe.clear();                   // [stall-probe] samples are session state
         g_deadTgt.clear();                      // [deadtgt] windows are session state
         TauntProbe::Reset();                    // [taunt-probe] samples are session state
+        Taunt::Clear();                         // taunt attempts + pinned foes: logged "load", claims released
         g_noneMatchedNoted.clear();
         g_equipRangeUndecidableNoted.clear();   // MFO-B55 once-per-fight note
         g_reachHold.clear();                    // fix/mfo-unreachable-flyer: the leash hold
@@ -787,6 +789,11 @@ namespace MFO::Scheduler {
         // tick that returns early without pumping is a tick that can strand a
         // latch in the save.
         Packages::Pump();
+
+        // TAUNT (S2, ClickUp 86e3g6duw): advance every taunt attempt (idle confirmation) and every pinned foe (the
+        // duration and the early ends) EVERY pump, before the early returns: a taunt must release the same tick its
+        // taunter goes down or the party empties, and none of that is a follower service. Pauses with the game.
+        Taunt::Tick();
 
         auto& active = Followers::g_active;
         if (active.empty()) return;

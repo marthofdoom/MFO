@@ -11,6 +11,7 @@
 #include "CombatSense.h" // OutOfMeleeReach -- the melee-only reach gate (fix/mfo-unreachable-flyer)
 #include "apmf/APMFBridge.h"   // GetHealCastSpell/Target -- the incumbent heal recipient (PickAlly)
 #include "cast/Actuation.h" // MeleeOnly -- has MFO declared him melee, with nothing ranged in hand
+#include "Taunt.h"        // IsPartyMember -- cond.foe_attacking_ally's party test
 #include "Scheduler.h"   // ReachHoldSlack -- the reach hold's hysteresis line (review U3)
 
 namespace MFO::Eval {
@@ -33,7 +34,8 @@ namespace MFO::Eval {
                    a_op == Vocab::kCondFoeFleeing    ||
                    a_op == Vocab::kCondFoeWeakFire   || a_op == Vocab::kCondFoeWeakFrost ||
                    a_op == Vocab::kCondFoeWeakShock  || a_op == Vocab::kCondFoeIsMechanical ||
-                   a_op == Vocab::kCondFoeMultipleWithin || a_op == Vocab::kCondFoeIsUnholy;
+                   a_op == Vocab::kCondFoeMultipleWithin || a_op == Vocab::kCondFoeIsUnholy ||
+                   a_op == Vocab::kCondFoeAttackingAlly;
         }
 
         // Weak to an element = its resist actor-value is negative (a race trait
@@ -480,6 +482,11 @@ namespace MFO::Eval {
                         if (!FoeTargets(foe, a_player)) continue;
                     } else if (a_op == Vocab::kCondFoeAttackingMe) {
                         if (!FoeTargets(foe, a_self)) continue;
+                    } else if (a_op == Vocab::kCondFoeAttackingAlly) {
+                        // Taunt S2 (Docs/TAUNT-DESIGN.md 4.1): the foe's combat target is a PARTY member other than
+                        // this follower. The target is HELD for the test; nearest foe wins (score = dist).
+                        auto tp = foe->GetActorRuntimeData().currentCombatTarget.get();
+                        if (!tp.get() || tp.get() == a_self || !Taunt::IsPartyMember(tp.get())) continue;
                     } else if (a_op == Vocab::kCondFoeAttackingMeMelee) {
                         // Targeting the follower AND swinging steel (not a bow, not a
                         // spell) -- the "peel this one off me" rule for a mixed pack.

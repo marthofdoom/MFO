@@ -5,6 +5,7 @@
 #include "Actuation_internal.h"
 #include "Runtime.h"      // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "Scheduler.h"    // ReachHoldSlack -- the reach gates read the hold's line (review U3)
+#include "Taunt.h"        // act.taunt (taunt S2): Taunt::Fire
 #include "apmf/APMFBridge.h"   // Phase 3: APMF cast-selection assist (additive, guarded)
 #include "ComposedCast.h" // WatchClaim/ClearWatch -- the shared [cfc] silent-claim diagnostic
                           // (feat/offense-cast-seats: reused here, NOT routed through Try())
@@ -380,6 +381,7 @@ namespace MFO::Actuation {
         if (op == Vocab::kActEquipRanged) return EquipWeapon(a_follower, true);
         if (op == Vocab::kActEquipMelee)  return EquipWeapon(a_follower, false);
         if (op == Vocab::kActEquipSilver) return EquipSilver(a_follower);   // cast/EquipSilver.cpp (86e3p2gp9)
+        if (op == Vocab::kActTaunt) return Taunt::Fire(a_follower, a_choice);   // Taunt.cpp (taunt S2, 86e3g6duw)
         // kActEquipTorch moved to the LOGISTICS table (#35, marth: never needed in
         // combat) -- handled by Logistics::ServiceFollower now, not here.
 

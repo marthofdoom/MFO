@@ -1605,6 +1605,37 @@ namespace MFO::APMFBridge {
     void ReleaseDeposit(RE::FormID a_follower);
     // Revert / load (pump drained): release every deposit claim and forget them.
     void ClearDepositClaims();
+    // ── TAUNT (taunt slice S2, ClickUp 86e3g6duw, Docs/TAUNT-DESIGN.md) -- apmf/TauntClaims.cpp ──
+    // The claims only; the decisions are native/Taunt.cpp's. Worker or main thread (own mutex, never g_mx). Nothing
+    // is saved. TauntSupported: APMF present AND abiVersion >= 17 (ch.12 idle v2; implies the pin, the entry,
+    // IsClaimLive and Repoint) AND no synchronous refusal of the idle / pin seat seen this session.
+    bool TauntSupported();
+    // The TAUNTER's idle (keyed by the taunter): ch.1 hold + ch.12 v2 idle a_idle played at a_target (the foe). False =
+    // refused (logged; a refusal of a valid claim marks the seat refused for the session).
+    bool ClaimTauntIdle(RE::FormID a_taunter, RE::FormID a_idle, RE::FormID a_target);
+    enum class TauntIdleState {
+        None,     // no idle claim for this taunter
+        Pending,  // filed, not yet published (Harbinger's next drain); below the never-live grace
+        Live,     // IsClaimLive read true (accepted by the engine; Harbinger ends the claim itself if the graph never raises
+                  // the idle's entry event within 3 s of world time -- [Idle] bIdleConfirm)
+        Ended,    // Harbinger ended it (refused / not confirmed / owner died), or never seen live within the grace
+    };
+    TauntIdleState TauntIdleStateOf(RE::FormID a_taunter);
+    // Release the idle, then the hold, and forget them. Idempotent.
+    void ReleaseTauntIdle(RE::FormID a_taunter);
+    // The FOE's claims (keyed by the FOE), FACETS Example 20a: a ch.20 pin on the foe naming the taunter, plus a ch.21
+    // entry only when a_taunterInFoeGroup is false. A second call for the same foe REPOINTS (a second taunter); an
+    // ended handle is released and re-requested.
+    enum class TauntPinResult { New, Repointed, Refused };
+    TauntPinResult PinFoeToTaunter(RE::FormID a_foe, RE::FormID a_taunter, bool a_taunterInFoeGroup);
+    enum class TauntPinState { None, Standing, Ended };   // Ended = Harbinger ended it (IsClaimLive was true, now false)
+    TauntPinState TauntPinStateOf(RE::FormID a_foe);
+    bool TauntPinEverLive(RE::FormID a_foe);   // has the pin ever read live (for the release line)
+    // Release the foe's pin and entry and forget them. Idempotent; the foe's own selector answers again.
+    void ReleaseTauntPin(RE::FormID a_foe);
+    // Revert / load: release and forget every taunt claim (idle and pin tables).
+    void ClearTauntClaims();
+
     // ── HARBINGER LINE OF SIGHT + AWARENESS (ABI v18, feat/mfo-harbinger-los-adopt) -- apmf/Los.cpp ──
     // Contract: APMF_API.h "ABI v18: LINE OF SIGHT AND AWARENESS". Below v18 (or with
     // Config::g_apmfCast off) every call here reports "not usable" and the caller keeps

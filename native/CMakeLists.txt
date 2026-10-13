@@ -39,6 +39,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     i18n/Strings.cpp
     Probe.cpp
     TauntProbe.cpp
+    Taunt.cpp
     ProgProbe.cpp
     Progression.cpp
     progression/Allocator.cpp
@@ -119,6 +120,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/CastGuard.cpp
     apmf/EquipPreference.cpp
     apmf/Deposit.cpp
+    apmf/TauntClaims.cpp
     apmf/Los.cpp
     imgui_impl_win32.cpp
 )

@@ -813,6 +813,9 @@ namespace MFO::Board {
                             // still shows its label (labelFor), it just is not offered.
                             if (!std::strcmp(actTab[k].op, Vocab::kActLootMuseum) &&
                                 !Lotd::GambitOffered()) continue;
+                            // TAUNT (S2): MELEE-ONLY, offered only while a melee weapon is in the right hand. Same
+                            // shape as LOTD above: a rule already holding Taunt still shows its label (labelFor).
+                            if (!std::strcmp(actTab[k].op, Vocab::kActTaunt) && !who->meleeInRight) continue;
                             if (IsPotionLootAct(actTab[k].op)) {
                                 if (actPotionSlot < 0) { actPotionSlot = (int)actTopIdx.size();
                                                           actTopIdx.push_back(-1); }
