@@ -355,7 +355,7 @@ namespace MFO::Probe {
 
         if (!victim) {
             Targeting::ClearAll();
-            spdlog::info("[focus] no target (not aiming at an actor, and you are not in combat) "
+            spdlog::info("[focus] no usable target (not aiming at an enemy, and no enemy combat target) "
                          "-- all latches released");
             return;
         }

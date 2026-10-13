@@ -1649,3 +1649,6 @@ Opus review of `fix/mfo-m3-cosave-tool`, MERGE OK; everything above SEV-5 was fi
 - The "engine call not modelled" fault names the immediate caller (`report_and_fail`), not the MFO function that
   started the chain. Fix shape: walk the emulated stack for return addresses.
 - The GMST placeholder values are not LoreRim's real ones. Re-run on the Deck's real v6/v7 saves when it is awake.
+
+### MFO-B255 (SEV-4) -- focus key can still send followers at the player's own summon
+Raised against 297ca4c (`fix/focus-skip-followers`, Opus review), 2026-10-12. Reviewer (verbatim): "The remaining hole: the player's own summon or atronach, which is a teammate but not tracked with summons off. If the player hits it by mistake and it becomes their combat target, followers are still sent after it. The fix is cheap: add `&& !a->IsPlayerTeammate()` (and the same on `pt`) to both filters. It is a flag read already used off-worker (logistics/Sinks.cpp:253), and the skip log text would say \"one of your allies\"." Not fixed in the branch: outside the brief's spec (filter = the crosshair path's player + tracked).

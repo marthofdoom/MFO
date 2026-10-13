@@ -881,9 +881,6 @@ namespace MFO::Board {
                             // SEV-1: FocusOnCrosshair reads follower membership; run its
                             // deferred body under PumpTickGate like every MFO AddTask body
                             // so a revert/save draining the pump makes it bail (#4).
-                            // (Follow-up, OUT OF THIS WAVE'S SCOPE: FocusOnCrosshair in
-                            // Probe.cpp still probes via the unlocked Followers::IsTracked
-                            // walk -- switch it to IsTrackedFast to fully close the read.)
                             const auto epoch = MFO::Diagnostics::CurrentPumpEpoch();
                             SKSE::GetTaskInterface()->AddTask([epoch]() {
                                 MFO::Diagnostics::PumpTickGate gate(epoch);
