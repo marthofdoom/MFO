@@ -811,7 +811,17 @@ namespace MFO::Actuation {
             // 2026-09-21): a fire-and-forget heal/ward/Restoration-school cast at
             // an ally or the player takes the DIRECT road (RestorationCastDirect
             // above) and never the ch.8b AI-fired heal claim + equip/grace/force
-            // machinery below. Offense keeps that road. Everything above this
+            // machinery below. Offense keeps that road.
+            // SUBSTRATE S1 / R9 (2026-10-13): what is LEFT on this fork is only a
+            // restoration cast NO claim road took: a heal off the heal road
+            // (ChooseHealRoad: no controller, Harbinger absent) or a ward / buff the
+            // buff road declined (ChooseBuffRoad above: no controller, ABI < 19, an
+            // ambiguous row ...). A ward or Restoration-school buff the buff road DOES
+            // take is a claim at the fork above, a concentration one at ConcentrationCast
+            // (whose claim sites dropped their `!IsRestorationSpell` exclusion), so the
+            // exclusion no longer keeps any claimable ward direct. The direct stream this
+            // ends in logs the residue: `[cast] <id>: UNANIMATED road 'target-stream' ...`
+            // with the road chooser's reason (cast/Unanimated.cpp). Everything above this
             // line (range, competence, magicka reserve, the per-hand lock,
             // satisfied-in-flight) already ran. `a_target != a_follower`: a self
             // target only reaches here with bCastSelf OFF, and that dev-only
@@ -1011,8 +1021,9 @@ namespace MFO::Actuation {
                 } else if (a_target && (a_target != a_follower || healClaim)) {
                     // (animheal phase 2: a SELF heal on the claim road comes here too --
                     // Try() sends target 0 for self, which Harbinger resolves to the
-                    // claimant for a Self-delivery spell, and ChooseHealRoad keeps any
-                    // other delivery off this road. Before, self heals took the self
+                    // claimant for a Self-delivery spell, and the caster's own FormID for
+                    // any other delivery (substrate S1 R2: Harbinger's self-flip proxy).
+                    // Before, self heals took the self
                     // fork's CastSelfDirect and never met Loadout::Prepare's yield.)
                     // The heal twin. `ownedCast` is Offense-only by its own
                     // classification check, so a Heal/Buff spell never took that branch
@@ -1632,6 +1643,10 @@ namespace MFO::Actuation {
             // DAC makes. Clamped to the live pool (#6) so a deduct can never
             // drive magicka negative.
             {
+                // THE LAST DIRECT ROAD OF THE AI-FIRST HYBRID: the follower's own AI declined, the force-on-miss is a
+                // CastSpellImmediate (no animation). On the combat table the field log names it (substrate S1).
+                NoteUnanimatedRoadWhy(a_follower, "legacy-force", spell, a_target,
+                                      "the AI-first hybrid's force-on-miss: no claim road took this cast: ");
                 auto doCast = [fid = a_follower->GetFormID(),
                                tid = a_target ? a_target->GetFormID() : 0,
                                spid = spell->GetFormID(), src] {

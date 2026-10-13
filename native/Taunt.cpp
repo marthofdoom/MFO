@@ -24,12 +24,6 @@ namespace MFO::Taunt {
         constexpr RE::FormID kIdleABC     = 0x000B8C73;   // CombatIdleABC
         constexpr RE::FormID kIdleRegular = 0x000B8C71;   // CombatIdleRegular
 
-        // Harbinger ends a ch.12 claim whose idle was NOT CONFIRMED (the graph never raised its entry event) within
-        // kConfirmWaitMs = 3000 ms of world time (APMF channels/Idle.cpp), but keeps an UNCONFIRMABLE one live (bIdleConfirm=0 or
-        // an unreadable graph). The ABI has no idle-state query yet (one is being built), so MFO only knows the claim SURVIVED: the claim read live AND this many
-        // UNPAUSED ms have passed since it was filed (3000 + a margin for the 133 ms tick and the publish frame).
-        // Mirrors Harbinger's constant; if it ever changes there, this changes with it.
-        constexpr double kConfirmMs = 3300.0;
         // A foe whose combat flag is down, or a taunter whose flag is down, for this many consecutive laps is "combat
         // ended" (the flag flaps for a lap on a LoS loss; see Scheduler.cpp's party-combat note).
         constexpr int kCombatEndLaps = 2;
@@ -47,6 +41,7 @@ namespace MFO::Taunt {
             RE::FormID      idle = 0;
             double          startMs = 0.0;
             int             noCombat = 0;
+            bool            resolving = false;   // idle played, roll-and-pin in flight: still "an attempt" for the no-repeat rule
             std::string     name;
         };
         struct Active {
@@ -163,9 +158,13 @@ namespace MFO::Taunt {
         }
 
         // ── the roll and the pins (MAIN thread when the pump is live: SenseActor is main-thread only) ─────────────────
-        void Resolve(RE::ActorHandle a_taunter, std::vector<Cand> a_cands, bool a_onMain) {
+        void Resolve(RE::ActorHandle a_taunter, RE::FormID a_taunterId, std::vector<Cand> a_cands, bool a_onMain) {
             auto  tp = a_taunter.get();   // HOLD
             auto* t  = tp.get();
+            struct EndAttempt {   // the attempt ends when the roll-and-pin step does, on every path
+                RE::FormID id;
+                ~EndAttempt() { std::scoped_lock lk(g_mx); g_attempts.erase(id); }
+            } endAttempt{ a_taunterId };
             if (!t || IsDown(t) || t->IsDisabled()) {
                 spdlog::info("[taunt] taunter gone or down before the roll -- no foe is rolled");
                 return;
@@ -256,6 +255,7 @@ namespace MFO::Taunt {
                 if (it == g_attempts.end()) return;
                 a = it->second;
             }
+            if (a.resolving) return;
             auto  tp = a.taunter.get();   // HOLD
             auto* t  = tp.get();
             const auto ms = static_cast<long long>(a_nowMs - a.startMs);
@@ -277,33 +277,33 @@ namespace MFO::Taunt {
             }
             if (stop) { drop(stop); return; }
 
-            const auto st = APMFBridge::TauntIdleStateOf(a_id);
-            if (st == APMFBridge::TauntIdleState::Pending) return;
-            if (st != APMFBridge::TauntIdleState::Live) {
+            // The verdict is Harbinger's own (GetIdleState, ABI 24): MFO times nothing.
+            const auto rd = APMFBridge::ReadTauntIdle(a_id);
+            if (rd.verdict == APMFBridge::TauntIdleVerdict::Waiting) return;
+            if (rd.verdict != APMFBridge::TauntIdleVerdict::Played) {
                 // A FAILED idle is a failed attempt: no roll, no pin. Said loudly, once.
-                drop("idle FAILED: Harbinger ended the ch.12 idle claim (the engine refused it, the behaviour graph never "
-                     "raised its entry event within 3 s, or the owner died; APMF.log '[ch.12]' names which). No roll, no pin");
+                drop(std::format("idle FAILED ({}): the idle did not play. APMF.log '[ch.12]' names why. No roll, no pin", rd.detail));
                 return;
             }
-            if (a_nowMs - a.startMs < kConfirmMs) return;   // live, but the confirmation window is still open
 
-            // The idle's claim SURVIVED Harbinger's entry-event window (NOT proof it played: an UNCONFIRMABLE idle stays live too). Release it (and the
-            // ch.1 hold), then roll.
+            // PLAYED (Confirmed, or ConfirmedWeak which marth ruled counts). Release the idle (and the ch.1 hold), then roll.
             APMFBridge::ReleaseTauntIdle(a_id);
-            { std::scoped_lock lk(g_mx); g_attempts.erase(a_id); }
-            spdlog::info("[taunt] {} ({:08X}) idle {} claim survived the window after {} ms (APMF.log [ch.12] says "
-                         "CONFIRMED or UNCONFIRMABLE) -- rolling", a.name, a_id, a.idle == kIdleABC ? "B8C73" : "B8C71", ms);
+            { std::scoped_lock lk(g_mx); if (auto it2 = g_attempts.find(a_id); it2 != g_attempts.end()) it2->second.resolving = true; }
+            spdlog::info("[taunt] {} ({:08X}) idle {} PLAYED after {} ms ({}{}, entry after {} ms wall) -- rolling", a.name, a_id,
+                         a.idle == kIdleABC ? "B8C73" : "B8C71", ms, rd.detail, rd.weak ? ", WEAK evidence" : "",
+                         rd.msToEntry == 0xFFFFFFFFu ? 0u : rd.msToEntry);
 
             auto cands = Gather(t, a.chosen);
             if (cands.empty()) {
+                { std::scoped_lock lk(g_mx); g_attempts.erase(a_id); }
                 spdlog::info("[taunt] {} ({:08X}) TAUNT -> 0 foe(s): none eligible any more (dead, unloaded, no longer "
                              "fighting the party, out of reach or already taunted)", a.name, a_id);
                 return;
             }
             if (MainThread::IsInstalled())
-                MainThread::Post([th = a.taunter, cs = std::move(cands)]() mutable { Resolve(th, std::move(cs), true); });
+                MainThread::Post([th = a.taunter, tid = a_id, cs = std::move(cands)]() mutable { Resolve(th, tid, std::move(cs), true); });
             else
-                Resolve(a.taunter, std::move(cands), false);
+                Resolve(a.taunter, a_id, std::move(cands), false);
         }
 
         // One active taunt, each pump (WORKER).
@@ -378,8 +378,17 @@ namespace MFO::Taunt {
     Actuation::Outcome Fire(RE::Actor* a_f, const Eval::Choice& a_choice) {
         using R = Actuation::Result;
         if (!a_f) return { R::FailedOther, "taunt: no follower", true };
-        if (!APMFBridge::TauntSupported())
-            return { R::FailedOther, "taunt needs Harbinger (APMF) ABI 17 or newer (the ch.12 idle with a form), or the idle / pin seat was refused this session (see the [taunt] warning)", true };
+        if (!APMFBridge::TauntSupported()) {
+            // Taunt needs GetIdleState (ABI 24). There is NO fallback to a guess at whether the idle played.
+            static bool s_said = false;
+            if (!s_said) {
+                s_said = true;
+                spdlog::warn("[taunt] act.taunt is UNAVAILABLE: it needs Harbinger (APMF) ABI 24 or newer (GetIdleState: the idle's "
+                             "verdict), or the idle / pin seat was refused this session (an earlier [taunt] warning names it). "
+                             "No taunt will fire. Logged once.");
+            }
+            return { R::FailedOther, "taunt needs Harbinger (APMF) ABI 24 or newer (the ch.12 idle verdict), or the idle / pin seat was refused this session", true };
+        }
         // MELEE-ONLY: the animation is non-negotiable and the vanilla humanoid combat idle needs a melee weapon in the
         // right hand (Docs/TAUNT-DESIGN.md 3.1). Transparent: the scan falls through to the rules below.
         if (!MeleeInRightHand(a_f))
@@ -388,8 +397,13 @@ namespace MFO::Taunt {
         const auto id = a_f->GetFormID();
         {
             std::scoped_lock lk(g_mx);
-            if (g_attempts.contains(id))   // one animated idle is one attempt: the next waits for this one
-                return { R::NoOp, "taunt in progress (idle playing)", false };
+            // marth 2026-10-13: "for the taunt gambit, it shouldn't repeat while it's active". An attempt in progress, or any
+            // foe still pinned by THIS taunter's taunt, keeps act.taunt from firing again. Transparent: the rules below run.
+            if (g_attempts.contains(id))
+                return { R::NoOp, "taunt in progress (idle playing)", true };
+            for (const auto& [fid, act] : g_active)
+                if (act.taunterId == id)
+                    return { R::NoOp, "taunt active (a foe is still pinned to him)", true };
         }
         // The foe the condition selected; a condition that selects none ("Always -> Taunt") falls back to the foe he is
         // fighting. Neither is required: Gather ranks the chosen one first, then the nearest others.
@@ -427,7 +441,7 @@ namespace MFO::Taunt {
             g_attempts[id] = a;
         }
         spdlog::info("[taunt] {} ({:08X}) idle {} filed at {:08X} (R={} L={}, {} candidate foe(s)) -- the roll waits for the "
-                     "idle claim to survive the window, the ch.1 hold is filed once Harbinger accepts the idle", a.name, id, shield1H ? "B8C73" : "B8C71", idleTarget, r, l, cands.size());
+                     "Harbinger to report the idle played (GetIdleState Confirmed), the ch.1 hold is filed once it accepts the play", a.name, id, shield1H ? "B8C73" : "B8C71", idleTarget, r, l, cands.size());
         return { R::Fired, "taunt: idle filed" };
     }
 

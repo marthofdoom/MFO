@@ -493,7 +493,7 @@ per concern:
 - `cast/Roads.cpp` (288) = the three delivery ROADS `CastOn` forks to: `ForceCast` (`:31`, the
   forced package cast), `ConcentrationCast` (`:129`, the bounded concentration stream entry) and
   `RestorationCastDirect` (`:269`).
-- `cast/CastOn.cpp` (1657 -- still PAST the ~1500 "plan a split" mark; marth 2026-10-05: do NOT split it,
+- `cast/CastOn.cpp` (1742 -- still PAST the ~1500 "plan a split" mark; marth 2026-10-05: do NOT split it,
   `CastOn()` is one 1550-line function; new heal-road logic goes in `cast/HealRoad.cpp` instead) = `CastOn` (`:123`, the AI-first hybrid of one spell at one target;
   its heal-road call `HealRoadLap` `:368`, the in-flight `HealRefreshGate` (proxy + right never-observed bound) `:544`, the right-hand heal's Prepare-free return `:1013`, see "ANIMATED HEAL CLAIM ROAD" and
   "PER-HAND HEAL ROAD" below)
@@ -734,6 +734,22 @@ per concern:
   NOT read it (the earlier Enemy retarget is gone): the TARGET picker's "Enemy (gambit target)" subject (`Vocab::Subject::Enemy`,
   `CommandedEnemy`) names the commanded foe for ANY spell, and a foe SELECTOR condition names its own foe. WHAT BREAKS: widening the
   predicate silently stops AUTO casting those spells. Open findings: MFO-B236.
+- **COMBAT SUBSTRATE SLICE S1 (feat/mfo-animated-combat-casts, 2026-10-13; design `Docs/COMBAT-SUBSTRATE-DESIGN.md` on `docs/combat-substrate-design`, Table 1 rows R2/R5/R9/R10).**
+  `cast/Unanimated.cpp` (NEW, 116, the UNANIMATED road log, principle 7) = `NoteUnanimatedRoad` (`:62`), `NoteUnanimatedRoadWhy` (`:67`), `UnanimatedWhy` (`:74`, public in
+  `cast/Actuation_internal.h`): `[cast] <id>: UNANIMATED road '<road>' for '<spell>' -- <reason>` at WARN (INFO with Harbinger absent), 30 s per (follower, spell, road),
+  COMBAT TABLE ONLY (`g_firingRule != kNoRule`; the reason asks `ChooseHealRoad` / `ChooseBuffRoad`, which the OOC table must never call, MFO-B173). Sinks, i.e. every in-combat
+  direct road: `'self-stream'` (`DirectSelf.cpp:210`), `'target-stream'` (`DirectTarget.cpp:264`, also RestorationCastDirect and ConcentrationCast), `'summon-oneshot'`
+  (`Summon.cpp:430`), `'auto-fan'` (`Auto.cpp:989`), `'legacy-force'` (`CastOn.cpp:1649`). `ChooseBuffRoad` gained an out `a_why` (the reason text its `[buff]` line prints).
+  **R2** `ComposedCast::ChooseHealRoad` no longer answers DirectNoSeat for a non-Self heal at its caster; `ComposedCast::Try` claims it with the caster's OWN FormID
+  as the target (Harbinger's self-flip proxy, as `ExplicitSelfBuff`), and `APMFBridge::GetHealCastTarget` (`apmf/CastClaims.cpp:509`) reports a self claim as 0 either way, and a self-flip heal that FIRED but NEVER LANDED (3 misses, 2 per concentration stream; the `[heal-obs]` verdict, `cast/HealObs.cpp`) is released (`HealRefreshGate`) and barred to the direct road for the fight (`HealSelfFlipBarred`), so every
+  "0 = self" reader (HealRoad `recipKey`, Hands, HealObs, Auto) is unchanged; AUTO's heal series now lists the caster for every delivery (`Auto.cpp` `selfOk`).
+  **R9** the `!IsRestorationSpell` exclusion is gone from the two Task-1 concentration claim sites (`DirectSelf.cpp:173`, `DirectTarget.cpp:~215`), WITH backlog MFO-B58's
+  `combatController` test added to both (a ward now reaches them). `RestorationCastDirect` (CastOn fork) stays for a restoration cast no claim road took (logged).
+  **R10** `CastAuto` (`Auto.cpp:636`): AUTO hostile in combat with Harbinger's claim road, a controller and a non-Self delivery is a SERIES: `HostileAutoFoes` (`:302`, shared with the
+  direct fan) -> one foe (the foe a standing lock of this spell names, else the nearest in range and sight) -> `CastOn` (the owned offense claim / concentration claim). A Self-delivery
+  offense spell, no controller, or no Harbinger keeps the fan (labelled). **R5** no code path was removable: a combat summon reaches `CastSummonOnce` only when `ChooseBuffRoad`
+  said not-Claim (no controller, ABI < 19, ambiguous row, bCastSelf off, Harbinger absent); it now logs why. Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B269..B276 (CastOn.cpp is 1742 lines). **What breaks if you change this:** the sinks' `g_firingRule` gate
+  (an OOC caller reaching `UnanimatedWhy` mints/releases heal claims); `GetHealCastTarget`'s self->0 (a self heal claim would look like another recipient and be re-claimed every lap).
 - `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, widened by feat/mfo-claim-road-summon-ally-rowless 2026-10-05; batch A
   release gate checklist R6/R8/R9/R11) = THE ANIMATED BUFF CLAIM ROAD: `ChooseBuffRoad(follower, spell, log, recipient)` (NotBuff / Claim /
   DirectDegrade / DirectNoSeat / DirectNoRow / DirectNoCap / DirectNoCombat; one `[buff]` line per reason), `BuffClaim` (+ `BuffSelfClaim`
@@ -2489,7 +2505,7 @@ Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.
   `settings.ini` x2, `kMcmDefaults`), INI-only `fTauntRadius` (1024) and `iTauntMaxFoes` (4) in `[Taunt]`.
 - **Log lines:** `[taunt] <f> (<id>) idle B8C73|B8C71 filed ...`, `... idle ... CONFIRMED played after N ms`, `... TAUNT idle FAILED ...`,
   `... TAUNT -> <n> foe(s): <foe> (<id>) L<lvl> p=<p> roll=<r> HIT|MISS ...`, `... released foe <foe> (<reason>) after <ms> ms`.
-- **Open findings: MFO-B266..MFO-B268.** **What breaks if you change this:** the opcodes are frozen strings (#10; no co-save change, no enum touched). The release order (taunter
+- **Open findings: MFO-B277..MFO-B279.** **What breaks if you change this:** the opcodes are frozen strings (#10; no co-save change, no enum touched). The release order (taunter
   down -> release the SAME pump) is a safety rule, Harbinger's bleed-out drive walks the foe to a downed pinned taunter. `Resolve` must
   stay on the main thread while it calls `SenseOf`. `kConfirmMs` mirrors Harbinger's `kConfirmWaitMs`. Do not give the foe pin a ch.21 `fval`
   (Table 23a: the range rule points the wrong way for a hostile holder).

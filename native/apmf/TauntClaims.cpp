@@ -14,7 +14,7 @@
 //     repointed; one that has never read live is PENDING and may still be repointed (Example 20a's Ended()).
 //
 // ABI. Idle v2 is v17 and an OLDER Harbinger does not refuse a form (it plays the v1 idle), so nothing here is
-// requested below v17. v17 implies the pin (13), the entry (14) and IsClaimLive / Repoint (6).
+// requested below v24 (GetIdleState, the idle verdict). v24 implies idle v2 (17), the pin (13), the entry (14) and IsClaimLive / Repoint (6).
 //
 // THREADING. Called from the AddTask job worker (Scheduler tick -> Taunt::Tick / Fire) and from a
 // MainThread::Post'd task (Taunt's roll-and-pin step). APMF's Request / Repoint / Release / IsClaimLive are
@@ -35,18 +35,16 @@
 namespace MFO::APMFBridge {
 
     namespace {
-        constexpr std::uint32_t kTauntMinAbi = 17;   // ch.12 Idle v2 (form + target)
+        constexpr std::uint32_t kTauntMinAbi = 24;   // GetIdleState (implies ch.12 idle v2 = 17, pin 13, entry 14)
 
-        // A just-filed idle claim is not in APMF's PUBLISHED map until its next writer Drain, and IsClaimLive reads
-        // only that map. So it is judged ENDED only after it was seen live once, or after this long unseen. A
-        // FLOOR, not an expiry (principle 9): it only delays noticing an end. Same value as apmf/Deposit.cpp.
-        constexpr auto kIdleNeverLiveGrace = std::chrono::seconds(3);
+        // The idle record is created at RequestEx; this wall-clock grace only covers the instant before the call is
+        // visible. A state still Unknown after it is a failed attempt. It judges nothing about whether the idle played.
+        constexpr auto kIdleRecordGrace = std::chrono::milliseconds(1500);
 
         struct IdleClaims {
             APMF_API::Handle hold = APMF_API::kInvalidHandle;
             APMF_API::Handle idle = APMF_API::kInvalidHandle;
             std::chrono::steady_clock::time_point filed{};
-            bool             everLive = false;
             bool             holdTried = false;   // the ch.1 hold is filed ONCE, when the idle is first seen live
         };
         struct FoeClaims {
@@ -61,15 +59,15 @@ namespace MFO::APMFBridge {
         // bTargetPin=0, [Idle] bIdleV2=0, self-check). Session-stable (seats install once at APMF's kDataLoaded).
         std::atomic<bool> s_seatRefused{ false };
 
-        const APMF_API::APMF_API_v6* TauntApi() {
+        const APMF_API::APMF_API_v24* TauntApi() {
             auto* api = g_apmf.load(std::memory_order_relaxed);
             if (!api || api->abiVersion < kTauntMinAbi) return nullptr;
-            return reinterpret_cast<const APMF_API::APMF_API_v6*>(api);   // v17 >= v6: Repoint + IsClaimLive
+            return reinterpret_cast<const APMF_API::APMF_API_v24*>(api);   // v24 >= v6: Repoint + IsClaimLive, plus GetIdleState
         }
 
         // Example 20a's Ended(): a handle that WAS live and is not any more has ended (Harbinger ended it, or a
         // load did). One that has never read live is pending, not ended. s_mx HELD.
-        bool Ended(const APMF_API::APMF_API_v6* a_api, APMF_API::Handle a_h, bool& a_seen) {
+        bool Ended(const APMF_API::APMF_API_v24* a_api, APMF_API::Handle a_h, bool& a_seen) {
             if (a_h == APMF_API::kInvalidHandle) return false;
             const bool live = a_api->IsClaimLive(a_h);
             if (live) a_seen = true;
@@ -101,7 +99,7 @@ namespace MFO::APMFBridge {
         if (s_idles.contains(a_taunter)) return true;   // one attempt at a time (Taunt.cpp never double-files)
         IdleClaims c{};
 
-        // NO ch.1 hold yet (marth 2026-10-13): the hold is filed by TauntIdleStateOf the first time the idle claim reads LIVE,
+        // NO ch.1 hold yet (marth 2026-10-13): the hold is filed by ReadTauntIdle the first time the idle claim reads LIVE,
         // i.e. once Harbinger has ACCEPTED the play (PlayIdle succeeded). A refused idle (its conditions fail) ends the claim
         // and costs the follower nothing: he keeps fighting.
         APMF_API::APMF_Param p{};
@@ -121,28 +119,80 @@ namespace MFO::APMFBridge {
         return true;
     }
 
-    TauntIdleState TauntIdleStateOf(RE::FormID a_taunter) {
+    namespace {
+        const char* IdleStateName(std::uint32_t s) {
+            switch (s) {
+                case APMF_API::kIdleState_Unknown: return "Unknown";
+                case APMF_API::kIdleState_Pending: return "Pending";
+                case APMF_API::kIdleState_Accepted: return "Accepted";
+                case APMF_API::kIdleState_Confirmed: return "Confirmed";
+                case APMF_API::kIdleState_ConfirmedWeak: return "ConfirmedWeak";
+                case APMF_API::kIdleState_NotConfirmed: return "NotConfirmed";
+                case APMF_API::kIdleState_NoTransition: return "NoTransition";
+                case APMF_API::kIdleState_Refused: return "Refused";
+                case APMF_API::kIdleState_Unconfirmable: return "Unconfirmable";
+                case APMF_API::kIdleState_NotPlayed: return "NotPlayed";
+                case APMF_API::kIdleState_Carried: return "Carried";
+                default: return "?";
+            }
+        }
+        const char* EndName(std::uint32_t e) {
+            switch (e) {
+                case APMF_API::kIdleEnd_None: return "None";
+                case APMF_API::kIdleEnd_Harbinger: return "Harbinger";
+                case APMF_API::kIdleEnd_ActorDied: return "ActorDied";
+                case APMF_API::kIdleEnd_Released: return "Released";
+                case APMF_API::kIdleEnd_Superseded: return "Superseded";
+                case APMF_API::kIdleEnd_Gone: return "Gone";
+                default: return "?";
+            }
+        }
+    }
+
+    // The FACETS ch.12 client example, branch for branch (Docs/FACETS.md "Reading what happened (ABI 24)").
+    TauntIdleReading ReadTauntIdle(RE::FormID a_taunter) {
+        TauntIdleReading out;
         const auto* api = TauntApi();
-        if (!api) return TauntIdleState::None;
+        if (!api || !api->GetIdleState) return out;
         std::scoped_lock lock(s_mx);
         const auto it = s_idles.find(a_taunter);
-        if (it == s_idles.end() || it->second.idle == APMF_API::kInvalidHandle) return TauntIdleState::None;
+        if (it == s_idles.end() || it->second.idle == APMF_API::kInvalidHandle) return out;
         auto& c = it->second;
-        if (api->IsClaimLive(c.idle)) {
-            c.everLive = true;
-            if (!c.holdTried) {   // the idle was accepted: NOW hold him still for the clip (ch.1, no param)
-                c.holdTried = true;
-                APMF_API::APMF_Param hp{};
-                c.hold = api->RequestEx(a_taunter, APMF_API::kIntent_MovementBlock, kOwnBasis, &hp);
-                if (c.hold == APMF_API::kInvalidHandle)
-                    spdlog::warn("[taunt] {:08X}: ch.1 hold REFUSED by Harbinger -- the taunt idle plays without a "
-                                 "stand-still (APMF.log names the reason)", a_taunter);
-            }
-            return TauntIdleState::Live;
+        APMF_API::APMF_IdleStateInfo info{};
+        info.size = sizeof(info);
+        const std::uint32_t st = api->GetIdleState(c.idle, &info);
+        out.msToEntry = info.msToEntry;
+        out.detail = std::string("state=") + IdleStateName(st) + " endCause=" + EndName(info.endCause);
+        if (info.unconfirmableWhy) out.detail += " unconfirmableWhy=" + std::to_string(info.unconfirmableWhy);
+        using V = TauntIdleVerdict;
+        if (info.endCause == APMF_API::kIdleEnd_Superseded) {
+            // Another claim owns ch.12 on the actor: ours is live but not played. A failed attempt (never wait on it).
+            out.detail += " (another claim owns ch.12 on him)";
+            out.verdict = V::Failed;
+        } else if (st == APMF_API::kIdleState_Confirmed || st == APMF_API::kIdleState_ConfirmedWeak) {
+            out.verdict = V::Played;
+            out.weak = st == APMF_API::kIdleState_ConfirmedWeak;
+        } else if (info.endCause != APMF_API::kIdleEnd_None) {
+            out.verdict = V::Failed;   // ended without playing (NotConfirmed, NoTransition, Refused, NotPlayed, Released, Gone, ActorDied)
+        } else if (st == APMF_API::kIdleState_Unknown) {
+            if (std::chrono::steady_clock::now() - c.filed < kIdleRecordGrace) out.verdict = V::Waiting;   // record not visible yet
+            else out.verdict = V::Failed;
+        } else if (st == APMF_API::kIdleState_Unconfirmable || st == APMF_API::kIdleState_Carried) {
+            out.verdict = V::Failed;   // live, but no evidence for this play: never act on it as played
+        } else {
+            out.verdict = V::Waiting;  // Pending or Accepted: Harbinger judges the window, MFO does not time it
         }
-        if (!c.everLive && std::chrono::steady_clock::now() - c.filed < kIdleNeverLiveGrace)
-            return TauntIdleState::Pending;   // not published yet
-        return TauntIdleState::Ended;         // Harbinger ended it (refused / not confirmed / owner died): APMF.log says why
+        // The ch.1 hold, ONCE, as soon as the play is ACCEPTED (PlayIdle returned true): Accepted, or any state that
+        // follows an accepted call and is not a failure. A refused idle never reaches here, so it never holds him.
+        if (!c.holdTried && (st == APMF_API::kIdleState_Accepted || out.verdict == V::Played)) {
+            c.holdTried = true;
+            APMF_API::APMF_Param hp{};
+            c.hold = api->RequestEx(a_taunter, APMF_API::kIntent_MovementBlock, kOwnBasis, &hp);
+            if (c.hold == APMF_API::kInvalidHandle)
+                spdlog::warn("[taunt] {:08X}: ch.1 hold REFUSED by Harbinger -- the taunt idle plays without a "
+                             "stand-still (APMF.log names the reason)", a_taunter);
+        }
+        return out;
     }
 
     void ReleaseTauntIdle(RE::FormID a_taunter) {

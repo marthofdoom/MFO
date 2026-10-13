@@ -201,18 +201,19 @@ namespace MFO::ComposedCast {
     //                     unanimated, with its own rate-limited [heal] line. A heal
     //                     claim still standing on that follower is RELEASED here, so
     //                     the two roads never overlap (one road per actor).
-    //   DirectNoSeat   -- Harbinger present, a controller, but the shape has no seat:
-    //                     a heal whose delivery is not Self aimed at its own caster.
-    //                     Harbinger resolves a self claim to the claimant only for a
-    //                     Self-delivery spell (APMF 12c456e), so such a claim could
-    //                     never fire. Direct road, labelled. (AUTO never picks it.)
+    //   DirectNoSeat   -- RETIRED (substrate S1, R2, 2026-10-13): it was a heal whose delivery is
+    //                     not Self aimed at its own caster, which Harbinger resolves only for a
+    //                     Self-delivery target-0 claim (APMF 12c456e). That heal is a Claim now, with
+    //                     the caster's own FormID as the target (ComposedCast::Try). Never produced.
     //   DirectDegrade  -- Harbinger absent or too old, an unverified runtime, or the
     //                     kill switches (bHealAnimPackage / bEquipToCast) OFF: the
     //                     documented "legacy = Harbinger-absent" degrade, no line.
     // NEVER a fallback: a Claim that is then refused or never fires stays loud and
     // falls through per the gambit; nothing re-routes it to the direct road.
     // a_target: the recipient (the caster for a self heal); nullptr when the caller
-    // has not picked one yet (CastAuto), which skips only the DirectNoSeat test.
+    // has not picked one yet (CastAuto). DirectNoSeat is no longer produced (substrate S1 R2: a heal of a
+    // non-Self delivery at its own caster is a claim with the caster's FormID as the target); the value stays
+    // so the enum is unchanged.
     // Worker-serial (same worker as Try/End; its log dedup is unlocked for that reason).
     enum class HealRoad : std::uint8_t { NotHeal, Claim, DirectNoCombat, DirectNoSeat, DirectDegrade };
     HealRoad ChooseHealRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_target);
