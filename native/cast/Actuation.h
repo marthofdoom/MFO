@@ -623,6 +623,9 @@ namespace MFO::Actuation {
     bool PlacementSkipFirstLog(RE::FormID a_follower, RE::FormID a_form);
     // Worker: dismissal / MFO-off (Logistics::OnFollowerRemoved) -- his placements and escalation watch.
     void ForgetPlacements(RE::FormID a_follower);
+    // Worker: the party left combat (Scheduler's out-of-combat edge) -- re-arms the once-per-episode
+    // "ch.26: nothing to prefer" line for a_follower.
+    void NoteCombatEpisodeEnded(RE::FormID a_follower);
 
     // MELEE-ONLY (fix/mfo-unreachable-flyer, cast/Fire.cpp): MFO has DECLARED him melee --
     // base class Melee (#65 combatClassOverride 1, the resting stance), or an
