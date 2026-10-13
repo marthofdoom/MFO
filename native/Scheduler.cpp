@@ -1015,6 +1015,7 @@ namespace MFO::Scheduler {
                 // note carries the cooldown across the fight edge and is never
                 // erased here.
                 g_combatEnteredAt.erase(id);   // flair #3: re-arm the ready beat
+                Actuation::NoteCombatEpisodeEnded(id);   // re-arm the once-per-episode ch.26 "nothing to prefer" line
                 g_proposedTarget.erase(id);    // flair #5: no proposal outlives a fight
                 APMFBridge::ReleasePursuitLeash(id, "combat ended");   // ch.23: the in-combat leash ends with the fight
                 APMFBridge::ReleaseHealApproach(id, "combat ended", APMFBridge::kApproachAnyHand, true);   // ch.24: and the held-heal approach

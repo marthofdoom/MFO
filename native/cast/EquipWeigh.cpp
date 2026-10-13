@@ -312,6 +312,10 @@ namespace MFO::Actuation {
         g_watch.erase(a_follower);   // worker: OnFollowerRemoved runs on the worker (Followers::ReleaseHeldState)
     }
 
+    void NoteCombatEpisodeEnded(RE::FormID a_follower) {
+        g_emptyPrefLogged.erase(a_follower);   // worker-serial, like g_watch
+    }
+
     void ClearWeighing() {
         {
             std::scoped_lock lk(g_placeMx);

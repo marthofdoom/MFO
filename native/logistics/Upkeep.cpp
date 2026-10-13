@@ -199,7 +199,7 @@ namespace MFO::Logistics {
             // Capture FormIDs and re-resolve on the frame that runs.
             const RE::FormID folID   = a_follower->GetFormID();
             const RE::FormID lightID = light->GetFormID();
-            // A placement of MFO's OWN already waiting owns Left: not a foreign hold, say nothing.
+            // Any placement of MFO's OWN still waiting (either hand) is not reported as a foreign hold.
             if (Actuation::WeighingEquips() && Actuation::PlacementPending(a_follower->GetFormID())) return false;
             if (APMFBridge::EquipAuthorityOwns(a_follower->GetFormID(), APMF_API::kEquipCat_Left)) {
                 // Rate-limited per follower (worker-serial); names what is ACTUALLY in the left hand.
