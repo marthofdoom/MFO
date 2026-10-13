@@ -2471,8 +2471,8 @@ Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.
 - **`Taunt.cpp`** (decisions; worker + one main-thread step): `IsPartyMember:359` (player / teammate / summon commanded by
   either; also the evaluator's selector test), `MeleeInRightHand:369` (WEAPON_TYPE 1..6 in the right hand; the board offer gate AND
   `Fire`'s transparent refusal), `Fire:375` (called from `cast/Fire.cpp:384`; refusals are all transparent so the scan falls
-  through: no Harbinger ABI 17, no melee, no eligible foe; `NoOp` OPAQUE "taunt in progress" while an attempt waits; otherwise
-  files the idle and returns `Fired`; the ch.1 hold is NOT filed with it: `TauntIdleStateOf` files it the first time the idle claim reads LIVE = Harbinger accepted the PlayIdle, so a refused idle never holds the follower), `Gather:98` (the chosen foe first, then the nearest others within `fTauntRadius`, up to
+  through: no Harbinger ABI 24 (logged once, never a fallback to a guess), no melee, no eligible foe, an attempt in progress or ANY foe still pinned by this taunter (marth: "it shouldn't repeat while it's active"; all TRANSPARENT); otherwise
+  files the idle and returns `Fired`; the ch.1 hold is NOT filed with it: `ReadTauntIdle` files it the first time `GetIdleState` reads Accepted or a confirmed state = Harbinger accepted the PlayIdle, so a refused idle never holds the follower), `Gather:98` (the chosen foe first, then the nearest others within `fTauntRadius`, up to
   `iTauntMaxFoes` TOTAL; eligible = alive, 3D loaded, in combat, hostile, NOT a party member, `currentCombatTarget` IS a party member,
   not already taunted by THIS taunter; per-foe `inGroup` = the taunter HELD in the foe's own combat group; two read locks, never
   nested, #23), `Tick:431` (every pump from `Scheduler::Tick` right after `Packages::Pump`, BEFORE the early returns; the unpaused
@@ -2481,7 +2481,7 @@ Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.
   State: `g_attempts` (by TAUNTER) and `g_active` (by FOE) behind `g_mx`; lock order `Taunt::g_mx` -> bridge `s_mx` (leaf), never reverse.
   FLOW: rule fires -> idle `0x0B8C73` (shield + one-hander) or `0x0B8C71` (everything else) via ch.12 v2 + ch.1 hold, target = the
   first candidate foe -> `AdvanceAttempt` waits until the idle claim has stayed LIVE through Harbinger's 3 s entry-event window
-  (`kConfirmMs` 3300 unpaused ms; the ABI has no idle-state query yet, so this only proves the claim SURVIVED: Harbinger ends a NOT CONFIRMED claim at >= 3000 world ms, but keeps an UNCONFIRMABLE one live (`bIdleConfirm=0`, unreadable graph). The log says "claim survived the window". A query is being built; switch over then) ->
+  (Harbinger's own verdict, `GetIdleState` ABI 24: Pending / Accepted wait, Confirmed and ConfirmedWeak (marth: weak counts) PLAY, everything else is a FAILED attempt with the state and endCause logged, MFO times nothing; a FRESH idle claim per attempt, never a Repoint, so no Carried) ->
   a claim that ENDED first is a FAILED attempt, logged, no roll, no pin -> confirmed: release idle + hold, `Gather` again,
   `MainThread::Post(Resolve)` (Harbinger `SenseActor` is main-thread only; only a definitive NO drops a foe; unusable / deferred is logged
   `sense=unknown|deferred` and the foe is rolled) -> per foe `p = clamp(0.5 + 0.05 x (taunter level - foe level), 0.1, 0.9)`, HIT ->
@@ -2491,12 +2491,12 @@ Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.
   laps with the foe's or taunter's combat flag down), the pin ENDED by Harbinger ("the hold ended itself"), the duration. A second
   taunter REPOINTS the foe's one pin (resets the timer). NO cooldown: a MISS leaves the foe unpinned so the rule can fire again, a
   HIT foe is ineligible for that taunter until released, so with every foe pinned the rule is transparent and the rules below run.
-- **`apmf/TauntClaims.cpp`** (claims; own mutex `s_mx`, never `g_mx`): `ClaimTauntIdle:95` / `TauntIdleStateOf:128` (None / Pending /
+- **`apmf/TauntClaims.cpp`** (claims; own mutex `s_mx`, never `g_mx`): `ClaimTauntIdle` / `ReadTauntIdle` (the FACETS ch.12 client example branch for branch: Superseded -> Failed; Confirmed|ConfirmedWeak -> Played; any other endCause -> Failed; Unknown -> Waiting 1.5 s wall then Failed; Unconfirmable|Carried -> Failed; else Waiting; verdicts None /
   Live / Ended, 3 s never-live grace like `Deposit.cpp`) / `ReleaseTauntIdle`; `PinFoeToTaunter:150` = Example 20a verbatim
   (an ENDED handle, `IsClaimLive` was true and now false, is released and re-requested, never repointed; a never-live one is
   pending and is repointed), `TauntPinStateOf:193`, `ReleaseTauntPin:208`, `ClearTauntClaims:217` (also called from
   `apmf/Bridge.cpp` `ClearTransientState`). A synchronous refusal of a valid idle / pin marks the seat refused for the session (warn once).
-  ABI >= 17 only (an older Harbinger plays the v1 idle for a form). `TauntSupported` is declared in `apmf/APMFBridge.h` (TAUNT section).
+  ABI >= 24 only (GetIdleState; an older Harbinger has no idle verdict and Taunt is unavailable). `TauntSupported` is declared in `apmf/APMFBridge.h` (TAUNT section).
 - **Wiring:** `Vocabulary.h:163/196` (appended opcodes), `Evaluator.cpp:38/485` (`cond.foe_attacking_ally` is a FOE SELECTOR in the
   `PickFoe` scan: nearest foe whose `currentCombatTarget` is a party member other than the follower), `Board_internal.h:182/234`
   (`kCondsCombat` / `kActsCombat`), `Board.h` `FollowerRow::meleeInRight` (set in `Board.cpp:1610`), `Board_FieldKit.cpp:818` (the picker
@@ -2507,7 +2507,7 @@ Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.
   `... TAUNT -> <n> foe(s): <foe> (<id>) L<lvl> p=<p> roll=<r> HIT|MISS ...`, `... released foe <foe> (<reason>) after <ms> ms`.
 - **Open findings: MFO-B277..MFO-B279.** **What breaks if you change this:** the opcodes are frozen strings (#10; no co-save change, no enum touched). The release order (taunter
   down -> release the SAME pump) is a safety rule, Harbinger's bleed-out drive walks the foe to a downed pinned taunter. `Resolve` must
-  stay on the main thread while it calls `SenseOf`. `kConfirmMs` mirrors Harbinger's `kConfirmWaitMs`. Do not give the foe pin a ch.21 `fval`
+  stay on the main thread while it calls `SenseOf`. Never infer "played" from claim liveness. Do not give the foe pin a ch.21 `fval`
   (Table 23a: the range rule points the wrong way for a hostile holder).
 
 ### Gait.cpp / Gait.h — travel-package speed byte (low risk)
@@ -5764,7 +5764,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   - `apmf/Los.cpp` (~110) = Harbinger line of sight + awareness (ABI v18): `LosSupported` / `LosOf` (GetLineOfSight,
     any thread) / `SenseOf` (SenseActor, main thread only); consumers `Sightline.cpp` (Basis::Own), `EngageOnSight.cpp`.
   - `apmf/TauntClaims.cpp` (~225) = the taunt claims (taunt S2): the taunter's ch.1 + ch.12 v2 idle and the FOE-keyed ch.20 pin (+ ch.21
-    entry when absent), own mutex `s_mx`; the decisions are `Taunt.cpp` (section 2, "Taunt.cpp"). ABI >= 17.
+    entry when absent), own mutex `s_mx`; the decisions are `Taunt.cpp` (section 2, "Taunt.cpp"). ABI >= 24.
   - `apmf/Deposit.cpp` (234) = the LOTD deposit trip's three claims (feat/mfo-lotd), keyed by
     follower, own mutex `s_mx` (never `g_mx`): `DepositSupported:99` (ABI >= 17: an older APMF
     ignores an idle form and plays the v1 idle, silently), `ClaimDepositTravel:106` (ch.19, its OWN
