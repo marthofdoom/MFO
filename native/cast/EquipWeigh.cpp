@@ -188,6 +188,11 @@ namespace MFO::Actuation {
         {
             std::scoped_lock lk(g_placeMx);
             auto& v = g_place[a_follower];
+            // IDEMPOTENT: the same item for the same hand already waiting is kept as it is (its clocks are not
+            // reset and nothing is logged), so a road that asks again every lap until the item lands (a Fired
+            // equip gambit, the 5 s excluded-weapon heal) neither spams the log nor keeps a failed placement alive.
+            for (const auto& w : v)
+                if (w.form == a_form && w.slot == a_slot) return;
             // One wish per form and one per named hand: the newest wins.
             std::erase_if(v, [&](const Wish& w) {
                 return w.form == a_form || (a_slot != APMF_API::kEquipSlot_Default && w.slot == a_slot);

@@ -479,7 +479,7 @@ releases **by eviction** with a non-actor XMarker.
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
 
-### native/cast/ — Fire / Roads / CastOn / Equip / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / SummonProbe / Archetype / Auto / Hands / HealRoad + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
+### native/cast/ — Fire / Roads / CastOn / Equip / EquipWeigh / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / SummonProbe / Archetype / Auto / Hands / HealRoad + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
 Only module that mutates actor state; main-thread only. **Layout = the wave-1 subsystem-folder
 split (2026-09-24, `refactor/subsystem-folders-wave1`, drained REVIEW-BACKLOG MFO-B37), a pure
 move proven function by function by `tools/splitcheck`; before it the family was
@@ -527,6 +527,47 @@ per concern:
   `HoldFromSale` off the worker races `g_needs`; letting a relic back into the main pool re-opens the
   field bug; since the ch.17 declaration's hands come ONLY from this hold ledger, this is also what
   keeps a relic out of the declared set (MFO-B126).
+  **WEIGHTING W1 (2026-10-12, `feat/mfo-weighting-w1w2`; marth: "Direct equip is going. Harbinger has all the
+  responsibility now.")** -- with Harbinger at ABI >= 22 (`WeighingEquips()`, cast/EquipWeigh.cpp) this file
+  makes NO direct weapon / shield equip: `EquipShieldOnMain` becomes a ch.17 one-shot placement
+  (`WantPlacement`, the caller re-declares); the `bWeaponStyleControl`-off plain equip in `EquipWeapon` becomes a
+  placement + `DeclareFromLedger`; `DeclareFromLedger` SKIPS the MFO-B41 re-declare loop (a re-assert against the
+  engine's scored pick, which the weighting rule forbids; the bounded D4 escalation replaces it) and sends the
+  ch.26 preference (`RefreshPreference`) after the ch.17 rebuild; `ReleaseForcedWeapon` returns early with NO
+  force-unequip and NO re-arm (MFO placed no lock: Harbinger's ch.17 pass equips non-forced), the silver main
+  weapon becomes a placement, the stand-down sheathe stays (one main-thread hop), ch.15 is released;
+  `YieldForcedLeftHand` keeps its UNEQUIP (it clears the hand for the cast's own spell placement) and refreshes the
+  preference (D3); `ReconcileForcedWeapon` calls `ServicePreference` on every in-combat lap (before its no-ledger
+  early return); `ShieldTopUpFor` (new, under `g_forcedMx`) exports the `g_shieldRank` shield for the preference;
+  `ClearForcedWeapons` calls `ClearWeighing`. The old-hold UNEQUIPS in `EquipWeapon` / `EquipSilver` stay (not
+  equips). Below ABI 22 every road is byte-for-byte today's. FWPN layout UNCHANGED (no co-save change).
+  **What breaks:** calling `DeclareFromLedger` from `ReleaseForcedWeapon` (dismissal releases ch.17 FIRST,
+  Followers.cpp F7, and a rebuild would re-claim it); re-enabling MFO-B41 under weighting (a 3 s re-assert loop
+  against the engine's scored choice).
+- `cast/EquipWeigh.cpp` (NEW, 2026-10-12, weighting phase 1 W1) = **MFO's ch.26 consumer + the one-shot ch.17
+  placements + the D4 escalation.** Public (`cast/Actuation.h`): `WeighingEquips` (= `APMFBridge::
+  EquipPreferenceSupported`: ABI >= 22 AND the ch.17 authority supported), `PlacementSlotFor`, `WantPlacement`
+  (any thread, own `g_placeMx`), `PlacementPending`, `PendingPlacements` (worker; retires a placement that LANDED in
+  its hand, is no longer owned / he is dead, was declared but did not land within `kPlaceTtl` 10 s -- a WARN, never
+  retried -- or was never declared within `kPlaceWaitCap` 120 s because the ledger or a cast held its hand),
+  `NotePlacementDeclared` (the TTL starts at the first declaration that carried it), `ForgetPlacements`
+  (OnFollowerRemoved). Internal: `RefreshPreference`, `ServicePreference`, `ClearWeighing`. `BuildPreference`:
+  ledger `.right` (one-hander = `kEquipSlot_Right`, two-hander / bow = Default), `.left` (Left), the
+  `ShieldTopUpFor` shield (Default) when no left weapon; D3 drops an entry whose hand MFO's own live cast claim
+  holds (`IsOwnedCastActiveOnHand` / `IsHealCastActiveOnHand` / a dual heal = right too), rank 0 for all.
+  `ServicePreference` (every in-combat lap, from `ReconcileForcedWeapon`): re-declares a pending placement, sends
+  the preference (send-on-change in the bridge), reads `GetEquipPreferenceState`, logs `[equip-pref]` state lines
+  (on change, floor 2 s; heartbeat 30 s) and FORCE ANOMALY rises; D4: a miss counts only while the state is
+  Lifted / Leading and the item was scored in the last 3 s; after `kEscalateAfter` (2 s) it Repoints with
+  `kEquipPref_Force` and re-places ONCE through ch.17 (`ResendEquipDeclaration` + `DeclareLedger`), logged WARN;
+  Outranked = an ANOMALY (warn, NOT forced: it would violate Harbinger's priority sliders); Unreadable = error,
+  not forced; ZeroScore / HandHeld / Declared / None = not a scored miss; a launcher preferred with the foe inside
+  `fMeleeReach` = the engine's range gate, not escalated. Forced and still missing 4 s later = one ERROR, no retry.
+  The force bit comes off after 5 s held, and out of combat. Threading: the watch map is worker-serial (#4).
+  **What breaks:** escalating on a non-scored state (ZeroScore would force a bow with no arrows; HandHeld would
+  fight MFO's own cast claim, D3); re-placing more than once per episode (that is the retired MFO-B41 loop);
+  `WantPlacement` from a road that runs after the ch.17 release (dismissal: nothing would ever declare it --
+  `Loadout::Restore` keeps its direct call for this reason).
 - `cast/EquipSilver.cpp` (531, ClickUp 86e3p2gp9, 2026-10-12) = **act.equip_silver, "Switch to silver
   weapon", and the switch BACK.** `EquipSilver` (`:241`, from `Fire`): satisfied (transparent NoOp) while a silver
   melee weapon (`Logistics::IsSilverMeleeWeapon`) is in the RIGHT hand; else picks
@@ -575,6 +616,13 @@ per concern:
   (a lock with no ledger entry to release it); touching rule 2's ammo seam beyond its two branches (the Jesper-outfit
   area: it is a read-only seam, no ledger entries).
   Open review findings: Docs/REVIEW-BACKLOG.md MFO-B245 (silver ammo damage field check; IsSilverAmmo vs REQ_WeaponType_SilverArrow; restore-to-best under the authority).
+  **WEIGHTING W1 (2026-10-12):** under `WeighingEquips()` the `bWeaponStyleControl`-off plain swap, its plain
+  switch-back, and the non-hold switch-back's `PostMainReArm` are ch.17 placements (`WantPlacement` +
+  `DeclareLedger`); the silver hold itself was already a ledger declaration and is now ALSO the ch.26 preference
+  (cast/EquipWeigh.cpp reads the ledger), so the target gate (MFO-B55 unknown-not-false) and the 2 s dwell decide
+  what is DECLARED. The silver UNEQUIP at the switch-back stays. THE AMMO ROAD IS UNCHANGED (inventory E11: "keep
+  force until the ammo pick is understood"; ch.26 ignores ammo): without a launcher ledger hold it still nocks
+  with a direct non-forced `EquipObject`.
 - **The DIRECT-DELIVERY road = five files + `cast/Direct_internal.h`** (the Direct.cpp split,
   2026-09-29, `split/cast-direct`, the Direct.cpp part of MFO-B152: a pure move of the old 1879-line `cast/Direct.cpp`,
   proven by `tools/splitcheck`, TU map `tools/splitcheck/tumaps/wave3.txt`). `cast/Direct_internal.h` (83)
@@ -3462,6 +3510,23 @@ module. Module layout:
   `ClearEquipDeclarations` (the claims go in `APMFBridge::ClearTransientState`, kPreLoadGame),
   so the first service after a load re-claims and re-declares. The gate OFF releases any standing
   claim (and `APMFBridge::Tick` releases on `bApmfEquipAuthority=0` for in-combat followers).
+  **WEIGHTING W1 (2026-10-12): RULE 1c, ONE-SHOT PLACEMENTS** (`RefreshEquipDeclaration`, between the bound
+  weapons and the ammo). Under `Actuation::WeighingEquips()` (Harbinger ABI >= 22) every equip MFO used to make
+  directly is an entry here until it lands (`Actuation::PendingPlacements`, cast/EquipWeigh.cpp): a WEAP owns
+  Right (one-hander, `kEquipSlot_Right`) or Left (`kEquipSlot_Left`) or both (two-hander / bow, Default); a shield
+  owns ONLY `kEquipCat_Shield` (Default slot, never Left: the AI's bow stays allowed); a torch owns ONLY
+  `kEquipCat_Light`. THE LEDGER WINS: a placement is left out while a hold declares its hand, a left-hand item while
+  `a_leftReserved` (a cast holds the left, D3), a shield while Shield is DENIED for him; it stays pending (its 10 s
+  "did not land" clock starts only at the first build that carried it, `NotePlacementDeclared`). This is NOT the
+  shield-over-dagger loop below: the shield is never declared together with a left weapon, and it leaves the set
+  the build after it lands. Sites routed here: `cast/Equip.cpp` `EquipShieldOnMain` + the kill-switch-off plain
+  equip + the silver release; `cast/EquipSilver.cpp` the plain swap / switch-backs; `logistics/Upkeep.cpp`
+  `EquipTorch` (returns false while a placement is already pending) and `HealExcludedWeapon` (the replacement is
+  placed; the excluded weapon is UNEQUIPPED and evicted as before); `logistics/Gear.cpp` `AcquireEquip`'s weapon
+  equip-in-place (owned upgrade / loot); `Loadout.cpp` `EquipBack` (the cast's gear give-back; the DISMISSAL
+  `Restore` keeps the direct call because the ch.17 claim is already released and nothing would declare it).
+  **What breaks:** owning Left for a shield (refuses the AI's own bow); declaring a placement over a ledger hand
+  (two items for one slot, displaced every pass).
   DIRECT SITES GATED: `AcquireEquip` (`logistics/Gear.cpp`) skips its `MainThread::Post`
   `EquipObject` hop for ARMOR when `EquipAuthorityLive(id)` (transfer, verdicts, MEO gem carry
   untouched; logs `'<name>' declared`); `EquipBestOwnedGear`'s `[equip] OWNED` line appends
@@ -4460,6 +4525,14 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
 Puts a gambit spell in a follower's hand, records displaced gear as **transient
 debt**, hands it back on hit/combat-end/dismissal. Reconstructed from live state on
 load — no co-save record.
+- **WEIGHTING W1 (2026-10-12):** under `Actuation::WeighingEquips()` (Harbinger ABI >= 22) the give-back
+  (`EquipBack`: `RestoreOne`'s stowed two-hander and displaced left item, `OnFollowerHit`'s shield, `Tick`'s
+  deferred shield, `Reconcile`'s load-time shield) is a ch.17 ONE-SHOT PLACEMENT (`Actuation::WantPlacement`,
+  cast/EquipWeigh.cpp), the same hand; the debt is settled as before. `Restore` (DISMISSAL) passes `a_direct` and
+  keeps the direct call: ch.17 is released first (Followers.cpp F7) and nothing would declare a placement for a
+  follower MFO no longer services. The spell placement itself (`Prepare`'s `EquipSpell`) is the cast DELIVERY
+  (Docs/CAST-DELIVERY.md: "MFO EXECUTES the equip half") and is UNCHANGED by the weighting brief (W2: reported to
+  marth, not removed).
 - Five deliberately-separate main-thread-only maps (`:9-57`): `g_debt`, `g_lastStow`,
   `g_equipClock`, `g_coolUntil`, `g_mfoSpell` — merging them re-introduces named
   regressions.
@@ -5750,6 +5823,18 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `ServiceCastGuard` (one claim per follower, Repoint heartbeat, release when no guard applies, a refused bit
     struck for the session), `ReleaseCastGuard`, `ClearCastGuards` (from `ClearTransientState`). Own mutex `g_guardMx`
     (order g_mx -> g_guardMx; never takes g_mx).
+  - `apmf/EquipPreference.cpp` (NEW 2026-10-12, weighting phase 1 W1) = the ch.26 EQUIP PREFERENCE claim (ABI v22,
+    `kIntent_EquipPreference`): `EquipPreferenceSupported` (ABI >= 22 AND `EquipAuthoritySupported`: the
+    weighting mode, read by `Actuation::WeighingEquips`), `DeclareEquipPreference` (claim on the first non-empty
+    list at `kOwnBasis` ival 0, `SetEquipPreference` send-on-change, an EMPTY list RELEASES the claim, a handle
+    older than `kEquipAuthValidateAfter` that `IsClaimLive` reports dead is re-minted -- the declaration dies with
+    its claim; a refusal is one ERROR per follower per streak, re-asked after 30 s, NEVER a decline-fallback),
+    `ReleaseEquipPreference` (Logistics::OnFollowerRemoved), `EquipPreferenceState` (`GetEquipPreferenceState`,
+    any thread), `SetEquipPreferenceForce` (D4: `Repoint` with `kEquipPref_Force`), `EquipPreferenceForced`,
+    `ClearEquipPreferences` (from `ClearTransientState`). Own mutex `g_prefMx` (order g_mx -> g_prefMx; never takes
+    g_mx). Harbinger calls are made under `g_prefMx` (enqueues, no callback into MFO). **What breaks:** declaring a
+    spell, ammo or body armor here (Harbinger ignores it, named in its log); sending per lap without the change
+    detector ("declare, do not tick"); gating on anything but `abiVersion >= 22` before the v22 cast.
   - `apmf/APMFBridge_internal.h` (402, NEW in wave 1) = the claim state the families share, all
     of it from the old file's anonymous namespace: `CastClaim` (`:80`), `Owned` (`:208`), the
     `extern` `g_apmf`/`g_mx`/`g_owned`/refusal sets (defined in `apmf/Bridge.cpp`),
