@@ -431,6 +431,13 @@ namespace MFO::Actuation {
             RE::TESBoundObject* right = nullptr;
             RE::TESBoundObject* left  = nullptr;
             int rule = kNoRule;
+            // RUNTIME ONLY, NEVER SERIALIZED (FWPN writes only the {follower, weapon} pairs; layout
+            // untouched): this hand's weapon was FORCE-equipped by MFO (the legacy T#76 prevent-removal
+            // lock: APMF absent / authority off when it was placed). ReleaseForcedWeapon's weighting road
+            // keeps the force-UNEQUIP for such a hand, so a hold placed before bApmfEquipAuthority was
+            // toggled back on cannot leak its lock (review of e06a54f, SEV-3).
+            bool forcedRight = false;
+            bool forcedLeft  = false;
             bool Empty() const { return !right && !left; }
         };
         extern std::unordered_map<RE::FormID, ForcedHold> g_forcedWeapon;

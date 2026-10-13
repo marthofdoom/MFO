@@ -33,6 +33,7 @@
 
 #include <chrono>
 #include <mutex>
+#include <unordered_set>
 
 namespace MFO::Actuation {
 
@@ -73,6 +74,7 @@ namespace MFO::Actuation {
         };
         std::mutex                                       g_placeMx;
         std::unordered_map<RE::FormID, std::vector<Wish>> g_place;   // guarded by g_placeMx
+        std::unordered_set<std::uint64_t>                 g_skipLogged;   // (follower << 32 | form), guarded by g_placeMx
 
         const char* NameOf(RE::FormID a_form) {
             const auto* f = a_form ? RE::TESForm::LookupByID(a_form) : nullptr;
@@ -167,10 +169,11 @@ namespace MFO::Actuation {
             }
             if (left && !rightBoth && !leftHeld)
                 out.push_back({ left, static_cast<std::uint8_t>(APMF_API::kEquipSlot_Left), 0, { 0, 0 } });
-            // The shield-by-perks top-up competes for the left hand (Harbinger's category 3): Default slot, so
-            // the shield's own engine item is covered whatever hand slot the engine files it under.
+            // The shield-by-perks top-up is a LEFT-hand item (Harbinger's category 3). kEquipSlot_Left, never
+            // Default: a Default entry covers BOTH hands, so under kEquipPref_Force it would refuse the AI's
+            // right-hand weapons too (review of e06a54f, SEV-4).
             if (shield && !left && !rightBoth && !leftHeld)
-                out.push_back({ shield, static_cast<std::uint8_t>(APMF_API::kEquipSlot_Default), 0, { 0, 0 } });
+                out.push_back({ shield, static_cast<std::uint8_t>(APMF_API::kEquipSlot_Left), 0, { 0, 0 } });
             return out;
         }
     }
@@ -180,7 +183,12 @@ namespace MFO::Actuation {
     std::uint8_t PlacementSlotFor(const RE::TESForm* a_item, bool a_leftHand) {
         const auto* w = a_item ? a_item->As<RE::TESObjectWEAP>() : nullptr;
         if (w && OneHanded(w)) return a_leftHand ? APMF_API::kEquipSlot_Left : APMF_API::kEquipSlot_Right;
-        return APMF_API::kEquipSlot_Default;   // a two-hander, a bow, a shield, a torch: the item's own slot
+        // A shield or a torch is a LEFT-hand item: Harbinger categorizes it Shield|Left / Light|Left, and its
+        // ch.17 pass places it only with Left owned and declared kEquipSlot_Left (FACETS ch.17; review SEV-2).
+        if (const auto* ar = a_item ? a_item->As<RE::TESObjectARMO>() : nullptr; ar && ar->IsShield())
+            return APMF_API::kEquipSlot_Left;
+        if (a_item && a_item->As<RE::TESObjectLIGH>()) return APMF_API::kEquipSlot_Left;
+        return APMF_API::kEquipSlot_Default;   // a two-hander, a bow
     }
 
     void WantPlacement(RE::FormID a_follower, RE::FormID a_form, std::uint8_t a_slot, const char* a_why) {
@@ -273,10 +281,16 @@ namespace MFO::Actuation {
             if (w.form == a_form && w.declaredAt == Clock::time_point{}) w.declaredAt = Clock::now();
     }
 
+    bool PlacementSkipFirstLog(RE::FormID a_follower, RE::FormID a_form) {
+        std::scoped_lock lk(g_placeMx);
+        return g_skipLogged.insert((static_cast<std::uint64_t>(a_follower) << 32) | a_form).second;
+    }
+
     void ForgetPlacements(RE::FormID a_follower) {
         {
             std::scoped_lock lk(g_placeMx);
             g_place.erase(a_follower);
+            std::erase_if(g_skipLogged, [a_follower](std::uint64_t k) { return (k >> 32) == a_follower; });
         }
         g_watch.erase(a_follower);   // worker: OnFollowerRemoved runs on the worker (Followers::ReleaseHeldState)
     }
@@ -285,6 +299,7 @@ namespace MFO::Actuation {
         {
             std::scoped_lock lk(g_placeMx);
             g_place.clear();
+            g_skipLogged.clear();
         }
         g_watch.clear();
     }
@@ -370,6 +385,23 @@ namespace MFO::Actuation {
         }
         w.heldSince = {};
         // A MISS. Which kind decides whether D4 may escalate.
+        // (1) Harbinger's state is PER ACTOR: it describes the item it last scored (info.lastForm). Only a state
+        //     about THE MISSING ITEM classifies this miss (review of e06a54f, SEV-3); another item's Lifted /
+        //     Leading says nothing about why this one is not in its hand.
+        if (info.lastForm != missForm) { w.missSince = {}; return; }
+        // (2) A SPELL in the missing item's hand is a CROSS-CATEGORY pick (a Restore / Ward / buff spell is walked
+        //     before the weapons, the order table, not a score): not a scored miss, and the ch.17 re-placement
+        //     would clobber the AI's heal mid-cast (review of e06a54f, SEV-3).
+        {
+            const auto spellIn = [&](bool a_left) {
+                auto* f = a_follower->GetEquippedObject(a_left);
+                return f && f->As<RE::SpellItem>() != nullptr;
+            };
+            const bool spell = missSlot == APMF_API::kEquipSlot_Right ? spellIn(false)
+                             : missSlot == APMF_API::kEquipSlot_Left  ? spellIn(true)
+                                                                       : (spellIn(false) || spellIn(true));
+            if (spell) { w.missSince = {}; return; }
+        }
         switch (state) {
         case APMF_API::kEquipPrefState_Lifted:
         case APMF_API::kEquipPrefState_Leading:

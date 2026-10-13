@@ -11,7 +11,8 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **In a fight the game picks MFO's weapon by its own rules.** MFO names the weapon for each hand. Harbinger raises that weapon's score just above the best other choice, so the follower's own AI equips it. A bow is still not drawn while the foe stands next to them.
 - **A hand that is casting holds only the spell.** MFO names no weapon for it.
 - **MFO only pushes harder after about 2 seconds.** If the chosen weapon is still not in hand after the game scored it on top, MFO asks Harbinger to block the other picks. Every push is in the log. A push that would overrule a mod ranked above MFO is not sent. It is logged as something to look into.
-- **Shields, torches, the silver switch back and gear upgrades go through Harbinger too.** Each one is placed by Harbinger and the log says when it lands. One that does not land in 10 seconds is logged and not retried.
+- **Shields, torches, the switch back from a silver weapon and gear upgrades go through Harbinger too.** Harbinger places each one, and shields and torches go in the left hand. The log says when it lands. One that does not land in 10 seconds is logged and not retried.
+- **Silver arrows and bolts work as before.** MFO still puts them on the bow itself.
 - **No more re-equip loop.** MFO used to re-send a weapon every 3 seconds when the game took it away in a fight. That is gone.
 - **The focus key no longer points followers at another follower.** When your combat target was one of your own followers, the rest were sent after them. That target is now skipped like it already was for the crosshair.
 - **Foe: Unholy is now Foe targeted: Unholy.** It checks only the foe the follower is fighting. It no longer looks for an Unholy foe nearby and switches the target to it. Existing rules keep working.

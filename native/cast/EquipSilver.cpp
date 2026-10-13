@@ -397,6 +397,7 @@ namespace MFO::Actuation {
                 std::scoped_lock lk(g_forcedMx);
                 auto& hold = g_forcedWeapon[id];
                 hold.right = best;
+                hold.forcedRight = !authority;   // runtime only: the legacy force-hold above
                 hold.rule  = g_firingRule;
             }
             if (authority) DeclareLedger(a_follower, "gambit equip silver");
@@ -482,10 +483,12 @@ namespace MFO::Actuation {
                 // takes the non-forced re-arm below instead.
                 if (ep.mainHeld && mainObj && !a_mainHoldReleasable) {
                     it->second.right = mainObj;
+                    it->second.forcedRight = !APMFBridge::EquipAuthoritySupported();   // runtime only: forced below without it
                     it->second.rule  = ep.mainRule;
                     restoreHold = true;
                 } else {
                     it->second.right = nullptr;
+                    it->second.forcedRight = false;   // the silver unequip below clears its lock
                     if (it->second.Empty()) { g_forcedWeapon.erase(it); entryGone = true; }
                 }
             }

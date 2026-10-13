@@ -559,7 +559,12 @@ namespace MFO::Actuation {
     // Pass false (the default, and every pre-existing call site's behaviour) when the
     // item genuinely has to leave the hand: death/disable teardown, a category flip
     // mid-fight, the kill switch, dismissal.
-    void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown = false);
+    //
+    // a_leaving (weighting W1, review of e06a54f SEV-4): MFO is LEAVING this follower (dismissal / the
+    // MFO-OFF edge, Followers::ReleaseHeldState, which releases the ch.17 claim FIRST). Under Harbinger
+    // ABI >= 22 a released silver hold's main weapon is then re-armed with the direct non-forced equip
+    // (the documented Loadout::Restore exception: nothing will ever declare a placement for him).
+    void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown = false, bool a_leaving = false);
 
     // SILVER SWITCH-BACK (ClickUp 86e3p2gp9, cast/EquipSilver.cpp). Called by the Scheduler on
     // every combat lap, just BEFORE ReconcileForcedWeapon: a_held = an act.equip_silver rule's
@@ -613,6 +618,9 @@ namespace MFO::Actuation {
     // 10 s "did not land" clock starts at the FIRST such build (a placement held back because the
     // ledger or a cast holds its hand is waiting, not failing; it is dropped after 120 s unplaced).
     void NotePlacementDeclared(RE::FormID a_follower, RE::FormID a_form);
+    // Worker: true the FIRST time a placement of a_form is held back for a_follower (the rule 1c skip
+    // line's throttle). Cleared by ForgetPlacements (dismissal) and ClearWeighing (revert).
+    bool PlacementSkipFirstLog(RE::FormID a_follower, RE::FormID a_form);
     // Worker: dismissal / MFO-off (Logistics::OnFollowerRemoved) -- his placements and escalation watch.
     void ForgetPlacements(RE::FormID a_follower);
 

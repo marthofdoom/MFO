@@ -424,7 +424,7 @@ namespace MFO::Followers {
         // handle may have merely flickered) and force-unequip; if it will not
         // resolve, the record is session-scoped and revert-cleared.
         if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id))
-            Actuation::ReleaseForcedWeapon(a);
+            Actuation::ReleaseForcedWeapon(a, /*a_standDown*/ false, /*a_leaving*/ true);   // W1: ch.17 already released above
         // The cast-consent latch -- a latch left here would DENY the follower's
         // own casting for the rest of the session and keep every combat caster
         // off the hook's fast-out.

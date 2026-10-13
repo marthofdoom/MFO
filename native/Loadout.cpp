@@ -127,6 +127,10 @@ namespace MFO::Loadout {
             mgr->EquipObject(a_actor, a_obj, nullptr, 1, a_slot);
         }
 
+        // MFO-B22 (review of e06a54f, SEV-4): under weighting EquipBack only ASKS for a ch.17 placement, so
+        // a log line must not claim the item is back. "restored" (direct) / "placement asked" (W1).
+        const char* RestoreVerb() { return Actuation::WeighingEquips() ? "placement asked" : "restored"; }
+
         // Hand everything back for ONE follower. Returns what it restored, for
         // the log.
         int RestoreOne(RE::FormID a_id, bool a_direct = false) {
@@ -696,7 +700,7 @@ namespace MFO::Loadout {
         }
 
         EquipBack(actor, it->second.displacedLeft);
-        spdlog::info("[loadout] {:08X} took a hit -- shield restored", a_actorID);
+        spdlog::info("[loadout] {:08X} took a hit -- shield {}", a_actorID, RestoreVerb());
         it->second.hitDeferred = false;
         it->second.displacedLeft = nullptr;
         it->second.leftWasShield = false;
@@ -810,8 +814,8 @@ namespace MFO::Loadout {
             if (it == g_debt.end() || !it->second.displacedLeft || !it->second.leftWasShield) continue;
             if (auto* actor = RE::TESForm::LookupByID<RE::Actor>(id)) {
                 EquipBack(actor, it->second.displacedLeft);
-                spdlog::info("[loadout] {:08X} shield restored (the hit was deferred while a heal "
-                             "claim held the left hand)", id);
+                spdlog::info("[loadout] {:08X} shield {} (the hit was deferred while a heal "
+                             "claim held the left hand)", id, RestoreVerb());
             }
             it->second.displacedLeft = nullptr;
             it->second.leftWasShield = false;
@@ -819,7 +823,8 @@ namespace MFO::Loadout {
 
         for (const auto id : restoreAll) {
             if (const int n = RestoreOne(id); n > 0) {
-                spdlog::info("[loadout] {:08X} restored {} displaced item(s)", id, n);
+                spdlog::info("[loadout] {:08X} {} {} displaced item(s)", id,
+                             Actuation::WeighingEquips() ? "placement asked for" : "restored", n);
             }
         }
     }
@@ -894,8 +899,8 @@ namespace MFO::Loadout {
                 }
                 if (shield) {
                     EquipBack(a, shield);
-                    spdlog::info("[loadout] reconciled {:08X} {} -- spell removed, shield restored",
-                                 a->GetFormID(), a->GetName());
+                    spdlog::info("[loadout] reconciled {:08X} {} -- spell removed, shield {}",
+                                 a->GetFormID(), a->GetName(), RestoreVerb());
                     continue;
                 }
             }

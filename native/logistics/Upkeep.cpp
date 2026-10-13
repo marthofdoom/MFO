@@ -209,7 +209,7 @@ namespace MFO::Logistics {
             // this service tick's tail carries it with Light owned; Harbinger's equip pass equips it).
             if (Actuation::WeighingEquips()) {
                 if (Actuation::PlacementPending(folID)) return false;   // already asked: let the other rules run
-                Actuation::WantPlacement(folID, lightID, APMF_API::kEquipSlot_Default, "torch upkeep");
+                Actuation::WantPlacement(folID, lightID, APMF_API::kEquipSlot_Left, "torch upkeep");
                 return true;
             }
             auto doTorch = [folID, lightID]() {

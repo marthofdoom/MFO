@@ -890,6 +890,7 @@ namespace MFO::Logistics {
                     auto* obj = resolve(pl.form);
                     if (!obj) continue;
                     std::uint32_t needs = 0;
+                    std::uint8_t  slot  = pl.slot;
                     bool skip = false;
                     if (auto* w = obj->As<RE::TESObjectWEAP>()) {
                         const bool twoHands = w->IsTwoHandedSword() || w->IsTwoHandedAxe() || w->IsBow() || w->IsCrossbow();
@@ -904,24 +905,28 @@ namespace MFO::Logistics {
                             skip  = rightDeclared;
                         }
                     } else if (auto* ar = obj->As<RE::TESObjectARMO>(); ar && ar->IsShield()) {
-                        needs = APMF_API::kEquipCat_Shield;
+                        // Harbinger categorizes a shield Shield|Left and a torch Light|Left (EquipSink Categorize)
+                        // and its pass skips an entry whose categories are not ALL owned (review of e06a54f,
+                        // SEV-2): both own Left too, and are declared kEquipSlot_Left (FACETS ch.17).
+                        needs = APMF_API::kEquipCat_Shield | APMF_API::kEquipCat_Left;
+                        slot  = APMF_API::kEquipSlot_Left;
                         skip  = leftDeclared || a_leftReserved || (denied & APMF_API::kEquipCat_Shield) != 0;
                     } else if (obj->As<RE::TESObjectLIGH>()) {
-                        needs = APMF_API::kEquipCat_Light;
+                        needs = APMF_API::kEquipCat_Light | APMF_API::kEquipCat_Left;
+                        slot  = APMF_API::kEquipSlot_Left;
                         skip  = leftDeclared || a_leftReserved;
                     } else {
                         continue;   // armor rides rules 4/5, ammo rule 2: nothing else is placed this way
                     }
                     if (skip) {
-                        static std::unordered_set<std::uint64_t> s_skipLogged;   // worker-serial like g_lastDeclared
-                        if (s_skipLogged.insert((static_cast<std::uint64_t>(id) << 32) | pl.form).second)
+                        if (Actuation::PlacementSkipFirstLog(id, pl.form))   // once per (follower, item); cleared on revert / dismissal
                             spdlog::info("[equip-place] {:08X}: '{}' not declared this build -- its hand is held by "
                                          "the ledger or a cast, or its category is denied (kept pending)", id,
                                          obj->GetName() ? obj->GetName() : "?");
                         continue;
                     }
                     owned |= needs;
-                    decl.Add(obj, pl.slot);
+                    decl.Add(obj, slot);
                     Actuation::NotePlacementDeclared(id, pl.form);
                 }
             }

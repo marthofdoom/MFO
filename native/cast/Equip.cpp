@@ -209,7 +209,7 @@ namespace MFO::Actuation {
             // shield is NOT equipped here. It is a one-shot ch.17 placement (Harbinger's equip pass puts it
             // on) and, in combat, part of the ch.26 preference (ShieldTopUpFor). The caller re-declares.
             if (WeighingEquips()) {
-                WantPlacement(a_follower, a_shield, APMF_API::kEquipSlot_Default,
+                WantPlacement(a_follower, a_shield, APMF_API::kEquipSlot_Left,
                               a_logWhy ? a_logWhy : "gambit shield by perks");
                 return;
             }
@@ -291,6 +291,7 @@ namespace MFO::Actuation {
             {
                 std::scoped_lock lk(g_forcedMx);
                 g_forcedWeapon[id].left = a_weap;
+                g_forcedWeapon[id].forcedLeft = true;   // the legacy prevent-removal lock (runtime only)
             }
             return true;
         }
@@ -320,6 +321,7 @@ namespace MFO::Actuation {
                 auto& hold = g_forcedWeapon[id];
                 if (hold.left && hold.left != a_weap) oldLeft = hold.left;
                 hold.left = a_weap;
+                hold.forcedLeft = false;   // placed by Harbinger's ch.17 pass, non-forced
             }
             if (oldLeft)
                 if (auto* mgr = RE::ActorEquipManager::GetSingleton())
@@ -761,8 +763,9 @@ namespace MFO::Actuation {
                         std::scoped_lock lk(g_forcedMx);
                         auto& hold = g_forcedWeapon[id];
                         hold.right = best;
+                        hold.forcedRight = !authority;   // runtime only: the legacy force-equip above
                         hold.rule  = g_firingRule;   // RANK STAMP (review round 2)
-                        if (oldLeft) hold.left = nullptr;
+                        if (oldLeft) { hold.left = nullptr; hold.forcedLeft = false; }
                     }
                     // Off-hand (style control ON only -- see the plan above). The
                     // hold's OUTCOME feeds the `[equip]` line below: it says
@@ -854,7 +857,7 @@ namespace MFO::Actuation {
         return it == g_shieldRank.end() ? 0u : it->second.shield;
     }
 
-    void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown) {
+    void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown, bool a_leaving) {
         if (!a_follower) return;
         const auto id = a_follower->GetFormID();
         ForcedHold hold;
@@ -884,9 +887,53 @@ namespace MFO::Actuation {
         // today's unequip + non-forced re-arm. A released SILVER hold's main weapon goes back as a ch.17
         // placement (never a direct equip). The stand-down sheathe stays (not an equip).
         if (WeighingEquips()) {
+            // A hand MFO itself FORCE-equipped (the legacy road, e.g. placed while bApmfEquipAuthority was off and
+            // released after it was toggled back on) still carries the prevent-removal lock: that hand keeps the
+            // force-UNEQUIP (review of e06a54f, SEV-3), and on a stand-down its weapon is asked back as a ch.17
+            // placement (never a direct re-equip). Engine calls outside g_forcedMx (the SEV-1 discipline).
+            if (hold.forcedLeft || hold.forcedRight) {
+                if (auto* mgr = RE::ActorEquipManager::GetSingleton()) {
+                    if (hold.forcedLeft && hold.left)
+                        mgr->UnequipObject(a_follower, hold.left, nullptr, 1, Loadout::LeftHandSlot(), true, true);
+                    if (hold.forcedRight && hold.right)
+                        mgr->UnequipObject(a_follower, hold.right, nullptr, 1, nullptr, true, true);
+                }
+                spdlog::info("[equip] {:08X}: legacy force-hold lock cleared on release ({}{})", id,
+                             hold.forcedRight ? "right" : "", hold.forcedLeft ? (hold.forcedRight ? "+left" : "left") : "");
+                if (a_standDown && !a_leaving && !a_follower->IsDead()) {
+                    if (hold.forcedLeft && hold.left)
+                        WantPlacement(id, hold.left->GetFormID(), PlacementSlotFor(hold.left, true), "stand-down re-arm (legacy lock cleared)");
+                    if (hold.forcedRight && hold.right && silverMain == 0)
+                        WantPlacement(id, hold.right->GetFormID(), PlacementSlotFor(hold.right, false), "stand-down re-arm (legacy lock cleared)");
+                }
+            }
             if (silverMain != 0 && !a_follower->IsDead()) {
-                auto* mainForm = RE::TESForm::LookupByID(silverMain);
-                WantPlacement(id, silverMain, PlacementSlotFor(mainForm, false), "silver hold released: main weapon back");
+                if (a_leaving) {
+                    // LEAVING (dismissal / MFO off): ch.17 is already released and ForgetPlacements is about to
+                    // run, so a placement would be erased and he would leave holding the silver weapon. The
+                    // documented exception (as Loadout::Restore): the legacy direct NON-forced re-arm, two
+                    // main-thread hops (#62; the silver unequip of a legacy lock above is queued).
+                    if (MainThread::IsInstalled()) {
+                        const RE::FormID mainId = silverMain;
+                        auto reArm = [id, mainId]() {
+                            auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+                            auto* mgr   = RE::ActorEquipManager::GetSingleton();
+                            auto* obj   = RE::TESForm::LookupByID<RE::TESBoundObject>(mainId);
+                            if (!actor || !mgr || !obj || actor->IsDead() || actor->IsDisabled()) return;
+                            auto inv = actor->GetInventory();
+                            const auto it = inv.find(obj);
+                            if (it == inv.end() || it->second.first <= 0) return;
+                            mgr->EquipObject(actor, obj, nullptr, 1, nullptr, true, false);   // forceEquip = FALSE
+                            spdlog::info("[equip] {:08X}: leaving MFO -- main weapon '{}' re-armed in place of the "
+                                         "silver one (direct, non-forced: ch.17 is already released)", id,
+                                         obj->GetName() ? obj->GetName() : "?");
+                        };
+                        MainThread::Post([reArm]() { MainThread::Post(reArm); });
+                    }
+                } else {
+                    auto* mainForm = RE::TESForm::LookupByID(silverMain);
+                    WantPlacement(id, silverMain, PlacementSlotFor(mainForm, false), "silver hold released: main weapon back");
+                }
             }
             RefreshPreference(a_follower, "force-hold released");
             if (a_standDown && MainThread::IsInstalled()) {
@@ -897,9 +944,10 @@ namespace MFO::Actuation {
                 });
             }
             APMFBridge::ReleaseEquipment(id);   // ch.15, the single release choke point (below, unchanged)
-            spdlog::info("[equip] {:08X}: force-hold released{} -- no unequip / re-arm (weighting: Harbinger placed "
+            spdlog::info("[equip] {:08X}: force-hold released{} -- no unequip / re-arm of what Harbinger placed (weighting: placed "
                          "it non-forced; the AI owns the hands again{})", id, hold.left ? " (both hands)" : "",
-                         silverMain ? ", main weapon placed in place of the silver one" : "");
+                         !silverMain ? "" : a_leaving ? ", main weapon re-arm requested in place of the silver one"
+                                                      : ", main weapon placement asked in place of the silver one");
             return;
         }
         // forceEquip=true on the UNequip. CORRECTED 2026-09-22 (disassembly, Fable
@@ -1050,7 +1098,8 @@ namespace MFO::Actuation {
             if (a_twoHandToo && TakesBothHands(it->second.right)) right2h = it->second.right;
             if (!left && !right2h) return false;
             it->second.left = nullptr;
-            if (right2h) it->second.right = nullptr;
+            it->second.forcedLeft = false;   // the force-unequip below clears its lock
+            if (right2h) { it->second.right = nullptr; it->second.forcedRight = false; }
             if (it->second.Empty()) { g_forcedWeapon.erase(it); lastHold = true; }
         }
         if (a_outLeft)  *a_outLeft  = left;

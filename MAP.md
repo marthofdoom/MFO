@@ -544,6 +544,13 @@ per concern:
   **What breaks:** calling `DeclareFromLedger` from `ReleaseForcedWeapon` (dismissal releases ch.17 FIRST,
   Followers.cpp F7, and a rebuild would re-claim it); re-enabling MFO-B41 under weighting (a 3 s re-assert loop
   against the engine's scored choice).
+  Review of e06a54f fixes: `ForcedHold::forcedRight` / `forcedLeft` (runtime only, NOT serialized; FWPN untouched)
+  mark a hand MFO force-equipped on the legacy road; `ReleaseForcedWeapon`'s weighting road keeps the force-UNEQUIP
+  for such a hand (a hold placed while `bApmfEquipAuthority` was 0 and released after it came back on would leak its
+  lock) and asks its stand-down re-arm as a placement. `ReleaseForcedWeapon(..., a_leaving)` (Followers.cpp
+  `ReleaseHeldState`, dismissal / MFO off): a released silver hold's main weapon is re-armed with the DIRECT
+  non-forced equip there (ch.17 is already released and `ForgetPlacements` erases any placement: the `Loadout::Restore`
+  exception). Open: Docs/REVIEW-BACKLOG.md MFO-B256, MFO-B257.
 - `cast/EquipWeigh.cpp` (NEW, 2026-10-12, weighting phase 1 W1) = **MFO's ch.26 consumer + the one-shot ch.17
   placements + the D4 escalation.** Public (`cast/Actuation.h`): `WeighingEquips` (= `APMFBridge::
   EquipPreferenceSupported`: ABI >= 22 AND the ch.17 authority supported), `PlacementSlotFor`, `WantPlacement`
@@ -553,12 +560,15 @@ per concern:
   `NotePlacementDeclared` (the TTL starts at the first declaration that carried it), `ForgetPlacements`
   (OnFollowerRemoved). Internal: `RefreshPreference`, `ServicePreference`, `ClearWeighing`. `BuildPreference`:
   ledger `.right` (one-hander = `kEquipSlot_Right`, two-hander / bow = Default), `.left` (Left), the
-  `ShieldTopUpFor` shield (Default) when no left weapon; D3 drops an entry whose hand MFO's own live cast claim
+  `ShieldTopUpFor` shield (`kEquipSlot_Left`, never Default: a Default entry covers both hands and under Force would
+  refuse right-hand weapons) when no left weapon; D3 drops an entry whose hand MFO's own live cast claim
   holds (`IsOwnedCastActiveOnHand` / `IsHealCastActiveOnHand` / a dual heal = right too), rank 0 for all.
   `ServicePreference` (every in-combat lap, from `ReconcileForcedWeapon`): re-declares a pending placement, sends
   the preference (send-on-change in the bridge), reads `GetEquipPreferenceState`, logs `[equip-pref]` state lines
   (on change, floor 2 s; heartbeat 30 s) and FORCE ANOMALY rises; D4: a miss counts only while the state is
-  Lifted / Leading and the item was scored in the last 3 s; after `kEscalateAfter` (2 s) it Repoints with
+  Lifted / Leading FOR THE MISSING ITEM (`info.lastForm == missForm`: Harbinger's state is per actor) and the item
+  was scored in the last 3 s, and NOT while a spell sits in the missing item's hand (a cross-category pick: Restore /
+  Ward / buff spells are walked first; a re-placement would clobber the AI's heal mid-cast); after `kEscalateAfter` (2 s) it Repoints with
   `kEquipPref_Force` and re-places ONCE through ch.17 (`ResendEquipDeclaration` + `DeclareLedger`), logged WARN;
   Outranked = an ANOMALY (warn, NOT forced: it would violate Harbinger's priority sliders); Unreadable = error,
   not forced; ZeroScore / HandHeld / Declared / None = not a scored miss; a launcher preferred with the foe inside
@@ -3514,8 +3524,11 @@ module. Module layout:
   weapons and the ammo). Under `Actuation::WeighingEquips()` (Harbinger ABI >= 22) every equip MFO used to make
   directly is an entry here until it lands (`Actuation::PendingPlacements`, cast/EquipWeigh.cpp): a WEAP owns
   Right (one-hander, `kEquipSlot_Right`) or Left (`kEquipSlot_Left`) or both (two-hander / bow, Default); a shield
-  owns ONLY `kEquipCat_Shield` (Default slot, never Left: the AI's bow stays allowed); a torch owns ONLY
-  `kEquipCat_Light`. THE LEDGER WINS: a placement is left out while a hold declares its hand, a left-hand item while
+  owns `kEquipCat_Shield | kEquipCat_Left` and a torch `kEquipCat_Light | kEquipCat_Left`, both declared
+  `kEquipSlot_Left` (review of e06a54f, SEV-2: Harbinger's `Categorize`, core/EquipSink.cpp, files them Shield|Left /
+  Light|Left and its ch.17 pass skips an entry whose categories are not ALL owned -- `skipped-unowned`; owning only
+  Shield / Light meant they NEVER landed). Left is owned only while the placement is pending (it leaves the set the
+  build after it lands). THE LEDGER WINS: a placement is left out while a hold declares its hand, a left-hand item while
   `a_leftReserved` (a cast holds the left, D3), a shield while Shield is DENIED for him; it stays pending (its 10 s
   "did not land" clock starts only at the first build that carried it, `NotePlacementDeclared`). This is NOT the
   shield-over-dagger loop below: the shield is never declared together with a left weapon, and it leaves the set
@@ -3525,8 +3538,12 @@ module. Module layout:
   placed; the excluded weapon is UNEQUIPPED and evicted as before); `logistics/Gear.cpp` `AcquireEquip`'s weapon
   equip-in-place (owned upgrade / loot); `Loadout.cpp` `EquipBack` (the cast's gear give-back; the DISMISSAL
   `Restore` keeps the direct call because the ch.17 claim is already released and nothing would declare it).
-  **What breaks:** owning Left for a shield (refuses the AI's own bow); declaring a placement over a ledger hand
-  (two items for one slot, displaced every pass).
+  **What breaks:** owning only `kEquipCat_Shield` / `kEquipCat_Light` for a shield / torch (Harbinger skips it as
+  unowned: the top-up never lands, the torch re-asks forever, a shield give-back is lost); a Default slot for them;
+  keeping the placement in the set after it lands (Left stays owned: in enforce mode the AI's own bow would be
+  refused); declaring a placement over a ledger hand (two items for one slot, displaced every pass).
+  Open review findings: Docs/REVIEW-BACKLOG.md MFO-B256 (D3 preference re-sent per cast-claim change), MFO-B257
+  (FWPN load force-unequips Harbinger-placed weapons).
   DIRECT SITES GATED: `AcquireEquip` (`logistics/Gear.cpp`) skips its `MainThread::Post`
   `EquipObject` hop for ARMOR when `EquipAuthorityLive(id)` (transfer, verdicts, MEO gem carry
   untouched; logs `'<name>' declared`); `EquipBestOwnedGear`'s `[equip] OWNED` line appends
