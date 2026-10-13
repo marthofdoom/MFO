@@ -149,10 +149,12 @@ namespace MFO::Vocab {
     // to the one nearest the follower (Evaluator.cpp PickFoe). param = units (Distance).
     // APPENDED; frozen serialization string (#10), saved as a string like every opcode.
     inline constexpr const char* kCondFoeMultipleWithin  = "cond.foe_multiple_within";
-    // UNHOLY selector (ClickUp 86e3p2gp9, marth named it 2026-10-12): the nearest foe the load
-    // order's SILVER bonuses hit -- the live SilverPerk's target conditions or the silver
-    // enchantment effect's (logistics/Silver.cpp Logistics::IsUnholy; fallback undead, vampires,
-    // werewolves). Pairs with act.equip_silver. APPENDED; frozen serialization string (#10).
+    // "Foe targeted: Unholy" (ClickUp 86e3p2gp9, marth 2026-10-12): true only when the foe the follower
+    // is CURRENTLY fighting (currentCombatTarget, the kCondFoeWithinRange path) is one the load order's
+    // SILVER bonuses hit -- the live SilverPerk's target conditions or the silver enchantment effect's
+    // (logistics/Silver.cpp Logistics::IsUnholy; fallback undead, vampires, werewolves). It never scans
+    // for another Unholy foe and never switches the target. Pairs with act.equip_silver. APPENDED;
+    // frozen serialization string (#10): the opcode keeps its "foe_is_unholy" spelling.
     inline constexpr const char* kCondFoeIsUnholy        = "cond.foe_is_unholy";
     // ALLY SELECTOR -- the lowest-HP teammate under `param` pct; chooses that
     // ally as the target (for Cast at ally / Heal Other). Walks the maintained

@@ -1,7 +1,7 @@
 // cast/EquipSilver.cpp -- act.equip_silver, "switch to silver" (ClickUp 86e3p2gp9, marth
 // 2026-10-12), and the switch BACK to the main weapon.
 //
-// THE RULING. In combat, while the rule's condition holds (normally "Foe: Unholy"), the follower
+// THE RULING. In combat, while the rule's condition holds (normally "Foe targeted: Unholy"), the follower
 // puts his best owned silver melee weapon (Logistics::BestSilverWeapon -- the tracked slot,
 // logistics/Silver.cpp) in the MAIN weapon's hand(s), replacing the main weapon; the off-hand is
 // untouched. When the condition is no longer true, the main weapon comes back.

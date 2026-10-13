@@ -223,7 +223,7 @@ leash and walk-to-loot.
 
 ## What is new in 2.4.0
 
-- **Switch to silver weapon.** A new gambit action with a new condition, **Foe: Unholy**. While
+- **Switch to silver weapon.** A new gambit action with a new condition, **Foe targeted: Unholy**. While
   the follower's target is Unholy (hurt more by the silver in your load order, or undead, werewolf
   or vampire as a fallback), the best silver weapon they carry goes in the main hand. The main
   weapon returns 2 seconds after. A follower keeps a silver weapon and restocks one by loot or buying.

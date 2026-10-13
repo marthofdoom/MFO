@@ -1234,7 +1234,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     SpellFire. `kHoldLastSeenCapMs` 4000 -> 6500 and `kObservedFiringRecencyMs` 4000 -> 5000 (de-aliased from
     `kHealHoldNeverObservedMs`, `apmf/APMFBridge.h`, sized from the field numbers cited there).
   * **Every lap, no caps.** `MaintainCompanion` re-judges THIS rule's heal on the other hand (dead /
-    essential-down / beyond reach / at threshold or full with nothing in flight -> released; stream cap ->
+    beyond reach / at threshold or full with nothing in flight -> released; stream cap ->
     re-stream) or renews it in place (`RefreshOwnedCastOnHand` + `WatchClaim`), so one rule healing two
     recipients keeps both while its picker names one per lap. `CastAuto`'s D8 keep is per hand (a
     different lowest recipient takes the other hand). `PickAlly` / `CastAuto` treat either hand's recipient
@@ -2152,7 +2152,7 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   HELD weapon mid-party-fight; dropping the `g_active` walk from the top of `Tick`
   for a per-follower read re-introduces a per-follower "truth" that flaps; dropping
   the `EquipRangeUndecidable` demotion re-opens `MFO-B55` (weapons vanishing mid-fight
-  on a LoS loss). Still open from the gate review: `MFO-B56` (`Loadout::Tick` erases
+  on a LoS loss); the silver rule has the same demotion (`silverKnownFalse`, `Eval::CurrentTargetIfTrackable`), and `EquipRangeUndecidable` itself lacks the trackability gates (open: `MFO-B254`, Docs/REVIEW-BACKLOG.md). Still open from the gate review: `MFO-B56` (`Loadout::Tick` erases
   `g_equipClock` on the OWN flag, so the AI-first grace collapses for an own-OOC
   hybrid cast) and `MFO-B57` (`[sense] foes=0` every 3 s for own-OOC followers; the
   ready beat is consumed at the party edge).
@@ -2975,7 +2975,7 @@ module. Module layout:
   call this. **What breaks:** a second Auto rule elsewhere; calling it off the worker / main
   pump (it reads `FollowerState`); changing a weight changes every Auto follower's HMS split.
 - `logistics/Silver.cpp` (472, ClickUp 86e3p2gp9, 2026-10-12) — **THE SILVER WEAPON knowledge** (API in
-  `logistics/Logistics.h`). `IsUnholy` (`:305`, the `cond.foe_is_unholy` selector's test): the LIVE SilverPerk
+  `logistics/Logistics.h`). `IsUnholy` (`:305`, the `cond.foe_is_unholy` ("Foe targeted: Unholy") test, called on the current combat target outside the group lock): the LIVE SilverPerk
   (Skyrim.esm `0x10D685`) weapon-damage entries' TARGET tab (2) and the LIVE silver-enchantment MGEF
   (`0x10B116`)'s conditions, read once (`Build` `:164`, `std::call_once`, primed at kDataLoaded by
   `PrimeSilverRules`, `[silver] Unholy rule from ...` lines) and INTERPRETED (`RuleTrue` `:266`: HasKeyword on
@@ -7539,7 +7539,7 @@ handle+position, the FoeCount filters, #23; Is3DLoaded / IsHostileToActor after 
 the follower; the normal 3D / hostile / chase-cap / LoS-preference / reach gates still apply to who may be
 chosen). Count >= 3 is fixed (2 others). `[cluster]` debug line, 5 s throttle. No serialized shape changed.
 `kCondFoeIsUnholy` ("cond.foe_is_unholy") and `kActEquipSilver` ("act.equip_silver") are APPENDED (ClickUp
-86e3p2gp9, 2026-10-12): Unholy is a foe SELECTOR (`IsFoeSelector`, `PickFoe` -> `Logistics::IsUnholy`), Board
+86e3p2gp9, 2026-10-12): Unholy is a foe SELECTOR (`IsFoeSelector`) on `PickFoe`'s CURRENT-TARGET path (with Within/Beyond range, via `Eval::CurrentTargetIfTrackable`; holds only when `currentCombatTarget` is Unholy, no group scan; label "Foe targeted: Unholy"), and the Scheduler demotes `silverKnownFalse` to unknown when that target is unusable but `FoeCount > 0` (MFO-B55 shape), Board
 `kCondsCombat` after "Foe: Mechanical"; the action is combat-only (`kActsCombat` after "Equip melee weapon"),
 `Fire` -> `cast/EquipSilver.cpp`, a melee equip (category 1) for the Scheduler's hand claim / stance / equipHeld
 plus its own `silverHeld` / `silverKnownFalse`. No serialized shape changed; an older DLL reads both strings as

@@ -1776,7 +1776,7 @@ namespace MFO::Scheduler {
         // SILVER (ClickUp 86e3p2gp9): the silver rule's OWN truth, by the same two ways -- the scan
         // ran to completion, or an act.equip_silver rule sat above the stop and did not hold. Its
         // own, because another melee equip holding the hand (equipHeld == 1) must not keep the
-        // silver weapon in it once the foe is no longer Unholy. Deliberately NOT folded into
+        // silver weapon in it once the target is no longer Unholy. Deliberately NOT folded into
         // equipCondKnownFalse above: a false silver rule above the stop says nothing about an
         // act.equip_melee rule below it, whose hold must survive its unknown laps as before.
         bool silverKnownFalse = !silverHeld && condKnownFalse;
@@ -1786,6 +1786,25 @@ namespace MFO::Scheduler {
                 const int stopIdx = (choice.ruleIndex < 0) ? static_cast<int>(rules.size()) : choice.ruleIndex;
                 for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i)
                     if (rules[i].actionOpcode == Vocab::kActEquipSilver) { silverKnownFalse = true; break; }
+            }
+        }
+        // "Foe targeted: Unholy" is target-relative like the range conditions: with no usable
+        // currentCombatTarget the Evaluator returns empty, which is UNKNOWN, not false, while the
+        // follower's own group still has foes (MFO-B55 shape; the Cicero line-of-sight-loss thrash).
+        // Demote silverKnownFalse so ReconcileSilver keeps refreshing trueAt and the silver weapon
+        // stays. Gated: an act.equip_silver + cond.foe_is_unholy rule was EVALUATED above the stop,
+        // the current target is unusable (Eval::CurrentTargetIfTrackable, PickFoe's own gates), and
+        // CombatSense::FoeCount > 0. A genuinely empty group still reads false and releases.
+        if (silverKnownFalse && !silverHeld) {
+            if (const auto r4 = g_followers.find(id); r4 != g_followers.end()) {
+                const auto& rules = r4->second.combat();
+                const int stopIdx = (choice.ruleIndex < 0) ? static_cast<int>(rules.size()) : choice.ruleIndex;
+                bool unholyRuleEvaluated = false;
+                for (int i = 0; i < static_cast<int>(rules.size()) && i < stopIdx; ++i)
+                    if (rules[i].actionOpcode == Vocab::kActEquipSilver &&
+                        rules[i].conditionOpcode == Vocab::kCondFoeIsUnholy) { unholyRuleEvaluated = true; break; }
+                if (unholyRuleEvaluated && !Eval::CurrentTargetIfTrackable(f) && CombatSense::FoeCount(f) > 0)
+                    silverKnownFalse = false;
             }
         }
         // MFO-B55 FIX: a "known false" that came from a target-relative equip
