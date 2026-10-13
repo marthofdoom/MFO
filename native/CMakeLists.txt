@@ -69,6 +69,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/Auto.cpp
     cast/Hands.cpp
     cast/HealRoad.cpp
+    cast/Unanimated.cpp
     Scheduler.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp

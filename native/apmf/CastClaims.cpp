@@ -512,7 +512,10 @@ namespace MFO::APMFBridge {
         const auto it = g_owned.find(a_follower);
         if (it == g_owned.end()) return 0;
         const CastClaim* c = HealSlotLocked(it->second, a_hand);
-        return c ? c->target : 0;
+        // 0 = SELF, always (every reader keys "the claimant's own heal" on 0): a non-Self-delivery heal at its own
+        // caster is claimed with the caster's FormID as the target (ComposedCast::Try, substrate S1 R2), and is
+        // reported here as 0 like a Self-delivery one.
+        return c ? (c->target == a_follower ? 0 : c->target) : 0;
     }
 
     RE::FormID GetHealCastProxy(RE::FormID a_follower, std::int32_t a_hand) {

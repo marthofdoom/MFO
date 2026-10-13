@@ -165,13 +165,22 @@ namespace MFO::Actuation {
         // REFUSED -> FAIL CLOSED (Declined, logged loudly, no direct-force stream);
         // otherwise the facet was never there (ABI < 5 / toggle raced off) and the
         // direct-force stream below runs, byte-identical to today.
-        // `!IsRestorationSpell` (fix/mfo-combat-restoration-direct, 2026-09-21):
-        // a Restoration-school concentration self-cast (a ward) is a restoration
-        // cast and takes the direct-force stream below, like every other
-        // restoration cast in combat; only a non-restoration Offense/Buff stream
-        // still claims the AI-fired road here.
-        if (selfKind != CasterConsent::SpellKind::Heal && !IsRestorationSpell(a_spell) &&
+        // SUBSTRATE S1 / R9 (2026-10-13): the `!IsRestorationSpell` exclusion that
+        // fix/mfo-combat-restoration-direct (2026-09-21) put here is GONE. It guarded
+        // MFO's own direct Healing Hands cast colliding with MFO's own heal claim on the
+        // instant caster (Jesper 750012C6: the CFC claim denied against the direct
+        // cast, the idle-hand floor closed the right hand, the follower stood frozen);
+        // Harbinger d41ed43 stopped ch.8b gating the instant caster by a hand claim, and
+        // the heal claim road is back (ComposedCast::ChooseHealRoad). A Heal-kind spell
+        // is excluded by `selfKind` above, so what the exclusion still kept direct was
+        // a Restoration-school WARD or buff stream: it claims the AI-fired road here
+        // like every other non-heal concentration stream. THE CONTROLLER TEST is backlog
+        // MFO-B58's fix (mirror the heal twin): with no CombatController there is no
+        // caster to seat, so a claim here would stand dead and wall the lap, and a
+        // Restoration-school ward now reaches this site too.
+        if (selfKind != CasterConsent::SpellKind::Heal &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+            a_follower->GetActorRuntimeData().combatController &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
             !Config::g_legacyCastHybrid.load()) {
             NoteArchetypeRoad(a_follower, a_spell, ArchRoad::ConcClaim);   // [archetype] probe (passive)
@@ -195,6 +204,10 @@ namespace MFO::Actuation {
             // already warns ONCE per session about a too-old ABI, so nothing is
             // logged here. Fall through to the direct-force stream (degrade).
         }
+
+        // EVERYTHING PAST HERE IS THE DIRECT SELF STREAM (CastSpellImmediate, no hand animation). On the combat
+        // table that is the residue the field log must name (substrate S1, cast/Unanimated.cpp).
+        NoteUnanimatedRoadWhy(a_follower, "self-stream", a_spell, nullptr);
 
         const auto now = SelfClock::now();
         auto it = g_selfCast.find(id);

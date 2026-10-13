@@ -186,12 +186,18 @@ namespace MFO::Actuation {
         // present + CAPABLE means it REFUSED -> FAIL CLOSED (Declined, logged);
         // otherwise the facet was never there and the gate + direct-force stream
         // below runs, byte-identical to today.
-        // `!IsRestorationSpell` (fix/mfo-combat-restoration-direct, 2026-09-21):
-        // a Restoration-school concentration cast at an ally is a restoration
-        // cast and takes the direct-force stream below; only a non-restoration
-        // Offense/Buff stream still claims the AI-fired road here.
-        if (kind != CasterConsent::SpellKind::Heal && !IsRestorationSpell(a_spell) &&
+        // SUBSTRATE S1 / R9 (2026-10-13): the `!IsRestorationSpell` exclusion that
+        // fix/mfo-combat-restoration-direct (2026-09-21) put here is GONE (see the
+        // twin in CastSelfDirect for the history: it guarded MFO's own direct heal
+        // colliding with MFO's own claim on the instant caster, which Harbinger
+        // d41ed43 fixed, and a Heal-kind spell is excluded by `kind` anyway). A
+        // Restoration-school ward or buff concentration cast at an ally or the player
+        // now claims the AI-fired road like every other non-heal concentration stream.
+        // THE CONTROLLER TEST is backlog MFO-B58's fix (mirror the heal twin): no
+        // CombatController, no caster to seat, so the claim would stand dead.
+        if (kind != CasterConsent::SpellKind::Heal &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
+            a_follower->GetActorRuntimeData().combatController &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
             !Config::g_legacyCastHybrid.load()) {
             NoteArchetypeRoad(a_follower, a_spell, ArchRoad::ConcClaim);   // [archetype] probe (passive)
@@ -251,6 +257,11 @@ namespace MFO::Actuation {
                 return SelfCast::Declined;
             }
         }
+
+        // EVERYTHING PAST HERE IS THE DIRECT TARGET STREAM (CastSpellImmediate onto the target, no hand animation),
+        // which RestorationCastDirect and ConcentrationCast also end in. On the combat table that is the residue the
+        // field log must name (substrate S1, cast/Unanimated.cpp).
+        NoteUnanimatedRoadWhy(a_follower, "target-stream", a_spell, a_target);
 
         const auto now = SelfClock::now();
         auto it = g_targetCast.find(id);

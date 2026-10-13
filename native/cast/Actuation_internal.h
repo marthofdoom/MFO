@@ -539,8 +539,24 @@ namespace MFO::Actuation {
         // single-target buff rule leaves it false and releases as before. Worker-serial (#4).
         inline bool g_autoBuffSeries = false;
         enum class BuffRoad : std::uint8_t { NotBuff, Claim, DirectNoCombat, DirectNoSeat, DirectNoRow, DirectDegrade, DirectNoCap };
+        // a_why (optional out): the static text of the reason the answer is not Claim (the same text the `[buff]` line
+        // prints), for the UNANIMATED road log (cast/Unanimated.cpp); left untouched when the answer is Claim / NotBuff.
         BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log = true,
-                                RE::Actor* a_recipient = nullptr);
+                                RE::Actor* a_recipient = nullptr, const char** a_why = nullptr);
+        // THE UNANIMATED ROAD LOG (substrate slice S1, cast/Unanimated.cpp; principle 7: never mask). Every
+        // in-combat cast that is still delivered on a DIRECT road (CastSpellImmediate, no hand animation) calls
+        // this once per cast attempt; it logs `[cast] <id>: UNANIMATED road '<road>' for '<spell>' -- <reason>`
+        // at WARN (INFO with Harbinger absent: that is the documented degrade), rate-limited per (follower,
+        // spell, road). A no-op off the combat table (g_firingRule == kNoRule: the out-of-combat service is the
+        // substrate's slice, not this one). UnanimatedWhy names the reason a Heal / Buff / Offense spell is not
+        // on a claim road right now, from the same road choosers the claim forks use (log-free).
+        void NoteUnanimatedRoad(RE::Actor* a_follower, const char* a_road, RE::SpellItem* a_spell,
+                                std::string_view a_reason);
+        std::string UnanimatedWhy(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
+        // The same, with the reason computed by UnanimatedWhy only once the gate (combat table + rate limit) passes:
+        // the road choosers it asks must not run for an out-of-combat caller (MFO-B173).
+        void NoteUnanimatedRoadWhy(RE::Actor* a_follower, const char* a_road, RE::SpellItem* a_spell,
+                                   RE::Actor* a_recipient);
         SelfCast BuffClaim(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
         SelfCast BuffSelfClaim(RE::Actor* a_follower, RE::SpellItem* a_spell);
         std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell,
