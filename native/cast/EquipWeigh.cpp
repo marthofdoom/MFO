@@ -156,8 +156,8 @@ namespace MFO::Actuation {
             return true;
         }
 
-        // The preference as the ledger stands NOW (ch.26 entries: the gambit holds at rank 0, the best fit at
-        // rank 1 unless a_withBestFit is off). Empty = nothing preferred.
+        // The preference as the ledger stands NOW (ch.26 entries: the gambit holds and the best fit, all rank 0,
+        // unless a_withBestFit is off). Empty = nothing preferred.
         std::vector<APMF_API::APMF_EquipPrefEntry> BuildPreference(RE::Actor* a_follower, bool a_withBestFit = true) {
             std::vector<APMF_API::APMF_EquipPrefEntry> out;
             const RE::FormID fid = a_follower->GetFormID();
@@ -182,12 +182,13 @@ namespace MFO::Actuation {
             if (shield && !left && !rightBoth && !leftHeld)
                 out.push_back({ shield, static_cast<std::uint8_t>(APMF_API::kEquipSlot_Left), 0, { 0, 0 } });
 
-            // BEST FIT (marth 2026-10-12, ch.26 ALWAYS-PREFER): rank 1 under the gambit's rank 0. A hand a gambit
-            // hold, a shield top-up or MFO's own cast claim takes is NOT filled (the gambit overrides, D3 holds); a
-            // two-hander / launcher needs both hands free. Never while the force bit is on: kEquipPref_Force
-            // refuses every engine equip into a hand the claim prefers something for, and the best fit is a nudge
-            // only (D4 escalates the gambit entries alone).
-            if (a_withBestFit && !APMFBridge::EquipPreferenceForced(fid)) {
+            // BEST FIT (marth 2026-10-12, ch.26 ALWAYS-PREFER; "prefer, escalate if it loses"): MFO's perk and class
+            // pick for a hand NO gambit hold, shield top-up or MFO cast claim takes (the gambit overrides, D3
+            // holds); a two-hander / launcher needs both hands free. RANK 0, like the gambit entries: it is only
+            // added where it is the effective winner for its hand, ranks order entries within one claim (APMF_API.h
+            // APMF_EquipPrefEntry: equal ranks are each lifted above every undeclared item, "two hands: rank both
+            // 0"), and it escalates under D4 exactly like a hold, so there is no second tier to rank it below.
+            if (a_withBestFit) {
                 const BestFit bf = BestFitFor(a_follower);
                 const bool rightTaken = right || rightHeld || rightBoth;
                 const bool leftTaken  = left || shield || leftHeld || rightBoth;
@@ -198,11 +199,11 @@ namespace MFO::Actuation {
                 if (bf.main && !taken(bf.main)) {
                     mainBoth = bf.mainSlot != APMF_API::kEquipSlot_Right;
                     if (!rightTaken && !(mainBoth && leftTaken))
-                        out.push_back({ bf.main, bf.mainSlot, 1, { 0, 0 } });
+                        out.push_back({ bf.main, bf.mainSlot, 0, { 0, 0 } });
                     else mainBoth = false;
                 }
                 if (bf.left && !mainBoth && !leftTaken && !taken(bf.left))
-                    out.push_back({ bf.left, static_cast<std::uint8_t>(APMF_API::kEquipSlot_Left), 1, { 0, 0 } });
+                    out.push_back({ bf.left, static_cast<std::uint8_t>(APMF_API::kEquipSlot_Left), 0, { 0, 0 } });
             }
             return out;
         }
@@ -379,12 +380,8 @@ namespace MFO::Actuation {
             return;
         }
         g_emptyPrefLogged.erase(fid);
-        // D4 watches the GAMBIT entries (rank 0) alone. With none, only the best fit stands: a nudge, watched for
-        // the state line but never escalated (nudgeOnly).
-        std::vector<APMF_API::APMF_EquipPrefEntry> entries;
-        for (const auto& e : declared) if (e.rank == 0) entries.push_back(e);
-        const bool nudgeOnly = entries.empty();
-        if (nudgeOnly) entries = declared;
+        // D4 watches every declared entry: a gambit hold and the best fit escalate alike (marth 2026-10-12).
+        const auto& entries = declared;
         if (!SameDecl(w.watched, entries)) {   // a new declaration is a new episode
             const bool forced = APMFBridge::EquipPreferenceForced(fid);
             w = Watch{};
@@ -435,15 +432,6 @@ namespace MFO::Actuation {
             if (APMFBridge::SetEquipPreferenceForce(fid, false))
                 spdlog::info("[equip-pref] {:08X}: force cleared -- out of combat (the score pipeline does not run)", fid);
             w.escalatedAt = {};
-            return;
-        }
-        // BEST FIT ONLY: a nudge. No miss is tracked and nothing is escalated; a force bit left from an earlier
-        // gambit episode comes off so it cannot bind the best fit's hands (D4: best fit is never forced).
-        if (nudgeOnly) {
-            w.missSince = {}; w.heldSince = {};
-            if (APMFBridge::SetEquipPreferenceForce(fid, false))
-                spdlog::info("[equip-pref] {:08X}: force cleared -- only the best fit stands (a nudge, never forced)", fid);
-            w.escalatedAt = {}; w.forcedMissLogged = false;
             return;
         }
         if (allHeld) {
@@ -554,6 +542,14 @@ namespace MFO::Actuation {
             // The re-placement: Harbinger equips nothing for a preference, so the declared hands go out once more
             // through ch.17 (its equip pass places what he is not wearing). ONCE per episode: this is the bounded
             // replacement of the retired MFO-B41 re-declare loop.
+            // A best-fit item is not in the ledger, so the ch.17 pass would not know it: it is placed as a one-shot
+            // wish (idempotent), the same road the shield top-up and the torch use; a gambit hold is already
+            // carried by the ledger declaration.
+            {
+                const auto [lr, ll] = ForcedHoldFor(fid);
+                if (missForm != lr && missForm != ll && missForm != ShieldTopUpFor(fid))
+                    WantPlacement(fid, missForm, missSlot, "D4 escalation: best fit");
+            }
             Logistics::ResendEquipDeclaration(fid);
             DeclareLedger(a_follower, "D4 escalation: re-place");
             return;

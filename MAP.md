@@ -578,22 +578,24 @@ per concern:
   `fMeleeReach` = the engine's range gate, not escalated. KNOWN GAP (MFO-B262): Harbinger's state is per ACTOR (the
   last item scored), so with two entries D4 may never classify the earlier-scored one; that miss is logged once per
   episode (`miss of ... not classified`) until a per-entry Harbinger read exists. Forced and still missing 4 s later = one ERROR, no retry.
-  **BEST-FIT ALWAYS-PREFER (2026-10-12, `feat/mfo-always-prefer`, marth: "MFO ALWAYS sends a ch.26 weapon preference").**
-  `BuildPreference` appends, after the gambit entries (rank 0), MFO's best-fit weapon at RANK 1 from
-  `cast/EquipBestFit.cpp` (`BestFitFor`, cached `kBestFitRefresh` 5 s per follower, worker-serial; `ForgetBestFit` in
-  `ForgetPlacements`, `ClearBestFit` in `ClearWeighing`). Direction = `Logistics::CombatBestFitFor`
-  (`logistics/EquipAuthority.cpp`, over `ComputeWeaponRoles` + `StyleVotesFor`, the SAME answers `GemReconcilePrefsFor`
-  uses): higher melee skill = 1H/2H class, ranged leads when archery > melee (tie: owned perk ranks, then melee), the
-  other class is the fallback. Pick = the combat pick's own judge (`CombatWeaponScore` / `CombatRangedScore`, `>=`),
-  a launcher only with ammo, `CombatWeaponExcluded` (non-playable / creature / `Catalog::IsExcluded`), museum relic
-  last (`BestFitIsMuseumRelic`); left = `BestFitShield` / `BestFitOffHandWeapon` (cast/Equip.cpp wrappers of the combat
-  pick's `PickShield` / `PickOffHandWeapon`) only when `roles.offHand` votes and `bWeaponStyleControl` is on.
-  A hand a gambit hold, the shield top-up or MFO's own cast claim takes (D3) is not filled; a two-hander / launcher
-  needs both free; the best fit is dropped from the declaration while the force bit is ON. `ServicePreference` runs
-  the D4 watch on the rank-0 entries alone; with only the best fit it is a nudge (`nudgeOnly`: state line, no miss,
-  no escalation, a stale force bit cleared). No ch.17 placement, no co-save. **What breaks:** letting D4 watch the
-  best fit escalates a nudge; sending it under Force binds the engine's hands; reading the direction anywhere but
-  `CombatBestFitFor` lets the preferred weapon and the gems disagree; the inventory read must stay behind the 5 s cache.
+  **BEST-FIT ALWAYS-PREFER (2026-10-12, `feat/mfo-always-prefer`, marth: "MFO ALWAYS sends a ch.26 weapon preference"; "prefer, escalate if it loses").**
+  `BuildPreference` appends MFO's best-fit weapon from `cast/EquipBestFit.cpp` (`BestFitFor`, cached `kBestFitRefresh`
+  5 s per follower, worker-serial; `ForgetBestFit` in `ForgetPlacements`, `ClearBestFit` in `ClearWeighing`) for each hand
+  no gambit entry takes, at RANK 0 (it is the effective winner for its hand and escalates like a hold; ranks only order
+  entries within one claim). Direction = `Logistics::CombatBestFitFor` (`logistics/EquipAuthority.cpp`, over
+  `ComputeWeaponRoles` + `StyleVotesFor`, the SAME answers `GemReconcilePrefsFor` uses): higher melee skill = 1H/2H class,
+  ranged leads when archery > melee (tie: owned perk ranks, then melee), the other class is the fallback. Pick = the
+  combat pick's own judge (`CombatWeaponScore` / `CombatRangedScore`, `>=`), a launcher only with ammo,
+  `CombatWeaponExcluded`, museum relic last (`BestFitIsMuseumRelic`); left = `BestFitShield` / `BestFitOffHandWeapon`
+  (cast/Equip.cpp wrappers) only when `roles.offHand` votes and `bWeaponStyleControl` is on. A hand a gambit hold, the
+  shield top-up or MFO's own cast claim takes (D3) is not filled; a two-hander / launcher needs both free; same form as
+  a gambit entry is deduped. D4 watches every declared entry: a best-fit item Lifted / Leading and still missing after
+  2 s escalates with Force (Outranked = ANOMALY, no force) and, being outside the ledger, is also placed once through
+  ch.17 (`WantPlacement` "D4 escalation: best fit") beside the existing `ResendEquipDeclaration` + `DeclareLedger`.
+  No co-save change. **What breaks:** reading the direction anywhere but `CombatBestFitFor` lets the preferred weapon
+  and the gems disagree; ranking best fit below a hold within one claim stops it being lifted when the hold's hand is
+  also named; letting a gambit hand be filled by best fit overrides a gambit rule; the inventory read must stay behind
+  the 5 s cache; under Force the best-fit hands are refused to the engine by design.
   The force bit comes off after 5 s held, and out of combat. Threading: the watch map is worker-serial (#4).
   **What breaks:** escalating on a non-scored state (ZeroScore would force a bow with no arrows; HandHeld would
   fight MFO's own cast claim, D3); re-placing more than once per episode (that is the retired MFO-B41 loop);
