@@ -1,6 +1,6 @@
 # Combat substrate and animated casting everywhere: design
 
-Status: DESIGN ONLY (2026-10-12/13, Opus design pass). No production code. ClickUp 86e3f1nf5 (due 2026-10-16).
+Status: DESIGN ONLY (2026-10-12/13, Opus design pass; revised 2026-10-13 with marth's answers: the anchor must be an actor (3.3), the follower keeps moving under its own package (3.4), AUTO attack series approved, the two holes approved). No production code. ClickUp 86e3f1nf5 (due 2026-10-16).
 Repos: MFO `main` e511b2f (code read at 955645e; no cast-road change between them), Harbinger (APMF) `main`
 3f22ae4 (includes the engagement hold 52d55c4).
 
@@ -47,13 +47,13 @@ animation (PROVEN, ENGINE_NOTES §0.8 / §0.13).
 | R7 | combat | fire-and-forget offense at a foe | owned offense claim (`CastOn`, `ClaimOffenseCast`) | **yes** (PROVEN 2026-09-06, 17 animated offense fires) | **no**: 0x0F deny + hand block; offense shares category 0 with weapons, and the hand block, not a score, keeps the weapon out | keep |
 | R8 | combat | concentration offense or non-Restoration buff, any target | `ClaimOffenseCast(conc=true)` (`DirectSelf.cpp:178`, `DirectTarget.cpp:198`) | **yes by design** | no | keep (note: this branch has no controller test; under the substrate it gets one) |
 | R9 | combat | Restoration non-heal (ward, Restoration-school buff) at an ally, concentration or fire-and-forget, when no claim road took it | `ConcentrationCast` -> `CastTargetDirect` stream (`CastOn:807`), `RestorationCastDirect` (`CastOn:822`) | **no** | no | claim. The 2026-09-21 reason for the exclusion (`fix/mfo-combat-restoration-direct`, MFO's own direct cast colliding with its own claim on the instant caster) was fixed in Harbinger d41ed43, the same fix that let heals back onto the claim road |
-| R10 | combat | **AUTO hostile** (the board's Auto target on an offense spell) | fan-out: one `CastSpellImmediate` per foe in one tick (`Auto.cpp:163/176` via `ApplyEffectFromTo`) | **no** | no | a SERIES through `CastOn`, one foe at a time (the shape AUTO heal and AUTO buff already use). Question Q3 |
+| R10 | combat | **AUTO hostile** (the board's Auto target on an offense spell) | fan-out: one `CastSpellImmediate` per foe in one tick (`Auto.cpp:163/176` via `ApplyEffectFromTo`) | **no** | no | a SERIES through `CastOn`, one foe at a time (the shape AUTO heal and AUTO buff already use). **Approved by marth 2026-10-12** |
 | R11 | combat | AUTO heal, AUTO buff | series through `CastOn` (claim per recipient) | **yes** (heal PROVEN; buff by design) | no | keep |
-| R12 | OOC | every heal (self, ally, player, AUTO) | `CastSelfDirect` / `CastTargetDirect` direct stream, or posted `CastSpellImmediate` (`Service.cpp:1892`) | **no** (PROVEN: 19 `[heal] ... out-of-combat heal -- INSTANT road, unanimated` lines on LoreRim 2026-10-12) | no | substrate + ch.8b claim (section 3) |
-| R13 | OOC | every buff, ward, light, AUTO buff fan | direct (`CastSelfDirect`, `ApplyEffectFromTo`, posted `CastSpellImmediate`) | **no** | no | substrate + claim |
-| R14 | OOC | summon | `CastSummonOnce` direct | **no** | no | substrate + claim |
+| R12 | OOC | every heal (self, ally, player, AUTO) | `CastSelfDirect` / `CastTargetDirect` direct stream, or posted `CastSpellImmediate` (`Service.cpp:1892`) | **no** (PROVEN: 19 `[heal] ... out-of-combat heal -- INSTANT road, unanimated` lines on LoreRim 2026-10-12) | no | substrate + ch.8b claim (section 3); the follower keeps moving under its own package (3.4) |
+| R13 | OOC | every buff, ward, light, AUTO buff fan | direct (`CastSelfDirect`, `ApplyEffectFromTo`, posted `CastSpellImmediate`) | **no** | no | substrate + claim; the follower keeps moving under its own package (3.4) |
+| R14 | OOC | summon | `CastSummonOnce` direct | **no** | no | substrate + claim; the follower keeps moving under its own package (3.4) |
 | R15 | OOC | fire-and-forget hostile at a foe | `Packages::CastAt` UseMagic package (`Service.cpp:1941`), else direct (`:1966`) | package: **yes but rooting**, a substituted package; direct: **no** | no | an OOC hostile cast at a foe is a combat start. It becomes ch.21 entry + the R7 claim (a real fight, no substrate) |
-| R16 | OOC | concentration at any target | `CastTargetDirect` stream | **no** | no | substrate + claim, held for the channel |
+| R16 | OOC | concentration at any target | `CastTargetDirect` stream | **no** | no | substrate + claim, held for the channel; the follower keeps moving under its own package (3.4) |
 | R17 | either | Harbinger absent or `bLegacyCastHybrid` | legacy hybrid (`ForceCast`, `CastOn:1656`) | partly | n/a | unchanged. The APMF-absent degrade, out of scope |
 
 **The column that matters.** "Needs weighting" is **no on every row.** Each animated road is a claim, and what
@@ -128,7 +128,7 @@ Why no weight is needed on any row:
 fight may rarely enter the magic branch of its behaviour tree (§0.28 "melee bias"), so `CheckStartCast` is seldom
 asked. The candidate lever is the combat-style magic multiplier, which is a weight. The deny alternative already
 exists: a short ch.7 deny of the weapon leaves while a cast claim waits to fire makes the tree fall to its magic
-branch. That needs ch.7 to gain a weapon-only bit, which the substrate needs anyway (section 3.4). Use the deny.
+branch. That needs ch.7 to gain a weapon-only bit, on the same ActionGate act()/pop() thunks the substrate's leaf allow-list uses (section 3.5). Use the deny.
 Field status: claims fire in 0.63-2.85 s (CAST-DELIVERY, archer heals), so no field case has yet needed either.
 
 Known non-weighting failure shape to keep apart: a DUAL-CAST heal claim (`hand=D`) that builds and is answered
@@ -184,87 +184,208 @@ SE 45573/45574). What it does, in order (AE addresses; SE twins verified where g
 
 ### 3.3 Who is the combat target? (the research question of 86e3f1nf5)
 
-Candidates, judged against the disassembly:
+marth asked (2026-10-12): "Can it be an inanimate object? since we are blocking combat movement, it could be anything
+nearby in that case?" **No. The engine needs an ACTOR, and the disassembly shows why.**
+
+**Why a non-actor reference cannot be the target (PROVEN, AE 1.6.1170; SE has the same shape):**
+
+- `Actor::StartCombat` reads Actor-only fields of its target before it builds anything. It reads `target+0x204` at
+  `0x6B6AED` (AE `Actor::boolFlags`, runtime data `+0x1FC` SE / `+0x204` AE) and `target+0xF8` at `0x6B6B4F`
+  (`currentProcess`). A `TESObjectREFR` is `0x98` bytes (fork `TESObjectREFR.h:511`). For a static, an activator,
+  furniture or an XMarker, both reads land past the end of the object. The function would act on garbage: undefined
+  behaviour, not a refusal.
+- Everything downstream holds the target as an actor. `CombatTarget::targetHandle` (+0x00) is an `ActorHandle`
+  (fork `CombatGroup.h:26`). `CombatController` keeps `targetHandle` (+0x2C) as an `ActorHandle` and `cachedTarget`
+  (+0x68) as a `NiPointer<Actor>`. The selector, the target-detection pass and the cast seats resolve it as an
+  `Actor` and call Actor methods on it. These declarations are INFERRED as ABI facts (we never trust CommonLib for
+  ABI). The StartCombat field reads above are PROVEN.
+- So the XMarker MFO keeps as its evict marker (base `0x3B`, `Packages.cpp`) cannot be reused, and neither can
+  "anything nearby". A nearby REAL actor is out for the reasons in the table below.
 
 | Candidate | Verdict | Why |
 |---|---|---|
+| Any non-actor reference (static, activator, furniture, the evict XMarker) | **impossible** | Actor-only reads past the end of a 0x98-byte REFR (above). PROVEN |
 | The follower itself | **impossible** | refused at `0x6B69B3` (SE `0x625231`). PROVEN |
-| No target, a bare controller | **impossible** through StartCombat | no target and no group builds nothing (`0x6B6CBE`). PROVEN. Building one by hand (calling 46873 directly, or the constructor) skips the engine's entry and ch.22's seat. Rejected: wrong layer, and a second road into combat that ch.22 could not see |
-| The heal recipient (an ally) | **rejected** | the ally becomes the follower's combat target and a member of a hostile pair. The aggressor mark (`AIProcess+0x136` bit 2) is set because the ally does not regard the follower as hostile. Other teammates and the ally's own AI may answer (INFERRED). A self buff has no recipient at all |
-| The player | **rejected** | the worst case: combat music, a teammate in combat with the player, the follower's attack leaves aimed at the player |
-| **A Harbinger-owned anchor actor** | **chosen** | see below |
+| No target, a bare controller | **impossible** through StartCombat | no target and no group builds nothing (`0x6B6CBE`). PROVEN. Building one by hand skips the engine's entry and ch.22's seat. Rejected |
+| The heal recipient, or another nearby actor | **rejected** | it becomes the follower's combat target. StartCombat sets the aggressor mark (`AIProcess+0x136` bit 2) because the target does not regard the follower as hostile. That actor's AI and its allies may answer (INFERRED). A self-buff has no recipient |
+| The player | **rejected** | combat music, a teammate in combat with the player |
+| **A Harbinger anchor actor** | **chosen** | below |
 
-**The answer: the combat target is an ANCHOR, and the cast target is the claim's target.**
-The anchor is a Harbinger-owned dummy actor (a new record in `APMF.esl`): invisible, ghost, no collision, AI off,
-no factions, no inventory, unaggressive, essential, level 1. It is placed at the follower for the cast and deleted
-after. The follower's combat target is the anchor. The magic target is the ch.8b claim's own `target`, which
-seat `GetMagicTarget` (0x0A on the combat casters) hands to the AI whatever the combat target is. For a heal that is
-the recipient. For a self buff or a summon it is target 0 (self, or the caster's placement). For an ally buff it is
-the ally.
+**The answer: the combat target is an ANCHOR ACTOR, and the cast target is the claim's target.**
 
-Why the anchor works with the pipeline (INFERRED until probe P3): the selector's range gate (`0x813A2F`, vfunc 6)
-measures the item against the combat target, and an anchor at the follower's feet is in range of every spell,
-touch included. The behaviour tree has a target and runs. Nothing in the world is the follower's enemy.
+- **The anchor is a small POOL of persistent anchor actors authored in `APMF.esl`.** It is not spawned with
+  PlaceAtMe. The refs live in a Harbinger holding cell. Each is invisible, a ghost, without collision, AI off, in no
+  factions, unaggressive, essential and level 1.
+- **Open:** Harbinger moves one anchor to the follower.
+- **Close:** it moves the anchor back home.
+- **Pool size:** one anchor per concurrent substrate (a short fixed count, for example 8). A follower that finds the
+  pool empty waits one lap. The wait is logged.
+- **Why a pool, not PlaceAtMe:**
+  - nothing new enters the `.ess`;
+  - no reference is created or deleted;
+  - the load sweep shrinks to "move every anchor home".
+- **The cast target** is the ch.8b claim's own `target`. Seat `GetMagicTarget` (0x0A on the combat casters) hands
+  that target to the AI, whatever the combat target is:
+  - a heal: the recipient;
+  - a self-buff or a summon: target 0 (self, or the caster's placement);
+  - an ally buff: the ally.
+- **Already proven in the field:** that the seats aim at the claim target while the combat target is another actor.
+  Every claimed heal on LoreRim was cast at an ally while the controller's target was a foe.
+- **Range (INFERRED):** the selector's range gate (`0x813A2F`, vfunc 6) measures the item against the combat target.
+  An anchor at the follower is in range of every spell, touch spells included.
+  - The follower keeps walking during the substrate (section 3.4), so Harbinger moves the anchor with it each frame
+    (`SetPosition` on the main thread).
+  - Probe P3 checks that a touch-range claim still fires after the follower has walked about 200 units.
 
-That the seats aim the cast at the claim target while the combat target is another actor is PROVEN in the field
-for heals: every claimed heal on LoreRim was cast at an ally while the controller's target was a foe.
+### 3.4 Movement: combat must not drive the body, the follower's own package does
 
-### 3.4 Deny every facet the substrate switches on
+marth (2026-10-12): "block combat from affecting movement and have them continue using the non combat package for
+movement". So there is no stand-and-cast. While the substrate is up, the follower keeps following, travelling or
+sandboxing under its own package while its hands cast.
+
+**What the engine does with a controller (PROVEN unless marked):**
+
+1. **Combat owns the body by default.** The combat tree is a Parallel of a Movement half and an Action half
+   (`CombatBehaviorTreeCombat`, AE builder `0x85F7D0`). The Movement half's selector re-selects every 0.25 s and
+   always runs some movement leaf, because "Close Movement" has a constant value of 1. This is Harbinger's RE of
+   2026-10-05, on all three runtimes (`channels/CombatApproach.cpp` header, agentlog `apmf-combat-moveto.md`).
+2. **The package stops running in active combat.** `0x6B6DF0` (id 38563) is "in active combat". It returns
+   `IsInCombat()` (slot 0xE3) and NOT `process->ignoringCombat` (`AIProcess+0x139`, read by `0x6D6780`). The package
+   gate `0x6D8950` (id 39199) lets a package run only when that test is false, except for package types 26 and 42
+   and one procedure class. The function and the test are PROVEN; that this is the "may the package run" gate is
+   INFERRED from its shape. The field agrees (§0.27): a package without IgnoreCombat does nothing in combat.
+3. **"Ignoring combat" has TWO halves, and the engine sets them together.**
+   - `AIProcess::UpdateIgnoringCombat` (`0x6D7E80`, id 39181; called from `0x485B2D` and `0x6EA9A3`) copies the
+     running package's IgnoreCombat flag (package flags bit 20, `0x00100000`, the bit MFO's old UseMagic package and
+     Mercer's override carry) into the PROCESS bit `+0x139`.
+   - It also pauses the CONTROLLER with `0x55A870`: controller `+0x42 = 1`, then it stops the behaviour controller
+     (`0x858C20`). It resumes with `0x55A890`.
+   - The controller constructor copies the process bit into `+0x42` at birth (`0x5582F8`).
+   - With both set, the package moves the actor and the whole combat tree is paused, the cast leaves included. That
+     is why the old UseMagic package rooted the follower and why an IgnoreCombat package drops every combat facet.
+4. **Upper-body casting while the legs walk is normal.** Vanilla combat casters cast while strafing (marth's own
+   observation, §0.27). The cast is driven by the actor's magic caster on the animation graph, not by locomotion.
+   INFERRED for package-driven walking; probe P6 shows it.
+
+**The composition: split the two halves of "ignoring combat".**
+
+| Half | State during the substrate | Effect |
+|---|---|---|
+| Process `ignoringCombat` (`+0x139`) | **ON** | the package gate (`0x6D8950`) lets the follower's own package run, so the follow / travel / sandbox procedure moves the body. Composition: the package is never replaced, and its source keeps its slot |
+| Controller paused (`+0x42`) | **OFF** | the combat tree keeps running, so the Action half reaches the cast leaves and the claim fires animated |
+| Combat Movement half | **DENIED** | every leaf of the Movement half is force-failed by the ActionGate act()/pop() pair (section 3.5's leaf allow-list already denies them). The tree issues no movement request, so the package is the only driver. Includes Acquire Movement Resource and Dodge Threat, so combat never takes the movement controller from the package |
+
+**The order matters (PROVEN by the constructor copy at `0x5582F8`):**
+
+1. Call `StartCombat(anchor)` with the process bit OFF, so the controller is born unpaused.
+2. Set the process bit, and do not call `0x55A870`.
+3. Call `EvaluatePackage(false, false)` once, so a package StartCombat ended (`0x70F4C0`, INFERRED) is re-picked.
+   `resetAI` stays false (MFO's rule: a reset clears the combat group).
+
+`UpdateIgnoringCombat` re-syncs the process bit from the package flag whenever the package is re-evaluated. Its two
+callers are call sites, which INVARIANTS #17 forbids patching. So Harbinger re-asserts the bit once per frame from
+its game-thread pump for the substrate's bounded life (1-3 s, hard TTL 15 s), and counts every reset it has to undo
+(`[substrate] ... ignoring-bit reset by the engine (n)`).
+
+This is a sustained write. Harbinger's rules forbid sustaining a decision outside a declared, bounded facet. The
+substrate's INVARIANTS amendment must name it.
+
+**Other readers of the process bit to clear in P3 (INFERRED, not yet traced):** `IsIgnoringCombat` (`0x6B6E40`,
+id 38564) is also read at `0x2EB421`, `0x3318E4`, `0x3398E3`, `0x662294`, `0x67D151`, `0x71C0DD` and `0x8410C5`
+(CombatManager id 46941). Some may be detection or alarm. P3 logs them.
+
+**A side effect that may close the bark hole (INFERRED):** inside StartCombat, the block at `0x6B6CFB-0x6B6D32`
+(the vfunc 0x4A result into `0x3A0D20` / id 24131, then `0x6EBCF0`) is skipped when the actor is ignoring combat.
+Setting the process bit BEFORE the entry would skip it, but it would also be copied into `+0x42` and pause the newborn
+controller. The fix would be to call the engine's own resume (`0x55A890`) right after. That variant is research item
+RS2. The design ships the simple order above, with the bark as a known hole (marth approved).
+
+**Fallback if the split fails in P6:** a Harbinger-internal ch.24 bound centred on the package's goal (for a follow
+package, the player) at the follow distance. This is the engine's own package-to-combat movement bridge
+(`BGSProcedureHoldPosition` adds a `CombatAreaHoldPosition`, AE `0x55B010`). It walks the follower after the player in
+combat gait. It is combat movement aimed at the package's goal, so it is second best against marth's ruling, and it is
+used only if P6 shows the package cannot drive while a controller exists.
+
+### 3.5 Deny every facet the substrate switches on
 
 Deny-completeness is the licence (principle 2). The substrate is legal only when every row below has a complete
-deny or a recorded, accepted hole. **Harbinger owns the deny set, not the client.** The client cannot be trusted to
-claim every facet, and a substrate opened with one facet unclaimed is the exact hole the principle forbids. So the
-substrate facet installs its denies itself, as the engagement hold already installs its internal ch.24 bound.
+deny or a recorded hole that marth accepted.
+
+**Harbinger owns the deny set, not the client.** The client cannot be trusted to claim every facet, and a substrate
+opened with one facet unclaimed is the exact hole the principle forbids. So the substrate facet installs its denies
+itself, the same way the engagement hold installs its internal ch.24 bound.
 
 | Facet combat switches on | Existing Harbinger deny | Substrate deny | Hole |
 |---|---|---|---|
-| Attack leaves (melee, ranged, bash, special, ground, flying) | ch.7 `Offense` (also denies the cast leaves, so unusable here) | **a substrate leaf ALLOW-list** in `core/ActionGate.cpp`: while a substrate is live, every combat behaviour-tree leaf is force-failed (the existing act()/pop() pair) **except** `CastImmediateSpell`, `CastConcentrationSpell`, `PrepareDualCast`. Allow, not block: a leaf nobody listed is denied by construction | none for leaves, if the catalog is complete (it is a 70-leaf catalog, matched 1:1 on this build) |
-| Shouts | ch.14 is arbitration only; ch.7 `Cast` bit includes CastShout | covered by the allow-list (`CastShout` not on it) | none |
-| Combat movement (advance, flank, chase, strafe, orbit, dodge, cover, flee, hide, return to area, search ...) | ch.23 leash, ch.24 bound | covered by the allow-list: the follower stands and casts (vanilla OOC casters stand too). Option Q2: keep following via a Harbinger-internal ch.24 bound centred on the player instead | the substrate lasts one cast (1-3 s, field claim-to-fire 0.63-2.85 s) |
-| Flee | none needed | an anchor is no threat; flee leaves are also off the allow-list | none |
-| Search, target lost | the engagement hold's knowledge seats (`[EngagementHold]`, group-keyed on `CombatGroup::UpdateTargetDetection`, listener AE `0x7AF410 -> 0x7AF830`, group pass in `CombatGroup::Update` AE `0x803710`) | register the anchor as a held target, so it is never "lost" and the group never searches. Search leaves are off the allow-list anyway | none |
-| Weapon equip (StartCombat's re-arm, the combat selector) | ch.17 (governs ARMO/WEAP/AMMO/LIGH), HandBlock | the claim's hand is closed by the hand block; the other hand gets a full deny-only floor **without** `kCastFlag_FloorSpellsOnly` (the archer-heal floor mode), so no weapon, shield or torch enters it | the re-arm equip at `0x6B6BED` fires before any claim can be live on a fresh controller. Mitigation: the floor and the claim are published BEFORE the entry call (Harbinger orders its own drain). Probe P3 checks it |
+| Attack leaves (melee, ranged, bash, special, ground, flying) | ch.7 `Offense` (also denies the cast leaves, so it cannot be used here) | **a substrate leaf ALLOW-list** in `core/ActionGate.cpp`. While a substrate is live, every combat behaviour-tree leaf is force-failed (the existing act()/pop() pair) **except** `CastImmediateSpell`, `CastConcentrationSpell` and `PrepareDualCast`. Allow, not block: a leaf nobody listed is denied by construction | none for leaves, if the catalog is complete (a 70-leaf catalog, matched 1:1 on this build) |
+| Shouts | ch.14 is arbitration only; ch.7 `Cast` includes CastShout | covered by the allow-list | none |
+| **Combat movement** (every Movement-half leaf: close, flank, chase, strafe, orbit, dodge, cover, flee, hide, return to area, search, acquire weapon / movement resource) | ch.23 leash, ch.24 bound | **denied by the allow-list; the body belongs to the follower's own package** through the ignoring-combat split (section 3.4) | P6 must show the package moving the body. The engine may reset the process bit (re-asserted and counted) |
+| Flee | none needed | an anchor is no threat; the flee leaves are off the allow-list | none |
+| Search, target lost | the engagement hold's knowledge seats (`[EngagementHold]`, group-keyed on `CombatGroup::UpdateTargetDetection`; listener AE `0x7AF410 -> 0x7AF830`, group pass in `CombatGroup::Update` AE `0x803710`) | register the anchor as a held target, so it is never "lost" and the group never searches | none |
+| Weapon equip (StartCombat's re-arm, the combat selector) | ch.17 (ARMO/WEAP/AMMO/LIGH), HandBlock | the hand block closes the claimed hand. The other hand gets a full deny-only floor **without** `kCastFlag_FloorSpellsOnly`, so no weapon, shield or torch enters it | the re-arm equip at `0x6B6BED` runs inside the entry call. Mitigation: publish the floor and the claim BEFORE the entry. P3 checks it |
 | Other spells | ch.8 allow-list, 0x0F, 0x0A CheckCast | unchanged; only the gambit spell is admitted (marth's ruling) | none |
-| Weapon draw | ch.4 draws; nothing denies a draw | casting needs the hands up (that IS the animation). With both hands holding only the spell or nothing, the draw shows the spell | after the substrate the follower sheathes on the engine's own delay |
-| Hostility of others toward the follower | none | the anchor is in no faction and never attacks, so nobody has a reason (INFERRED) | probe P3 counts it |
-| Allies and teammates joining the fight | ch.22 denies StartCombat per actor in a window | **a new deny on StartCombat's TARGET check**: the slot 0x99 hook ch.22 already owns answers "dead" at the target return address (`0x6B6A0A` AE / `0x625288` SE) when the target is an anchor and `this` is not the substrate's owner. Nobody else can start combat against an anchor | an actor that joins through a group (third argument, `0x83D2C0`) is not caught there. Commanded actors (summons) may join this way. Probe P3; the substrate ends at fire, before a summon arrives (about 1 s) |
-| The aggressor mark (`AIProcess+0x136` bit 2) | none | the anchor owns no crime faction and is never hit, so a mark with no victim (INFERRED). Clear the bit at the end if P3 shows it outlives the fight | INFERRED, probe |
-| Crime, bounty | none (ch.21 leaves them to the client) | no hit lands on anyone; the anchor has no owner faction | none known |
-| Combat music | none | driven by actors in combat with the PLAYER (INFERRED). Nobody targets the player | probe P3 (`[subprobe] music`) |
+| Weapon draw | ch.4 draws; nothing denies a draw | casting raises the hands, which IS the animation; the hands hold only the spell | afterwards the follower sheathes on the engine's own delay |
+| Hostility of others toward the follower | none | the anchor is in no faction and never attacks (INFERRED) | P3 counts it |
+| Allies and teammates joining | ch.22 denies StartCombat per actor in a window | **a new deny on StartCombat's TARGET check**: the slot 0x99 hook ch.22 already owns answers "dead" at the target return address (`0x6B6A0A` AE / `0x625288` SE) when the target is an anchor and `this` is not the substrate's owner | a group join (third argument, `0x83D2C0`) is not caught there; commanded actors (summons) may join this way. The substrate ends at fire, before a summon arrives (about 1 s). P3 |
+| The aggressor mark (`AIProcess+0x136` bit 2) | none | the anchor owns no crime faction and is never hit. Clear the bit at close if P3 shows it outlives the substrate | INFERRED |
+| Crime, bounty | none | no hit lands; the anchor has no owner faction | none known |
+| Combat music | none | driven by actors in combat with the PLAYER (INFERRED). Nobody targets the player | P3 |
 | The player's combat state, saving | none | the player is in no combat group | none known |
-| Dialogue barks (combat-start topic, attack barks) | ch.10 only pauses dialogue | **HOLE.** The combat-start topic is likely `0x3A0D20` (id 24131) at `0x6B6D24` (INFERRED). No deny exists. Research RS2: a seat on the combat-topic selection. Question Q4 |
-| Papyrus `OnCombatStateChanged` and `TESCombatEvent` (follower frameworks, other mods' scripts) | none | **HOLE, accepted only with marth's word.** The event is the engine's; a deny would hide state from other mods' scripts. Question Q4 |
-| Combat regen rates | none | **HOLE, accepted**: the combat regen multipliers apply for 1-3 s | negligible |
-| MFO's own combat systems (party combat gate, Evaluator foe pick, FoeCount, engage on sight, combat table, torch combat-end edge) | none | **MFO change (slice S3)**: a Harbinger query `GetSubstrateState(actor)` (or the anchor base FormID); MFO treats a substrate-only controller as OUT of combat everywhere, and never lists the anchor as a foe | none once S3 lands |
-| Harbinger's own combat features (engagement hold watchdog, ch.24 waiting claims, R-1 "another target attacking the party") | | the substrate is not an engagement: the hold ignores substrate controllers; a waiting ch.24 claim of the client does not apply under a substrate | none once S2 lands |
-| A real foe arrives during the substrate | ch.22 refuses entry only inside its window | the engine's StartCombat(foe) on the follower takes the "already in combat" path and adds the foe. The substrate sees the second target (its StartCombat observer at the ch.22 seat) and ENDS AT ONCE: the anchor is deleted, the leaf allow-list and floors drop, and the fight is the engine's own from that pass. The cast claim stays, now as an ordinary in-combat claim | none, but it is the transition to test first in the field |
+| Dialogue barks (combat-start topic, attack barks) | ch.10 only pauses dialogue | attack barks: no attack leaf runs. Combat-start topic: likely `0x3A0D20` (id 24131) at `0x6B6D24` (INFERRED) | **KNOWN HOLE, approved by marth 2026-10-12.** Logged per substrate: `[substrate] ... known hole: combat-start topic path ran`. RS2 runs in parallel (section 3.4's ordering variant is its first candidate) |
+| Papyrus `OnCombatStateChanged` and `TESCombatEvent` | none | none: the event is the engine's, and hiding it would hide state from other mods' scripts | **KNOWN HOLE, approved by marth 2026-10-12.** Logged once per substrate: `[substrate] ... known hole: combat state event sent` |
+| Combat regen rates | none | none | accepted: 1-3 s, negligible |
+| MFO's own combat systems (party combat gate, Evaluator foe pick, FoeCount, engage on sight, combat table, combat-end edges) | none | **MFO change (slice S3)**: a Harbinger query `GetSubstrateState(actor)`. MFO treats a substrate-only controller as OUT of combat and never lists an anchor as a foe | none once S3 lands |
+| Harbinger's own combat features (engagement hold watchdog, waiting ch.24 claims, R-1) | | the substrate is not an engagement. The hold ignores substrate controllers; a waiting client ch.24 claim does not apply under a substrate | none once S2 lands |
+| A real foe arrives during the substrate | ch.22 only inside its window | StartCombat(foe) on the follower takes the "already in combat" path and adds the foe. The substrate sees the second target (its StartCombat observer at the ch.22 seat) and ENDS AT ONCE: the anchor goes home, the process bit is cleared, the leaf allow-list and floors drop, and the fight is the engine's own. The cast claim stays, now as an ordinary in-combat claim | none, but it is the transition to test first in the field |
 
-### 3.5 Lifetime and the clean end
+### 3.6 Lifetime and the clean end
 
-- **Open** (client asks; Harbinger, game thread): validate (loaded, alive, not in combat, not in a scene or
-  dialogue, high process), place the anchor at the follower, publish the leaf allow-list and the floors, mark the
-  anchor held, call `StartCombat(anchor, nullptr)` once through ch.21's verified call. A false return ends the
-  substrate with the reason.
-- **Serve:** the client's ch.8b claim casts. The engine's own selector equips the spell (section 4).
-- **Close:** on the claim's first observed FIRE (fire-and-forget), at the channel end (concentration, the claim's
-  stop percent), on the client's release, on a real foe, on TTL (default 6 s, clamped 15 s), on the follower's
-  death, unload, load or revert. Close does, in one game-thread pass, the shape `DropNotEngaged`
-  (`channels/CombatEntry.cpp:1034`) uses: `Actor::StopCombat` once (slot 0xE5, AE `0x6B70A0` / SE `0x625920`,
-  which frees the controller inline and nulls `+0x160` and the current combat target, §0.47), release every
-  internal effect (the hold slot, the leaf allow-list, the floors, any internal ch.24 bound), delete the anchor
-  (`Disable` + `SetDelete`), and nothing else. Prior behaviour returns because nothing else was written: the
-  package was never replaced, so the follow package resumes on the engine's own evaluation. `DropNotEngaged` is
-  engagement-specific, so the design factors its release steps into one shared `EndCombatRestore` helper rather
-  than calling it.
-- **Load and revert sweep:** an anchor placed before a save is in the `.ess`. At `kPostLoadGame` Harbinger deletes
-  every reference of the anchor base in loaded cells and on cell attach (fix-forward, the furniture-latch lesson).
-  No co-save.
-- **Threading:** open and close run on the game thread (Harbinger's MainThread pump, `Arbiter::OncePerFrame`).
-  StopCombat frees the controller on the calling thread with no lock (§0.47), so no other Harbinger reader may
-  hold the controller across that pass. Every substrate reader reads a FormID-keyed state record, never the
-  controller.
+**Open** (the client asks; Harbinger runs it on the game thread):
 
-### 3.6 Rejected alternatives
+1. Validate: the follower is loaded, alive, not in combat, not in a scene or dialogue, and high process.
+2. Take an anchor from the pool and move it to the follower.
+3. Publish the leaf allow-list and the floors, and mark the anchor held.
+4. Call `StartCombat(anchor, nullptr)` once, through ch.21's verified call. A false return ends the substrate and
+   logs the reason.
+5. Set the process ignoring-combat bit and call `EvaluatePackage(false, false)` (section 3.4).
+
+**Serve:**
+- The client's ch.8b claim casts. The engine's own selector equips the spell (section 4).
+- The package moves the body.
+- The anchor follows the follower.
+- The process bit is re-asserted every frame.
+
+**Close** triggers:
+- the claim's first observed FIRE (fire-and-forget);
+- the channel end (concentration: the claim's stop percent or its release);
+- the client's release;
+- a real foe;
+- TTL (default 6 s, clamped to 15 s);
+- the follower's death, unload, load or revert.
+
+Close runs in one game-thread pass:
+
+1. Clear the process bit.
+2. Call `Actor::StopCombat` once (slot 0xE5, AE `0x6B70A0` / SE `0x625920`). It frees the controller inline and
+   nulls `+0x160` and the current combat target (§0.47).
+3. Release every internal effect: the hold slot, the leaf allow-list, the floors.
+4. Move the anchor home.
+5. Call `EvaluatePackage(false, false)`.
+
+Prior behaviour returns because nothing else was written; the package was never replaced. This is the shape
+`DropNotEngaged` uses (`channels/CombatEntry.cpp:1034`). That function is engagement-specific, so its release steps
+are factored into one shared `EndCombatRestore` helper rather than calling it.
+
+**Load and revert:** every pool anchor is moved home at `kPostLoadGame`, and its held state is dropped. No co-save.
+The anchors are ESL-authored references, so the `.ess` only ever carries their position.
+
+**Threading:**
+- Open, serve and close run on the game thread (Harbinger's MainThread pump, `Arbiter::OncePerFrame`).
+- StopCombat frees the controller on the calling thread with no lock (§0.47), so no Harbinger reader may hold the
+  controller across that pass.
+- Every substrate reader reads a FormID-keyed state record, never the controller.
+
+### 3.7 Rejected alternatives
 
 - **The UseMagic package** (`Packages::CastAt`, OOC hostile today). Animated (PROVEN §0.21) and needs no combat, but
   it SUBSTITUTES the follower's package (the source loses its slot and fires OnPackageEnd), roots the follower, and
@@ -295,49 +416,82 @@ because both have a controller.
 the fallback is a Harbinger-side bounded equip of the claimed spell on the claimed hand (a ch.8b option bit, ABI
 append, using the same `#17a`-licensed equip shape ch.17 uses for declared items), never MFO's direct call.
 
+
 ## 5. The probe ladder (principle 5: observe each path running before building on it)
 
 | Probe | Code? | Where | INI | Exact log line(s) | Proves |
 |---|---|---|---|---|---|
-| **P1** claimed buff/summon/ward fires | none (field setup only) | MFO + APMF as shipped | `[Probe] bCasterTypeCensus=1` (default) | MFO `[buff] ... CLAIM at ...`; APMF `[ctcensus] ... BUILT type=<Row>` and `... VERDICT: FIRED via <Row> (the hand charged: ANIMATED` | R3/R4 run in the field |
-| **P2** the engine equips a claimed spell itself | passive, APMF | `core/EquipGate.cpp` 0x0F seat | `[Probe] bClaimEquipProbe=1` (new, default 0) | `[equip-probe] 0x<actor> 0x0F ASKED form=0x<spell> hand=<L/R> driven=yes in-hand-before=<yes/no> by=<engine selector/client>` once per claim window, plus the window close `[equip-probe] 0x<actor> CLOSE claimed hand took driven form via <engine/client Prepare> at +<ms>` | whether the engine equips the claimed spell without `Loadout::Prepare` |
-| **P3** substrate dry run (combat with an anchor, no cast) | yes, behind a default-off switch: the S2 build itself | APMF S2 | `[CombatSubstrate] bCombatSubstrate=1`, `bSubstrateDryRun=1` | `[substrate] 0x<f> OPEN anchor=0x<ref> entry=<true/false>`, `[substrate] 0x<f> LEAF DENIED <leaf> (n)`, `[substrate] 0x<f> STARTCOMBAT-AT-ANCHOR REFUSED caller=0x<actor>`, `[substrate] 0x<f> OBSERVED combat-event state=<n>`, `[substrate] 0x<f> OBSERVED music=<type> player-in-combat=<y/n> aggressor-bit=<0/1> regen-mult=<f>`, `[substrate] 0x<f> CLOSE reason=<...> controller-null=<y/n> anchor-deleted=<y/n> pkg-after=0x<pkg>` | every row of the deny table, with numbers, before any cast rides on it |
-| **P3a** console rehearsal of the facets (before S2 lands) | none | in-game console | none | what marth sees and hears | barks, music, teammates joining, for combat against a non-hostile target. Steps: place any harmless NPC with `placeatme`, select it and `tai` + `setghost 1` + `setav aggression 0`; select a follower and `startcombat <ref>`; watch for 30 s; `stopcombat`. Not a substitute for P3, only a cheap early look |
+| **P1** a claimed buff / summon / ward fires | none (field setup only) | MFO + APMF as shipped | `[Probe] bCasterTypeCensus=1` (default) | MFO `[buff] ... CLAIM at ...`; APMF `[ctcensus] ... BUILT type=<Row>` and `... VERDICT: FIRED via <Row> (the hand charged: ANIMATED` | R3/R4 run in the field |
+| **P2** the engine equips a claimed spell itself | passive, APMF | `core/EquipGate.cpp` 0x0F seat | `[Probe] bClaimEquipProbe=1` (new, default 0) | `[equip-probe] 0x<actor> 0x0F ASKED form=0x<spell> hand=<L/R> driven=yes in-hand-before=<yes/no>` once per claim window, and at the window close `[equip-probe] 0x<actor> CLOSE claimed hand took driven form via <engine/client Prepare> at +<ms>` | whether the engine equips the claimed spell without `Loadout::Prepare` |
+| **P3** substrate dry run (a controller on an anchor, no cast) | yes, behind a default-off switch: the S2 build itself | APMF S2 | `[CombatSubstrate] bCombatSubstrate=1`, `bSubstrateDryRun=1` | `[substrate] 0x<f> OPEN anchor=0x<ref> entry=<true/false>`; `[substrate] 0x<f> LEAF DENIED <leaf> (n)`; `[substrate] 0x<f> STARTCOMBAT-AT-ANCHOR REFUSED caller=0x<actor>`; `[substrate] 0x<f> OBSERVED music=<type> player-in-combat=<y/n> aggressor-bit=<0/1> ignoring-readers=<site:n,...>`; `[substrate] 0x<f> known hole: combat state event sent` / `... combat-start topic path ran`; `[substrate] 0x<f> CLOSE reason=<...> controller-null=<y/n> anchor-home=<y/n> pkg-after=0x<pkg>` | every row of the deny table, with numbers, before a cast rides on it |
+| **P6** the package drives the body under the substrate | P3's build, same switch | APMF S2 | `[CombatSubstrate] bSubstrateMoveTrace=1` (new, default 0) | once per 250 ms while open: `[substrate] 0x<f> MOVE pkg=0x<pkg> proc=<type> ctrl+0x42=<0/1> proc+0x139=<0/1> speed=<u/s> dist-to-pkg-goal=<u> movement-leaves-denied=<n> ignoring-bit reset by the engine (n)`; with a claim (P4): `[castobs] ... ANIM-EVENT 'BeginCast<L/R>'` and `'M<L/R>h_SpellFire_Event'` at a sample with `speed > 50` | the split works: the package moves the follower (speed > 0, distance to the player holding), the tree is not paused (`ctrl+0x42=0`), and an animated cast fires while walking |
+| **P3a** console rehearsal (before S2 lands) | none | in-game console | none | what marth sees and hears | barks, music and teammates joining for combat against a non-hostile target. Steps: `placeatme` any harmless NPC; select it, then `tai`, `setghost 1`, `setav aggression 0`; select a follower, `startcombat <ref>`; watch 30 s; `stopcombat`. A cheap early look, not a substitute for P3 |
 | **P4** substrate + claim fires | S3 | MFO + APMF | as P3, `bSubstrateDryRun=0` | APMF `[ctcensus] ... controller=yes ... VERDICT: FIRED via <Row> (the hand charged: ANIMATED`; MFO `[cast] ... road=substrate-claim ... FIRED`; then `[substrate] ... CLOSE reason=fired` | an animated OOC cast |
-| **P5** the transition | S3 | field | as P4 | `[substrate] ... CLOSE reason=real-foe target=0x<foe>` then the claim continuing as an in-combat claim, no `TARGET IS ANCHOR` lines from MFO's foe pick | a substrate meeting a real fight ends cleanly |
+| **P5** the transition to a real fight | S3 | field | as P4 | `[substrate] ... CLOSE reason=real-foe target=0x<foe>`, then the claim continuing as an in-combat claim, and no anchor in MFO's foe pick | a substrate meeting a real fight ends cleanly |
 
-Every new probe line is rate-limited and passive. A failure is logged loudly and never masked (principle 7): a
+Every new probe line is rate-limited and passive. A failure is logged loudly and never masked (principle 7). A
 substrate that cannot open does not fall back to the direct road while Harbinger reports the substrate capable.
 
 ## 6. The build plan
 
 | Slice | Tier | Repo | Author | Depends on | What it proves in the field | Due 10-16? |
 |---|---|---|---|---|---|---|
-| **S0** P1 field run + P3a console rehearsal | none | (field) | marth plays, coordinator gathers | nothing | the in-combat claim roads R3/R4 fire; the substrate's world facets with a non-hostile target | **yes** |
-| **S1** convert the remaining in-combat direct roads: R2 (claim with own FormID), R5 (the summon claim is the only road with Harbinger present; direct = APMF-absent degrade), R9 (drop the `!IsRestorationSpell` exclusion on the claim forks), R10 (AUTO hostile becomes a series through `CastOn`); every road still direct logs one `[road] <id> <spell> UNANIMATED (<reason>)` WARN per fight so the residue is visible | B | MFO | Sonnet | S0 for R5 confidence (not a hard block) | every in-combat cast except R6 animated | **yes** |
-| **S2** Harbinger substrate facet (new intent, e.g. `kIntent_CombatSubstrate`, ABI append): the anchor record in `APMF.esl`, open/close/sweep, entry through ch.21's verified StartCombat call, anchor held by the knowledge seats, the ActionGate leaf allow-list, the anchor-target refusal at StartCombat's target `IsDead(false)` return address (a new `VerifiedAddresses` call-site row, both runtimes, byte-checked), the dry-run switch, the P3 probe lines; INVARIANTS #0 amendment (needs Q1); FACETS chapter | **A** | APMF | Opus | Q1 | P3: the deny table with numbers | **no** (tier A, 3 review rounds is the norm) |
-| **S3** MFO substrate client: the OOC table asks for a substrate and a ch.8b claim for every OOC cast (R12-R14, R16); MFO's combat readers (Scheduler party-combat gate, Evaluator foe pick, `FoeCount`, engage on sight, the combat-end edges) treat a substrate-only controller as out of combat and never see the anchor as a foe; R15 becomes ch.21 entry + the R7 claim | **A** (the Scheduler combat gate and its threading) | MFO | Opus | S2 | P4, P5 | no |
-| **S4** spell equip moves: P2 probe first (APMF, passive), then MFO stops `Loadout::Prepare`'s `EquipSpell` on claim roads when Harbinger reports engine-equip capability; the bounded Harbinger equip bit only if P2 says the engine does not equip | P2: B (passive probe); MFO change: B; a Harbinger equip bit: A | APMF + MFO | Sonnet (B), Opus (A) | P2 field data | the claimed hand takes the driven form with no MFO equip | P2 probe only |
-| **S5** concentration and AUTO under the substrate: a heal channel held for its stop percent, the AUTO series out of combat | B | MFO | Sonnet | S3 | OOC channelled heals animated | no |
+| **S0** P1 field run, plus the P3a console rehearsal | none | (field) | marth plays, the coordinator gathers | nothing | the in-combat claim roads R3/R4 fire; the world facets of combat against a non-hostile target | **yes** |
+| **S1** convert the remaining in-combat direct roads (details below) | B | MFO | Sonnet | S0 for R5 confidence (not a hard block) | every in-combat cast except R6 is animated | **yes** |
+| **S2** the Harbinger substrate facet (details below) | **A** | APMF | Opus | marth's adoption of the amendment (anchor actor + process-bit split) | P3 and P6: the deny table and the movement split, with numbers | **no** (tier A; three review rounds is the norm) |
+| **S3** the MFO substrate client (details below) | **A** (the Scheduler combat gate and its threading) | MFO | Opus | S2 | P4, P5 | no |
+| **S4** the spell equip moves: the P2 probe first (APMF, passive); then MFO stops `Loadout::Prepare`'s `EquipSpell` on claim roads when Harbinger reports engine-equip capability; the bounded Harbinger equip bit only if P2 says the engine does not equip | P2: B; MFO change: B; a Harbinger bit: A | APMF + MFO | Sonnet (B), Opus (A) | P2 field data | the claimed hand takes the driven form with no MFO equip | P2 probe only |
+| **S5** concentration and AUTO under the substrate: a heal channel held for its stop percent while walking; the AUTO heal / buff series out of combat | B | MFO | Sonnet | S3 | OOC channelled heals are animated | no |
 | **S6** retire the OOC direct roads with Harbinger present (they stay the APMF-absent degrade); update CAST-DELIVERY, MAP, ENGINE_NOTES, STATUS | B (code) / C (docs) | MFO | Sonnet | S3-S5 field-proven | nothing new: the docs match the code | no |
 | **RS1** research: an animated road for aimed Light and runes (kTargetLocation), and `rowApprox` spells | research | APMF | Opus | none | which caster, if any, the engine builds for them | no |
-| **RS2** research: a deny for the combat-start topic and combat barks; the meaning of `AIProcess+0x136` bit 2 | research | APMF | Opus | P3 numbers | whether the bark hole can be closed | no |
+| **RS2** research, in parallel (marth approved shipping without it): a deny for the combat-start topic (first candidate: section 3.4's ordering variant); the meaning of `AIProcess+0x136` bit 2; the seven other readers of the process ignoring-combat bit | research | APMF | Opus | P3 numbers | whether the bark hole can be closed | no |
+
+**S1 detail (MFO, tier B):**
+- R2: a self heal whose delivery is not Self is claimed with the caster's own FormID as the target.
+- R5: the summon claim is the only road with Harbinger present; the direct road is the APMF-absent degrade.
+- R9: drop the `!IsRestorationSpell` exclusion on the claim forks.
+- **R10: AUTO hostile becomes a series through `CastOn`, one foe at a time (marth approved).**
+- Every road that is still direct logs one `[road] <id> <spell> UNANIMATED (<reason>)` WARN per fight, so the
+  residue is visible.
+
+**S2 detail (Harbinger, tier A):**
+- A new intent, for example `kIntent_CombatSubstrate`, appended to the ABI.
+- The anchor POOL records in `APMF.esl`, and the open / serve / close / load-home lifecycle.
+- The entry through ch.21's verified StartCombat call.
+- The anchor held by the knowledge seats, and the anchor following the follower.
+- The ActionGate leaf allow-list, Movement half included.
+- **The ignoring-combat split:** the process bit on after the entry and re-asserted per frame, the controller
+  unpaused, and the `EvaluatePackage` re-pick.
+- The anchor-target refusal at StartCombat's target `IsDead(false)` return address: a new `VerifiedAddresses`
+  call-site row on both runtimes, byte-checked.
+- The dry-run switch, and the P3 / P6 probe lines.
+- The INVARIANTS #0 amendment and a FACETS chapter.
+
+**S3 detail (MFO, tier A):**
+- The OOC table asks for a substrate and a ch.8b claim for every OOC cast (R12-R14, R16).
+- MFO's combat readers treat a substrate-only controller as out of combat and never see an anchor as a foe: the
+  Scheduler party-combat gate, the Evaluator foe pick, `FoeCount`, engage on sight and the combat-end edges.
+- R15 becomes a ch.21 entry plus the R7 claim.
 
 **The first buildable slice is S1** (tier B, Sonnet, MFO only, no Harbinger change), together with S0 in the field.
-S0 + S1 + the P2 probe fit the 2026-10-16 date. **S2 and S3 cannot meet 2026-10-16**: S2 is a new Harbinger facet
-with an engine call, a new verified call-site row and an INVARIANTS amendment, which is tier A and runs until its
-review finds nothing above SEV-3; S3 depends on it and touches the Scheduler's combat gate.
+S0, S1 and the P2 probe fit the 2026-10-16 date.
 
-## 7. Questions for marth
+**S2 and S3 cannot meet 2026-10-16.** S2 is a new Harbinger facet with an engine call, a new verified call-site row,
+a sustained engine-state write and an INVARIANTS amendment. That is tier A, and it runs until its review finds
+nothing above SEV-3. S3 depends on it and touches the Scheduler's combat gate.
 
-- **Q1. A Harbinger-owned anchor actor.** The substrate needs Harbinger to place its own invisible dummy actor and
-  start combat against it. That is a new kind of Harbinger action (it creates a reference). Adopt it as a new
-  legal action (INVARIANTS #0), yes or no? Without it there is no combat target that is not a real actor.
-- **Q2. Out-of-combat casts: stand and cast, or keep walking?** Recommended: stand and cast for the 1-3 s of the
-  cast, as vanilla casters do. The alternative keeps the follower walking toward you in combat gait while casting,
-  through an internal combat-area bound.
-- **Q3. AUTO on an attack spell becomes one foe at a time.** Today it hits every foe in one tick, unanimated. The
-  animated shape is a series, one real cast per foe, the same way AUTO heals already work. OK?
-- **Q4. Two holes with no deny today:** the combat-start bark ("there you are" style lines) and the Papyrus
-  `OnCombatStateChanged` event other mods' scripts see, both for the 1-3 s of a substrate. Ship S3 with these
-  logged as known holes while RS2 looks for a deny, or hold S3 until RS2 closes the bark?
+## 7. Decisions (marth, 2026-10-12) and what is still open
+
+**Answered:**
+- **Q1, the anchor.** marth asked whether it can be an inanimate object. The disassembly says no (section 3.3), so
+  the anchor is an actor, now a pooled, ESL-authored one. **Still needs his yes:** S2's amendment, which lets
+  Harbinger move its own anchor actors, start combat against them, and hold the process ignoring-combat bit for the
+  substrate's bounded life.
+- **Q2, movement.** marth: "block combat from affecting movement and have them continue using the non combat package
+  for movement". The design is section 3.4: split ignoring combat, deny the Movement half, and let the package drive.
+  Proven by P6 before anything rides on it. The ch.24 fallback is used only if P6 fails.
+- **Q3, AUTO on attack spells.** One foe at a time, animated. Approved; in S1.
+- **Q4, the two holes.** The combat-start bark and `OnCombatStateChanged` ship as known holes, logged per substrate.
+  Approved; RS2 runs in parallel.
+
+**Open:** none beyond the S2 amendment above.
