@@ -354,3 +354,10 @@ MISSED`, then MFO's own `[taunt] released 0x<foe> (<reason>) after <s> s`.
    the taunt, or not get Taunt at all?
 3. **Roll numbers:** is 50% at equal level, plus or minus 5% per level, clamped 10 to 90%, right?
 4. **Duration:** 15 s fixed, or an MCM/INI value (default 15)?
+
+## Decisions (marth, 2026-10-12)
+- **Q1 targets:** the chosen foe plus up to 3 nearby foes (about 1024 u, in combat with the party, can sense the taunter). Each rolls separately.
+- **Q2 ranged / staff / casters:** Taunt is a MELEE-ONLY gambit action (offered only while a melee weapon is in the right hand), so it always plays an animation. Animations are non-negotiable.
+- **Q3 roll:** p = clamp(0.5 + 0.05 x (taunter level - foe level), 0.1, 0.9), as proposed.
+- **Q4 duration:** 15 s by default, adjustable with an MCM slider.
+- Ranking vs other target mods is the user's Harbinger slider configuration, not a design question; the enemy pin is a normal ranked ch.20 claim. Nothing escapes Harbinger.
