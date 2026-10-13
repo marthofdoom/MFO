@@ -127,4 +127,8 @@ MFO seed defaults. MCM Helper's Data/MCM/Settings/MFO.ini is read AFTER this and
 
 ## [Taunt]
 
+- **`fTauntDuration`** (default `15.0`, MCM slider 5 to 60). How long, in seconds of running game, a foe that rolled a hit stays pinned onto the taunter before it picks its own target again. It is released sooner if the taunter goes down or dies, the foe dies or unloads, the fight ends, a save loads, or Harbinger ends the hold itself.
+- **`fTauntRadius`** (default `1024.0`, range 256 to 2048). Plain INI, not in the MCM. How far from the taunter, in game units, an extra foe may be and still roll. The foe the gambit chose is exempt.
+- **`iTauntMaxFoes`** (default `4`, range 1 to 6). Plain INI, not in the MCM. Foes per taunt, counting the one the gambit chose. 4 means the chosen foe plus up to 3.
+
 - **`bTauntProbe`** (default `0`). Dev only, plain INI, not in the MCM. 1 = write rate-limited `[taunt-probe]` lines to MFO.log. P1 says whether the combat taunt idle would play for a follower in combat right now (every 5 s per follower) and names the first failing condition record. P2 says whether each follower is held, lost or absent in the combat group of each foe that is fighting the party, how often that foe switches target, and whether it senses the follower (every 2 s per follower). It logs only. No claim, no animation, no change to the game. P2's SenseActor call is not zero-impact on Harbinger: it costs up to 3 synchronous rays on the main thread, shares the `kLosMaxSyncPairsPerFrame` budget of 8, and registers pair interest that Harbinger re-measures every 250 ms for 2 s.

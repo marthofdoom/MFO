@@ -376,7 +376,7 @@ namespace MFO::Taunt {
         using R = Actuation::Result;
         if (!a_f) return { R::FailedOther, "taunt: no follower", true };
         if (!APMFBridge::TauntSupported())
-            return { R::FailedOther, "taunt needs Harbinger (APMF) 0.9.10 or newer (ABI 17: the ch.12 idle with a form)", true };
+            return { R::FailedOther, "taunt needs Harbinger (APMF) ABI 17 or newer (the ch.12 idle with a form)", true };
         // MELEE-ONLY: the animation is non-negotiable and the vanilla humanoid combat idle needs a melee weapon in the
         // right hand (Docs/TAUNT-DESIGN.md 3.1). Transparent: the scan falls through to the rules below.
         if (!MeleeInRightHand(a_f))

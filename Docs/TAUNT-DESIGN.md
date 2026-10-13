@@ -1,6 +1,6 @@
 # Taunt gambit: design and RE (ClickUp 86e3g6duw)
 
-Status: DESIGN ONLY, no production code. Written 2026-10-12 against MFO origin/main `955645e` and
+Status: DESIGN. Slice S0 (probes) and slice S2 (`cond.foe_attacking_ally`, `act.taunt`, the executor: `native/Taunt.cpp`, `native/apmf/TauntClaims.cpp`, MAP section 2 "Taunt.cpp") are built, see MAP.md. Written as design only, no production code. Written 2026-10-12 against MFO origin/main `955645e` and
 Harbinger (APMF) origin/main `3f22ae4`. Addresses were read from our unpacked executables
 (1.6.1170 "AE", 1.5.97 "SE") with the RE helper; ids are Address Library ids from LoreRim's
 `versionlib-1-6-1170-0.bin` / `version-1-5-97-0.bin`.
