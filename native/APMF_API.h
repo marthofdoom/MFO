@@ -16,8 +16,7 @@
 // END of a NEW versioned struct whose leading fields are byte-identical to the
 // previous struct, add new fields at the END of APMF_Param, and bump kABIVersion.
 // A client built against an older ABI must keep working against every later APMF.
-// (The same discipline any byte-shared C-ABI header between two separately
-// compiled DLLs needs.)
+// History: Docs/APMF_API-HISTORY.md#append-only-discipline
 //
 // ── VERSIONING SHAPE (COM-style prefix extension) ──
 // Each ABI revision adds a struct APMF_API_vN whose LEADING members are exactly,
@@ -50,10 +49,7 @@
 //     // that only needs v2 checks `>= 2` and casts to APMF_API_v2*; a v3 field like
 //     // Repoint requires `>= 3`; a v4 field like SetSpellAllowList requires `>= 4`.)
 //
-// (An exported query fn was chosen over the SKSE-messaging handshake MEO uses: it
-// is synchronous, has no message-ordering or sender/receiver routing subtlety, and
-// hands over a POD struct with no vtable. The struct-of-fn-pointers shape is the
-// ABI contract; the transport is just how you get the pointer.)
+// History: Docs/APMF_API-HISTORY.md#transport-choice
 //
 // ── Threading ──
 // Request/RequestEx/Repoint/Release/SetSpellAllowList/SetEquipSet/SetEquipSetEx/SetEquipScope
@@ -93,71 +89,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI v10 (2026-09-22) adds kIntent_Travel (ch.19) + TravelFlags and NOTHING
-    // else: ch.19 rides the EXISTING Request/RequestEx/Repoint/Release slots, so
-    // there is no APMF_API_v10 struct and no new function pointer. A v9 client is
-    // byte-unaffected and keeps working against this build unchanged.
-    //
-    // ABI v11 (2026-09-23) adds APMF_API_v11: two read-only SPACE QUERIES
-    // (FindEmptySpace, FindHostilesInSpace) and their POD structs, plus the
-    // kCastFlag_AtPosition bit that lets a kIntent_Cast RequestEx carry a world
-    // POINT (APMF_Param.pos), and the kTravel_ToPosition bit that lets kIntent_Travel
-    // walk to one. A client must see abiVersion >= 11 before it calls a v11 slot or
-    // sets either bit: an older APMF ignores kCastFlag_AtPosition and would treat the
-    // request as an ordinary actor-target cast claim (it refuses a zero-form travel).
-    //
-    // ABI v12 (2026-09-24) adds APMF_API_v12: ONE read-only slot, GetTravelLegState,
-    // and its POD struct APMF_TravelLegInfo, so a client can read WHY its travel leg
-    // ended (APMF ends a leg but never releases the client's claim, so without it an
-    // ended leg is indistinguishable from a package theft). It also adds the travel
-    // GAIT bits (kTravel_SpeedSet + a 2-bit speed) and the BLOCKED leg end. A client
-    // must see abiVersion >= 12 before it calls the slot or sets a gait bit: an older
-    // APMF stores the unknown bits and walks at its authored speed without a word.
-    //
-    // ABI v13..v16 (2026-09-25) each add ONE intent and NOTHING else (no struct, no slot, no
-    // APMF_Param field; each rides RequestEx/Repoint/Release, a v(N-1) client is byte-unaffected):
-    // v13 kIntent_TargetPin (ch.20), v14 kIntent_CombatEntry (ch.21), v15 kIntent_CombatReentryDeny
-    // (ch.22, param.fval = the window in seconds), v16 kIntent_PursuitLeash (ch.23, param.target =
-    // the anchor, param.fval = the radius). A client must see abiVersion >= N before it asks for
-    // that intent: an OLDER APMF has no channel for it and REFUSES the request (kInvalidHandle, "no
-    // channel serves intent <n>" in its log) -- the documented degrade: do it your own way. (A
-    // withdrawn, never-released v16 draft carried the leash as ch.7 bit kCombatActionCat_Pursuit.)
-    //
-    // ABI v17 (2026-09-25) gives kIntent_Idle (ch.12) a FORM and a TARGET and NOTHING else: no
-    // new intent, no struct, no function-pointer slot, no APMF_Param field. The idle rides the
-    // EXISTING param.form (the TESIdleForm to play) and param.target (the reference to play it
-    // at), which v1..v16 accept and ignore for this intent. That is why no field is added: the
-    // two values are a form and a ref, exactly what those fields already carry for every other
-    // intent, and a zero form still means the v1 behaviour. There is no APMF_API_v17 struct and
-    // a v16 client is byte-unaffected. A client must see abiVersion >= 17 before it sets
-    // param.form on kIntent_Idle: an OLDER APMF does NOT refuse such a claim -- it ignores the
-    // form and plays its form-free IdleForceDefaultState -- so an unchecked client gets the
-    // wrong animation, silently. That is the degrade to avoid; check the version.
-    //
-    // ABI v18 (2026-10-05, ClickUp 86e3h6qj9) adds Harbinger's OWN LINE OF SIGHT and an
-    // AWARENESS query. Two new flag bits ride existing words: kCastFlag_OwnLineOfSight
-    // (CastFlags bit 6) and kTargetPin_OwnLineOfSight (kIntent_TargetPin's param.ival,
-    // bit 0, which v13..v17 accept and ignore). APMF_API_v18 appends TWO slots,
-    // GetLineOfSight (any thread) and SenseActor (main thread only), with their POD
-    // structs. A client must see abiVersion >= 18 before it calls either slot or sets
-    // either bit: an OLDER APMF ignores both bits WITHOUT a word (the cast fires, and the
-    // pin holds, with no line-of-sight test at all). See "ABI v18: LINE OF SIGHT AND
-    // AWARENESS" at the end of this header.
-    //
-    // ABI v19 (2026-10-05, batch A) adds kIntent_CombatApproach (ch.24): the IN-COMBAT
-    // movement goal "stay within R of actor X while fighting". It rides the EXISTING
-    // RequestEx/Repoint/Release slots and reads the EXISTING param.target (X), param.fval
-    // (R) and param.ival (CombatApproachFlags). APMF_API_v19 appends ONE read-only slot,
-    // GetCombatApproachState, with its POD struct APMF_CombatApproachInfo. A client must see
-    // abiVersion >= 19 before it asks for the intent or calls the slot: an OLDER APMF has no
-    // channel for intent 24 and REFUSES the request (kInvalidHandle, "no channel serves
-    // intent 24" in its log) -- the documented degrade. See "ABI v19: COMBAT APPROACH" at
-    // the end of this header.
-    // ABI v20 (2026-10-06): kCastFlag_FloorSpellsOnly (CastFlags bit 7) only, no struct/slot.
-    // Gate on abiVersion >= 20 (Docs/INTEGRATION.md "Spells-only floor" has the why).
-    // ABI v21 (2026-10-12): kIntent_CastGuard (ch.25) + CastGuardFlags only, no struct/slot. An older
-    // APMF REFUSES intent 25 ("no channel serves intent 25"). Docs/INTEGRATION.md "Cast guards".
-    inline constexpr std::uint32_t kABIVersion = 21;
+    // ABI history (v10..v22, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // N.
+    // History: Docs/APMF_API-HISTORY.md#abi-history
+    inline constexpr std::uint32_t kABIVersion = 22;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -208,13 +143,9 @@ namespace APMF_API {
                                      //       framework's own selection is a future gap).
                                      //       Param: form (the spell FormID). `ival`, `target`
                                      //       and `pos` are ACCEPTED-AND-IGNORED on this intent.
-                                     //       RETIRED (feat/ai-cast-seats-impl): `ival` bits 0-1
-                                     //       (the +ACT hand mode) and bit 2 (kActFlag_Drive, the
-                                     //       +ACT drive opt-in) NO LONGER MEAN ANYTHING. The
-                                     //       forced cast drive they selected is gone; a cast that
-                                     //       must actually HAPPEN is now a kIntent_Cast (ch.8b)
-                                     //       claim, which makes the NPC's own AI cast natively
-                                     //       through the engine seats (see kIntent_Cast below).
+                                     //       `ival` bits 0-2 (the old +ACT mode / drive) are RETIRED and mean
+                                     //       nothing.
+                                     //       History: Docs/APMF_API-HISTORY.md#kintent-selectspell-retired
                                      //       The bits stay RESERVED and are never reused, so a
                                      //       client that still sets them is byte-compatible and
                                      //       simply gets this channel's original gate-only
@@ -350,8 +281,7 @@ namespace APMF_API {
         // reserves ch.18 for the NPC attack-selection facet; nothing has been
         // authored for it. Leaving the number unused costs nothing and keeps intent
         // numbers and channel numbers aligned for every channel that exists.
-        // (That design's own draft calls itself "ABI v10" -- it will have to become
-        // v11, since ch.19 shipped v10 first.)
+        // History: Docs/APMF_API-HISTORY.md#intent-18
 
         kIntent_Travel        = 19,  // ch.19 WALK this actor to a destination (ABI v10, marth
                                      //       2026-09-22). Mode: the framework MOVES the actor,
@@ -365,62 +295,18 @@ namespace APMF_API {
                                      //       [50, 512] and the clamp logged); ival = a TravelFlags
                                      //       bitmask.
                                      //
-                                     //       A DESTINATION IS A REFERENCE OR A CELL, and the
-                                     //       FormID's own record type decides which -- no flag,
-                                     //       no second field, no ambiguity:
-                                     //         * an object REFERENCE (REFR/ACHR: an actor, an
-                                     //           XMarker, a container, anything loaded). Arrival
-                                     //           = distance to it <= the radius.
-                                     //         * a CELL. Arrival = the actor's PARENT CELL is that
-                                     //           cell; distance has no meaning for a cell, so the
-                                     //           radius is not consulted for this kind.
-                                     //       Anything else is REFUSED and logged, never
-                                     //       reinterpreted -- but read the two refusal TIMINGS
-                                     //       below, because they are not the same and a client
-                                     //       that assumes they are will leak a claim.
+                                     //       A destination is a reference (arrival = within the radius) or a
+                                     //       cell (arrival = in it); a point needs kTravel_ToPosition.
+                                     //       See Docs/APMF_API-REFERENCE.md#kintent-travel-destinations
                                      //
-                                     //       A WORLD POSITION (ABI v11): set kTravel_ToPosition in
-                                     //       ival, leave form = 0, put the point in param.pos. An
-                                     //       AI package's location still carries a form or a handle
-                                     //       and NO coordinates, so APMF does what vanilla does: it
-                                     //       places its OWN XMarker at the point and the leg's
-                                     //       destination is that marker. Everything else is the
-                                     //       reference path above, unchanged (radius, combat,
-                                     //       the 2-minute stuck end), except that a marker never
-                                     //       "dies". APMF deletes the marker when the leg ends for
-                                     //       ANY reason and replaces it on a Repoint to a new
-                                     //       point (see kTravel_ToPosition). WITHOUT the flag a
-                                     //       non-zero param.pos is still REFUSED by name, never
-                                     //       silently ignored.
+                                     //       A leg ends on arrival, on the actor entering combat, or the
+                                     //       destination dying / disabled / unloading (v12: BLOCKED).
+                                     //       See Docs/APMF_API-REFERENCE.md#kintent-travel-ends
                                      //
-                                     //       THE WHOLE CONTRACT, in marth's words: "it goes to
-                                     //       the target 50-100u from it. And combat interrupts
-                                     //       and cancels the movement. That's all." The leg ENDS
-                                     //       on ARRIVAL (inside the radius), on the ACTOR ENTERING
-                                     //       COMBAT (`Actor::IsInCombat`), or on the destination
-                                     //       dying / being disabled / unloading. Nothing else.
-                                     //       (ABI v12 adds one engine-reported end: BLOCKED, the
-                                     //       engine holding the actor in its Movement Blocked
-                                     //       package for 3 s. The 2-minute stuck end is the
-                                     //       safety net. APMF_API_v12::GetTravelLegState says
-                                     //       which end it was.)
-                                     //
-                                     //       ONE INTENT, ONE FACET. ch.19 claims NOTHING on your
-                                     //       behalf -- no combat target (ch.6), no attack
-                                     //       selection, no casting, no equip (ch.17), no hands, no
-                                     //       aggression (ch.11), no movement block (ch.1). It
-                                     //       enters no combat, pins no target, and fakes no
-                                     //       perception (there is no line-of-sight or detection
-                                     //       test anywhere in it). A client that wants any of
-                                     //       those claims that intent ITSELF, separately, and the
-                                     //       two arbitrate independently. That orthogonality is
-                                     //       deliberate: marth, 2026-09-22, "We should avoid
-                                     //       combining intents anyway."
-                                     //       Convenience COMBO intents (one call that bundles,
-                                     //       say, travel + combat target + combat entry) are a
-                                     //       recognised and reasonable idea, DEFERRED until after
-                                     //       the full MFO port to APMF is complete -- not refused
-                                     //       on principle. Until then: one facet, one intent.
+                                     //       ch.19 claims nothing else on your behalf (no target, combat,
+                                     //       equip, aggression).
+                                     //       See Docs/APMF_API-REFERENCE.md#kintent-travel-one-facet
+                                     //       History: Docs/APMF_API-HISTORY.md#kintent-travel-no-combos
                                      //
                                      //       Repoint(handle, &param) moves the destination in
                                      //       place -- no release/re-claim churn. Release ends the
@@ -439,15 +325,7 @@ namespace APMF_API {
                                      //         returned a LIVE HANDLE, the log says why the
                                      //         claim does nothing, and the handle stays live
                                      //         until you Release it. RELEASE IT.
-                                     //       Why not synchronous: RequestEx is callable FROM ANY
-                                     //         THREAD and its whole contract is that it copies
-                                     //         POD and enqueues (see the Threading note at the
-                                     //         top). Deciding a form's record type needs a form
-                                     //         lookup, and APMF does not take the engine's form
-                                     //         table off the game thread for an API call --
-                                     //         kIntent_Cast's own FromPackage extraction defers
-                                     //         for exactly the same reason. Every refusal is
-                                     //         logged with its reason either way.
+                                     //       See Docs/APMF_API-REFERENCE.md#kintent-travel-refusal-timing
 
         kIntent_TargetPin     = 20,  // ch.20 PIN this actor's combat target (ABI v13, marth
                                      //       2026-09-25). Mode: DENY the ENGINE'S OWN target
@@ -458,53 +336,10 @@ namespace APMF_API {
                                      //       ival = TargetPinFlags (ABI v18; 0 = none).
                                      //       fval / target / pos are not read.
                                      //
-                                     //       WHAT IT DOES. Each combat update the engine asks its
-                                     //       target selectors which foe this actor should fight.
-                                     //       While the claim stands, APMF answers that question
-                                     //       with your target, so the engine's own pick never
-                                     //       reaches the actor. The engine then fights your
-                                     //       target with its own AI: its own attacks, movement,
-                                     //       spells and equips.
-                                     //
-                                     //       ONLY AMONG THE ENGINE'S OWN COMBAT TARGETS. The
-                                     //       answer is replaced only when the engine's selector
-                                     //       picked a target (the actor is fighting) AND your
-                                     //       target is one of the actor's combat group's targets.
-                                     //       Otherwise nothing is written and the log says so.
-                                     //       It does NOT start combat and does not make anyone a
-                                     //       target: an actor becomes pinnable once something (the
-                                     //       engine, or your own combat entry, a separate concern)
-                                     //       makes it a combat target of the actor's group. Combat
-                                     //       entry is never this intent (INVARIANTS #0).
-                                     //       It claims nothing else: no attack selection, no
-                                     //       casting, no equip, no movement, no aggression. One
-                                     //       intent, one facet (the kIntent_Travel rule).
-                                     //       It is a different intent from kIntent_CombatTarget
-                                     //       (ch.6), which stays ARBITRATION-ONLY and writes
-                                     //       nothing: claim this one to have APMF hold the target.
-                                     //
-                                     //       THE PIN PAUSES -- the engine's own pick stands for
-                                     //       that update -- while the engine has no target or your
-                                     //       target is not (yet) one of the group's combat targets.
-                                     //       The claim stays; it resumes when both hold again.
-                                     //
-                                     //       THE PIN ENDS, AND APMF RELEASES THE CLAIM ITSELF
-                                     //       (marth: "If APMF can no longer track the target, it's
-                                     //       lost, and dropped"), when the target is LOST (the
-                                     //       engine can no longer locate it), dead, disabled, not
-                                     //       loaded or no longer resolves, or the actor itself
-                                     //       dies. The log names the reason ("pin ended: target
-                                     //       lost"), IsClaimLive(handle) turns false (ABI v6), and
-                                     //       the handle is dead: a mod that wants to keep chasing
-                                     //       must pin again. This is the ONLY case in which APMF
-                                     //       releases a client's kIntent_TargetPin claim. Your own
-                                     //       Release, an outranking claim, a save load, a new game
-                                     //       or the actor unloading also end it (never saved).
-                                     //
-                                     //       The world's reaction to the fight is YOURS (CLAUDE.md
-                                     //       principle 2): crime, bounty, faction and aggression
-                                     //       consequences happen as the engine does them, and
-                                     //       Release does not undo them.
+                                     //       Answers the engine target selectors with your target, only among
+                                     //       the group's own combat targets; pauses otherwise; APMF releases
+                                     //       it when the target is lost / dead / unloaded.
+                                     //       See Docs/APMF_API-REFERENCE.md#kintent-targetpin
                                      //
                                      //       OWN LINE OF SIGHT (ABI v18): param.ival carries
                                      //       TargetPinFlags (it was not read before v18). With
@@ -774,6 +609,16 @@ namespace APMF_API {
                                      //       outranks "Engine" on the Cast facet (APMF_Sources.ini). REFUSED
                                      //       (kInvalidHandle, logged): APMF < v21, the player, CheckCast gate not
                                      //       installed, a bad ival / fval, kCastGuard_LineOfFire while unarmed.
+        kIntent_EquipPreference = 26, // ch.26 PREFER items for this actor's hands IN COMBAT (ABI v22, weighting
+                                     //       phase 1). Mode: COMPOSE (the engine's own CalculateScore 0x0C answer
+                                     //       is LIFTED, never replaced) + an opt-in DENY (kEquipPref_Force).
+                                     //       Param: ival = EquipPrefFlags. form/target/fval/pos are not read. A
+                                     //       STANDING claim (no TTL), ended by Release. The claim alone changes
+                                     //       nothing: the client then DECLARES the preferred items with
+                                     //       SetEquipPreference (APMF_API_v22). See "ABI v22: EQUIP PREFERENCE"
+                                     //       at the end of this header for the whole contract. REFUSED
+                                     //       (kInvalidHandle, logged): APMF < v22, the player, actor 0,
+                                     //       [AiCastSeats] EnableScoreSteer=0, or no score seat installed.
     };
 
     // ── Cast guard flags (kIntent_CastGuard's param.ival, ABI v21). APPEND-ONLY. ──────
@@ -1193,15 +1038,7 @@ namespace APMF_API {
                                              //   NOTHING here and APMF asks the engine to arm nothing:
                                              //   this is the missing half of the per-hand cast deny.
                                              //
-                                             //   THE PROBLEM IT SOLVES. A single-hand kIntent_Cast claim
-                                             //   scopes its deny to its OWN hand by design, so the other
-                                             //   hand stays fully AI-governed -- and the field showed the
-                                             //   AI using it: 25 Stone Runes, 6 Poison Sprays and 8 Raise
-                                             //   Zombies all charged on the UNCLAIMED hand while the claim
-                                             //   held the other one (2026-09-06 diagnosis, RC3 / audit rows
-                                             //   P3-P4). A client that wants the follower to cast ONLY what
-                                             //   it asked for had no way to say so, because there is no
-                                             //   spell it wants on that second hand -- only silence.
+                                             //   History: Docs/APMF_API-HISTORY.md#kcastflag-denyhandonly-problem
                                              //
                                              //   WHAT APMF DOES WITH IT. The claim stands on exactly the
                                              //   hand kCastFlag_LeftHand selects (default right), with its
@@ -1280,26 +1117,9 @@ namespace APMF_API {
                                              //   ANYTHING ON A FLOORED HAND -- a driving kIntent_Cast claim
                                              //   (which, per the tie rule above, takes the hand at an equal
                                              //   basis) is how you reopen it, not an unclaimed cast.
-                                             //   VERIFIED, 2026-09-06, because the natural worry is that a
-                                             //   client's own DIRECT force-cast would be denied by its own
-                                             //   floor: it is NOT. A direct
-                                             //   `GetMagicCaster(kInstant)->CastSpellImmediate(...)` force
-                                             //   does not consult CheckCast at all, so this gate cannot see
-                                             //   it -- MagicCaster::CastSpellImmediate is vtable slot 0x01
-                                             //   and CheckCast is 0x0A, and the engine's CastSpellImmediate
-                                             //   never calls it. Two independent pieces of field evidence,
-                                             //   not a reading of the header: (1) MFO hooks CheckCast on the
-                                             //   SAME ActorMagicCaster vtable[0] slot 0x0A and records, in
-                                             //   its own source, that "the kInstant ConcProxy direct force
-                                             //   (CastSpellImmediate) does NOT deliberate through these
-                                             //   hooks, so it is never vetoed and needs no bound"
-                                             //   (MFO CasterConsent.cpp); (2) MFO's ENGINE_NOTES 0.9
-                                             //   measured a follower with ZERO magicka casting through
-                                             //   CastSpellImmediate forever -- a CheckCast consult would
-                                             //   have refused it with kMagickaInsufficient on the first
-                                             //   try. A floor therefore closes the hand to the AI's
-                                             //   deliberation, which is exactly and only what it claims to
-                                             //   do; it does not close the client's own direct force.
+                                             //   A floor does NOT close the client's own direct
+                                             //   CastSpellImmediate force (it never consults CheckCast).
+                                             //   History: Docs/APMF_API-HISTORY.md#kcastflag-denyhandonly-evidence
                                              //
                                              //   COMPATIBILITY. This is an APPEND-ONLY bit inside the
                                              //   already-frozen `flags` word -- no struct field added,
@@ -1775,17 +1595,9 @@ namespace APMF_API {
         Handle (*RequestCast)(RE::FormID actor, float basis, const APMF_CastRequest* req);
     };
 
-    // The v6 interface: APMF_API_v5's members verbatim (via prefix EXTENSION, same
-    // shape as every prior revision), then two appended cast-claim OBSERVABILITY
-    // slots. Neither changes what APMF does -- both are read-only queries closing
-    // an MFO<->APMF blind spot diagnosed 2026-09-06: a client that called
-    // RequestCast had no way to learn (a) the delivery-flip proxy FormID APMF
-    // minted internally for that claim, so it could only ever match the ORIGINAL
-    // spell and never recognised its own proxy's cast, and (b) whether its claim
-    // had already auto-expired at the TTL (design.md §5a), so it kept believing a
-    // long-dead handle was still live. This header is BYTE-SHARED with MFO: the
-    // declaration below is authoritative and must be mirrored byte-identically on
-    // the client side.
+    // The v6 interface: APMF_API_v5 verbatim (prefix extension) + two read-only cast-claim observability
+    // slots. BYTE-SHARED with MFO: mirror byte-identically.
+    // History: Docs/APMF_API-HISTORY.md#api-v6-preamble
     struct APMF_API_v6 : APMF_API_v5 {
         // Hand back the delivery-flip proxy FormID APMF minted internally for the
         // cast claim behind `handle` (see APMF_CastRequest::proxy and
@@ -1915,13 +1727,7 @@ namespace APMF_API {
         // knows). Read-only, safe from any thread, may change once at kDataLoaded
         // and never afterwards.
         //
-        // WHY (ABI v8, MFO wiring review SEV-2 F1): a client that turns its OWN
-        // equips off on a successful kIntent_EquipAuthority claim must be able to
-        // tell "APMF holds the set" from "APMF is only watching". Paired with the
-        // v8 rule that a kIntent_EquipAuthority Request/RequestEx returns
-        // kInvalidHandle while the seat is NOT installed (so the client's documented
-        // degrade path runs), this call distinguishes the remaining case: claimed
-        // and installed, but observe-only.
+        // History: Docs/APMF_API-HISTORY.md#isequipauthorityenforced-why
         bool (*IsEquipAuthorityEnforced)(void);
     };
 
@@ -2145,9 +1951,7 @@ namespace APMF_API {
     };
 
     // ── ABI v18: LINE OF SIGHT AND AWARENESS (2026-10-05, ClickUp 86e3h6qj9) ────
-    // marth 2026-09-30: "this really should be a flag sent to harbinger." marth
-    // 2026-10-05: "We also want harbinger line of sight for attack on sight ... we want
-    // the appearance of more senses than sight."
+    // History: Docs/APMF_API-HISTORY.md#abi-v18-los-origin
     //
     // THE OWN RAY. Harbinger's line of sight from a VIEWER actor to a TARGET actor is a
     // physics ray test, never the engine's cached Actor::HasLineOfSight answer:
@@ -2173,7 +1977,7 @@ namespace APMF_API {
     //     character controller, an unloaded, disabled or deleted actor, a dead viewer, or
     //     the engine's pick returning without casting): the verdict is UNAVAILABLE with its
     //     reason. It is never reported as VISIBLE.
-    // This is MFO's field-proven Sightline own-ray recipe (2026-09-30), now Harbinger's.
+    // History: Docs/APMF_API-HISTORY.md#abi-v18-los-recipe
     //
     // THREADING AND COST. Every ray runs on the game's MAIN thread (the player-Update
     // thread APMF drains its own queue on). Each ray is one bhkWorld::PickObject call,
@@ -2487,6 +2291,150 @@ namespace APMF_API {
         // layout, fills `*out`. Read-only; ANY THREAD (a copy under APMF's own lock, no game
         // call). A throw inside returns kApproachState_None and writes nothing.
         std::uint32_t (*GetCombatApproachState)(RE::FormID actor, APMF_CombatApproachInfo* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v22: EQUIP PREFERENCE (kIntent_EquipPreference, ch.26) -- weighting, phase 1
+    // ═════════════════════════════════════════════════════════════════════════════
+    // Where the engine decides by a SCORE, Harbinger enforces a wish only by BIASING that score.
+    // In combat the engine rescores every item about once a second with CombatInventoryItem::
+    // CalculateScore (vfunc 0x0C), sorts each engine CATEGORY and equips the top of each while a
+    // hand is free. Melee and ranged weapons and OFFENSIVE spells and staves share category 0;
+    // shields and torches 3; Restore 1; Ward 2 or 3; buff and utility spells 4 or 5.
+    //
+    // WHAT A DECLARATION DOES. While the claim OWNS ch.26 on the actor and the actor is in combat,
+    // each time the engine scores a declared item Harbinger returns the engine's OWN score lifted to
+    // max(own, best * (1 + kEquipPrefStepRel) + kEquipPrefStepAbs), where "best" is the highest score
+    // the engine holds for any other item of the same category list. Items this actor's preferences
+    // or live cast claims lift at an equal or better rank are left out of "best". A lower `rank` is
+    // lifted above a higher one; an item that already leads is returned unchanged. Weapons, shields
+    // and torches are lifted at the weapon-class seats, a staff at the spell/staff seat. A SPELL is
+    // not declarable here (it is ignored): a kIntent_Cast claim's driven spell is lifted the same
+    // way at the spell/staff seat. The ENGINE STILL DECIDES: its range gate, its order table (a
+    // Restore, Ward or buff spell takes its hand before any weapon) and its hand occupancy apply.
+    // Out of combat the scorer does not run and a preference does nothing.
+    //   * NEVER LIFTED: an item the engine scored 0 or less (a bow with no arrows); an item for a
+    //     hand a live kIntent_Cast claim holds (that hand carries only the spell); any item while a
+    //     source INSIDE the score seat outranks this claim on the Equip facet (APMF_Sources.ini; the
+    //     engine itself ranks at "Engine", default 20, a client at 50).
+    //
+    // ESCALATION (kEquipPref_Force). DISCOURAGED. Set it (Repoint with param.ival |= kEquipPref_Force)
+    // only after an OBSERVED miss: the preferred item not in its hand after about two rescore passes
+    // (about 2 s) in combat. Harbinger does not time this; the bit is honoured when set. With it
+    // Harbinger ALSO refuses, at the engine's equip choke point, every engine equip of a weapon,
+    // shield or torch into a hand this claim prefers something for, unless the item is preferred for
+    // a hand it competes for -- RANKED like every other deny: a source that outranks the claim keeps
+    // its equip, and that is a FORCE ANOMALY (warn line, counted, APMF_EquipPrefInfo::forceAnomalies).
+    // The claim's OWN client's equip ties with the claim and stands; that is counted apart, not an
+    // anomaly. The player's own trade/gift menu equips always pass. An unattributed equip passes
+    // unless APMF_Sources.ini says [UnknownSources] Equip=override. Harbinger EQUIPS NOTHING for a
+    // preference: place the item yourself (or declare it with kIntent_EquipAuthority).
+    //
+    // THREADING. SetEquipPreference: any thread; copies `entries` synchronously and never retains
+    // the pointer; the declaration reaches the score seats on the next game frame. GetEquipPreferenceState:
+    // any thread.
+    enum EquipPrefFlags : std::uint32_t {
+        kEquipPref_None  = 0,
+        kEquipPref_Force = 1u << 0,   // escalation: also refuse non-preferred engine equips into the
+                                      //   preferred hands (ranked, see ESCALATION above)
+    };
+
+    // The step ("a step above the best competitor"): a relative margin above the best competitor,
+    // sized from the LoreRim 2026-10-12 scores (one item rose at most 3.94% between two passes), plus
+    // an absolute part that only makes a tie at a tiny score strict. Informational for a client.
+    inline constexpr float kEquipPrefStepRel = 0.05f;
+    inline constexpr float kEquipPrefStepAbs = 0.01f;
+
+    // The bound on one declaration; an overflow keeps the first kMaxEquipPreference entries (logged).
+    inline constexpr std::uint32_t kMaxEquipPreference = 8;
+
+    // One preferred item. EXACT LAYOUT (byte-shared with the client, pinned below):
+    //   +0  form      RE::FormID  the item's BASE FormID: a WEAP (a staff included), a shield (an
+    //                             ARMO with the shield biped slot) or a torch (LIGH). Anything else
+    //                             (a spell, body armor, ammo, an unknown form) is IGNORED, named
+    //                             once in that declaration's log line.
+    //   +4  slot      u8          an EquipSlot: kEquipSlot_Right / kEquipSlot_Left = that hand's
+    //                             engine item only; kEquipSlot_Default = either hand (a two-hander,
+    //                             a bow, or "whichever hand the engine picks")
+    //   +5  rank      u8          0 = most preferred. Of two declared items in one category the
+    //                             lower rank is lifted above the higher one; equal ranks are each
+    //                             lifted above every undeclared item (two hands: rank both 0).
+    //   +6  reserved  u8[2]       MUST be 0 (a later ABI may define them; a v22 APMF ignores them)
+    //   size 8, alignment 4.
+    struct APMF_EquipPrefEntry {
+        RE::FormID   form;
+        std::uint8_t slot;
+        std::uint8_t rank;
+        std::uint8_t reserved[2];
+    };
+    static_assert(sizeof(APMF_EquipPrefEntry) == 8,  "APMF_EquipPrefEntry is 8 bytes, byte-shared with clients");
+    static_assert(alignof(APMF_EquipPrefEntry) == 4, "APMF_EquipPrefEntry aligns to 4");
+    static_assert(offsetof(APMF_EquipPrefEntry, slot)     == 4, "slot at +4");
+    static_assert(offsetof(APMF_EquipPrefEntry, rank)     == 5, "rank at +5");
+    static_assert(offsetof(APMF_EquipPrefEntry, reserved) == 6, "reserved at +6");
+
+    // What ch.26 last did for an actor. APPEND-ONLY: never renumber.
+    enum EquipPrefState : std::uint32_t {
+        kEquipPrefState_None       = 0,   // no ch.26 state for this actor since the last load
+        kEquipPrefState_Declared   = 1,   // a winning claim; none of its items scored since the declaration
+                                          //   (not in combat, or the item is not in the engine's combat list)
+        kEquipPrefState_Lifted     = 2,   // the last scored preferred item was LIFTED above its best competitor
+        kEquipPrefState_Leading    = 3,   // the engine already scored it above every competitor: unchanged
+        kEquipPrefState_ZeroScore  = 4,   // the engine scored it 0 or less (unusable now): never lifted
+        kEquipPrefState_HandHeld   = 5,   // its hand is held by a live kIntent_Cast claim: not lifted
+        kEquipPrefState_Outranked  = 6,   // a source inside the score seat outranks the claim: not lifted
+        kEquipPrefState_Unreadable = 7,   // the engine's category list could not be read (logged): not lifted
+        kEquipPrefState_Released   = 8,   // no winning ch.26 claim on the actor any more
+    };
+
+    // GetEquipPreferenceState output. EXACT LAYOUT (byte-shared): 64 bytes, every field 4 bytes. The
+    // CALLER sets `size` = sizeof(APMF_EquipPrefInfo); APMF fills the v22 fields when `size` >=
+    // kEquipPrefInfoV22Size (64, never changes) and writes nothing into a smaller struct (the
+    // APMF_TravelLegInfo rule). The counters are per actor since the last load, saturating.
+    struct APMF_EquipPrefInfo {
+        std::uint32_t size;             // +0   the CALLER sets = sizeof(APMF_EquipPrefInfo)
+        std::uint32_t state;            // +4   an EquipPrefState (the same value the call returns)
+        RE::FormID    actor;            // +8   the actor asked about
+        std::uint32_t ownerHandle;      // +12  the winning kIntent_EquipPreference claim (0 = none)
+        std::uint32_t flags;            // +16  that claim's EquipPrefFlags
+        std::uint32_t entryCount;       // +20  that claim's published (type-checked) entries
+        RE::FormID    lastForm;         // +24  the preferred item `state` came from (0 = none yet)
+        std::uint32_t lastSlot;         // +28  the hand of that scoring, an EquipSlot (Default = not a hand item)
+        float         lastEngineScore;  // +32  the engine's own score for it
+        float         lastRivalScore;   // +36  the best competitor's score in its category (0 = none)
+        float         lastResultScore;  // +40  the score Harbinger returned to the engine
+        std::uint32_t msSinceScored;    // +44  milliseconds since that scoring (saturates; 0xFFFFFFFF = never)
+        std::uint32_t lifts;            // +48  scorings this actor's preferences were lifted
+        std::uint32_t withheld;         // +52  scorings not lifted because the claim was outranked
+        std::uint32_t forcedDenies;     // +56  engine equips refused under kEquipPref_Force
+        std::uint32_t forceAnomalies;   // +60  forced refusals NOT applied: the source outranked the claim
+    };
+    inline constexpr std::uint32_t kEquipPrefInfoV22Size = 64;
+    static_assert(sizeof(APMF_EquipPrefInfo) == 64, "APMF_EquipPrefInfo is 64 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_EquipPrefInfo, lastEngineScore) == 32, "lastEngineScore at +32");
+    static_assert(offsetof(APMF_EquipPrefInfo, lifts)           == 48, "lifts at +48");
+    static_assert(offsetof(APMF_EquipPrefInfo, forceAnomalies)  == 60, "forceAnomalies at +60");
+
+    // The v22 interface: APMF_API_v19's members verbatim (prefix EXTENSION; v20 and v21 added no
+    // slot), then TWO appended slots. BYTE-SHARED with MFO: mirror it byte-identically. A new intent
+    // and new slots: gate on `abiVersion >= 22` (INVARIANTS #14b).
+    struct APMF_API_v22 : APMF_API_v19 {
+        // DECLARE the preferred items for the actor behind a kIntent_EquipPreference claim (`handle`,
+        // as RequestEx/Request returned it). `entries` is READ AND COPIED synchronously (a stack array
+        // is fine); `count` is clamped to kMaxEquipPreference (logged). `count == 0` or `entries ==
+        // nullptr` CLEARS the declaration. DECLARE, DO NOT TICK: call it when the preference CHANGES.
+        // The declaration is type-checked (see APMF_EquipPrefEntry::form) and reaches the score seats
+        // on the next game frame. A declaration on a claim that does not own ch.26 is stored and
+        // applies the moment that claim wins (the ch.17 rule). It is DROPPED when its claim ends by
+        // any road (your Release, or Harbinger releasing or sweeping the claim). A handle that is not
+        // a live kIntent_EquipPreference claim of this session is a silent no-op. Any thread.
+        void (*SetEquipPreference)(Handle handle, const APMF_EquipPrefEntry* entries, std::uint32_t count);
+
+        // What ch.26 last did for `actor` (see EquipPrefState). Returns the state and, when `out` is
+        // non-null and `out->size` covers the v22 layout, fills `*out`. Read-only; ANY THREAD (a copy
+        // under APMF's own lock, no game call). A throw inside returns kEquipPrefState_None and writes
+        // nothing.
+        std::uint32_t (*GetEquipPreferenceState)(RE::FormID actor, APMF_EquipPrefInfo* out);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the

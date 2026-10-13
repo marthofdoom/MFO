@@ -2024,6 +2024,27 @@ enabling it.
 precede 0" are confirmed); the steady-state `rescoreInterval`; whether the
 duplicate cat-0 entry in the order table is an off-hand fill.
 
+**CORRECTION (2026-10-12, RE 10-12, both runtimes; `Docs/WEIGHTING-INVENTORY.md` "Disassembly evidence"
+and SUMMARY item 1). Two statements above are WRONG and are superseded here (left in place as the record):**
+- **OFFENSIVE MAGIC IS CATEGORY 0, WITH THE WEAPONS.** `CombatInventory::AddItem` (AE `0x811AC0`) files every
+  item into `inventoryItems[GetCategory()]` (vfunc `0x0B`, call `0x811BA1`, index `0x811BA7`). Melee, Ranged and
+  every OFFENSIVE magic or staff item return **0**. Restore returns 1, Ward 2 or 3, the buff and utility casters
+  (Summon, Armor, Cloak, Invisibility, BoundItem, Stagger, Paralyze, Reanimate) 4 or 5, Disarm and Light 4,
+  Shield and Torch 3, OneHandedBlock 6. So "a weapon score can NEVER beat a spell that already claimed the
+  hand" holds only for Restore / Ward / buff spells (categories 1/2/4, walked first). **Weapon versus OFFENSIVE
+  spell is a real score comparison inside category 0.** "Weapon-vs-magic is NOT a score problem" is likewise true
+  only across categories. The "still open" line above is answered for 1/2/4/5 by the same disassembly.
+- **THE SCORE RANGE IS NOT 0.08–29 IN GENERAL.** That range is the 09-06 Tuxborn run only. The LoreRim deck logs
+  of 2026-10-12 (game 1.6.1170, 4629 `WEAPON-SCORE` lines: Melee 917, Ranged 3562, Shield 94, Torch 56) span
+  **0.22 to 1320** (median **147**, p90 154, max 1320 `Harbinger's Battleaxe`); spell items scored 10.08, 504
+  (Healing) and 1008 (an unclaimed proxy). Between two rescore passes an item's score drifts about **±2%**, and the
+  largest single rise seen was **3.94%**. That is why Harbinger's ABI 22 lift is RELATIVE (D1, "a step above" the
+  best competitor: 5% + 0.01, `APMF_API::kEquipPrefStepRel` / `kEquipPrefStepAbs`) and not an additive constant:
+  the old `+1000` steer loses to a 1320 battleaxe or a 1008 spell. Size nothing against a fixed range.
+- The rescore cadence is about once a second per actor in combat (`0x80F573 mov [r14+0x198], 1.0f` after each
+  pass; `dirty` at `+0x1C4` resets the timer at `0x80F3B8`). A top-scored item out of range is skipped by the
+  selector's range gate (`0x813A2F`, vfunc 6 max range): a preferred bow at melee range is the engine being right.
+
 ---
 
 ### 0.43 `0x811a10` is a DEAD TWIN with zero callers; the live rescore is inlined in `CombatInventory::Update` (2026-09-06)

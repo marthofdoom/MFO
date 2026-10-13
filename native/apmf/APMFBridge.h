@@ -1638,4 +1638,39 @@ namespace MFO::APMFBridge {
     // (Harbinger's defaults). a_anchor is the second listener (the player), 0 = none.
     bool SenseOf(RE::FormID a_viewer, RE::FormID a_target, RE::FormID a_anchor, float a_sightRange,
                  SenseReading& a_out);
+
+    // ── ch.26 EQUIP PREFERENCE (ABI v22, kIntent_EquipPreference) -- apmf/EquipPreference.cpp ──
+    // Weighting phase 1, W1 (marth 2026-10-12: "Direct equip is going. Harbinger has all the
+    // responsibility now."). MFO DECLARES the weapons / shield it wants in each hand IN COMBAT;
+    // Harbinger lifts their score one step above the best competitor in the engine's own
+    // CalculateScore (D1) and the AI equips them by its own rules. Harbinger EQUIPS NOTHING
+    // for a preference: placement rides the ch.17 declaration (Harbinger's equip pass).
+    //
+    // THE MODE. True when Harbinger is at ABI >= 22 AND the ch.17 equip authority is supported
+    // (EquipAuthoritySupported: the placement road). Then MFO makes NO direct weapon / shield /
+    // torch equip: every one is a ch.17 declaration (placement) plus, in combat, this ch.26
+    // preference. False (APMF absent, ABI < 22, bApmfEquipAuthority off): today's roads, the
+    // documented degrade. A REFUSED ch.26 claim does NOT turn this off (no decline-fallback):
+    // MFO keeps declaring placement through ch.17 and the refusal is an error line. Any thread.
+    bool EquipPreferenceSupported();
+    // Worker. Declare a_entries as a_follower's preference (send on change only; "declare, do
+    // not tick"). Claims ch.26 on the first non-empty declaration (basis kOwnBasis, ival 0),
+    // re-mints a handle Harbinger no longer knows (the declaration goes with a dead claim),
+    // and RELEASES the claim on an empty list (the force bit goes with it). A refusal is
+    // logged once per follower per streak and re-asked no sooner than 30 s later. Returns
+    // true when a live handle carries a non-empty declaration after the call.
+    bool DeclareEquipPreference(RE::FormID a_follower, const std::vector<APMF_API::APMF_EquipPrefEntry>& a_entries,
+                                const char* a_why);
+    // Worker. Drop the follower's ch.26 claim (dismissal, MFO-OFF).
+    void ReleaseEquipPreference(RE::FormID a_follower, const char* a_why);
+    // Any thread. GetEquipPreferenceState for a_follower; kEquipPrefState_None (out zeroed)
+    // below ABI 22. a_out->size is set here.
+    std::uint32_t EquipPreferenceState(RE::FormID a_follower, APMF_API::APMF_EquipPrefInfo* a_out);
+    // Worker. D4 escalation: Repoint the claim with (a_force ? kEquipPref_Force : 0). No-op
+    // without a live claim or when the bit already matches. Returns true when sent.
+    bool SetEquipPreferenceForce(RE::FormID a_follower, bool a_force);
+    // Any thread. Does a_follower's ch.26 claim carry kEquipPref_Force right now?
+    bool EquipPreferenceForced(RE::FormID a_follower);
+    // kPreLoadGame / revert teardown (ClearTransientState): release every ch.26 handle.
+    void ClearEquipPreferences();
 }

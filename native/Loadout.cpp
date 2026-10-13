@@ -107,17 +107,33 @@ namespace MFO::Loadout {
         // RIGHT hand (the engine's default), which for a dual-wielder displaces the
         // main-hand weapon at combat end. Shields and a stowed two-hander keep the
         // slot-less call (a shield has its own slot, a two-hander takes both).
+        //
+        // WEIGHTING W1 (marth 2026-10-12, "Direct equip is going. Harbinger has all the responsibility now."):
+        // with Harbinger at ABI >= 22 the give-back is a one-shot ch.17 placement (cast/EquipWeigh.cpp), the
+        // same hand, placed by Harbinger's equip pass on his next declaration. a_direct = the DISMISSAL restore
+        // (Restore): the ch.17 claim is already released and he is no longer serviced, so nothing would ever
+        // declare a placement for him -- that one road keeps the direct call.
         void EquipBack(RE::Actor* a_actor, RE::TESBoundObject* a_obj,
-                       const RE::BGSEquipSlot* a_slot = nullptr) {
+                       const RE::BGSEquipSlot* a_slot = nullptr, bool a_direct = false) {
             if (!a_actor || !a_obj) return;
+            if (!a_direct && Actuation::WeighingEquips()) {
+                const bool leftHand = a_slot != nullptr && a_slot == LeftHandSlot();
+                Actuation::WantPlacement(a_actor->GetFormID(), a_obj->GetFormID(),
+                                         Actuation::PlacementSlotFor(a_obj, leftHand), "cast gear give-back");
+                return;
+            }
             auto* mgr = RE::ActorEquipManager::GetSingleton();
             if (!mgr) return;
             mgr->EquipObject(a_actor, a_obj, nullptr, 1, a_slot);
         }
 
+        // MFO-B22 (review of e06a54f, SEV-4): under weighting EquipBack only ASKS for a ch.17 placement, so
+        // a log line must not claim the item is back. "restored" (direct) / "placement asked" (W1).
+        const char* RestoreVerb() { return Actuation::WeighingEquips() ? "placement asked" : "restored"; }
+
         // Hand everything back for ONE follower. Returns what it restored, for
         // the log.
-        int RestoreOne(RE::FormID a_id) {
+        int RestoreOne(RE::FormID a_id, bool a_direct = false) {
             auto it = g_debt.find(a_id);
             if (it == g_debt.end()) return 0;
 
@@ -125,7 +141,7 @@ namespace MFO::Loadout {
             int n = 0;
             if (actor) {
                 if (it->second.stowedWeapon)  {
-                    EquipBack(actor, it->second.stowedWeapon);  ++n;
+                    EquipBack(actor, it->second.stowedWeapon, nullptr, a_direct);  ++n;
                     // ARM THE DEBOUNCE HERE, NOT AT STOW TIME. Both used to read
                     // the same clock, so the weapon was handed back at exactly
                     // the moment a re-stow became legal again -- a still-true
@@ -138,7 +154,7 @@ namespace MFO::Loadout {
                 if (auto* left = it->second.displacedLeft) {
                     // A weapon displaced from the LEFT hand returns to the LEFT hand
                     // (F2); anything else (shield, torch) keeps the default call.
-                    EquipBack(actor, left, left->As<RE::TESObjectWEAP>() ? LeftHandSlot() : nullptr);
+                    EquipBack(actor, left, left->As<RE::TESObjectWEAP>() ? LeftHandSlot() : nullptr, a_direct);
                     ++n;
                 }
             }
@@ -684,7 +700,7 @@ namespace MFO::Loadout {
         }
 
         EquipBack(actor, it->second.displacedLeft);
-        spdlog::info("[loadout] {:08X} took a hit -- shield restored", a_actorID);
+        spdlog::info("[loadout] {:08X} took a hit -- shield {}", a_actorID, RestoreVerb());
         it->second.hitDeferred = false;
         it->second.displacedLeft = nullptr;
         it->second.leftWasShield = false;
@@ -798,8 +814,8 @@ namespace MFO::Loadout {
             if (it == g_debt.end() || !it->second.displacedLeft || !it->second.leftWasShield) continue;
             if (auto* actor = RE::TESForm::LookupByID<RE::Actor>(id)) {
                 EquipBack(actor, it->second.displacedLeft);
-                spdlog::info("[loadout] {:08X} shield restored (the hit was deferred while a heal "
-                             "claim held the left hand)", id);
+                spdlog::info("[loadout] {:08X} shield {} (the hit was deferred while a heal "
+                             "claim held the left hand)", id, RestoreVerb());
             }
             it->second.displacedLeft = nullptr;
             it->second.leftWasShield = false;
@@ -807,7 +823,8 @@ namespace MFO::Loadout {
 
         for (const auto id : restoreAll) {
             if (const int n = RestoreOne(id); n > 0) {
-                spdlog::info("[loadout] {:08X} restored {} displaced item(s)", id, n);
+                spdlog::info("[loadout] {:08X} {} {} displaced item(s)", id,
+                             Actuation::WeighingEquips() ? "placement asked for" : "restored", n);
             }
         }
     }
@@ -825,7 +842,7 @@ namespace MFO::Loadout {
             g_mfoSpell.erase(sp);
         }
         g_coolUntil.erase(a_actorID);
-        if (const int n = RestoreOne(a_actorID); n > 0) {
+        if (const int n = RestoreOne(a_actorID, /*a_direct*/ true); n > 0) {   // W1: he leaves MFO, nothing declares for him
             spdlog::info("[loadout] {:08X} left the party -- restored {} item(s)", a_actorID, n);
         }
     }
@@ -882,8 +899,8 @@ namespace MFO::Loadout {
                 }
                 if (shield) {
                     EquipBack(a, shield);
-                    spdlog::info("[loadout] reconciled {:08X} {} -- spell removed, shield restored",
-                                 a->GetFormID(), a->GetName());
+                    spdlog::info("[loadout] reconciled {:08X} {} -- spell removed, shield {}",
+                                 a->GetFormID(), a->GetName(), RestoreVerb());
                     continue;
                 }
             }

@@ -758,6 +758,12 @@ namespace MFO::Logistics {
                 spdlog::info("[equip] {:08X}: '{}' left to the APMF equip declaration (no direct EquipObject; "
                              "a refused claim is logged by [equip-auth])", a_follower->GetFormID(),
                              a_item->GetName() ? a_item->GetName() : "?");
+            } else if (equipIt && Actuation::WeighingEquips()) {
+                // WEIGHTING W1 (marth 2026-10-12, "Direct equip is going. Harbinger has all the responsibility
+                // now."): the weapon (equip-in-place: the RIGHT hand that holds the same role) is a one-shot
+                // ch.17 placement carried by this service tick's declaration; Harbinger's equip pass puts it on.
+                Actuation::WantPlacement(a_follower->GetFormID(), a_item->GetFormID(),
+                                         Actuation::PlacementSlotFor(a_item, false), "owned / looted upgrade");
             } else if (equipIt) {
                 // #62 EQUIP ON THE MAIN THREAD. Capture FormIDs (never the worker's
                 // Actor*/item) and re-resolve on the frame that runs.

@@ -382,7 +382,11 @@ namespace MFO::Actuation {
             mainId = it->second.mainRight;
         }
 
-        if (!styleControl) {
+        if (!styleControl && WeighingEquips()) {
+            // W1 (marth 2026-10-12, "Direct equip is going"): the plain equip is a ch.17 placement.
+            WantPlacement(id, best->GetFormID(), PlacementSlotFor(best, false), "silver, bWeaponStyleControl off");
+            DeclareLedger(a_follower, "silver placement");
+        } else if (!styleControl) {
             mgr->EquipObject(a_follower, best);   // kill switch off: EquipWeapon's plain equip, no ledger
         } else {
             // The old right-hand hold leaves first (forced unequip clears its lock; unequips are
@@ -393,6 +397,7 @@ namespace MFO::Actuation {
                 std::scoped_lock lk(g_forcedMx);
                 auto& hold = g_forcedWeapon[id];
                 hold.right = best;
+                hold.forcedRight = !authority;   // runtime only: the legacy force-hold above
                 hold.rule  = g_firingRule;
             }
             if (authority) DeclareLedger(a_follower, "gambit equip silver");
@@ -447,7 +452,11 @@ namespace MFO::Actuation {
         if (ep.direct) {
             // bWeaponStyleControl off: plain swap back, only while the silver weapon is still in hand.
             auto* held = a_follower->GetEquippedObject(false);
-            if (held && held->GetFormID() == ep.silver && mainObj && mgr && MainThread::IsInstalled()) {
+            if (held && held->GetFormID() == ep.silver && mainObj && WeighingEquips()) {
+                // W1: the plain swap back is a ch.17 placement, never a direct equip.
+                WantPlacement(id, ep.mainRight, PlacementSlotFor(mainObj, false), "silver ended (plain)");
+                DeclareLedger(a_follower, "silver ended: main weapon placement");
+            } else if (held && held->GetFormID() == ep.silver && mainObj && mgr && MainThread::IsInstalled()) {
                 const RE::FormID mainId = ep.mainRight;
                 MainThread::Post([id, mainId]() {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
@@ -461,6 +470,7 @@ namespace MFO::Actuation {
             return;
         }
 
+        const bool authority = APMFBridge::EquipAuthoritySupported();   // ONE read: the ledger flag below and the equip after it
         RE::TESBoundObject* silverObj = nullptr;
         bool restoreHold = false, entryGone = false;
         {
@@ -474,10 +484,12 @@ namespace MFO::Actuation {
                 // takes the non-forced re-arm below instead.
                 if (ep.mainHeld && mainObj && !a_mainHoldReleasable) {
                     it->second.right = mainObj;
+                    it->second.forcedRight = !authority;   // runtime only: forced below without it (the one authority read)
                     it->second.rule  = ep.mainRule;
                     restoreHold = true;
                 } else {
                     it->second.right = nullptr;
+                    it->second.forcedRight = false;   // the silver unequip below clears its lock
                     if (it->second.Empty()) { g_forcedWeapon.erase(it); entryGone = true; }
                 }
             }
@@ -487,15 +499,21 @@ namespace MFO::Actuation {
             spdlog::info("[silver] {:08X}: no longer Unholy -- the silver hold is already gone, nothing to switch back", id);
             return;
         }
-        const bool authority = APMFBridge::EquipAuthoritySupported();
         if (mgr) mgr->UnequipObject(a_follower, silverObj, nullptr, 1, nullptr, true, true);   // clears the lock
         if (restoreHold) {
             if (authority) DeclareLedger(a_follower, "silver ended: main weapon hold restored");
             else if (mgr)  mgr->EquipObject(a_follower, mainObj, nullptr, 1, nullptr, true, true);   // T#76 force-hold
         } else {
             if (entryGone) APMFBridge::ReleaseEquipment(id);   // the hands are free: the ch.15 claim goes too
-            if (authority) DeclareLedger(a_follower, "silver ended");   // the right hand is unowned again
-            PostMainReArm(id, mainObj ? ep.mainRight : 0);
+            if (WeighingEquips()) {
+                // W1: the main weapon goes back as a ch.17 placement (declared with the now-unowned hand),
+                // never the non-forced direct re-arm.
+                if (mainObj) WantPlacement(id, ep.mainRight, PlacementSlotFor(mainObj, false), "silver ended");
+                DeclareLedger(a_follower, "silver ended");
+            } else {
+                if (authority) DeclareLedger(a_follower, "silver ended");   // the right hand is unowned again
+                PostMainReArm(id, mainObj ? ep.mainRight : 0);
+            }
         }
         spdlog::info("[silver] {:08X}: no longer Unholy -- '{}' out, main weapon '{}' back{}", id, NameOf(silverObj),
                      mainObj ? NameOf(mainObj) : "none (the AI re-arms)",
