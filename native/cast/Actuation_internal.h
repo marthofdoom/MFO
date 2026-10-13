@@ -748,6 +748,22 @@ namespace MFO::Actuation {
         // reconcile lap -- re-declare a pending placement, refresh the preference, log Harbinger's
         // state, and the D4 escalation (force after ~2 s of a scored miss; Outranked = an anomaly,
         // never forced). ClearWeighing: revert. All worker-serial; no-ops unless WeighingEquips().
+        // BEST FIT (cast/EquipBestFit.cpp, ch.26 always-prefer): MFO's best-fit weapon for a follower, cached
+        // (kBestFitRefresh). Worker-serial. The three wrappers below are cast/Equip.cpp's combat-pick judges.
+        struct BestFit {
+            RE::FormID   main = 0;                                // right-hand / two-hand / launcher item, 0 = none
+            std::uint8_t mainSlot = 0;                            // an APMF_API::EquipSlot
+            RE::FormID   left = 0;                                // left-hand shield / second one-hander, 0 = none
+            float        skill = 0.0f;                            // the skill that decided the class
+            const char*  cls = "?";                               // string literal: "one-handed" ...
+        };
+        BestFit BestFitFor(RE::Actor* a_follower);
+        void ForgetBestFit(RE::FormID a_follower);
+        void ClearBestFit();
+        RE::TESObjectWEAP* BestFitOffHandWeapon(RE::Actor* a_follower, const Logistics::CombatWeaponStyle& a_style,
+                                                bool a_daggerMelee, const RE::TESObjectWEAP* a_right);   // cast/Equip.cpp
+        RE::TESObjectARMO* BestFitShield(RE::Actor* a_follower);                                         // cast/Equip.cpp
+        bool BestFitIsMuseumRelic(RE::Actor* a_follower, RE::TESObjectWEAP* a_w);                        // cast/Equip.cpp
         void RefreshPreference(RE::Actor* a_follower, const char* a_why);
         void ServicePreference(RE::Actor* a_follower);
         void ClearWeighing();

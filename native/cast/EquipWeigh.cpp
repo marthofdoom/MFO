@@ -31,6 +31,7 @@
 #include "Actuation_internal.h"
 #include "apmf/APMFBridge.h"
 
+#include <algorithm>
 #include <chrono>
 #include <mutex>
 #include <unordered_set>
@@ -155,8 +156,9 @@ namespace MFO::Actuation {
             return true;
         }
 
-        // The preference as the ledger stands NOW (ch.26 entries). Empty = nothing preferred.
-        std::vector<APMF_API::APMF_EquipPrefEntry> BuildPreference(RE::Actor* a_follower) {
+        // The preference as the ledger stands NOW (ch.26 entries: the gambit holds at rank 0, the best fit at
+        // rank 1 unless a_withBestFit is off). Empty = nothing preferred.
+        std::vector<APMF_API::APMF_EquipPrefEntry> BuildPreference(RE::Actor* a_follower, bool a_withBestFit = true) {
             std::vector<APMF_API::APMF_EquipPrefEntry> out;
             const RE::FormID fid = a_follower->GetFormID();
             const auto [right, left] = ForcedHoldFor(fid);
@@ -179,6 +181,29 @@ namespace MFO::Actuation {
             // right-hand weapons too (review of e06a54f, SEV-4).
             if (shield && !left && !rightBoth && !leftHeld)
                 out.push_back({ shield, static_cast<std::uint8_t>(APMF_API::kEquipSlot_Left), 0, { 0, 0 } });
+
+            // BEST FIT (marth 2026-10-12, ch.26 ALWAYS-PREFER): rank 1 under the gambit's rank 0. A hand a gambit
+            // hold, a shield top-up or MFO's own cast claim takes is NOT filled (the gambit overrides, D3 holds); a
+            // two-hander / launcher needs both hands free. Never while the force bit is on: kEquipPref_Force
+            // refuses every engine equip into a hand the claim prefers something for, and the best fit is a nudge
+            // only (D4 escalates the gambit entries alone).
+            if (a_withBestFit && !APMFBridge::EquipPreferenceForced(fid)) {
+                const BestFit bf = BestFitFor(a_follower);
+                const bool rightTaken = right || rightHeld || rightBoth;
+                const bool leftTaken  = left || shield || leftHeld || rightBoth;
+                const auto taken = [&](RE::FormID f) {
+                    return std::any_of(out.begin(), out.end(), [f](const auto& e) { return e.form == f; });
+                };
+                bool mainBoth = false;
+                if (bf.main && !taken(bf.main)) {
+                    mainBoth = bf.mainSlot != APMF_API::kEquipSlot_Right;
+                    if (!rightTaken && !(mainBoth && leftTaken))
+                        out.push_back({ bf.main, bf.mainSlot, 1, { 0, 0 } });
+                    else mainBoth = false;
+                }
+                if (bf.left && !mainBoth && !leftTaken && !taken(bf.left))
+                    out.push_back({ bf.left, static_cast<std::uint8_t>(APMF_API::kEquipSlot_Left), 1, { 0, 0 } });
+            }
             return out;
         }
     }
@@ -309,6 +334,7 @@ namespace MFO::Actuation {
             std::erase_if(g_failStreak, [a_follower](const auto& kv) { return (kv.first >> 32) == a_follower; });
         }
         g_emptyPrefLogged.erase(a_follower);
+        ForgetBestFit(a_follower);
         g_watch.erase(a_follower);   // worker: OnFollowerRemoved runs on the worker (Followers::ReleaseHeldState)
     }
 
@@ -320,6 +346,7 @@ namespace MFO::Actuation {
             g_failStreak.clear();
         }
         g_emptyPrefLogged.clear();
+        ClearBestFit();
         g_watch.clear();
     }
 
@@ -335,19 +362,25 @@ namespace MFO::Actuation {
         // nothing; PendingPlacements inside it retires the landed / expired ones and the next build drops them).
         if (PlacementPending(fid)) DeclareLedger(a_follower, "placement pending");
 
-        const auto entries = BuildPreference(a_follower);
-        APMFBridge::DeclareEquipPreference(fid, entries, "combat lap");
+        const auto declared = BuildPreference(a_follower);
+        APMFBridge::DeclareEquipPreference(fid, declared, "combat lap");
         auto& w = g_watch[fid];
         const auto now = Clock::now();
-        if (entries.empty()) {
+        if (declared.empty()) {
             g_watch.erase(fid);
             if (!a_follower->IsInCombat()) g_emptyPrefLogged.erase(fid);   // the episode ended
             else if (g_emptyPrefLogged.insert(fid).second)
-                spdlog::info("[equip-pref] {:08X}: ch.26: nothing to prefer (no gambit weapon hold, no shield top-up) "
-                             "-- the engine picks", fid);
+                spdlog::info("[equip-pref] {:08X}: ch.26: nothing to prefer (no gambit weapon hold, no shield top-up, "
+                             "no best-fit candidate) -- the engine picks", fid);
             return;
         }
         g_emptyPrefLogged.erase(fid);
+        // D4 watches the GAMBIT entries (rank 0) alone. With none, only the best fit stands: a nudge, watched for
+        // the state line but never escalated (nudgeOnly).
+        std::vector<APMF_API::APMF_EquipPrefEntry> entries;
+        for (const auto& e : declared) if (e.rank == 0) entries.push_back(e);
+        const bool nudgeOnly = entries.empty();
+        if (nudgeOnly) entries = declared;
         if (!SameDecl(w.watched, entries)) {   // a new declaration is a new episode
             const bool forced = APMFBridge::EquipPreferenceForced(fid);
             w = Watch{};
@@ -398,6 +431,15 @@ namespace MFO::Actuation {
             if (APMFBridge::SetEquipPreferenceForce(fid, false))
                 spdlog::info("[equip-pref] {:08X}: force cleared -- out of combat (the score pipeline does not run)", fid);
             w.escalatedAt = {};
+            return;
+        }
+        // BEST FIT ONLY: a nudge. No miss is tracked and nothing is escalated; a force bit left from an earlier
+        // gambit episode comes off so it cannot bind the best fit's hands (D4: best fit is never forced).
+        if (nudgeOnly) {
+            w.missSince = {}; w.heldSince = {};
+            if (APMFBridge::SetEquipPreferenceForce(fid, false))
+                spdlog::info("[equip-pref] {:08X}: force cleared -- only the best fit stands (a nudge, never forced)", fid);
+            w.escalatedAt = {}; w.forcedMissLogged = false;
             return;
         }
         if (allHeld) {

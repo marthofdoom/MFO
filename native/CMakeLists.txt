@@ -55,6 +55,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/CastOn.cpp
     cast/Equip.cpp
     cast/EquipSilver.cpp
+    cast/EquipBestFit.cpp
     cast/EquipWeigh.cpp
     cast/Direct.cpp
     cast/DirectSelf.cpp

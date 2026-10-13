@@ -329,6 +329,25 @@ namespace MFO::Logistics {
     // The ranged pick score (WeaponScore plus the has-ammo tier): wraps RangedPickScore.
     float CombatRangedScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon, const CombatAmmo& a_ammo);
 
+    // BEST FIT (ch.26 always-prefer, marth 2026-10-12): THE direction the gem logic already uses
+    // (GemReconcilePrefsFor -> ComputeWeaponRoles + StyleVotesFor), exposed once for cast/EquipBestFit.cpp so
+    // the preferred weapon and the gem cannot disagree. meleeClass: 0 none, 1 one-handed, 2 two-handed (the higher
+    // melee skill, as ComputeWeaponRoles). hasRanged: a bow/crossbow is in his role. rangedFirst: the ranged
+    // skill leads the melee skill (a tie goes to the owned perk ranks of each, then to melee). Skills are CURRENT
+    // actor values, the same read ComputeWeaponRoles makes. Worker domain (reads the inventory + g_followers, #4).
+    struct CombatBestFit {
+        CombatWeaponStyle style;
+        std::uint8_t      meleeClass  = 0;
+        bool              hasRanged   = false;
+        bool              rangedFirst = false;
+        float             meleeSkill  = 0.0f;
+        float             rangedSkill = 0.0f;
+    };
+    CombatBestFit CombatBestFitFor(RE::Actor* a_follower, const FollowerState& a_state);
+    // A weapon MFO never fights with or loots: a non-playable / known creature weapon, or a quest / artifact
+    // exclusion (Catalog::IsExcluded) -- the test Upkeep's excluded-weapon heal and the upgrade scan use.
+    bool CombatWeaponExcluded(const RE::TESObjectWEAP* a_weapon);
+
     // The APMF equip authority is SUPPORTED (APMF present, ABI >= 9, bApmfEquipAuthority):
     // the direct equip sites stay out, claimed or refused (no decline-fallback, 2026-09-28).
     bool EquipAuthorityLive(RE::FormID a_follower);

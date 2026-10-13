@@ -857,6 +857,15 @@ namespace MFO::Actuation {
         return it == g_shieldRank.end() ? 0u : it->second.shield;
     }
 
+    // BEST FIT (cast/EquipBestFit.cpp): the combat pick's own off-hand / shield / relic judges, named for the
+    // ch.26 always-prefer so the preference and the combat equip cannot disagree. Bodies stay in the anon namespace.
+    RE::TESObjectWEAP* BestFitOffHandWeapon(RE::Actor* a_follower, const Logistics::CombatWeaponStyle& a_style,
+                                            bool a_daggerMelee, const RE::TESObjectWEAP* a_right) {
+        return PickOffHandWeapon(a_follower, a_style, a_daggerMelee, a_right);
+    }
+    RE::TESObjectARMO* BestFitShield(RE::Actor* a_follower) { return PickShield(a_follower); }
+    bool BestFitIsMuseumRelic(RE::Actor* a_follower, RE::TESObjectWEAP* a_w) { return IsMuseumRelic(a_follower, a_w); }
+
     void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown, bool a_leaving) {
         if (!a_follower) return;
         const auto id = a_follower->GetFormID();

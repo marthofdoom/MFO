@@ -316,6 +316,35 @@ namespace MFO::Logistics {
             return { a.arrows, a.bolts };
         }
 
+        CombatBestFit CombatBestFitFor(RE::Actor* a_follower, const FollowerState& a_state) {
+            CombatBestFit f;
+            if (!a_follower) return f;
+            const WeaponRoles r = ComputeWeaponRoles(a_follower, a_state);
+            f.style     = { r.preferKinds, r.offHand };
+            f.meleeClass = r.melee == WepClass::OneHand ? 1 : r.melee == WepClass::TwoHand ? 2 : 0;
+            f.hasRanged  = r.doRanged;
+            auto* avo = a_follower->AsActorValueOwner();
+            if (!avo) return f;
+            using AV = RE::ActorValue;
+            const auto idx = [](AV a_av) { return static_cast<int>(a_av) - static_cast<int>(AV::kOneHanded); };
+            const AV meleeAv = r.melee == WepClass::TwoHand ? AV::kTwoHanded : AV::kOneHanded;
+            f.meleeSkill  = r.melee != WepClass::Other ? avo->GetActorValue(meleeAv) : 0.0f;
+            f.rangedSkill = r.doRanged ? avo->GetActorValue(AV::kArchery) : 0.0f;
+            if (f.hasRanged && f.meleeClass == 0) f.rangedFirst = true;
+            else if (f.hasRanged) {
+                if (f.rangedSkill != f.meleeSkill) f.rangedFirst = f.rangedSkill > f.meleeSkill;
+                else {
+                    const auto votes = StyleVotesFor(a_follower);
+                    f.rangedFirst = votes.skillRanks[idx(AV::kArchery)] > votes.skillRanks[idx(meleeAv)];
+                }
+            }
+            return f;
+        }
+
+        bool CombatWeaponExcluded(const RE::TESObjectWEAP* a_weapon) {
+            return !a_weapon || IsCreatureWeapon(a_weapon) || Catalog::IsExcluded(a_weapon->GetFormID());
+        }
+
         float CombatWeaponScore(const CombatWeaponStyle& a_style, const RE::TESObjectWEAP* a_weapon) {
             return WeaponScore(RolesOf(a_style), a_weapon);
         }
