@@ -1234,7 +1234,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
     SpellFire. `kHoldLastSeenCapMs` 4000 -> 6500 and `kObservedFiringRecencyMs` 4000 -> 5000 (de-aliased from
     `kHealHoldNeverObservedMs`, `apmf/APMFBridge.h`, sized from the field numbers cited there).
   * **Every lap, no caps.** `MaintainCompanion` re-judges THIS rule's heal on the other hand (dead /
-    essential-down / beyond reach / at threshold or full with nothing in flight -> released; stream cap ->
+    beyond reach / at threshold or full with nothing in flight -> released; stream cap ->
     re-stream) or renews it in place (`RefreshOwnedCastOnHand` + `WatchClaim`), so one rule healing two
     recipients keeps both while its picker names one per lap. `CastAuto`'s D8 keep is per hand (a
     different lowest recipient takes the other hand). `PickAlly` / `CastAuto` treat either hand's recipient

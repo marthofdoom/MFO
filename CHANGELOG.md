@@ -8,6 +8,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 ## Unreleased
 
 - **Foe: Unholy is now Foe targeted: Unholy.** It checks only the foe the follower is fighting. It no longer looks for an Unholy foe nearby and switches the target to it. Existing rules keep working.
+- **Followers heal a downed ally in combat.** An essential ally on the ground was skipped by the heal. Now the heal keeps going until they are back on their feet and topped up.
 
 ## v2.6.1 -- Archers heal without dropping to melee
 
