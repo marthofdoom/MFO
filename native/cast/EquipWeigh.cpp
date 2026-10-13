@@ -134,6 +134,7 @@ namespace MFO::Actuation {
             bool              forcedMissLogged = false;
             bool              anomalyLogged    = false;   // Outranked / Unreadable said for this episode
             bool              rangeLogged      = false;   // the range-gate skip said for this episode
+            bool              unclassifiedLogged = false; // the per-actor-state gap said for this episode
             std::uint32_t     lastState = 0xFFFFFFFFu;
             RE::FormID        lastForm  = 0;
             Clock::time_point lastStateLog{};
@@ -388,7 +389,19 @@ namespace MFO::Actuation {
         // (1) Harbinger's state is PER ACTOR: it describes the item it last scored (info.lastForm). Only a state
         //     about THE MISSING ITEM classifies this miss (review of e06a54f, SEV-3); another item's Lifted /
         //     Leading says nothing about why this one is not in its hand.
-        if (info.lastForm != missForm) { w.missSince = {}; return; }
+        //     KNOWN GAP (re-review of 67722ac, SEV-3): Harbinger's Record overwrites lastForm / state on every
+        //     scoring and a pass scores the declared entries back to back, so with two entries the reported one is
+        //     nearly always the LAST scored and D4 may never classify the other. Said once per episode, never
+        //     masked; the per-entry state read is a Harbinger ABI request (Docs/REVIEW-BACKLOG.md MFO-B258).
+        if (info.lastForm != missForm) {
+            if (!w.unclassifiedLogged) {
+                w.unclassifiedLogged = true;
+                spdlog::info("[equip-pref] {:08X}: miss of '{}' not classified -- Harbinger reports only '{}' "
+                             "(per-actor state); no D4 for it", fid, NameOf(missForm), NameOf(info.lastForm));
+            }
+            w.missSince = {};
+            return;
+        }
         // (2) A SPELL in the missing item's hand is a CROSS-CATEGORY pick (a Restore / Ward / buff spell is walked
         //     before the weapons, the order table, not a score): not a scored miss, and the ch.17 re-placement
         //     would clobber the AI's heal mid-cast (review of e06a54f, SEV-3).

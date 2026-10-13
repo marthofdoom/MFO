@@ -1410,8 +1410,28 @@ namespace MFO::Actuation {
                 if (!actor) return;
                 auto* mgr = RE::ActorEquipManager::GetSingleton();
                 if (!mgr) return;
+                // MFO-B257 (review of e06a54f / 67722ac, raised to SEV-3 under the co-save carve-out): only a
+                // weapon that ACTUALLY carries the prevent-removal lock is force-unequipped. Under the ch.17
+                // authority (and W1 weighting) Harbinger placed the hold NON-forced, so there is no lock and the
+                // old unconditional unequip only stripped his weapon on every load. The lock is ExtraCannotWear
+                // (extra type 0x3D) on the item's ExtraDataList (ENGINE_NOTES 0.48; mit-3.7 fork
+                // ExtraDataTypes.h kCannotWear, ExtraDataList::HasType). FWPN format, versions and reader are
+                // byte-identical: only this action changes. Still on the main thread (#62).
+                const auto locked = [actor](RE::TESBoundObject* a_obj) {
+                    if (!a_obj) return false;
+                    auto inv = actor->GetInventory();
+                    const auto it = inv.find(a_obj);
+                    if (it == inv.end() || !it->second.second) return false;
+                    const auto* entry = it->second.second.get();
+                    if (!entry->extraLists) return false;
+                    for (auto* xList : *entry->extraLists)
+                        if (xList && xList->HasType(RE::ExtraDataType::kCannotWear)) return true;
+                    return false;
+                };
+                bool anyLock = false;
                 if (weapon != 0) {
-                    if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(weapon)) {
+                    if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(weapon); obj && locked(obj)) {
+                        anyLock = true;
                         // The pair carries no hand (layout v1), so name the slot
                         // from the LIVE hands (F4): a form held in the LEFT is
                         // unequipped with the left slot, one in the RIGHT with no
@@ -1436,12 +1456,17 @@ namespace MFO::Actuation {
                     // left hand names its slot (F4).
                     for (bool leftHand : { false, true }) {
                         if (auto* held = actor->GetEquippedObject(leftHand))
-                            if (auto* wep = held->As<RE::TESObjectWEAP>())
+                            if (auto* wep = held->As<RE::TESObjectWEAP>(); wep && locked(wep)) {   // MFO-B257: locked only
+                                anyLock = true;
                                 mgr->UnequipObject(actor, wep, nullptr, 1,
                                                    leftHand ? Loadout::LeftHandSlot() : nullptr, true, true);
+                            }
                     }
                 }
-                spdlog::info("[equip] {:08X}: stale force-hold cleared on load", follower);
+                if (anyLock)
+                    spdlog::info("[equip] {:08X}: stale force-hold cleared on load", follower);
+                else
+                    spdlog::info("[equip] {:08X}: force-hold on load: no lock (placed non-forced) -- left in hand", follower);
             });
             ++released;
         }

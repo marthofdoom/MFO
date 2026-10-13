@@ -470,6 +470,7 @@ namespace MFO::Actuation {
             return;
         }
 
+        const bool authority = APMFBridge::EquipAuthoritySupported();   // ONE read: the ledger flag below and the equip after it
         RE::TESBoundObject* silverObj = nullptr;
         bool restoreHold = false, entryGone = false;
         {
@@ -483,7 +484,7 @@ namespace MFO::Actuation {
                 // takes the non-forced re-arm below instead.
                 if (ep.mainHeld && mainObj && !a_mainHoldReleasable) {
                     it->second.right = mainObj;
-                    it->second.forcedRight = !APMFBridge::EquipAuthoritySupported();   // runtime only: forced below without it
+                    it->second.forcedRight = !authority;   // runtime only: forced below without it (the one authority read)
                     it->second.rule  = ep.mainRule;
                     restoreHold = true;
                 } else {
@@ -498,7 +499,6 @@ namespace MFO::Actuation {
             spdlog::info("[silver] {:08X}: no longer Unholy -- the silver hold is already gone, nothing to switch back", id);
             return;
         }
-        const bool authority = APMFBridge::EquipAuthoritySupported();
         if (mgr) mgr->UnequipObject(a_follower, silverObj, nullptr, 1, nullptr, true, true);   // clears the lock
         if (restoreHold) {
             if (authority) DeclareLedger(a_follower, "silver ended: main weapon hold restored");
