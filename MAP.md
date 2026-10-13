@@ -550,7 +550,10 @@ per concern:
   lock) and asks its stand-down re-arm as a placement. `ReleaseForcedWeapon(..., a_leaving)` (Followers.cpp
   `ReleaseHeldState`, dismissal / MFO off): a released silver hold's main weapon is re-armed with the DIRECT
   non-forced equip there (ch.17 is already released and `ForgetPlacements` erases any placement: the `Loadout::Restore`
-  exception). Open: Docs/REVIEW-BACKLOG.md MFO-B256, MFO-B257.
+  exception). Open: Docs/REVIEW-BACKLOG.md MFO-B256, MFO-B258. MFO-B257 RESOLVED 09d1056: the FWPN load unequip
+  (`CoLoadForcedWeapons`) now acts only on a weapon carrying the `kCannotWear` lock; a Harbinger-placed hold stays in
+  hand. **What breaks:** dropping that lock check re-strips every follower's weapon on load under the authority;
+  moving the check off the posted main-thread body (#62).
 - `cast/EquipWeigh.cpp` (NEW, 2026-10-12, weighting phase 1 W1) = **MFO's ch.26 consumer + the one-shot ch.17
   placements + the D4 escalation.** Public (`cast/Actuation.h`): `WeighingEquips` (= `APMFBridge::
   EquipPreferenceSupported`: ABI >= 22 AND the ch.17 authority supported), `PlacementSlotFor`, `WantPlacement`
@@ -572,7 +575,9 @@ per concern:
   `kEquipPref_Force` and re-places ONCE through ch.17 (`ResendEquipDeclaration` + `DeclareLedger`), logged WARN;
   Outranked = an ANOMALY (warn, NOT forced: it would violate Harbinger's priority sliders); Unreadable = error,
   not forced; ZeroScore / HandHeld / Declared / None = not a scored miss; a launcher preferred with the foe inside
-  `fMeleeReach` = the engine's range gate, not escalated. Forced and still missing 4 s later = one ERROR, no retry.
+  `fMeleeReach` = the engine's range gate, not escalated. KNOWN GAP (MFO-B258): Harbinger's state is per ACTOR (the
+  last item scored), so with two entries D4 may never classify the earlier-scored one; that miss is logged once per
+  episode (`miss of ... not classified`) until a per-entry Harbinger read exists. Forced and still missing 4 s later = one ERROR, no retry.
   The force bit comes off after 5 s held, and out of combat. Threading: the watch map is worker-serial (#4).
   **What breaks:** escalating on a non-scored state (ZeroScore would force a bow with no arrows; HandHeld would
   fight MFO's own cast claim, D3); re-placing more than once per episode (that is the retired MFO-B41 loop);
@@ -3542,8 +3547,9 @@ module. Module layout:
   unowned: the top-up never lands, the torch re-asks forever, a shield give-back is lost); a Default slot for them;
   keeping the placement in the set after it lands (Left stays owned: in enforce mode the AI's own bow would be
   refused); declaring a placement over a ledger hand (two items for one slot, displaced every pass).
-  Open review findings: Docs/REVIEW-BACKLOG.md MFO-B256 (D3 preference re-sent per cast-claim change), MFO-B257
-  (FWPN load force-unequips Harbinger-placed weapons).
+  Open review findings: Docs/REVIEW-BACKLOG.md MFO-B256 (D3 preference re-sent per cast-claim change), MFO-B258
+  (D4 per-actor state gap). MFO-B257 RESOLVED 09d1056: `CoLoadForcedWeapons` force-unequips only a weapon whose
+  entry carries `kCannotWear` (FWPN format unchanged).
   DIRECT SITES GATED: `AcquireEquip` (`logistics/Gear.cpp`) skips its `MainThread::Post`
   `EquipObject` hop for ARMOR when `EquipAuthorityLive(id)` (transfer, verdicts, MEO gem carry
   untouched; logs `'<name>' declared`); `EquipBestOwnedGear`'s `[equip] OWNED` line appends
