@@ -1654,3 +1654,6 @@ Opus review of `fix/mfo-m3-cosave-tool`, MERGE OK; everything above SEV-5 was fi
 
 ### MFO-B254 (SEV-4, OPEN, Scheduler) -- EquipRangeUndecidable lacks the PickFoe trackability gates (raised against 5c01051)
 Opus review of `fix/foe-targeted-unholy`; pre-existing, not changed by that branch. Reviewer text, verbatim: "Pre-existing for range rules, worth carrying over: `EquipRangeUndecidable`'s "usable" test omits the trackability gates (3D, kTargetLost) that `PickFoe` applies. A lost but non-null target therefore still reads known-false. A silver demotion should use the same gates as `PickFoe`."
+
+### MFO-B255 (SEV-4) -- focus key can still send followers at the player's own summon
+Raised against 297ca4c (`fix/focus-skip-followers`, Opus review), 2026-10-12. Reviewer (verbatim): "The remaining hole: the player's own summon or atronach, which is a teammate but not tracked with summons off. If the player hits it by mistake and it becomes their combat target, followers are still sent after it. The fix is cheap: add `&& !a->IsPlayerTeammate()` (and the same on `pt`) to both filters. It is a flag read already used off-worker (logistics/Sinks.cpp:253), and the skip log text would say \"one of your allies\"." Not fixed in the branch: outside the brief's spec (filter = the crosshair path's player + tracked).
