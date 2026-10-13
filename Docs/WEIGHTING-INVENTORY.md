@@ -271,3 +271,11 @@ Bias model (needs marth's call, D1): the field shows an additive constant is the
 - The "captures outside writes" column comes from Harbinger 80f699b: `native/core/FacetAttribution.*`, `Sources.h` (facets), the `Decide` / `Observe` call sites (TargetPin, ActionGate, CastGate, CastSeats, CastClassify, CastGuard, EquipGate, EquipSink, PackageSources, SpectatorGate, ActorValueObserve, CombatEntry, CombatReentryDeny, CombatApproach) and `Docs/FACETS.md` Appendix A, cross-checked against the census lines in the 10-12 logs.
 - Not re-verified: T1's threat scorer (not phase 1), the ammo pick (E11), the armor scorer (E3, probe P0c), every CH-MAP claim outside phase 1.
 - Follow-up docs task (outside this brief): ENGINE_NOTES §0.42 should say that offensive magic is category 0 with the weapons (only Restore, Ward and buff categories precede it), and that its "~0.08-29" range is the 09-06 Tuxborn run only (LoreRim 10-12: 0.22 to 1320).
+
+## Decisions (marth, 2026-10-12)
+
+- **D1 bias model:** relative lift inside the category, "a step above" the best competitor: the smallest margin that makes the preferred item win. Never lift an item the engine scored 0.
+- **D2 equip deny priority:** equip denies rank by priority like every other facet. A source that outranks the claim keeps its equip.
+- **D3 hybrid hand:** a hand held by a cast claim carries only the spell.
+- **D4 escalation:** force after about 2 s, but every escalation is an anomaly to investigate and log when it would violate Harbinger's priority sliders.
+- **D5 EnableScoreSteer:** on by default, and still bound by the same priority sliders as everything else.
