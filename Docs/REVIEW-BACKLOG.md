@@ -1727,3 +1727,6 @@ Same review. Reviewer's finding, relayed: "SenseActor hearing-combat makes sense
 
 ### MFO-B279 (SEV-4, OPEN, Taunt.cpp / apmf/TauntClaims.cpp) -- IdleForceDefaultState on release, and Repoint on a dead handle (raised against 101cf49)
 Same review (F6, relayed). Releasing a still-held ch.12 idle makes Harbinger send IdleForceDefaultState once, which can cut a clip short, and `PinFoeToTaunter`'s Repoint of a handle that has just died is a silent no-op until the next Ended() read. Text not preserved verbatim in the review log; re-check against the review before draining.
+
+### MFO-B280 (SEV-4, OPEN, Taunt.cpp / apmf/TauntClaims.cpp) -- an Accepted-but-never-confirmed idle holds the follower during the window, and the next attempt follows (raised against 7bdacd3)
+Opus re-review of `feat/mfo-taunt` @ 7bdacd3 (residual of F2). The ch.1 hold is filed once Harbinger accepts the play, so an idle that is Accepted and then never confirmed (NotConfirmed after the 3 s window) holds the follower still for that window, and since there is no cooldown the next attempt can follow it. Consistent with "no cooldown", recorded so the field run knows to look for it.

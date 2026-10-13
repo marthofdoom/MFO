@@ -27,6 +27,12 @@ namespace MFO::Taunt {
         // A foe whose combat flag is down, or a taunter whose flag is down, for this many consecutive laps is "combat
         // ended" (the flag flaps for a lap on a LoS loss; see Scheduler.cpp's party-combat note).
         constexpr int kCombatEndLaps = 2;
+        // A ch.12 claim still Pending after this many UNPAUSED ms never won the taunter's idle facet (another source holds
+        // it): Harbinger stamps Superseded only for a handle that already played, so nothing else would end the wait. Sized from
+        // the real cadence: Harbinger drains at its next writer tick (a frame) and runs the play task right after, so Accepted
+        // appears within ~0.1 s; MFO reads once per 133 ms pump. 2000 ms is ~15 pumps, an order of magnitude of margin, short
+        // enough that the follower is not stalled for a visible time. A floor, not an expiry of live state (principle 9).
+        constexpr double kPendingFailMs = 2000.0;
         constexpr double kClockMaxStepMs = 400.0;   // one Tick-to-Tick gap counts at most this much unpaused time
 
         struct Cand {
@@ -279,7 +285,13 @@ namespace MFO::Taunt {
 
             // The verdict is Harbinger's own (GetIdleState, ABI 24): MFO times nothing.
             const auto rd = APMFBridge::ReadTauntIdle(a_id);
-            if (rd.verdict == APMFBridge::TauntIdleVerdict::Waiting) return;
+            if (rd.verdict == APMFBridge::TauntIdleVerdict::Waiting) {
+                if (rd.pending && a_nowMs - a.startMs >= kPendingFailMs) {
+                    drop(std::format("idle FAILED (still Pending after {} ms: the taunter's ch.12 idle facet is held by another source; "
+                                     "{}). No roll, no pin", ms, rd.detail));
+                }
+                return;
+            }
             if (rd.verdict != APMFBridge::TauntIdleVerdict::Played) {
                 // A FAILED idle is a failed attempt: no roll, no pin. Said loudly, once.
                 drop(std::format("idle FAILED ({}): the idle did not play. APMF.log '[ch.12]' names why. No roll, no pin", rd.detail));

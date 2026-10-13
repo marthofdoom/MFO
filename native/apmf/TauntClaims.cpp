@@ -162,6 +162,7 @@ namespace MFO::APMFBridge {
         info.size = sizeof(info);
         const std::uint32_t st = api->GetIdleState(c.idle, &info);
         out.msToEntry = info.msToEntry;
+        out.pending = st == APMF_API::kIdleState_Pending && info.endCause == APMF_API::kIdleEnd_None;
         out.detail = std::string("state=") + IdleStateName(st) + " endCause=" + EndName(info.endCause);
         if (info.unconfirmableWhy) out.detail += " unconfirmableWhy=" + std::to_string(info.unconfirmableWhy);
         using V = TauntIdleVerdict;
@@ -182,9 +183,9 @@ namespace MFO::APMFBridge {
         } else {
             out.verdict = V::Waiting;  // Pending or Accepted: Harbinger judges the window, MFO does not time it
         }
-        // The ch.1 hold, ONCE, as soon as the play is ACCEPTED (PlayIdle returned true): Accepted, or any state that
-        // follows an accepted call and is not a failure. A refused idle never reaches here, so it never holds him.
-        if (!c.holdTried && (st == APMF_API::kIdleState_Accepted || out.verdict == V::Played)) {
+        // The ch.1 hold, ONCE, as soon as the play is ACCEPTED (PlayIdle returned true), seen as Accepted. A first read that is
+        // already Confirmed files none (the clip is over by the time the roll runs). A refused idle never reaches here, so it never holds him.
+        if (!c.holdTried && st == APMF_API::kIdleState_Accepted) {
             c.holdTried = true;
             APMF_API::APMF_Param hp{};
             c.hold = api->RequestEx(a_taunter, APMF_API::kIntent_MovementBlock, kOwnBasis, &hp);

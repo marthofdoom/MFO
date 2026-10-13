@@ -1628,6 +1628,7 @@ namespace MFO::APMFBridge {
         TauntIdleVerdict verdict = TauntIdleVerdict::None;
         std::string      detail;   // "state=Refused endCause=Harbinger why=..." (for the log)
         bool             weak = false;
+        bool             pending = false;   // the raw state is still Pending (PlayIdle not called yet)
         std::uint32_t    msToEntry = 0xFFFFFFFFu;
     };
     TauntIdleReading ReadTauntIdle(RE::FormID a_taunter);

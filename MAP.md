@@ -2505,7 +2505,7 @@ Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.
   `settings.ini` x2, `kMcmDefaults`), INI-only `fTauntRadius` (1024) and `iTauntMaxFoes` (4) in `[Taunt]`.
 - **Log lines:** `[taunt] <f> (<id>) idle B8C73|B8C71 filed ...`, `... idle ... CONFIRMED played after N ms`, `... TAUNT idle FAILED ...`,
   `... TAUNT -> <n> foe(s): <foe> (<id>) L<lvl> p=<p> roll=<r> HIT|MISS ...`, `... released foe <foe> (<reason>) after <ms> ms`.
-- **Open findings: MFO-B277..MFO-B279.** **What breaks if you change this:** the opcodes are frozen strings (#10; no co-save change, no enum touched). The release order (taunter
+- **Open findings: MFO-B277..MFO-B280.** **What breaks if you change this:** the opcodes are frozen strings (#10; no co-save change, no enum touched). The release order (taunter
   down -> release the SAME pump) is a safety rule, Harbinger's bleed-out drive walks the foe to a downed pinned taunter. `Resolve` must
   stay on the main thread while it calls `SenseOf`. Never infer "played" from claim liveness. Do not give the foe pin a ch.21 `fval`
   (Table 23a: the range rule points the wrong way for a hostile holder).
