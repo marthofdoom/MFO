@@ -1469,3 +1469,27 @@ spell (Muffle, fortify / resist, Night Eye, Detect Life, cures, Courage; Harbing
 first, one recipient per lap via CastOn). Out of combat, below ABI 19, aimed Light, a `rowApprox` row, a self cast of a non-Self
 spell: the direct road, one `[buff]` line naming why. A claim that never fires is released once (WARN) and held off per fight, never the
 direct road. Hostile rowless spells at a foe (Calm / Fear / Frenzy) already take the owned-offense claim. See MAP.md `cast/BuffRoad.cpp`.
+
+
+## COMBAT SUBSTRATE SLICE S1: THE REMAINING IN-COMBAT DIRECT ROADS (feat/mfo-animated-combat-casts, 2026-10-13)
+
+marth: "Getting animations for everything is non negotiable." Design: `Docs/COMBAT-SUBSTRATE-DESIGN.md` (branch `docs/combat-substrate-design`), Table 1.
+Each road's status after S1 (APMF present, ABI >= 19, a combat controller on the follower; NOT field-run yet):
+
+| Road | Before | After |
+|---|---|---|
+| R2 heal at its own caster, delivery not Self | `ChooseHealRoad` DirectNoSeat, direct stream | claim with the caster's OWN FormID as the target (Harbinger's self-flip proxy). `GetHealCastTarget` reports it as 0 |
+| R5 combat summon | claim, else `CastSummonOnce` direct | unchanged road choice. The direct one-shot is now only a summon `ChooseBuffRoad` declined, and logs `UNANIMATED road 'summon-oneshot'` with the reason (no controller, ABI < 19, ambiguous row, bCastSelf off, Harbinger absent) |
+| R9 Restoration ward / buff at an ally or the player | concentration: direct stream; fire-and-forget: claim if the buff road took it, else `RestorationCastDirect` | concentration: the Task-1 claim (the `!IsRestorationSpell` exclusion is gone, `combatController` test added = backlog MFO-B58). Fire-and-forget unchanged (buff claim, else logged direct) |
+| R10 AUTO hostile | one `CastSpellImmediate` per foe, one tick | a SERIES through `CastOn`, one foe at a time (a standing lock's foe, else the nearest in range and sight), the owned offense claim. A Self-delivery offense spell, no controller or no Harbinger keeps the fan, labelled |
+| every other direct road in combat | silent | `[cast] <id>: UNANIMATED road '<road>' for '<spell>' -- <reason>`, WARN, 30 s per (follower, spell, road) |
+
+**Why the 2026-09-21 `!IsRestorationSpell` exclusion could go.** It existed because MFO's own direct Healing Hands on the INSTANT caster collided with MFO's own
+heal claim (Jesper 750012C6: `t2c CheckCast DENIED`, the idle-hand floor closed the right hand, the follower froze). Harbinger `d41ed43` stopped ch.8b gating the
+instant caster by a hand claim and the heal claim road is back (animheal phase 2). The exclusion also covered heals, which stay where `ChooseHealRoad` puts them. What it
+still kept direct was a Restoration-school WARD or buff stream.
+
+**The log's roads** (`cast/Unanimated.cpp`): `self-stream`, `target-stream` (also `RestorationCastDirect` and `ConcentrationCast`), `summon-oneshot`, `auto-fan`
+(Self-delivery offense, an instant or concentration non-heal beneficial fan, no Harbinger), `legacy-force` (the AI-first hybrid's force-on-miss). Reasons seen: no combat
+controller (an own-OOC follower in a party fight: the substrate, slices S2/S3, is what fixes this), Harbinger absent or too old or the claim road switched off, an ambiguous
+row, aimed Light, a target-location self cast. Out of combat nothing logs here (the OOC heal keeps `out-of-combat heal -- INSTANT road`).
