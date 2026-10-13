@@ -46,7 +46,8 @@ namespace MFO::TauntProbe {
             return std::chrono::duration<double>(a_now - a_t).count();
         }
 
-        // GetEquippedItemType numbering for the log: weapon animation type 0..9, shield 10, else -1.
+        // WEAPON_TYPE for the log (TESObjectWEAP::GetWeaponType, 0..9), 10 for a shield, else -1. Not the
+        // engine's GetEquippedItemType numbering.
         int ItemType(RE::Actor* a_f, bool a_left) {
             auto* o = a_f->GetEquippedObject(a_left);
             if (!o) return -1;
@@ -130,7 +131,11 @@ namespace MFO::TauntProbe {
             MainThread::Post([a_foe, a_f, head = std::move(a_head)] {
                 const char* sense = "unknown";
                 APMFBridge::SenseReading rd{};
-                if (APMFBridge::SenseOf(a_foe, a_f, 0, 0.0f, rd)) sense = rd.senses ? "yes" : "no";
+                if (APMFBridge::SenseOf(a_foe, a_f, 0, 0.0f, rd)) {
+                    if (rd.senses) sense = "yes";
+                    else if (rd.detail & APMF_API::kAwareDetail_SightDeferred) sense = "deferred";   // sight ray not cast this frame
+                    else sense = "no";
+                }
                 spdlog::info("{}; senses follower: {}", head, sense);
             });
         }
@@ -144,7 +149,6 @@ namespace MFO::TauntProbe {
             {
                 RE::BSReadLockGuard lk(cc->combatGroup->lock);
                 for (const auto& t : cc->combatGroup->targets) {
-                    if (foes.size() >= kMaxFoes) break;
                     auto p = t.targetHandle.get();   // HOLD the NiPointer
                     auto* foe = p.get();
                     if (!foe || foe == a_f || foe->IsDead() || foe->IsDisabled()) continue;
@@ -153,6 +157,7 @@ namespace MFO::TauntProbe {
             }
 
             const auto fHandle = a_f->GetHandle().native_handle();
+            std::size_t logged = 0;
             for (auto& fp : foes) {
                 RE::Actor* foe = fp.get();
                 if (!foe->IsInCombat()) continue;   // controller-lifetime gate, as every group read here
@@ -160,8 +165,28 @@ namespace MFO::TauntProbe {
 
                 auto  tp  = foe->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
                 auto* cur = tp.get();
-                const bool party = cur && (cur->IsPlayerRef() || cur->IsPlayerTeammate());
-                if (!party) continue;   // only a foe fighting the party (design section 6)
+                if (!cur) continue;
+
+                // Target-switch baseline per foe (its currentCombatTarget changes): EVERY in-range, in-combat foe,
+                // whoever it targets, so a foe going A -> summon -> A is seen.
+                const RE::FormID foeId = foe->GetFormID();
+                const RE::FormID curId = cur->GetFormID();
+                auto [it, fresh] = g_foes.try_emplace(foeId, FoeSeen{ curId, a_now, a_now });
+                if (!fresh) {
+                    it->second.lastSeen = a_now;
+                    if (it->second.tgt != curId) {
+                        const auto ms = static_cast<long long>(Since(it->second.since, a_now) * 1000.0);
+                        spdlog::info("[taunt-probe] foe 0x{:08X} target switch 0x{:08X} -> 0x{:08X} after {} ms",
+                                     foeId, it->second.tgt, curId, ms);
+                        it->second.tgt   = curId;
+                        it->second.since = a_now;
+                    }
+                }
+
+                const bool party = cur->IsPlayerRef() || cur->IsPlayerTeammate();
+                if (!party) continue;   // only a foe fighting the party gets the HELD/LOST line (design section 6)
+                if (logged >= kMaxFoes) continue;   // cap AFTER the in-combat, range and party filters
+                ++logged;
 
                 // The foe's OWN group, a fresh read lock with nothing nested (pass 1's lock is released).
                 Hold         hold = Hold::kNoGroup;
@@ -176,21 +201,6 @@ namespace MFO::TauntProbe {
                         detect    = t.detectLevel;
                         attackers = t.attackerCount;
                         break;
-                    }
-                }
-
-                // Target-switch baseline per foe (its currentCombatTarget changes).
-                const RE::FormID foeId = foe->GetFormID();
-                const RE::FormID curId = cur->GetFormID();
-                auto [it, fresh] = g_foes.try_emplace(foeId, FoeSeen{ curId, a_now, a_now });
-                if (!fresh) {
-                    it->second.lastSeen = a_now;
-                    if (it->second.tgt != curId) {
-                        const auto ms = static_cast<long long>(Since(it->second.since, a_now) * 1000.0);
-                        spdlog::info("[taunt-probe] foe 0x{:08X} target switch 0x{:08X} -> 0x{:08X} after {} ms",
-                                     foeId, it->second.tgt, curId, ms);
-                        it->second.tgt   = curId;
-                        it->second.since = a_now;
                     }
                 }
 
