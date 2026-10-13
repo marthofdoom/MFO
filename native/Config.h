@@ -348,6 +348,11 @@ namespace MFO::Config {
     // flipping it OFF mid-session drops every ch.26 claim and pending placement (Actuation::ReconcileWeighSwitch).
     inline std::atomic<bool>  g_weighWeapons{ false };
 
+    // TAUNT S0 PROBES (INI-only [Taunt] bTauntProbe, ClickUp 86e3g6duw, Docs/TAUNT-DESIGN.md section 6). Default
+    // OFF. PASSIVE: rate-limited [taunt-probe] log lines on the worker tick (TauntProbe.cpp). No claim, no
+    // animation, no engine write, not in the MCM.
+    inline std::atomic<bool>  g_tauntProbe{ false };
+
     // WARN WHEN APMF IS ABSENT (MCM bWarnNoApmf). Default ON. 2.0.0 makes APMF
     // (Harbinger) a recommended companion; MFO still runs its full legacy
     // fallback without it, but a player who forgot to install it should know
