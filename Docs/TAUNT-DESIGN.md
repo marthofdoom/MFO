@@ -361,3 +361,5 @@ MISSED`, then MFO's own `[taunt] released 0x<foe> (<reason>) after <s> s`.
 - **Q3 roll:** p = clamp(0.5 + 0.05 x (taunter level - foe level), 0.1, 0.9), as proposed.
 - **Q4 duration:** 15 s by default, adjustable with an MCM slider.
 - Ranking vs other target mods is the user's Harbinger slider configuration, not a design question; the enemy pin is a normal ranked ch.20 claim. Nothing escapes Harbinger.
+
+**Status 2026-10-13:** Taunt ships DISABLED via `[Taunt] bTaunt = 0` (INI-only, default 0) pending the 2026-10-13 field defect (ClickUp 86e3pyjk2). `Taunt::Fire` returns a transparent NoOp and logs `[taunt] disabled (bTaunt=0)` once; `Taunt::Tick` / `Clear` and the claim release stay active.

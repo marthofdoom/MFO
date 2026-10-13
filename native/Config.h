@@ -353,6 +353,11 @@ namespace MFO::Config {
     // animation, no engine write, not in the MCM.
     inline std::atomic<bool>  g_tauntProbe{ false };
 
+    // TAUNT MASTER SWITCH (INI-only [Taunt] bTaunt, ClickUp 86e3pyjk2). Default OFF: marth 2026-10-13, Taunt failed its
+    // field test, so a Taunt gambit is skipped (Taunt::Fire, transparent) this release. The release-time cleanup
+    // (Taunt::Clear / Tick / ClearTauntClaims) runs regardless. Not in the MCM.
+    inline std::atomic<bool>  g_taunt{ false };
+
     // WARN WHEN APMF IS ABSENT (MCM bWarnNoApmf). Default ON. 2.0.0 makes APMF
     // (Harbinger) a recommended companion; MFO still runs its full legacy
     // fallback without it, but a player who forgot to install it should know

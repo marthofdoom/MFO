@@ -13,6 +13,7 @@
 The "YOU ARE HERE" block below still reads 2026-09-07 and has NOT been rewritten.
 Read it as history and this block as current.
 
+- **2026-10-13: Taunt ships DISABLED via `[Taunt] bTaunt = 0` (INI-only, default 0) pending the 2026-10-13 field defect (ClickUp 86e3pyjk2; marth: "Shelve its fix for next week and disable it in the release we are working on"). A Taunt gambit is skipped transparently (`Taunt::Fire`); release cleanup still runs.**
 - **2026-10-13: v2.6.2 RELEASED (Latest) with Harbinger 0.13.1 (ABI 24).** Taunt gambit (idle confirmed via GetIdleState), held engagements + engage-range drop (no waits), animated in-combat casts (self-flip heals, wards/buffs at allies, AUTO one foe at a time; UNANIMATED log), Foe targeted: Unholy, focus filter, downed-ally heals, weapon weighting OFF (bWeighWeapons=0, batch D), FWPN load lock check. Deployed to LoreRim + Tuxborn (main c4ced81 / APMF 16585ee). Mostly UNTESTED in play: checklist ClickUp 86e3pu3m2. Harbinger combat substrate S2a ships ON but has no client yet; dry-run field test: anchor invisible, followers keep moving, BUT battle music starts (after a real fight) and MFO treats it as combat -- marth: 'Certainly not. It only exists to facilitate actions.' Next week: ClickUp 86e3pu939, then MFO client S3.
 - **2026-10-05 F2b: Skyrim 1.7.104.0 support on branch `feat/mfo-1.7.104` (NOT merged, needs the tier-A review).**
   MFO adopts the MIT CommonLib fork main `71021ae0` (registry baseline `d568e7f7`, port 3.7.0#17: upstream sync

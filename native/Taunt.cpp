@@ -389,6 +389,17 @@ namespace MFO::Taunt {
 
     Actuation::Outcome Fire(RE::Actor* a_f, const Eval::Choice& a_choice) {
         using R = Actuation::Result;
+        // Master switch (86e3pyjk2): the earliest point of act.taunt (its only caller is cast/Fire.cpp's act.taunt arm).
+        // Transparent NoOp = the rules below evaluate as if Taunt were not there, the same road every other
+        // unavailable act.* here takes. No idle, no claim, no pin. Tick / Clear (cleanup) never pass through here.
+        if (!Config::g_taunt.load()) {
+            static bool s_said = false;
+            if (!s_said) {
+                s_said = true;
+                spdlog::info("[taunt] disabled (bTaunt=0): Taunt gambits are skipped this release");
+            }
+            return { R::NoOp, "taunt disabled (bTaunt=0)", true };
+        }
         if (!a_f) return { R::FailedOther, "taunt: no follower", true };
         if (!APMFBridge::TauntSupported()) {
             // Taunt needs GetIdleState (ABI 24). There is NO fallback to a guess at whether the idle played.

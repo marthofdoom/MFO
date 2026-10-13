@@ -754,7 +754,7 @@
           "id": "fTauntDuration:General",
           "text": "Taunt: how long foes stay on the taunter (seconds)",
           "type": "slider",
-          "help": "A follower with a Taunt gambit plays a taunt animation, and each foe nearby then rolls to be drawn onto him. A foe that is drawn keeps fighting him for this many seconds, then picks its own target again. The roll favours a taunter of higher level. Needs Harbinger (APMF). Without it Taunt does nothing.",
+          "help": "A follower with a Taunt gambit plays a taunt animation, and each foe nearby then rolls to be drawn onto him. A foe that is drawn keeps fighting him for this many seconds, then picks its own target again. The roll favours a taunter of higher level. Needs Harbinger (APMF). Without it Taunt does nothing. Taunt is turned off in this release.",
           "valueOptions": {
             "min": 5.0,
             "max": 60.0,
