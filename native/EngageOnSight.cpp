@@ -70,6 +70,12 @@ namespace MFO::EngageOnSight {
         // ── MAIN-THREAD PROBE MIRROR ─────────────────────────────────────────────
         // Written by the main-thread probe, read by the worker. A real lock (#4:
         // cross-thread); a LEAF -- nothing is called while it is held.
+        // Engage-on-sight only STARTS an engagement on a target within this fraction of the reaction
+        // range, while the FULL range goes to Harbinger as ch.21 fval (review R3-1): Harbinger drops a
+        // held, not-hostile target the moment it is past fval with no debounce, so a fight begun right
+        // at the edge would be dropped as soon as anyone moved a few units. A distance margin, not a wait.
+        constexpr float kStartRangeMargin = 0.9f;
+
         struct ProbeResult {
             std::uint32_t seq = 0;                  // the post sequence this answers (g_seq)
             std::vector<RE::FormID> candidates;     // every enemy in the leash, nearest (to him) first
@@ -135,6 +141,8 @@ namespace MFO::EngageOnSight {
             // none). Released (if Targeting still holds that target) when the entry ends
             // and on the bEngageOnSight kill switch (review of 1c50696).
             RE::FormID        pinned = 0;
+            // The reaction range (ch.21 fval) of the entry filed last: lets Service tell a range drop apart.
+            float             engageRange = 0.0f;
         };
         std::unordered_map<RE::FormID, Note> g_notes;
         // Followers whose LAST logistics-table evaluation stopped on a Wait rule
@@ -200,14 +208,14 @@ namespace MFO::EngageOnSight {
         }
 
         // Is a_actor fighting the party right now (its currentCombatTarget resolves to the
-        // player or a teammate)? The crime filter's exemption. Main thread.
+        // player or a teammate)? The crime filter's exemption. main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state.
         bool FightingParty(RE::Actor* a_actor) {
             auto  tp = a_actor->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
             auto* t  = tp.get();
             return t && (t->IsPlayerRef() || t->IsPlayerTeammate());
         }
 
-        // MAIN THREAD. The ENEMY test (review of 1c50696, SEV-2). Actor::IsHostileToActor
+        // main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state. The ENEMY test (review of 1c50696, SEV-2). Actor::IsHostileToActor
         // alone is the engine's "would attack" predicate (aggression x faction reaction,
         // disassembled AE 0x679F10 by the reviewer): with a bounty, as a stage-4 vampire or
         // a werewolf it names every guard and townsperson, and starting that fight is a
@@ -228,7 +236,7 @@ namespace MFO::EngageOnSight {
         // Hostile to HIM alone (not to the player) still counts -- CONFIRMED by marth
         // 2026-09-25: "yes, there will be fights without player involvement".
         // The Aggression actor value (0 Unaggressive, 1 Aggressive, 2 Very Aggressive,
-        // 3 Frenzied). Same read as ToldToWait. Main thread.
+        // 3 Frenzied). Same read as ToldToWait. main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state.
         float AggressionOf(RE::Actor* a) {
             auto* avo = a->AsActorValueOwner();
             return avo ? avo->GetActorValue(RE::ActorValue::kAggression) : 0.0f;
@@ -241,7 +249,7 @@ namespace MFO::EngageOnSight {
 
         // NEVER ENGAGED PROACTIVELY (marth 2026-10-12): giants, mammoths, carriage drivers,
         // ferrymen, non-combatant servants -- unless FightingParty. The factions / races come
-        // from Config::g_engageOnSightSkip, resolved ONCE on the main thread (RunProbe) on first use.
+        // from Config::g_engageOnSightSkip, resolved ONCE on first use (a thread-safe magic static: the main thread via RunProbe, or the worker via Service's range-drop test).
         struct SkipSet {
             std::vector<RE::FormID> factions;
             std::vector<RE::FormID> races;
@@ -325,7 +333,7 @@ namespace MFO::EngageOnSight {
         // runtime "radius entered" flag. Aggression 0 + the NPC's AIDT aggro-radius behaviour bit
         // + a non-zero attack radius (aggroRadius[1] warn-and-attack or [2] attack) + a reaction
         // to the player or him that is Neutral or Enemy (not Ally / Friend). This is what Requiem
-        // gives skeevers, wolves and bears. Main thread.
+        // gives skeevers, wolves and bears. main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state.
         bool IsTerritorial(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc) {
             if (AggressionOf(a) != 0.0f) return false;
             const auto* base = a->GetActorBase();
@@ -381,6 +389,7 @@ namespace MFO::EngageOnSight {
             return true;
         }
 
+        // MAIN THREAD ONLY: Service (the worker) must NEVER call NoteSkip (its static map is unlocked).
         // Per-actor rate limit for the skip line (main thread only, like RunProbe): one line per
         // actor per kSkipLogSecs. Bounded: the map is cleared past kSkipLogMax entries.
         constexpr float kSkipLogSecs = 30.0f;
@@ -590,10 +599,28 @@ namespace MFO::EngageOnSight {
             const auto st = APMFBridge::CombatEntryStateOf(a_id, &et);
             if (st == APMFBridge::EntryState::Standing) return true;   // pending: his lap, no logistics
             if (st == APMFBridge::EntryState::Ended) {
-                note.givenUp[et] = note.postedSeq;
+                // A RANGE DROP is not a give-up (marth 2026-10-12, no waiting): Harbinger ended the
+                // entry because the target is beyond fval and not hostile to the party. It cannot be
+                // read through the API, so detect it here: the target is alive, still an enemy by
+                // MFO's own test, and now beyond the range the entry was filed with. It then stays
+                // eligible and is engaged again once it is back inside kStartRangeMargin * range.
+                bool rangeDrop = false;
+                if (auto* tt = RE::TESForm::LookupByID<RE::Actor>(et);
+                    tt && note.engageRange > 0.0f && !tt->IsDead() && !tt->IsDisabled()) {
+                    const char* why = "";
+                    rangeDrop = IsEnemy(tt, a_f, RE::PlayerCharacter::GetSingleton(), why) &&
+                                tt->GetPosition().GetDistance(a_f->GetPosition()) > note.engageRange;
+                }
+                if (!rangeDrop) note.givenUp[et] = note.postedSeq;
                 // The recipe drops both handles. Release the pin only if it is still OURS.
                 const bool pinCleared = note.pinned == et && ReleaseOwnPin(note, a_id);
                 APMFBridge::ForgetCombatEntry(a_id);
+                if (rangeDrop) {
+                    spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} ended past the {:.0f}u range "
+                                 "(Harbinger's range drop) -- NOT given up, engaged again once it is back inside "
+                                 "{:.0f}u{}", NameOf(a_f), a_id, et, note.engageRange,
+                                 note.engageRange * kStartRangeMargin, pinCleared ? "; its pin released" : "");
+                } else
                 spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} is over -- target given up until it "
                              "dies, unloads, stops being hostile or is past fLeashMax from you{}",
                              NameOf(a_f), a_id, et, pinCleared ? "; its pin released" : "");
@@ -694,10 +721,13 @@ namespace MFO::EngageOnSight {
                                             "bar (he would start a fight only to flee it)", now,
                            fmt::format(" -- estimate {:.2f} against {} foe(s) that would join, bar {:.2f}", conf, foes,
                                        a_minConfidence));
+                } else if (r.dSelf > r.range * kStartRangeMargin) {
+                    Status(note, a_f, a_id, "armed: nearest enemy is in the edge band (beyond 0.9 x range)", now);
                 } else if (t && !t->IsDead() && !t->IsDisabled()) {
                     std::uint32_t h = 0;
-                    switch (APMFBridge::RequestCombatEntry(a_id, r.chosen, &h)) {
+                    switch (APMFBridge::RequestCombatEntry(a_id, r.chosen, &h, r.range)) {
                     case APMFBridge::EntryResult::Filed: {
+                        note.engageRange = r.range;
                         // The recipe's second handle: pin the same target (ch.20 waits until the
                         // entry has made it a combat-group target). Through Targeting, so there is
                         // ONE pin per follower and his foe gambits re-point it once he fights.

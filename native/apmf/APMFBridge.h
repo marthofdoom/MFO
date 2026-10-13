@@ -410,8 +410,9 @@ namespace MFO::APMFBridge {
     // caller is converted at that one choke point. Worker-safe (the tick's AddTask
     // worker, the same thread every other claim in this file is filed from); takes g_mx.
     //
-    // THE PIN ENDS ON HARBINGER'S SIDE (target lost / dead / disabled / unloaded /
-    // unresolvable, or the follower dead): IsClaimLive turns false. (An OUTRANKED claim
+    // THE PIN ENDS ON HARBINGER'S SIDE (target dead / disabled / unloaded / unresolvable, the
+    // follower dead, or -- Harbinger fix/apmf-engagement-held -- the target is no longer a combat
+    // target (it was one) or a held-engagement end fired): IsClaimLive turns false. (An OUTRANKED claim
     // is NOT ended -- Harbinger's Poll ends only the winner -- so it stays live.)
     // Tick()'s sweep marks it ENDED and Releases the handle (a no-op on a dead claim;
     // FIFO-cancels a still-pending one, so no orphan can survive a false judgement).
@@ -474,7 +475,10 @@ namespace MFO::APMFBridge {
     // True when APMF is present at ABI >= 14 AND no synchronous refusal has been seen this
     // session (the ch.21 seat is installed as far as MFO can tell).
     bool CombatEntryOffered();
-    EntryResult RequestCombatEntry(RE::FormID a_follower, RE::FormID a_target, std::uint32_t* a_outHandle);
+    // a_engageRange = APMF_Param::fval, the engage reaction distance from the follower (units): Harbinger
+    // drops a not-actively-hostile target beyond it and ends the follower's combat. 0 = none.
+    EntryResult RequestCombatEntry(RE::FormID a_follower, RE::FormID a_target, std::uint32_t* a_outHandle,
+                                   float a_engageRange = 0.0f);
     // The follower's entry state; *a_outTarget (may be null) = the entry's target.
     EntryState CombatEntryStateOf(RE::FormID a_follower, RE::FormID* a_outTarget);
     // Release (if still standing) and forget this follower's entry. No-op when none.

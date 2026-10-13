@@ -223,7 +223,8 @@ namespace MFO::APMFBridge {
                 if (GamePaused() || p.unpausedSweeps < kPinNeverLiveSweeps) return false;
             }
             spdlog::info("[target-pin] {:08X}: pin on {:08X} ENDED (h={}, {}; Harbinger ends a pin when the "
-                         "target is lost, dead, disabled, unloaded or unresolvable, or the follower dies -- "
+                         "target is dead, disabled, unloaded or unresolvable, is no longer a combat target "
+                         "(it was one), or the follower dies, or a held-engagement end fires -- "
                          "APMF's '[ch.20] pin ended' line names it). The engine picks until MFO's gambit "
                          "chooses a foe again.",
                          follower, p.target, p.handle, p.everLive ? "was live" : "never seen live");

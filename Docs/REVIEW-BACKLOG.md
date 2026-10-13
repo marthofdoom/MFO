@@ -1657,3 +1657,15 @@ Opus review of `fix/foe-targeted-unholy`; pre-existing, not changed by that bran
 
 ### MFO-B255 (SEV-4) -- focus key can still send followers at the player's own summon
 Raised against 297ca4c (`fix/focus-skip-followers`, Opus review), 2026-10-12. Reviewer (verbatim): "The remaining hole: the player's own summon or atronach, which is a teammate but not tracked with summons off. If the player hits it by mistake and it becomes their combat target, followers are still sent after it. The fix is cheap: add `&& !a->IsPlayerTeammate()` (and the same on `pt`) to both filters. It is a flag read already used off-worker (logistics/Sinks.cpp:253), and the skip log text would say \"one of your allies\"." Not fixed in the branch: outside the brief's spec (filter = the crosshair path's player + tracked).
+
+### MFO-B258 (SEV-4, OPEN, EngageOnSight) -- a no-progress end on an ActivelyHostile target beyond R is misread as a range drop
+Raised against 863106c (`feat/mfo-engage-range`, Opus review MERGE OK, 2026-10-12). `Service`'s Ended branch calls an end a range drop when the target is alive, `IsEnemy` and beyond `Note::engageRange`. Harbinger's no-progress / arrived-but-not-fighting ends on a hostile target that happens to be past R look identical, so the target is not given up and a bounded re-engage cycle follows. The review log (`agentlogs/review-mfo-engage.md`) records only the verdict, so this is the coordinator's relay of the finding, not the reviewer's verbatim words. Fix shape: Harbinger exposes the end reason.
+
+### MFO-B259 (SEV-4, OPEN, EngageOnSight) -- the drop is classified at Service time, not drop time
+Raised against 863106c, same review. The range test runs when `Service` sees the Ended state, not when the bridge sweep marked it. A target back inside R in that window is wrongly given up. Relayed, not verbatim (see MFO-B258). Fix shape: Harbinger exposes the end reason, or MFO samples distance when the bridge sweep marks the entry Ended.
+
+### MFO-B260 (SEV-4, OPEN, EngageOnSight) -- the 0.9 band is only 50u at the 500u minimum
+Raised against 863106c, same review. With `fEngageOnSightRange` at its 500u minimum the start margin `kStartRangeMargin` x R leaves a 50u band, so a receding target can be engaged and dropped at once. Relayed, not verbatim (see MFO-B258). Fix shape: start inside min(0.9R, R - 250u).
+
+### MFO-B261 (SEV-5, OPEN, EngageOnSight) -- "another cell" ends compare raw positions
+Raised against 863106c, same review. Harbinger ends a hold for a target in another cell, and the range-drop test compares raw `GetPosition()` distances across cells. Relayed, not verbatim (see MFO-B258).
