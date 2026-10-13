@@ -282,6 +282,14 @@ Bias model (needs marth's call, D1): the field shows an additive constant is the
 
 ## Phase 1 MFO status (W1 + W2, 2026-10-12, branch `feat/mfo-weighting-w1w2`, Harbinger main 17650fc ABI 22)
 
+**W1 STATUS 2026-10-12: PARKED behind the INI key `bWeighWeapons` (default 0), batch D.** marth: "Lets revert armor
+and weapons to unweighted. Lets only focus on weights where they actually help us, batch D armor and weapon weights
+unless something reliant on weighting actually needs weighting." `Actuation::WeighingEquips()` now also requires
+`Config::g_weighWeapons`, so with the default every row below is today's pre-W1 road (direct equips, the
+force-hold, the MFO-B41 loop). The code stays for batch D. Flipping the key off at runtime (MCM close re-read)
+runs `Actuation::ReconcileWeighSwitch`: ch.26 claims released, pending placements dropped. Armor was never weighted
+(W3 not built). The rest of this section describes the behaviour WITH the key on.
+
 marth 2026-10-12: "Direct equip is going. Harbinger has all the responsibility now." With Harbinger at ABI >= 22
 and the ch.17 equip authority supported (`APMFBridge::EquipPreferenceSupported` = `Actuation::WeighingEquips`),
 MFO makes NO direct weapon, shield or torch `EquipObject`. Below ABI 22 (or APMF absent, or `bApmfEquipAuthority`

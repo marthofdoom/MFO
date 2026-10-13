@@ -183,7 +183,25 @@ namespace MFO::Actuation {
         }
     }
 
-    bool WeighingEquips() { return APMFBridge::EquipPreferenceSupported(); }
+    bool WeighingEquips() { return Config::g_weighWeapons.load() && APMFBridge::EquipPreferenceSupported(); }
+
+    // bWeighWeapons flipped OFF at runtime (Config::Read on MCM close): nothing may stay half-weighted. Drops
+    // the pending ch.17 placements, the escalation watch and every ch.26 claim. A no-op while weighing is on
+    // or when there is nothing to drop. Worker-serial (the MCM-close task), like g_watch.
+    void ReconcileWeighSwitch() {
+        if (WeighingEquips()) return;
+        bool had = false;
+        {
+            std::scoped_lock lk(g_placeMx);
+            had = !g_place.empty();
+            g_place.clear();
+        }
+        had = had || !g_watch.empty();
+        g_watch.clear();
+        g_emptyPrefLogged.clear();
+        APMFBridge::ClearEquipPreferences();
+        if (had) spdlog::info("[equip] weapon weighting switched OFF: ch.26 claims released, pending placements dropped");
+    }
 
     std::uint8_t PlacementSlotFor(const RE::TESForm* a_item, bool a_leftHand) {
         const auto* w = a_item ? a_item->As<RE::TESObjectWEAP>() : nullptr;
