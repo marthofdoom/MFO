@@ -362,7 +362,7 @@ namespace MFO::Actuation {
             const auto healRoad  = ComposedCast::ChooseHealRoad(a_follower, spell, a_target);
             const bool healClaim = healRoad == ComposedCast::HealRoad::Claim;
             // THE PER-HAND HEAL ROAD (feat/mfo-perhand-heal, cast/HealRoad.cpp): the lap's
-            // recipient re-judged (dead / essential-down / beyond reach / at threshold or
+            // recipient re-judged (dead / beyond reach / at threshold or
             // full -> released, transparent), this rule's heal on the OTHER hand maintained,
             // the LEFT hand's equip-gambit rank gate, and the hand this recipient is served
             // on: the LEFT, or the RIGHT for a second recipient while the left heals another.
