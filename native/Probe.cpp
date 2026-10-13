@@ -326,9 +326,12 @@ namespace MFO::Probe {
         // when it works, and it is not the one we rely on.
         if (const auto id = CrosshairTarget(); id != 0) {
             if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id)) {
-                if (a != player && !Followers::IsTracked(a->GetFormID())) {
+                if (a != player && !Followers::IsTrackedFast(a->GetFormID())) {
                     victim = a;
                     how = "crosshair";
+                } else {
+                    spdlog::info("[focus] crosshair {:08X} skipped ({}), trying your combat target",
+                                 a->GetFormID(), a == player ? "you" : "one of your followers");
                 }
             }
         }
@@ -338,8 +341,15 @@ namespace MFO::Probe {
         //    works in combat, which is the only time it matters.
         if (!victim) {
             if (auto* pt = player->GetActorRuntimeData().currentCombatTarget.get().get()) {
-                victim = pt;
-                how = "your combat target";
+                // Same filter as the crosshair: a tracked follower (or the player) is never a
+                // focus target. The field log pinned two followers on a third (Auri).
+                if (pt != player && !Followers::IsTrackedFast(pt->GetFormID())) {
+                    victim = pt;
+                    how = "your combat target";
+                } else {
+                    spdlog::info("[focus] your combat target {:08X} skipped ({})", pt->GetFormID(),
+                                 pt == player ? "you" : "one of your followers");
+                }
             }
         }
 

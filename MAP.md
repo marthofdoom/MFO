@@ -7377,7 +7377,7 @@ outlives a session. `ReleaseAll()` (`:445`) ← `plugin.cpp:359`, `Serialization
 survives. `Tick()` (`:368`) ← `Diagnostics.cpp:350` (main-thread task). **Real
 gameplay dependency (not debug-only):** `CrosshairTarget()` (`:307`) ←
 `logistics/LootTake.cpp:596` (QuickLoot-aware player-claim signal; it moved out of
-`Logistics.cpp` in the 2026-08-31 split). `FocusOnCrosshair()` (`:309`) ←
+`Logistics.cpp` in the 2026-08-31 split). `FocusOnCrosshair()` (`:309`, skips the player and tracked followers on BOTH the crosshair and combat-target paths via `IsTrackedFast`; runs in an AddTask on the job worker under PumpTickGate) ←
 `Board.cpp:622`.
 `StartCombatOn` uses po3 RelocationID(37608,38561), VR-refused. Most `Fire`/`GetLast`/
 enum entry points have **no in-tree C++ caller** (the ImGui probe panel isn't wired) —

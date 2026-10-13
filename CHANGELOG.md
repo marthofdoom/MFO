@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **The focus key no longer points followers at another follower.** When your combat target was one of your own followers, the rest were sent after them. That target is now skipped like it already was for the crosshair.
+
 ## v2.6.1 -- Archers heal without dropping to melee
 
 - **Needs Harbinger 0.12.0 or newer (ABI 21).** Harbinger 0.13.0 is current.
