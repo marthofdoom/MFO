@@ -19,6 +19,7 @@
 #include "Targeting.h"    // flair #5: retarget hesitation reads the current latch
 #include "Temperament.h"  // flair #1: per-follower timing seed
 #include "Rapport.h"      // #63 quash backstop routes through QuashAllyPair
+#include "TauntProbe.h"    // taunt S0 passive probes (bTauntProbe)
 #include "EngageOnSight.h" // the hidden OOC gambit "nearest visible enemy" (party-OOC branch)
 #include "progression/ProgAllocator.h" // §HMS: publish fired combat action pool for the level-up skew
 #include <cstring>          // [deadtgt] strcmp on the CannotActReason strings
@@ -738,6 +739,7 @@ namespace MFO::Scheduler {
         g_partyCombatNoted.clear();
         g_stallProbe.clear();                   // [stall-probe] samples are session state
         g_deadTgt.clear();                      // [deadtgt] windows are session state
+        TauntProbe::Reset();                    // [taunt-probe] samples are session state
         g_noneMatchedNoted.clear();
         g_equipRangeUndecidableNoted.clear();   // MFO-B55 once-per-fight note
         g_reachHold.clear();                    // fix/mfo-unreachable-flyer: the leash hold
@@ -1185,6 +1187,7 @@ namespace MFO::Scheduler {
         if (ownCombat) g_stallProbe.erase(id);   // [stall-probe]: only while own combat is OFF
         else           StallProbe(f, id);
         DeadTgtService(f, id, ownCombat);   // [deadtgt]: passive, ClickUp 86e3eb078
+        TauntProbe::Service(f, id, ownCombat);   // [taunt-probe]: passive, gated by bTauntProbe (ClickUp 86e3g6duw)
         APMFBridge::ReleaseOffenseCastOnDeadTarget(id);   // ClickUp 86e3eb078: a dead target ends the channel at once
 
         // OWNED MODEL: keep this follower's APMF combat-target claim (if any) alive for

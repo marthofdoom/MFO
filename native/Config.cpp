@@ -166,6 +166,7 @@ namespace MFO::Config {
             else if (a_key == "bLootTravelViaApmfTravel") setB(g_lootTravelViaApmfTravel); // A/B: route loot travel through APMF ch.19 kIntent_Travel, inert without APMF v10+
             else if (a_key == "bApmfRetreat")       setB(g_apmfRetreat);      // APMF package-offer retreat, inert without APMF
             else if (a_key == "bApmfEquipAuthority") setB(g_apmfEquipAuthority); // APMF equip authority (declared worn set), inert without APMF v7+
+            else if (a_key == "bTauntProbe")        setB(g_tauntProbe);       // taunt S0 passive probes, INI-only, default OFF
             else if (a_key == "bWeighWeapons")      setB(g_weighWeapons);     // EXPERIMENTAL weapon weighting (ch.26 + ch.17 placements), INI-only, default OFF (batch D)
             else if (a_key == "bWarnNoApmf")        setB(g_warnNoApmf);       // corner-toast reminder when APMF is absent, default ON
             else if (a_key == "bHealAnimPackage")   setB(g_healAnimPackage);  // animated heals in combat (the ComposedCast claim road), default ON, KILL SWITCH; inert without Harbinger (key name frozen)
@@ -326,6 +327,7 @@ namespace MFO::Config {
             g_lootTravelViaApmfTravel = true;   // default ON (marth 2026-09-23: ship 1): loot walks on APMF ch.19 when APMF v10+ is present, else MFO's own road
             g_apmfRetreat        = true;    // default = APMF package-offer retreat, inert without APMF
             g_apmfEquipAuthority = true;    // default = declare the worn set to APMF (equip authority), inert without APMF v7+
+            g_tauntProbe         = false;   // taunt S0 passive probes -- OFF by default (INI-only)
             g_weighWeapons       = false;   // default OFF: MFO equips weapons directly (weighting is parked, batch D)
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent
             g_healAnimPackage    = true;    // default ON (animheal phase 2): with Harbinger present and a combat controller a heal is cast ANIMATED by the follower's own AI (the ch.8b claim road); OFF = the kill switch, heals take the direct road (unanimated)

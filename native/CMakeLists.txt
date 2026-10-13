@@ -38,6 +38,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     Board_FieldKit.cpp
     i18n/Strings.cpp
     Probe.cpp
+    TauntProbe.cpp
     ProgProbe.cpp
     Progression.cpp
     progression/Allocator.cpp
