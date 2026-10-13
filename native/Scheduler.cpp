@@ -1776,7 +1776,7 @@ namespace MFO::Scheduler {
         // SILVER (ClickUp 86e3p2gp9): the silver rule's OWN truth, by the same two ways -- the scan
         // ran to completion, or an act.equip_silver rule sat above the stop and did not hold. Its
         // own, because another melee equip holding the hand (equipHeld == 1) must not keep the
-        // silver weapon in it once the foe is no longer Unholy. Deliberately NOT folded into
+        // silver weapon in it once the target is no longer Unholy. Deliberately NOT folded into
         // equipCondKnownFalse above: a false silver rule above the stop says nothing about an
         // act.equip_melee rule below it, whose hold must survive its unknown laps as before.
         bool silverKnownFalse = !silverHeld && condKnownFalse;

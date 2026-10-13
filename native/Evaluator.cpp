@@ -263,7 +263,12 @@ namespace MFO::Eval {
             // already in -- the observed equip thrash (D5/H6). No current target ->
             // the condition is false and the rule falls through. Reads only the
             // handle (no combat-group lock); brawl gate still applies.
-            if (a_op == Vocab::kCondFoeWithinRange || a_op == Vocab::kCondFoeBeyondRange) {
+            //
+            // "Foe targeted: Unholy" (marth 2026-10-12) rides the SAME current-target path: it
+            // holds only when the foe the follower is fighting is Unholy; it never scans the
+            // group for some other Unholy foe and never switches the target to it. No distance test.
+            if (a_op == Vocab::kCondFoeWithinRange || a_op == Vocab::kCondFoeBeyondRange ||
+                a_op == Vocab::kCondFoeIsUnholy) {
                 auto tp   = a_self->GetActorRuntimeData().currentCombatTarget.get();
                 auto* tgt = tp.get();
                 if (!tgt || tgt->IsDead() || tgt->IsDisabled()) return best;
@@ -294,6 +299,12 @@ namespace MFO::Eval {
                         LogReachSkip(a_self, tgt->GetHandle(), rr, {});
                         return best;
                     }
+                }
+                if (a_op == Vocab::kCondFoeIsUnholy) {
+                    // What the load order's silver bonuses hit (ClickUp 86e3p2gp9): the live
+                    // SilverPerk / silver-enchantment conditions, pre-read once. Outside the group lock.
+                    if (Logistics::IsUnholy(tgt)) best = tgt->GetHandle();
+                    return best;
                 }
                 const float d  = a_self->GetPosition().GetDistance(tgt->GetPosition());
                 const bool  ok = (a_op == Vocab::kCondFoeWithinRange) ? (d <= a_param)
@@ -476,11 +487,6 @@ namespace MFO::Eval {
                         if (!RaceHasKeyword(foe, "ActorTypeDragon")) continue;
                     } else if (a_op == Vocab::kCondFoeIsMechanical) {
                         if (!FoeIsMechanical(foe)) continue;
-                    } else if (a_op == Vocab::kCondFoeIsUnholy) {
-                        // What the load order's silver bonuses hit (ClickUp 86e3p2gp9): the live
-                        // SilverPerk / silver-enchantment conditions, pre-read once; plain race /
-                        // keyword / faction reads here, fit for the group lock (#23).
-                        if (!Logistics::IsUnholy(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeMultipleWithin) {
                         // CENTRE of a cluster: most other foes within the distance wins;
                         // ties go to the one nearest the follower (the + dist term, always

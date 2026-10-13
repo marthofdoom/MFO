@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **Foe: Unholy is now Foe targeted: Unholy.** It checks only the foe the follower is fighting. It no longer looks for an Unholy foe nearby and switches the target to it. Existing rules keep working.
+
 ## v2.6.1 -- Archers heal without dropping to melee
 
 - **Needs Harbinger 0.12.0 or newer (ABI 21).** Harbinger 0.13.0 is current.

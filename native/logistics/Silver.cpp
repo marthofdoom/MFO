@@ -4,7 +4,8 @@
 // Owns the KNOWLEDGE half of the feature; the hand half (act.equip_silver, the switch back to the
 // main weapon) lives in cast/EquipSilver.cpp and reads only the public API below (Logistics.h).
 //
-//   * UNHOLY (cond.foe_is_unholy, marth named it): "exactly what the load order's silver bonuses
+//   * UNHOLY (cond.foe_is_unholy, shown as "Foe targeted: Unholy": true only when the foe the follower is
+//     currently fighting is Unholy, no scan for another; marth named it): "exactly what the load order's silver bonuses
 //     hit". Not a hand-written list: the target-tab conditions of the LIVE SilverPerk record
 //     (Skyrim.esm 0x10D685, whatever plugin overrides it last) and the conditions of the LIVE
 //     silver-enchantment effect (Skyrim.esm MGEF 0x10B116 EnchSilverSwordFFContact) are read
