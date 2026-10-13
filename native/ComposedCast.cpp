@@ -818,6 +818,16 @@ namespace MFO::ComposedCast {
                              fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
             return HealRoad::DirectNoCombat;
         }
+        // THE SELF-FLIP NEVER-LANDED BAR (review F1): a non-Self heal at its own caster whose claim fired repeatedly and
+        // landed nothing (Actuation::HealSelfFlipBarred, cast/HealObs.cpp) is a direct heal for the rest of the fight.
+        if (a_target == a_follower && a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
+            Actuation::HealSelfFlipBarred(fid, spellID)) {
+            if (RoadLogDue(fid, spellID, HealRoad::DirectNoSeat))
+                spdlog::warn("[heal] {:08X} {} ({:08X}) at its own caster: its self-flip claim FIRED but NEVER LANDED "
+                             "earlier this fight -- DIRECT road, unanimated, until the fight ends",
+                             fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
+            return HealRoad::DirectNoSeat;
+        }
         // A HEAL AT ITS OWN CASTER IS A CLAIM WHATEVER ITS DELIVERY (substrate slice S1, R2). Harbinger resolves
         // a TARGET-0 self claim only for a Self-delivery spell, so a heal of another delivery (Aimed / Touch /
         // TargetActor, e.g. Healing Hands) at its own caster is claimed with the caster's OWN FormID as the

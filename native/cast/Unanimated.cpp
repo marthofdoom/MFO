@@ -65,10 +65,11 @@ namespace MFO::Actuation {
     }
 
     void NoteUnanimatedRoadWhy(RE::Actor* a_follower, const char* a_road, RE::SpellItem* a_spell,
-                               RE::Actor* a_recipient) {
+                               RE::Actor* a_recipient, const char* a_prefix) {
         // the reason is computed AFTER the gate: UnanimatedWhy asks the road choosers, which are combat-table business
         if (UnanimatedDue(a_follower, a_road, a_spell))
-            EmitUnanimated(a_follower, a_road, a_spell, UnanimatedWhy(a_follower, a_spell, a_recipient));
+            EmitUnanimated(a_follower, a_road, a_spell,
+                           std::string(a_prefix ? a_prefix : "") + UnanimatedWhy(a_follower, a_spell, a_recipient));
     }
 
     std::string UnanimatedWhy(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient) {
@@ -93,6 +94,19 @@ namespace MFO::Actuation {
             }
             return "the heal road is not a claim";
         case CasterConsent::SpellKind::Buff: {
+            // A concentration ward / buff at ANOTHER recipient is ChooseBuffRoad's "its own claim road" answer, which it
+            // gives before any controller test: name what actually keeps THAT road (the Task-1 claim in
+            // cast/DirectTarget.cpp) from claiming (review F5).
+            if (other && a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+                if (!APMFBridge::Available() || !APMFBridge::OffenseCastClaimSupported() || !Config::g_apmfCast.load() ||
+                    Config::g_legacyCastHybrid.load())
+                    return "Harbinger absent or too old, or the claim road is switched off (bApmfCast, bLegacyCastHybrid)";
+                if (!a_follower->GetActorRuntimeData().combatController)
+                    return "no combat controller: the animated cast needs the follower's own combat AI";
+                if (!APMFBridge::CastSeatsSupported())
+                    return "Harbinger lacks the buff seats (ABI < 19): a concentration ward / buff stays direct until it is updated";
+                return "the concentration claim was not made on this lap";
+            }
             const char* why = nullptr;
             const auto road = ChooseBuffRoad(a_follower, a_spell, /*a_log=*/false, other ? a_recipient : nullptr, &why);
             if (road == BuffRoad::Claim)
@@ -109,6 +123,8 @@ namespace MFO::Actuation {
                 return "Harbinger absent or too old, or the claim road is switched off (bApmfCast, bLegacyCastHybrid)";
             if (!a_follower->GetActorRuntimeData().combatController)
                 return "no combat controller: the animated cast needs the follower's own combat AI";
+            if (!Config::g_equipToCast.load())
+                return "bEquipToCast is off (the owned offense claim lives inside that toggle)";
             return "this offense shape has no claim road (self delivery, or a claim the road does not serve)";
         }
     }

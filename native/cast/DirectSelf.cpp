@@ -178,7 +178,10 @@ namespace MFO::Actuation {
         // MFO-B58's fix (mirror the heal twin): with no CombatController there is no
         // caster to seat, so a claim here would stand dead and wall the lap, and a
         // Restoration-school ward now reaches this site too.
+        // F4 (review): a ward / buff (any non-Offense kind) needs Harbinger's buff seats (ABI >= 19,
+        // CastSeatsSupported, ChooseBuffRoad's needCap): on an older one this claim stands dead and walls the lap.
         if (selfKind != CasterConsent::SpellKind::Heal &&
+            (selfKind == CasterConsent::SpellKind::Offense || APMFBridge::CastSeatsSupported()) &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             a_follower->GetActorRuntimeData().combatController &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&

@@ -1645,10 +1645,8 @@ namespace MFO::Actuation {
             {
                 // THE LAST DIRECT ROAD OF THE AI-FIRST HYBRID: the follower's own AI declined, the force-on-miss is a
                 // CastSpellImmediate (no animation). On the combat table the field log names it (substrate S1).
-                if (g_firingRule != kNoRule)   // the reason asks the road choosers: combat table only (MFO-B173)
-                    NoteUnanimatedRoad(a_follower, "legacy-force", spell,
-                                       "the AI-first hybrid's force-on-miss: no claim road took this cast (" +
-                                           UnanimatedWhy(a_follower, spell, a_target) + ")");
+                NoteUnanimatedRoadWhy(a_follower, "legacy-force", spell, a_target,
+                                      "the AI-first hybrid's force-on-miss: no claim road took this cast: ");
                 auto doCast = [fid = a_follower->GetFormID(),
                                tid = a_target ? a_target->GetFormID() : 0,
                                spid = spell->GetFormID(), src] {

@@ -469,7 +469,10 @@ namespace MFO::Actuation {
                 const float ceiling = std::min(a_healThreshold, Vocab::kHealFull);
                 const auto  selfPos = a_follower->GetPosition();
                 // the caster is a candidate for EVERY delivery: a non-Self heal at him is a claim too (substrate S1 R2)
-                const bool  selfOk  = true;
+                // ... unless its self-flip claim FIRED but NEVER LANDED this fight (HealSelfFlipBarred): then his road is the
+                // direct stream, which re-pins the pick on him, so he is left out
+                const bool  selfOk  = spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf ||
+                                      !HealSelfFlipBarred(id, a_spellID);
                 std::vector<RE::FormID> sightWant;
                 RE::Actor* lowest   = nullptr;
                 float      lowestHp = ceiling;   // strictly under the rule's ceiling
@@ -973,20 +976,20 @@ namespace MFO::Actuation {
             // THE DIRECT FAN IS THE UNANIMATED RESIDUE (substrate S1): every cast below is a CastSpellImmediate with no
             // hand animation. Combat table only (the helper is a no-op off it); one line per (follower, spell).
             if (g_firingRule != kNoRule) {
-                std::string why;
-                if (hostile) {
-                    if (spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf)
-                        why = "a Self-delivery offense spell has no foe to aim at: AUTO fans its effect onto each foe";
-                    else
-                        why = UnanimatedWhy(a_follower, spell, nullptr);
-                } else if (concentration) {
-                    why = "AUTO fans a concentration spell that is not a heal (no claim series for it)";
-                } else if (authoredDur <= 0.0f) {
-                    why = "AUTO fans an instant beneficial spell (the claim series needs a duration to read back)";
-                } else {
-                    why = UnanimatedWhy(a_follower, spell, RE::PlayerCharacter::GetSingleton());
-                }
-                NoteUnanimatedRoad(a_follower, "auto-fan", spell, why);
+                // the reasons that ask the road choosers use the Why form: gate + rate limit first (review SEV-4)
+                if (hostile && spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf)
+                    NoteUnanimatedRoad(a_follower, "auto-fan", spell,
+                                       "a Self-delivery offense spell has no foe to aim at: AUTO fans its effect onto each foe");
+                else if (hostile)
+                    NoteUnanimatedRoadWhy(a_follower, "auto-fan", spell, nullptr);
+                else if (concentration)
+                    NoteUnanimatedRoad(a_follower, "auto-fan", spell,
+                                       "AUTO fans a concentration spell that is not a heal (no claim series for it)");
+                else if (authoredDur <= 0.0f)
+                    NoteUnanimatedRoad(a_follower, "auto-fan", spell,
+                                       "AUTO fans an instant beneficial spell (the claim series needs a duration to read back)");
+                else
+                    NoteUnanimatedRoadWhy(a_follower, "auto-fan", spell, RE::PlayerCharacter::GetSingleton());
             }
 
             int fired = 0, skipped = 0;

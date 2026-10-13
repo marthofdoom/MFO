@@ -556,7 +556,7 @@ namespace MFO::Actuation {
         // The same, with the reason computed by UnanimatedWhy only once the gate (combat table + rate limit) passes:
         // the road choosers it asks must not run for an out-of-combat caller (MFO-B173).
         void NoteUnanimatedRoadWhy(RE::Actor* a_follower, const char* a_road, RE::SpellItem* a_spell,
-                                   RE::Actor* a_recipient);
+                                   RE::Actor* a_recipient, const char* a_prefix = nullptr);
         SelfCast BuffClaim(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient);
         SelfCast BuffSelfClaim(RE::Actor* a_follower, RE::SpellItem* a_spell);
         std::optional<Outcome> BuffRefreshGate(RE::Actor* a_follower, RE::SpellItem* a_spell,

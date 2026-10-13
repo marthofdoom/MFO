@@ -100,6 +100,11 @@ namespace MFO::Actuation {
     // names it, logging each per-hand end once ([heal-hand]). ComposedCast::ChooseHealRoad's
     // road switch (kill switch / controller gone) is the caller. Worker-serial (#4).
     void ReleaseHealClaimsAllHands(RE::FormID a_follower, const char* a_why);
+    // SELF-FLIP "FIRED BUT NEVER LANDED" bound (substrate S1 review F1, cast/HealObs.cpp): true once a non-Self-delivery heal
+    // claimed at its own caster has fired repeatedly with no landing evidence; ChooseHealRoad then answers DirectNoSeat for
+    // that (caster, spell) for the rest of the fight. HealSelfFlipFightOver clears a caster's record (combat end / dismiss).
+    bool HealSelfFlipBarred(RE::FormID a_caster, RE::FormID a_spell);
+    void HealSelfFlipFightOver(RE::FormID a_caster);
     // HEAL CLAIMS LAST UNTIL THE RECIPIENT IS FULL (ClickUp 86e3m36qr; cast/HealRoad.cpp). HealSustainLap:
     // once per follower per combat tick, replays the heal lap for a standing claim no rule asked for this
     // tick; returns the bitmask (1 << hand) of heals still standing. ReleaseUnheldCastHands: Scheduler's

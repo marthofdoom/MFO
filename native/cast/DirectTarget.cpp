@@ -195,7 +195,10 @@ namespace MFO::Actuation {
         // now claims the AI-fired road like every other non-heal concentration stream.
         // THE CONTROLLER TEST is backlog MFO-B58's fix (mirror the heal twin): no
         // CombatController, no caster to seat, so the claim would stand dead.
+        // F4 (review): a ward / buff (any non-Offense kind) needs Harbinger's buff seats (ABI >= 19,
+        // CastSeatsSupported, ChooseBuffRoad's needCap): on an older one this claim stands dead and walls the lap.
         if (kind != CasterConsent::SpellKind::Heal &&
+            (kind == CasterConsent::SpellKind::Offense || APMFBridge::CastSeatsSupported()) &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             a_follower->GetActorRuntimeData().combatController &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&

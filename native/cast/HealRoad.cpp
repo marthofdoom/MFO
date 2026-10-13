@@ -969,6 +969,14 @@ namespace MFO::Actuation {
         // keeps a left claim that never fires from starving offense; HealClaimNeedsRepair only WARNs).
         if (NeverFiredRelease(a_follower, a_hand, a_spell, "its recipient"))
             return Outcome{ Result::FailedOther, "animated heal released: it never fired", true };
+        // The self-flip never-landed bound (substrate S1 review F1): the verdict is made on the main thread in
+        // HealObsSweep (cast/HealObs.cpp); the claim is released HERE, on the worker, once it has barred the spell.
+        if (HealSelfFlipBarred(a_follower->GetFormID(), a_spell) &&
+            APMFBridge::GetHealCastSpell(a_follower->GetFormID(), ApmfHand(a_hand)) == a_spell &&
+            APMFBridge::GetHealCastTarget(a_follower->GetFormID(), ApmfHand(a_hand)) == 0) {
+            ReleaseWithExit(a_follower, a_hand, a_spell, "its self-flip cast fired but never landed", "never-landed");
+            return Outcome{ Result::FailedOther, "animated heal released: its self-flip cast fired but never landed", true };
+        }
         return std::nullopt;
     }
 
@@ -1164,6 +1172,7 @@ namespace MFO::Actuation {
         g_launcherSeen.erase(a_follower);   // per FIGHT: a follower who switched bow -> sword is not a launcher user
         g_neverFiredLatch.erase((static_cast<std::uint64_t>(a_follower) << 1) | kHandLeft);
         g_neverFiredLatch.erase((static_cast<std::uint64_t>(a_follower) << 1) | kHandRight);
+        HealSelfFlipFightOver(a_follower);   // the self-flip never-landed bar is per fight
     }
 
     void ResetHealRoad() {
