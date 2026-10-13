@@ -1755,3 +1755,9 @@ Same review. Reviewer (verbatim): "load-time `Loadout::Reconcile` (`plugin.cpp:5
 
 ### MFO-B288 (SEV-5, OPEN, logistics/Upkeep.cpp) -- the "[heal] ... NOT healed" skip logs every service lap while the hold lasts (raised against 0d38508)
 Author's own note on the closing round: the skip in `HealExcludedWeapon` logs on every poll while a hold owns the hand. Rare case (an excluded weapon in a held hand); latch it per follower if it proves noisy.
+
+### MFO-B289 (SEV-4, OPEN, logistics/EquipAuthority.cpp) -- in combat, a hold whose item returns is not re-declared until the next gambit/ledger trigger (raised against d797089)
+Opus tier-B review of `fix/mfo-drop-uncarried-holds` @ d797089. Reviewer (verbatim): "In combat: the only rebuild triggers are gambit equip, off-hand top-up and bound weapon live/ended (`Equip.cpp:578, 598, 789, 796, 1223`). There is no inventory-change trigger. If a declaration is built while the weapon is gone (for example a Disarm with an AI pickup) and the weapon then returns mid-fight, the hand stays unowned until the next gambit fire or combat end. ... this degrades softly (the AI arms the hand, no lockout)."
+
+### MFO-B290 (SEV-5, OPEN, logistics/EquipAuthority.cpp) -- the "no longer carried" log latch never re-arms; its text over-promises (raised against d797089)
+Same review. Reviewer (verbatim): "the `g_uncarriedLogged` latch (:417) is only cleared on forget or revert. A second loss of the same item in one session is not logged again (log only)." and "The log text 'the next equip gambit re-picks' (:784-786) is optimistic, because a gambit that sees its pick already satisfied may not call `DeclareFromLedger` again."
