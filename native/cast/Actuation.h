@@ -587,6 +587,35 @@ namespace MFO::Actuation {
     // erasing it then makes the next OOC tick declare Armor-only on its own.
     std::pair<RE::FormID, RE::FormID> ForcedHoldFor(RE::FormID a_follower);
 
+    // ── WEIGHTING PHASE 1, W1 (cast/EquipWeigh.cpp) ─────────────────────────────────────────
+    // marth 2026-10-12: "Direct equip is going. Harbinger has all the responsibility now."
+    // True when Harbinger serves ch.26 (ABI >= 22) and the ch.17 equip authority is supported
+    // (APMFBridge::EquipPreferenceSupported). Then NO MFO road makes a direct weapon / shield /
+    // torch EquipObject: each one becomes a ONE-SHOT PLACEMENT declared through ch.17 (below)
+    // and, in combat, the ledger's choice is a ch.26 preference. False: today's roads (the
+    // documented degrade: APMF absent, ABI < 22, bApmfEquipAuthority off). Any thread.
+    bool WeighingEquips();
+    // The ch.17 hand for a placement of a_item: a one-hander (a staff included) names its hand
+    // (a_leftHand), everything else is kEquipSlot_Default (a two-hander, a bow, a shield, a torch).
+    std::uint8_t PlacementSlotFor(const RE::TESForm* a_item, bool a_leftHand);
+    // ONE-SHOT PLACEMENT: put a_form in a_slot through Harbinger's ch.17 equip pass (the item is
+    // added to the next declaration with its hand owned, until it is seen in the hand, the item
+    // is gone, or 10 s pass -- a loud "did not land", never retried around). Replaces a direct
+    // EquipObject under WeighingEquips(). Any thread (own mutex); the declaration that carries it
+    // is the next RefreshEquipDeclaration (the OOC service tail, or the in-combat reconcile lap).
+    void WantPlacement(RE::FormID a_follower, RE::FormID a_form, std::uint8_t a_slot, const char* a_why);
+    bool PlacementPending(RE::FormID a_follower);
+    struct Placement { RE::FormID form = 0; std::uint8_t slot = 0; };
+    // Worker (RefreshEquipDeclaration): the placements still waiting for a_follower, after
+    // retiring the ones that landed / are gone / expired (each logged once).
+    std::vector<Placement> PendingPlacements(RE::Actor* a_follower);
+    // Worker (RefreshEquipDeclaration): a_form was carried by the declaration just built -- its
+    // 10 s "did not land" clock starts at the FIRST such build (a placement held back because the
+    // ledger or a cast holds its hand is waiting, not failing; it is dropped after 120 s unplaced).
+    void NotePlacementDeclared(RE::FormID a_follower, RE::FormID a_form);
+    // Worker: dismissal / MFO-off (Logistics::OnFollowerRemoved) -- his placements and escalation watch.
+    void ForgetPlacements(RE::FormID a_follower);
+
     // MELEE-ONLY (fix/mfo-unreachable-flyer, cast/Fire.cpp): MFO has DECLARED him melee --
     // base class Melee (#65 combatClassOverride 1, the resting stance), or an
     // act.equip_melee force-hold standing in either hand (ForcedHoldFor: the hold the ch.17

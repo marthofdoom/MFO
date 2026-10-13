@@ -733,6 +733,17 @@ namespace MFO::Actuation {
         // The ch.17 equip declaration from the ledger (Equip.cpp's anon DeclareFromLedger, named
         // for cast/EquipSilver.cpp). Worker-serial.
         void DeclareLedger(RE::Actor* a_follower, const char* a_why);              // cast/Equip.cpp
+        // The shield-by-perks top-up MFO stamped for a_follower (g_shieldRank, MFO-B186), 0 = none.
+        // Under g_forcedMx. The ch.26 preference declares it (cast/EquipWeigh.cpp).
+        RE::FormID ShieldTopUpFor(RE::FormID a_follower);                          // cast/Equip.cpp
+        // WEIGHTING W1 (cast/EquipWeigh.cpp). RefreshPreference: send the ch.26 preference built
+        // from the ledger now (send-on-change; empty = release). ServicePreference: the in-combat
+        // reconcile lap -- re-declare a pending placement, refresh the preference, log Harbinger's
+        // state, and the D4 escalation (force after ~2 s of a scored miss; Outranked = an anomaly,
+        // never forced). ClearWeighing: revert. All worker-serial; no-ops unless WeighingEquips().
+        void RefreshPreference(RE::Actor* a_follower, const char* a_why);
+        void ServicePreference(RE::Actor* a_follower);
+        void ClearWeighing();
 
         // The direct road's shared clock + stream state (were anon in Actuation_Direct.cpp):
         using SelfClock = std::chrono::steady_clock;

@@ -55,6 +55,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/CastOn.cpp
     cast/Equip.cpp
     cast/EquipSilver.cpp
+    cast/EquipWeigh.cpp
     cast/Direct.cpp
     cast/DirectSelf.cpp
     cast/DirectTarget.cpp
@@ -115,6 +116,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/OffenseApproach.cpp
     apmf/SpellAllowList.cpp
     apmf/CastGuard.cpp
+    apmf/EquipPreference.cpp
     apmf/Deposit.cpp
     apmf/Los.cpp
     imgui_impl_win32.cpp

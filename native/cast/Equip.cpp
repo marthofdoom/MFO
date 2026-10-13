@@ -205,6 +205,14 @@ namespace MFO::Actuation {
         // an equip that was actually issued (MFO-B22), never one the closure dropped.
         void EquipShieldOnMain(RE::FormID a_follower, RE::FormID a_shield, const char* a_logWhy = nullptr) {
             StampShieldRank(a_follower, a_shield);
+            // WEIGHTING W1 (marth 2026-10-12, "Direct equip is going"): with Harbinger at ABI >= 22 the
+            // shield is NOT equipped here. It is a one-shot ch.17 placement (Harbinger's equip pass puts it
+            // on) and, in combat, part of the ch.26 preference (ShieldTopUpFor). The caller re-declares.
+            if (WeighingEquips()) {
+                WantPlacement(a_follower, a_shield, APMF_API::kEquipSlot_Default,
+                              a_logWhy ? a_logWhy : "gambit shield by perks");
+                return;
+            }
             auto doEquip = [a_follower, a_shield, a_logWhy]() {
                 auto* fol  = RE::TESForm::LookupByID<RE::Actor>(a_follower);
                 auto* form = RE::TESForm::LookupByID(a_shield);
@@ -361,8 +369,12 @@ namespace MFO::Actuation {
                 }
             }
             // MFO-B41: unchanged ledger + its weapon in neither hand -> re-send.
+            // RETIRED under WEIGHTING (W1): that loop re-asserts the ledger against the engine's SCORED
+            // re-pick every 3 s, which the weighting rule forbids. With ch.26 the pick is lifted instead, and
+            // a scored miss of ~2 s escalates ONCE (cast/EquipWeigh.cpp ServicePreference, D4).
+            const bool weighing = WeighingEquips();
             if (auto prev = g_lastLedgerDeclared.find(id);
-                prev != g_lastLedgerDeclared.end() && prev->second == std::make_pair(right, left)) {
+                !weighing && prev != g_lastLedgerDeclared.end() && prev->second == std::make_pair(right, left)) {
                 auto* hr = a_follower->GetEquippedObject(false);
                 auto* hl = a_follower->GetEquippedObject(true);
                 const auto heldId = [](RE::TESForm* f) { return f ? f->GetFormID() : 0u; };
@@ -380,6 +392,7 @@ namespace MFO::Actuation {
             Logistics::RefreshEquipDeclaration(a_follower, it->second, right, left,
                                                LeftReservedForCast(a_follower, holdRule),
                                                /*judgeArmor*/false, a_why);
+            if (weighing) RefreshPreference(a_follower, a_why);   // ch.26: the same ledger, as a preference
         }
 
         // Off-hand TOP-UP cadence on the equip rule's SATISFIED lap (the AI drew
@@ -571,6 +584,7 @@ namespace MFO::Actuation {
                         } else if (roles.offHand == 1 && !(leftA && leftA->IsShield())) {
                             if (auto* sh = PickShield(a_follower)) {
                                 EquipShieldOnMain(id, sh->GetFormID(), "shield by perks, top-up");   // v9: Shield is never owned -- always direct
+                                if (WeighingEquips()) DeclareFromLedger(a_follower, "shield top-up placement");   // W1: Harbinger places it
                             }
                         }
                     }
@@ -763,6 +777,11 @@ namespace MFO::Actuation {
                         DeclareFromLedger(a_follower, a_ranged ? "gambit equip ranged" : "gambit equip melee");
                         if (offHandHeld) LogLeftHandReadback(id);   // criterion 7: the hand reached the engine
                     }
+                } else if (WeighingEquips()) {
+                    // W1: kill switch off = one plain equip, no ledger, no preference. Harbinger places it (ch.17).
+                    WantPlacement(a_follower->GetFormID(), best->GetFormID(), PlacementSlotFor(best, false),
+                                  "gambit equip, bWeaponStyleControl off");
+                    DeclareFromLedger(a_follower, "gambit equip placement");
                 } else {
                     mgr->EquipObject(a_follower, best);   // kill-switch off: today's behaviour exactly
                 }
@@ -829,6 +848,12 @@ namespace MFO::Actuation {
                  it->second.left  ? it->second.left->GetFormID()  : 0u };
     }
 
+    RE::FormID ShieldTopUpFor(RE::FormID a_follower) {
+        std::scoped_lock lk(g_forcedMx);
+        const auto it = g_shieldRank.find(a_follower);
+        return it == g_shieldRank.end() ? 0u : it->second.shield;
+    }
+
     void ReleaseForcedWeapon(RE::Actor* a_follower, bool a_standDown) {
         if (!a_follower) return;
         const auto id = a_follower->GetFormID();
@@ -851,6 +876,32 @@ namespace MFO::Actuation {
         if (!hadHold) return;
         g_offHandRetryAt.erase(id);   // next combat's off-hand top-up starts fresh
         g_leftHeldRefusal.erase(id);  // ... and a refused hold is reported afresh
+        // ── WEIGHTING W1 (marth 2026-10-12, "Direct equip is going. Harbinger has all the responsibility
+        // now."). Under Harbinger ABI >= 22 MFO never placed a prevent-removal lock (the hold was placed by
+        // Harbinger's ch.17 equip pass, non-forced), so there is NO lock to clear: no force-unequip and no
+        // re-arm. The weapons stay in his hands, the ch.26 preference is withdrawn (the ledger is empty now)
+        // and the hands are unowned on the next declaration, so his AI owns them again exactly as after
+        // today's unequip + non-forced re-arm. A released SILVER hold's main weapon goes back as a ch.17
+        // placement (never a direct equip). The stand-down sheathe stays (not an equip).
+        if (WeighingEquips()) {
+            if (silverMain != 0 && !a_follower->IsDead()) {
+                auto* mainForm = RE::TESForm::LookupByID(silverMain);
+                WantPlacement(id, silverMain, PlacementSlotFor(mainForm, false), "silver hold released: main weapon back");
+            }
+            RefreshPreference(a_follower, "force-hold released");
+            if (a_standDown && MainThread::IsInstalled()) {
+                MainThread::Post([id]() {
+                    auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
+                    if (actor && !actor->IsDead() && !actor->IsDisabled() && !actor->IsInCombat())
+                        actor->DrawWeaponMagicHands(false);
+                });
+            }
+            APMFBridge::ReleaseEquipment(id);   // ch.15, the single release choke point (below, unchanged)
+            spdlog::info("[equip] {:08X}: force-hold released{} -- no unequip / re-arm (weighting: Harbinger placed "
+                         "it non-forced; the AI owns the hands again{})", id, hold.left ? " (both hands)" : "",
+                         silverMain ? ", main weapon placed in place of the silver one" : "");
+            return;
+        }
         // forceEquip=true on the UNequip. CORRECTED 2026-09-22 (disassembly, Fable
         // spot check): the reason that stood here for months was WRONG, and a
         // rules-shaped comment that teaches a false fact is worse than none.
@@ -1020,6 +1071,10 @@ namespace MFO::Actuation {
             if (right2h) mgr->UnequipObject(a_follower, right2h, nullptr, 1, nullptr, true, true);
         }
         if (lastHold) APMFBridge::ReleaseEquipment(id);
+        // W1 (D3): the hand now carries only the spell -- the ch.26 preference drops its weapon at once.
+        // The unequip above stays: it is not an equip, it clears the hand for the cast's own spell
+        // placement (Loadout::Prepare, the cast DELIVERY, untouched by the weighting brief).
+        RefreshPreference(a_follower, "hand yielded to a cast");
         spdlog::info("[equip] {:08X}: {} hold yielded ({}){}", id,
                      right2h ? "two-handed (it takes the left hand too)" : "left-hand", a_why,
                      lastHold ? " -- no hold remains" : "");
@@ -1113,6 +1168,10 @@ namespace MFO::Actuation {
                 g_boundSeen.erase(it);
             }
         }
+        // WEIGHTING W1 (cast/EquipWeigh.cpp): every in-combat lap, hold or no hold -- the pending ch.17
+        // placements, the ch.26 preference from the ledger, Harbinger's state line and the D4 escalation.
+        // No-op unless Harbinger serves ch.26 (ABI >= 22).
+        ServicePreference(a_follower);
         // KEEP the hold while the feature is ON and an equip gambit of the forced
         // weapon's OWN category held THIS tick (a_wantStance, set by a fired-or-
         // satisfied equip). RELEASE only when we actually KNOW the condition is
@@ -1204,6 +1263,7 @@ namespace MFO::Actuation {
         g_boundSeen.clear();
         g_lastB41At.clear();
         ClearSilverEpisodes();      // the silver gambit's episodes (cast/EquipSilver.cpp), session-scoped like the ledger
+        ClearWeighing();            // W1: the one-shot placements + the escalation watch (cast/EquipWeigh.cpp)
         std::scoped_lock lk(g_forcedMx);
         g_forcedWeapon.clear();
         g_shieldRank.clear();

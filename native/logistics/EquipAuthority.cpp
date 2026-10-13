@@ -873,6 +873,59 @@ namespace MFO::Logistics {
                                  : hand == APMF_API::kEquipSlot_Left ? "left" : "default");
             }
 
+            // 1c. ONE-SHOT PLACEMENTS (WEIGHTING W1, cast/EquipWeigh.cpp; marth 2026-10-12: "Direct equip is
+            //     going. Harbinger has all the responsibility now."). Under Harbinger ABI >= 22 every equip MFO
+            //     used to make directly (the shield top-up, the torch, the silver switch-back, an owned / looted
+            //     weapon upgrade, the excluded-weapon heal, the cast's gear give-back) is declared HERE until it
+            //     is seen in its hand (Actuation::PendingPlacements retires it: landed, gone, or a loud 10 s
+            //     "did not land"). Its category is OWNED for that long so Harbinger's equip pass places it (an
+            //     entry in an unowned category is only logged as skipped). THE LEDGER WINS: a placement for a
+            //     hand a hold already declares is left out (two items for one slot is not wearable at once,
+            //     ch.17 "the set must be wearable"); a left-hand item is left out while a cast holds the left
+            //     (a_leftReserved, D3); a shield is left out while the Shield category is DENIED for him.
+            if (Actuation::WeighingEquips()) {
+                const bool rightDeclared = right != nullptr;
+                const bool leftDeclared  = left != nullptr || rightTwoHanded;
+                for (const auto& pl : Actuation::PendingPlacements(a_follower)) {
+                    auto* obj = resolve(pl.form);
+                    if (!obj) continue;
+                    std::uint32_t needs = 0;
+                    bool skip = false;
+                    if (auto* w = obj->As<RE::TESObjectWEAP>()) {
+                        const bool twoHands = w->IsTwoHandedSword() || w->IsTwoHandedAxe() || w->IsBow() || w->IsCrossbow();
+                        if (twoHands) {
+                            needs = APMF_API::kEquipCat_Right | APMF_API::kEquipCat_Left;
+                            skip  = rightDeclared || leftDeclared || a_leftReserved;
+                        } else if (pl.slot == APMF_API::kEquipSlot_Left) {
+                            needs = APMF_API::kEquipCat_Left;
+                            skip  = leftDeclared || a_leftReserved;
+                        } else {
+                            needs = APMF_API::kEquipCat_Right;
+                            skip  = rightDeclared;
+                        }
+                    } else if (auto* ar = obj->As<RE::TESObjectARMO>(); ar && ar->IsShield()) {
+                        needs = APMF_API::kEquipCat_Shield;
+                        skip  = leftDeclared || a_leftReserved || (denied & APMF_API::kEquipCat_Shield) != 0;
+                    } else if (obj->As<RE::TESObjectLIGH>()) {
+                        needs = APMF_API::kEquipCat_Light;
+                        skip  = leftDeclared || a_leftReserved;
+                    } else {
+                        continue;   // armor rides rules 4/5, ammo rule 2: nothing else is placed this way
+                    }
+                    if (skip) {
+                        static std::unordered_set<std::uint64_t> s_skipLogged;   // worker-serial like g_lastDeclared
+                        if (s_skipLogged.insert((static_cast<std::uint64_t>(id) << 32) | pl.form).second)
+                            spdlog::info("[equip-place] {:08X}: '{}' not declared this build -- its hand is held by "
+                                         "the ledger or a cast, or its category is denied (kept pending)", id,
+                                         obj->GetName() ? obj->GetName() : "?");
+                        continue;
+                    }
+                    owned |= needs;
+                    decl.Add(obj, pl.slot);
+                    Actuation::NotePlacementDeclared(id, pl.form);
+                }
+            }
+
             // 2. AMMO -- only under a bow/crossbow HOLD (v9: Ammo is owned exactly
             //    then). With no ranged hold the archer AI's own ammo equips pass
             //    in an unowned category; declaring ammo there would only be an

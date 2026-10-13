@@ -204,6 +204,14 @@ namespace MFO::Logistics {
             // Capture FormIDs and re-resolve on the frame that runs.
             const RE::FormID folID   = a_follower->GetFormID();
             const RE::FormID lightID = light->GetFormID();
+            // WEIGHTING W1 (marth 2026-10-12, "Direct equip is going. Harbinger has all the responsibility
+            // now."): with Harbinger at ABI >= 22 the torch is a one-shot ch.17 placement (the declaration at
+            // this service tick's tail carries it with Light owned; Harbinger's equip pass equips it).
+            if (Actuation::WeighingEquips()) {
+                if (Actuation::PlacementPending(folID)) return false;   // already asked: let the other rules run
+                Actuation::WantPlacement(folID, lightID, APMF_API::kEquipSlot_Default, "torch upkeep");
+                return true;
+            }
             auto doTorch = [folID, lightID]() {
                 auto* mgr  = RE::ActorEquipManager::GetSingleton();
                 auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
@@ -263,7 +271,14 @@ namespace MFO::Logistics {
             const RE::FormID folID    = a_follower->GetFormID();
             const RE::FormID bestID   = best ? best->GetFormID() : 0;
             const RE::FormID badID    = bad->GetFormID();
-            auto doHeal = [folID, bestID, badID, creature]() {
+            // WEIGHTING W1 (marth 2026-10-12): with Harbinger at ABI >= 22 the replacement is NOT equipped here.
+            // It is a one-shot ch.17 placement into the same hand (this service's declaration carries it); the
+            // excluded weapon is only UNEQUIPPED and evicted below (an unequip and a RemoveItem, not an equip).
+            const bool weighing = Actuation::WeighingEquips();
+            if (weighing && best)
+                Actuation::WantPlacement(folID, bestID, Actuation::PlacementSlotFor(best, hand == 1),
+                                         "excluded-weapon heal: replacement");
+            auto doHeal = [folID, bestID, badID, creature, weighing]() {
                 auto* eq      = RE::ActorEquipManager::GetSingleton();
                 auto* fol     = RE::TESForm::LookupByID<RE::Actor>(folID);
                 auto* badForm = RE::TESForm::LookupByID(badID);
@@ -272,8 +287,8 @@ namespace MFO::Logistics {
                 RE::TESBoundObject* bestObj = nullptr;
                 if (bestID)
                     if (auto* f = RE::TESForm::LookupByID(bestID)) bestObj = f->As<RE::TESBoundObject>();
-                if (bestObj) eq->EquipObject(fol, bestObj);   // auto-unequips the excluded one
-                else         eq->UnequipObject(fol, badObj);  // nothing real carried -- just take it off
+                if (bestObj && !weighing) eq->EquipObject(fol, bestObj);   // auto-unequips the excluded one
+                else                      eq->UnequipObject(fol, badObj);  // nothing real carried (or W1: Harbinger places the replacement) -- just take it off
                 std::int32_t haveBad = 0;
                 for (auto& [obj, data] : fol->GetInventory())
                     if (obj == badObj) { haveBad = data.first; break; }
@@ -706,6 +721,8 @@ namespace MFO::Logistics {
         // declares from scratch. Idempotent (no claim -> no-op, no log).
         APMFBridge::ReleaseEquipAuthority(a_id);
         ForgetEquipDeclaration(a_id);
+        APMFBridge::ReleaseEquipPreference(a_id, "dismissed / MFO off");   // ch.26 (weighting W1): same road
+        Actuation::ForgetPlacements(a_id);   // ch.17 one-shot placements still waiting (cast/EquipWeigh.cpp)
         Lockpick::Abort(a_id, "dismissed");   // LP-M1: release his pick hold, if any
         // A follower dismissed DURING an excursion may still hold alias 0 (Clear
         // hasn't run). With his framework claim gone, MFO's static-60 claim is his
