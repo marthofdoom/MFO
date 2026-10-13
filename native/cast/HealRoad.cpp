@@ -125,7 +125,7 @@ namespace MFO::Actuation {
         const char* LostToken(const char* a_why) {
             if (!a_why) return nullptr;
             if (std::strstr(a_why, "full health") || std::strstr(a_why, "HP threshold")) return "full";
-            if (std::strstr(a_why, "dead") || std::strstr(a_why, "essential-down")) return "dead";
+            if (std::strstr(a_why, "dead")) return "dead";
             if (std::strstr(a_why, "gone") || std::strstr(a_why, "left the")) return "gone";
             if (std::strstr(a_why, "beyond")) return "out-of-reach";
             if (std::strstr(a_why, "equip gambit") || std::strstr(a_why, "weapon now owns")) return "preempted";
@@ -157,7 +157,8 @@ namespace MFO::Actuation {
         // THE PER-LAP RECIPIENT JUDGEMENT (the tests CastOn's heal road made for the lap's
         // recipient, moved here and made per hand). a_hand = the hand whose claim serves
         // him, or kHandCount when none does yet (no cast of his can be in flight then).
-        //   * dead / gone / essential-down (a heal does not land: fix/mfo-lifestate);
+        //   * dead / gone (an essential-down ally is NOT lost: a heal lands on it and revives it, field
+        //     LoreRim 2026-10-12 16:44:15 [heal-obs] landed=effect, marth: "keep trying the downed one");
         //   * beyond the heal's REACH (never line of sight: the claim waits charged);
         //   * at or above the rule's own HP threshold (only while NO claim serves him yet: the
         //     threshold starts a heal, it does not end one), or at full health -- unless a cast
@@ -167,9 +168,6 @@ namespace MFO::Actuation {
             if (!a_recipient) return "the recipient is gone";
             if (a_recipient->IsDead()) return "the recipient is dead";
             if (a_recipient->IsDisabled()) return "the recipient is gone (disabled)";
-            if (const auto* rst = a_recipient->AsActorState();
-                rst && rst->GetLifeState() == RE::ACTOR_LIFE_STATE::kEssentialDown)
-                return "the recipient is essential-down (a heal does not land on it)";
             if (a_recipient != a_follower && HealRecipientUnreachable(a_follower, a_recipient, a_spell))
                 return "the recipient is beyond the heal's reach";
             const auto fid = a_follower->GetFormID();

@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **Followers heal a downed ally in combat.** An essential ally on the ground was skipped by the heal. Now the heal keeps trying until they get back up.
+
 ## v2.6.1 -- Archers heal without dropping to melee
 
 - **Needs Harbinger 0.12.0 or newer (ABI 21).** Harbinger 0.13.0 is current.
