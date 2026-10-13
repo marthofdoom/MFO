@@ -409,6 +409,9 @@ namespace MFO::Logistics {
                 bool operator==(const SentDecl&) const = default;
             };
             std::unordered_map<RE::FormID, SentDecl> g_lastDeclared;
+            // Once-per-deferral latch for the "declaration DEFERRED" line (equip-self-violations); erased when a
+            // declaration is actually sent and on forget/revert, so every load logs it again. Worker-serial.
+            std::unordered_set<RE::FormID> g_deferLogged;
             // The worn pieces the LAST build withheld as museum relics (RelicOffBody),
             // per follower, worker-serial like g_lastDeclared (field 0928c, Cicero's
             // Dawnguard Helmet): when the relic verdict flips back, that piece is worn
@@ -610,11 +613,11 @@ namespace MFO::Logistics {
 
         void ForgetEquipDeclaration(RE::FormID a_follower) {
             g_lastDeclared.erase(a_follower); g_playerPicks.erase(a_follower); g_lastDeclSentAt.erase(a_follower);
-            g_lastWithheld.erase(a_follower);
+            g_lastWithheld.erase(a_follower); g_deferLogged.erase(a_follower);
         }
         void ResendEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); }   // MFO-B41: the change detector only
         void ClearEquipDeclarations() {
-            g_lastDeclared.clear(); g_playerPicks.clear(); g_lastDeclSentAt.clear(); g_lastWithheld.clear();
+            g_lastDeclared.clear(); g_playerPicks.clear(); g_lastDeclSentAt.clear(); g_lastWithheld.clear(); g_deferLogged.clear();
         }
 
         bool IsPlayerPick(RE::FormID a_follower, RE::FormID a_form) {
@@ -734,8 +737,7 @@ namespace MFO::Logistics {
             // pending nothing is sent (the claim above stands, exactly as in the 3D-absent skip: APMF allows
             // everything on a fresh claim) and the cache is dropped so the first post-reapply build is sent.
             if (ProgAllocator::ReapplyPending(id)) {
-                static std::unordered_set<RE::FormID> s_deferLogged;   // worker-serial like g_lastDeclared
-                if (s_deferLogged.insert(id).second)
+                if (g_deferLogged.insert(id).second)
                     spdlog::info("[equip-auth] {:08X}: declaration DEFERRED -- his progression perks are not reapplied "
                                  "yet (the scope would be built from a perk-less actor)", id);
                 g_lastDeclared.erase(id);
@@ -1304,6 +1306,7 @@ namespace MFO::Logistics {
                 return;
             }
             g_lastDeclared[id] = std::move(sent);
+            g_deferLogged.erase(id);
             g_lastDeclSentAt[id] = std::chrono::steady_clock::now();   // MFO-B63: the drift throttle's clock
             spdlog::info("[equip-auth] {:08X}: declare n={} [{}] owned={} denied={} ({}{})", id,
                          decl.entries.size(), decl.names, CategoryNames(owned), CategoryNames(denied),
