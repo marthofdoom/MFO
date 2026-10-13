@@ -1,6 +1,6 @@
 # Taunt gambit: design and RE (ClickUp 86e3g6duw)
 
-Status: DESIGN. Slice S0 (probes) and slice S2 (`cond.foe_attacking_ally`, `act.taunt`, the executor: `native/Taunt.cpp`, `native/apmf/TauntClaims.cpp`, MAP section 2 "Taunt.cpp") are built, see MAP.md. Written as design only, no production code. Written 2026-10-12 against MFO origin/main `955645e` and
+Status: DESIGN, slices S0 and S2 built. Slice S0 (probes) and slice S2 (`cond.foe_attacking_ally`, `act.taunt`, the executor: `native/Taunt.cpp`, `native/apmf/TauntClaims.cpp`, MAP section 2 "Taunt.cpp") are built, see MAP.md. Written as design only, no production code. Written 2026-10-12 against MFO origin/main `955645e` and
 Harbinger (APMF) origin/main `3f22ae4`. Addresses were read from our unpacked executables
 (1.6.1170 "AE", 1.5.97 "SE") with the RE helper; ids are Address Library ids from LoreRim's
 `versionlib-1-6-1170-0.bin` / `version-1-5-97-0.bin`.
@@ -229,7 +229,7 @@ Proposed defaults, which are Q1:
 
 - **Primary:** the foe the condition selected.
 - **Area:** every other foe within **`fTauntRadius` = 1024** units of the taunter (the engine's own
-  `fCombatRangedDistance`), up to **`iTauntMaxFoes` = 3** in total, nearest first.
+  `fCombatRangedDistance`), up to **`iTauntMaxFoes` = 4** in total, the chosen foe included (so the chosen foe plus up to 3), nearest first.
 - **Eligible foe:** alive, loaded, not the player, in combat, and **its combat target is in the
   party** (the same party test Harbinger's NOT-ENGAGED check uses, `CombatEntry.cpp:902-918`). A
   foe that is not fighting the party is never taunted, because a taunt must not start fights.
@@ -337,7 +337,7 @@ MFO already reads combat groups (the evaluator's group snapshot), never from a n
 |---|---|---|---|---|
 | S0 | MFO | P1 + P2 passive probes, `[Taunt] bTauntProbe` | B (logging inside existing mechanisms, reads a foe's group under its lock) | Sonnet 5.5 / Opus one pass |
 | S1 | APMF | Audit ch.20 + the hold for a **non-party holder**: confirm no teammate assumption (seat, census, menu, sight service, `DropNotEngaged`, the drives). Decide whether to skip the bleed-out / search drives for a holder that is not a party member. FACETS ch.20 gets a "pin a hostile NPC" example. If the audit finds no code change, it is a tier-C docs round | A if any hold/seat code changes, else C | Opus 5.5 / Opus tier 3 (or a mechanical check if docs-only) |
-| S2 | MFO | `cond.foe_attacking_ally`, `act.taunt`, board and i18n strings. The executor: ch.1 hold + ch.12 idle by loadout, then on `ANIMATION CONFIRMED` the area pick (4.2), the roll (4.3), the ch.20 pin foe -> taunter (plus the ch.21 helper per P2), the 15 s timer and the early ends (4.5). One MFO pin per foe, repointed by a second taunter. INI `fTauntDuration=15`, `fTauntRadius=1024`, `iTauntMaxFoes=3`. A new mechanism goes in a new file in its subsystem (proposed `native/apmf/Taunt.cpp` for the bridge calls; the brief names the exact files) | B (uses shipped Harbinger facets, no new seat) | Sonnet 5.5 / Opus one pass |
+| S2 | MFO | `cond.foe_attacking_ally`, `act.taunt`, board and i18n strings. The executor: ch.1 hold + ch.12 idle by loadout, then on `ANIMATION CONFIRMED` the area pick (4.2), the roll (4.3), the ch.20 pin foe -> taunter (plus the ch.21 helper per P2), the 15 s timer and the early ends (4.5). One MFO pin per foe, repointed by a second taunter. INI `fTauntDuration=15`, `fTauntRadius=1024`, `iTauntMaxFoes=4`. A new mechanism goes in a new file in its subsystem (proposed `native/apmf/Taunt.cpp` for the bridge calls; the brief names the exact files) | B (uses shipped Harbinger facets, no new seat) | Sonnet 5.5 / Opus one pass |
 | S3 | field | LoreRim: P1/P2 run first, then S2 with the gate on | n/a | coordinator gathers, Opus concludes |
 
 Order: S0 and S1 can run in parallel, then S2, which depends on P1 for the idle choice and on P2

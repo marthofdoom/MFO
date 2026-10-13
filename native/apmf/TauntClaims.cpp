@@ -2,8 +2,9 @@
 // Docs/TAUNT-DESIGN.md). The decisions (who, when, the roll, when to release) are native/Taunt.cpp's; this file
 // owns only the claims and their lifecycle, in the two shapes Harbinger's FACETS.md gives:
 //
-//   * the TAUNTER's idle -- ch.1 kIntent_MovementBlock (hold him still, no param) + ch.12 kIntent_Idle v2
-//     (form = the combat taunt IDLE record, target = the foe the idle is played at). ABI v17. Keyed by the
+//   * the TAUNTER's idle -- ch.12 kIntent_Idle v2 (form = the combat taunt IDLE record, target = the foe the idle is
+//     played at), then ch.1 kIntent_MovementBlock (hold him still, no param) filed ONLY once the idle claim first
+//     reads LIVE (Harbinger accepted the play; a refused idle ends the claim and the follower is never held). ABI v17. Keyed by the
 //     taunter. Same pair as the LOTD deposit (apmf/Deposit.cpp) and the lockpick hold.
 //   * the FOE's pin -- FACETS "Pinning a hostile NPC (e.g. a taunt)", Example 20a. ch.20 kIntent_TargetPin on
 //     the FOE with form = the TAUNTER (fval 0, ival 0), plus a ch.21 kIntent_CombatEntry on the foe naming
@@ -46,6 +47,7 @@ namespace MFO::APMFBridge {
             APMF_API::Handle idle = APMF_API::kInvalidHandle;
             std::chrono::steady_clock::time_point filed{};
             bool             everLive = false;
+            bool             holdTried = false;   // the ch.1 hold is filed ONCE, when the idle is first seen live
         };
         struct FoeClaims {
             APMF_API::Handle pin = APMF_API::kInvalidHandle, entry = APMF_API::kInvalidHandle;
@@ -99,20 +101,14 @@ namespace MFO::APMFBridge {
         if (s_idles.contains(a_taunter)) return true;   // one attempt at a time (Taunt.cpp never double-files)
         IdleClaims c{};
 
-        // HOLD STILL for the idle (ch.1, no param). A refusal is logged and the idle still plays: the hold is what
-        // keeps the follow package from walking him off mid-animation, not what plays it.
-        APMF_API::APMF_Param hp{};
-        c.hold = api->RequestEx(a_taunter, APMF_API::kIntent_MovementBlock, kOwnBasis, &hp);
-        if (c.hold == APMF_API::kInvalidHandle)
-            spdlog::warn("[taunt] {:08X}: ch.1 hold REFUSED by Harbinger -- the taunt idle plays without a "
-                         "stand-still (APMF.log names the reason)", a_taunter);
-
+        // NO ch.1 hold yet (marth 2026-10-13): the hold is filed by TauntIdleStateOf the first time the idle claim reads LIVE,
+        // i.e. once Harbinger has ACCEPTED the play (PlayIdle succeeded). A refused idle (its conditions fail) ends the claim
+        // and costs the follower nothing: he keeps fighting.
         APMF_API::APMF_Param p{};
         p.form   = a_idle;     // the IDLE record (v17: an older APMF would ignore it -- gated above)
         p.target = a_target;   // the foe: the engine evaluates the idle's conditions against it
         c.idle = api->RequestEx(a_taunter, APMF_API::kIntent_Idle, kOwnBasis, &p);
         if (c.idle == APMF_API::kInvalidHandle) {
-            if (c.hold != APMF_API::kInvalidHandle) api->Release(c.hold);   // do not leave him held
             if (!s_seatRefused.exchange(true))
                 spdlog::warn("[taunt] {:08X}: Harbinger REFUSED the ch.12 idle v2 claim (idle {:08X} at {:08X}) at the "
                              "call: the idle seat is not installed ([Idle] bIdleV2=0 in APMF.ini, VR, a runtime other "
@@ -132,7 +128,18 @@ namespace MFO::APMFBridge {
         const auto it = s_idles.find(a_taunter);
         if (it == s_idles.end() || it->second.idle == APMF_API::kInvalidHandle) return TauntIdleState::None;
         auto& c = it->second;
-        if (api->IsClaimLive(c.idle)) { c.everLive = true; return TauntIdleState::Live; }
+        if (api->IsClaimLive(c.idle)) {
+            c.everLive = true;
+            if (!c.holdTried) {   // the idle was accepted: NOW hold him still for the clip (ch.1, no param)
+                c.holdTried = true;
+                APMF_API::APMF_Param hp{};
+                c.hold = api->RequestEx(a_taunter, APMF_API::kIntent_MovementBlock, kOwnBasis, &hp);
+                if (c.hold == APMF_API::kInvalidHandle)
+                    spdlog::warn("[taunt] {:08X}: ch.1 hold REFUSED by Harbinger -- the taunt idle plays without a "
+                                 "stand-still (APMF.log names the reason)", a_taunter);
+            }
+            return TauntIdleState::Live;
+        }
         if (!c.everLive && std::chrono::steady_clock::now() - c.filed < kIdleNeverLiveGrace)
             return TauntIdleState::Pending;   // not published yet
         return TauntIdleState::Ended;         // Harbinger ended it (refused / not confirmed / owner died): APMF.log says why

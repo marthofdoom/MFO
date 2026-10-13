@@ -25,8 +25,8 @@ namespace MFO::Taunt {
         constexpr RE::FormID kIdleRegular = 0x000B8C71;   // CombatIdleRegular
 
         // Harbinger ends a ch.12 claim whose idle was NOT CONFIRMED (the graph never raised its entry event) within
-        // kConfirmWaitMs = 3000 ms of world time (APMF channels/Idle.cpp). The ABI has no "confirmed" query, so MFO calls
-        // the idle CONFIRMED when its claim has stayed live through that whole window: the claim read live AND this many
+        // kConfirmWaitMs = 3000 ms of world time (APMF channels/Idle.cpp), but keeps an UNCONFIRMABLE one live (bIdleConfirm=0 or
+        // an unreadable graph). The ABI has no idle-state query yet (one is being built), so MFO only knows the claim SURVIVED: the claim read live AND this many
         // UNPAUSED ms have passed since it was filed (3000 + a margin for the 133 ms tick and the publish frame).
         // Mirrors Harbinger's constant; if it ever changes there, this changes with it.
         constexpr double kConfirmMs = 3300.0;
@@ -53,6 +53,7 @@ namespace MFO::Taunt {
             RE::ActorHandle foe, taunter;
             RE::FormID      foeId = 0, taunterId = 0;
             double          filedMs = 0.0, untilMs = 0.0;
+            std::uint64_t   gen = 0;   // per-entry generation: a re-pin of the same foe is a NEW entry, never the one Tick judged
             int             foeNoCombat = 0, taunterNoCombat = 0;
             std::string     taunterName, foeName;
         };
@@ -60,6 +61,7 @@ namespace MFO::Taunt {
         std::mutex                                g_mx;
         std::unordered_map<RE::FormID, Attempt>   g_attempts;   // keyed by TAUNTER; guarded by g_mx
         std::unordered_map<RE::FormID, Active>    g_active;     // keyed by FOE; guarded by g_mx
+        std::uint64_t                             g_gen = 0;         // guarded by g_mx
         double                                    g_clockMs = 0.0;   // the unpaused clock (guarded by g_mx)
         Clock::time_point                         g_clockAt{};       // worker (Tick) only
 
@@ -225,6 +227,7 @@ namespace MFO::Taunt {
                         a.foe = c.h; a.taunter = a_taunter;
                         a.foeId = c.id; a.taunterId = tId;
                         a.filedMs = now;
+                        a.gen = ++g_gen;
                         a.untilMs = now + static_cast<double>(Config::g_tauntDuration.load()) * 1000.0;
                         a.taunterName = tName; a.foeName = NameOf(foe);
                         g_active[c.id] = std::move(a);   // a second taunter's repoint resets the timer and the owner
@@ -284,12 +287,12 @@ namespace MFO::Taunt {
             }
             if (a_nowMs - a.startMs < kConfirmMs) return;   // live, but the confirmation window is still open
 
-            // CONFIRMED: the idle's claim stayed live through Harbinger's whole entry-event window. Release it (and the
+            // The idle's claim SURVIVED Harbinger's entry-event window (NOT proof it played: an UNCONFIRMABLE idle stays live too). Release it (and the
             // ch.1 hold), then roll.
             APMFBridge::ReleaseTauntIdle(a_id);
             { std::scoped_lock lk(g_mx); g_attempts.erase(a_id); }
-            spdlog::info("[taunt] {} ({:08X}) idle {} CONFIRMED played after {} ms (claim live through Harbinger's 3 s "
-                         "entry-event window) -- rolling", a.name, a_id, a.idle == kIdleABC ? "B8C73" : "B8C71", ms);
+            spdlog::info("[taunt] {} ({:08X}) idle {} claim survived the window after {} ms (APMF.log [ch.12] says "
+                         "CONFIRMED or UNCONFIRMABLE) -- rolling", a.name, a_id, a.idle == kIdleABC ? "B8C73" : "B8C71", ms);
 
             auto cands = Gather(t, a.chosen);
             if (cands.empty()) {
@@ -347,7 +350,7 @@ namespace MFO::Taunt {
             {
                 std::scoped_lock lk(g_mx);   // release under the lock Resolve pins under, and only the entry we judged
                 const auto it = g_active.find(a_foeId);
-                if (it == g_active.end() || it->second.filedMs != a.filedMs) return;   // refreshed by a new taunt meanwhile
+                if (it == g_active.end() || it->second.gen != a.gen) return;   // refreshed by a new taunt meanwhile
                 APMFBridge::ReleaseTauntPin(a_foeId);
                 g_active.erase(it);
             }
@@ -376,7 +379,7 @@ namespace MFO::Taunt {
         using R = Actuation::Result;
         if (!a_f) return { R::FailedOther, "taunt: no follower", true };
         if (!APMFBridge::TauntSupported())
-            return { R::FailedOther, "taunt needs Harbinger (APMF) ABI 17 or newer (the ch.12 idle with a form)", true };
+            return { R::FailedOther, "taunt needs Harbinger (APMF) ABI 17 or newer (the ch.12 idle with a form), or the idle / pin seat was refused this session (see the [taunt] warning)", true };
         // MELEE-ONLY: the animation is non-negotiable and the vanilla humanoid combat idle needs a melee weapon in the
         // right hand (Docs/TAUNT-DESIGN.md 3.1). Transparent: the scan falls through to the rules below.
         if (!MeleeInRightHand(a_f))
@@ -424,7 +427,7 @@ namespace MFO::Taunt {
             g_attempts[id] = a;
         }
         spdlog::info("[taunt] {} ({:08X}) idle {} filed at {:08X} (R={} L={}, {} candidate foe(s)) -- the roll waits for the "
-                     "idle to be confirmed played", a.name, id, shield1H ? "B8C73" : "B8C71", idleTarget, r, l, cands.size());
+                     "idle claim to survive the window, the ch.1 hold is filed once Harbinger accepts the idle", a.name, id, shield1H ? "B8C73" : "B8C71", idleTarget, r, l, cands.size());
         return { R::Fired, "taunt: idle filed" };
     }
 

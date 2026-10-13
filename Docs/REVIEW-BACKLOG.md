@@ -1687,3 +1687,12 @@ Opus review of `fix/mfo-torch-place-logging` @ cc3716d. Reviewer's finding, verb
 
 ### MFO-B265 (SEV-5, OPEN, cast/EquipWeigh.cpp) -- "attempt N in a row" can overcount (raised against cc3716d)
 Opus review of `fix/mfo-torch-place-logging` @ cc3716d. Reviewer's finding, verbatim: "'attempt N in a row' can overcount. The streak resets only when a pending placement is seen landing. If the item lands by another road, such as the engine's own AI torch equip with no wish pending, the next failure still counts on from the old streak."
+
+### MFO-B266 (SEV-4, OPEN, Taunt.cpp) -- a follower leaving the party is not a taunt release reason (raised against 101cf49)
+Opus tier-3 review of `feat/mfo-taunt` @ 101cf49. Reviewer's finding, relayed from its log (design 4.5 item 4 lists "the follower leaves the party" as a release reason): "Release paths ok except 'follower leaves party' (design 4.5.4) missing." A dismissed taunter's pins last until the duration or another reason fires.
+
+### MFO-B267 (SEV-4, OPEN, Taunt.cpp) -- the sense gate barely filters, and ABI 17 has none (raised against 101cf49)
+Same review. Reviewer's finding, relayed: "SenseActor hearing-combat makes sense gate ~vacuous (SEV-4); ABI17 no sense (SEV-4)." Below ABI 18 `SenseOf` is unusable and the foe is rolled with `sense=unknown`.
+
+### MFO-B268 (SEV-4, OPEN, Taunt.cpp / apmf/TauntClaims.cpp) -- IdleForceDefaultState on release, and Repoint on a dead handle (raised against 101cf49)
+Same review (F6, relayed). Releasing a still-held ch.12 idle makes Harbinger send IdleForceDefaultState once, which can cut a clip short, and `PinFoeToTaunter`'s Repoint of a handle that has just died is a silent no-op until the next Ended() read. Text not preserved verbatim in the review log; re-check against the review before draining.

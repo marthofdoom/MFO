@@ -24,7 +24,7 @@ namespace MFO::Taunt {
     [[nodiscard]] bool IsPartyMember(RE::Actor* a_actor);
 
     // The act.taunt offer gate: a melee weapon (one-handed sword, dagger, axe, mace or a two-hander) in the RIGHT
-    // hand. Reads the actor; the board calls it on the main thread when it builds a row.
+    // hand. Reads the actor; the board calls it when it builds a row (the worker drain, Board.cpp).
     [[nodiscard]] bool MeleeInRightHand(RE::Actor* a_actor);
 
     // Actuation::Fire's act.taunt road (cast/Fire.cpp). Worker. Transparent on every refusal so the combat scan falls

@@ -1610,7 +1610,7 @@ namespace MFO::APMFBridge {
     // is saved. TauntSupported: APMF present AND abiVersion >= 17 (ch.12 idle v2; implies the pin, the entry,
     // IsClaimLive and Repoint) AND no synchronous refusal of the idle / pin seat seen this session.
     bool TauntSupported();
-    // The TAUNTER's idle (keyed by the taunter): ch.1 hold + ch.12 v2 idle a_idle played at a_target (the foe). False =
+    // The TAUNTER's idle (keyed by the taunter): ch.12 v2 idle a_idle played at a_target (the foe); the ch.1 hold is filed by TauntIdleStateOf once the idle first reads Live. False =
     // refused (logged; a refusal of a valid claim marks the seat refused for the session).
     bool ClaimTauntIdle(RE::FormID a_taunter, RE::FormID a_idle, RE::FormID a_target);
     enum class TauntIdleState {

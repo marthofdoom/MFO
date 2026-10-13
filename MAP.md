@@ -2456,16 +2456,16 @@ Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.
   either; also the evaluator's selector test), `MeleeInRightHand:369` (WEAPON_TYPE 1..6 in the right hand; the board offer gate AND
   `Fire`'s transparent refusal), `Fire:375` (called from `cast/Fire.cpp:384`; refusals are all transparent so the scan falls
   through: no Harbinger ABI 17, no melee, no eligible foe; `NoOp` OPAQUE "taunt in progress" while an attempt waits; otherwise
-  files the idle and returns `Fired`), `Gather:98` (the chosen foe first, then the nearest others within `fTauntRadius`, up to
+  files the idle and returns `Fired`; the ch.1 hold is NOT filed with it: `TauntIdleStateOf` files it the first time the idle claim reads LIVE = Harbinger accepted the PlayIdle, so a refused idle never holds the follower), `Gather:98` (the chosen foe first, then the nearest others within `fTauntRadius`, up to
   `iTauntMaxFoes` TOTAL; eligible = alive, 3D loaded, in combat, hostile, NOT a party member, `currentCombatTarget` IS a party member,
   not already taunted by THIS taunter; per-foe `inGroup` = the taunter HELD in the foe's own combat group; two read locks, never
   nested, #23), `Tick:431` (every pump from `Scheduler::Tick` right after `Packages::Pump`, BEFORE the early returns; the unpaused
-  clock `g_clockMs`; pauses with the game), `AdvanceAttempt:248`, `Resolve:164` (the roll), `AdvanceActive:307`, `Clear:455`
+  clock `g_clockMs`; pauses with the game), `AdvanceAttempt:248`, `Resolve:164` (the roll), `AdvanceActive:307` (a per-entry `gen` counter guards the release against a same-pump re-pin),, `Clear:455`
   (revert: logs `released (load)` per taunt, `APMFBridge::ClearTauntClaims`; called from `Scheduler::ClearTransientState`).
   State: `g_attempts` (by TAUNTER) and `g_active` (by FOE) behind `g_mx`; lock order `Taunt::g_mx` -> bridge `s_mx` (leaf), never reverse.
   FLOW: rule fires -> idle `0x0B8C73` (shield + one-hander) or `0x0B8C71` (everything else) via ch.12 v2 + ch.1 hold, target = the
   first candidate foe -> `AdvanceAttempt` waits until the idle claim has stayed LIVE through Harbinger's 3 s entry-event window
-  (`kConfirmMs` 3300 unpaused ms; there is no "confirmed" query in the ABI, `bIdleConfirm` ends an unconfirmed claim itself) ->
+  (`kConfirmMs` 3300 unpaused ms; the ABI has no idle-state query yet, so this only proves the claim SURVIVED: Harbinger ends a NOT CONFIRMED claim at >= 3000 world ms, but keeps an UNCONFIRMABLE one live (`bIdleConfirm=0`, unreadable graph). The log says "claim survived the window". A query is being built; switch over then) ->
   a claim that ENDED first is a FAILED attempt, logged, no roll, no pin -> confirmed: release idle + hold, `Gather` again,
   `MainThread::Post(Resolve)` (Harbinger `SenseActor` is main-thread only; only a definitive NO drops a foe; unusable / deferred is logged
   `sense=unknown|deferred` and the foe is rolled) -> per foe `p = clamp(0.5 + 0.05 x (taunter level - foe level), 0.1, 0.9)`, HIT ->
@@ -2489,7 +2489,7 @@ Design: `Docs/TAUNT-DESIGN.md` (incl. "Decisions"). Harbinger recipe: FACETS ch.
   `settings.ini` x2, `kMcmDefaults`), INI-only `fTauntRadius` (1024) and `iTauntMaxFoes` (4) in `[Taunt]`.
 - **Log lines:** `[taunt] <f> (<id>) idle B8C73|B8C71 filed ...`, `... idle ... CONFIRMED played after N ms`, `... TAUNT idle FAILED ...`,
   `... TAUNT -> <n> foe(s): <foe> (<id>) L<lvl> p=<p> roll=<r> HIT|MISS ...`, `... released foe <foe> (<reason>) after <ms> ms`.
-- **What breaks if you change this:** the opcodes are frozen strings (#10; no co-save change, no enum touched). The release order (taunter
+- **Open findings: MFO-B266..MFO-B268.** **What breaks if you change this:** the opcodes are frozen strings (#10; no co-save change, no enum touched). The release order (taunter
   down -> release the SAME pump) is a safety rule, Harbinger's bleed-out drive walks the foe to a downed pinned taunter. `Resolve` must
   stay on the main thread while it calls `SenseOf`. `kConfirmMs` mirrors Harbinger's `kConfirmWaitMs`. Do not give the foe pin a ch.21 `fval`
   (Table 23a: the range rule points the wrong way for a hostile holder).

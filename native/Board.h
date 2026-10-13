@@ -77,8 +77,8 @@ namespace MFO::Board {
         bool          stillFollower = false;
         bool          commanded = false;
         bool          inCombat = false;
-        // Taunt S2: a melee weapon is in the follower's RIGHT hand now (Taunt::MeleeInRightHand), read on the main
-        // thread when the row is built. The gambit picker offers act.taunt only while this is true.
+        // Taunt S2: a melee weapon is in the follower's RIGHT hand now (Taunt::MeleeInRightHand), read on the worker
+        // drain when the row is built. The gambit picker offers act.taunt only while this is true.
         bool          meleeInRight = false;
         // Activity glyphs for the HUD [C][L][T] strip + the Followers-tab status
         // word. Precomputed on the worker (Logistics::JustLooted/IsTrading) so
