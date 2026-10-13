@@ -293,6 +293,35 @@ namespace MFO::Actuation {
             const float ratio = Config::g_dotRecastBurstRatio.load();
             return burst >= dotRate * timeRemaining * ratio;
         }
+
+        // The hostile AUTO set: the foes in the follower's OWN combat group, alive, loaded, hostile, inside the chase
+        // radius, that this cast would actually affect (ShouldApplyTo: an instant spell always, a duration DoT only
+        // when not already covered). FormIDs only (the F1 rule: the caller uses them after the group's read lock is
+        // released). Shared by the claim series (R10) and the direct fan below, so the two never disagree on who is
+        // a target. a_concSelf: a conc-Self spell lands only on the caster under AUTO, so no foe is a target.
+        std::vector<RE::FormID> HostileAutoFoes(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_concSelf) {
+            std::vector<RE::FormID> out;
+            const float radius = Confidence::ChaseRadius(a_follower);
+            auto& rt = a_follower->GetActorRuntimeData();
+            if (auto* cc = rt.combatController; cc && cc->combatGroup) {
+                const auto selfPos = a_follower->GetPosition();
+                RE::BSReadLockGuard lk(cc->combatGroup->lock);
+                for (const auto& t : cc->combatGroup->targets) {
+                    auto  ptr = t.targetHandle.get();
+                    auto* foe = ptr.get();
+                    if (!foe || foe == a_follower) continue;
+                    if (a_concSelf) continue;   // SEV-3: a conc-Self spell lands only on the caster under AUTO -- no foe is a real target
+                    if (foe->IsDead() || foe->IsDisabled() || !foe->Is3DLoaded()) continue;
+                    if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
+                    if (!foe->IsHostileToActor(a_follower)) continue;   // brawl gate (#34)
+                    if (selfPos.GetDistance(foe->GetPosition()) > radius) continue;
+                    // F2/F3/F4: only a foe this cast will actually affect. Filtering here (worker, foe ptr still
+                    // valid) means an all-covered set NoOps transparently in the callers.
+                    if (ShouldApplyTo(foe, a_spell, true)) out.push_back(foe->GetFormID());
+                }
+            }
+            return out;
+        }
     }
 
     // ── SUMMON = ONE-SHOT CONJURE (fix/mfo-summon-oneshot) ──────────────────
@@ -411,9 +440,9 @@ namespace MFO::Actuation {
             // left-hand yield, the claim, the stream cap. So AUTO and an explicit
             // heal rule cannot drift apart.
             //   * the pick is the LOWEST health fraction under the rule's own
-            //     threshold, among the party, the player and -- for a Self-delivery
-            //     spell only (Harbinger serves a self claim for Self delivery) -- the
-            //     caster, each inside the heal's reach with line of sight (HealInReach
+            //     threshold, among the party, the player and the caster (a Self-delivery
+            //     spell as target 0, any other delivery with his own FormID as the
+            //     target, substrate S1 R2), each inside the heal's reach with line of sight (HealInReach
             //     plus PickAlly's 3 s trust of a recent Occluded);
             //   * a cast IN FLIGHT on the standing claim's recipient finishes first
             //     (D8): the pick stays on him until the engine is done;
@@ -439,7 +468,11 @@ namespace MFO::Actuation {
                 const float radius  = Config::g_sharedRadius.load();
                 const float ceiling = std::min(a_healThreshold, Vocab::kHealFull);
                 const auto  selfPos = a_follower->GetPosition();
-                const bool  selfOk  = spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf;
+                // the caster is a candidate for EVERY delivery: a non-Self heal at him is a claim too (substrate S1 R2)
+                // ... unless its self-flip claim FIRED but NEVER LANDED this fight (HealSelfFlipBarred): then his road is the
+                // direct stream, which re-pins the pick on him, so he is left out
+                const bool  selfOk  = spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf ||
+                                      !HealSelfFlipBarred(id, a_spellID);
                 std::vector<RE::FormID> sightWant;
                 RE::Actor* lowest   = nullptr;
                 float      lowestHp = ceiling;   // strictly under the rule's ceiling
@@ -600,6 +633,67 @@ namespace MFO::Actuation {
                 struct SeriesScope { SeriesScope() { g_autoBuffSeries = true; } ~SeriesScope() { g_autoBuffSeries = false; } };
                 Outcome out = [&] { SeriesScope scope; return CastOn(a_follower, a_spellID, pick, /*a_rangeGate=*/false); }();
                 out.reason = std::format("auto buff (lowest first) at {:08X}: {}", pick->GetFormID(), out.reason);
+                return out;
+            }
+
+            // AUTO HOSTILE ON THE ANIMATED CLAIM ROAD: A SERIES OF REAL CASTS, ONE FOE AT A TIME
+            // (combat-substrate slice S1, R10; marth 2026-10-12: "AUTO on attack spells: one foe at a time,
+            // animated", the way AUTO heals already work). The fan below put one CastSpellImmediate on EVERY foe
+            // in one tick, which plays no animation (ENGINE_NOTES §0.8 / §0.13). The follower casts with one hand
+            // at one target, so this picks ONE foe and hands it to the single-target road (CastOn), which owns
+            // everything a claimed offense cast needs: the hand plan and lock with its carried-rank preemption, the
+            // owned ch.8b claim (fire-and-forget) or the concentration claim, Loadout::Prepare, the magicka and
+            // reserve gates, the line-of-sight and line-of-fire holds. So AUTO and an explicit cast_target rule
+            // cannot drift apart.
+            //   * the foes are HostileAutoFoes (own combat group, hostile, inside the chase radius, not already
+            //     covered by a DoT of this spell), then those inside the spell's own range and not Occluded;
+            //   * a foe the STANDING claim or lock for this spell already names keeps the pick (CastOn holds a
+            //     different target off while its hand lock stands, so re-picking would only stall the lap); the
+            //     lock is dropped by CastOn when the cast has fired, and the next lap picks the next foe;
+            //   * otherwise the NEAREST foe (the one the follower is most likely already facing);
+            //   * nobody to hit -> a transparent NoOp, exactly as the fan returned.
+            // Combat table only (g_firingRule: the claim needs the fight's controller and a ranked lock), a
+            // non-Self delivery (a Self-delivery offense spell, a cloak, has no foe to aim at: it keeps the fan and
+            // the UNANIMATED line), and Harbinger's claim road in use. Out of combat, with Harbinger absent or the
+            // claim road switched off, the fan below is the documented direct degrade, labelled.
+            if (hostile && g_firingRule != kNoRule && spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
+                a_follower->GetActorRuntimeData().combatController &&
+                APMFBridge::Available() && APMFBridge::OffenseCastClaimSupported() && Config::g_apmfCast.load() &&
+                !Config::g_legacyCastHybrid.load() && Config::g_equipToCast.load()) {
+                const auto foes = HostileAutoFoes(a_follower, spell, /*a_concSelf=*/false);
+                if (foes.empty())
+                    return { Result::NoOp, "auto-cast: no enemies in range", true };
+                Sightline::Want(id, foes, Sightline::Basis::Own);
+                const float range   = spell->GetRange();   // 0 = unset: fails open, as CastOn's own range gate
+                const auto  selfPos = a_follower->GetPosition();
+                auto usable = [&](RE::Actor* foe) {
+                    if (!foe) return false;
+                    if (range > 0.0f && selfPos.GetDistance(foe->GetPosition()) > range) return false;
+                    return Sightline::Check(id, foe->GetFormID(), Sightline::Basis::Own) != Sightline::Verdict::Occluded;
+                };
+                RE::Actor* pick = nullptr;
+                // the standing claim's foe: the lock of THIS spell on either hand, while he is still a candidate
+                if (const auto lk = g_castLock.find(id); lk != g_castLock.end()) {
+                    for (const std::size_t h : { kHandLeft, kHandRight }) {
+                        const auto& l = lk->second.hand[h];
+                        if (pick || l.spell != a_spellID || l.target == 0) continue;
+                        if (std::find(foes.begin(), foes.end(), l.target) == foes.end()) continue;
+                        if (auto* cur = RE::TESForm::LookupByID<RE::Actor>(l.target); usable(cur)) pick = cur;
+                    }
+                }
+                if (!pick) {
+                    float best = std::numeric_limits<float>::max();
+                    for (const RE::FormID fid : foes) {
+                        auto* foe = RE::TESForm::LookupByID<RE::Actor>(fid);
+                        if (!usable(foe)) continue;
+                        const float d = selfPos.GetDistance(foe->GetPosition());
+                        if (d < best) { best = d; pick = foe; }
+                    }
+                }
+                if (!pick)
+                    return { Result::NoOp, "auto hostile: no enemy in the spell's range and sight", true };
+                auto out = CastOn(a_follower, a_spellID, pick, /*a_rangeGate=*/true);
+                out.reason = std::format("auto hostile (one foe at a time) at {:08X}: {}", pick->GetFormID(), out.reason);
                 return out;
             }
 
@@ -804,28 +898,7 @@ namespace MFO::Actuation {
             int   outOfReach = 0;   // fix/mfo-can-act: hurt allies a heal could not reach
             if (hostile) {
                 radius = Confidence::ChaseRadius(a_follower);
-                auto& rt = a_follower->GetActorRuntimeData();
-                if (auto* cc = rt.combatController; cc && cc->combatGroup) {
-                    const auto selfPos = a_follower->GetPosition();
-                    RE::BSReadLockGuard lk(cc->combatGroup->lock);
-                    for (const auto& t : cc->combatGroup->targets) {
-                        auto  ptr = t.targetHandle.get();
-                        auto* foe = ptr.get();
-                        if (!foe || foe == a_follower) continue;
-                        if (concSelf) continue;   // SEV-3: a conc-Self spell lands only on the caster under AUTO -- no foe is a real target
-                        if (foe->IsDead() || foe->IsDisabled() || !foe->Is3DLoaded()) continue;
-                        if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
-                        if (!foe->IsHostileToActor(a_follower)) continue;   // brawl gate (#34)
-                        if (selfPos.GetDistance(foe->GetPosition()) > radius) continue;
-                        // F2/F3/F4: only fan to a foe this cast will actually
-                        // affect -- an instant spell always, a duration DoT only
-                        // when it is not already covered (burst-vs-tail test).
-                        // Filtering here (worker, foe ptr still valid) means an
-                        // all-covered fan-out NoOps transparently below.
-                        if (ShouldApplyTo(foe, spell, true))
-                            targets.push_back(foe->GetFormID());
-                    }
-                }
+                targets = HostileAutoFoes(a_follower, spell, concSelf);
                 // F7: warm the LoS cache for the foes we will try to hit, so the
                 // apply loop's Sightline::Check stops being fail-open Unknown
                 // forever (the verdict lands a frame later; walls do not move).
@@ -899,6 +972,25 @@ namespace MFO::Actuation {
                          : outOfReach ? std::format("auto-cast: {} in need, none in the spell's reach", outOfReach)
                                       : std::string("auto-cast: nobody needs it"),
                          true };
+
+            // THE DIRECT FAN IS THE UNANIMATED RESIDUE (substrate S1): every cast below is a CastSpellImmediate with no
+            // hand animation. Combat table only (the helper is a no-op off it); one line per (follower, spell).
+            if (g_firingRule != kNoRule) {
+                // the reasons that ask the road choosers use the Why form: gate + rate limit first (review SEV-4)
+                if (hostile && spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf)
+                    NoteUnanimatedRoad(a_follower, "auto-fan", spell,
+                                       "a Self-delivery offense spell has no foe to aim at: AUTO fans its effect onto each foe");
+                else if (hostile)
+                    NoteUnanimatedRoadWhy(a_follower, "auto-fan", spell, nullptr);
+                else if (concentration)
+                    NoteUnanimatedRoad(a_follower, "auto-fan", spell,
+                                       "AUTO fans a concentration spell that is not a heal (no claim series for it)");
+                else if (authoredDur <= 0.0f)
+                    NoteUnanimatedRoad(a_follower, "auto-fan", spell,
+                                       "AUTO fans an instant beneficial spell (the claim series needs a duration to read back)");
+                else
+                    NoteUnanimatedRoadWhy(a_follower, "auto-fan", spell, RE::PlayerCharacter::GetSingleton());
+            }
 
             int fired = 0, skipped = 0;
             for (const auto tgtID : targets) {

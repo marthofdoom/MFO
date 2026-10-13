@@ -7,6 +7,7 @@
 #include "apmf/APMFBridge.h"     // feat/cast-gambit-concentration (Task 1): ClaimOffenseCast for a
 #include <map>            // feat/mfo-animheal-p0 fix: ReadbackWarnDue gate (tuple key)
 #include <tuple>
+#include <unordered_set>
 
 namespace MFO::Actuation {
 
@@ -39,6 +40,18 @@ namespace MFO::Actuation {
         struct WarnGate { SelfClock::time_point last{}; std::uint32_t held = 0; };
         std::map<std::tuple<RE::FormID, RE::FormID, ReadbackWarn>, WarnGate> g_readbackWarn;
         constexpr float kReadbackWarnEverySec = 5.0f;
+        // THE SELF-FLIP "FIRED BUT NEVER LANDED" BOUND (substrate S1 review F1, the heal road's twin of the buff road's
+        // R2-1, BuffRoad.cpp g_fireSeen). A non-Self-delivery heal at its own caster is a claim whose target is the
+        // caster's own FormID (Harbinger's self-flip proxy). If the proxy fires but nothing lands, the rule would
+        // recast until the magicka ran out (a concentration heal would re-stream while the HP condition held). The
+        // [heal-obs] verdict (effect present now, or the HP rose, ~1 s after each claim fire) is the landing evidence;
+        // kSelfFlipMissLimit consecutive LASTING fires (per STREAM for a concentration heal) with none bar the spell
+        // until the cast rule lapses or the fight ends. Written on MAIN (the verdict), read on the worker (HealRefreshGate, ChooseHealRoad):
+        // under g_healObsMx. Key (caster << 32) | spell.
+        constexpr int kSelfFlipMissLimitFF   = 3;
+        constexpr int kSelfFlipMissLimitConc = 2;
+        std::unordered_map<std::uint64_t, int>  g_selfFlipMiss;
+        std::unordered_set<std::uint64_t>       g_selfFlipBarred;
 
     }
         void ResetHealObs() {
@@ -47,7 +60,22 @@ namespace MFO::Actuation {
             g_healObsLast.clear();
             g_readbackWarn.clear();
             g_claimLap.clear();
+            g_selfFlipMiss.clear();
+            g_selfFlipBarred.clear();
         }
+
+    bool HealSelfFlipBarred(RE::FormID a_caster, RE::FormID a_spell) {
+        std::lock_guard lk(g_healObsMx);
+        return g_selfFlipBarred.count((static_cast<std::uint64_t>(a_caster) << 32) | a_spell) != 0;
+    }
+
+    void HealSelfFlipFightOver(RE::FormID a_caster) {
+        std::lock_guard lk(g_healObsMx);
+        for (auto it = g_selfFlipBarred.begin(); it != g_selfFlipBarred.end();)
+            it = (static_cast<RE::FormID>(*it >> 32) == a_caster) ? g_selfFlipBarred.erase(it) : std::next(it);
+        for (auto it = g_selfFlipMiss.begin(); it != g_selfFlipMiss.end();)
+            it = (static_cast<RE::FormID>(it->first >> 32) == a_caster) ? g_selfFlipMiss.erase(it) : std::next(it);
+    }
     namespace {
 
         const char* AttachName(HealAttach a) {
@@ -251,6 +279,35 @@ namespace MFO::Actuation {
                 const bool cut  = o.conc && !sustainsItself && !landed &&
                                   std::string_view(stream) == "live" &&
                                   std::string_view(channel) == "stopped";
+                // THE SELF-FLIP BOUND (review F1): a claim fire at the caster of a non-Self heal that landed
+                // nothing counts as a miss; a landing clears the count. MAIN thread, state under g_healObsMx.
+                if (claimRoad && o.caster == o.target) {
+                    auto* sfSp = RE::TESForm::LookupByID<RE::SpellItem>(o.spell);
+                    // ONLY A LASTING heal is judged (concentration, or a duration effect; the `gone` predicate's test, review R2):
+                    // an instant heal leaves nothing to read 1 s later and its only evidence would be a health rise against the
+                    // claim-lap stamp, which heavy damage falsely misses. The passive [castproxy] NOT seen line covers those.
+                    if (sfSp && sfSp->GetDelivery() != RE::MagicSystem::Delivery::kSelf && lasting) {
+                        const std::uint64_t k = (static_cast<std::uint64_t>(o.caster) << 32) | o.spell;
+                        int misses = 0;
+                        bool barNow = false;
+                        {
+                            std::lock_guard lk(g_healObsMx);
+                            if (landed) g_selfFlipMiss.erase(k);
+                            else {
+                                misses = ++g_selfFlipMiss[k];
+                                if (misses >= (o.conc ? kSelfFlipMissLimitConc : kSelfFlipMissLimitFF) &&
+                                    g_selfFlipBarred.insert(k).second)
+                                    barNow = true;
+                            }
+                        }
+                        if (barNow)
+                            spdlog::warn("[heal] {:08X} {} ({:08X}) at its own caster: the self-flip claim FIRED {} times "
+                                         "and NEVER LANDED (no effect on the caster, no health rise) -- the claim is "
+                                         "RELEASED and this spell takes the DIRECT road (unanimated) until the cast rule "
+                                         "lapses or the fight ends. A seat or self-flip proxy problem in Harbinger shows here (no masking)",
+                                         o.caster, sfSp->GetName() ? sfSp->GetName() : "?", o.spell, misses);
+                    }
+                }
                 const auto line = std::format(
                     "[heal-obs] {:08X} -> {:08X} {} ({:08X}{}) road={} dist={:.0f} LoS={} hp {:.0f}% -> "
                     "{:.0f}% after {:.1f}s | effect at apply={} now={} | channel={} (state {}) stream={} | "

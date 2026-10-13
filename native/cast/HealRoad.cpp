@@ -969,6 +969,14 @@ namespace MFO::Actuation {
         // keeps a left claim that never fires from starving offense; HealClaimNeedsRepair only WARNs).
         if (NeverFiredRelease(a_follower, a_hand, a_spell, "its recipient"))
             return Outcome{ Result::FailedOther, "animated heal released: it never fired", true };
+        // The self-flip never-landed bound (substrate S1 review F1): the verdict is made on the main thread in
+        // HealObsSweep (cast/HealObs.cpp); the claim is released HERE, on the worker, once it has barred the spell.
+        if (HealSelfFlipBarred(a_follower->GetFormID(), a_spell) &&
+            APMFBridge::GetHealCastSpell(a_follower->GetFormID(), ApmfHand(a_hand)) == a_spell &&
+            APMFBridge::GetHealCastTarget(a_follower->GetFormID(), ApmfHand(a_hand)) == 0) {
+            ReleaseWithExit(a_follower, a_hand, a_spell, "its self-flip cast fired but never landed", "never-landed");
+            return Outcome{ Result::FailedOther, "animated heal released: its self-flip cast fired but never landed", true };
+        }
         return std::nullopt;
     }
 
@@ -1156,6 +1164,25 @@ namespace MFO::Actuation {
         }
     }
 
+    // The self-flip never-landed bar's release (substrate S1 review R1): ends this follower's heal claim(s) for a_spell AT ITS
+    // OWN CASTER on every hand, and the lock that names it. Called from ChooseHealRoad's bar branch, so the claim is gone
+    // BEFORE CastOn reads the lap's road: otherwise the standing claim pins the hand (handPlan.inFlight) and the in-flight
+    // refresh renews it although healClaim is false (HealRefreshGate is gated on it).
+    void ReleaseSelfHealClaimsForSpell(RE::FormID a_follower, RE::FormID a_spell, const char* a_why) {
+        for (std::size_t h = 0; h < kHandCount; ++h) {
+            const auto ah = ApmfHand(h);
+            if (APMFBridge::GetHealCastSpell(a_follower, ah) != a_spell ||
+                APMFBridge::GetHealCastTarget(a_follower, ah) != 0)   // 0 = self (GetHealCastTarget normalises)
+                continue;
+            g_healExit = "never-landed";
+            ComposedCast::EndHand(a_follower, ah);
+            if (auto it = g_castLock.find(a_follower); it != g_castLock.end() && it->second.hand[h].spell == a_spell)
+                it->second.hand[h] = CastLock{};
+            HealHandEnded(a_follower, h, a_why);
+            g_healExit = nullptr;
+        }
+    }
+
     bool HealStandsOnHand(RE::FormID a_follower, std::size_t a_hand) {
         return a_hand < kHandCount && HealOnHand(a_follower, a_hand).found;
     }
@@ -1164,6 +1191,7 @@ namespace MFO::Actuation {
         g_launcherSeen.erase(a_follower);   // per FIGHT: a follower who switched bow -> sword is not a launcher user
         g_neverFiredLatch.erase((static_cast<std::uint64_t>(a_follower) << 1) | kHandLeft);
         g_neverFiredLatch.erase((static_cast<std::uint64_t>(a_follower) << 1) | kHandRight);
+        HealSelfFlipFightOver(a_follower);   // the self-flip never-landed bar is per fight
     }
 
     void ResetHealRoad() {

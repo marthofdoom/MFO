@@ -421,6 +421,13 @@ namespace MFO::Actuation {
         if (SecSince(g_summonPosted[key], now) < kSummonPostEverySec)
             return { Result::NoOp, "summon check queued", true };
         g_summonPosted[key] = now;
+        // SUBSTRATE S1 / R5: with Harbinger present the combat table sends a summon to the buff claim road
+        // (Fire.cpp / Auto.cpp -> CastOn's self fork) whenever ChooseBuffRoad answers Claim, so a summon that
+        // reaches THIS direct one-shot in combat is a summon the claim road declined (no combat controller: an
+        // own-OOC follower in a party fight; ABI < 19; an ambiguous row; bCastSelf off; Harbinger absent). It stays
+        // direct (the substrate, slice S3, is what gives the no-controller follower a controller) and the field
+        // log names it (cast/Unanimated.cpp). Combat table only; the out-of-combat service is a no-op here.
+        NoteUnanimatedRoadWhy(a_follower, "summon-oneshot", a_spell, nullptr);
         MainThread::Post([id, spellID, a_rule, table = std::string(a_table ? a_table : "?"),
                           target = std::string(a_target)] {
             SummonOnMain(id, spellID, a_rule, table, target);

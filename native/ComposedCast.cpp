@@ -382,7 +382,11 @@ namespace MFO::ComposedCast {
         const RE::FormID fid       = a_follower->GetFormID();
         const RE::FormID spellID   = a_spell->GetFormID();
         const bool        selfCast = (!a_target) || (a_target == a_follower);
-        const RE::FormID  targetID = selfCast ? 0 : a_target->GetFormID();
+        // A self heal names target 0 (Harbinger resolves it to the claimant) ONLY for a Self-delivery spell; any other
+        // delivery names the caster's own FormID so Harbinger's self-flip proxy serves it (substrate S1 R2, see
+        // ChooseHealRoad). GetHealCastTarget reports a self claim as 0 either way, so every reader keeps "0 = self".
+        const RE::FormID  targetID = selfCast ? (a_spell->GetDelivery() == RE::MagicSystem::Delivery::kSelf ? 0 : fid)
+                                              : a_target->GetFormID();
         const bool  isConcentration =
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration;
 
@@ -814,17 +818,27 @@ namespace MFO::ComposedCast {
                              fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
             return HealRoad::DirectNoCombat;
         }
-        // a_target nullptr = no recipient chosen yet (CastAuto asks before it picks,
-        // and keeps the caster out of its own candidates for a non-Self spell).
-        const bool atSelf = a_target == a_follower;
-        if (atSelf && a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf) {
+        // THE SELF-FLIP NEVER-LANDED BAR (review F1): a non-Self heal at its own caster whose claim fired repeatedly and
+        // landed nothing (Actuation::HealSelfFlipBarred, cast/HealObs.cpp) is a direct heal until the cast rule lapses or the fight ends.
+        if (a_target == a_follower && a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
+            Actuation::HealSelfFlipBarred(fid, spellID)) {
+            // END THE STANDING CLAIM HERE, before any caller reads this lap's road: left standing it pins the hand and
+            // CastOn's in-flight refresh renews it (HealRefreshGate is gated on healClaim, which is false now). Idempotent.
+            Actuation::ReleaseSelfHealClaimsForSpell(fid, spellID, "its self-flip cast fired but never landed (barred)");
             if (RoadLogDue(fid, spellID, HealRoad::DirectNoSeat))
-                spdlog::warn("[heal] {:08X} {} ({:08X}) aimed at its own caster, but its delivery is "
-                             "not Self: Harbinger resolves a self claim only for a Self-delivery "
-                             "spell, so no seat can fire it -- DIRECT road, unanimated",
+                spdlog::warn("[heal] {:08X} {} ({:08X}) at its own caster: its self-flip claim FIRED but NEVER LANDED "
+                             "earlier -- the claim is released and the DIRECT road (unanimated) casts it until the cast "
+                             "rule lapses or the fight ends",
                              fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
             return HealRoad::DirectNoSeat;
         }
+        // A HEAL AT ITS OWN CASTER IS A CLAIM WHATEVER ITS DELIVERY (substrate slice S1, R2). Harbinger resolves
+        // a TARGET-0 self claim only for a Self-delivery spell, so a heal of another delivery (Aimed / Touch /
+        // TargetActor, e.g. Healing Hands) at its own caster is claimed with the caster's OWN FormID as the
+        // target, exactly as the buff road claims a non-Self buff at its caster (ExplicitSelfBuff, cast/
+        // BuffRoad.cpp): Harbinger's self-flip proxy mints a kSelf copy for a claim whose target is the
+        // claimant, so no ray is aimed at the shooter. Try() names the target; this chooser has no seat test left
+        // for the shape (it answered DirectNoSeat, a direct unanimated heal, until 2026-10-13).
         // ONE ROAD PER ACTOR, the direct -> claim half (MFO-B176). A direct heal
         // stream still standing from a lap that took the direct road (a controller
         // flap, the out-of-combat table) is ENDED here, the same way the stream ends

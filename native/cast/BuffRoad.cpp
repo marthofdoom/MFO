@@ -284,13 +284,15 @@ namespace MFO::Actuation {
         return BuffUp(recip, a_spell, BuffPlacementSpell(a_spell)) != Up::No;
     }
 
-    BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log, RE::Actor* a_recipient) {
+    BuffRoad ChooseBuffRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, bool a_log, RE::Actor* a_recipient,
+                            const char** a_why) {
         if (!a_follower || !a_spell) return BuffRoad::NotBuff;
         if (CasterConsent::ClassifySpell(a_spell) != CasterConsent::SpellKind::Buff) return BuffRoad::NotBuff;
         const auto fid     = a_follower->GetFormID();
         const auto spellID = a_spell->GetFormID();
         const auto name    = a_spell->GetName() ? a_spell->GetName() : "?";
         auto say = [&](BuffRoad r, const char* why) {
+            if (a_why) *a_why = why;
             if (a_log && RoadLogDue(fid, spellID, r))
                 spdlog::info("[buff] {:08X} {} ({:08X}): {} -- DIRECT road, unanimated", fid, name, spellID, why);
             return r;
@@ -298,13 +300,18 @@ namespace MFO::Actuation {
 
         // The documented degrade contract: Harbinger absent / too old / claims switched off.
         if (!APMFBridge::Available() || !APMFBridge::OffenseCastClaimSupported() ||
-            !Config::g_apmfCast.load() || Config::g_legacyCastHybrid.load() || !Config::g_equipToCast.load())
+            !Config::g_apmfCast.load() || Config::g_legacyCastHybrid.load() || !Config::g_equipToCast.load()) {
+            if (a_why) *a_why = "Harbinger absent / too old, or the claim road is switched off (bApmfCast, "
+                                "bLegacyCastHybrid, bEquipToCast)";
             return BuffRoad::DirectDegrade;
+        }
 
         const bool other = a_recipient && a_recipient != a_follower;
         // A concentration cast at another recipient keeps its own claim road (cast/DirectTarget.cpp); quiet.
-        if (other && a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration)
+        if (other && a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
+            if (a_why) *a_why = "a concentration cast at another recipient (its own claim road, cast/DirectTarget.cpp)";
             return BuffRoad::DirectNoSeat;
+        }
 
         // A buff at another recipient is keyed with seat 0's self flip (a_seat0: the claim's driven form),
         // as the heal claim road is; a self buff keys its own row natively.
