@@ -223,6 +223,33 @@ namespace MFO::Eval {
                         return true;
             return false;
     }
+    RE::Actor* CurrentTargetIfTrackable(RE::Actor* a_self) {
+        if (!a_self) return nullptr;
+        auto  tp  = a_self->GetActorRuntimeData().currentCombatTarget.get();
+        auto* tgt = tp.get();
+        if (!tgt || tgt->IsDead() || tgt->IsDisabled()) return nullptr;
+        // The SAME trackability gates the group scan applies (3D loaded, present in the group's
+        // targets and not kTargetLost): what ends a Harbinger ch.20 pin must also stop this path
+        // choosing the foe, or an ended pin re-pins onto a foe Harbinger cannot track, at gambit
+        // cadence (apmf/Excursion.cpp PinTarget's no-loop rule). ONE group read lock, nothing else
+        // inside it (#23).
+        if (!tgt->Is3DLoaded()) return nullptr;
+        {
+            auto* cc = a_self->GetActorRuntimeData().combatController;
+            if (!cc || !cc->combatGroup) return nullptr;
+            bool trackable = false;
+            RE::BSReadLockGuard lk(cc->combatGroup->lock);
+            for (const auto& t : cc->combatGroup->targets) {
+                if (t.targetHandle.native_handle() != tgt->GetHandle().native_handle()) continue;
+                trackable = !t.flags.any(RE::CombatTarget::Flags::kTargetLost);
+                break;
+            }
+            if (!trackable) return nullptr;
+        }
+        if (!tgt->IsHostileToActor(a_self)) return nullptr;   // don't act in a brawl
+        return tgt;
+    }
+
     namespace {
 
         // Pick a foe from the follower's OWN COMBAT GROUP.
@@ -269,30 +296,13 @@ namespace MFO::Eval {
             // group for some other Unholy foe and never switches the target to it. No distance test.
             if (a_op == Vocab::kCondFoeWithinRange || a_op == Vocab::kCondFoeBeyondRange ||
                 a_op == Vocab::kCondFoeIsUnholy) {
-                auto tp   = a_self->GetActorRuntimeData().currentCombatTarget.get();
-                auto* tgt = tp.get();
-                if (!tgt || tgt->IsDead() || tgt->IsDisabled()) return best;
-                // The SAME trackability gates the group scan below applies (3D loaded,
-                // present in the group's targets and not kTargetLost): what ends a
-                // Harbinger ch.20 pin must also stop this path choosing the foe, or an
-                // ended pin re-pins onto a foe Harbinger cannot track, at gambit cadence
-                // (apmf/Excursion.cpp PinTarget's no-loop rule). ONE group read lock and
-                // nothing else inside it; this branch returns before the chase-cap
-                // computation, so it never nests (#23).
-                if (!tgt->Is3DLoaded()) return best;
-                {
-                    auto* cc = a_self->GetActorRuntimeData().combatController;
-                    if (!cc || !cc->combatGroup) return best;
-                    bool trackable = false;
-                    RE::BSReadLockGuard lk(cc->combatGroup->lock);
-                    for (const auto& t : cc->combatGroup->targets) {
-                        if (t.targetHandle.native_handle() != tgt->GetHandle().native_handle()) continue;
-                        trackable = !t.flags.any(RE::CombatTarget::Flags::kTargetLost);
-                        break;
-                    }
-                    if (!trackable) return best;
-                }
-                if (!tgt->IsHostileToActor(a_self)) return best;   // don't act in a brawl
+                // The trackability gates (dead/disabled, 3D loaded, in the group's targets and not
+                // kTargetLost, hostile) live in CurrentTargetIfTrackable, shared with the Scheduler's
+                // silver-hold demotion so both read ONE definition of "usable current target".
+                // ONE group read lock inside, nothing nested (#23); this branch returns before the
+                // chase-cap computation.
+                auto* tgt = CurrentTargetIfTrackable(a_self);
+                if (!tgt) return best;
                 if (a_reachGate) {
                     CombatSense::ReachRead rr;
                     if (CombatSense::OutOfMeleeReach(a_self, tgt, a_reachSlack, &rr)) {

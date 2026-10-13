@@ -1649,3 +1649,6 @@ Opus review of `fix/mfo-m3-cosave-tool`, MERGE OK; everything above SEV-5 was fi
 - The "engine call not modelled" fault names the immediate caller (`report_and_fail`), not the MFO function that
   started the chain. Fix shape: walk the emulated stack for return addresses.
 - The GMST placeholder values are not LoreRim's real ones. Re-run on the Deck's real v6/v7 saves when it is awake.
+
+### MFO-B254 (SEV-4, OPEN, Scheduler) -- EquipRangeUndecidable lacks the PickFoe trackability gates (raised against 5c01051)
+Opus review of `fix/foe-targeted-unholy`; pre-existing, not changed by that branch. Finding (paraphrased from the review, verbatim text not retained by the author): `EquipRangeUndecidable` (Scheduler.cpp) decides "target usable" from null / dead / disabled / hostile only. PickFoe's current-target path also rejects a target that is not 3D-loaded, not in the combat group's targets, or kTargetLost. A target PickFoe rejects for those reasons therefore reads as USABLE to the demotion, so the rule falls through as known-false instead of UNKNOWN. Fix shape: use `Eval::CurrentTargetIfTrackable` (added in the same branch for the silver demotion) in `EquipRangeUndecidable`.

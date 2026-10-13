@@ -60,4 +60,11 @@ namespace MFO::Eval {
     // own-line-of-sight flag (apmf/Excursion.cpp, via Targeting.cpp) share this one test.
     bool HoldsBowOrStaff(RE::Actor* a_actor);
 
+    // The follower's currentCombatTarget if it is USABLE as a gambit target, else nullptr: not dead or
+    // disabled, 3D loaded, present in his combat group's targets and not kTargetLost, hostile to him (no
+    // brawl partner). The one definition shared by the current-target selectors (Foe: Target within /
+    // beyond, Foe targeted: Unholy) and the Scheduler's silver-hold demotion. Pure reads, one group read
+    // lock inside (#23); call it with no other lock held. The pointer is valid for the calling tick only.
+    RE::Actor* CurrentTargetIfTrackable(RE::Actor* a_self);
+
 }
