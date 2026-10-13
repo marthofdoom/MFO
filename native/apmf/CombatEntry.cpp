@@ -10,6 +10,10 @@
 // fight" / "How combat entry ends". One claim per follower. MFO never Repoints it: a new
 // target is a NEW request (INTEGRATION.md: "To try again, send a NEW RequestEx. An ended
 // handle is dead"), and an ended entry is only ever forgotten here, never re-filed.
+// An entry may also end because Harbinger HELD-ENGAGEMENT rules fired (range drop, no path progress,
+// arrived but not fighting): it then refuses the same (follower, target) for 60 s, accepting the
+// request and ending it a frame later (never a synchronous refusal). The no-re-ask floor lives in
+// EngageOnSight's given-up set (kReengageHold).
 #include "APMFBridge.h"
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
@@ -68,8 +72,9 @@ namespace MFO::APMFBridge {
             }
             spdlog::info("[engage-on-sight] {:08X}: combat entry against {:08X} ENDED (h={}, {}). Harbinger "
                          "ends it on engine refusal, entry not attempted, combat ended, or a dead / disabled / "
-                         "unloaded / unresolvable follower or target; APMF's '[ch.21] entry ended' line names "
-                         "the reason. MFO does not ask again for this target while it stays a candidate.",
+                         "unloaded / unresolvable follower or target, the engage-range rule or its watchdogs; APMF's "
+                         "'[ch.21] entry ended' line names the reason. MFO does not ask again for this target "
+                         "while it stays a candidate (and never inside Harbinger's 60 s re-engage cooldown).",
                          follower, e.target, e.handle, e.everLive ? "was live" : "never seen live");
             // ALWAYS Release before dropping the handle: a no-op on a claim Harbinger already
             // released, and it FIFO-cancels one still pending, so a false "never live"
@@ -112,7 +117,8 @@ namespace MFO::APMFBridge {
         return api && api->abiVersion >= kEntryMinAbi && !g_entrySeatRefused.load(std::memory_order_relaxed);
     }
 
-    EntryResult RequestCombatEntry(RE::FormID a_follower, RE::FormID a_target, std::uint32_t* a_outHandle) {
+    EntryResult RequestCombatEntry(RE::FormID a_follower, RE::FormID a_target, std::uint32_t* a_outHandle,
+                                   float a_engageRange) {
         if (a_outHandle) *a_outHandle = APMF_API::kInvalidHandle;
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || api->abiVersion < kEntryMinAbi || g_entrySeatRefused.load(std::memory_order_relaxed))
@@ -126,7 +132,12 @@ namespace MFO::APMFBridge {
         if (g_entries.contains(a_follower)) return EntryResult::Standing;
 
         APMF_API::APMF_Param prm{};
-        prm.form = a_target;   // REQUIRED: the target ACTOR. Nothing else is read.
+        prm.form = a_target;   // REQUIRED: the target ACTOR.
+        // Harbinger's range rule (fix/apmf-engagement-held): fval = the engage reaction distance from the
+        // FOLLOWER (min(leash, fEngageOnSightRange)). A target farther than that for 1 s that is not actively
+        // hostile is dropped and the follower's combat ended. Older Harbinger builds do not read it (and 0 =
+        // no range), so it is safe on any version. Negative / NaN is sent as 0.
+        if (a_engageRange > 0.0f) prm.fval = a_engageRange;
         const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_CombatEntry, kOwnBasis, &prm);
         if (h == APMF_API::kInvalidHandle) {
             if (!g_entrySeatRefused.exchange(true)) {

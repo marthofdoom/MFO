@@ -5665,7 +5665,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     gambit (`EngageOnSight.cpp`, below the Scheduler). `CombatEntryOffered` (`:110`) = APMF present,
     ABI >= 14, and no synchronous refusal seen this session (`g_entrySeatRefused`, never reset: the
     seat installs once per process). `RequestCombatEntry` (`:115`) files `RequestEx(follower,
-    kIntent_CombatEntry, kOwnBasis, {form = target})` ONCE per entry (never Repointed: a new target
+    kIntent_CombatEntry, kOwnBasis, {form = target, fval = a_engageRange})` ONCE per entry (never Repointed: a new target
     is a new request, INTEGRATION.md "How combat entry ends"); returns `EntryResult` (Filed /
     Standing / Invalid / SeatAbsent). `EntryEndedLocked` (`:58`) = the pin table's judgement
     (IsClaimLive false once seen live, or never seen live after 15 UNPAUSED sweeps) -> Release ALWAYS,
@@ -5678,6 +5678,15 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     ENDED state this table reports — erasing an entry when it ends instead of marking it loses that
     signal); dropping a handle without Release; a synchronous refusal meaning anything but "seat not
     installed" (keep the Invalid pre-filter, or the gambit goes inert for the session on a bad param).
+    **Held engagement + range rule (feat/mfo-engage-range 2026-10-12, Harbinger fix/apmf-engagement-held):**
+    `RequestCombatEntry(.., a_engageRange)` sends `prm.fval` = `ProbeResult::range` (min(leash,
+    `fEngageOnSightRange`), from the follower); Harbinger drops a not-actively-hostile target beyond it and ends
+    the follower's combat (older builds ignore `fval`). Harbinger also refuses a re-request of a pair IT ended
+    for 60 s (accepts, ends a frame later; never a synchronous refusal, so "refusal = seat absent" still
+    holds). MFO's side: `EngageOnSight::Note::givenAt` + `kReengageHold` (60 s) keep a GONE target in `givenUp`
+    for 60 s; `Excursion.cpp` `TargetPinClaim::endedAt` makes `PinTarget` return `Suppressed` for a pin that
+    ended <60 s ago on a still-alive target. A pin may now end with "no longer a combat target (it was one)",
+    not only lost/dead; nothing in MFO relies on the old set.
   - `apmf/ReentryDeny.cpp` (235, NEW, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5v9) = the
     **ch.22 COMBAT RE-ENTRY DENY** table (ABI v15 `kIntent_CombatReentryDeny`), the retreat's half of
     Harbinger's recipe "StopCombat once + deny re-entry". File-local `g_denies` under its OWN
