@@ -1164,6 +1164,25 @@ namespace MFO::Actuation {
         }
     }
 
+    // The self-flip never-landed bar's release (substrate S1 review R1): ends this follower's heal claim(s) for a_spell AT ITS
+    // OWN CASTER on every hand, and the lock that names it. Called from ChooseHealRoad's bar branch, so the claim is gone
+    // BEFORE CastOn reads the lap's road: otherwise the standing claim pins the hand (handPlan.inFlight) and the in-flight
+    // refresh renews it although healClaim is false (HealRefreshGate is gated on it).
+    void ReleaseSelfHealClaimsForSpell(RE::FormID a_follower, RE::FormID a_spell, const char* a_why) {
+        for (std::size_t h = 0; h < kHandCount; ++h) {
+            const auto ah = ApmfHand(h);
+            if (APMFBridge::GetHealCastSpell(a_follower, ah) != a_spell ||
+                APMFBridge::GetHealCastTarget(a_follower, ah) != 0)   // 0 = self (GetHealCastTarget normalises)
+                continue;
+            g_healExit = "never-landed";
+            ComposedCast::EndHand(a_follower, ah);
+            if (auto it = g_castLock.find(a_follower); it != g_castLock.end() && it->second.hand[h].spell == a_spell)
+                it->second.hand[h] = CastLock{};
+            HealHandEnded(a_follower, h, a_why);
+            g_healExit = nullptr;
+        }
+    }
+
     bool HealStandsOnHand(RE::FormID a_follower, std::size_t a_hand) {
         return a_hand < kHandCount && HealOnHand(a_follower, a_hand).found;
     }

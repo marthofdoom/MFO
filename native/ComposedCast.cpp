@@ -819,12 +819,16 @@ namespace MFO::ComposedCast {
             return HealRoad::DirectNoCombat;
         }
         // THE SELF-FLIP NEVER-LANDED BAR (review F1): a non-Self heal at its own caster whose claim fired repeatedly and
-        // landed nothing (Actuation::HealSelfFlipBarred, cast/HealObs.cpp) is a direct heal for the rest of the fight.
+        // landed nothing (Actuation::HealSelfFlipBarred, cast/HealObs.cpp) is a direct heal until the cast rule lapses or the fight ends.
         if (a_target == a_follower && a_spell->GetDelivery() != RE::MagicSystem::Delivery::kSelf &&
             Actuation::HealSelfFlipBarred(fid, spellID)) {
+            // END THE STANDING CLAIM HERE, before any caller reads this lap's road: left standing it pins the hand and
+            // CastOn's in-flight refresh renews it (HealRefreshGate is gated on healClaim, which is false now). Idempotent.
+            Actuation::ReleaseSelfHealClaimsForSpell(fid, spellID, "its self-flip cast fired but never landed (barred)");
             if (RoadLogDue(fid, spellID, HealRoad::DirectNoSeat))
                 spdlog::warn("[heal] {:08X} {} ({:08X}) at its own caster: its self-flip claim FIRED but NEVER LANDED "
-                             "earlier this fight -- DIRECT road, unanimated, until the fight ends",
+                             "earlier -- the claim is released and the DIRECT road (unanimated) casts it until the cast "
+                             "rule lapses or the fight ends",
                              fid, a_spell->GetName() ? a_spell->GetName() : "?", spellID);
             return HealRoad::DirectNoSeat;
         }

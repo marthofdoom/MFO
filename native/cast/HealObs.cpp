@@ -45,8 +45,8 @@ namespace MFO::Actuation {
         // caster's own FormID (Harbinger's self-flip proxy). If the proxy fires but nothing lands, the rule would
         // recast until the magicka ran out (a concentration heal would re-stream while the HP condition held). The
         // [heal-obs] verdict (effect present now, or the HP rose, ~1 s after each claim fire) is the landing evidence;
-        // kSelfFlipMissLimit consecutive fires (per STREAM for a concentration heal) with none bar the spell for the
-        // rest of the fight. Written on MAIN (the verdict), read on the worker (HealRefreshGate, ChooseHealRoad):
+        // kSelfFlipMissLimit consecutive LASTING fires (per STREAM for a concentration heal) with none bar the spell
+        // until the cast rule lapses or the fight ends. Written on MAIN (the verdict), read on the worker (HealRefreshGate, ChooseHealRoad):
         // under g_healObsMx. Key (caster << 32) | spell.
         constexpr int kSelfFlipMissLimitFF   = 3;
         constexpr int kSelfFlipMissLimitConc = 2;
@@ -283,7 +283,10 @@ namespace MFO::Actuation {
                 // nothing counts as a miss; a landing clears the count. MAIN thread, state under g_healObsMx.
                 if (claimRoad && o.caster == o.target) {
                     auto* sfSp = RE::TESForm::LookupByID<RE::SpellItem>(o.spell);
-                    if (sfSp && sfSp->GetDelivery() != RE::MagicSystem::Delivery::kSelf) {
+                    // ONLY A LASTING heal is judged (concentration, or a duration effect; the `gone` predicate's test, review R2):
+                    // an instant heal leaves nothing to read 1 s later and its only evidence would be a health rise against the
+                    // claim-lap stamp, which heavy damage falsely misses. The passive [castproxy] NOT seen line covers those.
+                    if (sfSp && sfSp->GetDelivery() != RE::MagicSystem::Delivery::kSelf && lasting) {
                         const std::uint64_t k = (static_cast<std::uint64_t>(o.caster) << 32) | o.spell;
                         int misses = 0;
                         bool barNow = false;
@@ -300,8 +303,8 @@ namespace MFO::Actuation {
                         if (barNow)
                             spdlog::warn("[heal] {:08X} {} ({:08X}) at its own caster: the self-flip claim FIRED {} times "
                                          "and NEVER LANDED (no effect on the caster, no health rise) -- the claim is "
-                                         "RELEASED and this spell takes the DIRECT road (unanimated) for the rest of the "
-                                         "fight. A seat or self-flip proxy problem in Harbinger shows here (no masking)",
+                                         "RELEASED and this spell takes the DIRECT road (unanimated) until the cast rule "
+                                         "lapses or the fight ends. A seat or self-flip proxy problem in Harbinger shows here (no masking)",
                                          o.caster, sfSp->GetName() ? sfSp->GetName() : "?", o.spell, misses);
                     }
                 }

@@ -84,7 +84,7 @@ namespace MFO::Actuation {
                 return "Harbinger absent or too old, or the animated heal road is switched off "
                        "(bHealAnimPackage, bEquipToCast)";
             case ComposedCast::HealRoad::DirectNoSeat:
-                return "the heal has no seat in Harbinger";
+                return "self-flip fired but never landed (barred)";
             case ComposedCast::HealRoad::Claim:
                 return "the heal claim road was not taken on this lap (a switch flipped between the road "
                        "choice and the cast)";

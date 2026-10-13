@@ -1688,20 +1688,26 @@ Opus review of `fix/mfo-torch-place-logging` @ cc3716d. Reviewer's finding, verb
 ### MFO-B265 (SEV-5, OPEN, cast/EquipWeigh.cpp) -- "attempt N in a row" can overcount (raised against cc3716d)
 Opus review of `fix/mfo-torch-place-logging` @ cc3716d. Reviewer's finding, verbatim: "'attempt N in a row' can overcount. The streak resets only when a pending placement is seen landing. If the item lands by another road, such as the engine's own AI torch equip with no wish pending, the next failure still counts on from the old streak."
 
-### MFO-B266 (SEV-4, OPEN, ComposedCast.cpp ChooseHealRoad) -- a kTargetLocation self heal still needs DirectNoSeat (F2, raised against db940a0)
-Opus review of `feat/mfo-animated-combat-casts` (substrate S1) @ db940a0. The review log (`agentlogs/review-substrate-s1.md`) records only the summary line "heal road lacks R2-1 never-landed bound + kTargetLocation mirror"; reviewer's reasoning as relayed: Harbinger's SELF-FLIP block (core/ControlMap.cpp) gates on beneficial, non-placement, non-kTargetLocation, and the buff road mirrors that with `BuffSelfRuneWhy`. R2 removed ChooseHealRoad's whole DirectNoSeat test, so a kTargetLocation (rune-shaped) heal at its own caster is now claimed with the caster's FormID although the flip will not serve it. Fix shape: keep DirectNoSeat for `delivery == kTargetLocation` self heals. Surfaced at edit time from MAP.md "COMBAT SUBSTRATE SLICE S1".
+### MFO-B269 (SEV-4, OPEN, ComposedCast.cpp ChooseHealRoad) -- a kTargetLocation self heal still needs DirectNoSeat (F2, raised against db940a0)
+Opus review of `feat/mfo-animated-combat-casts` (substrate S1) @ db940a0. The review log (`agentlogs/review-substrate-s1.md`) was never given a separate "verbatim backlog text" section; its text for this finding is, verbatim, the clause "heal road lacks R2-1 never-landed bound + kTargetLocation mirror" and "APMF ControlMap self-flip block (gate: beneficial, non-placement, non-kTargetLocation; no conc exclusion)". Meaning: Harbinger's flip does not serve a kTargetLocation spell, the buff road mirrors that (`BuffSelfRuneWhy`), and R2 removed ChooseHealRoad's whole DirectNoSeat test. Fix shape: keep DirectNoSeat for kTargetLocation self heals. Surfaced at edit time from MAP.md "COMBAT SUBSTRATE SLICE S1".
 
-### MFO-B267 (SEV-3, OPEN before release, shared proxy pool, Harbinger APMF-B62) -- the self-flip claims draw on the shared 8-slot proxy pool (F3, raised against db940a0)
-Same review. Relayed finding: "pool B62 pressure". Every non-Self heal / buff at the caster or an ally mints a Harbinger delivery-flip proxy from one shared 8-slot pool (APMF-B62); R2, R9 and the AUTO caster candidate raise the demand. Drain APMF-B62 before a release cut. MAP.md cross-ref: cast/BuffRoad.cpp and "COMBAT SUBSTRATE SLICE S1".
+### MFO-B270 (SEV-3, OPEN before release, Harbinger APMF-B62) -- the self-flip claims draw on the shared 8-slot proxy pool (F3, raised against db940a0)
+Same review, verbatim from its log: "pool B62 pressure". Every non-Self heal / buff at the caster or an ally mints a delivery-flip proxy from one shared 8-slot pool (APMF-B62); R2, R9 and the AUTO caster candidate raise the demand. Drain APMF-B62 before a release cut.
 
-### MFO-B268 (SEV-4, OPEN, Scheduler.cpp:1365) -- the retreat-heal path changes behaviour and its comment still says "NoSeat" (F6, raised against db940a0)
-Same review. Relayed finding: "Scheduler.cpp:1365, the retreat-heal behaviour change, and its comment still saying NoSeat". The Scheduler's retreat-heal test `ChooseHealRoad(f, sp, f) == Claim` now answers Claim for a non-Self heal at self (it answered DirectNoSeat), so a retreating healer's self heal is treated as claim-road. Check the intent and fix the comment.
+### MFO-B271 (SEV-4, OPEN, Scheduler.cpp:1365) -- the retreat-heal path changes behaviour and its comment still says "NoSeat" (F6, raised against db940a0)
+Same review, verbatim from its log: "retreat-heal behaviour change". The Scheduler's `ChooseHealRoad(f, sp, f) == Claim` test now answers Claim for a non-Self heal at self (it answered DirectNoSeat). Check the intent and fix the comment.
 
-### MFO-B269 (SEV-5, OPEN, cast/Unanimated.cpp) -- `g_unanimatedLast` is never cleared (raised against db940a0)
-Same review. Relayed finding: the rate-limit map of the UNANIMATED road log is not cleared at revert / dismissal; it grows only by (follower, spell, road) and a stale 30 s window can hide the first line after a load. Fix shape: clear it from `ClearCastLocks`.
+### MFO-B272 (SEV-5, OPEN, cast/Unanimated.cpp) -- `g_unanimatedLast` is never cleared (raised against db940a0)
+Same review. A stale 30 s window can hide the first line after a load; the map grows only by (follower, spell, road). Fix shape: clear it from `ClearCastLocks`.
 
-### MFO-B270 (SEV-5, OPEN, cast/Auto.cpp) -- the R10 "next lap picks the next foe" comment overclaims (raised against db940a0)
-Same review. Relayed finding: the comment says the lock is dropped by CastOn when the cast has fired and the next lap picks the next foe; for an instant spell ShouldApplyTo is always true, so the same nearest foe is picked again (focus fire), and only a DoT moves the series on.
+### MFO-B273 (SEV-5, OPEN, cast/Auto.cpp) -- the R10 "next lap picks the next foe" comment overclaims (raised against db940a0)
+Same review. For an instant spell `ShouldApplyTo` is always true, so the same nearest foe is picked again (focus fire); only a DoT moves the series on.
 
-### MFO-B271 (SEV-5, OPEN, MAP.md) -- MAP's `cast/CastOn.cpp` line count is stale (1742) (raised against db940a0)
-Same review. MAP.md still cites CastOn.cpp as 1657 lines; it is 1742 and past the ~1500 plan-a-split mark (marth 2026-10-05: do not split, `CastOn()` is one function).
+### MFO-B274 (SEV-5, OPEN, MAP.md) -- MAP's `cast/CastOn.cpp` line count was stale (raised against db940a0)
+Same review. MAP said 1657, the file is 1742 (corrected in the closing round; it is past the ~1500 plan-a-split mark, marth 2026-10-05: do not split, `CastOn()` is one function).
+
+### MFO-B275 (SEV-4, OPEN, cast/HealObs.cpp) -- the self-flip bar is cleared mid-fight by the no-cast-rule path (R3, raised against 3859cd8)
+Opus focused re-review of `feat/mfo-animated-combat-casts` @ 3859cd8, verbatim from its log: "Bar cleared mid-fight by Scheduler no-cast-rule ClearCastLock (2019) -> 'rest of the fight' wording wrong, bounded. SEV-4." The WARN text was reworded to "until the cast rule lapses or the fight ends"; the clearing itself is by design and bounded.
+
+### MFO-B276 (SEV-5, OPEN, cast/HealObs.cpp) -- a posted self-flip verdict can land in the next fight (R5, raised against 3859cd8)
+Same re-review, verbatim from its log: "Stale posted verdict into next fight SEV-5." The `[heal-obs]` verdict is posted to the main thread about 1 s after the fire and counts into `g_selfFlipMiss` after the fight's record was cleared.

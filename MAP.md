@@ -748,7 +748,7 @@ per concern:
   **R10** `CastAuto` (`Auto.cpp:636`): AUTO hostile in combat with Harbinger's claim road, a controller and a non-Self delivery is a SERIES: `HostileAutoFoes` (`:302`, shared with the
   direct fan) -> one foe (the foe a standing lock of this spell names, else the nearest in range and sight) -> `CastOn` (the owned offense claim / concentration claim). A Self-delivery
   offense spell, no controller, or no Harbinger keeps the fan (labelled). **R5** no code path was removable: a combat summon reaches `CastSummonOnce` only when `ChooseBuffRoad`
-  said not-Claim (no controller, ABI < 19, ambiguous row, bCastSelf off, Harbinger absent); it now logs why. Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B266..B271 (CastOn.cpp is 1742 lines). **What breaks if you change this:** the sinks' `g_firingRule` gate
+  said not-Claim (no controller, ABI < 19, ambiguous row, bCastSelf off, Harbinger absent); it now logs why. Open findings: `Docs/REVIEW-BACKLOG.md` MFO-B269..B276 (CastOn.cpp is 1742 lines). **What breaks if you change this:** the sinks' `g_firingRule` gate
   (an OOC caller reaching `UnanimatedWhy` mints/releases heal claims); `GetHealCastTarget`'s self->0 (a self heal claim would look like another recipient and be re-claimed every lap).
 - `cast/BuffRoad.cpp` (feat/mfo-remaining-cast-kinds 2026-10-05, widened by feat/mfo-claim-road-summon-ally-rowless 2026-10-05; batch A
   release gate checklist R6/R8/R9/R11) = THE ANIMATED BUFF CLAIM ROAD: `ChooseBuffRoad(follower, spell, log, recipient)` (NotBuff / Claim /
