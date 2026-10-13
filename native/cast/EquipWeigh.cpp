@@ -191,10 +191,23 @@ namespace MFO::Actuation {
     void ReconcileWeighSwitch() {
         if (WeighingEquips()) return;
         bool had = false;
+        std::vector<RE::FormID> held;   // followers whose last ch.17 declaration may still carry a placement
         {
             std::scoped_lock lk(g_placeMx);
             had = !g_place.empty();
+            for (const auto& [fid, v] : g_place)
+                if (!v.empty()) held.push_back(fid);
             g_place.clear();
+            g_skipLogged.clear();
+            g_failStreak.clear();
+        }
+        // Re-send each affected follower's declaration WITHOUT the dropped placement, or Harbinger keeps owning
+        // Shield|Left / Light|Left and, with ServicePreference now a no-op, nothing rebuilds it in combat.
+        for (const RE::FormID fid : held) {
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(fid);
+            if (!actor || !actor->Is3DLoaded()) continue;
+            Logistics::ResendEquipDeclaration(fid);
+            DeclareLedger(actor, "weighting off");
         }
         had = had || !g_watch.empty();
         g_watch.clear();

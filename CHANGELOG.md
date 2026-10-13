@@ -14,6 +14,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **With weighting on, a hand that is casting holds only the spell.** MFO names no weapon for it.
 - **With weighting on, MFO only pushes harder after about 2 seconds.** If the chosen weapon is still not in hand after the game scored it on top, MFO asks Harbinger to block the other picks. Every push is in the log. A push that would overrule a mod ranked above MFO is not sent. It is logged as something to look into.
 - **With weighting on, shields, torches, the switch back from a silver weapon and gear upgrades go through Harbinger too.** Harbinger places each one, and shields and torches go in the left hand. The log says when it lands. One that does not land in 10 seconds is logged and not retried.
+- **Followers keep their weapon after you load a save made mid-fight.**
 - **Silver arrows and bolts work as before.** MFO still puts them on the bow itself.
 - **No more re-equip loop with weighting on.** MFO used to re-send a weapon every 3 seconds when the game took it away in a fight. That is gone.
 - **The focus key no longer points followers at another follower.** When your combat target was one of your own followers, the rest were sent after them. That target is now skipped like it already was for the crosshair.
