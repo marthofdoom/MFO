@@ -1240,6 +1240,7 @@ namespace MFO::APMFBridge {
         ClearHealApproaches();        // ch.24 held-heal approaches: same
         ClearOffenseApproaches();     // ch.24 offense approaches: same
         ClearCastGuards();            // ch.25 cast guards: same (Harbinger never saves them)
+        ClearTauntClaims();           // taunt idle + foe pins: same (own mutex, a leaf; Harbinger never saves them)
         ClearEquipPreferences();      // ch.26 equip preferences: same (own mutex; order g_mx -> g_prefMx, never the reverse)
         g_equipAuthRefused.clear();
         g_selectOverflow.clear();

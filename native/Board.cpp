@@ -38,6 +38,7 @@
 #include "progression/ProgAllocator.h"
 #include "MainThread.h"
 #include "Vocabulary.h"
+#include "Taunt.h"   // MeleeInRightHand: act.taunt is offered only with a melee weapon in the right hand
 #include "Scheduler.h"
 #include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the focus-fire sink
 
@@ -1606,6 +1607,7 @@ namespace MFO::Board {
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
             r.inCombat  = a->IsInCombat();
+            r.meleeInRight = Taunt::MeleeInRightHand(a);   // the picker offers act.taunt only while true
             // Activity glyphs (worker-domain reads; this drain IS the worker, #4).
             // r.looting reads JustLooted, NOT IsLooting: IsLooting is a travel-
             // slot proxy (true the whole walk-there, even on an arrival that

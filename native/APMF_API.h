@@ -89,10 +89,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v22, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v24, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 22;
+    inline constexpr std::uint32_t kABIVersion = 24;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -619,6 +619,23 @@ namespace APMF_API {
                                      //       at the end of this header for the whole contract. REFUSED
                                      //       (kInvalidHandle, logged): APMF < v22, the player, actor 0,
                                      //       [AiCastSeats] EnableScoreSteer=0, or no score seat installed.
+        kIntent_CombatSubstrate = 27, // COMBAT SUBSTRATE (ABI v23, INVARIANTS #0 (j)). Mode: a bounded combat
+                                     //       SUBSTRATE + Harbinger's own deny set. Param: fval = TTL in SECONDS (0 =>
+                                     //       the INI default 6 s, clamped to 15 s). form/ival/target/pos not read.
+                                     //       Harbinger puts the OUT-OF-COMBAT actor into combat against its own
+                                     //       anchor actor so the engine's animated cast road exists, lets only the
+                                     //       three cast leaves run (and only while a DRIVING kIntent_Cast claim
+                                     //       stands), floors both hands at the lowest basis, keeps the actor's own
+                                     //       package moving it, and ends it on the cast claim's first fire (fire-
+                                     //       and-forget), the claim's end, Release, the TTL or death / unload.
+                                     //       REAL COMBAT (a foe in its group, a hit from a non-party actor, the
+                                     //       party in combat) DROPS it with no StopCombat: the fight and the cast
+                                     //       claim go on, and Harbinger releases this claim (IsClaimLive false).
+                                     //       File it beside your kIntent_Cast claim. REFUSED (kInvalidHandle,
+                                     //       logged): APMF < v23, [CombatSubstrate] bCombatSubstrate=0 (set off in APMF.ini),
+                                     //       an unsupported runtime, the player, a negative / NaN fval. A
+                                     //       substrate that cannot open (in combat, unloaded, ...) ends its claim.
+                                     //       See Docs/FACETS.md "Combat substrate".
     };
 
     // ── Cast guard flags (kIntent_CastGuard's param.ival, ABI v21). APPEND-ONLY. ──────
@@ -1425,10 +1442,12 @@ namespace APMF_API {
     //   ival   kIntent_CombatApproach  ABI v19: a CombatApproachFlags bitmask (0 = end on arrival).
     //   ival   kIntent_CastGuard       ABI v21: a CastGuardFlags bitmask. fval: the TTL in seconds.
     //                                  form / pos are not read.
+    //   fval   kIntent_CombatSubstrate ABI v23: the TTL in seconds (0 => INI default; clamped to 15 s).
     //   none   every other Intent      accepted, not yet read by the channel
     //
     // fval is read ONLY by kIntent_Travel (ABI v10), kIntent_CombatReentryDeny (ABI v15),
-    // kIntent_PursuitLeash (ABI v16), kIntent_CombatApproach (ABI v19) and kIntent_CastGuard (ABI v21);
+    // kIntent_PursuitLeash (ABI v16), kIntent_CombatApproach (ABI v19), kIntent_CastGuard (ABI v21) and
+    // kIntent_CombatSubstrate (ABI v23);
     // it stays reserved for a future per-request bias on ch.11, scale on ch.1a, factor on ch.16. target
     // is read by kIntent_PursuitLeash (ABI v16, the anchor), kIntent_CombatApproach (ABI v19, X) and
     // was by kIntent_SelectSpell (retired). pos is read by
@@ -1952,51 +1971,8 @@ namespace APMF_API {
 
     // ── ABI v18: LINE OF SIGHT AND AWARENESS (2026-10-05, ClickUp 86e3h6qj9) ────
     // History: Docs/APMF_API-HISTORY.md#abi-v18-los-origin
-    //
-    // THE OWN RAY. Harbinger's line of sight from a VIEWER actor to a TARGET actor is a
-    // physics ray test, never the engine's cached Actor::HasLineOfSight answer:
-    //   * FROM the viewer's eye point (the engine's own Actor::GetEyeVector origin). There
-    //     is NO view cone and NO facing test: a target behind the viewer is as visible as
-    //     one in front. Line of sight is geometry, not attention.
-    //   * TO three points on the target: its feet + 16 units, 55% and 90% of its height
-    //     (its bound height times its scale; 120 units when that reads as nothing). Each
-    //     ray ends short of its point by the TARGET's own size -- the horizontal half-diagonal
-    //     of its bound box times its scale, plus 16 units, never less than 48 (a humanoid's
-    //     value) and never more than 1024 -- so the target's own body (a giant's, a mammoth's
-    //     or a dragon's included) is never the thing that blocks it. A target closer than
-    //     that margin is VISIBLE.
-    //   * ON the character-controller collision layer, in the viewer's own collision group
-    //     (its own capsule is skipped): "could a walking body travel this line". Walls,
-    //     closed doors and tent walls block; an open doorway, a railing under the line or
-    //     a gate's gaps do not. ANOTHER ACTOR'S BODY on the line blocks that ray.
-    //   * VISIBLE when ANY of the three rays is clear (a target one stair up, or behind a
-    //     low sill, is seen); OCCLUDED only when all three are blocked.
-    //   * A target in a different havok world (an interior seen from outside) is
-    //     OCCLUDED with kLosWhy_OtherWorld.
-    //   * The ray cannot be cast (no attached cell or havok world, a viewer without a
-    //     character controller, an unloaded, disabled or deleted actor, a dead viewer, or
-    //     the engine's pick returning without casting): the verdict is UNAVAILABLE with its
-    //     reason. It is never reported as VISIBLE.
+    // THE OWN RAY, THREADING AND COST, WHO KEEPS A PAIR MEASURED: Docs/APMF_API-REFERENCE.md#abi-v18-own-ray
     // History: Docs/APMF_API-HISTORY.md#abi-v18-los-recipe
-    //
-    // THREADING AND COST. Every ray runs on the game's MAIN thread (the player-Update
-    // thread APMF drains its own queue on). Each ray is one bhkWorld::PickObject call,
-    // which takes the havok world's READ lock itself around the cast (disassembly of all
-    // three builds: AE 0xE86560, SE 0xDA7580, 1.7.104 0x104BE80); Harbinger holds no lock
-    // of its own across a ray and takes no outer world lock. At most 3 rays per pair
-    // measurement. Cached pairs are re-measured at most once every kLosRefreshMs and at
-    // most kLosMaxPairsPerFrame pairs per frame (oldest first). SenseActor's synchronous
-    // sight test has its OWN per-frame cap, kLosMaxSyncPairsPerFrame: past it, the query
-    // answers from the pair's stored verdict (fresh only) or not at all
-    // (kAwareDetail_SightDeferred), and the pair is queued for the pump. So the main-thread
-    // cost is bounded at 3 x (kLosMaxPairsPerFrame + kLosMaxSyncPairsPerFrame) rays per frame
-    // whatever the clients ask.
-    //
-    // WHO KEEPS A PAIR MEASURED. A pair is measured while something ASKS for it: a
-    // GetLineOfSight call, a cast seat or target-pin seat reading it for a claim with an
-    // own-line-of-sight bit, or a SenseActor sight test. A pair nobody has asked for in
-    // kLosInterestMs is dropped. GetLineOfSight is a cheap lock-free read, so a client
-    // asks every time it needs the answer, and the asking is what keeps it warm.
 
     enum LosVerdict : std::uint32_t {
         kLos_Unknown     = 0,   // never measured yet, or the newest measurement is older than
@@ -2064,38 +2040,7 @@ namespace APMF_API {
     };
 
     // ── AWARENESS (SenseActor) ─────────────────────────────────────────────────
-    // "Does this actor SENSE that one?" -- for an engage-on-sight gambit. OMNIDIRECTIONAL
-    // (no view cone, no facing anywhere) and MULTI-SENSE: each sense below is evaluated on
-    // its own and reported as a bit, so a client decides which ones count for it.
-    //
-    //   kSense_Sight      The OWN RAY (above) from the viewer to the target is VISIBLE and the
-    //                     target is within sightRange. Measured now, unless this pair was
-    //                     measured less than kLosRefreshMs ago (that verdict is reused), or this
-    //                     frame's kLosMaxSyncPairsPerFrame is spent (kAwareDetail_SightDeferred:
-    //                     a fresh stored verdict answers, else sight is not sensed this call). It
-    //                     also refreshes the pair for GetLineOfSight.
-    //   kSense_Hearing    Either route (AwareDetail says which):
-    //                     NOISE: the target made a NEW engine noise in the last
-    //                     kAwareNoiseWindowMs, of a level above 0, at a point within
-    //                     hearRadius of the viewer or of the anchor. The noise is the engine's
-    //                     own "detection event", the one record the engine keeps per actor of
-    //                     the last noise it made (written by AIProcess::SetActorsDetectionEvent:
-    //                     a spell's release, a projectile fired or landing, a hit, and the
-    //                     other engine noise sources; its level is the engine's own value).
-    //                     "New" means Harbinger saw that record change: the FIRST time a query
-    //                     names a target, Harbinger records its current noise as a baseline and
-    //                     hears nothing from it (a noise made before Harbinger ever looked is
-    //                     not heard; kAwareDetail_NoiseBaseline marks that call).
-    //                     COMBAT: the target is in combat (Actor::IsInCombat) within hearRadius
-    //                     of the viewer or of the anchor -- a fight is loud.
-    //   kSense_Proximity  The target is within proximityRadius of the viewer (3D distance),
-    //                     whatever is between them.
-    //   kSense_Engaged    The target is in combat and its current combat target IS the viewer
-    //                     or the anchor: it is fighting you.
-    // Nothing here decides hostility, faction or crime: that is the client's call. A target in
-    // a different cell space (interior vs exterior, another interior) senses nothing and sets
-    // kAwareDetail_OtherSpace. The engine's own detection (Actor::RequestDetectionLevel) is
-    // deliberately NOT a sense: its sight half is the facing, cone-limited test this replaces.
+    // See Docs/APMF_API-REFERENCE.md#senseactor-senses ("does this actor sense that one": what each sense means)
     //
     // THREADING: SYNCHRONOUS, TRUE MAIN THREAD ONLY (the sight ray), exactly like the v11 space
     // queries. Any other thread returns kQuery_NotMainThread and does nothing. Cost: at most 3
@@ -2296,39 +2241,7 @@ namespace APMF_API {
     // ═════════════════════════════════════════════════════════════════════════════
     // ABI v22: EQUIP PREFERENCE (kIntent_EquipPreference, ch.26) -- weighting, phase 1
     // ═════════════════════════════════════════════════════════════════════════════
-    // Where the engine decides by a SCORE, Harbinger enforces a wish only by BIASING that score.
-    // In combat the engine rescores every item about once a second with CombatInventoryItem::
-    // CalculateScore (vfunc 0x0C), sorts each engine CATEGORY and equips the top of each while a
-    // hand is free. Melee and ranged weapons and OFFENSIVE spells and staves share category 0;
-    // shields and torches 3; Restore 1; Ward 2 or 3; buff and utility spells 4 or 5.
-    //
-    // WHAT A DECLARATION DOES. While the claim OWNS ch.26 on the actor and the actor is in combat,
-    // each time the engine scores a declared item Harbinger returns the engine's OWN score lifted to
-    // max(own, best * (1 + kEquipPrefStepRel) + kEquipPrefStepAbs), where "best" is the highest score
-    // the engine holds for any other item of the same category list. Items this actor's preferences
-    // or live cast claims lift at an equal or better rank are left out of "best". A lower `rank` is
-    // lifted above a higher one; an item that already leads is returned unchanged. Weapons, shields
-    // and torches are lifted at the weapon-class seats, a staff at the spell/staff seat. A SPELL is
-    // not declarable here (it is ignored): a kIntent_Cast claim's driven spell is lifted the same
-    // way at the spell/staff seat. The ENGINE STILL DECIDES: its range gate, its order table (a
-    // Restore, Ward or buff spell takes its hand before any weapon) and its hand occupancy apply.
-    // Out of combat the scorer does not run and a preference does nothing.
-    //   * NEVER LIFTED: an item the engine scored 0 or less (a bow with no arrows); an item for a
-    //     hand a live kIntent_Cast claim holds (that hand carries only the spell); any item while a
-    //     source INSIDE the score seat outranks this claim on the Equip facet (APMF_Sources.ini; the
-    //     engine itself ranks at "Engine", default 20, a client at 50).
-    //
-    // ESCALATION (kEquipPref_Force). DISCOURAGED. Set it (Repoint with param.ival |= kEquipPref_Force)
-    // only after an OBSERVED miss: the preferred item not in its hand after about two rescore passes
-    // (about 2 s) in combat. Harbinger does not time this; the bit is honoured when set. With it
-    // Harbinger ALSO refuses, at the engine's equip choke point, every engine equip of a weapon,
-    // shield or torch into a hand this claim prefers something for, unless the item is preferred for
-    // a hand it competes for -- RANKED like every other deny: a source that outranks the claim keeps
-    // its equip, and that is a FORCE ANOMALY (warn line, counted, APMF_EquipPrefInfo::forceAnomalies).
-    // The claim's OWN client's equip ties with the claim and stands; that is counted apart, not an
-    // anomaly. The player's own trade/gift menu equips always pass. An unattributed equip passes
-    // unless APMF_Sources.ini says [UnknownSources] Equip=override. Harbinger EQUIPS NOTHING for a
-    // preference: place the item yourself (or declare it with kIntent_EquipAuthority).
+    // See Docs/APMF_API-REFERENCE.md#abi-v22-equip-preference (what a declaration does, never lifted, the escalation)
     //
     // THREADING. SetEquipPreference: any thread; copies `entries` synchronously and never retains
     // the pointer; the declaration reaches the score seats on the next game frame. GetEquipPreferenceState:
@@ -2435,6 +2348,118 @@ namespace APMF_API {
         // under APMF's own lock, no game call). A throw inside returns kEquipPrefState_None and writes
         // nothing.
         std::uint32_t (*GetEquipPreferenceState)(RE::FormID actor, APMF_EquipPrefInfo* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v24: IDLE STATE (kIntent_Idle with a form, ch.12)
+    // ═════════════════════════════════════════════════════════════════════════════
+    // What became of a ch.12 claim's PlayIdle call, per claim HANDLE, so a client can tell an idle
+    // that PLAYED from one nobody can confirm, without a timer of its own. Harbinger judges NOT
+    // CONFIRMED after kIdleConfirmWindowMs of WORLD time (a menu pause does not count) at its
+    // ~250 ms Poll; read the state instead of racing that window. Only a claim filed with
+    // param.form != 0 (or re-pointed to one) has a state. The record stays while the claim is
+    // live, and for kIdleStateGraceMs of world time after its last change once it is not, so a
+    // client sees the terminal state (NotConfirmed, Refused) and not Unknown. A save load or a
+    // new game drops every record. Not saved. APPEND-ONLY: never renumber.
+    enum IdleState : std::uint32_t {
+        kIdleState_Unknown       = 0,  // no record: not a ch.12 claim with a form, a form-free (v1) claim, or
+                                       //   the grace ran out
+        kIdleState_Pending       = 1,  // filed or re-pointed; PlayIdle not called yet (not drained, not the
+                                       //   claim that owns ch.12 on the actor, or the play task has not run)
+        kIdleState_Accepted      = 2,  // PlayIdle returned true; no entry event yet, the window runs
+        kIdleState_Confirmed     = 3,  // PLAYED: the graph raised an entry event no other transition raises
+        kIdleState_ConfirmedWeak = 4,  // the graph raised an entry event OTHER transitions raise too (WEAK
+                                       //   evidence: it may be another state's event, REVIEW-BACKLOG APMF-B35)
+        kIdleState_NotConfirmed  = 5,  // no entry event within the window: Harbinger ENDS the claim
+        kIdleState_NoTransition  = 6,  // a complete graph walk found no transition on the idle's event: it
+                                       //   cannot play on this actor, Harbinger ENDS the claim
+        kIdleState_Refused       = 7,  // PlayIdle returned false (the idle's own conditions failed against the
+                                       //   actor / target, or the actor plays no idle now): Harbinger ENDS it
+        kIdleState_Unconfirmable = 8,  // PlayIdle returned true but no entry event can be resolved
+                                       //   (unconfirmableWhy): whether it played is UNKNOWN; the claim stays
+        kIdleState_NotPlayed     = 9,  // NO engine call: idle v2 is not available (a Repoint is not refused
+                                       //   synchronously), the form is not an IDLE, the target is not a loaded
+                                       //   reference, the actor is not loaded / dead / has no high process.
+                                       //   Harbinger ENDS the claim
+        kIdleState_Carried       = 10, // NOT EVIDENCE: this handle re-played the same idle while no IdleStop had
+                                       //   been seen since its previous play's entry, and this play has no fresh
+                                       //   entry event (one inside the window upgrades it to Confirmed). The claim stays. An
+                                       //   IdleStop since sets kIdleInfo_CarryEnded: the inherited idle ended
+    };
+
+    // Why a play is kIdleState_Unconfirmable (APMF_IdleStateInfo::unconfirmableWhy). APPEND-ONLY.
+    enum IdleUnconfirmable : std::uint32_t {
+        kIdleUnconf_None            = 0,
+        kIdleUnconf_ConfirmOff      = 1,  // [Idle] bIdleConfirm=0 in APMF.ini
+        kIdleUnconf_NotArmed        = 2,  // the self-check refused a vtable the graph read needs
+        kIdleUnconf_NoEntryEvents   = 3,  // the transition(s) on the idle's event raise no notify event, or the
+                                          //   idle names no animation event
+        kIdleUnconf_WalkIncomplete  = 4,  // no transition found, but the graph walk had a blind spot
+        kIdleUnconf_GraphUnreadable = 5,  // the actor has no readable behaviour graph
+        kIdleUnconf_IdSpaceBroken   = 6,  // event ids outside their graph's name table: nothing is judged
+    };
+
+    // How the claim behind a record ended (APMF_IdleStateInfo::endCause). APPEND-ONLY.
+    enum IdleEnd : std::uint32_t {
+        kIdleEnd_None       = 0,  // not ended
+        kIdleEnd_Harbinger  = 1,  // Harbinger released it; `state` says why
+        kIdleEnd_ActorDied  = 2,  // Harbinger released it: the actor died
+        kIdleEnd_Released   = 3,  // released by the client, or (owning ch.12) by the unload sweep or the
+                                  //   facet's last claim going
+        kIdleEnd_Superseded = 4,  // still live, but another claim owns ch.12 on the actor (or it was
+                                  //   re-pointed to form 0): its idle is no longer played. Winning back
+                                  //   plays again (a new play: the record restarts)
+        kIdleEnd_Gone       = 5,  // the claim stopped being live with no end Harbinger saw: released before
+                                  //   its play ran, or dropped (unload sweep) while not owning ch.12.
+                                  //   Stamped up to ~1.25 s after; the grace runs from the stamp
+    };
+
+    inline constexpr std::uint32_t kIdleInfo_Carried = 1u << 0;   // flags: this play was armed with a carry (same
+                                                                   //   handle, same idle, no IdleStop seen since)
+    inline constexpr std::uint32_t kIdleInfo_CarryEnded = 1u << 1; // flags: a carried play saw an IdleStop and no fresh entry
+    inline constexpr std::uint32_t kIdleConfirmWindowMs = 3000;    // informational: the NOT CONFIRMED window
+    inline constexpr std::uint32_t kIdleStateGraceMs    = 10000;   // informational: world ms a non-live record stays
+    inline constexpr std::uint32_t kIdleMsNone          = 0xFFFFFFFFu;
+
+    // GetIdleState output. EXACT LAYOUT (byte-shared): 60 bytes, every field 4 bytes. The CALLER
+    // sets `size` = sizeof(APMF_IdleStateInfo); APMF fills the v24 fields when `size` >=
+    // kIdleStateInfoV24Size (60, never changes) and writes nothing into a smaller struct (the
+    // APMF_TravelLegInfo rule). World ms = game time a menu pause does not advance.
+    struct APMF_IdleStateInfo {
+        std::uint32_t size;               // +0   the CALLER sets = sizeof(APMF_IdleStateInfo)
+        std::uint32_t state;              // +4   an IdleState (the same value the call returns)
+        std::uint32_t handle;             // +8   the handle asked about
+        RE::FormID    actor;              // +12  the claim's actor (0 on kIdleState_Unknown)
+        RE::FormID    idle;               // +16  the idle form of this play (param.form)
+        RE::FormID    target;             // +20  the target of this play (param.target, 0 = none)
+        std::uint32_t unconfirmableWhy;   // +24  an IdleUnconfirmable (kIdleUnconf_None unless Unconfirmable)
+        std::uint32_t endCause;           // +28  an IdleEnd
+        std::uint32_t flags;              // +32  kIdleInfo_* bits
+        std::uint32_t msSincePlay;        // +36  world ms since this play's PlayIdle call (kIdleMsNone = no call)
+        std::uint32_t msToEntry;          // +40  wall ms from the call to the entry event (kIdleMsNone = none;
+                                          //        0 when carried)
+        std::uint32_t msSinceEnd;         // +44  world ms since the end (kIdleMsNone = not ended)
+        std::uint32_t confirmWindowMs;    // +48  the window NOT CONFIRMED is judged on (kIdleConfirmWindowMs)
+        std::uint32_t plays;              // +52  PlayIdle calls made for this handle
+        std::uint32_t seq;                // +56  changes on every change of this record (compare for inequality)
+    };
+    inline constexpr std::uint32_t kIdleStateInfoV24Size = 60;
+    static_assert(sizeof(APMF_IdleStateInfo) == 60, "APMF_IdleStateInfo is 60 bytes, byte-shared with clients");
+    static_assert(offsetof(APMF_IdleStateInfo, unconfirmableWhy) == 24, "unconfirmableWhy at +24");
+    static_assert(offsetof(APMF_IdleStateInfo, msSincePlay)      == 36, "msSincePlay at +36");
+    static_assert(offsetof(APMF_IdleStateInfo, seq)              == 56, "seq at +56");
+
+    // The v24 interface: APMF_API_v22's members verbatim (prefix EXTENSION; v23 added no slot), then
+    // ONE appended slot. BYTE-SHARED with MFO: mirror it byte-identically. A new slot: gate on
+    // `abiVersion >= 24` (INVARIANTS #14b). An older APMF has no query: the claim's liveness
+    // (IsClaimLive) is all it offers, and a live claim there may be CONFIRMED or UNCONFIRMABLE.
+    struct APMF_API_v24 : APMF_API_v22 {
+        // What became of `handle`'s idle (see IdleState). Returns the state and, when `out` is
+        // non-null and `out->size` covers the v24 layout, fills `*out`. Read-only; ANY THREAD (a
+        // copy under APMF's own leaf lock, no game call). A state set on the game thread is seen
+        // at once; Harbinger judges it at its ~250 ms Poll. A throw inside returns
+        // kIdleState_Unknown and writes nothing.
+        std::uint32_t (*GetIdleState)(Handle handle, APMF_IdleStateInfo* out);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the

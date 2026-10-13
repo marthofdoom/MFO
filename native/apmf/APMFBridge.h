@@ -1,6 +1,7 @@
 #pragma once
 #include <RE/Skyrim.h>
 #include <chrono>   // FacetExpiry()'s std::chrono::milliseconds return type
+#include <string>   // TauntIdleReading::detail
 #include <vector>   // DeclareEquipSet's declared worn set
 #include "APMF_API.h"   // APMF_EquipEntry -- DeclareEquipSet's entry type (ABI v8); EquipCategory bits (v9)
 #include "Loadout.h"   // Loadout::HandPick -- HandFor's argument type below
@@ -1605,6 +1606,47 @@ namespace MFO::APMFBridge {
     void ReleaseDeposit(RE::FormID a_follower);
     // Revert / load (pump drained): release every deposit claim and forget them.
     void ClearDepositClaims();
+    // ── TAUNT (taunt slice S2, ClickUp 86e3g6duw, Docs/TAUNT-DESIGN.md) -- apmf/TauntClaims.cpp ──
+    // The claims only; the decisions are native/Taunt.cpp's. Worker or main thread (own mutex, never g_mx). Nothing
+    // is saved. TauntSupported: APMF present AND abiVersion >= 24 (GetIdleState; implies ch.12 idle v2, the pin, the entry,
+    // IsClaimLive and Repoint) AND no synchronous refusal of the idle / pin seat seen this session.
+    bool TauntSupported();
+    // The TAUNTER's idle (keyed by the taunter): ch.12 v2 idle a_idle played at a_target (the foe); the ch.1 hold is filed by ReadTauntIdle once the play is accepted. False =
+    // refused (logged; a refusal of a valid claim marks the seat refused for the session).
+    bool ClaimTauntIdle(RE::FormID a_taunter, RE::FormID a_idle, RE::FormID a_target);
+    // The idle's verdict, from Harbinger's own GetIdleState (ABI 24, kIntent_Idle, FACETS ch.12 "Reading what happened").
+    // MFO times nothing itself. Also files the ch.1 hold the first time the play is ACCEPTED (state Accepted or a
+    // confirmed one), so a refused idle never holds the follower.
+    enum class TauntIdleVerdict {
+        None,      // no idle claim for this taunter
+        Waiting,   // Pending or Accepted (or the record has not appeared yet, inside a short grace): wait
+        Played,    // Confirmed or ConfirmedWeak (marth: weak counts): roll and pin
+        Failed,    // anything else: NotConfirmed, NoTransition, Refused, NotPlayed, Unconfirmable, Carried, Unknown, Superseded, or a
+                   // terminal endCause with no confirmation. No roll, no pin. `detail` carries the state and the reason
+    };
+    struct TauntIdleReading {
+        TauntIdleVerdict verdict = TauntIdleVerdict::None;
+        std::string      detail;   // "state=Refused endCause=Harbinger why=..." (for the log)
+        bool             weak = false;
+        bool             pending = false;   // the raw state is still Pending (PlayIdle not called yet)
+        std::uint32_t    msToEntry = 0xFFFFFFFFu;
+    };
+    TauntIdleReading ReadTauntIdle(RE::FormID a_taunter);
+    // Release the idle, then the hold, and forget them. Idempotent.
+    void ReleaseTauntIdle(RE::FormID a_taunter);
+    // The FOE's claims (keyed by the FOE), FACETS Example 20a: a ch.20 pin on the foe naming the taunter, plus a ch.21
+    // entry only when a_taunterInFoeGroup is false. A second call for the same foe REPOINTS (a second taunter); an
+    // ended handle is released and re-requested.
+    enum class TauntPinResult { New, Repointed, Refused };
+    TauntPinResult PinFoeToTaunter(RE::FormID a_foe, RE::FormID a_taunter, bool a_taunterInFoeGroup);
+    enum class TauntPinState { None, Standing, Ended };   // Ended = Harbinger ended it (IsClaimLive was true, now false)
+    TauntPinState TauntPinStateOf(RE::FormID a_foe);
+    bool TauntPinEverLive(RE::FormID a_foe);   // has the pin ever read live (for the release line)
+    // Release the foe's pin and entry and forget them. Idempotent; the foe's own selector answers again.
+    void ReleaseTauntPin(RE::FormID a_foe);
+    // Revert / load: release and forget every taunt claim (idle and pin tables).
+    void ClearTauntClaims();
+
     // ── HARBINGER LINE OF SIGHT + AWARENESS (ABI v18, feat/mfo-harbinger-los-adopt) -- apmf/Los.cpp ──
     // Contract: APMF_API.h "ABI v18: LINE OF SIGHT AND AWARENESS". Below v18 (or with
     // Config::g_apmfCast off) every call here reports "not usable" and the caller keeps

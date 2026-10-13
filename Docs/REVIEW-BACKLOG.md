@@ -1719,3 +1719,14 @@ Reviewer (verbatim, supplied by the coordinator from the review report): "`Clear
 ### MFO-B276 (SEV-5, OPEN, cast/HealObs.cpp) -- a posted self-flip verdict can land in the next fight (R5, raised against 3859cd8)
 Same re-review, verbatim from its log: "Stale posted verdict into next fight SEV-5." The `[heal-obs]` verdict is posted to the main thread about 1 s after the fire and counts into `g_selfFlipMiss` after the fight's record was cleared.
 Reviewer (verbatim, supplied by the coordinator from the review report): "A verdict posted near fight end can count one stale miss into the next fight's map."
+### MFO-B277 (SEV-4, OPEN, Taunt.cpp) -- a follower leaving the party is not a taunt release reason (raised against 101cf49)
+Opus tier-3 review of `feat/mfo-taunt` @ 101cf49. Reviewer's finding, relayed from its log (design 4.5 item 4 lists "the follower leaves the party" as a release reason): "Release paths ok except 'follower leaves party' (design 4.5.4) missing." A dismissed taunter's pins last until the duration or another reason fires.
+
+### MFO-B278 (SEV-4, OPEN, Taunt.cpp) -- the sense gate barely filters, and ABI 17 has none (raised against 101cf49)
+Same review. Reviewer's finding, relayed: "SenseActor hearing-combat makes sense gate ~vacuous (SEV-4); ABI17 no sense (SEV-4)." Below ABI 18 `SenseOf` is unusable and the foe is rolled with `sense=unknown`.
+
+### MFO-B279 (SEV-4, OPEN, Taunt.cpp / apmf/TauntClaims.cpp) -- IdleForceDefaultState on release, and Repoint on a dead handle (raised against 101cf49)
+Same review (F6, relayed). Releasing a still-held ch.12 idle makes Harbinger send IdleForceDefaultState once, which can cut a clip short, and `PinFoeToTaunter`'s Repoint of a handle that has just died is a silent no-op until the next Ended() read. Text not preserved verbatim in the review log; re-check against the review before draining.
+
+### MFO-B280 (SEV-4, OPEN, Taunt.cpp / apmf/TauntClaims.cpp) -- an Accepted-but-never-confirmed idle holds the follower during the window, and the next attempt follows (raised against 7bdacd3)
+Opus re-review of `feat/mfo-taunt` @ 7bdacd3 (residual of F2). The ch.1 hold is filed once Harbinger accepts the play, so an idle that is Accepted and then never confirmed (NotConfirmed after the 3 s window) holds the follower still for that window, and since there is no cooldown the next attempt can follow it. Consistent with "no cooldown", recorded so the field run knows to look for it.

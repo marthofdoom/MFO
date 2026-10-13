@@ -961,6 +961,13 @@ namespace MFO::Config {
     // Held-heal approach (Harbinger ch.24, ABI v19; apmf/CombatApproach.cpp): the radius R a follower
     // whose heal is held behind a wall closes to around the recipient. fHealApproachRadius, game units.
     inline std::atomic<float> g_healApproachRadius{ 384.0f };
+    // TAUNT (slice S2, Docs/TAUNT-DESIGN.md, ClickUp 86e3g6duw; Taunt.cpp). fTauntDuration = how long a taunted foe
+    // stays pinned to the taunter, seconds (MCM slider 5-60, default 15). fTauntRadius = how far from the taunter an
+    // extra foe may be (INI-only, units, default 1024). iTauntMaxFoes = foes per taunt INCLUDING the chosen one
+    // (INI-only, default 4 = the chosen foe plus up to 3).
+    inline std::atomic<float> g_tauntDuration{ 15.0f };
+    inline std::atomic<float> g_tauntRadius{ 1024.0f };
+    inline std::atomic<int>   g_tauntMaxFoes{ 4 };
     // Combat chase radius (#22): how far from HIMSELF a follower engages a foe,
     // confidence-scaled. Floor well above melee so he always fights an adjacent
     // foe; ceiling lets a bold follower range the field. Stops the distance-blind

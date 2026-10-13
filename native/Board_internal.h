@@ -179,6 +179,7 @@ namespace MFO::Board {
         { Vocab::kCondFoeWithinRange, Str::K::Cond_FoeWithinRange, ParamKind::Distance},
         { Vocab::kCondFoeBeyondRange, Str::K::Cond_FoeBeyondRange, ParamKind::Distance},
         { Vocab::kCondFoeAttackingPlayer, Str::K::Cond_FoeAttackingPlayer, ParamKind::None },
+        { Vocab::kCondFoeAttackingAlly, Str::K::Cond_FoeAttackingAlly, ParamKind::None   },
         { Vocab::kCondFoeAttackingMe, Str::K::Cond_FoeAttackingMe,     ParamKind::None    },
         { Vocab::kCondFoeAttackingMeMelee, Str::K::Cond_FoeAttackingMeMelee,  ParamKind::None },
         { Vocab::kCondFoeAttackingMeRanged, Str::K::Cond_FoeAttackingMeRanged, ParamKind::None },
@@ -230,6 +231,7 @@ namespace MFO::Board {
         { Vocab::kActEquipRanged, Str::K::Act_EquipRanged },
         { Vocab::kActEquipMelee, Str::K::Act_EquipMelee },
         { Vocab::kActEquipSilver, Str::K::Act_EquipSilver },
+        { Vocab::kActTaunt, Str::K::Act_Taunt },   // melee-only: the picker offers it only while a melee weapon is in the right hand
         { Vocab::kActPowerAttack, Str::K::Act_PowerAttack },
         { Vocab::kActFlee, Str::K::Act_Flee },
     };
