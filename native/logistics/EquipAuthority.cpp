@@ -412,6 +412,9 @@ namespace MFO::Logistics {
             // Once-per-deferral latch for the "declaration DEFERRED" line (equip-self-violations); erased when a
             // declaration is actually sent and on forget/revert, so every load logs it again. Worker-serial.
             std::unordered_set<RE::FormID> g_deferLogged;
+            // Once per (follower, item) latch for "hold not declared: no longer carried" (key = id<<32 | form).
+            // Worker-serial; erased per follower on forget, cleared on revert.
+            std::unordered_set<std::uint64_t> g_uncarriedLogged;
             // The worn pieces the LAST build withheld as museum relics (RelicOffBody),
             // per follower, worker-serial like g_lastDeclared (field 0928c, Cicero's
             // Dawnguard Helmet): when the relic verdict flips back, that piece is worn
@@ -614,10 +617,11 @@ namespace MFO::Logistics {
         void ForgetEquipDeclaration(RE::FormID a_follower) {
             g_lastDeclared.erase(a_follower); g_playerPicks.erase(a_follower); g_lastDeclSentAt.erase(a_follower);
             g_lastWithheld.erase(a_follower); g_deferLogged.erase(a_follower);
+            std::erase_if(g_uncarriedLogged, [a_follower](std::uint64_t k) { return static_cast<RE::FormID>(k >> 32) == a_follower; });
         }
         void ResendEquipDeclaration(RE::FormID a_follower) { g_lastDeclared.erase(a_follower); }   // MFO-B41: the change detector only
         void ClearEquipDeclarations() {
-            g_lastDeclared.clear(); g_playerPicks.clear(); g_lastDeclSentAt.clear(); g_lastWithheld.clear(); g_deferLogged.clear();
+            g_lastDeclared.clear(); g_playerPicks.clear(); g_lastDeclSentAt.clear(); g_lastWithheld.clear(); g_deferLogged.clear(); g_uncarriedLogged.clear();
         }
 
         bool IsPlayerPick(RE::FormID a_follower, RE::FormID a_form) {
@@ -766,8 +770,24 @@ namespace MFO::Logistics {
             //    cast holds/claims the left): nothing left, owned or declared --
             //    the hold yields to the cast anyway (YieldForcedLeftHand).
             const RE::FormID holdLeft = a_leftReserved ? 0 : a_holdLeft;
-            RE::TESBoundObject* right = resolve(a_holdRight);
-            RE::TESBoundObject* left  = resolve(holdLeft);
+            // DROP A HOLD THE FOLLOWER NO LONGER CARRIES (Harbinger tier-3 review F2): Harbinger refuses, at
+            // combat selection, every candidate for an OWNED hand that is not in the declared set, so a hold
+            // naming a sold / dropped / looted-away weapon would leave the hand owned with nothing usable.
+            // Not declared -> the hand is unowned and the AI arms it normally; the next equip gambit fire
+            // re-picks. `inv` is read on this same worker call (the builder's own GetInventory above).
+            const auto resolveCarried = [&](RE::FormID a_fid, const char* a_what) -> RE::TESBoundObject* {
+                auto* obj = resolve(a_fid);
+                if (!obj) return nullptr;
+                const auto it = inv.find(obj);
+                if (it != inv.end() && it->second.first > 0) return obj;
+                if (g_uncarriedLogged.insert((static_cast<std::uint64_t>(id) << 32) | a_fid).second)
+                    spdlog::info("[equip-auth] {:08X}: {} {:08X} '{}' not declared -- no longer carried (the hand is "
+                                 "left unowned; the next equip gambit re-picks)", id, a_what, a_fid,
+                                 obj->GetName() ? obj->GetName() : "?");
+                return nullptr;
+            };
+            RE::TESBoundObject* right = resolveCarried(a_holdRight, "right hold");
+            RE::TESBoundObject* left  = resolveCarried(holdLeft, "left hold");
             auto* rightW = right ? right->As<RE::TESObjectWEAP>() : nullptr;
             const bool rightRanged    = rightW && (rightW->IsBow() || rightW->IsCrossbow());
             const bool rightTwoHanded = rightW && (rightRanged || rightW->IsTwoHandedSword() || rightW->IsTwoHandedAxe());
@@ -906,7 +926,7 @@ namespace MFO::Logistics {
                 const bool rightDeclared = right != nullptr;
                 const bool leftDeclared  = left != nullptr || rightTwoHanded;
                 for (const auto& pl : Actuation::PendingPlacements(a_follower)) {
-                    auto* obj = resolve(pl.form);
+                    auto* obj = resolveCarried(pl.form, "placement");
                     if (!obj) continue;
                     std::uint32_t needs = 0;
                     std::uint8_t  slot  = pl.slot;
