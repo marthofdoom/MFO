@@ -208,14 +208,14 @@ namespace MFO::EngageOnSight {
         }
 
         // Is a_actor fighting the party right now (its currentCombatTarget resolves to the
-        // player or a teammate)? The crime filter's exemption. Main thread.
+        // player or a teammate)? The crime filter's exemption. main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state.
         bool FightingParty(RE::Actor* a_actor) {
             auto  tp = a_actor->GetActorRuntimeData().currentCombatTarget.get();   // HOLD
             auto* t  = tp.get();
             return t && (t->IsPlayerRef() || t->IsPlayerTeammate());
         }
 
-        // MAIN THREAD. The ENEMY test (review of 1c50696, SEV-2). Actor::IsHostileToActor
+        // main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state. The ENEMY test (review of 1c50696, SEV-2). Actor::IsHostileToActor
         // alone is the engine's "would attack" predicate (aggression x faction reaction,
         // disassembled AE 0x679F10 by the reviewer): with a bounty, as a stage-4 vampire or
         // a werewolf it names every guard and townsperson, and starting that fight is a
@@ -236,7 +236,7 @@ namespace MFO::EngageOnSight {
         // Hostile to HIM alone (not to the player) still counts -- CONFIRMED by marth
         // 2026-09-25: "yes, there will be fights without player involvement".
         // The Aggression actor value (0 Unaggressive, 1 Aggressive, 2 Very Aggressive,
-        // 3 Frenzied). Same read as ToldToWait. Main thread.
+        // 3 Frenzied). Same read as ToldToWait. main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state.
         float AggressionOf(RE::Actor* a) {
             auto* avo = a->AsActorValueOwner();
             return avo ? avo->GetActorValue(RE::ActorValue::kAggression) : 0.0f;
@@ -249,7 +249,7 @@ namespace MFO::EngageOnSight {
 
         // NEVER ENGAGED PROACTIVELY (marth 2026-10-12): giants, mammoths, carriage drivers,
         // ferrymen, non-combatant servants -- unless FightingParty. The factions / races come
-        // from Config::g_engageOnSightSkip, resolved ONCE on the main thread (RunProbe) on first use.
+        // from Config::g_engageOnSightSkip, resolved ONCE on first use (a thread-safe magic static: the main thread via RunProbe, or the worker via Service's range-drop test).
         struct SkipSet {
             std::vector<RE::FormID> factions;
             std::vector<RE::FormID> races;
@@ -333,7 +333,7 @@ namespace MFO::EngageOnSight {
         // runtime "radius entered" flag. Aggression 0 + the NPC's AIDT aggro-radius behaviour bit
         // + a non-zero attack radius (aggroRadius[1] warn-and-attack or [2] attack) + a reaction
         // to the player or him that is Neutral or Enemy (not Ally / Friend). This is what Requiem
-        // gives skeevers, wolves and bears. Main thread.
+        // gives skeevers, wolves and bears. main thread (RunProbe) or the worker (Service's range-drop test); no main-thread-only state.
         bool IsTerritorial(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc) {
             if (AggressionOf(a) != 0.0f) return false;
             const auto* base = a->GetActorBase();
@@ -389,6 +389,7 @@ namespace MFO::EngageOnSight {
             return true;
         }
 
+        // MAIN THREAD ONLY: Service (the worker) must NEVER call NoteSkip (its static map is unlocked).
         // Per-actor rate limit for the skip line (main thread only, like RunProbe): one line per
         // actor per kSkipLogSecs. Bounded: the map is cleared past kSkipLogMax entries.
         constexpr float kSkipLogSecs = 30.0f;
@@ -617,8 +618,8 @@ namespace MFO::EngageOnSight {
                 if (rangeDrop) {
                     spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} ended past the {:.0f}u range "
                                  "(Harbinger's range drop) -- NOT given up, engaged again once it is back inside "
-                                 "{:.0f}u", NameOf(a_f), a_id, et, note.engageRange,
-                                 note.engageRange * kStartRangeMargin);
+                                 "{:.0f}u{}", NameOf(a_f), a_id, et, note.engageRange,
+                                 note.engageRange * kStartRangeMargin, pinCleared ? "; its pin released" : "");
                 } else
                 spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} is over -- target given up until it "
                              "dies, unloads, stops being hostile or is past fLeashMax from you{}",
@@ -721,7 +722,7 @@ namespace MFO::EngageOnSight {
                            fmt::format(" -- estimate {:.2f} against {} foe(s) that would join, bar {:.2f}", conf, foes,
                                        a_minConfidence));
                 } else if (r.dSelf > r.range * kStartRangeMargin) {
-                    Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
+                    Status(note, a_f, a_id, "armed: nearest enemy is in the edge band (beyond 0.9 x range)", now);
                 } else if (t && !t->IsDead() && !t->IsDisabled()) {
                     std::uint32_t h = 0;
                     switch (APMFBridge::RequestCombatEntry(a_id, r.chosen, &h, r.range)) {

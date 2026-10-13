@@ -72,8 +72,8 @@ namespace MFO::APMFBridge {
             spdlog::info("[engage-on-sight] {:08X}: combat entry against {:08X} ENDED (h={}, {}). Harbinger "
                          "ends it on engine refusal, entry not attempted, combat ended, or a dead / disabled / "
                          "unloaded / unresolvable follower or target, the engage-range rule or its watchdogs; APMF's "
-                         "'[ch.21] entry ended' line names the reason. MFO does not ask again for this target "
-                         "while it stays a candidate.",
+                         "'[ch.21] entry ended' line names the reason. Unless MFO sees it as a range drop (EngageOnSight), "
+                         "it does not ask again for this target while it stays a candidate.",
                          follower, e.target, e.handle, e.everLive ? "was live" : "never seen live");
             // ALWAYS Release before dropping the handle: a no-op on a claim Harbinger already
             // released, and it FIFO-cancels one still pending, so a false "never live"
@@ -133,7 +133,7 @@ namespace MFO::APMFBridge {
         APMF_API::APMF_Param prm{};
         prm.form = a_target;   // REQUIRED: the target ACTOR.
         // Harbinger's range rule (fix/apmf-engagement-held): fval = the engage reaction distance from the
-        // FOLLOWER (min(leash, fEngageOnSightRange)). A target farther than that for 1 s that is not actively
+        // FOLLOWER (min(leash, fEngageOnSightRange)). A target farther than that (Harbinger drops on the first poll, no debounce) that is not actively
         // hostile is dropped and the follower's combat ended. Older Harbinger builds do not read it (and 0 =
         // no range), so it is safe on any version. Negative / NaN is sent as 0.
         if (a_engageRange > 0.0f) prm.fval = a_engageRange;
