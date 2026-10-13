@@ -5681,11 +5681,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     **Held engagement + range rule (feat/mfo-engage-range 2026-10-12, Harbinger fix/apmf-engagement-held):**
     `RequestCombatEntry(.., a_engageRange)` sends `prm.fval` = `ProbeResult::range` (min(leash,
     `fEngageOnSightRange`), from the follower); Harbinger drops a not-actively-hostile target beyond it and ends
-    the follower's combat (older builds ignore `fval`). Harbinger also refuses a re-request of a pair IT ended
-    for 60 s (accepts, ends a frame later; never a synchronous refusal, so "refusal = seat absent" still
-    holds). MFO's side: `EngageOnSight::Note::givenAt` + `kReengageHold` (60 s) keep a GONE target in `givenUp`
-    for 60 s; `Excursion.cpp` `TargetPinClaim::endedAt` makes `PinTarget` return `Suppressed` for a pin that
-    ended <60 s ago on a still-alive target. A pin may now end with "no longer a combat target (it was one)",
+    the follower's combat (older builds ignore `fval`). Harbinger's own end of an engagement never surfaces as a synchronous refusal, so "refusal = seat absent"
+    still holds. MFO adds NO waiting of its own (marth 2026-10-12: "No waiting ever"): the old `givenUp` rule is the
+    only no-re-ask rule and the pin's no-loop rule is unchanged. A pin may now end with "no longer a combat target (it was one)",
     not only lost/dead; nothing in MFO relies on the old set.
   - `apmf/ReentryDeny.cpp` (235, NEW, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5v9) = the
     **ch.22 COMBAT RE-ENTRY DENY** table (ABI v15 `kIntent_CombatReentryDeny`), the retreat's half of
