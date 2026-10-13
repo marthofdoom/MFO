@@ -1730,3 +1730,10 @@ Same review (F6, relayed). Releasing a still-held ch.12 idle makes Harbinger sen
 
 ### MFO-B280 (SEV-4, OPEN, Taunt.cpp / apmf/TauntClaims.cpp) -- an Accepted-but-never-confirmed idle holds the follower during the window, and the next attempt follows (raised against 7bdacd3)
 Opus re-review of `feat/mfo-taunt` @ 7bdacd3 (residual of F2). The ch.1 hold is filed once Harbinger accepts the play, so an idle that is Accepted and then never confirmed (NotConfirmed after the 3 s window) holds the follower still for that window, and since there is no cooldown the next attempt can follow it. Consistent with "no cooldown", recorded so the field run knows to look for it.
+
+### MFO-B281 (SEV-4, OPEN, Board_FieldKit.cpp) -- the gambit picker still offers Taunt while bTaunt=0 (raised against f916d41)
+Opus tier-B review of `fix/mfo-taunt-off-switch` @ f916d41. Outside that brief (it gated dispatch only); marth to decide whether to hide it for the release.
+Reviewer (verbatim): "the gambit board still offers Taunt in the action picker (`Board_internal.h:234`, `Board_FieldKit.cpp:818`). A player can author a Taunt rule that silently does nothing. The only hint is the MCM help sentence on the duration slider plus the one log line."
+
+### MFO-B282 (SEV-5, OPEN, Taunt.cpp) -- the "[taunt] disabled" line never re-arms (raised against f916d41)
+Same review. Reviewer (verbatim): "`s_said` never re-arms. If the INI goes 0→1→0 within one session, the disabled line will not print again. Cosmetic."
