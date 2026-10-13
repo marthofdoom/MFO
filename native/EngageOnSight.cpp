@@ -70,10 +70,6 @@ namespace MFO::EngageOnSight {
         // ── MAIN-THREAD PROBE MIRROR ─────────────────────────────────────────────
         // Written by the main-thread probe, read by the worker. A real lock (#4:
         // cross-thread); a LEAF -- nothing is called while it is held.
-        // Harbinger's re-engage cooldown for a (follower, target) it ended (fix/apmf-engagement-held,
-        // kCooldownMs): MFO does not ask for the pair again inside it, so the churn never starts.
-        constexpr std::chrono::seconds kReengageHold{ 60 };
-
         struct ProbeResult {
             std::uint32_t seq = 0;                  // the post sequence this answers (g_seq)
             std::vector<RE::FormID> candidates;     // every enemy in the leash, nearest (to him) first
@@ -133,10 +129,6 @@ namespace MFO::EngageOnSight {
             // leaves this map only when a probe posted AFTER that (seq > value) reports it
             // GONE (ProbeResult::gone).
             std::unordered_map<RE::FormID, std::uint32_t> givenUp;
-            // When each given-up target was given up. Harbinger refuses a re-request of the same
-            // (follower, target) for 60 s after IT ended an engagement (accepts, then ends it a
-            // frame later), so a GONE target is not released from givenUp before kReengageHold.
-            std::unordered_map<RE::FormID, Clock::time_point> givenAt;
             std::string       status;               // last status KEY (stable text, no live values)
             Clock::time_point statusAt{};
             // The target this gambit pinned through Targeting on its last engage (0 =
@@ -599,13 +591,11 @@ namespace MFO::EngageOnSight {
             if (st == APMFBridge::EntryState::Standing) return true;   // pending: his lap, no logistics
             if (st == APMFBridge::EntryState::Ended) {
                 note.givenUp[et] = note.postedSeq;
-                note.givenAt[et] = now;
                 // The recipe drops both handles. Release the pin only if it is still OURS.
                 const bool pinCleared = note.pinned == et && ReleaseOwnPin(note, a_id);
                 APMFBridge::ForgetCombatEntry(a_id);
                 spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} is over -- target given up until it "
-                             "dies, unloads, stops being hostile or is past fLeashMax from you, and not "
-                             "before the 60 s re-engage hold (Harbinger refuses the pair that long){}",
+                             "dies, unloads, stops being hostile or is past fLeashMax from you{}",
                              NameOf(a_f), a_id, et, pinCleared ? "; its pin released" : "");
             }
         }
@@ -675,12 +665,9 @@ namespace MFO::EngageOnSight {
             // reports it GONE. Seeing it again after that is a FRESH sighting.
             for (auto it = note.givenUp.begin(); it != note.givenUp.end();) {
                 const bool gone = std::find(r.gone.begin(), r.gone.end(), it->first) != r.gone.end();
-                const auto at   = note.givenAt.find(it->first);
-                const bool held = at != note.givenAt.end() && now - at->second < kReengageHold;
-                if (r.seq > it->second && gone && !held) {
+                if (r.seq > it->second && gone) {
                     spdlog::info("[engage-on-sight] {} ({:08X}): {:08X} is gone (dead, unloaded, no longer hostile "
                                  "or past fLeashMax) -- no longer given up", NameOf(a_f), a_id, it->first);
-                    note.givenAt.erase(it->first);
                     it = note.givenUp.erase(it);
                 } else {
                     ++it;

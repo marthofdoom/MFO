@@ -199,7 +199,6 @@ namespace MFO::APMFBridge {
             bool everLive       = false;       // seen IsClaimLive at least once (kept after an end)
             bool ended          = false;       // Harbinger ended it (IsClaimLive went false)
             bool suppressLogged = false;       // one [target-pin] line per ended pin, not per tick
-            std::chrono::steady_clock::time_point endedAt{};   // when PinEndedLocked marked it ENDED
         };
         std::unordered_map<RE::FormID, TargetPinClaim> g_pins;   // guarded by g_mx
 
@@ -236,7 +235,6 @@ namespace MFO::APMFBridge {
             api->Release(p.handle);
             p.handle = APMF_API::kInvalidHandle;
             p.ended  = true;
-            p.endedAt = std::chrono::steady_clock::now();
             return true;
         }
     }
@@ -278,22 +276,6 @@ namespace MFO::APMFBridge {
                                      a_follower, a_target);
                     }
                     return PinResult::Suppressed;
-                }
-                // Harbinger refuses a re-request of the same (follower, target) for 60 s after IT ended
-                // the engagement (accepts, ends it a frame later), and a live, enabled target may have
-                // been dropped on purpose ("no longer a combat target (it was one)"). Re-pinning inside
-                // that window only churns, so it waits. A dead / disabled target never reaches here live.
-                if (std::chrono::steady_clock::now() - p.endedAt < std::chrono::seconds(60)) {
-                    const auto* t = RE::TESForm::LookupByID<RE::Actor>(a_target);
-                    if (t && !t->IsDead() && !t->IsDisabled()) {
-                        if (!p.suppressLogged) {
-                            p.suppressLogged = true;
-                            spdlog::info("[target-pin] {:08X}: gambit re-chose {:08X}, whose pin Harbinger ended "
-                                         "while it is alive -- NOT re-pinned for 60 s (Harbinger's re-engage "
-                                         "cooldown). (Logged once per ended pin.)", a_follower, a_target);
-                        }
-                        return PinResult::Suppressed;
-                    }
                 }
                 spdlog::info("[target-pin] {:08X}: {:08X} is trackable again (re-chosen by the gambit) -- re-pinning",
                              a_follower, a_target);

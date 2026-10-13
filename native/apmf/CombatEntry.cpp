@@ -10,10 +10,9 @@
 // fight" / "How combat entry ends". One claim per follower. MFO never Repoints it: a new
 // target is a NEW request (INTEGRATION.md: "To try again, send a NEW RequestEx. An ended
 // handle is dead"), and an ended entry is only ever forgotten here, never re-filed.
-// An entry may also end because Harbinger HELD-ENGAGEMENT rules fired (range drop, no path progress,
-// arrived but not fighting): it then refuses the same (follower, target) for 60 s, accepting the
-// request and ending it a frame later (never a synchronous refusal). The no-re-ask floor lives in
-// EngageOnSight's given-up set (kReengageHold).
+// An entry may also end because Harbinger's held-engagement rules fired (range drop, no path progress,
+// arrived but not fighting). Never a synchronous refusal. Engage-on-sight is an aggressive setting: MFO
+// adds no waiting of its own (marth 2026-10-12), the given-up set in EngageOnSight is the only no-loop rule.
 #include "APMFBridge.h"
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
@@ -74,7 +73,7 @@ namespace MFO::APMFBridge {
                          "ends it on engine refusal, entry not attempted, combat ended, or a dead / disabled / "
                          "unloaded / unresolvable follower or target, the engage-range rule or its watchdogs; APMF's "
                          "'[ch.21] entry ended' line names the reason. MFO does not ask again for this target "
-                         "while it stays a candidate (and never inside Harbinger's 60 s re-engage cooldown).",
+                         "while it stays a candidate.",
                          follower, e.target, e.handle, e.everLive ? "was live" : "never seen live");
             // ALWAYS Release before dropping the handle: a no-op on a claim Harbinger already
             // released, and it FIFO-cancels one still pending, so a false "never live"

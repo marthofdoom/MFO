@@ -420,12 +420,11 @@ namespace MFO::APMFBridge {
     // if that pin had gone LIVE -- MFO's foe selector skips dead / disabled / lost /
     // unloaded foes, so being re-chosen means MFO sees it trackable again. A pin that
     // never went live returns Suppressed until the gambit chooses a DIFFERENT foe (a fresh
-    // choice) or the pin is released (INTEGRATION.md "How the pin ends"). A pin that went live but
-    // ended on a still-alive target is also Suppressed for 60 s (Harbinger's re-engage cooldown).
+    // choice) or the pin is released (INTEGRATION.md "How the pin ends").
     enum class PinResult {
         Pinned,       // a NEW pin was filed (first pin, a changed target, or a re-pin)
         Unchanged,    // already pinned (or pending) on this target: not an action
-        Suppressed,   // an ended pin on this same target that never went live, or ended <60 s ago on a live target: not re-pinned
+        Suppressed,   // an ended pin that never went live, on this same target: not re-pinned
         Invalid,      // no follower / no target / self-target: nothing filed
         SeatAbsent,   // APMF absent, ABI < 13, or a synchronous refusal (= ch.20 seat not
                       // installed -- the only synchronous refusal MFO's valid params can hit)
