@@ -375,6 +375,13 @@ namespace MFO::ProgAllocator {
     // Addon detected AND economy initialized — every verb gates on this.
     bool Active();
 
+    // EQUIP-SELF-VIOLATIONS (2026-10-13): true while this follower is ENROLLED and this session's guarded
+    // reapply has not yet run for him (his base perks are not back, so any perk-derived read is blank).
+    // ANY THREAD: reads a mutex-guarded value mirror that the main thread republishes whenever `applied`
+    // changes (PublishReapplyPending); never touches g_prog. The ch.17 equip declaration defers its FIRST
+    // build on it (logistics/EquipAuthority.cpp).
+    bool ReapplyPending(RE::FormID a_actorID);
+
     // kPostLoadGame/kNewGame, main thread, AFTER the co-save loaded: start
     // the level poll and queue the guarded reapply for every enrolled record.
     // Also re-reads the economy so a save's persisted GLOB values apply live.

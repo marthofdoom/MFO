@@ -427,6 +427,7 @@ namespace MFO::ProgAllocator {
         // 5. ERASE. One main-thread closure: the poll, the board views and SaveCallback
         // (all main thread) see the record whole or not at all.
         g_prog.erase(it);
+        PublishReapplyPending();
         {
             std::scoped_lock lk(g_hmsFireMx);
             g_hmsFiredMask.erase(a_actorID);

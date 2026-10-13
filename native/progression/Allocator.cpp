@@ -5,6 +5,7 @@
 // (2026-09-24) moved the other concerns to their own files in progression/.
 #include "PCH.h"
 #include <cmath>     // std::floor / std::isfinite — not guaranteed via the PCH
+#include <unordered_set>   // g_pendingReapply
 #include "ProgAllocator.h"
 #include "ProgAllocator_internal.h"   // the split family's shared substrate
 #include "Progression.h"
@@ -168,6 +169,7 @@ namespace MFO::ProgAllocator {
         // strippedPerks unions), or every native node re-locks on the Board and
         // the reapply defers MFO's rank behind the returned native.
         for (auto& [id, st] : g_prog) { st.applied = false; st.nativeHeld = false; }
+        PublishReapplyPending();
 
         ++g_pollGen;
         g_pollFrames = kPollFrames;
@@ -846,8 +848,26 @@ namespace MFO::ProgAllocator {
                      loaded, droppedActor, droppedPerk, droppedAv, g_lastPlayerLevel);
     }
 
+    namespace {
+        std::mutex                         g_pendingMx;
+        std::unordered_set<RE::FormID>     g_pendingReapply;   // under g_pendingMx
+    }
+    void PublishReapplyPending() {
+        std::unordered_set<RE::FormID> now;
+        if (g_ready)
+            for (const auto& [id, st] : g_prog)
+                if (st.enrolled && !st.applied) now.insert(id);
+        std::scoped_lock lk(g_pendingMx);
+        g_pendingReapply = std::move(now);
+    }
+    bool ReapplyPending(RE::FormID a_actorID) {
+        std::scoped_lock lk(g_pendingMx);
+        return g_pendingReapply.count(a_actorID) != 0;
+    }
+
     void ClearAll() {
         g_prog.clear();
+        PublishReapplyPending();
         g_lastPlayerLevel = 0;
         g_playerHmsTotalLast = 0.0f;   // §HMS Phase 3: re-seeded on the next load/observe
         ++g_pollGen;   // orphan any in-flight poll chain (MainThread::Clear

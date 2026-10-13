@@ -46,4 +46,9 @@ namespace MFO::Scheduler {
     // picker, the action and the ch.23 leash hold all read ONE line. WORKER ONLY (#4).
     float ReachHoldSlack(RE::FormID a_follower);
 
+    // Party combat (player, any managed follower, or the [sense] foe tally): the same flag the combat
+    // table gates on. WORKER ONLY (plain bool written by Scheduler::Tick, read by Loadout::Tick on the
+    // same serial pump job).
+    bool PartyCombat();
+
 }

@@ -6,6 +6,7 @@
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
 #include "Lotd.h"               // HoldFromSale: a museum-needed relic is never MFO's armor choice
 #include "PlayerGiven.h"        // ... unless the PLAYER gave it / put it on him
+#include "progression/ProgAllocator.h"   // ReapplyPending: defer the FIRST declaration until his perks are back
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
 #include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
@@ -723,6 +724,22 @@ namespace MFO::Logistics {
                 g_lastDeclared.erase(id);
                 g_lastDeclSentAt.erase(id);   // no drift hold against the first loaded tick
                 g_handedPick = {};            // F10's hand-off is still ONE tick's, consumed or not
+                return;
+            }
+
+            // EQUIP-SELF-VIOLATIONS (marth 2026-10-13): NEVER BUILD THE SCOPE FROM A PERK-LESS ACTOR. The
+            // `denied` mask and the hold roles are perk-derived (roles.offHand / melee), and base-form perks do
+            // not survive a load until the guarded progression reapply runs -- the 2026-10-13 Cicero deck run
+            // declared denied=none ~3 s before `[prog] reapply` and a shield passed for 11 s. While his reapply is
+            // pending nothing is sent (the claim above stands, exactly as in the 3D-absent skip: APMF allows
+            // everything on a fresh claim) and the cache is dropped so the first post-reapply build is sent.
+            if (ProgAllocator::ReapplyPending(id)) {
+                static std::unordered_set<RE::FormID> s_deferLogged;   // worker-serial like g_lastDeclared
+                if (s_deferLogged.insert(id).second)
+                    spdlog::info("[equip-auth] {:08X}: declaration DEFERRED -- his progression perks are not reapplied "
+                                 "yet (the scope would be built from a perk-less actor)", id);
+                g_lastDeclared.erase(id);
+                g_handedPick = {};
                 return;
             }
 
