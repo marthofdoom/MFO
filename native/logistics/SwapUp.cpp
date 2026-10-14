@@ -265,6 +265,14 @@ namespace MFO::Logistics {
                         b = { obj, primary, secondary };
                 }
                 for (auto& [k, b] : best) if (b.obj) { keepArmor.insert(b.obj); bestBySlot[k] = b.obj; }
+                // The ring / amulet the declaration CHOSE (EquipAuthority.cpp ChooseJewelry): never sold from under it,
+                // for a non-mage too (his jewelry used to fall through to "sellable junk" above).
+                if (!Config::g_dollsMode.load()) {
+                    RE::TESObjectARMO *chosenRing = nullptr, *chosenAmulet = nullptr;
+                    DeclaredJewelry(a_follower, a_state, chosenRing, chosenAmulet);
+                    if (chosenRing)   keepArmor.insert(chosenRing);
+                    if (chosenAmulet) keepArmor.insert(chosenAmulet);
+                }
             }
 
             // THE MAGE BACKUP (review round 1 on 4f23c30, the caster backup-dagger

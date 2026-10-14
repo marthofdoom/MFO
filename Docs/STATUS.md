@@ -1473,6 +1473,9 @@ Field-test instance: **Tuxbornrc1** on the deck
   carries the CORRECTED pass criterion — the old `[ch.9-redirect]`-within-one-frame test
   is WRONG (it dedups on transition) and must not be used.
 
+### 2026-10-14 -- `fix/mfo-jewelry-all` (NOT merged): every follower now picks a ring and an amulet
+The declaration (`logistics/EquipAuthority.cpp` `ChooseJewelry`) names the most useful carried ring/amulet instance for ANY follower, not just mages (marth: "Followers don't seem to consider jewelry slots"). With MEO an empty ring/amulet is worn as a gem host. The sell keep set protects the chosen pieces. Open: the ch.17 entry is base-form only until Harbinger's instance-id field lands; the legacy APMF-absent path is unchanged. NEEDS LOCAL (Deck): a non-mage with an enchanted ring in his pack after a cell load; an MEO follower with an empty ring.
+
 ### What is merged but UNRELEASED
 
 | repo | branch | what it fixes | state |

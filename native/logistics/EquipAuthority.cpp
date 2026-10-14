@@ -503,7 +503,11 @@ namespace MFO::Logistics {
             // mage uses MageClothingSlot 0-5 (jewelry included). Null = nothing for that slot.
             // ComputeOwnedGearPick is untouched (the legacy APMF-absent road and every other
             // caller keep it); the slate is a SIBLING read only by RefreshEquipDeclaration.
-            struct GearSlate { RE::TESObjectARMO* slot[6] = {}; bool mage = false; };
+            // jewelInst[0] / [1] = the inventory INSTANCE (ExtraDataList + ExtraUniqueID) behind slot[4] / slot[5] when
+            // ChooseJewelry chose it (null / 0 = a base-form pick). The ch.17 entry names a BASE form today; a later ABI
+            // field can carry this identity (Harbinger instance-id work) without re-deriving the choice.
+            struct JewelInst { RE::ExtraDataList* xl = nullptr; std::uint16_t uid = 0; };
+            struct GearSlate { RE::TESObjectARMO* slot[6] = {}; bool mage = false; JewelInst jewelInst[2]; };
 
             // RULE 5's OVERLAP TEST, ONE copy for the declaration and the sell side: a WORN
             // non-shield piece rides in the declaration when neither the pick nor any other
@@ -515,6 +519,191 @@ namespace MFO::Logistics {
                 for (std::size_t i = 0; i < a_n; ++i)
                     if (a_slate[i] != a_ar && SlotsOverlap(a_ar, a_slate[i])) return true;
                 return false;
+            }
+
+            // ── JEWELRY FOR EVERY FOLLOWER (marth 2026-10-14: "Followers don't seem to consider jewelry
+            // slots (except mages) ... a piece of jewelry with the right enchants could be useful") ──
+            // The rated slate above only ever names head/body/hands/feet, so a non-mage never chose a
+            // ring or an amulet (it only kept whatever he happened to wear, rule 5). USEFULNESS SCORE of
+            // a piece = sum over its enchantment's beneficial effects of magnitude x unit weight x
+            // RELEVANCE to THIS follower: a skill fortify (and its Modifier / PowerModifier AVs) is
+            // weighted by his standing in that skill (base AV / 100, so a one-hander values Fortify
+            // One-handed, a mage Fortify Destruction); a magic school counts only for a caster
+            // (IsCasterFollower, else 0); Magicka only for a caster; non-combat skills (smithing,
+            // alchemy, speech ...) 0; Health / Stamina, regen rates, resists, armor rating and carry
+            // weight carry a flat positive unit weight. Detrimental / hostile effects are skipped (a
+            // curse is not a boost, as SchoolMatchScore). Pure form-data reads, worker-safe. The
+            // enchantment is the INSTANCE's when the inventory entry carries one (a player-enchanted
+            // ring), else the base form's.
+            // EMPTY JEWELRY AS A GEM HOST (marth 2026-10-14: "they'll need to equip empty jewelry so that they
+            // can socket it"): with MEO present and its carried-gem support, an UNENCHANTED ring / amulet scores a
+            // small constant (kEmptyHostScore, below any genuinely enchanted piece) so it is worn when nothing
+            // better exists and MEO has a socket target. Without MEO it scores 0 and is not worn.
+            constexpr float kEmptyHostScore = 0.05f;
+            // The enchantment LIVE on an inventory instance: its ExtraEnchantment (a player-enchanted piece or an
+            // MEO-socketed one) if the list carries one, else the base form's. Explicit extra-list read (the
+            // fork's InventoryEntryData::GetEnchantmentCharge reads the same ExtraEnchantment ahead of the base).
+            const RE::EnchantmentItem* InstanceEnchant(const RE::TESObjectARMO* a_ar, RE::ExtraDataList* a_xl) {
+                if (a_xl)
+                    if (auto* xe = a_xl->GetByType<RE::ExtraEnchantment>(); xe && xe->enchantment) return xe->enchantment;
+                return a_ar ? a_ar->formEnchanting : nullptr;
+            }
+            float JewelryScore(RE::Actor* a_follower, bool a_caster, const RE::TESObjectARMO* a_ar,
+                               const RE::EnchantmentItem* ench) {
+                if (!a_follower || !a_ar) return 0.0f;
+                auto* avo = a_follower->AsActorValueOwner();
+                if (!avo) return 0.0f;
+                if (!ench)   // unenchanted: a gem host only with MEO's carried-gem support
+                    return (MEOBridge::Available() && MEOBridge::CarriedGemsSupported()) ? kEmptyHostScore : 0.0f;
+                using AV = RE::ActorValue;
+                const auto standing = [&](AV a_skill) {   // 0..1.5 of the follower's BASE skill / 100
+                    return std::clamp(avo->GetBaseActorValue(a_skill) / 100.0f, 0.0f, 1.5f);
+                };
+                float total = 0.0f;
+                for (const auto* e : ench->effects) {
+                    const auto* mgef = e ? e->baseEffect : nullptr;
+                    if (!mgef) continue;
+                    using Flag = RE::EffectSetting::EffectSettingData::Flag;
+                    if (mgef->data.flags.any(Flag::kDetrimental) || mgef->data.flags.any(Flag::kHostile)) continue;
+                    using Arch = RE::EffectArchetypes::ArchetypeID;
+                    const auto arch = mgef->data.archetype;
+                    if (arch != Arch::kValueModifier && arch != Arch::kPeakValueModifier &&
+                        arch != Arch::kDualValueModifier) continue;   // not a stat boost (waterbreathing, light ...)
+                    const float mag = e->GetMagnitude();
+                    if (!(mag > 0.0f)) continue;
+                    // a magic school (cost / power fortify): the caster's top skills, nobody else's
+                    if (const AV school = EffectBoostSchool(mgef); school != AV::kNone) {
+                        if (a_caster) total += mag * standing(school);
+                        continue;
+                    }
+                    float unit = 0.0f;   // flat unit weight, or
+                    float rel  = 1.0f;   // the standing of the skill the AV fortifies
+                    switch (mgef->data.primaryAV) {
+                    case AV::kOneHanded: case AV::kOneHandedModifier: case AV::kOneHandedPowerModifier:
+                        unit = 1.0f; rel = standing(AV::kOneHanded); break;
+                    case AV::kTwoHanded: case AV::kTwoHandedModifier: case AV::kTwoHandedPowerModifier:
+                        unit = 1.0f; rel = standing(AV::kTwoHanded); break;
+                    case AV::kArchery: case AV::kMarksmanModifier: case AV::kMarksmanPowerModifier:
+                        unit = 1.0f; rel = standing(AV::kArchery); break;
+                    case AV::kBlock: case AV::kBlockModifier: case AV::kBlockPowerModifier:
+                        unit = 1.0f; rel = standing(AV::kBlock); break;
+                    case AV::kHeavyArmor: case AV::kHeavyArmorModifier: case AV::kHeavyArmorPowerModifier:
+                        unit = 1.0f; rel = standing(AV::kHeavyArmor); break;
+                    case AV::kLightArmor: case AV::kLightArmorModifier: case AV::kLightArmorPowerModifier:
+                        unit = 1.0f; rel = standing(AV::kLightArmor); break;
+                    case AV::kSneak: case AV::kSneakingModifier: case AV::kSneakingPowerModifier:
+                        unit = 1.0f; rel = standing(AV::kSneak); break;
+                    case AV::kHealth: case AV::kStamina:                    unit = 0.5f; break;
+                    case AV::kMagicka:                                      unit = a_caster ? 0.5f : 0.0f; break;
+                    case AV::kHealRate: case AV::kStaminaRate:              unit = 5.0f; break;
+                    case AV::kMagickaRate:                                  unit = a_caster ? 5.0f : 0.0f; break;
+                    case AV::kHealRateMult: case AV::kStaminaRateMult:      unit = 1.0f; break;
+                    case AV::kMagickaRateMult:                              unit = a_caster ? 1.0f : 0.0f; break;
+                    case AV::kResistFire: case AV::kResistFrost: case AV::kResistShock: case AV::kResistMagic:
+                        unit = 1.0f; break;
+                    case AV::kPoisonResist: case AV::kResistDisease:        unit = 0.3f; break;
+                    case AV::kDamageResist:                                 unit = 0.3f; break;
+                    case AV::kCarryWeight:                                  unit = 0.3f; break;
+                    default: break;   // every other AV (non-combat skills, speed, ...) is worth 0
+                    }
+                    total += mag * unit * rel;
+                }
+                return total;
+            }
+
+            // The ring (logical slot 4) and amulet (5) the declaration names, folded into the slate
+            // (a_gs.slot[4] / [5]) AFTER the rated / mage slate was built. Per slot: the best CARRIED piece
+            // by JewelryScore, a piece declared only when its score > 0 -- with nothing scoring, the slot
+            // stays as the slate left it (non-mage: empty, so rule 5 declares whatever he WEARS; a worn
+            // ring is never stripped for no reason). Ties go to the worn piece, then the higher FormID.
+            // Filtered like the rest of the builder: creature armor, a museum relic (RelicOffBody),
+            // blacklisted apparel, and an excluded artifact while bLootSpecialItems is off unless it is
+            // worn or the player's (Catalog::IsExcluded, as the weapon branches). PLAYER AGENCY: a worn
+            // piece the player put on him (g_playerPicks / PlayerGiven) stands for a non-mage; for a mage
+            // 4b's playerPieceWins already guards the slot. MAGE RECONCILIATION: MageBestPerSlot already
+            // put its value-ranked ring / amulet in the slate; the usefulness winner replaces it only if
+            // its score is STRICTLY higher than the mage pick's own JewelryScore (so exactly one of the
+            // two methods declares each slot, the higher-scoring, the mage's on a tie). A mage candidate
+            // must also pass MageApparelBuyKey (villain-coded / blacklisted / rated pieces stay out).
+            void ChooseJewelry(RE::Actor* a_follower, const FollowerState& a_state, GearSlate& a_gs,
+                               const RE::TESObjectREFR::InventoryItemMap& a_inv) {
+                const RE::FormID id = a_follower->GetFormID();
+                const bool caster = IsCasterFollower(a_state);
+                const std::uint8_t top2 = a_gs.mage ? TopTwoSchoolMask(a_follower) : 0;
+                const bool schoolPrimary = Config::g_mageApparelStrictSchool.load();
+                const bool allowVillain  = a_gs.mage && IsNecromancerFollower(a_state);
+                const bool meoGems = MEOBridge::Available() && MEOBridge::CarriedGemsSupported();
+                const auto uidOf = [](RE::ExtraDataList* a_xl) -> std::uint16_t {
+                    auto* u = a_xl ? a_xl->GetByType<RE::ExtraUniqueID>() : nullptr;
+                    return u ? u->uniqueID : 0;
+                };
+                for (const int slot : { 4, 5 }) {
+                    auto* worn = WornInLogicalSlot(a_follower, slot);
+                    // The worn instance (its list carries ExtraWorn; a single-instance entry has none to find).
+                    RE::ExtraDataList* wornXl = nullptr;
+                    if (worn) {
+                        if (const auto it = a_inv.find(worn); it != a_inv.end() && it->second.second && it->second.second->extraLists) {
+                            for (auto* xl : *it->second.second->extraLists)
+                                if (xl && xl->GetByType<RE::ExtraWorn>()) { wornXl = xl; break; }
+                        }
+                    }
+                    if (!a_gs.mage && worn && !RelicOffBody(a_follower, a_state, worn) &&
+                        (IsPlayerPick(id, worn->GetFormID()) || PlayerGiven::IsPlayerEquipped(id, worn->GetFormID()))) {
+                        a_gs.slot[slot] = worn;   // the player's choice stands
+                        a_gs.jewelInst[slot - 4] = { wornXl, uidOf(wornXl) };
+                        continue;
+                    }
+                    // MEO GUARD: MEO exposes no "reconcile in progress" signal (MEOBridge has none), so a worn piece
+                    // that is GEMMED in MEO's carried-gem cache is kept as it is -- swapping it would race the gem
+                    // moves MEO's reconcile / QueueGemMove make onto it.
+                    if (meoGems && worn && uidOf(wornXl) != 0 &&
+                        MEOBridge::IsCarriedGemmed(id, worn->GetFormID(), uidOf(wornXl)) &&
+                        !RelicOffBody(a_follower, a_state, worn)) {
+                        a_gs.slot[slot] = worn;
+                        a_gs.jewelInst[slot - 4] = { wornXl, uidOf(wornXl) };
+                        continue;
+                    }
+                    RE::TESObjectARMO* best = nullptr; float bestScore = 0.0f; JewelInst bestInst; bool bestIsWorn = false;
+                    for (auto& [obj, data] : a_inv) {
+                        if (!obj || data.first <= 0) continue;
+                        auto* ar = obj->As<RE::TESObjectARMO>();
+                        if (!ar || IsCreatureArmor(ar) || ar->IsShield() || MageClothingSlot(ar) != slot) continue;
+                        if (RelicOffBody(a_follower, a_state, obj) || IsBlacklistedApparel(ar)) continue;
+                        if (ar != worn && !Config::g_lootSpecialItems.load() && Catalog::IsExcluded(ar->GetFormID()) &&
+                            !PlayerGiven::IsPlayerGiven(id, ar->GetFormID())) continue;
+                        if (a_gs.mage) {
+                            int t = 0; std::int32_t m = 0;
+                            if (!MageApparelBuyKey(ar, top2, schoolPrimary, allowVillain || ar == worn, t, m)) continue;
+                        }
+                        // EVERY INSTANCE is scored on its own (a gemmed copy is not the plain copy of the same base);
+                        // an entry with no extra lists is one plain instance.
+                        std::vector<RE::ExtraDataList*> insts;
+                        if (data.second && data.second->extraLists)
+                            for (auto* xl : *data.second->extraLists) insts.push_back(xl);
+                        if (insts.empty()) insts.push_back(nullptr);
+                        for (auto* xl : insts) {
+                            const std::uint16_t uid = uidOf(xl);
+                            if (meoGems && uid != 0 && MEOBridge::RemovalHeld(id, ar->GetFormID(), uid)) continue;   // on its way out
+                            const float sc = JewelryScore(a_follower, caster, ar, InstanceEnchant(ar, xl));
+                            if (!(sc > 0.0f)) continue;
+                            const bool isWorn = (ar == worn) && (xl == wornXl);
+                            if (!best || sc > bestScore || (sc == bestScore && isWorn && !bestIsWorn) ||
+                                (sc == bestScore && !bestIsWorn && ar->GetFormID() > best->GetFormID())) {
+                                best = ar; bestScore = sc; bestInst = { xl, uid }; bestIsWorn = isWorn;
+                            }
+                        }
+                    }
+                    if (!best) continue;
+                    if (a_gs.mage && a_gs.slot[slot]) {
+                        RE::ExtraDataList* mxl = nullptr;
+                        if (const auto it = a_inv.find(a_gs.slot[slot]); it != a_inv.end() && it->second.second && it->second.second->extraLists)
+                            for (auto* xl : *it->second.second->extraLists) { if (xl && (a_gs.slot[slot] != worn || xl == wornXl)) { mxl = xl; break; } }
+                        const float mageScore = JewelryScore(a_follower, caster, a_gs.slot[slot], InstanceEnchant(a_gs.slot[slot], mxl));
+                        if (!(bestScore > mageScore)) continue;   // the mage's own pick scores as high: it stands
+                    }
+                    a_gs.slot[slot] = best;
+                    a_gs.jewelInst[slot - 4] = bestInst;
+                }
             }
 
             // Worker. OOC only (the caller gates on judgeArmor). MAGE: MageBestPerSlot, the
@@ -540,6 +729,7 @@ namespace MFO::Logistics {
                     MageBestPerSlot(a_follower, a_state, best);
                     for (int i = 0; i < 6; ++i)
                         a_out.slot[i] = best[i].obj ? best[i].obj->As<RE::TESObjectARMO>() : nullptr;
+                    ChooseJewelry(a_follower, a_state, a_out, a_inv);   // ring / amulet: usefulness vs the mage's value pick
                     return;
                 }
                 using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
@@ -570,6 +760,7 @@ namespace MFO::Logistics {
                     if (RelicOffBody(a_follower, a_state, worn)) continue;  // rule 5 withholds it
                     if (ArmorScore(pref, worn) >= (a_out.slot[s] ? bestScore[s] : 0.0f)) a_out.slot[s] = worn;
                 }
+                ChooseJewelry(a_follower, a_state, a_out, a_inv);   // slots 4 / 5: the rated slate names none
             }
         }
 
@@ -600,6 +791,19 @@ namespace MFO::Logistics {
             RE::TESObjectARMO* sl[6]; std::size_t n = 0;
             for (int i = 0; i < 6; ++i) if (gs.slot[i]) sl[n++] = gs.slot[i];
             return !Rule5Overlaps(a_worn, pick, sl, n);
+        }
+
+        // The ring and amulet the armor choice DECLARES for this follower (null = none named), for the sell
+        // side's keep set (SwapUp.cpp): the piece the declaration chose must never be sold from under it.
+        // Same GearSlate RefreshEquipDeclaration builds. Worker; one inventory walk.
+        void DeclaredJewelry(RE::Actor* a_follower, const FollowerState& a_state,
+                             RE::TESObjectARMO*& a_outRing, RE::TESObjectARMO*& a_outAmulet) {
+            a_outRing = a_outAmulet = nullptr;
+            if (!a_follower) return;
+            GearSlate gs;
+            const auto inv = a_follower->GetInventory();
+            ComputeOwnedGearSlate(a_follower, a_state, gs, inv);
+            a_outRing = gs.slot[4]; a_outAmulet = gs.slot[5];
         }
 
         // NO DECLINE-FALLBACK (marth 2026-09-28: "MFO's fallback is deprecated"): with
@@ -1126,6 +1330,21 @@ namespace MFO::Logistics {
                     slate.push_back(b);
                 };
                 for (const int slot : { 1, 0, 2, 3, 4, 5 }) accept(gs.slot[slot]);
+                // [jewelry]: one line per follower when the chosen ring / amulet CHANGES (worker-serial).
+                static std::unordered_map<RE::FormID, std::pair<RE::FormID, RE::FormID>> s_jewelLogged;
+                const std::pair<RE::FormID, RE::FormID> now{ gs.slot[4] ? gs.slot[4]->GetFormID() : 0,
+                                                             gs.slot[5] ? gs.slot[5]->GetFormID() : 0 };
+                if (const auto jl = s_jewelLogged.find(id); jl == s_jewelLogged.end() ? (now.first || now.second)
+                                                                                      : jl->second != now) {
+                    s_jewelLogged[id] = now;
+                    const bool jc = IsCasterFollower(a_state);
+                    const auto jscore = [&](RE::TESObjectARMO* a, const JewelInst& ji) {
+                        return a ? JewelryScore(a_follower, jc, a, InstanceEnchant(a, ji.xl)) : 0.0f;
+                    };
+                    spdlog::info("[jewelry] {:08X}: ring '{}' score={:.1f} | amulet '{}' score={:.1f}", id,
+                                 gs.slot[4] && gs.slot[4]->GetName() ? gs.slot[4]->GetName() : "(none)", jscore(gs.slot[4], gs.jewelInst[0]),
+                                 gs.slot[5] && gs.slot[5]->GetName() ? gs.slot[5]->GetName() : "(none)", jscore(gs.slot[5], gs.jewelInst[1]));
+                }
             }
 
             // 4b. THE PLAYER'S OWN CHOICE (round 3, ABI v8: APMF lets the trade/gift

@@ -860,6 +860,8 @@ namespace MFO::Logistics {
     bool UsesMageClothing(const FollowerState& a_state, RE::Actor* a_follower);
     // Does the armor choice (the declared GearSlate) keep this worn piece? EquipAuthority.cpp.
     bool DeclaredSetKeeps(RE::Actor* a_follower, const FollowerState& a_state, RE::TESObjectARMO* a_worn);
+    // The ring / amulet the armor choice declares (null = none), so the sell keep set protects them. EquipAuthority.cpp.
+    void DeclaredJewelry(RE::Actor* a_follower, const FollowerState& a_state, RE::TESObjectARMO*& a_outRing, RE::TESObjectARMO*& a_outAmulet);
     std::uint8_t TopTwoSchoolMask(RE::Actor* a_follower);
     void LearnCarriedTomes(RE::Actor* a_follower);
     const char* SchoolName(RE::ActorValue a_school);
