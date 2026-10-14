@@ -553,8 +553,9 @@ namespace MFO::Logistics {
                 if (!a_follower || !a_ar) return 0.0f;
                 auto* avo = a_follower->AsActorValueOwner();
                 if (!avo) return 0.0f;
-                if (!ench)   // unenchanted: a gem host only with MEO's carried-gem support
-                    return (MEOBridge::Available() && MEOBridge::CarriedGemsSupported()) ? kEmptyHostScore : 0.0f;
+                if (!ench)   // unenchanted: a gem host only with MEO's carried-gem support AND if MEO can socket this piece
+                    return (MEOBridge::Available() && MEOBridge::CarriedGemsSupported() &&
+                            MEOBridge::SocketableArmor(a_ar)) ? kEmptyHostScore : 0.0f;
                 using AV = RE::ActorValue;
                 const auto standing = [&](AV a_skill) {   // 0..1.5 of the follower's BASE skill / 100
                     return std::clamp(avo->GetBaseActorValue(a_skill) / 100.0f, 0.0f, 1.5f);
@@ -647,6 +648,14 @@ namespace MFO::Logistics {
                                 if (xl && xl->GetByType<RE::ExtraWorn>()) { wornXl = xl; break; }
                         }
                     }
+                    // A QUEST-BOUND worn piece (the engine's per-instance IsQuestObject, as the loot guard) is never
+                    // displaced, by a higher score or by the mage pick: kept as worn.
+                    if (worn)
+                        if (const auto it = a_inv.find(worn); it != a_inv.end() && IsQuestObjectInstance(it->second.second.get())) {
+                            a_gs.slot[slot] = worn;
+                            a_gs.jewelInst[slot - 4] = { wornXl, uidOf(wornXl) };
+                            continue;
+                        }
                     if (!a_gs.mage && worn && !RelicOffBody(a_follower, a_state, worn) &&
                         (IsPlayerPick(id, worn->GetFormID()) || PlayerGiven::IsPlayerEquipped(id, worn->GetFormID()))) {
                         a_gs.slot[slot] = worn;   // the player's choice stands
@@ -669,6 +678,7 @@ namespace MFO::Logistics {
                         auto* ar = obj->As<RE::TESObjectARMO>();
                         if (!ar || IsCreatureArmor(ar) || ar->IsShield() || MageClothingSlot(ar) != slot) continue;
                         if (RelicOffBody(a_follower, a_state, obj) || IsBlacklistedApparel(ar)) continue;
+                        if (IsQuestObjectInstance(data.second.get())) continue;   // a quest-bound piece is never a candidate
                         if (ar != worn && !Config::g_lootSpecialItems.load() && Catalog::IsExcluded(ar->GetFormID()) &&
                             !PlayerGiven::IsPlayerGiven(id, ar->GetFormID())) continue;
                         if (a_gs.mage) {

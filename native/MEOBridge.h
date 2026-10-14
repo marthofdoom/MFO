@@ -165,6 +165,8 @@ namespace MFO::MEOBridge {
     bool GemThemeOf(const char* a_gid, MEO_API::GemTheme& a_out);
     // Is the reconcile usable (MEO present, ABI >= 3)? Tier 1 no-ops below this.
     bool GemReconcileSupported();
+    // Would MEO socket this armor base (unenchanted, playable, a MEO armor slot, no MagicDisallowEnchanting)? Any thread (form reads).
+    bool SocketableArmor(const RE::TESObjectARMO* a_armo);
 
     // Worker-callable: schedule a MAIN-THREAD reconcile pass for a_follower. No-op
     // when MEO < v3. a_effectAware gates ONLY the effect-aware tier; conservation

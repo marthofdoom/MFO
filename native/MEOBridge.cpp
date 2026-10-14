@@ -1305,6 +1305,10 @@ namespace MFO::MEOBridge {
 
     bool GemReconcileSupported() { return g_meo && g_meo->Version() >= 3; }
 
+    // Public face of MEO's own socketability test (MeoSocketableArmor, above): an unenchanted, playable armor with a
+    // MEO armor slot and no MagicDisallowEnchanting. One copy of the rule; the jewelry choice reads it.
+    bool SocketableArmor(const RE::TESObjectARMO* a_armo) { return MeoSocketableArmor(a_armo); }
+
     void RequestGemReconcile(RE::Actor* a_follower, bool a_effectAware, GemReconcilePrefs a_prefs) {
         if (!GemReconcileSupported() || !a_follower) return;
         if (!MainThread::IsInstalled()) { ReconcileLooseGems(a_follower, a_effectAware, a_prefs); return; }  // VR: run direct
