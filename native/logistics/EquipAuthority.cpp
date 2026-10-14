@@ -619,9 +619,11 @@ namespace MFO::Logistics {
             // ring is never stripped for no reason). Ties go to the worn piece, then the higher FormID.
             // Filtered like the rest of the builder: creature armor, a museum relic (RelicOffBody),
             // blacklisted apparel, and an excluded artifact while bLootSpecialItems is off unless it is
-            // worn or the player's (Catalog::IsExcluded, as the weapon branches). PLAYER AGENCY: a worn
-            // piece the player put on him (g_playerPicks / PlayerGiven) stands for a non-mage; for a mage
-            // 4b's playerPieceWins already guards the slot. MAGE RECONCILIATION: MageBestPerSlot already
+            // worn or the player's (Catalog::IsExcluded, as the weapon branches). BEST SCORE WINS (marth
+            // 2026-10-14, as rated armor): a ring the player put on him is only the INCUMBENT -- it is kept while
+            // nothing strictly outscores it (ties go to the worn piece) and is replaced by a strictly higher
+            // JewelryScore; no player-pick guard applies to jewelry (playerPieceWins skips slots 4 / 5 too).
+            // A quest-bound worn piece is the one exception. MAGE RECONCILIATION: MageBestPerSlot already
             // put its value-ranked ring / amulet in the slate; the usefulness winner replaces it only if
             // its score is STRICTLY higher than the mage pick's own JewelryScore (so exactly one of the
             // two methods declares each slot, the higher-scoring, the mage's on a tie). A mage candidate
@@ -656,12 +658,6 @@ namespace MFO::Logistics {
                             a_gs.jewelInst[slot - 4] = { wornXl, uidOf(wornXl) };
                             continue;
                         }
-                    if (!a_gs.mage && worn && !RelicOffBody(a_follower, a_state, worn) &&
-                        (IsPlayerPick(id, worn->GetFormID()) || PlayerGiven::IsPlayerEquipped(id, worn->GetFormID()))) {
-                        a_gs.slot[slot] = worn;   // the player's choice stands
-                        a_gs.jewelInst[slot - 4] = { wornXl, uidOf(wornXl) };
-                        continue;
-                    }
                     // MEO GUARD: MEO exposes no "reconcile in progress" signal (MEOBridge has none), so a worn piece
                     // that is GEMMED in MEO's carried-gem cache is kept as it is -- swapping it would race the gem
                     // moves MEO's reconcile / QueueGemMove make onto it.
@@ -1426,8 +1422,10 @@ namespace MFO::Logistics {
                     // relic dressing is PlayerGiven's record, which RelicOffBody honours.
                     if (RelicOffBody(a_follower, a_state, obj)) continue;
                     picks.insert(f);
-                    spdlog::info("[equip-auth] {:08X}: player put on '{}' -- kept", id,
-                                 ar->GetName() ? ar->GetName() : "?");
+                    const int pcs = MageClothingSlot(ar);
+                    spdlog::info("[equip-auth] {:08X}: player put on '{}' -- {}", id,
+                                 ar->GetName() ? ar->GetName() : "?",
+                                 (pcs == 4 || pcs == 5) ? "kept while nothing scores higher (jewelry: best score wins)" : "kept");
                 }
             }
             // PLAYER AGENCY: the player's worn piece (g_playerPicks) overlapping a CHALLENGER
@@ -1439,6 +1437,7 @@ namespace MFO::Logistics {
             const auto playerPieceWins = [&](RE::TESObjectARMO* a_challenger) -> RE::TESObjectARMO* {
                 if (!a_challenger || picks.empty()) return nullptr;
                 if (!(UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load())) return nullptr;
+                if (const int cs = MageClothingSlot(a_challenger); cs == 4 || cs == 5) return nullptr;   // jewelry: best JewelryScore wins (ChooseJewelry)
                 const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
                 const bool schoolPrimary = Config::g_mageApparelStrictSchool.load();
                 int ct = 0; std::int32_t cm = 0;
