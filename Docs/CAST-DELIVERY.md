@@ -1493,3 +1493,71 @@ still kept direct was a Restoration-school WARD or buff stream.
 (Self-delivery offense, an instant or concentration non-heal beneficial fan, no Harbinger), `legacy-force` (the AI-first hybrid's force-on-miss). Reasons seen: no combat
 controller (an own-OOC follower in a party fight: the substrate, slices S2/S3, is what fixes this), Harbinger absent or too old or the claim road switched off, an ambiguous
 row, aimed Light, a target-location self cast. Out of combat nothing logs here (the OOC heal keeps `out-of-combat heal -- INSTANT road`).
+
+## COMBAT SUBSTRATE SLICE S3: THE OUT-OF-COMBAT CASTS ON HARBINGER'S SUBSTRATE (feat/mfo-substrate-s3, 2026-10-19)
+
+marth's goal (plan `_evidence/2026-10-18-designs/SUBSTRATE-TO-OOC-PLAN.md`, round R3): followers cast heals, buffs and summons out
+of combat with the real cast animation. Substrate combat is not combat for any client. The legacy direct cast is used only when
+Harbinger is absent. **Behind ONE INI-only switch, `bSubstrateCasts` (MFO.ini, default 0) until the field run (plan L8) proves it.
+NOT field-run yet.**
+
+**What it is.** Every ch.8b seat is a vfunc of a `CombatMagicCaster`, which only exists under a `CombatController`. Harbinger's
+ch.27 `kIntent_CombatSubstrate` (ABI v23, availability query v27) forces combat against its own invisible anchor as a substrate,
+denies every facet it switches on except the cast leaves, floors both hands, keeps the actor's own package moving it, and closes on
+the cast claim's first fire. MFO files the substrate BESIDE an ordinary ch.8b claim (spell, recipient, LEFT hand, `kOwnBasis`,
+`kHealCastTtlMs`), and the follower's own AI casts. MFO makes no engine cast call on this road and deducts no magicka (the engine's
+cast spends it).
+
+**The converted out-of-combat roads** (fire-and-forget heal / buff / summon only):
+
+| Road (plan) | Today (switch OFF) | Switch ON, substrate available |
+|---|---|---|
+| R14 OOC summon | `CastSummonOnce` -> main-thread `CastSpellImmediate` (`cast/Summon.cpp`) | the worker decides (`SubstrateRoadFor`), the main thread files the pair instead of the cast (`[summon] ... road=substrate-claim`) |
+| R13 OOC AUTO buff / heal | `CastAuto` fans one `ApplyEffectFromTo` (`CastSpellImmediate`) per recipient (`cast/Auto.cpp`) | a SERIES: one pair per lap at the neediest recipient (a heal: lowest health; a buff: the first in need), the next after the fCastCooldown pace |
+| R12 / R13 OOC self (bCastSelf on) | `CastSelfDirect` (`logistics/Service.cpp` self branch) | the pair, target per the ch.8b convention |
+| R12 / R13 OOC posted immediate (self with bCastSelf off, the player, an ally) | posted `CastSpellImmediate` (`logistics/Service.cpp` immediate branch) | the pair |
+| R16 OOC concentration (incl. `CastTargetDirect` in the Service OOC block, which is concentration-only) | direct stream | **unchanged: slice S5** |
+| R15 OOC hostile at a foe | `Packages::CastAt` + direct fallback | **unchanged: round R4** |
+
+**Which spells.** Exactly what the combat table's claim roads serve, minus the controller test (`cast/SubstrateRoad.cpp`
+`SubstrateRoadFor`): a Heal with `ChooseHealRoad`'s gates (`bHealAnimPackage`, Harbinger v5+, `bEquipToCast`, a verified runtime; a
+target-location heal stays direct), and a Buff or summon `ChooseBuffRoad` answers `Claim` or `DirectNoCombat` for (its last test, so
+every seat / row / shape test passed). Anything else keeps today's road and a `[substrate] ... stays on today's direct road -- <why>`
+line says why (60 s per follower and spell).
+
+**The per-cast gates** (`FileSubstrateCast`), each a TRANSPARENT no-cast this lap, NEVER the direct road: a pair already stands for
+him (the PENDING latch: open in flight, held, or its close grace), the player is sneaking (ruling Q6, a `[substrate] ... OPEN
+refused: the player is sneaking` line every 10 s), he cannot act, magicka or the reserve floor, a heal out of reach
+(`HealInReach`), the spell's pacing window (duration x 0.9, floor max(3 s, fCastCooldown), 300 s ceiling; none for a summon), or its
+effect still up on the recipient.
+
+**The ch.8b target convention** (as `BuffClaim` / `ComposedCast::Try`): 0 = self for a Self-delivery or placement spell; the caster's
+own FormID for a self cast of any other delivery (Harbinger's self-flip proxy); the recipient otherwise. `kCastFlag_OwnLineOfSight`
+for a recipient that is not the caster.
+
+**The state machine** (`apmf/Substrate.cpp`; one pair per follower; each line once per pair, all carrying `road=substrate-claim`):
+
+| Line | When |
+|---|---|
+| `[substrate] <f> OPEN requested: <spell> at <target>, left hand, site <site>` | both claims filed (worker, or main for a summon) |
+| `[substrate] <f> HELD` | the sweep reads `GetSubstrateState == Held` |
+| `[substrate] <f> CAST CLAIMED ... proxy <p>` | the cast claim first reads `IsClaimLive` |
+| `[substrate] <f> FIRED` | the SpellSink saw the spell or the proxy fire on him |
+| `[substrate] <f> CLOSED reason=fired / cast-claim-ended / closed-unfired / not-opened / real-combat / released` | the substrate claim is gone, then the cast claim is released |
+| ERROR `OPEN REFUSED at the call` | `RequestEx` / `RequestCast` returned no handle: skipped, never direct |
+| ERROR `NOT OPENED` | the substrate claim ended never held or fired (`APMF.log` names why): never direct |
+| ERROR `CLOSED reason=timeout` | MFO's 17 s backstop (Harbinger clamps the TTL at 15 s) |
+
+**Close on fire, and APMF-B93.** Harbinger closes the substrate on the claim's first fire. MFO adds no second cut: once the substrate
+claim is gone, the cast claim is released at once if the fire was SEEN (the SpellSink), else after a 2.5 s grace (sized from the
+measured fire -> `TESSpellCastEvent` lag, 0.33..2.02 s), so MFO's release can never be what cuts a charge in flight. A REAL fight
+during the window (`kSubstrateState_Real`) releases the cast claim at once: the combat table owns casting from then on (no claim of
+the out-of-combat table may stand beside the combat table's: the MFO-B173 class).
+
+**Availability (ruling Q4: "shouldn't happen").** Switch OFF or Harbinger absent: today's road, nothing read. Harbinger older than
+ABI v27: one WARN per session, today's road. Harbinger v27 with `IsSubstrateAvailable()` false: one ERROR per session ("THIS SHOULD
+NOT HAPPEN"), today's road. That is the declared degrade, never silent. Once a cast takes the road, nothing falls back.
+
+**Threading.** The OOC table and the sweep (`APMFBridge::Tick`) run on the AddTask job worker; the summon's file runs on the main
+thread. The pair table has its own leaf mutex (`g_subMx`, order g_mx -> g_subMx at `ClearTransientState`); the APMF calls under it are
+enqueues or lock-free reads. No co-save change: Harbinger forgets every substrate on a load, and `ClearTransientState` forgets MFO's.
