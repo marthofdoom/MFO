@@ -226,7 +226,7 @@ namespace MFO::Logistics::Errand {
                 auto  ptr = h.get();
                 auto* v   = ptr.get();
                 if (!v || !v->Is3DLoaded() || v->IsInCombat()) continue;
-                if (const auto s = v->GetSitSleepState(); s == RE::SIT_SLEEP_STATE::kIsSleeping ||
+                if (const auto s = v->AsActorState()->GetSitSleepState(); s == RE::SIT_SLEEP_STATE::kIsSleeping ||
                                                            s == RE::SIT_SLEEP_STATE::kWantToSleep ||
                                                            s == RE::SIT_SLEEP_STATE::kWaitingForSleepAnim)
                     continue;   // a sleeper cannot be talked to
@@ -389,7 +389,7 @@ namespace MFO::Logistics::Errand {
         if (SlotOf(fid)) return true;   // looting: loot and errand never overlap
         auto* avo = a_follower->AsActorValueOwner();
         if (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) return true;   // told to wait
-        if (a_follower->IsOnMount() || a_follower->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) return true;
+        if (a_follower->IsOnMount() || a_follower->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) return true;
         if (!a_follower->Is3DLoaded()) return true;
         if (LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) != playerTown) return true;   // he is not in the player's town
         if (auto* q = Forms::g_tradeQuest; !q || !q->IsRunning()) return true;   // no trade bridge: nothing could be traded
@@ -457,6 +457,10 @@ namespace MFO::Logistics::Errand {
             }
         }
         if (!best) {
+            {
+                std::scoped_lock lk(g_mx);
+                g_nextPlan[fid] = a_now + std::chrono::seconds(20);   // nothing to do here: the plan is a cell walk + an inventory walk, ask less often
+            }
             // Said once per ~minute per follower at most (the plan cadence is 6 s): the reason he is NOT shopping.
             static std::unordered_map<RE::FormID, Clock::time_point> s_nextNoReasonLog;
             if (auto& nx = s_nextNoReasonLog[fid]; nx.time_since_epoch().count() == 0 || a_now >= nx) {

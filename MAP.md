@@ -4428,6 +4428,56 @@ bit (it is session-only proof); recording non-relics (marth's ruling: regular gi
 **Open backlog:** MFO-B130 (menu read off-main), MFO-B131 (a stale entry after a fast leave; now saved), MFO-B132
 (a gift before LOTD's first snapshot is recorded whatever it is; inert).
 
+### logistics/Errand.cpp / Errand.h / apmf/ErrandClaims.cpp — TOWN ERRANDS, round R1a (ClickUp 86e3t1mx7; NOT serialized)
+Design: `_evidence/2026-10-18-designs/TOWN-DESIGN.md` (R1a = this; R1b = off-screen simulation + recall, R2 = the `ERND` co-save,
+both LATER rounds). With Harbinger ABI >= 24 (`APMFBridge::ErrandSupported`, ch.19 + ch.12 v2 + `GetIdleState`) and
+`bTownErrands` ON (default) the instant proximity trade is RETIRED: `EconomyProbe` is no longer called from the idle branch
+(`Service.cpp:2159`, `if (... && !Errand::TryStart(...)) EconomyProbe(...)`; `TryStart` returns TRUE whenever errands own the
+economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the old trade, unchanged.
+- **Planner** `Errand::TryStart` (`Errand.cpp:348`) <- the idle branch of `ServiceFollower`. Gates: player in a City / Town /
+  Settlement (`LocationTypes::TownAnchor`, `LocationTypes.h:92`: innermost City/Town/Settlement before a Clearable/Dungeon) for
+  >= `fErrandSettleSec`; no combat (his or the player's), no menu pause, not looting (`SlotOf`), not waiting (AV 95), not mounted,
+  not sitting/sleeping, himself in the same town; per-follower plan cadence 6 s (20 s when nothing qualifies) + `fErrandCooldownSec`.
+  `BuildCatalog` (`:199`): LOADED vendor actors in the follower's attached cell (<= 4096 u), vendor faction (the legacy scan's
+  visitor), open hours (VENV, `OpenAt:169`), no `vendorConditions->head`, no fence (`buysStolen && !buysNonStolen`), valid chest
+  container, same town as the player, <= `fTravelRadius` from the player, not sleeping, not parked. Then `EconomyProbe` in PLAN mode
+  evaluates every candidate with the real trade code; reasons = sell (rows the vendor accepts worth >= `iErrandMinSellGold`, capped
+  by that chest's last-seen gold, or carry weight > 80 %), need (supply gambit below threshold AND the VEND list carries
+  Potion/Arrow/Weapon), wish (purse >= `iErrandMinPurse` AND VEND carries weapon/armor/clothing/jewelry/tome for the wish).
+  Rank = sell gold + 250 need + 150 wish - distance/10. **ALL followers may run errands at once**; the concurrent ch.19 WALKS are
+  budgeted by `kMaxWalking` = 4 (Harbinger has 8 package slots, shared with loot `kMaxLootSlots` 4 and the deposit) and a refusal /
+  `kLeg_Failed` QUEUES him (6 s retry), never parks the vendor, never falls back to the instant trade.
+- **State machine** `Tick` (`:512`) <- `Service.cpp:408` (right after `Lotd::DepositTick`; an errand owns his logistics tick):
+  WALKING (own ch.19 claim to the vendor ACTOR, radius 110; `Arrived`, or `Blocked` within 260 u same floor, or the 170 u backstop;
+  other leg ends end the errand, a static `Blocked` PARKS the vendor 5 min) -> TALKING (`DialogueGenericTalking`, fallback
+  `DialogueNeutralExpressive`, skipped when neither plays) -> GIVING (`IdleGive`; the trade dispatches once it reads Played + 1.5 s,
+  or anyway, loudly, if the idle failed: principle 7) -> TRADING (`EconomyProbe` EXECUTE; waits `TradeBridge::TakeOutcome`, 45 s) ->
+  TAKING (`IdleTake`, only if something was bought) -> DONE. Every exit is `Finish` (`:281`): drop the record, release the claims,
+  stamp the cooldown, ONE `[errand]` line. The ch.12 verdict of the CURRENT beat is believed only when the idle record names that
+  beat's idle (a Repoint is applied on the game thread).
+- **Interruptions** `Sweep` (`:747`) <- `Diagnostics.cpp:950` (the pump, every lap): follower dead / unloaded, his or the player's
+  combat (30 s cooldown, "he rejoins"), dismissed (not in `ActiveSnapshot`), not serviced for 8 s, 240 s real-time cap
+  (`fErrandMaxGameMin` game-minute cap in `Tick`), told to wait, and **the player leaving the town** (`TownAnchor` differs for 2 s,
+  not during a `LoadingMenu`) -> the errand ends and his follow package walks him back. R1a has no off-screen half: a follower who
+  unloads ends the errand (R1b builds simulation + `MoveTo` recall).
+- **EconomyProbe errand mode** (`Economy.cpp:459`, `ErrandProbe` in `Logistics_internal.h:883`): `a_errand` null = byte-for-byte the
+  legacy path. Non-null: no scan clock / cell walk / pair cadence / trade cooldown, candidates = `a_errand->vendors`, `kPlan` fills
+  `verdicts` and dispatches nothing, `kExecute` dispatches (`dispatched`). The order is built FRESH at the give beat (the follower is
+  loaded); R1b's stored PLAN-time `TradeOrder` replaces that call.
+- **TradeBridge seam** `HasLiveOrder` / `TakeOutcome` / `DiscardOutcome` / `LastSeenChestGold` (`TradeBridge.cpp:763-790`, native
+  only; the 10 Papyrus natives and `MFO_Trade.pex` are untouched). `ReportTrade` now also files a per-follower outcome.
+- **apmf/ErrandClaims.cpp**: `ClaimErrandTravel` / `ReadErrandLeg` / `PlayErrandIdle` (first beat = ch.1 hold + ch.12 claim, later
+  beats = `Repoint`) / `ReadErrandIdle` / `ReleaseErrand`; own mutex, never `g_mx`; nothing saved; `ClearErrandClaims` on revert
+  (`Upkeep.cpp:726` <- `Errand::ClearTransientState`).
+- **Config** (`Config.h` after `g_economyBuyTomes`): `bTownErrands` (MCM toggle, default ON, `out/MCM/Config/MFO/config.json`),
+  INI-only `iErrandMinSellGold` 100, `iErrandMinPurse` 200, `fErrandSettleSec` 10, `fErrandCooldownSec` 120, `fErrandMaxGameMin` 120.
+  The six keys parse in a chain of their own at the top of `Config.cpp` `Apply` (the main chain is near MSVC's nested-block limit).
+- **WHAT BREAKS if you change this:** `EconomyProbe`'s parameter list (Service.cpp, Errand.cpp); `ErrandProbe::Verdict` fields (the
+  ranker); `TradeBridge::ReportTrade` (the outcome the Trading phase waits on); `kLeg_*` handling (a new end state = a new case in
+  the Walking phase); the idle FormIDs (`Errand.cpp` constants, all verified in Skyrim.esm). **Not done on purpose (R1b/R2 seams):**
+  unloaded shops (the faction's PLVD union `TESForm*` vs `ObjectRefHandle` is unverified), simulation, `MoveTo` recall, `entryDoor`,
+  the `ERND` co-save.
+
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives
 over-count), MFO-B123 (a reload before arrival can ship one duplicate), MFO-B124 (the ledger floor leaks
