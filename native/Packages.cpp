@@ -327,6 +327,21 @@ namespace MFO::Packages {
             return verified;
         }
 
+        // Town S review (SEV-3): never create an alias fill the reader cannot sweep (a refused reader
+        // beside a verified ForceRefTo would leave a latched follower in the .ess). Logged once.
+        bool FillSweepable(const char* a_route) {
+            if (Logistics::TradePerks::AliasReaderVerified()) return true;
+            static std::atomic_bool s_logged{ false };
+            if (!s_logged.exchange(true))
+                spdlog::error("[pkg] {} alias fill DECLINED, and every alias fill this session: the alias reader seat is refused, so MFO could not sweep it", a_route);
+            return false;
+        }
+        // ReleaseAll with the reader refused: occupancy UNKNOWN = possibly occupied, so the caller
+        // evicts with the marker unconditionally (a marker in an alias is inert) and logs the outcome.
+        void LogUnknownSweep(const char* a_why, const char* a_tag, std::uint32_t a_alias, bool a_evicted) {
+            spdlog::error("[{}] {} -- alias {} occupancy unknown (alias reader seat refused): {}", a_tag, a_why, a_alias, a_evicted ? "evicted (marker, unconditional)" : "NOT swept (no marker or no native ForceRefTo)");
+        }
+
         bool ForceRefToNative(RE::TESQuest* a_quest, std::uint32_t a_aliasID,
                               RE::TESObjectREFR* a_ref) {
             if (!a_quest) return false;
@@ -911,6 +926,7 @@ namespace MFO::Packages {
             auto* pkg   = self ? Forms::g_castPackageSelf : Forms::g_castPackage;
             if (!quest || !pkg)                return Decline::NoRecord;
             if (!VM() || !CommandAlias())      return Decline::NoVM;
+            if (!FillSweepable("cast"))        return Decline::NoVM;   // town S: no unsweepable fill
 
             // The self route is native-only: the VM fallback fills alias 0,
             // the FOE carrier -- wrong for self. The foe route is already
@@ -1600,7 +1616,7 @@ namespace MFO::Packages {
             // could hold a follower (or the player, #48b) from an old save.
             for (int slot = 0; slot < kMaxLootSlots; ++slot) {
                 const auto read = Logistics::TradePerks::AliasRefHandle(quest, LootActorAlias(slot));
-                if (!read) { spdlog::error("[loot] {} -- loot alias (slot {}) NOT swept: alias reader seat refused", a_why, slot); continue; }
+                if (!read) { LogUnknownSweep(a_why, "loot", LootActorAlias(slot), haveMarker && ForceRefToNative(quest, LootActorAlias(slot), ev)); continue; }
                 RE::ObjectRefHandle h = *read;
                 auto* held = h.get() ? h.get().get() : nullptr;
                 // Evict any ACTOR occupant. Actor-ness, not identity, skips a
@@ -1637,7 +1653,7 @@ namespace MFO::Packages {
         // alone. Only the ACTOR alias latches.)
         if (auto* quest = Forms::g_retreatQuest) {
             const auto read = Logistics::TradePerks::AliasRefHandle(quest, kAliasRetreatActor);
-            if (!read) spdlog::error("[retreat] {} -- retreat alias NOT swept: alias reader seat refused", a_why);
+            if (!read) LogUnknownSweep(a_why, "retreat", kAliasRetreatActor, haveMarker && ForceRefToNative(quest, kAliasRetreatActor, ev));
             RE::ObjectRefHandle h = read ? *read : RE::ObjectRefHandle{};
             auto* held = h.get() ? h.get().get() : nullptr;
             if (held && player && held->As<RE::Actor>() &&
@@ -1683,7 +1699,7 @@ namespace MFO::Packages {
             auto* mark = EvictMarkerRef();   // marker or null -- no player fallback here
             for (const std::uint32_t aliasID : { kAliasCommandActor, kAliasCommandSelfActor }) {
                 const auto read = Logistics::TradePerks::AliasRefHandle(quest, aliasID);
-                if (!read) { spdlog::error("[pkg] {} -- cast alias {} NOT swept: alias reader seat refused", a_why, aliasID); continue; }
+                if (!read) { LogUnknownSweep(a_why, "pkg", aliasID, mark && ForceRefToNative(quest, aliasID, mark)); continue; }
                 RE::ObjectRefHandle h = *read;
                 auto* held = h.get() ? h.get().get() : nullptr;
                 if (held && player && held->As<RE::Actor>() &&
@@ -1800,6 +1816,7 @@ namespace MFO::Packages {
         // The native ForceRefTo is AE + SE (see ForceRefToNative). On VR we
         // simply do not offer travel -- the caller falls back to arm's-reach.
         if (!ForceRefToNativeAvailable())          return false;
+        if (!FillSweepable("loot"))                return false;   // town S: no unsweepable fill
         if (!quest->IsRunning()) {
             spdlog::error("[loot] MFO_LootQuest {:08X} is NOT RUNNING -- Data/SEQ/MFO.seq "
                           "missing or stale? Travel unavailable.", quest->GetFormID());
@@ -2216,6 +2233,7 @@ namespace MFO::Packages {
         // The native ForceRefTo is AE + SE (see ForceRefToNative). On VR the
         // probe simply never runs -- no VM fallback, no partial data.
         if (!ForceRefToNativeAvailable())          return false;
+        if (!FillSweepable("retreat"))             return false;   // town S: no unsweepable fill
         if (!quest->IsRunning()) {
             spdlog::error("[retreat] MFO_RetreatQuest {:08X} is NOT RUNNING -- Data/SEQ/MFO.seq "
                           "missing or stale? Probe unavailable.", quest->GetFormID());
