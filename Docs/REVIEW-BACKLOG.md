@@ -1761,3 +1761,15 @@ Opus tier-B review of `fix/mfo-drop-uncarried-holds` @ d797089. Reviewer (verbat
 
 ### MFO-B290 (SEV-5, OPEN, logistics/EquipAuthority.cpp) -- the "no longer carried" log latch never re-arms; its text over-promises (raised against d797089)
 Same review. Reviewer (verbatim): "the `g_uncarriedLogged` latch (:417) is only cleared on forget or revert. A second loss of the same item in one session is not logged again (log only)." and "The log text 'the next equip gambit re-picks' (:784-786) is optimistic, because a gambit that sees its pick already satisfied may not call `DeclareFromLedger` again."
+
+### MFO-B291 (SEV-5, OPEN, logistics/EquipAuthority.cpp) -- jewelry: copies with no ExtraDataList are never scored when the entry has lists (raised against c3b55dd)
+Opus tier-B review of `fix/mfo-jewelry-all` @ c3b55dd. Reviewer (verbatim): "when an entry has one or more ExtraDataLists, copies that have no list are never scored (`:676-679`). Example: one list is RemovalHeld and two plain copies have no list, so that base offers no gem-host candidate. This is harmless."
+
+### MFO-B292 (SEV-5, OPEN, logistics/Economy.cpp) -- jewelry: a displaced worn ring may be sold as redundant (raised against c3b55dd)
+Same review. Reviewer (verbatim): "`DeclaredSetKeeps` now reports a displaced worn ring as not kept. `Economy.cpp:725` may then sell it when it is `redundantInferior`. On main a non-mage's worn ring was always kept by rule 5. Player picks are still protected by `IsPlayerPick`."
+
+### MFO-B293 (SEV-5, OPEN, logistics/SwapUp.cpp) -- jewelry: DeclaredJewelry runs with APMF absent (raised against c3b55dd)
+Same review. Reviewer (verbatim): "`DeclaredJewelry` in `SwapUp.cpp` runs even when APMF is absent. It keeps a ring the non-mage will never wear and costs an extra slate build per sell pass." Also: the legacy APMF-absent EquipBestOwnedGear still gives non-mages no jewelry.
+
+### MFO-B294 (SEV-5, OPEN, logistics/EquipAuthority.cpp) -- jewelry: mage reconcile scores an arbitrary instance; [jewelry] log scores the chosen, not the worn, copy (raised against c3b55dd / 39ca40f)
+Same review: "The mage reconcile's `mxl` (`:698-700`) takes an arbitrary instance's list when the mage's pick is not the worn base. That only affects the score comparison, never the base, so there is no churn." and "the engine may put on a plain copy of the chosen base. The `[jewelry]` line logs the chosen instance's score, not the worn copy's." Author note on 39ca40f: the uid tag in decl.names replaces the first occurrence of the display name (log only).
