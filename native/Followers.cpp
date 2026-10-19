@@ -95,7 +95,7 @@ namespace MFO::Followers {
         // Worker/serial-pump only, like every map here; cleared with them.
         constexpr float kLoadWindowS     = 60.0f;   // Sven's measured absence after a load: up to ~40 s
         constexpr float kTransientHoldS  = 60.0f;
-        constexpr float kRefreshGapS     = 2.5f;    // sweeps run every ~0.13 s; a longer gap = the worker was stalled by a load
+        constexpr float kRefreshGapS     = 2.5f;    // Refresh runs every kDiagEveryNth=4 pump wakes (~532 ms, Diagnostics.cpp:68); a longer gap = the worker was stalled by a load
         constexpr float kTeleportJumpU   = 4096.0f; // player position jump between sweeps = fast travel / cell load
         using Clock = std::chrono::steady_clock;
         Clock::time_point                             g_lastRefreshAt{};
@@ -390,7 +390,13 @@ namespace MFO::Followers {
         return g_followers[a_actorID];
     }
 
-    void ReleaseHeldState(RE::FormID id) {
+    // a_movementOnly (claim-through-load, transient roster drop): release ONLY the holds that STEER him
+    // (movement / package / target / cast claims) and KEEP the ch.17 equip claim, its change detector, the
+    // Loadout ledger, the force-hold and the weapon-stance ownership. A follower looting, casting or retreating at
+    // the door runs that package instead of Follow, so the engine would never bring him along; the equip
+    // claim is the one thing marth said stays ("Keep the claim through loads"). The full release
+    // (a_movementOnly=false) is the original, unchanged path, and is idempotent over what was kept.
+    static void ReleaseHeldStateImpl(RE::FormID id, bool a_movementOnly) {
         // Hand back every bit of engine/session state MFO was holding on this
         // follower, so he reverts to a vanilla/engine-default follower. Called on
         // the WORKER: from dismissal (Refresh, above) and from the T#78 board
@@ -404,8 +410,8 @@ namespace MFO::Followers {
         // enforcing APMF would refuse the repay and the follower would leave the
         // party in MFO's gear. Logistics::OnFollowerRemoved below releases too
         // (idempotent no-op then) and drops the declaration's change detector.
-        const bool authorityWasLive = APMFBridge::IsEquipAuthorityClaimed(id);
-        APMFBridge::ReleaseEquipAuthority(id);
+        const bool authorityWasLive = !a_movementOnly && APMFBridge::IsEquipAuthorityClaimed(id);
+        if (!a_movementOnly) APMFBridge::ReleaseEquipAuthority(id);
         //
         // Give back anything MFO put in their hands -- the hit sink is gated on
         // IsTracked, so after a dismissal nothing would ever restore it (#55).
@@ -418,7 +424,9 @@ namespace MFO::Followers {
         // not be mutated from the main thread. A revert in between makes the gate
         // bail, and the revert's ClearTransientState has cleared the ledger anyway.
         // Without the authority: the direct call, byte-identical to before.
-        if (authorityWasLive) {
+        if (a_movementOnly) {
+            // kept: Loadout ledger (restored on the full release)
+        } else if (authorityWasLive) {
             const auto epoch = Diagnostics::CurrentPumpEpoch();
             auto restore = [id, epoch]() {
                 SKSE::GetTaskInterface()->AddTask([id, epoch]() {
@@ -442,13 +450,13 @@ namespace MFO::Followers {
         // The weapon-stance ownership -- an entry left behind keeps every
         // combatant paying the ApplyTick lookup and could re-swap a style we no
         // longer own. Idempotent erase-miss when unowned.
-        CombatStyle::Clear(id);
+        if (!a_movementOnly) CombatStyle::Clear(id);
         // The T#76 equip force-hold: its prevent-removal LOCK is on the
         // ActorEquipManager, not the controller, so a follower left force-held
         // stays stuck with the weapon, unable to cast. Resolve the actor (the
         // handle may have merely flickered) and force-unequip; if it will not
         // resolve, the record is session-scoped and revert-cleared.
-        if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id))
+        if (auto* a = RE::TESForm::LookupByID<RE::Actor>(id); a && !a_movementOnly)
             Actuation::ReleaseForcedWeapon(a, /*a_standDown*/ false, /*a_leaving*/ true);   // W1: ch.17 already released above
         // The cast-consent latch -- a latch left here would DENY the follower's
         // own casting for the rest of the session and keep every combat caster
@@ -460,7 +468,8 @@ namespace MFO::Followers {
         Packages::Release(id);
         // The loot-travel alias: nothing else reclaims a walk-to-loot follower
         // and the fill is serialized, so it re-latches every load. Evict him.
-        Logistics::OnFollowerRemoved(id);
+        if (a_movementOnly) Logistics::OnFollowerAbsent(id);   // loot alias / slot / deposit / pick hold only
+        else                Logistics::OnFollowerRemoved(id);  // + the equip claim and its change detector
         // The retreat-probe alias -- identical claim model, identical serialized
         // tail.
         Packages::RetreatEvictIf(id);
@@ -491,6 +500,8 @@ namespace MFO::Followers {
         // just above -- a dismissed follower's lock must not outlive him either.
         Actuation::ClearCastLock(id);
     }
+
+    void ReleaseHeldState(RE::FormID id) { ReleaseHeldStateImpl(id, false); }
 
     bool RequestRosterRemoval(RE::FormID id) {
         if (!IsPersistableID(id) || g_followers.find(id) == g_followers.end()) {
@@ -706,11 +717,15 @@ namespace MFO::Followers {
                 const float sinceTransition = g_transitionAt.time_since_epoch().count() != 0
                     ? std::chrono::duration<float>(sweepNow - g_transitionAt).count() : -1.0f;
                 if (IsEligibleFollower(gone) && sinceTransition >= 0.0f && sinceTransition <= kLoadWindowS) {
-                    // TRANSIENT (load / cell change): keep the ch.17 claim and every other held state; the
-                    // release is finished below if he stays absent or stops being eligible.
+                    // TRANSIENT (load / cell change): keep ONLY the ch.17 claim + detector, the Loadout
+                    // ledger, the force-hold and the stance; release everything that steers him NOW so the
+                    // engine can bring him along. The rest is released below if he stays absent or stops
+                    // being eligible.
+                    ReleaseHeldStateImpl(id, /*a_movementOnly*/ true);
                     g_transientDrop[id] = sweepNow;
-                    spdlog::info("[follower] - {:08X} (transient, {:.1f}s after a world transition: {} -- claim and held "
-                                 "state KEPT, record and Rapport retained)", id, sinceTransition, why);
+                    spdlog::info("[follower] - {:08X} (transient, {:.1f}s after a world transition: {} -- equip claim, "
+                                 "declaration and gear ledger KEPT, movement/cast/loot holds released, record and "
+                                 "Rapport retained)", id, sinceTransition, why);
                     continue;
                 }
                 // Give back everything MFO was holding on this follower BEFORE we

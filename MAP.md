@@ -465,9 +465,10 @@ releases **by eviction** with a non-actor XMarker.
   CLAIM THROUGH LOADS (`fix/mfo-claim-through-load`, ClickUp 86e3qmmef, marth 2026-10-19): a drop within `kLoadWindowS` (60 s) of
   a world transition (`g_transitionAt`: LoadingMenu seen, a > 2.5 s worker gap between sweeps, player interior-cell /
   worldspace change, > 4096u position jump) while `IsEligibleFollower` still holds is TRANSIENT: `Refresh` logs
-  `[follower] - id (transient ...)`, does NOT run `ReleaseHeldState` (the ch.17 claim, `g_lastDeclared`, Loadout ledger
-  and aliases all stand) and records him in `g_transientDrop`; the same sweep later forgets him on re-add (`back after`)
-  or finishes `ReleaseHeldState` after `kTransientHoldS` (60 s) / when he stops being eligible. Every other drop releases
+  `[follower] - id (transient ...)`, runs only the MOVEMENT half (`ReleaseHeldStateImpl(id, true)`: loot/cast/retreat aliases, Targeting latch,
+  ch.21-24 claims, cast claims, `Logistics::OnFollowerAbsent`) so the engine can bring him along, and KEEPS the ch.17 claim,
+  `g_lastDeclared`, the Loadout ledger, the force-hold and the stance and records him in `g_transientDrop`; the same sweep later forgets him on re-add (`back after`)
+  or finishes the full `ReleaseHeldState` after `kTransientHoldS` (60 s) / when he stops being eligible. Every other drop releases
   as before, and EVERY drop line now carries its reason. The re-add declares with the standing claim (`fresh=false`; the
   MFO-B63 3D-absent skip in `RefreshEquipDeclaration` re-sends once loaded), never a "(service, new claim)".
   Worker-serial maps, cleared in `ClearTransientState`. What breaks: moving the release back into the drop branch.
