@@ -82,6 +82,7 @@ namespace MFO::Logistics::Errand {
         DestKind      destKind = DestKind::Cell;   // the errand's original destination (a fallback when no vendor actor is loaded)
         RE::FormID    destForm = 0;
         float         destRad = 0.0f;
+        bool          announced = false;   // the "is trading with" toast already fired for this errand (sim Trade stage reached)
     };
 
     namespace Sim {
@@ -116,5 +117,9 @@ namespace MFO::Logistics::Errand {
         bool  VendorPresentNear(RE::Actor* a_follower, RE::FormID a_faction);
         RE::FormID PlayerTownId();   // the BGSLocation id of the player's town, 0 = not in one
         const char* NameOf(const RE::Actor* a_actor);
+        // bTownToasts: one informational HUD line (RE::DebugNotification, posted to the main thread). No-op while the toggle is OFF.
+        void  Toast(const std::string& a_text);
+        // "<who> is trading with <shop>." via Toast, at the moment the trade begins (arrival, physical or simulated).
+        void  ToastTrading(const std::string& a_who, const std::string& a_shop);
     }
 }

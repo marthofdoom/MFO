@@ -379,6 +379,16 @@
           }
         },
         {
+          "id": "bTownToasts:General",
+          "text": "Economy: town errand toasts",
+          "type": "toggle",
+          "help": "OFF (default): town errands are silent. ON: one short HUD line when a follower begins trading at a shop ('Auri is trading with Niranye.'). One line per errand, no amounts, no failure notices. Only matters while 'Economy: shop in town' is on.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
+        },
+        {
           "id": "bMageWearRobes:General",
           "text": "Mages wear robes + jewelry",
           "type": "toggle",

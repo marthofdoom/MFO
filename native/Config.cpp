@@ -119,6 +119,7 @@ namespace MFO::Config {
             // TOWN ERRANDS (R1a): a chain of its own -- the main chain below is already long enough that one more
             // `else if` per key risks MSVC's nested-block limit (C1061).
             if      (a_key == "bTownErrands")       { setB(g_townErrands);   return; }   // default ON; OFF = the old proximity trade
+            else if (a_key == "bTownToasts")        { setB(g_townToasts);    return; }   // default OFF; HUD lines for errand events
             else if (a_key == "iErrandMinSellGold") { setI(g_errandMinSellGold, 0, 100000);    return; }
             else if (a_key == "iErrandMinPurse")    { setI(g_errandMinPurse,    0, 1000000);   return; }
             else if (a_key == "fErrandSettleSec")   { setF(g_errandSettleSec,   0.0f, 600.0f); return; }
@@ -399,6 +400,7 @@ namespace MFO::Config {
             g_economyBuyGear     = true;    // #21 gear-buy sub-toggle -- ON, gated under bEconomy
             g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
             g_townErrands        = true;    // R1a town errands -- ON (features ship on)
+            g_townToasts         = false;   // errand HUD toasts -- OFF by default (marth 2026-10-19)
             g_errandMinSellGold  = 100;
             g_errandMinPurse     = 200;
             g_errandSettleSec    = 10.0f;
@@ -485,7 +487,8 @@ namespace MFO::Config {
             { "bEngageOnSight", "0" },         { "bEngageOnSightSneaking", "0" },
             { "fEngageOnSightRange", "2000.000000" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
-            { "bTownErrands", "1" },           { "iErrandMinSellGold", "100" },
+            { "bTownErrands", "1" },           { "bTownToasts", "0" },
+            { "iErrandMinSellGold", "100" },
             { "iErrandMinPurse", "200" },      { "fErrandSettleSec", "10.000000" },
             { "fErrandCooldownSec", "120.000000" }, { "fErrandMaxGameMin", "120.000000" },
             { "bHmsRedistribute", "1" },       { "fHmsSkewMax", "20.000000" },

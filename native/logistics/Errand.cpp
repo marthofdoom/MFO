@@ -25,6 +25,7 @@
 #include "Logistics_internal.h"
 #include "Config.h"
 #include "Followers.h"
+#include "MainThread.h"
 #include "Forms.h"
 #include "LocationTypes.h"
 #include "Papyrus.h"         // DispatchMoveTo: the recall of a follower whose errand ended while he was unloaded
@@ -117,6 +118,7 @@ namespace MFO::Logistics::Errand {
             bool          talkFallbackUsed = false;
             bool          dispatched = false;
             bool          bought = false;
+            bool          announced = false;       // bTownToasts: the "is trading with" line fired (not saved; a resume sets it from the sim stage)
             // R1b: what the SIMULATION needs if he goes off screen, and what a hand-off back to the physical errand needs.
             RE::FormID    faction = 0;                      // the vendor faction of the shop
             DestKind      destKind = DestKind::VendorActor; // what the ch.19 leg walks to NOW
@@ -637,6 +639,16 @@ namespace MFO::Logistics::Errand {
             const char* n = a_actor ? a_actor->GetName() : nullptr;
             return n && *n ? n : "?";
         }
+        void Toast(const std::string& a_text) {
+            if (!Config::g_townToasts.load()) return;
+            // DebugNotification enqueues a UI message: main thread only (the Tick runs on the AddTask job worker).
+            auto fn = [text = a_text]() { RE::DebugNotification(text.c_str()); };
+            if (MainThread::IsInstalled()) MainThread::Post(fn);
+            else                           fn();   // VR: the pump is a no-op, keep the direct path
+        }
+        void ToastTrading(const std::string& a_who, const std::string& a_shop) {
+            Toast(std::format("{} is trading with {}.", a_who, a_shop));
+        }
 
         // RECALL (marth 2026-10-18: a follower always rejoins the player): put an alive, UNLOADED follower beside the player,
         // out of his view, UNLESS he is already in the player's cell. Vanilla Papyrus ObjectReference.MoveTo, ~250 u behind
@@ -688,6 +700,7 @@ namespace MFO::Logistics::Errand {
             r.followerName = a_info.followerName;
             r.vendorName = vendor ? NameOf(vendor.get()) : a_info.vendorName;
             r.order = a_info.order;
+            r.announced = a_info.announced;
             if (vendor) { r.destKind = DestKind::VendorActor; r.destForm = r.vendor; r.destRad = kVendorRadius; }
             else        { r.destKind = a_info.destKind; r.destForm = a_info.destForm; r.destRad = a_info.destRad; }
             r.start = r.phaseAt = now;
@@ -1020,6 +1033,10 @@ namespace MFO::Logistics::Errand {
             // Distance backstop: a leg read that is not ours yet, or a vendor who walked up to him.
             if (!arrived && dist <= kArriveDist && dz <= kSameFloorDz) arrived = true;
             if (!arrived) { Store(fid, r); return true; }
+            if (!r.announced) {   // one-shot: the Walking phase leaves here for the talk / give beat (a resume that was announced skips it)
+                r.announced = true;
+                detail::ToastTrading(r.followerName, r.vendorName);
+            }
             spdlog::info("[errand] {:08X} '{}': ARRIVED at '{}' ({:.0f} u) after {} s -- talk beat",
                          fid, r.followerName, r.vendorName, dist,
                          std::chrono::duration_cast<std::chrono::seconds>(a_now - r.start).count());
