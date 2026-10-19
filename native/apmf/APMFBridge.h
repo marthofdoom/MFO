@@ -91,6 +91,23 @@ namespace MFO::APMFBridge {
     // Is the APMF interface live (present + ABI >= 2, so RequestEx is available)?
     bool Available();
 
+    // ── COMBAT SUBSTRATE IS NOT COMBAT (Harbinger ABI v26 GetSubstrateState; ClickUp 86e3pu939) ──
+    // marth 2026-10-13, on whether MFO treats Harbinger's combat substrate as combat: "Certainly not. It only
+    // exists to facilitate actions." A substrate holder has a live combat controller and IsInCombat() reads true,
+    // but it is not fighting. ANY THREAD (APMF answers lock-free, no game call); the combat-thread hooks may call
+    // them. Below ABI v26 (or APMF absent) every answer is "no substrate": today's behaviour.
+    // SubstrateOnly: the actor's combat is SUBSTRATE-ONLY (kSubstrateState_Held). Real combat during the window
+    //   flips it false at once (kSubstrateState_Real), so a real fight always counts.
+    bool SubstrateOnly(RE::FormID a_actor);
+    // IsSubstrateAnchor: the actor is Harbinger's substrate anchor (a ghost stand-in): never a foe or a target.
+    bool IsSubstrateAnchor(RE::FormID a_actor);
+    // THE "is this follower / party member fighting" read: IsInCombat() and not substrate-only. Every MFO site that
+    // asks "is he in a fight" (party combat, the HUD, combat style, the combat table, loot / lockpick / LotD
+    // interruption, confidence, rapport, progression) uses this. Sites that guard ENGINE MECHANICS (a live
+    // controller, drawn hands, StopCombat bookkeeping, the cast road keyed on controller presence) keep the raw
+    // IsInCombat() / combatController reads on purpose.
+    bool InCombat(const RE::Actor* a_actor);
+
     // ROUND-ROBIN-AWARE STALENESS WINDOW (APMFBridge.cpp, 2026-09-05; moved to
     // external linkage feat/cast-gambit-concentration so it has ONE definition
     // shared cross-TU). Every claim in this file that is refreshed from INSIDE

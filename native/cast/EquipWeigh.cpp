@@ -376,7 +376,7 @@ namespace MFO::Actuation {
         const auto now = Clock::now();
         if (entries.empty()) {
             g_watch.erase(fid);
-            if (!a_follower->IsInCombat()) g_emptyPrefLogged.erase(fid);   // the episode ended
+            if (!APMFBridge::InCombat(a_follower)) g_emptyPrefLogged.erase(fid);   // the episode ended
             else if (g_emptyPrefLogged.insert(fid).second)
                 spdlog::info("[equip-pref] {:08X}: ch.26: nothing to prefer (no gambit weapon hold, no shield top-up) "
                              "-- the engine picks", fid);
@@ -389,7 +389,7 @@ namespace MFO::Actuation {
             w.watched = entries;
             if (forced) w.escalatedAt = now;   // the bit survives a re-declaration on the same claim
         }
-        const bool inCombat = a_follower->IsInCombat();
+        const bool inCombat = APMFBridge::InCombat(a_follower);   // a Harbinger substrate is not combat (ABI v26)
         bool allHeld = true;
         RE::FormID missForm = 0; std::uint8_t missSlot = 0;
         for (const auto& e : entries)

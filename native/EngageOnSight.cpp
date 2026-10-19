@@ -487,6 +487,7 @@ namespace MFO::EngageOnSight {
                 auto  ptr = hh.get();          // HOLD the NiPointer
                 auto* a   = ptr.get();
                 if (!a || a == self) continue;
+                if (APMFBridge::IsSubstrateAnchor(a->GetFormID())) continue;   // Harbinger's substrate anchor is never a foe (v26)
                 if (a->IsPlayerRef() || a->IsPlayerTeammate()) continue;
                 if (a->IsDead() || a->IsDisabled() || !a->Is3DLoaded()) continue;
                 if (a->GetPosition().GetDistance(pcPos) > a_leash) continue;   // the leash is from the PLAYER

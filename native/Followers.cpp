@@ -661,7 +661,7 @@ namespace MFO::Followers {
             if (!a) continue;
             const auto id = a->GetFormID();
             g_missStreak.erase(id);   // seen -- reset any streak
-            if (a->IsInCombat()) g_lastCombat[id] = std::chrono::steady_clock::now();
+            if (APMFBridge::InCombat(a)) g_lastCombat[id] = std::chrono::steady_clock::now();   // not a substrate (v26)
             if (std::find(before.begin(), before.end(), id) == before.end()) {
                 const bool isSummon    = a->IsCommandedActor();
                 const bool persistable = IsPersistableID(id);

@@ -1825,3 +1825,21 @@ marth 2026-10-19: catalog-excluded non-quest off-role weapons: "Keep but never w
 
 ### MFO-B309 (SEV-5, OPEN, Serialization.cpp) -- ERND: version 0 read as v1; ReadString accepts a 1-3 byte partial length read (raised against 3e9b659)
 Opus tier-3 review of `feat/mfo-town-r2` @ 3e9b659. F4: "an ERND record with version 0 is parsed as v1. There is no lower-bound guard, the same as PGIV." F6 (pre-existing helper): "`ReadString` checks `!ReadRecordData(len)`, which accepts a 1-3 byte partial read. In ERND the following bound check or short read still catches it."
+
+### MFO-B310 (SEV-4, OPEN, CasterConsent.cpp) -- substrate-not-combat review (raised against 5876057)
+Opus tier-3 review of `fix/mfo-substrate-not-combat` @ 5876057. Verbatim: "CasterConsent's two deny halves now disagree for a substrate holder. The hard deny at CasterConsent.cpp:1041 was converted to InCombat. Its comment justifies the gate as 'what CheckStartCast gets by construction', but that premise no longer holds. The soft CheckStartCast path at :657 (CtrlUnlatchedDeny), and the latched deny below it, still run under the substrate's live controller. So a holder with a leftover g_ctrl / g_want entry is soft-denied but no longer hard-backed. The window is short: the entries last at most until the 2-lap OOC teardown's CasterConsent::Clear. Either gate the soft half the same way or fix the comment." Reasoning: Deferred by the coordinator (closing round, SEV-4): the leftover entries live at most until the 2-lap OOC teardown clears them.
+
+### MFO-B311 (SEV-5, OPEN, Scheduler.cpp) -- substrate-not-combat review (raised against 5876057)
+Opus tier-3 review of `fix/mfo-substrate-not-combat` @ 5876057. Verbatim: "Scheduler.cpp:828: std::unordered_set substrateNow is built every pump (133 ms); MSVC allocates a sentinel node even for an empty set. Make it a reused static or a small vector." Reasoning: Cost only; recorded, not fixed in the closing round.
+
+### MFO-B312 (SEV-5, OPEN, Scheduler.cpp) -- substrate-not-combat review (raised against 5876057)
+Opus tier-3 review of `fix/mfo-substrate-not-combat` @ 5876057. Verbatim: "Scheduler.cpp:871-876: the 'left the Harbinger combat substrate' line also fires when a noted follower dies, is disabled or is dismissed (the continue at :853 comes before the check), so the wording is wrong in those cases." Reasoning: Log wording only.
+
+### MFO-B313 (SEV-5, OPEN, logistics/Lockpick.cpp) -- substrate-not-combat review (raised against 5876057)
+Opus tier-3 review of `fix/mfo-substrate-not-combat` @ 5876057. Verbatim: "Lockpick.cpp:819-834: if a substrate draws his hands, the wait line says 'sheathing it first', but the posted sheathe is gated on raw !IsInCombat(), so it waits out the substrate (at most 15 s) without sheathing. Behaviour fine; log text wrong." Reasoning: Log wording only; the raw sheathe gate is the deliberate mechanics line.
+
+### MFO-B314 (SEV-5, OPEN, Docs/STATUS.md) -- substrate-not-combat review (raised against 5876057)
+Opus tier-3 review of `fix/mfo-substrate-not-combat` @ 5876057. Verbatim: "Docs/STATUS.md says a holder 'runs no combat table'; only true while the party is otherwise out of combat. If the player or another follower fights, the combat table runs for him (own-OOC). Behaviour correct; wording overclaims." Reasoning: Doc wording only.
+
+### MFO-B315 (SEV-5, OPEN, CombatSense.h) -- substrate-not-combat review (raised against 5876057)
+Opus tier-3 review of `fix/mfo-substrate-not-combat` @ 5876057. Verbatim: "CombatSense.h:6-11 re-declares two APMFBridge functions to avoid an include cycle; a future signature drift would only fail at link time." Reasoning: Maintenance hazard; recorded.

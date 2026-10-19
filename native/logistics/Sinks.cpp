@@ -102,7 +102,7 @@ namespace MFO::Logistics {
                 if (!named || !named->GetFullName() || !*named->GetFullName())
                     return RE::BSEventNotifyControl::kContinue;
                 auto* actor = a_ev->actor->As<RE::Actor>();
-                if (!actor || !actor->IsPlayerTeammate() || actor->IsInCombat())
+                if (!actor || !actor->IsPlayerTeammate() || APMFBridge::InCombat(actor))   // substrate: not combat (v26)
                     return RE::BSEventNotifyControl::kContinue;
                 // DEBOUNCE (~1s/follower): coalesces a full-set trade's burst of
                 // equip events. Main-thread, so the static map needs no lock.

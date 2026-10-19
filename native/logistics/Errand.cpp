@@ -302,7 +302,7 @@ namespace MFO::Logistics::Errand {
                 if (out.size() >= kMaxCands) break;
                 auto  ptr = h.get();
                 auto* v   = ptr.get();
-                if (!v || !v->Is3DLoaded() || v->IsInCombat()) continue;
+                if (!v || !v->Is3DLoaded() || APMFBridge::InCombat(v)) continue;
                 if (const auto s = v->AsActorState()->GetSitSleepState(); s == RE::SIT_SLEEP_STATE::kIsSleeping ||
                                                            s == RE::SIT_SLEEP_STATE::kWantToSleep ||
                                                            s == RE::SIT_SLEEP_STATE::kWaitingForSleepAnim)
@@ -420,7 +420,7 @@ namespace MFO::Logistics::Errand {
             for (auto& h : cands) {
                 auto p = h.get();
                 auto* v = p.get();
-                if (!v || !v->Is3DLoaded() || v->IsInCombat()) continue;
+                if (!v || !v->Is3DLoaded() || APMFBridge::InCombat(v)) continue;
                 if (const auto st = v->AsActorState()->GetSitSleepState(); st == RE::SIT_SLEEP_STATE::kIsSleeping ||
                     st == RE::SIT_SLEEP_STATE::kWantToSleep || st == RE::SIT_SLEEP_STATE::kWaitingForSleepAnim) continue;
                 auto* fac = VendorFactionOf(v);
@@ -609,7 +609,7 @@ namespace MFO::Logistics::Errand {
             // exterior stall one cell over), provided that actor is loaded and usable.
             if (!vendor && a_info.destKind == DestKind::VendorActor && a_info.destForm) {
                 if (auto* va = RE::TESForm::LookupByID<RE::Actor>(a_info.destForm);
-                    va && va->Is3DLoaded() && !va->IsDead() && !va->IsDisabled() && !va->IsInCombat())
+                    va && va->Is3DLoaded() && !va->IsDead() && !va->IsDisabled() && !APMFBridge::InCombat(va))
                     vendor = RE::NiPointer<RE::Actor>(va);
             }
             const auto fid = a_follower->GetFormID();
@@ -687,7 +687,7 @@ namespace MFO::Logistics::Errand {
         // A cheap gate set first; the plan below walks a cell and the follower's inventory.
         auto* ui = RE::UI::GetSingleton();
         if (ui && ui->GameIsPaused()) return true;
-        if (a_follower->IsInCombat() || pc->IsInCombat()) return true;
+        if (APMFBridge::InCombat(a_follower) || pc->IsInCombat()) return true;   // a Harbinger substrate is not combat (v26)
         if (SlotOf(fid)) return true;   // looting: loot and errand never overlap
         auto* avo = a_follower->AsActorValueOwner();
         if (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) return true;   // told to wait
@@ -849,7 +849,7 @@ namespace MFO::Logistics::Errand {
         // The last LOADED position / cell: the simulation's start point and the entry-door search origin.
         r.lastPos = a_follower->GetPosition();
         if (auto* fc0 = a_follower->GetParentCell()) r.lastCell = fc0->GetFormID();
-        if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) { Finish(fid, "combat -- he rejoins", kCombatCooldownSec); return false; }
+        if (APMFBridge::InCombat(a_follower) || (pc && pc->IsInCombat())) { Finish(fid, "combat -- he rejoins", kCombatCooldownSec); return false; }
         if (auto* avo = a_follower->AsActorValueOwner(); avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) {
             Finish(fid, "told to wait", 60.0f);
             return false;
@@ -865,7 +865,7 @@ namespace MFO::Logistics::Errand {
         }
         // r.vendor == 0: still walking to the shop's PLACE (a cell / a ref); the vendor actor is found on arrival.
         RE::Actor* vendor = r.vendor ? RE::TESForm::LookupByID<RE::Actor>(r.vendor) : nullptr;
-        if (r.vendor && (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || vendor->IsInCombat())) {
+        if (r.vendor && (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || APMFBridge::InCombat(vendor))) {
             Finish(fid, "the vendor is gone, dead, unloaded or in combat", kFailCooldownSec);
             return false;
         }
@@ -1134,7 +1134,7 @@ namespace MFO::Logistics::Errand {
                     r.unloadedSince = {};
                     r.lastPos = f->GetPosition();   // sampled every lap: the simulation starts from the last LOADED position
                     if (auto* fc = f->GetParentCell()) r.lastCell = fc->GetFormID();
-                    if (f->IsInCombat() || (pc && pc->IsInCombat())) why = "combat -- he rejoins";
+                    if (APMFBridge::InCombat(f) || (pc && pc->IsInCombat())) why = "combat -- he rejoins";   // substrate: not combat (v26)
                     else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end()) why = "no longer an active follower";
                     else if (clk - r.lastTickClk > kStallSec) why = "the follower is no longer serviced";
                     else if (clk - r.startClk > kRealCapSec) why = "timed out (240 s real time)";

@@ -1,4 +1,5 @@
 #include "PCH.h"
+#include "apmf/APMFBridge.h"   // InCombat: a Harbinger combat substrate is not combat (ABI v26)
 #include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 
 // d3d11.h drags in windows.h, which CommonLibSSE-NG never includes.
@@ -1606,7 +1607,7 @@ namespace MFO::Board {
             r.active    = true;
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
-            r.inCombat  = a->IsInCombat();
+            r.inCombat  = APMFBridge::InCombat(a);   // the HUD's combat glyph: a Harbinger substrate is not combat (v26)
             r.meleeInRight = Taunt::MeleeInRightHand(a);   // the picker offers act.taunt only while true
             // Activity glyphs (worker-domain reads; this drain IS the worker, #4).
             // r.looting reads JustLooted, NOT IsLooting: IsLooting is a travel-

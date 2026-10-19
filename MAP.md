@@ -2160,6 +2160,27 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   first + unconditional. Reads `g_followers` — safe only because StopPump
   brackets the load window. Retreating follower `return`s before the gambit table
   so a cast rule can't fight the retreat travel.
+- **COMBAT SUBSTRATE IS NOT COMBAT (2026-10-19, ClickUp 86e3pu939, Harbinger ABI v26; marth 2026-10-13
+  "Certainly not. It only exists to facilitate actions").** A follower whose combat is a Harbinger substrate
+  (`APMFBridge::SubstrateOnly`) is skipped by the party-combat walk (`substrateNow` / `g_substrateNoted`, one
+  `[sched] ... is in a Harbinger combat SUBSTRATE` line per entry and one `left` line, `substrate-only=` on the
+  transition line), and `ownCombat`, the retreat's `inCombat`, the retreat self-heal gate, the `[sense]` own= and
+  the combat-table cast wait read `APMFBridge::InCombat(f)`. Elsewhere `InCombat` replaced `IsInCombat()` at every
+  "is he fighting" site: the HUD glyph (`Board.cpp` `r.inCombat`), `Confidence::Of`, `Followers` `g_lastCombat`,
+  Rapport credit, CasterConsent's CheckCast hard deny, the head-clear sink, HMS, the attack diag fight-open, lockpick
+  wait, the taunter's combat counters, ch.26 equip-weigh, the silver ammo episode, Service (potion pick, loot
+  eviction, steal concede) and LotD. The combat-thread `UpdateCombatHook` (`Targeting.cpp`) returns before style /
+  redirect for a substrate holder; `CombatSense::FoeCount` / `FoeLoad` skip the anchor. **Kept RAW on purpose
+  (engine mechanics, not "is he fighting"):** sheathe stand-downs (`Lockpick` posted sheathe, `cast/Equip.cpp`),
+  `EquipAuthority`'s OOC weapon / mage fixes (the substrate's hand floors own the hands), `Packages` retreat
+  StopCombat bookkeeping, `Probe`, and every cast-road choice keyed on `combatController` presence. **Also converted
+  after the town R2 / ranged-approach merges:** `logistics/Errand.cpp` (the follower's combat abort of an errand,
+  the run's combat check, the hand-off poll, and the vendor-usable reads), `Loadout.cpp` (displaced-left debt
+  expiry, heal-holds / heal-quiet), `Evaluator.cpp` (the fight-log dedupe). A dry-run substrate on a follower
+  mid-errand does NOT abort the errand. Evaluator's combat-group reads (`combatController`) stay raw (mechanics). **The anchor is never a foe** (closing round of 5876057): `IsSubstrateAnchor` skips it in EngageOnSight's RunProbe
+  scan, `cast/Auto.cpp` HostileAutoFoes, Evaluator PickFoe (both group loops) and CurrentTargetIfTrackable, and
+  `CombatSense` FoeCount / FoeLoad / ScanMeleeReach. **BACKLOG (read before editing CasterConsent / Scheduler substrate
+  walk / Lockpick / CombatSense):** REVIEW-BACKLOG MFO-B310..B315.
 - **PARTY COMBAT (2026-09-21, Deck/Fable — the Jesper freeze + the Cicero hold
   teardown; line numbers refreshed on `fix/mfo-field-batch-0921`).** `g_partyCombat`
   (`:199`) = the player `IsInCombat()` OR any managed active follower `IsInCombat()`
@@ -5913,7 +5934,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     `g_mx`/`g_owned` (`:57-58`) + refusal sets, `FacetExpiry` (`:169`), the shared claim helpers
     `EnsureClaimLocked` (`:180`), `ReleaseClaimLocked` (`:206`), `CastHeartbeatInterval` (`:247`),
     `EnsureCastClaimLocked` (`:286`), the idle-hand floor `ReconcileHandFloorLocked` (`:732`),
-    `Acquire` (`:900`, requests ABI 10) / `Available` (`:940`) / `MaybeWarnAbsence` (`:958`), the expiry sweep
+    `Acquire` (`:900`, requests ABI 10) / `Available` (`:940`) / **`SubstrateOnly` / `IsSubstrateAnchor` / `InCombat`
+    (`:976-982`, Harbinger ABI v26 `GetSubstrateState`, ClickUp 86e3pu939: a combat SUBSTRATE is not combat for
+    MFO; any thread, lock-free in APMF; "no substrate" below v26)** / `MaybeWarnAbsence` (`:958`), the expiry sweep
     `Tick` (`:974`) and `ClearTransientState` (`:1172`).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
     `ClaimOffenseCast` `:83`, `RefreshOwnedCastOnHand` `:215`, `ReleaseCastClaimOnHand` `:311`,

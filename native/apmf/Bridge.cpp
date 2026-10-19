@@ -960,6 +960,27 @@ namespace MFO::APMFBridge {
 
     bool Available() { return g_apmf.load(std::memory_order_relaxed) != nullptr; }
 
+    // ABI v26 (ClickUp 86e3pu939): Harbinger's substrate state. A v26 interface's leading members are v2's, so the
+    // cast from the stored v2 pointer is the documented up-cast after the abiVersion test.
+    namespace {
+        constexpr std::uint32_t kSubstrateMinAbi = 26;
+        std::uint32_t SubstrateStateOf(RE::FormID a_actor) {
+            if (a_actor == 0) return APMF_API::kSubstrateState_None;
+            auto* api = g_apmf.load(std::memory_order_relaxed);
+            if (!api || api->abiVersion < kSubstrateMinAbi) return APMF_API::kSubstrateState_None;
+            const auto* v26 = reinterpret_cast<const APMF_API::APMF_API_v26*>(api);
+            return v26->GetSubstrateState ? v26->GetSubstrateState(a_actor) : APMF_API::kSubstrateState_None;
+        }
+    }
+
+    bool SubstrateOnly(RE::FormID a_actor) { return SubstrateStateOf(a_actor) == APMF_API::kSubstrateState_Held; }
+    bool IsSubstrateAnchor(RE::FormID a_actor) {
+        return SubstrateStateOf(a_actor) == APMF_API::kSubstrateState_Anchor;
+    }
+    bool InCombat(const RE::Actor* a_actor) {
+        return a_actor && a_actor->IsInCombat() && !SubstrateOnly(a_actor->GetFormID());
+    }
+
     namespace {
         // The exact toast wording, in ONE place. Plain, one sentence, no em/en-
         // dash, no semicolon (Docs/VOICE.md).

@@ -89,10 +89,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v25, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v26, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 25;
+    inline constexpr std::uint32_t kABIVersion = 26;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -635,6 +635,7 @@ namespace APMF_API {
                                      //       logged): APMF < v23, [CombatSubstrate] bCombatSubstrate=0 (set off in APMF.ini),
                                      //       an unsupported runtime, the player, a negative / NaN fval. A
                                      //       substrate that cannot open (in combat, unloaded, ...) ends its claim.
+                                     //       ABI v26: APMF_API_v26::GetSubstrateState (substrate-only combat).
                                      //       See Docs/FACETS.md "Combat substrate".
     };
 
@@ -2486,6 +2487,29 @@ namespace APMF_API {
         // at once; Harbinger judges it at its ~250 ms Poll. A throw inside returns
         // kIdleState_Unknown and writes nothing.
         std::uint32_t (*GetIdleState)(Handle handle, APMF_IdleStateInfo* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v26: SUBSTRATE STATE (kIntent_CombatSubstrate, ch.27)
+    // ═════════════════════════════════════════════════════════════════════════════
+    // Is an actor's combat a Harbinger SUBSTRATE (forced only so the animated cast road exists) and not
+    // a fight? marth 2026-10-13: substrate combat is NOT combat, for any client. Real combat during the
+    // window flips the actor to kSubstrateState_Real at once. APPEND-ONLY: never renumber.
+    // See Docs/APMF_API-REFERENCE.md#abi-v26-substrate-state
+    enum SubstrateState : std::uint32_t {
+        kSubstrateState_None   = 0,  // no substrate (its combat, if any, is real); also any APMF < v26
+        kSubstrateState_Held   = 1,  // a live holder, no real-combat trigger: its combat is SUBSTRATE-ONLY
+        kSubstrateState_Real   = 2,  // a holder whose real-combat trigger fired: its combat COUNTS
+        kSubstrateState_Anchor = 3,  // the actor IS Harbinger's anchor (APMF.esl 0x80A): never a foe or target
+    };
+
+    // The v26 interface: APMF_API_v24's members verbatim (prefix EXTENSION; v25 added no slot), then
+    // ONE appended slot. BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 26`
+    // (INVARIANTS #14b); an older APMF has no query (treat every actor as kSubstrateState_None).
+    struct APMF_API_v26 : APMF_API_v24 {
+        // `actor`'s SubstrateState. Read-only; ANY THREAD (lock-free, no game call, no lock); cheap
+        // per actor per tick. A throw inside returns kSubstrateState_None.
+        std::uint32_t (*GetSubstrateState)(RE::FormID actor);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the

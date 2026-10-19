@@ -750,7 +750,7 @@ namespace MFO::Loadout {
             std::vector<RE::FormID> expired;
             for (const auto& [id, t] : g_equipClock) {
                 auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
-                if (!a || !a->IsInCombat()) expired.push_back(id);
+                if (!a || !APMFBridge::InCombat(a)) expired.push_back(id);   // a Harbinger substrate is not combat (v26)
             }
             for (const auto id : expired) g_equipClock.erase(id);
         }
@@ -792,12 +792,12 @@ namespace MFO::Loadout {
             // cast is pending on the left hand, neither give-back below undoes it.
             // Combat end is NOT suspended (the backstop further down): the claim
             // does not outlive combat, and the honest deadline stays honest.
-            const bool healHolds = actor->IsInCombat() && ComposedCast::HealTakesLeft(actor);
+            const bool healHolds = APMFBridge::InCombat(actor) && ComposedCast::HealTakesLeft(actor);
             if (healHolds || (debt.healWeapon && (APMFBridge::GetHealCastSpell(id, APMFBridge::kApmfHandLeft) != 0 ||
                                                   Actuation::HealRestreamGap(id))))
                 debt.healSeenAt = now;
             // A heal claim stood within kHealQuietS: not yet (in combat only; combat end is the backstop below).
-            const bool healQuiet = !actor->IsInCombat() || debt.healSeenAt == std::chrono::steady_clock::time_point{} ||
+            const bool healQuiet = !APMFBridge::InCombat(actor) || debt.healSeenAt == std::chrono::steady_clock::time_point{} ||
                                    std::chrono::duration<float>(now - debt.healSeenAt).count() >= kHealQuietS;
 
             // A hit that arrived during the suspension: restore the shield now that

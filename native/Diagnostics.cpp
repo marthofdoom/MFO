@@ -744,7 +744,7 @@ namespace MFO::Diagnostics {
                 s.lastAttachMs = a_nowMs;
                 AtkPostAttach(fid, a_slot);
             }
-            if (a_actor->IsInCombat()) {
+            if (APMFBridge::InCombat(a_actor)) {   // a Harbinger substrate opens no fight here (ABI v26)
                 s.oocArmed = false;
                 if (!s.fightOpen) {
                     s.fightOpen    = true;
