@@ -886,6 +886,12 @@ namespace MFO::APMFBridge {
     // which of the two a session ran under.
     bool IsEquipAuthorityEnforced();
 
+    // Any thread. True when the connected APMF is ABI >= 25 (a ch.17 entry may name ONE item
+    // instance by its ExtraUniqueID: APMF_API::SetEquipEntryUid). An older APMF ignores the
+    // entry's reserved bytes, so MFO sets a uid only when this is true. MFO's requested ABI and
+    // its minimum APMF are unchanged.
+    bool EquipInstanceSupported();
+
     // Worker-safe. Ensure a_follower holds the STANDING kIntent_EquipAuthority
     // claim (param.ival = kEquipAuth_None: scripts/console pass, unequips pass,
     // observe-only is APMF's own INI decision this cycle). Idempotent: a live claim

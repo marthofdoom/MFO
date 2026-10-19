@@ -1474,7 +1474,7 @@ Field-test instance: **Tuxbornrc1** on the deck
   is WRONG (it dedups on transition) and must not be used.
 
 ### 2026-10-14 -- `fix/mfo-jewelry-all` (NOT merged): every follower now picks a ring and an amulet
-The declaration (`logistics/EquipAuthority.cpp` `ChooseJewelry`) names the most useful carried ring/amulet instance for ANY follower, not just mages (marth: "Followers don't seem to consider jewelry slots"). With MEO an empty ring/amulet is worn as a gem host. The sell keep set protects the chosen pieces. Open: the ch.17 entry is base-form only until Harbinger's instance-id field lands; the legacy APMF-absent path is unchanged. NEEDS LOCAL (Deck): a non-mage with an enchanted ring in his pack after a cell load; an MEO follower with an empty ring.
+The declaration (`logistics/EquipAuthority.cpp` `ChooseJewelry`) names the most useful carried ring/amulet instance for ANY follower, not just mages (marth: "Followers don't seem to consider jewelry slots"). With MEO an empty ring/amulet is worn as a gem host. The sell keep set protects the chosen pieces. Since 2026-10-18 (APMF ABI v25, header mirrored) the ring and amulet entries name the CHOSEN copy by its ExtraUniqueID when the connected Harbinger is v25+ and the copy has a uid, so a gemmed or empty-socketable copy is worn rather than another copy of the same base (an older Harbinger: base form, as before). Hand entries never carry a uid. The legacy APMF-absent path is unchanged. NEEDS LOCAL (Deck): a non-mage with an enchanted ring in his pack after a cell load; an MEO follower with an empty ring.
 
 ### What is merged but UNRELEASED
 

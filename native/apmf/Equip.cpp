@@ -108,6 +108,11 @@ namespace MFO::APMFBridge {
         return reinterpret_cast<const APMF_API::APMF_API_v8*>(api)->IsEquipAuthorityEnforced();
     }
 
+    bool EquipInstanceSupported() {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        return api && api->abiVersion >= 25;
+    }
+
     bool ClaimEquipAuthority(RE::FormID a_follower, bool* a_outFresh) {
         if (a_outFresh) *a_outFresh = false;
         auto* api = g_apmf.load(std::memory_order_relaxed);

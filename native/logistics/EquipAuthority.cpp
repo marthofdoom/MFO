@@ -406,6 +406,9 @@ namespace MFO::Logistics {
                 std::vector<DeclKey> keys;
                 std::uint32_t        owned  = 0;
                 std::uint32_t        denied = 0;
+                // APMF ABI v25: the (form, uid) of every entry that names an item INSTANCE (the chosen
+                // ring / amulet copy), sorted, so a changed instance of the same base form re-sends.
+                std::vector<std::pair<RE::FormID, std::uint16_t>> uids;
                 bool operator==(const SentDecl&) const = default;
             };
             std::unordered_map<RE::FormID, SentDecl> g_lastDeclared;
@@ -504,8 +507,8 @@ namespace MFO::Logistics {
             // ComputeOwnedGearPick is untouched (the legacy APMF-absent road and every other
             // caller keep it); the slate is a SIBLING read only by RefreshEquipDeclaration.
             // jewelInst[0] / [1] = the inventory INSTANCE (ExtraDataList + ExtraUniqueID) behind slot[4] / slot[5] when
-            // ChooseJewelry chose it (null / 0 = a base-form pick). The ch.17 entry names a BASE form today; a later ABI
-            // field can carry this identity (Harbinger instance-id work) without re-deriving the choice.
+            // ChooseJewelry chose it (null / 0 = a base-form pick). RefreshEquipDeclaration names that copy in the
+            // ch.17 entry (APMF ABI v25, SetEquipEntryUid) when APMF supports it and the copy has a uid.
             struct JewelInst { RE::ExtraDataList* xl = nullptr; std::uint16_t uid = 0; };
             struct GearSlate { RE::TESObjectARMO* slot[6] = {}; bool mage = false; JewelInst jewelInst[2]; };
 
@@ -1318,9 +1321,13 @@ namespace MFO::Logistics {
             // the hands wins those bits before the gauntlets are considered. For the mage set
             // this is the order it always had.
             std::vector<RE::TESObjectARMO*> slate;
+            // The chosen ring / amulet COPY (ChooseJewelry), read below to name it in the declaration (ABI v25).
+            RE::TESObjectARMO* jewelForm[2] = {};
+            RE::ExtraDataList* jewelXl[2]   = {};
             if (a_judgeArmor) {
                 GearSlate gs;
                 ComputeOwnedGearSlate(a_follower, a_state, gs, inv);
+                for (int j = 0; j < 2; ++j) { jewelForm[j] = gs.slot[4 + j]; jewelXl[j] = gs.jewelInst[j].xl; }
                 const auto accept = [&](RE::TESObjectARMO* b) {
                     if (!b || b->IsShield()) return;
                     if (pick && SlotsOverlap(pick, b)) return;
@@ -1483,6 +1490,29 @@ namespace MFO::Logistics {
                 }
                 decl.Add(ar);
             }
+            // THE CHOSEN JEWELRY COPY (APMF ABI v25): the ring / amulet entry names the instance ChooseJewelry
+            // chose, so a gemmed (or empty socketable) copy is worn rather than another copy of the same base.
+            // ONLY the two jewelry entries (Default slot): a uid on a hand entry would take it out of the combat
+            // AI's weapon switching (APMF docs, review F1). Only when the slate kept the piece (accept() may
+            // drop it), APMF is ABI >= 25, and the copy has a nonzero ExtraUniqueID, read NOW from the follower's
+            // own inventory list (the engine rewrites uids on a container transfer; MEOBridge::WornUid reads the
+            // same field). No uid: the plain base-form entry, as before.
+            if (APMFBridge::EquipInstanceSupported()) {
+                for (int j = 0; j < 2; ++j) {
+                    if (!jewelForm[j] || !jewelXl[j] ||
+                        std::find(slate.begin(), slate.end(), jewelForm[j]) == slate.end()) continue;
+                    const auto* u = jewelXl[j]->GetByType<RE::ExtraUniqueID>();
+                    const std::uint16_t uid = u ? u->uniqueID : 0;
+                    if (uid == 0) continue;
+                    for (auto& e : decl.entries) {
+                        if (e.form != jewelForm[j]->GetFormID() || e.slot != APMF_API::kEquipSlot_Default) continue;
+                        APMF_API::SetEquipEntryUid(e, uid);
+                        decl.names += fmt::format(" [{} uid {:04X}]", j == 0 ? "ring" : "amulet", uid);
+                        break;
+                    }
+                }
+            }
+
             // Every build, sent or not: what 4b must not read as the player's next tick.
             if (withheldNow.empty()) g_lastWithheld.erase(id);
             else                     g_lastWithheld[id] = std::move(withheldNow);
@@ -1504,8 +1534,12 @@ namespace MFO::Logistics {
             // scope over a NEW set (the order is fixed).
             SentDecl sent;
             sent.keys.reserve(decl.entries.size());
-            for (const auto& e : decl.entries) sent.keys.emplace_back(e.form, e.slot);
+            for (const auto& e : decl.entries) {
+                sent.keys.emplace_back(e.form, e.slot);
+                if (const auto uid = APMF_API::EquipEntryUid(e); uid != 0) sent.uids.emplace_back(e.form, uid);
+            }
             std::sort(sent.keys.begin(), sent.keys.end());
+            std::sort(sent.uids.begin(), sent.uids.end());
             sent.owned  = owned;
             sent.denied = denied;
             // ... EXCEPT that "unchanged" must not mean "already on his body"
