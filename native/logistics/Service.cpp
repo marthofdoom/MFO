@@ -1185,7 +1185,8 @@ namespace MFO::Logistics {
                         // Stuck at his OWN origin: 3+ different targets blocked within ~300 u of one
                         // point (StuckAtOrigin.cpp). End the excursion, release the road, back to follow.
                         if (StuckAtOriginNoteBlock(a_follower, tref->GetFormID(),
-                                                   blockPos ? *blockPos : a_follower->GetPosition(), now)) {
+                                                   blockPos ? *blockPos : a_follower->GetPosition(), now,
+                                                   tr.active)) {
                             Packages::LootTravelClear("stuck at his own origin", a_follower, slot);
                             tr = TravelIntent{};
                             return;
