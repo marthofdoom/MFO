@@ -510,6 +510,27 @@ namespace MFO::Logistics {
             // ChooseJewelry chose it (null / 0 = a base-form pick). RefreshEquipDeclaration names that copy in the
             // ch.17 entry (APMF ABI v25, SetEquipEntryUid) when APMF supports it and the copy has a uid.
             struct JewelInst { RE::ExtraDataList* xl = nullptr; std::uint16_t uid = 0; };
+
+            // IS THE DECLARED COPY WORN (APMF ABI v25 review F1). uid 0: any copy of the base worn (the entry
+            // names no instance, InventoryEntryData::IsWorn). uid != 0: only the list carrying THAT ExtraUniqueID
+            // counts, worn when it has ExtraWorn or ExtraWornLeft (a plain copy A worn while gemmed copy B is
+            // declared is NOT worn). kMissing: the follower carries no list with that uid (the next ChooseJewelry
+            // re-chooses). Shared by the drift re-send and slateLanded so the two cannot disagree.
+            enum class DeclWorn { kNo, kYes, kMissing };
+            DeclWorn DeclaredCopyWorn(const RE::TESObjectREFR::InventoryItemMap& a_inv, RE::TESBoundObject* a_obj,
+                                      std::uint16_t a_uid) {
+                const auto it = a_inv.find(a_obj);
+                if (it == a_inv.end() || !it->second.second) return a_uid ? DeclWorn::kMissing : DeclWorn::kNo;
+                if (a_uid == 0) return it->second.second->IsWorn() ? DeclWorn::kYes : DeclWorn::kNo;
+                if (it->second.second->extraLists)
+                    for (auto* xl : *it->second.second->extraLists) {
+                        const auto* u = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
+                        if (!u || u->uniqueID != a_uid) continue;
+                        return (xl->HasType(RE::ExtraDataType::kWorn) || xl->HasType(RE::ExtraDataType::kWornLeft))
+                                   ? DeclWorn::kYes : DeclWorn::kNo;
+                    }
+                return DeclWorn::kMissing;
+            }
             struct GearSlate { RE::TESObjectARMO* slot[6] = {}; bool mage = false; JewelInst jewelInst[2]; };
 
             // RULE 5's OVERLAP TEST, ONE copy for the declaration and the sell side: a WORN
@@ -1324,10 +1345,23 @@ namespace MFO::Logistics {
             // The chosen ring / amulet COPY (ChooseJewelry), read below to name it in the declaration (ABI v25).
             RE::TESObjectARMO* jewelForm[2] = {};
             RE::ExtraDataList* jewelXl[2]   = {};
+            std::uint16_t      jewelUid[2]  = {};
+            // The uid the declaration will name for a_ar (0 = the plain base-form entry).
+            const auto declUid = [&](const RE::TESBoundObject* a_ar) -> std::uint16_t {
+                for (int j = 0; j < 2; ++j)
+                    if (a_ar && a_ar == jewelForm[j]) return jewelUid[j];
+                return 0;
+            };
             if (a_judgeArmor) {
                 GearSlate gs;
                 ComputeOwnedGearSlate(a_follower, a_state, gs, inv);
                 for (int j = 0; j < 2; ++j) { jewelForm[j] = gs.slot[4 + j]; jewelXl[j] = gs.jewelInst[j].xl; }
+                // The copy's uid, read NOW from the follower's own list (the engine rewrites uids on a container
+                // transfer; MEOBridge::WornUid reads the same field). 0 = no uid, or APMF older than ABI v25.
+                if (APMFBridge::EquipInstanceSupported())
+                    for (int j = 0; j < 2; ++j)
+                        if (jewelForm[j] && jewelXl[j])
+                            if (const auto* u = jewelXl[j]->GetByType<RE::ExtraUniqueID>()) jewelUid[j] = u->uniqueID;
                 const auto accept = [&](RE::TESObjectARMO* b) {
                     if (!b || b->IsShield()) return;
                     if (pick && SlotsOverlap(pick, b)) return;
@@ -1403,8 +1437,7 @@ namespace MFO::Logistics {
                 return it != inv.end() && it->second.second && it->second.second->IsWorn();
             }();
             const auto wornNow = [&](RE::TESObjectARMO* a_ar) {
-                const auto it = inv.find(a_ar);
-                return it != inv.end() && it->second.second && it->second.second->IsWorn();
+                return DeclaredCopyWorn(inv, a_ar, declUid(a_ar)) == DeclWorn::kYes;   // review F1: the declared COPY
             };
             // MAGE ROAD ONLY (the old mageSetLanded): MFO is contesting a slot until every set
             // piece is on him. The RATED road keeps main's `(!pick || pickWorn)` and main's
@@ -1497,19 +1530,19 @@ namespace MFO::Logistics {
             // drop it), APMF is ABI >= 25, and the copy has a nonzero ExtraUniqueID, read NOW from the follower's
             // own inventory list (the engine rewrites uids on a container transfer; MEOBridge::WornUid reads the
             // same field). No uid: the plain base-form entry, as before.
-            if (APMFBridge::EquipInstanceSupported()) {
-                for (int j = 0; j < 2; ++j) {
-                    if (!jewelForm[j] || !jewelXl[j] ||
-                        std::find(slate.begin(), slate.end(), jewelForm[j]) == slate.end()) continue;
-                    const auto* u = jewelXl[j]->GetByType<RE::ExtraUniqueID>();
-                    const std::uint16_t uid = u ? u->uniqueID : 0;
-                    if (uid == 0) continue;
-                    for (auto& e : decl.entries) {
-                        if (e.form != jewelForm[j]->GetFormID() || e.slot != APMF_API::kEquipSlot_Default) continue;
-                        APMF_API::SetEquipEntryUid(e, uid);
-                        decl.names += fmt::format(" [{} uid {:04X}]", j == 0 ? "ring" : "amulet", uid);
-                        break;
-                    }
+            for (int j = 0; j < 2; ++j) {
+                const std::uint16_t uid = jewelUid[j];   // 0 unless APMF >= v25 and the copy has a uid
+                if (uid == 0 || std::find(slate.begin(), slate.end(), jewelForm[j]) == slate.end()) continue;
+                for (auto& e : decl.entries) {
+                    if (e.form != jewelForm[j]->GetFormID() || e.slot != APMF_API::kEquipSlot_Default) continue;
+                    APMF_API::SetEquipEntryUid(e, uid);
+                    // Next to its item in the declare line's names (review SEV-5).
+                    const char* nm = jewelForm[j]->GetName();
+                    const std::string item = (nm && *nm) ? nm : "?";
+                    const std::string tag  = fmt::format("{} [{} uid {:04X}]", item, j == 0 ? "ring" : "amulet", uid);
+                    if (const auto at = decl.names.find(item); at != std::string::npos) decl.names.replace(at, item.size(), tag);
+                    else decl.names += ", " + tag;
+                    break;
                 }
             }
 
@@ -1568,7 +1601,12 @@ namespace MFO::Logistics {
                         if (!ar) continue;                                          // not an ARMO: skip
                         const auto iit = inv.find(ar);
                         if (iit == inv.end() || iit->second.first <= 0) continue;    // not owned any more
-                        if (iit->second.second && iit->second.second->IsWorn()) continue;
+                        // Review F1 (ABI v25): a key with a uid is worn only if THAT copy is; no list with the uid ->
+                        // skip (the next ChooseJewelry re-chooses). uid 0: any copy worn, as before.
+                        std::uint16_t uid = 0;
+                        for (const auto& u : sent.uids) if (u.first == k.first) { uid = u.second; break; }
+                        const DeclWorn w = DeclaredCopyWorn(inv, ar, uid);
+                        if (w != DeclWorn::kNo) continue;
                         adrift = ar;
                         break;
                     }
