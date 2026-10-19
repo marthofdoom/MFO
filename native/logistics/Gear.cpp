@@ -259,7 +259,7 @@ namespace MFO::Logistics {
         // never declared, never chosen, never kept), and it stays in the pack for the sale path.
         // His OWN plugin's gear (intentional invisible native gear, #64), excluded/quest items, jewelry and
         // non-playable creature armor (IsCreatureArmor's, deleted) are NOT this class.
-        bool ArmorWontRender(RE::Actor* a_actor, const RE::TESObjectARMO* a_armo) {
+        bool ArmorWontRender(RE::Actor* a_actor, RE::TESObjectARMO* a_armo) {
             if (!a_actor || !a_armo) return false;
             auto* race = a_actor->GetRace();
             if (!race) return false;
