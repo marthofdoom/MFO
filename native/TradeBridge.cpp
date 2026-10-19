@@ -561,6 +561,9 @@ namespace MFO::TradeBridge {
                 g_outcomes[o.followerId] = TradeOutcome{ true, 0, 0, 0, 0 };
                 return;
             }
+            const std::int32_t postTradeGold = o.probeOnly ? a_vendorGold
+                : static_cast<std::int32_t>(std::max<std::int64_t>(0, static_cast<std::int64_t>(a_vendorGold) -
+                                                                      a_soldValue + a_spent));
             {
                 // NO EMPTY TRADES: file the result. The chest's gold is the last-seen value
                 // for every later signature there; an EMPTY result is remembered for this
@@ -568,7 +571,10 @@ namespace MFO::TradeBridge {
                 const auto vpp = o.vendor.get();
                 auto* vp = vpp.get();
                 std::scoped_lock lk(g_mtx);
-                g_chestGold[o.chestId] = a_vendorGold;
+                // MFO_Trade.psc reports the chest's gold read BEFORE the trade (:36); a real trade then moved
+                // soldValue OUT of the chest (:68) and spent INTO it (:107), both exactly the reported totals.
+                // Store what the chest holds NOW. A probe moves no gold (psc `if !probe`), so it keeps the read.
+                g_chestGold[o.chestId] = postTradeGold;
                 g_outcomes[o.followerId] = TradeOutcome{ false, a_soldCount, a_soldValue, a_boughtCount, a_spent };
                 // The memo key: the vendor actor when it resolves, else the errand's own (the plan keyed SkipTrade by it).
                 const RE::FormID vkey = vp ? vp->GetFormID() : o.memoKey;
@@ -594,12 +600,12 @@ namespace MFO::TradeBridge {
                 offered += std::format("'{}' x{}", n && n->GetFullName() && *n->GetFullName() ? n->GetFullName() : "?",
                                        o.sell[i].count);
             }
-            spdlog::info("[econ] {:08X} '{}' @ '{}': chest gold={} | {} SELL {} for {}g, BUY {} for {}g "
+            spdlog::info("[econ] {:08X} '{}' @ '{}': chest gold NOW={} | {} SELL {} for {}g, BUY {} for {}g "
                          "(sell n={}, needs={}, purse={}) | offered [{}] | bought plan [{}]",
                          fol ? fol->GetFormID() : 0u,
                          fol && fol->GetName() ? fol->GetName() : "?",
                          ven && ven->GetName() ? ven->GetName() : "?",
-                         a_vendorGold, verb, a_soldCount, a_soldValue, a_boughtCount, a_spent,
+                         postTradeGold, verb, a_soldCount, a_soldValue, a_boughtCount, a_spent,
                          o.sell.size(), o.needs.size(), o.budget + o.buySpent,   // original purse
                          offered, o.buyPlan);
         }

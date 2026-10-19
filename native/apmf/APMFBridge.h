@@ -1653,6 +1653,7 @@ namespace MFO::APMFBridge {
         ErrandIdleVerdict verdict = ErrandIdleVerdict::None;   // None = no idle claim
         bool              weak    = false;
         std::string       detail;   // "state=Refused endCause=Harbinger ..." for the log
+        std::uint32_t     unconfirmableWhy = 0;   // APMF_IdleStateInfo::unconfirmableWhy when the state read Unconfirmable (else 0)
     };
     // Play a_idle AT a_target as the next beat: the first call files the ch.1 hold and the ch.12 claim, a later
     // call Repoints the same claim to the new idle. False = refused at the call (logged).
