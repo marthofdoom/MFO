@@ -540,6 +540,14 @@ namespace MFO::Logistics {
         }
         if (inRoleWeapons == 0) return false;   // don't disarm
 
+        // NO HAND-BACK, NO DROP (marth 2026-10-18: "We dont do handing or dropping anymore. It's selling, or
+        // perhaps inter follower trading/bartering"). Off-role weapons leave the follower ONLY through the
+        // sale path (Economy.cpp); this pass keeps its bookkeeping above (Lotd deposit set, fists log) but
+        // moves nothing. The drop machinery below is retained, switched off, for the day a trading road
+        // replaces it.
+        constexpr bool kShedMovesItems = false;
+        if (!kShedMovesItems) return false;
+
         const char* nm = shed->GetName() ? shed->GetName() : "?";
 
         // DROP IT ON THE FLOOR near the follower (marth: "drop the handing

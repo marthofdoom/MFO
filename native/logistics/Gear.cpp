@@ -473,42 +473,44 @@ namespace MFO::Logistics {
             }
 
             WeaponRoles roles;
-            // ROLES COME FROM CLASS, GAMBITS AND PERKS -- NEVER FROM WHAT IS CARRIED (marth 2026-10-18:
-            // "Fix roles, sell off-role"; "Ranged and Melee classes allow casting but are strictly within
-            // spec even with outstanding perks, auto class yes, perks count both ways"):
-            //   explicit MELEE class  -> melee role only (no ranged role, whatever the bow perks / gambits)
-            //   explicit RANGED class -> ranged role only (no melee role, whatever the sword perks / gambits)
-            //   explicit MAGE class   -> today's rule: a melee role only by an equip-melee gambit, a ranged
-            //                            role only by an equip-ranged gambit (perks never author one)
-            //   AUTO class            -> melee by an equip-melee gambit OR owned 1H/2H perk ranks, ranged by an
-            //                            equip-ranged gambit OR owned bow/crossbow perk ranks (both may hold)
-            // Casting gambits never change any of it. The perk mirror is blank until his real perks are
-            // tallied (StyleVotesReady: not before the progression reapply, diag 4a), so on a pump runtime
-            // the OLD carried signal stands until then -- it can only KEEP, never sell on a half-known
+            // ROLES (marth 2026-10-18): the CLASS sets the base role; an equip-melee / equip-ranged gambit is an
+            // OVERRIDE that adds that role for ANY class ("gambits are viewed as an override"); casting gambits
+            // never change anything; carried weapons never do ("Fix roles, sell off-role"):
+            //   explicit MELEE class  -> melee;  explicit RANGED class -> ranged;  MAGE class -> neither;
+            //   AUTO class            -> melee by 1H/2H perk ranks, ranged by bow/crossbow perk ranks, and if
+            //                            neither a gambit nor a perk yields any role, the base class vote
+            //                            (ResolveBaseClass) -- never "no role".
+            // Perks never add an off-class role to an explicit class. The perk mirror is blank until his real
+            // perks are tallied (StyleVotesReady: not before the progression reapply, diag 4a), so on a pump
+            // runtime the OLD carried signal stands until then -- it can only KEEP, never sell on a half-known
             // answer. VR has no pump: class + gambits alone, no perks.
             const bool ready = StyleVotesReady(a_follower);
             const bool vr    = !MainThread::IsInstalled();
             const char* meleeSrc = "none";
             const char* rangedSrc = "none";
             if (!ready && !vr) {
-                if (wantsMelee || carriesMelee) { roles.melee = bestMeleeSkill; meleeSrc = wantsMelee ? "gambit" : "carried"; }
+                if (wantsMelee || carriesMelee) { roles.melee = bestMeleeSkill; meleeSrc = wantsMelee ? "gambit-override" : "carried"; }
                 roles.doRanged = wantsRanged || carriesRanged;
-                if (roles.doRanged) rangedSrc = wantsRanged ? "gambit" : "carried";
+                if (roles.doRanged) rangedSrc = wantsRanged ? "gambit-override" : "carried";
             } else {
                 const Progression::StyleVotes rv = ready ? StyleVotesFor(a_follower) : Progression::StyleVotes{};
                 const std::uint8_t cls = a_state.combatClassOverride;
                 bool m = false, r = false;
                 if (cls == 1)      { m = true; meleeSrc = "class"; }
                 else if (cls == 2) { r = true; rangedSrc = "class"; }
-                else {
-                    if (wantsMelee)  { m = true; meleeSrc = "gambit"; }
-                    if (wantsRanged) { r = true; rangedSrc = "gambit"; }
-                    if (cls == 0) {
-                        int mp = 0;
-                        for (int b = 0; b < 7; ++b) mp += rv.weapon[b];
-                        if (!m && mp > 0)                           { m = true; meleeSrc = "perks"; }
-                        if (!r && (rv.weapon[7] > 0 || rv.weapon[8] > 0)) { r = true; rangedSrc = "perks"; }
-                    }
+                else if (cls == 0) {
+                    int mp = 0;
+                    for (int b = 0; b < 7; ++b) mp += rv.weapon[b];
+                    if (mp > 0)                                  { m = true; meleeSrc = "perks"; }
+                    if (rv.weapon[7] > 0 || rv.weapon[8] > 0)    { r = true; rangedSrc = "perks"; }
+                }
+                if (wantsMelee  && !m) { m = true; meleeSrc  = "gambit-override"; }
+                if (wantsRanged && !r) { r = true; rangedSrc = "gambit-override"; }
+                if (cls == 0 && !m && !r) {
+                    // Auto, no gambit and no perk signal: fall back to the base class vote.
+                    const std::uint8_t vote = ResolveBaseClass(a_follower, a_state);
+                    if (vote == 1)      { m = true; meleeSrc = "class-vote"; }
+                    else if (vote == 2) { r = true; rangedSrc = "class-vote"; }
                 }
                 if (m) roles.melee = bestMeleeSkill;
                 roles.doRanged = r;
