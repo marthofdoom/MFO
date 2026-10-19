@@ -182,7 +182,10 @@ namespace MFO::TradeBridge {
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
                      std::int32_t a_budget, const BuyThresholds& a_buy = {},
-                     std::uint64_t a_sig = 0, float a_daysNow = 0.0f);
+                     std::uint64_t a_sig = 0, float a_daysNow = 0.0f,
+                     RE::FormID a_memoKey = 0);
+    // a_memoKey (town errands, R1b): the vendor key the empty-trade memo is filed under when a_vendor is null or unloaded -- the
+    // SAME key the plan's SkipTrade used (the vendor actor's FormID, or the FACTION's for a shop with no loaded vendor).
 
     // ── NO EMPTY TRADES (marth 2026-09-28; field: 159 dispatches, 156 moved nothing --
     // Jesper at Brand-Shei's chest, gold 1, three sell rows, every ~20 s for 5 min) ──

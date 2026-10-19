@@ -340,6 +340,29 @@ namespace MFO::Logistics::Errand {
 
             // R1b: shops whose vendor is NOT loaded (an interior while the player is outside), from the faction catalog.
             if (Runtime::IsVerified1_6_1170() && a_playerTown) {
+                // A shop that is a CELL has no position: its distance (and the travel-radius gate) is that of the nearest LOADED load
+                // door whose destination door sits in that cell. No such door in the follower's loaded cell = the shop is skipped
+                // (nothing to estimate the walk from, and no proof the player's area leads there).
+                std::unordered_map<RE::FormID, float> cellDoorDist;
+                {
+                    std::vector<RE::ObjectRefHandle> doors;
+                    cell->ForEachReferenceInRange(a_follower->GetPosition(), kScanRadius, [&](RE::TESObjectREFR* a_ref) {
+                        if (doors.size() < 64 && a_ref->extraList.GetByType<RE::ExtraTeleport>()) doors.push_back(a_ref->GetHandle());
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    });
+                    for (auto& dh : doors) {
+                        auto dp = dh.get();
+                        auto* d = dp.get();
+                        auto* tele = d ? d->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+                        if (!tele || !tele->teleportData) continue;
+                        auto lp = tele->teleportData->linkedDoor.get();
+                        auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
+                        if (!lc) continue;
+                        const float dd = d->GetPosition().GetDistance(pc->GetPosition());
+                        if (const auto it = cellDoorDist.find(lc->GetFormID()); it == cellDoorDist.end() || dd < it->second)
+                            cellDoorDist[lc->GetFormID()] = dd;
+                    }
+                }
                 std::vector<ShopStatic> shops;
                 bool have = false;
                 {
@@ -364,8 +387,11 @@ namespace MFO::Logistics::Errand {
                         if (!ref) continue;
                         d = ref->GetPosition().GetDistance(pc->GetPosition());
                         if (d > maxFromPlayer) { ++a_dropped; continue; }
-                    } else if (!RE::TESForm::LookupByID<RE::TESObjectCELL>(sh.place)) {
-                        continue;
+                    } else {
+                        const auto it = cellDoorDist.find(sh.place);
+                        if (it == cellDoorDist.end()) { ++a_dropped; continue; }
+                        d = it->second;
+                        if (d > maxFromPlayer) { ++a_dropped; continue; }
                     }
                     seenChest[sh.chest] = true;
                     Cand c;
@@ -531,6 +557,10 @@ namespace MFO::Logistics::Errand {
             const bool ok = Papyrus::DispatchMoveTo(f, pc, dx, dy, 0.0f);
             spdlog::info("[errand] {:08X} '{}': RECALL ({}) -- he is unloaded while the player is elsewhere; MoveTo the "
                          "player (+{:.0f},{:.0f}) {}", a_fid, NameOf(f), a_why, dx, dy, ok ? "dispatched" : "FAILED to dispatch");
+        }
+
+        bool VendorPresentNear(RE::Actor* a_follower, RE::FormID a_faction) {
+            return static_cast<bool>(FindVendorActor(a_follower, a_faction));
         }
 
         bool ResumePhysical(RE::Actor* a_follower, const ResumeInfo& a_info) {
@@ -763,15 +793,16 @@ namespace MFO::Logistics::Errand {
             it->second.lastTickClk = Scheduler::ServiceClock();
             r = it->second;
         }
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        if (!Config::g_townErrands.load() || !Config::g_economy.load()) { Finish(fid, "town errands / economy switched off", kFailCooldownSec); return false; }
+        if (a_follower->IsDead()) { Finish(fid, "follower dead", kFailCooldownSec); return false; }
+        // An UNLOADED follower is the Sweep's: it hands him to the simulation after one more poll. His own logistics tick can land
+        // first (he stays on the roster ~1-1.6 s after the unload and Scheduler::Tick runs before Errand::Sweep), so this tick
+        // neither acts nor ends anything -- and does not sample his (now stale) position.
+        if (!a_follower->Is3DLoaded()) return true;
         // The last LOADED position / cell: the simulation's start point and the entry-door search origin.
         r.lastPos = a_follower->GetPosition();
         if (auto* fc0 = a_follower->GetParentCell()) r.lastCell = fc0->GetFormID();
-        auto* pc = RE::PlayerCharacter::GetSingleton();
-        if (!Config::g_townErrands.load() || !Config::g_economy.load()) { Finish(fid, "town errands / economy switched off", kFailCooldownSec); return false; }
-        if (a_follower->IsDead() || !a_follower->Is3DLoaded()) {
-            Finish(fid, "follower dead or unloaded", kFailCooldownSec);   // (an unloaded one is the Sweep's: it hands him to the simulation)
-            return false;
-        }
         if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) { Finish(fid, "combat -- he rejoins", kCombatCooldownSec); return false; }
         if (auto* avo = a_follower->AsActorValueOwner(); avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) {
             Finish(fid, "told to wait", 60.0f);
@@ -832,6 +863,8 @@ namespace MFO::Logistics::Errand {
                     } else if (pleg.state == APMF_API::kLeg_Failed) {
                         Finish(fid, "Harbinger could not start the leg (FAILED -- all travel slots busy? APMF.log says); queued", 6.0f);
                         return false;
+                    } else if (pleg.state == APMF_API::kLeg_ActorGone) {
+                        // He went through a shop door / left the loaded area: the HAND-OFF to the simulation (Sweep), not a failure.
                     } else if (pleg.state > APMF_API::kLeg_Blocked && pleg.state <= APMF_API::kLeg_Released) {
                         Finish(fid, std::format("the walk to the shop ended: {}", LegName(pleg.state)).c_str(), kFailCooldownSec);
                         return false;
@@ -867,6 +900,8 @@ namespace MFO::Logistics::Errand {
                     // He QUEUES (a short retry), never parks the vendor and never falls back to the instant trade.
                     Finish(fid, "Harbinger could not start the leg (FAILED -- all travel slots busy? APMF.log says); queued", 6.0f);
                     return false;
+                } else if (leg.state == APMF_API::kLeg_ActorGone) {
+                    // (the hand-off to the simulation is the Sweep's, not a failure)
                 } else if (leg.state > APMF_API::kLeg_Blocked && leg.state <= APMF_API::kLeg_Released) {
                     Finish(fid, std::format("the walk ended: {}", LegName(leg.state)).c_str(), kFailCooldownSec);
                     return false;

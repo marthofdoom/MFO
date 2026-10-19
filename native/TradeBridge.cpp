@@ -15,6 +15,7 @@ namespace MFO::TradeBridge {
         struct TradeOrder {
             RE::ActorHandle      follower;
             RE::FormID           followerId = 0;   // for the town errand's outcome record (below)
+            RE::FormID           memoKey = 0;      // town errand: the empty-trade memo's vendor key when no vendor actor resolves
             RE::ActorHandle      vendor;
             RE::ObjectRefHandle  chest;
             RE::FormID           chestId = 0;  // for the per-chest in-flight guard
@@ -564,15 +565,15 @@ namespace MFO::TradeBridge {
                 // NO EMPTY TRADES: file the result. The chest's gold is the last-seen value
                 // for every later signature there; an EMPTY result is remembered for this
                 // (follower, vendor) against what was offered, anything else forgets it.
-                const auto fpp = o.follower.get();
                 const auto vpp = o.vendor.get();
-                auto* fp = fpp.get();
                 auto* vp = vpp.get();
                 std::scoped_lock lk(g_mtx);
                 g_chestGold[o.chestId] = a_vendorGold;
                 g_outcomes[o.followerId] = TradeOutcome{ false, a_soldCount, a_soldValue, a_boughtCount, a_spent };
-                if (fp && vp) {
-                    const auto key = PairKey(fp->GetFormID(), vp->GetFormID());
+                // The memo key: the vendor actor when it resolves, else the errand's own (the plan keyed SkipTrade by it).
+                const RE::FormID vkey = vp ? vp->GetFormID() : o.memoKey;
+                if (o.followerId && vkey) {
+                    const auto key = PairKey(o.followerId, vkey);
                     if (a_soldCount == 0 && a_boughtCount == 0)
                         g_emptyMemo[key] = EmptyMemo{ o.sig, a_vendorGold, o.daysAt, false };
                     else
@@ -625,7 +626,7 @@ namespace MFO::TradeBridge {
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
                      std::int32_t a_budget, const BuyThresholds& a_buy,
-                     std::uint64_t a_sig, float a_daysNow) {
+                     std::uint64_t a_sig, float a_daysNow, RE::FormID a_memoKey) {
         auto* q = Forms::g_tradeQuest;
         if (!q || !q->IsRunning()) return false;
         if (!a_follower || !a_chest)  return false;
@@ -656,6 +657,7 @@ namespace MFO::TradeBridge {
             TradeOrder o;
             o.follower  = a_follower->GetHandle();
             o.followerId = a_follower->GetFormID();
+            o.memoKey   = a_memoKey;
             o.vendor    = a_vendor ? a_vendor->GetHandle() : RE::ActorHandle{};
             o.chest     = a_chest->GetHandle();
             o.chestId   = chestId;

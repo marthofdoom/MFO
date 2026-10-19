@@ -103,6 +103,8 @@ namespace MFO::Logistics::Errand {
         // he is already in the player's cell. `a_why` goes to the log. No-op during a loading screen.
         void  RecallToPlayer(RE::FormID a_follower, const char* a_why);
         bool  InLoadingMenu();
+        // Is a vendor ACTOR of this faction standing, loaded and awake, in the follower's (loaded) cell?
+        bool  VendorPresentNear(RE::Actor* a_follower, RE::FormID a_faction);
         RE::FormID PlayerTownId();   // the BGSLocation id of the player's town, 0 = not in one
         const char* NameOf(const RE::Actor* a_actor);
     }

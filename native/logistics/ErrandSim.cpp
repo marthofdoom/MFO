@@ -152,7 +152,7 @@ namespace MFO::Logistics::Errand::Sim {
             auto* vendor = r.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(r.vendorActor) : nullptr;
             TradeBridge::DiscardOutcome(r.follower);
             const bool ok = TradeBridge::VendorTrade(f, vendor, chest, r.order->sell, r.order->needs, r.order->purse,
-                                                     r.order->buy, r.order->sig, r.order->daysNow);
+                                                     r.order->buy, r.order->sig, r.order->daysNow, r.order->vendorKey);
             if (ok) {
                 r.dispatched = true;
                 r.dispatchedClk = Scheduler::ServiceClock();
@@ -168,7 +168,9 @@ namespace MFO::Logistics::Errand::Sim {
             if (r.dispatched || r.tradeAbandoned) return;
             if (a_days >= r.tArrive && r.order && !r.order->skipped) {
                 spdlog::info("[errand] {:08X}: resolving to now ({}) -- he had arrived: the trade is replayed", r.follower, a_why);
-                DispatchTrade(r, f);
+                if (!DispatchTrade(r, f))
+                    spdlog::warn("[errand] {:08X}: the trade could NOT be replayed while resolving ({}): the chest holds another order, the "
+                                 "bridge is down or the order is gone -- the errand ends without it", r.follower, a_why);
             } else {
                 spdlog::info("[errand] {:08X}: resolving to now ({}) -- he had not arrived: the trade is dropped", r.follower, a_why);
             }
@@ -275,6 +277,8 @@ namespace MFO::Logistics::Errand::Sim {
     bool OnLoadedTick(RE::Actor* a_follower, const FollowerState& a_state) {
         (void)a_state;
         if (!a_follower) return false;
+        // Not loaded = still the Sweep's (a stale tick of an unloaded follower must not resume or end anything).
+        if (!a_follower->Is3DLoaded()) return true;
         const auto fid = a_follower->GetFormID();
         SimRec r;
         {
@@ -284,8 +288,16 @@ namespace MFO::Logistics::Errand::Sim {
             r = it->second;
             g_sims.erase(it);
         }
-        // "If the player walks in then it picks up": a trade that has NOT been replayed is done on screen from where the simulation is.
-        if (!r.dispatched && !r.reported && !r.tradeAbandoned && r.order && !r.order->skipped &&
+        const double days = GameDays();
+        // "If the player walks in then it picks up" -- but ONLY where he really is in the shop: the player is still in the errand's
+        // town AND either the shop's vendor stands in the cell he loaded into, or that cell IS the shop's place. A follower who
+        // reloads anywhere else (the player came back out, a teleport, fast travel) is found near the player: resolve to now, DONE
+        // (design 2.4), never sent back across the town.
+        auto* nowCell = a_follower->GetParentCell();
+        const bool inTown = detail::PlayerTownId() == r.town;
+        const bool atShop = inTown && (detail::VendorPresentNear(a_follower, r.faction) ||
+                                       (r.destKind == DestKind::Cell && nowCell && nowCell->GetFormID() == r.destForm));
+        if (atShop && !r.dispatched && !r.reported && !r.tradeAbandoned && r.order && !r.order->skipped &&
             (r.stage == Stage::Out || r.stage == Stage::Trade)) {
             ResumeInfo ri;
             ri.follower = fid; ri.followerName = r.followerName; ri.vendorName = r.vendorName;
@@ -293,13 +305,14 @@ namespace MFO::Logistics::Errand::Sim {
             ri.destKind = r.destKind; ri.destForm = r.destForm; ri.destRad = r.destRad;
             if (detail::ResumePhysical(a_follower, ri)) return true;
             detail::Cooldown(fid, kFailCooldownSec);
-            spdlog::info("[errand] {:08X} '{}': loaded again at {} but the shop is unattended / unreachable -- the trade is dropped",
+            spdlog::info("[errand] {:08X} '{}': loaded again at {} in the shop but the walk could not be resumed -- the trade is dropped",
                          fid, r.followerName, StageName(r.stage));
             return false;
         }
+        ResolveNow(r, a_follower, days, atShop ? "loaded again in the shop" : "loaded again away from the shop");
         detail::Cooldown(fid, Config::g_errandCooldownSec.load());
-        spdlog::info("[errand] {:08X} '{}': loaded again at {} (trade {}) -- he is with the player; DONE", fid, r.followerName,
-                     StageName(r.stage), r.dispatched || r.reported ? "done / in flight" : "not replayed");
+        spdlog::info("[errand] {:08X} '{}': loaded again at {} ({}) -- he is with the player; DONE", fid, r.followerName,
+                     StageName(r.stage), atShop ? "trade already done / in flight" : "away from the shop, resolved to now");
         return false;
     }
 
@@ -324,7 +337,11 @@ namespace MFO::Logistics::Errand::Sim {
             }
             auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
             if (!f || f->IsDead()) { Drop(fid, "follower dead", kFailCooldownSec, false); continue; }
-            if (!Config::g_logistics.load() || !Config::g_townErrands.load()) { Drop(fid, "logistics / town errands off", kFailCooldownSec, false); continue; }
+            if (!Config::g_logistics.load() || !Config::g_townErrands.load()) {
+                ResolveNow(r, f, GameDays(), "logistics / town errands switched off");
+                Drop(fid, "logistics / town errands off", kFailCooldownSec, false);
+                continue;
+            }
             if (paused) continue;   // a load screen / no player: nothing moves, nothing decides (the game clock is the only clock)
 
             if (f->Is3DLoaded()) {   // loaded again: Errand::Tick -> OnLoadedTick resumes him when he is serviced; bounded here
@@ -378,8 +395,8 @@ namespace MFO::Logistics::Errand::Sim {
             }
             if ((days - r.startDays) * 1440.0 > Config::g_errandMaxGameMin.load()) {
                 ResolveNow(r, f, days, "fErrandMaxGameMin");
-                PlaceReturn(r, f, "the errand cap");
-                Drop(fid, "older than fErrandMaxGameMin", kFailCooldownSec, false);
+                detail::RecallToPlayer(fid, "the errand cap");
+                Drop(fid, "older than fErrandMaxGameMin -- recalled", kFailCooldownSec, false);
                 continue;
             }
 
