@@ -21,6 +21,7 @@ Int[]           Function GetSellCounts(int token)     global native
 Int[]           Function GetSellValues(int token)     global native
 Int[]           Function PlanBuy(int token, Form[] forms, Int[] counts) global native
 Int             Function GetFormValue(Form akForm)    global native
+Int             Function GetBuyPrice(int token, Form akForm) global native
 Function ReportTrade(int token, int soldValue, int soldCount, int boughtCount, int spent, int vendorGold) global native
 
 Function RunTrade(int token)
@@ -92,7 +93,7 @@ Function RunTrade(int token)
         while b < m && b < plan.Length
             if plan[b] > 0
                 int qty = plan[b]
-                int lineGold = qty * GetFormValue(stock[b])
+                int lineGold = qty * GetBuyPrice(token, stock[b])
                 if probe
                     boughtCount += qty
                     spent += lineGold
@@ -101,8 +102,9 @@ Function RunTrade(int token)
                     ; follower can pay for RIGHT NOW (its purse may have dropped since
                     ; dispatch -- audit #6), and move+pay together so a save mid-loop
                     ; leaves a consistent partial trade (done items fully paid, rest
-                    ; skipped) -- never free items, never unpaid goods. GetFormValue
-                    ; is token-free, so it survives a load.
+                    ; skipped) -- never free items, never unpaid goods. GetBuyPrice is
+                    ; the follower's own Speech/perk price for this vendor (R2); a stale
+                    ; token (a stack saved mid-run) answers the base value, so it survives a load.
                     chest.RemoveItem(stock[b], qty, true, follower)          ; goods -> follower
                     follower.RemoveItem(gold001, lineGold, true, chest)      ; pay into the vendor's chest
                     boughtCount += qty

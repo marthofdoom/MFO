@@ -807,9 +807,9 @@ namespace MFO::Config {
 
     // #21 SELL-side pricing/bypass (INI-only advanced settings, NO MCM control --
     // deliberately, to avoid toggle-linkage churn). All gated under bEconomy.
-    //   bSpeechPricing (default ON): the follower's SELL value follows the vanilla
-    //     barter curve scaled by their Speech skill (sellFraction 0.30 @ speech 0 ->
-    //     0.50 @ speech 100). OFF: sell at full instance value (the old behavior).
+    //   bSpeechPricing (default ON): the follower's OWN barter prices -- Speech via the real
+    //     GMSTs plus his buy/sell price perks -- on BOTH sides (logistics/Pricing.h, town
+    //     phase 2 R2). OFF: base value both ways.
     //   bMerchantPerkBypass (default ON): a follower who holds the merchant perk
     //     (xMerchantPerkID) may sell items OUTSIDE the vendor's normal buy filter
     //     (the vanilla Merchant/Salesman "sell anything" perk), mirroring the

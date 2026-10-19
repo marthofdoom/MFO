@@ -4,6 +4,7 @@
 #include "Papyrus.h"
 #include "Config.h"
 #include "ItemCatalog.h"
+#include "logistics/Pricing.h"     // the follower-own barter price model (town phase 2 R2)
 #include "logistics/Logistics.h"   // Logistics::PotionRestores -- the SAME classifier CountPotions uses
 #include "Vocabulary.h"  // Vocab::IsCastableSpell -- the tome-buy gate
 #include <mutex>
@@ -29,6 +30,10 @@ namespace MFO::TradeBridge {
             std::string          buyPlan;    // names PlanBuy chose ("Falkreath Helmet x1, ...") for the [econ] report line
             std::uint64_t        sig = 0;       // NO EMPTY TRADES: TradeSignature at dispatch
             float                daysAt = 0.0f; // RE::Calendar days passed at dispatch
+            // Town phase 2 R2: the follower's price quote for THIS vendor, taken ONCE at the first PlanBuy /
+            // GetBuyPrice of the order so the plan's budget and the gold Papyrus pays use one multiplier.
+            Logistics::Pricing::Quote quote;
+            bool                 quoted = false;
         };
 
         std::mutex                                    g_mtx;
@@ -219,6 +224,18 @@ namespace MFO::TradeBridge {
         // best first, filling each category's quota, bounded by the shared purse.
         // Returns qty[] parallel to a_forms; the spent gold is cached for
         // GetBuySpent. Mutates the order's quotas/budget (single-shot per trade).
+        // Takes the order's price quote once (caller holds g_mtx). vendorKey = the vendor actor, else the
+        // shop faction's key the dispatcher filed as memoKey.
+        const Logistics::Pricing::Quote& EnsureQuote(TradeOrder& a_o) {
+            if (!a_o.quoted) {
+                auto vp = a_o.vendor.get();
+                const RE::FormID vkey = vp ? vp->GetFormID() : a_o.memoKey;
+                a_o.quote  = Logistics::Pricing::Resolve(a_o.follower, a_o.vendor, vkey);
+                a_o.quoted = true;
+            }
+            return a_o.quote;
+        }
+
         std::vector<std::int32_t> PlanBuy(RE::StaticFunctionTag*, std::int32_t a_token,
                                           std::vector<RE::TESForm*> a_forms,
                                           std::vector<std::int32_t> a_counts) {
@@ -227,6 +244,9 @@ namespace MFO::TradeBridge {
             auto* o = Find(a_token);
             if (!o) return plan;
             const BuyThresholds& b = o->buy;
+            // R2: every candidate is priced with the follower's own buy multiplier, so the plan's budget
+            // (and buySpent) is the gold GetBuyPrice makes Papyrus pay.
+            const float buyMult = EnsureQuote(*o).buy;
 
             // Classify every stock line ONCE (supply + gear + tome kinds).
             struct Cand { std::size_t idx; std::int32_t kind, value, avail; RE::TESForm* f; };
@@ -238,8 +258,9 @@ namespace MFO::TradeBridge {
                 if (Catalog::IsExcluded(f->GetFormID())) continue;
                 const int kind = ClassifyBuy(f, b);
                 if (kind < 0) continue;
-                const int val = BaseValue(f);
-                if (val <= 0) continue;   // free/valueless stock isn't a real buy
+                const int baseVal = BaseValue(f);
+                if (baseVal <= 0) continue;   // free/valueless stock isn't a real buy
+                const int val = std::max(1, static_cast<int>(Logistics::Pricing::Apply(baseVal, buyMult)));
                 cands.push_back(Cand{ i, kind, val, avail, f });
             }
 
@@ -523,6 +544,22 @@ namespace MFO::TradeBridge {
             return BaseValue(a_form);
         }
 
+        // R2 (APPENDED native 11): what the follower PAYS per unit for a form at this order's vendor, base
+        // value x his buy multiplier (Speech, then the kModBuyPrices perks; logistics/Pricing.h). A token the
+        // session no longer knows (a RunTrade stack saved mid-run) answers the base value, logged: the
+        // Papyrus stack resumes and finishes without a Papyrus error.
+        std::int32_t GetBuyPrice(RE::StaticFunctionTag*, std::int32_t a_token, RE::TESForm* a_form) {
+            const std::int32_t base = BaseValue(a_form);
+            std::scoped_lock lk(g_mtx);
+            auto* o = Find(a_token);
+            if (!o) {
+                spdlog::info("[econ] GetBuyPrice: token {} unknown (stale or reaped) -- the base value {} is used "
+                             "for '{:08X}'", a_token, base, a_form ? a_form->GetFormID() : 0u);
+                return base;
+            }
+            return Logistics::Pricing::Apply(base, EnsureQuote(*o).buy);
+        }
+
         // Papyrus reports the result; native logs it + frees the token.
         void ReportTrade(RE::StaticFunctionTag*, std::int32_t a_token,
                          std::int32_t a_soldValue, std::int32_t a_soldCount,
@@ -608,6 +645,15 @@ namespace MFO::TradeBridge {
                          postTradeGold, verb, a_soldCount, a_soldValue, a_boughtCount, a_spent,
                          o.sell.size(), o.needs.size(), o.budget + o.buySpent,   // original purse
                          offered, o.buyPlan);
+            // R2: ONE price line per trade -- the follower's Speech, the factors, the perk-adjusted values,
+            // the clamps and the rounding. The sell rows were priced at dispatch from the same cache.
+            if (o.quoted)
+                spdlog::info("[econ] {:08X} price @ '{}': {}", fol ? fol->GetFormID() : 0u,
+                             ven && ven->GetName() ? ven->GetName() : "?", Logistics::Pricing::Describe(o.quote));
+            else
+                spdlog::info("[econ] {:08X} price @ '{}': no buy plan ran, so no buy quote was taken (sell rows were "
+                             "priced at dispatch)", fol ? fol->GetFormID() : 0u,
+                             ven && ven->GetName() ? ven->GetName() : "?");
         }
 
     }
@@ -624,6 +670,7 @@ namespace MFO::TradeBridge {
         a_vm->RegisterFunction("PlanBuy",          "MFO_Trade", PlanBuy);
         a_vm->RegisterFunction("GetFormValue",     "MFO_Trade", GetFormValue);
         a_vm->RegisterFunction("ReportTrade",      "MFO_Trade", ReportTrade);
+        a_vm->RegisterFunction("GetBuyPrice",      "MFO_Trade", GetBuyPrice);   // APPENDED (R2): the 11th native
         spdlog::info("[trade] registered MFO_Trade natives (sell + buy bridge)");
         return true;
     }
@@ -802,6 +849,7 @@ namespace MFO::TradeBridge {
         g_chestGold.clear();
         g_emptyMemo.clear();
         g_staticSkip.clear();
+        Logistics::Pricing::Clear();   // R2: the price cache is session-only
         // Cross-save token guard (Fable audit #3): a RunTrade suspended in a save
         // resumes with its OLD token; jump the counter far past any value the next
         // session could reissue, so the stale token can never name a fresh order

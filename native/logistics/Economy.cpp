@@ -10,6 +10,7 @@
 // helpers shared with TradeBridge::PlanBuy (see Logistics.h).
 #include "Logistics_internal.h"
 #include "GemRules.h"
+#include "Pricing.h"           // town phase 2 R2: the follower-own barter price model
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
 #include "Lotd.h"                // LOTD: never sell a relic the museum still needs
 #include "Errand_internal.h"      // town errands: ErrandShop / ErrandPlanned (the plan entry below)
@@ -546,22 +547,9 @@ namespace MFO::Logistics {
                                    a_follower->HasPerk(perk);
                 }
             }
-            //  (b) SPEECH-SCALED SELL PRICE -- the vanilla barter curve keyed on the
-            //      follower's Speech skill. fBarterMax/fBarterMin are the GMSTs
-            //      (hardcoded to their vanilla defaults 3.3 / 2.0; changing the GMST is
-            //      out of scope). sellFraction: 0.30 @ speech 0 -> 0.50 @ speech 100.
-            //      NOTE: the follower's own kModSellPrices PERK boosts (Haggling/
-            //      Salesman ranks) are NOT applied -- see the report; that needs a
-            //      CI-verified EPFD read this offline build can't confirm.
-            double sellFraction = 1.0;
-            if (Config::g_speechPricing.load()) {
-                constexpr float kBarterMax = 3.3f, kBarterMin = 2.0f;   // GMST fBarterMax / fBarterMin
-                auto* avo = a_follower->AsActorValueOwner();
-                const float speech = avo
-                    ? std::clamp(avo->GetActorValue(RE::ActorValue::kSpeech), 0.0f, 100.0f) : 0.0f;
-                const float priceFactor = kBarterMax - (kBarterMax - kBarterMin) * speech / 100.0f;
-                if (priceFactor > 0.0f) sellFraction = 1.0 / static_cast<double>(priceFactor);
-            }
+            //  (b) SELL PRICE (town phase 2 R2): the follower's OWN barter multiplier -- Speech from the real GMSTs
+            //      plus his kModSellPrices perks -- is resolved PER VENDOR in the loop below (logistics/Pricing.h).
+            //      Candidates carry the BASE value; the row's unit price is Apply(base, quote.sell) there.
 
             // ---- FOLLOWER-SIDE STATE (vendor-independent) -----------------------
             // Everything from here through the sell-candidate build + buy-needs
@@ -666,10 +654,11 @@ namespace MFO::Logistics {
             struct SellCandidate {
                 RE::TESBoundObject* obj;
                 std::int32_t        count;
-                std::int32_t        price;
+                std::int32_t        price;     // sort key only: the base value (the row price is per vendor, below)
                 bool                jewelry;
                 RE::BGSKeywordForm* kwf;
                 const char*         passTag;   // sdiag label once the vendor filter clears it
+                bool                minOne = false;   // ammo rows never price below 1g (as before R2)
             };
             std::vector<SellCandidate> sellCandidates;
             std::vector<GemRules::HoldKey> saleTouched;   // items the sale path checked this scan (GemRules holds)
@@ -699,7 +688,7 @@ namespace MFO::Logistics {
                         const std::int32_t baseVal = mentry ? mentry->GetValue() : 0;
                         sellCandidates.push_back(SellCandidate{
                             obj, static_cast<std::int32_t>(data.first),
-                            static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
+                            baseVal,
                             false, mkwf, "valuable" });
                     }
                     continue;
@@ -838,11 +827,11 @@ namespace MFO::Logistics {
                                        : gemHold(entry, obj->GetFormID()))
                                                             { sdiag(obj, "gemHold"); continue; }  // ungem-then-sell (v3) / protect (v2)
                 if (Catalog::IsExcluded(obj->GetFormID()))  { sdiag(obj, "excluded"); continue; } // #3 artifacts/quest
-                // #21 speech-scaled sell price (base instance value * sellFraction).
+                // #21 sell price: the BASE instance value; the per-vendor unit price is Apply(base, quote.sell) below (R2).
                 const std::int32_t baseVal = entry ? entry->GetValue() : 0;
                 sellCandidates.push_back(SellCandidate{
                     obj, static_cast<std::int32_t>(data.first),
-                    static_cast<std::int32_t>(std::lround(baseVal * sellFraction)),
+                    baseVal,
                     armo && IsJewelryPiece(armo), kwf, "SELL" });
             }
             // An item the sale path no longer considers is no longer on its way out: let go of its hold.
@@ -910,22 +899,18 @@ namespace MFO::Logistics {
                     for (const auto& s : offKind) {
                         if (s.pinned || s.count <= 0) continue;
                         if (IsSilverAmmo(s.obj ? s.obj->As<RE::TESAmmo>() : nullptr)) continue;   // the silver slot's (86e3p2gp9): never sold
-                        const auto unit = std::max<std::int32_t>(
-                            1, static_cast<std::int32_t>(std::lround(s.value * sellFraction)));
                         sellCandidates.push_back(SellCandidate{
-                            s.obj, s.count, unit, false, AmmoKeywords(s.obj),
-                            "SELL (off-kind ammo: no weapon fires it)" });
+                            s.obj, s.count, s.value, false, AmmoKeywords(s.obj),
+                            "SELL (off-kind ammo: no weapon fires it)", true });
                     }
                     continue;
                 }
                 const int target = AmmoKeepTarget(&a_state, bolt, usesKind);
                 if (target <= 0) continue;
                 for (const auto& s : ObsoleteHeldAmmo(a_follower, bolt, target)) {
-                    const auto unit = std::max<std::int32_t>(
-                        1, static_cast<std::int32_t>(std::lround(s.value * sellFraction)));
                     sellCandidates.push_back(SellCandidate{
-                        s.obj, s.count, unit, false, AmmoKeywords(s.obj),
-                        "SELL (obsolete ammo)" });
+                        s.obj, s.count, s.value, false, AmmoKeywords(s.obj),
+                        "SELL (obsolete ammo)", true });
                 }
             }
             // Highest-value first: the vendor's barter gold is limited (field log:
@@ -1016,6 +1001,10 @@ namespace MFO::Logistics {
                 // list. #21 merchant-perk bypass: a "sell anything" follower
                 // ignores the vendor's VEND filter (like the player); otherwise
                 // the filter holds.
+                // R2: this follower's price for THIS vendor (Speech + perks, cached; Pricing.h). Resolved after the
+                // chest checks so only an evaluated vendor costs a lookup. The vendor key is the actor, else the shop.
+                const Pricing::Quote quote = Pricing::Resolve(a_follower->GetHandle(),
+                                                              vendor ? vendor->GetHandle() : RE::ActorHandle{}, vendorKey);
                 std::vector<TradeBridge::SellRow> sell;
                 sell.reserve(sellCandidates.size());
                 for (auto& c : sellCandidates) {
@@ -1023,7 +1012,9 @@ namespace MFO::Logistics {
                         sdiag(c.obj, "vendor-filter"); continue;
                     }
                     if (diag) sdiag(c.obj, c.passTag);
-                    sell.push_back(TradeBridge::SellRow{ c.obj, c.count, c.price, c.jewelry });
+                    const std::int32_t unit = Pricing::Apply(c.price, quote.sell);
+                    sell.push_back(TradeBridge::SellRow{ c.obj, c.count, c.minOne ? std::max<std::int32_t>(1, unit) : unit,
+                                                         c.jewelry });
                 }
 
                 // NO EMPTY TRADES (marth 2026-09-28; TradeBridge::SkipTrade): never

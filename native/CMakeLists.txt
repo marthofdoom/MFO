@@ -80,6 +80,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/Cast.cpp
     logistics/ClassResolve.cpp
     logistics/Economy.cpp
+    logistics/Pricing.cpp
     logistics/Errand.cpp
     logistics/ErrandSim.cpp
     logistics/GemRules.cpp

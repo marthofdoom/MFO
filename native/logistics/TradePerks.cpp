@@ -127,6 +127,21 @@ namespace MFO::Logistics::TradePerks {
                           std::to_underlying(a_ep));
             return std::nullopt;
         }
+        // MFO-B323: the conditions read the argument as the engine's own type for that entry point (R0-1
+        // arg names): a REFR (Target / Locked Ref) for 8 / 60 / 59, a TESBoundObject (Item) for 76. A form
+        // of the wrong type would be read as that type, so refuse it.
+        {
+            using EP = RE::BGSEntryPoint::ENTRY_POINT;
+            const bool wantsBound = (a_ep == EP::kModTemperingHealth);
+            const bool typeOk = wantsBound ? a_arg->IsBoundObject() : (a_arg->As<RE::TESObjectREFR>() != nullptr);
+            if (!typeOk) {
+                spdlog::error("[trade] EntryPointValue REFUSED: entry point {} condition argument {:08X} is not a {} "
+                              "-- no answer",
+                              std::to_underlying(a_ep), a_arg->GetFormID(),
+                              wantsBound ? "bound object" : "reference");
+                return std::nullopt;
+            }
+        }
         if (!EntryPointCallable(a_ep, a_owner, 1)) return std::nullopt;
         float v = a_seed;
         EntryPointRel()(std::to_underlying(a_ep), a_owner, a_arg, &v);
