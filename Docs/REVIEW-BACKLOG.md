@@ -1822,3 +1822,6 @@ Same reviews: an in-role catalog-excluded weapon (artifact, "keep but never wiel
 
 ### MFO-B308 (OPEN, Harbinger dependency) -- artifacts "keep but never wield" needs a per-item equip deny
 marth 2026-10-19: catalog-excluded non-quest off-role weapons: "Keep but never wield". Interim (392aba1): unequipped once per item per session, never sold; the engine may re-wield. Proper fix waits on Harbinger ClickUp 86e3t8w23 (ch.17 per-item DENY entry, ABI).
+
+### MFO-B309 (SEV-5, OPEN, Serialization.cpp) -- ERND: version 0 read as v1; ReadString accepts a 1-3 byte partial length read (raised against 3e9b659)
+Opus tier-3 review of `feat/mfo-town-r2` @ 3e9b659. F4: "an ERND record with version 0 is parsed as v1. There is no lower-bound guard, the same as PGIV." F6 (pre-existing helper): "`ReadString` checks `!ReadRecordData(len)`, which accepts a 1-3 byte partial read. In ERND the following bound check or short read still catches it."
