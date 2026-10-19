@@ -4461,7 +4461,7 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
   not during a `LoadingMenu`) -> the errand ends and his follow package walks him back. R1a has no off-screen half: a follower who
   unloads ends the errand, and if he is alive, on the roster and not in the player's cell `RecallToPlayer` (`Errand.cpp:334`) dispatches
   a Papyrus `ObjectReference.MoveTo` (`Papyrus::DispatchMoveTo`) ~250 u behind the player's heading, logged `[errand] ... RECALL`
-  (R1b's off-screen simulation replaces this; the seam is commented). The stall test and the 240 s / 45 s caps run on
+  (R1b's off-screen simulation replaces this; the seam is commented). The end is DEFERRED while a loading screen is up (the record is what remembers him), and `ErrandClaims.cpp` also treats a claim as dead when `GetIdleState.endCause != None` (a refused talk idle never reads live). The stall test and the 240 s / 45 s caps run on
   `Scheduler::ServiceClock()` (UNPAUSED seconds) so a menu never ends an errand. `ErrandClaims.cpp` re-files a ch.12 / ch.1 claim
   Harbinger itself released (a failed talk idle) before the next beat instead of re-pointing a dead handle.
   **Selling now happens only on town errands** (the instant trade is retired under Harbinger): junk and off-role gear accumulate

@@ -67,6 +67,7 @@ namespace MFO::APMFBridge {
             // the next Drain; the Deposit.cpp rule).
             bool idleEverLive = false, holdEverLive = false;
             std::chrono::steady_clock::time_point holdFiled{};
+            std::chrono::steady_clock::time_point idleFiled{};   // set ONLY at the idle's RequestEx (beatFiled moves on every Repoint)
         };
         std::mutex                                     s_mx;
         std::unordered_map<RE::FormID, ErrandClaims>   s_claims;   // keyed by follower; guarded by s_mx
@@ -220,13 +221,23 @@ namespace MFO::APMFBridge {
         p.target = a_target;   // the vendor: the engine evaluates the idle's conditions against it
         // A previous beat's claim that Harbinger released (the failed talk idle is the expected case outside a
         // conversation) cannot be re-pointed: invalidate it and file a FRESH claim for this beat.
-        if (ClaimDead(api, c.idle, c.idleEverLive, c.beatFiled)) {
+        // Harbinger's OWN statement that the claim ended: GetIdleState's endCause (readable for kIdleStateGraceMs, 10 s). A
+        // refused talk idle releases its claim at the same drain that publishes it, so IsClaimLive never reads true.
+        bool idleEnded = false;
+        if (c.idle != APMF_API::kInvalidHandle) {
+            APMF_API::APMF_IdleStateInfo ii{};
+            ii.size = sizeof(ii);
+            api->GetIdleState(c.idle, &ii);
+            idleEnded = ii.endCause != APMF_API::kIdleEnd_None;
+        }
+        if (idleEnded || ClaimDead(api, c.idle, c.idleEverLive, c.idleFiled)) {
             spdlog::info("[errand] {:08X}: the previous idle claim (handle {}) was released by Harbinger -- filing a "
                          "fresh ch.12 claim for this beat", a_follower, c.idle);
             c.idle = APMF_API::kInvalidHandle;
         }
         if (c.idle == APMF_API::kInvalidHandle) {
             c.idleEverLive = false;
+            c.idleFiled = std::chrono::steady_clock::now();
             c.idle = api->RequestEx(a_follower, APMF_API::kIntent_Idle, kOwnBasis, &p);
             if (c.idle == APMF_API::kInvalidHandle) {
                 spdlog::warn("[errand] {:08X}: ch.12 idle v2 REFUSED by Harbinger (idle {:08X} at {:08X}) -- APMF.log "

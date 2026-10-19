@@ -801,8 +801,14 @@ namespace MFO::Logistics::Errand {
                 else if (!f || f->IsDead() || !f->Is3DLoaded()) {
                     why = "follower dead or unloaded";
                     // Alive, still on the roster and unloaded: the errand's follower was left behind (RecallToPlayer).
-                    if (f && !f->IsDead() && ids && std::find(ids->begin(), ids->end(), fid) != ids->end())
+                    if (f && !f->IsDead() && ids && std::find(ids->begin(), ids->end(), fid) != ids->end()) {
+                        // DEFER while the player is loading: RecallToPlayer refuses a loading screen, and the record is
+                        // what remembers him -- ending it now would leave him behind with nothing to retry (a load door
+                        // is exactly the case the recall exists for). The record is kept (its caps run on the unpaused
+                        // service clock, which a load does not advance) and ended + recalled on the first Sweep after.
+                        if (loading || !pc || !pc->Is3DLoaded()) continue;
                         recalls.push_back(fid);
+                    }
                 }
                 else if (f->IsInCombat() || (pc && pc->IsInCombat())) why = "combat -- he rejoins";
                 else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end()) why = "no longer an active follower";
