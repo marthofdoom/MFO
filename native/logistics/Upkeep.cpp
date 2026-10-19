@@ -670,6 +670,14 @@ namespace MFO::Logistics {
         }
     }
 
+    void OnFollowerAbsent(RE::FormID a_id) {
+        Lockpick::Abort(a_id, "unloaded");
+        Packages::LootTravelEvictIf(a_id);
+        if (const int slot = SlotIndexOf(a_id); slot >= 0)
+            g_travelSlots[slot] = TravelIntent{};
+        Lotd::EndDeposit(a_id, "unloaded");
+    }
+
     void OnFollowerRemoved(RE::FormID a_id) {
         // APMF EQUIP AUTHORITY: the standing claim ends with MFO's management of
         // him -- dismissal AND the T#78 MFO-OFF edge both arrive here through

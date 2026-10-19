@@ -229,6 +229,9 @@ namespace MFO::Logistics {
     // is save-serialized, so it would re-latch on every future load. Safe to
     // call for any id -- a no-op unless a_id is the active traveller.
     void OnFollowerRemoved(RE::FormID a_id);
+    // Claim-through-load: the movement-steering half of OnFollowerRemoved ONLY (loot alias + slot, deposit trip,
+    // pick hold) -- NO equip-authority release, no declaration forget. Worker.
+    void OnFollowerAbsent(RE::FormID a_id);
 
     // ── T#69: co-save companions for g_stockGear ──────────────────────────────
     // A follower's OWN weapon/armor gear, snapshotted the first time MFO
