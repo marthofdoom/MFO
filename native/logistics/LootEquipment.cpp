@@ -133,9 +133,10 @@ namespace MFO::Logistics {
             // keeps the old gambit heuristic (mageMode && !wantsMelee). Ordinals
             // match CombatStyle::Stance by construction (State.h:82).
             // baseClass read earlier now (mageMode gates on it directly, above).
+            const bool baseCaster          = baseClass == 3;
             const bool baseWeaponUser      = baseClass == 1 || baseClass == 2;
             ctx.meleeTargetClass =
-                (mageMode && !baseWeaponUser && !wantsMelee)
+                (mageMode && !baseWeaponUser && (baseCaster || !wantsMelee))   // base MAGE: dagger sidearm contract, not a melee target (marth: "Daggers only still applies")
                     ? WepClass::Other : roles.melee;
             // Ranged is a primary if a gambit wants it OR they carry one.
             ctx.doRanged =

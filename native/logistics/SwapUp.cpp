@@ -105,10 +105,13 @@ namespace MFO::Logistics {
             const bool keepBaseWeaponUser = keepBaseClass == 1 || keepBaseClass == 2;
             const bool keepMageMode = IsCasterFollower(a_state) &&
                 (keepBaseCaster || (keepBaseClass == 0 && !keepWantsMelee && !keepWantsRanged));
-            // An equip-melee gambit is an OVERRIDE for ANY class (marth 2026-10-18), a Mage class included: with one,
-            // the melee role stands (loot, buy and keep all read it the same way).
+            // An equip-melee gambit is an OVERRIDE for any class EXCEPT that a base MAGE (class 3) keeps the
+            // sidearm contract (marth 2026-10-18 "Daggers only still applies"): no melee TARGET class, a
+            // one-hander BACKUP -- a dagger under bMageDaggersOnly (the default), any one-hander without it --
+            // exactly cast/Equip.cpp's daggerMelee (class 3 && bMageDaggersOnly). Loot (LootEquipment.cpp
+            // meleeTargetClass/wantBackup) and buy (Economy.cpp) use this same expression.
             const WepClass keepMeleeTargetClass =
-                (keepMageMode && !keepBaseWeaponUser && !keepWantsMelee)
+                (keepMageMode && !keepBaseWeaponUser && (keepBaseCaster || !keepWantsMelee))
                     ? WepClass::Other : keepRoles.melee;
             const bool rolesFinal = StyleVotesReady(a_follower) || !MainThread::IsInstalled();   // not the carried fallback
             const bool keepSecond1H = keepRoles.offHand == 2 && keepMeleeTargetClass == WepClass::OneHand;
@@ -130,6 +133,8 @@ namespace MFO::Logistics {
                 std::unordered_map<int, std::pair<RE::TESBoundObject*, float>> best;
                 std::unordered_map<int, std::pair<RE::TESBoundObject*, float>> gatedBest;   // off-role melee, floor only
                 bool anyInRole = false;
+                // doRanged exactly as Economy's offRoleLauncher and the loot judge take it.
+                const bool keepDoRanged = (keepMageMode && !keepWantsRanged) ? false : keepRoles.doRanged;
                 struct OneHander { RE::TESBoundObject* obj; float rank; std::int32_t count; };
                 std::vector<OneHander> oneHanders;   // bucket 1, for the dual-wield runner-up
                 for (auto& [obj, data] : a_follower->GetInventory()) {
@@ -148,7 +153,9 @@ namespace MFO::Logistics {
                     // gear, relics, quest/excluded items and gemmed weapons are protected in the sell loop.
                     const bool offRoleMelee = rolesFinal && ((b == 1 && keepMeleeTargetClass != WepClass::OneHand) ||
                                                              (b == 2 && keepMeleeTargetClass != WepClass::TwoHand));
-                    if (!offRoleMelee && (b == 1 || b == 2 || ((b == 3 || b == 4) && keepRoles.doRanged))) anyInRole = true;
+                    if (!offRoleMelee && (b == 1 || b == 2)) anyInRole = true;
+                    // a launcher counts only if Economy's offRoleLauncher would NOT sell it (role + ammo family)
+                    if ((b == 3 || b == 4) && keepDoRanged && RangedInFamily(w, keepRoles.wantCrossbow)) anyInRole = true;
                     // Staves are ranked by their ENCHANTED WORTH (GetGoldValue), not
                     // GetAttackDamage() -- a staff's melee swing stat is irrelevant to
                     // its value, so ranking that bucket by damage could keep the worse
@@ -169,8 +176,14 @@ namespace MFO::Logistics {
                 for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
                 // NEVER-DISARM FLOOR: with no in-role weapon carried at all, the best carried melee weapon
                 // of each class is kept as before (the follower is never left with nothing to wield).
-                if (!anyInRole)
-                    for (auto& [b, s] : gatedBest) if (s.first) keepWeapons.insert(s.first);
+                // Only when he HAS a weapon role (a follower with none has nothing to be disarmed of), and
+                // then ONE weapon: the best carried melee weapon across the off-role buckets.
+                if (!anyInRole && (keepMeleeTargetClass != WepClass::Other || keepDoRanged)) {
+                    RE::TESBoundObject* floorW = nullptr; float floorRank = -1e9f;
+                    for (auto& [b, s] : gatedBest)
+                        if (s.first && s.second > floorRank) { floorW = s.first; floorRank = s.second; }
+                    if (floorW) keepWeapons.insert(floorW);
+                }
                 // Dual wield: keep the runner-up one-hander as well (top-2 by
                 // WeaponScore), unless the best is a stack of >= 2 of one form.
                 if (keepSecond1H && oneHanders.size() >= 2) {

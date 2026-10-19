@@ -314,11 +314,12 @@ namespace MFO::Logistics {
                 const bool wantsMelee  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
                 const WeaponRoles roles = ComputeWeaponRoles(a_follower, a_state);
                 const std::uint8_t baseClass = a_state.combatClassOverride;
+                const bool baseCaster     = baseClass == 3;
                 const bool baseWeaponUser = baseClass == 1 || baseClass == 2;
                 // meleeTargetClass / doRanged mirror the loot judge (weapon role uses
                 // 'caster' == mageMode, NOT the apparel toggle).
                 const WepClass meleeTargetClass =
-                    (caster && !baseWeaponUser && !wantsMelee)   // an equip-melee gambit overrides any class
+                    (caster && !baseWeaponUser && (baseCaster || !wantsMelee))   // base MAGE: dagger sidearm contract (marth: "Daggers only still applies")
                         ? WepClass::Other : roles.melee;
                 const bool doRanged     = (caster && !wantsRanged) ? false : roles.doRanged;
                 const bool wantCrossbow = roles.wantCrossbow;
