@@ -3244,6 +3244,7 @@ module. Module layout:
   at once (by design -- never fork the set); `BuyThresholds` is append-only.
 - **WEAPON / ARMOR STYLE BY PERKS (2026-09-13, marth: "highest skill wins, most
   perked style within a category wins, strongly prefers").** THE decision is
+  **2026-10-18 (fix/mfo-potions-roles):** `ComputeWeaponRoles` roles = gambit / `ResolveBaseClass` / owned bow-crossbow perk ranks, NOT carried weapons (carried signal only until `StyleVotesReady`, Gear.cpp). Role-flag readers (all change with it): LootEquipment.cpp (ctx.meleeTargetClass/doRanged), Economy.cpp buy (:324,:383) + sell (`offRoleLauncher`), SwapUp.cpp keep + shield rule, Upkeep.cpp `ShedOffRoleWeapon`, Silver.cpp (`UsesLauncher`, ammo), LootTake/LootScan ammo (`UsesAmmoKind`), Gear.cpp `GemReconcilePrefsFor` skill bits, EquipAuthority.cpp `CombatStyleFor`/declaration, cast/Equip.cpp ranged pick (preferKinds only). `PotionRestores` rejects Hostile/Detrimental potions (Upkeep.cpp). Service.cpp gem reconcile gated on `StyleVotesReady`.
   `ComputeWeaponRoles` (`logistics/Gear.cpp:398`): the melee CLASS is still the
   higher skill (`two > one`, tie → 1H, unchanged; CURRENT AV -- open MFO-B250, marth: base values, perks break ties; the F3 gem direction reuses this answer); inside that class the kind(s)
   with the MOST owned perk ranks conditioned on them (`Progression::StyleVotes`
