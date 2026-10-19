@@ -84,7 +84,7 @@ namespace MFO::Logistics {
         // health, stamina, magicka, fortify, resist, cure -- but NOT a poison
         // (that is a weapon coating) or food.
         bool IsDrinkablePotion(RE::AlchemyItem* a_alc) {
-            return a_alc && !a_alc->IsPoison() && !a_alc->IsFood();
+            return a_alc && !a_alc->IsPoison() && !a_alc->IsFood() && !PotionIsDrug(a_alc);
         }
 
         // a_want names WHICH restorative to take; kNone is the catch-all (any

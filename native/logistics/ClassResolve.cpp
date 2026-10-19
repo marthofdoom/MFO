@@ -5,9 +5,11 @@
 // is resolved here, and ONLY here: one weighted vote over three signals, the
 // gambit table weighted highest ("All 3 weighted towards gambit table for HMS",
 // marth 2026-10-01). Consumer today: the base HMS split (progression/Hms.cpp,
-// through Followers::ResolvedClassFast). Equipment does NOT use this: skills pick
-// armor and weapon type and perks pick how they are used (marth 2026-10-01), and
-// that rule lives in the loot/keep/buy judges unchanged.
+// through Followers::ResolvedClassFast). Equipment does NOT use this vote: skills pick
+// armor, and WEAPON ROLES (ComputeWeaponRoles, Gear.cpp, marth 2026-10-18) come from the
+// EXPLICIT class pick only (combatClassOverride: Melee = melee role only, Ranged = ranged
+// role only, Mage = a role only by an equip gambit), and for Auto from the gambit table
+// OR owned perk ranks, both ways. Never from what is carried.
 //
 // Lives in logistics because the gambit-table reads it reuses (TableHasAction,
 // HasCastGambit) are logistics helpers.

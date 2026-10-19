@@ -44,6 +44,7 @@ namespace MFO::Logistics {
     // Requiem note (DESIGN §3.3/§4.8.2). Poisons and fortify/cure potions
     // return kNone by construction. Reads only the POTION, no actor.
     RE::ActorValue PotionRestores(RE::AlchemyItem* a_potion);
+    bool PotionIsDrug(const RE::AlchemyItem* a_potion);   // any Hostile/Detrimental effect: never a restorative, never looted as a potion
 
     // The dominant restore MAGNITUDE of a_potion, in the same resource
     // PotionRestores classifies it under (the largest-magnitude value-modifier

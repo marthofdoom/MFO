@@ -500,6 +500,7 @@ namespace MFO::Logistics {
             Progression::StyleVotes votes;
             Clock::time_point       stamp{};
             bool                    inFlight = false;
+            std::uint32_t           loggedRole = 0xFFFFFFFFu;   // last [role] line's {melee, doRanged} (log on change)
             std::uint32_t           loggedPick = 0xFFFFFFFFu;   // last [style] line's pick (log on change)
             std::uint64_t           loggedArmor = 0;             // last [armor] line's {class, worn-set} key (0 = never; log on change)
         };

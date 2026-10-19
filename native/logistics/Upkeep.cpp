@@ -45,23 +45,22 @@ namespace MFO::Logistics {
 
     // ── public: pure reads used by the evaluator ────────────────────────────
 
-    namespace {
-        // NEVER a restorative (marth 2026-10-18): a potion carrying ANY Hostile or
-        // Detrimental effect (Requiem Skooma's 1,000,000-point Health DamageValueMod
-        // flagged Hostile|Detrimental) is a drug, not a restore. Mirrors the Synthesis
-        // patcher's Catalog.cs:290 rule; applies to drinking AND looting.
-        bool HasHarmfulEffect(const RE::AlchemyItem* a_potion) {
-            for (const auto* e : a_potion->effects) {
-                const auto* mgef = e ? e->baseEffect : nullptr;
-                if (mgef && (mgef->IsHostile() || mgef->IsDetrimental())) return true;
-            }
-            return false;
+    // NEVER a restorative (marth 2026-10-18): a potion carrying ANY Hostile or Detrimental effect
+    // (Requiem Skooma's 1,000,000-point Health DamageValueMod flagged Hostile|Detrimental) is a drug, not
+    // a restore. Mirrors the Synthesis patcher's Catalog.cs:290 rule; applies to drinking AND looting
+    // (also the catch-all IsDrinkablePotion in LootTake.cpp).
+    bool PotionIsDrug(const RE::AlchemyItem* a_potion) {
+        if (!a_potion) return false;
+        for (const auto* e : a_potion->effects) {
+            const auto* mgef = e ? e->baseEffect : nullptr;
+            if (mgef && (mgef->IsHostile() || mgef->IsDetrimental())) return true;
         }
+        return false;
     }
 
     RE::ActorValue PotionRestores(RE::AlchemyItem* a_potion) {
         if (!a_potion || a_potion->IsPoison()) return RE::ActorValue::kNone;
-        if (HasHarmfulEffect(a_potion)) return RE::ActorValue::kNone;
+        if (PotionIsDrug(a_potion)) return RE::ActorValue::kNone;
         // FOOD is an AlchemyItem with a Restore-Health/Stamina effect, so the
         // archetype gate below would pass it. §4.8.2 is potions ONLY -- exclude
         // food or the follower vacuums city food barrels and counts apples as
@@ -492,6 +491,9 @@ namespace MFO::Logistics {
             auto* w = obj->As<RE::TESObjectWEAP>();
             if (!w || w->IsStaff()) continue;
             if (inRole(w)) { ++inRoleWeapons; inRoleBases.push_back(obj->GetFormID()); continue; }
+            // LAUNCHERS GO TO THE SALE PATH ONLY (marth 2026-10-18: off-role weapons are SOLD): an off-role
+            // bow/crossbow is never dropped or handed over here (Economy.cpp offRoleLauncher sells it).
+            if (WeaponClassOf(w->GetWeaponType()) == WepClass::Ranged) continue;
             // Fists that are NOT valid for fighting are still never shed: the
             // Unarmed record is the engine's, not a weapon anyone can drop.
             if (WeaponClassOf(w->GetWeaponType()) == WepClass::Other) continue;

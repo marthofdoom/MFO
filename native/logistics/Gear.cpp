@@ -6,6 +6,7 @@
 #include "Logistics_internal.h"
 #include "GemRules.h"
 #include "Lotd.h"             // HoldFromSale: the museum-relic pool rule for the ranged pick
+#include "progression/ProgAllocator.h"   // ReapplyPending: no perk tally is trusted before his perks are back
 #include "PlayerGiven.h"      // IsPlayerEquipped: ... unless the PLAYER put it on him
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 
@@ -374,25 +375,35 @@ namespace MFO::Logistics {
                     auto* actor = RE::TESForm::LookupByID<RE::Actor>(id);
                     const Progression::StyleVotes v = actor ? Progression::TallyStyleVotes(actor)
                                                             : Progression::StyleVotes{};
+                    // NEVER STAMP A PERK-LESS TALLY (diag 4a, MFO.log.4 Sven 15:53:48 "0 of 0 owned catalog
+                    // rank(s)"): while his guarded progression reapply is pending his base perks are not
+                    // back, so this tally is blank. Drop it (clear the latch only) and the next call
+                    // re-posts, until the reapply lands -- the EquipAuthority.cpp ReapplyPending precedent.
+                    // Unlike merely reading the flag in StyleVotesReady, this also keeps the stamp from
+                    // making a blank copy "ready" for the 10 s until the next refresh.
+                    const bool pending = ProgAllocator::ReapplyPending(id);
                     std::scoped_lock lk(g_styleMx);
                     auto& m    = g_styleMirror[id];
-                    m.votes    = v;
-                    m.stamp    = Clock::now();
+                    if (!pending) {
+                        m.votes = v;
+                        m.stamp = Clock::now();
+                    }
                     m.inFlight = false;
                 });
             }
             return out;
         }
 
-        // True once a main-thread tally has landed for this follower (stamp set), or when there is
-        // no pump to wait for (VR: the mirror stays empty by design, nothing to wait on). Also kicks
+        // True once a main-thread tally of his REAL perks has landed (stamp set; a tally taken while his
+        // reapply is pending never stamps). FALSE on VR (no pump, the mirror stays empty by design):
+        // callers that must not wait on it test MainThread::IsInstalled() themselves. Also kicks
         // the first refresh (StyleVotesFor posts it), so a caller that only asks still gets one.
         // Gates the post-load gem reconcile (its perk direction reads the mirror) and the carried-
         // vs-class weapon role in ComputeWeaponRoles.
         bool StyleVotesReady(RE::Actor* a_follower) {
             if (!a_follower) return false;
             (void)StyleVotesFor(a_follower);
-            if (!MainThread::IsInstalled()) return false;   // VR: never stamped; callers fall back to their legacy answer
+            if (!MainThread::IsInstalled()) return false;   // VR: never stamped (see above)
             std::scoped_lock lk(g_styleMx);
             auto it = g_styleMirror.find(a_follower->GetFormID());
             return it != g_styleMirror.end() && it->second.stamp != Clock::time_point{};
@@ -462,23 +473,60 @@ namespace MFO::Logistics {
             }
 
             WeaponRoles roles;
-            // ROLES COME FROM CLASS, PERKS AND GAMBITS -- NEVER FROM WHAT IS CARRIED (marth 2026-10-18:
-            // "Fix roles, sell off-role"). A carried bow used to hand a melee follower a ranged role,
-            // which bought him a better bow and kept it forever (self-perpetuating). Melee role =
-            // an equip-melee gambit, or a Melee/Ranged class (a weapon user keeps a melee sidearm);
-            // ranged role = an equip-ranged gambit, a Ranged class, or owned bow/crossbow perk ranks.
-            // The perk mirror is empty until its first main-thread tally lands, so until it is
-            // stamped (StyleVotesReady) the OLD carried signal stands -- conservative, it can only
-            // KEEP, never sell a weapon on a half-known answer. VR (no pump) never stamps: it stays
-            // on the carried signal, i.e. unchanged.
-            if (StyleVotesReady(a_follower)) {
-                const auto         rv  = StyleVotesFor(a_follower);
-                const std::uint8_t cls = ResolveBaseClass(a_follower, a_state);
-                if (wantsMelee || cls == 1 || cls == 2) roles.melee = bestMeleeSkill;
-                roles.doRanged = wantsRanged || cls == 2 || rv.weapon[7] > 0 || rv.weapon[8] > 0;
-            } else {
-                if (wantsMelee || carriesMelee) roles.melee = bestMeleeSkill;
+            // ROLES COME FROM CLASS, GAMBITS AND PERKS -- NEVER FROM WHAT IS CARRIED (marth 2026-10-18:
+            // "Fix roles, sell off-role"; "Ranged and Melee classes allow casting but are strictly within
+            // spec even with outstanding perks, auto class yes, perks count both ways"):
+            //   explicit MELEE class  -> melee role only (no ranged role, whatever the bow perks / gambits)
+            //   explicit RANGED class -> ranged role only (no melee role, whatever the sword perks / gambits)
+            //   explicit MAGE class   -> today's rule: a melee role only by an equip-melee gambit, a ranged
+            //                            role only by an equip-ranged gambit (perks never author one)
+            //   AUTO class            -> melee by an equip-melee gambit OR owned 1H/2H perk ranks, ranged by an
+            //                            equip-ranged gambit OR owned bow/crossbow perk ranks (both may hold)
+            // Casting gambits never change any of it. The perk mirror is blank until his real perks are
+            // tallied (StyleVotesReady: not before the progression reapply, diag 4a), so on a pump runtime
+            // the OLD carried signal stands until then -- it can only KEEP, never sell on a half-known
+            // answer. VR has no pump: class + gambits alone, no perks.
+            const bool ready = StyleVotesReady(a_follower);
+            const bool vr    = !MainThread::IsInstalled();
+            const char* meleeSrc = "none";
+            const char* rangedSrc = "none";
+            if (!ready && !vr) {
+                if (wantsMelee || carriesMelee) { roles.melee = bestMeleeSkill; meleeSrc = wantsMelee ? "gambit" : "carried"; }
                 roles.doRanged = wantsRanged || carriesRanged;
+                if (roles.doRanged) rangedSrc = wantsRanged ? "gambit" : "carried";
+            } else {
+                const Progression::StyleVotes rv = ready ? StyleVotesFor(a_follower) : Progression::StyleVotes{};
+                const std::uint8_t cls = a_state.combatClassOverride;
+                bool m = false, r = false;
+                if (cls == 1)      { m = true; meleeSrc = "class"; }
+                else if (cls == 2) { r = true; rangedSrc = "class"; }
+                else {
+                    if (wantsMelee)  { m = true; meleeSrc = "gambit"; }
+                    if (wantsRanged) { r = true; rangedSrc = "gambit"; }
+                    if (cls == 0) {
+                        int mp = 0;
+                        for (int b = 0; b < 7; ++b) mp += rv.weapon[b];
+                        if (!m && mp > 0)                           { m = true; meleeSrc = "perks"; }
+                        if (!r && (rv.weapon[7] > 0 || rv.weapon[8] > 0)) { r = true; rangedSrc = "perks"; }
+                    }
+                }
+                if (m) roles.melee = bestMeleeSkill;
+                roles.doRanged = r;
+            }
+            {
+                // One [role] line per follower per CHANGE of the computed role (recomputed every tick).
+                const std::uint32_t key = (static_cast<std::uint32_t>(roles.melee) << 8) |
+                                          (roles.doRanged ? 1u : 0u);
+                bool logIt = false;
+                {
+                    std::scoped_lock lk(g_styleMx);
+                    auto& mm = g_styleMirror[a_follower->GetFormID()];
+                    if (mm.loggedRole != key) { mm.loggedRole = key; logIt = true; }
+                }
+                if (logIt)
+                    spdlog::info("[role] {:08X}: melee={} ({}) ranged={} ({}) class={}",
+                                 a_follower->GetFormID(), static_cast<int>(roles.melee), meleeSrc,
+                                 roles.doRanged, rangedSrc, static_cast<int>(a_state.combatClassOverride));
             }
 
             // ── STYLE BY PERKS within the melee class (marth 2026-09-13) ─────

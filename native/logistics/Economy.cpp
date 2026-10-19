@@ -796,11 +796,18 @@ namespace MFO::Logistics {
                 // class / perks / gambits, never from what is carried, so a bow/crossbow outside the
                 // ranged role (or outside the chosen ammo family) is no loadout weapon -- it sells,
                 // unless the protections below (stock gear, relic, player-given, quest, socketed) hold.
-                // doRanged is taken as buy takes it: a caster with no equip-ranged gambit has none.
+                // doRanged as the loot judge takes it (mageMode && !wantsRanged -> none).
                 // (Off-role MELEE is not decided here: its keep bucket lives in SwapUp.cpp ComputeKeepSet.)
+                // The caster clause is the NARROW MFO-B24 mageMode the keep set and the loot judge use
+                // (SwapUp.cpp ComputeKeepSet / BuildEquipmentContext), NOT buy's broad IsCasterFollower: an
+                // explicit Ranged-class follower with a heal gambit keeps his bow (else sell/loot loop).
+                const bool wantsRangedGambit = TableHasAction(a_state.combat(), Vocab::kActEquipRanged);
+                const bool wantsMeleeGambit  = TableHasAction(a_state.combat(), Vocab::kActEquipMelee);
+                const bool mageModeB24 = IsCasterFollower(a_state) &&
+                    (a_state.combatClassOverride == 3 ||
+                     (a_state.combatClassOverride == 0 && !wantsMeleeGambit && !wantsRangedGambit));
                 const bool offRoleLauncher = weap && WeaponClassOf(weap->GetWeaponType()) == WepClass::Ranged &&
-                    (!keepRoles.doRanged ||
-                     (IsCasterFollower(a_state) && !TableHasAction(a_state.combat(), Vocab::kActEquipRanged)) ||
+                    (!keepRoles.doRanged || (mageModeB24 && !wantsRangedGambit) ||
                      !RangedInFamily(weap, keepRoles.wantCrossbow));
                 if (weap && keepWeapons.count(obj) && !offRoleLauncher) { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
                 if (armo && IsPlayerPick(fid, obj->GetFormID())) { sdiag(obj, "playerPick"); continue; }   // the player put it on him: keep, never sell (round 3)
