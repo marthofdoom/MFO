@@ -1864,7 +1864,7 @@ Opus review of `feat/mfo-town-toasts` @ ad8746aa. Verbatim: "The sim's walk=0 pa
 
 ### MFO-B322 (SEV-5, OPEN, logistics/Errand.cpp) -- town toasts: VR fallback branch effectively dead (raised against ad8746aa)
 Opus review of `feat/mfo-town-toasts` @ ad8746aa. Verbatim: "The VR fallback branch (Errand.cpp:646) is effectively dead: errands refuse on VR (ErrandSupported())." Reasoning: harmless, kept for the Economy.cpp pattern.
-### MFO-B323 (SEV-4, OPEN, logistics/TradePerks.cpp) -- town S: EntryPointValue does not type-check its condition argument (raised against 527877c6)
+### MFO-B323 (SEV-4, CLOSED 2026-10-19 in `feat/mfo-town-p2-r2-prices`: As<TESObjectREFR>() for 8/60/59, IsBoundObject() for 76, refused + logged otherwise, logistics/TradePerks.cpp) -- town S: EntryPointValue does not type-check its condition argument (raised against 527877c6)
 Opus tier-3 review of `feat/mfo-town-p2-s-rows` @ 527877c6. Verbatim: "EntryPointValue(ep, owner, TESForm* arg, seed) does not type-check the argument per entry point: a non-REFR form passed for 8/60/59, or a non-bound object for 76, would be read by the conditions as the wrong type. Add As<TESObjectREFR>() / IsBoundObject() checks before R2 adds the first caller." Reasoning: no caller exists yet; the check must land before round R2 adds the first one. MAP: "logistics/TradePerks.cpp" entry in the logistics file list.
 
 ### MFO-B324 (SEV-4, OPEN, Progression.cpp / cast/Summon.cpp / progression/PerkGate.cpp / ProgProbe.cpp / TauntProbe.cpp) -- town S: unguarded HandleEntryPoint / IsTrue callers (raised against 527877c6)

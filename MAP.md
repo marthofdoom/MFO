@@ -3158,8 +3158,7 @@ module. Module layout:
     **What breaks:** adding an entry point to `ProvenCondArgs` without reading its argCount from the engine's
     EP table (a wrong count makes the engine read a condition pointer as the value pointer); treating nullopt as
     the seed or as false (the no-fallback contract); seeding with 1.0 where the engine seeds otherwise.
-    Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B323 (per-EP argument type check, before R2's first
-    caller), MFO-B324 (the unguarded direct callers below).
+    MFO-B323 (per-EP argument type check) CLOSED in R2 (`TradePerks.cpp`, the 4-arg `EntryPointValue`); first caller is `logistics/Pricing.cpp RefreshOnMain`. Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B324 (the unguarded direct callers below).
   - `logistics/Lotd.cpp` (1641, past ~1500: plan a split round) + `logistics/Lotd.h` = LOTD awareness (feat/mfo-lotd, 2026-09-25):
     detection, the museum snapshot, the "Loot museum items" gambit and its deposit trip. Its own
     public header (plugin.cpp, Diagnostics.cpp, Board_FieldKit.cpp include it). See the LOTD section
@@ -7621,7 +7620,7 @@ native seats) and ENGINE_NOTES §0.40.
 ### TradeBridge.cpp / TradeBridge.h — Papyrus econ bridge (#21) ⚠️ SCRIPT-COMPAT
 Native owns the trade DECISION; merchant read/mutation runs in `MFO_Trade.psc`
 (native `GetInventory`/`GetGoldAmount` CTD on merchant chests). `RegisterFuncs()`
-(`:365`) ← `plugin.cpp:422`, registers **10 Papyrus natives** on class `MFO_Trade`
+(`:365`) ← `plugin.cpp:422`, registers **11 Papyrus natives** (the 11th, `GetBuyPrice`, APPENDED by town phase 2 R2 at `TradeBridge.cpp:673`; the first 10 and their order are untouched) on class `MFO_Trade`
 (`:209-218`) called by the shipped `MFO_Trade.pex` — renaming/re-signing any breaks
 trading silently. `VendorTrade` (`:223`) ← `logistics/Economy.cpp` (`EconomyProbe:451`). `SellRow`/`NeedCat::
 Kind` (`TradeBridge.h:25,35`) are the wire vocabulary with Logistics. Cross-save
@@ -7651,10 +7650,31 @@ a fresh order.
 - **#21 SELL bypass + pricing** (`EconomyProbe`, INI-only, no MCM). `bMerchantPerkBypass`
   + `xMerchantPerkID` (0x00058F7A): a follower holding the merchant perk (dual-check
   `GetActorBase()->GetPerkIndex` + `HasPerk`, the `OwnsExactPerk` idiom) sells past the
-  vendor's VEND filter. `bSpeechPricing`: `SellRow.value = lround(baseValue *
-  sellFraction)`, `sellFraction = 1/(fBarterMax-(fBarterMax-fBarterMin)*speech/100)`
-  (0.30→0.50 over Speech 0→100). BUY stays base value. (Per-perk `kModSellPrices`
-  boosts are NOT applied — needs a CI-verified EPFD read; flagged.)
+  vendor's VEND filter. **PRICES (town phase 2 R2, 2026-10-19, SUPERSEDES the old `sellFraction`
+  note: hardcoded 3.3/2.0 GMSTs, base-value BUY, no perks).** `bSpeechPricing` gates the new
+  `logistics/Pricing.{h,cpp}` model, one `Quote` per (follower, vendor): `speech` clamped [0,100];
+  `buy = max(fBarterMax-(fBarterMax-fBarterMin)*speech/100, fBarterBuyMin)`; `sell = min(1/buy,
+  fBarterSellMax)`; then `TradePerks::EntryPointValue` EP 8 / EP 60 (owner = follower, Target = the
+  vendor actor) SEEDED with those factors; then `buy = max(fMinBuyMult, buy, 1.0)`, `sell = min(
+  fMaxSellMult, sell, 1.0)`. All six GMSTs are read by name per Resolve (`Pricing.cpp:ReadGmst`); one
+  unreadable -> model off (multipliers 1.0, one ERROR). Unit price = `Pricing::Apply(base, mult)` =
+  `std::lround`, per unit (the engine rounds in the barter swf; this is MFO's one documented choice).
+  THREADS: `Pricing::Resolve` any thread (worker `EconomyProbeImpl` per vendor in the VEND-filter pass;
+  VM thread via `TradeBridge::EnsureQuote` at the first PlanBuy / GetBuyPrice of an order); the perk step
+  runs ONLY in `RefreshOnMain` (Posted, main thread, follower loaded, vendor actor loaded). Cache:
+  session-only `g_cache` keyed (follower, vendorKey) under `Pricing.cpp g_mx`; refresh when the cached
+  Speech moved >= 0.5, or after 60 s (a perk change has no cheap signal; unloaded followers keep their
+  last value). No cached value -> Speech-only factor + a `[econ] ... no cached perk-adjusted price` line
+  (once per pair). BUY: `GetBuyPrice(token, form)` = `Apply(BaseValue, quote.buy)`; `PlanBuy` budgets
+  with the same multiplier (the order's quote is taken once, `EnsureQuote`); `MFO_Trade.psc` pays
+  `qty * GetBuyPrice`. A stale token answers the base value (logged). `ReportTrade` writes ONE
+  `[econ] ... price @ vendor: ...` line per trade. SELL rows carry the BASE value as the sort key and
+  are priced per vendor in `Economy.cpp` (`SellCandidate.minOne` keeps ammo >= 1g). WHAT BREAKS:
+  renaming/reordering the natives or the three method-name strings; computing perks off the main thread
+  or on an unloaded follower (the wrapper refuses); a SellRow value that is not Apply()'d changes
+  `TradeSignature` and reopens empty-trade memos. Pricing cache is cleared in
+  `TradeBridge::ClearTransientState`. The `.pex` is GITIGNORED (`out/Scripts/MFO_Trade.pex`) but R2
+  force-added the recompiled one; `marth-mods` copies only `MFO_MCM.pex` (see STATUS).
 - **NO EMPTY TRADES (`fix/mfo-museum-priority`, 2026-09-28; field: 159 dispatches, 156 empty).**
   `TradeSignature:597` (purse, needs, sell rows) and `SkipTrade:614` ← `logistics/Economy.cpp:943`,
   right before `VendorTrade`. `ReportTrade:465` files every result under `g_mtx`: the chest's gold
@@ -8016,5 +8036,5 @@ after co-save loads); must NOT latch a failed grant (`:100`) so a missing ESP re
 | `Diagnostics::Install` (TESSpellCast, TESHit, MenuOpenClose, + Probe crosshair) | `plugin.cpp:341` → `Diagnostics.cpp` `Install()` | + the worker pump; prints the `[atk-obs] frameworks` line |
 | `[atk-obs]` `BSAnimationGraphEvent` sinks (per follower slot, on his own graphs) | `Diagnostics.cpp` `AtkPostAttach` ← `AtkService` (worker) → `MainThread::Post` | whenever managed + `Is3DLoaded()`, every 2 s (`kAtkAttachMs`), in or out of combat, deduped; counters/dumps fight-scoped; observation only, `bAttackObserve` |
 | `[fatal]` vectored exception handler (LAST) + `std::terminate` handler | `Diagnostics.cpp` `InstallFatalHook` ← `plugin.cpp` `SKSEPluginLoad` after `SetupLog`; terminate copies per thread (sleeper, worker, main via Post) | process lifetime; flush + one `[fatal]` line, `EXCEPTION_CONTINUE_SEARCH`; never handles |
-| `TradeBridge::RegisterFuncs` (10 Papyrus natives) | `plugin.cpp:422` → `TradeBridge.cpp:365-376` | script ABI |
+| `TradeBridge::RegisterFuncs` (11 Papyrus natives, `GetBuyPrice` appended R2) | `plugin.cpp:422` → `TradeBridge.cpp:365-376` | script ABI |
 | `MEOBridge::Acquire` (MEO interface) | `plugin.cpp:289` | external ABI |
