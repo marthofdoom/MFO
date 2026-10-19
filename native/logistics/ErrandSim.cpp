@@ -624,9 +624,11 @@ namespace MFO::Logistics::Errand::Sim {
                         r.reported = true;
                         if (out.aborted)
                             spdlog::warn("[errand] {:08X}: the replayed trade ABORTED (Papyrus found no usable chest)", fid);
-                        else
+                        else {
                             spdlog::info("[errand] {:08X} '{}': trade REPORTED (loaded=no) -- sold {} for {}g, bought {} for {}g", fid,
                                          r.followerName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
+                            detail::ToastTrade(r.followerName, r.vendorName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
+                        }
                     } else if (clk - r.dispatchedClk > kTradeWaitClkSec) {
                         r.reported = true;
                         spdlog::warn("[errand] {:08X}: the replayed trade never reported ({:.0f} s) -- continuing", fid, kTradeWaitClkSec);

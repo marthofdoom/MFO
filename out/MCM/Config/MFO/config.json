@@ -379,6 +379,16 @@
           }
         },
         {
+          "id": "bTownToasts:General",
+          "text": "Economy: town errand toasts",
+          "type": "toggle",
+          "help": "OFF (default): town errands are silent. ON: one short HUD line per errand event: when a follower heads to a shop, when his trade is done (what he sold and bought, and where), and when he could not reach the shop. One line per event, never repeated. Only matters while 'Economy: shop in town' is on.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 0
+          }
+        },
+        {
           "id": "bMageWearRobes:General",
           "text": "Mages wear robes + jewelry",
           "type": "toggle",

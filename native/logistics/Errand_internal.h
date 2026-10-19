@@ -116,5 +116,10 @@ namespace MFO::Logistics::Errand {
         bool  VendorPresentNear(RE::Actor* a_follower, RE::FormID a_faction);
         RE::FormID PlayerTownId();   // the BGSLocation id of the player's town, 0 = not in one
         const char* NameOf(const RE::Actor* a_actor);
+        // bTownToasts: one HUD line (RE::DebugNotification, posted to the main thread). No-op while the toggle is OFF.
+        void  Toast(const std::string& a_text);
+        // The "sold N items for G gold at Shop" line of a REPORTED trade (physical and simulated alike), via Toast.
+        void  ToastTrade(const std::string& a_who, const std::string& a_shop,
+                         std::int32_t a_soldCount, std::int32_t a_soldValue, std::int32_t a_boughtCount, std::int32_t a_spent);
     }
 }

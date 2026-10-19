@@ -25,6 +25,7 @@
 #include "Logistics_internal.h"
 #include "Config.h"
 #include "Followers.h"
+#include "MainThread.h"
 #include "Forms.h"
 #include "LocationTypes.h"
 #include "Papyrus.h"         // DispatchMoveTo: the recall of a follower whose errand ended while he was unloaded
@@ -637,6 +638,28 @@ namespace MFO::Logistics::Errand {
             const char* n = a_actor ? a_actor->GetName() : nullptr;
             return n && *n ? n : "?";
         }
+        void Toast(const std::string& a_text) {
+            if (!Config::g_townToasts.load()) return;
+            // DebugNotification enqueues a UI message: main thread only (the Tick runs on the AddTask job worker).
+            auto fn = [text = a_text]() { RE::DebugNotification(text.c_str()); };
+            if (MainThread::IsInstalled()) MainThread::Post(fn);
+            else                           fn();   // VR: the pump is a no-op, keep the direct path
+        }
+        void ToastTrade(const std::string& a_who, const std::string& a_shop,
+                        std::int32_t a_soldCount, std::int32_t a_soldValue, std::int32_t a_boughtCount, std::int32_t a_spent) {
+            if (a_soldCount <= 0 && a_boughtCount <= 0) {
+                Toast(std::format("{} found nothing to trade at {}.", a_who, a_shop));
+                return;
+            }
+            std::string t = std::format("{}", a_who);
+            if (a_soldCount > 0)
+                t += std::format(" sold {} item{} for {} gold at {}", a_soldCount, a_soldCount == 1 ? "" : "s", a_soldValue, a_shop);
+            if (a_boughtCount > 0)
+                t += std::format("{} bought {} for {} gold{}", a_soldCount > 0 ? " and" : "", a_boughtCount, a_spent,
+                                 a_soldCount > 0 ? "" : std::format(" at {}", a_shop));
+            t += ".";
+            Toast(t);
+        }
 
         // RECALL (marth 2026-10-18: a follower always rejoins the player): put an alive, UNLOADED follower beside the player,
         // out of his view, UNLESS he is already in the player's cell. Vanilla Papyrus ObjectReference.MoveTo, ~250 u behind
@@ -881,6 +904,7 @@ namespace MFO::Logistics::Errand {
                      fid, r.followerName, r.vendorName, best->id, TownName(r.town), best->dist,
                      r.destKind == DestKind::VendorActor ? "the vendor" : r.destKind == DestKind::Ref ? "the shop ref" : "the shop cell",
                      r.destForm, bestWhy, cands.size());
+        detail::Toast(std::format("{} heads to {} to trade.", r.followerName, r.vendorName));
         return true;
     }
 
@@ -974,6 +998,7 @@ namespace MFO::Logistics::Errand {
                     } else if (pleg.state > APMF_API::kLeg_Blocked && pleg.state <= APMF_API::kLeg_Released) {
                         WarnCombatDisagree(a_follower, pleg.state);
                         const auto bo = NoteWalkFailed(fid, r, a_now);
+                        if (bo > 0) detail::Toast(std::format("{} could not reach {}.", r.followerName, r.vendorName));
                         Finish(fid, std::format("the walk to the shop ended: {} (this shop backed off {} s)", LegName(pleg.state), bo).c_str(), kFailCooldownSec);
                         return false;
                     }
@@ -1013,6 +1038,7 @@ namespace MFO::Logistics::Errand {
                 } else if (leg.state > APMF_API::kLeg_Blocked && leg.state <= APMF_API::kLeg_Released) {
                     WarnCombatDisagree(a_follower, leg.state);
                     const auto bo = NoteWalkFailed(fid, r, a_now);
+                    if (bo > 0) detail::Toast(std::format("{} could not reach {}.", r.followerName, r.vendorName));
                     Finish(fid, std::format("the walk ended: {} (this vendor backed off {} s)", LegName(leg.state), bo).c_str(), kFailCooldownSec);
                     return false;
                 }
@@ -1131,6 +1157,7 @@ namespace MFO::Logistics::Errand {
                 }
                 spdlog::info("[errand] {:08X} '{}': trade REPORTED at '{}' -- sold {} for {}g, bought {} for {}g",
                              fid, r.followerName, r.vendorName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
+                detail::ToastTrade(r.followerName, r.vendorName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
                 r.bought = out.boughtCount > 0;
                 if (r.bought && idles.take) {
                     if (!beginBeat(Phase::Taking, idles.take, "take")) return false;

@@ -4524,6 +4524,11 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
   (`Upkeep.cpp:751` <- `Errand::ClearTransientState`).
 - **Config** (`Config.h` after `g_economyBuyTomes`): `bTownErrands` (MCM toggle, default ON, `out/MCM/Config/MFO/config.json`),
   INI-only `iErrandMinSellGold` 100, `iErrandMinPurse` 200, `fErrandSettleSec` 10, `fErrandCooldownSec` 120, `fErrandMaxGameMin` 120.
+  `bTownToasts` (MCM toggle, default OFF, `Config.h` `g_townToasts`): HUD corner toasts via `detail::Toast` / `detail::ToastTrade`
+  (`Errand.cpp`, declared in `Errand_internal.h`; `RE::DebugNotification` posted with `MainThread::Post`, direct on VR). Sites: PLAN commit
+  (`Errand.cpp` end of the plan fn, "heads to"), trade REPORTED in the Trading phase ("sold ... at" / "found nothing to trade at"), the
+  two `NoteWalkFailed` call sites in the Walking phase ("could not reach", only when a backoff was applied), and `ErrandSim.cpp` trade
+  REPORTED (loaded=no). All one-shot transitions. The sold/bought toast fires at REPORTED, before the cosmetic take beat.
   The six keys parse in a chain of their own at the top of `Config.cpp` `Apply` (the main chain is near MSVC's nested-block limit).
 - **WHAT BREAKS if you change this:** `EconomyProbe`'s parameter list (Service.cpp, Errand.cpp); `ErrandProbe::Verdict` fields (the
   ranker); `TradeBridge::ReportTrade` (the outcome the Trading phase waits on); `kLeg_*` handling (a new end state = a new case in
