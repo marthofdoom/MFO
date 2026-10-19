@@ -2183,12 +2183,12 @@ claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kHealCastTtlMs`) and t
   line names why), `FileSubstrateCast` (`:115`, worker or MAIN: the PENDING latch, the player sneaking (Q6), can-act,
   magicka + reserve, heal reach, the pacing window, already-up, the ch.8b target convention, then the bridge),
   `TrySubstrateCast` (`:198`, both). Its maps are under `g_roadMx` (leaf).
-- `apmf/Substrate.cpp` (305) = the claim PAIR and its state machine, declared in `apmf/APMFBridge.h`
+- `apmf/Substrate.cpp` (309) = the claim PAIR and its state machine, declared in `apmf/APMFBridge.h`
   (`SubstrateAvail`): `SubstrateAvailability` (`:116`, the once-per-session WARN (ABI < 27) / ERROR (v27 says
   unavailable, "THIS SHOULD NOT HAPPEN", Q4)), `SubstrateCastPending` (`:141`, the latch), `OpenSubstrateCast`
-  (`:146`), `NoteSubstrateCastFired` (`:194`, from `Diagnostics.cpp`'s SpellSink task), `ReleaseSubstrateCast`
-  (`:207`, from `Followers::ReleaseHeldStateImpl`), `SweepSubstrateCasts` (`:217`, from `APMFBridge::Tick`
-  `apmf/Bridge.cpp:1025`, BEFORE g_mx), `ClearSubstrateCasts` (`:299`, from `ClearTransientState` `apmf/Bridge.cpp:1267`,
+  (`:146`), `NoteSubstrateCastFired` (`:196`, from `Diagnostics.cpp`'s SpellSink task), `ReleaseSubstrateCast`
+  (`:209`, from `Followers::ReleaseHeldStateImpl`), `SweepSubstrateCasts` (`:219`, from `APMFBridge::Tick`
+  `apmf/Bridge.cpp:1025`, BEFORE g_mx), `ClearSubstrateCasts` (`:303`, from `ClearTransientState` `apmf/Bridge.cpp:1267`,
   under g_mx). Own leaf mutex `g_subMx` (order g_mx -> g_subMx; never the reverse). Every transition logs once per pair
   with `road=substrate-claim`: OPEN requested -> HELD -> CAST CLAIMED -> FIRED -> CLOSED reason=fired / cast-claim-ended
   / closed-unfired / not-opened / real-combat / released / timeout; ERRORs for OPEN REFUSED, NOT OPENED, timeout.
@@ -6026,7 +6026,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     (`:976-982`, Harbinger ABI v26 `GetSubstrateState`, ClickUp 86e3pu939: a combat SUBSTRATE is not combat for
     MFO; any thread, lock-free in APMF; "no substrate" below v26)** / `MaybeWarnAbsence` (`:958`), the expiry sweep
     `Tick` (`:1016`; it sweeps the ch.27 substrate pairs first, `:1025`) and `ClearTransientState` (`:1216`; clears them, `:1267`).
-  - `apmf/Substrate.cpp` (305) = the OUT-OF-COMBAT SUBSTRATE CLIENT (slice S3, ch.27 + ch.8b, ABI v27): the claim pair
+  - `apmf/Substrate.cpp` (309) = the OUT-OF-COMBAT SUBSTRATE CLIENT (slice S3, ch.27 + ch.8b, ABI v27): the claim pair
     and its state machine. Full entry: "cast/SubstrateRoad.cpp + apmf/Substrate.cpp" in section 2 (before Scheduler).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
     `ClaimOffenseCast` `:83`, `RefreshOwnedCastOnHand` `:215`, `ReleaseCastClaimOnHand` `:311`,

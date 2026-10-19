@@ -148,6 +148,9 @@ namespace MFO::APMFBridge {
         if (!api || a_follower == 0 || a_follower == 0x14 || a_spell == 0) return false;   // Harbinger refuses the player
         if (!api->IsSubstrateAvailable || !api->IsSubstrateAvailable()) return false;      // the caller asked first
         const char* site = a_site ? a_site : "?";
+        // Harbinger's own line of sight for a recipient that is not the caster (asked outside the lock: a lock-free
+        // probe, apmf/Los.cpp).
+        const bool ownLos = a_target != 0 && a_target != a_follower && LosSupported();
         std::scoped_lock lock(g_subMx);
         if (g_pairs.find(a_follower) != g_pairs.end()) return false;   // the latch (the caller asked first; a race)
 
@@ -170,8 +173,7 @@ namespace MFO::APMFBridge {
         req.proxy  = 0;   // Harbinger mints its own delivery-flip proxy where the shape needs one
         req.target = a_target;
         req.flags  = APMF_API::kCastFlag_LeftHand;
-        if (a_target != 0 && a_target != a_follower && LosSupported())
-            req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
+        if (ownLos) req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
         req.ttlMs  = kHealCastTtlMs;
         const APMF_API::Handle cast = api->RequestCast(a_follower, kOwnBasis, &req);
         if (cast == APMF_API::kInvalidHandle) {
@@ -274,7 +276,9 @@ namespace MFO::APMFBridge {
                                   fid, SpellName(pr.spell), pr.spell, pr.target, pr.site);
                 }
             }
-            if (pr.closing && (pr.fired || !castLive || now - pr.closedAt >= kCloseGrace)) {
+            // Released at once when the fire was SEEN, the cast claim is already gone, or the substrate was never held
+            // (no controller ever existed, so no charge can be in flight); else after the B93 grace.
+            if (pr.closing && (pr.fired || !castLive || !pr.held || now - pr.closedAt >= kCloseGrace)) {
                 ReleasePairLocked(api, pr);
                 spdlog::info("[substrate] {:08X} CLOSED reason={} after {} ms: {} ({:08X}) at {:08X} ({}){}{} "
                              "road=substrate-claim", fid, pr.closeReason ? pr.closeReason : "?",

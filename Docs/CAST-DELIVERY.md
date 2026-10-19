@@ -1549,7 +1549,8 @@ for a recipient that is not the caster.
 | ERROR `CLOSED reason=timeout` | MFO's 17 s backstop (Harbinger clamps the TTL at 15 s) |
 
 **Close on fire, and APMF-B93.** Harbinger closes the substrate on the claim's first fire. MFO adds no second cut: once the substrate
-claim is gone, the cast claim is released at once if the fire was SEEN (the SpellSink), else after a 2.5 s grace (sized from the
+claim is gone, the cast claim is released at once if the fire was SEEN (the SpellSink) or the substrate was never held
+(no controller, so no charge), else after a 2.5 s grace (sized from the
 measured fire -> `TESSpellCastEvent` lag, 0.33..2.02 s), so MFO's release can never be what cuts a charge in flight. A REAL fight
 during the window (`kSubstrateState_Real`) releases the cast claim at once: the combat table owns casting from then on (no claim of
 the out-of-combat table may stand beside the combat table's: the MFO-B173 class).
