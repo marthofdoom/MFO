@@ -1813,7 +1813,23 @@ namespace MFO::Logistics {
                     if (auto it = g_logiCastUntil.find(castKey); it != g_logiCastUntil.end() && now < it->second) {
                         start = choice.ruleIndex + 1; continue;   // within this spell's window
                     }
-                if (selfPkg) {
+                // THE SUBSTRATE ROAD (bSubstrateCasts, substrate round R3 = slice S3; cast/SubstrateRoad.cpp): the
+                // self and the immediate branches below file a Harbinger ch.27 substrate + a ch.8b claim instead, so
+                // the follower's own AI casts with the animation. NotTaken = today's branches below, unchanged (the
+                // switch OFF, Harbinger absent or the substrate unavailable, or a spell the claim road does not
+                // serve). Skipped = a transparent no-cast this lap, NEVER the direct road (a pair already stands,
+                // the player sneaks, paced, refused: cast/Actuation.h SubstrateTry). The hostile-at-foe branch is
+                // round R4 and never asks.
+                const auto subRoad = (selfPkg || immediate)
+                    ? Actuation::TrySubstrateCast(a_follower, sp, tgt, /*a_oocTable=*/true,
+                                                  selfPkg ? "ooc-self" : "ooc-immediate")
+                    : Actuation::SubstrateTry::NotTaken;
+                if (subRoad == Actuation::SubstrateTry::Skipped) {
+                    start = choice.ruleIndex + 1; continue;
+                }
+                if (subRoad == Actuation::SubstrateTry::Filed) {
+                    acted = true;   // the pair is filed (road=substrate-claim): this tick's action
+                } else if (selfPkg) {
                     // The UNIVERSAL DIRECT TRIGGER (SPEC-self-cast-forced).
                     // Actuation::CastSelfDirect applies the effect DIRECTLY
                     // (CastSpellImmediate, kInstant) + spends magicka -- NO equip,
@@ -1994,7 +2010,8 @@ namespace MFO::Logistics {
                     g_logiCastUntil[castKey] = now + std::chrono::duration_cast<Clock::duration>(
                                                         std::chrono::duration<float>(dur));
                     const char* route =
-                          op == Vocab::kActCastPlayer                   ? "player (immediate)"
+                          subRoad == Actuation::SubstrateTry::Filed     ? "substrate-claim (animated)"
+                        : op == Vocab::kActCastPlayer                   ? "player (immediate)"
                         : (op == Vocab::kActCastTarget && immediate && !casterPick) ? "ally/player (immediate)"
                         : immediate                                     ? "self (immediate)"
                                                                         : "foe (package)";

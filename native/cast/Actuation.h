@@ -517,8 +517,36 @@ namespace MFO::Actuation {
     // Never a self/target stream, no hand lock, so no MFO reconcile, combat-end
     // or cleanup path ends the summon. ALWAYS returns a transparent result: the
     // main thread's [summon] line says whether it cast. WORKER only.
+    // SUBSTRATE S3 (bSubstrateCasts ON, out-of-combat table only): the main thread files the substrate pair
+    // (FileSubstrateCast below) instead of the direct cast; `road=substrate-claim` on its [summon] line.
     Outcome CastSummonOnce(RE::Actor* a_follower, RE::SpellItem* a_spell, int a_rule,
                            const char* a_table, std::string_view a_target);
+
+    // ── THE OUT-OF-COMBAT SUBSTRATE ROAD (substrate round R3 = slice S3; cast/SubstrateRoad.cpp) ──────────────
+    // With Config::g_substrateCasts ON and Harbinger's substrate available (ABI >= 27, IsSubstrateAvailable), an
+    // OUT-OF-COMBAT heal / buff / summon (fire-and-forget only) is cast by the follower's own AI with the real
+    // animation: MFO files a ch.27 combat substrate beside a ch.8b cast claim (apmf/Substrate.cpp owns the pair
+    // and its state machine). The converted sites: logistics/Service.cpp's self (CastSelfDirect) and posted
+    // immediate branches, CastAuto's beneficial fan (cast/Auto.cpp, one recipient per cast) and CastSummonOnce's
+    // main-thread cast (cast/Summon.cpp). Concentration (slice S5) and hostile casts (round R4) are NOT converted.
+    //   NotTaken  today's road, unchanged: the switch is OFF, Harbinger is absent / too old / reports the substrate
+    //             unavailable (logged once per session), the caller is the combat table, or the spell is not one
+    //             the claim road serves (a rate-limited [substrate] line names why).
+    //   Filed     the pair is filed: this lap's action. The cast is Harbinger's and the engine's from here.
+    //   Skipped   a TRANSPARENT no-cast this lap, NEVER the direct road: a pair already stands for him (the
+    //             PENDING latch), the player is sneaking (marth 2026-10-19 Q6), unaffordable, out of reach, the
+    //             spell's effect is still up or its pacing window is open, or Harbinger REFUSED the open (logged).
+    enum class SubstrateTry : std::uint8_t { NotTaken, Filed, Skipped };
+    // WORKER only (ChooseBuffRoad's state is worker-serial). Does this cast take the substrate road? a_oocTable is
+    // false for every combat-table caller (g_firingRule set): the combat table never files a substrate.
+    bool SubstrateRoadFor(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, bool a_oocTable);
+    // WORKER or MAIN. Files the pair after the per-cast gates. a_recipient other than the caster is WORKER only
+    // (the reach gate reads the Sightline cache); the main-thread caller (the summon) passes the caster.
+    SubstrateTry FileSubstrateCast(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,
+                                   const char* a_site);
+    // WORKER only: SubstrateRoadFor, then FileSubstrateCast. a_site is a string literal (it is kept in the log).
+    SubstrateTry TrySubstrateCast(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,
+                                  bool a_oocTable, const char* a_site);
 
     // (CONCENTRATION delivery is DIRECT FORCE everywhere -- Docs/CAST-DELIVERY.md.
     // COMBAT: CastOn's concentration fork -> ConcentrationCast -> CastTargetDirect

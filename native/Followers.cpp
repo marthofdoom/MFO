@@ -462,6 +462,9 @@ namespace MFO::Followers {
         // own casting for the rest of the session and keep every combat caster
         // off the hook's fast-out.
         CasterConsent::Clear(id);
+        // An out-of-combat substrate cast pair (slice S3, apmf/Substrate.cpp): Harbinger's TTL would end it within
+        // seconds, but a dismissed / switched-off follower keeps no MFO claim. Idempotent (no pair -> no-op).
+        APMFBridge::ReleaseSubstrateCast(id, "the follower's held state is released (dismissal / MFO off / load window)");
         // The package (cast) alias -- a longer tail: the alias fill is
         // SERIALIZED INTO THE .ess, so a latch left behind comes back on every
         // future load of every save descended from this one. Evict to the marker.

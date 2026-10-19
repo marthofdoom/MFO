@@ -126,6 +126,7 @@ namespace MFO::Config {
             else if (a_key == "fErrandCooldownSec") { setF(g_errandCooldownSec, 0.0f, 3600.0f); return; }
             else if (a_key == "fErrandMaxGameMin")  { setF(g_errandMaxGameMin,  10.0f, 1440.0f); return; }
             else if (a_key == "iErrandTradeGameMin") { setI(g_errandTradeGameMin, 1, 240); return; }
+            else if (a_key == "bSubstrateCasts")    { setB(g_substrateCasts); return; }   // OOC casts on the ch.27 substrate (S3), INI-only, default OFF
 
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
             else if (a_key == "fRapportRate")       setF(g_rapportRate,       0.0f, 100.0f);
@@ -347,6 +348,7 @@ namespace MFO::Config {
             g_weighWeapons       = false;   // default OFF: MFO equips weapons directly (weighting is parked, batch D)
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent
             g_healAnimPackage    = true;    // default ON (animheal phase 2): with Harbinger present and a combat controller a heal is cast ANIMATED by the follower's own AI (the ch.8b claim road); OFF = the kill switch, heals take the direct road (unanimated)
+            g_substrateCasts     = false;   // default OFF (S3): OOC casts stay on the direct road until the field run proves the substrate client
             g_forcedCastTrigger  = 0;       // RESERVED ComposedCast trigger variant
             g_cfcBackoffMs       = 10000;   // ComposedCast degrade backoff (ms)
             g_castSource         = 3;

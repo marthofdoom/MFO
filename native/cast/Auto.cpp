@@ -974,6 +974,44 @@ namespace MFO::Actuation {
                                       : std::string("auto-cast: nobody needs it"),
                          true };
 
+            // THE SUBSTRATE ROAD, OUT OF COMBAT (bSubstrateCasts, substrate round R3 = slice S3; cast/SubstrateRoad.cpp).
+            // A real cast is ONE cast at ONE recipient, so the beneficial fan becomes a series (the combat claim
+            // series' shape): this lap casts at the neediest -- a heal at the lowest health fraction, anything else at
+            // the first of the set (the party snapshot order, then the player) -- and the next lap, after the
+            // fCastCooldown pace, at whoever still needs it (the already-up guard drops the one just served). The
+            // jittered recast window is armed only when the set had one recipient left, so it never starves the rest.
+            // NotTaken = the fan below, unchanged. Skipped = a transparent no-cast this lap, never the fan. Hostile
+            // (round R4) and concentration (slice S5) never ask; nor does the combat table (g_firingRule).
+            if (!hostile && !concentration && g_firingRule == kNoRule && Config::g_substrateCasts.load()) {
+                const bool healSet = kind == CasterConsent::SpellKind::Heal || SpellHealsHealth(spell);
+                RE::Actor* pick = nullptr;
+                float      pickHp = 2.0f;
+                for (const auto tgtID : targets) {
+                    auto* a = RE::TESForm::LookupByID<RE::Actor>(tgtID);
+                    if (!a) continue;
+                    if (!healSet) { pick = a; break; }
+                    if (const float hp = Vocab::HealthPct(a); hp < pickHp) { pickHp = hp; pick = a; }
+                }
+                if (pick) {
+                    switch (TrySubstrateCast(a_follower, spell, pick, /*a_oocTable=*/true, "ooc-auto")) {
+                    case SubstrateTry::NotTaken:
+                        break;   // today's fan below
+                    case SubstrateTry::Skipped:
+                        return { Result::NoOp, "auto: substrate cast not filed this lap (pending / sneaking / paced / refused)", true };
+                    case SubstrateTry::Filed:
+                        g_autoCast[id] = now;
+                        if (suppressible && targets.size() == 1)
+                            g_beneficialRecast[recastKey] = { now, JitteredRecastWindow(authoredDur) };
+                        spdlog::info("[cast] {:08X} {} AUTO BENEFICIAL {} ({:08X}) -> {:08X} -- substrate claim filed "
+                                     "(one of {} in need; road=substrate-claim)",
+                                     id, a_follower->GetName() ? a_follower->GetName() : "?",
+                                     spell->GetName() ? spell->GetName() : "?", a_spellID, pick->GetFormID(),
+                                     targets.size());
+                        return { Result::Fired, "auto: substrate claim filed" };
+                    }
+                }
+            }
+
             // THE DIRECT FAN IS THE UNANIMATED RESIDUE (substrate S1): every cast below is a CastSpellImmediate with no
             // hand animation. Combat table only (the helper is a no-op off it); one line per (follower, spell).
             if (g_firingRule != kNoRule) {

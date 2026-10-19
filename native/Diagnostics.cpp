@@ -268,6 +268,11 @@ namespace MFO::Diagnostics {
                                          ours ? "  *** MFO GAMBIT SPELL -- THE ANIMATED PATH ***"
                                               : "  (their own spell, not ours)");
 
+                            // SUBSTRATE S3 hand-off (apmf/Substrate.cpp): marks an out-of-combat substrate
+                            // pair FIRED when this is its spell or Harbinger's proxy. A map lookup; it releases
+                            // nothing (Harbinger's fire close ends the substrate, the sweep releases the claim).
+                            APMFBridge::NoteSubstrateCastFired(casterID, spellID);
+
                             // COMPOSED FORCED CAST observe hand-off (SPEC-FORCED-CAST.md
                             // §1.3 RELEASE / §5). If the executor armed an "expected
                             // cast" for this (follower, spell) just before it triggered,

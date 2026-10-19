@@ -108,6 +108,38 @@ namespace MFO::APMFBridge {
     // IsInCombat() / combatController reads on purpose.
     bool InCombat(const RE::Actor* a_actor);
 
+    // ── MFO AS THE OUT-OF-COMBAT SUBSTRATE CLIENT (ch.27 + ch.8b; ABI v27; substrate round R3 = slice S3) ──
+    // apmf/Substrate.cpp. Plan: _evidence/2026-10-18-designs/SUBSTRATE-TO-OOC-PLAN.md "R3 detail". The cast side
+    // (which spells, which sites, the pacing and the sneak refusal) is cast/SubstrateRoad.cpp; this is the claim
+    // pair and its state machine. One pair per follower: a kIntent_CombatSubstrate claim (Harbinger forces combat
+    // against its own anchor as a substrate) filed BESIDE a ch.8b kIntent_Cast claim (the spell, the recipient,
+    // the LEFT hand). Harbinger closes the substrate on the claim's first fire. MFO never casts on this road.
+    //   OPEN requested -> held (GetSubstrateState Held) -> cast claimed (IsClaimLive) -> fired (the SpellSink saw
+    //   the spell or its proxy) / refused / timeout -> closed. Each transition is logged ONCE per pair with
+    //   `road=substrate-claim`. Thread: every function below is ANY-THREAD safe (one leaf mutex, g_subMx, never
+    //   held with g_mx taken after it; the APMF calls are enqueues or lock-free reads).
+    enum class SubstrateAvail : std::uint8_t {
+        Absent,        // no Harbinger: today's road, silently (the no-APMF toast covers it)
+        TooOld,        // Harbinger older than ABI v27 (no availability query): today's road, one warn per session
+        Unavailable,   // v27 says the substrate is not installed here: today's road, one ERROR per session (Q4)
+        Available,
+    };
+    SubstrateAvail SubstrateAvailability();
+    // THE PENDING LATCH: a pair stands for this follower (requested, held, or its close grace). While it does,
+    // every converted OOC site skips its cast this lap (never the direct road beside a substrate).
+    bool SubstrateCastPending(RE::FormID a_follower);
+    // File the pair. a_target follows the ch.8b convention (0 = self for a Self-delivery or placement spell, the
+    // caster's own FormID for a self cast of a non-Self spell, else the recipient). false = REFUSED at the call
+    // (logged loudly as an ERROR; the caller SKIPS the cast, never the direct road: principle 7). Requires
+    // SubstrateAvailability() == Available (re-checked).
+    bool OpenSubstrateCast(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target, const char* a_site);
+    // The SpellSink's hand-off (Diagnostics.cpp, on the AddTask worker): a_spell fired on a_follower. Marks the
+    // pair FIRED when it is the pair's spell or Harbinger's minted proxy. Never releases anything by itself:
+    // Harbinger's own fire close decides when the substrate ends (APMF-B93: the close must not cut the charge).
+    void NoteSubstrateCastFired(RE::FormID a_follower, RE::FormID a_spell);
+    // Release the pair now (dismissal / MFO switched off for him). Idempotent.
+    void ReleaseSubstrateCast(RE::FormID a_follower, const char* a_why);
+
     // ROUND-ROBIN-AWARE STALENESS WINDOW (APMFBridge.cpp, 2026-09-05; moved to
     // external linkage feat/cast-gambit-concentration so it has ONE definition
     // shared cross-TU). Every claim in this file that is refreshed from INSIDE

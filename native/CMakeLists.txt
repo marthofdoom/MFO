@@ -72,6 +72,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     cast/Hands.cpp
     cast/HealRoad.cpp
     cast/Unanimated.cpp
+    cast/SubstrateRoad.cpp
     Scheduler.cpp
     EngageOnSight.cpp
     logistics/Upkeep.cpp
@@ -127,6 +128,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/ErrandClaims.cpp
     apmf/TauntClaims.cpp
     apmf/Los.cpp
+    apmf/Substrate.cpp
     imgui_impl_win32.cpp
 )
 
