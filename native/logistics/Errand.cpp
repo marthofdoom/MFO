@@ -137,6 +137,7 @@ namespace MFO::Logistics::Errand {
         // the shop for both a loaded vendor actor and a faction-only shop, so the walk's two phases (place, then vendor) share one key.
         struct WalkBackoff { Clock::time_point until{}; int fails = 0; };
         std::unordered_map<std::uint64_t, WalkBackoff>       g_backoff;
+        std::unordered_map<RE::FormID, std::string>          g_backoffLogged;   // follower -> the skipped-chest set last logged (the skip line fires on a CHANGE only)
         std::uint64_t BackoffKey(RE::FormID a_fid, RE::FormID a_chest) { return (static_cast<std::uint64_t>(a_fid) << 32) | a_chest; }
         RE::FormID                                           g_townId = 0;  // the town the player has been in ...
         Clock::time_point                                    g_townSince{}; // ... since this instant
@@ -421,8 +422,16 @@ namespace MFO::Logistics::Errand {
                     out.push_back(c);
                 }
             }
-            if (!backoffSkipped.empty())
-                spdlog::info("[errand] {:08X}: plan skips backed-off target(s) after a failed walk: {}", a_follower->GetFormID(), backoffSkipped);
+            {
+                // The plan runs every 6 s: say it when this follower's skipped set CHANGES, not on every plan.
+                std::scoped_lock lk(g_mx);
+                auto& last = g_backoffLogged[a_follower->GetFormID()];
+                if (last != backoffSkipped) {
+                    last = backoffSkipped;
+                    if (!backoffSkipped.empty())
+                        spdlog::info("[errand] {:08X}: plan skips backed-off target(s) after a failed walk: {}", a_follower->GetFormID(), backoffSkipped);
+                }
+            }
             return out;
         }
 
@@ -561,6 +570,7 @@ namespace MFO::Logistics::Errand {
             g_nextPlan.clear();
             g_parked.clear();
             g_backoff.clear();
+            g_backoffLogged.clear();
             g_townShops.clear();
             g_townId = 0;
             g_townSince = {};
