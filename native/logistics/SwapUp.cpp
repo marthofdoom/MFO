@@ -8,18 +8,17 @@
 // ONE rule, shared by the loot side and the economy (shop) side. When a follower
 // can get a better item of a kind it keeps (weapon, armor, AMMO) it takes the
 // better one and gets rid of the worse: SOLD at a vendor (EconomyProbe's sell
-// list), or DROPPED back into the source container while looting when carrying it
-// no longer makes sense. Two halves:
+// list), never dropped (marth 2026-10-18). Two halves:
 //
 //   * THE KEEP SET (weapons + armor) -- ComputeKeepSet. The best weapon of each
 //     class bucket (1H [top-2 for a dual wielder], 2H, bow, crossbow, staff) and
 //     the worn + best-scored piece per logical armor slot (ArmorScore, the
 //     skill-led judge). Moved here VERBATIM out of EconomyProbe so the sell side
 //     and the loot side read the SAME set: everything outside it is superseded.
-//     The economy sells it (unchanged); the loot side drops it only to make room
-//     for an upgrade that would not fit the carry weight (PlanRoomForSwapUp, then
-//     CommitSwapUpDrops once the upgrade has landed): only under bEconomy, never an
-//     enchanted piece, never one worth more than the upgrade.
+//     The economy sells it. The loot side never drops it to make room: an upgrade
+//     that does not fit the carry weight is left in the body and the superseded
+//     piece waits for the vendor (the old PlanRoomForSwapUp / CommitSwapUpDrops
+//     were removed 2026-10-18).
 //
 //   * AMMO -- ranked by DAMAGE, VALUE breaking a tie, within one kind (arrows vs
 //     bolts), and judged ONLY for the kind the follower actually uses
@@ -567,131 +566,13 @@ namespace MFO::Logistics {
             }
             if (taken == 0) return false;
 
-            // SHED what the take made obsolete, lowest first, back into the body --
-            // recomputed ONCE from what he now actually carries (the carry-weight
-            // gate may have skipped a stack the plan above counted on). A target of 0
-            // (not his kind) sheds nothing: the take was a plain restock.
-            std::int32_t shed = 0;
-            std::string  shedNames;
-            for (const auto& s : ObsoleteHeldAmmo(a_follower, a_wantBolt, a_target)) {
-                a_follower->RemoveItem(s.obj, s.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_src);
-                shed += s.count;
-                if (!shedNames.empty()) shedNames += ", ";
-                shedNames += std::format("'{}' x{} dmg={:.0f}", s.obj->GetName() ? s.obj->GetName() : "?", s.count, s.dmg);
-            }
-            spdlog::info("[swapup] {:08X}: {} {} took {} from {:08X}, target={} | dropped obsolete [{}] ({})",
+            // NOTHING IS DROPPED BACK (marth 2026-10-18: "We dont do handing or dropping anymore. It's
+            // selling"): the stacks this take made obsolete stay in his pack for the vendor's sell list
+            // (Economy.cpp, ObsoleteHeldAmmo at the same target). A target of 0 is a plain restock.
+            spdlog::info("[swapup] {:08X}: {} {} took {} from {:08X}, target={}",
                          a_follower->GetFormID(), a_upgradeOnly ? "UPGRADE" : "RESTOCK",
-                         a_wantBolt ? "bolts" : "arrows", taken, a_src->GetFormID(), a_target,
-                         shedNames, shed);
+                         a_wantBolt ? "bolts" : "arrows", taken, a_src->GetFormID(), a_target);
             return true;
-        }
-
-        // ── WEAPONS + ARMOR: the loot-side drop ─────────────────────────────
-        bool PlanRoomForSwapUp(RE::Actor* a_follower, const FollowerState& a_state,
-                               RE::TESBoundObject* a_incoming, std::int32_t a_incomingValue,
-                               std::vector<SwapUpDrop>& a_outPlan) {
-            a_outPlan.clear();
-            if (!a_follower || !a_incoming) return false;
-            // ECONOMY GATE (review round 1 on 4f23c30): "superseded" is the keep set
-            // the ECONOMY sells by, and this drop is the loot-time twin of that sale.
-            // With bEconomy off the follower never sells anything, so nothing he
-            // carries is junk to MFO either -- he keeps it for the player to sort, and
-            // an upgrade that does not fit is left in the body as before this change.
-            if (!Config::g_economy.load()) return false;
-            auto* avo = a_follower->AsActorValueOwner();
-            if (!avo) return false;
-            const float cap  = avo->GetActorValue(RE::ActorValue::kCarryWeight);
-            const float need = a_follower->GetWeightInContainer() + a_incoming->GetWeight() - cap;
-            if (need <= 0.0f) return true;   // it already fits
-
-            // SUPERSEDED = outside THE keep set the economy sells by. Only weapons
-            // and rated armor (clothing / jewelry are value-dense: they go to a
-            // vendor, never onto the floor), only what the follower is not wearing,
-            // never ENCHANTED, never worth MORE than what it makes room for, and
-            // never anything protected (see the file header).
-            const KeepSet keep = ComputeKeepSet(a_follower, a_state);
-            const RE::FormID fid = a_follower->GetFormID();
-            const bool meo = MEOBridge::Available();
-            std::vector<SwapUpDrop> cands;
-            for (auto& [obj, data] : a_follower->GetInventory()) {
-                if (!obj || data.first <= 0 || obj == a_incoming) continue;
-                auto* weap = obj->As<RE::TESObjectWEAP>();
-                auto* armo = obj->As<RE::TESObjectARMO>();
-                if (weap) {
-                    if (weap->GetWeaponType() == RE::WEAPON_TYPE::kHandToHandMelee) continue;   // fists are not gear
-                    if (keep.weapons.count(obj)) continue;
-                } else if (armo) {
-                    if (armo->GetArmorRating() <= 0.0f || !keep.armorJudged || keep.armor.count(obj)) continue;
-                } else {
-                    continue;
-                }
-                const float w = obj->GetWeight();
-                if (w <= 0.0f) continue;   // frees nothing
-                auto* entry = data.second.get();
-                if (entry && (entry->IsWorn() || entry->IsEnchanted())) continue;
-                const std::int32_t value = entry ? entry->GetValue() : 0;
-                if (value > a_incomingValue) continue;   // never drop more worth than it makes room for
-                if (IsStockGear(fid, obj->GetFormID()) || IsQuestObjectInstance(entry) ||
-                    Catalog::IsExcluded(obj->GetFormID()) || IsPlayerPick(fid, obj->GetFormID()) ||
-                    Lotd::HoldFromSale(fid, obj))   // LOTD: a needed relic is never dropped
-                    continue;
-                if (meo && entry && entry->extraLists) {
-                    bool uid = false;
-                    for (auto* xl : *entry->extraLists) {
-                        auto* u = xl ? xl->GetByType<RE::ExtraUniqueID>() : nullptr;
-                        if (u && u->uniqueID != 0) { uid = true; break; }
-                    }
-                    if (uid) continue;   // may carry gems: the vendor un-gems first, a drop cannot
-                }
-                cands.push_back({ obj, static_cast<std::int32_t>(data.first), w, value });
-            }
-            // LOWEST FIRST: the least valuable goes first (the vendor sells the most
-            // valuable junk first, so both ends agree on what is worth least).
-            std::stable_sort(cands.begin(), cands.end(), [](const SwapUpDrop& a, const SwapUpDrop& b) {
-                return a.value != b.value ? a.value < b.value : a.weight > b.weight;
-            });
-            // Plan the exact copies that free `need`, all or nothing: a relief that
-            // cannot make room plans nothing.
-            float freed = 0.0f;
-            for (const auto& c : cands) {
-                if (freed >= need) break;
-                std::int32_t n = 0;
-                while (n < c.count && freed < need) { ++n; freed += c.weight; }
-                a_outPlan.push_back({ c.obj, n, c.weight, c.value });
-            }
-            if (freed < need) { a_outPlan.clear(); return false; }
-            return true;
-        }
-
-        std::int32_t HeldCount(RE::Actor* a_follower, RE::TESBoundObject* a_obj) {
-            if (!a_follower || !a_obj) return 0;
-            for (auto& [obj, data] : a_follower->GetInventory())
-                if (obj == a_obj) return static_cast<std::int32_t>(data.first);
-            return 0;
-        }
-
-        void CommitSwapUpDrops(RE::Actor* a_follower, RE::TESObjectREFR* a_src,
-                               const std::vector<SwapUpDrop>& a_plan, RE::TESBoundObject* a_incoming) {
-            if (!a_follower || !a_src || a_plan.empty()) return;
-            // Runs only AFTER the upgrade landed in his inventory (the caller checks),
-            // so a failed acquire drops nothing. Each line is re-read: a copy that is
-            // gone since the plan is simply not dropped.
-            std::string names;
-            float freed = 0.0f;
-            for (const auto& d : a_plan) {
-                const std::int32_t n = std::min(d.count, HeldCount(a_follower, d.obj));
-                if (n <= 0) continue;
-                // MEO-aware: a socketed piece is never dropped (GemRules); it stays carried and the
-                // sell path strips it before it sells.
-                if (GemRules::CheckRemovalCached(a_follower, d.obj, "swap-up drop", GemRules::Reason::SwapUp) == GemRules::Verdict::Held) continue;
-                a_follower->RemoveItem(d.obj, n, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_src);
-                freed += d.weight * n;
-                if (!names.empty()) names += ", ";
-                names += std::format("'{}' x{}", d.obj->GetName() ? d.obj->GetName() : "?", n);
-            }
-            spdlog::info("[swapup] {:08X}: dropped superseded [{}] into {:08X} ({:.1f} weight) to carry '{}'",
-                         a_follower->GetFormID(), names, a_src->GetFormID(), freed,
-                         a_incoming && a_incoming->GetName() ? a_incoming->GetName() : "?");
         }
 
 }

@@ -485,25 +485,17 @@ namespace MFO::Logistics {
             // the weight gate an overencumbered follower walks a whole excursion leg,
             // takes nothing at arrival (the real take IS weight-gated below), and the
             // corpse gets marked DONE -- a wasted trip.
-            // THE SWAP-UP RULE (86e3ebfu3, logistics/SwapUp.cpp): an upgrade that
-            // does not fit is still taken when dropping SUPERSEDED gear (outside the
-            // keep set the economy sells by, unworn, unprotected) into this body
-            // frees the weight -- all or nothing, least valuable first. The peek
-            // asks the same question without moving anything, so peek and take agree.
+            // NO DROPPING TO MAKE ROOM (marth 2026-10-18): an upgrade that does not fit is skipped; the
+            // superseded gear stays for the vendor's sale (logistics/SwapUp.cpp keep set).
             // AMMO UPGRADE (same rule): with no gear upgrade here, a ranged follower
             // takes ammo of HIS kind strictly better than the weakest tier he relies
-            // on and drops what that makes obsolete back into the body (lowest
-            // first). Lowest priority: one gear piece per call beats ammo, and
+            // on (what that makes obsolete stays for the sale).
+            // Lowest priority: one gear piece per call beats ammo, and
             // StripCorpse's repeat calls reach the ammo once the gear is done.
-            // The drops are PLANNED here and COMMITTED only after AcquireEquip put the
-            // upgrade in his inventory (below) -- a failed acquire drops nothing.
             const int  ammoTarget = ctx.doRanged ? AmmoKeepTarget(g_svc, ctx.wantCrossbow, /*a_usesKind*/ true) : 0;
-            std::vector<SwapUpDrop> room;
-            auto fitsOrRoom = [&]() {
-                room.clear();
-                return FitsCarryWeight(a_follower, best->GetWeight()) ||
-                       (g_svc && PlanRoomForSwapUp(a_follower, *g_svc, best, best->GetGoldValue(), room));
-            };
+            // A follower NEVER drops gear to make room (marth 2026-10-18): an upgrade that does not fit
+            // is skipped and the superseded piece waits in the pack for the vendor's sale.
+            auto fitsOrRoom = [&]() { return FitsCarryWeight(a_follower, best->GetWeight()); };
             // GEMS COUNT AS BETTER GEAR (marth, ClickUp 86e3p2gp8; GemRules.h): with MEO-aware gems
             // on, gear in this body that may carry socketed gems and is NOT an upgrade is still
             // worth a take -- the gems are. It is taken, stripped, and kept or put back by GemRules.
@@ -514,7 +506,13 @@ namespace MFO::Logistics {
                 return ammoTarget > 0 &&
                        SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ true);
             }
-            if (best && !fitsOrRoom()) best = nullptr;   // does not fit, nothing superseded frees the room
+            if (best && !fitsOrRoom()) {   // does not fit: skipped, never made room for by dropping
+                static std::unordered_set<std::uint64_t> s_noRoomLogged;   // worker-only, once per (follower, item)
+                if (s_noRoomLogged.insert((static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | best->GetFormID()).second)
+                    spdlog::info("[swapup] {:08X}: '{}' no room -- kept for sale at the next vendor",
+                                 a_follower->GetFormID(), best->GetName() ? best->GetName() : "?");
+                best = nullptr;
+            }
             if (!best) {
                 if (const auto gc = GemRules::FindGemCandidate(a_follower, a_src); gc.obj &&
                     GemRules::TakeAndProbe(a_follower, a_src, gc))
@@ -526,7 +524,6 @@ namespace MFO::Logistics {
             if (!best)
                 return ammoTarget > 0 &&
                        SwapUpAmmoFrom(a_follower, a_src, ctx.wantCrossbow, ammoTarget, /*a_upgradeOnly*/ true, /*a_peek*/ false);
-            const std::int32_t heldBefore = room.empty() ? 0 : HeldCount(a_follower, best);
 
             // ACQUIRE + EQUIP through the shared v1.0.38 safe step: transfers from
             // a_src, captures + carries MEO gems, equips IN PLACE on the main thread
@@ -543,17 +540,6 @@ namespace MFO::Logistics {
             const bool silverStock = best == bestSilver && best != bestWeap;
             const bool equipped   = AcquireEquip(a_follower, best, a_src, myWeap,
                                                  best == bestBackup || trueSecond || silverStock);
-            // THE SWAP-UP RULE: commit the planned drops only now that the upgrade
-            // is in his inventory (AcquireEquip's transfer is synchronous on this
-            // worker). If it did not arrive, nothing is dropped -- and said so.
-            if (!room.empty()) {
-                if (HeldCount(a_follower, best) > heldBefore)
-                    CommitSwapUpDrops(a_follower, a_src, room, best);
-                else
-                    spdlog::warn("[swapup] {:08X}: '{}' did not arrive from {:08X} -- the planned drops were NOT made",
-                                 a_follower->GetFormID(), best->GetName() ? best->GetName() : "?", a_src->GetFormID());
-            }
-
             // [equip] DIAGNOSTIC: log WHAT we put on, over WHAT, and the reasoning.
             if (auto* nw = best->As<RE::TESObjectWEAP>()) {
                 spdlog::info("[equip] {:08X}: LOOT-{} weapon '{}' dmg={} score={:.1f} kind=0x{:02X} class={} <- held '{}' "
