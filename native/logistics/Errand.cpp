@@ -74,6 +74,8 @@ namespace MFO::Logistics::Errand {
         constexpr auto  kParkTime       = std::chrono::minutes(5);
         constexpr float kFailCooldownSec  = 45.0f;
         constexpr float kCombatCooldownSec = 30.0f;
+        constexpr std::chrono::seconds kWalkBackoffBase{ 120 };   // a failed walk to a target: skip it this long, doubling per repeat ...
+        constexpr std::chrono::seconds kWalkBackoffCap{ 900 };    // ... up to 15 min
 
         // Skyrim.esm facts, all verified with tools/esp_inspect.py on Skyrim.esm (2026-10-18).
         constexpr RE::FormID kKwPotion    = 0x0008CDEC;   // VendorItemPotion
@@ -131,6 +133,12 @@ namespace MFO::Logistics::Errand {
         std::unordered_map<RE::FormID, Clock::time_point>    g_cool;        // follower -> next errand allowed
         std::unordered_map<RE::FormID, Clock::time_point>    g_nextPlan;    // follower -> next plan evaluation
         std::unordered_map<RE::FormID, Clock::time_point>    g_parked;      // vendor actor -> parked until (a static-blocked walk)
+        // (follower, shop chest) -> backoff after a FAILED WALK (session-scoped, not saved; cleared in ClearTransientState). The chest keys
+        // the shop for both a loaded vendor actor and a faction-only shop, so the walk's two phases (place, then vendor) share one key.
+        struct WalkBackoff { Clock::time_point until{}; int fails = 0; };
+        std::unordered_map<std::uint64_t, WalkBackoff>       g_backoff;
+        std::unordered_map<RE::FormID, std::string>          g_backoffLogged;   // follower -> the skipped-chest set last logged (the skip line fires on a CHANGE only)
+        std::uint64_t BackoffKey(RE::FormID a_fid, RE::FormID a_chest) { return (static_cast<std::uint64_t>(a_fid) << 32) | a_chest; }
         RE::FormID                                           g_townId = 0;  // the town the player has been in ...
         Clock::time_point                                    g_townSince{}; // ... since this instant
         std::atomic<bool>                                    g_latched{ false };   // Harbinger refused the idle seat: errands INERT this session
@@ -296,6 +304,18 @@ namespace MFO::Logistics::Errand {
                 std::scoped_lock lk(g_mx);   // a locked copy: Sweep / Tick write g_parked under g_mx (threading carve-out)
                 parked = g_parked;
             }
+            std::unordered_map<RE::FormID, Clock::time_point> backedOff;   // this follower's failed-walk backoffs: chest -> until
+            {
+                std::scoped_lock lk(g_mx);
+                const auto fid32 = a_follower->GetFormID();
+                for (const auto& [k, b] : g_backoff)
+                    if (static_cast<RE::FormID>(k >> 32) == fid32 && a_now < b.until) backedOff[static_cast<RE::FormID>(k & 0xFFFFFFFFu)] = b.until;
+            }
+            std::string backoffSkipped;   // said ONCE per plan
+            auto noteBackoff = [&](RE::FormID a_chest, const char* a_name) {
+                if (!backoffSkipped.empty()) backoffSkipped += ", ";
+                backoffSkipped += std::format("'{}' (chest {:08X})", a_name && *a_name ? a_name : "?", a_chest);
+            };
             const float maxFromPlayer = Config::g_travelRadius.load();
             std::unordered_map<RE::FormID, bool> seenChest;
             for (auto& h : living) {
@@ -323,6 +343,7 @@ namespace MFO::Logistics::Errand {
                 const float dPlayer = v->GetPosition().GetDistance(pc->GetPosition());
                 if (dPlayer > maxFromPlayer) { ++a_dropped; continue; }
                 if (const auto it = parked.find(v->GetFormID()); it != parked.end() && a_now < it->second) continue;
+                if (backedOff.contains(chest->GetFormID())) { noteBackoff(chest->GetFormID(), v->GetName()); continue; }
                 if (seenChest.contains(chest->GetFormID())) continue;   // one actor per chest is enough
                 seenChest[chest->GetFormID()] = true;
                 Cand c;
@@ -381,6 +402,7 @@ namespace MFO::Logistics::Errand {
                     if (!fac) continue;
                     if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
                     if (const auto it = parked.find(sh.faction); it != parked.end() && a_now < it->second) continue;
+                    if (backedOff.contains(sh.chest)) { noteBackoff(sh.chest, fac->GetName()); continue; }
                     float d = 0.0f;
                     if (sh.kind == DestKind::Ref) {
                         auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(sh.place);
@@ -398,6 +420,16 @@ namespace MFO::Logistics::Errand {
                     c.id = sh.faction; c.fac = fac; c.chest = sh.chest; c.dist = d;
                     c.kind = sh.kind; c.destForm = sh.place; c.destRad = sh.rad;
                     out.push_back(c);
+                }
+            }
+            {
+                // The plan runs every 6 s: say it when this follower's skipped set CHANGES, not on every plan.
+                std::scoped_lock lk(g_mx);
+                auto& last = g_backoffLogged[a_follower->GetFormID()];
+                if (last != backoffSkipped) {
+                    last = backoffSkipped;
+                    if (!backoffSkipped.empty())
+                        spdlog::info("[errand] {:08X}: plan skips backed-off target(s) after a failed walk: {}", a_follower->GetFormID(), backoffSkipped);
                 }
             }
             return out;
@@ -457,11 +489,37 @@ namespace MFO::Logistics::Errand {
                 r = it->second;
                 g_recs.erase(it);
                 g_cool[a_fid] = Clock::now() + std::chrono::milliseconds(static_cast<long long>(a_cooldownSec * 1000.0f));
+                if (a_complete) g_backoff.erase(BackoffKey(a_fid, r.chest));   // a successful DONE at this target forgives it
             }
             APMFBridge::ReleaseErrand(a_fid);   // idle, hold, walk (in that order)
-            spdlog::info("[errand] {:08X} '{}': {} at {} -- {} (vendor '{}' {:08X}; {} s)", a_fid, r.followerName,
-                         a_complete ? "DONE" : "ENDED", PhaseName(r.phase), a_why, r.vendorName, r.vendor,
+            // A shop-place walk has no vendor actor yet (r.vendor == 0): name the faction / destination instead.
+            const std::string who = r.vendor ? std::format("vendor '{}' {:08X}", r.vendorName, r.vendor)
+                                             : std::format("shop '{}' faction {:08X} dest {:08X}", r.vendorName, r.faction, r.destForm);
+            spdlog::info("[errand] {:08X} '{}': {} at {} -- {} ({}; {} s)", a_fid, r.followerName,
+                         a_complete ? "DONE" : "ENDED", PhaseName(r.phase), a_why, who,
                          std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - r.start).count());
+        }
+
+        // A walk to a target FAILED (the leg ended on something other than arrival): back that (follower, shop) off 120 s, doubling per
+        // repeat of the same pair, capped at 15 min, so the planner picks the next candidate instead of the same top-ranked one.
+        // Returns the backoff applied, in seconds (for the Finish line).
+        long long NoteWalkFailed(RE::FormID a_fid, const Rec& a_r, Clock::time_point a_now) {
+            if (!a_r.chest) return 0;
+            std::scoped_lock lk(g_mx);
+            auto& b = g_backoff[BackoffKey(a_fid, a_r.chest)];
+            ++b.fails;
+            auto d = kWalkBackoffBase;
+            for (int i = 1; i < b.fails && d < kWalkBackoffCap; ++i) d *= 2;
+            if (d > kWalkBackoffCap) d = kWalkBackoffCap;
+            b.until = a_now + d;
+            return d.count();
+        }
+
+        // Principle 7: a Harbinger walk cancelled for combat while MFO reads no combat is a disagreement, never masked.
+        void WarnCombatDisagree(RE::Actor* a_follower, std::uint32_t a_legState) {
+            if (a_legState == APMF_API::kLeg_CombatCancelled && !APMFBridge::InCombat(a_follower))
+                spdlog::warn("[errand] {:08X}: Harbinger cancelled the walk for combat but MFO sees no combat (APMFBridge::InCombat false) "
+                             "-- the substrate / combat verdicts disagree", a_follower->GetFormID());
         }
 
         void Store(RE::FormID a_fid, const Rec& a_r) {
@@ -511,6 +569,8 @@ namespace MFO::Logistics::Errand {
             g_cool.clear();
             g_nextPlan.clear();
             g_parked.clear();
+            g_backoff.clear();
+            g_backoffLogged.clear();
             g_townShops.clear();
             g_townId = 0;
             g_townSince = {};
@@ -912,7 +972,9 @@ namespace MFO::Logistics::Errand {
                     } else if (pleg.state == APMF_API::kLeg_ActorGone) {
                         // He went through a shop door / left the loaded area: the HAND-OFF to the simulation (Sweep), not a failure.
                     } else if (pleg.state > APMF_API::kLeg_Blocked && pleg.state <= APMF_API::kLeg_Released) {
-                        Finish(fid, std::format("the walk to the shop ended: {}", LegName(pleg.state)).c_str(), kFailCooldownSec);
+                        WarnCombatDisagree(a_follower, pleg.state);
+                        const auto bo = NoteWalkFailed(fid, r, a_now);
+                        Finish(fid, std::format("the walk to the shop ended: {} (this shop backed off {} s)", LegName(pleg.state), bo).c_str(), kFailCooldownSec);
                         return false;
                     }
                 }
@@ -949,7 +1011,9 @@ namespace MFO::Logistics::Errand {
                 } else if (leg.state == APMF_API::kLeg_ActorGone) {
                     // (the hand-off to the simulation is the Sweep's, not a failure)
                 } else if (leg.state > APMF_API::kLeg_Blocked && leg.state <= APMF_API::kLeg_Released) {
-                    Finish(fid, std::format("the walk ended: {}", LegName(leg.state)).c_str(), kFailCooldownSec);
+                    WarnCombatDisagree(a_follower, leg.state);
+                    const auto bo = NoteWalkFailed(fid, r, a_now);
+                    Finish(fid, std::format("the walk ended: {} (this vendor backed off {} s)", LegName(leg.state), bo).c_str(), kFailCooldownSec);
                     return false;
                 }
             }
@@ -981,6 +1045,16 @@ namespace MFO::Logistics::Errand {
                     return true;
                 }
                 if (a_now - r.confirmedAt >= kTalkHold) return false;   // beginBeat finished the errand
+            } else if (rd.verdict == APMFBridge::ErrandIdleVerdict::Failed && rd.unconfirmableWhy == APMF_API::kIdleUnconf_NoEntryEvents) {
+                // Dialogue idles raise no notify event, so Harbinger can say neither played nor failed. The idle IS running (the claim is
+                // live): hold the beat for its normal dwell, and do NOT try the fallback idle (it has the same problem).
+                if (r.confirmedAt.time_since_epoch().count() == 0) {
+                    r.confirmedAt = a_now;
+                    spdlog::info("[errand] {:08X}: talk idle requested -- unconfirmable (Dialogue idles raise no event) ({})", fid, rd.detail);
+                }
+                if (a_now - r.confirmedAt >= kTalkHold) {
+                    if (!beginBeat(Phase::Giving, idles.give, "give")) return false;
+                }
             } else if (rd.verdict == APMFBridge::ErrandIdleVerdict::Failed ||
                        (rd.verdict == APMFBridge::ErrandIdleVerdict::Waiting && patience)) {
                 // The dialogue idles may carry conditions that need a live conversation (design 4.2). One fallback idle,

@@ -1843,3 +1843,15 @@ Opus tier-3 review of `fix/mfo-substrate-not-combat` @ 5876057. Verbatim: "Docs/
 
 ### MFO-B315 (SEV-5, OPEN, CombatSense.h) -- substrate-not-combat review (raised against 5876057)
 Opus tier-3 review of `fix/mfo-substrate-not-combat` @ 5876057. Verbatim: "CombatSense.h:6-11 re-declares two APMFBridge functions to avoid an include cycle; a future signature drift would only fail at link time." Reasoning: Maintenance hazard; recorded.
+
+### MFO-B316 (SEV-5, OPEN, logistics/Errand.cpp) -- errand backoff: shared-chest duplicate listing (raised against 397b24d1)
+Opus review of `fix/mfo-errand-field-1019` @ 397b24d1. Verbatim: "A backed-off loaded vendor never marks seenChest, so the faction-only loop also lists the same chest under the faction name. Several living vendors that share one chest each add their own entry too. (Errand.cpp:345, :402-404)" Reasoning: the backoff skip `continue`s before `seenChest` is set, so the same chest can re-enter the catalog as a faction shop and the skip line may name it twice; cosmetic today because the faction path checks `backedOff` by chest too.
+
+### MFO-B317 (SEV-5, OPEN, logistics/Errand.cpp) -- errand backoff: WarnCombatDisagree wording (raised against 397b24d1)
+Opus review of `fix/mfo-errand-field-1019` @ 397b24d1. Verbatim: "WarnCombatDisagree (Errand.cpp:510-514): Tick has already called Finish on APMFBridge::InCombat(follower) or player combat at the top of the same tick (~:903), so any kLeg_CombatCancelled that reaches the walk-end sites meets InCombat == false. The WARN amounts to 'every CombatCancelled', including a short real combat that ended before the leg was read. Not a mask, just noisier than its wording suggests." Reasoning: log-wording only; the failure is still loud (principle 7).
+
+### MFO-B318 (SEV-5, OPEN, logistics/Errand.cpp) -- errand backoff: chest 0 reports 0 s (raised against 397b24d1)
+Opus review of `fix/mfo-errand-field-1019` @ 397b24d1. Verbatim: "Errand.cpp:497-498: if r.chest is 0, NoteWalkFailed returns 0 and the Finish line says 'backed off 0 s'. Cannot happen with the current catalog, which always sets the chest." Reasoning: unreachable today; a future catalog source without a chest would silently get no backoff.
+
+### MFO-B319 (SEV-5, OPEN, logistics/ErrandSim.cpp) -- errand backoff: simulation DONE does not reset (raised against 397b24d1)
+Opus review of `fix/mfo-errand-field-1019` @ 397b24d1. Verbatim: "The off-screen simulation's DONE (ErrandSim.cpp) does not erase the backoff entry, so the fails count carries over and the next failure doubles from there." Reasoning: the backoff state is private to Errand.cpp and the simulation completes in its own file; the effect is a longer backoff after a later failure, bounded by the 15 min cap.

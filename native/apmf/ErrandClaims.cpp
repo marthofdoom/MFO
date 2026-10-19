@@ -314,6 +314,7 @@ namespace MFO::APMFBridge {
             out.verdict = inGrace ? V::Waiting : V::Failed;
         } else if (st == APMF_API::kIdleState_Unconfirmable || st == APMF_API::kIdleState_Carried) {
             out.verdict = V::Failed;   // live, but no evidence for this play: never act on it as played
+            if (st == APMF_API::kIdleState_Unconfirmable) out.unconfirmableWhy = info.unconfirmableWhy;   // (a caller may know this why is benign)
         } else {
             out.verdict = V::Waiting;  // Pending or Accepted: Harbinger judges the window, MFO does not time it
         }
