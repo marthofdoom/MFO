@@ -109,6 +109,7 @@ namespace MFO::Logistics {
             const WepClass keepMeleeTargetClass =
                 (keepMageMode && !keepBaseWeaponUser && (keepBaseCaster || !keepWantsMelee))
                     ? WepClass::Other : keepRoles.melee;
+            const bool rolesFinal = StyleVotesReady(a_follower) || !MainThread::IsInstalled();   // not the carried fallback
             const bool keepSecond1H = keepRoles.offHand == 2 && keepMeleeTargetClass == WepClass::OneHand;
             std::unordered_set<RE::TESBoundObject*> keepWeapons;
             {
@@ -134,6 +135,16 @@ namespace MFO::Logistics {
                     if (!w || IsCreatureWeapon(w)) continue;
                     const int b = bucketOf(w->GetWeaponType());
                     if (b < 0) continue;
+                    // OFF-ROLE MELEE IS NOT KEPT (marth 2026-10-18: "off-role = sold"): roles come from the
+                    // class and the equip-melee/ranged gambit override (ComputeWeaponRoles), never from what
+                    // is carried, and ShedOffRoleWeapon no longer moves anything -- so a melee bucket outside
+                    // the melee role (the SAME keepMeleeTargetClass the loot judge fetches by) falls to the
+                    // sale path. Only once the roles are final: until the perk mirror is stamped they are the
+                    // carried fallback, which must never sell. The mage backup, the silver slot and the
+                    // dual-wield runner-up are inserted separately below/above and are unaffected; stock
+                    // gear, relics, quest/excluded items and gemmed weapons are protected in the sell loop.
+                    if (rolesFinal && ((b == 1 && keepMeleeTargetClass != WepClass::OneHand) ||
+                                       (b == 2 && keepMeleeTargetClass != WepClass::TwoHand))) continue;
                     // Staves are ranked by their ENCHANTED WORTH (GetGoldValue), not
                     // GetAttackDamage() -- a staff's melee swing stat is irrelevant to
                     // its value, so ranking that bucket by damage could keep the worse
@@ -180,21 +191,18 @@ namespace MFO::Logistics {
             std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best obj (worn-inferior convergence)
             if (out.armorJudged) {
                 using Slot = RE::BGSBipedObjectForm::BipedObjectSlot;
-                const bool caster         = IsCasterFollower(a_state);   // weapon/shield roles: gambit signal
                 const bool useMageApparel = UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load() &&
                                             !Config::g_dollsMode.load();
                 const std::uint8_t top2   = useMageApparel ? TopTwoSchoolMask(a_follower) : 0;
                 const bool schoolPrimary  = Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain   = useMageApparel && IsNecromancerFollower(a_state);
-                // A shield is in-role ONLY for a dedicated one-hand MELEE follower. A
-                // ranged (bow) or caster follower never equips one, so it must NOT be
-                // kept -- it is dead weight that should sell. (The off-role WEAPON shed
-                // drops wrong-role weapons; a shield is armor and slipped past it.)
+                // A shield is in-role ONLY with a one-hand MELEE role (class Melee, or an equip-melee gambit
+                // override, or Auto by perks): "Melee classes allow casting", so a cast gambit no longer
+                // takes it away (a spellsword keeps his shield). A follower with no melee role, or a
+                // dual wielder (roles.offHand == 2: his left hand holds a weapon), never equips one, so it
+                // is dead weight that sells. Armor, so the weapon keep set above never covered it.
                 const WeaponRoles& roles = keepRoles;   // computed once above (keepWeapons)
-                // ... and not for a DUAL WIELDER (roles.offHand == 2): his left hand
-                // holds a weapon, so a shield is dead weight for him too.
-                const bool usesShield   = (roles.melee == WepClass::OneHand) &&
-                                          !roles.doRanged && !caster && roles.offHand != 2;
+                const bool usesShield   = keepMeleeTargetClass == WepClass::OneHand && roles.offHand != 2;
                 // ARMOR CLASS (2026-09-14): the rated buckets rank by ArmorScore --
                 // the SAME judge EquipBestOwnedGear wears by -- so the piece kept
                 // per slot is the one the follower will actually wear, and the

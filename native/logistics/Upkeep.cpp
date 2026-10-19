@@ -372,18 +372,11 @@ namespace MFO::Logistics {
         return static_cast<bool>(dropped);
     }
 
-    // SHED OFF-ROLE WEAPONS (marth). A follower carrying a weapon of a role they
-    // do NOT maintain -- a 2H on a 1H fighter, a crossbow on a bow user, any ranged
-    // on a melee-only fighter -- lets their game AI equip the wrong thing "of its
-    // own volition", and it is dead weight / a leftover from pre-1.0.12 skill-forced
-    // loot. Hand ONE such weapon back to the PLAYER per idle tick (recoverable,
-    // never destroyed). The role set is the SAME gambit-driven one LootEquipment
-    // uses (keep in sync), so MFO never sheds a class it would loot. NEVER sheds an
-    // in-role class, a SOCKETED weapon (gems), a catalog-excluded/quest weapon, a
-    // creature weapon, or a staff; never runs for a follower with NO weapon role (a
-    // caster); never leaves them with zero in-role weapons. Runs OUT of combat, so
-    // unequipping a worn off-role weapon is safe. RemoveItem-to-player is the same
-    // worker-safe move LootAmmo already uses.
+    // OFF-ROLE WEAPON BOOKKEEPING (formerly "shed", marth 2026-10-18: no handing back, no dropping). Moves
+    // NOTHING: an off-role weapon is sold (Economy.cpp + the role-gated keep set, SwapUp.cpp ComputeKeepSet).
+    // This pass only keeps the Lotd kept-for-deposit set honest (the relics he carries off-role for the
+    // museum trip, with the in-role weapons Lotd re-checks) and logs the fists verdict. The role set is the
+    // SAME stable one LootEquipment loots by (ComputeWeaponRoles). Runs OUT of combat (post-battle dwell).
     bool ShedOffRoleWeapon(RE::Actor* a_follower, const FollowerState& a_state) {
         using WT = RE::WEAPON_TYPE;
 
@@ -482,7 +475,7 @@ namespace MFO::Logistics {
         };
 
         const auto [silverBest, silverOneHand] = TrackedSilver(a_follower, a_state);   // never shed (86e3p2gp9)
-        RE::TESBoundObject* shed = nullptr; std::int32_t shedCount = 0; int inRoleWeapons = 0;
+        bool haveOffRole = false; int inRoleWeapons = 0;
         std::vector<RE::FormID> keptForDeposit;   // MFO-B126: handed to Lotd after the walk
         std::vector<RE::FormID> inRoleBases;      // ... with the in-role weapons Lotd re-checks at ship time
         std::vector<RE::FormID> keptUnworn;       // ... and the kept relics seen UNWORN (round 3: AI-equip proof)
@@ -515,7 +508,7 @@ namespace MFO::Logistics {
                 if (!anyWorn || data.first > 1) keptUnworn.push_back(obj->GetFormID());
                 continue;
             }
-            if (!shed) { shed = obj; shedCount = data.first; }   // first off-role, one per tick
+            haveOffRole = true;   // an off-role weapon is carried (the sale path takes it)
         }
         // MFO-B126: the kept relics ship even if his AI has since equipped one -- but
         // only with an in-role weapon left (the never-disarm guard below, same count;
@@ -523,7 +516,7 @@ namespace MFO::Logistics {
         if (inRoleWeapons > 0)
             Lotd::NoteKeptForDeposit(a_follower->GetFormID(), std::move(keptForDeposit), std::move(inRoleBases),
                                      std::move(keptUnworn));
-        if (!shed) return false;   // nothing off-role in the pack
+        if (!haveOffRole) return false;   // nothing off-role in the pack
         // The fists verdict is what decides the never-disarm guard when the only
         // other "weapon" is the Unarmed record, so log it where it matters --
         // with a shed candidate in hand -- once per CHANGE per follower.
@@ -538,122 +531,12 @@ namespace MFO::Logistics {
                              progression ? "y" : "n", votes.unarmed);
             }
         }
-        if (inRoleWeapons == 0) return false;   // don't disarm
-
-        // NO HAND-BACK, NO DROP (marth 2026-10-18: "We dont do handing or dropping anymore. It's selling, or
-        // perhaps inter follower trading/bartering"). Off-role weapons leave the follower ONLY through the
-        // sale path (Economy.cpp); this pass keeps its bookkeeping above (Lotd deposit set, fists log) but
-        // moves nothing. The drop machinery below is retained, switched off, for the day a trading road
-        // replaces it.
-        constexpr bool kShedMovesItems = false;
-        if (!kShedMovesItems) return false;
-
-        const char* nm = shed->GetName() ? shed->GetName() : "?";
-
-        // DROP IT ON THE FLOOR near the follower (marth: "drop the handing
-        // entirely"). NOT handed to the player anymore -- the follower just sets
-        // the off-role weapon down where anyone can pick it back up.
-        //
-        // THREADING -- this MUST run on the main thread. DropObject spawns a NEW
-        // world reference (a dropped-item 3D object placed in the cell): a 3D /
-        // cell mutation, exactly the class MainThread::Post exists to marshal off
-        // this BSJobs worker (#4/#14, and the #62 equip / loose-loot ActivateRef
-        // hops right here in this file do the same). Creating a world ref off the
-        // worker races the render/cell threads -> UB/CTD. RemoveItem-to-a-container
-        // is worker-safe, but a floor DROP is not -- so we post the whole
-        // remove+place to main. Capture FormIDs only (never the worker's stale
-        // Actor*/TESBoundObject*) and re-resolve on the frame that runs.
-        const RE::FormID folID  = a_follower->GetFormID();
-        const RE::FormID itemID = shed->GetFormID();
-        const std::int32_t dropCount = shedCount;
-        auto doDrop = [folID, itemID, dropCount]() {
-            auto* fol  = RE::TESForm::LookupByID<RE::Actor>(folID);
-            auto* form = RE::TESForm::LookupByID(itemID);
-            auto* item = form ? form->As<RE::TESBoundObject>() : nullptr;
-            if (!fol || !item) return;
-            // MEO-aware: a socketed weapon is never shed (GemRules): strip it, shed it on a later pass.
-            if (GemRules::CheckRemovalLive(fol, item, "shed", GemRules::Reason::Shed) == GemRules::Verdict::Held) return;
-            // DropObject removes from the actor AND places the world ref in one
-            // engine call (nullptr drop-loc/rotate -> the engine drops it at the
-            // actor's feet).
-            //
-            // ABI -- CALL THE ENGINE VFUNC DIRECTLY, NOT THROUGH `RE::Actor::DropObject`.
-            // Worked example of engineering principle 6 ("COMMONLIB DECLARATIONS
-            // ARE NOT ABI-TRUSTWORTHY"), the third this week after GetMagicTarget
-            // (hidden sret out-slot, Actuation_Direct.cpp) and ControlMap::
-            // ToggleControls (member layout, Board.cpp). CommonLibSSE-NG 3.7.0's
-            // wrapper (src/RE/A/Actor.cpp:1438) goes through RelocateVirtual<>,
-            // whose RelocateVirtualHelper builds a FREE-function type
-            // `Ret(This*, Args...)` (include/REL/Relocation.h:2038-2043) and has
-            // NO member_function_non_pod_type handling. ObjectRefHandle is non-POD
-            // (BSUntypedPointerHandle has a user dtor), so MSVC returns it through
-            // a hidden sret pointer -- and for a FREE function that pointer takes
-            // rcx, pushing `this` to rdx. The engine's DropObject is a MEMBER
-            // function: rcx = this, rdx = &result, r8 = object, r9 = extraList,
-            // [rsp+0x28] = count, [rsp+0x30] = dropLoc, [rsp+0x38] = rotate
-            // (1.6.1170 SkyrimSE.exe+0x6781D0, 1.5.97 SkyrimSE.exe+0x5E6150 --
-            // identical prologues, both read from the unpacked binaries). So the
-            // wrapper hands the engine MFO's stack temporary as the Actor and it
-            // crashes on whatever sits at [temp+0xF8] / [temp+0x60]
-            // (currentProcess / parentCell). Deterministic on every call, every
-            // runtime: 4 CTDs on LoreRim in one evening (v2.0.5, MFO.dll+FD11F
-            // is the wrapper's return address on every crash stack). Measured
-            // from MFO's own v2.0.5 bytes: the wrapper passes rcx = &result,
-            // rdx = this. live-alandtse-ng v7.2.0 carries the same defect.
-            //
-            // Declaring the return as a POINTER keeps `this` in rcx and passes the
-            // sret slot explicitly in rdx, which is byte-for-byte what the engine
-            // consumes (it hands rdx back in rax, the sret convention). The vtable
-            // index was never wrong: 0xCB on SE/AE (verified against BOTH unpacked
-            // binaries, VTABLE_Actor[0] / VTABLE_Character[0] slot 0xCB), 0xCD on
-            // VR per CommonLib's table. The VR index is unverified (no VR binary)
-            // and unreachable: the `!MainThread::IsInstalled()` guard below skips
-            // the shed on VR before this lambda is ever posted. G1: the slot is no
-            // longer picked by the IsVR() bucket; it is 0xCB on the exact builds
-            // and REFUSED anywhere else (MainThread refuses those too, so this is
-            // the belt to that brace). F2b: 0xCB on 1.7.104 too -- the Actor and
-            // Character vtables keep 296 / 298 slots there and slot 0xCB holds the
-            // same 282-instruction body (1.6.1170 0x6781D0, 1.7.104 0x68ACB0).
-            // Do NOT reinstate the wrapper, and do NOT substitute
-            // RemoveItem(kDropping): it skips the middleHigh queued-3D cleanup and
-            // the post-drop fix-ups the real DropObject performs.
-            using DropObjectFn = RE::ObjectRefHandle* (*)(
-                RE::Actor* a_this, RE::ObjectRefHandle* a_out,
-                const RE::TESBoundObject* a_object, RE::ExtraDataList* a_extraList,
-                std::int32_t a_count, const RE::NiPoint3* a_dropLoc, const RE::NiPoint3* a_rotate);
-            if (!Runtime::Known()) {
-                spdlog::error("[shed] {:08X}: DropObject vtable slot is not verified on runtime {} -- shed REFUSED",
-                              folID, REL::Module::get().version().string("."));
-                return;
-            }
-            constexpr std::size_t slot = 0xCB;
-            auto* vtbl = *reinterpret_cast<std::uintptr_t**>(fol);
-            auto  fn   = reinterpret_cast<DropObjectFn>(vtbl[slot]);
-            RE::ObjectRefHandle dropped;
-            fn(fol, &dropped, item, nullptr, dropCount, nullptr, nullptr);
-            // NEVER MASK A FAILURE (principle 7): an invalid handle means the
-            // engine removed nothing / placed nothing. Say so on the frame it ran.
-            if (!dropped)
-                spdlog::warn("[shed] {:08X}: DropObject '{}' x{} returned an INVALID handle -- nothing dropped",
-                             folID, item->GetName() ? item->GetName() : "?", dropCount);
-        };
-        if (!MainThread::IsInstalled()) {
-            // VR: Post() is a documented no-op, and there is NO main thread to
-            // fall back to -- a direct DropObject would spawn the world ref right
-            // here on the BSJobs worker, the off-thread 3D-create crash class we
-            // are avoiding. The shed is non-critical (the weapon just stays in the
-            // pack another session), so SKIP rather than risk a CTD.
-            spdlog::info("[shed] {:08X}: off-role weapon '{}' SKIPPED -- no main-thread pump for DropObject (VR)",
-                         a_follower->GetFormID(), nm);
-            return false;
-        }
-        MainThread::Post(doDrop);
-
-        spdlog::info("[shed] {:08X}: off-role weapon '{}' x{} (class {}) DROPPED on floor | meleeRole={} doRanged={} xbow={}",
-                     a_follower->GetFormID(), nm, shedCount,
-                     static_cast<int>(WeaponClassOf(shed->As<RE::TESObjectWEAP>()->GetWeaponType())),
-                     static_cast<int>(meleeRole), doRanged, wantCrossbow);
-        return true;
+        // NOTHING MOVES (marth 2026-10-18: "We dont do handing or dropping anymore. It's selling, or perhaps
+        // inter follower trading/bartering"): an off-role weapon leaves the follower only through the sale
+        // path (Economy.cpp, with ComputeKeepSet's role-gated keep set in SwapUp.cpp). What stays here is
+        // the Lotd deposit bookkeeping above and the fists log. Inter-follower trading is a possible FUTURE
+        // road; it is not built.
+        return false;
     }
 
     // HUD activity glyphs -- see Logistics.h. Worker-domain reads only.
