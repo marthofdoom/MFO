@@ -105,8 +105,10 @@ namespace MFO::Logistics {
             const bool keepBaseWeaponUser = keepBaseClass == 1 || keepBaseClass == 2;
             const bool keepMageMode = IsCasterFollower(a_state) &&
                 (keepBaseCaster || (keepBaseClass == 0 && !keepWantsMelee && !keepWantsRanged));
+            // An equip-melee gambit is an OVERRIDE for ANY class (marth 2026-10-18), a Mage class included: with one,
+            // the melee role stands (loot, buy and keep all read it the same way).
             const WepClass keepMeleeTargetClass =
-                (keepMageMode && !keepBaseWeaponUser && (keepBaseCaster || !keepWantsMelee))
+                (keepMageMode && !keepBaseWeaponUser && !keepWantsMelee)
                     ? WepClass::Other : keepRoles.melee;
             const bool rolesFinal = StyleVotesReady(a_follower) || !MainThread::IsInstalled();   // not the carried fallback
             const bool keepSecond1H = keepRoles.offHand == 2 && keepMeleeTargetClass == WepClass::OneHand;
@@ -126,6 +128,8 @@ namespace MFO::Logistics {
                     }
                 };
                 std::unordered_map<int, std::pair<RE::TESBoundObject*, float>> best;
+                std::unordered_map<int, std::pair<RE::TESBoundObject*, float>> gatedBest;   // off-role melee, floor only
+                bool anyInRole = false;
                 struct OneHander { RE::TESBoundObject* obj; float rank; std::int32_t count; };
                 std::vector<OneHander> oneHanders;   // bucket 1, for the dual-wield runner-up
                 for (auto& [obj, data] : a_follower->GetInventory()) {
@@ -142,8 +146,9 @@ namespace MFO::Logistics {
                     // carried fallback, which must never sell. The mage backup, the silver slot and the
                     // dual-wield runner-up are inserted separately below/above and are unaffected; stock
                     // gear, relics, quest/excluded items and gemmed weapons are protected in the sell loop.
-                    if (rolesFinal && ((b == 1 && keepMeleeTargetClass != WepClass::OneHand) ||
-                                       (b == 2 && keepMeleeTargetClass != WepClass::TwoHand))) continue;
+                    const bool offRoleMelee = rolesFinal && ((b == 1 && keepMeleeTargetClass != WepClass::OneHand) ||
+                                                             (b == 2 && keepMeleeTargetClass != WepClass::TwoHand));
+                    if (!offRoleMelee && (b == 1 || b == 2 || ((b == 3 || b == 4) && keepRoles.doRanged))) anyInRole = true;
                     // Staves are ranked by their ENCHANTED WORTH (GetGoldValue), not
                     // GetAttackDamage() -- a staff's melee swing stat is irrelevant to
                     // its value, so ranking that bucket by damage could keep the worse
@@ -154,12 +159,18 @@ namespace MFO::Logistics {
                         ? static_cast<float>(std::clamp<std::int32_t>(w->GetGoldValue(), 0, 0xFFFF))
                         : (b == 1 || b == 2) ? WeaponScore(keepRoles, w)
                                              : static_cast<float>(w->GetAttackDamage());
-                    auto& slot = best[b];
+                    // An off-role melee bucket is ranked on the side (gatedBest): it joins the keep set only
+                    // under the NEVER-DISARM FLOOR below (no in-role weapon held at all).
+                    auto& slot = offRoleMelee ? gatedBest[b] : best[b];
                     if (!slot.first || rank >= slot.second)
                         slot = { obj, rank };
-                    if (keepSecond1H && b == 1) oneHanders.push_back({ obj, rank, data.first });
+                    if (!offRoleMelee && keepSecond1H && b == 1) oneHanders.push_back({ obj, rank, data.first });
                 }
                 for (auto& [b, s] : best) if (s.first) keepWeapons.insert(s.first);
+                // NEVER-DISARM FLOOR: with no in-role weapon carried at all, the best carried melee weapon
+                // of each class is kept as before (the follower is never left with nothing to wield).
+                if (!anyInRole)
+                    for (auto& [b, s] : gatedBest) if (s.first) keepWeapons.insert(s.first);
                 // Dual wield: keep the runner-up one-hander as well (top-2 by
                 // WeaponScore), unless the best is a stack of >= 2 of one form.
                 if (keepSecond1H && oneHanders.size() >= 2) {

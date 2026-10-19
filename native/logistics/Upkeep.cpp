@@ -298,14 +298,31 @@ namespace MFO::Logistics {
             //
             // CRITICAL (why the RemoveItem, not just an unequip): un-equipping alone
             // leaves the weapon in the pack, and the engine re-wields it as "best
-            // weapon" within seconds -- the poll then churns forever (field-caught:
-            // same 'Dwarven Sphere Crossbow' re-healed 3 min apart). So it has to
-            // LEAVE the follower. Which way follows the ARMOR fix's rule
-            // (KeepHeadClear): a CREATURE weapon is non-playable -- invisible/broken
-            // on the PLAYER too -- DELETE it; a merely catalog-excluded weapon is a
-            // real playable quest/unique item -> return it to the player. Count the
-            // copies so a stack leaves entirely.
+            // weapon" within seconds (field-caught: same 'Dwarven Sphere Crossbow' re-healed 3 min
+            // apart). So a CREATURE weapon (non-playable -- invisible/broken on the PLAYER too) is
+            // DELETED; a QUEST-bound one is handed to the player (marth 2026-10-18); any other
+            // catalog-excluded playable weapon is kept and unequipped once (above). Count the copies so
+            // a stack leaves entirely.
             const bool       creature = IsCreatureWeapon(bad);
+            // KEEP BUT NEVER WIELD, ONCE (marth 2026-10-18; review of cae6bb4 SEV-2): a catalog-excluded,
+            // NON-quest playable weapon (an artifact / unique) is neither handed over nor sold (Economy never
+            // sells excluded items) -- it just must not be the one he wields. NO road refuses ONE item today:
+            // the ch.17 equip scope is per CATEGORY (owning a hand with no declared weapon would refuse every
+            // weapon -> unarmed), and Harbinger has no item-deny. So this unequips it ONCE per (follower, item)
+            // per session and logs it; the engine may re-wield it and we do NOT chase it (the old poll re-ran
+            // this every ~5 s with a 3D rebuild each time). A real item-deny is an APMF item (tier A).
+            if (!creature) {
+                bool questBound = false;
+                for (auto& [obj, data] : a_follower->GetInventory())
+                    if (obj == bad) { questBound = IsQuestObjectInstance(data.second.get()); break; }
+                if (!questBound) {
+                    static std::unordered_set<std::uint64_t> s_healedOnce;   // worker-only
+                    if (!s_healedOnce.insert((static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | bad->GetFormID()).second)
+                        continue;
+                    spdlog::info("[heal] {:08X} excluded '{}' unequipped ONCE (kept, never sold; the engine may re-wield it -- "
+                                 "no item-deny road exists)", a_follower->GetFormID(), bad->GetName() ? bad->GetName() : "?");
+                }
+            }
             const RE::FormID folID    = a_follower->GetFormID();
             const RE::FormID bestID   = best ? best->GetFormID() : 0;
             const RE::FormID badID    = bad->GetFormID();

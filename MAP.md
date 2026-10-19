@@ -3176,15 +3176,11 @@ module. Module layout:
     MAGE BACKUP sidearm (`BuildEquipmentContext(actor, &state)`'s `wantBackup` / `daggersOnly`,
     best by attack damage) so a looted backup dagger is never sold and re-looted.
     `BuildEquipmentContext` gained a state-taking overload for this (`LootEquipment.cpp`; the
-    one-arg form forwards `g_svc`). Consumers: EconomyProbe's sell list and the LOOT drop:
-    `PlanRoomForSwapUp:509` plans, for an upgrade `LootEquipment` picked that does not fit the
-    carry weight, the SUPERSEDED gear to drop -- only under `bEconomy` (the drop is the loot-time
-    twin of the sale), outside the keep set, WEAP or rated ARMO only, unworn, NOT ENCHANTED, value
-    <= the upgrade's `GetGoldValue`, not `IsStockGear` / quest / `Catalog::IsExcluded` /
-    `IsPlayerPick`, no MEO unique id while MEO is present -- least valuable first, exact copies,
-    all or nothing; `CommitSwapUpDrops:591` runs only after `AcquireEquip` put the upgrade in his
-    inventory (`HeldCount:584` before/after; a miss logs `[swapup] ... did not arrive ... NOT
-    made`).
+    one-arg form forwards `g_svc`). Consumers: EconomyProbe's sell list and the LOOT side's superseded-gear
+    read. (The loot-time DROP that used to live here -- `PlanRoomForSwapUp` / `CommitSwapUpDrops` / `HeldCount`
+    -- was DELETED 2026-10-18 on marth's ruling "we dont do handing or dropping anymore": an upgrade that does
+    not fit the carry weight is skipped, logged once `[swapup] ... skipped (no room); superseded gear waits for
+    the vendor`, and the superseded piece waits for the sale.)
   - **Ammo:** ranked by `TESAmmo` DAMAGE, instance VALUE breaking a tie (`AmmoRankAbove`), within
     one kind (`AmmoIsBolt`; its fallback is the `GetRuntimeData()` kNonBolt flag, never `IsBolt()`,
     batch L), judged ONLY for the kind the follower USES (`UsesAmmoKind:308`: his
@@ -4492,12 +4488,12 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   (`Board_FieldKit.cpp:576`).
 - **A needed relic is never sold or dropped.** `HoldFromSale:1218` (whenever awareness is on,
   Harbinger or not) ← the Economy sell list (`Economy.cpp:662`), SwapUp's ammo ladder (`HeldAmmo`
-  pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:545`).
+  pins it, `SwapUp.cpp`: the sell list; the loot-time drop and `PlanRoomForSwapUp` were deleted 2026-10-18).
   `KeepForDeposit:1227` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
   `ShedOffRoleWeapon` (`Upkeep.cpp:399`): an off-role relic weapon is deposited, not handed to you.
 - **A needed relic is never sold or dropped.** `HoldFromSale:1265` (whenever awareness is on,
   Harbinger or not) ← the Economy sell list (`Economy.cpp:662`), SwapUp's ammo ladder (`HeldAmmo`
-  pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:557`).
+  pins it, `SwapUp.cpp`: the sell list; the loot-time drop and `PlanRoomForSwapUp` were deleted 2026-10-18).
   `KeepForDeposit:1281` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
   `ShedOffRoleWeapon` (`Upkeep.cpp:412`): an off-role relic weapon is deposited, not handed to you.
   It is also never the combat pick while another weapon of its category is carried
@@ -5558,7 +5554,7 @@ Uses only existing `MEO_API.h` calls via MEOBridge (+ `MEOBridge::CarriedGemCoun
 queued count). **A socketed item never leaves a follower through MFO:** every removal path calls
 `CheckRemovalCached` (worker) / `CheckRemovalLive` (main) and SKIPS on `Held` (gems stripped via MEO, retried on a
 later pass): Economy sell (`Economy.cpp` `gemHold` site), `Gear.cpp` KeepHeadClear, `Upkeep.cpp` heal-evict + shed drop,
-`Lotd.cpp` TransferOnMain (museum), `SwapUp.cpp` CommitSwapUpDrops. Ammo/book/lockpick removals are not gear.
+`Lotd.cpp` TransferOnMain (museum), (`SwapUp.cpp` CommitSwapUpDrops was DELETED 2026-10-18: no dropping to make room). Ammo/book/lockpick removals are not gear.
 **Looting socketed gear:** `LootEquipment.cpp` falls back to `FindGemCandidate` (a non-upgrade weapon/armor with a
 nonzero ExtraUniqueID in the source container) when nothing is an upgrade; `TakeAndProbe` takes THAT instance,
 the main-thread probe strips its gems, then `Decide` keeps it only if the follower has a loot-valuables (to sell) gambit AND the item clears its value/weight rule (`ValuableRatioClears`, `LootTake.cpp`, `fValuablesRatio`); no gambit = gems only, gear always returned

@@ -133,10 +133,9 @@ namespace MFO::Logistics {
             // keeps the old gambit heuristic (mageMode && !wantsMelee). Ordinals
             // match CombatStyle::Stance by construction (State.h:82).
             // baseClass read earlier now (mageMode gates on it directly, above).
-            const bool baseCaster          = baseClass == 3;
             const bool baseWeaponUser      = baseClass == 1 || baseClass == 2;
             ctx.meleeTargetClass =
-                (mageMode && !baseWeaponUser && (baseCaster || !wantsMelee))
+                (mageMode && !baseWeaponUser && !wantsMelee)
                     ? WepClass::Other : roles.melee;
             // Ranged is a primary if a gambit wants it OR they carry one.
             ctx.doRanged =
@@ -509,7 +508,7 @@ namespace MFO::Logistics {
             if (best && !fitsOrRoom()) {   // does not fit: skipped, never made room for by dropping
                 static std::unordered_set<std::uint64_t> s_noRoomLogged;   // worker-only, once per (follower, item)
                 if (s_noRoomLogged.insert((static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | best->GetFormID()).second)
-                    spdlog::info("[swapup] {:08X}: '{}' no room -- kept for sale at the next vendor",
+                    spdlog::info("[swapup] {:08X}: '{}' skipped (no room); superseded gear waits for the vendor",
                                  a_follower->GetFormID(), best->GetName() ? best->GetName() : "?");
                 best = nullptr;
             }
