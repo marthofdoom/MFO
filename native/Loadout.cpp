@@ -35,6 +35,7 @@ namespace MFO::Loadout {
             // must not undo a live heal claim).
             bool  hitDeferred = false;
             bool  giveBackDeferredLogged = false;   // one log line per deferred 2H give-back
+            bool  quietDeferredLogged    = false;   // same, for the heal-quiet deferral
             // Last Tick that saw a heal claim holding / re-streaming the left hand over this debt. The give-backs wait
             // kHealQuietS after it so a heal gambit that re-claims within the lap does not make the bow/weapon
             // draw-and-put-away every 1-2 s (LoreRim 2026-10-18, Auri: 5 restores each re-taken by the next heal).
@@ -595,6 +596,7 @@ namespace MFO::Loadout {
         debt.stowedAt      = now;
         debt.hitDeferred   = false;
         debt.giveBackDeferredLogged = false;
+        debt.quietDeferredLogged = false;
         // A FRESH equip gets a FRESH window -- plain assignment, unlike the
         // AlreadyReady try_emplace above.
         g_equipClock[id] = now;
@@ -818,8 +820,8 @@ namespace MFO::Loadout {
                     continue;
                 }
                 if (!healQuiet) {
-                    if (!debt.giveBackDeferredLogged) {
-                        debt.giveBackDeferredLogged = true;
+                    if (!debt.quietDeferredLogged) {
+                        debt.quietDeferredLogged = true;
                         spdlog::info("[loadout] {:08X} two-hander give-back DEFERRED: a heal claim held the left hand "
                                      "within the last {:.0f} s (another heal may re-claim it at once)", id, kHealQuietS);
                     }

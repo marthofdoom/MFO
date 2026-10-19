@@ -344,6 +344,7 @@ namespace MFO::Eval {
             float bestVisScore = std::numeric_limits<float>::max();
             RE::ActorHandle bestVis;
             int   qualified    = 0;       // candidates that passed every gate
+            bool  realVisible  = false;   // a candidate measured Visible (Unknown passes the pick but is NEUTRAL for the ch.24 dwell)
             std::vector<RE::FormID> wantLoS;   // measured NEXT tick, on main
             // a_ownRay (the CALLER's class): this rule's action is a SPELL cast or a
             // ranged swing, so its LoS preference reads MFO's own ray verdict; any
@@ -548,8 +549,9 @@ namespace MFO::Eval {
                     // CACHED verdict for this tick's preference.
                     ++qualified;
                     wantLoS.push_back(foe->GetFormID());
-                    if (Sightline::Check(selfID, foe->GetFormID(), losBasis) !=
-                        Sightline::Verdict::Occluded) {
+                    const auto losV = Sightline::Check(selfID, foe->GetFormID(), losBasis);
+                    if (losV == Sightline::Verdict::Visible) realVisible = true;
+                    if (losV != Sightline::Verdict::Occluded) {
                         if (score < bestVisScore) { bestVisScore = score; bestVis = t.targetHandle; }
                     }
 
@@ -565,7 +567,7 @@ namespace MFO::Eval {
             if (bestVis) {
                 best = bestVis;
                 // Sight is back (a fresh Sightline verdict, never a reused one): the ch.24 offense approach ends once it has held.
-                if (a_ownRay) APMFBridge::NoteOffenseSight(selfID);
+                if (a_ownRay && realVisible) APMFBridge::NoteOffenseSight(selfID);
             } else if (best && qualified > 0) {
                 LogOccludedFallback(a_self, qualified);
                 // Every candidate is occluded: walk toward the pinned foe to regain sight (ClickUp 86e3m5ff8).
