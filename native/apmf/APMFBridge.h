@@ -552,6 +552,9 @@ namespace MFO::APMFBridge {
     // (a "sight returned" release, so a lower rule that sees a foe cannot ping-pong the claim).
     void ServiceOffenseApproach(RE::FormID a_follower, RE::FormID a_foe, bool a_touchSpell = false);
     void ReleaseOffenseApproach(RE::FormID a_follower, const char* a_why, bool a_fightOver = false, bool a_refileGap = false);
+    // The selector saw a candidate foe in view (fresh verdict): ends the all-occluded run; releases a standing claim once
+    // sight has held the dwell (apmf/OffenseApproach.cpp kSightDwellMs).
+    void NoteOffenseSight(RE::FormID a_follower);
 
     // ── LOCKPICK HOLD (LP-M1, ClickUp 86e3edgha): ch.1 + ch.12 Idle v2 (ABI v17) ──
     // The pick window's two claims, filed together when a follower standing at a locked

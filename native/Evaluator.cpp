@@ -564,8 +564,8 @@ namespace MFO::Eval {
             // fallback so an all-occluded pack never reads as "no foe".
             if (bestVis) {
                 best = bestVis;
-                // Sight is back (a fresh Sightline verdict, never a reused one): end the ch.24 offense approach.
-                if (a_ownRay) APMFBridge::ReleaseOffenseApproach(selfID, "sight returned: a candidate foe is in view", false, true);
+                // Sight is back (a fresh Sightline verdict, never a reused one): the ch.24 offense approach ends once it has held.
+                if (a_ownRay) APMFBridge::NoteOffenseSight(selfID);
             } else if (best && qualified > 0) {
                 LogOccludedFallback(a_self, qualified);
                 // Every candidate is occluded: walk toward the pinned foe to regain sight (ClickUp 86e3m5ff8).
