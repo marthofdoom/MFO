@@ -55,7 +55,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (5 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1` (`Serialization.h`). PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
+| **Co-save (6 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v1` (`Serialization.h`). ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:711-784` | `StopPump()` MUST run first (`:717`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -191,6 +191,23 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   empty. Cleared by `PlayerGiven::ClearRecord` in `ResetAllState` (`Serialization.cpp:735`, after
   `ProgAllocator::ClearAll`, well after `StopPump` `:706` and `MainThread::Clear`) and, belt and
   braces, at the top of `LoadCallback` (`:579`). Fifth independent record.
+- **`'ERND'` / `kErrandVersion=1`** (`Serialization.h:187-188`, ClickUp 86e3t1mx7 town R2, 2026-10-19) -- the town
+  errands in progress (physical AND simulated), so a save mid-errand (the autosave on every load door) never strands a
+  follower in a shop. Sixth independent record. Bytes owned by `Serialization.cpp` (`WriteErrandRecord:117` from
+  `Logistics::Errand::SnapshotForSave` (`logistics/Errand.cpp:526`, + `Sim::SnapshotInto` `ErrandSim.cpp:352`), called last
+  in `SaveCallback` `:461`; `ReadErrandRecord:160`, dispatched `:834`). **Written ONLY when an errand exists.** Layout v1
+  (full table in `Serialization.h`): `u32 count (<=256)`, per errand `{u32 follower, str stage, u8 flags, u32 town, u32
+  faction, u32 chest, u32 vendorActor, str destKind, u32 destForm, f32 destRad, u32 entryDoor, u32 lastCell, f32 x3
+  lastPos, f32 startDays, f64 tEnter, tArrive, tTradeEnd, tReturn}`. `str` = the shared opcode string (u32 len <= 64 +
+  bytes); stage / destKind are STRING OPCODES (#10, tables `kErrStageOps` / `kErrDestOps`: never rename one, append a new
+  one); flags 0x01 arrived, 0x02 dispatched, 0x04 trade done, 0x08 had an order, 0x10 trade given up (masked to 0x1F,
+  #11). **The trade ORDER is never saved.** Reader: strict full-size reads, a short read / bad count / over-long opcode
+  aborts THIS record; follower unresolvable -> entry DROPPED (#8); unknown opcode -> entry DROPPED (#13); other ids
+  unresolvable -> 0, and a gone faction or chest gives the trade up (he is still brought back); non-finite floats
+  clamped, a bad clock -> all stamps 0 (a fresh walk estimate). Entries are STAGED (`Errand::RestoreFromSave` ->
+  `Sim::StagePending`), never acted on in the callback; cleared by `Errand::ClearRestorePending` at the top of
+  `LoadCallback` (`:768`) and in `ResetAllState` (`:942`, beside PGIV; `Logistics::ClearTransientState` -> `Errand::
+  ClearTransientState` already dropped them). Load / resume rules: logistics/Errand.cpp "R2" below.
 
 **ROSTER REMOVAL erases entries, never layout (ClickUp 86e3eewaf, 2026-10-12).** The Follower-tab
 "remove" deletes one follower's FLWR record (`g_followers`, worker), PRGN record (`g_prog`, main,
@@ -225,7 +242,7 @@ and the load window both funnel here. Order is load-bearing:
 `Diagnostics::StopPump()` **first** (`:706`, drains the worker) → `MainThread::Clear`
 → `g_followers.clear()` → `Followers::g_active.clear()` → each subsystem's
 `ClearTransientState`/`ClearAll` (Followers, Scheduler, Logistics, +`ClearStockGear`,
-ProgAllocator, +`PlayerGiven::ClearRecord` (PGIV, `:735`, 86e3faccn), Loadout, Targeting, CasterConsent, CombatStyle, Sightline, Board,
+ProgAllocator, +`PlayerGiven::ClearRecord` (PGIV, `:735`, 86e3faccn), +`Errand::ClearRestorePending` (ERND staged entries, 86e3t1mx7), Loadout, Targeting, CasterConsent, CombatStyle, Sightline, Board,
 Packages `ReleaseAll("revert")` (`:733`), Papyrus, TradeBridge, MEOBridge, Probe, Rapport)
 → `Board::SetHud(false)`. **What breaks:** move any clear out, or run it while the
 pump is live, and you race a worker insert (UB). `Packages::ReleaseAll` here
@@ -1132,6 +1149,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
       claimed" window) and its rank/waiter state (R2-3). Transparent, like the refresh. Gated on
       `bEquipToCast`.
     - **MFO-B227 left-weapon debt (marth 2026-10-11, `Loadout.cpp` Prepare Caster branch + `Debt::healWeapon` + Tick):** a LEFT heal claim's spell that displaces a left WEAPON (heal only in the right hand reads Caster) books it as `displacedLeft` (unless MFO's own yield held it or a left debt is open); Tick gives it back as soon as `GetHealCastSpell(left)==0 && !HealRestreamGap` (not only at combat end). Loadout.cpp now includes `cast/Actuation.h`.
+    - **Heal give-back quiet time (fix/mfo-ranged-approach 2026-10-19, `Loadout.cpp` Tick + `Debt::healSeenAt`, `kHealQuietS` 2 s):** a two-hander / `healWeapon` give-back waits 2 s after the last Tick that saw a heal claim holding or re-streaming the left hand (in combat only; combat end stays the backstop), so repeated heal gambits stop the draw/put-away churn.
     - **`Loadout::Prepare(a_healClaimLive)`** (`Loadout.cpp:421`, R2-1): an open gear debt no longer
       refuses a re-equip into an EMPTY left hand (no two-hander in the right) under a live heal claim;
       nothing is displaced, so the ledger is left as it is. Before, the debt gate Debounced every repair
@@ -3192,15 +3210,11 @@ module. Module layout:
     MAGE BACKUP sidearm (`BuildEquipmentContext(actor, &state)`'s `wantBackup` / `daggersOnly`,
     best by attack damage) so a looted backup dagger is never sold and re-looted.
     `BuildEquipmentContext` gained a state-taking overload for this (`LootEquipment.cpp`; the
-    one-arg form forwards `g_svc`). Consumers: EconomyProbe's sell list and the LOOT drop:
-    `PlanRoomForSwapUp:509` plans, for an upgrade `LootEquipment` picked that does not fit the
-    carry weight, the SUPERSEDED gear to drop -- only under `bEconomy` (the drop is the loot-time
-    twin of the sale), outside the keep set, WEAP or rated ARMO only, unworn, NOT ENCHANTED, value
-    <= the upgrade's `GetGoldValue`, not `IsStockGear` / quest / `Catalog::IsExcluded` /
-    `IsPlayerPick`, no MEO unique id while MEO is present -- least valuable first, exact copies,
-    all or nothing; `CommitSwapUpDrops:591` runs only after `AcquireEquip` put the upgrade in his
-    inventory (`HeldCount:584` before/after; a miss logs `[swapup] ... did not arrive ... NOT
-    made`).
+    one-arg form forwards `g_svc`). Consumers: EconomyProbe's sell list and the LOOT side's superseded-gear
+    read. (The loot-time DROP that used to live here -- `PlanRoomForSwapUp` / `CommitSwapUpDrops` / `HeldCount`
+    -- was DELETED 2026-10-18 on marth's ruling "we dont do handing or dropping anymore": an upgrade that does
+    not fit the carry weight is skipped, logged once `[swapup] ... skipped (no room); superseded gear waits for
+    the vendor`, and the superseded piece waits for the sale.)
   - **Ammo:** ranked by `TESAmmo` DAMAGE, instance VALUE breaking a tie (`AmmoRankAbove`), within
     one kind (`AmmoIsBolt`; its fallback is the `GetRuntimeData()` kNonBolt flag, never `IsBolt()`,
     batch L), judged ONLY for the kind the follower USES (`UsesAmmoKind:308`: his
@@ -3260,7 +3274,7 @@ module. Module layout:
   at once (by design -- never fork the set); `BuyThresholds` is append-only.
 - **WEAPON / ARMOR STYLE BY PERKS (2026-09-13, marth: "highest skill wins, most
   perked style within a category wins, strongly prefers").** THE decision is
-  **2026-10-18 (fix/mfo-potions-roles):** `ComputeWeaponRoles` roles = explicit class base + equip-melee/ranged gambit OVERRIDE (Auto: perks, then `ResolveBaseClass`), NOT carried weapons; `ShedOffRoleWeapon` is a no-op for items (kShedMovesItems=false; sale only, inter-follower trading possible future road) (carried signal only until `StyleVotesReady`, Gear.cpp). Role-flag readers (all change with it): LootEquipment.cpp (ctx.meleeTargetClass/doRanged), Economy.cpp buy (:324,:383) + sell (`offRoleLauncher`), SwapUp.cpp keep + shield rule, Upkeep.cpp `ShedOffRoleWeapon`, Silver.cpp (`UsesLauncher`, ammo), LootTake/LootScan ammo (`UsesAmmoKind`), Gear.cpp `GemReconcilePrefsFor` skill bits, EquipAuthority.cpp `CombatStyleFor`/declaration, cast/Equip.cpp ranged pick (preferKinds only). `PotionRestores` rejects Hostile/Detrimental potions (Upkeep.cpp). Service.cpp gem reconcile gated on `StyleVotesReady`.
+  **2026-10-18 (fix/mfo-potions-roles):** `ComputeWeaponRoles` roles = explicit class base + equip-melee/ranged gambit OVERRIDE (Auto: perks, then `ResolveBaseClass`), NOT carried weapons; `ArmorWontRender` (Gear.cpp) = foreign playable non-rendering armor: never worn/kept, sold (KeepHeadClear only unequips it); `HealExcludedWeapon` hands only quest items to the player; `ShedOffRoleWeapon` moves nothing (drop code deleted; Lotd bookkeeping + fists log only; sale only, inter-follower trading possible future road); `ComputeKeepSet` (SwapUp.cpp) gates keep buckets 1/2 on `keepMeleeTargetClass` once `rolesFinal`, shield keep = one-hand melee role && !dual wield (carried signal only until `StyleVotesReady`, Gear.cpp). Role-flag readers (all change with it): LootEquipment.cpp (ctx.meleeTargetClass/doRanged), Economy.cpp buy (:324,:383) + sell (`offRoleLauncher`), SwapUp.cpp keep + shield rule, Upkeep.cpp `ShedOffRoleWeapon`, Silver.cpp (`UsesLauncher`, ammo), LootTake/LootScan ammo (`UsesAmmoKind`), Gear.cpp `GemReconcilePrefsFor` skill bits, EquipAuthority.cpp `CombatStyleFor`/declaration, cast/Equip.cpp ranged pick (preferKinds only). `PotionRestores` rejects Hostile/Detrimental potions (Upkeep.cpp). Service.cpp gem reconcile gated on `StyleVotesReady`.
   `ComputeWeaponRoles` (`logistics/Gear.cpp:398`): the melee CLASS is still the
   higher skill (`two > one`, tie → 1H, unchanged; CURRENT AV -- open MFO-B250, marth: base values, perks break ties; the F3 gem direction reuses this answer); inside that class the kind(s)
   with the MOST owned perk ranks conditioned on them (`Progression::StyleVotes`
@@ -4444,7 +4458,7 @@ bit (it is session-only proof); recording non-relics (marth's ruling: regular gi
 **Open backlog:** MFO-B130 (menu read off-main), MFO-B131 (a stale entry after a fast leave; now saved), MFO-B132
 (a gift before LOTD's first snapshot is recorded whatever it is; inert).
 
-### logistics/Errand.cpp / Errand.h / apmf/ErrandClaims.cpp — TOWN ERRANDS, round R1a (ClickUp 86e3t1mx7; NOT serialized)
+### logistics/Errand.cpp / Errand.h / apmf/ErrandClaims.cpp — TOWN ERRANDS, round R1a (ClickUp 86e3t1mx7; SAVED since R2: 'ERND' v1)
 Design: `_evidence/2026-10-18-designs/TOWN-DESIGN.md` (R1a = this; R1b = off-screen simulation + recall, R2 = the `ERND` co-save,
 both LATER rounds). With Harbinger ABI >= 24 (`APMFBridge::ErrandSupported`, ch.19 + ch.12 v2 + `GetIdleState`) and
 `bTownErrands` ON (default) the instant proximity trade is RETIRED: `EconomyProbe` is no longer called from the idle branch
@@ -4497,10 +4511,10 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
   The six keys parse in a chain of their own at the top of `Config.cpp` `Apply` (the main chain is near MSVC's nested-block limit).
 - **WHAT BREAKS if you change this:** `EconomyProbe`'s parameter list (Service.cpp, Errand.cpp); `ErrandProbe::Verdict` fields (the
   ranker); `TradeBridge::ReportTrade` (the outcome the Trading phase waits on); `kLeg_*` handling (a new end state = a new case in
-  the Walking phase); the idle FormIDs (`Errand.cpp` constants, all verified in Skyrim.esm). **Not done on purpose (R2 / later):**
-  the `ERND` co-save (a save mid-errand loses the record), the H1(a) hold package, multi-stop itineraries.
+  the Walking phase); the idle FormIDs (`Errand.cpp` constants, all verified in Skyrim.esm). **Not done on purpose (later):**
+  the H1(a) hold package, multi-stop itineraries. (The `ERND` co-save is R2, below.)
 
-#### R1b — the OFF-SCREEN half: `logistics/ErrandSim.cpp` + `Errand_internal.h` (ClickUp 86e3t1mx7; NOT serialized)
+#### R1b — the OFF-SCREEN half: `logistics/ErrandSim.cpp` + `Errand_internal.h` (ClickUp 86e3t1mx7; SAVED since R2)
 marth's rulings 2026-10-19: an unloaded errand is SIMULATED against the REAL merchant chest and gold (no movement, no animation outside the
 player's cell); if the player walks in "it picks up"; leaving town (fast travel or otherwise) brings him back; player combat -> he walks out of the
 shop and joins; all followers may shop at once; off-screen time = walk estimate + `iErrandTradeGameMin` (10) game minutes. House rule: MFO never reads
@@ -4538,6 +4552,38 @@ an unloaded follower's inventory, so the order is built at PLAN time and replaye
 - **WHAT BREAKS if you change this:** `ErrandPlanned` / `ErrandShop` (Economy.cpp, Errand.cpp, ErrandSim.cpp); the `SimStart` / `ResumeInfo` seam (the R2
   `ERND` record serialises these); `TradeBridge::TakeOutcome` (both the physical and the simulated trade wait on it); the lock order (Errand `g_mx` ->
   Sim `g_mx`, never the reverse; neither is held across a Papyrus / TradeBridge / Harbinger call).
+
+#### R2 — the `ERND` co-save and the load recovery (ClickUp 86e3t1mx7, 2026-10-19; record layout in the co-save section above)
+marth's rulings: unloaded errands are simulated against real stock / gold; "if the player walks in then it picks up"; leaving town brings him back;
+a save made before the off-screen trade ran DROPS that trade (nothing moves until `RunTrade`, so there is nothing to refund).
+- **Save** (`SaveCallback`, main thread, pump PAUSED): `Errand::SnapshotForSave` (`Errand.cpp:526`) maps each physical `Rec` (WALKING -> `phys.walking`,
+  TALKING / GIVING -> `phys.at_vendor`, TRADING -> `phys.trading`, TAKING -> `phys.taking`; no clock stamps) and `Sim::SnapshotInto` (`ErrandSim.cpp:352`)
+  each `SimRec` (with its game-day stamps and entry door) plus every staged-not-yet-adopted entry, verbatim (a save right after a load keeps them).
+- **Load** (`LoadCallback`, pump STOPPED): entries are resolved and STAGED in `Sim::g_pending` only; `Sim::Has` counts a staged entry, so `TryStart`
+  never plans a new errand for him meanwhile.
+- **Adopt** (`AdoptPending` `ErrandSim.cpp:401`, first thing in `Sim::Sweep`, worker; waits for the player's 3D and no `LoadingMenu`): follower gone /
+  dead / errands or logistics off / not `IsEligibleFollower` (dismissed) / already on an errand -> DROPPED with one line. A physical stage (or a
+  simulated one whose clock the reader reset) -> `Sim::Begin` with `restored` (a fresh walk estimate from his saved last loaded position, the same as a
+  live hand-off); a simulated stage -> a `SimRec` with its saved stamps. Always: `dispatched = false` (a trade in flight at the save is NEVER replayed: its
+  Papyrus stack resumes from the .ess with a stale token after `TradeBridge::ClearTransientState`'s token jump, finishes its token-free sell / buy loops
+  or aborts on its own; so a `kDispatched`-not-done entry is adopted with the trade GIVEN UP, review F1), `order = null`, `restored = true`, `hadOrder` from the
+  flags, `restoredPhysical` for a `phys.*` stage, `decideBy = now + kRestoreSettle` (3 s) when the trade had not run. Errands / logistics OFF at adoption:
+  the entry is dropped and an UNLOADED, still-eligible follower is recalled behind the player (review F3).
+- **Resume, LOADED** (`OnLoadedTick` `:306`): at the shop (the player in the errand's town AND the vendor in his cell, or his cell IS the shop) with the
+  trade not run and `hadOrder` (`tradeLeft`) -> `ResumePhysical`: the ch.19 claim is re-filed and the physical errand's give beat RE-PLANS the
+  trade from his live inventory (`EconomyProbe(kExecute)`, as every physical trade does). A `restoredPhysical` record resumes ANYWHERE in the errand's
+  town (review F2, design 2.7: the walk to the shop place, or to the vendor ACTOR when that actor is loaded even outside his cell, `ResumePhysical`
+  `Errand.cpp`). A simulated-origin record away from the shop, or a player no longer in the town -> the errand is over (DONE), he is with the player.
+- **Resume, UNLOADED** (`Sim::Sweep`, "R2 RESTORE DECISION" `:520`): still unloaded after `kRestoreSettle` with the trade not run -> the trade is
+  DROPPED (`tradeAbandoned`), OUT / TRADE go to RET_SIM with `tReturn = min(saved tReturn, now + the saved walk)`; then the R1b timeline as usual
+  (door placement, the player-left-town RECALL, player combat, the cap). A trade that was DONE keeps its saved timeline.
+- **Revert / new game**: `ResetAllState` -> `Logistics::ClearTransientState` -> `Errand::ClearTransientState` -> `Sim::ClearTransientState` (live records +
+  staged entries), plus `Errand::ClearRestorePending` beside PGIV.
+- **WHAT BREAKS if you change this:** the ERND v1 byte order or an opcode string (old saves desync / drop); adding a `SavedStage` / `SavedDest` value without
+  an opcode (the writer would emit "", the reader drops the entry); acting on staged entries inside `LoadCallback` (the world, `Calendar` and the follower's
+  3D are not there yet); replaying a dispatched-at-save trade (it can double-sell beside the resumed Papyrus stack); setting `dispatched` on a restored
+  record (the resume would wait 45 s for a report that never comes). A NEW field = `kErrandVersion` 2 APPENDED at the end of each entry with an
+  `if (version >= 2)` read; keep the v1 reader forever (#12).
 
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives
@@ -4603,12 +4649,12 @@ MFO reads its data + two Papyrus script objects natively. Every LOTD FormID (loc
   (`Board_FieldKit.cpp:576`).
 - **A needed relic is never sold or dropped.** `HoldFromSale:1218` (whenever awareness is on,
   Harbinger or not) ← the Economy sell list (`Economy.cpp:662`), SwapUp's ammo ladder (`HeldAmmo`
-  pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:545`).
+  pins it, `SwapUp.cpp`: the sell list; the loot-time drop and `PlanRoomForSwapUp` were deleted 2026-10-18).
   `KeepForDeposit:1227` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
   `ShedOffRoleWeapon` (`Upkeep.cpp:399`): an off-role relic weapon is deposited, not handed to you.
 - **A needed relic is never sold or dropped.** `HoldFromSale:1265` (whenever awareness is on,
   Harbinger or not) ← the Economy sell list (`Economy.cpp:662`), SwapUp's ammo ladder (`HeldAmmo`
-  pins it, `SwapUp.cpp:353`: sell + loot-time drop) and `PlanRoomForSwapUp` (`SwapUp.cpp:557`).
+  pins it, `SwapUp.cpp`: the sell list; the loot-time drop and `PlanRoomForSwapUp` were deleted 2026-10-18).
   `KeepForDeposit:1281` (HoldFromSale + an enabled act.loot_museum rule + the deposit can run) ←
   `ShedOffRoleWeapon` (`Upkeep.cpp:412`): an off-role relic weapon is deposited, not handed to you.
   It is also never the combat pick while another weapon of its category is carried
@@ -5669,7 +5715,7 @@ Uses only existing `MEO_API.h` calls via MEOBridge (+ `MEOBridge::CarriedGemCoun
 queued count). **A socketed item never leaves a follower through MFO:** every removal path calls
 `CheckRemovalCached` (worker) / `CheckRemovalLive` (main) and SKIPS on `Held` (gems stripped via MEO, retried on a
 later pass): Economy sell (`Economy.cpp` `gemHold` site), `Gear.cpp` KeepHeadClear, `Upkeep.cpp` heal-evict + shed drop,
-`Lotd.cpp` TransferOnMain (museum), `SwapUp.cpp` CommitSwapUpDrops. Ammo/book/lockpick removals are not gear.
+`Lotd.cpp` TransferOnMain (museum), (`SwapUp.cpp` CommitSwapUpDrops was DELETED 2026-10-18: no dropping to make room). Ammo/book/lockpick removals are not gear.
 **Looting socketed gear:** `LootEquipment.cpp` falls back to `FindGemCandidate` (a non-upgrade weapon/armor with a
 nonzero ExtraUniqueID in the source container) when nothing is an upgrade; `TakeAndProbe` takes THAT instance,
 the main-thread probe strips its gems, then `Decide` keeps it only if the follower has a loot-valuables (to sell) gambit AND the item clears its value/weight rule (`ValuableRatioClears`, `LootTake.cpp`, `fValuablesRatio`); no gambit = gems only, gear always returned
@@ -6016,7 +6062,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     foe)`, only when `a_ownRay`); that call is also the refresh. Released by `ReleaseOffenseApproach`: sighted candidate returns (same `PickFoe`, fresh Sightline
     verdict, nothing reused), foe dead/disabled / no ask for `kStaleMs` 3.5 s / retreat / Harbinger ended it (`SweepOffenseApproaches` from `Tick`), combat end (`Scheduler.cpp`),
     dismissal (`Followers.cpp`), `ClearOffenseApproaches` from `ClearTransientState`. Bounds copied from the heal approach (R = tightened `fHealApproachRadius` but NEVER below `kOffenseStandoff` 1024 (a Touch spell: 128, `PickFoe`'s `a_touchSpell`); logs `standoff=<u> (ranged|touch spell)`; a 'sight returned' release sets a 4 s refile gap, Repoint
-    every 3 s, ch.23 Leashed -> blocked, 5 s at the floor inside the standoff -> RELEASED with regular movement for `kOffenseRegularMoveMs` 15 s for that follower+foe, not blocked). Logs `[offense-approach]`. OWN mutex `g_offMx`, never nested with `g_approachMx`: a held-heal
+    every 3 s, ch.23 Leashed -> blocked, 5 s at the floor inside the standoff -> RELEASED with regular movement for `kOffenseRegularMoveMs` 15 s for that follower+foe, not blocked). Logs `[offense-approach]`. **Dwell (fix/mfo-ranged-approach 2026-10-19):** `ServiceOffenseApproach` files only after the all-occluded verdict held `kSightDwellMs` 1.5 s (`g_offOccDwell`), and `NoteOffenseSight` (called by `PickFoe` on a sighted pick instead of the old immediate release) releases only after sight held 1.5 s (`g_offVisDwell`); each opposite sample resets its clock; both cleared by `ReleaseOffenseApproach`/`ClearOffenseApproaches`. Remaining silent re-claim gates: `g_offRefileAfter` (combat-ended only now), `g_offRegular` 15 s, `g_offBlocked`, the CONFIDENCE CHASE CAP (`PickFoe` `dist > chaseCap`, Evaluator.cpp:467; WAIVED (marth 2026-10-19) for a foe that Harbinger holds the engagement on (`PinnedTarget` or a Standing `CombatEntryStateOf` entry, read before the group lock) AND whose `currentCombatTarget` is the follower, logged once `chase cap waived: engaged both ways`; `[sense] chase=`: a foe beyond it is not a candidate, so neither claim nor release is serviced; the reviewer traced most of the 21:59:21-22:00:38 gap to it), `HoldsBowOrStaff` (a swing rule is own-ray, hence eligible, only while a bow/staff is held). OWN mutex `g_offMx`, never nested with `g_approachMx`: a held-heal
     claim wins the one ch.24 slot (`HealApproachStands` checked before `g_offMx`; `ServiceHealApproach` releases ours first). What breaks: filing from anywhere that is not the
     all-occluded fallback re-creates a walk with no sight reason; a third lock order here deadlocks with the heal table.
   - `apmf/CombatApproach.cpp` (NEW, feat/mfo-held-heal-approach 2026-10-05, ClickUp 86e3h871c; marth 2026-09-30: "instead of a

@@ -71,7 +71,7 @@ namespace MFO::Logistics {
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
-                    if (!ar) continue;
+                    if (!ar || ArmorWontRender(a_follower, ar)) continue;   // wont-render armor is never worn (sells)
                     if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
                     const int slot = MageClothingSlot(ar);
                     if (slot < 0) continue;
@@ -146,7 +146,7 @@ namespace MFO::Logistics {
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
-                    if (!ar || IsCreatureArmor(ar)) continue;
+                    if (!ar || IsCreatureArmor(ar) || ArmorWontRender(a_follower, ar)) continue;
                     if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
                     // #3 NO IsExcluded skip here: a follower MAY wear an artifact it
                     // already owns (a legit upgrade) -- equip stays permissive, matching
@@ -696,7 +696,7 @@ namespace MFO::Logistics {
                     for (auto& [obj, data] : a_inv) {
                         if (!obj || data.first <= 0) continue;
                         auto* ar = obj->As<RE::TESObjectARMO>();
-                        if (!ar || IsCreatureArmor(ar) || ar->IsShield() || MageClothingSlot(ar) != slot) continue;
+                        if (!ar || IsCreatureArmor(ar) || ArmorWontRender(a_follower, ar) || ar->IsShield() || MageClothingSlot(ar) != slot) continue;
                         if (RelicOffBody(a_follower, a_state, obj) || IsBlacklistedApparel(ar)) continue;
                         if (IsQuestObjectInstance(data.second.get())) continue;   // a quest-bound piece is never a candidate
                         if (ar != worn && !Config::g_lootSpecialItems.load() && Catalog::IsExcluded(ar->GetFormID()) &&
@@ -772,7 +772,7 @@ namespace MFO::Logistics {
                 for (auto& [obj, data] : a_inv) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
-                    if (!ar || IsCreatureArmor(ar) || isShieldBit(ar)) continue;
+                    if (!ar || IsCreatureArmor(ar) || ArmorWontRender(a_follower, ar) || isShieldBit(ar)) continue;
                     if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
                     const int s = ArmorBuySlot(ar);
                     if (s < 0 || s > 3) continue;

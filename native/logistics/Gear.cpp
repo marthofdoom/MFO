@@ -253,6 +253,33 @@ namespace MFO::Logistics {
         // Main-thread only (equip + inventory mutation). PluginKey handles ESL/FE
         // light plugins (top byte 0xFE -> id>>12, else id>>24).
         // Returns true if a socketed piece was HELD (GemRules stripping it): the caller retries later.
+        // A foreign PLAYABLE, non-jewelry, non-excluded armor piece that draws NOTHING on his race (the
+        // KeepHeadClear "hand back" class). marth 2026-10-18: "armour that wont render simply isnt allowed to
+        // be worn, but can be sold" -- so every wear pick and keep set treats it as not-a-candidate (it is
+        // never declared, never chosen, never kept), and it stays in the pack for the sale path.
+        // His OWN plugin's gear (intentional invisible native gear, #64), excluded/quest items, jewelry and
+        // non-playable creature armor (IsCreatureArmor's, deleted) are NOT this class.
+        bool ArmorWontRender(RE::Actor* a_actor, RE::TESObjectARMO* a_armo) {
+            if (!a_actor || !a_armo) return false;
+            auto* race = a_actor->GetRace();
+            if (!race) return false;
+            if ((a_armo->GetFormFlags() & (1u << 2)) != 0) return false;   // non-playable: IsCreatureArmor's road
+            auto pluginKey = [](RE::FormID a_id) -> std::uint32_t {
+                return ((a_id >> 24) == 0xFEu) ? (a_id >> 12) : (a_id >> 24);
+            };
+            if (pluginKey(a_armo->GetFormID()) == pluginKey(a_actor->GetFormID())) return false;
+            if (Catalog::IsExcluded(a_armo->GetFormID())) return false;
+            {
+                using S = RE::BGSBipedObjectForm::BipedObjectSlot;
+                const auto m = static_cast<std::uint32_t>(a_armo->GetSlotMask());
+                if ((m & (static_cast<std::uint32_t>(S::kAmulet) | static_cast<std::uint32_t>(S::kRing))) != 0) return false;
+            }
+            int guard = 0;
+            for (RE::TESRace* r = race; r && guard < 8; r = r->armorParentRace, ++guard)
+                if (a_armo->GetArmorAddon(r)) return false;
+            return true;
+        }
+
         bool KeepHeadClear(RE::Actor* a_actor) {
             auto* race   = a_actor->GetRace();
             auto* eq     = RE::ActorEquipManager::GetSingleton();
@@ -325,17 +352,19 @@ namespace MFO::Logistics {
             for (auto& h : hits) {
                 const char* nm = h.armo->GetFullName();
                 // MEO-aware: a socketed piece never leaves him (GemRules): strip, retry next pass.
-                if (GemRules::CheckRemovalLive(a_actor, h.armo, "evict", GemRules::Reason::Evict, &touched) == GemRules::Verdict::Held) {
+                // (Only a DELETE removes anything now; a playable piece is just taken off and sold later.)
+                if (h.del && GemRules::CheckRemovalLive(a_actor, h.armo, "evict", GemRules::Reason::Evict, &touched) == GemRules::Verdict::Held) {
                     held = true;
                     continue;
                 }
                 eq->UnequipObject(a_actor, h.armo);
-                if (h.count > 0) {
-                    if (h.del) a_actor->RemoveItem(h.armo, h.count, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                    else       a_actor->RemoveItem(h.armo, h.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, player);
-                }
+                // marth 2026-10-18: no hand-back. A non-playable piece is DELETED; a playable one that will not
+                // render is only taken off (above) and stays for the sale path (ArmorWontRender keeps it out
+                // of every wear pick and keep set).
+                if (h.count > 0 && h.del)
+                    a_actor->RemoveItem(h.armo, h.count, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
                 spdlog::info("[evict] {:08X}: {} {} '{}' ({:08X}) count={}",
-                             a_actor->GetFormID(), h.del ? "DELETED" : "returned-to-player",
+                             a_actor->GetFormID(), h.del ? "DELETED" : "unequipped (kept for sale)",
                              h.why, nm ? nm : "?", h.armo->GetFormID(), h.count);
             }
             GemRules::ReleaseHoldsExcept(a_actor->GetFormID(), GemRules::Reason::Evict, touched);   // no longer an evict candidate

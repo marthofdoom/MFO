@@ -143,6 +143,17 @@ namespace MFO::Eval {
         // the old distance/HP pick rather than going passive. One line per ~5 s
         // per follower -- enough for the deck log to show the gate deciding,
         // quiet enough not to drown it.
+        // "chase cap waived: engaged both ways" -- once per (follower, foe) transition; cleared when no waiver applies.
+        void LogChaseCapWaiver(RE::FormID a_self, RE::FormID a_foe) {
+            static std::unordered_map<RE::FormID, RE::FormID> s_last;
+            if (!a_foe) { s_last.erase(a_self); return; }
+            auto& last = s_last[a_self];
+            if (last == a_foe) return;
+            last = a_foe;
+            spdlog::info("[sense] {:08X}: chase cap waived: engaged both ways (Harbinger holds the engagement on {:08X} and it targets him)",
+                         a_self, a_foe);
+        }
+
         void LogOccludedFallback(RE::Actor* a_self, int a_count) {
             static std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> s_next;
             const auto now = std::chrono::steady_clock::now();
@@ -344,6 +355,7 @@ namespace MFO::Eval {
             float bestVisScore = std::numeric_limits<float>::max();
             RE::ActorHandle bestVis;
             int   qualified    = 0;       // candidates that passed every gate
+            bool  realVisible  = false;   // a candidate measured Visible (Unknown passes the pick but is NEUTRAL for the ch.24 dwell)
             std::vector<RE::FormID> wantLoS;   // measured NEXT tick, on main
             // a_ownRay (the CALLER's class): this rule's action is a SPELL cast or a
             // ranged swing, so its LoS preference reads MFO's own ray verdict; any
@@ -365,6 +377,18 @@ namespace MFO::Eval {
             // out removes the nesting entirely -- and the cap is per-follower, not
             // per-candidate, so this is also strictly less work.
             const float chaseCap = Confidence::ChaseRadius(a_self);
+            // CHASE CAP WAIVER (marth 2026-10-19: "Keep it if the foe is also engaged with the follower"): a foe past the
+            // cap stays a candidate while Harbinger holds the engagement on it (the ch.20 pin or the ch.21 held entry)
+            // AND the foe's own combat target is this follower. Both reads take APMFBridge's g_mx, so they are made here,
+            // BEFORE the combat-group lock, never inside it.
+            RE::FormID heldFoeID = 0, entryFoeID = 0;
+            {
+                const auto pinH = APMFBridge::PinnedTarget(a_self->GetFormID());
+                if (auto pp = pinH.get(); pp) heldFoeID = pp->GetFormID();
+                RE::FormID et = 0;
+                if (APMFBridge::CombatEntryStateOf(a_self->GetFormID(), &et) == APMFBridge::EntryState::Standing) entryFoeID = et;
+            }
+            RE::FormID waivedFoe = 0;   // the foe the waiver kept this pass (logged once per transition, after the lock)
             // The reach gate's own height read, once and before the lock (pure reads).
             const float selfHeight = a_reachGate ? CombatSense::BodyHeight(a_self) : 0.0f;
             RE::ActorHandle          reachSkipped;   // the first foe the reach gate skipped
@@ -464,7 +488,12 @@ namespace MFO::Eval {
                     // charge). Hurt/mobbed shrinks it; healthy widens it. (The
                     // target-relative range conditions returned above, so they
                     // never reach this scan.)
-                    if (dist > chaseCap) continue;
+                    if (dist > chaseCap) {
+                        const auto fid = foe->GetFormID();
+                        const bool held = fid != 0 && (fid == heldFoeID || fid == entryFoeID);
+                        if (!(held && FoeTargets(foe, a_self))) continue;
+                        if (!waivedFoe) waivedFoe = fid;
+                    }
 
                     float score = dist;   // default for the gate-style selectors
 
@@ -548,8 +577,9 @@ namespace MFO::Eval {
                     // CACHED verdict for this tick's preference.
                     ++qualified;
                     wantLoS.push_back(foe->GetFormID());
-                    if (Sightline::Check(selfID, foe->GetFormID(), losBasis) !=
-                        Sightline::Verdict::Occluded) {
+                    const auto losV = Sightline::Check(selfID, foe->GetFormID(), losBasis);
+                    if (losV == Sightline::Verdict::Visible) realVisible = true;
+                    if (losV != Sightline::Verdict::Occluded) {
                         if (score < bestVisScore) { bestVisScore = score; bestVis = t.targetHandle; }
                     }
 
@@ -564,8 +594,8 @@ namespace MFO::Eval {
             // fallback so an all-occluded pack never reads as "no foe".
             if (bestVis) {
                 best = bestVis;
-                // Sight is back (a fresh Sightline verdict, never a reused one): end the ch.24 offense approach.
-                if (a_ownRay) APMFBridge::ReleaseOffenseApproach(selfID, "sight returned: a candidate foe is in view", false, true);
+                // Sight is back (a fresh Sightline verdict, never a reused one): the ch.24 offense approach ends once it has held.
+                if (a_ownRay && realVisible) APMFBridge::NoteOffenseSight(selfID);
             } else if (best && qualified > 0) {
                 LogOccludedFallback(a_self, qualified);
                 // Every candidate is occluded: walk toward the pinned foe to regain sight (ClickUp 86e3m5ff8).
@@ -574,6 +604,7 @@ namespace MFO::Eval {
                         APMFBridge::ServiceOffenseApproach(selfID, bp->GetFormID(), a_touchSpell);
                 }
             }
+            LogChaseCapWaiver(selfID, waivedFoe);
             // Held fire in a brawl: the only "foes" were non-hostile and nothing
             // real was selected. Log outside the group lock (throttled).
             if (nonHostile > 0 && !best) LogBrawlSkip(a_self, lastNH, nonHostile);

@@ -8,8 +8,11 @@
 // evaluator keeps saying "all occluded". It is released when a sighted candidate returns (the same selector),
 // when the pinned foe dies / is disabled, when the rule stops asking (no refresh for kStaleMs), on retreat /
 // combat end / dismissal (Scheduler, Followers), and on load / revert (ClearTransientState).
-// LINE OF SIGHT IS NEVER REUSED: the trigger is the selector's own fresh Sightline verdict each evaluation; this
-// file keeps no sight state of its own.
+// LINE OF SIGHT IS NEVER REUSED: the trigger is the selector's own fresh Sightline verdict each evaluation. This
+// file keeps only the DWELL clocks over those fresh samples (marth/Opus 2026-10-18, Auri vs a flying dragon: terrain
+// flips a borderline line OCCLUDED/VISIBLE every 1-2 s, and one sample claimed then released the walk at once):
+// a claim needs the all-occluded verdict to have held kSightDwellMs, and a release needs sight to have held
+// kSightDwellMs, each clock reset by one opposite sample (NoteOffenseSight is the visible side).
 //
 // BOUNDS (the held-heal approach's, verbatim): X = the pinned foe, R = TightRadius (fHealApproachRadius, tightened
 // toward kApproachMinRadius while Holding and still occluded), Repointed every kTightenGap; Harbinger's ch.23 leash
@@ -29,6 +32,7 @@
 #include <chrono>
 #include <cmath>
 #include <mutex>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -53,6 +57,10 @@ namespace MFO::APMFBridge {
         constexpr std::chrono::seconds  kTightenGap{ 3 };
         constexpr std::chrono::seconds  kFloorGiveUp{ 5 };
         constexpr std::chrono::seconds  kRefileGap{ 4 };
+        // Dwell over the selector's fresh LoS samples (Sightline re-measures a pair at most every 0.3 s and the
+        // evaluator asks about once a lap, ~133 ms x party): 1.5 s is about five agreeing measurements, above one
+        // flip of the 1-2 s terrain flicker seen in the field, below the 3.5 s kStaleMs.
+        constexpr std::chrono::milliseconds kSightDwellMs{ 1500 };
         // marth 2026-10-12: inside the standoff, still occluded, nothing more the approach can do (no strafe): release
         // the claim so the engine's own combat movement runs, and do not re-claim for THAT follower+foe for this long.
         // NOT a fight-long block: after it, the normal flow may claim again.
@@ -76,7 +84,21 @@ namespace MFO::APMFBridge {
         std::unordered_map<RE::FormID, std::chrono::steady_clock::time_point> g_offRefileAfter;
         struct Regular { RE::FormID foe = 0; std::chrono::steady_clock::time_point until{}; };
         std::unordered_map<RE::FormID, Regular> g_offRegular;   // follower -> foe whose re-claim is suppressed; g_offMx
+        // Dwell clocks (g_offMx): `since` = first sample of the current run of that verdict, `last` = the most recent one;
+        // a run whose last sample is older than kStaleMs (the rule stopped asking) restarts.
+        struct Dwell { std::chrono::steady_clock::time_point since{}, last{}; };
+        std::unordered_map<RE::FormID, Dwell> g_offOccDwell;   // follower -> all-occluded run
+        std::unordered_map<RE::FormID, Dwell> g_offVisDwell;   // follower -> sight run (only while a claim stands)
         std::atomic<bool> g_offSeatRefused{ false };
+
+        // Extend (or restart) a run with a sample at a_now; returns how long the run has held.
+        std::chrono::milliseconds NoteRun(std::unordered_map<RE::FormID, Dwell>& a_m, RE::FormID a_fid,
+                                          std::chrono::steady_clock::time_point a_now) {
+            auto& d = a_m[a_fid];
+            if (d.since == std::chrono::steady_clock::time_point{} || a_now - d.last > kStaleMs) d.since = a_now;
+            d.last = a_now;
+            return std::chrono::duration_cast<std::chrono::milliseconds>(a_now - d.since);
+        }
 
         const APMF_API::APMF_API_v19* OffApi() {
             auto* api = g_apmf.load(std::memory_order_relaxed);
@@ -136,6 +158,7 @@ namespace MFO::APMFBridge {
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(g_offMx);
         auto it = g_off.find(a_follower);
+        g_offVisDwell.erase(a_follower);   // an occluded sample ends any run of sight
         if (const auto rg = g_offRegular.find(a_follower); rg != g_offRegular.end()) {
             if (rg->second.foe == a_foe && now < rg->second.until) return;   // regular movement window
             g_offRegular.erase(rg);
@@ -153,6 +176,9 @@ namespace MFO::APMFBridge {
         }
         if (it == g_off.end()) {
             if (const auto rit = g_offRefileAfter.find(a_follower); rit != g_offRefileAfter.end() && now < rit->second) return;
+            // Not on one occluded sample: the verdict must have held (a visible sample clears the run).
+            const auto occludedFor = NoteRun(g_offOccDwell, a_follower, now);
+            if (occludedFor < kSightDwellMs) return;
             APMF_API::APMF_Param prm{};
             prm.target = a_foe;
             prm.fval   = Tight(a_follower, a_foe, radius, a_touchSpell);
@@ -169,8 +195,8 @@ namespace MFO::APMFBridge {
             c.handle = h; c.foe = a_foe; c.radius = prm.fval; c.lastAsk = now; c.lastTighten = now;
             g_off.emplace(a_follower, c);
             spdlog::info("[offense-approach] {:08X}: ch.24 combat approach CLAIMED (h={}, X {:08X}, R {:.0f}, Hold, standoff={:.0f} ({})) -- every "
-                         "candidate foe is occluded; he walks toward the pinned foe to regain sight",
-                         a_follower, h, a_foe, prm.fval, standoff, standoffWhy);
+                         "candidate foe has been occluded for {} ms; he walks toward the pinned foe to regain sight",
+                         a_follower, h, a_foe, prm.fval, standoff, standoffWhy, occludedFor.count());
             return;
         }
         auto& c = it->second;
@@ -210,11 +236,32 @@ namespace MFO::APMFBridge {
         c.foe = a_foe; c.radius = prm.fval; c.lastTighten = now; c.floorSince = {}; c.lastSeq = 0;
     }
 
+    // A fresh VISIBLE (or Unknown, which passes) verdict from the selector. Ends the all-occluded run; with a claim
+    // standing, releases it only once sight has held kSightDwellMs (one visible sample of a flickering line is not sight).
+    void NoteOffenseSight(RE::FormID a_follower) {
+        bool release = false;
+        long long heldMs = 0;
+        {
+            std::scoped_lock lock(g_offMx);
+            g_offOccDwell.erase(a_follower);
+            if (g_off.find(a_follower) == g_off.end()) { g_offVisDwell.erase(a_follower); return; }
+            const auto held = NoteRun(g_offVisDwell, a_follower, std::chrono::steady_clock::now());
+            release = held >= kSightDwellMs;
+            heldMs = held.count();
+        }
+        if (release) {
+            const std::string why = "sight returned: a candidate foe has been in view for " + std::to_string(heldMs) + " ms";
+            ReleaseOffenseApproach(a_follower, why.c_str(), false, false);
+        }
+    }
+
     void ReleaseOffenseApproach(RE::FormID a_follower, const char* a_why, bool a_fightOver, bool a_refileGap) {
         APMF_API::Handle h = APMF_API::kInvalidHandle;
         RE::FormID       x = 0;
         {
             std::scoped_lock lock(g_offMx);
+            g_offOccDwell.erase(a_follower);
+            g_offVisDwell.erase(a_follower);
             if (a_fightOver) { g_offBlocked.erase(a_follower); g_offRefileAfter.erase(a_follower); g_offRegular.erase(a_follower); }
             const auto it = g_off.find(a_follower);
             if (it == g_off.end()) return;
@@ -301,6 +348,8 @@ namespace MFO::APMFBridge {
         g_offBlocked.clear();
         g_offRefileAfter.clear();
         g_offRegular.clear();
+        g_offOccDwell.clear();
+        g_offVisDwell.clear();
     }
 
 }

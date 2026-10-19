@@ -22,6 +22,8 @@
 #include "Board.h"
 #include "progression/ProgAllocator.h"
 #include "logistics/PlayerGiven.h"   // 86e3faccn: the 'PGIV' player-given relic record
+#include "logistics/Errand.h"        // 86e3t1mx7 (town R2): the 'ERND' errand record
+#include <cmath>                     // std::isfinite: ERND float ingestion (#11)
 #include "logistics/GemRules.h"   // revert: clear the looted-gear gem probes
 #include <unordered_set>   // T#69: stock-gear per-follower sets (kRecStock)
 
@@ -83,6 +85,169 @@ namespace MFO {
             a_out.resize(len);
             if (len == 0) return true;
             return a_intfc->ReadRecordData(a_out.data(), len) == len;
+        }
+
+        // ── 'ERND' (town R2; layout in Serialization.h) ─────────────────────────────────────────────
+        // The opcode tables are the WIRE identity (#10): never rename a string; a new stage APPENDS one.
+        constexpr std::uint32_t kMaxErrands = 256;   // #11: one per follower, generous headroom
+        using ErrStage = Logistics::Errand::SavedStage;
+        using ErrDest  = Logistics::Errand::SavedDest;
+        constexpr std::pair<ErrStage, const char*> kErrStageOps[] = {
+            { ErrStage::PhysWalking,  "phys.walking" },  { ErrStage::PhysAtVendor, "phys.at_vendor" },
+            { ErrStage::PhysTrading,  "phys.trading" },  { ErrStage::PhysTaking,   "phys.taking" },
+            { ErrStage::SimOut,       "sim.out" },       { ErrStage::SimTrade,     "sim.trade" },
+            { ErrStage::SimReturn,    "sim.return" },    { ErrStage::SimRejoin,    "sim.rejoin" },
+        };
+        constexpr std::pair<ErrDest, const char*> kErrDestOps[] = {
+            { ErrDest::VendorActor, "vendor_actor" }, { ErrDest::Ref, "ref" }, { ErrDest::Cell, "cell" },
+        };
+        template <class E, std::size_t N>
+        const char* OpOf(const std::pair<E, const char*> (&a_tab)[N], E a_v) {
+            for (const auto& [v, op] : a_tab) if (v == a_v) return op;
+            return nullptr;
+        }
+        template <class E, std::size_t N>
+        bool FromOp(const std::pair<E, const char*> (&a_tab)[N], const std::string& a_op, E& a_out) {
+            for (const auto& [v, op] : a_tab) if (a_op == op) { a_out = v; return true; }
+            return false;
+        }
+        // #9: a 0xFF (runtime) id is never written; 0 means "none".
+        RE::FormID PersistId(RE::FormID a_id) { return (a_id >> 24) == 0xFF ? 0u : a_id; }
+
+        void WriteErrandRecord(SKSE::SerializationInterface* a_intfc) {
+            auto snap = Logistics::Errand::SnapshotForSave();
+            std::uint32_t skippedRuntime = 0;
+            std::erase_if(snap, [&](const Logistics::Errand::Saved& e) {
+                const bool drop = e.follower == 0 || (e.follower >> 24) == 0xFF;   // #9: a runtime follower is session-only
+                if (drop) ++skippedRuntime;
+                return drop;
+            });
+            if (snap.size() > kMaxErrands) snap.resize(kMaxErrands);
+            if (snap.empty()) {   // design 2.7: written only when errands exist
+                if (skippedRuntime)
+                    spdlog::info("[cosave] no errand record written -- SKIPPED {} runtime (0xFF) follower(s)", skippedRuntime);
+                return;
+            }
+            if (!a_intfc->OpenRecord(kRecErrand, kErrandVersion)) {
+                spdlog::error("[cosave] OpenRecord('ERND') failed -- town errands NOT saved");
+                return;
+            }
+            bool ok = a_intfc->WriteRecordData(static_cast<std::uint32_t>(snap.size()));
+            for (const auto& e : snap) {
+                const char* stageOp = OpOf(kErrStageOps, e.stage);
+                const char* destOp  = OpOf(kErrDestOps, e.destKind);
+                ok = ok && a_intfc->WriteRecordData(e.follower) &&
+                     WriteString(a_intfc, stageOp ? stageOp : "") &&
+                     a_intfc->WriteRecordData(static_cast<std::uint8_t>(e.flags & Logistics::Errand::Saved::kAllFlags)) &&
+                     a_intfc->WriteRecordData(PersistId(e.town)) && a_intfc->WriteRecordData(PersistId(e.faction)) &&
+                     a_intfc->WriteRecordData(PersistId(e.chest)) && a_intfc->WriteRecordData(PersistId(e.vendorActor)) &&
+                     WriteString(a_intfc, destOp ? destOp : "") &&
+                     a_intfc->WriteRecordData(PersistId(e.destForm)) && a_intfc->WriteRecordData(e.destRad) &&
+                     a_intfc->WriteRecordData(PersistId(e.entryDoor)) && a_intfc->WriteRecordData(PersistId(e.lastCell)) &&
+                     a_intfc->WriteRecordData(e.lastPos.x) && a_intfc->WriteRecordData(e.lastPos.y) &&
+                     a_intfc->WriteRecordData(e.lastPos.z) && a_intfc->WriteRecordData(e.startDays) &&
+                     a_intfc->WriteRecordData(e.tEnter) && a_intfc->WriteRecordData(e.tArrive) &&
+                     a_intfc->WriteRecordData(e.tTradeEnd) && a_intfc->WriteRecordData(e.tReturn);
+            }
+            if (!ok)
+                spdlog::error("[cosave] a write into 'ERND' failed -- the errand record is INCOMPLETE (the load aborts it at the short read)");
+            spdlog::info("[cosave] saved {} town errand(s), schema v{}{}", snap.size(), kErrandVersion,
+                         skippedRuntime ? std::format(" -- SKIPPED {} runtime (0xFF) follower(s)", skippedRuntime) : std::string{});
+        }
+
+        // 'ERND' body (after the version guard). A short read / implausible count / bad opcode string aborts THIS record
+        // (what was parsed is still staged); an entry it cannot honestly map is DROPPED with a line (#13).
+        void ReadErrandRecord(SKSE::SerializationInterface* a_intfc, std::uint32_t /*a_version: v1 is the only one*/) {
+            using Logistics::Errand::Saved;
+            // A read counts only when it delivered every byte (a partial read is a short read, #11).
+            auto rd = [&](auto& a_v) { return a_intfc->ReadRecordData(a_v) == sizeof(a_v); };
+            std::uint32_t count = 0;
+            if (!rd(count)) {
+                spdlog::error("[cosave] short read on ERND count -- ABORTING errand load");
+                return;
+            }
+            if (count > kMaxErrands) {
+                spdlog::error("[cosave] implausible ERND count {} -- ABORTING errand load", count);
+                return;
+            }
+            std::vector<Saved> staged;
+            std::uint32_t droppedFollower = 0, droppedOpcode = 0, unresolvedRef = 0, shopGone = 0, clockReset = 0;
+            auto resolve = [&](RE::FormID a_raw, RE::FormID& a_out) -> bool {   // 0 stays 0; unresolvable -> 0
+                a_out = 0;
+                if (a_raw == 0) return true;
+                if (a_intfc->ResolveFormID(a_raw, a_out) && a_out != 0) return true;
+                a_out = 0;
+                ++unresolvedRef;
+                return false;
+            };
+            for (std::uint32_t i = 0; i < count; ++i) {
+                Saved e;
+                RE::FormID rawFollower = 0, rawTown = 0, rawFac = 0, rawChest = 0, rawVendor = 0, rawDest = 0, rawDoor = 0, rawCell = 0;
+                std::string stageOp, destOp;
+                std::uint8_t flags = 0;
+                const bool ok = rd(rawFollower) && ReadString(a_intfc, stageOp) &&
+                                rd(flags) && rd(rawTown) &&
+                                rd(rawFac) && rd(rawChest) &&
+                                rd(rawVendor) && ReadString(a_intfc, destOp) &&
+                                rd(rawDest) && rd(e.destRad) &&
+                                rd(rawDoor) && rd(rawCell) &&
+                                rd(e.lastPos.x) && rd(e.lastPos.y) &&
+                                rd(e.lastPos.z) && rd(e.startDays) &&
+                                rd(e.tEnter) && rd(e.tArrive) &&
+                                rd(e.tTradeEnd) && rd(e.tReturn);
+                if (!ok) {
+                    spdlog::error("[cosave] short read in ERND at errand {}/{} -- ABORTING (staged {} so far)", i, count, staged.size());
+                    break;
+                }
+                if (!a_intfc->ResolveFormID(rawFollower, e.follower) || e.follower == 0) {   // #8
+                    ++droppedFollower;
+                    spdlog::info("[cosave] ERND: errand of follower {:08X} DROPPED -- the follower does not resolve (his plugin is gone)", rawFollower);
+                    continue;
+                }
+                if (!FromOp(kErrStageOps, stageOp, e.stage) || !FromOp(kErrDestOps, destOp, e.destKind)) {   // #13
+                    ++droppedOpcode;
+                    spdlog::warn("[cosave] ERND: errand of {:08X} DROPPED -- unknown stage '{}' / destination '{}'", e.follower, stageOp, destOp);
+                    continue;
+                }
+                e.flags = static_cast<std::uint8_t>(flags & Saved::kAllFlags);   // #11
+                resolve(rawTown, e.town);
+                const bool facOk = resolve(rawFac, e.faction) && e.faction != 0;
+                const bool chestOk = resolve(rawChest, e.chest) && e.chest != 0;
+                resolve(rawVendor, e.vendorActor);
+                resolve(rawDest, e.destForm);
+                resolve(rawDoor, e.entryDoor);
+                resolve(rawCell, e.lastCell);
+                if (!facOk || !chestOk) {   // the shop is gone: no trade can happen, but he is still brought back
+                    ++shopGone;
+                    e.flags = static_cast<std::uint8_t>(e.flags & ~Saved::kHadOrder);
+                    if (!(e.flags & Saved::kTradeDone)) e.flags |= Saved::kAbandoned;
+                }
+                // #11: clamp at ingestion.
+                if (!std::isfinite(e.destRad)) e.destRad = 0.0f;
+                e.destRad = std::clamp(e.destRad, 0.0f, 4096.0f);
+                if (!std::isfinite(e.lastPos.x) || !std::isfinite(e.lastPos.y) || !std::isfinite(e.lastPos.z)) {
+                    e.lastPos = {};
+                    e.lastCell = 0;
+                }
+                if (!std::isfinite(e.startDays) || e.startDays < 0.0f) e.startDays = 0.0f;
+                const bool clockOk = std::isfinite(e.tEnter) && std::isfinite(e.tArrive) && std::isfinite(e.tTradeEnd) &&
+                                     std::isfinite(e.tReturn) && e.tEnter >= 0.0 && e.tArrive >= 0.0 && e.tTradeEnd >= 0.0 &&
+                                     e.tReturn >= 0.0;
+                if (!clockOk) {
+                    ++clockReset;
+                    e.tEnter = e.tArrive = e.tTradeEnd = e.tReturn = 0.0;   // adoption makes a fresh walk estimate
+                } else {
+                    e.tArrive = std::max(e.tArrive, e.tEnter);
+                    e.tTradeEnd = std::max(e.tTradeEnd, e.tArrive);
+                    e.tReturn = std::max(e.tReturn, e.tTradeEnd);
+                }
+                staged.push_back(e);
+            }
+            const auto n = staged.size();
+            Logistics::Errand::RestoreFromSave(std::move(staged));
+            spdlog::info("[cosave] loaded {} town errand(s) (staged until the world is up); dropped {} unresolvable follower(s), {} "
+                         "unknown opcode(s); {} unresolvable reference(s) zeroed, {} shop(s) gone (trade given up), {} clock(s) reset",
+                         n, droppedFollower, droppedOpcode, unresolvedRef, shopGone, clockReset);
         }
     }
 
@@ -290,6 +455,10 @@ namespace MFO {
         // isolation contract: the museum relics the player gave a follower or put on
         // him (PlayerGiven owns the layout, bounds and the lock).
         PlayerGiven::CoSave(a_intfc);
+
+        // 86e3t1mx7 (kRecErrand/'ERND') -- a SIXTH independent record, same isolation
+        // contract: the town errands in progress (written only when one exists).
+        WriteErrandRecord(a_intfc);
     }
 
     namespace {
@@ -596,6 +765,7 @@ namespace MFO {
         Logistics::ClearStockGear();   // T#69: defence in depth -- RevertCallback already
                                         // cleared it, same belt-and-braces as g_followers above
         PlayerGiven::ClearRecord();    // 86e3faccn: same belt-and-braces for 'PGIV'
+        Logistics::Errand::ClearRestorePending();   // 86e3t1mx7: same belt-and-braces for 'ERND'
 
         std::uint32_t type = 0, version = 0, length = 0;
         std::uint32_t loaded = 0, droppedActor = 0, disabledRules = 0,
@@ -659,6 +829,19 @@ namespace MFO {
                     continue;
                 }
                 PlayerGiven::CoLoad(a_intfc, version);
+                continue;
+            }
+            if (type == kRecErrand) {
+                // 86e3t1mx7 (town R2): same independence contract. A newer record skips (never
+                // aborts); an old save without it simply never reaches here (nothing staged).
+                if (version > kErrandVersion) {
+                    spdlog::error("[cosave] ERRAND SAVE IS NEWER (v{}) THAN THIS DLL (v{}) -- "
+                                  "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
+                                  version, kErrandVersion);
+                    g_sawNewerSave.store(true);
+                    continue;
+                }
+                ReadErrandRecord(a_intfc, version);
                 continue;
             }
             if (type != kRecFollowers) {
@@ -752,6 +935,11 @@ namespace MFO {
         // writes are PumpTickGate'd; its main-thread recounts were dropped by
         // MainThread::Clear above). A load right after this repopulates it.
         PlayerGiven::ClearRecord();
+        // 86e3t1mx7 (town R2): the 'ERND' entries a load staged for adoption. Logistics::
+        // ClearTransientState above already dropped them with every live errand (Errand::
+        // ClearTransientState); kept as its own call beside PGIV so the serialized-record
+        // contract reads in one place. A load right after this stages them again.
+        Logistics::Errand::ClearRestorePending();
         // The equip ledger describes a LIVE loadout. On revert the world is
         // about to be replaced, so there is nothing to give back -- but the
         // ledger must not survive to re-equip gear into the next save (#16).
