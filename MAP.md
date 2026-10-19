@@ -505,6 +505,23 @@ releases **by eviction** with a non-actor XMarker.
   not 1.6/1.4 — a 1.7.x binary included — under `IsSE()`). Two-class layout offsets (`kPointerOffFromIPackageData=0x10`,
   `:76`) + `kTypeTargetSelector`/`kTypeSingleRef` guard (`:88`, `ReadTarget` `:431`)
   are **memory-safety critical** — `SetInputs` (`:467`) writes nothing if guards fail.
+- **ALIAS READER behind its self-check row (town phase 2 round S, 2026-10-19).** Every
+  `TESQuest::CreateRefHandleByAliasID` read in this file goes through
+  `Logistics::TradePerks::AliasRefHandle` (`logistics/TradePerks.h`, row
+  `TradePerks.TESQuest.CreateRefHandleByAliasID`, ids 25066 / 24537): `FillObserved` (`:798`), the
+  `ReleaseAll` sweeps (loot slots `:1618`, retreat `:1655`, command aliases `:1701`), `LootTravelEvictIf`
+  (`:2121`) and `RetreatEvictIf` (`:2456`). Refused (nullopt) = occupancy UNKNOWN, never "empty": the
+  seat logs once by name; the ReleaseAll sweeps treat UNKNOWN as possibly occupied and evict with the
+  marker unconditionally when a marker exists and ForceRefTo verified (`LogUnknownSweep`, `:341`; a
+  marker in an alias is inert); the evict sites log an error and skip; `FillObserved` returns false and
+  the fill-timeout line says the reader is refused instead of blaming a mod. **No unsweepable fill:**
+  `FillSweepable` (`:332`) makes the cast (`Begin`), loot-travel and retreat legacy fills DECLINE while
+  the reader is refused (logged once per session), so a refused reader beside a verified ForceRefTo can
+  never leave a fill in the .ess. On the three exact builds the row verifies, so nothing changes there.
+  VR has no table: its alias reads and alias fills are now REFUSED there.
+  **What breaks:** calling `quest->CreateRefHandleByAliasID` directly again bypasses the gate; treating
+  nullopt as an empty alias would skip a latched follower silently; a new alias-fill route without the
+  `FillSweepable` gate. Open deferred finding: `Docs/REVIEW-BACKLOG.md` MFO-B325 (VR load noise).
 
 ### native/cast/ — Fire / Roads / CastOn / Equip / EquipWeigh / Direct / DirectSelf / DirectTarget / CanAct / HealObs / Summon / SummonProbe / Archetype / Auto / Hands / HealRoad + Actuation.h / Actuation_internal.h / Direct_internal.h — "a package IS the action"
 Only module that mutates actor state; main-thread only. **Layout = the wave-1 subsystem-folder
@@ -877,7 +894,13 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   vtable) + `InstallCheckCastHook`, `CombatStyle` equip gate (per vtable), `Board::InstallInputHook`
   (refused -> sink + ControlMap path), `SyncControlBlock` ToggleControls, `ForceRefToNativeAvailable`
   (refused -> Papyrus route), `Probe::StartCombatOn`, `logistics/PickupSound.cpp` `Install` (4 rows + the
-  1.7.104 raw-RVA row from `tools/verified_addresses/idmap-1.7.104-mfo.csv`; refused -> engine sound unchanged).
+  1.7.104 raw-RVA row from `tools/verified_addresses/idmap-1.7.104-mfo.csv`; refused -> engine sound unchanged),
+  and since town round S (2026-10-19, 63 rows per runtime) the three `logistics/TradePerks.cpp` query wrappers
+  (`HandleEntryPoint` 23526 / 23073, `TESCondition::IsTrue` 29888 / 29074, `CreateRefHandleByAliasID`
+  25066 / 24537; all three in the 1.7.104 MIT table; refused -> nullopt, no fallback). NOT yet routed
+  through those rows (direct CommonLib calls, unguarded, out of round S scope): `HandleEntryPoint` in
+  `Progression.cpp:1429` (lockpick query) and `cast/Summon.cpp:112`; `TESCondition::IsTrue` in
+  `progression/PerkGate.cpp:403`, `ProgProbe.cpp:401`, `TauntProbe.cpp:89` (backlog MFO-B324).
   **What breaks:** a new id-based hook or
   call without a spec row + regenerated header refuses itself at startup (by design); a spec row
   whose id or RVA drifts makes the generator exit 1 and write nothing. Regenerate with
@@ -3119,6 +3142,24 @@ module. Module layout:
     Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B226 (misleading generated regenerate text / 1.7.104
     comment, scope breadth, raw row without a byte check). `logistics/Lockpick.cpp` PlayAtFollower builds with
     flags 0x11 (forced 3D) for the same reason; CommonLib's default 0x1A forces 2D.
+  - `logistics/TradePerks.cpp` (NEW town phase 2 round S, 2026-10-19) + public `logistics/TradePerks.h` =
+    **GUARDED ENGINE QUERIES** (tier A), no behaviour of their own. `EntryPointValue(ep, owner[, arg], seed)
+    -> optional<float>` (HandleEntryPoint, C-variadic, called through its own typed relocation; only the
+    PROVEN shapes 8 / 60 / 76 / 59 with one condition arg and 63 / 65 with none, else refused; a null
+    condition arg refused; an owner with no process / middle-high / perk data returns nullopt, R0-4),
+    `ConditionTrue(cond, action, target) -> optional<bool>` (TESCondition::IsTrue), `AliasRefHandle(quest,
+    id) -> optional<ObjectRefHandle>` (CreateRefHandleByAliasID, used by `Packages.cpp`), and
+    `AliasReaderVerified()`. Each checks `Runtime::Known()` then `SeatVerified` once (static), logs the
+    refusal once by seat name and returns nullopt for ever after. **Threading:** EntryPointValue and
+    ConditionTrue are MAIN THREAD ONLY (live state, no lock); AliasRefHandle is any thread (the engine takes
+    `aliasAccessLock` itself; today's callers run on the AddTask job worker, the roster refresh and the
+    load/revert handlers), never while holding that lock. Callers (round R2 on) evaluate entry points while
+    the follower is LOADED and cache the result; no cache lives here. Design: TOWN-PHASE2-DESIGN.md round S + R0.
+    **What breaks:** adding an entry point to `ProvenCondArgs` without reading its argCount from the engine's
+    EP table (a wrong count makes the engine read a condition pointer as the value pointer); treating nullopt as
+    the seed or as false (the no-fallback contract); seeding with 1.0 where the engine seeds otherwise.
+    Open deferred findings: `Docs/REVIEW-BACKLOG.md` MFO-B323 (per-EP argument type check, before R2's first
+    caller), MFO-B324 (the unguarded direct callers below).
   - `logistics/Lotd.cpp` (1641, past ~1500: plan a split round) + `logistics/Lotd.h` = LOTD awareness (feat/mfo-lotd, 2026-09-25):
     detection, the museum snapshot, the "Loot museum items" gambit and its deposit trip. Its own
     public header (plugin.cpp, Diagnostics.cpp, Board_FieldKit.cpp include it). See the LOTD section

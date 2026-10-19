@@ -19,7 +19,7 @@
 
 namespace MFO::VerifiedAddresses
 {
-	// 1.6.1170.0: 60 rows
+	// 1.6.1170.0: 63 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_6_1170[] = {
 		{ 207886, 0x18A5558, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 208040, 0x18AB9C0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -81,9 +81,12 @@ namespace MFO::VerifiedAddresses
 		{ 37196, 0x65FE90, 0x0, 0, {  }, "PickupSound.Actor.PlayPickUpSound" },
 		{ 67666, 0xCB11A0, 0x0, 0, {  }, "PickupSound.BSAudioManager.BuildSoundDataFromDescriptor" },
 		{ 67624, 0xCAF660, 0x0, 0, {  }, "PickupSound.BSSoundHandle.SetOutputModel" },
+		{ 23526, 0x385F30, 0x0, 0, {  }, "TradePerks.BGSEntryPoint.HandleEntryPoint" },
+		{ 29888, 0x49F8F0, 0x0, 0, {  }, "TradePerks.TESCondition.IsTrue" },
+		{ 25066, 0x3D14D0, 0x0, 0, {  }, "TradePerks.TESQuest.CreateRefHandleByAliasID" },
 	};
 
-	// 1.5.97.0: 60 rows
+	// 1.5.97.0: 63 rows
 	inline constexpr REL::SelfCheck::Row kRows_1_5_97[] = {
 		{ 261397, 0x165DA40, 0x0, 0, {  }, "Targeting.Character.UpdateCombat" },
 		{ 261916, 0x16635E0, 0x0, 0, {  }, "MainThread.PlayerCharacter.Update" },
@@ -145,9 +148,12 @@ namespace MFO::VerifiedAddresses
 		{ 36216, 0x5CF8E0, 0x0, 0, {  }, "PickupSound.Actor.PlayPickUpSound" },
 		{ 66404, 0xBEF0B0, 0x0, 0, {  }, "PickupSound.BSAudioManager.BuildSoundDataFromDescriptor" },
 		{ 66363, 0xBED740, 0x0, 0, {  }, "PickupSound.BSSoundHandle.SetOutputModel" },
+		{ 23073, 0x32ECE0, 0x0, 0, {  }, "TradePerks.BGSEntryPoint.HandleEntryPoint" },
+		{ 29074, 0x4447A0, 0x0, 0, {  }, "TradePerks.TESCondition.IsTrue" },
+		{ 24537, 0x378760, 0x0, 0, {  }, "TradePerks.TESQuest.CreateRefHandleByAliasID" },
 	};
 
-	// 1.7.104.0: 60 rows
+	// 1.7.104.0: 63 rows
 	// 1 NOT VERIFIED on 1.7.104.0, deliberately absent from this table (the seat is refused):
 	//   PickupSound.Actor.PlayPickUpSound (1.6.1170 id 37196): id 37196 is not in the idmap
 	inline constexpr REL::SelfCheck::Row kRows_1_7_104[] = {
@@ -210,6 +216,9 @@ namespace MFO::VerifiedAddresses
 		{ 207886, 0x1923258, 0x0, 0, {  }, "PickupSound.Character.PlayPickUpSoundSlot" },
 		{ 67666, 0xCCB320, 0x0, 0, {  }, "PickupSound.BSAudioManager.BuildSoundDataFromDescriptor" },
 		{ 67624, 0xCC97E0, 0x0, 0, {  }, "PickupSound.BSSoundHandle.SetOutputModel" },
+		{ 23526, 0x38CFF0, 0x0, 0, {  }, "TradePerks.BGSEntryPoint.HandleEntryPoint" },
+		{ 29888, 0x4A6E20, 0x0, 0, {  }, "TradePerks.TESCondition.IsTrue" },
+		{ 25066, 0x3D8590, 0x0, 0, {  }, "TradePerks.TESQuest.CreateRefHandleByAliasID" },
 		{ 0, 0x6728B0, 0x0, 0, {  }, "PickupSound.Actor.PlayPickUpSound.1_7_104" },
 	};
 

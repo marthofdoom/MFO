@@ -963,6 +963,51 @@
    },
    "source": "native/logistics/PickupSound.cpp Install (BuildCall::thunk, main thread, inside the MFO pickup scope only)",
    "doc": "Docs/ENGINE_NOTES.md section 0.50 (batch A 86e3haxqx, pickup sound at the follower); void(BSSoundHandle*, BSISoundOutputModel* = BGSSoundOutput + 0x20), as the engine calls it (1.6.1170 0x97AD83 / 1.5.97 0x2864BE); NOT CommonLib's SetOutputModel(const BGSSoundOutput*), which passes the form itself"
+  },
+  {
+   "seat": "TradePerks.BGSEntryPoint.HandleEntryPoint",
+   "kind": "function",
+   "construct": "REL::RelocationID(23073, 23526) (= CommonLib RE::BGSEntryPoint::HandleEntryPoint)",
+   "ids": {
+    "1.6.1170": 23526,
+    "1.5.97": 23073
+   },
+   "sig": {
+    "1.6.1170": "48 85 D2 0F 84 ?? ?? ?? ?? 48 89 54 24 10 4C 89 44 24 18",
+    "1.5.97": "48 85 D2 0F 84 ?? ?? ?? ?? 48 89 54 24 10 4C 89 44 24 18"
+   },
+   "source": "native/logistics/TradePerks.cpp EntryPointValue",
+   "doc": "_evidence/2026-10-18-designs/TOWN-PHASE2-DESIGN.md R0-1: C-variadic void(u32 ep (ecx, movsxd; ep >= 0x5C returns), Actor* owner (rdx; null returns), condArg... (8-byte pointers, count = the engine's EP table row), float* value...); r8/r9 spilled to home slots, args read from the spill area. Engine callers: buy (8, player, vendorRef, &v) 1.6.1170 0x8EAFCA / 1.5.97 0x85214C, sell (0x3C, ...) 0x8EAFE5 / 0x852164, temper (0x4C, player, TESBoundObject*, &delta) 0x90BA85 / 0x863EE3"
+  },
+  {
+   "seat": "TradePerks.TESCondition.IsTrue",
+   "kind": "function",
+   "construct": "REL::RelocationID(29074, 29888) (= CommonLib RE::TESCondition::IsTrue(TESObjectREFR*, TESObjectREFR*))",
+   "ids": {
+    "1.6.1170": 29888,
+    "1.5.97": 29074
+   },
+   "sig": {
+    "1.6.1170": "48 83 EC 68 33 C0 48 89 54 24 20 4C 89 44 24 28",
+    "1.5.97": "48 83 EC 68 33 C0 48 89 54 24 20 4C 89 44 24 28"
+   },
+   "source": "native/logistics/TradePerks.cpp ConditionTrue",
+   "doc": "bool(const TESCondition* (rcx), TESObjectREFR* action (rdx), TESObjectREFR* target (r8)): builds ConditionCheckParams {action, target, 0...} on its stack and calls the list evaluator (1.6.1170 0x49FA70 / 1.5.97 0x444920), which reads head = [rcx] (null head = true) and swaps the evaluation context in TLS; returns al"
+  },
+  {
+   "seat": "TradePerks.TESQuest.CreateRefHandleByAliasID",
+   "kind": "function",
+   "construct": "REL::RelocationID(24537, 25066) (= CommonLib RE::TESQuest::CreateRefHandleByAliasID)",
+   "ids": {
+    "1.6.1170": 25066,
+    "1.5.97": 24537
+   },
+   "sig": {
+    "1.6.1170": "44 89 44 24 18 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF",
+    "1.5.97": "44 89 44 24 18 57 48 83 EC 30 48 C7 44 24 20 FE FF FF FF"
+   },
+   "source": "native/logistics/TradePerks.cpp AliasRefHandle (callers native/Packages.cpp)",
+   "doc": "ObjectRefHandle&(TESQuest* (rcx), ObjectRefHandle& out (rdx), u32 aliasID (r8d)): LockForRead(quest+0xD0 aliasAccessLock; 68233 / 66976), out = the invalid handle, refAliasMap lookup (quest+0x70 on 1.6.1170, +0x78 on 1.5.97) writing out, UnlockForRead (68239 / 66982), returns &out. The 1.5.97 ForceRefTo body calls it (Packages.cpp ForceRefTo note)"
   }
  ],
  "layout_facts": [

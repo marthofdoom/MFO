@@ -96,6 +96,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/Silver.cpp
     logistics/Lockpick.cpp
     logistics/PickupSound.cpp
+    logistics/TradePerks.cpp
     Loadout.cpp
     Papyrus.cpp
     TradeBridge.cpp
