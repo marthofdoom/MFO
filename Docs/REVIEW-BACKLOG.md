@@ -1791,3 +1791,12 @@ Opus review of `feat/mfo-town-r1a` @ 2e1f5a2: (1) "`Tick` gets `healWants`, not 
 
 ### MFO-B300 (SEV-5, OPEN, logistics/Errand.cpp) -- town R1a: queue/plan churn, backstop slot under-count, vendor convergence, own-cell catalog, recall placement (raised against 2e1f5a2 / 0574a95)
 Same reviews: a QUEUED follower re-plans (cell + inventory walk) and logs every 6 s; kLeg_Failed → Finish + retry ~7 s line churn while slots are full; a distance-backstop arrival leaves the ch.19 leg live (holds a slot) and CountWalking under-counts it; all followers rank vendors the same way and converge (others hold the give pose up to 33 s on the per-chest guard); the catalog walks only the follower's own cell (4096 u); recall MoveTo 250 u behind the player has no navmesh check; fast travel out of town triggers a redundant recall.
+
+### MFO-B301 (SEV-4, OPEN, TradeBridge.cpp / Economy.cpp) -- town R1b: empty-trade memo key mismatch when a faction-planned shop trades with a resolved vendor (raised against 393632c)
+Opus re-review of `feat/mfo-town-r1b` @ 393632c. Verbatim: "The shop is planned from outside (keyed by faction), but the trade then runs with a resolved vendor actor: picked up on screen through `EconomyProbe` kExecute, or replayed after a Repoint set `r.vendorActor`. The memo lands under the actor, and the next plan from outside looks up the faction key. Suggested fix: `SkipTrade` checks both keys, or `ReportTrade` files under both when `memoKey` differs from the actor."
+
+### MFO-B302 (SEV-4, OPEN, logistics/ErrandSim.cpp) -- town R1b: a resolve-to-now that can't dispatch (chest busy) ends without the trade (raised against 393632c)
+Same review (accepted deviation). "Nothing is lost or minted, because nothing moves until `RunTrade` runs. The usual cause is another follower's live order on the same chest ... Optional backlog item: one short retry window before dropping." Also from the 6d48c00 review: ResumePhysical ignores the kMaxWalking budget (Errand.cpp:543); RepointErrandTravel's result is ignored (Errand.cpp:826).
+
+### MFO-B303 (SEV-5, OPEN, logistics/Errand.cpp / MAP.md) -- town R1b small edges (raised against 393632c)
+Same review: `Tick` Finishes on "town errands / economy switched off" even for an unloaded follower with no hand-off/recall (~:797, manual toggle only); the at-shop ResumePhysical failure drops the trade instead of resolving to now; MAP.md R1b line refs a few lines stale (tier C).
