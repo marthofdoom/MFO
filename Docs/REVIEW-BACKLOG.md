@@ -973,6 +973,7 @@ Effect: the town/inn filter stops engage-on-sight inside those three while their
 Raised against 4f23c30 (`feat/mfo-swapup-ammo`, tier-B review), 2026-09-25. Finding (as relayed): "the ammo peek ignoring carry weight". `SwapUpAmmoFrom`'s peek (`native/logistics/SwapUp.cpp`) answers "would take something" without the per-stack `FitsCarryWeight` the take applies, so an over-encumbered follower can walk to a body whose better ammo he then cannot carry (the shipped `LootAmmo` peek had the same shape). Fix shape: run the carry-weight test in the peek too, as `LootEquipment`'s gear peek does.
 
 ### MFO-B115 (SEV-4) -- swap-up: ComputeKeepSet runs inside the loot peek
+**RESOLVED (moot) 2026-10-18, `fix/mfo-keepset-roles`:** `PlanRoomForSwapUp` is deleted (no dropping to make room), so the peek no longer builds the keep set.
 Raised against 4f23c30 (`feat/mfo-swapup-ammo`, tier-B review), 2026-09-25. Finding (as relayed): "the ComputeKeepSet peek cost". When a gear upgrade does not fit, `LootEquipment`'s peek calls `PlanRoomForSwapUp`, which builds the whole keep set (inventory walks, `ComputeWeaponRoles`, `ArmorPrefFor`, and since round 1 `BuildEquipmentContext`) once per candidate body during a scan. Only on the over-weight path. Fix shape: build the keep set once per `LootNearby` call (like the lazily built `EquipmentContext`) and pass it down.
 
 ### MFO-B116 (SEV-4) -- swap-up: VendorTrades(null) on a TESAmmo keyword form

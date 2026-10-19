@@ -794,6 +794,7 @@ namespace MFO::Logistics {
     bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     bool CarriesSlotArmorAtLeast(const ArmorPref& a_pref, RE::Actor* a_follower,
                                  RE::TESObjectARMO* a_armo);
+    bool ArmorWontRender(RE::Actor* a_actor, RE::TESObjectARMO* a_armo);   // playable foreign piece that draws nothing on his race: never worn, sells (Gear.cpp)
     bool KeepHeadClear(RE::Actor* a_actor);   // true = a socketed piece was held (GemRules), retry later
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
     AmmoOwned   CountAmmoOwned(RE::Actor* a_follower);   // same family test ComputeWeaponRoles uses
@@ -1021,23 +1022,6 @@ namespace MFO::Logistics {
         std::unordered_map<int, RE::TESBoundObject*> bestBySlot;   // logical-slot key -> best (worn-inferior convergence)
     };
     KeepSet ComputeKeepSet(RE::Actor* a_follower, const FollowerState& a_state);
-    // Loot: when a_incoming would not fit the carry weight, PLAN the superseded gear
-    // to drop (outside the keep set, unworn, not enchanted, worth <= a_incomingValue,
-    // unprotected), least valuable first -- all or nothing. True = it fits already
-    // (empty plan) or the plan frees enough. Only under bEconomy. Nothing moves: the
-    // caller acquires first and CommitSwapUpDrops only once the upgrade has landed.
-    struct SwapUpDrop {
-        RE::TESBoundObject* obj    = nullptr;
-        std::int32_t        count  = 0;
-        float               weight = 0.0f;   // per copy
-        std::int32_t        value  = 0;      // per copy
-    };
-    bool PlanRoomForSwapUp(RE::Actor* a_follower, const FollowerState& a_state,
-                           RE::TESBoundObject* a_incoming, std::int32_t a_incomingValue,
-                           std::vector<SwapUpDrop>& a_outPlan);
-    void CommitSwapUpDrops(RE::Actor* a_follower, RE::TESObjectREFR* a_src,
-                           const std::vector<SwapUpDrop>& a_plan, RE::TESBoundObject* a_incoming);
-    std::int32_t HeldCount(RE::Actor* a_follower, RE::TESBoundObject* a_obj);
 
     // Ammo: ranked by DAMAGE, VALUE breaking a tie, within one kind (arrows /
     // bolts), judged only for the kind the follower USES (UsesAmmoKind). He keeps

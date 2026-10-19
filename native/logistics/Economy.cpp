@@ -320,7 +320,7 @@ namespace MFO::Logistics {
                 // meleeTargetClass / doRanged mirror the loot judge (weapon role uses
                 // 'caster' == mageMode, NOT the apparel toggle).
                 const WepClass meleeTargetClass =
-                    (caster && !baseWeaponUser && (baseCaster || !wantsMelee))
+                    (caster && !baseWeaponUser && (baseCaster || !wantsMelee))   // base MAGE: dagger sidearm contract (marth: "Daggers only still applies")
                         ? WepClass::Other : roles.melee;
                 const bool doRanged     = (caster && !wantsRanged) ? false : roles.doRanged;
                 const bool wantCrossbow = roles.wantCrossbow;
@@ -577,8 +577,8 @@ namespace MFO::Logistics {
             // KEEP THE LOADOUT -- THE SWAP-UP RULE's keep half (86e3ebfu3). The
             // keep set (best weapon per class bucket, worn + best-scored armor per
             // logical slot) moved VERBATIM to logistics/SwapUp.cpp ComputeKeepSet so
-            // the loot side's superseded-gear drop (PlanRoomForSwapUp) reads the
-            // SAME set this sell list does. Everything outside it is superseded and
+            // the loot side reads the
+            // SAME set this sell list does (its superseded-gear drop was removed 2026-10-18). Everything outside it is superseded and
             // sells below; the full rationale is there.
             const KeepSet keep = ComputeKeepSet(a_follower, a_state);
             const WeaponRoles& keepRoles   = keep.roles;
