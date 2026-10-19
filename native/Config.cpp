@@ -124,6 +124,7 @@ namespace MFO::Config {
             else if (a_key == "fErrandSettleSec")   { setF(g_errandSettleSec,   0.0f, 600.0f); return; }
             else if (a_key == "fErrandCooldownSec") { setF(g_errandCooldownSec, 0.0f, 3600.0f); return; }
             else if (a_key == "fErrandMaxGameMin")  { setF(g_errandMaxGameMin,  10.0f, 1440.0f); return; }
+            else if (a_key == "iErrandTradeGameMin") { setI(g_errandTradeGameMin, 1, 240); return; }
 
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
             else if (a_key == "fRapportRate")       setF(g_rapportRate,       0.0f, 100.0f);
@@ -403,6 +404,7 @@ namespace MFO::Config {
             g_errandSettleSec    = 10.0f;
             g_errandCooldownSec  = 120.0f;
             g_errandMaxGameMin   = 120.0f;
+            g_errandTradeGameMin = 10;
             g_hmsRedistribute    = true;    // §HMS class-redistribution master switch -- ON
             g_hmsSkewMaxFrac     = 0.20f;   // §HMS off-class skew ceiling -- 20% (INI stores percent)
             g_speechPricing      = true;    // #21 sell price follows the speech-scaled vanilla barter curve

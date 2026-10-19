@@ -20,7 +20,8 @@
 // TradeBridge or EconomyProbe call (a copy of the record is taken, acted on, and written back if the errand
 // still exists).
 #include "PCH.h"
-#include "Errand.h"
+#include "Errand_internal.h"
+#include "Runtime.h"         // IsVerified1_6_1170: the PLVD layout (faction vendorLocation) is verified on that build only
 #include "Logistics_internal.h"
 #include "Config.h"
 #include "Followers.h"
@@ -69,6 +70,7 @@ namespace MFO::Logistics::Errand {
         constexpr double kRealCapSec    = 240.0;
         constexpr double kStallSec      = 8.0;    // an errand whose follower is not being serviced
         constexpr auto  kLeftTownGrace  = std::chrono::seconds(2);
+        constexpr auto  kHandoffPoll    = std::chrono::milliseconds(1000);   // unloaded this long (one more poll) before he is handed to the simulation
         constexpr auto  kParkTime       = std::chrono::minutes(5);
         constexpr float kFailCooldownSec  = 45.0f;
         constexpr float kCombatCooldownSec = 30.0f;
@@ -113,6 +115,15 @@ namespace MFO::Logistics::Errand {
             bool          talkFallbackUsed = false;
             bool          dispatched = false;
             bool          bought = false;
+            // R1b: what the SIMULATION needs if he goes off screen, and what a hand-off back to the physical errand needs.
+            RE::FormID    faction = 0;                      // the vendor faction of the shop
+            DestKind      destKind = DestKind::VendorActor; // what the ch.19 leg walks to NOW
+            RE::FormID    destForm = 0;
+            float         destRad = 0.0f;
+            std::shared_ptr<const ErrandPlanned> order;     // the trade, built at PLAN time while he was loaded
+            RE::NiPoint3  lastPos{};                        // the follower's last LOADED position / cell (sampled every tick and lap)
+            RE::FormID    lastCell = 0;
+            Clock::time_point unloadedSince{};              // first lap he read unloaded (the hand-off waits one more poll)
         };
 
         std::mutex                                           g_mx;
@@ -194,12 +205,68 @@ namespace MFO::Logistics::Errand {
         // not read it: PackageLocation::Data is a union of TESForm* and ObjectRefHandle and which member a
         // faction's file-loaded PLVD fills is not verified, so R1a takes the place from the loaded vendor ACTOR.
         struct Cand {
-            RE::ActorHandle  handle;
-            RE::FormID       id = 0;
+            RE::ActorHandle  handle;            // empty = a shop whose vendor is not loaded (an interior)
+            RE::FormID       id = 0;            // the plan key: the vendor ACTOR's FormID, or the FACTION's for a faction-only shop
+            RE::FormID       actorId = 0;       // 0 = no loaded vendor
             RE::TESFaction*  fac = nullptr;
             RE::FormID       chest = 0;
-            float            dist = 0.0f;       // player -> vendor, straight line
+            float            dist = 0.0f;       // player -> vendor / place, straight line (0 for a cell: no position)
+            DestKind         kind = DestKind::VendorActor;
+            RE::FormID       destForm = 0;      // what ch.19 walks to: the vendor actor, the PLVD ref, or the PLVD cell
+            float            destRad = 0.0f;
         };
+
+        // R1b: the town's shops from the vendor FACTIONS (design 2.2), cached per town -- immutable once built. The place is the
+        // faction's PLVD vendorLocation, read the way 1.6.1170's loader leaves it (disassembled, 2026-10-19): TESFaction::Load
+        // builds the PackageLocation, InitItem's resolver (rva 0x49c630) then turns kInCell into a TESObjectCELL* in
+        // data.object and kNearReference into a 32-bit ObjectRefHandle in data.refHandle. Other location types are skipped.
+        // Verified on 1.6.1170 only (per-runtime rule): elsewhere the list is empty and shops are the loaded-vendor ones (R1a).
+        struct ShopStatic { RE::FormID faction = 0, chest = 0, place = 0; DestKind kind = DestKind::Cell; float rad = 0.0f; };
+        std::unordered_map<RE::FormID, std::vector<ShopStatic>> g_townShops;   // town BGSLocation id -> shops; guarded by g_mx
+
+        std::vector<ShopStatic> BuildTownShops(const RE::BGSLocation* a_town) {
+            std::vector<ShopStatic> out;
+            auto* dh = RE::TESDataHandler::GetSingleton();
+            if (!dh || !a_town) return out;
+            int seen = 0;
+            for (auto* fac : dh->GetFormArray<RE::TESFaction>()) {
+                if (!fac || !fac->IsVendor() || !fac->OffersServices()) continue;
+                auto* chest = fac->vendorData.merchantContainer;
+                if (!chest || !chest->GetContainer()) continue;
+                if (fac->vendorData.vendorConditions && fac->vendorData.vendorConditions->head) continue;   // conditioned
+                const auto& vv = fac->vendorData.vendorValues;
+                if (vv.buysStolen && !vv.buysNonStolen) continue;                                         // a fence
+                auto* loc = fac->vendorData.vendorLocation;
+                if (!loc) continue;
+                ShopStatic sh;
+                sh.faction = fac->GetFormID();
+                sh.chest   = chest->GetFormID();
+                const RE::BGSLocation* placeLoc = nullptr;
+                switch (loc->locType.get()) {
+                case RE::PackageLocation::Type::kInCell: {
+                    auto* cell = loc->data.object ? loc->data.object->As<RE::TESObjectCELL>() : nullptr;
+                    if (!cell) continue;
+                    sh.kind = DestKind::Cell; sh.place = cell->GetFormID(); placeLoc = cell->GetLocation();
+                    break;
+                }
+                case RE::PackageLocation::Type::kNearReference: {
+                    auto ref = loc->data.refHandle.get();
+                    if (!ref) continue;
+                    sh.kind = DestKind::Ref; sh.place = ref->GetFormID();
+                    sh.rad = std::clamp(static_cast<float>(loc->rad), 50.0f, 512.0f);   // ch.19 clamps the same range
+                    placeLoc = ref->GetEditorLocation();
+                    if (!placeLoc) placeLoc = ref->GetCurrentLocation();
+                    break;
+                }
+                default: continue;   // the other PLVD types are not shop PLACES (spouse stores, package-relative): skipped
+                }
+                ++seen;
+                if (placeLoc && LocationTypes::TownAnchor(placeLoc) == a_town) out.push_back(sh);
+            }
+            spdlog::info("[errand] shop catalog for '{}': {} of {} vendor faction(s) with a PLVD place sit in this town",
+                         a_town->GetName() ? a_town->GetName() : "?", out.size(), seen);
+            return out;
+        }
 
         std::vector<Cand> BuildCatalog(RE::Actor* a_follower, const RE::BGSLocation* a_playerTown,
                                        Clock::time_point a_now, int& a_dropped) {
@@ -261,12 +328,79 @@ namespace MFO::Logistics::Errand {
                 Cand c;
                 c.handle = h;
                 c.id     = v->GetFormID();
+                c.actorId = c.id;
                 c.fac    = fac;
                 c.chest  = chest->GetFormID();
                 c.dist   = dPlayer;
+                c.kind   = DestKind::VendorActor;
+                c.destForm = c.id;
+                c.destRad = kVendorRadius;
                 out.push_back(c);
             }
+
+            // R1b: shops whose vendor is NOT loaded (an interior while the player is outside), from the faction catalog.
+            if (Runtime::IsVerified1_6_1170() && a_playerTown) {
+                std::vector<ShopStatic> shops;
+                bool have = false;
+                {
+                    std::scoped_lock lk(g_mx);
+                    if (const auto it = g_townShops.find(a_playerTown->GetFormID()); it != g_townShops.end()) { shops = it->second; have = true; }
+                }
+                if (!have) {
+                    shops = BuildTownShops(a_playerTown);   // a one-time walk of the faction array, outside the lock
+                    std::scoped_lock lk(g_mx);
+                    g_townShops[a_playerTown->GetFormID()] = shops;
+                }
+                for (const auto& sh : shops) {
+                    if (out.size() >= kMaxCands) break;
+                    if (seenChest.contains(sh.chest)) continue;   // a loaded vendor already covers this chest
+                    auto* fac = RE::TESForm::LookupByID<RE::TESFaction>(sh.faction);
+                    if (!fac) continue;
+                    if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
+                    if (const auto it = parked.find(sh.faction); it != parked.end() && a_now < it->second) continue;
+                    float d = 0.0f;
+                    if (sh.kind == DestKind::Ref) {
+                        auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(sh.place);
+                        if (!ref) continue;
+                        d = ref->GetPosition().GetDistance(pc->GetPosition());
+                        if (d > maxFromPlayer) { ++a_dropped; continue; }
+                    } else if (!RE::TESForm::LookupByID<RE::TESObjectCELL>(sh.place)) {
+                        continue;
+                    }
+                    seenChest[sh.chest] = true;
+                    Cand c;
+                    c.id = sh.faction; c.fac = fac; c.chest = sh.chest; c.dist = d;
+                    c.kind = sh.kind; c.destForm = sh.place; c.destRad = sh.rad;
+                    out.push_back(c);
+                }
+            }
             return out;
+        }
+
+        // The vendor ACTOR of a faction standing in a LOADED cell: the physical half of a shop reached through its place
+        // (design AT_VENDOR_PHYS). Collect-then-act; alive, loaded, not in combat, not a teammate, not asleep.
+        RE::NiPointer<RE::Actor> FindVendorActor(RE::Actor* a_near, RE::FormID a_faction) {
+            auto* cell = a_near ? a_near->GetParentCell() : nullptr;
+            if (!cell || !cell->IsAttached()) return {};
+            std::vector<RE::ActorHandle> cands;
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            cell->ForEachReferenceInRange(a_near->GetPosition(), kScanRadius, [&](RE::TESObjectREFR* a_ref) {
+                auto* a = a_ref->As<RE::Actor>();
+                if (a && a != a_near && a != pc && !a->IsDead() && !a->IsDisabled() && !a->IsMarkedForDeletion() &&
+                    !a->IsPlayerTeammate() && cands.size() < 64)
+                    cands.push_back(a->GetHandle());
+                return RE::BSContainer::ForEachResult::kContinue;
+            });
+            for (auto& h : cands) {
+                auto p = h.get();
+                auto* v = p.get();
+                if (!v || !v->Is3DLoaded() || v->IsInCombat()) continue;
+                if (const auto st = v->AsActorState()->GetSitSleepState(); st == RE::SIT_SLEEP_STATE::kIsSleeping ||
+                    st == RE::SIT_SLEEP_STATE::kWantToSleep || st == RE::SIT_SLEEP_STATE::kWaitingForSleepAnim) continue;
+                auto* fac = VendorFactionOf(v);
+                if (fac && fac->GetFormID() == a_faction) return p;
+            }
+            return {};
         }
 
         struct Idles { RE::FormID talk = 0, talkFallback = 0, give = 0, take = 0; };
@@ -325,12 +459,64 @@ namespace MFO::Logistics::Errand {
                              "animations are required: no idle, no errand, and no instant trade either.");
         }
 
-        // RECALL (marth 2026-10-18: a follower always rejoins the player). The errand ended because the follower UNLOADED
-        // (the player took a load door or fast travelled): put him beside the player, out of his view, UNLESS he is
-        // already in the player's cell. Vanilla Papyrus ObjectReference.MoveTo, ~250 u behind the player's heading
-        // (the AFT fBehindOffset precedent): a vanilla native on a persistent actor, no engine-address seat.
-        // SEAM (R1b): the off-screen simulation replaces this -- an unloaded errand is then RESOLVED (trade replayed
-        // against the real chest, the walk back simulated) before this placement, which stays as the recall step.
+        std::size_t CountWalking() {
+            std::scoped_lock lk(g_mx);
+            std::size_t n = 0;
+            for (const auto& [id, r] : g_recs) if (r.phase == Phase::Walking) ++n;
+            return n;
+        }
+    }
+
+    // ── public: lifecycle ───────────────────────────────────────────────────────────────────────────
+    bool Active(RE::FormID a_follower) {
+        {
+            std::scoped_lock lk(g_mx);
+            if (g_recs.contains(a_follower)) return true;
+        }
+        return Sim::Has(a_follower);
+    }
+
+    void End(RE::FormID a_follower, const char* a_why) { Finish(a_follower, a_why, kFailCooldownSec); }
+
+    void ClearTransientState() {
+        {
+            std::scoped_lock lk(g_mx);
+            g_recs.clear();
+            g_cool.clear();
+            g_nextPlan.clear();
+            g_parked.clear();
+            g_townShops.clear();
+            g_townId = 0;
+            g_townSince = {};
+        }
+        Sim::ClearTransientState();
+        APMFBridge::ClearErrandClaims();
+    }
+
+    // ── services for the simulation (Errand_internal.h) ────────────────────────────────────────────
+    namespace detail {
+        void Cooldown(RE::FormID a_follower, float a_seconds) {
+            std::scoped_lock lk(g_mx);
+            g_cool[a_follower] = Clock::now() + std::chrono::milliseconds(static_cast<long long>(a_seconds * 1000.0f));
+        }
+        bool InLoadingMenu() {
+            auto* ui = RE::UI::GetSingleton();
+            return ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
+        }
+        RE::FormID PlayerTownId() {
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            const RE::BGSLocation* here = pc ? LocationTypes::TownAnchor(pc->GetCurrentLocation()) : nullptr;
+            return here ? here->GetFormID() : 0u;
+        }
+        const char* NameOf(const RE::Actor* a_actor) {
+            const char* n = a_actor ? a_actor->GetName() : nullptr;
+            return n && *n ? n : "?";
+        }
+
+        // RECALL (marth 2026-10-18: a follower always rejoins the player): put an alive, UNLOADED follower beside the player,
+        // out of his view, UNLESS he is already in the player's cell. Vanilla Papyrus ObjectReference.MoveTo, ~250 u behind
+        // the player's heading (the AFT fBehindOffset precedent): a vanilla native on a persistent actor, no engine-address
+        // seat. R1b: the simulation RESOLVES the errand (trade replayed, walk back simulated) before calling this.
         void RecallToPlayer(RE::FormID a_fid, const char* a_why) {
             auto* f  = RE::TESForm::LookupByID<RE::Actor>(a_fid);
             auto* pc = RE::PlayerCharacter::GetSingleton();
@@ -343,37 +529,44 @@ namespace MFO::Logistics::Errand {
             constexpr float kBehind = 250.0f;
             const float dx = -kBehind * std::sin(az), dy = -kBehind * std::cos(az);
             const bool ok = Papyrus::DispatchMoveTo(f, pc, dx, dy, 0.0f);
-            spdlog::info("[errand] {:08X} '{}': RECALL ({}) -- he was unloaded while the player is elsewhere; MoveTo the "
+            spdlog::info("[errand] {:08X} '{}': RECALL ({}) -- he is unloaded while the player is elsewhere; MoveTo the "
                          "player (+{:.0f},{:.0f}) {}", a_fid, NameOf(f), a_why, dx, dy, ok ? "dispatched" : "FAILED to dispatch");
         }
 
-        std::size_t CountWalking() {
-            std::scoped_lock lk(g_mx);
-            std::size_t n = 0;
-            for (const auto& [id, r] : g_recs) if (r.phase == Phase::Walking) ++n;
-            return n;
+        bool ResumePhysical(RE::Actor* a_follower, const ResumeInfo& a_info) {
+            if (!a_follower || g_latched.load() || !APMFBridge::ErrandSupported()) return false;
+            auto vendor = FindVendorActor(a_follower, a_info.faction);
+            const auto fid = a_follower->GetFormID();
+            // No vendor actor in HIS cell: he is not in the shop (he was handed off mid-walk and loaded again elsewhere), so
+            // the walk to the shop's place simply resumes. No place either (a vendor actor was the destination): give up.
+            if (!vendor && (a_info.destKind == DestKind::VendorActor || a_info.destForm == 0)) return false;
+            if (!APMFBridge::ClaimErrandTravel(fid, vendor ? vendor->GetFormID() : a_info.destForm,
+                                               vendor ? kVendorRadius : a_info.destRad)) return false;
+            const auto now = Clock::now();
+            Rec r;
+            r.phase = Phase::Walking;
+            r.vendor = vendor ? vendor->GetFormID() : 0u;
+            r.chest = a_info.chest;
+            r.town = a_info.town;
+            r.faction = a_info.faction;
+            r.followerName = a_info.followerName;
+            r.vendorName = vendor ? NameOf(vendor.get()) : a_info.vendorName;
+            r.order = a_info.order;
+            if (vendor) { r.destKind = DestKind::VendorActor; r.destForm = r.vendor; r.destRad = kVendorRadius; }
+            else        { r.destKind = a_info.destKind; r.destForm = a_info.destForm; r.destRad = a_info.destRad; }
+            r.start = r.phaseAt = now;
+            r.startClk = r.lastTickClk = Scheduler::ServiceClock();
+            r.startDays = a_info.startDays;
+            r.lastPos = a_follower->GetPosition();
+            {
+                std::scoped_lock lk(g_mx);
+                g_recs[fid] = r;
+            }
+            spdlog::info("[errand] {:08X} '{}': PICKS UP -- he is loaded again; {} '{}' ({:08X}) to trade on screen",
+                         fid, r.followerName, vendor ? "walking to the vendor" : "resuming the walk to the shop of", r.vendorName,
+                         vendor ? r.vendor : r.destForm);
+            return true;
         }
-    }
-
-    // ── public: lifecycle ───────────────────────────────────────────────────────────────────────────
-    bool Active(RE::FormID a_follower) {
-        std::scoped_lock lk(g_mx);
-        return g_recs.contains(a_follower);
-    }
-
-    void End(RE::FormID a_follower, const char* a_why) { Finish(a_follower, a_why, kFailCooldownSec); }
-
-    void ClearTransientState() {
-        {
-            std::scoped_lock lk(g_mx);
-            g_recs.clear();
-            g_cool.clear();
-            g_nextPlan.clear();
-            g_parked.clear();
-            g_townId = 0;
-            g_townSince = {};
-        }
-        APMFBridge::ClearErrandClaims();
     }
 
     // ── public: the planner (the idle branch of ServiceFollower) ─────────────────────────────────────
@@ -407,6 +600,7 @@ namespace MFO::Logistics::Errand {
             if (tid != g_townId) { g_townId = tid; g_townSince = a_now; }
             townSince = g_townSince;
             if (g_recs.contains(fid)) return true;   // (Tick owns him)
+            if (Sim::Has(fid)) return true;          // (the simulation owns him)
             if (const auto it = g_cool.find(fid); it != g_cool.end() && a_now < it->second) return true;
             if (const auto it = g_nextPlan.find(fid); it != g_nextPlan.end() && a_now < it->second) return true;
         }
@@ -435,11 +629,14 @@ namespace MFO::Logistics::Errand {
         auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped);
         if (cands.empty()) return true;
 
-        // PLAN: EconomyProbe in errand/plan mode evaluates every candidate with the SAME code a trade uses.
-        ErrandProbe probe;
-        probe.mode = ErrandProbe::Mode::kPlan;
-        for (auto& c : cands) probe.vendors.push_back(c.handle);
-        EconomyProbe(a_follower, a_state, a_now, &probe);
+        // PLAN: the SAME code a trade uses evaluates every candidate -- loaded vendor actors AND faction-only shops -- and hands
+        // back the ORDER for each, built now while the follower is loaded (the simulation replays it; MFO never reads an
+        // unloaded follower's inventory).
+        std::vector<ErrandShop> shops;
+        shops.reserve(cands.size());
+        for (auto& c : cands) shops.push_back(ErrandShop{ c.fac, c.handle });
+        std::vector<ErrandPlanned> planned;
+        EconomyErrandPlan(a_follower, a_state, a_now, shops, planned);
 
         const int minSell  = Config::g_errandMinSellGold.load();
         const int minPurse = Config::g_errandMinPurse.load();
@@ -450,15 +647,15 @@ namespace MFO::Logistics::Errand {
             carry = cw > 0.0f ? iw / cw : 0.0f;
         }
         const Cand* best = nullptr;
+        const ErrandPlanned* bestPlan = nullptr;
         float bestScore = -1.0e9f;
         std::string bestWhy;
         int evaluated = 0, skipped = 0;
-        for (const auto& v : probe.verdicts) {
-            if (!v.evaluated) continue;
+        for (const auto& v : planned) {
             ++evaluated;
             if (v.skipped) { ++skipped; continue; }
             const Cand* c = nullptr;
-            for (const auto& k : cands) if (k.id == v.vendor) { c = &k; break; }
+            for (const auto& k : cands) if (k.id == v.vendorKey) { c = &k; break; }
             if (!c) continue;
             // Gold the chest can actually pay for the rows this vendor accepts (last-seen gold; unknown = uncapped).
             std::int64_t sellGold = v.sellValue;
@@ -482,6 +679,7 @@ namespace MFO::Logistics::Errand {
             if (score > bestScore) {
                 bestScore = score;
                 best = c;
+                bestPlan = &v;
                 bestWhy = std::format("sell {} row(s) worth {}g (chest gold {}), needs {:#x}, wishes gear={} apparel={} tome={}, "
                                       "purse {}, carry {:.0f}%, reason sell={} need={} wish={}",
                                       v.sellRows, v.sellValue, v.chestGold, v.needKinds, v.wishGear, v.wishApparel,
@@ -514,9 +712,7 @@ namespace MFO::Logistics::Errand {
                          "loot), next try in {} s", fid, NameOf(a_follower), kMaxWalking, kQueueRetry.count());
             return true;
         }
-        auto* vendor = best->handle.get().get();
-        if (!vendor) return true;
-        if (!APMFBridge::ClaimErrandTravel(fid, best->id, kVendorRadius)) {
+        if (!APMFBridge::ClaimErrandTravel(fid, best->destForm, best->destRad)) {
             // Refused at the call: the leg budget (all 8 slots busy), [Travel] bTravel=0, VR. Retry soon, never a fallback.
             std::scoped_lock lk(g_mx);
             g_nextPlan[fid] = a_now + kQueueRetry;
@@ -524,11 +720,20 @@ namespace MFO::Logistics::Errand {
         }
         Rec r;
         r.phase       = Phase::Walking;
-        r.vendor      = best->id;
+        r.vendor      = best->actorId;
         r.chest       = best->chest;
+        r.faction     = best->fac->GetFormID();
         r.town        = playerTown->GetFormID();
         r.followerName = NameOf(a_follower);
-        r.vendorName  = NameOf(vendor);
+        {
+            auto* vendor = best->handle.get().get();
+            const char* vn = vendor ? vendor->GetName() : best->fac->GetName();
+            r.vendorName = vn && *vn ? vn : "?";
+        }
+        r.destKind = best->kind; r.destForm = best->destForm; r.destRad = best->destRad;
+        r.order = std::make_shared<const ErrandPlanned>(*bestPlan);
+        r.lastPos = a_follower->GetPosition();
+        if (auto* fc = a_follower->GetParentCell()) r.lastCell = fc->GetFormID();
         r.start = r.phaseAt = a_now;
         r.startClk = r.lastTickClk = Scheduler::ServiceClock();
         if (auto* cal = RE::Calendar::GetSingleton()) r.startDays = cal->GetDaysPassed();
@@ -536,8 +741,10 @@ namespace MFO::Logistics::Errand {
             std::scoped_lock lk(g_mx);
             g_recs[fid] = r;
         }
-        spdlog::info("[errand] {:08X} '{}' PLAN -> '{}' ({:08X}) in '{}', {:.0f} u from the player | {} | {} candidate(s)",
-                     fid, r.followerName, r.vendorName, best->id, TownName(r.town), best->dist, bestWhy, cands.size());
+        spdlog::info("[errand] {:08X} '{}' PLAN -> '{}' ({:08X}) in '{}', {:.0f} u from the player, walking to {} {:08X} | {} | {} candidate(s)",
+                     fid, r.followerName, r.vendorName, best->id, TownName(r.town), best->dist,
+                     r.destKind == DestKind::VendorActor ? "the vendor" : r.destKind == DestKind::Ref ? "the shop ref" : "the shop cell",
+                     r.destForm, bestWhy, cands.size());
         return true;
     }
 
@@ -546,6 +753,8 @@ namespace MFO::Logistics::Errand {
               const std::function<bool()>& a_healWants) {
         if (!a_follower) return false;
         const auto fid = a_follower->GetFormID();
+        // R1b: a follower the SIMULATION was running and who is LOADED again (the player walked in): "it picks up".
+        if (Sim::Has(fid)) return Sim::OnLoadedTick(a_follower, a_state);
         Rec r;
         {
             std::scoped_lock lk(g_mx);
@@ -554,11 +763,13 @@ namespace MFO::Logistics::Errand {
             it->second.lastTickClk = Scheduler::ServiceClock();
             r = it->second;
         }
+        // The last LOADED position / cell: the simulation's start point and the entry-door search origin.
+        r.lastPos = a_follower->GetPosition();
+        if (auto* fc0 = a_follower->GetParentCell()) r.lastCell = fc0->GetFormID();
         auto* pc = RE::PlayerCharacter::GetSingleton();
         if (!Config::g_townErrands.load() || !Config::g_economy.load()) { Finish(fid, "town errands / economy switched off", kFailCooldownSec); return false; }
         if (a_follower->IsDead() || !a_follower->Is3DLoaded()) {
-            Finish(fid, "follower dead or unloaded", kFailCooldownSec);
-            if (!a_follower->IsDead()) RecallToPlayer(fid, "errand ended while he was unloaded");
+            Finish(fid, "follower dead or unloaded", kFailCooldownSec);   // (an unloaded one is the Sweep's: it hands him to the simulation)
             return false;
         }
         if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) { Finish(fid, "combat -- he rejoins", kCombatCooldownSec); return false; }
@@ -575,15 +786,16 @@ namespace MFO::Logistics::Errand {
                 return false;
             }
         }
-        auto* vendor = RE::TESForm::LookupByID<RE::Actor>(r.vendor);
-        if (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || vendor->IsInCombat()) {
+        // r.vendor == 0: still walking to the shop's PLACE (a cell / a ref); the vendor actor is found on arrival.
+        RE::Actor* vendor = r.vendor ? RE::TESForm::LookupByID<RE::Actor>(r.vendor) : nullptr;
+        if (r.vendor && (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || vendor->IsInCombat())) {
             Finish(fid, "the vendor is gone, dead, unloaded or in combat", kFailCooldownSec);
             return false;
         }
         const Idles& idles = IdleIds();
         if (!idles.give) { Finish(fid, "IdleGive did not resolve", 600.0f); return false; }
-        const float dist = a_follower->GetPosition().GetDistance(vendor->GetPosition());
-        const float dz   = std::fabs(a_follower->GetPosition().z - vendor->GetPosition().z);
+        const float dist = vendor ? a_follower->GetPosition().GetDistance(vendor->GetPosition()) : 0.0f;
+        const float dz   = vendor ? std::fabs(a_follower->GetPosition().z - vendor->GetPosition().z) : 0.0f;
 
         // Advance to the next beat: request its idle (the first beat files the ch.1 hold + ch.12 claim, later beats
         // re-point the same claim). A synchronous refusal of the FIRST beat latches the feature.
@@ -602,6 +814,32 @@ namespace MFO::Logistics::Errand {
 
         switch (r.phase) {
         case Phase::Walking: {
+            if (!vendor) {   // walking to the shop's PLACE (a PLVD cell / ref): the leg ends Arrived in the shop, then to the vendor
+                APMFBridge::LootLegState pleg;
+                if (APMFBridge::ReadErrandLeg(fid, pleg) && pleg.ours) {
+                    if (pleg.state == APMF_API::kLeg_Arrived) {
+                        auto va = FindVendorActor(a_follower, r.faction);
+                        if (!va) { Finish(fid, "the shop is unattended (no vendor actor in the loaded shop)", kFailCooldownSec); return false; }
+                        r.vendor = va->GetFormID();
+                        r.vendorName = NameOf(va.get());
+                        r.destKind = DestKind::VendorActor; r.destForm = r.vendor; r.destRad = kVendorRadius;
+                        APMFBridge::RepointErrandTravel(fid, r.vendor, kVendorRadius);
+                        spdlog::info("[errand] {:08X}: reached the shop; walking on to its vendor '{}' ({:08X})", fid, r.vendorName, r.vendor);
+                    } else if (pleg.state == APMF_API::kLeg_Blocked) {
+                        { std::scoped_lock lk(g_mx); g_parked[r.faction] = a_now + kParkTime; }
+                        Finish(fid, "the walk to the shop ended BLOCKED (a closed door?); shop parked", kFailCooldownSec);
+                        return false;
+                    } else if (pleg.state == APMF_API::kLeg_Failed) {
+                        Finish(fid, "Harbinger could not start the leg (FAILED -- all travel slots busy? APMF.log says); queued", 6.0f);
+                        return false;
+                    } else if (pleg.state > APMF_API::kLeg_Blocked && pleg.state <= APMF_API::kLeg_Released) {
+                        Finish(fid, std::format("the walk to the shop ended: {}", LegName(pleg.state)).c_str(), kFailCooldownSec);
+                        return false;
+                    }
+                }
+                Store(fid, r);
+                return true;
+            }
             bool arrived = false;
             APMFBridge::LootLegState leg;
             if (APMFBridge::ReadErrandLeg(fid, leg) && leg.ours) {
@@ -782,8 +1020,10 @@ namespace MFO::Logistics::Errand {
 
     // ── public: the owner-independent backstop ───────────────────────────────────────────────────────
     void Sweep() {
+        Sim::Sweep();   // R1b: the off-screen errands (their own table; a lap of the game-time clock)
+
         std::vector<std::pair<RE::FormID, std::string>> ends;
-        std::vector<RE::FormID> recalls;
+        std::vector<RE::FormID> handoffs;
         {
             std::scoped_lock lk(g_mx);
             if (g_recs.empty()) return;
@@ -798,30 +1038,34 @@ namespace MFO::Logistics::Errand {
                 std::string why;
                 auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
                 if (!Config::g_logistics.load() || !Config::g_townErrands.load()) why = "logistics / town errands off";
-                else if (!f || f->IsDead() || !f->Is3DLoaded()) {
-                    why = "follower dead or unloaded";
-                    // Alive, still on the roster and unloaded: the errand's follower was left behind (RecallToPlayer).
-                    if (f && !f->IsDead() && ids && std::find(ids->begin(), ids->end(), fid) != ids->end()) {
-                        // DEFER while the player is loading: RecallToPlayer refuses a loading screen, and the record is
-                        // what remembers him -- ending it now would leave him behind with nothing to retry (a load door
-                        // is exactly the case the recall exists for). The record is kept (its caps run on the unpaused
-                        // service clock, which a load does not advance) and ended + recalled on the first Sweep after.
-                        if (loading || !pc || !pc->Is3DLoaded()) continue;
-                        recalls.push_back(fid);
-                    }
+                else if (!f || f->IsDead()) why = "follower dead";
+                else if (!f->Is3DLoaded()) {
+                    // R1b HAND-OFF: the follower left the player's loaded area (the player took a load door, or he walked through
+                    // a shop door: Harbinger's ch.19 leg reads ActorGone). Not an end: the errand goes OFF SCREEN and is simulated
+                    // against the real chest and gold. He must still be a follower; the roster drop (3 sweeps after the unload)
+                    // is NOT a dismissal, so eligibility is read from the actor, not from the roster.
+                    if (!Followers::IsEligibleFollower(f)) why = "no longer a follower (dismissed)";
+                    else if (loading || !pc || !pc->Is3DLoaded()) continue;   // defer while a load is in progress (the record is what remembers him)
+                    else if (r.unloadedSince.time_since_epoch().count() == 0) r.unloadedSince = now;
+                    else if (now - r.unloadedSince >= kHandoffPoll) handoffs.push_back(fid);   // unloaded for one more poll: not a 3D hiccup
                 }
-                else if (f->IsInCombat() || (pc && pc->IsInCombat())) why = "combat -- he rejoins";
-                else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end()) why = "no longer an active follower";
-                else if (clk - r.lastTickClk > kStallSec) why = "the follower is no longer serviced";
-                else if (clk - r.startClk > kRealCapSec) why = "timed out (240 s real time)";
-                else if (!loading && pc && pc->Is3DLoaded()) {
-                    // PLAYER LEAVES TOWN (marth 2026-10-18): the errand ends and he rejoins. R1a is physical only, so the
-                    // follower just follows again; R1b resolves an off-screen errand and places him with a MoveTo.
-                    if (hereId != r.town) {
-                        if (r.townLostSince.time_since_epoch().count() == 0) r.townLostSince = now;
-                        else if (now - r.townLostSince >= kLeftTownGrace) why = "the player left the town";
-                    } else {
-                        r.townLostSince = {};
+                else {
+                    r.unloadedSince = {};
+                    r.lastPos = f->GetPosition();   // sampled every lap: the simulation starts from the last LOADED position
+                    if (auto* fc = f->GetParentCell()) r.lastCell = fc->GetFormID();
+                    if (f->IsInCombat() || (pc && pc->IsInCombat())) why = "combat -- he rejoins";
+                    else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end()) why = "no longer an active follower";
+                    else if (clk - r.lastTickClk > kStallSec) why = "the follower is no longer serviced";
+                    else if (clk - r.startClk > kRealCapSec) why = "timed out (240 s real time)";
+                    else if (!loading && pc && pc->Is3DLoaded()) {
+                        // PLAYER LEAVES TOWN (marth 2026-10-18): a LOADED errand ends and his follow package walks him back.
+                        // (An unloaded one is the simulation's: it resolves the errand and recalls him.)
+                        if (hereId != r.town) {
+                            if (r.townLostSince.time_since_epoch().count() == 0) r.townLostSince = now;
+                            else if (now - r.townLostSince >= kLeftTownGrace) why = "the player left the town";
+                        } else {
+                            r.townLostSince = {};
+                        }
                     }
                 }
                 if (!why.empty()) ends.emplace_back(fid, std::move(why));
@@ -829,6 +1073,26 @@ namespace MFO::Logistics::Errand {
         }
         for (const auto& [fid, why] : ends)
             Finish(fid, why.c_str(), why.rfind("combat", 0) == 0 ? kCombatCooldownSec : kFailCooldownSec);
-        for (const auto fid : recalls) RecallToPlayer(fid, "errand ended while he was unloaded");
+
+        for (const auto fid : handoffs) {
+            Rec r;
+            {
+                std::scoped_lock lk(g_mx);
+                const auto it = g_recs.find(fid);
+                if (it == g_recs.end()) continue;
+                r = it->second;
+                g_recs.erase(it);
+            }
+            APMFBridge::ReleaseErrand(fid);   // Harbinger dropped the claims with the unload; this forgets our record of them
+            SimStart st;
+            st.follower = fid; st.followerName = r.followerName; st.vendorName = r.vendorName;
+            st.faction = r.faction; st.chest = r.chest; st.town = r.town; st.vendorActor = r.vendor;
+            st.destKind = r.destKind; st.destForm = r.destForm; st.destRad = r.destRad;
+            st.order = r.order; st.lastPos = r.lastPos; st.lastCell = r.lastCell; st.startDays = r.startDays;
+            st.arrived = r.phase != Phase::Walking;
+            st.tradeDispatched = r.dispatched;
+            st.tradeDone = r.phase == Phase::Taking;
+            Sim::Begin(std::move(st));
+        }
     }
 }

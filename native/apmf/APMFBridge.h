@@ -1622,6 +1622,8 @@ namespace MFO::APMFBridge {
     std::uint32_t ErrandApiVersion();   // 0 when APMF is absent (for the once-log)
     // ch.19 walk to a_dest (a loaded reference), arrival radius a_radius (APMF clamps to [50,512]).
     bool ClaimErrandTravel(RE::FormID a_follower, RE::FormID a_dest, float a_radius);
+    // Move the live errand walk to a new destination in place (R1b: from the shop's place to the vendor actor).
+    bool RepointErrandTravel(RE::FormID a_follower, RE::FormID a_dest, float a_radius);
     // The errand leg's v12 state, same contract as ReadLootTravelLeg (`ours` = this errand's claim and vendor).
     bool ReadErrandLeg(RE::FormID a_follower, LootLegState& a_out);
     // The verdict of the CURRENT idle beat. Waiting = Pending / Accepted (Harbinger judges the window) or the

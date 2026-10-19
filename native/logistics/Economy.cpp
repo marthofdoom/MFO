@@ -12,6 +12,7 @@
 #include "GemRules.h"
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
 #include "Lotd.h"                // LOTD: never sell a relic the museum still needs
+#include "Errand_internal.h"      // town errands: ErrandShop / ErrandPlanned (the plan entry below)
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
 #include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
@@ -456,8 +457,13 @@ namespace MFO::Logistics {
             return buy;
         }
 
-        void EconomyProbe(RE::Actor* a_follower, const FollowerState& a_state,
-                          Clock::time_point a_now, ErrandProbe* a_errand) {
+        // The probe proper. a_shops / a_planOut are the TOWN ERRAND PLAN extension (EconomyErrandPlan below): extra
+        // candidates that are FACTIONS whose vendor actor may not be loaded (an interior shop), and the per-candidate
+        // ORDER the plan hands back (the simulation replays it later; MFO never reads an unloaded follower's inventory).
+        // Both null = the legacy / R1a path, unchanged.
+        static void EconomyProbeImpl(RE::Actor* a_follower, const FollowerState& a_state,
+                          Clock::time_point a_now, ErrandProbe* a_errand,
+                          const std::vector<ErrandShop>* a_shops, std::vector<ErrandPlanned>* a_planOut) {
             const auto& a_logistics = a_state.logistics();
             const auto fid = a_follower->GetFormID();
 
@@ -952,6 +958,9 @@ namespace MFO::Logistics {
                 else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
             }
 
+            // CANDIDATES: the loaded vendor actors above, plus (errand PLAN only) faction-only shops.
+            struct ProbeVendor { RE::NiPointer<RE::Actor> keep; RE::Actor* vendor = nullptr; RE::TESFaction* fac = nullptr; };
+            std::vector<ProbeVendor> pvs;
             for (auto& h : living) {
                 auto  ptr    = h.get();
                 auto* vendor = ptr.get();
@@ -966,9 +975,24 @@ namespace MFO::Logistics {
                     return false;
                 });
                 if (!fac) continue;
+                pvs.push_back({ ptr, vendor, fac });
+            }
+            if (a_shops)
+                for (const auto& sh : *a_shops) {
+                    if (!sh.fac) continue;
+                    auto sp = sh.vendor.get();   // null = the vendor is not loaded (the order is built for the faction's chest)
+                    pvs.push_back({ sp, sp.get(), sh.fac });
+                }
+
+            for (auto& pv : pvs) {
+                auto* vendor = pv.vendor;
+                auto* fac    = pv.fac;
+                // The pair key / SkipTrade / log identity: the vendor actor, or the FACTION for a shop whose vendor is not loaded.
+                const RE::FormID vendorKey = vendor ? vendor->GetFormID() : fac->GetFormID();
+                const char* vendorName = vendor && vendor->GetName() ? vendor->GetName() : (fac->GetName() ? fac->GetName() : "?");
 
                 // Per-(follower,vendor) log cooldown (60 s).
-                const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendor->GetFormID();
+                const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendorKey;
                 if (!a_errand) {   // errand mode: the errand's own planner cadence replaces this one
                     auto& pn = g_econPair[pairKey];
                     if (pn.time_since_epoch().count() != 0 && a_now < pn) continue;
@@ -1012,14 +1036,18 @@ namespace MFO::Logistics {
                 auto* cal = RE::Calendar::GetSingleton();
                 const float daysNow = cal ? cal->GetDaysPassed() : 0.0f;
                 const bool buyWishes = purse > 0 && (buy.buyGear || buy.buyMageApparel || buy.buyTomes);
-                if (std::string why; TradeBridge::SkipTrade(fid, vendor->GetFormID(), chest->GetFormID(), sig, daysNow,
+                if (std::string why; TradeBridge::SkipTrade(fid, vendorKey, chest->GetFormID(), sig, daysNow,
                                                             buyWishes, sell, needs, why)) {
                     if (!why.empty())
-                        spdlog::info("[econ] {:08X} @ '{}': trade SKIPPED -- {}", fid,
-                                     vendor->GetName() ? vendor->GetName() : "?", why);
+                        spdlog::info("[econ] {:08X} @ '{}': trade SKIPPED -- {}", fid, vendorName, why);
+                    if (a_planOut) {
+                        ErrandPlanned pl;
+                        pl.vendorKey = vendorKey; pl.faction = fac->GetFormID(); pl.chest = chest->GetFormID(); pl.skipped = true;
+                        a_planOut->push_back(std::move(pl));
+                    }
                     if (a_errand) {   // evaluated, SkipTrade said no (the empty-trade memo / nothing to do here)
                         ErrandProbe::Verdict v;
-                        v.vendor = vendor->GetFormID();
+                        v.vendor = vendorKey;
                         v.chest = chest->GetFormID();
                         v.evaluated = true;
                         v.skipped = true;
@@ -1029,8 +1057,23 @@ namespace MFO::Logistics {
                 }
                 // TOWN ERRAND PLAN: report what this vendor would take / give; dispatch nothing (the errand decides).
                 if (a_errand && a_errand->mode == ErrandProbe::Mode::kPlan) {
+                    if (a_planOut) {   // the ORDER, built NOW while the follower is loaded, for the simulation to replay
+                        ErrandPlanned pl;
+                        pl.vendorKey = vendorKey; pl.faction = fac->GetFormID(); pl.chest = chest->GetFormID();
+                        pl.sellRows = static_cast<int>(sell.size());
+                        for (const auto& r : sell) pl.sellValue += static_cast<std::int64_t>(r.value) * std::max<std::int32_t>(r.count, 0);
+                        for (const auto& n : needs) pl.needKinds |= (1u << n.kind);
+                        pl.wishGear = purse > 0 && buy.buyGear;
+                        pl.wishApparel = purse > 0 && buy.buyMageApparel;
+                        pl.wishTome = purse > 0 && buy.buyTomes;
+                        pl.purse = purse;
+                        pl.chestGold = TradeBridge::LastSeenChestGold(chest->GetFormID());
+                        pl.sell = sell; pl.needs = needs; pl.buy = buy; pl.sig = sig; pl.daysNow = daysNow;
+                        a_planOut->push_back(std::move(pl));
+                        continue;
+                    }
                     ErrandProbe::Verdict v;
-                    v.vendor = vendor->GetFormID();
+                    v.vendor = vendorKey;
                     v.chest = chest->GetFormID();
                     v.evaluated = true;
                     v.sellRows = static_cast<int>(sell.size());
@@ -1054,7 +1097,21 @@ namespace MFO::Logistics {
                     if (a_errand) a_errand->dispatched = true;
                     break;
                 }
-            }   // for (living vendors)
+            }   // for (candidate vendors)
+        }
+
+        void EconomyProbe(RE::Actor* a_follower, const FollowerState& a_state,
+                          Clock::time_point a_now, ErrandProbe* a_errand) {
+            EconomyProbeImpl(a_follower, a_state, a_now, a_errand, nullptr, nullptr);
+        }
+
+        // TOWN ERRAND PLAN (logistics/Errand.cpp): evaluate every candidate -- loaded vendor actors AND faction-only shops
+        // -- with the same code a trade uses and hand back one ErrandPlanned each, order included. Dispatches nothing.
+        void EconomyErrandPlan(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now,
+                               const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out) {
+            ErrandProbe probe;
+            probe.mode = ErrandProbe::Mode::kPlan;
+            EconomyProbeImpl(a_follower, a_state, a_now, &probe, &a_shops, &a_out);
         }
     // ── #21 economy GEAR/TOME buy helpers (see Logistics.h) ─────────────────────
     // Thin wrappers over the anon-namespace loot judge, callable from the VM-side

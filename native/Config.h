@@ -781,6 +781,11 @@ namespace MFO::Config {
     inline std::atomic<float> g_errandSettleSec{ 10.0f };
     inline std::atomic<float> g_errandCooldownSec{ 120.0f };
     inline std::atomic<float> g_errandMaxGameMin{ 120.0f };
+    //   iErrandTradeGameMin (R1b, INI-only): game minutes an OFF-SCREEN (simulated) errand spends at the vendor; the walk
+    //     there and back is estimated from the distance (150 u/s x the timescale), and all of it runs on the game clock.
+    //   (The design's H1(a) hold package, bErrandHoldPackage, is NOT built: it needs a new PACK record and the passive
+    //     [errand-pos] drift line decides whether it is needed at all, principle 5.)
+    inline std::atomic<int>   g_errandTradeGameMin{ 10 };
 
     // §HMS class-redistribution (v1.0.68). On level-up MFO measures the engine's
     // per-level Health/Magicka/Stamina award and re-grants it reshaped to the

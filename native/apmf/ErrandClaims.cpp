@@ -165,6 +165,30 @@ namespace MFO::APMFBridge {
         return true;
     }
 
+    bool RepointErrandTravel(RE::FormID a_follower, RE::FormID a_dest, float a_radius) {
+        auto* api = ErrandApi();
+        if (!api || a_follower == 0 || a_dest == 0) return false;
+        std::scoped_lock lock(s_mx);
+        const auto it = s_claims.find(a_follower);
+        if (it == s_claims.end() || it->second.travel == APMF_API::kInvalidHandle) return false;
+        auto& c = it->second;
+        APMF_API::APMF_TravelLegInfo pre{};
+        pre.size = static_cast<std::uint32_t>(sizeof(APMF_API::APMF_TravelLegInfo));
+        api->GetTravelLegState(a_follower, &pre);
+        c.hasStale = true;
+        c.staleSeq = pre.seq;   // the state standing now is the OLD leg's end, never the new one's
+        APMF_API::APMF_Param p{};
+        p.form = a_dest;
+        p.fval = a_radius;
+        const int gait = std::clamp(Config::g_travelGait.load(), 0, 3);
+        p.ival = static_cast<std::int32_t>(APMF_API::kTravel_SpeedSet |
+                                           ((static_cast<std::uint32_t>(gait) << 3) & APMF_API::kTravel_SpeedMask));
+        api->Repoint(c.travel, &p);
+        c.dest = a_dest;
+        spdlog::info("[errand] {:08X}: walk RE-POINTED (ch.19) -> {:08X} radius {:.0f} handle {}", a_follower, a_dest, a_radius, c.travel);
+        return true;
+    }
+
     bool ReadErrandLeg(RE::FormID a_follower, LootLegState& a_out) {
         a_out = LootLegState{};
         auto* api = ErrandApi();
