@@ -9,7 +9,7 @@
 // THE RULE. Three or more consecutive static-block (GATED) ends, across DISTINCT targets, whose block points
 // all lie within kStuckRadius of the newest one: he is stuck himself. The caller ends the excursion, releases
 // the ch.19 road (Packages::LootTravelClear) and sends him back to follow; this file keeps the evidence and the
-// COOLDOWN that stops the very next tick from dispatching another loot leg from the same box.
+// SUPPRESSION (until he has moved > kStuckRadius from where he stood, or left the cell; no timer, no teleport) that stops the very next tick from dispatching another loot leg from the same box.
 //
 // THREAD. Worker (the logistics tick) for NoteBlockedEnd / LootCooldownActive; ClearStuckOrigin from the
 // revert path. One mutex covers the table. Session-only: nothing here is serialized.
@@ -23,14 +23,8 @@ namespace MFO::Logistics {
         constexpr auto  kRunGap       = std::chrono::seconds(90);
         constexpr float kStuckRadius  = 300.0f;   // "about 300 u of one point" (marth's spec)
         constexpr int   kStuckTargets = 3;        // distinct targets
-        // The cooldown: 3 x fExcursionMax's 60 s default. The excursion cap is the longest single outing; a
-        // follower who failed 3 of them from one spot should sit out three outing-lengths while the player
-        // walks on (a player at walking pace leaves a 2048-u leash-cell in well under that). It is also
-        // scoped to the CELL, so crossing into another cell lifts it at once, and it is session-only.
-        constexpr auto  kCooldown     = std::chrono::seconds(180);
-
         struct Hit { RE::FormID target; RE::NiPoint3 pos; Clock::time_point at; };
-        struct Cool { RE::FormID cell; Clock::time_point until; };
+        struct Cool { RE::FormID cell; RE::NiPoint3 pos; };   // suppress loot until he is > kStuckRadius from pos
         std::mutex                                      g_mx;
         std::unordered_map<RE::FormID, std::vector<Hit>> g_runs;   // follower -> current run
         std::unordered_map<RE::FormID, Cool>             g_cool;   // follower -> cooldown
@@ -56,22 +50,26 @@ namespace MFO::Logistics {
         if (static_cast<int>(run.size()) < kStuckTargets) return false;
 
         const int n = static_cast<int>(run.size());
+        const auto here = a_follower->GetPosition();
+        auto* cell = a_follower->GetParentCell();
         spdlog::error("[loot] {:08X} is stuck himself at ({:.0f},{:.0f},{:.0f}) -- {} different targets blocked at "
-                      "the same spot; ending the excursion (no further loot excursions by him in this cell for "
-                      "{}s)", id, a_blockPos.x, a_blockPos.y, a_blockPos.z, n,
-                      std::chrono::duration_cast<std::chrono::seconds>(kCooldown).count());
-        g_cool[id] = Cool{ CellOf(a_follower), a_now + kCooldown };
+                      "the same spot; ending the excursion. PHYSICALLY STUCK: he stands at ({:.0f},{:.0f},{:.0f}), "
+                      "swimming={}, cell {:08X} '{}'. No teleport (no ruling). No further loot excursions by him "
+                      "until he is more than {:.0f} u from that point", id, a_blockPos.x, a_blockPos.y,
+                      a_blockPos.z, n, here.x, here.y, here.z, a_follower->IsSwimming() ? "yes" : "no",
+                      cell ? cell->GetFormID() : 0u, cell && cell->GetFullName() ? cell->GetFullName() : "?", kStuckRadius);
+        g_cool[id] = Cool{ CellOf(a_follower), here };
         run.clear();
         return true;
     }
 
-    bool StuckAtOriginCooldown(RE::Actor* a_follower, Clock::time_point a_now) {
+    bool StuckAtOriginCooldown(RE::Actor* a_follower, Clock::time_point) {
         if (!a_follower) return false;
         std::lock_guard lk(g_mx);
         if (g_cool.empty()) return false;
         auto it = g_cool.find(a_follower->GetFormID());
         if (it == g_cool.end()) return false;
-        if (a_now >= it->second.until || it->second.cell != CellOf(a_follower)) {
+        if (it->second.cell != CellOf(a_follower) || it->second.pos.GetDistance(a_follower->GetPosition()) > kStuckRadius) {
             g_cool.erase(it);
             return false;
         }

@@ -3110,11 +3110,9 @@ module. Module layout:
     3+ consecutive static-block (GATED) ends of DISTINCT targets whose block points lie within 300 u of the newest one
     (ends <= 90 s apart) -> `StuckAtOriginNoteBlock` (worker; called in `Service.cpp` at the `MarkGated` branch) logs the
     ERROR `[loot] <id> is stuck himself at (x,y,z) -- N different targets blocked at the same spot`, the caller releases
-    the ch.19 road (`Packages::LootTravelClear`), resets the intent and returns him to follow, and a 180 s (3 x
-    `fExcursionMax`) cell-scoped, session-only cooldown stops `LootNearby` (`LootScan.cpp`, top) from dispatching another
+    the ch.19 road (`Packages::LootTravelClear`), resets the intent and returns him to follow, and a session-only suppression (lifts when he is > 300 u from where he stood or the cell changes; no timer, no teleport) stops `LootNearby` (`LootScan.cpp`, top) from dispatching another
     excursion from that box. `ClearStuckAtOrigin` is in `Upkeep.cpp` `ClearTransientState`. **What breaks:** the gate
-    path only counts a STATIC block (an actor block is a REORDER, not counted); a cooldown that is too long starves
-    looting after a false trigger (it lifts on a cell change); declarations are in `Logistics_internal.h` next to
+    path only counts a STATIC block (an actor block is a REORDER, not counted); a false trigger starves his looting until he moves 300 u; declarations are in `Logistics_internal.h` next to
     `RunExcursionScan`. No co-save.
   - `logistics/PickupSound.cpp` (NEW batch A 86e3haxqx, 2026-10-05) = **PICKUP SOUND AT THE FOLLOWER**, an
     ENGINE SEAT (tier A). A `write_call<5>` call-site trampoline (its OWN `SKSE::Trampoline`, never Board's:
