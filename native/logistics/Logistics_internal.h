@@ -839,10 +839,12 @@ namespace MFO::Logistics {
                           Clock::time_point a_now);
     // logistics/StuckAtOrigin.cpp: a follower whose loot targets all BLOCK within ~300 u of one point is stuck
     // himself. NoteBlock (a static-block end, WORKER) returns true when the run reaches 3 distinct targets (and
-    // logs the ERROR + starts the suppression); Cooldown gates new loot excursions AND runs the strict 'really stuck' check + door-rescue decision; Clear is the revert path.
+    // logs the ERROR + opens the episode); Cooldown gates new loot excursions; Tick runs the strict 'really stuck' check + the door rescue; Clear is the revert path.
     bool StuckAtOriginNoteBlock(RE::Actor* a_follower, RE::FormID a_target, const RE::NiPoint3& a_blockPos,
-                                Clock::time_point a_now, bool a_orderLive);
-    bool StuckAtOriginCooldown(RE::Actor* a_follower, Clock::time_point a_now);
+                                Clock::time_point a_now);
+    void StuckAtOriginResetRun(RE::FormID a_follower);   // a pickup / non-GATED end breaks the "consecutive" run
+    void StuckAtOriginTick(RE::Actor* a_follower, Clock::time_point a_now);   // every logistics service: the strict check + rescue
+    bool StuckAtOriginCooldown(RE::Actor* a_follower, Clock::time_point a_now);   // pure query: loot suppressed?
     void ClearStuckAtOrigin();
     bool IsValuableMisc(RE::TESBoundObject* a_obj);
     bool DropObjectAt(RE::Actor* a_fol, RE::TESBoundObject* a_item, RE::ExtraDataList* a_xl,

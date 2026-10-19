@@ -1166,6 +1166,12 @@ namespace MFO::Scheduler {
         }
 
         g_outOfCombatTicks.erase(id);   // T#76: party back in combat -> re-arm the debounce
+        // A teammate in combat with ONLY Harbinger's anchor (a leak, logged by the party-combat count) runs no combat
+        // table: no foes exist for it. Every other site still reads him as IN combat (raw), so no OOC work starts.
+        if (CombatSense::AnchorOnlyLeak(f)) {
+            g_lastTickMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            return;
+        }
         // POST-BATTLE SHED GATE: stamp "seen fighting" so Logistics only drops
         // off-role weapons once the PARTY has been stably out of combat for a
         // dwell -- never during a mid-fight IsInCombat() lull. Stamped on every

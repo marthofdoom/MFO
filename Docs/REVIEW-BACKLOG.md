@@ -1864,3 +1864,15 @@ Opus review of `feat/mfo-town-toasts` @ ad8746aa. Verbatim: "The sim's walk=0 pa
 
 ### MFO-B322 (SEV-5, OPEN, logistics/Errand.cpp) -- town toasts: VR fallback branch effectively dead (raised against ad8746aa)
 Opus review of `feat/mfo-town-toasts` @ ad8746aa. Verbatim: "The VR fallback branch (Errand.cpp:646) is effectively dead: errands refuse on VR (ErrandSupported())." Reasoning: harmless, kept for the Economy.cpp pattern.
+
+### MFO-B323 (SEV-5, OPEN, apmf/Bridge.cpp) -- riften fixes: const_cast in InCombat (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "const_cast in InCombat is harmless (AnchorOnlyLeak only reads); it could take const RE::Actor*." Reasoning: read-only. NOTE: the round that followed (this branch's second head) removed the leak test from `InCombat` altogether (the SEV-3 narrowing), so the const_cast is gone; the finding is kept for `AnchorOnlyLeak` taking `RE::Actor*` where it could take a const one.
+
+### MFO-B324 (SEV-5, OPEN, logistics/LootTravel_internal.h) -- riften fixes: the gate-ref label is per call, not per record (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "ReadmitOnGateEvent's ', the record's own gate ref' label is set if ANY record names this ref, not per erased record. Log text only." Reasoning: the label is computed once before the erase; no behavioural effect.
+
+### MFO-B325 (SEV-5, OPEN, Targeting.cpp / CombatSense.h) -- riften fixes: group read lock per combat tick (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "The per-call group read lock now runs per combat tick in the Targeting hook while any style is owned, and calls APMF GetSubstrateState under the engine lock (the FoeCount pattern)." Reasoning: same exposure FoeCount already has; the SubstrateOnly call added to `AnchorOnlyLeak` in the follow-up round is lock-free on the APMF side.
+
+### MFO-B326 (SEV-5, OPEN, CombatStyle.cpp) -- riften fixes: a CSTY written before a leak began stays (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "A CSTY written before a leak began stays on the live controller until it dies." Reasoning: the Targeting hook stops re-asserting a style for a leaked teammate, it does not restore the engine-derived one; the controller's own teardown does.

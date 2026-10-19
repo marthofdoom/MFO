@@ -195,6 +195,10 @@ namespace MFO::Logistics {
         const auto id  = a_follower->GetFormID();
         const auto now = Clock::now();
 
+        // STUCK AT HIS OWN ORIGIN (StuckAtOrigin.cpp): the episode's evidence window and the door rescue tick on every
+        // service, independent of whether any loot rule dispatches (the loot suppression would otherwise starve them).
+        StuckAtOriginTick(a_follower, now);
+
         // Undo a wrongly-looted non-playable weapon (invisible on a follower) before
         // anything else this tick -- cheap + rate-limited (5 s), a no-op once healed.
         {
@@ -541,6 +545,7 @@ namespace MFO::Logistics {
                         spdlog::info("[acquire] {:08X}: HARVESTED coin purse {:08X} -- harvested={} coin {} -> {} ({:+})",
                                      id, tr.acquireRefID, harvested ? 1 : 0, tr.acquirePre, coinPost, gained);
                         MarkJustLooted(id, now);   // [L] glyph: CONFIRMED credit
+                    StuckAtOriginResetRun(id);   // a pickup breaks the 'consecutive' run
                     } else if (harvested) {
                         // PROVEN: the engine harvested the purse for him and his coin did not
                         // rise. Latch the flora road OFF for the session (carve-out b).
@@ -573,6 +578,7 @@ namespace MFO::Logistics {
                                  id, tr.acquireRefID,
                                  refGone ? "gone" : "persists", delta);
                     MarkJustLooted(id, now);   // [L] glyph: CONFIRMED pickup, not the travel-slot proxy
+                    StuckAtOriginResetRun(id);   // a pickup breaks the 'consecutive' run
                 } else
                     spdlog::info("[acquire] {:08X}: ACTIVATE NO-OP -- ref persists, inv unchanged",
                                  id);
@@ -603,6 +609,7 @@ namespace MFO::Logistics {
                              id, skippedRef, tpJump, tpDt, tpPrevDist, toPlayer, tpSource, TeleportCompat::DetectedName(),
                              leashView.clamped ? "ON -- the clamp did NOT prevent this teleport" : "off");
                 skipWhy         = "TELEPORTED to the player (leg ended cleanly)";
+                StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                 tr.blockedSince = {};
                 tr.stolenSince  = {};
                 tr.phase        = TravelPhase::Holding;
@@ -628,6 +635,7 @@ namespace MFO::Logistics {
                              id, skippedRef, leashView.release, TeleportCompat::DetectedName(),
                              leashView.teleportAt);
                 skipWhy         = "past the teleport-safe leash (weapon drawn)";
+                StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                 tr.blockedSince = {};
                 tr.stolenSince  = {};
                 tr.phase        = TravelPhase::Holding;
@@ -658,6 +666,7 @@ namespace MFO::Logistics {
                            return true;
                        }()) {
                 skipWhy        = "EMPTIED before arrival";
+                StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                 tr.phase       = TravelPhase::Holding;
                 tr.lingerUntil = now + BatchLingerDur();
                 // no return -- fall into Holding (the next item, same tick)
@@ -827,6 +836,7 @@ namespace MFO::Logistics {
                 if (ch19DestGone) {
                     skippedRef = tref->GetFormID();
                     skipWhy    = "DESTINATION GONE (Harbinger ch.19)";
+                StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                 }
 
                 // ARRIVAL is checked BEFORE the stall/deadline giveup: a follower
@@ -1015,6 +1025,7 @@ namespace MFO::Logistics {
                     bool leftWaiting = false;
                     const bool moved = StripCorpse(a_follower, a_state, tref, now, &leftWaiting);
                     if (moved) MarkJustLooted(id, now);   // [L] glyph: CONFIRMED pickup
+                    StuckAtOriginResetRun(id);   // a pickup breaks the 'consecutive' run
                     if (moved || !leftWaiting)
                         g_grabGrow.erase(tref->GetFormID());   // handled -> stale grow verdict
                     if (!leftWaiting)
@@ -1161,6 +1172,7 @@ namespace MFO::Logistics {
                                  id, tref->GetFormID(), dist, arrivalDist);
                     skippedRef      = tref->GetFormID();
                     skipWhy         = "ARRIVED per Harbinger but drifted away (leg restarted)";
+                StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                     tr.blockedSince = {};
                     tr.stolenSince  = {};
                     stealAbandon    = true;   // not a failure: skip the stall/deadline blame path
@@ -1179,18 +1191,10 @@ namespace MFO::Logistics {
                                      "items away from the blocker first), not a gate", id, tref->GetFormID(),
                                      held, ab.id, ab.dist);
                         skipWhy = "ACTOR-BLOCKED (reordered, not dropped)";
+                StuckAtOriginResetRun(id);   // a non-GATED end breaks the 'consecutive' run
                     } else {
                         MarkGated(a_follower, tref, held, now, blockPos);
                         skipWhy = "GATED (Movement Blocked, no actor in front)";
-                        // Stuck at his OWN origin: 3+ different targets blocked within ~300 u of one
-                        // point (StuckAtOrigin.cpp). End the excursion, release the road, back to follow.
-                        if (StuckAtOriginNoteBlock(a_follower, tref->GetFormID(),
-                                                   blockPos ? *blockPos : a_follower->GetPosition(), now,
-                                                   tr.active)) {
-                            Packages::LootTravelClear("stuck at his own origin", a_follower, slot);
-                            tr = TravelIntent{};
-                            return;
-                        }
                     }
                     skippedRef      = tref->GetFormID();
                     tr.blockedSince = {};
@@ -1201,8 +1205,19 @@ namespace MFO::Logistics {
                     // LP-M2 (logistics/Lockpick.cpp): a LOCKED DOOR at the block becomes the
                     // next leg (pick, unlock -> its lock-changed event re-admits the gate).
                     if (!ab.id && Lockpick::DispatchGateDoor(a_follower, slot, tref,
-                                                             blockPos ? *blockPos : a_follower->GetPosition(), now))
+                                                             blockPos ? *blockPos : a_follower->GetPosition(), now)) {
                         skipWhy = "GATED by a LOCKED DOOR (door leg dispatched)";
+                        StuckAtOriginResetRun(id);   // a door leg is the way on, not "stuck"
+                    }
+                    // Stuck at his OWN origin: 3+ different targets blocked within ~300 u of one point
+                    // (StuckAtOrigin.cpp). Only when no pickable locked door at the block took the lap (a door leg
+                    // is not "stuck"). End the excursion, release the road, back to follow.
+                    else if (!ab.id && StuckAtOriginNoteBlock(a_follower, tref->GetFormID(),
+                                                              blockPos ? *blockPos : a_follower->GetPosition(), now)) {
+                        Packages::LootTravelClear("stuck at his own origin", a_follower, slot);
+                        tr = TravelIntent{};
+                        return;
+                    }
                     // no return -- fall into Holding (the next reachable item, same tick)
                 } else if (!gone && tref && apmfLeg && tr.legEngaged) {
                     // The hold is real for this leg: the 0x49 override has been
