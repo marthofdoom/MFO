@@ -240,6 +240,7 @@ namespace MFO::Eval {
         if (!a_self) return nullptr;
         auto tgt = a_self->GetActorRuntimeData().currentCombatTarget.get();
         if (!tgt || tgt->IsDead() || tgt->IsDisabled()) return nullptr;
+        if (APMFBridge::IsSubstrateAnchor(tgt->GetFormID())) return nullptr;   // Harbinger's anchor is never a foe (v26)
         // The SAME trackability gates the group scan applies (3D loaded, present in the group's
         // targets and not kTargetLost): what ends a Harbinger ch.20 pin must also stop this path
         // choosing the foe, or an ended pin re-pins onto a foe Harbinger cannot track, at gambit
@@ -415,6 +416,7 @@ namespace MFO::Eval {
                         auto ptr  = t.targetHandle.get();   // HOLD the NiPointer
                         auto* foe = ptr.get();
                         if (!foe || foe == a_self) continue;
+                        if (APMFBridge::IsSubstrateAnchor(foe->GetFormID())) continue;   // never a foe (v26)
                         if (foe->IsDead() || foe->IsDisabled()) continue;
                         if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
                         raw.push_back({ t.targetHandle, foe->GetPosition() });
@@ -442,6 +444,7 @@ namespace MFO::Eval {
                     auto ptr = t.targetHandle.get();
                     auto* foe = ptr.get();
                     if (!foe || foe == a_self) continue;
+                    if (APMFBridge::IsSubstrateAnchor(foe->GetFormID())) continue;   // Harbinger's anchor is never a foe (v26)
                     if (foe->IsDead() || foe->IsDisabled()) continue;
 
                     // The engine has lost track of this one -- fled, hidden,

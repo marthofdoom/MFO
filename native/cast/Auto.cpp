@@ -310,6 +310,7 @@ namespace MFO::Actuation {
                     auto  ptr = t.targetHandle.get();
                     auto* foe = ptr.get();
                     if (!foe || foe == a_follower) continue;
+                    if (APMFBridge::IsSubstrateAnchor(foe->GetFormID())) continue;   // Harbinger's anchor is never a foe (v26)
                     if (a_concSelf) continue;   // SEV-3: a conc-Self spell lands only on the caster under AUTO -- no foe is a real target
                     if (foe->IsDead() || foe->IsDisabled() || !foe->Is3DLoaded()) continue;
                     if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;

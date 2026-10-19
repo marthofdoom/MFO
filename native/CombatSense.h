@@ -221,6 +221,7 @@ namespace MFO::CombatSense {
             auto ptr = t.targetHandle.get();          // HOLD the NiPointer
             auto* foe = ptr.get();
             if (!foe || foe == a_self) continue;
+            if (APMFBridge::IsSubstrateAnchor(foe->GetFormID())) continue;   // Harbinger's anchor is never a foe (v26)
             if (foe->IsDead() || foe->IsDisabled()) continue;
             if (!foe->IsHostileToActor(a_self)) continue;
             ReachRead rr;

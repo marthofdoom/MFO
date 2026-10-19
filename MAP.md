@@ -2177,7 +2177,10 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   after the town R2 / ranged-approach merges:** `logistics/Errand.cpp` (the follower's combat abort of an errand,
   the run's combat check, the hand-off poll, and the vendor-usable reads), `Loadout.cpp` (displaced-left debt
   expiry, heal-holds / heal-quiet), `Evaluator.cpp` (the fight-log dedupe). A dry-run substrate on a follower
-  mid-errand does NOT abort the errand. Evaluator's combat-group reads (`combatController`) stay raw (mechanics).
+  mid-errand does NOT abort the errand. Evaluator's combat-group reads (`combatController`) stay raw (mechanics). **The anchor is never a foe** (closing round of 5876057): `IsSubstrateAnchor` skips it in EngageOnSight's RunProbe
+  scan, `cast/Auto.cpp` HostileAutoFoes, Evaluator PickFoe (both group loops) and CurrentTargetIfTrackable, and
+  `CombatSense` FoeCount / FoeLoad / ScanMeleeReach. **BACKLOG (read before editing CasterConsent / Scheduler substrate
+  walk / Lockpick / CombatSense):** REVIEW-BACKLOG MFO-B310..B315.
 - **PARTY COMBAT (2026-09-21, Deck/Fable — the Jesper freeze + the Cicero hold
   teardown; line numbers refreshed on `fix/mfo-field-batch-0921`).** `g_partyCombat`
   (`:199`) = the player `IsInCombat()` OR any managed active follower `IsInCombat()`
