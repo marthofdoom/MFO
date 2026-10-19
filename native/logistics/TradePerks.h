@@ -22,8 +22,14 @@
 //                    but the condition functions read live state with no lock.
 //   AliasRefHandle   Any thread that may touch the quest. The engine takes the quest's
 //                    aliasAccessLock (read) itself. NEVER call it while holding aliasAccessLock:
-//                    BSReadWriteLock is not recursive, so that deadlocks. Today's callers
-//                    (Packages.cpp) are on the main thread.
+//                    BSReadWriteLock is not recursive, so that deadlocks (MFO never takes it).
+//                    Today's callers (Packages.cpp) are NOT all on the main thread:
+//                    FillObserved runs from Packages::Pump, which Scheduler::Tick calls on the
+//                    AddTask job worker (Scheduler.cpp:798); LootTravelEvictIf comes from
+//                    logistics/Upkeep.cpp OnFollowerAbsent on that worker path; RetreatEvictIf
+//                    from Followers.cpp:475 (the serial roster refresh); the ReleaseAll sweeps
+//                    from plugin.cpp's SKSE message handler (kPreLoadGame, post-load) and
+//                    Serialization.cpp's revert callback.
 // The seat checks themselves are thread-safe (a function-local static over the self-check result).
 #include "PCH.h"
 
