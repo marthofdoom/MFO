@@ -1800,3 +1800,9 @@ Same review (accepted deviation). "Nothing is lost or minted, because nothing mo
 
 ### MFO-B303 (SEV-5, OPEN, logistics/Errand.cpp / MAP.md) -- town R1b small edges (raised against 393632c)
 Same review: `Tick` Finishes on "town errands / economy switched off" even for an unloaded follower with no hand-off/recall (~:797, manual toggle only); the at-shop ResumePhysical failure drops the trade instead of resolving to now; MAP.md R1b line refs a few lines stale (tier C).
+
+### MFO-B304 (SEV-4, OPEN, Loadout.cpp) -- ranged: heal-quiet stamping and combat-flag flaps (raised against e63db74)
+Opus review of `fix/mfo-ranged-approach` @ e63db74. F3: "For the two-hander (bow) debt, `healSeenAt` is stamped only while `HealTakesLeft` is true ... A claim that fired more than 2 s ago and still stands still gets the bow back." F5: "`healQuiet` uses the actor's own `IsInCombat()`, which flaps mid-fight ... A flap tick reads as quiet and gives the bow back."
+
+### MFO-B305 (SEV-4, OPEN, apmf/OffenseApproach.cpp / Evaluator.cpp) -- ranged: dwell tuning; disagreeing selector rules reset each other's clocks (raised against e63db74)
+Same review. F8: kSightDwellMs 1500 vs 1-2 s field flicker still allows a ~3 s claim/release cycle — tune from field data. F7: "When two own-ray foe rules disagree on the same lap, the occluded rule erases the visible run every lap ... Bounded by `kStaleMs`, death and combat end." Author's round-2 spots: PinnedTarget/CombatEntryStateOf read every PickFoe pass (g_mx, unprofiled); LogChaseCapWaiver static map assumes single-threaded PickFoe.

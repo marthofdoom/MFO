@@ -35,12 +35,20 @@ namespace MFO::Loadout {
             // must not undo a live heal claim).
             bool  hitDeferred = false;
             bool  giveBackDeferredLogged = false;   // one log line per deferred 2H give-back
+            bool  quietDeferredLogged    = false;   // same, for the heal-quiet deferral
+            // Last Tick that saw a heal claim holding / re-streaming the left hand over this debt. The give-backs wait
+            // kHealQuietS after it so a heal gambit that re-claims within the lap does not make the bow/weapon
+            // draw-and-put-away every 1-2 s (LoreRim 2026-10-18, Auri: 5 restores each re-taken by the next heal).
+            std::chrono::steady_clock::time_point healSeenAt{};
             // MFO-B227 (marth 2026-10-11): displacedLeft is a WEAPON a LEFT heal claim's spell took over
             // (Prepare's Caster branch). Tick gives it back as soon as no heal claim stands on the left,
             // not only at combat end.
             bool  healWeapon = false;
         };
         std::unordered_map<RE::FormID, Debt> g_debt;
+        // Quiet time with no heal claim on the left hand before a give-back lands (from the heal-gambit cadence in the
+        // field: the next heal claim arrived 1-2 s after each restore).
+        constexpr float kHealQuietS = 2.0f;
 
         // SEPARATE from the debt, deliberately. When the follower's own AI
         // takes its weapon back, the debt is settled and its entry erased --
@@ -588,6 +596,7 @@ namespace MFO::Loadout {
         debt.stowedAt      = now;
         debt.hitDeferred   = false;
         debt.giveBackDeferredLogged = false;
+        debt.quietDeferredLogged = false;
         // A FRESH equip gets a FRESH window -- plain assignment, unlike the
         // AlreadyReady try_emplace above.
         g_equipClock[id] = now;
@@ -784,6 +793,12 @@ namespace MFO::Loadout {
             // Combat end is NOT suspended (the backstop further down): the claim
             // does not outlive combat, and the honest deadline stays honest.
             const bool healHolds = actor->IsInCombat() && ComposedCast::HealTakesLeft(actor);
+            if (healHolds || (debt.healWeapon && (APMFBridge::GetHealCastSpell(id, APMFBridge::kApmfHandLeft) != 0 ||
+                                                  Actuation::HealRestreamGap(id))))
+                debt.healSeenAt = now;
+            // A heal claim stood within kHealQuietS: not yet (in combat only; combat end is the backstop below).
+            const bool healQuiet = !actor->IsInCombat() || debt.healSeenAt == std::chrono::steady_clock::time_point{} ||
+                                   std::chrono::duration<float>(now - debt.healSeenAt).count() >= kHealQuietS;
 
             // A hit that arrived during the suspension: restore the shield now that
             // the heal has fired or the claim has ended.
@@ -804,6 +819,14 @@ namespace MFO::Loadout {
                     }
                     continue;
                 }
+                if (!healQuiet) {
+                    if (!debt.quietDeferredLogged) {
+                        debt.quietDeferredLogged = true;
+                        spdlog::info("[loadout] {:08X} two-hander give-back DEFERRED: a heal claim held the left hand "
+                                     "within the last {:.0f} s (another heal may re-claim it at once)", id, kHealQuietS);
+                    }
+                    continue;
+                }
                 restoreAll.push_back(id);
                 continue;
             }
@@ -812,7 +835,7 @@ namespace MFO::Loadout {
             // stands on the left (the re-stream gap counts as standing), not only at combat end.
             if (debt.displacedLeft && debt.healWeapon && !debt.leftWasShield &&
                 APMFBridge::GetHealCastSpell(id, APMFBridge::kApmfHandLeft) == 0 &&
-                !Actuation::HealRestreamGap(id)) {
+                !Actuation::HealRestreamGap(id) && healQuiet) {
                 restoreAll.push_back(id);
                 continue;
             }
