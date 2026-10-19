@@ -583,10 +583,10 @@ namespace MFO::Logistics {
                     // nothing if it simply does not hold the thing the winning
                     // rule wants (arrows, or the specific potion).
                     spdlog::info("[loot] {:08X} cat={} r={:.0f} leash={:.0f}: {} refs, {} lootable, {} eligible "
-                                 "(dropped owned={} locked={} waiting={} farleash={} empty={}) | self arrows={} bolts={} "
+                                 "(dropped owned={} offlimits={} locked={} waiting={} farleash={} empty={}) | self arrows={} bolts={} "
                                  "potH={} potS={} potM={}",
                                  a_follower->GetFormID(), CatName(a_cat), kLootRadius, leash, dRefs, dLootable,
-                                 (int)candidates.size(), dOwned, dLocked, dNotYet, dLeash, dEmpty,
+                                 (int)candidates.size(), dOwned, dOffLimits, dLocked, dNotYet, dLeash, dEmpty,
                                  ArrowCount(a_follower), BoltCount(a_follower),
                                  CountPotions(a_follower, RE::ActorValue::kHealth),
                                  CountPotions(a_follower, RE::ActorValue::kStamina),

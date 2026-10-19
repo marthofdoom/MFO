@@ -45,8 +45,23 @@ namespace MFO::Logistics {
 
     // ── public: pure reads used by the evaluator ────────────────────────────
 
+    namespace {
+        // NEVER a restorative (marth 2026-10-18): a potion carrying ANY Hostile or
+        // Detrimental effect (Requiem Skooma's 1,000,000-point Health DamageValueMod
+        // flagged Hostile|Detrimental) is a drug, not a restore. Mirrors the Synthesis
+        // patcher's Catalog.cs:290 rule; applies to drinking AND looting.
+        bool HasHarmfulEffect(const RE::AlchemyItem* a_potion) {
+            for (const auto* e : a_potion->effects) {
+                const auto* mgef = e ? e->baseEffect : nullptr;
+                if (mgef && (mgef->IsHostile() || mgef->IsDetrimental())) return true;
+            }
+            return false;
+        }
+    }
+
     RE::ActorValue PotionRestores(RE::AlchemyItem* a_potion) {
         if (!a_potion || a_potion->IsPoison()) return RE::ActorValue::kNone;
+        if (HasHarmfulEffect(a_potion)) return RE::ActorValue::kNone;
         // FOOD is an AlchemyItem with a Restore-Health/Stamina effect, so the
         // archetype gate below would pass it. §4.8.2 is potions ONLY -- exclude
         // food or the follower vacuums city food barrels and counts apples as

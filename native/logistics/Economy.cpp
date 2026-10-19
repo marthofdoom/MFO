@@ -792,7 +792,17 @@ namespace MFO::Logistics {
                 // never keep/wear it; sell it even while worn (RemoveItem unequips it).
                 const bool forceSell = redundantInferior || deniedWorn ||
                                        (armo && IsBlacklistedApparel(armo));
-                if (weap && keepWeapons.count(obj))     { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
+                // OFF-ROLE LAUNCHER (marth 2026-10-18: "off-role weapons go to SELL"): roles come from
+                // class / perks / gambits, never from what is carried, so a bow/crossbow outside the
+                // ranged role (or outside the chosen ammo family) is no loadout weapon -- it sells,
+                // unless the protections below (stock gear, relic, player-given, quest, socketed) hold.
+                // doRanged is taken as buy takes it: a caster with no equip-ranged gambit has none.
+                // (Off-role MELEE is not decided here: its keep bucket lives in SwapUp.cpp ComputeKeepSet.)
+                const bool offRoleLauncher = weap && WeaponClassOf(weap->GetWeaponType()) == WepClass::Ranged &&
+                    (!keepRoles.doRanged ||
+                     (IsCasterFollower(a_state) && !TableHasAction(a_state.combat(), Vocab::kActEquipRanged)) ||
+                     !RangedInFamily(weap, keepRoles.wantCrossbow));
+                if (weap && keepWeapons.count(obj) && !offRoleLauncher) { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
                 if (armo && IsPlayerPick(fid, obj->GetFormID())) { sdiag(obj, "playerPick"); continue; }   // the player put it on him: keep, never sell (round 3)
                 if (armo && keepArmor.count(obj) && !forceSell) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
                 RE::BGSKeywordForm* kwf = weap

@@ -99,10 +99,9 @@ namespace MFO::Logistics {
                 if (!obj || data.first <= 0) continue;
                 auto* alc = obj->As<RE::AlchemyItem>();
                 if (!alc || PotionRestores(alc) != a_which) continue;
-                // Magnitude of the costliest effect -- the same effect PotionRestores
-                // classified on, so ranking is by the resource the potion is FOR.
-                const auto* eff = alc->GetCostliestEffectItem();
-                const float mag = eff ? eff->GetMagnitude() : 0.0f;
+                // Largest restore magnitude on the resource the potion is FOR (the same
+                // value-modifier gate as PotionRestores), not the costliest effect's.
+                const float mag = PotionMagnitude(alc);
                 if (mag > strongMag) { strongMag = mag; strong = alc; }
                 if (!inCombat && mag + 0.5f >= deficit && mag < coverMag) { coverMag = mag; cover = alc; }
             }
@@ -2145,7 +2144,12 @@ namespace MFO::Logistics {
             // CONSERVATION always runs; the effect-aware tier is gated on bMeoAwareGems.
             // Posts to the main thread inside; a full no-op when MEO < v3 (the loose
             // gem simply stays as it does today -- no regression).
-            if (MEOBridge::GemReconcileSupported()) {
+            // POST-LOAD GATE (ClickUp 86e3t1gfv, diag 4a): the effect-aware tier reads the perk-vote
+            // mirror (GemReconcilePrefsFor), which is EMPTY until its first main-thread tally lands --
+            // reconciling on the empty answer swapped gems to the wrong direction and back ~10 s later
+            // (Conjuration, then back). Wait for the stamp; VR has no pump, so it never waits.
+            if (MEOBridge::GemReconcileSupported() &&
+                (!Config::g_meoAwareGems.load() || !MainThread::IsInstalled() || StyleVotesReady(a_follower))) {
                 const MEOBridge::GemReconcilePrefs prefs = GemReconcilePrefsFor(a_follower, a_state);   // Gear.cpp (F3 perk direction)
                 MEOBridge::RequestGemReconcile(a_follower, Config::g_meoAwareGems.load(), prefs);
             }

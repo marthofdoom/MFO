@@ -797,6 +797,7 @@ namespace MFO::Logistics {
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
     AmmoOwned   CountAmmoOwned(RE::Actor* a_follower);   // same family test ComputeWeaponRoles uses
     Progression::StyleVotes StyleVotesFor(RE::Actor* a_follower);
+    bool StyleVotesReady(RE::Actor* a_follower);   // the perk-vote mirror has been tallied at least once (Gear.cpp)
     // defined in logistics/Gear.cpp: the gem reconcile's preferences, incl. the F3 perk direction
     // (skill bits + owned perk ranks) from the equip side's own answers (ComputeWeaponRoles, ArmorPrefFor,
     // StyleVotesFor, TopTwoSchoolMask). WORKER, like they are.

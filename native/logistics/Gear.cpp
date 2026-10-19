@@ -384,6 +384,20 @@ namespace MFO::Logistics {
             return out;
         }
 
+        // True once a main-thread tally has landed for this follower (stamp set), or when there is
+        // no pump to wait for (VR: the mirror stays empty by design, nothing to wait on). Also kicks
+        // the first refresh (StyleVotesFor posts it), so a caller that only asks still gets one.
+        // Gates the post-load gem reconcile (its perk direction reads the mirror) and the carried-
+        // vs-class weapon role in ComputeWeaponRoles.
+        bool StyleVotesReady(RE::Actor* a_follower) {
+            if (!a_follower) return false;
+            (void)StyleVotesFor(a_follower);
+            if (!MainThread::IsInstalled()) return false;   // VR: never stamped; callers fall back to their legacy answer
+            std::scoped_lock lk(g_styleMx);
+            auto it = g_styleMirror.find(a_follower->GetFormID());
+            return it != g_styleMirror.end() && it->second.stamp != Clock::time_point{};
+        }
+
         void ClearStyleMirror() {
             std::scoped_lock lk(g_styleMx);
             g_styleMirror.clear();
@@ -448,8 +462,24 @@ namespace MFO::Logistics {
             }
 
             WeaponRoles roles;
-            if (wantsMelee || carriesMelee) roles.melee = bestMeleeSkill;
-            roles.doRanged = wantsRanged || carriesRanged;
+            // ROLES COME FROM CLASS, PERKS AND GAMBITS -- NEVER FROM WHAT IS CARRIED (marth 2026-10-18:
+            // "Fix roles, sell off-role"). A carried bow used to hand a melee follower a ranged role,
+            // which bought him a better bow and kept it forever (self-perpetuating). Melee role =
+            // an equip-melee gambit, or a Melee/Ranged class (a weapon user keeps a melee sidearm);
+            // ranged role = an equip-ranged gambit, a Ranged class, or owned bow/crossbow perk ranks.
+            // The perk mirror is empty until its first main-thread tally lands, so until it is
+            // stamped (StyleVotesReady) the OLD carried signal stands -- conservative, it can only
+            // KEEP, never sell a weapon on a half-known answer. VR (no pump) never stamps: it stays
+            // on the carried signal, i.e. unchanged.
+            if (StyleVotesReady(a_follower)) {
+                const auto         rv  = StyleVotesFor(a_follower);
+                const std::uint8_t cls = ResolveBaseClass(a_follower, a_state);
+                if (wantsMelee || cls == 1 || cls == 2) roles.melee = bestMeleeSkill;
+                roles.doRanged = wantsRanged || cls == 2 || rv.weapon[7] > 0 || rv.weapon[8] > 0;
+            } else {
+                if (wantsMelee || carriesMelee) roles.melee = bestMeleeSkill;
+                roles.doRanged = wantsRanged || carriesRanged;
+            }
 
             // ── STYLE BY PERKS within the melee class (marth 2026-09-13) ─────
             // "Most perked style wins": among the kinds of the chosen class,
