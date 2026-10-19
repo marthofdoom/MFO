@@ -4528,6 +4528,7 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
   (`Errand.cpp`, declared in `Errand_internal.h`; `RE::DebugNotification` posted with `MainThread::Post`, direct on VR). Sites: Walking phase
   right after `arrived` (physical) and `ErrandSim.cpp` TRADE_SIM stage entry. No toast for plan, result, failure or backoff. A future
   smithing errand kind would toast "X is working at Y." at its own begin point.
+  Open findings: Docs/REVIEW-BACKLOG.md MFO-B320 to B322 (toast edge cases). `Rec`/`ResumeInfo` `announced` stops a resumed errand toasting twice.
   The six keys parse in a chain of their own at the top of `Config.cpp` `Apply` (the main chain is near MSVC's nested-block limit).
 - **WHAT BREAKS if you change this:** `EconomyProbe`'s parameter list (Service.cpp, Errand.cpp); `ErrandProbe::Verdict` fields (the
   ranker); `TradeBridge::ReportTrade` (the outcome the Trading phase waits on); `kLeg_*` handling (a new end state = a new case in

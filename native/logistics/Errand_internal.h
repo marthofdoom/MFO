@@ -82,6 +82,7 @@ namespace MFO::Logistics::Errand {
         DestKind      destKind = DestKind::Cell;   // the errand's original destination (a fallback when no vendor actor is loaded)
         RE::FormID    destForm = 0;
         float         destRad = 0.0f;
+        bool          announced = false;   // the "is trading with" toast already fired for this errand (sim Trade stage reached)
     };
 
     namespace Sim {

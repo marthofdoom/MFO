@@ -343,6 +343,7 @@ namespace MFO::Logistics::Errand::Sim {
             ri.follower = fid; ri.followerName = r.followerName; ri.vendorName = r.vendorName;
             ri.faction = r.faction; ri.chest = r.chest; ri.town = r.town; ri.order = r.order; ri.startDays = r.startDays;
             ri.destKind = r.destKind; ri.destForm = r.destForm; ri.destRad = r.destRad;
+            ri.announced = r.stage == Stage::Trade;   // the Trade stage was entered (toast fired) or restored as arrived: do not toast again
             if (detail::ResumePhysical(a_follower, ri)) return true;
             detail::Cooldown(fid, kFailCooldownSec);
             spdlog::info("[errand] {:08X} '{}': loaded again at {} {} but the walk could not be resumed -- the trade is dropped",
@@ -605,7 +606,7 @@ namespace MFO::Logistics::Errand::Sim {
             if (r.stage == Stage::Out && days >= r.tArrive) {
                 r.stage = Stage::Trade;
                 spdlog::info("[errand] {:08X} '{}': TRADE_SIM -- he has reached '{}' (off screen)", fid, r.followerName, r.vendorName);
-                detail::ToastTrading(r.followerName, r.vendorName);
+                if (!r.tradeAbandoned && r.order && !r.order->skipped) detail::ToastTrading(r.followerName, r.vendorName);   // not for a trade that will never run
             }
             if (r.stage == Stage::Trade) {
                 const double clk = Scheduler::ServiceClock();

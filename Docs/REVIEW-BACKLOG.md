@@ -1855,3 +1855,12 @@ Opus review of `fix/mfo-errand-field-1019` @ 397b24d1. Verbatim: "Errand.cpp:497
 
 ### MFO-B319 (SEV-5, OPEN, logistics/ErrandSim.cpp) -- errand backoff: simulation DONE does not reset (raised against 397b24d1)
 Opus review of `fix/mfo-errand-field-1019` @ 397b24d1. Verbatim: "The off-screen simulation's DONE (ErrandSim.cpp) does not erase the backoff entry, so the fails count carries over and the next failure doubles from there." Reasoning: the backoff state is private to Errand.cpp and the simulation completes in its own file; the effect is a longer backoff after a later failure, bounded by the 15 min cap.
+
+### MFO-B320 (SEV-4, OPEN, logistics/Errand.cpp) -- town toasts: toast precedes a possible immediate failure (raised against ad8746aa)
+Opus review of `feat/mfo-town-toasts` @ ad8746aa. Verbatim: "The physical toast precedes a possible immediate failure: beginBeat can Finish the errand right after the toast (Errand.cpp:1038-1042); the errand can retry after the cooldown and toast again for the same vendor. Minor; fits 'begin' semantics." Reasoning: the toast marks the begin of the activity, so a failed first beat then a retry is a second begin. Cosmetic only.
+
+### MFO-B321 (SEV-5, OPEN, logistics/ErrandSim.cpp) -- town toasts: sim walk=0 path never toasts (raised against ad8746aa)
+Opus review of `feat/mfo-town-toasts` @ ad8746aa. Verbatim: "The sim's walk=0 path never toasts: when now >= tArrive at Begin (ErrandSim.cpp:287) the record goes straight to Trade with no toast. Under-toast, harmless." Reasoning: the toast fires only on the Out to Trade transition in Sweep.
+
+### MFO-B322 (SEV-5, OPEN, logistics/Errand.cpp) -- town toasts: VR fallback branch effectively dead (raised against ad8746aa)
+Opus review of `feat/mfo-town-toasts` @ ad8746aa. Verbatim: "The VR fallback branch (Errand.cpp:646) is effectively dead: errands refuse on VR (ErrandSupported())." Reasoning: harmless, kept for the Economy.cpp pattern.
