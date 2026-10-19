@@ -685,7 +685,7 @@ namespace MFO::Eval {
                             const float dist  = selfPos.GetDistance(ally->GetPosition());
                             if (dist > reach) {
                                 static std::unordered_map<RE::FormID, bool> s_loggedFight;
-                                if (!a_self->IsInCombat()) s_loggedFight.erase(a_self->GetFormID());
+                                if (!APMFBridge::InCombat(a_self)) s_loggedFight.erase(a_self->GetFormID());
                                 else if (!s_loggedFight[a_self->GetFormID()]) {
                                     s_loggedFight[a_self->GetFormID()] = true;
                                     spdlog::info("[heal] {:08X} dropped ally {:08X} for reach: dist {:.0f} > reach {:.0f} (source: {}, spell {:08X})",

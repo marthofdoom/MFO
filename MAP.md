@@ -2163,9 +2163,11 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   redirect for a substrate holder; `CombatSense::FoeCount` / `FoeLoad` skip the anchor. **Kept RAW on purpose
   (engine mechanics, not "is he fighting"):** sheathe stand-downs (`Lockpick` posted sheathe, `cast/Equip.cpp`),
   `EquipAuthority`'s OOC weapon / mage fixes (the substrate's hand floors own the hands), `Packages` retreat
-  StopCombat bookkeeping, `Probe`, and every cast-road choice keyed on `combatController` presence. **NOT yet
-  converted (files owned by other in-flight branches):** `logistics/Errand.cpp` (follower combat aborts an errand),
-  `Loadout.cpp` (displaced-left debt expiry, heal-holds), `Evaluator.cpp` (a log dedupe).
+  StopCombat bookkeeping, `Probe`, and every cast-road choice keyed on `combatController` presence. **Also converted
+  after the town R2 / ranged-approach merges:** `logistics/Errand.cpp` (the follower's combat abort of an errand,
+  the run's combat check, the hand-off poll, and the vendor-usable reads), `Loadout.cpp` (displaced-left debt
+  expiry, heal-holds / heal-quiet), `Evaluator.cpp` (the fight-log dedupe). A dry-run substrate on a follower
+  mid-errand does NOT abort the errand. Evaluator's combat-group reads (`combatController`) stay raw (mechanics).
 - **PARTY COMBAT (2026-09-21, Deck/Fable — the Jesper freeze + the Cicero hold
   teardown; line numbers refreshed on `fix/mfo-field-batch-0921`).** `g_partyCombat`
   (`:199`) = the player `IsInCombat()` OR any managed active follower `IsInCombat()`
