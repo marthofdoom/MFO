@@ -66,6 +66,13 @@ namespace MFO::Papyrus {
     // by token. Returns whether the call was DISPATCHED (async, like the others).
     bool DispatchTradeRun(RE::TESForm* a_quest, std::int32_t a_token);
 
+    // ObjectReference.MoveTo(akTarget, afXOffset, afYOffset, afZOffset, abMatchRotation=false), a vanilla native
+    // reached by class name on a_ref's handle (like Activate above): works on a persistent actor that is in memory
+    // but unloaded, and needs no engine-address seat (design TOWN-DESIGN §0 call 4). Town errands use it to put a
+    // follower whose errand ended while unloaded back beside the player (logistics/Errand.cpp RecallToPlayer).
+    // Returns whether the call was DISPATCHED (async), not whether he moved.
+    bool DispatchMoveTo(RE::TESObjectREFR* a_ref, RE::TESObjectREFR* a_target, float a_dx, float a_dy, float a_dz);
+
     // How many dispatches this session, for the heartbeat (#53). A subsystem
     // whose correct behaviour is invisible must publish one.
     std::uint32_t Dispatches();

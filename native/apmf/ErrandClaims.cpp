@@ -61,6 +61,12 @@ namespace MFO::APMFBridge {
             bool             hasStale = false;
             RE::FormID       beatIdle = 0;     // the idle the CURRENT beat plays (what the record must name)
             std::chrono::steady_clock::time_point beatFiled{};
+            // Harbinger RELEASES a ch.12 claim itself when the play fails (NotConfirmed / NoTransition / Refused /
+            // NotPlayed) and a Repoint on a released handle does nothing, so a handle is judged dead only after it
+            // was seen live once, or after the publish grace (a just-filed claim is not in IsClaimLive's map until
+            // the next Drain; the Deposit.cpp rule).
+            bool idleEverLive = false, holdEverLive = false;
+            std::chrono::steady_clock::time_point holdFiled{};
         };
         std::mutex                                     s_mx;
         std::unordered_map<RE::FormID, ErrandClaims>   s_claims;   // keyed by follower; guarded by s_mx
@@ -70,6 +76,15 @@ namespace MFO::APMFBridge {
             if (!api || api->abiVersion < kErrandMinAbi) return nullptr;
             auto* v24 = reinterpret_cast<const APMF_API::APMF_API_v24*>(api);
             return (v24->GetTravelLegState && v24->GetIdleState) ? v24 : nullptr;
+        }
+
+        constexpr auto kPublishGrace = std::chrono::seconds(3);
+        // s_mx HELD. True = the handle is a claim Harbinger no longer holds.
+        bool ClaimDead(const APMF_API::APMF_API_v24* a_api, APMF_API::Handle a_h, bool& a_everLive,
+                       std::chrono::steady_clock::time_point a_filed) {
+            if (a_h == APMF_API::kInvalidHandle) return false;
+            if (a_api->IsClaimLive(a_h)) { a_everLive = true; return false; }
+            return a_everLive || std::chrono::steady_clock::now() - a_filed > kPublishGrace;
         }
 
         void ReleaseLocked(const APMF_API::APMF_API_v2* a_api, ErrandClaims& a_c) {
@@ -186,8 +201,14 @@ namespace MFO::APMFBridge {
 
         // HOLD STILL for the beats (ch.1, no param), once. A refusal is logged and the idle still plays: the
         // hold is what keeps the follow package from walking him off the counter mid-animation, not what plays it.
+        if (ClaimDead(api, c.hold, c.holdEverLive, c.holdFiled)) {
+            spdlog::info("[errand] {:08X}: the ch.1 hold ended (Harbinger released it) -- filing a fresh one", a_follower);
+            c.hold = APMF_API::kInvalidHandle;
+        }
         if (c.hold == APMF_API::kInvalidHandle) {
             APMF_API::APMF_Param hp{};
+            c.holdEverLive = false;
+            c.holdFiled = std::chrono::steady_clock::now();
             c.hold = api->RequestEx(a_follower, APMF_API::kIntent_MovementBlock, kOwnBasis, &hp);
             if (c.hold == APMF_API::kInvalidHandle)
                 spdlog::warn("[errand] {:08X}: ch.1 hold REFUSED by Harbinger -- the idles play without a "
@@ -197,7 +218,15 @@ namespace MFO::APMFBridge {
         APMF_API::APMF_Param p{};
         p.form   = a_idle;     // the IDLE record (an older APMF would ignore it -- gated above)
         p.target = a_target;   // the vendor: the engine evaluates the idle's conditions against it
+        // A previous beat's claim that Harbinger released (the failed talk idle is the expected case outside a
+        // conversation) cannot be re-pointed: invalidate it and file a FRESH claim for this beat.
+        if (ClaimDead(api, c.idle, c.idleEverLive, c.beatFiled)) {
+            spdlog::info("[errand] {:08X}: the previous idle claim (handle {}) was released by Harbinger -- filing a "
+                         "fresh ch.12 claim for this beat", a_follower, c.idle);
+            c.idle = APMF_API::kInvalidHandle;
+        }
         if (c.idle == APMF_API::kInvalidHandle) {
+            c.idleEverLive = false;
             c.idle = api->RequestEx(a_follower, APMF_API::kIntent_Idle, kOwnBasis, &p);
             if (c.idle == APMF_API::kInvalidHandle) {
                 spdlog::warn("[errand] {:08X}: ch.12 idle v2 REFUSED by Harbinger (idle {:08X} at {:08X}) -- APMF.log "
@@ -225,6 +254,7 @@ namespace MFO::APMFBridge {
         auto& c = it->second;
         APMF_API::APMF_IdleStateInfo info{};
         info.size = sizeof(info);
+        if (api->IsClaimLive(c.idle)) c.idleEverLive = true;
         const std::uint32_t st = api->GetIdleState(c.idle, &info);
         out.detail = std::string("state=") + IdleStateName(st) + " endCause=" + IdleEndName(info.endCause);
         if (info.unconfirmableWhy) out.detail += " unconfirmableWhy=" + std::to_string(info.unconfirmableWhy);
@@ -266,6 +296,7 @@ namespace MFO::APMFBridge {
             *h = APMF_API::kInvalidHandle;
         }
         c.beatIdle = 0;
+        c.idleEverLive = c.holdEverLive = false;
     }
 
     void ReleaseErrand(RE::FormID a_follower) {

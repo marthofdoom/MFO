@@ -108,6 +108,26 @@ namespace MFO::Papyrus {
         return ok;
     }
 
+    bool DispatchMoveTo(RE::TESObjectREFR* a_ref, RE::TESObjectREFR* a_target, float a_dx, float a_dy, float a_dz) {
+        if (!a_ref || !a_target) { ++g_failures; return false; }
+        auto* vm = VM();
+        if (!vm) { ++g_failures; return false; }
+
+        // The handle is the MOVED ref's; the target rides along as akTarget.
+        RE::VMHandle handle{};
+        if (!HandleFor(a_ref, handle)) { ++g_failures; return false; }
+
+        // unique_ptr for the same MakeFunctionArguments leak noted above.
+        std::unique_ptr<RE::BSScript::IFunctionArguments> args{
+            RE::MakeFunctionArguments(std::move(a_target), std::move(a_dx), std::move(a_dy), std::move(a_dz), false) };
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+
+        const bool ok = vm->DispatchMethodCall2(handle, "ObjectReference", "MoveTo", args.get(), callback);
+        if (ok) ++g_dispatches;
+        else    ++g_failures;
+        return ok;
+    }
+
     bool DispatchTradeRun(RE::TESForm* a_quest, std::int32_t a_token) {
         if (!a_quest) { ++g_failures; return false; }
         auto* vm = VM();

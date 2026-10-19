@@ -26,6 +26,8 @@
 #include "Followers.h"
 #include "Forms.h"
 #include "LocationTypes.h"
+#include "Papyrus.h"         // DispatchMoveTo: the recall of a follower whose errand ended while he was unloaded
+#include "Scheduler.h"      // ServiceClock(): the UNPAUSED clock the caps and the stall test run on
 #include "TradeBridge.h"
 #include "APMF_API.h"
 #include "apmf/APMFBridge.h"
@@ -61,9 +63,11 @@ namespace MFO::Logistics::Errand {
         constexpr auto  kTakeHold       = std::chrono::milliseconds(2500);
         constexpr auto  kBeatPatience   = std::chrono::seconds(8);           // a beat Harbinger has not judged by now is skipped (logged)
         constexpr auto  kDispatchPatience = std::chrono::seconds(25);        // a busy chest / a bridge that is down
-        constexpr auto  kTradeWait      = std::chrono::seconds(45);          // dispatch -> ReportTrade (VendorTrade reaps an order at 30 s)
-        constexpr auto  kRealCap        = std::chrono::seconds(240);
-        constexpr auto  kStall          = std::chrono::seconds(8);           // an errand whose follower is not being serviced
+        // These three run on Scheduler::ServiceClock() (UNPAUSED seconds), so a barter / map / MCM menu that
+        // pauses the world never ages an errand (Lotd::SweepTrip's rule).
+        constexpr double kTradeWaitSec  = 45.0;   // dispatch -> ReportTrade (VendorTrade reaps an order at 30 s)
+        constexpr double kRealCapSec    = 240.0;
+        constexpr double kStallSec      = 8.0;    // an errand whose follower is not being serviced
         constexpr auto  kLeftTownGrace  = std::chrono::seconds(2);
         constexpr auto  kParkTime       = std::chrono::minutes(5);
         constexpr float kFailCooldownSec  = 45.0f;
@@ -102,7 +106,8 @@ namespace MFO::Logistics::Errand {
             RE::FormID    chest = 0;
             RE::FormID    town = 0;            // the BGSLocation the errand belongs to (the player's town when it began)
             std::string   followerName, vendorName;
-            Clock::time_point start{}, phaseAt{}, lastTick{}, townLostSince{}, confirmedAt{}, dispatchedAt{};
+            Clock::time_point start{}, phaseAt{}, townLostSince{}, confirmedAt{};
+            double        startClk = 0.0, lastTickClk = 0.0, dispatchedClk = 0.0;   // Scheduler::ServiceClock() seconds
             float         startDays = 0.0f;
             bool          beatRequested = false;   // the CURRENT beat's idle was requested
             bool          talkFallbackUsed = false;
@@ -219,6 +224,11 @@ namespace MFO::Logistics::Errand {
                 });
 
             const float hour = cal->GetHour();
+            std::unordered_map<RE::FormID, Clock::time_point> parked;
+            {
+                std::scoped_lock lk(g_mx);   // a locked copy: Sweep / Tick write g_parked under g_mx (threading carve-out)
+                parked = g_parked;
+            }
             const float maxFromPlayer = Config::g_travelRadius.load();
             std::unordered_map<RE::FormID, bool> seenChest;
             for (auto& h : living) {
@@ -245,7 +255,7 @@ namespace MFO::Logistics::Errand {
                 if (!vTown || vTown != a_playerTown) { ++a_dropped; continue; }
                 const float dPlayer = v->GetPosition().GetDistance(pc->GetPosition());
                 if (dPlayer > maxFromPlayer) { ++a_dropped; continue; }
-                if (const auto it = g_parked.find(v->GetFormID()); it != g_parked.end() && a_now < it->second) continue;
+                if (const auto it = parked.find(v->GetFormID()); it != parked.end() && a_now < it->second) continue;
                 if (seenChest.contains(chest->GetFormID())) continue;   // one actor per chest is enough
                 seenChest[chest->GetFormID()] = true;
                 Cand c;
@@ -313,6 +323,28 @@ namespace MFO::Logistics::Errand {
                 spdlog::warn("[errand] town errands are OFF for this session: Harbinger refused the ch.12 v2 idle "
                              "synchronously (APMF.log names why: [Idle] bIdleV2=0, runtime, self-check). Proper "
                              "animations are required: no idle, no errand, and no instant trade either.");
+        }
+
+        // RECALL (marth 2026-10-18: a follower always rejoins the player). The errand ended because the follower UNLOADED
+        // (the player took a load door or fast travelled): put him beside the player, out of his view, UNLESS he is
+        // already in the player's cell. Vanilla Papyrus ObjectReference.MoveTo, ~250 u behind the player's heading
+        // (the AFT fBehindOffset precedent): a vanilla native on a persistent actor, no engine-address seat.
+        // SEAM (R1b): the off-screen simulation replaces this -- an unloaded errand is then RESOLVED (trade replayed
+        // against the real chest, the walk back simulated) before this placement, which stays as the recall step.
+        void RecallToPlayer(RE::FormID a_fid, const char* a_why) {
+            auto* f  = RE::TESForm::LookupByID<RE::Actor>(a_fid);
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            if (!f || !pc || f->IsDead() || !pc->Is3DLoaded() || InLoadingMenu()) return;
+            if (f->Is3DLoaded()) return;
+            auto* fc = f->GetParentCell();
+            auto* pcell = pc->GetParentCell();
+            if (fc && fc == pcell) return;   // already in the player's cell: his own package brings him
+            const float az = pc->GetAngleZ();
+            constexpr float kBehind = 250.0f;
+            const float dx = -kBehind * std::sin(az), dy = -kBehind * std::cos(az);
+            const bool ok = Papyrus::DispatchMoveTo(f, pc, dx, dy, 0.0f);
+            spdlog::info("[errand] {:08X} '{}': RECALL ({}) -- he was unloaded while the player is elsewhere; MoveTo the "
+                         "player (+{:.0f},{:.0f}) {}", a_fid, NameOf(f), a_why, dx, dy, ok ? "dispatched" : "FAILED to dispatch");
         }
 
         std::size_t CountWalking() {
@@ -497,7 +529,8 @@ namespace MFO::Logistics::Errand {
         r.town        = playerTown->GetFormID();
         r.followerName = NameOf(a_follower);
         r.vendorName  = NameOf(vendor);
-        r.start = r.phaseAt = r.lastTick = a_now;
+        r.start = r.phaseAt = a_now;
+        r.startClk = r.lastTickClk = Scheduler::ServiceClock();
         if (auto* cal = RE::Calendar::GetSingleton()) r.startDays = cal->GetDaysPassed();
         {
             std::scoped_lock lk(g_mx);
@@ -518,19 +551,23 @@ namespace MFO::Logistics::Errand {
             std::scoped_lock lk(g_mx);
             const auto it = g_recs.find(fid);
             if (it == g_recs.end()) return false;
-            it->second.lastTick = a_now;
+            it->second.lastTickClk = Scheduler::ServiceClock();
             r = it->second;
         }
         auto* pc = RE::PlayerCharacter::GetSingleton();
         if (!Config::g_townErrands.load() || !Config::g_economy.load()) { Finish(fid, "town errands / economy switched off", kFailCooldownSec); return false; }
-        if (a_follower->IsDead() || !a_follower->Is3DLoaded()) { Finish(fid, "follower dead or unloaded", kFailCooldownSec); return false; }
+        if (a_follower->IsDead() || !a_follower->Is3DLoaded()) {
+            Finish(fid, "follower dead or unloaded", kFailCooldownSec);
+            if (!a_follower->IsDead()) RecallToPlayer(fid, "errand ended while he was unloaded");
+            return false;
+        }
         if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) { Finish(fid, "combat -- he rejoins", kCombatCooldownSec); return false; }
         if (auto* avo = a_follower->AsActorValueOwner(); avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) {
             Finish(fid, "told to wait", 60.0f);
             return false;
         }
         if (a_healWants && a_healWants()) { Finish(fid, "yields to a heal", 15.0f); return false; }
-        if (a_now - r.start > kRealCap) { Finish(fid, "timed out (240 s real time)", 60.0f); return false; }
+        if (Scheduler::ServiceClock() - r.startClk > kRealCapSec) { Finish(fid, "timed out (240 s real time)", 60.0f); return false; }
         if (auto* cal = RE::Calendar::GetSingleton()) {
             const float minutes = (cal->GetDaysPassed() - r.startDays) * 24.0f * 60.0f;
             if (minutes > Config::g_errandMaxGameMin.load()) {
@@ -670,7 +707,7 @@ namespace MFO::Logistics::Errand {
             if (probe.dispatched) {
                 r.phase = Phase::Trading;
                 r.dispatched = true;
-                r.dispatchedAt = a_now;
+                r.dispatchedClk = Scheduler::ServiceClock();
                 r.phaseAt = a_now;
                 spdlog::info("[errand] {:08X} '{}': trade DISPATCHED at '{}' (give beat done)", fid, r.followerName, r.vendorName);
                 Store(fid, r);
@@ -710,7 +747,7 @@ namespace MFO::Logistics::Errand {
                 Finish(fid, "trade done", Config::g_errandCooldownSec.load(), true);
                 return false;
             }
-            if (a_now - r.dispatchedAt > kTradeWait) {
+            if (Scheduler::ServiceClock() - r.dispatchedClk > kTradeWaitSec) {
                 Finish(fid, "the trade never reported (45 s)", kFailCooldownSec);
                 return false;
             }
@@ -746,12 +783,14 @@ namespace MFO::Logistics::Errand {
     // ── public: the owner-independent backstop ───────────────────────────────────────────────────────
     void Sweep() {
         std::vector<std::pair<RE::FormID, std::string>> ends;
+        std::vector<RE::FormID> recalls;
         {
             std::scoped_lock lk(g_mx);
             if (g_recs.empty()) return;
             const auto now = Clock::now();
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const bool loading = InLoadingMenu();
+            const double clk = Scheduler::ServiceClock();
             const RE::BGSLocation* here = pc ? LocationTypes::TownAnchor(pc->GetCurrentLocation()) : nullptr;
             const RE::FormID hereId = here ? here->GetFormID() : 0u;
             const auto ids = Followers::ActiveSnapshot();
@@ -759,11 +798,16 @@ namespace MFO::Logistics::Errand {
                 std::string why;
                 auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
                 if (!Config::g_logistics.load() || !Config::g_townErrands.load()) why = "logistics / town errands off";
-                else if (!f || f->IsDead() || !f->Is3DLoaded()) why = "follower dead or unloaded";
+                else if (!f || f->IsDead() || !f->Is3DLoaded()) {
+                    why = "follower dead or unloaded";
+                    // Alive, still on the roster and unloaded: the errand's follower was left behind (RecallToPlayer).
+                    if (f && !f->IsDead() && ids && std::find(ids->begin(), ids->end(), fid) != ids->end())
+                        recalls.push_back(fid);
+                }
                 else if (f->IsInCombat() || (pc && pc->IsInCombat())) why = "combat -- he rejoins";
                 else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end()) why = "no longer an active follower";
-                else if (now - r.lastTick > kStall) why = "the follower is no longer serviced";
-                else if (now - r.start > kRealCap) why = "timed out (240 s real time)";
+                else if (clk - r.lastTickClk > kStallSec) why = "the follower is no longer serviced";
+                else if (clk - r.startClk > kRealCapSec) why = "timed out (240 s real time)";
                 else if (!loading && pc && pc->Is3DLoaded()) {
                     // PLAYER LEAVES TOWN (marth 2026-10-18): the errand ends and he rejoins. R1a is physical only, so the
                     // follower just follows again; R1b resolves an off-screen errand and places him with a MoveTo.
@@ -779,5 +823,6 @@ namespace MFO::Logistics::Errand {
         }
         for (const auto& [fid, why] : ends)
             Finish(fid, why.c_str(), why.rfind("combat", 0) == 0 ? kCombatCooldownSec : kFailCooldownSec);
+        for (const auto fid : recalls) RecallToPlayer(fid, "errand ended while he was unloaded");
     }
 }
