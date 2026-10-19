@@ -1773,3 +1773,12 @@ Same review. Reviewer (verbatim): "`DeclaredJewelry` in `SwapUp.cpp` runs even w
 
 ### MFO-B294 (SEV-5, OPEN, logistics/EquipAuthority.cpp) -- jewelry: mage reconcile scores an arbitrary instance; [jewelry] log scores the chosen, not the worn, copy (raised against c3b55dd / 39ca40f)
 Same review: "The mage reconcile's `mxl` (`:698-700`) takes an arbitrary instance's list when the mage's pick is not the worn base. That only affects the score comparison, never the base, so there is no churn." and "the engine may put on a plain copy of the chosen base. The `[jewelry]` line logs the chosen instance's score, not the worn copy's." Author note on 39ca40f: the uid tag in decl.names replaces the first occurrence of the display name (log only).
+
+### MFO-B295 (SEV-5, OPEN, logistics/Economy.cpp) -- comment says player-given weapons are protected; only LotD relics are (raised against faf0c0f)
+Opus review of `fix/mfo-potions-roles` @ faf0c0f (F8). Verbatim: "the comment at `Economy.cpp:~796` says player-given weapons are protected. Only museum relics are (Lotd); an ordinary bow the player handed over is not protected by sell or by Shed."
+
+### MFO-B296 (SEV-5, OPEN, logistics/Economy.cpp) -- off-family launcher sale rides on a carried-derived ammo family (raised against faf0c0f)
+Same review (F9). Verbatim: "selling a launcher outside the chosen ammo family goes beyond the ruling. The family choice (`wantCrossbow`) is itself worked out from what is carried and the ammo held."
+
+### MFO-B297 (SEV-4, OPEN, logistics/Upkeep.cpp / Gear.cpp) -- perk-derived ranged role needs the progression add-on; no doRanged source log before edf5df5
+Same review (F6). Verbatim: "the perk part of the ranged role needs the progression add-on. Without it the vote array is empty (`Progression.h:403`)." (edf5df5 added the [role] source line; the add-on dependency stands.)
