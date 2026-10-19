@@ -1806,3 +1806,9 @@ Opus review of `fix/mfo-ranged-approach` @ e63db74. F3: "For the two-hander (bow
 
 ### MFO-B305 (SEV-4, OPEN, apmf/OffenseApproach.cpp / Evaluator.cpp) -- ranged: dwell tuning; disagreeing selector rules reset each other's clocks (raised against e63db74)
 Same review. F8: kSightDwellMs 1500 vs 1-2 s field flicker still allows a ~3 s claim/release cycle — tune from field data. F7: "When two own-ray foe rules disagree on the same lap, the occluded rule erases the visible run every lap ... Bounded by `kStaleMs`, death and combat end." Author's round-2 spots: PinnedTarget/CombatEntryStateOf read every PickFoe pass (g_mx, unprofiled); LogChaseCapWaiver static map assumes single-threaded PickFoe.
+
+### MFO-B304 (SEV-4, OPEN, Loadout.cpp) -- ranged: heal-quiet stamping and combat-flag flaps (raised against e63db74)
+Opus review of `fix/mfo-ranged-approach` @ e63db74. F3: "For the two-hander (bow) debt, `healSeenAt` is stamped only while `HealTakesLeft` is true ... A claim that fired more than 2 s ago and still stands still gets the bow back." F5: "`healQuiet` uses the actor's own `IsInCombat()`, which flaps mid-fight ... A flap tick reads as quiet and gives the bow back."
+
+### MFO-B305 (SEV-4, OPEN, apmf/OffenseApproach.cpp / Evaluator.cpp) -- ranged: dwell tuning; disagreeing selector rules; chase-cap waiver gate (raised against e63db74 / 4cd7100)
+Same review. F8: kSightDwellMs 1500 vs 1-2 s flicker still allows a ~3 s claim/release cycle — tune from field data. F7: two own-ray rules that disagree reset each other's dwell clocks (bounded by kStaleMs). Author's round-2 spots: the waiver needs the foe's currentCombatTarget == the follower (a dragon targeting the player instead does not qualify — per marth's "engaged with the follower"); PinnedTarget/CombatEntryStateOf read every PickFoe pass (g_mx, unprofiled); LogChaseCapWaiver static map assumes single-threaded PickFoe.
