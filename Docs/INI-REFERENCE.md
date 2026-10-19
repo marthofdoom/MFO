@@ -106,6 +106,7 @@ MFO seed defaults. MCM Helper's Data/MCM/Settings/MFO.ini is read AFTER this and
 - **`fErrandSettleSec`** (default `10`). Seconds you must have been in the town before anyone goes shopping.
 - **`fErrandCooldownSec`** (default `120`). Real seconds between one follower's errands.
 - **`fErrandMaxGameMin`** (default `120`). An errand older than this many GAME minutes ends and the follower rejoins.
+- **`iErrandTradeGameMin`** (default `10`). Game minutes an OFF-SCREEN errand spends at the vendor (the walk there and back is estimated from the distance and runs on the game clock too).
 - **`bHmsRedistribute`** (default `1`). CLASS HMS ON LEVEL-UP (v1.0.68). bHmsRedistribute: 1 (default) = each level a follower's Health/Magicka/Stamina gain is reshaped to its class profile (mage -> Magicka, archer -> Stamina, warrior -> Health); total gain == vanilla, only the split changes. 0 = vanilla per-level HMS stands untouched.
 - **`fHmsSkewMax`** (default `20.0`). fHmsSkewMax: skew ceiling as a PERCENT of each level's HMS budget that may be pulled from the class-primary pool toward an off-class pool the follower actually exercises in battle (a battle-mage earning some Magicka). 0 disables.
 - **`bMageWearRobes`** (default `1`). MAGE DRESS-UP (loot + buy). bMageWearRobes: 1 (default) = a caster wears mage clothing/jewelry; 0 = a caster picks/buys real ARMOR by rating like any class.

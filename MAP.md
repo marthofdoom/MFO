@@ -4434,11 +4434,11 @@ both LATER rounds). With Harbinger ABI >= 24 (`APMFBridge::ErrandSupported`, ch.
 `bTownErrands` ON (default) the instant proximity trade is RETIRED: `EconomyProbe` is no longer called from the idle branch
 (`Service.cpp:2163`, `if (... && !Errand::TryStart(...)) EconomyProbe(...)`; `TryStart` returns TRUE whenever errands own the
 economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the old trade, unchanged.
-- **Planner** `Errand::TryStart` (`Errand.cpp:380`) <- the idle branch of `ServiceFollower`. Gates: player in a City / Town /
+- **Planner** `Errand::TryStart` (`Errand.cpp:573`) <- the idle branch of `ServiceFollower`. Gates: player in a City / Town /
   Settlement (`LocationTypes::TownAnchor`, `LocationTypes.h:92`: innermost City/Town/Settlement before a Clearable/Dungeon) for
   >= `fErrandSettleSec`; no combat (his or the player's), no menu pause, not looting (`SlotOf`), not waiting (AV 95), not mounted,
   not sitting/sleeping, himself in the same town; per-follower plan cadence 6 s (20 s when nothing qualifies) + `fErrandCooldownSec`.
-  `BuildCatalog` (`:204`): LOADED vendor actors in the follower's attached cell (<= 4096 u), vendor faction (the legacy scan's
+  `BuildCatalog` (`:271`): LOADED vendor actors in the follower's attached cell (<= 4096 u), vendor faction (the legacy scan's
   visitor), open hours (VENV, `OpenAt:174`), no `vendorConditions->head`, no fence (`buysStolen && !buysNonStolen`), valid chest
   container, same town as the player, <= `fTravelRadius` from the player, not sleeping, not parked. Then `EconomyProbe` in PLAN mode
   evaluates every candidate with the real trade code; reasons = sell (rows the vendor accepts worth >= `iErrandMinSellGold`, capped
@@ -4447,21 +4447,22 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
   Rank = sell gold + 250 need + 150 wish - distance/10. **ALL followers may run errands at once**; the concurrent ch.19 WALKS are
   budgeted by `kMaxWalking` = 4 (Harbinger has 8 package slots, shared with loot `kMaxLootSlots` 4 and the deposit) and a refusal /
   `kLeg_Failed` QUEUES him (6 s retry), never parks the vendor, never falls back to the instant trade.
-- **State machine** `Tick` (`:545`) <- `Service.cpp:407` (right after `Lotd::DepositTick`; an errand owns his logistics tick):
+- **State machine** `Tick` (`:752`) <- `Service.cpp:407` (right after `Lotd::DepositTick`; an errand owns his logistics tick):
   WALKING (own ch.19 claim to the vendor ACTOR, radius 110; `Arrived`, or `Blocked` within 260 u same floor, or the 170 u backstop;
   other leg ends end the errand, a static `Blocked` PARKS the vendor 5 min) -> TALKING (`DialogueGenericTalking`, fallback
   `DialogueNeutralExpressive`, skipped when neither plays) -> GIVING (`IdleGive`; the trade dispatches once it reads Played + 1.5 s,
   or anyway, loudly, if the idle failed: principle 7) -> TRADING (`EconomyProbe` EXECUTE; waits `TradeBridge::TakeOutcome`, 45 s) ->
-  TAKING (`IdleTake`, only if something was bought) -> DONE. Every exit is `Finish` (`:291`): drop the record, release the claims,
+  TAKING (`IdleTake`, only if something was bought) -> DONE. Every exit is `Finish` (`:425`): drop the record, release the claims,
   stamp the cooldown, ONE `[errand]` line. The ch.12 verdict of the CURRENT beat is believed only when the idle record names that
   beat's idle (a Repoint is applied on the game thread).
-- **Interruptions** `Sweep` (`:784`) <- `Diagnostics.cpp:950` (the pump, every lap): follower dead / unloaded, his or the player's
+- **Interruptions** `Sweep` (`:1022`) <- `Diagnostics.cpp:950` (the pump, every lap): follower dead / unloaded, his or the player's
   combat (30 s cooldown, "he rejoins"), dismissed (not in `ActiveSnapshot`), not serviced for 8 s, 240 s real-time cap
   (`fErrandMaxGameMin` game-minute cap in `Tick`), told to wait, and **the player leaving the town** (`TownAnchor` differs for 2 s,
-  not during a `LoadingMenu`) -> the errand ends and his follow package walks him back. R1a has no off-screen half: a follower who
-  unloads ends the errand, and if he is alive, on the roster and not in the player's cell `RecallToPlayer` (`Errand.cpp:334`) dispatches
+  not during a `LoadingMenu`) -> the errand ends and his follow package walks him back. R1a had no off-screen half; since R1b a follower who
+  unloads is HANDED OFF to the simulation (below), and the recall only places him when an off-screen errand ends or the player leaves:
+  (formerly: the errand ended and, if he is alive, on the roster and not in the player's cell `detail::RecallToPlayer` (`Errand.cpp:520`) dispatches
   a Papyrus `ObjectReference.MoveTo` (`Papyrus::DispatchMoveTo`) ~250 u behind the player's heading, logged `[errand] ... RECALL`
-  (R1b's off-screen simulation replaces this; the seam is commented). The end is DEFERRED while a loading screen is up (the record is what remembers him), and `ErrandClaims.cpp` also treats a claim as dead when `GetIdleState.endCause != None` (a refused talk idle never reads live). The stall test and the 240 s / 45 s caps run on
+  (R1b's off-screen simulation replaced this). The hand-off is DEFERRED while a loading screen is up (the record is what remembers him), and `ErrandClaims.cpp` also treats a claim as dead when `GetIdleState.endCause != None` (a refused talk idle never reads live). The stall test and the 240 s / 45 s caps run on
   `Scheduler::ServiceClock()` (UNPAUSED seconds) so a menu never ends an errand. `ErrandClaims.cpp` re-files a ch.12 / ch.1 claim
   Harbinger itself released (a failed talk idle) before the next beat instead of re-pointing a dead handle.
   **Selling now happens only on town errands** (the instant trade is retired under Harbinger): junk and off-role gear accumulate
@@ -4480,9 +4481,47 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
   The six keys parse in a chain of their own at the top of `Config.cpp` `Apply` (the main chain is near MSVC's nested-block limit).
 - **WHAT BREAKS if you change this:** `EconomyProbe`'s parameter list (Service.cpp, Errand.cpp); `ErrandProbe::Verdict` fields (the
   ranker); `TradeBridge::ReportTrade` (the outcome the Trading phase waits on); `kLeg_*` handling (a new end state = a new case in
-  the Walking phase); the idle FormIDs (`Errand.cpp` constants, all verified in Skyrim.esm). **Not done on purpose (R1b/R2 seams):**
-  unloaded shops (the faction's PLVD union `TESForm*` vs `ObjectRefHandle` is unverified), simulation, `MoveTo` recall, `entryDoor`,
-  the `ERND` co-save.
+  the Walking phase); the idle FormIDs (`Errand.cpp` constants, all verified in Skyrim.esm). **Not done on purpose (R2 / later):**
+  the `ERND` co-save (a save mid-errand loses the record), the H1(a) hold package, multi-stop itineraries.
+
+#### R1b — the OFF-SCREEN half: `logistics/ErrandSim.cpp` + `Errand_internal.h` (ClickUp 86e3t1mx7; NOT serialized)
+marth's rulings 2026-10-19: an unloaded errand is SIMULATED against the REAL merchant chest and gold (no movement, no animation outside the
+player's cell); if the player walks in "it picks up"; leaving town (fast travel or otherwise) brings him back; player combat -> he walks out of the
+shop and joins; all followers may shop at once; off-screen time = walk estimate + `iErrandTradeGameMin` (10) game minutes. House rule: MFO never reads
+an unloaded follower's inventory, so the order is built at PLAN time and replayed.
+- **PLVD VERIFIED (disassembly of 1.6.1170, 2026-10-19; scripts in the session scratchpad `re/`)**: `TESFaction::Load` (vtbl AE id 195672 -> rva
+  0x3ac9c0) builds each `PackageLocation` from the raw PLVD {type, formid, radius} (ctor rva 0x49be80); `InitItemImpl` (vtbl idx 19, rva 0x3ad2e0)
+  then calls the PackageLocation resolver (rva 0x49c630): **kInCell -> a `TESObjectCELL*` in `data.object`; kNearReference -> an `ObjectRefHandle`
+  (32-bit, `CreateRefHandle` rva 0x23b780) in `data.refHandle`**; types 5/8/9/11 are left alone. (The design assumed `data.object` for both; the ref
+  is a HANDLE.) `BuildTownShops` (`Errand.cpp:227`) reads exactly that, gated to `Runtime::IsVerified1_6_1170()` (other runtimes: loaded-vendor
+  shops only, the R1a behaviour). The shop list is per town, cached in `g_townShops` (immutable once built), skips fences / conditioned vendors, keeps a
+  shop only when its place's location resolves to the player's town (`TownAnchor`).
+- **Plan = one entry for actors AND faction-only shops**: `EconomyErrandPlan` (`Economy.cpp:1110`) -> `EconomyProbeImpl` (`:464`, the old
+  `EconomyProbe` body; `EconomyProbe` is now a wrapper at `:1105`, legacy path unchanged). Candidates are `ErrandShop{faction, vendor handle or null}`;
+  each returns an `ErrandPlanned` (verdict fields + the ORDER: sell rows, needs, purse, `BuyThresholds`, signature, day). SkipTrade is keyed by the vendor
+  actor, or by the FACTION when no vendor is loaded. `Errand.cpp` stores the chosen order in `Rec::order`.
+- **Walk to the shop's place**: ch.19 to the vendor ACTOR (loaded), the PLVD ref, or the PLVD cell (`Cand::kind/destForm/destRad`). Arriving at a place
+  with a loaded shop, `FindVendorActor` (`:382`) finds the vendor and `APMFBridge::RepointErrandTravel` (`ErrandClaims.cpp:168`) moves the leg to him;
+  no vendor actor in the loaded shop = "unattended", no trade.
+- **Hand-off** `Errand::Sweep` (`Errand.cpp:1022`): a follower unloaded for one more poll (1 s; the roster drop is NOT a dismissal, eligibility is
+  read with `Followers::IsEligibleFollower`; deferred during a loading screen) is taken out of `g_recs` and `Sim::Begin` (`ErrandSim.cpp:219`) starts
+  OUT_SIM: `tArrive = now + max(2 game min, distance / 150 u/s x Calendar timescale)`, `tTradeEnd = tArrive + iErrandTradeGameMin`, `tReturn = tTradeEnd + walk`
+  (game DAYS, `Calendar::GetDaysPassed`); a shop that is a cell uses door distance + 500 u. The last LOADED position / cell are sampled every
+  tick and lap (`Rec::lastPos`). `entryDoor` (`FindEntryDoor:118`) = the nearest `ExtraTeleport` door within 400 u of it, preferring one whose linked
+  door is in the cell he is in now.
+- **Simulation** `Sim::Sweep` (`ErrandSim.cpp:306`, called first thing in `Errand::Sweep`, 1 s per record): TRADE_SIM replays the stored order ONCE through
+  the unchanged `TradeBridge::VendorTrade` with a null/unloaded vendor and the real chest (`DispatchTrade:148`); the report is read with
+  `TakeOutcome`; RET_SIM waits for `tReturn`, then `PlaceReturn` (`:193`) puts him outside the entry door (toward where he went in; `Papyrus::DispatchMoveTo`) or
+  behind the player when there is no door; REJOIN watches 20 s and recalls him if he is still unloaded and > 4096 u away. Resolutions (`ResolveNow:167`
+  replays the trade if he had arrived, else drops it): dismissed (no recall), told to wait (stays), the player left the town (RECALL behind the player),
+  player combat (placed at the door: he walks out and joins), the `fErrandMaxGameMin` cap. A loading screen pauses every decision.
+- **Pick up** `Sim::OnLoadedTick` (`:275`, from `Errand::Tick`): loaded again with the trade not replayed -> `detail::ResumePhysical` (`Errand.cpp:536`)
+  rebuilds the physical errand (vendor found in his cell, else the walk to the place resumes) and he trades on screen; otherwise the errand is simply over.
+- **Passive drift log** `[errand-pos]` every 5 s per simulated follower: cell, position, distance moved since going off screen. The H1(a) hold package
+  (`bErrandHoldPackage`) is NOT built: it needs a new PACK record that cannot be validated offline; the log decides whether it is needed.
+- **WHAT BREAKS if you change this:** `ErrandPlanned` / `ErrandShop` (Economy.cpp, Errand.cpp, ErrandSim.cpp); the `SimStart` / `ResumeInfo` seam (the R2
+  `ERND` record serialises these); `TradeBridge::TakeOutcome` (both the physical and the simulated trade wait on it); the lock order (Errand `g_mx` ->
+  Sim `g_mx`, never the reverse; neither is held across a Papyrus / TradeBridge / Harbinger call).
 
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives
