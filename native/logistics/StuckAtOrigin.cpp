@@ -84,7 +84,7 @@ namespace MFO::Logistics {
                       "the same spot; ending the excursion. PHYSICALLY STUCK: he stands at ({:.0f},{:.0f},{:.0f}), "
                       "swimming={}, cell {:08X} '{}'. No teleport (no ruling). No further loot excursions by him "
                       "until he is more than {:.0f} u from that point", id, a_blockPos.x, a_blockPos.y,
-                      a_blockPos.z, n, here.x, here.y, here.z, a_follower->IsSwimming() ? "yes" : "no",
+                      a_blockPos.z, n, here.x, here.y, here.z, (a_follower->AsActorState() && a_follower->AsActorState()->IsSwimming()) ? "yes" : "no",
                       cell ? cell->GetFormID() : 0u, cell && cell->GetFullName() ? cell->GetFullName() : "?", kStuckRadius);
         Cool c{ CellOf(a_follower), here };
         c.since = run.front().at; c.startPos = run.front().fpos; c.orderLive = a_orderLive;
@@ -142,7 +142,8 @@ namespace MFO::Logistics {
         const float pDist = pc ? pc->GetPosition().GetDistance(fpos) : 1e9f;
         const float trans = Followers::SecondsSinceTransition();
         const bool  fight = a_follower->IsInCombat();
-        const bool  talk  = a_follower->actorState2.talkingToPlayer;
+        const auto* st    = a_follower->AsActorState();
+        const bool  talk  = st && st->actorState2.talkingToPlayer;
         const bool okSpan = span >= kStuckSecs, okMove = c.maxMoved < kMovedMax, okTrans = trans < 0.0f || trans > span;
         const bool okPl   = pDist > kPlayerNear;
         const bool all    = c.orderLive && okSpan && okMove && !fight && !talk && okTrans && okPl;
