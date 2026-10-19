@@ -73,6 +73,9 @@ namespace MFO::Targeting {
                                        g_latchCount.load(std::memory_order_relaxed) != 0;
                 if (!anyStyle && !anyTarget) return;
                 if (!a_this) return;
+                // A Harbinger COMBAT SUBSTRATE (ABI v26, ClickUp 86e3pu939) is not combat for MFO: no combat-style
+                // ownership and no target redirect on it. One lock-free APMF read, only when MFO has style or a latch.
+                if (APMFBridge::SubstrateOnly(a_this->GetFormID())) return;
 
                 auto& rt = a_this->GetActorRuntimeData();
 

@@ -1485,7 +1485,7 @@ namespace MFO::Lotd {
         // menus no longer hold it: a game-pausing menu stops this tick anyway, and the
         // transfer itself still refuses under a container / barter menu (TransferOnMain).
         auto* pc = RE::PlayerCharacter::GetSingleton();
-        if (!pc || a_follower->IsInCombat() || pc->IsInCombat()) return false;
+        if (!pc || APMFBridge::InCombat(a_follower) || pc->IsInCombat()) return false;   // substrate: not combat (v26)
         auto& needs = FreshNeeds(a_now);
         if (!needs.snap) return false;
         // Positive proof for the worn-relic ship (review F4): the needed relics seen
@@ -1575,7 +1575,7 @@ namespace MFO::Lotd {
 
         auto* pc = RE::PlayerCharacter::GetSingleton();
         if (!Enabled())                                   { EndTripLocked(fid, a_now, "LOTD awareness off", false, CrateCd::None); return false; }
-        if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) { EndTripLocked(fid, a_now, "combat", false, CrateCd::None); return false; }
+        if (APMFBridge::InCombat(a_follower) || (pc && pc->IsInCombat())) { EndTripLocked(fid, a_now, "combat", false, CrateCd::None); return false; }
         if (a_follower->IsDead() || !a_follower->Is3DLoaded()) { EndTripLocked(fid, a_now, "follower gone", false, CrateCd::None); return false; }
         auto* crate = RE::TESForm::LookupByID<RE::TESObjectREFR>(trip.crate);
         if (!crate || crate->IsDisabled() || !crate->Is3DLoaded()) {

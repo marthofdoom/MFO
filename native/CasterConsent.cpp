@@ -1038,7 +1038,7 @@ namespace MFO::CasterConsent {
             // in town), where MFO must stay completely hands-off -- g_ctrl
             // entries can outlive the fight by up to a service round before
             // the Scheduler's non-combat Clear sweeps them.
-            if (want == 0 && actor->IsInCombat() &&
+            if (want == 0 && APMFBridge::InCombat(actor) &&   // a Harbinger substrate is out of combat for MFO (v26)
                 !g_guardOnly.load(std::memory_order_relaxed)) {   // guard-only: Harbinger's allow-list
                 if (RE::FormID gambit = 0; CtrlUnlatchedDeny(fid, a_spell, gambit)) {
                     AbortLog(fid, actor, a_spell->GetFormID(), "continuous cast control");

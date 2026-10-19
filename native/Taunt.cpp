@@ -275,7 +275,7 @@ namespace MFO::Taunt {
             const char* stop = nullptr;
             if (!t || t->IsDead() || t->IsDisabled() || !t->Is3DLoaded()) stop = "aborted (taunter gone)";
             else if (IsDown(t)) stop = "aborted (taunter downed)";
-            else if (t->IsInCombat()) { std::scoped_lock lk(g_mx); if (auto it = g_attempts.find(a_id); it != g_attempts.end()) it->second.noCombat = 0; }
+            else if (APMFBridge::InCombat(t)) { std::scoped_lock lk(g_mx); if (auto it = g_attempts.find(a_id); it != g_attempts.end()) it->second.noCombat = 0; }
             else {
                 int laps = 0;
                 { std::scoped_lock lk(g_mx); if (auto it = g_attempts.find(a_id); it != g_attempts.end()) laps = ++it->second.noCombat; }
@@ -344,7 +344,7 @@ namespace MFO::Taunt {
                     std::scoped_lock lk(g_mx);
                     if (auto it = g_active.find(a_foeId); it != g_active.end()) {
                         it->second.foeNoCombat     = foe->IsInCombat() ? 0 : it->second.foeNoCombat + 1;
-                        it->second.taunterNoCombat = t->IsInCombat() ? 0 : it->second.taunterNoCombat + 1;
+                        it->second.taunterNoCombat = APMFBridge::InCombat(t) ? 0 : it->second.taunterNoCombat + 1;
                         fl = it->second.foeNoCombat; tl = it->second.taunterNoCombat;
                     }
                 }

@@ -816,14 +816,14 @@ namespace MFO::Logistics::Lockpick {
 
         if (j.phase == Phase::kReady) {
             auto* pc = RE::PlayerCharacter::GetSingleton();
-            const bool combat = a_follower->IsInCombat() || (pc && pc->IsInCombat());
+            const bool combat = APMFBridge::InCombat(a_follower) || (pc && pc->IsInCombat());   // substrate: not combat
             const auto* ast   = a_follower->AsActorState();
             const bool drawn  = ast && ast->IsWeaponDrawn();
             if (combat || drawn) {
                 if (!j.waitLogged) {
                     j.waitLogged = true;
                     spdlog::info("[lockpick] {:08X}: {:08X} pick WAITS -- {}{}", fid, rid,
-                                 combat ? (a_follower->IsInCombat() ? "he is in combat" : "the party is in combat")
+                                 combat ? (APMFBridge::InCombat(a_follower) ? "he is in combat" : "the party is in combat")
                                         : "his weapon is drawn",
                                  (!combat && drawn) ? "; sheathing it first" : "; waiting it out");
                 }
@@ -886,7 +886,7 @@ namespace MFO::Logistics::Lockpick {
                 // idle cannot play is not re-walked every blocklist cycle: retried when his
                 // picks or skill rise (or after a load).
                 auto* pcI = RE::PlayerCharacter::GetSingleton();
-                const bool transient = a_follower->IsInCombat() || (pcI && pcI->IsInCombat()) || pausedSinceLast;
+                const bool transient = APMFBridge::InCombat(a_follower) || (pcI && pcI->IsInCombat()) || pausedSinceLast;
                 if (transient)
                     spdlog::info("[lockpick] {:08X}: {:08X} idle ended by {} -- a retry cooldown, not a verdict", fid,
                                  rid, pausedSinceLast ? "a pause" : "combat");

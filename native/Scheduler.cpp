@@ -255,6 +255,10 @@ namespace MFO::Scheduler {
         // table live" line: inserted on the first own-OOC party-combat service,
         // erased with the other per-fight state in the party-OOC branch.
         std::unordered_set<RE::FormID> g_partyCombatNoted;
+        // COMBAT SUBSTRATE (Harbinger ABI v26, ClickUp 86e3pu939; marth 2026-10-13: "Certainly not. It only exists
+        // to facilitate actions"): the followers whose combat is a Harbinger substrate this lap. They are NOT party
+        // combat. One line when a follower enters that state and one when he leaves it. Worker-only, like the rest.
+        std::unordered_set<RE::FormID> g_substrateNoted;
         // POST-FIGHT STALL PROBE (field 2026-09-29), PASSIVE: no behaviour reads it.
         // Followers stood 10-20 s after fights while the PLAYER stayed combat-
         // flagged (a Bandit Chief no follower engaged) and party combat was ON.
@@ -521,7 +525,7 @@ namespace MFO::Scheduler {
                 }
                 return false;
             }
-            const bool inCombat = a_f->IsInCombat();
+            const bool inCombat = APMFBridge::InCombat(a_f);   // a Harbinger substrate is not combat (ABI v26)
             if (note.phase == RetreatPhase::None) {
                 // A hold the driver did not dispatch (the act.flee gambit's
                 // RetreatFill): adopt it as a fresh TRAVEL. STAY only when he is
@@ -738,6 +742,7 @@ namespace MFO::Scheduler {
         g_meleeClampTrueAt.clear();   // T#76 hysteresis dwell
         g_partyCombat = false;        // party-combat substrate: no phantom OFF edge in the next world
         g_partyCombatNoted.clear();
+        g_substrateNoted.clear();
         g_stallProbe.clear();                   // [stall-probe] samples are session state
         g_deadTgt.clear();                      // [deadtgt] windows are session state
         TauntProbe::Reset();                    // [taunt-probe] samples are session state
@@ -819,6 +824,8 @@ namespace MFO::Scheduler {
                 player = true;
             int followersFighting = 0;
             int foes = 0;
+            int substrate = 0;
+            std::unordered_set<RE::FormID> substrateNow;
             for (const auto& h : active) {
                 auto  ptr = h.get();          // HOLD the NiPointer across the group read
                 auto* a   = ptr.get();
@@ -849,15 +856,32 @@ namespace MFO::Scheduler {
                 // published from a StopCombat seat) is an engine seat for its
                 // own brief.
                 if (a->IsInCombat()) {
+                    // A Harbinger COMBAT SUBSTRATE (ABI v26) is not a fight: not party combat, and its group (the
+                    // anchor) is never read for foes. Real combat inside the window flips SubstrateOnly false at once.
+                    if (APMFBridge::SubstrateOnly(a->GetFormID())) {
+                        ++substrate;
+                        substrateNow.insert(a->GetFormID());
+                        if (g_substrateNoted.insert(a->GetFormID()).second)
+                            spdlog::info("[sched] {:08X} is in a Harbinger combat SUBSTRATE: MFO treats him as OUT of "
+                                         "combat (no party combat, no combat HUD, no combat style, no combat table) "
+                                         "until it closes or real combat starts", a->GetFormID());
+                        continue;
+                    }
                     ++followersFighting;
                     foes = std::max(foes, CombatSense::FoeCount(a));
                 }
             }
+            for (auto it = g_substrateNoted.begin(); it != g_substrateNoted.end();) {
+                if (substrateNow.contains(*it)) { ++it; continue; }
+                spdlog::info("[sched] {:08X} left the Harbinger combat substrate (closed, or real combat: his combat "
+                             "counts from now)", *it);
+                it = g_substrateNoted.erase(it);
+            }
             const bool party = player || followersFighting > 0 || foes > 0;
             if (party != g_partyCombat) {
                 g_partyCombat = party;
-                spdlog::info("[sched] party combat {} (player={} followers={} foes={})",
-                             party ? "ON" : "OFF", player ? 1 : 0, followersFighting, foes);
+                spdlog::info("[sched] party combat {} (player={} followers={} foes={} substrate-only={})",
+                             party ? "ON" : "OFF", player ? 1 : 0, followersFighting, foes, substrate);
             }
         }
 
@@ -997,7 +1021,7 @@ namespace MFO::Scheduler {
         // genuinely belong to HIS fight (loot-travel eviction, the once-per-fight
         // "own combat=0" note) and the own-OOC logistics service at the
         // no-action exits of the combat table.
-        const bool ownCombat = f->IsInCombat();
+        const bool ownCombat = APMFBridge::InCombat(f);   // a Harbinger substrate is not his fight (ABI v26)
         if (!g_partyCombat) {
             // THE WHOLE PARTY-OOC TEARDOWN IS DEBOUNCED over 2 consecutive PARTY-
             // out-of-combat services (SEV-4, Fable field diagnosis 2026-09-21).
@@ -1292,7 +1316,7 @@ namespace MFO::Scheduler {
                 const float loss = Confidence::HpLossRate(id);
                 spdlog::info("[sense] {:08X}: own={} foes={} load={:.2f} hpLoss={:.1f}%/s trend={:.2f} "
                              "confidence={:.2f} leash={:.0f} chase={:.0f} dPlayer={:.0f}",
-                             id, f->IsInCombat() ? 1 : 0, foes, load, loss * 100.0f,
+                             id, APMFBridge::InCombat(f) ? 1 : 0, foes, load, loss * 100.0f,
                              Confidence::TrendFactor(Vocab::HealthPct(f), loss), Confidence::Of(f),
                              Confidence::LeashRadius(f), Confidence::ChaseRadius(f),
                              spc ? f->GetPosition().GetDistance(spc->GetPosition()) : -1.0f);
@@ -1355,7 +1379,7 @@ namespace MFO::Scheduler {
                 // (ChooseHealRoad DirectNoCombat), which owns no package and no alias, so the
                 // retreat travel is untouched and nothing is left for a later StopCombat to
                 // cut. Before it lands, nothing runs (a claim minted now would be cut by it).
-                if (!f->IsInCombat() && !Actuation::CannotActReason(f) && Config::g_castSelf.load()) {
+                if (!APMFBridge::InCombat(f) && !Actuation::CannotActReason(f) && Config::g_castSelf.load()) {
                     for (int start = 0; ; ) {
                         const auto rec = g_followers.find(id);
                         if (rec == g_followers.end()) break;
@@ -1393,7 +1417,7 @@ namespace MFO::Scheduler {
 
             auto& note = g_retreatNotes[id];
             if (Config::g_autoRetreat.load() && note.rearmLaps == 0 && now >= note.rearmAt &&
-                f->IsInCombat() && pc && pc->IsInCombat() && dPlayer > kRetreatMinDist) {
+                APMFBridge::InCombat(f) && pc && pc->IsInCombat() && dPlayer > kRetreatMinDist) {
                 // Read BEFORE the fill: the fill posts a StopCombat, and once it
                 // lands Of() loses the combat/foe multiplier, so any later read
                 // would log a misleading 0.8-1.0 (assess-confidence-leash step 4).
@@ -1690,7 +1714,7 @@ namespace MFO::Scheduler {
             // direct road (they do not pass through here).
             const bool castOp = op == Vocab::kActCastSelf || op == Vocab::kActCastTarget ||
                                 op == Vocab::kActCastPlayer;
-            if (castOp && f->IsInCombat() && !f->GetActorRuntimeData().combatController)
+            if (castOp && APMFBridge::InCombat(f) && !f->GetActorRuntimeData().combatController)
                 outcome = { Actuation::Result::NoOp,
                             "waiting for his combat controller (a combat gambit's cast never takes the direct road)",
                             true };

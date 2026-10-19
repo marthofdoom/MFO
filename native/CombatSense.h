@@ -3,6 +3,13 @@
 #include <cmath>   // std::sqrt -- FoeWeight; std::fabs / std::isfinite -- the melee-reach read
 #include "Config.h" // g_meleeReach -- the melee-reach read
 
+// Harbinger ABI v26 substrate reads (apmf/Bridge.cpp; declared in apmf/APMFBridge.h, which this header cannot
+// include without a cycle). Any thread, lock-free.
+namespace MFO::APMFBridge {
+    bool InCombat(const RE::Actor* a_actor);
+    bool IsSubstrateAnchor(RE::FormID a_actor);
+}
+
 // COMBAT SENSE -- one canonical read of "how many foes is this follower fighting
 // right now," shared by Confidence (foe count knocks confidence down, tightening
 // the leash and arming auto-retreat) and Evaluator (the cond.foe_count_at_least
@@ -26,6 +33,7 @@ namespace MFO::CombatSense {
             if (!foe || foe == a_self) continue;
             if (foe->IsDead() || foe->IsDisabled()) continue;
             if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
+            if (APMFBridge::IsSubstrateAnchor(foe->GetFormID())) continue;   // Harbinger's anchor is never a foe (v26)
             ++n;
         }
         return n;
@@ -77,6 +85,7 @@ namespace MFO::CombatSense {
             if (!foe || foe == a_self) continue;
             if (foe->IsDead() || foe->IsDisabled()) continue;
             if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
+            if (APMFBridge::IsSubstrateAnchor(foe->GetFormID())) continue;   // Harbinger's anchor is never a foe (v26)
             load += FoeWeight(a_self, foe);
             ++n;
         }

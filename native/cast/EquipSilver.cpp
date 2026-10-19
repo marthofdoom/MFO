@@ -195,7 +195,7 @@ namespace MFO::Actuation {
         bool AmmoEpisodeHolds(RE::Actor* a_follower) {
             if (!IsLauncher(a_follower->GetEquippedObject(false))) return false;
             const bool foes = CombatSense::FoeCount(a_follower) > 0;
-            if (!a_follower->IsInCombat() && !foes) return false;
+            if (!APMFBridge::InCombat(a_follower) && !foes) return false;   // substrate: not a fight (v26)
             auto  tp  = a_follower->GetActorRuntimeData().currentCombatTarget.get();
             auto* tgt = tp.get();
             const bool usable = tgt && !tgt->IsDead() && !tgt->IsDisabled() && tgt->IsHostileToActor(a_follower);

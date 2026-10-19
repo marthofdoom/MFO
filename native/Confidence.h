@@ -174,7 +174,7 @@ namespace MFO::Confidence {
     inline float Of(RE::Actor* a_follower) {
         if (!a_follower) return 0.0f;
         float c = Vitality(a_follower) * TrendFactor(a_follower);
-        if (a_follower->IsInCombat()) {
+        if (APMFBridge::InCombat(a_follower)) {   // a Harbinger substrate is not a fight (ABI v26; CombatSense.h decl)
             const float load = CombatSense::FoeLoad(a_follower);
             c *= FoeMultiplier(load > 0.0f ? load : 1.0f);   // empty group in combat = one even foe (v1's max(1))
         }

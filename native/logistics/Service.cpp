@@ -86,7 +86,7 @@ namespace MFO::Logistics {
             // Ultimate potion to heal a scratch is the wasteful "burns the best potion"
             // tell (Fable P10). If nothing single-handedly covers the deficit, fall to
             // the strongest to close the most gap.
-            const bool  inCombat = a_follower->IsInCombat();
+            const bool  inCombat = APMFBridge::InCombat(a_follower);   // a Harbinger substrate is not combat (ABI v26)
             float deficit = 0.0f;
             if (!inCombat) {
                 if (auto* avo = a_follower->AsActorValueOwner())
@@ -501,14 +501,15 @@ namespace MFO::Logistics {
                 tr.obsAt         = now;
             }
             const bool inHome = !Config::g_lootInPlayerHomes.load() && InPlayerHome();
-            if (a_follower->IsInCombat() || overCap || outOfLeash || inHome) {
-                if (outOfLeash && leashView.clamped && !a_follower->IsInCombat() && !overCap && !inHome)
+            const bool folFighting = APMFBridge::InCombat(a_follower);   // a Harbinger substrate is not combat (v26)
+            if (folFighting || overCap || outOfLeash || inHome) {
+                if (outOfLeash && leashView.clamped && !folFighting && !overCap && !inHome)
                     spdlog::info("[loot] {:08X} left the TELEPORT-SAFE leash: {:.0f} u from the player > "
                                  "{:.0f} (capped under {}'s {:.0f} while his weapon is drawn) -- excursion ends "
                                  "(best-effort: that mod may already have teleported him; recognition is the "
                                  "backstop)", id, toPlayer, leashView.release,
                                  TeleportCompat::DetectedName(), leashView.teleportAt);
-                Packages::LootTravelClear(a_follower->IsInCombat() ? "combat"
+                Packages::LootTravelClear(folFighting ? "combat"
                                           : (overCap ? "excursion cap"
                                           : (inHome ? "player home"
                                           : (leashView.clamped ? "left leash (teleport-mod clamp)"
@@ -1238,7 +1239,7 @@ namespace MFO::Logistics {
                         // outranks loot-travel and must never be fought (the Scheduler
                         // clears loot on combat anyway, but this tick may beat it).
                         const bool tooManySteals = g_stealStrikes[skey] >= kStealStrikeMax;
-                        const bool folInCombat   = a_follower->IsInCombat();
+                        const bool folInCombat   = APMFBridge::InCombat(a_follower);   // substrate: not combat (v26)
                         // CH19, never engaged by kCh19Concede (5 s, R4): Harbinger
                         // owns the leg and MFO may not nudge it, so there is nothing
                         // to wait for -- concede now and let the Holding scan re-point

@@ -9,6 +9,7 @@
 #include <cmath>         // std::floor — not guaranteed via the PCH
 #include "Config.h"      // g_hmsRedistribute / g_hmsSkewMaxFrac (main-MFO MCM)
 #include "Followers.h"   // ResolvedClassFast / MeasureEngineVitalAward / SetFollowerHMS
+#include "apmf/APMFBridge.h"   // InCombat: a Harbinger combat substrate is not combat (ABI v26)
 
 namespace MFO::ProgAllocator {
 
@@ -147,7 +148,7 @@ namespace MFO::ProgAllocator {
             constexpr auto kHmsCombatDwell = std::chrono::seconds(3);   // mirror Logistics shed dwell
             const auto now = std::chrono::steady_clock::now();
             const RE::FormID fid = a_actor->GetFormID();
-            const bool combatNow = a_actor->IsInCombat();
+            const bool combatNow = APMFBridge::InCombat(a_actor);   // a Harbinger substrate is not combat (ABI v26)
             if (combatNow) a_st.hmsLastCombat = now;
             const bool recentCombat =
                 combatNow || (a_st.hmsInBattle && (now - a_st.hmsLastCombat) < kHmsCombatDwell);

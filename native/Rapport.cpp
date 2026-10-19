@@ -6,6 +6,7 @@
 #include "Config.h"
 #include "State.h"
 #include "MainThread.h"   // #63 quash runs on the pump, never in the dispatch
+#include "apmf/APMFBridge.h"   // InCombat: a Harbinger combat substrate is not combat (ABI v26)
 #include "Diagnostics.h"  // SEV-1: PumpTickGate/CurrentPumpEpoch to drain the death-sink body
 
 namespace MFO::Rapport {
@@ -65,7 +66,7 @@ namespace MFO::Rapport {
             // 1. Combat state carries the archery case: the player snipes from
             //    200m while the follower fights. They are participating and
             //    distance is irrelevant. (BALANCE.md §2.)
-            if (a_follower->IsInCombat()) return true;
+            if (APMFBridge::InCombat(a_follower)) return true;   // a Harbinger substrate is not a fight (ABI v26)
 
             // 1b. RECENTLY in combat counts too, and this is the case that was
             //     silently losing awards in the field. This test runs from a
@@ -240,7 +241,7 @@ namespace MFO::Rapport {
                             const char* nm = f->GetName();
                             spdlog::info("[rapport]   no credit for {:08X} {}: inCombat={} "
                                          "sinceCombat={:.1f}s distToPlayer={:.0f}u distToVictim={:.0f}u",
-                                         f->GetFormID(), nm ? nm : "?", f->IsInCombat() ? "Y" : "n",
+                                         f->GetFormID(), nm ? nm : "?", APMFBridge::InCombat(f) ? "Y" : "n",
                                          Followers::SecondsSinceCombat(f->GetFormID()),
                                          f->GetPosition().GetDistance(player->GetPosition()),
                                          f->GetPosition().GetDistance(victim->GetPosition()));
