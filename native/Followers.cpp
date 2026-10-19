@@ -82,6 +82,29 @@ namespace MFO::Followers {
         constexpr int kMissesBeforeDrop = 3;
         std::unordered_map<RE::FormID, int> g_missStreak;
 
+        // CLAIM THROUGH LOADS (marth 2026-10-19: "Keep the claim through loads"; ClickUp 86e3qmmef + the
+        // 10-18 load-gap finding). At every load screen the sweep drops a follower for 5-40 s (Sven loads
+        // later than Auri: `- id` then `+ id` seconds apart, always right after a main-thread stall) and the
+        // dismissal release handed his ch.17 equip claim back -- and in that gap the engine stripped worn
+        // gear (a declared ring, 3 of 4 armor pieces) until the re-claim re-declared. A drop that happens
+        // within kLoadWindowS of a world transition (LoadingMenu seen, a worker gap, a player interior/
+        // worldspace change or a position jump) while the actor is STILL an eligible teammate is TRANSIENT:
+        // he leaves g_active as before but ReleaseHeldState is NOT run, so the claim and the change
+        // detector stay standing; Refresh finishes the release if he is still absent after kTransientHoldS
+        // or stops being eligible. A drop with no transition in sight releases exactly as before.
+        // Worker/serial-pump only, like every map here; cleared with them.
+        constexpr float kLoadWindowS     = 60.0f;   // Sven's measured absence after a load: up to ~40 s
+        constexpr float kTransientHoldS  = 60.0f;
+        constexpr float kRefreshGapS     = 2.5f;    // sweeps run every ~0.13 s; a longer gap = the worker was stalled by a load
+        constexpr float kTeleportJumpU   = 4096.0f; // player position jump between sweeps = fast travel / cell load
+        using Clock = std::chrono::steady_clock;
+        Clock::time_point                             g_lastRefreshAt{};
+        Clock::time_point                             g_transitionAt{};
+        const void*                                   g_lastPlaceKey = nullptr;
+        RE::NiPoint3                                  g_lastPcPos{};
+        bool                                          g_havePcPos = false;
+        std::unordered_map<RE::FormID, Clock::time_point> g_transientDrop;   // id -> when the transient drop began
+
         // [follower] STATE LINE (2026-09-21, Deck/Fable: Jesper stood still for
         // three minutes on an ACTIVE PlayerFollowerPackage and nothing MFO
         // printed could tell Follow from Wait -- both are the same package
@@ -231,6 +254,8 @@ namespace MFO::Followers {
         g_rosterPending.clear();
         { std::scoped_lock lk(g_rosterMx); g_rosterDone.clear(); }
         g_missStreak.clear();
+        g_transientDrop.clear();
+        g_lastRefreshAt = {}; g_transitionAt = {}; g_lastPlaceKey = nullptr; g_havePcPos = false;
         g_lastCombat.clear();
         g_stateSample.clear();   // [follower] state-line sample (position + time)
         g_activeIds.clear();
@@ -581,6 +606,29 @@ namespace MFO::Followers {
             return;
         }
 
+        // World-transition marker for the claim-through-load rule (see kLoadWindowS). Four independent
+        // signals, any one marks: the LoadingMenu is open; the previous sweep was > kRefreshGapS ago (the
+        // worker is stalled by a load); the player's interior cell / worldspace changed; the player jumped
+        // > kTeleportJumpU (fast travel). Exterior-to-exterior walking marks nothing.
+        const auto sweepNow = Clock::now();
+        bool       loadingNow = false;
+        if (auto* ui = RE::UI::GetSingleton()) loadingNow = ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
+        if (loadingNow) g_transitionAt = sweepNow;
+        if (g_lastRefreshAt.time_since_epoch().count() != 0 &&
+            std::chrono::duration<float>(sweepNow - g_lastRefreshAt).count() > kRefreshGapS)
+            g_transitionAt = sweepNow;
+        g_lastRefreshAt = sweepNow;
+        if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
+            auto*       cell = pc->GetParentCell();
+            const void* key  = (cell && cell->IsInteriorCell()) ? static_cast<const void*>(cell)
+                                                                : static_cast<const void*>(pc->GetWorldspace());
+            if (g_lastPlaceKey && key != g_lastPlaceKey) g_transitionAt = sweepNow;
+            if (key) g_lastPlaceKey = key;
+            const auto pos = pc->GetPosition();
+            if (g_havePcPos && pos.GetDistance(g_lastPcPos) > kTeleportJumpU) g_transitionAt = sweepNow;
+            g_lastPcPos = pos; g_havePcPos = true;
+        }
+
         // Previous set, taken from the ID list rather than by re-resolving --
         // a handle that momentarily fails to resolve must still count as a
         // MISS (and get the hold), not silently disappear (F6).
@@ -624,10 +672,7 @@ namespace MFO::Followers {
                 LogStateLine(a, id, "30s");
             }
         }
-        const bool loading = [] {
-            auto* ui = RE::UI::GetSingleton();
-            return ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
-        }();
+        const bool loading = loadingNow;
         for (const auto id : before) {
             bool still = false;
             for (const auto& h : next) {
@@ -648,6 +693,26 @@ namespace MFO::Followers {
                     continue;
                 }
                 g_missStreak.erase(id);
+                // WHY he is gone, said on the drop line (86e3qmmef: Sven's `-`/`+` pairs had no reason).
+                auto* gone = RE::TESForm::LookupByID<RE::Actor>(id);
+                const char* why = !gone                          ? "actor does not resolve"
+                                : gone->IsDead()                 ? "dead"
+                                : gone->IsDisabled()             ? "disabled"
+                                : gone->IsDeleted()              ? "deleted"
+                                : !gone->IsPlayerTeammate()      ? "no longer a teammate"
+                                : IsDismissedCustomFollower(gone) ? "dismissed-custom-follower quirk"
+                                : (gone->IsCommandedActor() && !Config::g_allowSummons) ? "summon, not allowed"
+                                :                                  "not in the high process list (unloaded / other cell)";
+                const float sinceTransition = g_transitionAt.time_since_epoch().count() != 0
+                    ? std::chrono::duration<float>(sweepNow - g_transitionAt).count() : -1.0f;
+                if (IsEligibleFollower(gone) && sinceTransition >= 0.0f && sinceTransition <= kLoadWindowS) {
+                    // TRANSIENT (load / cell change): keep the ch.17 claim and every other held state; the
+                    // release is finished below if he stays absent or stops being eligible.
+                    g_transientDrop[id] = sweepNow;
+                    spdlog::info("[follower] - {:08X} (transient, {:.1f}s after a world transition: {} -- claim and held "
+                                 "state KEPT, record and Rapport retained)", id, sinceTransition, why);
+                    continue;
+                }
                 // Give back everything MFO was holding on this follower BEFORE we
                 // stop tracking him (#55). The exact same release is needed when a
                 // follower is toggled MFO-OFF on the board (T#78) -- one helper, one
@@ -655,7 +720,32 @@ namespace MFO::Followers {
                 ReleaseHeldState(id);
                 // Record is RETAINED -- dismissal must never destroy Rapport
                 // (DESIGN.md §3.1, the emotional core of the progression).
-                spdlog::info("[follower] - {:08X} (record and Rapport retained)", id);
+                spdlog::info("[follower] - {:08X} ({}; {}; record and Rapport retained)", id, why,
+                             sinceTransition < 0.0f ? "no world transition seen"
+                                                    : sinceTransition > kLoadWindowS ? "last world transition long ago"
+                                                                                     : "not eligible");
+            }
+        }
+
+        // Finish the release of transient drops that did not come back (still absent after the hold,
+        // or no longer an eligible teammate). One that re-joined is simply forgotten: his claim never left.
+        for (auto it = g_transientDrop.begin(); it != g_transientDrop.end();) {
+            const auto id = it->first;
+            if (std::find(nextIds.begin(), nextIds.end(), id) != nextIds.end()) {
+                spdlog::info("[follower] {:08X} back after {:.1f}s -- his equip claim and declaration stood through the load",
+                             id, std::chrono::duration<float>(sweepNow - it->second).count());
+                it = g_transientDrop.erase(it);
+                continue;
+            }
+            auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
+            const bool expired = std::chrono::duration<float>(sweepNow - it->second).count() > kTransientHoldS;
+            if (expired || !IsEligibleFollower(a)) {
+                ReleaseHeldState(id);
+                spdlog::info("[follower] {:08X} transient drop ended -- {}; held state released", id,
+                             expired ? "still absent after the hold" : "no longer an eligible teammate");
+                it = g_transientDrop.erase(it);
+            } else {
+                ++it;
             }
         }
 
