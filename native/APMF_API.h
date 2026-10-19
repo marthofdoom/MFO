@@ -89,10 +89,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v26, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v27, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 26;
+    inline constexpr std::uint32_t kABIVersion = 27;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -636,6 +636,7 @@ namespace APMF_API {
                                      //       an unsupported runtime, the player, a negative / NaN fval. A
                                      //       substrate that cannot open (in combat, unloaded, ...) ends its claim.
                                      //       ABI v26: APMF_API_v26::GetSubstrateState (substrate-only combat).
+                                     //       ABI v27: APMF_API_v27::IsSubstrateAvailable (installed here?).
                                      //       See Docs/FACETS.md "Combat substrate".
     };
 
@@ -2510,6 +2511,27 @@ namespace APMF_API {
         // `actor`'s SubstrateState. Read-only; ANY THREAD (lock-free, no game call, no lock); cheap
         // per actor per tick. A throw inside returns kSubstrateState_None.
         std::uint32_t (*GetSubstrateState)(RE::FormID actor);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v27: SUBSTRATE AVAILABILITY (kIntent_CombatSubstrate, ch.27)
+    // ═════════════════════════════════════════════════════════════════════════════
+    // Can this install open a combat substrate at all? It tells "the capability is ABSENT here" (a
+    // declared degrade the client may plan for) from "this one open was refused" (a failure the client
+    // logs and never falls back from, principle 7). See Docs/APMF_API-REFERENCE.md#abi-v27-substrate-available
+    //
+    // The v27 interface: APMF_API_v26's members verbatim (prefix EXTENSION), then ONE appended slot.
+    // BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 27` (INVARIANTS #14b); an
+    // older APMF has no query (a v23..v26 APMF may still accept a kIntent_CombatSubstrate claim).
+    struct APMF_API_v27 : APMF_API_v26 {
+        // TRUE only when the substrate is INSTALLED and usable on this runtime: APMF.ini's
+        // [CombatSubstrate] bCombatSubstrate is not 0, the runtime is one it runs on (exactly 1.6.1170
+        // or 1.5.97, not VR), every seat it rides is installed, every address row it calls verified, and
+        // its APMF.esl records resolved. Exactly when a kIntent_CombatSubstrate request is NOT refused for
+        // being unavailable. FALSE before kDataLoaded and after any refusal (the reason is logged once in
+        // APMF.log, "[substrate] combat substrate NOT installed"). Read-only, ANY THREAD (one atomic load,
+        // no game call), may change once at kDataLoaded and never afterwards. A throw inside returns false.
+        bool (*IsSubstrateAvailable)(void);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
