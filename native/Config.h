@@ -763,6 +763,25 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_economyBuyGear{ true };
     inline std::atomic<bool>  g_economyBuyTomes{ true };
 
+    // TOWN ERRANDS (ClickUp 86e3t1mx7, R1a; Docs/TOWN-DESIGN in the evidence folder). With Harbinger
+    // (ch.19 + ch.12 idle v2 + GetIdleState, ABI >= 24) present the follower no longer trades INSTANTLY
+    // with any vendor near him: when the player is in a City / Town / Settlement and he has a reason
+    // (junk to sell, a supply need, an affordable upgrade) he WALKS to an open shop's vendor, plays the
+    // talk / give / take idles, trades, and rejoins. Harbinger absent = the old proximity trade, unchanged.
+    //   bTownErrands: master switch for the above (default ON). OFF = the old proximity trade.
+    //   iErrandMinSellGold: the sellable rows a candidate vendor accepts must be worth at least this
+    //     much (capped by that chest's last-seen gold) for a SELL errand. INI-only.
+    //   iErrandMinPurse: the purse needed for an UPGRADE errand (gear / apparel / tome wishes). INI-only.
+    //   fErrandSettleSec: the player must have been in the town this long before anyone shops. INI-only.
+    //   fErrandCooldownSec: real seconds between one follower's errands. INI-only.
+    //   fErrandMaxGameMin: an errand older than this many GAME minutes ends (REJOIN). INI-only.
+    inline std::atomic<bool>  g_townErrands{ true };
+    inline std::atomic<int>   g_errandMinSellGold{ 100 };
+    inline std::atomic<int>   g_errandMinPurse{ 200 };
+    inline std::atomic<float> g_errandSettleSec{ 10.0f };
+    inline std::atomic<float> g_errandCooldownSec{ 120.0f };
+    inline std::atomic<float> g_errandMaxGameMin{ 120.0f };
+
     // §HMS class-redistribution (v1.0.68). On level-up MFO measures the engine's
     // per-level Health/Magicka/Stamina award and re-grants it reshaped to the
     // follower's class profile (mage -> Magicka, archer -> Stamina, warrior ->

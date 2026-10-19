@@ -1612,6 +1612,36 @@ namespace MFO::APMFBridge {
     void ReleaseDeposit(RE::FormID a_follower);
     // Revert / load (pump drained): release every deposit claim and forget them.
     void ClearDepositClaims();
+    // ── TOWN ERRAND (ClickUp 86e3t1mx7, R1a) -- apmf/ErrandClaims.cpp ──────────────────────────────
+    // The facet claims ONE town errand rides, keyed by follower: ch.19 travel to the VENDOR actor, ch.1 hold
+    // while the idle beats play, ch.12 Idle v2 (ONE claim: the talk / give / take beats are RE-POINTS of it).
+    // logistics/Errand.cpp owns the errands (one per follower, several at once). Worker road; own mutex, never
+    // g_mx. Nothing is saved. Needs ABI >= 24: ErrandSupported is false below it (an older APMF would play the v1
+    // idle for a form), and the legacy proximity trade is the road then -- never a fallback from a decline.
+    bool ErrandSupported();
+    std::uint32_t ErrandApiVersion();   // 0 when APMF is absent (for the once-log)
+    // ch.19 walk to a_dest (a loaded reference), arrival radius a_radius (APMF clamps to [50,512]).
+    bool ClaimErrandTravel(RE::FormID a_follower, RE::FormID a_dest, float a_radius);
+    // The errand leg's v12 state, same contract as ReadLootTravelLeg (`ours` = this errand's claim and vendor).
+    bool ReadErrandLeg(RE::FormID a_follower, LootLegState& a_out);
+    // The verdict of the CURRENT idle beat. Waiting = Pending / Accepted (Harbinger judges the window) or the
+    // record not visible yet; Played = Confirmed or ConfirmedWeak; Failed = anything else (detail names it).
+    enum class ErrandIdleVerdict { None, Waiting, Played, Failed };
+    struct ErrandIdleReading {
+        ErrandIdleVerdict verdict = ErrandIdleVerdict::None;   // None = no idle claim
+        bool              weak    = false;
+        std::string       detail;   // "state=Refused endCause=Harbinger ..." for the log
+    };
+    // Play a_idle AT a_target as the next beat: the first call files the ch.1 hold and the ch.12 claim, a later
+    // call Repoints the same claim to the new idle. False = refused at the call (logged).
+    bool PlayErrandIdle(RE::FormID a_follower, RE::FormID a_idle, RE::FormID a_target);
+    ErrandIdleReading ReadErrandIdle(RE::FormID a_follower);
+    // End the beats only (idle, then hold); the walk claim stays. Idempotent.
+    void ReleaseErrandIdle(RE::FormID a_follower);
+    // Release this errand's idle, hold and walk (in that order). Idempotent.
+    void ReleaseErrand(RE::FormID a_follower);
+    // Revert / load (pump drained): release every errand claim and forget them.
+    void ClearErrandClaims();
     // ── TAUNT (taunt slice S2, ClickUp 86e3g6duw, Docs/TAUNT-DESIGN.md) -- apmf/TauntClaims.cpp ──
     // The claims only; the decisions are native/Taunt.cpp's. Worker or main thread (own mutex, never g_mx). Nothing
     // is saved. TauntSupported: APMF present AND abiVersion >= 24 (GetIdleState; implies ch.12 idle v2, the pin, the entry,

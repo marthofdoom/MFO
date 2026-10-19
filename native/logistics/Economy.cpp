@@ -457,20 +457,24 @@ namespace MFO::Logistics {
         }
 
         void EconomyProbe(RE::Actor* a_follower, const FollowerState& a_state,
-                          Clock::time_point a_now) {
+                          Clock::time_point a_now, ErrandProbe* a_errand) {
             const auto& a_logistics = a_state.logistics();
             const auto fid = a_follower->GetFormID();
 
             // Per-follower SCAN cooldown -- the cell walk itself is the
             // cost being limited here, same pattern as the other diagnostics.
+            // TOWN ERRAND mode (a_errand, logistics/Errand.cpp): the errand owns the cadence and the
+            // candidate list, so no scan clock and no cell walk -- everything below the walk is shared.
             auto& sn = g_econScan[fid];
-            if (sn.time_since_epoch().count() != 0 && a_now < sn) return;
-            sn = a_now + std::chrono::seconds(2);   // vendor-scan cadence (was 15s, then 6 -- snappier shopping)
+            if (!a_errand) {
+                if (sn.time_since_epoch().count() != 0 && a_now < sn) return;
+                sn = a_now + std::chrono::seconds(2);   // vendor-scan cadence (was 15s, then 6 -- snappier shopping)
+            }
 
             // Same crash4-safe walk as LootNearby: the follower's OWN attached
             // cell, never TES::ForEachReferenceInRange (§0.30).
             auto* cell = a_follower->GetParentCell();
-            if (!cell || !cell->IsAttached()) return;
+            if (!a_errand && (!cell || !cell->IsAttached())) return;
             const auto  origin      = a_follower->GetPosition();
             const float kLootRadius = Config::g_lootRadius.load();
 
@@ -481,6 +485,7 @@ namespace MFO::Logistics {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             std::vector<RE::ActorHandle> living;
             living.reserve(kMaxVendorCands);
+            if (!a_errand)   // errand mode: the candidates come from the errand's catalog (below)
             cell->ForEachReferenceInRange(origin, kLootRadius,
                 [&](RE::TESObjectREFR* a_ref) {
                     if (living.size() >= kMaxVendorCands) return RE::BSContainer::ForEachResult::kStop;
@@ -498,6 +503,7 @@ namespace MFO::Logistics {
                     living.push_back(actor->GetHandle());
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
+            if (a_errand) living = a_errand->vendors;
 
             // PHASE 4 anti-thrash + don't-trade-mid-loot.
             // (a) A follower already walking to loot must not break off to trade --
@@ -508,7 +514,7 @@ namespace MFO::Logistics {
             //     next scan re-evaluates the need. Without it a follower near two
             //     vendors traded with BOTH in the same scan and over-bought (field:
             //     Erik +17 @ Ysolda AND +22 @ Adrianne, same second).
-            if (auto& tn = g_econTrade[fid]; tn.time_since_epoch().count() != 0 && a_now < tn) return;
+            if (auto& tn = g_econTrade[fid]; !a_errand && tn.time_since_epoch().count() != 0 && a_now < tn) return;
 
             // #21 buy thresholds (weapon/armor/apparel/tome) -- built ONCE on the
             // worker from the follower's own inventory/skills/gambits, reused for
@@ -963,9 +969,11 @@ namespace MFO::Logistics {
 
                 // Per-(follower,vendor) log cooldown (60 s).
                 const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendor->GetFormID();
-                auto& pn = g_econPair[pairKey];
-                if (pn.time_since_epoch().count() != 0 && a_now < pn) continue;
-                pn = a_now + std::chrono::seconds(12);   // per-(follower,vendor) retry cadence (was 60s, then 20)
+                if (!a_errand) {   // errand mode: the errand's own planner cadence replaces this one
+                    auto& pn = g_econPair[pairKey];
+                    if (pn.time_since_epoch().count() != 0 && a_now < pn) continue;
+                    pn = a_now + std::chrono::seconds(12);   // per-(follower,vendor) retry cadence (was 60s, then 20)
+                }
 
                 const auto& vv   = fac->vendorData.vendorValues;
                 auto*       vend = fac->vendorData.vendorSellBuyList;
@@ -1009,6 +1017,31 @@ namespace MFO::Logistics {
                     if (!why.empty())
                         spdlog::info("[econ] {:08X} @ '{}': trade SKIPPED -- {}", fid,
                                      vendor->GetName() ? vendor->GetName() : "?", why);
+                    if (a_errand) {   // evaluated, SkipTrade said no (the empty-trade memo / nothing to do here)
+                        ErrandProbe::Verdict v;
+                        v.vendor = vendor->GetFormID();
+                        v.chest = chest->GetFormID();
+                        v.evaluated = true;
+                        v.skipped = true;
+                        a_errand->verdicts.push_back(v);
+                    }
+                    continue;
+                }
+                // TOWN ERRAND PLAN: report what this vendor would take / give; dispatch nothing (the errand decides).
+                if (a_errand && a_errand->mode == ErrandProbe::Mode::kPlan) {
+                    ErrandProbe::Verdict v;
+                    v.vendor = vendor->GetFormID();
+                    v.chest = chest->GetFormID();
+                    v.evaluated = true;
+                    v.sellRows = static_cast<int>(sell.size());
+                    for (const auto& r : sell) v.sellValue += static_cast<std::int64_t>(r.value) * std::max<std::int32_t>(r.count, 0);
+                    for (const auto& n : needs) v.needKinds |= (1u << n.kind);
+                    v.wishGear = purse > 0 && buy.buyGear;
+                    v.wishApparel = purse > 0 && buy.buyMageApparel;
+                    v.wishTome = purse > 0 && buy.buyTomes;
+                    v.purse = purse;
+                    v.chestGold = TradeBridge::LastSeenChestGold(chest->GetFormID());
+                    a_errand->verdicts.push_back(v);
                     continue;
                 }
                 // Only burn the cooldown + stop scanning if a trade ACTUALLY
@@ -1018,6 +1051,7 @@ namespace MFO::Logistics {
                 if (TradeBridge::VendorTrade(a_follower, vendor, chest,
                                              std::move(sell), needs, purse, buy, sig, daysNow)) {
                     g_econTrade[fid] = a_now + std::chrono::seconds(8);
+                    if (a_errand) a_errand->dispatched = true;
                     break;
                 }
             }   // for (living vendors)

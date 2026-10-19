@@ -876,8 +876,32 @@ namespace MFO::Logistics {
     void LogMageApparelDiag(RE::TESObjectARMO* a_armo, RE::ActorValue a_school);
     void UnlockCollegeTomes();
     void EquipBestOwnedGear(RE::Actor* a_follower, const FollowerState& a_state);
+    // TOWN ERRAND mode of the probe (logistics/Errand.cpp, ClickUp 86e3t1mx7 R1a). Null (the default) = the
+    // legacy proximity trade, byte-for-byte the old path. Non-null: no scan clock, no cell walk -- the
+    // candidates are `vendors` (loaded vendor actors the errand catalog accepted) and everything else
+    // (follower-side state, VEND filter, SkipTrade, VendorTrade) is the SAME code. kPlan evaluates every
+    // candidate into `verdicts` (parallel-ish: one per candidate that got past the faction / chest checks)
+    // and dispatches nothing; kExecute dispatches the one trade (dispatched=true) exactly as the legacy path.
+    struct ErrandProbe {
+        enum class Mode { kPlan, kExecute } mode = Mode::kPlan;
+        std::vector<RE::ActorHandle> vendors;                  // IN
+        struct Verdict {                                       // OUT (kPlan; skipped=evaluated but SkipTrade said no)
+            RE::FormID    vendor = 0;
+            RE::FormID    chest = 0;
+            bool          evaluated = false;
+            bool          skipped = false;                     // SkipTrade said no: a memoed empty trade / nothing to do
+            int           sellRows = 0;
+            std::int64_t  sellValue = 0;                       // sum of unit price x count over the rows THIS vendor accepts
+            std::uint32_t needKinds = 0;                       // bit n = a TradeBridge::NeedCat::Kind n supply need
+            bool          wishGear = false, wishApparel = false, wishTome = false;
+            int           purse = 0;
+            std::int32_t  chestGold = -1;                      // the chest's last-seen barter gold (-1 unknown)
+        };
+        std::vector<Verdict> verdicts;
+        bool dispatched = false;                               // OUT (kExecute)
+    };
     void EconomyProbe(RE::Actor* a_follower, const FollowerState& a_state,
-                      Clock::time_point a_now);
+                      Clock::time_point a_now, ErrandProbe* a_errand = nullptr);
     // ── APMF EQUIP AUTHORITY (feat/mfo-equip-authority, 2026-09-15), defined in
     // Logistics_Economy.cpp beside EquipBestOwnedGear (full doc there). Declared
     // in THIS header, not Logistics.h, because the only non-Logistics caller is

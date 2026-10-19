@@ -18,6 +18,7 @@
 #include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
 #include "Loadout.h"       // LeftHandSlot: the left-hand heal equip names its slot
 #include "Lotd.h"          // LOTD awareness: the deposit trip's lifecycle edges (feat/mfo-lotd)
+#include "Errand.h"        // town errands: ClearTransientState on revert
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -747,6 +748,7 @@ namespace MFO::Logistics {
         g_lastBlocklistReassess = {};
         Lockpick::Clear();    // LP-M1: pick jobs, verdicts and their Harbinger holds are per-session
         Lotd::ClearTransientState();   // LOTD: the deposit trip + its claims, the needs cache, the ledger
+        Errand::ClearTransientState(); // town errands: the records + their Harbinger claims
     }
 
     void ReleaseTravelOnCombat(RE::Actor* a_follower) {

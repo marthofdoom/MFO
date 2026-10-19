@@ -17,6 +17,7 @@
 #include "ComposedCast.h"  // HeldOffBy: an Applied that was a HOLD, not a delivery (amendment (b))
 #include "TeleportCompat.h" // follower-teleport mod leash clamp + teleport recognition (86e3ec824)
 #include "Lotd.h"          // LOTD awareness: the museum gambit + deposit trip (feat/mfo-lotd)
+#include "Errand.h"        // town errands (R1a): Tick / TryStart
 #include <algorithm>      // std::sort/std::min/std::erase_if (healing stock cap)
 #include <cmath>          // std::sin/cos/sqrt for the view cone
 #include <unordered_set>  // keepWeapons: best-of-each-class protection set
@@ -401,6 +402,9 @@ namespace MFO::Logistics {
             return true;
         };
         if (Lotd::DepositTick(a_follower, now, tripHealWants)) return;
+        // TOWN ERRAND (logistics/Errand.cpp): while THIS follower is on a shopping errand it owns his logistics
+        // tick, exactly as a deposit trip does. It yields to combat (Sweep / its own checks) and to heals.
+        if (Errand::Tick(a_follower, a_state, now, healWants)) return;
         // MUSEUM DEPOSIT = TOP PRIORITY when a crate is inside his leash (marth
         // 2026-09-28). Checked EVERY service tick HERE -- ahead of the excursion driver
         // and the rule loop, so the board order and the pass-0 dibs deferral no longer
@@ -2154,7 +2158,9 @@ namespace MFO::Logistics {
                 MEOBridge::RequestGemReconcile(a_follower, Config::g_meoAwareGems.load(), prefs);
             }
             GemRules::PumpProbes(a_follower);   // looted-gear gem probes: keep or put back once the strip landed
-            if (Config::g_economy.load() && Po3Present())
+            // TOWN ERRANDS (Harbinger ABI >= 24): the planner owns the economy; the instant proximity trade runs
+            // ONLY when errands are off or Harbinger is absent / too old (TryStart returns false then).
+            if (Config::g_economy.load() && Po3Present() && !Errand::TryStart(a_follower, a_state, now))
                 EconomyProbe(a_follower, a_state, now);
         }
     }

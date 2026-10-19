@@ -14,6 +14,7 @@ namespace MFO::TradeBridge {
 
         struct TradeOrder {
             RE::ActorHandle      follower;
+            RE::FormID           followerId = 0;   // for the town errand's outcome record (below)
             RE::ActorHandle      vendor;
             RE::ObjectRefHandle  chest;
             RE::FormID           chestId = 0;  // for the per-chest in-flight guard
@@ -46,6 +47,9 @@ namespace MFO::TradeBridge {
         std::unordered_map<std::uint64_t, EmptyMemo>     g_emptyMemo;
         struct StaticSkip { std::uint64_t reason = 0; float day = 0.0f; };
         std::unordered_map<std::uint64_t, StaticSkip>    g_staticSkip;   // pair -> skip (b): the reason sig + the game day it began
+        // TOWN ERRAND (logistics/Errand.cpp): the LAST report per follower, so the errand that dispatched
+        // the order can see that it finished and what it moved. Guarded by g_mtx; session state.
+        std::unordered_map<RE::FormID, TradeOutcome>     g_outcomes;
 
         std::uint64_t PairKey(RE::FormID a_follower, RE::FormID a_vendor) {
             return (static_cast<std::uint64_t>(a_follower) << 32) | a_vendor;
@@ -552,6 +556,8 @@ namespace MFO::TradeBridge {
             }
             if (a_vendorGold < 0) {
                 spdlog::info("[econ] token {} -- Papyrus found no usable chest (aborted)", a_token);
+                std::scoped_lock lk(g_mtx);
+                g_outcomes[o.followerId] = TradeOutcome{ true, 0, 0, 0, 0 };
                 return;
             }
             {
@@ -564,6 +570,7 @@ namespace MFO::TradeBridge {
                 auto* vp = vpp.get();
                 std::scoped_lock lk(g_mtx);
                 g_chestGold[o.chestId] = a_vendorGold;
+                g_outcomes[o.followerId] = TradeOutcome{ false, a_soldCount, a_soldValue, a_boughtCount, a_spent };
                 if (fp && vp) {
                     const auto key = PairKey(fp->GetFormID(), vp->GetFormID());
                     if (a_soldCount == 0 && a_boughtCount == 0)
@@ -648,6 +655,7 @@ namespace MFO::TradeBridge {
             token = g_nextToken.fetch_add(1);
             TradeOrder o;
             o.follower  = a_follower->GetHandle();
+            o.followerId = a_follower->GetFormID();
             o.vendor    = a_vendor ? a_vendor->GetHandle() : RE::ActorHandle{};
             o.chest     = a_chest->GetHandle();
             o.chestId   = chestId;
@@ -752,9 +760,37 @@ namespace MFO::TradeBridge {
         return false;
     }
 
+    std::int32_t LastSeenChestGold(RE::FormID a_chest) {
+        std::scoped_lock lk(g_mtx);
+        const auto it = g_chestGold.find(a_chest);
+        return it == g_chestGold.end() ? -1 : it->second;
+    }
+
+    bool HasLiveOrder(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mtx);
+        for (const auto& [tok, o] : g_orders)
+            if (o.followerId == a_follower) return true;
+        return false;
+    }
+
+    bool TakeOutcome(RE::FormID a_follower, TradeOutcome& a_out) {
+        std::scoped_lock lk(g_mtx);
+        const auto it = g_outcomes.find(a_follower);
+        if (it == g_outcomes.end()) return false;
+        a_out = it->second;
+        g_outcomes.erase(it);
+        return true;
+    }
+
+    void DiscardOutcome(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mtx);
+        g_outcomes.erase(a_follower);
+    }
+
     void ClearTransientState() {
         std::scoped_lock lk(g_mtx);
         g_orders.clear();
+        g_outcomes.clear();
         g_chestGold.clear();
         g_emptyMemo.clear();
         g_staticSkip.clear();

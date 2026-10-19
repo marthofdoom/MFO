@@ -80,6 +80,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/Cast.cpp
     logistics/ClassResolve.cpp
     logistics/Economy.cpp
+    logistics/Errand.cpp
     logistics/GemRules.cpp
     logistics/EquipAuthority.cpp
     logistics/LootTake.cpp
@@ -121,6 +122,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/CastGuard.cpp
     apmf/EquipPreference.cpp
     apmf/Deposit.cpp
+    apmf/ErrandClaims.cpp
     apmf/TauntClaims.cpp
     apmf/Los.cpp
     imgui_impl_win32.cpp

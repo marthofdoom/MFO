@@ -205,6 +205,25 @@ namespace MFO::TradeBridge {
                    float a_daysNow, bool a_buyWishes, const std::vector<SellRow>& a_sell,
                    const std::vector<NeedCat>& a_needs, std::string& a_why);
 
+    // ── TOWN ERRAND seam (logistics/Errand.cpp, ClickUp 86e3t1mx7 R1a) ───────────────
+    // The errand dispatches ONE VendorTrade per follower and needs to see that it FINISHED:
+    // HasLiveOrder = an order for this follower is stored and not yet reported (or reaped);
+    // TakeOutcome = the last ReportTrade for this follower (consumed; false = none yet).
+    // DiscardOutcome before a dispatch so a stale report is never mistaken for the new one.
+    // `aborted` = Papyrus found no usable chest. Native only: no Papyrus signature changes.
+    struct TradeOutcome {
+        bool         aborted    = false;
+        std::int32_t soldCount  = 0;
+        std::int32_t soldValue  = 0;
+        std::int32_t boughtCount= 0;
+        std::int32_t spent      = 0;
+    };
+    // The vendor chest's barter gold as the LAST report there read it (-1 = never reported). Worker.
+    std::int32_t LastSeenChestGold(RE::FormID a_chest);
+    bool HasLiveOrder(RE::FormID a_follower);
+    bool TakeOutcome(RE::FormID a_follower, TradeOutcome& a_out);
+    void DiscardOutcome(RE::FormID a_follower);
+
     // Drop any pending orders (revert/quit). Token map is transient state.
     void ClearTransientState();
 

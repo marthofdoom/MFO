@@ -1,0 +1,779 @@
+// logistics/Errand.cpp -- TOWN ERRANDS, round R1a (ClickUp 86e3t1mx7). See logistics/Errand.h for the
+// contract and the R1b / R2 seams. This file owns the DECISIONS: when a follower goes shopping, which
+// vendor, and the state machine of the physical errand
+//
+//     PLAN --claim ch.19--> WALKING --arrived--> TALKING --> GIVING --trade dispatched--> TRADING
+//                                                                                  \--(bought)--> TAKING --> DONE
+//     any phase --combat / player left town / follower gone / told to wait / cap / vendor gone--> END (REJOIN)
+//
+// The Harbinger claims (ch.19 walk, ch.1 hold, ch.12 v2 idle beats) are apmf/ErrandClaims.cpp's; the order
+// build and the VEND / SkipTrade / VendorTrade chain are EconomyProbe's own code, driven in errand mode
+// (Logistics_internal.h ErrandProbe) so the errand and the legacy proximity trade can never disagree on what
+// a trade is.
+//
+// WHAT "REJOIN" MEANS: every errand claim is released and his own follow package walks him back to the
+// player (visible). R1b adds the off-screen half (the simulation, the MoveTo recall); until then a follower
+// who unloads simply ends the errand.
+//
+// THREADING: the AddTask job worker (the per-follower service tick + the pump's Sweep); ClearTransientState
+// from the revert with the pump drained. g_mx guards the tables and is NEVER held across a Harbinger,
+// TradeBridge or EconomyProbe call (a copy of the record is taken, acted on, and written back if the errand
+// still exists).
+#include "PCH.h"
+#include "Errand.h"
+#include "Logistics_internal.h"
+#include "Config.h"
+#include "Followers.h"
+#include "Forms.h"
+#include "LocationTypes.h"
+#include "TradeBridge.h"
+#include "APMF_API.h"
+#include "apmf/APMFBridge.h"
+
+#include <algorithm>
+#include <cmath>
+#include <format>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include <spdlog/spdlog.h>
+
+namespace MFO::Logistics::Errand {
+
+    namespace {
+
+        // ── constants (each sized from a real cadence, principle 9) ───────────────────────────────────
+        // The service tick (kLogisticsInterval ~1 s) is the errand's step clock, so every wait below is a
+        // handful of ticks. The Harbinger idle window (kIdleConfirmWindowMs 3 s) is judged by Harbinger, not here.
+        constexpr float kVendorRadius   = 110.0f;   // ch.19 arrival radius around the vendor (talking distance; APMF clamps [50,512])
+        constexpr float kArriveDist     = 170.0f;   // distance backstop for an arrival the leg state has not reported yet
+        constexpr float kBlockedReach   = 260.0f;   // a BLOCKED end this close to the vendor (same floor) is an arrival
+        constexpr float kSameFloorDz    = 120.0f;
+        constexpr float kScanRadius     = 4096.0f;  // the catalog's cell walk, around the follower (one cell is ~4096 u)
+        constexpr std::size_t kMaxCands = 24;
+        constexpr int   kMaxWalking     = 4;        // Harbinger has 8 ch.19 package slots, shared with loot (kMaxLootSlots = 4) and the deposit
+        constexpr auto  kPlanInterval   = std::chrono::seconds(6);
+        constexpr auto  kQueueRetry     = std::chrono::seconds(6);
+        constexpr auto  kTalkHold       = std::chrono::milliseconds(2500);   // the talk beat, once it reads Played
+        constexpr auto  kGiveHold       = std::chrono::milliseconds(1500);   // the give beat, once it reads Played, before the trade dispatches
+        constexpr auto  kTakeHold       = std::chrono::milliseconds(2500);
+        constexpr auto  kBeatPatience   = std::chrono::seconds(8);           // a beat Harbinger has not judged by now is skipped (logged)
+        constexpr auto  kDispatchPatience = std::chrono::seconds(25);        // a busy chest / a bridge that is down
+        constexpr auto  kTradeWait      = std::chrono::seconds(45);          // dispatch -> ReportTrade (VendorTrade reaps an order at 30 s)
+        constexpr auto  kRealCap        = std::chrono::seconds(240);
+        constexpr auto  kStall          = std::chrono::seconds(8);           // an errand whose follower is not being serviced
+        constexpr auto  kLeftTownGrace  = std::chrono::seconds(2);
+        constexpr auto  kParkTime       = std::chrono::minutes(5);
+        constexpr float kFailCooldownSec  = 45.0f;
+        constexpr float kCombatCooldownSec = 30.0f;
+
+        // Skyrim.esm facts, all verified with tools/esp_inspect.py on Skyrim.esm (2026-10-18).
+        constexpr RE::FormID kKwPotion    = 0x0008CDEC;   // VendorItemPotion
+        constexpr RE::FormID kKwWeapon    = 0x0008F958;   // VendorItemWeapon
+        constexpr RE::FormID kKwArmor     = 0x0008F959;   // VendorItemArmor
+        constexpr RE::FormID kKwJewelry   = 0x0008F95A;   // VendorItemJewelry
+        constexpr RE::FormID kKwClothing  = 0x0008F95B;   // VendorItemClothing
+        constexpr RE::FormID kKwArrow     = 0x000917E7;   // VendorItemArrow (bolts carry it too: there is no separate bolt keyword)
+        constexpr RE::FormID kKwSpellTome = 0x000937A5;   // VendorItemSpellTome
+        constexpr RE::FormID kIdleTalk         = 0x000F64DD;   // DialogueGenericTalking
+        constexpr RE::FormID kIdleTalkFallback = 0x000E5190;   // DialogueNeutralExpressive
+        constexpr RE::FormID kIdleGive         = 0x000B5E20;   // IdleGive (field-confirmed in the museum deposit)
+        constexpr RE::FormID kIdleTake         = 0x000B5E1F;   // IdleTake
+
+        enum class Phase { Walking, Talking, Giving, Trading, Taking };
+
+        const char* PhaseName(Phase p) {
+            switch (p) {
+                case Phase::Walking: return "WALKING";
+                case Phase::Talking: return "TALKING";
+                case Phase::Giving:  return "GIVING";
+                case Phase::Trading: return "TRADING";
+                case Phase::Taking:  return "TAKING";
+            }
+            return "?";
+        }
+
+        // One errand per follower. Session state, never saved (R2 adds the ERND record).
+        struct Rec {
+            Phase         phase = Phase::Walking;
+            RE::FormID    vendor = 0;          // the vendor ACTOR
+            RE::FormID    chest = 0;
+            RE::FormID    town = 0;            // the BGSLocation the errand belongs to (the player's town when it began)
+            std::string   followerName, vendorName;
+            Clock::time_point start{}, phaseAt{}, lastTick{}, townLostSince{}, confirmedAt{}, dispatchedAt{};
+            float         startDays = 0.0f;
+            bool          beatRequested = false;   // the CURRENT beat's idle was requested
+            bool          talkFallbackUsed = false;
+            bool          dispatched = false;
+            bool          bought = false;
+        };
+
+        std::mutex                                           g_mx;
+        std::unordered_map<RE::FormID, Rec>                  g_recs;
+        std::unordered_map<RE::FormID, Clock::time_point>    g_cool;        // follower -> next errand allowed
+        std::unordered_map<RE::FormID, Clock::time_point>    g_nextPlan;    // follower -> next plan evaluation
+        std::unordered_map<RE::FormID, Clock::time_point>    g_parked;      // vendor actor -> parked until (a static-blocked walk)
+        RE::FormID                                           g_townId = 0;  // the town the player has been in ...
+        Clock::time_point                                    g_townSince{}; // ... since this instant
+        std::atomic<bool>                                    g_latched{ false };   // Harbinger refused the idle seat: errands INERT this session
+
+        // ── small helpers ─────────────────────────────────────────────────────────────────────────────
+        const char* LegName(std::uint32_t s) {
+            switch (s) {
+                case APMF_API::kLeg_None:            return "NONE";
+                case APMF_API::kLeg_Pending:         return "PENDING";
+                case APMF_API::kLeg_Walking:         return "WALKING";
+                case APMF_API::kLeg_Arrived:         return "ARRIVED";
+                case APMF_API::kLeg_Blocked:         return "BLOCKED";
+                case APMF_API::kLeg_CombatCancelled: return "COMBAT-CANCELLED";
+                case APMF_API::kLeg_DestGone:        return "DEST-GONE";
+                case APMF_API::kLeg_StuckTimeout:    return "STUCK-TIMEOUT";
+                case APMF_API::kLeg_ActorGone:       return "ACTOR-GONE";
+                case APMF_API::kLeg_Failed:          return "FAILED";
+                case APMF_API::kLeg_Released:        return "RELEASED";
+                default:                             return "?";
+            }
+        }
+
+        const char* NameOf(const RE::Actor* a) {
+            const char* n = a ? a->GetName() : nullptr;
+            return n && *n ? n : "?";
+        }
+
+        std::string TownName(RE::FormID a_id) {
+            auto* loc = RE::TESForm::LookupByID<RE::BGSLocation>(a_id);
+            const char* n = loc ? loc->GetName() : nullptr;
+            return n && *n ? n : std::format("{:08X}", a_id);
+        }
+
+        bool InLoadingMenu() {
+            auto* ui = RE::UI::GetSingleton();
+            return ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
+        }
+
+        // The vendor faction the legacy scan also picks: the first one that IsVendor && OffersServices with
+        // rank >= 0 (a negative rank is a runtime removal).
+        RE::TESFaction* VendorFactionOf(RE::Actor* a_actor) {
+            RE::TESFaction* fac = nullptr;
+            a_actor->VisitFactions([&](RE::TESFaction* a_fac, std::int8_t a_rank) {
+                if (!a_fac || a_rank < 0) return false;
+                if (a_fac->IsVendor() && a_fac->OffersServices()) { fac = a_fac; return true; }
+                return false;
+            });
+            return fac;
+        }
+
+        // VENV hours: start == end, or 0-24, means always open.
+        bool OpenAt(const RE::TESFaction* a_fac, float a_hour) {
+            const float s = static_cast<float>(a_fac->vendorData.vendorValues.startHour);
+            const float e = static_cast<float>(a_fac->vendorData.vendorValues.endHour);
+            if (s == e || (s <= 0.0f && e >= 24.0f)) return true;
+            return s < e ? (a_hour >= s && a_hour < e) : (a_hour >= s || a_hour < e);
+        }
+
+        // Does this vendor's VEND list trade the keyword (same inclusion / exclusion rule as VendorTrades)?
+        bool ListTrades(const RE::TESFaction* a_fac, RE::FormID a_kw) {
+            auto* vend = a_fac->vendorData.vendorSellBuyList;
+            const bool notBuySell = a_fac->vendorData.vendorValues.notBuySell;
+            if (!vend) return notBuySell;
+            bool match = false;
+            for (auto* f : vend->forms)
+                if (f && f->GetFormID() == a_kw) { match = true; break; }
+            return notBuySell ? !match : match;
+        }
+
+        // ── the catalog (R1a: loaded vendor actors) ───────────────────────────────────────────────────
+        // SEAM: `place` (the faction's PLVD cell / reference) is where an UNLOADED shop attaches in R1b. R1a does
+        // not read it: PackageLocation::Data is a union of TESForm* and ObjectRefHandle and which member a
+        // faction's file-loaded PLVD fills is not verified, so R1a takes the place from the loaded vendor ACTOR.
+        struct Cand {
+            RE::ActorHandle  handle;
+            RE::FormID       id = 0;
+            RE::TESFaction*  fac = nullptr;
+            RE::FormID       chest = 0;
+            float            dist = 0.0f;       // player -> vendor, straight line
+        };
+
+        std::vector<Cand> BuildCatalog(RE::Actor* a_follower, const RE::BGSLocation* a_playerTown,
+                                       Clock::time_point a_now, int& a_dropped) {
+            std::vector<Cand> out;
+            a_dropped = 0;
+            auto* cell = a_follower->GetParentCell();
+            auto* pc   = RE::PlayerCharacter::GetSingleton();
+            auto* cal  = RE::Calendar::GetSingleton();
+            if (!cell || !cell->IsAttached() || !pc || !cal) return out;
+
+            // COLLECT-THEN-ACT (#2): handles only inside the walk, then the reads.
+            std::vector<RE::ActorHandle> living;
+            cell->ForEachReferenceInRange(a_follower->GetPosition(), kScanRadius,
+                [&](RE::TESObjectREFR* a_ref) {
+                    if (living.size() >= kMaxCands * 4) return RE::BSContainer::ForEachResult::kStop;
+                    auto* actor = a_ref->As<RE::Actor>();
+                    if (!actor || actor == a_follower || actor == pc || actor->IsDead() || actor->IsDisabled() ||
+                        actor->IsMarkedForDeletion() || actor->IsPlayerTeammate())   // a teammate is never a merchant (the Auri CTD guard)
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    living.push_back(actor->GetHandle());
+                    return RE::BSContainer::ForEachResult::kContinue;
+                });
+
+            const float hour = cal->GetHour();
+            const float maxFromPlayer = Config::g_travelRadius.load();
+            std::unordered_map<RE::FormID, bool> seenChest;
+            for (auto& h : living) {
+                if (out.size() >= kMaxCands) break;
+                auto  ptr = h.get();
+                auto* v   = ptr.get();
+                if (!v || !v->Is3DLoaded() || v->IsInCombat()) continue;
+                if (const auto s = v->GetSitSleepState(); s == RE::SIT_SLEEP_STATE::kIsSleeping ||
+                                                           s == RE::SIT_SLEEP_STATE::kWantToSleep ||
+                                                           s == RE::SIT_SLEEP_STATE::kWaitingForSleepAnim)
+                    continue;   // a sleeper cannot be talked to
+                auto* fac = VendorFactionOf(v);
+                if (!fac) continue;
+                // Skip conditioned vendors and fences (marth 2026-10-18; Q10): their stock / availability depends on
+                // conditions that need the vendor and the player as subject / target, which MFO cannot evaluate.
+                if (fac->vendorData.vendorConditions && fac->vendorData.vendorConditions->head) { ++a_dropped; continue; }
+                const auto& vv = fac->vendorData.vendorValues;
+                if (vv.buysStolen && !vv.buysNonStolen) { ++a_dropped; continue; }   // a fence
+                if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
+                auto* chest = fac->vendorData.merchantContainer;
+                if (!chest || !chest->GetContainer()) continue;   // a malformed merchant link (see EconomyProbe)
+                // The same town as the player (a roadside vendor outside any town is not an errand destination).
+                const auto* vTown = LocationTypes::TownAnchor(v->GetCurrentLocation());
+                if (!vTown || vTown != a_playerTown) { ++a_dropped; continue; }
+                const float dPlayer = v->GetPosition().GetDistance(pc->GetPosition());
+                if (dPlayer > maxFromPlayer) { ++a_dropped; continue; }
+                if (const auto it = g_parked.find(v->GetFormID()); it != g_parked.end() && a_now < it->second) continue;
+                if (seenChest.contains(chest->GetFormID())) continue;   // one actor per chest is enough
+                seenChest[chest->GetFormID()] = true;
+                Cand c;
+                c.handle = h;
+                c.id     = v->GetFormID();
+                c.fac    = fac;
+                c.chest  = chest->GetFormID();
+                c.dist   = dPlayer;
+                out.push_back(c);
+            }
+            return out;
+        }
+
+        struct Idles { RE::FormID talk = 0, talkFallback = 0, give = 0, take = 0; };
+        const Idles& IdleIds() {
+            static const Idles s = [] {
+                Idles i;
+                auto* dh = RE::TESDataHandler::GetSingleton();
+                auto id = [&](RE::FormID a_raw) -> RE::FormID {
+                    auto* f = dh ? dh->LookupForm<RE::TESIdleForm>(a_raw & 0x00FFFFFF, "Skyrim.esm") : nullptr;
+                    return f ? f->GetFormID() : 0u;
+                };
+                i.talk = id(kIdleTalk); i.talkFallback = id(kIdleTalkFallback); i.give = id(kIdleGive); i.take = id(kIdleTake);
+                spdlog::info("[errand] idle forms resolved: talk {:08X} (fallback {:08X}) give {:08X} take {:08X}",
+                             i.talk, i.talkFallback, i.give, i.take);
+                return i;
+            }();
+            return s;
+        }
+
+        // ── ending an errand ─────────────────────────────────────────────────────────────────────────
+        // Every exit funnels here: drop the record, release the claims, stamp the cooldown, say why ONCE.
+        void Finish(RE::FormID a_fid, const char* a_why, float a_cooldownSec, bool a_complete = false) {
+            Rec r;
+            {
+                std::scoped_lock lk(g_mx);
+                const auto it = g_recs.find(a_fid);
+                if (it == g_recs.end()) return;
+                r = it->second;
+                g_recs.erase(it);
+                g_cool[a_fid] = Clock::now() + std::chrono::milliseconds(static_cast<long long>(a_cooldownSec * 1000.0f));
+            }
+            APMFBridge::ReleaseErrand(a_fid);   // idle, hold, walk (in that order)
+            spdlog::info("[errand] {:08X} '{}': {} at {} -- {} (vendor '{}' {:08X}; {} s)", a_fid, r.followerName,
+                         a_complete ? "DONE" : "ENDED", PhaseName(r.phase), a_why, r.vendorName, r.vendor,
+                         std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - r.start).count());
+        }
+
+        void Store(RE::FormID a_fid, const Rec& a_r) {
+            std::scoped_lock lk(g_mx);
+            if (const auto it = g_recs.find(a_fid); it != g_recs.end()) {
+                const auto lost = it->second.townLostSince;   // the Sweep's field: a Tick's stale copy must not reset it
+                it->second = a_r;
+                it->second.townLostSince = lost;
+            }
+        }
+
+        // The state of the CURRENT idle beat, with the log line a verdict change deserves.
+        APMFBridge::ErrandIdleReading BeatReading(RE::FormID a_fid) { return APMFBridge::ReadErrandIdle(a_fid); }
+
+        // Latch the whole feature off: Harbinger refused the ch.12 idle seat synchronously. No walk-and-refuse
+        // loop, no instant trade either (the legacy road is "Harbinger absent" only, never a decline fallback).
+        void Latch() {
+            if (!g_latched.exchange(true))
+                spdlog::warn("[errand] town errands are OFF for this session: Harbinger refused the ch.12 v2 idle "
+                             "synchronously (APMF.log names why: [Idle] bIdleV2=0, runtime, self-check). Proper "
+                             "animations are required: no idle, no errand, and no instant trade either.");
+        }
+
+        std::size_t CountWalking() {
+            std::scoped_lock lk(g_mx);
+            std::size_t n = 0;
+            for (const auto& [id, r] : g_recs) if (r.phase == Phase::Walking) ++n;
+            return n;
+        }
+    }
+
+    // ── public: lifecycle ───────────────────────────────────────────────────────────────────────────
+    bool Active(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mx);
+        return g_recs.contains(a_follower);
+    }
+
+    void End(RE::FormID a_follower, const char* a_why) { Finish(a_follower, a_why, kFailCooldownSec); }
+
+    void ClearTransientState() {
+        {
+            std::scoped_lock lk(g_mx);
+            g_recs.clear();
+            g_cool.clear();
+            g_nextPlan.clear();
+            g_parked.clear();
+            g_townId = 0;
+            g_townSince = {};
+        }
+        APMFBridge::ClearErrandClaims();
+    }
+
+    // ── public: the planner (the idle branch of ServiceFollower) ─────────────────────────────────────
+    bool TryStart(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now) {
+        if (!a_follower) return false;
+        // Legacy proximity trade stays when errands are off, or Harbinger lacks what an errand needs.
+        if (!Config::g_townErrands.load()) return false;
+        if (!APMFBridge::ErrandSupported()) {
+            static std::atomic<bool> s_logged{ false };
+            if (!s_logged.exchange(true))
+                spdlog::info("[errand] town errands need Harbinger ABI >= 24 (this APMF: {}): the legacy instant "
+                             "proximity trade stays. (Logged once.)",
+                             APMFBridge::ErrandApiVersion() ? std::format("ABI v{}", APMFBridge::ErrandApiVersion())
+                                                            : std::string("absent"));
+            return false;
+        }
+        // From here on errands OWN the economy: whatever happens below, the caller must not run the
+        // instant trade (marth 2026-10-18: retired whenever Harbinger is present).
+        if (g_latched.load()) return true;
+
+        const auto fid = a_follower->GetFormID();
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        if (!pc || !pc->Is3DLoaded()) return true;
+
+        // The player's town + how long he has been in it (the settle clock). Tracked on every call.
+        const RE::BGSLocation* playerTown = LocationTypes::TownAnchor(pc->GetCurrentLocation());
+        Clock::time_point townSince{};
+        {
+            std::scoped_lock lk(g_mx);
+            const RE::FormID tid = playerTown ? playerTown->GetFormID() : 0u;
+            if (tid != g_townId) { g_townId = tid; g_townSince = a_now; }
+            townSince = g_townSince;
+            if (g_recs.contains(fid)) return true;   // (Tick owns him)
+            if (const auto it = g_cool.find(fid); it != g_cool.end() && a_now < it->second) return true;
+            if (const auto it = g_nextPlan.find(fid); it != g_nextPlan.end() && a_now < it->second) return true;
+        }
+        if (!playerTown) return true;
+        if (a_now - townSince < std::chrono::milliseconds(static_cast<long long>(Config::g_errandSettleSec.load() * 1000.0f)))
+            return true;
+
+        // A cheap gate set first; the plan below walks a cell and the follower's inventory.
+        auto* ui = RE::UI::GetSingleton();
+        if (ui && ui->GameIsPaused()) return true;
+        if (a_follower->IsInCombat() || pc->IsInCombat()) return true;
+        if (SlotOf(fid)) return true;   // looting: loot and errand never overlap
+        auto* avo = a_follower->AsActorValueOwner();
+        if (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) return true;   // told to wait
+        if (a_follower->IsOnMount() || a_follower->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) return true;
+        if (!a_follower->Is3DLoaded()) return true;
+        if (LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) != playerTown) return true;   // he is not in the player's town
+        if (auto* q = Forms::g_tradeQuest; !q || !q->IsRunning()) return true;   // no trade bridge: nothing could be traded
+
+        {
+            std::scoped_lock lk(g_mx);
+            g_nextPlan[fid] = a_now + kPlanInterval;
+        }
+
+        int dropped = 0;
+        auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped);
+        if (cands.empty()) return true;
+
+        // PLAN: EconomyProbe in errand/plan mode evaluates every candidate with the SAME code a trade uses.
+        ErrandProbe probe;
+        probe.mode = ErrandProbe::Mode::kPlan;
+        for (auto& c : cands) probe.vendors.push_back(c.handle);
+        EconomyProbe(a_follower, a_state, a_now, &probe);
+
+        const int minSell  = Config::g_errandMinSellGold.load();
+        const int minPurse = Config::g_errandMinPurse.load();
+        float carry = 0.0f;
+        if (avo) {
+            const float cw = avo->GetActorValue(RE::ActorValue::kCarryWeight);
+            const float iw = avo->GetActorValue(RE::ActorValue::kInventoryWeight);
+            carry = cw > 0.0f ? iw / cw : 0.0f;
+        }
+        const Cand* best = nullptr;
+        float bestScore = -1.0e9f;
+        std::string bestWhy;
+        int evaluated = 0, skipped = 0;
+        for (const auto& v : probe.verdicts) {
+            if (!v.evaluated) continue;
+            ++evaluated;
+            if (v.skipped) { ++skipped; continue; }
+            const Cand* c = nullptr;
+            for (const auto& k : cands) if (k.id == v.vendor) { c = &k; break; }
+            if (!c) continue;
+            // Gold the chest can actually pay for the rows this vendor accepts (last-seen gold; unknown = uncapped).
+            std::int64_t sellGold = v.sellValue;
+            if (v.chestGold >= 0) sellGold = std::min<std::int64_t>(sellGold, v.chestGold);
+            const bool sellReason  = v.sellRows > 0 && (sellGold >= minSell || carry > 0.8f);
+            bool needReason = false;
+            for (int k = 0; k < 12; ++k) {
+                if (!((v.needKinds >> k) & 1u)) continue;
+                const RE::FormID kw = (k <= 2) ? kKwPotion : (k == 3 || k == 4 || k == 11) ? kKwArrow : (k == 10) ? kKwWeapon : 0u;
+                if (kw && ListTrades(c->fac, kw)) { needReason = true; break; }
+            }
+            const bool rich = v.purse >= minPurse;
+            const bool wishReason = rich &&
+                ((v.wishGear    && (ListTrades(c->fac, kKwWeapon) || ListTrades(c->fac, kKwArmor))) ||
+                 (v.wishApparel && (ListTrades(c->fac, kKwClothing) || ListTrades(c->fac, kKwJewelry) || ListTrades(c->fac, kKwArmor))) ||
+                 (v.wishTome    && ListTrades(c->fac, kKwSpellTome)));
+            if (!sellReason && !needReason && !wishReason) continue;
+            // Rank: what he can sell here, plus a weight per need / wish this vendor can serve, minus walking.
+            const float score = static_cast<float>(sellReason ? sellGold : 0) + (needReason ? 250.0f : 0.0f) +
+                                (wishReason ? 150.0f : 0.0f) - c->dist / 10.0f;
+            if (score > bestScore) {
+                bestScore = score;
+                best = c;
+                bestWhy = std::format("sell {} row(s) worth {}g (chest gold {}), needs {:#x}, wishes gear={} apparel={} tome={}, "
+                                      "purse {}, carry {:.0f}%, reason sell={} need={} wish={}",
+                                      v.sellRows, v.sellValue, v.chestGold, v.needKinds, v.wishGear, v.wishApparel,
+                                      v.wishTome, v.purse, carry * 100.0f, sellReason, needReason, wishReason);
+            }
+        }
+        if (!best) {
+            // Said once per ~minute per follower at most (the plan cadence is 6 s): the reason he is NOT shopping.
+            static std::unordered_map<RE::FormID, Clock::time_point> s_nextNoReasonLog;
+            if (auto& nx = s_nextNoReasonLog[fid]; nx.time_since_epoch().count() == 0 || a_now >= nx) {
+                nx = a_now + std::chrono::seconds(60);
+                spdlog::info("[errand] {:08X} '{}': no errand -- {} open shop vendor(s) in '{}' ({} dropped: closed / "
+                             "conditioned / fence / other town), {} evaluated, {} skipped (nothing new to trade); no sell/need/"
+                             "wish reason clears (minSell {}g, minPurse {}g)", fid, NameOf(a_follower), cands.size(),
+                             playerTown->GetName() ? playerTown->GetName() : "?", dropped, evaluated, skipped, minSell,
+                             minPurse);
+            }
+            return true;
+        }
+
+        // The ch.19 leg budget (Harbinger's 8 package slots, shared with loot and the deposit): beyond it he queues.
+        if (CountWalking() >= static_cast<std::size_t>(kMaxWalking)) {
+            std::scoped_lock lk(g_mx);
+            g_nextPlan[fid] = a_now + kQueueRetry;
+            spdlog::info("[errand] {:08X} '{}': QUEUED -- {} errand walks already hold Harbinger's ch.19 legs (shared with "
+                         "loot), next try in {} s", fid, NameOf(a_follower), kMaxWalking, kQueueRetry.count());
+            return true;
+        }
+        auto* vendor = best->handle.get().get();
+        if (!vendor) return true;
+        if (!APMFBridge::ClaimErrandTravel(fid, best->id, kVendorRadius)) {
+            // Refused at the call: the leg budget (all 8 slots busy), [Travel] bTravel=0, VR. Retry soon, never a fallback.
+            std::scoped_lock lk(g_mx);
+            g_nextPlan[fid] = a_now + kQueueRetry;
+            return true;
+        }
+        Rec r;
+        r.phase       = Phase::Walking;
+        r.vendor      = best->id;
+        r.chest       = best->chest;
+        r.town        = playerTown->GetFormID();
+        r.followerName = NameOf(a_follower);
+        r.vendorName  = NameOf(vendor);
+        r.start = r.phaseAt = r.lastTick = a_now;
+        if (auto* cal = RE::Calendar::GetSingleton()) r.startDays = cal->GetDaysPassed();
+        {
+            std::scoped_lock lk(g_mx);
+            g_recs[fid] = r;
+        }
+        spdlog::info("[errand] {:08X} '{}' PLAN -> '{}' ({:08X}) in '{}', {:.0f} u from the player | {} | {} candidate(s)",
+                     fid, r.followerName, r.vendorName, best->id, TownName(r.town), best->dist, bestWhy, cands.size());
+        return true;
+    }
+
+    // ── public: the per-follower step (top of the logistics tick) ───────────────────────────────────
+    bool Tick(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now,
+              const std::function<bool()>& a_healWants) {
+        if (!a_follower) return false;
+        const auto fid = a_follower->GetFormID();
+        Rec r;
+        {
+            std::scoped_lock lk(g_mx);
+            const auto it = g_recs.find(fid);
+            if (it == g_recs.end()) return false;
+            it->second.lastTick = a_now;
+            r = it->second;
+        }
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        if (!Config::g_townErrands.load() || !Config::g_economy.load()) { Finish(fid, "town errands / economy switched off", kFailCooldownSec); return false; }
+        if (a_follower->IsDead() || !a_follower->Is3DLoaded()) { Finish(fid, "follower dead or unloaded", kFailCooldownSec); return false; }
+        if (a_follower->IsInCombat() || (pc && pc->IsInCombat())) { Finish(fid, "combat -- he rejoins", kCombatCooldownSec); return false; }
+        if (auto* avo = a_follower->AsActorValueOwner(); avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) {
+            Finish(fid, "told to wait", 60.0f);
+            return false;
+        }
+        if (a_healWants && a_healWants()) { Finish(fid, "yields to a heal", 15.0f); return false; }
+        if (a_now - r.start > kRealCap) { Finish(fid, "timed out (240 s real time)", 60.0f); return false; }
+        if (auto* cal = RE::Calendar::GetSingleton()) {
+            const float minutes = (cal->GetDaysPassed() - r.startDays) * 24.0f * 60.0f;
+            if (minutes > Config::g_errandMaxGameMin.load()) {
+                Finish(fid, std::format("older than fErrandMaxGameMin ({:.0f} game min)", minutes).c_str(), kFailCooldownSec);
+                return false;
+            }
+        }
+        auto* vendor = RE::TESForm::LookupByID<RE::Actor>(r.vendor);
+        if (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || vendor->IsInCombat()) {
+            Finish(fid, "the vendor is gone, dead, unloaded or in combat", kFailCooldownSec);
+            return false;
+        }
+        const Idles& idles = IdleIds();
+        if (!idles.give) { Finish(fid, "IdleGive did not resolve", 600.0f); return false; }
+        const float dist = a_follower->GetPosition().GetDistance(vendor->GetPosition());
+        const float dz   = std::fabs(a_follower->GetPosition().z - vendor->GetPosition().z);
+
+        // Advance to the next beat: request its idle (the first beat files the ch.1 hold + ch.12 claim, later beats
+        // re-point the same claim). A synchronous refusal of the FIRST beat latches the feature.
+        auto beginBeat = [&](Phase a_next, RE::FormID a_idle, const char* a_name) -> bool {
+            if (!APMFBridge::PlayErrandIdle(fid, a_idle, r.vendor)) {
+                Latch();
+                Finish(fid, std::format("Harbinger refused the {} idle at the call", a_name).c_str(), 600.0f);
+                return false;
+            }
+            r.phase = a_next;
+            r.phaseAt = a_now;
+            r.beatRequested = true;
+            r.confirmedAt = {};
+            return true;
+        };
+
+        switch (r.phase) {
+        case Phase::Walking: {
+            bool arrived = false;
+            APMFBridge::LootLegState leg;
+            if (APMFBridge::ReadErrandLeg(fid, leg) && leg.ours) {
+                if (leg.state == APMF_API::kLeg_Arrived) {
+                    arrived = true;
+                } else if (leg.state == APMF_API::kLeg_Blocked) {
+                    // BLOCKED within talking reach (same floor) is an arrival (the museum deposit's rule); a block that
+                    // stopped short FAILS loudly and PARKS that vendor for a while (a static block stays closed).
+                    if (dist <= kBlockedReach && dz <= kSameFloorDz) {
+                        arrived = true;
+                        spdlog::info("[errand] {:08X}: walk to '{}' ended BLOCKED at {:.0f} u -- within talking reach, "
+                                     "counted as ARRIVED", fid, r.vendorName, dist);
+                    } else {
+                        {
+                            std::scoped_lock lk(g_mx);
+                            g_parked[r.vendor] = a_now + kParkTime;
+                        }
+                        Finish(fid, std::format("the walk ended BLOCKED at {:.0f} u from the vendor (blocker kind {}); vendor parked for {} min",
+                                                dist, leg.blockerKind, std::chrono::duration_cast<std::chrono::minutes>(kParkTime).count()).c_str(),
+                               kFailCooldownSec);
+                        return false;
+                    }
+                } else if (leg.state == APMF_API::kLeg_Failed) {
+                    // The leg could not start: the usual cause is all 8 ch.19 package slots busy (loot + deposit + errands).
+                    // He QUEUES (a short retry), never parks the vendor and never falls back to the instant trade.
+                    Finish(fid, "Harbinger could not start the leg (FAILED -- all travel slots busy? APMF.log says); queued", 6.0f);
+                    return false;
+                } else if (leg.state > APMF_API::kLeg_Blocked && leg.state <= APMF_API::kLeg_Released) {
+                    Finish(fid, std::format("the walk ended: {}", LegName(leg.state)).c_str(), kFailCooldownSec);
+                    return false;
+                }
+            }
+            // Distance backstop: a leg read that is not ours yet, or a vendor who walked up to him.
+            if (!arrived && dist <= kArriveDist && dz <= kSameFloorDz) arrived = true;
+            if (!arrived) { Store(fid, r); return true; }
+            spdlog::info("[errand] {:08X} '{}': ARRIVED at '{}' ({:.0f} u) after {} s -- talk beat",
+                         fid, r.followerName, r.vendorName, dist,
+                         std::chrono::duration_cast<std::chrono::seconds>(a_now - r.start).count());
+            if (!idles.talk) {   // an old master without the dialogue idle: straight to the hand-over
+                if (!beginBeat(Phase::Giving, idles.give, "give")) return false;
+            } else if (!beginBeat(Phase::Talking, idles.talk, "talk")) {
+                return false;
+            }
+            Store(fid, r);
+            return true;
+        }
+
+        case Phase::Talking: {
+            const auto rd = BeatReading(fid);
+            const bool patience = a_now - r.phaseAt > kBeatPatience;
+            if (rd.verdict == APMFBridge::ErrandIdleVerdict::Played) {
+                if (r.confirmedAt.time_since_epoch().count() == 0) {
+                    r.confirmedAt = a_now;
+                    spdlog::info("[errand] {:08X}: talk idle PLAYED{} ({})", fid, rd.weak ? " (weak)" : "", rd.detail);
+                }
+                if (a_now - r.confirmedAt >= kTalkHold && beginBeat(Phase::Giving, idles.give, "give")) {
+                    Store(fid, r);
+                    return true;
+                }
+                if (a_now - r.confirmedAt >= kTalkHold) return false;   // beginBeat finished the errand
+            } else if (rd.verdict == APMFBridge::ErrandIdleVerdict::Failed ||
+                       (rd.verdict == APMFBridge::ErrandIdleVerdict::Waiting && patience)) {
+                // The dialogue idles may carry conditions that need a live conversation (design 4.2). One fallback idle,
+                // then skip the talk: the hand-over is the beat the trade needs.
+                if (!r.talkFallbackUsed && idles.talkFallback && idles.talkFallback != idles.talk) {
+                    r.talkFallbackUsed = true;
+                    spdlog::info("[errand] {:08X}: talk idle did not play ({}) -- trying the fallback idle {:08X}",
+                                 fid, rd.detail, idles.talkFallback);
+                    if (!beginBeat(Phase::Talking, idles.talkFallback, "talk fallback")) return false;
+                } else {
+                    spdlog::info("[errand] {:08X}: talk beat skipped ({}) -- hand-over next", fid, rd.detail);
+                    if (!beginBeat(Phase::Giving, idles.give, "give")) return false;
+                }
+            }
+            Store(fid, r);
+            return true;
+        }
+
+        case Phase::Giving: {
+            const auto rd = BeatReading(fid);
+            const bool patience = a_now - r.phaseAt > kBeatPatience;
+            bool go = false;
+            if (rd.verdict == APMFBridge::ErrandIdleVerdict::Played) {
+                if (r.confirmedAt.time_since_epoch().count() == 0) {
+                    r.confirmedAt = a_now;
+                    spdlog::info("[errand] {:08X}: give idle PLAYED{} ({})", fid, rd.weak ? " (weak)" : "", rd.detail);
+                }
+                go = a_now - r.confirmedAt >= kGiveHold;
+            } else if (rd.verdict == APMFBridge::ErrandIdleVerdict::Failed ||
+                       (rd.verdict == APMFBridge::ErrandIdleVerdict::Waiting && patience)) {
+                // The trade is the follower's decision, the animation is presentation: trade anyway, loudly (principle 7).
+                spdlog::warn("[errand] {:08X}: the GIVE idle did not play ({}) -- trading anyway (the animation is "
+                             "presentation; APMF.log '[apmf][idle]' names why)", fid, rd.detail);
+                go = true;
+            }
+            if (!go) { Store(fid, r); return true; }
+
+            TradeBridge::DiscardOutcome(fid);
+            ErrandProbe probe;
+            probe.mode = ErrandProbe::Mode::kExecute;
+            probe.vendors.push_back(vendor->GetHandle());
+            EconomyProbe(a_follower, a_state, a_now, &probe);
+            if (probe.dispatched) {
+                r.phase = Phase::Trading;
+                r.dispatched = true;
+                r.dispatchedAt = a_now;
+                r.phaseAt = a_now;
+                spdlog::info("[errand] {:08X} '{}': trade DISPATCHED at '{}' (give beat done)", fid, r.followerName, r.vendorName);
+                Store(fid, r);
+                return true;
+            }
+            const bool skipped = std::any_of(probe.verdicts.begin(), probe.verdicts.end(),
+                                             [](const ErrandProbe::Verdict& v) { return v.skipped; });
+            if (skipped) {   // nothing new to trade with him since the plan (the empty-trade memo): done, no harm
+                Finish(fid, "nothing to trade here any more (the empty-trade memo / nothing to buy or sell)", kFailCooldownSec);
+                return false;
+            }
+            // Not skipped and not dispatched: the chest holds another follower's live order (the second one WAITS,
+            // never parks), or the trade bridge is down. Hold the give pose and retry until the patience runs out.
+            if (a_now - r.phaseAt > kDispatchPatience + kBeatPatience) {
+                Finish(fid, "the trade could not be dispatched (chest busy or the trade bridge is down)", kFailCooldownSec);
+                return false;
+            }
+            Store(fid, r);
+            return true;
+        }
+
+        case Phase::Trading: {
+            TradeBridge::TradeOutcome out;
+            if (!TradeBridge::HasLiveOrder(fid) && TradeBridge::TakeOutcome(fid, out)) {
+                if (out.aborted) {
+                    Finish(fid, "the trade aborted (Papyrus found no usable chest)", kFailCooldownSec);
+                    return false;
+                }
+                spdlog::info("[errand] {:08X} '{}': trade REPORTED at '{}' -- sold {} for {}g, bought {} for {}g",
+                             fid, r.followerName, r.vendorName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
+                r.bought = out.boughtCount > 0;
+                if (r.bought && idles.take) {
+                    if (!beginBeat(Phase::Taking, idles.take, "take")) return false;
+                    Store(fid, r);
+                    return true;
+                }
+                Finish(fid, "trade done", Config::g_errandCooldownSec.load(), true);
+                return false;
+            }
+            if (a_now - r.dispatchedAt > kTradeWait) {
+                Finish(fid, "the trade never reported (45 s)", kFailCooldownSec);
+                return false;
+            }
+            Store(fid, r);
+            return true;
+        }
+
+        case Phase::Taking: {
+            const auto rd = BeatReading(fid);
+            const bool patience = a_now - r.phaseAt > kBeatPatience;
+            if (rd.verdict == APMFBridge::ErrandIdleVerdict::Played) {
+                if (r.confirmedAt.time_since_epoch().count() == 0) {
+                    r.confirmedAt = a_now;
+                    spdlog::info("[errand] {:08X}: take idle PLAYED{} ({})", fid, rd.weak ? " (weak)" : "", rd.detail);
+                }
+                if (a_now - r.confirmedAt >= kTakeHold) {
+                    Finish(fid, "trade done", Config::g_errandCooldownSec.load(), true);
+                    return false;
+                }
+            } else if (rd.verdict == APMFBridge::ErrandIdleVerdict::Failed ||
+                       (rd.verdict == APMFBridge::ErrandIdleVerdict::Waiting && patience)) {
+                spdlog::info("[errand] {:08X}: take beat skipped ({})", fid, rd.detail);   // the purchase is already made
+                Finish(fid, "trade done", Config::g_errandCooldownSec.load(), true);
+                return false;
+            }
+            Store(fid, r);
+            return true;
+        }
+        }
+        return true;
+    }
+
+    // ── public: the owner-independent backstop ───────────────────────────────────────────────────────
+    void Sweep() {
+        std::vector<std::pair<RE::FormID, std::string>> ends;
+        {
+            std::scoped_lock lk(g_mx);
+            if (g_recs.empty()) return;
+            const auto now = Clock::now();
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            const bool loading = InLoadingMenu();
+            const RE::BGSLocation* here = pc ? LocationTypes::TownAnchor(pc->GetCurrentLocation()) : nullptr;
+            const RE::FormID hereId = here ? here->GetFormID() : 0u;
+            const auto ids = Followers::ActiveSnapshot();
+            for (auto& [fid, r] : g_recs) {
+                std::string why;
+                auto* f = RE::TESForm::LookupByID<RE::Actor>(fid);
+                if (!Config::g_logistics.load() || !Config::g_townErrands.load()) why = "logistics / town errands off";
+                else if (!f || f->IsDead() || !f->Is3DLoaded()) why = "follower dead or unloaded";
+                else if (f->IsInCombat() || (pc && pc->IsInCombat())) why = "combat -- he rejoins";
+                else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end()) why = "no longer an active follower";
+                else if (now - r.lastTick > kStall) why = "the follower is no longer serviced";
+                else if (now - r.start > kRealCap) why = "timed out (240 s real time)";
+                else if (!loading && pc && pc->Is3DLoaded()) {
+                    // PLAYER LEAVES TOWN (marth 2026-10-18): the errand ends and he rejoins. R1a is physical only, so the
+                    // follower just follows again; R1b resolves an off-screen errand and places him with a MoveTo.
+                    if (hereId != r.town) {
+                        if (r.townLostSince.time_since_epoch().count() == 0) r.townLostSince = now;
+                        else if (now - r.townLostSince >= kLeftTownGrace) why = "the player left the town";
+                    } else {
+                        r.townLostSince = {};
+                    }
+                }
+                if (!why.empty()) ends.emplace_back(fid, std::move(why));
+            }
+        }
+        for (const auto& [fid, why] : ends)
+            Finish(fid, why.c_str(), why.rfind("combat", 0) == 0 ? kCombatCooldownSec : kFailCooldownSec);
+    }
+}

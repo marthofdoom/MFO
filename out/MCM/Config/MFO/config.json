@@ -369,6 +369,16 @@
           }
         },
         {
+          "id": "bTownErrands:General",
+          "text": "Economy: shop in town (walk to merchants)",
+          "type": "toggle",
+          "help": "ON (default): with Harbinger installed and the follower economy on, followers no longer trade instantly with any vendor near them. When you are in a city, town or settlement and a follower has something to sell, a supply to restock or an affordable upgrade, he walks to an open shop's merchant, plays the talk, hand-over and take animations, trades and rejoins you. Needs Harbinger (APMF). OFF: the old instant trade with any vendor near the follower.",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
           "id": "bMageWearRobes:General",
           "text": "Mages wear robes + jewelry",
           "type": "toggle",

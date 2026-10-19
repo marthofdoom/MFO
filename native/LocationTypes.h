@@ -81,4 +81,40 @@ namespace MFO::LocationTypes {
         return Kind::kUntagged;
     }
 
+
+    // The TOWN a location sits in, or null: the innermost location on the parent chain that carries
+    // LocTypeCity / LocTypeTown / LocTypeSettlement, met BEFORE a fight site (Clearable / Dungeon) -- the
+    // same innermost-first walk as Classify, so a bandit mine inside a hold is never "a town" and a shop
+    // interior under Whiterun resolves to WhiterunLocation. Town errands (logistics/Errand.cpp, ClickUp
+    // 86e3t1mx7) compare the anchor of the PLAYER's location with the anchor of the follower's. The
+    // keywords are Skyrim.esm FormIDs resolved once, exactly as in Classify (a modlist that lacks one
+    // simply has no anchors of that type). Pure reads; callable from the job worker like Classify.
+    inline const RE::BGSLocation* TownAnchor(const RE::BGSLocation* a_loc) {
+        struct Kw { RE::FormID id; bool town; };
+        static const std::vector<std::pair<const RE::BGSKeyword*, bool>> s_kws = [] {
+            constexpr Kw kList[] = {
+                { 0x000F5E80, false },   // LocTypeClearable
+                { 0x000130DB, false },   // LocTypeDungeon
+                { 0x00013168, true },    // LocTypeCity
+                { 0x00013166, true },    // LocTypeTown
+                { 0x00013167, true },    // LocTypeSettlement
+            };
+            std::vector<std::pair<const RE::BGSKeyword*, bool>> v;
+            auto* dh = RE::TESDataHandler::GetSingleton();
+            for (const auto& k : kList) {
+                auto* kw = dh ? dh->LookupForm<RE::BGSKeyword>(k.id & 0x00FFFFFF, "Skyrim.esm") : nullptr;
+                if (kw) v.emplace_back(kw, k.town);
+            }
+            return v;
+        }();
+        int guard = 0;
+        for (auto* loc = a_loc; loc && guard < 8; loc = loc->parentLoc, ++guard) {
+            for (const auto& [kw, town] : s_kws)
+                if (!town && loc->HasKeyword(kw)) return nullptr;   // a fight site is innermost: not a town
+            for (const auto& [kw, town] : s_kws)
+                if (town && loc->HasKeyword(kw)) return loc;
+        }
+        return nullptr;
+    }
+
 }

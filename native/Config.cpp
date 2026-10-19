@@ -116,6 +116,15 @@ namespace MFO::Config {
                 }
             };
 
+            // TOWN ERRANDS (R1a): a chain of its own -- the main chain below is already long enough that one more
+            // `else if` per key risks MSVC's nested-block limit (C1061).
+            if      (a_key == "bTownErrands")       { setB(g_townErrands);   return; }   // default ON; OFF = the old proximity trade
+            else if (a_key == "iErrandMinSellGold") { setI(g_errandMinSellGold, 0, 100000);    return; }
+            else if (a_key == "iErrandMinPurse")    { setI(g_errandMinPurse,    0, 1000000);   return; }
+            else if (a_key == "fErrandSettleSec")   { setF(g_errandSettleSec,   0.0f, 600.0f); return; }
+            else if (a_key == "fErrandCooldownSec") { setF(g_errandCooldownSec, 0.0f, 3600.0f); return; }
+            else if (a_key == "fErrandMaxGameMin")  { setF(g_errandMaxGameMin,  10.0f, 1440.0f); return; }
+
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
             else if (a_key == "fRapportRate")       setF(g_rapportRate,       0.0f, 100.0f);
             else if (a_key == "fRapportKill")       setF(g_rapportKill,       0.0f, 1000.0f);
@@ -388,6 +397,12 @@ namespace MFO::Config {
             g_economy            = true;
             g_economyBuyGear     = true;    // #21 gear-buy sub-toggle -- ON, gated under bEconomy
             g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
+            g_townErrands        = true;    // R1a town errands -- ON (features ship on)
+            g_errandMinSellGold  = 100;
+            g_errandMinPurse     = 200;
+            g_errandSettleSec    = 10.0f;
+            g_errandCooldownSec  = 120.0f;
+            g_errandMaxGameMin   = 120.0f;
             g_hmsRedistribute    = true;    // §HMS class-redistribution master switch -- ON
             g_hmsSkewMaxFrac     = 0.20f;   // §HMS off-class skew ceiling -- 20% (INI stores percent)
             g_speechPricing      = true;    // #21 sell price follows the speech-scaled vanilla barter curve
@@ -468,6 +483,9 @@ namespace MFO::Config {
             { "bEngageOnSight", "0" },         { "bEngageOnSightSneaking", "0" },
             { "fEngageOnSightRange", "2000.000000" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
+            { "bTownErrands", "1" },           { "iErrandMinSellGold", "100" },
+            { "iErrandMinPurse", "200" },      { "fErrandSettleSec", "10.000000" },
+            { "fErrandCooldownSec", "120.000000" }, { "fErrandMaxGameMin", "120.000000" },
             { "bHmsRedistribute", "1" },       { "fHmsSkewMax", "20.000000" },
             { "bMageWearRobes", "1" },         { "bMageApparelStrictSchool", "0" },
             { "bMeoAwareGems", "0" },
