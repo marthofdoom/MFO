@@ -15,6 +15,7 @@
                             // from Tick() ONLY, which runs inside the AddTask job-worker body
                             // (Diagnostics.cpp) = ComposedCast's own serialized context; ComposedCast
                             // never takes g_mx, so calling it under g_mx cannot deadlock.
+#include "CombatSense.h"   // AnchorOnlyLeak: a Harbinger anchor-only combat is not party combat (field 10-19)
 #include "Config.h"
 #include "Followers.h"   // g_active.size() -- round-robin-aware expiry sizing (FacetExpiry)
 #include "Loadout.h"     // WeaponHandActive's live-grip read
@@ -978,7 +979,9 @@ namespace MFO::APMFBridge {
         return SubstrateStateOf(a_actor) == APMF_API::kSubstrateState_Anchor;
     }
     bool InCombat(const RE::Actor* a_actor) {
-        return a_actor && a_actor->IsInCombat() && !SubstrateOnly(a_actor->GetFormID());
+        // A teammate whose ONLY target is Harbinger's anchor (a leak, not a fight) is not in combat either.
+        return a_actor && a_actor->IsInCombat() && !SubstrateOnly(a_actor->GetFormID()) &&
+               !CombatSense::AnchorOnlyLeak(const_cast<RE::Actor*>(a_actor));
     }
 
     namespace {

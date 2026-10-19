@@ -590,10 +590,17 @@ namespace MFO::Logistics {
                 // where he stands now, inside the current (possibly clamped) leash.
                 auto t = tr.target.get();
                 skippedRef = t ? t->GetFormID() : 0u;
+                // The SOURCE is INFERRED from where he landed, never read from the mover (field 2026-10-19: a Swiftly
+                // Order Squad MoveTo(player) was logged as Automatic Follower Teleporter NG): within ~50 u of the
+                // player = MoveTo(player) (e.g. Swiftly Order Squad); ~450 u (+-75) behind = AFT NG's fBehindOffset.
+                const char* tpSource = toPlayer <= 50.0f ? "a MoveTo(player), e.g. Swiftly Order Squad"
+                                       : std::fabs(toPlayer - 450.0f) <= 75.0f ? "Automatic Follower Teleporter NG"
+                                                                              : "unknown";
                 spdlog::warn("[loot] {:08X} leg->{:08X}: TELEPORTED to the player mid-leg -- jumped {:.0f} u in "
-                             "{:.1f}s, {:.0f} -> {:.0f} u from the player (teleport mod: {}; weapon-drawn clamp {}). "
+                             "{:.1f}s, {:.0f} -> {:.0f} u from the player (source INFERRED from the landing: {}; "
+                             "teleport mod detected in the load order: {}; weapon-drawn clamp {}). "
                              "Leg ended cleanly: no stall, no strike, no blocklist; re-planning inside the leash",
-                             id, skippedRef, tpJump, tpDt, tpPrevDist, toPlayer, TeleportCompat::DetectedName(),
+                             id, skippedRef, tpJump, tpDt, tpPrevDist, toPlayer, tpSource, TeleportCompat::DetectedName(),
                              leashView.clamped ? "ON -- the clamp did NOT prevent this teleport" : "off");
                 skipWhy         = "TELEPORTED to the player (leg ended cleanly)";
                 tr.blockedSince = {};
@@ -1175,6 +1182,14 @@ namespace MFO::Logistics {
                     } else {
                         MarkGated(a_follower, tref, held, now, blockPos);
                         skipWhy = "GATED (Movement Blocked, no actor in front)";
+                        // Stuck at his OWN origin: 3+ different targets blocked within ~300 u of one
+                        // point (StuckAtOrigin.cpp). End the excursion, release the road, back to follow.
+                        if (StuckAtOriginNoteBlock(a_follower, tref->GetFormID(),
+                                                   blockPos ? *blockPos : a_follower->GetPosition(), now)) {
+                            Packages::LootTravelClear("stuck at his own origin", a_follower, slot);
+                            tr = TravelIntent{};
+                            return;
+                        }
                     }
                     skippedRef      = tref->GetFormID();
                     tr.blockedSince = {};

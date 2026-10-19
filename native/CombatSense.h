@@ -39,6 +39,29 @@ namespace MFO::CombatSense {
         return n;
     }
 
+    // HARBINGER ANCHOR LEAK (field 2026-10-19 Riften, Sven). A teammate who IS in combat, whose combat group lists
+    // Harbinger's invisible substrate ANCHOR, and who has ZERO real foes (FoeCount skips the anchor) is fighting only
+    // the anchor: a Harbinger leak (a non-holder pulled into the holder's substrate group), not a fight. Same group,
+    // same read lock, same filters as FoeCount; any thread FoeCount may run on. False below ABI v26 (no anchor
+    // is ever reported) and for a non-teammate.
+    inline bool AnchorOnlyLeak(RE::Actor* a_self) {
+        if (!a_self || !a_self->IsInCombat() || !a_self->IsPlayerTeammate()) return false;
+        auto* cc = a_self->GetActorRuntimeData().combatController;
+        if (!cc || !cc->combatGroup) return false;
+        bool anchor = false;
+        RE::BSReadLockGuard lk(cc->combatGroup->lock);
+        for (const auto& t : cc->combatGroup->targets) {
+            auto ptr = t.targetHandle.get();          // HOLD the NiPointer
+            auto* foe = ptr.get();
+            if (!foe || foe == a_self) continue;
+            if (APMFBridge::IsSubstrateAnchor(foe->GetFormID())) { anchor = true; continue; }
+            if (foe->IsDead() || foe->IsDisabled()) continue;
+            if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
+            return false;                              // a real, live foe: this is a fight
+        }
+        return anchor;
+    }
+
     // FOE STRENGTH (Confidence v2, 86e3erv94). How much ONE foe weighs against
     // a_self, bounded to [kFoeWeightMin, kFoeWeightMax]: the geometric mean of the
     // foe's level over his and the foe's CURRENT health over his MAXIMUM health

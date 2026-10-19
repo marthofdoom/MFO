@@ -2179,7 +2179,13 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   expiry, heal-holds / heal-quiet), `Evaluator.cpp` (the fight-log dedupe). A dry-run substrate on a follower
   mid-errand does NOT abort the errand. Evaluator's combat-group reads (`combatController`) stay raw (mechanics). **The anchor is never a foe** (closing round of 5876057): `IsSubstrateAnchor` skips it in EngageOnSight's RunProbe
   scan, `cast/Auto.cpp` HostileAutoFoes, Evaluator PickFoe (both group loops) and CurrentTargetIfTrackable, and
-  `CombatSense` FoeCount / FoeLoad / ScanMeleeReach. **BACKLOG (read before editing CasterConsent / Scheduler substrate
+  `CombatSense` FoeCount / FoeLoad / ScanMeleeReach. **ANCHOR-ONLY LEAK (`fix/mfo-riften-1019b`, 2026-10-19, Sven):** a
+  TEAMMATE who IsInCombat, whose group lists the anchor and who has NO other live foe (`CombatSense::AnchorOnlyLeak`, same
+  group read lock as FoeCount) is a Harbinger leak, not a fight: `APMFBridge::InCombat` reads false for him (so the
+  combat table, HUD, loot/Confidence/etc. all stay out), the `Targeting.cpp` `UpdateCombatHook` returns before style /
+  redirect, and `Scheduler.cpp` skips him in the party-combat count with ONE ERROR line per episode (`g_anchorLeakNoted`,
+  worker). **What breaks:** it adds a group read lock per `InCombat` call for a teammate who is in combat (short-circuits
+  out of combat); a teammate's real fight with only an unseen/lost foe reads as a leak until a foe is live. **BACKLOG (read before editing CasterConsent / Scheduler substrate
   walk / Lockpick / CombatSense):** REVIEW-BACKLOG MFO-B310..B315.
 - **PARTY COMBAT (2026-09-21, Deck/Fable — the Jesper freeze + the Cicero hold
   teardown; line numbers refreshed on `fix/mfo-field-batch-0921`).** `g_partyCombat`
@@ -3100,6 +3106,16 @@ module. Module layout:
   - `logistics/Logistics.h` (232) = the public API (unchanged, moved whole).
   - `logistics/Lockpick.cpp` (956, NEW LP-M1 2026-09-25, doors LP-M2 2026-09-26) = follower LOCKPICKING of chests: see the
     LOCKPICK entry below. Declared in `Logistics_internal.h` (`namespace Lockpick`, `:847`).
+  - `logistics/StuckAtOrigin.cpp` (NEW `fix/mfo-riften-1019b`, 2026-10-19) = **A FOLLOWER STUCK AT HIS OWN ORIGIN**:
+    3+ consecutive static-block (GATED) ends of DISTINCT targets whose block points lie within 300 u of the newest one
+    (ends <= 90 s apart) -> `StuckAtOriginNoteBlock` (worker; called in `Service.cpp` at the `MarkGated` branch) logs the
+    ERROR `[loot] <id> is stuck himself at (x,y,z) -- N different targets blocked at the same spot`, the caller releases
+    the ch.19 road (`Packages::LootTravelClear`), resets the intent and returns him to follow, and a 180 s (3 x
+    `fExcursionMax`) cell-scoped, session-only cooldown stops `LootNearby` (`LootScan.cpp`, top) from dispatching another
+    excursion from that box. `ClearStuckAtOrigin` is in `Upkeep.cpp` `ClearTransientState`. **What breaks:** the gate
+    path only counts a STATIC block (an actor block is a REORDER, not counted); a cooldown that is too long starves
+    looting after a false trigger (it lifts on a cell change); declarations are in `Logistics_internal.h` next to
+    `RunExcursionScan`. No co-save.
   - `logistics/PickupSound.cpp` (NEW batch A 86e3haxqx, 2026-10-05) = **PICKUP SOUND AT THE FOLLOWER**, an
     ENGINE SEAT (tier A). A `write_call<5>` call-site trampoline (its OWN `SKSE::Trampoline`, never Board's:
     a second `AllocTrampoline` would release Board's block) on the `BuildSoundDataFromDescriptor` call inside
@@ -4118,7 +4134,8 @@ anonymous-namespace copy — that silently forks the instance).
     field 2026-09-26: the player opening a CHEST re-admitted five gates): NEVER a container's
     open/close; a record that names its gate (`GateRecord::gate`, set by `RecordGateRef` `:424`
     when LP-M2's door finder finds the locked door at the block) re-admits on THAT ref only; a
-    record without one re-admits only on a `GateLikeRef` (`Sinks.cpp:260`: a DOOR, or an ACTI
+    record without one re-admits only on a `GateLikeRef` AND (the PLAYER's act, or a lever-like ACTIVATOR; 2026-10-19 field,
+    Riften: an NPC using a plain DOOR no longer re-admits; the log line names the reason) (`Sinks.cpp:260`: a DOOR, or an ACTI
     with WerewolfCanActivate 00100769 / ActivatorLever 0006DEAD and no ExtraPrimitive -- the
     installed-ESM survey: every lever / chain / bar / button / portcullis / puzzle mechanism,
     no weapon rack, plaque or mannequin/trigger) within 2048 u of S or T; on the gated ref's own

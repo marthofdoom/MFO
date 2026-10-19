@@ -79,6 +79,9 @@ namespace MFO::Logistics {
                 ui && ui->IsMenuOpen(RE::ContainerMenu::MENU_NAME)) {
                 return false;
             }
+            // STUCK AT HIS OWN ORIGIN (field 2026-10-19): a cooldown after N different targets all blocked at
+            // one spot -- no new excursion from that box (StuckAtOrigin.cpp). Quiet: the trigger logged loudly.
+            if (StuckAtOriginCooldown(a_follower, a_now)) return false;
             // PLAYER-COMBAT INTERRUPT (marth: "player entering combat must
             // immediately cancel a loot excursion and pull followers back").
             // A follower must never BEGIN or CONTINUE a loot action while the
