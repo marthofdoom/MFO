@@ -27,7 +27,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <map>
 #include <mutex>
+#include <tuple>
 #include <unordered_map>
 
 namespace MFO::Actuation {
@@ -36,8 +38,9 @@ namespace MFO::Actuation {
         using RoadClock = std::chrono::steady_clock;
 
         std::mutex g_roadMx;
-        // (follower << 32 | spell) -> the end of this spell's pacing window on this road. Guarded by g_roadMx.
-        std::unordered_map<std::uint64_t, RoadClock::time_point> g_subPace;
+        // (follower, spell, recipient) -> the end of this cast's pacing window on this road. PER RECIPIENT, so AUTO's
+        // series reaches the next ally in need while the one just served is paced. Guarded by g_roadMx.
+        std::map<std::tuple<RE::FormID, RE::FormID, RE::FormID>, RoadClock::time_point> g_subPace;
         // (follower << 32 | spell) -> the last "stays on the direct road" line. Guarded by g_roadMx.
         std::unordered_map<std::uint64_t, RoadClock::time_point> g_directNoted;
         // follower -> the last "player sneaking" line. Guarded by g_roadMx.
@@ -169,7 +172,7 @@ namespace MFO::Actuation {
         if (!placement) {
             {
                 std::scoped_lock lock(g_roadMx);
-                if (const auto it = g_subPace.find(Key(fid, spellID)); it != g_subPace.end() && now < it->second)
+                if (const auto it = g_subPace.find({ fid, spellID, recip->GetFormID() }); it != g_subPace.end() && now < it->second)
                     return SubstrateTry::Skipped;
             }
             auto* ei   = a_spell->GetCostliestEffectItem();
@@ -189,7 +192,7 @@ namespace MFO::Actuation {
             if (g_subPace.size() > 64)
                 for (auto it = g_subPace.begin(); it != g_subPace.end();)
                     it = now >= it->second ? g_subPace.erase(it) : std::next(it);
-            g_subPace[Key(fid, spellID)] = now + std::chrono::duration_cast<RoadClock::duration>(
+            g_subPace[{ fid, spellID, recip->GetFormID() }] = now + std::chrono::duration_cast<RoadClock::duration>(
                                                      std::chrono::duration<float>(PaceSecs(a_spell)));
         }
         return filed ? SubstrateTry::Filed : SubstrateTry::Skipped;   // refused: logged as an ERROR, no direct road

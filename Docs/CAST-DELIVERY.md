@@ -1528,7 +1528,7 @@ line says why (60 s per follower and spell).
 **The per-cast gates** (`FileSubstrateCast`), each a TRANSPARENT no-cast this lap, NEVER the direct road: a pair already stands for
 him (the PENDING latch: open in flight, held, or its close grace), the player is sneaking (ruling Q6, a `[substrate] ... OPEN
 refused: the player is sneaking` line every 10 s), he cannot act, magicka or the reserve floor, a heal out of reach
-(`HealInReach`), the spell's pacing window (duration x 0.9, floor max(3 s, fCastCooldown), 300 s ceiling; none for a summon), or its
+(`HealInReach`), the pacing window per (follower, spell, recipient) (duration x 0.9, floor max(3 s, fCastCooldown), 300 s ceiling; none for a summon), or its
 effect still up on the recipient.
 
 **The ch.8b target convention** (as `BuffClaim` / `ComposedCast::Try`): 0 = self for a Self-delivery or placement spell; the caster's
