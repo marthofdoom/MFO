@@ -69,6 +69,7 @@ namespace MFO::Logistics::Errand {
         // R2: a PHYSICAL errand restored from the 'ERND' record. It carries no order (the order is never saved): the
         // physical resume re-plans it on screen, an unloaded one drops the trade (Sim::Sweep's restore decision).
         bool          restored = false, hadOrder = false, tradeAbandoned = false;
+        bool          restoredPhysical = false;   // restored from a PHYSICAL stage (OnLoadedTick resumes him anywhere in the town)
     };
 
     // Errand.cpp -> ErrandSim.cpp: a follower the simulation was running is LOADED again (the player walked in).

@@ -105,6 +105,7 @@ namespace MFO::Logistics::Errand::Sim {
             // R2: restored from the 'ERND' record. No order (never saved); hadOrder = there was a non-empty one, so a resume on
             // screen may re-plan it. decideBy: the unloaded restore decision (the trade is dropped) is due at this instant.
             bool          restored = false, hadOrder = false;
+            bool          restoredPhysical = false;   // restored from a PHYSICAL stage: loaded in the town, he resumes even away from the shop
             Clock::time_point decideBy{};
         };
 
@@ -256,6 +257,7 @@ namespace MFO::Logistics::Errand::Sim {
         r.restored = a_start.restored;
         r.hadOrder = a_start.hadOrder;
         r.tradeAbandoned = a_start.tradeAbandoned;
+        r.restoredPhysical = a_start.restoredPhysical;
         if (r.restored && !r.reported && !r.tradeAbandoned) r.decideBy = Clock::now() + kRestoreSettle;
 
         bool confirmed = false;
@@ -300,7 +302,9 @@ namespace MFO::Logistics::Errand::Sim {
                      toMin(r.tArrive - now), toMin(r.tTradeEnd - now), toMin(r.tReturn - now), r.entryDoor,
                      r.entryDoor ? (confirmed ? "its destination is the cell he is in" : "nearest load door, destination unconfirmed") : "none found",
                      r.order && !r.order->skipped ? "stored" : (r.restored && r.hadOrder ? "not in the save (re-planned only on screen)" : "NONE"),
-                     r.reported ? "done" : r.dispatched ? "already in flight" : "not yet dispatched");
+                     r.reported ? "done" : r.dispatched ? "already in flight"
+                     : r.tradeAbandoned ? (r.restored ? "not MFO's to run (given up, or in flight at the save: the save's own Papyrus trade owns it)" : "given up")
+                     : "not yet dispatched");
     }
 
     bool OnLoadedTick(RE::Actor* a_follower, const FollowerState& a_state) {
@@ -329,7 +333,11 @@ namespace MFO::Logistics::Errand::Sim {
         // R2: a restored record has no order; it resumes on screen when it HAD one (the physical give beat re-plans the trade from
         // his live inventory), unless the unloaded restore decision already dropped the trade (tradeAbandoned).
         const bool tradeLeft = r.order ? !r.order->skipped : (r.restored && r.hadOrder);
-        if (atShop && !r.dispatched && !r.reported && !r.tradeAbandoned && tradeLeft &&
+        // R2 (design 2.7, "if the player walks in then it picks up"): a PHYSICAL errand restored from the save with him loaded
+        // resumes wherever he is in the errand's town (the walk to the shop / vendor goes on). The away-from-the-shop end stays for
+        // a record that was SIMULATED (R1b: he reloaded near the player) and for a player who is no longer in the town.
+        const bool resumeHere = atShop || (r.restoredPhysical && inTown);
+        if (resumeHere && !r.dispatched && !r.reported && !r.tradeAbandoned && tradeLeft &&
             (r.stage == Stage::Out || r.stage == Stage::Trade)) {
             ResumeInfo ri;
             ri.follower = fid; ri.followerName = r.followerName; ri.vendorName = r.vendorName;
@@ -337,8 +345,8 @@ namespace MFO::Logistics::Errand::Sim {
             ri.destKind = r.destKind; ri.destForm = r.destForm; ri.destRad = r.destRad;
             if (detail::ResumePhysical(a_follower, ri)) return true;
             detail::Cooldown(fid, kFailCooldownSec);
-            spdlog::info("[errand] {:08X} '{}': loaded again at {} in the shop but the walk could not be resumed -- the trade is dropped",
-                         fid, r.followerName, StageName(r.stage));
+            spdlog::info("[errand] {:08X} '{}': loaded again at {} {} but the walk could not be resumed -- the trade is dropped",
+                         fid, r.followerName, StageName(r.stage), atShop ? "in the shop" : "in the town (restored physical errand)");
             return false;
         }
         ResolveNow(r, a_follower, days, atShop ? "loaded again in the shop" : "loaded again away from the shop");
@@ -421,6 +429,11 @@ namespace MFO::Logistics::Errand::Sim {
                 else if (Errand::Active(s.follower))                              why = "he is already on an errand";
                 if (why) {
                     spdlog::info("[errand] {:08X}: saved errand DROPPED on load -- {}", s.follower, why);
+                    // Switched off with him still out (an unloaded follower may be standing in a shop): bring him back. A dismissed
+                    // follower is not recalled (vanilla sends him home); RecallToPlayer itself skips a loaded one or one in the player's cell.
+                    if (f && !f->IsDead() && (!Config::g_logistics.load() || !Config::g_townErrands.load()) &&
+                        Followers::IsEligibleFollower(f) && !f->Is3DLoaded())
+                        detail::RecallToPlayer(s.follower, "town errands are off; his saved errand was dropped");
                     continue;
                 }
                 std::string vendorName = "?";
@@ -428,7 +441,10 @@ namespace MFO::Logistics::Errand::Sim {
                 else if (auto* fac = s.faction ? RE::TESForm::LookupByID<RE::TESFaction>(s.faction) : nullptr; fac && fac->GetName() && *fac->GetName())
                     vendorName = fac->GetName();
                 const bool done = (s.flags & Saved::kTradeDone) != 0;
-                const bool abandoned = (s.flags & Saved::kAbandoned) != 0;
+                // A trade IN FLIGHT at the save is the save's own: its Papyrus RunTrade stack resumes from the .ess and runs its
+                // token-free sell / buy loops. MFO must not trade again (on screen or off), so it is given up here and he walks back.
+                const bool inFlight = (s.flags & Saved::kDispatched) != 0 && !done;
+                const bool abandoned = (s.flags & Saved::kAbandoned) != 0 || inFlight;
                 const bool hadOrder = (s.flags & Saved::kHadOrder) != 0;
                 // A physical errand (or a simulated one whose clock did not survive the reader's checks) gets a FRESH walk estimate
                 // from Begin, which is also what a live hand-off does.
@@ -443,6 +459,7 @@ namespace MFO::Logistics::Errand::Sim {
                     st.tradeDispatched = false;   // a trade in flight at the save is never replayed (its Papyrus stack finishes it)
                     st.tradeDone = done;
                     st.restored = true; st.hadOrder = hadOrder; st.tradeAbandoned = abandoned;
+                    st.restoredPhysical = IsPhysical(s.stage);
                     Begin(std::move(st));
                     continue;
                 }
@@ -475,7 +492,8 @@ namespace MFO::Logistics::Errand::Sim {
                              "{:+.1f}, back {:+.1f} game min; entry door {:08X}; trade {}; loaded={}", r.follower, r.followerName,
                              StageName(r.stage), r.vendorName, r.chest, r.town, (r.tArrive - days) * 1440.0, (r.tTradeEnd - days) * 1440.0,
                              (r.tReturn - days) * 1440.0, r.entryDoor,
-                             r.reported ? "done" : r.tradeAbandoned ? "given up" : hadOrder ? "not run (re-planned only if he is loaded at the shop)" : "none",
+                             r.reported ? "done" : inFlight ? "in flight at the save (the save's own Papyrus trade owns it; MFO does not trade again)"
+                             : r.tradeAbandoned ? "given up" : hadOrder ? "not run (re-planned only if he is loaded at the shop, else dropped)" : "none",
                              f->Is3DLoaded());
             }
         }

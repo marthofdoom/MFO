@@ -4553,10 +4553,14 @@ a save made before the off-screen trade ran DROPS that trade (nothing moves unti
   simulated one whose clock the reader reset) -> `Sim::Begin` with `restored` (a fresh walk estimate from his saved last loaded position, the same as a
   live hand-off); a simulated stage -> a `SimRec` with its saved stamps. Always: `dispatched = false` (a trade in flight at the save is NEVER replayed: its
   Papyrus stack resumes from the .ess with a stale token after `TradeBridge::ClearTransientState`'s token jump, finishes its token-free sell / buy loops
-  or aborts on its own), `order = null`, `restored = true`, `hadOrder` from the flags, `decideBy = now + kRestoreSettle` (3 s) when the trade had not run.
+  or aborts on its own; so a `kDispatched`-not-done entry is adopted with the trade GIVEN UP, review F1), `order = null`, `restored = true`, `hadOrder` from the
+  flags, `restoredPhysical` for a `phys.*` stage, `decideBy = now + kRestoreSettle` (3 s) when the trade had not run. Errands / logistics OFF at adoption:
+  the entry is dropped and an UNLOADED, still-eligible follower is recalled behind the player (review F3).
 - **Resume, LOADED** (`OnLoadedTick` `:306`): at the shop (the player in the errand's town AND the vendor in his cell, or his cell IS the shop) with the
-  trade not run and `hadOrder` (`tradeLeft` `:331`) -> `ResumePhysical`: the ch.19 claim is re-filed and the physical errand's give beat RE-PLANS the
-  trade from his live inventory (`EconomyProbe(kExecute)`, as every physical trade does). Elsewhere -> the errand is over (DONE), he is with the player.
+  trade not run and `hadOrder` (`tradeLeft`) -> `ResumePhysical`: the ch.19 claim is re-filed and the physical errand's give beat RE-PLANS the
+  trade from his live inventory (`EconomyProbe(kExecute)`, as every physical trade does). A `restoredPhysical` record resumes ANYWHERE in the errand's
+  town (review F2, design 2.7: the walk to the shop place, or to the vendor ACTOR when that actor is loaded even outside his cell, `ResumePhysical`
+  `Errand.cpp`). A simulated-origin record away from the shop, or a player no longer in the town -> the errand is over (DONE), he is with the player.
 - **Resume, UNLOADED** (`Sim::Sweep`, "R2 RESTORE DECISION" `:520`): still unloaded after `kRestoreSettle` with the trade not run -> the trade is
   DROPPED (`tradeAbandoned`), OUT / TRADE go to RET_SIM with `tReturn = min(saved tReturn, now + the saved walk)`; then the R1b timeline as usual
   (door placement, the player-left-town RECALL, player combat, the cap). A trade that was DONE keeps its saved timeline.

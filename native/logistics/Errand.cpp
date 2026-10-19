@@ -605,6 +605,13 @@ namespace MFO::Logistics::Errand {
         bool ResumePhysical(RE::Actor* a_follower, const ResumeInfo& a_info) {
             if (!a_follower || g_latched.load() || !APMFBridge::ErrandSupported()) return false;
             auto vendor = FindVendorActor(a_follower, a_info.faction);
+            // R2: a physical errand restored from the save walks on to its vendor ACTOR even when the vendor is not in his cell (an
+            // exterior stall one cell over), provided that actor is loaded and usable.
+            if (!vendor && a_info.destKind == DestKind::VendorActor && a_info.destForm) {
+                if (auto* va = RE::TESForm::LookupByID<RE::Actor>(a_info.destForm);
+                    va && va->Is3DLoaded() && !va->IsDead() && !va->IsDisabled() && !va->IsInCombat())
+                    vendor = RE::NiPointer<RE::Actor>(va);
+            }
             const auto fid = a_follower->GetFormID();
             // No vendor actor in HIS cell: he is not in the shop (he was handed off mid-walk and loaded again elsewhere), so
             // the walk to the shop's place simply resumes. No place either (a vendor actor was the destination): give up.
