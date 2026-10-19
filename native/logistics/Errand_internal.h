@@ -66,6 +66,9 @@ namespace MFO::Logistics::Errand {
         RE::FormID    lastCell = 0;
         float         startDays = 0.0f;
         bool          arrived = false, tradeDispatched = false, tradeDone = false;
+        // R2: a PHYSICAL errand restored from the 'ERND' record. It carries no order (the order is never saved): the
+        // physical resume re-plans it on screen, an unloaded one drops the trade (Sim::Sweep's restore decision).
+        bool          restored = false, hadOrder = false, tradeAbandoned = false;
     };
 
     // Errand.cpp -> ErrandSim.cpp: a follower the simulation was running is LOADED again (the player walked in).
@@ -90,7 +93,12 @@ namespace MFO::Logistics::Errand {
         // The service tick of a follower who has a simulation record and is LOADED again. TRUE = the record owns
         // the tick (it resumed the physical errand this tick).
         bool OnLoadedTick(RE::Actor* a_follower, const FollowerState& a_state);
-        void ClearTransientState();
+        void ClearTransientState();   // also the staged restore entries
+        // R2 ('ERND'): append every simulation record and every staged-not-yet-adopted entry (SaveCallback, pump paused).
+        void SnapshotInto(std::vector<Saved>& a_out);
+        // R2: stage restored entries (LoadCallback, pump stopped); Sweep adopts them on its first lap in the world.
+        void StagePending(std::vector<Saved>&& a_entries);
+        void ClearPending();
     }
 
     // Errand.cpp services the simulation uses (defined there, outside the anonymous namespace).

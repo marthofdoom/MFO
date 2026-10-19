@@ -156,6 +156,37 @@ namespace MFO {
     inline constexpr std::uint32_t kRecPlayerGiven     = 'PGIV';
     inline constexpr std::uint32_t kPlayerGivenVersion = 1;
 
+    // ClickUp 86e3t1mx7 (TOWN R2, design 2.7): a SIXTH independent record -- the town errands in progress
+    // (logistics/Errand.h `Saved`). The autosave on every load door makes a save mid-errand the COMMON case;
+    // without it a follower saved inside a shop loads inside the shop with nothing bringing him back. Written
+    // ONLY when an errand exists (a save with none carries no ERND, so a load of it stages nothing). The trade
+    // ORDER is never saved (MFO never rebuilds it from an unloaded inventory): see Errand.h for the load rules.
+    //   v1 - u32 count (<= 256); per errand, in this order:
+    //          u32 follower           FormID (ResolveFormID; unresolvable -> the entry is DROPPED, #8)
+    //          str stage              opcode (#10): phys.walking | phys.at_vendor | phys.trading | phys.taking |
+    //                                 sim.out | sim.trade | sim.return | sim.rejoin   (unknown -> entry DROPPED, #13)
+    //          u8  flags              0x01 arrived, 0x02 trade dispatched at the save, 0x04 trade done,
+    //                                 0x08 had a non-empty order, 0x10 trade given up; other bits masked off (#11)
+    //          u32 town               BGSLocation FormID (the player's town when the errand began)
+    //          u32 faction            the shop's vendor TESFaction FormID
+    //          u32 chest              the faction's merchant chest REFR FormID
+    //          u32 vendorActor        the vendor Actor FormID (0 = not known / never loaded)
+    //          str destKind           opcode (#10): vendor_actor | ref | cell   (unknown -> entry DROPPED)
+    //          u32 destForm           what the walk goes to (an actor / a REFR / a CELL FormID)
+    //          f32 destRad            arrival radius (clamped [0, 4096])
+    //          u32 entryDoor          the load-door REFR he went in by (0 = none / physical stage)
+    //          u32 lastCell           the CELL of his last LOADED position
+    //          f32 lastPos.x, .y, .z  his last LOADED position (non-finite -> zeroed with lastCell)
+    //          f32 startDays          game days at the PLAN (the errand cap's origin)
+    //          f64 tEnter, tArrive, tTradeEnd, tReturn   the simulation's GAME-DAY stamps (all 0 for a physical
+    //                                 stage; non-finite / negative -> all 0 = a fresh walk estimate on adoption)
+    //        "str" = the shared opcode string: u32 length (<= 64) + bytes. Every u32 FormID other than the
+    //        follower: 0 = none; a 0xFF id is written as 0 (#9); unresolvable on load -> 0 (logged). An
+    //        unresolvable faction or chest also gives the trade up (the follower is still brought back).
+    //        A save without the record loads with nothing staged.
+    inline constexpr std::uint32_t kRecErrand     = 'ERND';
+    inline constexpr std::uint32_t kErrandVersion = 1;
+
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY
     // shipped version FOREVER.
     //

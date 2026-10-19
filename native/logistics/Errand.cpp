@@ -101,7 +101,7 @@ namespace MFO::Logistics::Errand {
             return "?";
         }
 
-        // One errand per follower. Session state, never saved (R2 adds the ERND record).
+        // One errand per follower. Saved by R2's 'ERND' record (SnapshotForSave below: identities, stage and flags, never the order).
         struct Rec {
             Phase         phase = Phase::Walking;
             RE::FormID    vendor = 0;          // the vendor ACTOR
@@ -518,6 +518,45 @@ namespace MFO::Logistics::Errand {
         Sim::ClearTransientState();
         APMFBridge::ClearErrandClaims();
     }
+
+    // ── R2: the 'ERND' co-save record (Serialization.cpp owns the bytes) ──────────────────────────────
+    // SaveCallback, main thread, the pump PAUSED (no tick mutates a table mid-snapshot; the locks are taken anyway).
+    // A physical errand is saved as its phase + flags; the game-day stamps are the simulation's only (a physical
+    // errand restored unloaded gets a fresh walk estimate from Sim::Begin).
+    std::vector<Saved> SnapshotForSave() {
+        std::vector<Saved> out;
+        {
+            std::scoped_lock lk(g_mx);
+            out.reserve(g_recs.size());
+            for (const auto& [fid, r] : g_recs) {
+                Saved s;
+                s.follower = fid;
+                switch (r.phase) {
+                    case Phase::Walking: s.stage = SavedStage::PhysWalking; break;
+                    case Phase::Talking:
+                    case Phase::Giving:  s.stage = SavedStage::PhysAtVendor; break;
+                    case Phase::Trading: s.stage = SavedStage::PhysTrading; break;
+                    case Phase::Taking:  s.stage = SavedStage::PhysTaking; break;
+                }
+                if (r.phase != Phase::Walking) s.flags |= Saved::kArrived;
+                if (r.dispatched)              s.flags |= Saved::kDispatched;
+                if (r.phase == Phase::Taking)  s.flags |= Saved::kTradeDone;
+                if (r.order && !r.order->skipped) s.flags |= Saved::kHadOrder;
+                s.town = r.town; s.faction = r.faction; s.chest = r.chest; s.vendorActor = r.vendor;
+                s.destKind = r.destKind == DestKind::VendorActor ? SavedDest::VendorActor
+                           : r.destKind == DestKind::Ref         ? SavedDest::Ref : SavedDest::Cell;
+                s.destForm = r.destForm; s.destRad = r.destRad;
+                s.lastCell = r.lastCell; s.lastPos = r.lastPos;
+                s.startDays = r.startDays;
+                out.push_back(s);
+            }
+        }
+        Sim::SnapshotInto(out);
+        return out;
+    }
+
+    void RestoreFromSave(std::vector<Saved>&& a_entries) { Sim::StagePending(std::move(a_entries)); }
+    void ClearRestorePending() { Sim::ClearPending(); }
 
     // ── services for the simulation (Errand_internal.h) ────────────────────────────────────────────
     namespace detail {

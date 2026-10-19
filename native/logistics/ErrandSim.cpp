@@ -15,8 +15,14 @@
 //
 // All clocks are GAME DAYS (Calendar::GetDaysPassed): waiting, sleeping and fast travel advance them, a menu does not.
 //
-// NOT HERE (R2): nothing is saved. A save made mid-errand loses the record (the follower is simply a follower again; the order is
-// dropped, never replayed from an unloaded inventory). The seam is SimStart / ResumeInfo in Errand_internal.h.
+// R2 (the 'ERND' co-save record, Serialization.cpp): every errand is saved as identities + stage + flags + game-day stamps, NEVER
+// the order. A load STAGES the entries (StagePending); the first lap with the player in the world ADOPTS them here (AdoptPending):
+// gone / dead / dismissed / errands off -> dropped (logged); otherwise a SimRec flagged `restored`. A restored follower who is
+// LOADED at the shop picks up on screen (OnLoadedTick -> ResumePhysical; the physical errand re-plans the trade from his live
+// inventory at the give beat); one who stays UNLOADED for kRestoreSettle DROPS the trade (marth 2026-10-19: a save before the
+// off-screen trade ran drops it; the order was never saved and MFO never reads an unloaded inventory) and walks back on the game
+// clock. A trade in flight at the save is never replayed: its Papyrus stack resumes from the .ess with a stale token
+// (TradeBridge::ClearTransientState) and finishes or aborts on its own.
 //
 // THREADING: the AddTask job worker (Errand::Sweep each pump lap, Errand::Tick for a loaded follower); ClearTransientState from
 // the revert with the pump drained. g_mx guards the table and is never held across a Papyrus / TradeBridge / Harbinger call.
@@ -59,6 +65,10 @@ namespace MFO::Logistics::Errand::Sim {
         constexpr float  kRejoinFarU       = 4096.0f;
         constexpr float  kFailCooldownSec  = 45.0f;
         constexpr float  kCombatCooldownSec = 30.0f;
+        // R2: a restored follower gets this long (real seconds, the world running) to show up LOADED before an unrun trade is
+        // dropped. The roster refresh + the first service tick after a load are each ~1 s (kLogisticsInterval), so 3 s is
+        // two polls of margin, and a follower who reloads after it still resumes his walk back (never re-sent to the counter).
+        constexpr auto   kRestoreSettle    = std::chrono::seconds(3);
 
         enum class Stage { Out, Trade, Return, Rejoin };
         const char* StageName(Stage s) {
@@ -92,10 +102,15 @@ namespace MFO::Logistics::Errand::Sim {
             RE::NiPoint3  posAtEnter{};
             RE::FormID    cellAtEnter = 0;
             bool          posKnown = false;
+            // R2: restored from the 'ERND' record. No order (never saved); hadOrder = there was a non-empty one, so a resume on
+            // screen may re-plan it. decideBy: the unloaded restore decision (the trade is dropped) is due at this instant.
+            bool          restored = false, hadOrder = false;
+            Clock::time_point decideBy{};
         };
 
         std::mutex                                 g_mx;
-        std::unordered_map<RE::FormID, SimRec>     g_sims;   // guarded by g_mx
+        std::unordered_map<RE::FormID, SimRec>     g_sims;      // guarded by g_mx
+        std::vector<Saved>                         g_pending;   // R2: loaded from the save, not yet adopted; guarded by g_mx
 
         double GameDays() {
             auto* cal = RE::Calendar::GetSingleton();
@@ -165,7 +180,12 @@ namespace MFO::Logistics::Errand::Sim {
 
         // "Resolve to now" (design 2.4): if he had ARRIVED and the trade was not dispatched, dispatch it (he got there); else drop it.
         void ResolveNow(SimRec& r, RE::Actor* f, double a_days, const char* a_why) {
-            if (r.dispatched || r.tradeAbandoned) return;
+            if (r.dispatched || r.tradeAbandoned || r.reported) return;
+            if (!r.order && r.restored) {
+                spdlog::info("[errand] {:08X}: resolving to now ({}) -- restored from the save, whose order is never saved: the trade is "
+                             "dropped", r.follower, a_why);
+                return;
+            }
             if (a_days >= r.tArrive && r.order && !r.order->skipped) {
                 spdlog::info("[errand] {:08X}: resolving to now ({}) -- he had arrived: the trade is replayed", r.follower, a_why);
                 if (!DispatchTrade(r, f))
@@ -210,12 +230,15 @@ namespace MFO::Logistics::Errand::Sim {
     // ── public ──────────────────────────────────────────────────────────────────────────────────────
     bool Has(RE::FormID a_follower) {
         std::scoped_lock lk(g_mx);
-        return g_sims.contains(a_follower);
+        if (g_sims.contains(a_follower)) return true;
+        // R2: a staged restore entry owns him too (no new errand is planned before it is adopted or dropped).
+        return std::any_of(g_pending.begin(), g_pending.end(), [&](const Saved& s) { return s.follower == a_follower; });
     }
 
     void ClearTransientState() {
         std::scoped_lock lk(g_mx);
         g_sims.clear();
+        g_pending.clear();
     }
 
     void Begin(SimStart&& a_start) {
@@ -230,6 +253,10 @@ namespace MFO::Logistics::Errand::Sim {
         r.dispatched = a_start.tradeDispatched;
         if (r.dispatched) r.dispatchedClk = Scheduler::ServiceClock();
         r.reported = a_start.tradeDone;
+        r.restored = a_start.restored;
+        r.hadOrder = a_start.hadOrder;
+        r.tradeAbandoned = a_start.tradeAbandoned;
+        if (r.restored && !r.reported && !r.tradeAbandoned) r.decideBy = Clock::now() + kRestoreSettle;
 
         bool confirmed = false;
         r.entryDoor = FindEntryDoor(f, r.lastCell, r.lastPos, confirmed);
@@ -266,12 +293,14 @@ namespace MFO::Logistics::Errand::Sim {
             g_sims[r.follower] = r;
         }
         auto toMin = [](double d) { return d * 1440.0; };
-        spdlog::info("[errand] {:08X} '{}': OFF SCREEN -> {} at '{}' (vendor actor {:08X}, chest {:08X}): walk estimate {:.1f} game min "
+        spdlog::info("[errand] {:08X} '{}': {} -> {} at '{}' (vendor actor {:08X}, chest {:08X}): walk estimate {:.1f} game min "
                      "({:.0f} u), arrive +{:.1f}, trade ends +{:.1f}, back +{:.1f} game min; entry door {:08X} ({}); order {}; "
-                     "trade {}", r.follower, r.followerName, StageName(r.stage), r.vendorName, r.vendorActor, r.chest, toMin(walk), dist,
+                     "trade {}", r.follower, r.followerName, r.restored ? "RESTORED from the save (fresh walk estimate)" : "OFF SCREEN",
+                     StageName(r.stage), r.vendorName, r.vendorActor, r.chest, toMin(walk), dist,
                      toMin(r.tArrive - now), toMin(r.tTradeEnd - now), toMin(r.tReturn - now), r.entryDoor,
                      r.entryDoor ? (confirmed ? "its destination is the cell he is in" : "nearest load door, destination unconfirmed") : "none found",
-                     r.order && !r.order->skipped ? "stored" : "NONE", r.dispatched ? "already in flight" : "not yet dispatched");
+                     r.order && !r.order->skipped ? "stored" : (r.restored && r.hadOrder ? "not in the save (re-planned only on screen)" : "NONE"),
+                     r.reported ? "done" : r.dispatched ? "already in flight" : "not yet dispatched");
     }
 
     bool OnLoadedTick(RE::Actor* a_follower, const FollowerState& a_state) {
@@ -297,7 +326,10 @@ namespace MFO::Logistics::Errand::Sim {
         const bool inTown = detail::PlayerTownId() == r.town;
         const bool atShop = inTown && (detail::VendorPresentNear(a_follower, r.faction) ||
                                        (r.destKind == DestKind::Cell && nowCell && nowCell->GetFormID() == r.destForm));
-        if (atShop && !r.dispatched && !r.reported && !r.tradeAbandoned && r.order && !r.order->skipped &&
+        // R2: a restored record has no order; it resumes on screen when it HAD one (the physical give beat re-plans the trade from
+        // his live inventory), unless the unloaded restore decision already dropped the trade (tradeAbandoned).
+        const bool tradeLeft = r.order ? !r.order->skipped : (r.restored && r.hadOrder);
+        if (atShop && !r.dispatched && !r.reported && !r.tradeAbandoned && tradeLeft &&
             (r.stage == Stage::Out || r.stage == Stage::Trade)) {
             ResumeInfo ri;
             ri.follower = fid; ri.followerName = r.followerName; ri.vendorName = r.vendorName;
@@ -316,7 +348,141 @@ namespace MFO::Logistics::Errand::Sim {
         return false;
     }
 
+    // ── R2: the 'ERND' record ──────────────────────────────────────────────────────────────────────
+    void SnapshotInto(std::vector<Saved>& a_out) {
+        const double days = GameDays();
+        std::scoped_lock lk(g_mx);
+        for (const auto& [fid, r] : g_sims) {
+            Saved s;
+            s.follower = fid;
+            switch (r.stage) {
+                case Stage::Out:    s.stage = SavedStage::SimOut; break;
+                case Stage::Trade:  s.stage = SavedStage::SimTrade; break;
+                case Stage::Return: s.stage = SavedStage::SimReturn; break;
+                case Stage::Rejoin: s.stage = SavedStage::SimRejoin; break;
+            }
+            if (r.stage != Stage::Out || days >= r.tArrive) s.flags |= Saved::kArrived;
+            if (r.dispatched)     s.flags |= Saved::kDispatched;
+            if (r.reported)       s.flags |= Saved::kTradeDone;
+            if (r.order ? !r.order->skipped : r.hadOrder) s.flags |= Saved::kHadOrder;
+            if (r.tradeAbandoned) s.flags |= Saved::kAbandoned;
+            s.town = r.town; s.faction = r.faction; s.chest = r.chest; s.vendorActor = r.vendorActor;
+            s.destKind = r.destKind == DestKind::VendorActor ? SavedDest::VendorActor
+                       : r.destKind == DestKind::Ref         ? SavedDest::Ref : SavedDest::Cell;
+            s.destForm = r.destForm; s.destRad = r.destRad;
+            s.entryDoor = r.entryDoor; s.lastCell = r.lastCell; s.lastPos = r.lastPos;
+            s.startDays = r.startDays;
+            s.tEnter = r.tEnter; s.tArrive = r.tArrive; s.tTradeEnd = r.tTradeEnd; s.tReturn = r.tReturn;
+            a_out.push_back(s);
+        }
+        for (const auto& s : g_pending) a_out.push_back(s);   // staged, not yet adopted: saved back verbatim
+    }
+
+    void StagePending(std::vector<Saved>&& a_entries) {
+        std::scoped_lock lk(g_mx);
+        for (auto& s : a_entries) g_pending.push_back(s);
+    }
+
+    void ClearPending() {
+        std::scoped_lock lk(g_mx);
+        g_pending.clear();
+    }
+
+    namespace {
+        DestKind ToDest(SavedDest a_d) {
+            return a_d == SavedDest::VendorActor ? DestKind::VendorActor : a_d == SavedDest::Ref ? DestKind::Ref : DestKind::Cell;
+        }
+        bool IsPhysical(SavedStage a_s) {
+            return a_s == SavedStage::PhysWalking || a_s == SavedStage::PhysAtVendor || a_s == SavedStage::PhysTrading ||
+                   a_s == SavedStage::PhysTaking;
+        }
+
+        // The first lap with the player in the world after a load (worker): turn each staged entry into a simulation record.
+        void AdoptPending() {
+            std::vector<Saved> pend;
+            {
+                std::scoped_lock lk(g_mx);
+                if (g_pending.empty()) return;
+            }
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            if (!pc || !pc->Is3DLoaded() || detail::InLoadingMenu()) return;   // the world is not there yet: keep them staged
+            {
+                std::scoped_lock lk(g_mx);
+                pend.swap(g_pending);
+            }
+            const auto now = Clock::now();
+            for (const auto& s : pend) {
+                auto* f = RE::TESForm::LookupByID<RE::Actor>(s.follower);
+                const char* why = nullptr;
+                if (!f)                                                            why = "the follower is not in this game";
+                else if (f->IsDead())                                              why = "the follower is dead";
+                else if (!Config::g_logistics.load() || !Config::g_townErrands.load()) why = "logistics / town errands are off";
+                else if (!Followers::IsEligibleFollower(f))                        why = "no longer a follower (dismissed)";
+                else if (Errand::Active(s.follower))                              why = "he is already on an errand";
+                if (why) {
+                    spdlog::info("[errand] {:08X}: saved errand DROPPED on load -- {}", s.follower, why);
+                    continue;
+                }
+                std::string vendorName = "?";
+                if (auto* va = s.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(s.vendorActor) : nullptr) vendorName = detail::NameOf(va);
+                else if (auto* fac = s.faction ? RE::TESForm::LookupByID<RE::TESFaction>(s.faction) : nullptr; fac && fac->GetName() && *fac->GetName())
+                    vendorName = fac->GetName();
+                const bool done = (s.flags & Saved::kTradeDone) != 0;
+                const bool abandoned = (s.flags & Saved::kAbandoned) != 0;
+                const bool hadOrder = (s.flags & Saved::kHadOrder) != 0;
+                // A physical errand (or a simulated one whose clock did not survive the reader's checks) gets a FRESH walk estimate
+                // from Begin, which is also what a live hand-off does.
+                if (IsPhysical(s.stage) || s.tReturn <= 0.0) {
+                    SimStart st;
+                    st.follower = s.follower; st.followerName = detail::NameOf(f); st.vendorName = vendorName;
+                    st.faction = s.faction; st.chest = s.chest; st.town = s.town; st.vendorActor = s.vendorActor;
+                    st.destKind = ToDest(s.destKind); st.destForm = s.destForm; st.destRad = s.destRad;
+                    st.lastPos = s.lastPos; st.lastCell = s.lastCell; st.startDays = s.startDays;
+                    st.arrived = (s.flags & Saved::kArrived) != 0 || s.stage == SavedStage::SimTrade ||
+                                 s.stage == SavedStage::SimReturn || s.stage == SavedStage::SimRejoin;
+                    st.tradeDispatched = false;   // a trade in flight at the save is never replayed (its Papyrus stack finishes it)
+                    st.tradeDone = done;
+                    st.restored = true; st.hadOrder = hadOrder; st.tradeAbandoned = abandoned;
+                    Begin(std::move(st));
+                    continue;
+                }
+                SimRec r;
+                r.follower = s.follower; r.followerName = detail::NameOf(f); r.vendorName = vendorName;
+                r.faction = s.faction; r.chest = s.chest; r.town = s.town; r.vendorActor = s.vendorActor;
+                r.destKind = ToDest(s.destKind); r.destForm = s.destForm; r.destRad = s.destRad;
+                r.lastPos = s.lastPos; r.lastCell = s.lastCell; r.entryDoor = s.entryDoor; r.startDays = s.startDays;
+                r.tEnter = s.tEnter; r.tArrive = s.tArrive; r.tTradeEnd = s.tTradeEnd; r.tReturn = s.tReturn;
+                r.stage = s.stage == SavedStage::SimOut ? Stage::Out : s.stage == SavedStage::SimTrade ? Stage::Trade
+                        : s.stage == SavedStage::SimReturn ? Stage::Return : Stage::Rejoin;
+                r.dispatched = false;   // never replayed (see the file comment)
+                r.reported = done;
+                r.tradeAbandoned = abandoned;
+                r.restored = true;
+                r.hadOrder = hadOrder;
+                if (!r.reported && !r.tradeAbandoned) r.decideBy = now + kRestoreSettle;
+                r.nextPoll = now;
+                r.nextPosLog = now + kPosLogEvery;
+                r.rejoinAt = now;   // a REJOIN stage restarts its 20 s watch
+                r.posAtEnter = f->GetPosition();
+                if (auto* fc = f->GetParentCell()) r.cellAtEnter = fc->GetFormID();
+                r.posKnown = true;
+                {
+                    std::scoped_lock lk(g_mx);
+                    g_sims[r.follower] = r;
+                }
+                const double days = GameDays();
+                spdlog::info("[errand] {:08X} '{}': RESTORED from the save at {} ('{}', chest {:08X}, town {:08X}); arrive {:+.1f}, trade ends "
+                             "{:+.1f}, back {:+.1f} game min; entry door {:08X}; trade {}; loaded={}", r.follower, r.followerName,
+                             StageName(r.stage), r.vendorName, r.chest, r.town, (r.tArrive - days) * 1440.0, (r.tTradeEnd - days) * 1440.0,
+                             (r.tReturn - days) * 1440.0, r.entryDoor,
+                             r.reported ? "done" : r.tradeAbandoned ? "given up" : hadOrder ? "not run (re-planned only if he is loaded at the shop)" : "none",
+                             f->Is3DLoaded());
+            }
+        }
+    }
+
     void Sweep() {
+        AdoptPending();   // R2: entries restored from the save (a no-op once adopted)
         std::vector<RE::FormID> ids;
         {
             std::scoped_lock lk(g_mx);
@@ -350,6 +516,23 @@ namespace MFO::Logistics::Errand::Sim {
                 continue;
             }
             if (r.loadedSince.time_since_epoch().count() != 0) r.loadedSince = {};
+
+            // R2 RESTORE DECISION: a restored errand whose trade had not run, and whose follower has not shown up LOADED (at the shop,
+            // with the player) within kRestoreSettle, DROPS the trade -- the order is not in the save and is never rebuilt from an
+            // unloaded inventory (marth 2026-10-19). The game clock goes on: he walks back, no longer than the saved walk.
+            if (r.restored && !r.reported && !r.tradeAbandoned && !r.dispatched) {
+                if (now < r.decideBy) { Store(r); continue; }
+                r.tradeAbandoned = true;
+                const double days = GameDays();
+                if (r.stage == Stage::Out || r.stage == Stage::Trade) {
+                    const double walk = std::max(0.0, r.tReturn - r.tTradeEnd);
+                    r.tReturn = std::min(r.tReturn, days + walk);
+                    r.stage = Stage::Return;
+                }
+                spdlog::info("[errand] {:08X} '{}': restored UNLOADED with the trade not run -- the trade is DROPPED (saved before it ran; "
+                             "the order is never saved); {}, back in {:.1f} game min", fid, r.followerName, StageName(r.stage),
+                             std::max(0.0, r.tReturn - days) * 1440.0);
+            }
 
             // THE PASSIVE DRIFT LINE (design 4.4, principle 5): where is a simulated follower REALLY? Every 5 s, never a decision.
             if (now >= r.nextPosLog) {
