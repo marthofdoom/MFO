@@ -1813,3 +1813,12 @@ Opus review of `fix/mfo-ranged-approach` @ e63db74. F3: "For the two-hander (bow
 
 ### MFO-B305 (SEV-4, OPEN, apmf/OffenseApproach.cpp / Evaluator.cpp) -- ranged: dwell tuning; disagreeing selector rules; chase-cap waiver gate (raised against e63db74 / 4cd7100)
 Same review. F8: kSightDwellMs 1500 vs 1-2 s flicker still allows a ~3 s claim/release cycle — tune from field data. F7: two own-ray rules that disagree reset each other's dwell clocks (bounded by kStaleMs). Author's round-2 spots: the waiver needs the foe's currentCombatTarget == the follower (a dragon targeting the player instead does not qualify — per marth's "engaged with the follower"); PinnedTarget/CombatEntryStateOf read every PickFoe pass (g_mx, unprofiled); LogChaseCapWaiver static map assumes single-threaded PickFoe.
+
+### MFO-B306 (SEV-4, OPEN, logistics/SwapUp.cpp / LootEquipment.cpp) -- keep-set: Mage edge cases (raised against 392aba1)
+Opus re-review of `fix/mfo-keepset-roles` @ 392aba1. (1) Pre-existing: "a class-3 follower with a melee gambit but no cast gambit (`IsCasterFollower` false) still gets `roles.melee` in keep and loot. The combat pick is dagger-only for him, so a sword can win bucket 1 and the unworn dagger sells." (2) "with bMageDaggersOnly OFF, combat lets a base Mage plus melee gambit wield a 2H, while keep holds only one 1H backup. An unworn 2H he fights with now sells."
+
+### MFO-B307 (SEV-5, OPEN, logistics/SwapUp.cpp / Economy.cpp / Upkeep.cpp) -- keep-set small edges (raised against 392aba1 / cae6bb4)
+Same reviews: an in-role catalog-excluded weapon (artifact, "keep but never wield") counts toward anyInRole and suppresses the floor; Economy's buy-threshold armor baseline (~:357/:435) doesn't skip ArmorWontRender (self-corrects after one vendor visit); the once-per-item heal set persists across loads in a session; shield keep vs EquipAuthority pureCaster deny edge; ArmorWontRender not gated by g_beastHeadFix (harmless).
+
+### MFO-B308 (OPEN, Harbinger dependency) -- artifacts "keep but never wield" needs a per-item equip deny
+marth 2026-10-19: catalog-excluded non-quest off-role weapons: "Keep but never wield". Interim (392aba1): unequipped once per item per session, never sold; the engine may re-wield. Proper fix waits on Harbinger ClickUp 86e3t8w23 (ch.17 per-item DENY entry, ABI).
