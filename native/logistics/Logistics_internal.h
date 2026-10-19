@@ -794,6 +794,7 @@ namespace MFO::Logistics {
     bool ArmorIsBetter(const ArmorPref& a_pref, RE::Actor* a_follower, RE::TESObjectARMO* a_armo);
     bool CarriesSlotArmorAtLeast(const ArmorPref& a_pref, RE::Actor* a_follower,
                                  RE::TESObjectARMO* a_armo);
+    bool ArmorWontRender(RE::Actor* a_actor, const RE::TESObjectARMO* a_armo);   // playable foreign piece that draws nothing on his race: never worn, sells (Gear.cpp)
     bool KeepHeadClear(RE::Actor* a_actor);   // true = a socketed piece was held (GemRules), retry later
     WeaponRoles ComputeWeaponRoles(RE::Actor* a_follower, const FollowerState& a_state);
     AmmoOwned   CountAmmoOwned(RE::Actor* a_follower);   // same family test ComputeWeaponRoles uses

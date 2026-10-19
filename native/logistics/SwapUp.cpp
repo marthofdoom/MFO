@@ -237,7 +237,7 @@ namespace MFO::Logistics {
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
-                    if (!ar) continue;
+                    if (!ar || ArmorWontRender(a_follower, ar)) continue;   // wont-render armor is never kept: it sells
                     int key = -1; float primary = 0.0f, secondary = 0.0f;
                     if (useMageApparel) {
                         // A mage's body/clothing slot holds ONE item -- a robe (rating 0)

@@ -146,6 +146,7 @@ namespace MFO::Logistics::GemRules {
                 return;
             }
             if (a_loose && a_loose->loose) {
+                // KEPT ON PURPOSE (marth 2026-10-18: "Keep putting it back"): looted gear not worth keeping goes back where it lay.
                 // Back where it lay: same position and angle, same instance (its extra list), via the
                 // proven engine DropObject on the main thread (Decide runs there).
                 if (DropObjectAt(a_fol, a_obj, xl, a_loose->pos, a_loose->rot))
@@ -161,6 +162,7 @@ namespace MFO::Logistics::GemRules {
                              a_fol->GetFormID(), NameOf(a_obj), a_srcID);
                 return;
             }
+            // KEPT ON PURPOSE (marth 2026-10-18: "Keep putting it back"): the looted piece returns to its source container.
             a_fol->RemoveItem(a_obj, 1, RE::ITEM_REMOVE_REASON::kStoreInContainer, xl, src);
             spdlog::info("[gems] returned '{}' to container {:08X} (not worth keeping gemless: {})", NameOf(a_obj), a_srcID,
                          a_hadGems ? (a_sellGambit ? "below the loot-to-sell value/weight rule" : "no loot-to-sell gambit, gems only") : "no gems on it");

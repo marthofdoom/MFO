@@ -330,8 +330,9 @@ namespace MFO::Logistics {
                     eq->EquipObject(fol, bestObj, nullptr, 1, leftHand ? Loadout::LeftHandSlot() : nullptr);
                 else                      eq->UnequipObject(fol, badObj);  // nothing real carried (or W1: Harbinger places the replacement) -- just take it off
                 std::int32_t haveBad = 0;
+                bool         quest   = false;
                 for (auto& [obj, data] : fol->GetInventory())
-                    if (obj == badObj) { haveBad = data.first; break; }
+                    if (obj == badObj) { haveBad = data.first; quest = IsQuestObjectInstance(data.second.get()); break; }
                 // MEO-aware: a socketed weapon never leaves him (GemRules): strip it, retry next pass.
                 if (haveBad > 0 && GemRules::CheckRemovalLive(fol, badObj, "heal-evict", GemRules::Reason::Heal) == GemRules::Verdict::Held)
                     haveBad = 0;
@@ -339,14 +340,17 @@ namespace MFO::Logistics {
                     if (creature)
                         fol->RemoveItem(badObj, haveBad, RE::ITEM_REMOVE_REASON::kRemove,
                                         nullptr, nullptr);
-                    else if (auto* player = RE::PlayerCharacter::GetSingleton())
-                        fol->RemoveItem(badObj, haveBad, RE::ITEM_REMOVE_REASON::kStoreInContainer,
-                                        nullptr, player);
+                    else if (quest) {   // marth 2026-10-18: QUEST items are handed to the player ...
+                        if (auto* player = RE::PlayerCharacter::GetSingleton())
+                            fol->RemoveItem(badObj, haveBad, RE::ITEM_REMOVE_REASON::kStoreInContainer,
+                                            nullptr, player);
+                    }
+                    // ... any other excluded playable weapon is only unequipped (above) and left for sale.
                 }
                 spdlog::info("[heal] {:08X} excluded '{}' -> {}, {} {}x", folID,
                              badObj->GetName() ? badObj->GetName() : "?",
                              bestObj ? (bestObj->GetName() ? bestObj->GetName() : "?") : "(bare hands)",
-                             creature ? "DELETED" : "returned-to-player", haveBad);
+                             creature ? "DELETED" : quest ? "returned-to-player (quest)" : "unequipped (kept for sale)", haveBad);
             };
             if (MainThread::IsInstalled()) MainThread::Post(doHeal);
             else                           doHeal();   // VR: pump is a no-op, keep the direct path
