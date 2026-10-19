@@ -605,6 +605,7 @@ namespace MFO::Logistics::Errand::Sim {
             if (r.stage == Stage::Out && days >= r.tArrive) {
                 r.stage = Stage::Trade;
                 spdlog::info("[errand] {:08X} '{}': TRADE_SIM -- he has reached '{}' (off screen)", fid, r.followerName, r.vendorName);
+                detail::ToastTrading(r.followerName, r.vendorName);
             }
             if (r.stage == Stage::Trade) {
                 const double clk = Scheduler::ServiceClock();
@@ -624,11 +625,9 @@ namespace MFO::Logistics::Errand::Sim {
                         r.reported = true;
                         if (out.aborted)
                             spdlog::warn("[errand] {:08X}: the replayed trade ABORTED (Papyrus found no usable chest)", fid);
-                        else {
+                        else
                             spdlog::info("[errand] {:08X} '{}': trade REPORTED (loaded=no) -- sold {} for {}g, bought {} for {}g", fid,
                                          r.followerName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
-                            detail::ToastTrade(r.followerName, r.vendorName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
-                        }
                     } else if (clk - r.dispatchedClk > kTradeWaitClkSec) {
                         r.reported = true;
                         spdlog::warn("[errand] {:08X}: the replayed trade never reported ({:.0f} s) -- continuing", fid, kTradeWaitClkSec);

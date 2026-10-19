@@ -776,8 +776,8 @@ namespace MFO::Config {
     //   fErrandCooldownSec: real seconds between one follower's errands. INI-only.
     //   fErrandMaxGameMin: an errand older than this many GAME minutes ends (REJOIN). INI-only.
     inline std::atomic<bool>  g_townErrands{ true };
-    //   bTownToasts: one HUD corner line per errand event (heads out, trade done, failed walk). One-shot
-    //     transitions only, never per tick. OFF by default (marth 2026-10-19); feedback only, drives nothing.
+    //   bTownToasts: one informational HUD corner line when a follower begins trading at a shop
+    //     ("Auri is trading with Niranye."). One-shot per errand, never per tick. OFF by default (marth 2026-10-19); feedback only, drives nothing.
     inline std::atomic<bool>  g_townToasts{ false };
     inline std::atomic<int>   g_errandMinSellGold{ 100 };
     inline std::atomic<int>   g_errandMinPurse{ 200 };
