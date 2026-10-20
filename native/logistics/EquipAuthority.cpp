@@ -68,11 +68,13 @@ namespace MFO::Logistics {
                 const std::uint8_t top2 = TopTwoSchoolMask(a_follower);
                 const bool schoolPrimary = Config::g_mageApparelStrictSchool.load();
                 const bool allowVillain  = IsNecromancerFollower(a_state);
+                const bool wearsHelmets  = WearsHelmets(&a_state);
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || ArmorWontRender(a_follower, ar)) continue;   // wont-render armor is never worn (sells)
                     if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
+                    if (!wearsHelmets && IsHelmetPiece(ar)) continue;      // 86e3phy41 "Wear helmets" OFF: never the choice
                     const int slot = MageClothingSlot(ar);
                     if (slot < 0) continue;
                     int t = 0; std::int32_t m = 0;
@@ -143,11 +145,13 @@ namespace MFO::Logistics {
                 armorPref = ArmorPrefFor(a_follower);
                 LogArmorClassIfChanged(a_follower, armorPref);   // one [armor] line per {class, worn-set} change
                 float bestScore = 0.0f;
+                const bool wearsHelmets = WearsHelmets(&a_state);
                 for (auto& [obj, data] : a_follower->GetInventory()) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || IsCreatureArmor(ar) || ArmorWontRender(a_follower, ar)) continue;
                     if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
+                    if (!wearsHelmets && IsHelmetPiece(ar)) continue;      // 86e3phy41 "Wear helmets" OFF: never the choice
                     // #3 NO IsExcluded skip here: a follower MAY wear an artifact it
                     // already owns (a legit upgrade) -- equip stays permissive, matching
                     // the mage-clothing branch above. Looting/selling/shedding an
@@ -768,12 +772,14 @@ namespace MFO::Logistics {
                             static_cast<std::uint32_t>(Slot::kShield)) != 0;
                 };
                 const ArmorPref pref = ArmorPrefFor(a_follower);
+                const bool wearsHelmets = WearsHelmets(&a_state);
                 float bestScore[4] = {};
                 for (auto& [obj, data] : a_inv) {
                     if (!obj || data.first <= 0) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || IsCreatureArmor(ar) || ArmorWontRender(a_follower, ar) || isShieldBit(ar)) continue;
                     if (RelicOffBody(a_follower, a_state, obj)) continue;   // museum relic: never the choice
+                    if (!wearsHelmets && IsHelmetPiece(ar)) continue;      // 86e3phy41 "Wear helmets" OFF: never the choice
                     const int s = ArmorBuySlot(ar);
                     if (s < 0 || s > 3) continue;
                     if (ar->GetArmorRating() <= 0.0f) continue;             // rating-0 clothing can never win
@@ -788,6 +794,7 @@ namespace MFO::Logistics {
                     auto* worn = WornInLogicalSlot(a_follower, s);
                     if (!worn || worn->GetArmorRating() <= 0.0f || isShieldBit(worn)) continue;
                     if (RelicOffBody(a_follower, a_state, worn)) continue;  // rule 5 withholds it
+                    if (!wearsHelmets && IsHelmetPiece(worn)) continue;    // 86e3phy41: rule 5 withholds it (and takes it off)
                     if (ArmorScore(pref, worn) >= (a_out.slot[s] ? bestScore[s] : 0.0f)) a_out.slot[s] = worn;
                 }
                 ChooseJewelry(a_follower, a_state, a_out, a_inv);   // slots 4 / 5: the rated slate names none
@@ -1321,6 +1328,14 @@ namespace MFO::Logistics {
             // unchanged, and the combat road (a_judgeArmor false) still declares worn.
             const bool mageSetMode = a_judgeArmor && !Config::g_dollsMode.load() &&
                                      UsesMageClothing(a_state, a_follower) && Config::g_mageWearRobes.load();
+            // "WEAR HELMETS" (ClickUp 86e3phy41, marth 2026-10-12). OFF for him (board override, else
+            // bWearHelmets): the pick, the slate and the mage set already hold no head piece (the judges
+            // skip IsHelmetPiece at the source), rule 4b records none, and rule 5 declares none. APMF_API.h
+            // has no head CATEGORY (Armor = every non-shield ARMO), but Armor is ALWAYS OWNED here, so a
+            // head piece left out of the set is an OFF-SET equip the seat refuses (OutfitApply, SPID, the
+            // AI) -- the head-slot block, expressed with the existing scope. APMF never unequips, so a
+            // head piece he is WEARING is taken off by MFO (rule 5, OOC road only); it stays in his bag.
+            const bool wearsHelmets = WearsHelmets(&a_state);
             if (a_judgeArmor && !mageSetMode) {
                 RE::TESBoundObject* pickObj = nullptr;
                 if (g_handedPick.set && g_handedPick.follower == id) {
@@ -1451,6 +1466,7 @@ namespace MFO::Logistics {
                     if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                     auto* ar = obj->As<RE::TESObjectARMO>();
                     if (!ar || ar->IsShield() || ar == pick) continue;
+                    if (!wearsHelmets && IsHelmetPiece(ar)) continue;   // 86e3phy41: rule 5 takes it off, never "kept"
                     if (mageSetMode && std::find(slate.begin(), slate.end(), ar) != slate.end()) continue;
                     const RE::FormID f = ar->GetFormID();
                     if (lastHas(f) || picks.count(f)) continue;
@@ -1510,6 +1526,38 @@ namespace MFO::Logistics {
                 if (!obj || data.first <= 0 || !data.second || !data.second->IsWorn()) continue;
                 auto* ar = obj->As<RE::TESObjectARMO>();
                 if (!ar || ar->IsShield()) continue;
+                // 86e3phy41 "Wear helmets" OFF: a worn head piece is never declared (its re-equip is
+                // refused) and, on the OOC road, comes OFF -- UnequipObject posted to the main thread
+                // (off-main equip/unequip is the invisible-head class, never DoReset3D), at most once
+                // per (follower, piece) per 5 s while it stays worn. Unequip only: nothing is dropped,
+                // sold or moved. Worker-serial static, like g_lastDeclared.
+                if (!wearsHelmets && IsHelmetPiece(ar)) {
+                    withheldNow.insert(ar->GetFormID());   // not a player pick on the next build (4b)
+                    // ONLY UNDER ENFORCEMENT (4b's gate): in observe mode the seat refuses nothing,
+                    // so the engine's outfit refresh would put it back and the two would trade it.
+                    if (a_judgeArmor && APMFBridge::IsEquipAuthorityEnforced()) {
+                        static std::unordered_map<std::uint64_t, Clock::time_point> s_helmOffAt;
+                        const auto key = (static_cast<std::uint64_t>(id) << 32) | ar->GetFormID();
+                        const auto now = Clock::now();
+                        if (const auto h = s_helmOffAt.find(key);
+                            h == s_helmOffAt.end() || now - h->second >= std::chrono::seconds(5)) {
+                            s_helmOffAt[key] = now;
+                            spdlog::info("[equip-auth] {:08X}: helmets OFF -- '{}' ({:08X}) is not declared and "
+                                         "comes off (kept in his inventory)", id, ar->GetName() ? ar->GetName() : "?",
+                                         ar->GetFormID());
+                            const RE::FormID armoId = ar->GetFormID();
+                            auto doOff = [id, armoId]() {
+                                auto* fol  = RE::TESForm::LookupByID<RE::Actor>(id);
+                                auto* armo = RE::TESForm::LookupByID<RE::TESObjectARMO>(armoId);
+                                auto* eq   = RE::ActorEquipManager::GetSingleton();
+                                if (fol && armo && eq) eq->UnequipObject(fol, armo);
+                            };
+                            if (MainThread::IsInstalled()) MainThread::Post(doOff);
+                            else                           doOff();   // VR: pump is a no-op, keep the direct path
+                        }
+                    }
+                    continue;
+                }
                 if (Rule5Overlaps(ar, pick, slate.data(), slate.size())) continue;
                 if (RelicOffBody(a_follower, a_state, obj)) {
                     withheldNow.insert(ar->GetFormID());

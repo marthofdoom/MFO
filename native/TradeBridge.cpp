@@ -468,6 +468,7 @@ namespace MFO::TradeBridge {
                             if (c.kind != NeedCat::kArmor || !affordReserve(c.value)) continue;
                             auto* a = c.f->As<RE::TESObjectARMO>();
                             if (!a || Logistics::ArmorBuySlot(a) != slot) continue;
+                            if (b.noHelmets && Logistics::IsHelmetPiece(a)) continue;   // 86e3phy41
                             const float score = ArmorScoreOf(a->GetArmorRating(), a->GetArmorType(),
                                                              b.armorHeavyBias, b.armorLightBias);
                             if (score > bestScore ||
@@ -497,6 +498,7 @@ namespace MFO::TradeBridge {
                             if (c.kind != NeedCat::kMageApparel || !affordReserve(c.value)) continue;
                             auto* a = c.f->As<RE::TESObjectARMO>();
                             if (!a || Logistics::MageClothingSlot(a) != slot) continue;
+                            if (b.noHelmets && Logistics::IsHelmetPiece(a)) continue;   // 86e3phy41
                             int tier = 0; std::int32_t metric = 0;
                             if (!Logistics::MageApparelBuyKey(a, b.eligibleSchools, b.mageSchoolPrimary,
                                                               b.isNecromancer, tier, metric)) continue;

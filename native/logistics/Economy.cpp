@@ -419,6 +419,7 @@ namespace MFO::Logistics {
                 buy.armorHeavyBias = armorPref.heavyBias;
                 buy.armorLightBias = armorPref.lightBias;
                 buy.buyMageApparel = useMageApparel && !dolls;
+                buy.noHelmets      = !WearsHelmets(&a_state);   // 86e3phy41: no head piece is bought (errands too)
                 // Ranking (marth 2026-10-01): value-driven by default, with or without
                 // MEO (most expensive piece per slot). Only the strict toggle ranks
                 // school-enchant first.
@@ -1265,6 +1266,14 @@ namespace MFO::Logistics {
         if (has(Slot::kFeet))   return 3;
         if (has(Slot::kShield)) return 4;
         return -1;
+    }
+
+    bool IsHelmetPiece(RE::TESObjectARMO* a_armo) { return ArmorBuySlot(a_armo) == 0; }
+
+    bool WearsHelmets(const FollowerState* a_state) {
+        if (a_state && a_state->helmetOverride == 1) return true;
+        if (a_state && a_state->helmetOverride == 2) return false;
+        return Config::g_wearHelmets.load();
     }
 
     bool MageApparelBuyKey(RE::TESObjectARMO* a_armo, std::uint8_t a_top2Mask,

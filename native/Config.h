@@ -866,6 +866,14 @@ namespace MFO::Config {
     //     schools; plain clothing / non-school jewelry is unaffected (so a slot is
     //     never left bare). OFF: pure value-driven (wear the most expensive piece).
     inline std::atomic<bool>  g_mageWearRobes{ true };
+
+    // bWearHelmets (DEFAULT ON, ClickUp 86e3phy41, marth 2026-10-12): the GLOBAL "Wear helmets"
+    //   switch. OFF = a follower does not loot or buy head pieces (town errands included), MFO never
+    //   picks one to wear, and under Harbinger's equip authority a head piece is left out of the
+    //   declared set (so the seat refuses its re-equip) and a worn one is taken off (kept in the bag).
+    //   A per-follower board override (FollowerState::helmetOverride) wins over it; read through
+    //   Logistics::WearsHelmets. A head piece = Logistics::IsHelmetPiece (ArmorBuySlot 0).
+    inline std::atomic<bool>  g_wearHelmets{ true };
     inline std::atomic<bool>  g_mageApparelStrictSchool{ false };
 
     // bMeoAwareGems (DEFAULT OFF): "MEO aware followers." Layers effect-aware gem

@@ -244,6 +244,7 @@ namespace MFO::Config {
             else if (a_key == "bMerchantPerkBypass") setB(g_merchantPerkBypass);
             else if (a_key == "xMerchantPerkID")    setU(g_merchantPerkID);
             else if (a_key == "bMageWearRobes")     setB(g_mageWearRobes);
+            else if (a_key == "bWearHelmets")       setB(g_wearHelmets);
             else if (a_key == "bMageApparelStrictSchool") setB(g_mageApparelStrictSchool);
             else if (a_key == "bMeoAwareGems")      setB(g_meoAwareGems);
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
@@ -431,6 +432,7 @@ namespace MFO::Config {
             g_merchantPerkID     = 0x00058F7A;  // vanilla Merchant / Ordinator Salesman (Skyrim.esm)
             g_fencePerkID        = 0x00058F79;  // R6: vanilla "fence" perk (Skyrim.esm)
             g_mageWearRobes      = true;    // #21 mage clothing/jewelry dress-up -- ON (loot + buy)
+            g_wearHelmets        = true;    // 86e3phy41 "Wear helmets" -- ON (per-follower board override wins)
             g_mageApparelStrictSchool = false;  // #21 strict top-2-school apparel filter -- OFF (value-driven default)
             g_meoAwareGems       = false;   // effect-aware gem optimization -- OFF (conservation still always runs)
             g_autoRetreat        = false;   // OFF while retreat is reworked (marth 2026-10-06; ClickUp 86e3m5feu)
@@ -511,6 +513,7 @@ namespace MFO::Config {
             { "fErrandCooldownSec", "120.000000" }, { "fErrandMaxGameMin", "120.000000" },
             { "bHmsRedistribute", "1" },       { "fHmsSkewMax", "20.000000" },
             { "bMageWearRobes", "1" },         { "bMageApparelStrictSchool", "0" },
+            { "bWearHelmets", "1" },
             { "bMeoAwareGems", "0" },
             { "bMagicLoadout", "1" },          { "bMageDaggersOnly", "1" },
             { "bBeastHeadFix", "1" },
