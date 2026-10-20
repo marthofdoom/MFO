@@ -2164,3 +2164,8 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 "The author's caller counts in the code comment and ENGINE_NOTES ('30/31 callers') are imprecise (reviewer counted 39/40/35). The conclusion holds."
 
 Note (SEV-4, tracked as a fork task, not here): the mit-3.7 fork's TES.h guards AE members with the never-defined SKYRIM_SUPPORT_AE (worldSpace, landBorderMode, sizeof assert; same class in UserEvents.h, InterfaceStrings.h, BGSSaveLoadManager.h). MFO avoids the TES walks by rule until the fork is corrected.
+### MFO-B430 (SEV-4, OPEN, native/FollowerCatchUp.cpp MoveOnMain) -- the 250 u MoveTo offset can land him inside geometry in interiors (raised against 8fe6952)
+"The catch-up uses the same ~250 u behind-the-player offset as Errand.cpp RecallToPlayer. In a small interior that point can be inside a wall or furniture. Same exposure as RecallToPlayer; watch in the field."
+
+### MFO-B431 (SEV-4, OPEN, native/FollowerCatchUp.cpp kSettleS) -- the 3 s settle is shorter than the engine's own carry (raised against 8fe6952)
+"Sven was measured absent for about 40 s after a load (Followers.cpp kLoadWindowS). A follower who is walking through the door himself therefore appears behind the player instead of at the door when the catch-up fires at 3 s."

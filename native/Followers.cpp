@@ -15,6 +15,7 @@
 #include "Diagnostics.h"  // F7: CurrentPumpEpoch / PumpTickGate for its AddTask body
 #include "progression/ProgAllocator.h"   // 86e3eewaf: ForgetFollower (the main-thread progression undo)
 #include "logistics/PlayerGiven.h"        // 86e3eewaf: Forget (his PGIV entries)
+#include "FollowerCatchUp.h"               // Poll: the left-behind catch-up
 #include "Rapport.h"                      // review F5: DrainPendingSpends (the respec debit, worker side)
 #include <mutex>                          // 86e3eewaf: g_rosterMx (main -> worker verdict hand-back)
 #include "Forms.h"
@@ -257,6 +258,7 @@ namespace MFO::Followers {
         g_missStreak.clear();
         g_transientDrop.clear();
         g_lastRefreshAt = {}; g_transitionAt = {}; g_transitionNs.store(0, std::memory_order_relaxed); g_lastPlaceKey = nullptr; g_havePcPos = false;
+        FollowerCatchUp::Reset();   // no pre-transition sample across a load
         g_lastCombat.clear();
         g_stateSample.clear();   // [follower] state-line sample (position + time)
         g_activeIds.clear();
@@ -782,6 +784,8 @@ namespace MFO::Followers {
         // g_activeIds. This is the ONLY safe road for the combat cast-hook /
         // sinks / SaveCallback / progression poll -- they never walk g_active.
         PublishActiveMirror();
+
+        FollowerCatchUp::Poll();   // after a world transition, move a follower the engine left behind (INI bFollowerCatchUp)
 
         // Log the zero case too, or "found none" and "never ran" look the same.
         spdlog::debug("[follower] refresh: {} active, {} record(s) stored",
