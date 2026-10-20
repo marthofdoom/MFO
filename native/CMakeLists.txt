@@ -130,6 +130,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/EquipPreference.cpp
     apmf/Deposit.cpp
     apmf/ErrandClaims.cpp
+    apmf/Place.cpp
     apmf/TauntClaims.cpp
     apmf/Los.cpp
     apmf/Substrate.cpp
