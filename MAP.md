@@ -1986,7 +1986,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   unclaimed until combat end. **Direct equips that remain under the authority (`Docs/STATUS.md`
   "to migrate")**: the `bWeaponStyleControl=0` plain `EquipObject` (`EquipWeapon`'s kill-switch
   branch), `Loadout.cpp` `EquipBack` (the cast-debt repay; in-set when it repays a declared item),
-  `logistics/Upkeep.cpp` `EquipTorch` (**feat/mfo-torch-ch17, 2026-10-20: with the authority supported it makes NO EquipObject** -- it stamps `g_torchRule` and `RefreshEquipDeclaration` rule 1d (`EquipAuthority.cpp`, via `TorchDeclaredFor`) declares the Light as a STANDING entry with Light|Left owned, 3 s TTL on the stamp, not while seated/sleeping/in furniture or while a hold/cast has the left; Harbinger absent: the text below is the unchanged legacy path. **What breaks:** drop the stamp refresh and the torch is un-owned after 3 s; own Light with no stamp and Harbinger's torch seat fights the engine's light; legacy path (v9: skips while Left is owned, `APMFBridge::EquipAuthorityOwns`;
+  `logistics/Upkeep.cpp` `EquipTorch` (**feat/mfo-torch-ch17, 2026-10-20: with the authority supported it makes NO EquipObject** -- `RefreshEquipDeclaration` rule 1d (`EquipAuthority.cpp`, via `Upkeep.cpp` `TorchDeclaredFor`) reads the torch rule's CONDITION off his table at each build and declares the Light as a STANDING entry with Light|Left owned -- never in combat, not while seated/sleeping/interacting/in a furniture idle (furnitureIdle read on 1.6.1170 only), not when Left is already owned by a hold/cast/placement/bound weapon; a declaration left standing when builds stop (his own combat) is ended by `ReconcileForcedWeapon`'s `TorchDeclarationDue` push (`cast/Equip.cpp`). Open: MFO-B387..B390; Harbinger absent: the text below is the unchanged legacy path. **What breaks:** declare the torch in combat or drop the `ReconcileForcedWeapon` push and the Light|Left claim stands the whole fight (bow/2H/shield refused); own Light with no rule and Harbinger's torch seat fights the engine's light; legacy path (v9: skips while Left is owned, `APMFBridge::EquipAuthorityOwns`;
   otherwise an unowned-category equip the seat allows) and `HealExcludedWeapon`'s best-weapon
   re-equip, `AcquireEquip`'s WEAPON equip-in-place hop (v9: passes when no hold owns the hand).
   `DrinkPotion`'s `EquipObject(potion)` is NOT governed (v8: only ARMO/WEAP/AMMO/LIGH are). **BOUND WEAPONS (round 4, `fix/mfo-equip-authority-bound`):** the
@@ -3174,7 +3174,7 @@ module. Module layout:
     The one file over ~1500: `ServiceFollower` alone is 1462 lines and a function is never
     cut by a move.
   - `logistics/Upkeep.cpp` (652) = what the tick calls into: `PotionRestores:44`,
-    `CountPotions:144`, `EquipTorch` (+ `TorchDeclaredFor`/`ForgetTorchRule`, the standing torch state, above it), `HealExcludedWeapon`,
+    `CountPotions:144`, `TorchDeclaredFor:234` (standing torch state above it), `EquipTorch:292`, `HealExcludedWeapon:378`,
     `ShedOffRoleWeapon:288`, `IsLooting:512`, `WalkingLootLeg:553`, the lifecycle hooks
     (`NoteInCombat:564`, `ClearTransientState:568`, `OnFollowerRemoved:613`) and the
     MSTK co-save accessors (`CopyStockGear:637`, `LoadStockRecord:642`, `ClearStockGear:647`,

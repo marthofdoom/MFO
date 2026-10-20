@@ -352,6 +352,10 @@ namespace MFO::Logistics {
     void RefreshEquipDeclaration(RE::Actor* a_follower, const FollowerState& a_state,
                                  RE::FormID a_holdRight, RE::FormID a_holdLeft,
                                  bool a_leftReserved, bool a_judgeArmor, const char* a_why);
+    // feat/mfo-torch-ch17: true when a STANDING torch declaration (Light|Left owned) is still on a follower who is
+    // now in combat or whose declaration builds stopped; cast/Equip.cpp ReconcileForcedWeapon (every in-combat
+    // lap) then re-sends the declaration so it ends. Worker. Defined in logistics/Upkeep.cpp.
+    bool TorchDeclarationDue(RE::Actor* a_follower);
     // The bound WEAP forms whose BoundItemEffect is live on a_follower right now
     // (sorted, deduped; worker, read-only). The declaration carries them while
     // live; Actuation's in-combat lap compares this to trigger a re-declaration.
