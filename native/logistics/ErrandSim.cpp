@@ -278,6 +278,7 @@ namespace MFO::Logistics::Errand::Sim {
                 r = it->second;
                 g_sims.erase(it);
             }
+            Counter::PollPlacement(a_fid, r.followerName, true);   // R4b: log a finished outcome, forget a pending one
             detail::Cooldown(a_fid, a_cooldownSec);
             spdlog::info("[errand] {:08X} '{}': {} (sim) at {} -- {} (vendor '{}')", a_fid, r.followerName,
                          a_complete ? "DONE" : "ENDED", StageName(r.stage), a_why, r.vendorName);
@@ -407,6 +408,7 @@ namespace MFO::Logistics::Errand::Sim {
         // Not loaded = still the Sweep's (a stale tick of an unloaded follower must not resume or end anything).
         if (!a_follower->Is3DLoaded()) return true;
         const auto fid = a_follower->GetFormID();
+        Counter::PollPlacement(fid, std::string(a_follower->GetName() ? a_follower->GetName() : ""), true);   // R4b: loaded again -- the placement's outcome is logged or forgotten here
         SimRec r;
         {
             std::scoped_lock lk(g_mx);

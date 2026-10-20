@@ -122,32 +122,32 @@ namespace MFO::Logistics::Errand::Counter {
             spdlog::info("[errand] {:08X} '{}': exterior counter: not placed (APMF-B152)", a_follower, a_name);
             return;
         }
-        if (!MFO::APMFBridge::PlaceSupported()) {   // Harbinger absent = errands do not run; ABI < 28 is logged once by the wrapper
-            MFO::APMFBridge::RequestPlace(a_follower, s.vendor, {}, 0.0f, 0);
-            return;
-        }
         // Stand across the counter from the vendor: in front of his heading (Skyrim yaw 0 = north, clockwise: forward = (sin, cos)),
-        // facing back at him. The offset is in WORLD axes (Papyrus MoveTo semantics).
+        // facing back at him. The destination is the learned INTERIOR CELL and the point is the learned absolute position plus the
+        // offset (world axes): NOT the vendor's live reference, which Harbinger would resolve to wherever that actor is now (an
+        // unloaded vendor at home, or outdoors, would put him in the wrong building). Harbinger reads the cell back and FAILS on a mismatch.
         constexpr float kTwoPi = 6.28318530718f;
         const RE::NiPoint3 off(std::sin(s.yaw) * kFrontOffset, std::cos(s.yaw) * kFrontOffset, 0.0f);
+        const RE::NiPoint3 point = s.pos + off;
         float yaw = std::fmod(s.yaw + 3.14159265359f, kTwoPi);
         if (yaw < 0.0f) yaw += kTwoPi;
         // NEVER request a placement of a LOADED actor (APMF-B149, unobserved): OnlyIfUnloaded is the guard. RefuseIfPlayerPresent
         // keeps it unseen. Both always; SetYaw so he faces the vendor.
         constexpr std::uint32_t flags = APMF_API::kPlace_OnlyIfUnloaded | APMF_API::kPlace_RefuseIfPlayerPresent | APMF_API::kPlace_SetYaw;
-        const std::uint32_t h = MFO::APMFBridge::RequestPlace(a_follower, s.vendor, off, yaw, flags);
+        const std::uint32_t h = MFO::APMFBridge::RequestPlace(a_follower, s.cell, point, yaw, flags);
         if (h == 0) {
+            if (!MFO::APMFBridge::PlaceSupported()) return;   // Harbinger absent = errands do not run; ABI < 28 was warned once by the wrapper
             spdlog::error("[errand] {:08X} '{}': placement REQUEST REFUSED at the call (Harbinger names why in APMF.log); he stays where the "
                           "engine has him", a_follower, a_name);
             return;
         }
-        spdlog::info("[errand] {:08X} '{}': placement requested beside vendor {:08X} (offset {:.0f},{:.0f} = {:.0f} u in front of his heading, "
-                     "yaw {:.2f} facing him), handle {}", a_follower, a_name, s.vendor, off.x, off.y, kFrontOffset, yaw, h);
+        spdlog::info("[errand] {:08X} '{}': placement requested in cell {:08X} at ({:.0f},{:.0f},{:.0f}) = {:.0f} u in front of vendor {:08X}'s heading, "
+                     "yaw {:.2f} facing him, handle {}", a_follower, a_name, s.cell, point.x, point.y, point.z, kFrontOffset, s.vendor, yaw, h);
         std::scoped_lock lk(g_mx);
         g_placing[a_follower] = PendingPlace{h, Clock::now(), a_vendorName};
     }
 
-    void PollPlacement(RE::FormID a_follower, const std::string& a_name) {
+    void PollPlacement(RE::FormID a_follower, const std::string& a_name, bool a_final) {
         PendingPlace pp;
         {
             std::scoped_lock lk(g_mx);
@@ -159,10 +159,10 @@ namespace MFO::Logistics::Errand::Counter {
         bool done = true;
         switch (r.state) {
         case APMF_API::kPlaceState_Queued:
-            done = Clock::now() - pp.at >= kPlaceQueuedGiveUp;
+            done = a_final || Clock::now() - pp.at >= kPlaceQueuedGiveUp;
             if (done)
-                spdlog::warn("[errand] {:08X} '{}': placement handle {} still Queued after {} s -- no outcome read", a_follower, a_name,
-                             pp.handle, kPlaceQueuedGiveUp.count());
+                spdlog::warn("[errand] {:08X} '{}': placement handle {} still Queued when {} -- no outcome read", a_follower, a_name,
+                             pp.handle, a_final ? "the errand record ended" : "the 60 s give-up passed");
             break;
         case APMF_API::kPlaceState_Placed:
             spdlog::info("[errand] {:08X} '{}': PLACED at '{}' ({:.0f},{:.0f},{:.0f}) cell {:08X}", a_follower, a_name, pp.vendorName,

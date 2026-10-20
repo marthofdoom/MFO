@@ -33,7 +33,9 @@ namespace MFO::Logistics::Errand::Counter {
     void NoteSimArrival(RE::FormID a_follower, const std::string& a_name, const std::string& a_vendorName, RE::FormID a_faction);
     // Poll the follower's pending placement (a no-op when none): logs Placed / Refused(why) / Failed(why) ONCE, then forgets it.
     // Called each Sim::Sweep pass for the record. AddTask worker.
-    void PollPlacement(RE::FormID a_follower, const std::string& a_name);
+    // a_final = the errand record is ending (Drop / loaded again): a still-Queued placement is logged and forgotten, so a stale entry
+    // never outlives its errand or reports under the next one.
+    void PollPlacement(RE::FormID a_follower, const std::string& a_name, bool a_final = false);
 
     void Clear();
 }

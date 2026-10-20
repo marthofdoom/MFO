@@ -1941,3 +1941,10 @@ Same review. Verbatim: "Errand.cpp:1045-1050: a later stop whose vendor is unloa
 
 ### MFO-B348 (SEV-5, OPEN, logistics/ErrandTrip.cpp) -- town R5: bestRow recomputed in the sort comparator (raised against c32c8c1e)
 Same review. Verbatim: "ErrandTrip.cpp:189-192: the stable_sort comparator recomputes bestRow (N log N x candidates x rows per plan on the worker); cache it if a plan ever stalls."
+
+### MFO-B370 (SEV-4, OPEN, apmf/Place.cpp) -- town R4b: a flags-0 RequestPlace is unguarded (raised against f2bfbc72)
+Opus review of `feat/mfo-town-p2-r4b-place` @ f2bfbc72. Verbatim: "the flags-0 RequestPlace used to raise the unsupported warning is safe today but fragile: if either gate changes, a flags-0 request means 'move whatever the player can see' with no guards; send the real flags or add a WarnPlaceUnsupported()." FIXED in the closing round (the flags-0 call is removed; the caller always sends the real flags and the wrapper warns once on ABI < 28). Kept for the record. MAP: "R4" What-breaks.
+
+### MFO-B371 (SEV-5, OPEN, logistics/ErrandCounter.cpp) -- town R4b: a multi-stop arrival overwrites the pending placement (raised against f2bfbc72)
+Same review. Verbatim: "a multi-stop arrival overwrites the pending entry; harmless in practice." MAP: "R4" What-breaks.
+
