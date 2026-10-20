@@ -35,6 +35,7 @@ namespace MFO::Logistics::Pricing {
         float buyPerk  = 1.0f;      // after entry point 8 / 60, before the final clamp
         float sellPerk = 1.0f;
         bool  perksEvaluated = false;
+        bool  refreshPending = false; // no cached value yet AND a main-thread refresh is queued/pending: the caller may defer one cycle
         bool  modelOn = true;       // false: bSpeechPricing off or a GMST unreadable -> multipliers are 1.0
         std::string source;         // "cache" / "cache-stale" / "speech-only" / "off" / "gmst-unreadable"
         std::string note;           // why perks were not evaluated, or which clamps applied

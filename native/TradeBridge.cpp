@@ -646,13 +646,13 @@ namespace MFO::TradeBridge {
                          o.sell.size(), o.needs.size(), o.budget + o.buySpent,   // original purse
                          offered, o.buyPlan);
             // R2: ONE price line per trade -- the follower's Speech, the factors, the perk-adjusted values,
-            // the clamps and the rounding. The sell rows were priced at dispatch from the same cache.
+            // the clamps and the rounding. The quote was taken at dispatch (or plan time) and priced the sell
+            // rows, PlanBuy's budget and every GetBuyPrice of this order.
             if (o.quoted)
                 spdlog::info("[econ] {:08X} price @ '{}': {}", fol ? fol->GetFormID() : 0u,
                              ven && ven->GetName() ? ven->GetName() : "?", Logistics::Pricing::Describe(o.quote));
             else
-                spdlog::info("[econ] {:08X} price @ '{}': no buy plan ran, so no buy quote was taken (sell rows were "
-                             "priced at dispatch)", fol ? fol->GetFormID() : 0u,
+                spdlog::info("[econ] {:08X} price @ '{}': no quote was attached to this order and no buy plan ran", fol ? fol->GetFormID() : 0u,
                              ven && ven->GetName() ? ven->GetName() : "?");
         }
 
@@ -679,7 +679,8 @@ namespace MFO::TradeBridge {
                      RE::TESObjectREFR* a_chest,
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
                      std::int32_t a_budget, const BuyThresholds& a_buy,
-                     std::uint64_t a_sig, float a_daysNow, RE::FormID a_memoKey) {
+                     std::uint64_t a_sig, float a_daysNow, RE::FormID a_memoKey,
+                     const Logistics::Pricing::Quote* a_quote) {
         auto* q = Forms::g_tradeQuest;
         if (!q || !q->IsRunning()) return false;
         if (!a_follower || !a_chest)  return false;
@@ -722,6 +723,9 @@ namespace MFO::TradeBridge {
             o.sig       = a_sig;
             o.daysAt    = a_daysNow;
             o.probeOnly = !Config::g_economy.load();
+            // ONE quote per trade: the one the sell rows were priced from (R2). A caller without one
+            // (none today) falls back to EnsureQuote at the first PlanBuy / GetBuyPrice.
+            if (a_quote) { o.quote = *a_quote; o.quoted = true; }
             g_orders[token] = std::move(o);
         }
         if (!Papyrus::DispatchTradeRun(q, token)) {

@@ -90,7 +90,8 @@ namespace MFO::Logistics::Pricing {
             auto* f = fp.get();
             auto* v = vp.get();
             Gmst g{};
-            if (!f || !ReadGmst(g)) { std::scoped_lock lk(g_mx); g_pending.erase(key); return; }
+            // the handle may now resolve to another actor (a reused slot): never cache under the captured id then
+            if (!f || f->GetFormID() != a_fid || !ReadGmst(g)) { std::scoped_lock lk(g_mx); g_pending.erase(key); return; }
             const float speech = ReadSpeech(f);
             std::optional<float> bp, sp;
             std::string why;
@@ -133,6 +134,7 @@ namespace MFO::Logistics::Pricing {
         const auto now = Clock::now();
 
         bool wantRefresh = false;
+        bool pendingNow = false;   // a refresh for this pair is queued (by this call or an earlier one)
         Quote out;
         bool haveEntry = false;
         {
@@ -149,9 +151,8 @@ namespace MFO::Logistics::Pricing {
                 wantRefresh = true;
             }
             if (wantRefresh && f && f->Is3DLoaded() && MainThread::IsInstalled()) {
-                if (g_pending.insert(key).second) {
-                    // post below, outside the lock
-                } else wantRefresh = false;
+                pendingNow = true;
+                if (!g_pending.insert(key).second) wantRefresh = false;   // already queued; post below otherwise
             } else {
                 wantRefresh = false;
             }
@@ -164,6 +165,7 @@ namespace MFO::Logistics::Pricing {
         // No cached perk value: the base Speech-only factor, said once per pair until a value is cached.
         Quote q = Model(g, speechNow >= 0.0f ? speechNow : 0.0f, nullptr, nullptr);
         q.source = "speech-only";
+        q.refreshPending = pendingNow;
         q.note = std::string(f ? (f->Is3DLoaded() ? "no cached value yet (main-thread refresh queued)"
                                                   : "follower not loaded and no cached value")
                                : "no follower") + (q.note.empty() ? "" : "; " + q.note);

@@ -1872,3 +1872,9 @@ Opus tier-3 review of `feat/mfo-town-p2-s-rows` @ 527877c6. Verbatim: "Unguarded
 
 ### MFO-B325 (SEV-5, OPEN, Packages.cpp) -- town S: VR load noise from the refused alias reader (raised against 527877c6)
 Opus tier-3 review of `feat/mfo-town-p2-s-rows` @ 527877c6. Verbatim: "VR noise: each VR load now prints 7 'NOT swept' error lines in addition to the seat refusal; the VR loot/retreat sweeps were already no-ops before this change." Reasoning: log volume only on VR (no verified table there); since the review fix the lines read "occupancy unknown ... NOT swept (no marker or no native ForceRefTo)". MAP: Packages.cpp "ALIAS READER behind its self-check row" bullet.
+
+### MFO-B330 (SEV-5, OPEN, logistics/Pricing.cpp) -- town R2: a GMST read failure turns the price model off at full base value (raised against a11fa74c)
+Opus review of `feat/mfo-town-p2-r2-prices` @ a11fa74c. Verbatim: "Pricing.cpp:126: when a GMST cannot be read the model turns off with multipliers 1.0; the sell side then pays full base value, more generous than the old 0.30-0.50 Speech fraction. Logged once as ERROR; the six GMSTs always exist as exe defaults." Reasoning: SEV-5, logged loudly, the settings always exist. MAP: the #21 "PRICES (town phase 2 R2)" bullet in the TradeBridge section (cross-referenced there as MFO-B330).
+
+### MFO-B331 (SEV-5, CLOSED 2026-10-19 in the R2 closing round, MAP.md) -- town R2: stale RegisterFuncs line number in MAP (raised against a11fa74c)
+Opus review of `feat/mfo-town-p2-r2-prices` @ a11fa74c. Verbatim: "MAP.md cites TradeBridge.cpp:365-376 for RegisterFuncs; the real location is ~:662-675 (stale before this change)." Reasoning: doc only; FIXED in the R2 closing round (now `:661-676`). MAP: TradeBridge section and the script-ABI table row.

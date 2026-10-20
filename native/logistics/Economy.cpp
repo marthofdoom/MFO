@@ -1005,6 +1005,14 @@ namespace MFO::Logistics {
                 // chest checks so only an evaluated vendor costs a lookup. The vendor key is the actor, else the shop.
                 const Pricing::Quote quote = Pricing::Resolve(a_follower->GetHandle(),
                                                               vendor ? vendor->GetHandle() : RE::ActorHandle{}, vendorKey);
+                // ONE quote per trade: while the follower is loaded and the first perk-adjusted value for this pair is
+                // still being computed on the main thread, DEFER this vendor one cycle instead of pricing the sell rows
+                // Speech-only (the refresh is already Posted; the next scan / plan finds the cache). Not a fallback:
+                // an UNLOADED follower or a vendor with no actor never defers and its line says Speech-only.
+                if (quote.refreshPending) {
+                    if (!a_errand) g_econPair[pairKey] = a_now;   // undo this scan's 12 s pair cooldown: retry on the next scan
+                    continue;
+                }
                 std::vector<TradeBridge::SellRow> sell;
                 sell.reserve(sellCandidates.size());
                 for (auto& c : sellCandidates) {
@@ -1059,7 +1067,7 @@ namespace MFO::Logistics {
                         pl.wishTome = purse > 0 && buy.buyTomes;
                         pl.purse = purse;
                         pl.chestGold = TradeBridge::LastSeenChestGold(chest->GetFormID());
-                        pl.sell = sell; pl.needs = needs; pl.buy = buy; pl.sig = sig; pl.daysNow = daysNow;
+                        pl.sell = sell; pl.needs = needs; pl.buy = buy; pl.sig = sig; pl.daysNow = daysNow; pl.quote = quote;
                         a_planOut->push_back(std::move(pl));
                         continue;
                     }
@@ -1083,7 +1091,7 @@ namespace MFO::Logistics {
                 // follower's order, or the bridge being down, must not cost this
                 // follower its 8 s window -- try the next vendor / next scan.
                 if (TradeBridge::VendorTrade(a_follower, vendor, chest,
-                                             std::move(sell), needs, purse, buy, sig, daysNow)) {
+                                             std::move(sell), needs, purse, buy, sig, daysNow, 0, &quote)) {
                     g_econTrade[fid] = a_now + std::chrono::seconds(8);
                     if (a_errand) a_errand->dispatched = true;
                     break;

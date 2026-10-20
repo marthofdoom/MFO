@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include "logistics/Pricing.h"   // town phase 2 R2: the dispatch quote rides the order
 
 // #21 ECON BRIDGE -- native side (Fable's ECON_PAPYRUS_PLAN).
 //
@@ -183,7 +184,8 @@ namespace MFO::TradeBridge {
                      std::vector<SellRow> a_sell, std::vector<NeedCat> a_needs,
                      std::int32_t a_budget, const BuyThresholds& a_buy = {},
                      std::uint64_t a_sig = 0, float a_daysNow = 0.0f,
-                     RE::FormID a_memoKey = 0);
+                     RE::FormID a_memoKey = 0,
+                     const Logistics::Pricing::Quote* a_quote = nullptr);
     // a_memoKey (town errands, R1b): the vendor key the empty-trade memo is filed under when a_vendor is null or unloaded -- the
     // SAME key the plan's SkipTrade used (the vendor actor's FormID, or the FACTION's for a shop with no loaded vendor).
 
