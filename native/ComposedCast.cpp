@@ -56,12 +56,12 @@ namespace MFO::ComposedCast {
         // to cast on its own); needs APMF present (the claim keeps the AI/other
         // frameworks off the hand -- without it "legacy = APMF-absent-only"
         // means the silent kInstant heal, never a half-composed one); opt-in
-        // behind the (repurposed) bHealAnimPackage toggle, default OFF.
+        // behind the (repurposed) bHealAnimPackage toggle, default ON.
         bool Enabled(RE::Actor* a_follower, RE::SpellItem* a_spell, CasterConsent::SpellKind a_kind) {
             if (!a_follower || !a_spell)                     return false;
             if (a_kind != CasterConsent::SpellKind::Heal)    return false;
             if (!Runtime::CastPathsVerified())               return false;   // unverified runtime -> kInstant
-            if (!Config::g_healAnimPackage.load())           return false;   // opt-in, default OFF
+            if (!Config::g_healAnimPackage.load())           return false;   // default ON, kill switch
             if (!APMFBridge::Available())                    return false;   // APMF absent -> kInstant
             return true;
         }

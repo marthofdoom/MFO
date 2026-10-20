@@ -156,16 +156,6 @@
           }
         },
         {
-          "id": "bForceCastOnMiss:General",
-          "text": "Force the chosen spell",
-          "type": "toggle",
-          "help": "ON (default): if a follower's own AI casts a different spell (or nothing) during the grace window, the gambit's configured spell is force-cast at the chosen target -- with line of sight required. OFF: the old behaviour (the AI decides, silent fallback).",
-          "valueOptions": {
-            "sourceType": "ModSettingBool",
-            "defaultValue": 1
-          }
-        },
-        {
           "id": "iCastControl:General",
           "text": "Cast control",
           "type": "enum",
@@ -193,16 +183,6 @@
           }
         },
         {
-          "id": "bLegacyCastHybrid:General",
-          "text": "Legacy cast (no APMF)",
-          "type": "toggle",
-          "help": "OFF (default): with APMF installed, a hostile cast gambit is OWNED -- APMF holds the target and selects the spell so the follower's own AI casts the right spell at the right target with the FULL cast animation. ON: use the old AI-first-wait plus force-on-miss hybrid instead (unanimated forced cast). Has no effect if APMF is not installed (the legacy hybrid runs either way).",
-          "valueOptions": {
-            "sourceType": "ModSettingBool",
-            "defaultValue": 0
-          }
-        },
-        {
           "id": "bApmfEquipAuthority:General",
           "text": "Harbinger equip authority",
           "type": "toggle",
@@ -223,16 +203,6 @@
           }
         },
         {
-          "id": "bCstyReassert:General",
-          "text": "Re-assert combat style each tick",
-          "type": "toggle",
-          "help": "Dev diagnostic. ON (default): when the engine re-derives a follower's combat style away from MFO's owned stance mid-combat, MFO re-asserts it every tick -- suspected cause of combat-only, intermittent positioning stutter. OFF: re-assert only once (when MFO first takes the controller) and rely on the equip gate to hold the weapon instead. Numpad 7 flips this live mid-battle for an A/B test. Leave ON unless you're helping diagnose the stutter.",
-          "valueOptions": {
-            "sourceType": "ModSettingBool",
-            "defaultValue": 1
-          }
-        },
-        {
           "id": "bHealAnimPackage:General",
           "text": "Animated heals in combat",
           "type": "toggle",
@@ -245,32 +215,6 @@
         {
           "text": "Timing",
           "type": "header"
-        },
-        {
-          "id": "fCastCooldown:General",
-          "text": "Cast cooldown (s)",
-          "type": "slider",
-          "help": "Minimum seconds between a follower's gambit casts.",
-          "valueOptions": {
-            "min": 0.0,
-            "max": 30.0,
-            "step": 0.5,
-            "sourceType": "ModSettingFloat",
-            "defaultValue": 4.0
-          }
-        },
-        {
-          "id": "fAiCastGrace:General",
-          "text": "AI cast grace (s)",
-          "type": "slider",
-          "help": "How long to wait for the follower's own AI to cast before MFO does it silently.",
-          "valueOptions": {
-            "min": 0.0,
-            "max": 15.0,
-            "step": 0.5,
-            "sourceType": "ModSettingFloat",
-            "defaultValue": 3.0
-          }
         },
         {
           "id": "fMagickaReserve:General",
@@ -891,15 +835,61 @@
           "valueOptions": {
             "value": "v2.6.2"
           }
+        }
+      ]
+    },
+    {
+      "pageDisplayName": "Debug",
+      "cursorFillMode": "topToBottom",
+      "content": [
+        {
+          "text": "Debug and legacy path",
+          "type": "header"
+        },
+        {
+          "id": "bCstyReassert:General",
+          "text": "Re-assert combat style each tick",
+          "type": "toggle",
+          "help": "Dev diagnostic. ON (default): when the engine re-derives a follower's combat style away from MFO's owned stance mid-combat, MFO re-asserts it every tick -- suspected cause of combat-only, intermittent positioning stutter. OFF: re-assert only once (when MFO first takes the controller) and rely on the equip gate to hold the weapon instead. Numpad 7 flips this live mid-battle for an A/B test. Leave ON unless you're helping diagnose the stutter. (debug / legacy path)",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
         },
         {
           "id": "bDebugUnlockSlots:General",
           "text": "Unlock all gambit slots",
           "type": "toggle",
-          "help": "DEBUG: open every gambit slot on every follower regardless of rank/rapport, so all gambits are assignable for testing.",
+          "help": "DEBUG: open every gambit slot on every follower regardless of rank/rapport, so all gambits are assignable for testing. (debug)",
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": 0
+          }
+        },
+        {
+          "id": "fAiCastGrace:General",
+          "text": "AI cast grace (s)",
+          "type": "slider",
+          "help": "How long to wait for the follower's own AI to cast before MFO does it silently. (debug / legacy path)",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 15.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 3.0
+          }
+        },
+        {
+          "id": "fCastCooldown:General",
+          "text": "Cast cooldown (s)",
+          "type": "slider",
+          "help": "Minimum seconds between a follower's gambit casts. (debug / legacy path)",
+          "valueOptions": {
+            "min": 0.0,
+            "max": 30.0,
+            "step": 0.5,
+            "sourceType": "ModSettingFloat",
+            "defaultValue": 4.0
           }
         }
       ]
