@@ -2033,3 +2033,9 @@ Opus review of `fix/mfo-town-counter-drop` @ d69e4869. Verbatim: "a follower alr
 
 ### MFO-B386 (SEV-4, OPEN, logistics/Errand.cpp Tick combat exit) -- town: combat during the inn-only walk re-plans the inn (raised against d69e4869)
 Same review. Verbatim: "combat-while-walking re-plans inn": an inn-only trip that ends on combat during the walk is not marked trip-done (deliberately left, the coordinator is asking marth), so after the combat cooldown he plans the inn trip again. MAP: R7 section.
+
+### MFO-B396 (SEV-5, OPEN, logistics/ErrandSim.cpp:250 / ErrandRest.cpp:847) -- helmets: a stored errand order keeps its plan-time buy (raised against 4f320cf)
+Opus tier-3 review of `feat/mfo-wear-helmets` @ 4f320cf (ClickUp 86e3phy41). Verbatim-ish: "errand stored orders (ErrandSim.cpp:250 / ErrandRest.cpp:847) use the plan-time buy, so a plan made while ON can still buy a helmet that trip." `BuildBuyThresholds` is rebuilt live per on-screen stop; only an order already stored (the off-screen sim replay, the inn/temple order) carries the `BuyThresholds::noHelmets` it was planned with. Effect: at most one trip's helmet buy after the toggle flips OFF. MAP.md: "WEAR HELMETS".
+
+### MFO-B397 (SEV-5, OPEN, logistics/Economy.cpp IsHelmetPiece / MageClothingSlot) -- helmets: a keyworded helmet with hands/feet bits sits in a mage's hands/feet slot (raised against 4f320cf)
+Same review. Verbatim-ish: "head+hands piece class mismatch." It survives F2 (the keyword test): an ARMO carrying ArmorHelmet/ClothingHead AND a hands or feet biped bit is a helmet to `IsHelmetPiece` (so it is never looted, bought or worn while OFF) but `MageClothingSlot` files it under hands/feet, so with helmets ON the mage judge ranks it against gloves/boots. Rare (no vanilla piece). MAP.md: "WEAR HELMETS".

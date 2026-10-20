@@ -306,6 +306,16 @@ namespace MFO::Logistics {
                 }
             }
 
+            // 86e3phy41 "Wear helmets" OFF for him: every helmet he CARRIES stays in the bag (marth
+            // 2026-10-12), whether or not armor is judged (bEconomyBuyGear). No new one is looted or bought
+            // while OFF, so this only holds what he had. Economy's sell loop is the only keep.armor reader.
+            if (!WearsHelmets(&a_state)) {
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    if (auto* ar = obj->As<RE::TESObjectARMO>(); ar && IsHelmetPiece(ar)) keepArmor.insert(obj);
+                }
+            }
+
             // THE MAGE BACKUP (review round 1 on 4f23c30, the caster backup-dagger
             // churn): a magic user's loot judge upgrades ONE sidearm by attack damage
             // (daggers only under bMageDaggersOnly, BuildEquipmentContext's

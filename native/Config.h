@@ -868,11 +868,11 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_mageWearRobes{ true };
 
     // bWearHelmets (DEFAULT ON, ClickUp 86e3phy41, marth 2026-10-12): the GLOBAL "Wear helmets"
-    //   switch. OFF = a follower does not loot or buy head pieces (town errands included), MFO never
-    //   picks one to wear, and under Harbinger's equip authority a head piece is left out of the
-    //   declared set (so the seat refuses its re-equip) and a worn one is taken off (kept in the bag).
-    //   A per-follower board override (FollowerState::helmetOverride) wins over it; read through
-    //   Logistics::WearsHelmets. A head piece = Logistics::IsHelmetPiece (ArmorBuySlot 0).
+    //   switch. OFF = a follower does not loot or buy helmets (town errands included), MFO never
+    //   picks one to wear, under Harbinger's equip authority a helmet is left out of the declared set
+    //   (so the seat refuses its re-equip; MFO does not unequip a worn one), and carried helmets are
+    //   kept, never sold. A per-follower board override (FollowerState::helmetOverride) wins over it;
+    //   read through Logistics::WearsHelmets. A helmet = Logistics::IsHelmetPiece (keywords).
     inline std::atomic<bool>  g_wearHelmets{ true };
     inline std::atomic<bool>  g_mageApparelStrictSchool{ false };
 

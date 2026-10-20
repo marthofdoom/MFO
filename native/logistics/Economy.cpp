@@ -724,6 +724,10 @@ namespace MFO::Logistics {
                             redundantInferior = true;
                     }
                 }
+                // 86e3phy41 "Wear helmets" OFF: a helmet he carries stays in the bag (the keep set holds every
+                // one), so a WORN helmet is not a redundant inferior either -- it is withheld from the
+                // declaration, not sold. Blacklisted apparel still force-sells below.
+                if (redundantInferior && IsHelmetPiece(armo) && !WearsHelmets(&a_state)) redundantInferior = false;
                 // THE WEAR JUDGE HAS THE LAST WORD ON A WORN PIECE (Cicero's helmet loop):
                 // bestBySlot is the KEEP set's ranking, a different judge from the armor
                 // choice's slate (per-biped-bit ArmorIsBetter + worn incumbency, or the mage
@@ -1268,7 +1272,12 @@ namespace MFO::Logistics {
         return -1;
     }
 
-    bool IsHelmetPiece(RE::TESObjectARMO* a_armo) { return ArmorBuySlot(a_armo) == 0; }
+    bool IsHelmetPiece(RE::TESObjectARMO* a_armo) {
+        // marth 2026-10-20: the vanilla type keywords, by editor ID (the HasKeywordString idiom MEOBridge
+        // uses on ARMO), so a mod's helmet that carries them counts and a circlet / wig / hair accessory
+        // (none of them carries either) does not.
+        return a_armo && (a_armo->HasKeywordString("ArmorHelmet") || a_armo->HasKeywordString("ClothingHead"));
+    }
 
     bool WearsHelmets(const FollowerState* a_state) {
         if (a_state && a_state->helmetOverride == 1) return true;

@@ -392,7 +392,7 @@
           "id": "bWearHelmets:General",
           "text": "Wear helmets",
           "type": "toggle",
-          "help": "ON (default): followers loot, buy and wear helmets and other head pieces (hats, hoods, circlets). OFF: followers do not loot or buy head pieces (town errands included) and do not put one on. With Harbinger, a helmet a follower is wearing comes off and stays in his bag. Each follower can override this on the board (Gambits tab, Helmets button).",
+          "help": "ON (default): followers loot, buy and wear helmets, hats and hoods. OFF: followers do not loot or buy them (town errands included) and do not put one on, and the helmets they carry stay in their bag. Circlets are not helmets. Each follower can override this on the board (Gambits tab, Helmets button).",
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": 1

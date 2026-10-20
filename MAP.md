@@ -3859,24 +3859,28 @@ module. Module layout:
   player / script unequip. **What breaks:** declaring a best that overlaps another re-creates the
   two-items-for-one-slot displacement loop; letting the set depend on worn state re-creates the flip.
 - **"WEAR HELMETS" (ClickUp 86e3phy41, `feat/mfo-wear-helmets`, 2026-10-20).** ONE predicate pair in
-  `logistics/Economy.cpp` (beside `ArmorBuySlot`, declared in `Logistics.h`): `IsHelmetPiece(ar)` =
-  `ArmorBuySlot(ar) == 0`, and `WearsHelmets(const FollowerState*)` = the board override
-  (`FollowerState::helmetOverride` 1 Wear / 2 Never) else `Config::g_wearHelmets` (`bWearHelmets`).
-  READERS (change one, check all): `LootEquipment.cpp` (`EquipmentContext::noHelmets`, set in
-  `BuildEquipmentContext`, read by the container AND loose armor branches only; the keep set ignores it),
+  `logistics/Economy.cpp` (beside `ArmorBuySlot`, declared in `Logistics.h`): `IsHelmetPiece(ar)` = the
+  ARMO carries keyword `ArmorHelmet` or `ClothingHead` (`HasKeywordString`, marth 2026-10-20: circlets,
+  wigs, hair accessories and unkeyworded pieces are NOT helmets), and `WearsHelmets(const FollowerState*)`
+  = the board override (`FollowerState::helmetOverride` 1 Wear / 2 Never) else `Config::g_wearHelmets`
+  (`bWearHelmets`). READERS (change one, check all): `LootEquipment.cpp` (`EquipmentContext::noHelmets`,
+  set in `BuildEquipmentContext`, read by the container AND loose armor branches only),
   `Economy.cpp BuildBuyThresholds` -> `TradeBridge::BuyThresholds::noHelmets` -> `TradeBridge.cpp PlanBuy`
-  (rated AND mage-apparel loops; errand plans copy `buy`, so a plan made before a toggle keeps its old
-  answer for that trip), `EquipAuthority.cpp` `MageBestPerSlot`, `ComputeOwnedGearPick` (rated),
-  `ComputeOwnedGearSlate` (candidate loop AND worn incumbency), and `RefreshEquipDeclaration` (4b never
-  records a head piece; rule 5 never declares one, puts it in `withheldNow`, and on the OOC road under
-  `IsEquipAuthorityEnforced()` posts `UnequipObject`, 5 s per (follower, piece) latch). The head-slot
-  block is the EXISTING scope: Armor is always owned, so an undeclared head piece is an off-set equip the
-  seat refuses. `APMF_API.h` has no head category and was NOT changed. What breaks: a head consumer that
-  tests `IsHeadSlotMask` instead of `IsHelmetPiece` here would bar hooded body suits; dropping the
-  enforcement gate on the unequip makes MFO and the outfit refresh trade the helmet in observe mode.
-  Board: `EditKind::SetHelmetOverride` (`Board_internal.h`, appended), applied in `Board.cpp ApplyEdits`
-  (clamped [0,2]), `FollowerRow::helmetOverride`, the `###helmbtn` / `##helm` picker in
-  `Board_FieldKit.cpp` beside the class picker. Persistence: FLWR v5 value-space (co-save section).
+  (rated AND mage-apparel loops; a STORED errand order keeps its plan-time value, MFO-B396),
+  `EquipAuthority.cpp` `MageBestPerSlot`, `ComputeOwnedGearPick` (rated), `ComputeOwnedGearSlate`
+  (candidate loop AND worn incumbency), `RefreshEquipDeclaration` (4b never records a helmet; rule 5
+  never declares a worn one and puts it in `withheldNow`, so `g_lastWithheld` keeps it from reading as
+  a player pick after the toggle flips back ON), `SwapUp.cpp ComputeKeepSet` (OFF: EVERY carried helmet
+  joins `keep.armor`, outside the `armorJudged` gate) and the `Economy.cpp` sell loop (OFF: a worn
+  helmet is never a `redundantInferior` force-sell). The head-slot block is the EXISTING scope: Armor
+  is always owned, so an undeclared helmet is an off-set equip the seat refuses. `APMF_API.h` has no
+  head category and was NOT changed. **MFO NEVER UNEQUIPS a worn helmet (marth 2026-10-20):** it stays
+  on, undeclared, until a separate tier-A Harbinger "strip these named items" facet lands and MFO adopts
+  it. What breaks: adding an MFO `UnequipObject` here; testing slot bits instead of the keywords; moving
+  the keep-set insert back inside `armorJudged` (carried helmets sell with bEconomyBuyGear off). Open:
+  MFO-B396, MFO-B397. Board: `EditKind::SetHelmetOverride` (`Board_internal.h`, appended), applied in
+  `Board.cpp ApplyEdits` (clamped [0,2]), `FollowerRow::helmetOverride`, the `###helmbtn` / `##helm`
+  picker in `Board_FieldKit.cpp` beside the class picker. Persistence: FLWR v5 value-space (co-save section).
 - **THE HEAD SLOT IS THREE BIPED BITS (2026-09-14, field fix; branch
   `fix/mfo-deck-0914-helmet-offhand-verdict-meo`).** FIELD (Deck log, Fable, ROOT
   CAUSE CONFIRMED): vanilla helmets (Imperial Light Helmet `00013EDB`, Elven Helmet
