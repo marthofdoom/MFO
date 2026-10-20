@@ -119,6 +119,8 @@ namespace MFO::Logistics::Errand {
         bool WantsMaterials(RE::Actor* a_follower);
         // How many MORE of this base form he wants (0 = not on the list).
         std::int32_t Wanted(RE::FormID a_follower, RE::FormID a_form);
+        // Is this form a component of any improve recipe on his want list (carried or still to buy)? The sell path holds it back.
+        bool HoldFromSale(RE::FormID a_follower, RE::FormID a_form);
         // He took a_count of a_form (a loot transfer): the list shrinks at once, before the next build.
         void NoteTaken(RE::FormID a_follower, RE::FormID a_form, std::int32_t a_count);
     }

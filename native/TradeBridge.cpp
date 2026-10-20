@@ -34,6 +34,10 @@ namespace MFO::TradeBridge {
             // GetBuyPrice of the order so the plan's budget and the gold Papyrus pays use one multiplier.
             Logistics::Pricing::Quote quote;
             bool                 quoted = false;
+            // R8: what PlanBuy planned of the smithing materials, and the plan's total units (ReportTrade credits the materials only when
+            // the report shows the whole plan was executed).
+            std::vector<SmithMat> smithPlanned;
+            std::int32_t         plannedTotal = 0;
         };
 
         std::mutex                                    g_mtx;
@@ -297,16 +301,18 @@ namespace MFO::TradeBridge {
             // ── SMITHING MATERIALS (town phase 2 R8, marth: "regardless of gambits a follower will ... buy whats needed for
             //    town errand smithing"): each wanted form the vendor stocks, up to its qty, held to HALF of the purse that is
             //    left (a trip never leaves him broke on ingots). Before the gear pass so the gear reserve sees what is left. ──
+            int matLeft = o->budget / 2;   // ONE half-purse budget for ALL the materials, computed once (as R7 does for food)
             for (const auto& m : b.smithMats) {
                 int need = m.qty;
                 for (auto& c : cands) {
                     if (need <= 0) break;
                     if (c.kind != NeedCat::kSmithMaterial || c.f->GetFormID() != m.form) continue;
                     int qty = std::min(need, c.avail - plan[c.idx]);
-                    qty = std::min<int>(qty, (o->budget / 2) / c.value);
+                    qty = std::min<int>(qty, matLeft / c.value);
                     if (qty <= 0) continue;
                     plan[c.idx] += qty;
                     need        -= qty;
+                    matLeft     -= qty * c.value;
                     o->budget   -= qty * c.value;
                     o->buySpent += qty * c.value;
                 }
@@ -587,6 +593,15 @@ namespace MFO::TradeBridge {
                 if (lines > 12) names += std::format(", +{} more", lines - 12);
                 o->buyPlan = std::move(names);
             }
+            o->smithPlanned.clear();
+            o->plannedTotal = 0;
+            for (std::size_t i = 0; i < plan.size(); ++i) o->plannedTotal += std::max(plan[i], 0);
+            for (const auto& m : b.smithMats) {
+                std::int32_t n = 0;
+                for (std::size_t i = 0; i < plan.size(); ++i)
+                    if (plan[i] > 0 && a_forms[i] && a_forms[i]->GetFormID() == m.form) n += plan[i];
+                if (n > 0) o->smithPlanned.push_back(SmithMat{ m.form, n });
+            }
             return plan;
         }
 
@@ -666,6 +681,8 @@ namespace MFO::TradeBridge {
                 // Store what the chest holds NOW. A probe moves no gold (psc `if !probe`), so it keeps the read.
                 g_chestGold[o.chestId] = postTradeGold;
                 g_outcomes[o.followerId] = TradeOutcome{ false, a_soldCount, a_soldValue, a_boughtCount, a_spent };
+                if (!o.probeOnly && o.plannedTotal > 0 && a_boughtCount >= o.plannedTotal)
+                    g_outcomes[o.followerId].smithBought = o.smithPlanned;   // R8: the whole plan ran, so its materials arrived
                 // The memo key: the vendor actor when it resolves, else the errand's own (the plan keyed SkipTrade by it).
                 const RE::FormID vkey = vp ? vp->GetFormID() : o.memoKey;
                 if (o.followerId && vkey) {

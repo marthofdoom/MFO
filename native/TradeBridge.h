@@ -241,6 +241,9 @@ namespace MFO::TradeBridge {
         std::int32_t soldValue  = 0;
         std::int32_t boughtCount= 0;
         std::int32_t spent      = 0;
+        // R8: the smithing materials this trade ACTUALLY bought, by form. Papyrus reports only totals, so a line is credited only when
+        // the report shows EVERY planned unit was bought (boughtCount >= the plan's total); otherwise nothing is credited (never a guess).
+        std::vector<SmithMat> smithBought;
     };
     // The vendor chest's barter gold as the LAST report there read it (-1 = never reported). Worker.
     std::int32_t LastSeenChestGold(RE::FormID a_chest);

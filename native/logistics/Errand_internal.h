@@ -102,7 +102,7 @@ namespace MFO::Logistics::Errand {
             std::uint32_t needCarry = 0;      // bit n = this VEND carries the category of NeedCat::Kind n
             bool          carriesGear = false, carriesTome = false;   // the gear / apparel wish, the tome wish
             bool          carriesMaterials = false;   // R8: the VEND trades ore / ingots, hides or animal parts (smithing materials)
-            bool          carriesForge = false;       // R8: a smithy: the VEND trades ore / ingots or weapons (its place has the forge furniture)
+            bool          carriesForge = false;       // R8: a smithy: the VEND trades ore / ingots (its place has the forge furniture)
         };
         struct Inputs {
             RE::FormID    follower = 0;
@@ -323,9 +323,12 @@ namespace MFO::Logistics::Errand::Smith {
     void End(RE::FormID a_follower, const char* a_why);
     bool Working(RE::FormID a_follower);
     std::string Describe(RE::FormID a_follower);   // "Working at X" ("" = no work). Any thread.
-    // Off screen: the game-day cost of the SMITH_SIM stage, and its end (worker). a_materialsBought = every earlier shop stop that
-    // wished for materials reported (its trade replayed). Returns the one-line summary (also logged).
+    // Off screen: the game-day cost of the SMITH_SIM stage, and its end (worker). REAL stock only: the materials carried at the plan plus
+    // what the trades of this trip reported bought (NoteBought); a line is applied only when fully paid. Returns the one-line summary.
     double SimWorkDays();
-    std::string SimFinish(RE::FormID a_follower, const std::string& a_followerName, bool a_materialsBought);
+    std::string SimFinish(RE::FormID a_follower, const std::string& a_followerName);
     void ClearTransientState();   // revert / load (pump drained)
+    // A trade's report said these materials were bought (TradeOutcome::smithBought, physical or simulated): the off-screen stage's
+    // ledger of REAL stock (it never reads an unloaded inventory). Worker.
+    void NoteBought(RE::FormID a_follower, const std::vector<TradeBridge::SmithMat>& a_bought);
 }

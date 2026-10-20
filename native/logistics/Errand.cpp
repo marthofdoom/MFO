@@ -888,10 +888,12 @@ namespace MFO::Logistics::Errand {
                 spdlog::info("[errand] {:08X} '{}': PICKS UP -- he is loaded again at '{}'; the stop's work resumes on screen", fid, r.followerName, r.vendorName);
                 return true;
             }
-            auto vendor = FindVendorActor(a_follower, a_info.faction);
+            // R8: a SMITH stop walks to the smithy's PLACE (Ref / Cell) and works there: no vendor, no counter business.
+            const bool smithStop = a_info.cur < a_info.stops.size() && a_info.stops[a_info.cur].kind == StopKind::Smith;
+            auto vendor = smithStop ? RE::NiPointer<RE::Actor>{} : FindVendorActor(a_follower, a_info.faction);
             // R2: a physical errand restored from the save walks on to its vendor ACTOR even when the vendor is not in his cell (an
             // exterior stall one cell over), provided that actor is loaded and usable.
-            if (!vendor && a_info.destKind == DestKind::VendorActor && a_info.destForm) {
+            if (!smithStop && !vendor && a_info.destKind == DestKind::VendorActor && a_info.destForm) {
                 if (auto* va = RE::TESForm::LookupByID<RE::Actor>(a_info.destForm);
                     va && va->Is3DLoaded() && !va->IsDead() && !va->IsDisabled() && !APMFBridge::InCombat(va))
                     vendor = RE::NiPointer<RE::Actor>(va);
@@ -1005,7 +1007,7 @@ namespace MFO::Logistics::Errand {
         // one is queued first and the plan is made on the next cadence. Off (smithing off / not hooked in this build) costs nothing.
         bool anySmithy = false;
         for (const auto& c : cands)
-            if (ListTrades(c.fac, kKwOreIngot) || ListTrades(c.fac, kKwWeapon)) { anySmithy = true; break; }
+            if (ListTrades(c.fac, kKwOreIngot)) { anySmithy = true; break; }   // a real blacksmith trades ore / ingots (a weapon seller is not one)
         if (Smith::Prepare(a_follower, anySmithy) == Smith::Prep::Pending) return true;
 
         // PLAN: the SAME code a trade uses evaluates every candidate -- loaded vendor actors AND faction-only shops -- and hands
@@ -1055,7 +1057,7 @@ namespace MFO::Logistics::Errand {
                             (wantApparel && (ListTrades(c.fac, kKwClothing) || ListTrades(c.fac, kKwJewelry) || ListTrades(c.fac, kKwArmor)));
             t.carriesTome = ListTrades(c.fac, kKwSpellTome);
             t.carriesMaterials = ListTrades(c.fac, kKwOreIngot) || ListTrades(c.fac, kKwAnimalHide) || ListTrades(c.fac, kKwAnimalPart);   // R8
-            t.carriesForge = ListTrades(c.fac, kKwOreIngot) || ListTrades(c.fac, kKwWeapon);                                              // R8: a smithy
+            t.carriesForge = ListTrades(c.fac, kKwOreIngot);   // R8: a smithy = an ore / ingot trader (a general store that sells weapons has no forge)
             tcands.push_back(std::move(t));
         }
         Trip::Inputs tin;
@@ -1427,6 +1429,7 @@ namespace MFO::Logistics::Errand {
             if (TradeBridge::TradeOutcome late; r.cur > 0 && !TradeBridge::HasLiveOrder(fid) && TradeBridge::TakeOutcome(fid, late) &&
                                                 !late.aborted && late.spent > 0) {
                 r.tripSpent += late.spent;
+                if (!late.smithBought.empty()) Smith::NoteBought(fid, late.smithBought);   // R8
                 spdlog::info("[errand] {:08X}: a late report from an earlier stop spent {}g -- counted against the trip purse", fid, late.spent);
             }
             TradeBridge::DiscardOutcome(fid);
@@ -1478,6 +1481,7 @@ namespace MFO::Logistics::Errand {
                 spdlog::info("[errand] {:08X} '{}': trade REPORTED at '{}' -- sold {} for {}g, bought {} for {}g",
                              fid, r.followerName, r.vendorName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
                 r.tripSpent += std::max(0, out.spent);   // R5: the next stop's purse cap
+                if (!out.smithBought.empty()) Smith::NoteBought(fid, out.smithBought);   // R8: real stock for a later hand-off
                 r.dispatched = false;
                 r.bought = out.boughtCount > 0;
                 if (r.bought && idles.take) {
@@ -1590,7 +1594,7 @@ namespace MFO::Logistics::Errand {
                 r = it->second;
                 g_recs.erase(it);
             }
-            if (r.phase == Phase::Smithing) Smith::End(fid, "he unloaded -- handed to the simulation");   // R8: SMITH_SIM finishes it (armor only)
+            if (r.phase == Phase::Smithing) Smith::End(fid, "he unloaded -- handed to the simulation");   // R8: SMITH_SIM starts without a plan (Begin erased it): no second apply; a dispatched temper is still charged on his next load
             const bool wasResting = r.phase == Phase::Resting;
             if (wasResting) Rest::End(fid, "he unloaded -- handed to the simulation", false);   // R7: the stay continues off screen (REST_SIM)
             APMFBridge::ReleaseErrand(fid);   // Harbinger dropped the claims with the unload; this forgets our record of them

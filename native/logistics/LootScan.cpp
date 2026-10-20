@@ -964,7 +964,7 @@ namespace MFO::Logistics {
         bool StripCorpse(RE::Actor* a_follower, const FollowerState& a_state,
                          RE::TESObjectREFR* a_corpse, Clock::time_point a_now,
                          bool* a_leftWaiting) {
-            bool moved = false;
+            bool moved = false, stopped = false;
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const RE::NiPoint3 playerPos = pc ? pc->GetPosition() : a_follower->GetPosition();
             for (int start = 0; ; ) {
@@ -987,7 +987,7 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootIngredients)    cat = Category::Ingredients;
                 else if (op == Vocab::kActLootValuables)      cat = Category::Valuables;
                 else if (op == Vocab::kActLootMuseum)         cat = Category::Museum;   // LOTD (inert unless active)
-                else if (op == Vocab::kActWait) break;   // user's STOP gambit ends the sweep
+                else if (op == Vocab::kActWait) { stopped = true; break; }   // user's STOP gambit ends the sweep
                 else isLoot = false;
                 if (isLoot) {
                     // CLAIM-AND-RELEASE parity with the scan (#2): a free-tier
@@ -1017,6 +1017,11 @@ namespace MFO::Logistics {
                 }
                 start = choice.ruleIndex + 1;
             }
+            // TOWN PHASE 2 R8 (marth: "regardless of gambits a follower will loot ... whats needed for town errand smithing"): both take roads
+            // (the arm's-reach drain and the excursion arrival) come through here, and they only evaluate loot gambits, so the smithing
+            // materials have their own pass: free tier, only the forms still on his want list. A Wait rule (stopped) wins.
+            if (!stopped && Errand::Smith::WantsMaterials(a_follower))
+                while (LootHere(a_follower, a_corpse, Category::SmithMats, RE::ActorValue::kNone)) moved = true;
             return moved;
         }
 

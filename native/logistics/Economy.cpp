@@ -673,6 +673,9 @@ namespace MFO::Logistics {
                 // LOTD (feat/mfo-lotd, marth 2026-09-24: "museum items cannot be sold if
                 // needed"): a relic THIS follower is covering for the museum never sells.
                 if (Lotd::HoldFromSale(fid, obj)) { sdiag(obj, "museum"); continue; }
+                // TOWN PHASE 2 R8: a material his smithing want list uses (ingots, leather, strips ...) is never sold -- IsValuableMisc
+                // would otherwise offer the very ingots the smith stop needs.
+                if (Errand::Smith::HoldFromSale(fid, obj->GetFormID())) { sdiag(obj, "smithing material"); continue; }
                 auto* weap = obj->As<RE::TESObjectWEAP>();
                 auto* armo = obj->As<RE::TESObjectARMO>();
                 if (!weap && !armo) {

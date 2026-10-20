@@ -78,7 +78,8 @@ namespace MFO::Logistics::Errand::Smith {
         constexpr double     kBuildWaitSec      = 10.0;         // the physical stop waits this long for its fresh build
         constexpr double     kEntrySec          = 10.0;         // furniture entry is confirmed within this of the offer (design 1.f)
         constexpr double     kRealCapSec        = 150.0;        // the work never takes more real seconds than this (a slow timescale)
-        constexpr double     kApplyWaitSec      = 10.0;         // a dispatched temper that has not read back after this did not take
+        constexpr double     kApplyWaitSec      = 10.0;         // a dispatched temper that has not read back after this did not take (for the WORK; the ledger keeps waiting)
+        constexpr double     kLedgerExpirySec   = 600.0;        // a dispatched temper that never read back in this long is dropped from the ledger (never charged)
 
         using Clock = std::chrono::steady_clock;
 
@@ -115,6 +116,8 @@ namespace MFO::Logistics::Errand::Smith {
             std::vector<char>        st;            // per line: 0 not issued, 1 issued, 2 took, 3 failed
             bool                     animated = false, entered = false, entryLogged = false, applyPosted = false;
             RE::FormID               station = 0;
+            std::vector<RE::FormID>  stationIds;   // the matching stations near him, nearest first: an occupied / refused one is followed by the next
+            std::size_t              stationIdx = 0;
             int                      took = 0, failed = 0;
         };
         struct Plan {                               // what Augment planned: the off-screen stage applies it (no inventory reads off screen)
@@ -127,6 +130,12 @@ namespace MFO::Logistics::Errand::Smith {
         std::unordered_map<RE::FormID, Want>         g_want;
         std::unordered_map<RE::FormID, Work>         g_work;
         std::unordered_map<RE::FormID, Plan>         g_plan;
+        // The LEDGER of dispatched tempers, independent of the work record (R8 review SEV-3): a temper is charged the moment its read-back
+        // is SEEN, by whichever main-thread pass sees it first (Verify, the next want-list build), even after the errand ended.
+        struct Pend { Line line; double at = 0.0; };
+        std::unordered_map<RE::FormID, std::vector<Pend>> g_ledger;
+        std::unordered_map<RE::FormID, Have>         g_boughtTrip;   // what this trip's trade REPORTS said was bought (real stock off screen)
+        std::atomic<unsigned>                        g_gen{ 0 };     // bumped by ClearTransientState: a build posted before it never stores
         std::unordered_map<RE::FormID, std::string>  g_lastSummary;   // the want-list line last logged per follower: a rebuild that changes nothing is silent
 
         // MAIN-thread only: the temper recipe index and the once-per-recipe condition log.
@@ -307,6 +316,7 @@ namespace MFO::Logistics::Errand::Smith {
                 auto* weap = obj->As<RE::TESObjectWEAP>();
                 auto* armo = obj->As<RE::TESObjectARMO>();
                 if (!weap && !armo) continue;
+                if (armo && LowestBit(static_cast<std::uint32_t>(armo->GetSlotMask())) == 0u) continue;   // slot mask 0 would take SKSE's WEAPON path
                 if (!data.second->IsWorn()) continue;
                 for (auto* xl : *data.second->extraLists) {
                     if (!xl) continue;
@@ -346,8 +356,9 @@ namespace MFO::Logistics::Errand::Smith {
         }
 
         // ── the want-list BUILD (MAIN thread) ─────────────────────────────────────────────────────────────────────
-        void StoreWant(RE::FormID a_fid, Want&& a_w) {
+        void StoreWant(RE::FormID a_fid, Want&& a_w, unsigned a_gen) {
             std::scoped_lock lk(g_mx);
+            if (a_gen != g_gen.load()) return;   // posted before a load / revert cleared the session: never restore a stale list
             a_w.smithy = g_want[a_fid].smithy;   // the planner's flag survives a rebuild
             a_w.built = true;
             a_w.pending = false;
@@ -355,14 +366,18 @@ namespace MFO::Logistics::Errand::Smith {
             g_want[a_fid] = std::move(a_w);
         }
 
-        void BuildOnMain(RE::ActorHandle a_h, RE::FormID a_fid) {
+        std::vector<Line> SettleLedger(RE::Actor* a_f, RE::FormID a_fid);   // defined below (the temper ledger)
+
+        void BuildOnMain(RE::ActorHandle a_h, RE::FormID a_fid, unsigned a_gen) {
             auto fp = a_h.get();
             auto* f = fp.get();
             Want w;
+            if (a_gen != g_gen.load()) return;
             // the handle may now resolve to another actor (a reused slot): never file under the captured id then
             if (!f || f->GetFormID() != a_fid) { std::scoped_lock lk(g_mx); g_want[a_fid].pending = false; return; }
-            if (!Config::g_errandSmith.load()) { w.note = "bErrandSmith = 0"; StoreWant(a_fid, std::move(w)); return; }
-            if (!f->Is3DLoaded()) { w.note = "not loaded (the entry point needs a process)"; StoreWant(a_fid, std::move(w)); return; }
+            SettleLedger(f, a_fid);   // a temper dispatched earlier (even by an errand that ended) is charged the moment its read-back is seen
+            if (!Config::g_errandSmith.load()) { w.note = "bErrandSmith = 0"; StoreWant(a_fid, std::move(w), a_gen); return; }
+            if (!f->Is3DLoaded()) { w.note = "not loaded (the entry point needs a process)"; StoreWant(a_fid, std::move(w), a_gen); return; }
             EnsureRecipes();
             auto* avo = f->AsActorValueOwner();
             float hdv1 = 0, hdv6 = 0, factor = 0;
@@ -370,7 +385,7 @@ namespace MFO::Logistics::Errand::Smith {
                 !ReadGmst("fSmithingConditionFactor", factor)) {
                 w.note = "a temper GMST (fHealthDataValue1 / fHealthDataValue6 / fSmithingConditionFactor) is unreadable";
                 spdlog::error("[smith] {:08X}: tempering OFF -- {}", a_fid, w.note);
-                StoreWant(a_fid, std::move(w));
+                StoreWant(a_fid, std::move(w), a_gen);
                 return;
             }
             w.skill = avo->GetActorValue(RE::ActorValue::kSmithing);   // UNCLAMPED (R0-3): a fortify counts
@@ -388,9 +403,18 @@ namespace MFO::Logistics::Errand::Smith {
                 float target = raw;
                 float delta1 = delta0;
                 if (delta0 > 0.0f) {
-                    const auto ep = TradePerks::EntryPointValue(RE::BGSEntryPoint::ENTRY_POINT::kModTemperingHealth, f, p.obj, delta0);
-                    if (!ep) { refused = true; break; }
-                    delta1 = *ep;
+                    // R0-4: with no process / middle-high / perk data (a follower who owns no perks) the engine's walk finds nothing and leaves the
+                    // seed, so the formula's own delta stands; say so (the wrapper would refuse and tempering would be OFF for a perkless follower).
+                    const auto* proc = f->GetActorRuntimeData().currentProcess;
+                    const bool perkReady = proc && proc->middleHigh && proc->middleHigh->perkData;
+                    if (perkReady) {
+                        const auto ep = TradePerks::EntryPointValue(RE::BGSEntryPoint::ENTRY_POINT::kModTemperingHealth, f, p.obj, delta0);
+                        if (!ep) { refused = true; break; }
+                        delta1 = *ep;
+                    } else {
+                        if (notes.find("perks NOT evaluated") == std::string::npos)
+                            notes += " | perks NOT evaluated (no perk data): the formula's own delta is used";
+                    }
                     target = std::floor((std::max(delta1, 0.0f) + hdv1) * 10.0f + 0.5f) * 0.1f;   // round half up, in tenths
                 }
                 if (target <= p.health + kTemperStep) {
@@ -453,7 +477,7 @@ namespace MFO::Logistics::Errand::Smith {
                 for (const auto& t : tlines) spdlog::info("{}", t);
                 spdlog::info("[smith] {:08X} '{}': want list built -- {}", a_fid, f->GetName(), summary);
             }
-            StoreWant(a_fid, std::move(w));
+            StoreWant(a_fid, std::move(w), a_gen);
         }
 
         void QueueBuild(RE::Actor* a_f) {
@@ -465,22 +489,24 @@ namespace MFO::Logistics::Errand::Smith {
                 w.pending = true;
                 w.pendingSince = Clock::now();
             }
-            MainThread::Post([h = a_f->GetHandle(), fid] { BuildOnMain(h, fid); });
+            MainThread::Post([h = a_f->GetHandle(), fid, gen = g_gen.load()] { BuildOnMain(h, fid, gen); });
         }
 
         // ── the station ────────────────────────────────────────────────────────────────────────────────────────────
-        // A sharpening wheel (weapons) or an armor table (armor) in the follower's loaded cell, nearest first. Data reads only.
-        std::vector<RE::ObjectRefHandle> FindStations(RE::Actor* a_f, RE::FormID a_keyword) {
-            std::vector<RE::ObjectRefHandle> out;
-            auto* cell = a_f ? a_f->GetParentCell() : nullptr;
-            if (!cell || !cell->IsAttached()) return out;
-            std::vector<std::pair<float, RE::ObjectRefHandle>> found;
+        // Sharpening wheels (weapons) / armor tables (armor) within kStationRadius of him, nearest first, over every LOADED cell around
+        // him (an outdoor forge sits in a neighbouring grid cell; TES::ForEachReferenceInRange walks the exterior grid or the interior
+        // cell, as the engine does). Data reads only; no learned vendor position is used.
+        std::vector<RE::FormID> FindStations(RE::Actor* a_f, RE::FormID a_keyword) {
+            std::vector<RE::FormID> out;
+            auto* tes = RE::TES::GetSingleton();
+            if (!a_f || !tes) return out;
+            std::vector<std::pair<float, RE::FormID>> found;
             const auto at = a_f->GetPosition();
-            cell->ForEachReferenceInRange(at, kStationRadius, [&](RE::TESObjectREFR* a_ref) {
+            tes->ForEachReferenceInRange(a_f, kStationRadius, [&](RE::TESObjectREFR* a_ref) {
                 auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
                 auto* fur = base ? base->As<RE::TESFurniture>() : nullptr;
                 if (fur && fur->HasKeywordID(a_keyword) && !a_ref->IsDisabled() && !a_ref->IsMarkedForDeletion() && found.size() < 16)
-                    found.emplace_back(a_ref->GetPosition().GetDistance(at), a_ref->GetHandle());
+                    found.emplace_back(a_ref->GetPosition().GetDistance(at), a_ref->GetFormID());
                 return RE::BSContainer::ForEachResult::kContinue;
             });
             std::sort(found.begin(), found.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -488,7 +514,53 @@ namespace MFO::Logistics::Errand::Smith {
             return out;
         }
 
-        // ── the temper APPLY (MAIN thread) ─────────────────────────────────────────────────────────────────────────
+        // ── the temper APPLY / LEDGER (MAIN thread) ────────────────────────────────────────────────────────────────
+        bool SameLine(const Line& a, const Line& b) { return a.item == b.item && a.weapon == b.weapon && a.hand == b.hand && a.slot == b.slot; }
+
+        // IT TOOK: now, and only now, the materials go. He is LOADED (native inventory change; the caller checked). Clamped to what he carries.
+        void Charge(RE::Actor* a_f, RE::FormID a_fid, const Line& a_l, float a_got) {
+            const Have counts = CountsOf(a_f);
+            for (const auto& c : a_l.comps) {
+                const auto it = counts.find(c.form);
+                const std::int32_t n = std::min(c.count, it != counts.end() ? it->second : 0);
+                if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(c.form); obj && n > 0)
+                    a_f->RemoveItem(obj, n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
+                if (n < c.count)
+                    spdlog::warn("[smith] {:08X} '{}': only {} of {} {} could be consumed (the temper already took)", a_fid, a_l.name,
+                                 n, c.count, NameOf(RE::TESForm::LookupByID(c.form)));
+            }
+            spdlog::info("[smith] {:08X} P-SMITH-T read back '{}': {:.2f} (target {:.1f}) -- TOOK; materials consumed", a_fid, a_l.name, a_got, a_l.target);
+        }
+
+        // Resolve the dispatched tempers: a piece that read back at its target is CHARGED (once) and leaves the ledger; one that has not stays
+        // (a slow VM, or he is unloaded) until it takes or kLedgerExpirySec passes -- it is never charged unless it took, and never forgotten
+        // because the errand ended. Returns the lines that took.
+        std::vector<Line> SettleLedger(RE::Actor* a_f, RE::FormID a_fid) {
+            std::vector<Pend> pend;
+            {
+                std::scoped_lock lk(g_mx);
+                const auto it = g_ledger.find(a_fid);
+                if (it == g_ledger.end()) return {};
+                pend = it->second;
+            }
+            const bool loaded = a_f && a_f->GetFormID() == a_fid && a_f->Is3DLoaded();
+            std::vector<Line> took;
+            std::vector<Pend> keep;
+            for (const auto& p : pend) {
+                float got = 1.0f;
+                if (loaded && WornHealth(a_f, p.line, got) && got >= p.line.target - kReadbackTol) {
+                    Charge(a_f, a_fid, p.line, got);
+                    took.push_back(p.line);
+                } else if (NowSec() - p.at > kLedgerExpirySec) {
+                    spdlog::warn("[smith] {:08X} '{}': the temper never read back in {:.0f} s -- dropped from the ledger, no material consumed",
+                                 a_fid, p.line.name, kLedgerExpirySec);
+                } else keep.push_back(p);
+            }
+            std::scoped_lock lk(g_mx);
+            if (keep.empty()) g_ledger.erase(a_fid); else g_ledger[a_fid] = std::move(keep);
+            return took;
+        }
+
         void ApplyOnMain(RE::ActorHandle a_h, RE::FormID a_fid) {
             std::vector<Line> lines;
             {
@@ -504,6 +576,7 @@ namespace MFO::Logistics::Errand::Smith {
                 std::fill(st.begin(), st.end(), static_cast<char>(3));
                 spdlog::warn("[smith] {:08X}: the temper was NOT applied -- he is no longer loaded; no material consumed", a_fid);
             } else {
+                SettleLedger(f, a_fid);   // an earlier dispatch that landed meanwhile is charged before this one reads the inventory
                 Have have = CountsOf(f);
                 for (std::size_t i = 0; i < lines.size(); ++i) {
                     const Line& l = lines[i];
@@ -526,6 +599,12 @@ namespace MFO::Logistics::Errand::Smith {
                     spdlog::info("[smith] {:08X} P-SMITH-T apply {} -- WornObject.SetItemHealthPercent {} (read back follows)",
                                  a_fid, LineText(l), ok ? "DISPATCHED" : "FAILED to dispatch");
                     st[i] = ok ? 1 : 3;
+                    if (ok) {   // the LEDGER owns the charge from here, whatever becomes of the work record
+                        std::scoped_lock lk(g_mx);
+                        auto& v = g_ledger[a_fid];
+                        std::erase_if(v, [&](const Pend& p) { return SameLine(p.line, l); });
+                        v.push_back(Pend{ l, NowSec() });
+                    }
                 }
             }
             std::scoped_lock lk(g_mx);
@@ -536,49 +615,26 @@ namespace MFO::Logistics::Errand::Smith {
             }
         }
 
+        // The read-back pass: settles the ledger (charging what took), then tells the work record which of its lines took. Safe with no
+        // work record at all (the errand ended): the ledger is the source of truth.
         void VerifyOnMain(RE::ActorHandle a_h, RE::FormID a_fid) {
-            std::vector<Line> lines;
-            std::vector<char> st;
-            double applyClk = 0.0;
-            {
-                std::scoped_lock lk(g_mx);
-                const auto it = g_work.find(a_fid);
-                if (it == g_work.end() || !it->second.applyPosted) return;
-                lines = it->second.lines; st = it->second.st; applyClk = it->second.applyClk;
-            }
             auto fp = a_h.get();
             auto* f = fp.get();
-            bool changed = false;
-            for (std::size_t i = 0; i < lines.size() && i < st.size(); ++i) {
-                if (st[i] != 1) continue;
-                const Line& l = lines[i];
-                float got = 1.0f;
-                const bool have = f && f->GetFormID() == a_fid && WornHealth(f, l, got);
-                if (have && got >= l.target - kReadbackTol) {
-                    // IT TOOK: now, and only now, the materials go (clamped to what he carries).
-                    const Have counts = CountsOf(f);
-                    for (const auto& c : l.comps) {
-                        const auto it = counts.find(c.form);
-                        const std::int32_t n = std::min(c.count, it != counts.end() ? it->second : 0);
-                        if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(c.form); obj && n > 0)
-                            f->RemoveItem(obj, n, RE::ITEM_REMOVE_REASON::kRemove, nullptr, nullptr);
-                        if (n < c.count)
-                            spdlog::warn("[smith] {:08X} '{}': only {} of {} {} could be consumed (the temper already took)", a_fid, l.name,
-                                         n, c.count, NameOf(RE::TESForm::LookupByID(c.form)));
-                    }
-                    spdlog::info("[smith] {:08X} P-SMITH-T read back '{}': {:.2f} (target {:.1f}) -- TOOK; materials consumed",
-                                 a_fid, l.name, got, l.target);
-                    st[i] = 2; changed = true;
-                } else if (NowSec() - applyClk > kApplyWaitSec) {
-                    spdlog::warn("[smith] {:08X} P-SMITH-T read back '{}': {} -- the temper did NOT take after {:.0f} s ({}); no material "
-                                 "consumed", a_fid, l.name, have ? std::format("{:.2f}", got) : std::string("(not worn)"), kApplyWaitSec,
-                                 l.weapon ? "weapons need a process and the right hand index (P-SMITH-W)" : "armor matches by biped slot");
-                    st[i] = 3; changed = true;
+            const std::vector<Line> took = SettleLedger(f, a_fid);
+            std::scoped_lock lk(g_mx);
+            const auto it = g_work.find(a_fid);
+            if (it == g_work.end() || !it->second.applyPosted) return;
+            auto& w = it->second;
+            for (std::size_t i = 0; i < w.lines.size() && i < w.st.size(); ++i) {
+                if (w.st[i] != 1) continue;
+                if (std::any_of(took.begin(), took.end(), [&](const Line& t) { return SameLine(t, w.lines[i]); })) { w.st[i] = 2; continue; }
+                if (NowSec() - w.applyClk > kApplyWaitSec) {
+                    spdlog::warn("[smith] {:08X} P-SMITH-T read back '{}': the temper did NOT take after {:.0f} s ({}); no material consumed "
+                                 "(it stays in the ledger and is charged if it lands later)", a_fid, w.lines[i].name, kApplyWaitSec,
+                                 w.lines[i].weapon ? "weapons need a process and the right hand index (P-SMITH-W)" : "armor matches by biped slot");
+                    w.st[i] = 3;
                 }
             }
-            if (!changed) return;
-            std::scoped_lock lk(g_mx);
-            if (const auto it = g_work.find(a_fid); it != g_work.end()) it->second.st = std::move(st);
         }
     }   // anonymous namespace
 
@@ -663,6 +719,7 @@ namespace MFO::Logistics::Errand::Smith {
         {
             std::scoped_lock lk(g_mx);
             g_plan[fid] = Plan{ w.lines, w.have, w.buy };
+            g_boughtTrip.erase(fid);   // a new plan starts a new ledger of what this trip's trades really bought
         }
         a_line += std::format(" | smith stop {} at '{}': {} improvable piece(s), {} payable from carried materials, buys {}", a_stops.size(),
                               pick->name, w.lines.size(), affordable.size(), buysMaterials ? "on the shop stops" : "nothing");
@@ -721,8 +778,8 @@ namespace MFO::Logistics::Errand::Smith {
             }
             bool needWheel = false, needTable = false;
             for (const auto i : pay) (want.lines[i].weapon ? needWheel : needTable) = true;
-            const auto wheels = needWheel ? FindStations(a_follower, kKwSharpeningWheel) : std::vector<RE::ObjectRefHandle>{};
-            const auto tables = needTable ? FindStations(a_follower, kKwArmorTable) : std::vector<RE::ObjectRefHandle>{};
+            const auto wheels = needWheel ? FindStations(a_follower, kKwSharpeningWheel) : std::vector<RE::FormID>{};
+            const auto tables = needTable ? FindStations(a_follower, kKwArmorTable) : std::vector<RE::FormID>{};
             for (const auto i : pay) {
                 const Line& l = want.lines[i];
                 if (l.weapon ? wheels.empty() : tables.empty()) {
@@ -734,15 +791,20 @@ namespace MFO::Logistics::Errand::Smith {
             }
             if (wk.lines.empty()) { out.res = Result::Done; out.why = "no sharpening wheel / armor table near him"; return out; }
             // THE ANIMATION: Harbinger's ch.9 Activate work package on the first station (wheel if there are weapon lines).
-            const auto& stations = !wheels.empty() && needWheel ? wheels : tables;
+            wk.stationIds = !wheels.empty() && needWheel ? wheels : tables;   // nearest first; an occupied one is followed by the next (Working)
+            wk.stationIdx = 0;
             std::string offerWhy = "bErrandSmithFurniture = 0";
             if (Config::g_errandSmithFurniture.load()) {
-                if (auto sp = stations.front().get(); sp) {
+                offerWhy = "no station reference resolved";
+                for (; wk.stationIdx < wk.stationIds.size() && !wk.animated; ++wk.stationIdx) {
+                    auto* sp = RE::TESForm::LookupByID<RE::TESObjectREFR>(wk.stationIds[wk.stationIdx]);
+                    if (!sp) continue;
                     wk.station = sp->GetFormID();
                     wk.stationName = NameOf(sp->GetBaseObject());
-                    wk.animated = OfferWork(fid, sp.get(), offerWhy);
+                    wk.animated = OfferWork(fid, sp, offerWhy);
                     wk.offerClk = now;
-                } else offerWhy = "the station reference vanished";
+                }
+                if (wk.animated) --wk.stationIdx;   // (the loop stepped past the one that took)
             }
             if (!wk.animated)
                 spdlog::warn("[smith] {:08X} '{}': working UNANIMATED -- {} (P-SMITH-1: the station animation did not run)", fid, wk.who, offerWhy);
@@ -763,8 +825,29 @@ namespace MFO::Logistics::Errand::Smith {
                     wk.entered = true; wk.entryLogged = true;
                     spdlog::info("[smith] {:08X} '{}': P-SMITH-1 -- ENTERED the station (sit/sleep state {})", fid, wk.who, static_cast<int>(s));
                 } else if (now - wk.offerClk > kEntrySec) {
-                    wk.entryLogged = true;
-                    spdlog::warn("[smith] {:08X} '{}': P-SMITH-1 -- NOT entered after {:.0f} s: working unanimated", fid, wk.who, kEntrySec);
+                    // OCCUPIED (or refused) station: release it and offer the NEXT one near him (design 1.f: "try the next free station once").
+                    ReleaseWork(fid);
+                    bool next = false;
+                    std::string why;
+                    while (!next && wk.stationIdx + 1 < wk.stationIds.size()) {
+                        ++wk.stationIdx;
+                        auto* sp = RE::TESForm::LookupByID<RE::TESObjectREFR>(wk.stationIds[wk.stationIdx]);
+                        if (!sp) continue;
+                        if (OfferWork(fid, sp, why)) {
+                            wk.station = sp->GetFormID();
+                            wk.stationName = NameOf(sp->GetBaseObject());
+                            wk.offerClk = now;
+                            next = true;
+                            spdlog::info("[smith] {:08X} '{}': P-SMITH-1 -- not entered after {:.0f} s (occupied?): trying the next station {:08X}",
+                                         fid, wk.who, kEntrySec, wk.station);
+                        }
+                    }
+                    if (!next) {
+                        wk.animated = false;
+                        wk.entryLogged = true;
+                        spdlog::warn("[smith] {:08X} '{}': P-SMITH-1 -- NOT entered after {:.0f} s and no other station took the offer: working unanimated",
+                                     fid, wk.who, kEntrySec);
+                    }
                 }
             }
             bool over = now - wk.workClk >= kRealCapSec;
@@ -816,6 +899,12 @@ namespace MFO::Logistics::Errand::Smith {
             ReleaseWork(a_follower);
             spdlog::info("[smith] {:08X}: work ended ({})", a_follower, a_why ? a_why : "?");
         }
+        // A temper dispatched but not yet read back is NOT lost with the work record: the ledger settles it (here, and on the next build).
+        bool pending = false;
+        { std::scoped_lock lk(g_mx); pending = g_ledger.contains(a_follower); }
+        if (pending)
+            if (auto* f = RE::TESForm::LookupByID<RE::Actor>(a_follower))
+                MainThread::Post([h = f->GetHandle(), a_follower] { VerifyOnMain(h, a_follower); });
     }
 
     bool Working(RE::FormID a_follower) {
@@ -832,13 +921,15 @@ namespace MFO::Logistics::Errand::Smith {
 
     double SimWorkDays() { return static_cast<double>(Config::g_smithWorkGameMin.load()) / (24.0 * 60.0); }
 
-    std::string SimFinish(RE::FormID a_follower, const std::string& a_followerName, bool a_materialsBought) {
+    std::string SimFinish(RE::FormID a_follower, const std::string& a_followerName) {
         Plan plan;
+        Have bought;
         {
             std::scoped_lock lk(g_mx);
+            if (const auto b = g_boughtTrip.find(a_follower); b != g_boughtTrip.end()) { bought = std::move(b->second); g_boughtTrip.erase(b); }
             const auto it = g_plan.find(a_follower);
             if (it == g_plan.end()) {
-                const std::string s = "no smith plan (it is session-only: lost with a load)";
+                const std::string s = "no smith plan (it is session-only: lost with a load, or the work already began on screen)";
                 spdlog::info("[smith] {:08X} '{}': OFF-SCREEN smithing -- {}", a_follower, a_followerName, s);
                 return s;
             }
@@ -851,10 +942,11 @@ namespace MFO::Logistics::Errand::Smith {
             spdlog::info("[smith] {:08X} '{}': OFF-SCREEN smithing -- {}", a_follower, a_followerName, s);
             return s;
         }
-        // No inventory is read off screen (house rule): the plan's snapshot is the truth, plus the materials the earlier shop
-        // stops were asked for when their trade reported.
+        // REAL STOCK ONLY (marth: "real stock and real gold"). No inventory is read off screen, so his stock is what he carried at the plan
+        // (those materials are held from sale, Economy.cpp) PLUS what the trade reports of this trip said was actually bought -- never the
+        // plan's wish. A line is applied only when it is FULLY paid and every removal was accepted by the VM.
         Have have = plan.have;
-        if (a_materialsBought) for (const auto& m : plan.buy) have[m.form] += m.qty;
+        for (const auto& [form, n] : bought) have[form] += n;
         int applied = 0, deferred = 0, skipped = 0;
         for (const auto& l : plan.lines) {
             if (l.weapon) {   // R0-5: a weapon is matched through the actor's process, which an unloaded follower may not have (P-SMITH-W)
@@ -864,24 +956,52 @@ namespace MFO::Logistics::Errand::Smith {
                 continue;
             }
             bool fits = true;
-            for (const auto& c : l.comps) if (have[c.form] < c.count) { fits = false; break; }
+            std::vector<RE::TESBoundObject*> objs;
+            for (const auto& c : l.comps) {
+                if (have[c.form] < c.count) fits = false;
+                auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(c.form);
+                if (!obj || !obj->As<RE::TESObjectMISC>()) fits = false;   // DispatchRemoveItem packs MISC only: a material it would refuse is not paid
+                objs.push_back(obj);
+            }
             if (!fits) {
                 ++skipped;
-                spdlog::info("[smith] {:08X} '{}': off screen -- {} SKIPPED (materials not in hand{})", a_follower, a_followerName, LineText(l),
-                             a_materialsBought ? "" : "; the shop stops had not reported");
+                spdlog::info("[smith] {:08X} '{}': off screen -- {} SKIPPED (not fully paid: the materials are not in his real stock, or one is not a MISC "
+                             "item the VM removal accepts)", a_follower, a_followerName, LineText(l));
+                continue;
+            }
+            bool paid = true;
+            for (std::size_t k = 0; k < l.comps.size(); ++k) paid = Papyrus::DispatchRemoveItem(f, objs[k], l.comps[k].count) && paid;
+            if (!paid) {
+                ++skipped;
+                spdlog::warn("[smith] {:08X} '{}': off screen -- {} NOT tempered: a material removal was refused at dispatch (a partial payment may have been "
+                             "taken; no temper is given)", a_follower, a_followerName, LineText(l));
                 continue;
             }
             for (const auto& c : l.comps) have[c.form] -= c.count;
             const bool ok = Papyrus::DispatchWornHealth(f, 0, static_cast<std::int32_t>(l.slot), l.target);
-            for (const auto& c : l.comps)
-                if (auto* obj = RE::TESForm::LookupByID<RE::TESBoundObject>(c.form)) Papyrus::DispatchRemoveItem(f, obj, c.count);
             ++applied;
-            spdlog::info("[smith] {:08X} '{}': off screen -- {} temper {} (armor is pure inventory data, R0-5)", a_follower, a_followerName,
+            spdlog::info("[smith] {:08X} '{}': off screen -- {} paid, temper {} (armor is pure inventory data, R0-5)", a_follower, a_followerName,
                          LineText(l), ok ? "DISPATCHED" : "FAILED to dispatch");
         }
         const std::string s = std::format("{} armor piece(s) tempered, {} weapon(s) deferred, {} skipped", applied, deferred, skipped);
         spdlog::info("[smith] {:08X} '{}': OFF-SCREEN smithing done -- {}", a_follower, a_followerName, s);
         return s;
+    }
+
+    void NoteBought(RE::FormID a_follower, const std::vector<TradeBridge::SmithMat>& a_bought) {
+        std::scoped_lock lk(g_mx);
+        auto& h = g_boughtTrip[a_follower];
+        for (const auto& m : a_bought) h[m.form] += m.qty;
+    }
+
+    bool HoldFromSale(RE::FormID a_follower, RE::FormID a_form) {
+        std::scoped_lock lk(g_mx);
+        const auto it = g_want.find(a_follower);
+        if (it == g_want.end() || !it->second.built) return false;
+        for (const auto& l : it->second.lines)
+            for (const auto& c : l.comps)
+                if (c.form == a_form) return true;
+        return false;
     }
 
     void ClearTransientState() {
@@ -890,22 +1010,26 @@ namespace MFO::Logistics::Errand::Smith {
         g_work.clear();
         g_plan.clear();
         g_lastSummary.clear();
+        g_ledger.clear();
+        g_boughtTrip.clear();
+        ++g_gen;   // (under g_mx: a StoreWant already past its check holds the same lock)
     }
 
     // ── the loot side (Errand.h) ───────────────────────────────────────────────────────────────────────────────────
     bool WantsMaterials(RE::Actor* a_follower) {
         if (!a_follower || !Config::g_errandSmith.load() || !Config::g_townErrands.load() || !MainThread::IsInstalled()) return false;
         const auto fid = a_follower->GetFormID();
-        bool want = false, stale = true;
+        bool want = false, stale = true, ledgerPending = false;
         {
             std::scoped_lock lk(g_mx);
+            ledgerPending = g_ledger.contains(fid);   // a dispatched temper waits for a settle (BuildOnMain settles first)
             const auto it = g_want.find(fid);
             if (it != g_want.end() && it->second.built) {
                 want = !it->second.buy.empty() && it->second.smithy != 0;   // (0 = the last town he planned in had no smithy)
                 stale = Clock::now() - it->second.at >= kLootRefresh;
             }
         }
-        if (stale && a_follower->Is3DLoaded()) QueueBuild(a_follower);
+        if ((stale || ledgerPending) && a_follower->Is3DLoaded()) QueueBuild(a_follower);
         return want;
     }
 
