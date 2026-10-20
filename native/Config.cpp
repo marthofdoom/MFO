@@ -79,6 +79,15 @@ namespace MFO::Config {
             float f = 0.0f;
             int   i = 0;
 
+            // INI-ONLY legacy-cast keys (marth 2026-10-20): they have no MCM control, so a stale value
+            // left in MCM Helper's store (Data/MCM/Settings/MFO.ini) must never apply. Only the seed
+            // SKSE/Plugins/MFO.ini (read first in Read()) may set them.
+            if ((a_key == "bLegacyCastHybrid" || a_key == "bForceCastOnMiss") &&
+                std::string_view(a_src) != kSeedPath) {
+                spdlog::debug("[config] {}: ignoring {} (INI-only key, read from {} only)", a_src, a_key, kSeedPath);
+                return;
+            }
+
             auto setF = [&](std::atomic<float>& dst, float lo, float hi) {
                 if (!ParseFloat(a_val, f)) {
                     spdlog::warn("[config] {}: unparseable value for {} ('{}') -- keeping default",
@@ -148,7 +157,6 @@ namespace MFO::Config {
             else if (a_key == "iRapportRank4")      setI(g_rank4, 1, 100000000);
             else if (a_key == "iRapportRank5")      setI(g_rank5, 1, 100000000);
             else if (a_key == "bEnableLogging")     setB(g_enableLogging);
-            else if (a_key == "bProfileRapport")    setB(g_profileRapport);
             else if (a_key == "iMenuStyle")         setI(g_menuStyle, 0, 3);
             else if (a_key == "bShowHud")           setB(g_showHud);
             else if (a_key == "bSeedTestData")      setB(g_seedTestData);
@@ -191,8 +199,6 @@ namespace MFO::Config {
             else if (a_key == "bWeighWeapons")      setB(g_weighWeapons);     // EXPERIMENTAL weapon weighting (ch.26 + ch.17 placements), INI-only, default OFF (batch D)
             else if (a_key == "bWarnNoApmf")        setB(g_warnNoApmf);       // corner-toast reminder when APMF is absent, default ON
             else if (a_key == "bHealAnimPackage")   setB(g_healAnimPackage);  // animated heals in combat (the ComposedCast claim road), default ON, KILL SWITCH; inert without Harbinger (key name frozen)
-            else if (a_key == "iForcedCastTrigger") setI(g_forcedCastTrigger, 0, 3);   // ComposedCast trigger variant, RESERVED (default 0)
-            else if (a_key == "iCfcBackoffMs")      setI(g_cfcBackoffMs, 0, 60000);    // ComposedCast per-follower degrade backoff, ms
             else if (a_key == "bCasterHook")        setB(g_casterHook);
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
             else if (a_key == "iCastControl")       setI(g_castControl, 0, 4);
@@ -334,7 +340,6 @@ namespace MFO::Config {
             g_bossLevelDelta    = 5;
             g_rank2 = 250;  g_rank3 = 1000;  g_rank4 = 2500;  g_rank5 = 5000;
             g_enableLogging  = true;
-            g_profileRapport = false;
             g_showHud        = false;
             g_menuStyle      = 0;
             g_seedTestData   = false;
@@ -358,8 +363,6 @@ namespace MFO::Config {
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent
             g_healAnimPackage    = true;    // default ON (animheal phase 2): with Harbinger present and a combat controller a heal is cast ANIMATED by the follower's own AI (the ch.8b claim road); OFF = the kill switch, heals take the direct road (unanimated)
             g_substrateCasts     = false;   // default OFF (S3): OOC casts stay on the direct road until the field run proves the substrate client
-            g_forcedCastTrigger  = 0;       // RESERVED ComposedCast trigger variant
-            g_cfcBackoffMs       = 10000;   // ComposedCast degrade backoff (ms)
             g_castSource         = 3;
             g_equipToCast        = true;
             g_aiCastGrace        = 3.0f;
@@ -482,13 +485,12 @@ namespace MFO::Config {
             { "iBossLevelDelta", "5" },        { "fSharedRadius", "3000.000000" },
             { "bEquipToCast", "1" },
             { "bCasterHook", "1" },            { "bCommandTarget", "1" },
-            { "bForceCastOnMiss", "1" },       { "iCastControl", "2" },
-            { "bLegacyCastHybrid", "0" },      { "bWarnNoApmf", "1" },
+            { "iCastControl", "2" },
+            { "bWarnNoApmf", "1" },
             { "bApmfEquipAuthority", "1" },
             { "bCstyReassert", "1" },
             { "bHealAnimPackage", "1" },
             { "bHealAnimMigrated", "1" },   // the one-shot marker of the migration below (NOT a control)
-            { "iForcedCastTrigger", "0" },     { "iCfcBackoffMs", "10000" },
             { "iOverlayX", "12" },             { "iOverlayY", "12" },
             { "bDollsMode", "0" },
             { "fCastCooldown", "4.000000" },   { "fAiCastGrace", "3.000000" },

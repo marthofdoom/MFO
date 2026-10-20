@@ -49,7 +49,6 @@ namespace MFO::Config {
 
     // -- diagnostics ---------------------------------------------------------
     inline std::atomic<bool>  g_enableLogging{ true };
-    inline std::atomic<bool>  g_profileRapport{ false };
     // Board skin 0..3 (DESIGN §6.7a): Ebony & Brass / Dwemer Parchment /
     // Soul Cairn / Quicksilver. Live, MCM dropdown.
     inline std::atomic<int>   g_menuStyle{ 0 };
@@ -241,7 +240,7 @@ namespace MFO::Config {
     // entry), same as bApmfCast. No save state. See apmf/APMFBridge.h's block doc.
     inline std::atomic<bool>  g_apmfSpellAllowList{ true };
 
-    // LEGACY CAST HYBRID (MCM bLegacyCastHybrid). The owned cast model (above) is the
+    // LEGACY CAST HYBRID (bLegacyCastHybrid, INI-only: read from SKSE/Plugins/MFO.ini ONLY, no MCM control). The owned cast model (above) is the
     // DEFAULT. Turn this ON to force MFO's ORIGINAL AI-first-wait + force-on-miss
     // package hybrid instead (the pre-APMF behaviour, unanimated force via the cast
     // package). FROZEN KEY (INVARIANTS #37): its semantics never change -- a new
@@ -431,23 +430,6 @@ namespace MFO::Config {
     // Harbinger absent = today's direct road, byte for byte. Harbinger present but the substrate unavailable = a loud
     // once-per-session error and today's road (marth 2026-10-19 Q4: "shouldn't happen"). Not in the MCM.
     inline std::atomic<bool>  g_substrateCasts{ false };
-
-    // Composed Forced Cast per-follower DEGRADE backoff, ms (SPEC-FORCED-CAST.md
-    // §1.6). VESTIGIAL as of the feat/cast-act S1 pass (2026-09-05) and still
-    // vestigial under the feat/mfo-cast-port RequestCast port: the retired
-    // MFO-side hand-drive used this to avoid hammering a repeatedly-failing
-    // executor; the declarative claim (APMFBridge::ClaimHealCast) is a cheap
-    // create-or-refresh every tick with no backoff of its own. Left declared and
-    // still parsed (INI-only, kCfcBackoffMs; no MCM control) rather than removed,
-    // since the key name is a persisted MCM-Helper identity (#5) -- it is simply
-    // no longer read by ComposedCast.cpp.
-    inline std::atomic<int>   g_cfcBackoffMs{ 10000 };
-
-    // Composed Forced Cast TRIGGER variant selector (iForcedCastTrigger), RESERVED.
-    // The spec's original 0=action-seat / 1=caster-drive selector is obsolete under
-    // observe-and-replicate; kept as a reserved INI tunable (default 0) for a future
-    // choice of observed-sequence variant. INI-only; no MCM control. Not yet read.
-    inline std::atomic<int>   g_forcedCastTrigger{ 0 };
 
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc
