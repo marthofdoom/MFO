@@ -168,7 +168,8 @@ namespace MFO::Logistics::Errand::Sim {
             auto* vendor = r.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(r.vendorActor) : nullptr;
             TradeBridge::DiscardOutcome(r.follower);
             const bool ok = TradeBridge::VendorTrade(f, vendor, chest, r.order->sell, r.order->needs, r.order->purse,
-                                                     r.order->buy, r.order->sig, r.order->daysNow, r.order->vendorKey);
+                                                     r.order->buy, r.order->sig, r.order->daysNow, r.order->vendorKey,
+                                                     &r.order->quote);
             if (ok) {
                 r.dispatched = true;
                 r.dispatchedClk = Scheduler::ServiceClock();

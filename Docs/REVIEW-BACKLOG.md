@@ -1864,7 +1864,7 @@ Opus review of `feat/mfo-town-toasts` @ ad8746aa. Verbatim: "The sim's walk=0 pa
 
 ### MFO-B322 (SEV-5, OPEN, logistics/Errand.cpp) -- town toasts: VR fallback branch effectively dead (raised against ad8746aa)
 Opus review of `feat/mfo-town-toasts` @ ad8746aa. Verbatim: "The VR fallback branch (Errand.cpp:646) is effectively dead: errands refuse on VR (ErrandSupported())." Reasoning: harmless, kept for the Economy.cpp pattern.
-### MFO-B323 (SEV-4, OPEN, logistics/TradePerks.cpp) -- town S: EntryPointValue does not type-check its condition argument (raised against 527877c6)
+### MFO-B323 (SEV-4, CLOSED 2026-10-19 in `feat/mfo-town-p2-r2-prices`: As<TESObjectREFR>() for 8/60/59, IsBoundObject() for 76, refused + logged otherwise, logistics/TradePerks.cpp) -- town S: EntryPointValue does not type-check its condition argument (raised against 527877c6)
 Opus tier-3 review of `feat/mfo-town-p2-s-rows` @ 527877c6. Verbatim: "EntryPointValue(ep, owner, TESForm* arg, seed) does not type-check the argument per entry point: a non-REFR form passed for 8/60/59, or a non-bound object for 76, would be read by the conditions as the wrong type. Add As<TESObjectREFR>() / IsBoundObject() checks before R2 adds the first caller." Reasoning: no caller exists yet; the check must land before round R2 adds the first one. MAP: "logistics/TradePerks.cpp" entry in the logistics file list.
 
 ### MFO-B324 (SEV-4, OPEN, Progression.cpp / cast/Summon.cpp / progression/PerkGate.cpp / ProgProbe.cpp / TauntProbe.cpp) -- town S: unguarded HandleEntryPoint / IsTrue callers (raised against 527877c6)
@@ -1872,3 +1872,9 @@ Opus tier-3 review of `feat/mfo-town-p2-s-rows` @ 527877c6. Verbatim: "Unguarded
 
 ### MFO-B325 (SEV-5, OPEN, Packages.cpp) -- town S: VR load noise from the refused alias reader (raised against 527877c6)
 Opus tier-3 review of `feat/mfo-town-p2-s-rows` @ 527877c6. Verbatim: "VR noise: each VR load now prints 7 'NOT swept' error lines in addition to the seat refusal; the VR loot/retreat sweeps were already no-ops before this change." Reasoning: log volume only on VR (no verified table there); since the review fix the lines read "occupancy unknown ... NOT swept (no marker or no native ForceRefTo)". MAP: Packages.cpp "ALIAS READER behind its self-check row" bullet.
+
+### MFO-B330 (SEV-5, OPEN, logistics/Pricing.cpp) -- town R2: a GMST read failure turns the price model off at full base value (raised against a11fa74c)
+Opus review of `feat/mfo-town-p2-r2-prices` @ a11fa74c. Verbatim: "Pricing.cpp:126: when a GMST cannot be read the model turns off with multipliers 1.0; the sell side then pays full base value, more generous than the old 0.30-0.50 Speech fraction. Logged once as ERROR; the six GMSTs always exist as exe defaults." Reasoning: SEV-5, logged loudly, the settings always exist. MAP: the #21 "PRICES (town phase 2 R2)" bullet in the TradeBridge section (cross-referenced there as MFO-B330).
+
+### MFO-B331 (SEV-5, CLOSED 2026-10-19 in the R2 closing round, MAP.md) -- town R2: stale RegisterFuncs line number in MAP (raised against a11fa74c)
+Opus review of `feat/mfo-town-p2-r2-prices` @ a11fa74c. Verbatim: "MAP.md cites TradeBridge.cpp:365-376 for RegisterFuncs; the real location is ~:662-675 (stale before this change)." Reasoning: doc only; FIXED in the R2 closing round (now `:661-676`). MAP: TradeBridge section and the script-ABI table row.

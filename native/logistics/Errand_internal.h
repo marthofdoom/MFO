@@ -39,6 +39,7 @@ namespace MFO::Logistics {
         TradeBridge::BuyThresholds        buy{};
         std::uint64_t                     sig = 0;
         float                             daysNow = 0.0f;
+        Pricing::Quote                    quote;   // R2: the plan-time price quote; the sim replay trades with THIS one (session-only, never saved)
     };
     void EconomyErrandPlan(RE::Actor* a_follower, const FollowerState& a_state,
                            std::chrono::steady_clock::time_point a_now,
