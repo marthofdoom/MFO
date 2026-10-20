@@ -189,6 +189,11 @@ namespace MFO::Logistics::Errand {
         // ONE TRIP PER TOWN VISIT (marth 2026-10-19): once a follower's trip ends no new errand is planned for him until the player
         // leaves the town. Session-only; NoteTown clears every mark when the player's town changes (TryStart calls it on every tick).
         void NoteTown(RE::FormID a_townId);
+        // The blessing / disease READ (a main-thread mirror, MagicView): TRUE = this LOADED follower's mirror is missing or older than 30 s,
+        // so the plan must WAIT (the probe is posted here; TryStart returns and re-plans on the next cadence, like R6's Pending). Without it
+        // an inn-only trip planned before the read lands would skip the temple for the whole visit (one trip per visit). Logged once per
+        // follower per town visit. FALSE for an unloaded follower (today's behaviour; logged) or when inn errands are off.
+        bool MagicReadPending(RE::Actor* a_follower);
         bool TripDone(RE::FormID a_follower, RE::FormID a_townId);
         void MarkTripDone(RE::FormID a_follower, RE::FormID a_townId, const char* a_why);
         // The synthetic food order's dispatch (the inn's physical give beat): VendorTrade of a_order at the innkeeper's chest.

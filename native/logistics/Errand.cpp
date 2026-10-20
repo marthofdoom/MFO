@@ -985,6 +985,10 @@ namespace MFO::Logistics::Errand {
             g_nextPlan[fid] = a_now + kPlanInterval;
         }
 
+        // R7: the blessing / disease read decides the temple stop; an inn-only trip planned before it lands would skip the temple for the
+        // whole visit (one trip per visit). Pending: the probe is posted, this plan is abandoned and re-run on the next cadence.
+        if (Rest::MagicReadPending(a_follower)) return true;
+
         int dropped = 0;
         auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped);
         // R7 (marth 2026-10-19): no open shop is NOT "no errand" -- a follower with nothing to shop for still plans the INN-ONLY trip

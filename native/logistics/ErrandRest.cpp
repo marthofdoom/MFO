@@ -154,6 +154,7 @@ namespace MFO::Logistics::Errand::Rest {
         std::unordered_map<RE::FormID, int>              g_templeTry;  // follower -> game day of the last temple visit (any outcome): a short-term ANTI-THRASH only, NOT the blessing's truth (that is MagicView::blessed)
         std::unordered_set<RE::FormID>                   g_tripDone;   // followers whose trip ended this town visit
         std::unordered_set<RE::FormID>                   g_tripLogged; // ... for whom the re-plan block was already logged
+        std::unordered_set<RE::FormID>                   g_magicWaitLogged; // ... for whom "waiting for the blessing/disease read" was logged this visit
         RE::FormID                                       g_marksTown = 0;
         struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0, cell = 0; };   // cell: the interior cell of the faction's PLVD place (0 = unknown)
         std::unordered_map<RE::FormID, std::vector<InnFac>> g_innFacs;  // town -> the innkeeper factions (immutable once built)
@@ -792,6 +793,24 @@ namespace MFO::Logistics::Errand::Rest {
         g_marksTown = a_townId;
         g_tripDone.clear();
         g_tripLogged.clear();
+        g_magicWaitLogged.clear();
+    }
+    bool MagicReadPending(RE::Actor* a_follower) {
+        if (!a_follower || !Config::g_errandInn.load()) return false;
+        const auto fid = a_follower->GetFormID();
+        const bool loaded = a_follower->Is3DLoaded();
+        const auto m = MagicOf(fid);
+        const bool fresh = m.valid && Clock::now() - m.stamp <= std::chrono::seconds(30);
+        if (fresh) return false;
+        bool first = false;
+        { std::scoped_lock lk(g_mx); first = g_magicWaitLogged.insert(fid).second; }
+        if (!loaded) {   // an unloaded follower's list is not readable: today's behaviour (TempleWanted wants nothing without a read)
+            if (first) spdlog::info("[errand] {:08X}: not loaded -- no blessing/disease read possible, planning without the temple", fid);
+            return false;
+        }
+        if (first) spdlog::info("[errand] {:08X}: waiting for the blessing/disease read (main-thread active-effect mirror) before planning", fid);
+        PostMagicProbe(fid);
+        return true;
     }
     bool TripDone(RE::FormID a_follower, RE::FormID a_townId) {
         std::scoped_lock lk(g_mx);
@@ -905,6 +924,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_templeTry.clear();
         g_tripDone.clear();
         g_tripLogged.clear();
+        g_magicWaitLogged.clear();
         g_innFacs.clear();
         g_marksTown = 0;
     }
