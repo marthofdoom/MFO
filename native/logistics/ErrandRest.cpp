@@ -30,6 +30,7 @@
 // Errand or Sim g_mx; it IS taken inside Rest::NoteTown (which calls Reopen::ClearAll, a leaf of its own: Rest g_mx -> Reopen g_mx, never reversed). NOTHING HERE IS SAVED (the ERND record carries the stop kinds; the ledgers are session-only).
 #include "PCH.h"
 #include "Errand_internal.h"
+#include "Logistics.h"   // ForEachLoadedRef (the F4 temple entry-door read)
 #include "Config.h"
 #include "Forms.h"
 #include "LocationTypes.h"
@@ -450,8 +451,9 @@ namespace MFO::Logistics::Errand::Rest {
         // ── F4: the data-resolved temple's ENTRY DOOR ───────────────────────────────────────────────────────
         // A temple resolved through the location's special refs (Falkreath / Markarth, field run 2) has no door in the follower's own cell, so
         // FindPlaces never applied the LOCKED gate and the walk ended BLOCKED at a closed door. The door is a load door in one of the town's
-        // EXTERIOR cells whose linked door sits in the temple cell: read on the MAIN thread (TES::ForEachReference walks the loaded grid; the
-        // worker must not, LootScan.cpp crash4), cached per temple cell. The player indoors = no exterior grid to read: unknown, retried.
+        // EXTERIOR cells whose linked door sits in the temple cell: read on the MAIN thread (Logistics::ForEachLoadedRef walks the loaded
+        // grid; the worker must not, LootScan.cpp crash4), cached per temple cell. Never RE::TES::ForEachReference: on AE it hands the
+        // engine a bad TESWorldSpace* (Logistics.h; the 2026-10-20 Markarth crash in GetSkyCell). The player indoors = no exterior grid to read: unknown, retried.
         void PostTempleDoorRead(RE::FormID a_cell) {
             { std::scoped_lock lk(g_mx); if (!g_doorAsked.insert(a_cell).second) return; }
             auto fn = [a_cell]() {
@@ -464,7 +466,7 @@ namespace MFO::Logistics::Errand::Rest {
                 else if (tes->interiorCell) dr.indoors = true;
                 else {
                     float bestD = 1.0e9f;
-                    tes->ForEachReference([&](RE::TESObjectREFR* a_ref) {
+                    ForEachLoadedRef([&](RE::TESObjectREFR* a_ref) {
                         auto* tele = a_ref ? a_ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
                         if (!tele || !tele->teleportData) return RE::BSContainer::ForEachResult::kContinue;
                         ++dr.scanned;

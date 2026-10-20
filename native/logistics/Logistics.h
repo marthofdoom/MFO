@@ -2,6 +2,7 @@
 #include "PCH.h"
 #include "State.h"
 #include <unordered_set>   // T#69: stock-gear sets (CopyStockGear/LoadStockRecord)
+#include <functional>      // ForEachLoadedRef callbacks (std::function is not in the PCH)
 
 // The logistics table's actuation. DESIGN.md §4.8.
 //
@@ -372,5 +373,20 @@ namespace MFO::Logistics {
     // live; Actuation's in-combat lap compares this to trigger a re-declaration.
     std::vector<RE::FormID> LiveBoundWeapons(RE::Actor* a_follower);
     void ResendEquipDeclaration(RE::FormID a_follower);   // drop ONLY the change detector so the next rebuild is sent (MFO-B41); player picks kept
+
+    // ── THE LOADED-WORLD REFERENCE WALK (logistics/LootScan.cpp; ENGINE_NOTES §0.30, corrected 2026-10-20) ──
+    // MFO's replacement for RE::TES::ForEachReference / ForEachReferenceInRange, which MFO must NOT call: the fork's
+    // TES.h guards the AE +8 shift before TES::worldSpace with SKYRIM_SUPPORT_AE, a macro nothing defines, so CommonLib
+    // reads worldSpace at +0x140 while 1.6.1170 and 1.7.104 keep it at +0x148. Both CommonLib walks end with
+    // `worldSpace->GetSkyCell()`, so in an exterior on AE they hand the engine whatever sits at +0x140 (two floats)
+    // as a TESWorldSpace* and fault (crash4 2026-07-22, the temple door crash 2026-10-20).
+    // Same walk, same order: the player's interior cell, or every ATTACHED grid cell, then the worldspace's sky cell.
+    // The worldspace is read at the offset verified per exact build (Runtime.h); the sky cell is the plain member the
+    // engine's GetSkyCell reads (+0xF8, never the call: GetSkyCell CREATES a missing sky cell). An unverified runtime
+    // skips the sky cell. The InRange form keeps CommonLib's 4096-unit grid-cell prefilter and the cell-level radius
+    // test. MAIN THREAD ONLY (the grid and the cell lists change while cells stream; LootScan.cpp crash4).
+    void ForEachLoadedRef(const std::function<RE::BSContainer::ForEachResult(RE::TESObjectREFR*)>& a_fn);
+    void ForEachLoadedRefInRange(const RE::NiPoint3& a_origin, float a_radius,
+                                 const std::function<RE::BSContainer::ForEachResult(RE::TESObjectREFR*)>& a_fn);
 
 }

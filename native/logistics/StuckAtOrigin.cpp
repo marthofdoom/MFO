@@ -39,8 +39,8 @@
 // more than kMovedAfter (500 u) and logs RESCUED, or a loud "rescue did NOT move him". ActivateRef is an
 // id-based call: it carries a verified-address row (tools/verified_addresses/spec.json,
 // "StuckAtOrigin.TESObjectREFR.ActivateRef") and a SeatVerified guard.
-// The door search is on the main thread because it walks every loaded cell (TES::ForEachReferenceInRange, whose
-// exterior grid walk is unsafe off the main thread: crash4).
+// The door search is on the main thread because it walks every loaded cell (Logistics::ForEachLoadedRefInRange, whose
+// exterior grid walk is unsafe off the main thread: crash4; never RE::TES::ForEachReferenceInRange, Logistics.h).
 //
 // THREAD. Worker (the logistics service tick) for NoteBlock / ResetRun / Cooldown / Tick; the door search and the
 // activation are posted to the MAIN thread (MainThread::Post) and re-resolve the follower by FormID.
@@ -117,7 +117,7 @@ namespace MFO::Logistics {
             RE::ObjectRefHandle best;
             float bestD = kDoorReach + 1.0f;
             const auto S = f->GetPosition();
-            tes->ForEachReferenceInRange(f, kDoorReach, [&](RE::TESObjectREFR* r) {
+            ForEachLoadedRefInRange(S, kDoorReach, [&](RE::TESObjectREFR* r) {
                 auto* base = r ? r->GetBaseObject() : nullptr;
                 if (!base || !base->Is(RE::FormType::Door) || r->IsDisabled() || r->IsMarkedForDeletion() ||
                     r->IsLocked())
