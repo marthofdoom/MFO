@@ -79,6 +79,14 @@ REQUIRED = {
     0x905: ('SNDR', "MFO_LockpickPickBreakSD",    ['EDID', 'CNAM', 'GNAM', 'ANAM', 'ONAM', 'LNAM', 'BNAM']),
 }
 
+# TOWN PHASE 2 R7: the errand WORK packages (Forms.h kErrandActivate0 / Sandbox0 / Eat0 / Sleep0, four slots each, ch.9 route). The Activate carries
+# its Target as a PTDA, the other three their Location as a PLDT -- the run-time writes (Packages::SetPackage*) need those inputs to exist.
+for _i in range(4):
+    REQUIRED[0x906 + _i] = ('PACK', f"MFO_ErrandActivate{_i}", ['EDID', 'PKDT', 'PKCU', 'PTDA'])
+    REQUIRED[0x90A + _i] = ('PACK', f"MFO_ErrandSandbox{_i}",  ['EDID', 'PKDT', 'PKCU', 'PLDT'])
+    REQUIRED[0x90E + _i] = ('PACK', f"MFO_ErrandEat{_i}",      ['EDID', 'PKDT', 'PKCU', 'PLDT'])
+    REQUIRED[0x912 + _i] = ('PACK', f"MFO_ErrandSleep{_i}",    ['EDID', 'PKDT', 'PKCU', 'PLDT'])
+
 # Quests that are start-game-enabled but NOT run-once must appear in the SEQ or
 # they never start on an existing save.
 SEQ_EXPECTED = {0x808, 0x80A, 0x80C, 0x830, 0x80E}

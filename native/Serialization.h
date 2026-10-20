@@ -188,8 +188,8 @@ namespace MFO {
     //          u8  stopCount          1..8 (#11; 0 or more than 8 = the record is aborted)
     //          per stop, in visit order:
     //            str kind             opcode (#10): shop | temple | inn   (R7 appended temple and inn as NEW STRING VALUES, no layout change; later
-                                 rounds APPEND fence | spouse | smith | home). An older reader meets an unknown kind as a LATER stop -> that stop
-                                 SKIPPED, or as the CURRENT stop -> the entry DROPPED (both logged): the follower is then simply with the player.
+    //                             rounds APPEND fence | spouse | smith | home). An older reader meets an unknown kind as a LATER stop -> that stop
+    //                             SKIPPED, or as the CURRENT stop -> the entry DROPPED (both logged): the follower is then simply with the player.
     //            u32 faction, chest, vendorActor   as in v1 (0 = none; unresolvable -> 0)
     //            str destKind         opcode: vendor_actor | ref | cell
     //            u32 destForm
