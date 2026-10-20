@@ -18,8 +18,9 @@ namespace MFO::Logistics::Errand::Counter {
     };
 
     // A LOADED, awake vendor of `a_faction` (the catalog's vendor scan). A spot is CONFIRMED only when two samples at least
-    // kSettleSec apart agree within kStillRadius (a vendor in mid-walk is not at his counter); later samples that agree
-    // refresh it, one that disagrees restarts the confirmation (his schedule moved him: a stale counter is worse than none).
+    // kSettleSec apart agree within kStillRadius (a vendor in mid-walk is not at his counter); a sample that disagrees with the
+    // confirmed spot (another actor of the faction, another cell, a move) DROPS it (confirmed=false) until a new pair agrees: a stale
+    // counter is worse than none. NOTE: "confirmed" means stationary for ~2 s+ at ANY sandbox marker, not proven "at the counter".
     void Learn(const RE::Actor* a_vendor, RE::FormID a_faction, Clock::time_point a_now);
     bool Lookup(RE::FormID a_faction, Spot& a_out);
 
@@ -29,12 +30,6 @@ namespace MFO::Logistics::Errand::Counter {
                     RE::FormID a_faction);
     // The OUT_SIM -> TRADE_SIM arrival (off screen): one log line, the placement status (see the .cpp: no Harbinger facet).
     void NoteSimArrival(RE::FormID a_follower, const std::string& a_name, const std::string& a_vendorName, RE::FormID a_faction);
-
-    // The browsing hold: set by ResumePhysical, read by the Talking beat of Errand::Tick, ended when the errand leaves Talking
-    // or finishes.
-    void MarkBrowse(RE::FormID a_follower);
-    bool Browsing(RE::FormID a_follower);
-    void EndBrowse(RE::FormID a_follower);
 
     void Clear();
 }

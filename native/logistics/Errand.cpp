@@ -121,6 +121,7 @@ namespace MFO::Logistics::Errand {
             bool          talkFallbackUsed = false;
             bool          dispatched = false;
             bool          bought = false;
+            bool          browse = false;          // R4: found at the counter -- the arrival plays the browsing beat (runtime only, ends with the record; R5 LoadStop must reset it)
             bool          announced = false;       // bTownToasts: the "is trading with" line fired (not saved; a resume sets it from the sim stage)
             // R1b: what the SIMULATION needs if he goes off screen, and what a hand-off back to the physical errand needs.
             RE::FormID    faction = 0;                      // the vendor faction of the shop
@@ -499,7 +500,6 @@ namespace MFO::Logistics::Errand {
                 g_cool[a_fid] = Clock::now() + std::chrono::milliseconds(static_cast<long long>(a_cooldownSec * 1000.0f));
                 if (a_complete) g_backoff.erase(BackoffKey(a_fid, r.chest));   // a successful DONE at this target forgives it
             }
-            Counter::EndBrowse(a_fid);
             APMFBridge::ReleaseErrand(a_fid);   // idle, hold, walk (in that order)
             // A shop-place walk has no vendor actor yet (r.vendor == 0): name the faction / destination instead.
             const std::string who = r.vendor ? std::format("vendor '{}' {:08X}", r.vendorName, r.vendor)
@@ -741,13 +741,14 @@ namespace MFO::Logistics::Errand {
             r.startClk = r.lastTickClk = Scheduler::ServiceClock();
             r.startDays = a_info.startDays;
             r.lastPos = a_follower->GetPosition();
+            // R4: found at the counter. Only an errand that really arrived off screen (announced = the sim reached Trade) browses.
+            if (vendor) {
+                Counter::NoteResume(fid, r.followerName, a_follower, vendor.get(), r.faction);
+                r.browse = a_info.announced && IdleIds().browse != 0;
+            }
             {
                 std::scoped_lock lk(g_mx);
                 g_recs[fid] = r;
-            }
-            if (vendor) {   // R4: found at the counter -- log the learned counter and hold a browsing beat on arrival
-                Counter::NoteResume(fid, r.followerName, a_follower, vendor.get(), r.faction);
-                if (IdleIds().browse) Counter::MarkBrowse(fid);
             }
             spdlog::info("[errand] {:08X} '{}': PICKS UP -- he is loaded again; {} '{}' ({:08X}) to trade on screen",
                          fid, r.followerName, vendor ? "walking to the vendor" : "resuming the walk to the shop of", r.vendorName,
@@ -1007,7 +1008,7 @@ namespace MFO::Logistics::Errand {
                 Finish(fid, std::format("Harbinger refused the {} idle at the call", a_name).c_str(), 600.0f);
                 return false;
             }
-            if (a_next != Phase::Talking) Counter::EndBrowse(fid);   // R4: the browsing beat is a Talking beat
+            if (a_next != Phase::Talking) r.browse = false;   // R4: the browsing beat is a Talking beat
             r.phase = a_next;
             r.phaseAt = a_now;
             r.beatRequested = true;
@@ -1096,7 +1097,7 @@ namespace MFO::Logistics::Errand {
                          r.planPosSet ? std::format(", {:.0f} u in a straight line from where the errand began",
                                                     a_follower->GetPosition().GetDistance(r.planPos))
                                       : std::string{});
-            if (idles.browse && Counter::Browsing(fid)) {   // R4: found at the counter -- browse first, then the hand-over
+            if (idles.browse && r.browse) {   // R4: found at the counter -- browse first, then the hand-over
                 spdlog::info("[errand] {:08X}: browsing the counter of '{}' (IdleExamine, ch.12 + ch.1 hold)", fid, r.vendorName);
                 if (!beginBeat(Phase::Talking, idles.browse, "browse")) return false;
             } else if (!idles.talk) {   // an old master without the dialogue idle: straight to the hand-over
@@ -1111,12 +1112,12 @@ namespace MFO::Logistics::Errand {
         case Phase::Talking: {
             const auto rd = BeatReading(fid);
             const bool patience = a_now - r.phaseAt > kBeatPatience;
-            const bool browsing = Counter::Browsing(fid);   // R4: this Talking beat is the browsing idle (longer hold, no talk fallback)
+            const bool browsing = r.browse;   // R4: this Talking beat is the browsing idle (longer hold, no talk fallback)
             const auto talkHold = browsing ? kBrowseHold : kTalkHold;
             if (rd.verdict == APMFBridge::ErrandIdleVerdict::Played) {
                 if (r.confirmedAt.time_since_epoch().count() == 0) {
                     r.confirmedAt = a_now;
-                    spdlog::info("[errand] {:08X}: talk idle PLAYED{} ({})", fid, rd.weak ? " (weak)" : "", rd.detail);
+                    spdlog::info("[errand] {:08X}: {} idle PLAYED{} ({})", fid, browsing ? "browse" : "talk", rd.weak ? " (weak)" : "", rd.detail);
                 }
                 if (a_now - r.confirmedAt >= talkHold && beginBeat(Phase::Giving, idles.give, "give")) {
                     Store(fid, r);
