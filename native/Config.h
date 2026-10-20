@@ -430,7 +430,7 @@ namespace MFO::Config {
     // follower's own AI casts it with the real animation (cast/SubstrateRoad.cpp, apmf/Substrate.cpp). OFF, or
     // Harbinger absent = today's direct road, byte for byte. Harbinger present but the substrate unavailable = a loud
     // once-per-session error and today's road (marth 2026-10-19 Q4: "shouldn't happen"). Not in the MCM.
-    inline std::atomic<bool>  g_substrateCasts{ true };
+    inline std::atomic<bool>  g_substrateCasts{ false };
 
     // Composed Forced Cast per-follower DEGRADE backoff, ms (SPEC-FORCED-CAST.md
     // §1.6). VESTIGIAL as of the feat/cast-act S1 pass (2026-09-05) and still
