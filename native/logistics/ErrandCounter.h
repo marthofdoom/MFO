@@ -2,7 +2,7 @@
 // logistics/ErrandCounter.h -- TOWN PHASE 2 R4 "found at the counter" (ClickUp 86e3t1mx7). Internal to logistics/ (Errand.cpp,
 // ErrandSim.cpp). The learned VENDOR MAP (where each shop's vendor actually stands) and the BROWSING-hold marker.
 // Nothing here is saved (session-only, cleared by Errand::ClearTransientState); nothing here calls the engine except reading
-// an already-loaded vendor's position. Threading: the AddTask job worker (BuildCatalog / Tick / Sim::Sweep); one own mutex,
+// an already-loaded vendor's position and asking Harbinger (R4b) to place an unloaded follower. Threading: the AddTask job worker (BuildCatalog / Tick / Sim::Sweep); one own mutex,
 // held for map access only, never across an engine / Harbinger call.
 #include "Errand.h"
 
@@ -28,8 +28,14 @@ namespace MFO::Logistics::Errand::Counter {
     // how far he stands from it. `a_vendor` null = the vendor is not in his cell.
     void NoteResume(RE::FormID a_follower, const std::string& a_name, const RE::Actor* a_follower3d, const RE::Actor* a_vendor,
                     RE::FormID a_faction);
-    // The OUT_SIM -> TRADE_SIM arrival (off screen): one log line, the placement status (see the .cpp: no Harbinger facet).
+    // The OUT_SIM -> TRADE_SIM arrival (off screen): one log line, and (counter CONFIRMED + INTERIOR + Harbinger ABI >= 28) a Harbinger
+    // placement request beside the vendor (see the .cpp). AddTask worker.
     void NoteSimArrival(RE::FormID a_follower, const std::string& a_name, const std::string& a_vendorName, RE::FormID a_faction);
+    // Poll the follower's pending placement (a no-op when none): logs Placed / Refused(why) / Failed(why) ONCE, then forgets it.
+    // Called each Sim::Sweep pass for the record. AddTask worker.
+    // a_final = the errand record is ending (Drop / loaded again): a still-Queued placement is logged and forgotten, so a stale entry
+    // never outlives its errand or reports under the next one.
+    void PollPlacement(RE::FormID a_follower, const std::string& a_name, bool a_final = false);
 
     void Clear();
 }
