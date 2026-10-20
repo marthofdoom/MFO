@@ -213,7 +213,8 @@ namespace MFO::Logistics::Errand {
         // bTownToasts: one informational HUD line (RE::DebugNotification, posted to the main thread). No-op while the toggle is OFF.
         void  Toast(const std::string& a_text);
         // "<who> is trading with <shop>." via Toast, at the moment the trade begins (arrival, physical or simulated).
-        void  ToastTrading(const std::string& a_who, const std::string& a_shop);
+        // R6: a_faction (the stop's vendor faction, 0 = unknown) of a FENCE reads "<who> is visiting <fence>." (ToastFence) instead.
+        void  ToastTrading(const std::string& a_who, const std::string& a_shop, RE::FormID a_faction = 0);
         // R5 (B300): the physical trips' share of Trip::ChestCrowd. Takes Errand g_mx.
         void  CrowdInto(std::unordered_map<RE::FormID, int>& a_crowd, RE::FormID a_exclude);
         // R3: STRINGS ONLY, no caller yet (the phase-2 rounds that add each errand kind call them at their own begin point).
@@ -223,4 +224,22 @@ namespace MFO::Logistics::Errand {
         void  ToastPraying(const std::string& a_who, const std::string& a_temple);   // "<who> is praying at <temple>."
         void  ToastFence(const std::string& a_who, const std::string& a_fence);      // "<who> is visiting <fence>."
     }
+}
+
+// ── R6: fences + spouse stores (logistics/ErrandShops.cpp; design 1.c) ────────────────────────────────────────────────────
+namespace MFO::Logistics::ErrandShops {
+    // Open = a candidate; Closed = not one; Pending = the main-thread condition evaluation is still being computed (skip this plan).
+    enum class Gate { Open, Closed, Pending };
+    // A base form's copies in the follower's inventory: none stolen, every copy stolen, or a mix (sold nowhere).
+    enum class Stolen : std::uint8_t { None, All, Mixed };
+    // A pure fence: buysStolen && !buysNonStolen. The ONLY vendors a stolen row may reach (and they take nothing else).
+    bool IsFence(const RE::TESFaction* a_fac);
+    bool IsFenceFaction(RE::FormID a_fac);
+    // Worker (BuildCatalog). a_vendor = the loaded vendor actor, empty for a faction-only shop. Both log ONE decision line.
+    Gate FenceGate(RE::Actor* a_follower, const RE::TESFaction* a_fac, RE::ActorHandle a_vendor);
+    Gate SpouseGate(RE::Actor* a_follower, const RE::TESFaction* a_fac, RE::ActorHandle a_vendor);
+    // Worker (EconomyProbeImpl, once per scan): every base form in his inventory classified by its copies' ExtraOwnership.
+    std::unordered_map<const RE::TESBoundObject*, Stolen> ClassifyStolen(RE::Actor* a_follower);
+    void NoteMixed(RE::Actor* a_follower, const RE::TESBoundObject* a_obj);   // one [econ] line per base per session
+    void Clear();                                                              // session reset (Errand::ClearTransientState)
 }

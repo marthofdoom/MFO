@@ -730,7 +730,7 @@ namespace MFO::Logistics::Errand::Sim {
                 r.stage = Stage::Trade;
                 spdlog::info("[errand] {:08X} '{}': TRADE_SIM -- he has reached '{}' (off screen)", fid, r.followerName, r.vendorName);
                 Counter::NoteSimArrival(fid, r.followerName, r.vendorName, r.faction);   // R4: counter known/unknown; placement unavailable (no Harbinger facet)
-                if (!r.tradeAbandoned && r.order && !r.order->skipped) detail::ToastTrading(r.followerName, r.vendorName);   // not for a trade that will never run
+                if (!r.tradeAbandoned && r.order && !r.order->skipped) detail::ToastTrading(r.followerName, r.vendorName, r.faction);   // not for a trade that will never run
             }
             if (r.stage == Stage::Trade) {
                 const double clk = Scheduler::ServiceClock();
