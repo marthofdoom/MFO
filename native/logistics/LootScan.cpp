@@ -7,6 +7,7 @@
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 #include "TeleportCompat.h"    // follower-teleport mod leash clamp (86e3ec824)
 #include "Errand.h"            // TOWN PHASE 2 R8: Errand::Smith (the smithing want list: loose materials, the always-on pass)
+#include "Runtime.h"           // ForEachLoadedRef: the per-build TES::worldSpace offset
 
 namespace MFO::Logistics {
 
@@ -1081,4 +1082,72 @@ namespace MFO::Logistics {
                 return true;
             return false;
         }
+
+    // ── THE LOADED-WORLD REFERENCE WALK (declared in Logistics.h; ENGINE_NOTES §0.30) ──────────────────────
+    // Offsets, from the disassembly of the unpacked executables (2026-10-20):
+    //   TES::interiorCell +0xC0: TES::GetCell reads [rcx+0xC0] first (1.6.1170 0x19E850, 1.5.97 0x155090).
+    //   TES::gridCells    +0x78, GridArray::length +0x10, GridCellArray::cells +0x18, slot = cells[x*length + y]:
+    //                     the grid slot accessor 1.6.1170 0x221830, called from 0x19E640 on [rbx+0x78].
+    //   TES::worldSpace   +0x140 on 1.5.97 (every caller of GetSkyCell 0x2B63B0 loads rcx from [reg+0x140]),
+    //                     +0x148 on 1.6.1170 (30 callers of GetSkyCell 0x30B070) and 1.7.104 (31 callers of 0x311640).
+    //                     CommonLib's TES.h compiles +0x140 for every build, which is the defect this walk avoids.
+    //   TESWorldSpace::skyCell +0xF8: GetSkyCell's first read on all three builds (`mov rdi,[rsi+0xF8]`).
+    namespace {
+        static_assert(offsetof(RE::TES, interiorCell) == 0xC0, "TES::interiorCell moved: re-verify ForEachLoadedRef");
+        static_assert(offsetof(RE::TES, gridCells) == 0x78, "TES::gridCells moved: re-verify ForEachLoadedRef");
+        static_assert(offsetof(RE::GridArray, length) == 0x10, "GridArray::length moved: re-verify ForEachLoadedRef");
+        static_assert(offsetof(RE::GridCellArray, cells) == 0x18, "GridCellArray::cells moved: re-verify ForEachLoadedRef");
+        static_assert(offsetof(RE::TESWorldSpace, skyCell) == 0xF8, "TESWorldSpace::skyCell moved: re-verify ForEachLoadedRef");
+
+        // TES::worldSpace at the offset verified for the running build; null on any other build (the sky cell is then skipped).
+        RE::TESWorldSpace* LoadedWorldSpace(const RE::TES* a_tes) {
+            std::size_t off = 0;
+            if (Runtime::IsVerified1_5_97())                                        off = 0x140;
+            else if (Runtime::IsVerified1_6_1170() || Runtime::IsVerified1_7_104()) off = 0x148;
+            else return nullptr;
+            return *reinterpret_cast<RE::TESWorldSpace* const*>(reinterpret_cast<const std::uint8_t*>(a_tes) + off);
+        }
+
+        // a_origin null = every reference (CommonLib's ForEachReference); otherwise the InRange form.
+        void WalkLoaded(const RE::NiPoint3* a_origin, float a_radius,
+                        const std::function<RE::BSContainer::ForEachResult(RE::TESObjectREFR*)>& a_fn) {
+            auto* tes = RE::TES::GetSingleton();
+            if (!tes) return;
+            auto walkCell = [&](RE::TESObjectCELL* a_cell) {
+                if (a_origin) a_cell->ForEachReferenceInRange(*a_origin, a_radius, a_fn);
+                else          a_cell->ForEachReference(a_fn);
+            };
+            if (auto* interior = tes->interiorCell) {
+                walkCell(interior);
+            } else if (auto* grid = tes->gridCells; grid && grid->length > 0) {
+                const std::uint32_t len = grid->length;
+                for (std::uint32_t x = 0; x < len; ++x) {
+                    for (std::uint32_t y = 0; y < len; ++y) {
+                        auto* cell = grid->GetCell(x, y);
+                        if (!cell || !cell->IsAttached()) continue;
+                        if (a_origin) {   // CommonLib's prefilter: the cell's 4096-unit square overlaps the radius box
+                            const auto* c = cell->GetCoordinates();
+                            if (!c) continue;
+                            if (!(c->worldX < a_origin->x + a_radius && c->worldX + 4096.0f > a_origin->x - a_radius &&
+                                  c->worldY < a_origin->y + a_radius && c->worldY + 4096.0f > a_origin->y - a_radius))
+                                continue;
+                        }
+                        walkCell(cell);
+                    }
+                }
+            }
+            if (auto* ws = LoadedWorldSpace(tes))
+                if (auto* sky = ws->skyCell) walkCell(sky);
+        }
+    }
+
+    void ForEachLoadedRef(const std::function<RE::BSContainer::ForEachResult(RE::TESObjectREFR*)>& a_fn) {
+        WalkLoaded(nullptr, 0.0f, a_fn);
+    }
+
+    void ForEachLoadedRefInRange(const RE::NiPoint3& a_origin, float a_radius,
+                                 const std::function<RE::BSContainer::ForEachResult(RE::TESObjectREFR*)>& a_fn) {
+        if (a_radius > 0.0f) WalkLoaded(&a_origin, a_radius, a_fn);
+        else                 WalkLoaded(nullptr, 0.0f, a_fn);   // CommonLib's fallback for a non-positive radius
+    }
 }

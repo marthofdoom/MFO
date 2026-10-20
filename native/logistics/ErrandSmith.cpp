@@ -45,6 +45,7 @@
 // THREADING: see Errand_internal.h (Smith). One leaf mutex; the engine, Papyrus and TradeBridge are never called under it.
 #include "PCH.h"
 #include "Errand_internal.h"
+#include "Logistics.h"   // ForEachLoadedRefInRange (the station search)
 #include "TradePerks.h"
 #include "Config.h"
 #include "MainThread.h"
@@ -498,15 +499,16 @@ namespace MFO::Logistics::Errand::Smith {
 
         // ── the station ────────────────────────────────────────────────────────────────────────────────────────────
         // Sharpening wheels (weapons) / armor tables (armor) within kStationRadius of him, nearest first, over every LOADED cell around
-        // him (an outdoor forge sits in a neighbouring grid cell; TES::ForEachReferenceInRange walks the exterior grid or the interior
-        // cell, as the engine does). Data reads only; no learned vendor position is used.
+        // him (an outdoor forge sits in a neighbouring grid cell; Logistics::ForEachLoadedRefInRange walks the exterior grid or the
+        // interior cell, as the engine does; never RE::TES::ForEachReferenceInRange, Logistics.h). Data reads only; no learned vendor
+        // position is used.
         std::vector<RE::FormID> FindStations(RE::Actor* a_f, RE::FormID a_keyword) {
             std::vector<RE::FormID> out;
             auto* tes = RE::TES::GetSingleton();
             if (!a_f || !tes) return out;
             std::vector<std::pair<float, RE::FormID>> found;
             const auto at = a_f->GetPosition();
-            tes->ForEachReferenceInRange(a_f, kStationRadius, [&](RE::TESObjectREFR* a_ref) {
+            ForEachLoadedRefInRange(at, kStationRadius, [&](RE::TESObjectREFR* a_ref) {
                 auto* base = a_ref ? a_ref->GetBaseObject() : nullptr;
                 auto* fur = base ? base->As<RE::TESFurniture>() : nullptr;
                 if (fur && fur->HasKeywordID(a_keyword) && !a_ref->IsDisabled() && !a_ref->IsMarkedForDeletion() && found.size() < 16)

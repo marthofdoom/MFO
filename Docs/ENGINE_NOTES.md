@@ -1289,6 +1289,24 @@ knowing when logistics and casting interact.
 
 ### 0.30 The Scheduler tick runs on a JOB WORKER thread, and TES::ForEachReferenceInRange tears its worldspace pointer (2026-07-22)
 
+> **CORRECTED 2026-10-20 (`fix/mfo-temple-door-crash`): finding 1's "torn pointer" was a LAYOUT BUG, not a race.**
+> The same fault (`sub_30B0B3 mov rdi,[rsi+0xF8]`, `rsi = 0x45505000_45723000`) hit on the MAIN thread in
+> Markarth, from `RE::TES::ForEachReference` (TES.cpp:41) in the F4 temple door read. Both `rsi` values are two
+> 32-bit floats (crash4's `0x450FE000` / `0x45242000`, this one's `3333.0f` / `3875.0f`), not a torn pointer.
+> The fork's `include/RE/T/TES.h` declares an AE-only `unk140` before `worldSpace` under
+> `#ifdef SKYRIM_SUPPORT_AE`, a macro nothing defines (the same dead macro as the CombatController note
+> above), so every build reads `TES::worldSpace` at **+0x140**. The engine keeps it at **+0x148 on 1.6.1170**
+> (all 30 callers of GetSkyCell 0x30B070 load `rcx` from `[reg+0x148]`, and TES::GetCell's grid fallback
+> 0x19E64D reads `[rbx+0x148]`) **and on 1.7.104** (31 callers of GetSkyCell 0x311640), and at **+0x140 on
+> 1.5.97** (callers of GetSkyCell 0x2B63B0). So on AE both CommonLib walks hand GetSkyCell (id 20095/20543,
+> its first read is `[this+0xF8]` = `TESWorldSpace::skyCell` on all three builds) whatever sits at +0x140, and
+> fault whenever that word is non-zero. Verified unaffected members: `interiorCell` +0xC0 (TES::GetCell
+> 0x19E850 / 0x155090), `gridCells` +0x78, `GridArray::length` +0x10, `GridCellArray::cells` +0x18
+> (slot accessor 0x221830, `cells[x*length + y]`). **Rule: MFO never calls `RE::TES::ForEachReference` or
+> `ForEachReferenceInRange`;** it uses `Logistics::ForEachLoadedRef[InRange]` (`logistics/LootScan.cpp`),
+> which reads `worldSpace` at the exact-build offset and the sky cell as the plain member (GetSkyCell would
+> CREATE a missing one). Finding 2 (the SKSE task runs on a job worker) and the actor-anchored loot walk stand.
+
 crash4: an `EXCEPTION_ACCESS_VIOLATION` inside the engine at
 `TESWorldSpace::sub_30B0B3  mov rdi,[rsi+0xF8]`, with `rsi = 0x450FE000_45242000`
 -- a **torn 64-bit pointer**, two mismatched 32-bit halves. Player in an exterior

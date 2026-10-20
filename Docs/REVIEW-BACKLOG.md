@@ -2153,3 +2153,14 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 
 ### MFO-B426 (SEV-5, OPEN, out/MCM/Config/MFO/config.json Interface page) -- a "Debug" header still sits above the Fashionrim toggle on the Interface page (raised against 5a48803)
 "The Interface page still has a header titled 'Debug' above the Fashionrim toggle (bDollsMode). Now that a separate Debug page exists, this may confuse players." Pre-existing, outside the brief.
+
+### MFO-B427 (SEV-5, OPEN, logistics/ErrandSmith.cpp:523) -- stale comment still names TES::ForEachReferenceInRange (raised against 75fadf7)
+"Stale comment at ErrandSmith.cpp:523, which still says 'TES::ForEachReferenceInRange reads the worldspace…'. It is a comment only."
+
+### MFO-B428 (SEV-5, OPEN, logistics/LootScan.cpp ForEachLoadedRef) -- unknown build skips the sky cell silently (raised against 75fadf7)
+"On an unknown build the sky cell is skipped with no log line. A one-time warning would be enough."
+
+### MFO-B429 (SEV-5, OPEN, LootScan.cpp comment, Docs/ENGINE_NOTES.md §0.30) -- imprecise GetSkyCell caller counts (raised against 75fadf7)
+"The author's caller counts in the code comment and ENGINE_NOTES ('30/31 callers') are imprecise (reviewer counted 39/40/35). The conclusion holds."
+
+Note (SEV-4, tracked as a fork task, not here): the mit-3.7 fork's TES.h guards AE members with the never-defined SKYRIM_SUPPORT_AE (worldSpace, landBorderMode, sizeof assert; same class in UserEvents.h, InterfaceStrings.h, BGSSaveLoadManager.h). MFO avoids the TES walks by rule until the fork is corrected.
