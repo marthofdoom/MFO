@@ -53,6 +53,7 @@
 #include "apmf/APMFBridge.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <format>
