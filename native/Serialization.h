@@ -184,8 +184,23 @@ namespace MFO {
     //        follower: 0 = none; a 0xFF id is written as 0 (#9); unresolvable on load -> 0 (logged). An
     //        unresolvable faction or chest also gives the trade up (the follower is still brought back).
     //        A save without the record loads with nothing staged.
+    //   v2 - (TOWN PHASE 2 R5, multi-stop trips) every v1 field, in the v1 order, describing the CURRENT stop, then APPENDED:
+    //          u8  stopCount          1..8 (#11; 0 or more than 8 = the record is aborted)
+    //          per stop, in visit order:
+    //            str kind             opcode (#10): shop   (later rounds APPEND fence | spouse | smith | temple | inn | home)
+    //            u32 faction, chest, vendorActor   as in v1 (0 = none; unresolvable -> 0)
+    //            str destKind         opcode: vendor_actor | ref | cell
+    //            u32 destForm
+    //            f32 destRad          clamped [0, 4096]
+    //            str state            opcode: pending | active | done | skipped
+    //            f64 tArrive, tWorkEnd   GAME DAYS of the simulation (0 = not reached); non-finite / negative -> 0
+    //          u8  cur                the current stop's index (< stopCount, else the entry is DROPPED, #13)
+    //        A later stop with an unknown opcode, or a pending one whose shop no longer resolves, loads SKIPPED (logged); the current
+    //        stop's opcodes unknown -> the entry is DROPPED. The writer writes v2 ONLY; the v1 reader is kept forever (#12): a v1
+    //        entry loads as a ONE-STOP trip (its own shop, cur 0, active). Version 0 is no schema: skipped (MFO-B309). An older
+    //        (v1) DLL skips a v2 record whole (its newer-than guard) and destroys it on its next save (#12, warned on screen).
     inline constexpr std::uint32_t kRecErrand     = 'ERND';
-    inline constexpr std::uint32_t kErrandVersion = 1;
+    inline constexpr std::uint32_t kErrandVersion = 2;
 
     // INVARIANTS.md #12: bump on every schema change; keep a reader for EVERY
     // shipped version FOREVER.

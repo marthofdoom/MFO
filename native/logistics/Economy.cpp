@@ -464,7 +464,8 @@ namespace MFO::Logistics {
         // Both null = the legacy / R1a path, unchanged.
         static void EconomyProbeImpl(RE::Actor* a_follower, const FollowerState& a_state,
                           Clock::time_point a_now, ErrandProbe* a_errand,
-                          const std::vector<ErrandShop>* a_shops, std::vector<ErrandPlanned>* a_planOut) {
+                          const std::vector<ErrandShop>* a_shops, std::vector<ErrandPlanned>* a_planOut,
+                          const ErrandPlanned* a_share = nullptr, int a_purseCap = -1) {
             const auto& a_logistics = a_state.logistics();
             const auto fid = a_follower->GetFormID();
 
@@ -526,7 +527,7 @@ namespace MFO::Logistics {
             // #21 buy thresholds (weapon/armor/apparel/tome) -- built ONCE on the
             // worker from the follower's own inventory/skills/gambits, reused for
             // every candidate vendor this scan and passed opaque to PlanBuy.
-            const TradeBridge::BuyThresholds buy = BuildBuyThresholds(a_follower, a_state);
+            TradeBridge::BuyThresholds buy = BuildBuyThresholds(a_follower, a_state);   // R5: a trip stop's share narrows its wishes (below)
 
             // Build A: warm the follower's carried-gem cache on the MAIN thread for
             // the NEXT scan (GetActorGemsCarried is main-thread only; the sell loop
@@ -943,6 +944,19 @@ namespace MFO::Logistics {
                 else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
             }
 
+            // R5 TRIP PARTITION (EconomyErrandExecute, a physical stop's give beat): this stop serves only its share of the trip --
+            // the need kinds, the gear / tome wishes and the ammo swap-up the planner gave it -- and spends at most what the trip
+            // purse has left. Live counts and prices are still read here (he is loaded; his inventory changed since the plan).
+            if (a_share) {
+                std::erase_if(needs, [&](const TradeBridge::NeedCat& n) {
+                    return n.kind < 0 || n.kind >= 32 || !((a_share->needKinds >> n.kind) & 1u);
+                });
+                buy.buyGear     = buy.buyGear && a_share->buy.buyGear;
+                buy.buyTomes    = buy.buyTomes && a_share->buy.buyTomes;
+                buy.ammoUpgrade = buy.ammoUpgrade && a_share->buy.ammoUpgrade;
+            }
+            if (a_purseCap >= 0) purse = std::min(purse, a_purseCap);
+
             // CANDIDATES: the loaded vendor actors above, plus (errand PLAN only) faction-only shops.
             struct ProbeVendor { RE::NiPointer<RE::Actor> keep; RE::Actor* vendor = nullptr; RE::TESFaction* fac = nullptr; };
             std::vector<ProbeVendor> pvs;
@@ -1024,6 +1038,11 @@ namespace MFO::Logistics {
                     sell.push_back(TradeBridge::SellRow{ c.obj, c.count, c.minOne ? std::max<std::int32_t>(1, unit) : unit,
                                                          c.jewelry });
                 }
+                if (a_share)   // R5: only the objects the trip planner gave THIS stop (another stop pays more for the rest)
+                    std::erase_if(sell, [&](const TradeBridge::SellRow& r) {
+                        return std::none_of(a_share->sell.begin(), a_share->sell.end(),
+                                            [&](const TradeBridge::SellRow& s) { return s.obj == r.obj; });
+                    });
 
                 // NO EMPTY TRADES (marth 2026-09-28; TradeBridge::SkipTrade): never
                 // dispatch again to a vendor whose last trade with him moved nothing
@@ -1111,6 +1130,12 @@ namespace MFO::Logistics {
             ErrandProbe probe;
             probe.mode = ErrandProbe::Mode::kPlan;
             EconomyProbeImpl(a_follower, a_state, a_now, &probe, &a_shops, &a_out);
+        }
+
+        // R5: one STOP of a trip, on screen (the give beat, logistics/Errand.cpp): the probe in execute mode with the stop's share.
+        void EconomyErrandExecute(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now,
+                                  ErrandProbe& a_probe, const ErrandPlanned* a_share, int a_purseCap) {
+            EconomyProbeImpl(a_follower, a_state, a_now, &a_probe, nullptr, nullptr, a_share, a_purseCap);
         }
     // ── #21 economy GEAR/TOME buy helpers (see Logistics.h) ─────────────────────
     // Thin wrappers over the anon-namespace loot judge, callable from the VM-side

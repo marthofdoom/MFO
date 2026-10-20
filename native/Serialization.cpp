@@ -77,7 +77,7 @@ namespace MFO {
         // Returns false on short read or implausible length -- caller must abort.
         bool ReadString(SKSE::SerializationInterface* a_intfc, std::string& a_out) {
             std::uint32_t len = 0;
-            if (!a_intfc->ReadRecordData(len)) return false;
+            if (a_intfc->ReadRecordData(len) != sizeof(len)) return false;   // MFO-B309: a 1-3 byte partial read is a short read (#11)
             if (len > kMaxOpcodeLen) {
                 spdlog::error("[cosave] opcode length {} exceeds max {} -- aborting read", len, kMaxOpcodeLen);
                 return false;
@@ -101,6 +101,15 @@ namespace MFO {
         constexpr std::pair<ErrDest, const char*> kErrDestOps[] = {
             { ErrDest::VendorActor, "vendor_actor" }, { ErrDest::Ref, "ref" }, { ErrDest::Cell, "cell" },
         };
+        // R5 (ERND v2): the itinerary's opcodes. A later round APPENDS a stop kind (fence, spouse, smith, temple, inn, home).
+        using ErrStopKind  = Logistics::Errand::SavedStopKind;
+        using ErrStopState = Logistics::Errand::SavedStopState;
+        constexpr std::pair<ErrStopKind, const char*> kErrStopKindOps[] = { { ErrStopKind::Shop, "shop" } };
+        constexpr std::pair<ErrStopState, const char*> kErrStopStateOps[] = {
+            { ErrStopState::Pending, "pending" }, { ErrStopState::Active, "active" },
+            { ErrStopState::Done, "done" },       { ErrStopState::Skipped, "skipped" },
+        };
+        constexpr std::size_t kMaxErrandStops = Logistics::Errand::kMaxTripStopsOnWire;   // #11
         template <class E, std::size_t N>
         const char* OpOf(const std::pair<E, const char*> (&a_tab)[N], E a_v) {
             for (const auto& [v, op] : a_tab) if (v == a_v) return op;
@@ -148,6 +157,32 @@ namespace MFO {
                      a_intfc->WriteRecordData(e.lastPos.z) && a_intfc->WriteRecordData(e.startDays) &&
                      a_intfc->WriteRecordData(e.tEnter) && a_intfc->WriteRecordData(e.tArrive) &&
                      a_intfc->WriteRecordData(e.tTradeEnd) && a_intfc->WriteRecordData(e.tReturn);
+                // v2 (R5): the itinerary, APPENDED to the v1 entry. Always >= 1 stop (an entry built without one writes its head).
+                std::vector<Logistics::Errand::SavedStop> stops(e.stops.begin(),
+                                                                e.stops.begin() + static_cast<std::ptrdiff_t>(std::min(e.stops.size(), kMaxErrandStops)));
+                std::uint8_t cur = e.cur;
+                if (stops.empty()) {
+                    Logistics::Errand::SavedStop h;
+                    h.faction = e.faction; h.chest = e.chest; h.vendorActor = e.vendorActor; h.destKind = e.destKind;
+                    h.destForm = e.destForm; h.destRad = e.destRad; h.state = ErrStopState::Active;
+                    h.tArrive = e.tArrive; h.tWorkEnd = e.tTradeEnd;
+                    stops.push_back(h);
+                    cur = 0;
+                }
+                if (cur >= stops.size()) cur = static_cast<std::uint8_t>(stops.size() - 1);
+                ok = ok && a_intfc->WriteRecordData(static_cast<std::uint8_t>(stops.size()));
+                for (const auto& st : stops) {
+                    const char* kindOp  = OpOf(kErrStopKindOps, st.kind);
+                    const char* sdOp    = OpOf(kErrDestOps, st.destKind);
+                    const char* stateOp = OpOf(kErrStopStateOps, st.state);
+                    ok = ok && WriteString(a_intfc, kindOp ? kindOp : "") &&
+                         a_intfc->WriteRecordData(PersistId(st.faction)) && a_intfc->WriteRecordData(PersistId(st.chest)) &&
+                         a_intfc->WriteRecordData(PersistId(st.vendorActor)) && WriteString(a_intfc, sdOp ? sdOp : "") &&
+                         a_intfc->WriteRecordData(PersistId(st.destForm)) && a_intfc->WriteRecordData(st.destRad) &&
+                         WriteString(a_intfc, stateOp ? stateOp : "") &&
+                         a_intfc->WriteRecordData(st.tArrive) && a_intfc->WriteRecordData(st.tWorkEnd);
+                }
+                ok = ok && a_intfc->WriteRecordData(cur);
             }
             if (!ok)
                 spdlog::error("[cosave] a write into 'ERND' failed -- the errand record is INCOMPLETE (the load aborts it at the short read)");
@@ -157,7 +192,7 @@ namespace MFO {
 
         // 'ERND' body (after the version guard). A short read / implausible count / bad opcode string aborts THIS record
         // (what was parsed is still staged); an entry it cannot honestly map is DROPPED with a line (#13).
-        void ReadErrandRecord(SKSE::SerializationInterface* a_intfc, std::uint32_t /*a_version: v1 is the only one*/) {
+        void ReadErrandRecord(SKSE::SerializationInterface* a_intfc, std::uint32_t a_version) {
             using Logistics::Errand::Saved;
             // A read counts only when it delivered every byte (a partial read is a short read, #11).
             auto rd = [&](auto& a_v) { return a_intfc->ReadRecordData(a_v) == sizeof(a_v); };
@@ -172,6 +207,7 @@ namespace MFO {
             }
             std::vector<Saved> staged;
             std::uint32_t droppedFollower = 0, droppedOpcode = 0, unresolvedRef = 0, shopGone = 0, clockReset = 0;
+            std::uint32_t stopsSkipped = 0, droppedTrip = 0;   // R5 (v2)
             auto resolve = [&](RE::FormID a_raw, RE::FormID& a_out) -> bool {   // 0 stays 0; unresolvable -> 0
                 a_out = 0;
                 if (a_raw == 0) return true;
@@ -198,6 +234,38 @@ namespace MFO {
                 if (!ok) {
                     spdlog::error("[cosave] short read in ERND at errand {}/{} -- ABORTING (staged {} so far)", i, count, staged.size());
                     break;
+                }
+                // v2 (R5): the itinerary tail. Read IN FULL before any per-entry drop below, so the stream stays aligned.
+                struct RawStop {
+                    std::string kindOp, destOp, stateOp;
+                    RE::FormID  fac = 0, chest = 0, vendor = 0, dest = 0;
+                    float       rad = 0.0f;
+                    double      tArrive = 0.0, tWorkEnd = 0.0;
+                };
+                std::vector<RawStop> rawStops;
+                std::uint8_t rawCur = 0;
+                if (a_version >= 2) {
+                    std::uint8_t n = 0;
+                    if (!rd(n)) {
+                        spdlog::error("[cosave] short read on the ERND v2 stop count at errand {}/{} -- ABORTING (staged {} so far)", i, count, staged.size());
+                        break;
+                    }
+                    if (n == 0 || n > kMaxErrandStops) {   // #11: the writer always writes 1..8
+                        spdlog::error("[cosave] implausible ERND v2 stop count {} at errand {}/{} -- ABORTING (staged {} so far)", static_cast<int>(n), i, count, staged.size());
+                        break;
+                    }
+                    bool sok = true;
+                    for (std::uint8_t k = 0; k < n && sok; ++k) {
+                        RawStop rs;
+                        sok = ReadString(a_intfc, rs.kindOp) && rd(rs.fac) && rd(rs.chest) && rd(rs.vendor) &&
+                              ReadString(a_intfc, rs.destOp) && rd(rs.dest) && rd(rs.rad) && ReadString(a_intfc, rs.stateOp) &&
+                              rd(rs.tArrive) && rd(rs.tWorkEnd);
+                        if (sok) rawStops.push_back(std::move(rs));
+                    }
+                    if (!sok || !rd(rawCur)) {
+                        spdlog::error("[cosave] short read in the ERND v2 itinerary at errand {}/{} -- ABORTING (staged {} so far)", i, count, staged.size());
+                        break;
+                    }
                 }
                 if (!a_intfc->ResolveFormID(rawFollower, e.follower) || e.follower == 0) {   // #8
                     ++droppedFollower;
@@ -241,13 +309,62 @@ namespace MFO {
                     e.tTradeEnd = std::max(e.tTradeEnd, e.tArrive);
                     e.tReturn = std::max(e.tReturn, e.tTradeEnd);
                 }
+                // The itinerary. v1: ONE stop, the entry's own shop (cur 0, Active). v2: the saved stops; stops[cur] is the entry's head
+                // (the adoption writes the resolved head fields over it). A stop that cannot be honestly mapped -- unknown opcode, its
+                // shop gone -- is SKIPPED (#13: never acted on, logged); the CURRENT stop's opcodes unknown drops the entry.
+                if (a_version < 2) {
+                    Logistics::Errand::SavedStop h;
+                    h.faction = e.faction; h.chest = e.chest; h.vendorActor = e.vendorActor; h.destKind = e.destKind;
+                    h.destForm = e.destForm; h.destRad = e.destRad; h.state = ErrStopState::Active;
+                    h.tArrive = e.tArrive; h.tWorkEnd = e.tTradeEnd;
+                    e.stops.push_back(h);
+                    e.cur = 0;
+                } else {
+                    if (rawCur >= rawStops.size()) {
+                        ++droppedTrip;
+                        spdlog::warn("[cosave] ERND: errand of {:08X} DROPPED -- its current stop {} is outside its {} stop(s)", e.follower,
+                                     static_cast<int>(rawCur), rawStops.size());
+                        continue;
+                    }
+                    bool curBad = false;
+                    for (std::size_t k = 0; k < rawStops.size(); ++k) {
+                        const auto& rs = rawStops[k];
+                        Logistics::Errand::SavedStop st;
+                        const bool opsOk = FromOp(kErrStopKindOps, rs.kindOp, st.kind) && FromOp(kErrDestOps, rs.destOp, st.destKind) &&
+                                           FromOp(kErrStopStateOps, rs.stateOp, st.state);
+                        if (!opsOk && k == rawCur) { curBad = true; break; }
+                        const bool facOk2 = resolve(rs.fac, st.faction) && st.faction != 0;
+                        const bool chestOk2 = resolve(rs.chest, st.chest) && st.chest != 0;
+                        resolve(rs.vendor, st.vendorActor);
+                        resolve(rs.dest, st.destForm);
+                        st.destRad = std::isfinite(rs.rad) ? std::clamp(rs.rad, 0.0f, 4096.0f) : 0.0f;
+                        st.tArrive = std::isfinite(rs.tArrive) && rs.tArrive >= 0.0 ? rs.tArrive : 0.0;
+                        st.tWorkEnd = std::isfinite(rs.tWorkEnd) && rs.tWorkEnd >= 0.0 ? std::max(rs.tWorkEnd, st.tArrive) : st.tArrive;
+                        if (k != rawCur && (!opsOk || ((!facOk2 || !chestOk2) && st.state == ErrStopState::Pending))) {
+                            if (!opsOk) { st.kind = ErrStopKind::Shop; st.destKind = ErrDest::Cell; }
+                            st.state = ErrStopState::Skipped;
+                            ++stopsSkipped;
+                            spdlog::info("[cosave] ERND: stop {} of {:08X}'s trip SKIPPED -- {}", k + 1, e.follower,
+                                         !opsOk ? std::format("unknown kind '{}' / destination '{}' / state '{}'", rs.kindOp, rs.destOp, rs.stateOp)
+                                                : std::string("its shop (faction / chest) does not resolve"));
+                        }
+                        e.stops.push_back(st);
+                    }
+                    if (curBad) {
+                        ++droppedOpcode;
+                        spdlog::warn("[cosave] ERND: errand of {:08X} DROPPED -- unknown opcode in its current stop", e.follower);
+                        continue;
+                    }
+                    e.cur = rawCur;
+                }
                 staged.push_back(e);
             }
             const auto n = staged.size();
             Logistics::Errand::RestoreFromSave(std::move(staged));
-            spdlog::info("[cosave] loaded {} town errand(s) (staged until the world is up); dropped {} unresolvable follower(s), {} "
-                         "unknown opcode(s); {} unresolvable reference(s) zeroed, {} shop(s) gone (trade given up), {} clock(s) reset",
-                         n, droppedFollower, droppedOpcode, unresolvedRef, shopGone, clockReset);
+            spdlog::info("[cosave] loaded {} town errand(s) from schema v{} (staged until the world is up); dropped {} unresolvable follower(s), {} "
+                         "unknown opcode(s), {} bad current stop(s); {} unresolvable reference(s) zeroed, {} shop(s) gone (trade given up), {} "
+                         "clock(s) reset, {} later stop(s) skipped", n, a_version, droppedFollower, droppedOpcode, droppedTrip, unresolvedRef,
+                         shopGone, clockReset, stopsSkipped);
         }
     }
 
@@ -839,6 +956,10 @@ namespace MFO {
                                   "skipped; it WILL BE DESTROYED if this DLL saves over this file.",
                                   version, kErrandVersion);
                     g_sawNewerSave.store(true);
+                    continue;
+                }
+                if (version < 1) {   // MFO-B309: no shipped writer produced v0; never parse it as v1 (#11)
+                    spdlog::error("[cosave] ERND record with version {} (no such schema) -- skipped, nothing staged", version);
                     continue;
                 }
                 ReadErrandRecord(a_intfc, version);
