@@ -2045,3 +2045,18 @@ Same review. Verbatim (log): "MFO doesn't check Harbinger has the torch seat -- 
 
 ### MFO-B390 (SEV-4, OPEN, logistics/Service.cpp early returns) -- torch: a standing declaration outlives a lap with no build outside combat (raised against 68f3841)
 Same review (minor strands of finding A): bLogistics toggled off at runtime, `CannotActReason` (bleedout), and the Scheduler's retreat / EngageOnSight returns all skip `ServiceFollower`'s declaration tail, so a torch declaration built earlier stands until the next build or the first combat lap (`TorchDeclarationDue` ends it there). Not pushed outside combat. MAP: EquipTorch entry.
+
+### MFO-B391 (SEV-4, OPEN, logistics/Upkeep.cpp TorchSeatedReason) -- torch: furnitureIdle check gated to 1.6.1170 only (raised against 7fff38a)
+Closing review of feat/mfo-torch-ch17: "widen the furnitureIdle gate to 1.5.97 (proven above) and to 1.7.104 (on H1's instruction-identical note)". Reviewer disassembled SE 38902 @0x1406801d0: `cmp qword [rax+0x228],0; jne <stow>` same as 1.6.1170. The 1.6-only gate is a safe floor (the other three seated signals still apply).
+
+### MFO-B392 (SEV-4, OPEN, logistics/Upkeep.cpp TorchRuleHolds) -- torch: rules above the torch rule no longer suppress it (raised against 7fff38a)
+"TorchRuleHolds ignores the rules above the torch rule. A higher Wait rule ('stops all gambits below it') no longer suppresses the torch. Before this change the torch's action had to be reached in the scan."
+
+### MFO-B393 (SEV-4, OPEN, logistics/Upkeep.cpp TorchDeclaredFor) -- torch: an OOC substrate cast reads as combat (raised against 7fff38a)
+"IsInCombat() is true while an S3 substrate cast runs (APMFBridge::InCombat deliberately excludes the substrate). With bSubstrateCasts=1, every out-of-combat substrate cast gives a STOPPED/STARTED pair and a re-send." Use the substrate-aware combat test.
+
+### MFO-B394 (SEV-4, OPEN, cast/Equip.cpp ReconcileForcedWeapon) -- torch: Due re-send repeats while RefreshEquipDeclaration early-returns (raised against 7fff38a)
+"Due stays true while RefreshEquipDeclaration returns early before 1d (reapply pending, 3D absent, refused, unsupported). The result is a DeclareFromLedger on every in-combat lap until it clears." Cheap; bounded only by the early-return state clearing.
+
+### MFO-B395 (SEV-5, OPEN, logistics/Upkeep.cpp TorchRuleHolds) -- torch: full-table Evaluate per build (raised against 7fff38a)
+"When the torch rule fails, Evaluate keeps scanning the rest of the table on every build. Checking just the one rule would be cheaper."
