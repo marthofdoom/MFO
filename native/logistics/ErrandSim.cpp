@@ -745,7 +745,13 @@ namespace MFO::Logistics::Errand::Sim {
             }
             if (paused) continue;   // a load screen / no player: nothing moves, nothing decides (the game clock is the only clock)
 
-            if (f->Is3DLoaded()) {   // loaded again: Errand::Tick -> OnLoadedTick resumes him when he is serviced; bounded here
+            // F1 (field run 2): a follower who is loaded but merely OFF THE ACTIVE ROSTER (a transient drop; eligible) is AWAY, not "never
+            // serviced": he gets the unloaded handling below (the resolutions, the timeline) and the claim that holds him stays. A dismissed
+            // one (not eligible) keeps the bounded drop.
+            const auto activeNow = Followers::ActiveSnapshot();
+            const bool awayOffRoster = f->Is3DLoaded() && Followers::IsEligibleFollower(f) && activeNow &&
+                                       std::find(activeNow->begin(), activeNow->end(), fid) == activeNow->end();
+            if (f->Is3DLoaded() && !awayOffRoster) {   // loaded again: Errand::Tick -> OnLoadedTick resumes him when he is serviced; bounded here
                 if (r.loadedSince.time_since_epoch().count() == 0) { r.loadedSince = now; Store(r); }
                 else if (now - r.loadedSince > kLoadedUnserviced) Drop(fid, "loaded again but never serviced", kFailCooldownSec, false);
                 continue;
@@ -810,7 +816,7 @@ namespace MFO::Logistics::Errand::Sim {
             if (pc->IsInCombat()) {   // he walks out of the shop and joins the fight
                 ResolveNow(r, f, days, "player combat");
                 PlaceReturn(r, f, "the player is in combat -- he walks out and joins");
-                if (Config::g_errandInn.load() && CurKind(r) == StopKind::Inn && r.stage == Stage::Rest) Rest::MarkTripDone(fid, r.town, "REST_SIM ended by player combat");   // R7 review: one trip per visit, off screen too; ONLY the stay (REST_SIM): combat during the OUT_SIM walk to the inn sends him back after the fight (marth)
+                // F2 (marth 2026-10-20: ONE TRIP AT A TIME): combat ends the stay but NOT the visit -- no trip-done mark; Rest::NoteCombat clears the marks on the combat-end edge and a FRESH plan runs.
                 Drop(fid, "player combat -- he joins", kCombatCooldownSec, false);
                 continue;
             }

@@ -159,6 +159,7 @@ namespace MFO::Logistics::Errand::Rest {
         std::unordered_set<RE::FormID>                   g_lockLogged;  // load doors whose LOCK was already logged (one skip line per door per town visit)
         std::unordered_set<RE::FormID>                   g_magicWaitLogged; // ... for whom "waiting for the blessing/disease read" was logged this visit
         RE::FormID                                       g_marksTown = 0;
+        bool                                             g_wasCombat = false;   // F2: the last player-combat state NoteCombat saw (the combat-end edge clears the marks)
         struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0, cell = 0; };   // cell: the interior cell of the faction's PLVD place (0 = unknown)
         std::unordered_map<RE::FormID, std::vector<InnFac>> g_innFacs;  // town -> the innkeeper factions (immutable once built)
 
@@ -837,6 +838,16 @@ namespace MFO::Logistics::Errand::Rest {
         g_magicWaitLogged.clear();
         g_magicDefers.clear();
     }
+    void NoteCombat(bool a_inCombat) {
+        std::scoped_lock lk(g_mx);
+        const bool was = g_wasCombat;
+        g_wasCombat = a_inCombat;
+        if (!was || a_inCombat) return;
+        if (!g_tripDone.empty())
+            spdlog::info("[errand] combat in town ended: {} follower(s)' trip-done mark(s) cleared -- a FRESH plan (current needs, inn last) runs after the combat cooldown", g_tripDone.size());
+        g_tripDone.clear();
+        g_tripLogged.clear();
+    }
     bool MagicReadPending(RE::Actor* a_follower) {
         if (!a_follower || !Config::g_errandInn.load()) return false;
         const auto fid = a_follower->GetFormID();
@@ -946,7 +957,7 @@ namespace MFO::Logistics::Errand::Rest {
         return out;
     }
 
-    void End(RE::FormID a_follower, const char* a_why, bool a_tripOver) {
+    void End(RE::FormID a_follower, const char* a_why, bool a_tripOver, bool a_byCombat) {
         Work w;
         {
             std::scoped_lock lk(g_mx);
@@ -965,7 +976,9 @@ namespace MFO::Logistics::Errand::Rest {
                          a_tripOver ? "the trip is over" : "handed to the simulation", w.mealsEaten);
         else
             spdlog::info("[errand] {:08X} '{}': TEMPLE VISIT ENDS at '{}' after {} s -- {}", a_follower, w.followerName, w.name, secs, a_why);
-        if (a_tripOver && w.kind == StopKind::Inn) MarkTripDone(a_follower, w.town, "the inn stay ended");
+        // F2 (marth 2026-10-20: ONE TRIP AT A TIME): a stay that combat ended is NOT a finished visit -- NoteCombat clears the marks when the fight is over
+        // and a FRESH plan (current needs, inn last) runs. Every other end of the stay still marks the visit done.
+        if (a_tripOver && w.kind == StopKind::Inn && !a_byCombat) MarkTripDone(a_follower, w.town, "the inn stay ended");
     }
 
     void ClearTransientState() {
@@ -980,6 +993,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_magicDefers.clear();
         g_innFacs.clear();
         g_marksTown = 0;
+        g_wasCombat = false;
     }
 
     bool Working(RE::FormID a_follower) {

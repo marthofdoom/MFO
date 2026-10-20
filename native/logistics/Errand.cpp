@@ -544,7 +544,7 @@ namespace MFO::Logistics::Errand {
                 if (a_complete) g_backoff.erase(BackoffKey(a_fid, r.chest));   // a successful DONE at this target forgives it
             }
             if (r.phase == Phase::Smithing) Smith::End(a_fid, a_why);   // R8: the work claim + the work record
-            if (r.phase == Phase::Resting) Rest::End(a_fid, a_why, true);   // R7: the stay's release reason is logged; the trip is done for this visit
+            if (r.phase == Phase::Resting) Rest::End(a_fid, a_why, true, a_cooldownSec == kCombatCooldownSec);   // R7: the stay's release reason is logged; the trip is done for this visit
             else if (Config::g_errandInn.load() && a_cooldownSec != kCombatCooldownSec) {
                 // R7 review: an INN-ONLY trip that ends for any reason but combat (blocked / stuck / dest gone / the caps), or a trip whose
                 // INN stop ended Skipped, is done for this visit: the inn stop has no faction / chest, so no park or backoff stops a re-plan
@@ -980,6 +980,7 @@ namespace MFO::Logistics::Errand {
         Clock::time_point townSince{};
         const RE::FormID tidNow = playerTown ? playerTown->GetFormID() : 0u;
         Rest::NoteTown(tidNow);   // R7: the player's town changed (or he left town) -> every "trip done" mark is cleared (before any early return below)
+        Rest::NoteCombat(pc->IsInCombat());   // F2: the combat-end edge clears the marks (a FRESH plan runs after the combat cooldown); before any early return below
         {
             std::scoped_lock lk(g_mx);
             const RE::FormID tid = playerTown ? playerTown->GetFormID() : 0u;
@@ -1613,11 +1614,24 @@ namespace MFO::Logistics::Errand {
                     else if (now - r.unloadedSince >= kHandoffPoll) handoffs.push_back(fid);   // unloaded for one more poll: not a 3D hiccup
                 }
                 else {
-                    r.unloadedSince = {};
+                    // F1 (field run 2, the inn stay): a follower who is merely OFF THE ROSTER (a transient drop of the active list while
+                    // he is loaded, Followers.cpp) is AWAY, not gone: eligibility read from the actor is the dismissal test (the same rule
+                    // as the unloaded branch above). Away = the hand-off to the simulation after kHandoffPoll, the claim kept; he is not
+                    // serviced, so the stall check below must not read his stale lastTickClk.
+                    const bool offRoster = ids && std::find(ids->begin(), ids->end(), fid) == ids->end();
+                    if (!offRoster) r.unloadedSince = {};
                     r.lastPos = f->GetPosition();   // sampled every lap: the simulation starts from the last LOADED position
                     if (auto* fc = f->GetParentCell()) r.lastCell = fc->GetFormID();
                     if (APMFBridge::InCombat(f) || (pc && pc->IsInCombat())) why = "combat -- he rejoins";   // substrate: not combat (v26)
-                    else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end()) why = "no longer an active follower";
+                    else if (offRoster) {
+                        if (!Followers::IsEligibleFollower(f)) why = "no longer a follower (dismissed)";
+                        else if (loading || !pc || !pc->Is3DLoaded()) continue;
+                        else if (r.unloadedSince.time_since_epoch().count() == 0) {
+                            r.unloadedSince = now;
+                            spdlog::info("[errand] {:08X}: off the active roster while loaded -- treated as away (not a dismissal); handed to the simulation if it lasts", fid);
+                        }
+                        else if (now - r.unloadedSince >= kHandoffPoll) handoffs.push_back(fid);
+                    }
                     else if (clk - r.lastTickClk > kStallSec) why = "the follower is no longer serviced";
                     else if (clk - r.startClk > kRealCapSec &&
                              !(r.phase == Phase::Resting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn))   // R7: an inn stay has no cap

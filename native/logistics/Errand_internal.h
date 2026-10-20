@@ -193,6 +193,10 @@ namespace MFO::Logistics::Errand {
         // ONE TRIP PER TOWN VISIT (marth 2026-10-19): once a follower's trip ends no new errand is planned for him until the player
         // leaves the town. Session-only; NoteTown clears every mark when the player's town changes (TryStart calls it on every tick).
         void NoteTown(RE::FormID a_townId);
+        // F2 (marth 2026-10-20: ONE TRIP AT A TIME): the planner reports the player's combat state on every tick (before any early return). On the
+        // combat -> no-combat edge every trip-done mark is cleared (session-only, never saved), so a FRESH plan from the current needs (inn last)
+        // runs once the existing combat cooldown has passed. A combat end does not set the mark itself (End a_byCombat; the sim no longer marks).
+        void NoteCombat(bool a_inCombat);
         // The blessing / disease READ (a main-thread mirror, MagicView): TRUE = this LOADED follower's mirror is missing or older than 30 s,
         // so the plan must WAIT (the probe is posted here; TryStart returns and re-plans on the next cadence, like R6's Pending). Without it
         // an inn-only trip planned before the read lands would skip the temple for the whole visit (one trip per visit). Logged once per
@@ -212,7 +216,8 @@ namespace MFO::Logistics::Errand {
         StepOut Step(RE::Actor* a_follower, std::chrono::steady_clock::time_point a_now);
         // The errand ends / the stop ends: release the work claim and forget it. a_why is logged (the release reason of an inn stay).
         // a_tripOver: the stay / visit really ended (marks the trip done for this town visit); false = handed to the simulation.
-        void End(RE::FormID a_follower, const char* a_why, bool a_tripOver);
+        // a_byCombat (F2): combat ended it -- the visit is NOT marked done (NoteCombat's combat-end edge lets a fresh plan run).
+        void End(RE::FormID a_follower, const char* a_why, bool a_tripOver, bool a_byCombat = false);
         void ClearTransientState();   // revert / load (pump drained): every ledger, mark and work
         bool Working(RE::FormID a_follower);
         // The Board text: "Resting at X" / "Praying at X" ("" = no work).
