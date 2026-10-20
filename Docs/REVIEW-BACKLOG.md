@@ -2111,3 +2111,30 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 
 ### MFO-B421 (SEV-5, OPEN, progression PerkPoolsOf) -- progression: disabling the craft stream on a save that used it leaves the follower "ahead" (raised against 708c244)
 "Moving the slider 4 -> 0 on a save that used craft points drops general to 0 (clamped); nothing is stripped." Reviewer: by design, informational.
+### MFO-B409 (SEV-4, OPEN, logistics/ErrandReopen.cpp Poll) -- town: the re-plan uses ORDERS recorded at the last plan, which can be stale (raised against feat/mfo-town-run2)
+"The recorded order of an hours-closed shop was built when the trip was planned. Its sell rows list items the earlier stops may since have sold, and its purse is the plan-time purse. On screen the execute re-reads live counts for the stop's share, so only the partition is stale; the off-screen replay (TRADE_SIM) sends the stored rows as they were. The empty-trade memo (SkipTrade) is also read at plan time. Accepted by the ruling 'decide from the needs recorded at the last plan and replay that order'; a refresh on the next loaded tick would remove it."
+
+### MFO-B410 (SEV-5, OPEN, logistics/ErrandReopen.cpp Poll) -- town: the hour gate reads at game-hour boundaries, so a shop opening mid-hour is seen up to an hour late (raised against feat/mfo-town-run2)
+"Poll compares floor(days*24) with the last read, so the first read after a record is the next whole game hour and a shop whose start hour is not an integer (VENV hours are integers) is unaffected, but a record made at 8:59 reads again at 9:00 and a record made at 9:01 not until 10:00. The ruling says at most once per game hour, so this is within it."
+
+### MFO-B411 (SEV-4, OPEN, logistics/ErrandRest.cpp PostTempleDoorRead) -- town: the temple door read needs the player OUTDOORS (raised against feat/mfo-town-run2)
+"TES::ForEachReference walks only the player's interior cell when the player is indoors, so the read reports 'indoors' and the planner defers (capped at kMagicMaxDefers, then plans without the temple). A follower who wants the temple while the player stays inside a building plans no temple until the player steps out. The inn is unaffected (its door is read from the follower's own cell)."
+
+### MFO-B412 (SEV-5, OPEN, logistics/ErrandSim.cpp Sweep) -- town: an off-roster loaded follower in a non-REST sim stage is simulated while loaded (raised against feat/mfo-town-run2)
+"The awayOffRoster fall-through lets a loaded, eligible, off-roster record run the whole timeline (OUT_SIM, TRADE_SIM, RET_SIM, PlaceReturn MoveTo) while his 3D is up. The roster drop it targets is a few seconds long; a follower that stays off the roster for a whole stage is not distinguished from one that is away."
+
+### MFO-B413 (SEV-5, OPEN, logistics/ErrandRest.cpp FindPlaces) -- town: the inn has no separate hours gate (raised against feat/mfo-town-run2)
+"The inn and the temple are gated only by their load door's lock (a night-locked door reads locked at that hour). There is no VENV-style opening-hours test; a place that is unlocked but 'closed' by script is walked to. The spec for F4 asked to apply 'the inn's LOCKED + hours gate': the inn has the lock gate only, which is what the temple now gets."
+
+
+### MFO-B414 (SEV-5, FIXED in the comment, logistics/ErrandRest.cpp:29) -- town: stale "leaf lock" comment (raised against 8aae97b)
+"leaf comment" (Opus review of feat/mfo-town-run2): the file header called g_mx a LEAF never nested, but Rest::NoteTown holds it while calling Reopen::ClearAll. The header comment now states the real order (Rest g_mx -> Reopen g_mx, never reversed).
+
+### MFO-B415 (SEV-5, OPEN, logistics/Errand.cpp BuildCatalog / ErrandReopen.cpp) -- town: a vendor whose quote is still pending (refreshPending) drops out of the watch with a misleading reason (raised against 8aae97b)
+"quote-pending closed shop" (Opus review of feat/mfo-town-run2): a closed shop whose plan-time quote/order was not ready leaves the watch with the 'yield NO stop' reason instead of being re-recorded.
+
+### MFO-B416 (SEV-5, OPEN, logistics/ErrandRest.cpp Augment) -- town: g_doorLogged is consumed by the first verdict so the success door line may never log (raised against 8aae97b)
+"door log" (Opus review of feat/mfo-town-run2): the once-per-visit g_doorLogged flag is eaten by an earlier 'could not be read' verdict, so the later 'entry door found' line never logs.
+
+### MFO-B417 (SEV-5, OPEN, logistics/ErrandReopen.cpp Poll) -- town: a reopened trip re-adds an inn stop that was Skipped in the first trip (raised against 8aae97b)
+"skipped inn re-appended" (Opus review of feat/mfo-town-run2): the recorded inn stop is appended to every reopened trip even when the first trip's inn stop ended Skipped (locked door / failure).

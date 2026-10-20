@@ -64,6 +64,7 @@ namespace MFO::Logistics::Errand::Sim {
         constexpr double kDispatchTryClkSec = 20.0;    // a busy chest: retry this long (service-clock seconds), then give the trade up
         constexpr double kTradeWaitClkSec   = 45.0;    // dispatch -> ReportTrade
         constexpr float  kRejoinFarU       = 4096.0f;
+        constexpr double kClockJumpDays    = 0.0625;   // F5: a game-clock advance of this much (1.5 game hours) inside ONE 1 s poll is not play time: fast travel / a wait / sleep
         constexpr float  kFailCooldownSec  = 45.0f;
         constexpr float  kCombatCooldownSec = 30.0f;
         // R2: a restored follower gets this long (real seconds, the world running) to show up LOADED before an unrun trade is
@@ -102,6 +103,8 @@ namespace MFO::Logistics::Errand::Sim {
             bool          dispatched = false, reported = false, tradeAbandoned = false;
             double        dispatchedClk = 0.0, firstTryClk = -1.0;
             Clock::time_point nextPoll{}, nextPosLog{}, rejoinAt{}, townLostSince{}, loadedSince{};
+            Clock::time_point enteredAt{};   // F5: when the record went off screen (the world-transition read in OnLoadedTick)
+            double        lastDays = 0.0;    // F5: the game clock at the previous poll (0 = none yet): a teleport-sized jump is read from it
             // the passive drift line
             RE::NiPoint3  posAtEnter{};
             RE::FormID    cellAtEnter = 0;
@@ -226,6 +229,41 @@ namespace MFO::Logistics::Errand::Sim {
             return true;
         }
 
+        // F3 (marth 2026-10-20: ONE TRIP AT A TIME): a watched shop opened while he rests at the inn off screen (REST_SIM). The stay ends WITHOUT a trip mark and a
+        // NEW trip starts from the RECORDED plan (ErrandReopen.cpp Poll: the needs recorded at the last plan, no unloaded inventory read; the stored orders are
+        // replayed as the sim always does): the opened shops OUT_SIM, the inn LAST. The hold moves with the first new stop (MoveHold); the walk back is the
+        // first new stop's place to his last loaded position.
+        void Retrip(SimRec& r, Reopen::Plan& a_plan, double a_days) {
+            SyncCur(r);
+            const Stop prev = r.stops[r.cur];   // the inn stop he leaves
+            r.stops = std::move(a_plan.stops);
+            r.cur = 0;
+            auto& s = r.stops[0];
+            s.state = StopState::Active;
+            r.faction = s.faction; r.chest = s.chest; r.vendorActor = s.vendorActor; r.vendorName = s.vendorName;
+            r.destKind = s.destKind; r.destForm = s.destForm; r.destRad = s.destRad;
+            r.order = s.order;
+            r.dispatched = r.reported = r.tradeAbandoned = false;
+            r.hadOrder = true;
+            r.firstTryClk = -1.0;
+            r.tripPurse = -1; r.tripSpent = 0;
+            for (const auto& st : r.stops) if (st.order) { r.tripPurse = st.order->purse; break; }
+            r.startDays = static_cast<float>(a_days);
+            const double leg = WalkDays(Trip::LegUnits(prev, s));
+            RE::NiPoint3 np;
+            const double back = WalkDays(Trip::PlacePos(s, np) ? static_cast<double>(np.GetDistance(r.lastPos)) : kUnknownBackUnits);
+            r.tEnter = a_days;
+            r.tArrive = a_days + leg;
+            r.tTradeEnd = r.tArrive + WorkDays(r.stops, r.cur);
+            r.tReturn = r.tTradeEnd + back;
+            s.tArrive = r.tArrive; s.tWorkEnd = r.tTradeEnd;
+            r.entryDoor = 0;
+            r.stage = Stage::Out;
+            MoveHold(r);
+            spdlog::info("[errand] {:08X} '{}': REST_SIM ended -- a needed shop opened (NO trip mark); new trip of {} stop(s), OUT_SIM to {}: walk {:.1f} game min, trade ends +{:.1f}, back +{:.1f} game min | {}",
+                         r.follower, r.followerName, r.stops.size(), Trip::Label(r.stops, r.cur), leg * 1440.0, (r.tTradeEnd - a_days) * 1440.0, (r.tReturn - a_days) * 1440.0, a_plan.line);
+        }
+
         // R5: a restored trip whose current trade is DROPPED drops every later stop with it (none has an order).
         void SkipRemaining(SimRec& r) {
             for (std::size_t i = r.cur + 1; i < r.stops.size(); ++i)
@@ -299,6 +337,10 @@ namespace MFO::Logistics::Errand::Sim {
                 if (!DispatchTrade(r, f))
                     spdlog::warn("[errand] {:08X}: the trade could NOT be replayed while resolving ({}): the chest holds another order, the "
                                  "bridge is down or the order is gone -- the errand ends without it", r.follower, a_why);
+            } else if (!r.order || r.order->skipped) {
+                // F5: a stop with no shop order (the temple, the smithy, an inn without food): there was never a trade to replay.
+                spdlog::info("[errand] {:08X}: resolving to now ({}) -- this stop has no order (temple / smithy / inn without a food order): nothing to replay",
+                             r.follower, a_why);
             } else {
                 spdlog::info("[errand] {:08X}: resolving to now ({}) -- he had not arrived: the trade is dropped", r.follower, a_why);
             }
@@ -419,6 +461,8 @@ namespace MFO::Logistics::Errand::Sim {
         if (r.reported && CurKind(r) == StopKind::Inn) { r.stage = Stage::Rest; r.tReturn = r.tTradeEnd; }   // R7: an inn stay stays (no walk back)
         r.nextPoll = Clock::now() + kPollEvery;
         r.nextPosLog = Clock::now() + kPosLogEvery;
+        r.enteredAt = Clock::now();
+        r.lastDays = now;
         r.posAtEnter = f->GetPosition();
         if (auto* fc = f->GetParentCell()) r.cellAtEnter = fc->GetFormID();
         r.posKnown = true;
@@ -468,8 +512,18 @@ namespace MFO::Logistics::Errand::Sim {
         // The simulation says he is IN a cell stop's cell (TRADE_SIM / REST_SIM); loaded, he is somewhere else: the off-screen hold did not take him
         // there (whether an unloaded actor walks between cells under the travel package is unproven). Loud, evidence only: no retry, no placement.
         if ((r.stage == Stage::Trade || r.stage == Stage::Rest) && r.destKind == DestKind::Cell && r.destForm && nowCell && nowCell->GetFormID() != r.destForm)
-            spdlog::warn("[errand] {:08X} '{}': the simulation had him AT cell {:08X} ('{}', {}) but he loaded in cell {:08X} -- the off-screen hold did not take him there",
-                         fid, r.followerName, r.destForm, r.vendorName, StageName(r.stage), nowCell->GetFormID());
+        {
+            // F5: a world transition of the player (a load, fast travel or teleport) since the hand-off explains it: the engine brought the follower along.
+            const float sinceT = Followers::SecondsSinceTransition();
+            const bool playerMoved = sinceT >= 0.0f && r.enteredAt.time_since_epoch().count() != 0 &&
+                                     sinceT <= std::chrono::duration<float>(Clock::now() - r.enteredAt).count();
+            if (playerMoved)
+                spdlog::warn("[errand] {:08X} '{}': the simulation had him AT cell {:08X} ('{}', {}) but he loaded in cell {:08X} -- the player made a world transition ({:.0f} s ago: a teleport / fast travel / load) after the hand-off; the engine brought him along",
+                             fid, r.followerName, r.destForm, r.vendorName, StageName(r.stage), nowCell->GetFormID(), sinceT);
+            else
+                spdlog::warn("[errand] {:08X} '{}': the simulation had him AT cell {:08X} ('{}', {}) but he loaded in cell {:08X} -- the off-screen hold did not take him there",
+                             fid, r.followerName, r.destForm, r.vendorName, StageName(r.stage), nowCell->GetFormID());
+        }
         // R2: a restored record has no order; it resumes on screen when it HAD one (the physical give beat re-plans the trade from
         // his live inventory), unless the unloaded restore decision already dropped the trade (tradeAbandoned).
         const bool tradeLeft = r.order ? !r.order->skipped : (r.restored && r.hadOrder);
@@ -745,7 +799,13 @@ namespace MFO::Logistics::Errand::Sim {
             }
             if (paused) continue;   // a load screen / no player: nothing moves, nothing decides (the game clock is the only clock)
 
-            if (f->Is3DLoaded()) {   // loaded again: Errand::Tick -> OnLoadedTick resumes him when he is serviced; bounded here
+            // F1 (field run 2): a follower who is loaded but merely OFF THE ACTIVE ROSTER (a transient drop; eligible) is AWAY, not "never
+            // serviced": he gets the unloaded handling below (the resolutions, the timeline) and the claim that holds him stays. A dismissed
+            // one (not eligible) keeps the bounded drop.
+            const auto activeNow = Followers::ActiveSnapshot();
+            const bool awayOffRoster = f->Is3DLoaded() && Followers::IsEligibleFollower(f) && activeNow &&
+                                       std::find(activeNow->begin(), activeNow->end(), fid) == activeNow->end();
+            if (f->Is3DLoaded() && !awayOffRoster) {   // loaded again: Errand::Tick -> OnLoadedTick resumes him when he is serviced; bounded here
                 if (r.loadedSince.time_since_epoch().count() == 0) { r.loadedSince = now; Store(r); }
                 else if (now - r.loadedSince > kLoadedUnserviced) Drop(fid, "loaded again but never serviced", kFailCooldownSec, false);
                 continue;
@@ -810,8 +870,31 @@ namespace MFO::Logistics::Errand::Sim {
             if (pc->IsInCombat()) {   // he walks out of the shop and joins the fight
                 ResolveNow(r, f, days, "player combat");
                 PlaceReturn(r, f, "the player is in combat -- he walks out and joins");
-                if (Config::g_errandInn.load() && CurKind(r) == StopKind::Inn && r.stage == Stage::Rest) Rest::MarkTripDone(fid, r.town, "REST_SIM ended by player combat");   // R7 review: one trip per visit, off screen too; ONLY the stay (REST_SIM): combat during the OUT_SIM walk to the inn sends him back after the fight (marth)
+                // F2 (marth 2026-10-20: ONE TRIP AT A TIME): combat ends the stay but NOT the visit -- no trip-done mark; Rest::NoteCombat clears the marks on the combat-end edge and a FRESH plan runs.
                 Drop(fid, "player combat -- he joins", kCombatCooldownSec, false);
+                continue;
+            }
+            if (r.stage == Stage::Rest && CurKind(r) == StopKind::Inn && Config::g_errandInn.load()) {   // F3: a watched shop opened
+                Reopen::Plan plan;
+                if (Reopen::Poll(fid, r.town, &r.lastPos, plan)) {
+                    Retrip(r, plan, days);
+                    Store(r);
+                    continue;
+                }
+            }
+            // F5: a teleport-sized game-clock jump (fast travel / wait / sleep) inside one poll is the player leaving, not the errand running long:
+            // end it like the player leaving town (finish his business, bring him back) instead of tripping the cap with a misleading line.
+            const double jumpDays = r.lastDays > 0.0 ? days - r.lastDays : 0.0;
+            r.lastDays = days;
+            // marth: only the player LEAVING town ends the record; a plain Wait / sleep in town (waiting for shops to open is F3's case) lets the timeline go on.
+            // The clock jump counts only with a player world transition (fast travel / a load) inside the last poll or two.
+            const float sinceT = Followers::SecondsSinceTransition();
+            if (r.stage != Stage::Rest && jumpDays > kClockJumpDays && sinceT >= 0.0f && sinceT <= 3.0f) {
+                spdlog::info("[errand] {:08X} '{}': the game clock jumped {:.1f} game h in one poll WITH a player world transition (fast travel) -- treated as the player leaving town", fid, r.followerName, jumpDays * 24.0);
+                ResolveNow(r, f, days, "a game-clock jump");
+                APMFBridge::ReleaseErrand(fid);   // the hold ends before the recall move
+                detail::RecallToPlayer(fid, "a game-clock jump");
+                Drop(fid, "game-clock jump (teleport / wait) -- recalled", kFailCooldownSec, false);
                 continue;
             }
             if (r.stage != Stage::Rest && (days - r.startDays) * 1440.0 > Trip::CapGameMin(r.stops.size())) {   // R5: once per planned stop (R7: an inn stay has no cap)

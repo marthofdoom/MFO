@@ -38,6 +38,7 @@
 #include <cmath>
 #include <format>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -298,10 +299,13 @@ namespace MFO::Logistics::Errand {
             return out;
         }
 
+        // F3: a_closedOut (when given) also collects the shops dropped ONLY for their hours (OpenAt false; the fence / spouse / condition gates ran
+        // BEFORE the hours test, so none of those is here) for the shop WATCH (ErrandReopen.cpp). a_dropped counts them as before.
         std::vector<Cand> BuildCatalog(RE::Actor* a_follower, const RE::BGSLocation* a_playerTown,
-                                       Clock::time_point a_now, int& a_dropped) {
+                                       Clock::time_point a_now, int& a_dropped, std::vector<Cand>* a_closedOut = nullptr) {
             std::vector<Cand> out;
             a_dropped = 0;
+            if (a_closedOut) a_closedOut->clear();
             auto* cell = a_follower->GetParentCell();
             auto* pc   = RE::PlayerCharacter::GetSingleton();
             auto* cal  = RE::Calendar::GetSingleton();
@@ -366,14 +370,15 @@ namespace MFO::Logistics::Errand {
                         if (g == ErrandShops::Gate::Pending) { waiting = true; continue; }   // the main-thread evaluation is in flight: this plan is abandoned below
                     }
                 }
-                if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
+                const bool open = OpenAt(fac, hour);
+                if (!open) { ++a_dropped; if (!a_closedOut) continue; }   // F3: a closed shop goes on, to the watch list below
                 auto* chest = fac->vendorData.merchantContainer;
                 if (!chest || !chest->GetContainer()) continue;   // a malformed merchant link (see EconomyProbe)
                 // The same town as the player (a roadside vendor outside any town is not an errand destination).
                 const auto* vTown = LocationTypes::TownAnchor(v->GetCurrentLocation());
-                if (!vTown || vTown != a_playerTown) { ++a_dropped; continue; }
+                if (!vTown || vTown != a_playerTown) { if (open) ++a_dropped; continue; }
                 const float dPlayer = v->GetPosition().GetDistance(pc->GetPosition());
-                if (dPlayer > maxFromPlayer) { ++a_dropped; continue; }
+                if (dPlayer > maxFromPlayer) { if (open) ++a_dropped; continue; }
                 if (const auto it = parked.find(v->GetFormID()); it != parked.end() && a_now < it->second) continue;
                 if (backedOff.contains(chest->GetFormID())) { noteBackoff(chest->GetFormID(), v->GetName()); continue; }
                 if (seenChest.contains(chest->GetFormID())) continue;   // one actor per chest is enough
@@ -389,7 +394,7 @@ namespace MFO::Logistics::Errand {
                 c.destForm = c.id;
                 c.destRad = kVendorRadius;
                 c.pos = v->GetPosition(); c.havePos = true;
-                out.push_back(c);
+                (open ? out : *a_closedOut).push_back(c);
             }
 
             // R1b: shops whose vendor is NOT loaded (an interior while the player is outside), from the faction catalog.
@@ -442,7 +447,8 @@ namespace MFO::Logistics::Errand {
                         if (g == ErrandShops::Gate::Closed) { ++a_dropped; continue; }
                         if (g == ErrandShops::Gate::Pending) { waiting = true; continue; }
                     } else if (sh.cls != 0) continue;   // its loaded vendor was gated above (and refused or was already listed)
-                    if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
+                    const bool open = OpenAt(fac, hour);
+                    if (!open) { ++a_dropped; if (!a_closedOut) continue; }   // F3: a closed shop goes on, to the watch list below
                     if (const auto it = parked.find(sh.faction); it != parked.end() && a_now < it->second) continue;
                     if (backedOff.contains(sh.chest)) { noteBackoff(sh.chest, fac->GetName()); continue; }
                     float d = 0.0f;
@@ -452,23 +458,24 @@ namespace MFO::Logistics::Errand {
                         if (!ref) continue;
                         placePos = ref->GetPosition();
                         d = placePos.GetDistance(pc->GetPosition());
-                        if (d > maxFromPlayer) { ++a_dropped; continue; }
+                        if (d > maxFromPlayer) { if (open) ++a_dropped; continue; }
                     } else {
                         const auto it = cellDoorDist.find(sh.place);
-                        if (it == cellDoorDist.end()) { ++a_dropped; continue; }
+                        if (it == cellDoorDist.end()) { if (open) ++a_dropped; continue; }
                         d = it->second;
                         placePos = cellDoorPos[sh.place];
-                        if (d > maxFromPlayer) { ++a_dropped; continue; }
+                        if (d > maxFromPlayer) { if (open) ++a_dropped; continue; }
                     }
                     seenChest[sh.chest] = true;
                     Cand c;
                     c.id = sh.faction; c.fac = fac; c.chest = sh.chest; c.dist = d;
                     c.kind = sh.kind; c.destForm = sh.place; c.destRad = sh.rad;
                     c.pos = placePos; c.havePos = true;
-                    out.push_back(c);
+                    (open ? out : *a_closedOut).push_back(c);
                 }
             }
-            if (waiting) {   // never commit a trip that silently lacks the fence / spouse store: re-plan on the next cadence (6 s)
+            if (waiting) {
+                if (a_closedOut) a_closedOut->clear();   // never commit a trip that silently lacks the fence / spouse store: re-plan on the next cadence (6 s)
                 spdlog::info("[errand] {:08X}: plan waiting for a vendor-condition answer (fence / spouse gate) -- re-planning shortly",
                              a_follower->GetFormID());
                 out.clear();
@@ -532,7 +539,7 @@ namespace MFO::Logistics::Errand {
 
         // ── ending an errand ─────────────────────────────────────────────────────────────────────────
         // Every exit funnels here: drop the record, release the claims, stamp the cooldown, say why ONCE.
-        void Finish(RE::FormID a_fid, const char* a_why, float a_cooldownSec, bool a_complete = false) {
+        void Finish(RE::FormID a_fid, const char* a_why, float a_cooldownSec, bool a_complete = false, bool a_noMark = false) {
             Rec r;
             {
                 std::scoped_lock lk(g_mx);
@@ -544,7 +551,7 @@ namespace MFO::Logistics::Errand {
                 if (a_complete) g_backoff.erase(BackoffKey(a_fid, r.chest));   // a successful DONE at this target forgives it
             }
             if (r.phase == Phase::Smithing) Smith::End(a_fid, a_why);   // R8: the work claim + the work record
-            if (r.phase == Phase::Resting) Rest::End(a_fid, a_why, true);   // R7: the stay's release reason is logged; the trip is done for this visit
+            if (r.phase == Phase::Resting) Rest::End(a_fid, a_why, true, a_noMark || a_cooldownSec == kCombatCooldownSec);   // R7: the stay's release reason is logged; the trip is done for this visit
             else if (Config::g_errandInn.load() && a_cooldownSec != kCombatCooldownSec) {
                 // R7 review: an INN-ONLY trip that ends for any reason but combat (blocked / stuck / dest gone / the caps), or a trip whose
                 // INN stop ended Skipped, is done for this visit: the inn stop has no faction / chest, so no park or backoff stops a re-plan
@@ -793,6 +800,7 @@ namespace MFO::Logistics::Errand {
             auto* ui = RE::UI::GetSingleton();
             return ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
         }
+        bool OpenAtHour(const RE::TESFaction* a_fac, float a_hour) { return a_fac && OpenAt(a_fac, a_hour); }
         RE::FormID PlayerTownId() {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const RE::BGSLocation* here = pc ? LocationTypes::TownAnchor(pc->GetCurrentLocation()) : nullptr;
@@ -953,6 +961,82 @@ namespace MFO::Logistics::Errand {
         }
     }
 
+    // F3: the commit of a planned trip (TryStart's tail, shared with the shop-opens re-plan): the ch.19 leg budget, the first stop's travel claim,
+    // the record, the plan line. TRUE = the trip stands; FALSE = queued / refused (g_nextPlan is set; nothing else changed).
+    static bool StartTrip(RE::Actor* a_follower, const RE::BGSLocation* a_town, Clock::time_point a_now, std::vector<Stop>&& stops,
+                          const std::string& tripLine, std::size_t a_candCount) {
+        const auto fid = a_follower->GetFormID();
+        // The ch.19 leg budget (Harbinger's 8 package slots, shared with loot and the deposit): beyond it he queues.
+        if (CountWalking() >= static_cast<std::size_t>(kMaxWalking)) {
+            std::scoped_lock lk(g_mx);
+            g_nextPlan[fid] = a_now + kQueueRetry;
+            spdlog::info("[errand] {:08X} '{}': QUEUED -- {} errand walks already hold Harbinger's ch.19 legs (shared with "
+                         "loot), next try in {} s", fid, NameOf(a_follower), kMaxWalking, kQueueRetry.count());
+            return false;
+        }
+        if (!APMFBridge::ClaimErrandTravel(fid, stops.front().destForm, stops.front().destRad)) {
+            // Refused at the call: the leg budget (all 8 slots busy), [Travel] bTravel=0, VR. Retry soon, never a fallback.
+            std::scoped_lock lk(g_mx);
+            g_nextPlan[fid] = a_now + kQueueRetry;
+            return false;
+        }
+        Rec r;
+        r.town        = a_town->GetFormID();
+        r.followerName = NameOf(a_follower);
+        r.stops = std::move(stops);
+        r.tripPurse = -1;   // R7: the first stop that carries an order sets the trip purse (a temple stop has none)
+        for (const auto& st : r.stops) if (st.order) { r.tripPurse = st.order->purse; break; }
+        LoadStop(r, 0);
+        r.lastPos = a_follower->GetPosition();
+        r.planPos = r.lastPos; r.planPosSet = true;
+        if (auto* fc = a_follower->GetParentCell()) r.lastCell = fc->GetFormID();
+        r.start = r.phaseAt = a_now;
+        r.startClk = r.lastTickClk = Scheduler::ServiceClock();
+        if (auto* cal = RE::Calendar::GetSingleton()) r.startDays = cal->GetDaysPassed();
+        {
+            std::scoped_lock lk(g_mx);
+            g_recs[fid] = r;
+        }
+        // His OWN distance to the destination (the from-player figure above says nothing about where HE stands; field
+        // 2026-10-19). A shop CELL has no position here (its door distance is measured from the player): "n/a".
+        std::string ownDist = "n/a (shop cell: no position)";
+        {
+            RE::NiPoint3 dp{};
+            bool         have = false;
+            const Stop& first = r.stops.front();   // R5: the trip's first stop (the R4 line's `best`)
+            if (first.destKind != DestKind::Cell) have = Trip::PlacePos(first, dp);
+            else if (first.havePos) { dp = first.pos; have = true; }   // an inn / temple / shop cell: the DOOR position the planner found
+            if (have) ownDist = std::format("{:.0f} u{}", a_follower->GetPosition().GetDistance(dp), first.destKind == DestKind::Cell ? " to its door" : "");
+        }
+        const char* destWhat = r.destKind == DestKind::VendorActor ? "the vendor" : r.destKind == DestKind::Ref ? "the shop ref"
+                             : r.stops.front().kind == StopKind::Inn ? "the inn cell" : r.stops.front().kind == StopKind::Temple ? "the temple cell" : "the shop cell";
+        spdlog::info("[errand] {:08X} '{}' TRIP PLAN in '{}': {} | walking to {} '{}' ({} from HIM): {} {:08X} | {} candidate(s)",
+                     fid, r.followerName, TownName(r.town), tripLine, Trip::Label(r.stops, 0), r.vendorName, ownDist,
+                     destWhat, r.destForm, a_candCount);
+        return true;
+    }
+
+    // F3 (marth 2026-10-20: ONE TRIP AT A TIME): a watched shop opened and the recorded needs yield a stop (ErrandReopen.cpp Poll). Start the new
+    // trip -- the opened shops, the inn LAST. The caller has ended whatever held the follower (the stay, the trip-done mark) WITHOUT a mark.
+    static bool StartReopenedTrip(RE::Actor* a_follower, RE::FormID a_townId, Clock::time_point a_now, Reopen::Plan&& a_plan) {
+        auto* town = RE::TESForm::LookupByID<RE::BGSLocation>(a_townId);
+        if (!town) {
+            spdlog::warn("[errand] {:08X}: a watched shop opened but the town {:08X} does not resolve -- no new trip", a_follower->GetFormID(), a_townId);
+            return false;
+        }
+        const std::size_t n = a_plan.stops.size();
+        const std::string line = a_plan.line;
+        std::vector<Stop> stops = a_plan.stops;   // (copy: a failed start leaves the plan, and the watch, intact for the retry)
+        if (!StartTrip(a_follower, town, a_now, std::move(stops), line, n)) {
+            Reopen::Retry(a_follower->GetFormID());
+            spdlog::warn("[errand] {:08X} '{}': a needed shop opened but the new trip could NOT start (queued at the ch.19 walk budget or the travel claim was refused) -- the shop stays in the watch, retried", a_follower->GetFormID(), NameOf(a_follower));
+            return false;
+        }
+        Reopen::Consume(a_follower->GetFormID(), a_plan);
+        spdlog::info("[errand] {:08X} '{}': a NEEDED SHOP OPENED -- new trip of {} stop(s) STARTED (the inn last): {}", a_follower->GetFormID(), NameOf(a_follower), n, line);
+        return true;
+    }
+
     // ── public: the planner (the idle branch of ServiceFollower) ─────────────────────────────────────
     bool TryStart(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now) {
         if (!a_follower) return false;
@@ -991,7 +1075,24 @@ namespace MFO::Logistics::Errand {
             if (const auto it = g_nextPlan.find(fid); it != g_nextPlan.end() && a_now < it->second) return true;
         }
         if (!playerTown) return true;
-        if (Config::g_errandInn.load() && Rest::TripDone(fid, tidNow)) return true;   // R7: ONE trip per town visit (marth 2026-10-19)
+        if (Config::g_errandInn.load() && Rest::TripDone(fid, tidNow)) {   // R7: ONE trip AT A TIME (marth 2026-10-19 / 2026-10-20)
+            // F3: new-session triggers are the player leaving town (NoteTown), the end of combat (NoteCombat) and a NEEDED SHOP OPENING (here).
+            auto* ui0 = RE::UI::GetSingleton();
+            auto* avo0 = a_follower->AsActorValueOwner();
+            const bool canPlan = !(ui0 && ui0->GameIsPaused()) && !APMFBridge::InCombat(a_follower) && !pc->IsInCombat() && !SlotOf(fid) &&
+                              !(avo0 && avo0->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) && !a_follower->IsOnMount() &&
+                              a_follower->AsActorState()->GetSitSleepState() == RE::SIT_SLEEP_STATE::kNormal && a_follower->Is3DLoaded() &&
+                              LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) == playerTown &&
+                              Forms::g_tradeQuest && Forms::g_tradeQuest->IsRunning();
+            if (canPlan) {
+                Reopen::Plan plan;
+                const auto from = a_follower->GetPosition();
+                if (Reopen::Poll(fid, tidNow, &from, plan)) {
+                    if (StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan))) Rest::UnmarkTripDone(fid, "a needed shop opened");   // a failed start keeps the mark (the watch retries)
+                }
+            }
+            return true;
+        }
         if (a_now - townSince < std::chrono::milliseconds(static_cast<long long>(Config::g_errandSettleSec.load() * 1000.0f)))
             return true;
 
@@ -1015,9 +1116,11 @@ namespace MFO::Logistics::Errand {
         // R7: the blessing / disease read decides the temple stop; an inn-only trip planned before it lands would skip the temple for the
         // whole visit (one trip per visit). Pending: the probe is posted, this plan is abandoned and re-run on the next cadence.
         if (Rest::MagicReadPending(a_follower)) return true;
+        if (Rest::PlacesPending(a_follower, playerTown)) return true;   // F4: the data-resolved temple's entry door (main-thread read)
 
         int dropped = 0;
-        auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped);
+        std::vector<Cand> closedCands;   // F3: dropped ONLY for their hours -> the shop watch
+        auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped, Config::g_errandInn.load() ? &closedCands : nullptr);
         // R7 (marth 2026-10-19): no open shop is NOT "no errand" -- a follower with nothing to shop for still plans the INN-ONLY trip
         // (Rest::Augment below), so the early return is only for inn errands switched off (MFO-B353).
         if (cands.empty() && !Config::g_errandInn.load()) return true;
@@ -1034,8 +1137,17 @@ namespace MFO::Logistics::Errand {
         std::vector<ErrandShop> shops;
         shops.reserve(cands.size());
         for (auto& c : cands) shops.push_back(ErrandShop{ c.fac, c.handle });
+        for (auto& c : closedCands) shops.push_back(ErrandShop{ c.fac, c.handle });   // F3: evaluated NOW (loaded) so the watch holds their orders
         std::vector<ErrandPlanned> planned;
         if (!shops.empty()) EconomyErrandPlan(a_follower, a_state, a_now, shops, planned);
+        std::vector<ErrandPlanned> closedPlanned;   // F3: the hours-closed shops' orders leave the open plan's list (their wishes are not this trip's)
+        if (!closedCands.empty()) {
+            const auto isClosedKey = [&](RE::FormID a_key) {
+                return std::any_of(closedCands.begin(), closedCands.end(), [&](const Cand& c) { return c.id == a_key; });
+            };
+            for (const auto& p : planned) if (isClosedKey(p.vendorKey)) closedPlanned.push_back(p);
+            std::erase_if(planned, [&](const ErrandPlanned& p) { return isClosedKey(p.vendorKey); });
+        }
 
         const int minSell  = Config::g_errandMinSellGold.load();
         const int minPurse = Config::g_errandMinPurse.load();
@@ -1055,9 +1167,7 @@ namespace MFO::Logistics::Errand {
             wantGear = wantGear || v.wishGear;
             wantApparel = wantApparel || v.wishApparel;
         }
-        std::vector<Trip::Cand> tcands;
-        tcands.reserve(cands.size());
-        for (const auto& c : cands) {
+        const auto makeTripCand = [&](const Cand& c, bool a_gear, bool a_apparel) {
             Trip::Cand t;
             t.key = c.id; t.actorId = c.actorId; t.faction = c.fac->GetFormID(); t.chest = c.chest;
             {
@@ -1071,12 +1181,21 @@ namespace MFO::Logistics::Errand {
                 const RE::FormID kw = (k <= 2) ? kKwPotion : (k == 3 || k == 4 || k == 11) ? kKwArrow : (k == 10) ? kKwWeapon : 0u;
                 if (kw && ListTrades(c.fac, kw)) t.needCarry |= 1u << k;
             }
-            t.carriesGear = (wantGear    && (ListTrades(c.fac, kKwWeapon) || ListTrades(c.fac, kKwArmor))) ||
-                            (wantApparel && (ListTrades(c.fac, kKwClothing) || ListTrades(c.fac, kKwJewelry) || ListTrades(c.fac, kKwArmor)));
+            t.carriesGear = (a_gear    && (ListTrades(c.fac, kKwWeapon) || ListTrades(c.fac, kKwArmor))) ||
+                            (a_apparel && (ListTrades(c.fac, kKwClothing) || ListTrades(c.fac, kKwJewelry) || ListTrades(c.fac, kKwArmor)));
             t.carriesTome = ListTrades(c.fac, kKwSpellTome);
             t.carriesMaterials = ListTrades(c.fac, kKwOreIngot) || ListTrades(c.fac, kKwAnimalHide) || ListTrades(c.fac, kKwAnimalPart);   // R8
             t.carriesForge = ListTrades(c.fac, kKwOreIngot);   // R8: a smithy = an ore / ingot trader (a general store that sells weapons has no forge)
-            tcands.push_back(std::move(t));
+            return t;
+        };
+        std::vector<Trip::Cand> tcands;
+        tcands.reserve(cands.size());
+        for (const auto& c : cands) tcands.push_back(makeTripCand(c, wantGear, wantApparel));
+        std::vector<Trip::Cand> closedTCands;   // F3
+        {
+            bool closedGear = false, closedApparel = false;
+            for (const auto& v : closedPlanned) { closedGear = closedGear || v.wishGear; closedApparel = closedApparel || v.wishApparel; }
+            for (const auto& c : closedCands) closedTCands.push_back(makeTripCand(c, closedGear, closedApparel));
         }
         Trip::Inputs tin;
         tin.follower = fid; tin.from = a_follower->GetPosition(); tin.carry = carry; tin.minSell = minSell; tin.minPurse = minPurse;
@@ -1107,53 +1226,11 @@ namespace MFO::Logistics::Errand {
             return true;
         }
 
-        // The ch.19 leg budget (Harbinger's 8 package slots, shared with loot and the deposit): beyond it he queues.
-        if (CountWalking() >= static_cast<std::size_t>(kMaxWalking)) {
-            std::scoped_lock lk(g_mx);
-            g_nextPlan[fid] = a_now + kQueueRetry;
-            spdlog::info("[errand] {:08X} '{}': QUEUED -- {} errand walks already hold Harbinger's ch.19 legs (shared with "
-                         "loot), next try in {} s", fid, NameOf(a_follower), kMaxWalking, kQueueRetry.count());
-            return true;
-        }
-        if (!APMFBridge::ClaimErrandTravel(fid, stops.front().destForm, stops.front().destRad)) {
-            // Refused at the call: the leg budget (all 8 slots busy), [Travel] bTravel=0, VR. Retry soon, never a fallback.
-            std::scoped_lock lk(g_mx);
-            g_nextPlan[fid] = a_now + kQueueRetry;
-            return true;
-        }
-        Rec r;
-        r.town        = playerTown->GetFormID();
-        r.followerName = NameOf(a_follower);
-        r.stops = std::move(stops);
-        r.tripPurse = -1;   // R7: the first stop that carries an order sets the trip purse (a temple stop has none)
-        for (const auto& st : r.stops) if (st.order) { r.tripPurse = st.order->purse; break; }
-        LoadStop(r, 0);
-        r.lastPos = a_follower->GetPosition();
-        r.planPos = r.lastPos; r.planPosSet = true;
-        if (auto* fc = a_follower->GetParentCell()) r.lastCell = fc->GetFormID();
-        r.start = r.phaseAt = a_now;
-        r.startClk = r.lastTickClk = Scheduler::ServiceClock();
-        if (auto* cal = RE::Calendar::GetSingleton()) r.startDays = cal->GetDaysPassed();
-        {
-            std::scoped_lock lk(g_mx);
-            g_recs[fid] = r;
-        }
-        // His OWN distance to the destination (the from-player figure above says nothing about where HE stands; field
-        // 2026-10-19). A shop CELL has no position here (its door distance is measured from the player): "n/a".
-        std::string ownDist = "n/a (shop cell: no position)";
-        {
-            RE::NiPoint3 dp{};
-            bool         have = false;
-            const Stop& first = r.stops.front();   // R5: the trip's first stop (the R4 line's `best`)
-            if (first.destKind != DestKind::Cell) have = Trip::PlacePos(first, dp);
-            else if (first.havePos) { dp = first.pos; have = true; }   // an inn / temple / shop cell: the DOOR position the planner found
-            if (have) ownDist = std::format("{:.0f} u{}", a_follower->GetPosition().GetDistance(dp), first.destKind == DestKind::Cell ? " to its door" : "");
-        }
-        const char* destWhat = r.destKind == DestKind::VendorActor ? "the vendor" : r.destKind == DestKind::Ref ? "the shop ref"
-                             : r.stops.front().kind == StopKind::Inn ? "the inn cell" : r.stops.front().kind == StopKind::Temple ? "the temple cell" : "the shop cell";
-        spdlog::info("[errand] {:08X} '{}' TRIP PLAN in '{}': {} | walking to {} '{}' ({} from HIM): {} {:08X} | {} candidate(s)",
-                     fid, r.followerName, TownName(r.town), tripLine, Trip::Label(r.stops, 0), r.vendorName, ownDist,
-                     destWhat, r.destForm, cands.size());
+        std::optional<Stop> innStopForWatch;   // F3: the committed trip's inn stop is the re-planned trip's LAST stop
+        if (!stops.empty() && stops.back().kind == StopKind::Inn) innStopForWatch = stops.back();
+        if (!StartTrip(a_follower, playerTown, a_now, std::move(stops), tripLine, cands.size())) return true;
+        if (Config::g_errandInn.load())   // F3: the hours-closed shops (and their orders) ride the trip: the WATCH
+            Reopen::Record(fid, playerTown->GetFormID(), std::move(closedTCands), std::move(closedPlanned), tin, innStopForWatch ? &*innStopForWatch : nullptr);
         return true;
     }
 
@@ -1240,6 +1317,17 @@ namespace MFO::Logistics::Errand {
                              "The stop is ended, no retry", fid, r.followerName, r.stops[r.cur].vendorName, oc ? oc->GetFormID() : 0u, r.stops[r.cur].destForm);
                 Rest::End(fid, "he left the inn / temple cell while the stay stood", true);   // the work claim + record end with the stop; one trip per visit
                 return stopOver("he left the inn / temple cell while the stay stood", false, kFailCooldownSec);
+            }
+            // F3: a watched shop opened while he stays at the inn: the stay ends WITHOUT a trip mark and a new trip starts (the opened shops, the inn last).
+            if (innStay) {
+                Reopen::Plan plan;
+                const auto from = a_follower->GetPosition();
+                if (Reopen::Poll(fid, r.town, &from, plan)) {
+                    const RE::FormID townId = r.town;
+                    Finish(fid, "a needed shop opened -- the stay ends, a new trip starts", 0.0f, false, true);
+                    StartReopenedTrip(a_follower, townId, a_now, std::move(plan));
+                    return true;
+                }
             }
             const auto st = Rest::Step(a_follower, a_now);
             if (st.res == Rest::Result::Continue) { Store(fid, r); return true; }
@@ -1583,6 +1671,10 @@ namespace MFO::Logistics::Errand {
 
     // ── public: the owner-independent backstop ───────────────────────────────────────────────────────
     void Sweep() {
+        {   // F2: the combat-end edge clears the trip-done marks (a FRESH plan runs after the combat cooldown). Sampled HERE, every pump lap: TryStart never runs during party combat.
+            auto* pc0 = RE::PlayerCharacter::GetSingleton();
+            Rest::NoteCombat(pc0 && pc0->IsInCombat());
+        }
         Sim::Sweep();   // R1b: the off-screen errands (their own table; a lap of the game-time clock)
 
         std::vector<std::pair<RE::FormID, std::string>> ends;
@@ -1613,11 +1705,24 @@ namespace MFO::Logistics::Errand {
                     else if (now - r.unloadedSince >= kHandoffPoll) handoffs.push_back(fid);   // unloaded for one more poll: not a 3D hiccup
                 }
                 else {
-                    r.unloadedSince = {};
+                    // F1 (field run 2, the inn stay): a follower who is merely OFF THE ROSTER (a transient drop of the active list while
+                    // he is loaded, Followers.cpp) is AWAY, not gone: eligibility read from the actor is the dismissal test (the same rule
+                    // as the unloaded branch above). Away = the hand-off to the simulation after kHandoffPoll, the claim kept; he is not
+                    // serviced, so the stall check below must not read his stale lastTickClk.
+                    const bool offRoster = ids && std::find(ids->begin(), ids->end(), fid) == ids->end();
+                    if (!offRoster) r.unloadedSince = {};
                     r.lastPos = f->GetPosition();   // sampled every lap: the simulation starts from the last LOADED position
                     if (auto* fc = f->GetParentCell()) r.lastCell = fc->GetFormID();
                     if (APMFBridge::InCombat(f) || (pc && pc->IsInCombat())) why = "combat -- he rejoins";   // substrate: not combat (v26)
-                    else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end()) why = "no longer an active follower";
+                    else if (offRoster) {
+                        if (!Followers::IsEligibleFollower(f)) why = "no longer a follower (dismissed)";
+                        else if (loading || !pc || !pc->Is3DLoaded()) continue;
+                        else if (r.unloadedSince.time_since_epoch().count() == 0) {
+                            r.unloadedSince = now;
+                            spdlog::info("[errand] {:08X}: off the active roster while loaded -- treated as away (not a dismissal); handed to the simulation if it lasts", fid);
+                        }
+                        else if (now - r.unloadedSince >= kHandoffPoll) handoffs.push_back(fid);
+                    }
                     else if (clk - r.lastTickClk > kStallSec) why = "the follower is no longer serviced";
                     else if (clk - r.startClk > kRealCapSec &&
                              !(r.phase == Phase::Resting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn))   // R7: an inn stay has no cap
