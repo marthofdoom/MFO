@@ -927,15 +927,15 @@ namespace MFO::Logistics::Errand::Smith {
         return out;
     }
 
-    void End(RE::FormID a_follower, const char* a_why) {
+    void End(RE::FormID a_follower, const char* a_why, bool a_releaseWork) {
         bool had = false;
         {
             std::scoped_lock lk(g_mx);
             had = g_work.erase(a_follower) > 0;
         }
         if (had) {
-            ReleaseWork(a_follower);
-            spdlog::info("[smith] {:08X}: work ended ({})", a_follower, a_why ? a_why : "?");
+            if (a_releaseWork) ReleaseWork(a_follower);
+            spdlog::info("[smith] {:08X}: work ended ({}){}", a_follower, a_why ? a_why : "?", a_releaseWork ? "" : " -- the work claim STANDS (hand-off)");
         }
         // A temper dispatched but not yet read back is NOT lost with the work record: the ledger settles it (here, and on the next build).
         bool pending = false;

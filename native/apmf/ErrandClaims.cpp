@@ -349,6 +349,19 @@ namespace MFO::APMFBridge {
         c.idleEverLive = c.holdEverLive = false;
     }
 
+    void ReleaseErrandTravel(RE::FormID a_follower) {
+        auto* api = g_apmf.load(std::memory_order_relaxed);
+        std::scoped_lock lock(s_mx);
+        auto it = s_claims.find(a_follower);
+        if (it == s_claims.end() || it->second.travel == APMF_API::kInvalidHandle) return;
+        auto& c = it->second;
+        if (api) api->Release(c.travel);
+        spdlog::info("[errand] {:08X}: the ch.19 walk claim (handle {}, dest {:08X}) RELEASED -- the work claim holds him now", a_follower, c.travel, c.dest);
+        c.travel = APMF_API::kInvalidHandle;
+        c.dest = 0;
+        c.travelEverLive = false;
+    }
+
     void ReleaseErrand(RE::FormID a_follower) {
         ReleaseErrandWork(a_follower);   // R7: the errand's ch.9 WORK claim (apmf/ErrandWork.cpp, its own mutex) goes with the rest
         auto* api = g_apmf.load(std::memory_order_relaxed);

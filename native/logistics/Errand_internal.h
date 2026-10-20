@@ -219,6 +219,9 @@ namespace MFO::Logistics::Errand {
         std::string Describe(RE::FormID a_follower);
         // Is he standing in the cell of this inn / temple stop? (a loaded follower, for the simulation's pick-up)
         bool InStopCell(RE::Actor* a_follower, const Stop& a_stop);
+        // A cell walk ended BLOCKED: log (passive, never a decision) the load door(s) to the destination cell within his scan, with the lock level of
+        // each side. Any door-open state is NOT read (BGSOpenCloseForm::GetOpenState has no VerifiedAddresses row).
+        void LogBlockedDoors(RE::Actor* a_follower, RE::FormID a_destCell, const std::string& a_label);
         // Sim: a temple visit ran off screen; the blessing is OWED (logged; paid only by a physical visit).
         void NoteOwed(RE::FormID a_follower, const std::string& a_followerName, const std::string& a_temple);
     }
@@ -325,8 +328,9 @@ namespace MFO::Logistics::Errand::Smith {
     // The physical work. Begin: he is AT the stop (the smithy's place). False = cannot (logged); the stop is skipped.
     bool Begin(RE::Actor* a_follower, const Stop& a_stop, const std::string& a_followerName, std::chrono::steady_clock::time_point a_now);
     StepOut Step(RE::Actor* a_follower, std::chrono::steady_clock::time_point a_now);
-    // The errand ends / the stop ends: release the work claim and forget the work. Idempotent.
-    void End(RE::FormID a_follower, const char* a_why);
+    // The errand ends / the stop ends: release the work claim and forget the work. Idempotent. a_releaseWork false = the HAND-OFF to the
+    // simulation: the work record goes but the ch.9 work claim STANDS (it holds the unloaded follower; the simulation / Finish releases it).
+    void End(RE::FormID a_follower, const char* a_why, bool a_releaseWork = true);
     bool Working(RE::FormID a_follower);
     std::string Describe(RE::FormID a_follower);   // "Working at X" ("" = no work). Any thread.
     // Off screen: the game-day cost of the SMITH_SIM stage, and its end (worker). REAL stock only: the materials carried at the plan plus

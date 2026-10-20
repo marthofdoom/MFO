@@ -2060,8 +2060,30 @@ Closing review of feat/mfo-torch-ch17: "widen the furnitureIdle gate to 1.5.97 (
 
 ### MFO-B395 (SEV-5, OPEN, logistics/Upkeep.cpp TorchRuleHolds) -- torch: full-table Evaluate per build (raised against 7fff38a)
 "When the torch rule fails, Evaluate keeps scanning the rest of the table on every build. Checking just the one rule would be cheaper."
+
+### MFO-B398 (SEV-5, OPEN, logistics/ErrandRest.cpp LogBlockedDoors) -- town: a BLOCKED cell leg does not log the door's open state (raised against fix/mfo-errand-hold)
+The brief asked for lock level AND open state. Only the lock level is logged: `BGSOpenCloseForm::GetOpenState` is an id-based engine call (fork RELOCATION_ID 14180/14288) with no `VerifiedAddresses.h` row. Needs a spec row + regenerated header + `SeatVerified()` guard first.
+
+### MFO-B399 (SEV-4, OPEN, logistics/ErrandRest.cpp ResolveViaData) -- town: the data-resolved inn / temple has no door, so its lock is never read (raised against fix/mfo-errand-hold)
+`FindPlaces` checks the load door pair's lock; `ResolveViaData` (cell from the vendor faction's PLVD place or the location's special refs) knows only the interior cell, so a locked temple reached only through the data road is still planned. The BLOCKED log (`Rest::LogBlockedDoors`) names the locked door after the first failed walk, and the walk backoff applies.
+
 ### MFO-B396 (SEV-5, OPEN, logistics/ErrandSim.cpp:250 / ErrandRest.cpp:847) -- helmets: a stored errand order keeps its plan-time buy (raised against 4f320cf)
 Opus tier-3 review of `feat/mfo-wear-helmets` @ 4f320cf (ClickUp 86e3phy41). Verbatim-ish: "errand stored orders (ErrandSim.cpp:250 / ErrandRest.cpp:847) use the plan-time buy, so a plan made while ON can still buy a helmet that trip." `BuildBuyThresholds` is rebuilt live per on-screen stop; only an order already stored (the off-screen sim replay, the inn/temple order) carries the `BuyThresholds::noHelmets` it was planned with. Effect: at most one trip's helmet buy after the toggle flips OFF. MAP.md: "WEAR HELMETS".
 
 ### MFO-B397 (SEV-5, OPEN, logistics/Economy.cpp IsHelmetPiece / MageClothingSlot) -- helmets: a keyworded helmet with hands/feet bits sits in a mage's hands/feet slot (raised against 4f320cf)
 Same review. Verbatim-ish: "head+hands piece class mismatch." It survives F2 (the keyword test): an ARMO carrying ArmorHelmet/ClothingHead AND a hands or feet biped bit is a helmet to `IsHelmetPiece` (so it is never looted, bought or worn while OFF) but `MageClothingSlot` files it under hands/feet, so with helmets ON the mage judge ranks it against gloves/boots. Rare (no vanilla piece). MAP.md: "WEAR HELMETS".
+
+### MFO-B400 (SEV-4, OPEN, apmf/ErrandClaims.cpp / logistics/Errand.cpp) -- town: a held cell leg holds one of Harbinger's 8 package slots for the whole stay (raised against dc0c334)
+Reviewer: a held cell leg keeps its package record and slot for the whole inn stay, so up to 8 stayers (plus loot and deposit legs) fill the table. Pre-existing and related: `RepointErrandTravel` reports true even when the table is full (the refusal is only visible later as kLeg_Failed).
+
+### MFO-B401 (SEV-4, OPEN, deploy) -- town: the hold needs Harbinger bf7f065 or later; an older Harbinger at the same ABI ends legs on unload (raised against dc0c334)
+Reviewer: MFO no longer treats ActorGone as a hand-off and no longer releases at the hand-off, so against an older Harbinger (leg ends ActorGone on unload) the stop ends loudly instead of handing off. Pair-deploy requirement; no ABI gate exists.
+
+### MFO-B402 (SEV-5, OPEN, logistics/Errand.cpp Tick) -- town: "went in and came back out" wording misattributes a third-party teleport (raised against dc0c334)
+Reviewer: the WARN for a follower seen loaded outside the cell he arrived in is worded as the hold failing; a quest teleport or another mod moving him reads the same.
+
+### MFO-B403 (SEV-5, OPEN, logistics/ErrandRest.cpp LogBlockedDoors) -- town: scans only near the follower (raised against dc0c334)
+Reviewer: the BLOCKED door log lists only load doors within kScan of the follower in his own cell; a destination door in another cell reads "none found".
+
+### MFO-B404 (SEV-5, OPEN, logistics/Errand.cpp) -- town: Errand.cpp is 1672 lines (raised against dc0c334)
+Reviewer: past the ~1500 plan-a-split line. Split note only; a split is its own brief (CLAUDE.md).
