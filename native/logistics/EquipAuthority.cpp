@@ -1204,6 +1204,23 @@ namespace MFO::Logistics {
                 }
             }
 
+            // 1d. THE STANDING TORCH (feat/mfo-torch-ch17, marth 2026-10-20). While a torch rule's CONDITION holds
+            //     (read off his table at this build: Upkeep.cpp TorchDeclaredFor), the carried Light is declared
+            //     with Light|Left OWNED, so Harbinger's equip pass keeps it in hand and its torch seat blocks every
+            //     other source while the claim owns Light. NOT declared (Light unowned, the engine manages light as
+            //     normal) when no torch rule holds, in combat, while he is seated / sleeping / in furniture, or when
+            //     Left is already owned by anything above (a hold, a two-hander, a bound weapon, a cast, a 1c
+            //     placement): THE LEDGER WINS, as in 1c.
+            {
+                const bool leftFree = !(owned & APMF_API::kEquipCat_Left) && !a_leftReserved;
+                if (const RE::FormID torch = TorchDeclaredFor(a_follower, a_state, leftFree); torch) {
+                    if (auto* obj = resolveCarried(torch, "torch"); obj && obj->As<RE::TESObjectLIGH>()) {
+                        owned |= APMF_API::kEquipCat_Light | APMF_API::kEquipCat_Left;
+                        decl.Add(obj, APMF_API::kEquipSlot_Left);
+                    }
+                }
+            }
+
             // 2. AMMO -- only under a bow/crossbow HOLD (v9: Ammo is owned exactly
             //    then). With no ranged hold the archer AI's own ammo equips pass
             //    in an unowned category; declaring ammo there would only be an

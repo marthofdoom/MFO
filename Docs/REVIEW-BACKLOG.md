@@ -2033,3 +2033,15 @@ Opus review of `fix/mfo-town-counter-drop` @ d69e4869. Verbatim: "a follower alr
 
 ### MFO-B386 (SEV-4, OPEN, logistics/Errand.cpp Tick combat exit) -- town: combat during the inn-only walk re-plans the inn (raised against d69e4869)
 Same review. Verbatim: "combat-while-walking re-plans inn": an inn-only trip that ends on combat during the walk is not marked trip-done (deliberately left, the coordinator is asking marth), so after the combat cooldown he plans the inn trip again. MAP: R7 section.
+
+### MFO-B387 (SEV-4, OPEN, logistics/Gear.cpp:871) -- torch: misleading "left to the next combat equip gambit" skip while the torch stands (raised against 68f3841)
+Opus review of `feat/mfo-torch-ch17` @ 68f3841. Verbatim (log): "Gear.cpp:871 (Right|Left overlap -> 2H/bow upgrade skipped while torch stands; SEV-4 misleading log)". Reasoning: while the standing torch owns Light|Left, AcquireEquip's weapon upgrade for a two-hander or bow is skipped and the log says the combat equip gambit will place it, which is not what happens OOC. MAP: "logistics/Upkeep.cpp" EquipTorch entry.
+
+### MFO-B388 (SEV-5, OPEN, logistics/EquipAuthority.cpp rule 1d) -- torch: STARTED is logged before resolveCarried (raised against 68f3841)
+Same review. Verbatim (log): "STARTED logged before resolveCarried". An uncarried torch logs a start with nothing declared. MAP: EquipTorch entry.
+
+### MFO-B389 (SEV-4, OPEN, logistics/Upkeep.cpp TorchDeclaredFor) -- torch: MFO does not check that Harbinger has the torch seat (raised against 68f3841)
+Same review. Verbatim (log): "MFO doesn't check Harbinger has the torch seat -- mixed-version stow not denied". With an older Harbinger (no H1 seat) the claim still owns Light|Left but the engine's stow is not denied, so the torch can be stowed and re-placed. MAP: EquipTorch entry.
+
+### MFO-B390 (SEV-4, OPEN, logistics/Service.cpp early returns) -- torch: a standing declaration outlives a lap with no build outside combat (raised against 68f3841)
+Same review (minor strands of finding A): bLogistics toggled off at runtime, `CannotActReason` (bleedout), and the Scheduler's retreat / EngageOnSight returns all skip `ServiceFollower`'s declaration tail, so a torch declaration built earlier stands until the next build or the first combat lap (`TorchDeclarationDue` ends it there). Not pushed outside combat. MAP: EquipTorch entry.

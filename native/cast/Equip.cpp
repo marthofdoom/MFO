@@ -1226,6 +1226,11 @@ namespace MFO::Actuation {
                 g_boundSeen.erase(it);
             }
         }
+        // STANDING TORCH (feat/mfo-torch-ch17): the OOC torch declaration (Light|Left owned) is built by the service
+        // road, which never runs in his own combat -- so a standing one is ended HERE, by one re-declaration (the
+        // build declines the torch in combat; send-on-change inside). Cheap: one map find.
+        if (Logistics::EquipAuthorityLive(a_follower->GetFormID()) && Logistics::TorchDeclarationDue(a_follower))
+            DeclareFromLedger(a_follower, "torch ended");
         // WEIGHTING W1 (cast/EquipWeigh.cpp): every in-combat lap, hold or no hold -- the pending ch.17
         // placements, the ch.26 preference from the ledger, Harbinger's state line and the D4 escalation.
         // No-op unless Harbinger serves ch.26 (ABI >= 22).
