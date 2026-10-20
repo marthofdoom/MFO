@@ -106,13 +106,24 @@ FID_LOTD_DETECTED_GLOB = OWN | 0x903
 # See LOCKPICK_SNDR_PENDING / make_lockpick_sndr() below.
 FID_SND_PICK_MOVEMENT = OWN | 0x904
 FID_SND_PICK_BREAK    = OWN | 0x905
-NEXT_OBJECT_ID     = 0x904         # first never-used local id (0x836-0x839 = APMF loot-travel packages,
+# TOWN PHASE 2 R7 (inn + temple errands): the ch.9 "work" packages the town errands offer through Harbinger (APMFBridge::
+# OfferErrandWork). FOUR per vanilla template, one per concurrent follower (the DLL writes the run-time target / location into
+# the slot's record before the claim, so two followers never share one record): Activate 00019B2D (the shrine), Sandbox
+# 0001C254 (stay in the inn), Eat 00019714 (the meal), Sleep 00019717 (the bed). Sixteen records, 0x906-0x915, from
+# NEXT_OBJECT_ID_WITH_SNDR; native/Forms.h kErrandWork* mirrors them. See make_errand_work_packages().
+FID_ERRAND_ACTIVATE_0 = OWN | 0x906   # 0x906-0x909
+FID_ERRAND_SANDBOX_0  = OWN | 0x90A   # 0x90A-0x90D
+FID_ERRAND_EAT_0      = OWN | 0x90E   # 0x90E-0x911
+FID_ERRAND_SLEEP_0    = OWN | 0x912   # 0x912-0x915
+ERRAND_WORK_SLOTS     = 4
+NEXT_OBJECT_ID     = 0x916         # first never-used local id (0x916 since R7: the sixteen work packages are always emitted;
+                                   # was 0x904. 0x836-0x839 = APMF loot-travel packages,
                                    # 0x83A = APMF retreat package, 0x83B/0x83C = retired (see above),
                                    # 0x900-0x902 = P7 travel packages, 0x903 = MFO_LOTDDetected)
                                    # 0x904/0x905 are CLAIMED by the lockpick SNDRs (Forms.h) but only
                                    # emitted once LOCKPICK_SNDR_PENDING is complete; main() then writes
                                    # NEXT_OBJECT_ID_WITH_SNDR into the header.
-NEXT_OBJECT_ID_WITH_SNDR = 0x906
+NEXT_OBJECT_ID_WITH_SNDR = 0x916
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -125,6 +136,10 @@ FREF_TMPL_USEMAGIC     = 0x000504F5   # Spell, Target, CastTime, Cooldown, NumTo
 FREF_TMPL_USEWEAPON    = 0x0001C338
 FREF_TMPL_HOLDPOSITION = 0x000503D0
 FREF_TMPL_TRAVEL       = 0x00016FAA
+FREF_TMPL_ACTIVATE     = 0x00019B2D   # R7: Target (SingleRef, uid 0), Number to Activate (Int, uid 2)
+FREF_TMPL_SANDBOX      = 0x0001C254   # R7: THREE inputs are named "Location" (uids 0, 9, 15); only uid 0 carries a value
+FREF_TMPL_EAT          = 0x00019714   # R7: "Eat Location" (uid 0)
+FREF_TMPL_SLEEP        = 0x00019717   # R7: "Sleep Location" (uid 0)
 FREF_TMPL_ACTIVATE     = 0x00019B2D
 
 # The seeded spell for the main package. Magelight, NOT a heal: the main
@@ -1031,6 +1046,121 @@ def make_apmf_retreat_package():
                         pkdt_flags=0x00102000)
 
 
+# ── TOWN PHASE 2 R7: the errand WORK packages (ch.9 0x49 route, runtime target / location) ─────────────────────────
+# Four vanilla templates, each instance mirrored from a vanilla exemplar dumped from Skyrim.esm with tools/esp_inspect.py
+# (2026-10-19), so the byte shape is the one the engine already loads: Activate <- GilfreSawmillSawLog8x14 (00100FA7),
+# Sandbox <- WinterholdKraldarSandboxHome (00000E8C), Eat <- GuardRiftenEatDayShift20x4 (0010C524), Sleep <-
+# DefaultSleepEditorLoc17x5 (0010FB3E). Only the inputs MFO sets differ from the exemplar:
+#   * the Location (Sandbox / Eat / Sleep) is PLDT type 0 "Near Reference" with a non-null placeholder ref (FREF_PLAYER, as
+#     the APMF loot-travel packages do) and a radius; the DLL overwrites PackageLocation::data.refHandle / rad at run time
+#     BEFORE it claims the actor (Packages::SetPackageLocation). No QNAM (no alias-valued input).
+#   * the Activate Target is PTDA targType 0 (a placed reference), placeholder FREF_PLAYER; the DLL writes the shrine's
+#     handle (Packages::SetPackageTargetRef). The placeholder is never the live target: the DLL claims only after both guards pass.
+#   * the Sandbox Bools: Allow Eating / Idle Markers / Sitting / Conversation ON; Allow Sleeping, Wandering, Special
+#     Furniture, "Unlock On Arrival?" (do not unlock the inn doors), Prefered Path, RideHorse OFF; Energy 50 (the exemplar's).
+# All four are PSDT "any time", no conditions, no QNAM; the interrupt flags are the exemplar's.
+def _work_pkdt(flags, interrupt):
+    return subrec('PKDT', struct.pack('<IBBBBHH', flags, 0x12, 0, 2, 0, interrupt, 0))
+
+
+def _work_inputs(pairs):
+    out = b''
+    for sig, data in pairs:
+        out += subrec(sig, data)
+    return out
+
+
+def _work_tail(unams, xnam):
+    out = b''
+    for u in unams:
+        out += subrec('UNAM', struct.pack('<B', u))
+    out += subrec('XNAM', struct.pack('<B', xnam))
+    for blk in ('POBA', 'POEA', 'POCA'):
+        out += subrec(blk, b'')
+        out += subrec('INAM', struct.pack('<I', 0))
+        out += subrec('PDTO', struct.pack('<II', 0, 0))
+    return out
+
+
+def _work_pack(fid, edid, pkdt, n_inputs, template, version, inputs, tail):
+    body  = subrec('EDID', zstr(edid))
+    body += pkdt
+    body += subrec('PSDT', bytes.fromhex('ffff00ffff00000000000000'))
+    body += subrec('PKCU', struct.pack('<III', n_inputs, template, version))
+    body += inputs
+    body += tail
+    return record('PACK', fid, 0, body)
+
+
+def _loc_input(radius):
+    return [('ANAM', zstr("Location")), ('PLDT', struct.pack('<IiI', 0, FREF_PLAYER, radius))]
+
+
+def _bool(v):
+    return [('ANAM', zstr("Bool")), ('CNAM', struct.pack('<B', v))]
+
+
+def make_errand_activate_package(fid, edid):
+    inputs = _work_inputs([('ANAM', zstr("SingleRef")), ('PTDA', struct.pack('<III', 0, FREF_PLAYER, 0)),
+                           ('ANAM', zstr("Int")), ('CNAM', struct.pack('<I', 1))])
+    return _work_pack(fid, edid, _work_pkdt(0, 0xFEFF), 2, FREF_TMPL_ACTIVATE, 13, inputs, _work_tail([0, 2], 3))
+
+
+def make_errand_sandbox_package(fid, edid, radius=600):
+    # Bool order = the exemplar's UNAM run: 0 Location, 14 Unlock On Arrival?, 1 Allow Eating, 3 Allow Sleeping, 4 Allow
+    # Conversation, 5 Allow Idle Markers, 6 Allow Sitting, 31 Allow Special Furniture, 7 Allow Wandering, 25 Prefered Path
+    # Only?, 27 RideHorseIfPossible, 29 Energy (Float).
+    pairs = _loc_input(radius)
+    for v in (0, 1, 0, 1, 1, 1, 0, 0, 0, 0):
+        pairs += _bool(v)
+    pairs += [('ANAM', zstr("Float")), ('CNAM', struct.pack('<f', 50.0))]
+    return _work_pack(fid, edid, _work_pkdt(0, 0xFEFF), 12, FREF_TMPL_SANDBOX, 10, _work_inputs(pairs),
+                      _work_tail([0, 14, 1, 3, 4, 5, 6, 31, 7, 25, 27, 29], 32))
+
+
+def make_errand_eat_package(fid, edid, radius=300):
+    # Everything after the Location verbatim from GuardRiftenEatDayShift20x4 (21 inputs).
+    pairs = _loc_input(radius)
+    pairs += _bool(0)
+    for tgt in (0x0000000F, 0x0000001B):   # the two TargetSelector / ObjectList pairs (Gold001, DefaultAshPile1 as vanilla)
+        pairs += [('ANAM', zstr("TargetSelector")), ('PTDA', struct.pack('<III', 2, tgt, 0)),
+                  ('ANAM', zstr("ObjectList")), ('CNAM', struct.pack('<I', 0))]
+    pairs += [('ANAM', zstr("Int")), ('CNAM', struct.pack('<I', 1))]
+    for v in (1, 0, 0, 1, 1, 0, 1, 0, 1, 1, 0):
+        pairs += _bool(v)
+    pairs += [('ANAM', zstr("Float")), ('CNAM', struct.pack('<f', 300.0))]
+    pairs += _bool(0)
+    pairs += [('ANAM', zstr("Float")), ('CNAM', struct.pack('<f', 0.0))]
+    unams = [0, 0x15, 1, 4, 5, 6, 0x0a, 0x0c, 0x10, 0x0e, 0x17, 0x19, 0x1a, 0x1b, 0x1c, 0x21, 0x1d, 0x1e, 0x23, 0x08, 0x20]
+    return _work_pack(fid, edid, _work_pkdt(0x00200000, 0xFCF7), 21, FREF_TMPL_EAT, 8, _work_inputs(pairs), _work_tail(unams, 0x24))
+
+
+def make_errand_sleep_package(fid, edid, radius=500):
+    # Everything after the Location verbatim from DefaultSleepEditorLoc17x5 (17 inputs).
+    pairs = _loc_input(radius)
+    pairs += [('ANAM', zstr("TargetSelector")), ('PTDA', struct.pack('<III', 2, 0x0000001A, 0)),
+              ('ANAM', zstr("ObjectList")), ('CNAM', struct.pack('<I', 0))]
+    for v in (0, 0, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1):
+        pairs += _bool(v)
+    pairs += [('ANAM', zstr("Float")), ('CNAM', struct.pack('<f', 300.0)),
+              ('ANAM', zstr("Float")), ('CNAM', struct.pack('<f', 50.0))]
+    unams = [0, 1, 2, 6, 8, 0x0f, 0x0d, 0x0b, 0x11, 0x12, 0x13, 0x14, 0x15, 0x19, 0x16, 0x1a, 0x18]
+    return _work_pack(fid, edid, _work_pkdt(0x00200000, 0xFEFF), 17, FREF_TMPL_SLEEP, 6, _work_inputs(pairs), _work_tail(unams, 5))
+
+
+def make_errand_work_packages():
+    out = b''
+    for i in range(ERRAND_WORK_SLOTS):
+        out += make_errand_activate_package(FID_ERRAND_ACTIVATE_0 + i, f"MFO_ErrandActivate{i}")
+    for i in range(ERRAND_WORK_SLOTS):
+        out += make_errand_sandbox_package(FID_ERRAND_SANDBOX_0 + i, f"MFO_ErrandSandbox{i}")
+    for i in range(ERRAND_WORK_SLOTS):
+        out += make_errand_eat_package(FID_ERRAND_EAT_0 + i, f"MFO_ErrandEat{i}")
+    for i in range(ERRAND_WORK_SLOTS):
+        out += make_errand_sleep_package(FID_ERRAND_SLEEP_0 + i, f"MFO_ErrandSleep{i}")
+    return out
+
+
 def make_poc_packages():
     """The probe ladder -- see POC_PROBES. One axis of novelty per probe,
     exactly one valid at a time via the MFO_ProbeSelect gate."""
@@ -1062,6 +1192,7 @@ def make_pack():
     body += make_apmf_loot_travel_package()
     body += make_apmf_retreat_package()
     body += make_retreat_package()
+    body += make_errand_work_packages()   # R7: 16 town-errand work packages (Activate / Sandbox / Eat / Sleep x 4 slots)
     return group('PACK', body)
 
 
@@ -1994,6 +2125,9 @@ def main():
     print(f"  PACK  0x{FID_RETREAT_PACKAGE & 0xFFF:03X}        MFO_RetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat")
     print(f"  PACK  0x{FID_APMF_RETREAT_PACKAGE & 0xFFF:03X}        MFO_APMFRetreatPackage -> vanilla Travel {FREF_TMPL_TRAVEL:08X} + kIgnoreCombat "
           f"(runtime-handle Location, ch.9 0x49 route, APMFBridge::OfferPackage)")
+    print(f"  PACK  0x{FID_ERRAND_ACTIVATE_0 & 0xFFF:03X}-0x{(FID_ERRAND_SLEEP_0 + ERRAND_WORK_SLOTS - 1) & 0xFFF:03X}    "
+          f"MFO_ErrandActivate/Sandbox/Eat/Sleep0-3 -> vanilla {FREF_TMPL_ACTIVATE:08X}/{FREF_TMPL_SANDBOX:08X}/{FREF_TMPL_EAT:08X}/"
+          f"{FREF_TMPL_SLEEP:08X} (runtime Location / Target, ch.9 0x49 route, town errands R7)")
     print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
     print(f"  CSTY  0x{FID_MELEE_STYLE & 0xFFF:03X}        MFO_MeleeStyle (equip_melee stance -- default ON)")
     print(f"  CSTY  0x{FID_RANGED_STYLE & 0xFFF:03X}        MFO_RangedStyle (equip_ranged stance -- default ON)")

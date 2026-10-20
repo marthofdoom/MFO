@@ -1,5 +1,6 @@
 #pragma once
 #include "PCH.h"
+#include <array>
 
 // Runtime form resolution against MFO.esp.
 //
@@ -110,6 +111,24 @@ namespace MFO::Forms {
     // the ids stay reserved forever, never recycled (INVARIANTS #41).
     inline constexpr RE::FormID kAPMFHealSelfPackage_RETIRED   = 0x83B;   // reserved, unused
     inline constexpr RE::FormID kAPMFHealPlayerPackage_RETIRED = 0x83C;   // reserved, unused
+
+    // TOWN PHASE 2 R7 (inn + temple errands): the ch.9 WORK packages the errands offer through Harbinger
+    // (APMFBridge::OfferErrandWork). FOUR per vanilla template, one per concurrent follower slot (the DLL writes the
+    // run-time target / location into the slot's record BEFORE the claim, so two followers never share a record).
+    // Activate 00019B2D (the shrine), Sandbox 0001C254 (stay in the inn), Eat 00019714, Sleep 00019717. Mirror
+    // MFO_GenerateESP.py FID_ERRAND_{ACTIVATE,SANDBOX,EAT,SLEEP}_0 (+ slot); no QNAM; a miss disables only that work.
+    inline constexpr RE::FormID kErrandActivate0 = 0x906;   // 0x906-0x909
+    inline constexpr RE::FormID kErrandSandbox0  = 0x90A;   // 0x90A-0x90D
+    inline constexpr RE::FormID kErrandEat0      = 0x90E;   // 0x90E-0x911
+    inline constexpr RE::FormID kErrandSleep0    = 0x912;   // 0x912-0x915
+    inline constexpr int kErrandWorkSlots = 4;
+    enum class ErrandWorkKind : int { Activate = 0, Sandbox, Eat, Sleep };
+    inline std::array<std::array<RE::TESPackage*, kErrandWorkSlots>, 4> g_errandWork{};   // [kind][slot], filled by Forms::Resolve
+    inline RE::TESPackage* ErrandWorkPackage(ErrandWorkKind a_kind, int a_slot) {
+        const int k = static_cast<int>(a_kind);
+        if (k < 0 || k > 3 || a_slot < 0 || a_slot >= kErrandWorkSlots) return nullptr;
+        return g_errandWork[k][a_slot];
+    }
 
     inline RE::SpellItem*  g_fieldOrders  = nullptr;
     inline RE::BGSKeyword* g_grantedKywd  = nullptr;

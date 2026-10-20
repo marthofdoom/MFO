@@ -51,6 +51,13 @@ namespace MFO::Forms {
         g_apmfLootTravelPackage1 = Look<RE::TESPackage>(kAPMFLootTravelPackage1, "MFO_APMFLootTravelPackage1");
         g_apmfLootTravelPackage2 = Look<RE::TESPackage>(kAPMFLootTravelPackage2, "MFO_APMFLootTravelPackage2");
         g_apmfLootTravelPackage3 = Look<RE::TESPackage>(kAPMFLootTravelPackage3, "MFO_APMFLootTravelPackage3");
+        // TOWN PHASE 2 R7: the errand work packages. A miss disables only that work (the errand skips the stop, loudly).
+        for (int i = 0; i < kErrandWorkSlots; ++i) {
+            g_errandWork[0][i] = Look<RE::TESPackage>(kErrandActivate0 + i, std::format("MFO_ErrandActivate{}", i).c_str());
+            g_errandWork[1][i] = Look<RE::TESPackage>(kErrandSandbox0 + i,  std::format("MFO_ErrandSandbox{}", i).c_str());
+            g_errandWork[2][i] = Look<RE::TESPackage>(kErrandEat0 + i,      std::format("MFO_ErrandEat{}", i).c_str());
+            g_errandWork[3][i] = Look<RE::TESPackage>(kErrandSleep0 + i,    std::format("MFO_ErrandSleep{}", i).c_str());
+        }
         g_retreatQuest   = Look<RE::TESQuest>(kRetreatQuest, "MFO_RetreatQuest");        // RETREAT PROBE
         g_retreatPackage = Look<RE::TESPackage>(kRetreatPackage, "MFO_RetreatPackage");  // RETREAT PROBE
         g_apmfRetreatPackage = Look<RE::TESPackage>(kAPMFRetreatPackage, "MFO_APMFRetreatPackage");  // APMF ch.9 0x49 route
