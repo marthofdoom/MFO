@@ -303,11 +303,13 @@ namespace MFO::TradeBridge {
                         const float wb = Logistics::FoodWorth(c2.f->As<RE::AlchemyItem>()) / static_cast<float>(c2.value);
                         return wa != wb ? wa > wb : a.value < c2.value;
                     });
+                    int foodLeft = o->budget / 2;   // R7 review: the cap is half the purse the FOOD pass started with, computed ONCE (not half of what is left per line)
                     for (const auto& c : foods) {
                         if (need->quota <= 0) break;
                         int qty = std::min(c.avail, need->quota);
-                        qty = std::min(qty, (o->budget / 2) / c.value);
+                        qty = std::min(qty, foodLeft / c.value);
                         if (qty <= 0) continue;
+                        foodLeft -= qty * c.value;
                         plan[c.idx] += qty;
                         need->quota -= qty;
                         o->budget   -= qty * c.value;

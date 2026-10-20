@@ -145,7 +145,7 @@ namespace MFO::Logistics::Errand::Rest {
         std::unordered_set<RE::FormID>                   g_tripDone;   // followers whose trip ended this town visit
         std::unordered_set<RE::FormID>                   g_tripLogged; // ... for whom the re-plan block was already logged
         RE::FormID                                       g_marksTown = 0;
-        struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0; };
+        struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0, cell = 0; };   // cell: the interior cell of the faction's PLVD place (0 = unknown)
         std::unordered_map<RE::FormID, std::vector<InnFac>> g_innFacs;  // town -> the innkeeper factions (immutable once built)
 
         int GameDay() {
@@ -290,18 +290,23 @@ namespace MFO::Logistics::Errand::Rest {
                     auto* pl = fac->vendorData.vendorLocation;
                     if (!pl) continue;
                     const RE::BGSLocation* placeLoc = nullptr;
+                    RE::FormID placeCell = 0;
                     if (pl->locType.get() == RE::PackageLocation::Type::kInCell) {
                         auto* c = pl->data.object ? pl->data.object->As<RE::TESObjectCELL>() : nullptr;
                         placeLoc = c ? c->GetLocation() : nullptr;
+                        if (c && c->IsInteriorCell()) placeCell = c->GetFormID();
                     } else if (pl->locType.get() == RE::PackageLocation::Type::kNearReference) {
                         auto ref = pl->data.refHandle.get();
-                        if (ref) { placeLoc = ref->GetEditorLocation(); if (!placeLoc) placeLoc = ref->GetCurrentLocation(); }
+                        if (ref) {
+                            placeLoc = ref->GetEditorLocation(); if (!placeLoc) placeLoc = ref->GetCurrentLocation();
+                            if (auto* rc = ref->GetParentCell(); rc && rc->IsInteriorCell()) placeCell = rc->GetFormID();
+                        }
                     }
                     if (!placeLoc || !LocationTypes::IsInn(placeLoc) || LocationTypes::TownAnchor(placeLoc) != a_town) continue;
                     // the innermost inn location of the place (the one the interior cell reports)
                     const RE::BGSLocation* inner = placeLoc;
                     InnFac f;
-                    f.faction = fac->GetFormID(); f.chest = chest->GetFormID(); f.locId = inner->GetFormID();
+                    f.faction = fac->GetFormID(); f.chest = chest->GetFormID(); f.locId = inner->GetFormID(); f.cell = placeCell;
                     out.push_back(f);
                 }
             }
@@ -309,6 +314,46 @@ namespace MFO::Logistics::Errand::Rest {
             std::scoped_lock lk(g_mx);
             g_innFacs[a_town->GetFormID()] = out;
             return out;
+        }
+
+        // R7 review SEV-3: the inn / temple are NOT only reachable through a load door in the follower's own cell (in an exterior town the
+        // door is often in another cell). Resolve the place from the DATA, the way BuildTownShops does and on the same gate (1.6.1170 only):
+        //   (a) the innkeeper vendor faction's PLVD place -> its interior cell (InnFactionsOf, fills InnFac::cell);
+        //   (b) the location's own special refs (LCSR): UnloadedRefData::parentSpaceID is the cell the ref sits in; the first INTERIOR cell whose
+        //       location IsInn / IsTemple and sits in this town.
+        // The cell is walked to by ch.19 exactly like a shop CELL; no door position is known (Stop::havePos false -> the planner's 2000 u street
+        // estimate). UNVERIFIED IN THE FIELD: whether a given location lists a special ref inside its interior.
+        bool ResolveViaData(const RE::BGSLocation* a_town, bool a_inn, Place& a_out, const char*& a_how) {
+            if (a_out.ok || !a_town || !Runtime::IsVerified1_6_1170()) return a_out.ok;
+            if (a_inn) {
+                for (const auto& f : InnFactionsOf(a_town)) {
+                    auto* c = f.cell ? RE::TESForm::LookupByID<RE::TESObjectCELL>(f.cell) : nullptr;
+                    const RE::BGSLocation* loc = c ? c->GetLocation() : nullptr;
+                    if (!loc) continue;
+                    a_out.ok = true; a_out.cell = c->GetFormID(); a_out.locId = loc->GetFormID();
+                    const char* n = loc->GetName();
+                    a_out.name = n && *n ? n : "the inn";
+                    a_how = "the innkeeper faction's place";
+                    return true;
+                }
+            }
+            auto* dh = RE::TESDataHandler::GetSingleton();
+            if (!dh) return false;
+            for (auto* loc : dh->GetFormArray<RE::BGSLocation>()) {
+                if (!loc || !(a_inn ? LocationTypes::IsInn(loc) : LocationTypes::IsTemple(loc)) || LocationTypes::TownAnchor(loc) != a_town) continue;
+                for (const auto& sr : loc->specialRefs) {
+                    auto* c = RE::TESForm::LookupByID<RE::TESObjectCELL>(sr.refData.parentSpaceID);
+                    if (!c || !c->IsInteriorCell()) continue;
+                    const RE::BGSLocation* cl = c->GetLocation();
+                    if (!cl || !(a_inn ? LocationTypes::IsInn(cl) : LocationTypes::IsTemple(cl)) || LocationTypes::TownAnchor(cl) != a_town) continue;
+                    a_out.ok = true; a_out.cell = c->GetFormID(); a_out.locId = cl->GetFormID();
+                    const char* n = cl->GetName();
+                    a_out.name = n && *n ? n : (a_inn ? "the inn" : "the temple");
+                    a_how = "the location's special refs";
+                    return true;
+                }
+            }
+            return false;
         }
 
         // ── the temple's reason ──────────────────────────────────────────────────────────────────────────
@@ -643,6 +688,13 @@ namespace MFO::Logistics::Errand::Rest {
         PostMagicProbe(fid);   // the NEXT plan (6 s) reads it: disease is a main-thread read
         Place inn, temple;
         FindPlaces(a_follower, a_town, inn, temple);
+        {   // not reachable by a door in his own cell: resolve through the data (see ResolveViaData)
+            const char* how = "";
+            if (!inn.ok && ResolveViaData(a_town, true, inn, how))
+                spdlog::info("[errand] {:08X}: inn '{}' (cell {:08X}) resolved through {} (no load door to it in his cell)", fid, inn.name, inn.cell, how);
+            if (!temple.ok && ResolveViaData(a_town, false, temple, how))
+                spdlog::info("[errand] {:08X}: temple '{}' (cell {:08X}) resolved through {} (no load door to it in his cell)", fid, temple.name, temple.cell, how);
+        }
         std::string templeWhy;
         const bool wantTemple = temple.ok && TempleWanted(fid, templeWhy);
         if (!a_haveStops && !wantTemple) return false;   // no shop work and no temple reason: no trip (the inn alone is never a trip)
@@ -654,7 +706,7 @@ namespace MFO::Logistics::Errand::Rest {
             t.kind = StopKind::Temple;
             t.vendorName = temple.name;
             t.destKind = DestKind::Cell; t.destForm = temple.cell; t.destRad = 0.0f;
-            t.pos = temple.door; t.havePos = true;
+            t.pos = temple.door; t.havePos = temple.door.x != 0.0f || temple.door.y != 0.0f || temple.door.z != 0.0f;
             t.state = StopState::Pending;
             a_stops.push_back(std::move(t));
             add += std::format(" -> temple '{}' ({})", temple.name, templeWhy);
@@ -671,7 +723,7 @@ namespace MFO::Logistics::Errand::Rest {
             s.kind = StopKind::Inn;
             s.vendorName = inn.name;
             s.destKind = DestKind::Cell; s.destForm = inn.cell; s.destRad = 0.0f;
-            s.pos = inn.door; s.havePos = true;
+            s.pos = inn.door; s.havePos = inn.door.x != 0.0f || inn.door.y != 0.0f || inn.door.z != 0.0f;
             s.state = StopState::Pending;
             // The innkeeper and a small food stock (R0-10: judged from the food's real effects; the stock is iInnFoodStock worthy foods).
             std::string food = "rest only";

@@ -1118,10 +1118,11 @@ namespace MFO::Logistics::Errand {
             Finish(fid, "told to wait", 60.0f);
             return false;
         }
-        if (a_healWants && a_healWants()) { Finish(fid, "yields to a heal", 15.0f); return false; }
+        // R7 review: the INN STAY has exactly two exits (the player leaving town, combat; marth 2026-10-19): a heal request does not end it.
+        const bool innStay = r.phase == Phase::Resting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn;
+        if (!innStay && a_healWants && a_healWants()) { Finish(fid, "yields to a heal", 15.0f); return false; }
         // R7: the INN STAY has no cap of its own (marth 2026-10-19: he stays until the player leaves town; combat and "told to wait" above and
         // the Sweep's player-left-town end it). Every other phase, and the temple's prayer, keep both caps.
-        const bool innStay = r.phase == Phase::Resting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn;
         if (!innStay && Scheduler::ServiceClock() - r.startClk > kRealCapSec) { Finish(fid, "timed out (240 s real time)", 60.0f); return false; }
         if (auto* cal = RE::Calendar::GetSingleton(); cal && !innStay) {
             const float minutes = (cal->GetDaysPassed() - r.startDays) * 24.0f * 60.0f;

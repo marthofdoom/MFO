@@ -140,7 +140,6 @@ FREF_TMPL_ACTIVATE     = 0x00019B2D   # R7: Target (SingleRef, uid 0), Number to
 FREF_TMPL_SANDBOX      = 0x0001C254   # R7: THREE inputs are named "Location" (uids 0, 9, 15); only uid 0 carries a value
 FREF_TMPL_EAT          = 0x00019714   # R7: "Eat Location" (uid 0)
 FREF_TMPL_SLEEP        = 0x00019717   # R7: "Sleep Location" (uid 0)
-FREF_TMPL_ACTIVATE     = 0x00019B2D
 
 # The seeded spell for the main package. Magelight, NOT a heal: the main
 # package's shipped shape is now "Aimed spell at the foe alias" (the only
@@ -1056,7 +1055,7 @@ def make_apmf_retreat_package():
 #     BEFORE it claims the actor (Packages::SetPackageLocation). No QNAM (no alias-valued input).
 #   * the Activate Target is PTDA targType 0 (a placed reference), placeholder FREF_PLAYER; the DLL writes the shrine's
 #     handle (Packages::SetPackageTargetRef). The placeholder is never the live target: the DLL claims only after both guards pass.
-#   * the Sandbox Bools: Allow Eating / Idle Markers / Sitting / Conversation ON; Allow Sleeping, Wandering, Special
+#   * the Sandbox Bools: Idle Markers / Sitting / Conversation ON; Allow Eating (the Eat package handles the meal), Allow Sleeping, Wandering, Special
 #     Furniture, "Unlock On Arrival?" (do not unlock the inn doors), Prefered Path, RideHorse OFF; Energy 50 (the exemplar's).
 # All four are PSDT "any time", no conditions, no QNAM; the interrupt flags are the exemplar's.
 def _work_pkdt(flags, interrupt):
@@ -1111,7 +1110,7 @@ def make_errand_sandbox_package(fid, edid, radius=600):
     # Conversation, 5 Allow Idle Markers, 6 Allow Sitting, 31 Allow Special Furniture, 7 Allow Wandering, 25 Prefered Path
     # Only?, 27 RideHorseIfPossible, 29 Energy (Float).
     pairs = _loc_input(radius)
-    for v in (0, 1, 0, 1, 1, 1, 0, 0, 0, 0):
+    for v in (0, 0, 0, 1, 1, 1, 0, 0, 0, 0):   # Allow Eating OFF: the Eat package handles the meal; Sandbox eating over a long stay would eat the bought stock
         pairs += _bool(v)
     pairs += [('ANAM', zstr("Float")), ('CNAM', struct.pack('<f', 50.0))]
     return _work_pack(fid, edid, _work_pkdt(0, 0xFEFF), 12, FREF_TMPL_SANDBOX, 10, _work_inputs(pairs),

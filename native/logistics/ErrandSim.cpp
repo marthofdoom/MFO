@@ -634,6 +634,9 @@ namespace MFO::Logistics::Errand::Sim {
                 for (const auto& ss : s.stops) r.stops.push_back(Trip::FromSaved(ss));   // R5 (ERND v2; a v1 entry: one stop)
                 r.cur = s.cur;
                 SyncCur(r);   // the head fields (resolved by the reader) are the current stop's
+                // R7 review SEV-2: a saved REST_SIM (SimTrade + kTradeDone on an INN stop) re-enters REST_SIM, not Trade -- the Trade stage would meet the cap
+                // check before the Trade->Rest transition and recall him out of the inn. (No wire change: the same flags the writer already sets.)
+                if (s.stage == SavedStage::SimTrade && done && CurKind(r) == StopKind::Inn) r.stage = Stage::Rest;
                 if (!r.reported && !r.tradeAbandoned) r.decideBy = now + kRestoreSettle;
                 r.nextPoll = now;
                 r.nextPosLog = now + kPosLogEvery;
@@ -750,6 +753,7 @@ namespace MFO::Logistics::Errand::Sim {
             if (pc->IsInCombat()) {   // he walks out of the shop and joins the fight
                 ResolveNow(r, f, days, "player combat");
                 PlaceReturn(r, f, "the player is in combat -- he walks out and joins");
+                if (Config::g_errandInn.load() && CurKind(r) == StopKind::Inn) Rest::MarkTripDone(fid, r.town, "REST_SIM ended by player combat");   // R7 review: one trip per visit, off screen too
                 Drop(fid, "player combat -- he joins", kCombatCooldownSec, false);
                 continue;
             }
@@ -820,6 +824,7 @@ namespace MFO::Logistics::Errand::Sim {
                 // 20 s after the placement: if he is STILL not loaded and far from the player, bring him the rest of the way.
                 const float d = f->GetPosition().GetDistance(pc->GetPosition());
                 if (d > kRejoinFarU) detail::RecallToPlayer(fid, "not back with the player 20 s after RET_SIM");
+                if (Config::g_errandInn.load()) Rest::MarkTripDone(fid, r.town, "RET_SIM returned");   // R7 review: an inn-less trip ends here; one trip per visit
                 Drop(fid, "returned", Config::g_errandCooldownSec.load(), true);
                 continue;
             }
