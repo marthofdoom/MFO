@@ -1903,3 +1903,21 @@ Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "The per-call group 
 
 ### MFO-B329 (SEV-5, OPEN, CombatStyle.cpp) -- riften fixes: a CSTY written before a leak began stays (raised against fb883fe3)
 Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "A CSTY written before a leak began stays on the live controller until it dies." Reasoning: the Targeting hook stops re-asserting a style for a leaked teammate, it does not restore the engine-derived one; the controller's own teardown does.
+
+### MFO-B337 (SEV-4, OPEN, Board.cpp / Board.h) -- town R3: r.cell is dead after the location column
+Opus review of `feat/mfo-town-p2-r3-board` @ 92c761cd. Verbatim: "Board.cpp:1785-1790 and Board.h:64-66: r.cell is now dead. It is still computed with duplicate engine reads, and the cell field and its comment in Board.h remain, but nothing draws it any more. The replacement is not clean: delete the block and the field."
+
+### MFO-B338 (SEV-4, CLOSED 2026-10-19 at merge) -- town R3: '?' vendor fallback shows "Walking to ?"
+Opus review @ 92c761cd. Verbatim: "Errand.cpp:906 and ErrandSim.cpp:456: vendorName falls back to '?', not to an empty string... the 'the shop' fallback in Describe never fires. It should check for '?' as well as empty." Fixed inline at merge (both Describe sites treat '?' as empty).
+
+### MFO-B339 (SEV-4, OPEN, Errand.cpp / ErrandSim.cpp / Board) -- town R3: errand status strings bypass i18n
+Opus review @ 92c761cd. Verbatim: "the status strings are English literals, while the same tab keys its sibling states (Fk_StateLooting / Fk_StateTrading)... Fix: have Describe return a kind plus the shop name, and let the Board format it through {1} keys. The toast literals match the existing ToastTrading... so they can stay."
+
+### MFO-B340 (SEV-5, OPEN, Board.cpp:34-35) -- town R3: mangled include comment
+Opus review @ 92c761cd. Verbatim: "the include comment got mangled. The // IsLooting/IsTrading... comment for Logistics.h was appended to the Errand.h line."
+
+### MFO-B341 (SEV-5, OPEN, Errand.cpp / ErrandSim.cpp) -- town R3: "Trading with" vs "trading at"
+Opus review @ 92c761cd. Verbatim: "the physical errand says 'Trading with X' and the simulated one says 'Off-screen: trading at X'. Pick one preposition."
+
+### MFO-B342 (SEV-5, OPEN, Board_FieldKit.cpp:510) -- town R3: '- %s' separator
+Opus review @ 92c761cd. Verbatim: "the '- %s' separator uses a hyphen as a dash. It is carried over from the old draw. VOICE.md asks for a colon or parentheses, so '(with you)' would fit better. Optional."

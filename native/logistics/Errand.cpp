@@ -564,6 +564,19 @@ namespace MFO::Logistics::Errand {
         return Sim::Has(a_follower);
     }
 
+    std::string Describe(RE::FormID a_follower) {
+        {
+            std::scoped_lock lk(g_mx);
+            auto it = g_recs.find(a_follower);
+            if (it != g_recs.end()) {
+                const Rec& r = it->second;
+                const std::string shop = (r.vendorName.empty() || r.vendorName == "?") ? std::string("the shop") : r.vendorName;
+                return r.phase == Phase::Walking ? "Walking to " + shop : "Trading with " + shop;
+            }
+        }
+        return Sim::Describe(a_follower);   // the table mutex is released: the two never nest
+    }
+
     void End(RE::FormID a_follower, const char* a_why) { Finish(a_follower, a_why, kFailCooldownSec); }
 
     void ClearTransientState() {
@@ -650,6 +663,19 @@ namespace MFO::Logistics::Errand {
         }
         void ToastTrading(const std::string& a_who, const std::string& a_shop) {
             Toast(std::format("{} is trading with {}.", a_who, a_shop));
+        }
+        // R3 strings table for the phase-2 kinds (no caller yet).
+        void ToastSmithing(const std::string& a_who, const std::string& a_place) {
+            Toast(std::format("{} is working at {}.", a_who, a_place));
+        }
+        void ToastResting(const std::string& a_who, const std::string& a_inn) {
+            Toast(std::format("{} is resting at {}.", a_who, a_inn));
+        }
+        void ToastPraying(const std::string& a_who, const std::string& a_temple) {
+            Toast(std::format("{} is praying at {}.", a_who, a_temple));
+        }
+        void ToastFence(const std::string& a_who, const std::string& a_fence) {
+            Toast(std::format("{} is visiting {}.", a_who, a_fence));
         }
 
         // RECALL (marth 2026-10-18: a follower always rejoins the player): put an alive, UNLOADED follower beside the player,

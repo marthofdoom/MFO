@@ -31,7 +31,8 @@
 #include "Rapport.h"
 #include "Config.h"
 #include "cast/Actuation.h"   // CastRoadUnsupported: the spell picker hides spells MFO cannot cast animated
-#include "logistics/Logistics.h"   // IsLooting/IsTrading for the [C][L][T] activity glyphs
+#include "logistics/Logistics.h"
+#include "logistics/Errand.h"   // R3: Errand::Describe for the follower row   // IsLooting/IsTrading for the [C][L][T] activity glyphs
 #include "Forms.h"
 #include "State.h"
 #include "Probe.h"
@@ -1544,6 +1545,20 @@ namespace MFO::Board {
         }
     }
 
+    // R3 (town): where this follower is and what his errand is doing. Worker-side (PublishSnapshot), copies strings into the row so
+    // the render thread never touches the actor. A named cell wins, else the location name. withYou = same parent cell as the player.
+    // Errand::Describe copies under the errand table mutexes and reads no engine object.
+    static void FillTownInfo(FollowerRow& a_row, RE::Actor* a_actor, RE::PlayerCharacter* a_player) {
+        if (!a_actor) return;
+        auto* c = a_actor->GetParentCell();
+        a_row.withYou = c && a_player && c == a_player->GetParentCell();
+        if (!a_row.withYou) {
+            if (c && c->GetName() && *c->GetName())                                          a_row.location = c->GetName();
+            else if (auto* loc = a_actor->GetCurrentLocation(); loc && loc->GetName() && *loc->GetName()) a_row.location = loc->GetName();
+        }
+        a_row.errand = Logistics::Errand::Describe(a_row.id);
+    }
+
     void PublishSnapshot() {
         ApplyEdits();       // main-thread: fold in whatever the editor queued
         EnsureRuleUIDs();   // every rule has a stable id before it is snapshotted
@@ -1605,6 +1620,7 @@ namespace MFO::Board {
             r.id        = a->GetFormID();
             r.name      = a->GetName() ? a->GetName() : "?";   // null-guard like every sibling
             r.active    = true;
+            FillTownInfo(r, a, player);
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
             r.inCombat  = APMFBridge::InCombat(a);   // the HUD's combat glyph: a Harbinger substrate is not combat (v26)
@@ -1772,6 +1788,7 @@ namespace MFO::Board {
                     } else if (auto* loc = a->GetCurrentLocation(); loc && loc->GetName() && *loc->GetName()) {
                         r.cell = loc->GetName();
                     }
+                    FillTownInfo(r, a, player);
                 }
             }
             r.active         = false;

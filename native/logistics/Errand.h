@@ -2,6 +2,7 @@
 #include "PCH.h"
 #include <chrono>
 #include <functional>
+#include <string>
 #include <vector>
 #include "State.h"   // FollowerState
 
@@ -45,6 +46,10 @@ namespace MFO::Logistics::Errand {
     void End(RE::FormID a_follower, const char* a_why);
     // Is this follower on an errand? (board / logging)
     bool Active(RE::FormID a_follower);
+    // R3: a short status of this follower's errand for the Board ("Walking to X", "Trading with X", "Off-screen: trading at X",
+    // "Heading back"), physical or simulated. EMPTY = no errand. Any thread: it copies under the table mutexes (physical, then
+    // simulated, never nested) and reads no engine object.
+    std::string Describe(RE::FormID a_follower);
     // Revert / load (pump drained): drop every errand and its claims (and any restored entry not yet adopted).
     void ClearTransientState();
 
