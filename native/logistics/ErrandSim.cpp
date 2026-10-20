@@ -69,6 +69,8 @@ namespace MFO::Logistics::Errand::Sim {
         // dropped. The roster refresh + the first service tick after a load are each ~1 s (kLogisticsInterval), so 3 s is
         // two polls of margin, and a follower who reloads after it still resumes his walk back (never re-sent to the counter).
         constexpr auto   kRestoreSettle    = std::chrono::seconds(3);
+        // R5: the walk back from a stop whose place has no known position (a CELL shop restored from a save), in units.
+        constexpr double kUnknownBackUnits = 2000.0;
 
         enum class Stage { Out, Trade, Return, Rejoin };
         const char* StageName(Stage s) {
@@ -107,6 +109,11 @@ namespace MFO::Logistics::Errand::Sim {
             bool          restored = false, hadOrder = false;
             bool          restoredPhysical = false;   // restored from a PHYSICAL stage: loaded in the town, he resumes even away from the shop
             Clock::time_point decideBy{};
+            // R5: the trip. The single-shop fields above (faction, chest, vendorActor, vendorName, dest*, order, tArrive, tTradeEnd) are
+            // stops[cur]'s working copy (SyncCur / AdvanceStop); dispatched / reported / tradeAbandoned are the CURRENT stop's.
+            std::vector<Stop> stops;
+            std::uint8_t  cur = 0;
+            int           tripPurse = -1, tripSpent = 0;
         };
 
         std::mutex                                 g_mx;
@@ -127,6 +134,66 @@ namespace MFO::Logistics::Errand::Sim {
         void Store(const SimRec& a_r) {
             std::scoped_lock lk(g_mx);
             if (const auto it = g_sims.find(a_r.follower); it != g_sims.end()) it->second = a_r;
+        }
+
+        // R5: write the current-stop working copy back into stops[cur] (a record with no stops gets one: the v1 shape).
+        void SyncCur(SimRec& r) {
+            if (r.stops.empty()) { r.stops.push_back(Stop{}); r.cur = 0; r.stops[0].state = StopState::Active; }
+            if (r.cur >= r.stops.size()) r.cur = static_cast<std::uint8_t>(r.stops.size() - 1);
+            auto& s = r.stops[r.cur];
+            s.faction = r.faction; s.chest = r.chest;
+            if (r.vendorActor) s.vendorActor = r.vendorActor;
+            s.vendorName = r.vendorName;
+            s.destKind = r.destKind; s.destForm = r.destForm; s.destRad = r.destRad;
+            s.order = r.order;
+            s.tArrive = r.tArrive; s.tWorkEnd = r.tTradeEnd;
+        }
+
+        // R5: the current stop's business is settled off screen (traded, given up, or nothing to do). Move on to the next stop that
+        // has an order (OUT_SIM again, tArrive = now + the walk between the two places; design 1.b) and return TRUE, or return FALSE
+        // when none is left (the caller walks him back). A stop with no order (restored from a save: orders are never saved) is
+        // skipped: MFO never rebuilds an order from an unloaded inventory.
+        bool AdvanceStop(SimRec& r, double a_days) {
+            SyncCur(r);
+            r.stops[r.cur].state = (r.reported && !r.tradeAbandoned) ? StopState::Done : StopState::Skipped;
+            int next = Trip::NextPending(r.stops, r.cur);
+            while (next >= 0 && !r.stops[static_cast<std::size_t>(next)].order) {
+                r.stops[static_cast<std::size_t>(next)].state = StopState::Skipped;
+                spdlog::info("[errand] {:08X} '{}': TRIP {} SKIPPED (sim) -- its order is not in the save (never rebuilt off screen)",
+                             r.follower, r.followerName, Trip::Label(r.stops, static_cast<std::size_t>(next)));
+                next = Trip::NextPending(r.stops, static_cast<std::size_t>(next));
+            }
+            if (next < 0) return false;
+            const Stop prev = r.stops[r.cur];
+            const std::string was = Trip::Label(r.stops, r.cur);
+            r.cur = static_cast<std::uint8_t>(next);
+            auto& s = r.stops[r.cur];
+            s.state = StopState::Active;
+            r.faction = s.faction; r.chest = s.chest; r.vendorActor = s.vendorActor; r.vendorName = s.vendorName;
+            r.destKind = s.destKind; r.destForm = s.destForm; r.destRad = s.destRad;
+            r.order = s.order;
+            r.dispatched = r.reported = r.tradeAbandoned = false;
+            r.hadOrder = true;
+            r.firstTryClk = -1.0;
+            const double leg = WalkDays(Trip::LegUnits(prev, s));
+            RE::NiPoint3 np;
+            const double back = WalkDays(Trip::PlacePos(s, np) ? static_cast<double>(np.GetDistance(r.lastPos)) : kUnknownBackUnits);
+            r.tArrive = a_days + leg;
+            r.tTradeEnd = r.tArrive + static_cast<double>(Config::g_errandTradeGameMin.load()) / 1440.0;
+            r.tReturn = r.tTradeEnd + back;
+            s.tArrive = r.tArrive; s.tWorkEnd = r.tTradeEnd;
+            r.entryDoor = 0;   // the door he went in by belongs to the first shop: the return places him behind the player instead
+            r.stage = Stage::Out;
+            spdlog::info("[errand] {:08X} '{}': TRIP {} {} (sim) -- OUT_SIM to {}: walk {:.1f} game min, trade ends +{:.1f}, back +{:.1f} game min",
+                         r.follower, r.followerName, was, prev.state == StopState::Done ? "DONE" : "SKIPPED", Trip::Label(r.stops, r.cur),
+                         leg * 1440.0, (r.tTradeEnd - a_days) * 1440.0, (r.tReturn - a_days) * 1440.0);
+            return true;
+        }
+
+        // R5: a restored trip whose current trade is DROPPED drops every later stop with it (none has an order).
+        void SkipRemaining(SimRec& r) {
+            for (std::size_t i = r.cur + 1; i < r.stops.size(); ++i)
+                if (r.stops[i].state == StopState::Pending) r.stops[i].state = StopState::Skipped;
         }
 
         // The load door he used: the nearest ExtraTeleport door to his last LOADED position within kEntryDoorReach, preferring one
@@ -167,15 +234,18 @@ namespace MFO::Logistics::Errand::Sim {
             if (!chest) { r.tradeAbandoned = true; return false; }
             auto* vendor = r.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(r.vendorActor) : nullptr;
             TradeBridge::DiscardOutcome(r.follower);
-            const bool ok = TradeBridge::VendorTrade(f, vendor, chest, r.order->sell, r.order->needs, r.order->purse,
+            // R5: the trip purse -- this stop spends at most what the earlier stops left of it (PlanBuy's reserve then applies to the trip).
+            const int purse = r.tripPurse >= 0 ? std::min(r.order->purse, std::max(0, r.tripPurse - r.tripSpent)) : r.order->purse;
+            const bool ok = TradeBridge::VendorTrade(f, vendor, chest, r.order->sell, r.order->needs, purse,
                                                      r.order->buy, r.order->sig, r.order->daysNow, r.order->vendorKey,
                                                      &r.order->quote);
             if (ok) {
                 r.dispatched = true;
                 r.dispatchedClk = Scheduler::ServiceClock();
                 spdlog::info("[errand] {:08X} '{}': TRADE_SIM -- the stored order is REPLAYED against '{}' chest {:08X} (loaded=no): "
-                             "{} sell row(s), {} need(s), purse {}", r.follower, r.followerName, r.vendorName, r.chest,
-                             r.order->sell.size(), r.order->needs.size(), r.order->purse);
+                             "{} sell row(s), {} need(s), purse {}{}", r.follower, r.followerName, r.vendorName, r.chest,
+                             r.order->sell.size(), r.order->needs.size(), purse,
+                             r.stops.size() > 1 ? std::format(" ({})", Trip::Label(r.stops, r.cur)) : std::string{});
             }
             return ok;
         }
@@ -260,6 +330,8 @@ namespace MFO::Logistics::Errand::Sim {
         r.tradeAbandoned = a_start.tradeAbandoned;
         r.restoredPhysical = a_start.restoredPhysical;
         if (r.restored && !r.reported && !r.tradeAbandoned) r.decideBy = Clock::now() + kRestoreSettle;
+        r.stops = std::move(a_start.stops); r.cur = a_start.cur;   // R5: the trip goes off screen at its CURRENT stop
+        r.tripPurse = a_start.tripPurse; r.tripSpent = a_start.tripSpent;
 
         bool confirmed = false;
         r.entryDoor = FindEntryDoor(f, r.lastCell, r.lastPos, confirmed);
@@ -286,6 +358,8 @@ namespace MFO::Logistics::Errand::Sim {
         r.tTradeEnd = r.tArrive + static_cast<double>(Config::g_errandTradeGameMin.load()) / 1440.0;
         r.tReturn = r.tTradeEnd + walk;
         r.stage = r.reported ? Stage::Return : (now >= r.tArrive ? Stage::Trade : Stage::Out);
+        SyncCur(r);   // R5: the current stop carries the stamps just estimated
+        if (r.reported && Trip::NextPending(r.stops, r.cur) >= 0) r.stage = Stage::Trade;   // traded here, more stops: the Trade stage moves on
         r.nextPoll = Clock::now() + kPollEvery;
         r.nextPosLog = Clock::now() + kPosLogEvery;
         r.posAtEnter = f->GetPosition();
@@ -306,6 +380,9 @@ namespace MFO::Logistics::Errand::Sim {
                      r.reported ? "done" : r.dispatched ? "already in flight"
                      : r.tradeAbandoned ? (r.restored ? "not MFO's to run (given up, or in flight at the save: the save's own Papyrus trade owns it)" : "given up")
                      : "not yet dispatched");
+        if (r.stops.size() > 1)
+            spdlog::info("[errand] {:08X} '{}': TRIP off screen at {} of {} stop(s); trip purse {}, spent {}", r.follower, r.followerName,
+                         Trip::Label(r.stops, r.cur), r.stops.size(), r.tripPurse, r.tripSpent);
     }
 
     bool OnLoadedTick(RE::Actor* a_follower, const FollowerState& a_state) {
@@ -337,7 +414,10 @@ namespace MFO::Logistics::Errand::Sim {
         // R2 (design 2.7, "if the player walks in then it picks up"): a PHYSICAL errand restored from the save with him loaded
         // resumes wherever he is in the errand's town (the walk to the shop / vendor goes on). The away-from-the-shop end stays for
         // a record that was SIMULATED (R1b: he reloaded near the player) and for a player who is no longer in the town.
-        const bool resumeHere = atShop || (r.restoredPhysical && inTown);
+        // R5: a trip walking BETWEEN two stops (OUT_SIM to a later stop) is in the town's streets by construction: loaded again in the
+        // town, he walks on to the current stop on screen (design 1.b: "a follower who loads mid-trip resumes the CURRENT stop").
+        const bool betweenStops = inTown && r.cur > 0 && r.stage == Stage::Out;
+        const bool resumeHere = atShop || (r.restoredPhysical && inTown) || betweenStops;
         if (resumeHere && !r.dispatched && !r.reported && !r.tradeAbandoned && tradeLeft &&
             (r.stage == Stage::Out || r.stage == Stage::Trade)) {
             ResumeInfo ri;
@@ -345,6 +425,8 @@ namespace MFO::Logistics::Errand::Sim {
             ri.faction = r.faction; ri.chest = r.chest; ri.town = r.town; ri.order = r.order; ri.startDays = r.startDays;
             ri.destKind = r.destKind; ri.destForm = r.destForm; ri.destRad = r.destRad;
             ri.announced = r.stage == Stage::Trade;   // the Trade stage was entered (toast fired) or restored as arrived: do not toast again
+            SyncCur(r);
+            ri.stops = r.stops; ri.cur = r.cur; ri.tripPurse = r.tripPurse; ri.tripSpent = r.tripSpent;   // R5
             if (detail::ResumePhysical(a_follower, ri)) return true;
             detail::Cooldown(fid, kFailCooldownSec);
             spdlog::info("[errand] {:08X} '{}': loaded again at {} {} but the walk could not be resumed -- the trade is dropped",
@@ -383,7 +465,11 @@ namespace MFO::Logistics::Errand::Sim {
             s.entryDoor = r.entryDoor; s.lastCell = r.lastCell; s.lastPos = r.lastPos;
             s.startDays = r.startDays;
             s.tEnter = r.tEnter; s.tArrive = r.tArrive; s.tTradeEnd = r.tTradeEnd; s.tReturn = r.tReturn;
-            a_out.push_back(s);
+            SimRec rc = r;   // R5: the itinerary, with the working copy written back into stops[cur]
+            SyncCur(rc);
+            for (const auto& st : rc.stops) s.stops.push_back(Trip::ToSaved(st));
+            s.cur = rc.cur;
+            a_out.push_back(std::move(s));
         }
         for (const auto& s : g_pending) a_out.push_back(s);   // staged, not yet adopted: saved back verbatim
     }
@@ -396,6 +482,20 @@ namespace MFO::Logistics::Errand::Sim {
     void ClearPending() {
         std::scoped_lock lk(g_mx);
         g_pending.clear();
+    }
+
+    void CrowdInto(std::unordered_map<RE::FormID, int>& a_crowd, RE::FormID a_exclude) {
+        std::scoped_lock lk(g_mx);
+        for (const auto& [fid, r] : g_sims) {
+            if (fid == a_exclude || r.stage == Stage::Return || r.stage == Stage::Rejoin) continue;
+            if (r.stops.empty()) { if (r.chest) ++a_crowd[r.chest]; continue; }
+            for (std::size_t i = r.cur; i < r.stops.size(); ++i) {
+                const auto& st = r.stops[i];
+                if ((i == r.cur || st.state == StopState::Pending) && st.chest) ++a_crowd[st.chest];
+            }
+        }
+        for (const auto& p : g_pending)   // a staged restore entry is still heading there until it is adopted or dropped
+            if (p.follower != a_exclude && p.chest) ++a_crowd[p.chest];
     }
 
     namespace {
@@ -462,6 +562,8 @@ namespace MFO::Logistics::Errand::Sim {
                     st.tradeDone = done;
                     st.restored = true; st.hadOrder = hadOrder; st.tradeAbandoned = abandoned;
                     st.restoredPhysical = IsPhysical(s.stage);
+                    for (const auto& ss : s.stops) st.stops.push_back(Trip::FromSaved(ss));   // R5 (ERND v2; a v1 entry: one stop)
+                    st.cur = s.cur;
                     Begin(std::move(st));
                     continue;
                 }
@@ -478,6 +580,9 @@ namespace MFO::Logistics::Errand::Sim {
                 r.tradeAbandoned = abandoned;
                 r.restored = true;
                 r.hadOrder = hadOrder;
+                for (const auto& ss : s.stops) r.stops.push_back(Trip::FromSaved(ss));   // R5 (ERND v2; a v1 entry: one stop)
+                r.cur = s.cur;
+                SyncCur(r);   // the head fields (resolved by the reader) are the current stop's
                 if (!r.reported && !r.tradeAbandoned) r.decideBy = now + kRestoreSettle;
                 r.nextPoll = now;
                 r.nextPosLog = now + kPosLogEvery;
@@ -543,6 +648,7 @@ namespace MFO::Logistics::Errand::Sim {
             if (r.restored && !r.reported && !r.tradeAbandoned && !r.dispatched) {
                 if (now < r.decideBy) { Store(r); continue; }
                 r.tradeAbandoned = true;
+                SkipRemaining(r);   // R5: no later stop has an order either (orders are never saved)
                 const double days = GameDays();
                 if (r.stage == Stage::Out || r.stage == Stage::Trade) {
                     const double walk = std::max(0.0, r.tReturn - r.tTradeEnd);
@@ -611,7 +717,7 @@ namespace MFO::Logistics::Errand::Sim {
             }
             if (r.stage == Stage::Trade) {
                 const double clk = Scheduler::ServiceClock();
-                if (!r.dispatched && !r.tradeAbandoned) {
+                if (!r.dispatched && !r.tradeAbandoned && !r.reported) {   // (R5: a stop that already traded -- handed off at TAKING -- never re-trades)
                     if (r.firstTryClk < 0.0) r.firstTryClk = clk;
                     if (!r.order || r.order->skipped) {
                         r.tradeAbandoned = true;
@@ -630,6 +736,7 @@ namespace MFO::Logistics::Errand::Sim {
                         else
                             spdlog::info("[errand] {:08X} '{}': trade REPORTED (loaded=no) -- sold {} for {}g, bought {} for {}g", fid,
                                          r.followerName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
+                        r.tripSpent += std::max(0, out.spent);   // R5: the next stop's purse cap
                     } else if (clk - r.dispatchedClk > kTradeWaitClkSec) {
                         r.reported = true;
                         spdlog::warn("[errand] {:08X}: the replayed trade never reported ({:.0f} s) -- continuing", fid, kTradeWaitClkSec);
@@ -637,8 +744,11 @@ namespace MFO::Logistics::Errand::Sim {
                 }
                 const bool tradeSettled = r.reported || r.tradeAbandoned || !r.order || r.order->skipped;
                 if (days >= r.tTradeEnd && tradeSettled) {
-                    r.stage = Stage::Return;
-                    spdlog::info("[errand] {:08X} '{}': RET_SIM -- done at '{}', walking back (off screen)", fid, r.followerName, r.vendorName);
+                    // R5: the next stop of the trip (OUT_SIM again), else the walk back.
+                    if (!AdvanceStop(r, days)) {
+                        r.stage = Stage::Return;
+                        spdlog::info("[errand] {:08X} '{}': RET_SIM -- done at '{}', walking back (off screen)", fid, r.followerName, r.vendorName);
+                    }
                 }
             }
             if (r.stage == Stage::Return && days >= r.tReturn) {

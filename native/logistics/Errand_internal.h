@@ -8,6 +8,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace MFO::Logistics {
@@ -44,12 +45,88 @@ namespace MFO::Logistics {
     void EconomyErrandPlan(RE::Actor* a_follower, const FollowerState& a_state,
                            std::chrono::steady_clock::time_point a_now,
                            const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out);
+    // R5: the physical give beat of ONE STOP of a trip: EconomyProbe(kExecute) for a_probe.vendors, with the trip's PARTITION
+    // applied. a_share (the stop's planned order, null = no partition: a restored stop re-plans in full) limits the sell rows
+    // to the objects it lists, the needs to its kinds and the gear / tome wishes to its flags; a_purseCap (< 0 = none) caps
+    // the purse at what the trip purse has left. Everything else (live counts, prices, SkipTrade, VendorTrade) is the
+    // unchanged probe.
+    struct ErrandProbe;
+    void EconomyErrandExecute(RE::Actor* a_follower, const FollowerState& a_state,
+                              std::chrono::steady_clock::time_point a_now, ErrandProbe& a_probe,
+                              const ErrandPlanned* a_share, int a_purseCap);
 }
 
 namespace MFO::Logistics::Errand {
 
     // What the ch.19 leg walks to.
     enum class DestKind { VendorActor, Ref, Cell };
+
+    // ── R5: the ITINERARY (design 1.b) ────────────────────────────────────────────────────────────────
+    // A trip is an ordered list of stops with ONE purse. Phase-1 errands are one-stop trips of kind Shop. The single-shop
+    // fields of the records below (faction, chest, vendor, dest*, order) are the CURRENT stop's working copy, stops[cur]
+    // (Errand.cpp / ErrandSim.cpp keep the two in step), so the phase-1 code paths keep their shape.
+    enum class StopKind : std::uint8_t { Shop };   // later rounds APPEND Fence, Spouse, Smith, Temple, Inn (R7: the last stop), Home
+    enum class StopState : std::uint8_t { Pending, Active, Done, Skipped };
+    struct Stop {
+        StopKind      kind = StopKind::Shop;
+        RE::FormID    faction = 0, chest = 0;
+        RE::FormID    vendorActor = 0;           // 0 = not known (a faction-only shop until he reaches it)
+        std::string   vendorName;
+        DestKind      destKind = DestKind::Cell;
+        RE::FormID    destForm = 0;
+        float         destRad = 0.0f;
+        RE::NiPoint3  pos{};                     // where the place is (runtime only; a CELL shop: its door), for the walk estimates
+        bool          havePos = false;
+        std::shared_ptr<const ErrandPlanned> order;   // this stop's SHARE of the trip (null after a load: never saved)
+        double        tArrive = 0.0, tWorkEnd = 0.0;  // GAME DAYS, the simulation's (0 = not reached yet)
+        StopState     state = StopState::Pending;
+    };
+    // The bound on the wire (#11) and the planner's cap. R7 appends an Inn stop after the shops, so the shops leave room.
+    inline constexpr std::size_t kMaxTripStops = kMaxTripStopsOnWire;
+    inline constexpr std::size_t kMaxShopStops = 4;
+
+    namespace Trip {
+        // One candidate the planner may visit (Errand.cpp builds these from its catalog; the VEND reads stay there).
+        struct Cand {
+            RE::FormID    key = 0;            // the plan key: ErrandPlanned::vendorKey (the vendor actor, else the faction)
+            RE::FormID    actorId = 0, faction = 0, chest = 0;
+            std::string   name;
+            float         dist = 0.0f;        // player -> place, straight line (a cell: its nearest loaded door)
+            RE::NiPoint3  pos{};
+            bool          havePos = false;
+            DestKind      kind = DestKind::Cell;
+            RE::FormID    destForm = 0;
+            float         destRad = 0.0f;
+            std::uint32_t needCarry = 0;      // bit n = this VEND carries the category of NeedCat::Kind n
+            bool          carriesGear = false, carriesTome = false;   // the gear / apparel wish, the tome wish
+        };
+        struct Inputs {
+            RE::FormID    follower = 0;
+            RE::NiPoint3  from{};             // the follower's position (the nearest-neighbour origin)
+            float         carry = 0.0f;       // inventory weight / carry weight
+            int           minSell = 0, minPurse = 0;
+        };
+        // Plan a trip over the evaluated candidates (a_planned: EconomyErrandPlan's output, one per candidate). Fills a_out
+        // (stops in visit order, each with its own order) and a_line (the one "[errand] TRIP" plan line's body). False = no
+        // stop has work.
+        bool Plan(const std::vector<Cand>& a_cands, const std::vector<ErrandPlanned>& a_planned, const Inputs& a_in,
+                  std::vector<Stop>& a_out, std::string& a_line);
+        // The next Pending stop after a_cur, or -1.
+        int  NextPending(const std::vector<Stop>& a_stops, std::size_t a_cur);
+        // Straight-line units between two stops' places (a place with no known position: a fixed street-walk estimate).
+        double LegUnits(const Stop& a_from, const Stop& a_to);
+        // Where a stop's place is NOW (the vendor actor / the ref, else the planned position). False = unknown.
+        bool PlacePos(const Stop& a_stop, RE::NiPoint3& a_out);
+        const char* StateName(StopState a_s);
+        // "2/3 'Belethor'" for the log lines.
+        std::string Label(const std::vector<Stop>& a_stops, std::size_t a_cur);
+        // The ERND v2 itinerary <-> the runtime one.
+        SavedStop ToSaved(const Stop& a_stop);
+        Stop      FromSaved(const SavedStop& a_saved);
+        // B300 (convergence): how many OTHER followers' trips are heading to each chest (their current and pending stops).
+        // Errand g_mx, then Sim g_mx, never nested.
+        std::unordered_map<RE::FormID, int> ChestCrowd(RE::FormID a_exclude);
+    }
 
     // Errand.cpp -> ErrandSim.cpp: the follower unloaded (or was found unloaded) with an errand in progress.
     // `arrived` = he had already reached the vendor (the trade is due at once); `tradeDispatched` = the order is
@@ -71,6 +148,10 @@ namespace MFO::Logistics::Errand {
         // physical resume re-plans it on screen, an unloaded one drops the trade (Sim::Sweep's restore decision).
         bool          restored = false, hadOrder = false, tradeAbandoned = false;
         bool          restoredPhysical = false;   // restored from a PHYSICAL stage (OnLoadedTick resumes him anywhere in the town)
+        // R5: the itinerary (the fields above are stops[cur]'s) and the trip purse (-1 = none: a restored trip re-plans on live gold).
+        std::vector<Stop> stops;
+        std::uint8_t  cur = 0;
+        int           tripPurse = -1, tripSpent = 0;
     };
 
     // Errand.cpp -> ErrandSim.cpp: a follower the simulation was running is LOADED again (the player walked in).
@@ -84,6 +165,10 @@ namespace MFO::Logistics::Errand {
         RE::FormID    destForm = 0;
         float         destRad = 0.0f;
         bool          announced = false;   // the "is trading with" toast already fired for this errand (sim Trade stage reached)
+        // R5: the itinerary (the fields above are stops[cur]'s) and the trip purse.
+        std::vector<Stop> stops;
+        std::uint8_t  cur = 0;
+        int           tripPurse = -1, tripSpent = 0;
     };
 
     namespace Sim {
@@ -102,6 +187,8 @@ namespace MFO::Logistics::Errand {
         // R2: stage restored entries (LoadCallback, pump stopped); Sweep adopts them on its first lap in the world.
         void StagePending(std::vector<Saved>&& a_entries);
         void ClearPending();
+        // R5 (B300): add every simulated trip's current + pending stop chests to a_crowd (a_exclude's own skipped). Takes Sim g_mx.
+        void CrowdInto(std::unordered_map<RE::FormID, int>& a_crowd, RE::FormID a_exclude);
     }
 
     // Errand.cpp services the simulation uses (defined there, outside the anonymous namespace).
@@ -122,5 +209,7 @@ namespace MFO::Logistics::Errand {
         void  Toast(const std::string& a_text);
         // "<who> is trading with <shop>." via Toast, at the moment the trade begins (arrival, physical or simulated).
         void  ToastTrading(const std::string& a_who, const std::string& a_shop);
+        // R5 (B300): the physical trips' share of Trip::ChestCrowd. Takes Errand g_mx.
+        void  CrowdInto(std::unordered_map<RE::FormID, int>& a_crowd, RE::FormID a_exclude);
     }
 }

@@ -128,6 +128,12 @@ namespace MFO::Logistics::Errand {
             RE::NiPoint3  lastPos{};                        // the follower's last LOADED position / cell (sampled every tick and lap)
             RE::FormID    lastCell = 0;
             Clock::time_point unloadedSince{};              // first lap he read unloaded (the hand-off waits one more poll)
+            // R5: the trip. The single-shop fields above (vendor, chest, faction, vendorName, dest*, order) are stops[cur]'s working
+            // copy (LoadStop / SyncCur). tripPurse: the follower's gold at the plan (-1 = none: a resumed restored trip, live gold);
+            // tripSpent: what this trip's trades have spent so far (the purse cap of the next stop).
+            std::vector<Stop> stops;
+            std::uint8_t  cur = 0;
+            int           tripPurse = -1, tripSpent = 0;
         };
 
         std::mutex                                           g_mx;
@@ -224,6 +230,8 @@ namespace MFO::Logistics::Errand {
             DestKind         kind = DestKind::VendorActor;
             RE::FormID       destForm = 0;      // what ch.19 walks to: the vendor actor, the PLVD ref, or the PLVD cell
             float            destRad = 0.0f;
+            RE::NiPoint3     pos{};             // R5: where the place is (the vendor / the ref / a cell's nearest loaded door), for the trip order
+            bool             havePos = false;
         };
 
         // R1b: the town's shops from the vendor FACTIONS (design 2.2), cached per town -- immutable once built. The place is the
@@ -358,6 +366,7 @@ namespace MFO::Logistics::Errand {
                 c.kind   = DestKind::VendorActor;
                 c.destForm = c.id;
                 c.destRad = kVendorRadius;
+                c.pos = v->GetPosition(); c.havePos = true;
                 out.push_back(c);
             }
 
@@ -367,6 +376,7 @@ namespace MFO::Logistics::Errand {
                 // door whose destination door sits in that cell. No such door in the follower's loaded cell = the shop is skipped
                 // (nothing to estimate the walk from, and no proof the player's area leads there).
                 std::unordered_map<RE::FormID, float> cellDoorDist;
+                std::unordered_map<RE::FormID, RE::NiPoint3> cellDoorPos;   // R5: that door's position (the trip order)
                 {
                     std::vector<RE::ObjectRefHandle> doors;
                     cell->ForEachReferenceInRange(a_follower->GetPosition(), kScanRadius, [&](RE::TESObjectREFR* a_ref) {
@@ -382,8 +392,10 @@ namespace MFO::Logistics::Errand {
                         auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
                         if (!lc) continue;
                         const float dd = d->GetPosition().GetDistance(pc->GetPosition());
-                        if (const auto it = cellDoorDist.find(lc->GetFormID()); it == cellDoorDist.end() || dd < it->second)
+                        if (const auto it = cellDoorDist.find(lc->GetFormID()); it == cellDoorDist.end() || dd < it->second) {
                             cellDoorDist[lc->GetFormID()] = dd;
+                            cellDoorPos[lc->GetFormID()] = d->GetPosition();
+                        }
                     }
                 }
                 std::vector<ShopStatic> shops;
@@ -406,21 +418,25 @@ namespace MFO::Logistics::Errand {
                     if (const auto it = parked.find(sh.faction); it != parked.end() && a_now < it->second) continue;
                     if (backedOff.contains(sh.chest)) { noteBackoff(sh.chest, fac->GetName()); continue; }
                     float d = 0.0f;
+                    RE::NiPoint3 placePos{};
                     if (sh.kind == DestKind::Ref) {
                         auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(sh.place);
                         if (!ref) continue;
-                        d = ref->GetPosition().GetDistance(pc->GetPosition());
+                        placePos = ref->GetPosition();
+                        d = placePos.GetDistance(pc->GetPosition());
                         if (d > maxFromPlayer) { ++a_dropped; continue; }
                     } else {
                         const auto it = cellDoorDist.find(sh.place);
                         if (it == cellDoorDist.end()) { ++a_dropped; continue; }
                         d = it->second;
+                        placePos = cellDoorPos[sh.place];
                         if (d > maxFromPlayer) { ++a_dropped; continue; }
                     }
                     seenChest[sh.chest] = true;
                     Cand c;
                     c.id = sh.faction; c.fac = fac; c.chest = sh.chest; c.dist = d;
                     c.kind = sh.kind; c.destForm = sh.place; c.destRad = sh.rad;
+                    c.pos = placePos; c.havePos = true;
                     out.push_back(c);
                 }
             }
@@ -551,6 +567,76 @@ namespace MFO::Logistics::Errand {
             for (const auto& [id, r] : g_recs) if (r.phase == Phase::Walking) ++n;
             return n;
         }
+
+        // ── R5: the trip's stops ↔ the current-stop working copy ───────────────────────────────────
+        // Write the working copy back into stops[cur] (a record with no stops -- never built by this round -- gets one).
+        void SyncCur(Rec& r) {
+            if (r.stops.empty()) { r.stops.push_back(Stop{}); r.cur = 0; r.stops[0].state = StopState::Active; }
+            if (r.cur >= r.stops.size()) r.cur = static_cast<std::uint8_t>(r.stops.size() - 1);
+            auto& s = r.stops[r.cur];
+            s.faction = r.faction; s.chest = r.chest;
+            if (r.vendor) s.vendorActor = r.vendor;
+            s.vendorName = r.vendorName;
+            s.destKind = r.destKind; s.destForm = r.destForm; s.destRad = r.destRad;
+            s.order = r.order;
+        }
+        // Make stops[a_i] current: a fresh Walking phase toward its place (a vendor actor is walked to directly; a shop place
+        // first, and its vendor found on arrival, as phase 1 does).
+        void LoadStop(Rec& r, std::size_t a_i) {
+            r.cur = static_cast<std::uint8_t>(a_i);
+            auto& s = r.stops[a_i];
+            s.state = StopState::Active;
+            r.phase = Phase::Walking;
+            r.vendor = s.destKind == DestKind::VendorActor ? s.destForm : 0u;
+            r.chest = s.chest; r.faction = s.faction; r.vendorName = s.vendorName;
+            r.destKind = s.destKind; r.destForm = s.destForm; r.destRad = s.destRad;
+            r.order = s.order;
+            r.beatRequested = r.talkFallbackUsed = r.dispatched = r.bought = r.announced = false;
+            r.confirmedAt = {};
+        }
+
+        // R5: the CURRENT stop is over -- a_ok: its trade ran or there was nothing left to do (Done); else it failed (Skipped, the
+        // design's "a failed stop is skipped, logged, and the trip moves on"). TRUE = the trip goes on: r describes the next stop,
+        // its walk is declared (ch.19 Repoint of the trip's own claim; MFO declares, Harbinger walks), and the CALLER stores r.
+        // FALSE = the trip is over and Finish ran (every claim released, the cooldown stamped, one line).
+        // a_cooldown / a_complete are what phase 1 passed to Finish for this end (a one-stop trip ends exactly as phase 1 did).
+        bool NextStopOrFinish(RE::FormID a_fid, Rec& r, Clock::time_point a_now, const std::string& a_why, bool a_ok, float a_cooldown,
+                              bool a_complete) {
+            SyncCur(r);
+            bool ok = a_ok, complete = a_complete;
+            float cooldown = a_cooldown;
+            std::string why = a_why;
+            for (;;) {
+                r.stops[r.cur].state = ok ? StopState::Done : StopState::Skipped;
+                if (complete) { std::scoped_lock lk(g_mx); g_backoff.erase(BackoffKey(a_fid, r.chest)); }   // a trade DONE forgives its target
+                const int next = Trip::NextPending(r.stops, r.cur);
+                if (next < 0) {
+                    const bool multi = r.stops.size() > 1;
+                    const bool anyDone = std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.state == StopState::Done; });
+                    if (multi && anyDone) cooldown = std::max(cooldown, Config::g_errandCooldownSec.load());   // the trip traded: the errand cooldown
+                    Store(a_fid, r);
+                    Finish(a_fid, multi ? std::format("{} (last of a {}-stop trip)", why, r.stops.size()).c_str() : why.c_str(), cooldown, complete);
+                    return false;
+                }
+                const std::string was = Trip::Label(r.stops, r.cur);
+                APMFBridge::ReleaseErrandIdle(a_fid);   // the counter's ch.12 beat + ch.1 hold; the ch.19 walk claim stays
+                LoadStop(r, static_cast<std::size_t>(next));
+                r.phaseAt = a_now;
+                r.startClk = r.lastTickClk = Scheduler::ServiceClock();   // the 240 s real-time cap is per stop (fErrandMaxGameMin covers the trip)
+                const char* how = "re-pointed";
+                bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(a_fid, r.destForm, r.destRad);
+                if (!walk && r.destForm != 0) { walk = APMFBridge::ClaimErrandTravel(a_fid, r.destForm, r.destRad); how = "claimed afresh"; }
+                spdlog::info("[errand] {:08X} '{}': TRIP {} {} ({}) -- next {}: walk to {} {:08X} {}", a_fid, r.followerName, was,
+                             ok ? "DONE" : "SKIPPED", why, Trip::Label(r.stops, r.cur),
+                             r.destKind == DestKind::VendorActor ? "the vendor" : r.destKind == DestKind::Ref ? "the shop ref" : "the shop cell",
+                             r.destForm, walk ? how : "could NOT be declared (Harbinger refused the ch.19 Repoint and a new claim)");
+                if (walk) return true;
+                ok = false;
+                complete = false;
+                cooldown = kFailCooldownSec;
+                why = "the walk to it could not be declared";
+            }
+        }
     }
 
     // ── public: lifecycle ───────────────────────────────────────────────────────────────────────────
@@ -610,7 +696,11 @@ namespace MFO::Logistics::Errand {
                 s.destForm = r.destForm; s.destRad = r.destRad;
                 s.lastCell = r.lastCell; s.lastPos = r.lastPos;
                 s.startDays = r.startDays;
-                out.push_back(s);
+                Rec rc = r;   // R5: the itinerary, with the working copy written back into stops[cur]
+                SyncCur(rc);
+                for (const auto& st : rc.stops) s.stops.push_back(Trip::ToSaved(st));
+                s.cur = rc.cur;
+                out.push_back(std::move(s));
             }
         }
         Sim::SnapshotInto(out);
@@ -648,6 +738,18 @@ namespace MFO::Logistics::Errand {
         }
         void ToastTrading(const std::string& a_who, const std::string& a_shop) {
             Toast(std::format("{} is trading with {}.", a_who, a_shop));
+        }
+
+        void CrowdInto(std::unordered_map<RE::FormID, int>& a_crowd, RE::FormID a_exclude) {
+            std::scoped_lock lk(g_mx);
+            for (const auto& [fid, r] : g_recs) {
+                if (fid == a_exclude) continue;
+                if (r.stops.empty()) { if (r.chest) ++a_crowd[r.chest]; continue; }
+                for (std::size_t i = r.cur; i < r.stops.size(); ++i) {
+                    const auto& st = r.stops[i];
+                    if ((st.state == StopState::Active || st.state == StopState::Pending) && st.chest) ++a_crowd[st.chest];
+                }
+            }
         }
 
         // RECALL (marth 2026-10-18: a follower always rejoins the player): put an alive, UNLOADED follower beside the player,
@@ -701,12 +803,16 @@ namespace MFO::Logistics::Errand {
             r.vendorName = vendor ? NameOf(vendor.get()) : a_info.vendorName;
             r.order = a_info.order;
             r.announced = a_info.announced;
+            r.stops = a_info.stops; r.cur = a_info.cur;   // R5: the trip goes on from the CURRENT stop
+            r.tripPurse = a_info.tripPurse; r.tripSpent = a_info.tripSpent;
             if (vendor) { r.destKind = DestKind::VendorActor; r.destForm = r.vendor; r.destRad = kVendorRadius; }
             else        { r.destKind = a_info.destKind; r.destForm = a_info.destForm; r.destRad = a_info.destRad; }
             r.start = r.phaseAt = now;
             r.startClk = r.lastTickClk = Scheduler::ServiceClock();
             r.startDays = a_info.startDays;
             r.lastPos = a_follower->GetPosition();
+            SyncCur(r);
+            r.stops[r.cur].state = StopState::Active;
             {
                 std::scoped_lock lk(g_mx);
                 g_recs[fid] = r;
@@ -795,47 +901,42 @@ namespace MFO::Logistics::Errand {
             const float iw = avo->GetActorValue(RE::ActorValue::kInventoryWeight);
             carry = cw > 0.0f ? iw / cw : 0.0f;
         }
-        const Cand* best = nullptr;
-        const ErrandPlanned* bestPlan = nullptr;
-        float bestScore = -1.0e9f;
-        std::string bestWhy;
+        // R5: the TRIP planner (ErrandTrip.cpp) partitions the work across up to kMaxShopStops stops. The VEND reads stay here: each
+        // candidate says which need categories it carries (the phase-1 keyword map) and whether it carries his gear / tome wish.
+        bool wantGear = false, wantApparel = false;
         int evaluated = 0, skipped = 0;
         for (const auto& v : planned) {
             ++evaluated;
             if (v.skipped) { ++skipped; continue; }
-            const Cand* c = nullptr;
-            for (const auto& k : cands) if (k.id == v.vendorKey) { c = &k; break; }
-            if (!c) continue;
-            // Gold the chest can actually pay for the rows this vendor accepts (last-seen gold; unknown = uncapped).
-            std::int64_t sellGold = v.sellValue;
-            if (v.chestGold >= 0) sellGold = std::min<std::int64_t>(sellGold, v.chestGold);
-            const bool sellReason  = v.sellRows > 0 && (sellGold >= minSell || carry > 0.8f);
-            bool needReason = false;
-            for (int k = 0; k < 12; ++k) {
-                if (!((v.needKinds >> k) & 1u)) continue;
-                const RE::FormID kw = (k <= 2) ? kKwPotion : (k == 3 || k == 4 || k == 11) ? kKwArrow : (k == 10) ? kKwWeapon : 0u;
-                if (kw && ListTrades(c->fac, kw)) { needReason = true; break; }
-            }
-            const bool rich = v.purse >= minPurse;
-            const bool wishReason = rich &&
-                ((v.wishGear    && (ListTrades(c->fac, kKwWeapon) || ListTrades(c->fac, kKwArmor))) ||
-                 (v.wishApparel && (ListTrades(c->fac, kKwClothing) || ListTrades(c->fac, kKwJewelry) || ListTrades(c->fac, kKwArmor))) ||
-                 (v.wishTome    && ListTrades(c->fac, kKwSpellTome)));
-            if (!sellReason && !needReason && !wishReason) continue;
-            // Rank: what he can sell here, plus a weight per need / wish this vendor can serve, minus walking.
-            const float score = static_cast<float>(sellReason ? sellGold : 0) + (needReason ? 250.0f : 0.0f) +
-                                (wishReason ? 150.0f : 0.0f) - c->dist / 10.0f;
-            if (score > bestScore) {
-                bestScore = score;
-                best = c;
-                bestPlan = &v;
-                bestWhy = std::format("sell {} row(s) worth {}g (chest gold {}), needs {:#x}, wishes gear={} apparel={} tome={}, "
-                                      "purse {}, carry {:.0f}%, reason sell={} need={} wish={}",
-                                      v.sellRows, v.sellValue, v.chestGold, v.needKinds, v.wishGear, v.wishApparel,
-                                      v.wishTome, v.purse, carry * 100.0f, sellReason, needReason, wishReason);
-            }
+            wantGear = wantGear || v.wishGear;
+            wantApparel = wantApparel || v.wishApparel;
         }
-        if (!best) {
+        std::vector<Trip::Cand> tcands;
+        tcands.reserve(cands.size());
+        for (const auto& c : cands) {
+            Trip::Cand t;
+            t.key = c.id; t.actorId = c.actorId; t.faction = c.fac->GetFormID(); t.chest = c.chest;
+            {
+                auto* vendor = c.handle.get().get();
+                const char* vn = vendor ? vendor->GetName() : c.fac->GetName();
+                t.name = vn && *vn ? vn : "?";
+            }
+            t.dist = c.dist; t.pos = c.pos; t.havePos = c.havePos;
+            t.kind = c.kind; t.destForm = c.destForm; t.destRad = c.destRad;
+            for (int k = 0; k < 12; ++k) {
+                const RE::FormID kw = (k <= 2) ? kKwPotion : (k == 3 || k == 4 || k == 11) ? kKwArrow : (k == 10) ? kKwWeapon : 0u;
+                if (kw && ListTrades(c.fac, kw)) t.needCarry |= 1u << k;
+            }
+            t.carriesGear = (wantGear    && (ListTrades(c.fac, kKwWeapon) || ListTrades(c.fac, kKwArmor))) ||
+                            (wantApparel && (ListTrades(c.fac, kKwClothing) || ListTrades(c.fac, kKwJewelry) || ListTrades(c.fac, kKwArmor)));
+            t.carriesTome = ListTrades(c.fac, kKwSpellTome);
+            tcands.push_back(std::move(t));
+        }
+        Trip::Inputs tin;
+        tin.follower = fid; tin.from = a_follower->GetPosition(); tin.carry = carry; tin.minSell = minSell; tin.minPurse = minPurse;
+        std::vector<Stop> stops;
+        std::string tripLine;
+        if (!Trip::Plan(tcands, planned, tin, stops, tripLine)) {
             {
                 std::scoped_lock lk(g_mx);
                 g_nextPlan[fid] = a_now + std::chrono::seconds(20);   // nothing to do here: the plan is a cell walk + an inventory walk, ask less often
@@ -861,26 +962,18 @@ namespace MFO::Logistics::Errand {
                          "loot), next try in {} s", fid, NameOf(a_follower), kMaxWalking, kQueueRetry.count());
             return true;
         }
-        if (!APMFBridge::ClaimErrandTravel(fid, best->destForm, best->destRad)) {
+        if (!APMFBridge::ClaimErrandTravel(fid, stops.front().destForm, stops.front().destRad)) {
             // Refused at the call: the leg budget (all 8 slots busy), [Travel] bTravel=0, VR. Retry soon, never a fallback.
             std::scoped_lock lk(g_mx);
             g_nextPlan[fid] = a_now + kQueueRetry;
             return true;
         }
         Rec r;
-        r.phase       = Phase::Walking;
-        r.vendor      = best->actorId;
-        r.chest       = best->chest;
-        r.faction     = best->fac->GetFormID();
         r.town        = playerTown->GetFormID();
         r.followerName = NameOf(a_follower);
-        {
-            auto* vendor = best->handle.get().get();
-            const char* vn = vendor ? vendor->GetName() : best->fac->GetName();
-            r.vendorName = vn && *vn ? vn : "?";
-        }
-        r.destKind = best->kind; r.destForm = best->destForm; r.destRad = best->destRad;
-        r.order = std::make_shared<const ErrandPlanned>(*bestPlan);
+        r.stops = std::move(stops);
+        r.tripPurse = r.stops.front().order ? r.stops.front().order->purse : -1;
+        LoadStop(r, 0);
         r.lastPos = a_follower->GetPosition();
         if (auto* fc = a_follower->GetParentCell()) r.lastCell = fc->GetFormID();
         r.start = r.phaseAt = a_now;
@@ -890,10 +983,10 @@ namespace MFO::Logistics::Errand {
             std::scoped_lock lk(g_mx);
             g_recs[fid] = r;
         }
-        spdlog::info("[errand] {:08X} '{}' PLAN -> '{}' ({:08X}) in '{}', {:.0f} u from the player, walking to {} {:08X} | {} | {} candidate(s)",
-                     fid, r.followerName, r.vendorName, best->id, TownName(r.town), best->dist,
+        spdlog::info("[errand] {:08X} '{}' TRIP PLAN in '{}': {} | walking to {} '{}': {} {:08X} | {} candidate(s)",
+                     fid, r.followerName, TownName(r.town), tripLine, Trip::Label(r.stops, 0), r.vendorName,
                      r.destKind == DestKind::VendorActor ? "the vendor" : r.destKind == DestKind::Ref ? "the shop ref" : "the shop cell",
-                     r.destForm, bestWhy, cands.size());
+                     r.destForm, cands.size());
         return true;
     }
 
@@ -936,12 +1029,19 @@ namespace MFO::Logistics::Errand {
                 return false;
             }
         }
+        // R5: the CURRENT STOP is over (a_ok: done / nothing left; else failed and skipped). The trip moves on to its next stop
+        // (TRUE: r now describes it and is stored here) or ends (FALSE: Finish ran). A failure while a trade is IN FLIGHT here ends
+        // the whole trip (its outcome would land on the next stop's wait).
+        auto stopOver = [&](const std::string& a_why, bool a_ok, float a_cooldown, bool a_complete = false) -> bool {
+            if (!a_ok && r.dispatched && r.phase == Phase::Trading) { Finish(fid, a_why.c_str(), a_cooldown); return false; }
+            if (!NextStopOrFinish(fid, r, a_now, a_why, a_ok, a_cooldown, a_complete)) return false;
+            Store(fid, r);
+            return true;
+        };
         // r.vendor == 0: still walking to the shop's PLACE (a cell / a ref); the vendor actor is found on arrival.
         RE::Actor* vendor = r.vendor ? RE::TESForm::LookupByID<RE::Actor>(r.vendor) : nullptr;
-        if (r.vendor && (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || APMFBridge::InCombat(vendor))) {
-            Finish(fid, "the vendor is gone, dead, unloaded or in combat", kFailCooldownSec);
-            return false;
-        }
+        if (r.vendor && (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || APMFBridge::InCombat(vendor)))
+            return stopOver("the vendor is gone, dead, unloaded or in combat", false, kFailCooldownSec);
         const Idles& idles = IdleIds();
         if (!idles.give) { Finish(fid, "IdleGive did not resolve", 600.0f); return false; }
         const float dist = vendor ? a_follower->GetPosition().GetDistance(vendor->GetPosition()) : 0.0f;
@@ -969,7 +1069,7 @@ namespace MFO::Logistics::Errand {
                 if (APMFBridge::ReadErrandLeg(fid, pleg) && pleg.ours) {
                     if (pleg.state == APMF_API::kLeg_Arrived) {
                         auto va = FindVendorActor(a_follower, r.faction);
-                        if (!va) { Finish(fid, "the shop is unattended (no vendor actor in the loaded shop)", kFailCooldownSec); return false; }
+                        if (!va) return stopOver("the shop is unattended (no vendor actor in the loaded shop)", false, kFailCooldownSec);
                         r.vendor = va->GetFormID();
                         r.vendorName = NameOf(va.get());
                         r.destKind = DestKind::VendorActor; r.destForm = r.vendor; r.destRad = kVendorRadius;
@@ -977,8 +1077,7 @@ namespace MFO::Logistics::Errand {
                         spdlog::info("[errand] {:08X}: reached the shop; walking on to its vendor '{}' ({:08X})", fid, r.vendorName, r.vendor);
                     } else if (pleg.state == APMF_API::kLeg_Blocked) {
                         { std::scoped_lock lk(g_mx); g_parked[r.faction] = a_now + kParkTime; }
-                        Finish(fid, "the walk to the shop ended BLOCKED (a closed door?); shop parked", kFailCooldownSec);
-                        return false;
+                        return stopOver("the walk to the shop ended BLOCKED (a closed door?); shop parked", false, kFailCooldownSec);
                     } else if (pleg.state == APMF_API::kLeg_Failed) {
                         Finish(fid, "Harbinger could not start the leg (FAILED -- all travel slots busy? APMF.log says); queued", 6.0f);
                         return false;
@@ -987,8 +1086,8 @@ namespace MFO::Logistics::Errand {
                     } else if (pleg.state > APMF_API::kLeg_Blocked && pleg.state <= APMF_API::kLeg_Released) {
                         WarnCombatDisagree(a_follower, pleg.state);
                         const auto bo = NoteWalkFailed(fid, r, a_now);
-                        Finish(fid, std::format("the walk to the shop ended: {} (this shop backed off {} s)", LegName(pleg.state), bo).c_str(), kFailCooldownSec);
-                        return false;
+                        return stopOver(std::format("the walk to the shop ended: {} (this shop backed off {} s)", LegName(pleg.state), bo), false,
+                                        kFailCooldownSec);
                     }
                 }
                 Store(fid, r);
@@ -1011,10 +1110,9 @@ namespace MFO::Logistics::Errand {
                             std::scoped_lock lk(g_mx);
                             g_parked[r.vendor] = a_now + kParkTime;
                         }
-                        Finish(fid, std::format("the walk ended BLOCKED at {:.0f} u from the vendor (blocker kind {}); vendor parked for {} min",
-                                                dist, leg.blockerKind, std::chrono::duration_cast<std::chrono::minutes>(kParkTime).count()).c_str(),
-                               kFailCooldownSec);
-                        return false;
+                        return stopOver(std::format("the walk ended BLOCKED at {:.0f} u from the vendor (blocker kind {}); vendor parked for {} min",
+                                                    dist, leg.blockerKind, std::chrono::duration_cast<std::chrono::minutes>(kParkTime).count()),
+                                        false, kFailCooldownSec);
                     }
                 } else if (leg.state == APMF_API::kLeg_Failed) {
                     // The leg could not start: the usual cause is all 8 ch.19 package slots busy (loot + deposit + errands).
@@ -1026,8 +1124,7 @@ namespace MFO::Logistics::Errand {
                 } else if (leg.state > APMF_API::kLeg_Blocked && leg.state <= APMF_API::kLeg_Released) {
                     WarnCombatDisagree(a_follower, leg.state);
                     const auto bo = NoteWalkFailed(fid, r, a_now);
-                    Finish(fid, std::format("the walk ended: {} (this vendor backed off {} s)", LegName(leg.state), bo).c_str(), kFailCooldownSec);
-                    return false;
+                    return stopOver(std::format("the walk ended: {} (this vendor backed off {} s)", LegName(leg.state), bo), false, kFailCooldownSec);
                 }
             }
             // Distance backstop: a leg read that is not ours yet, or a vendor who walked up to him.
@@ -1113,7 +1210,10 @@ namespace MFO::Logistics::Errand {
             ErrandProbe probe;
             probe.mode = ErrandProbe::Mode::kExecute;
             probe.vendors.push_back(vendor->GetHandle());
-            EconomyProbe(a_follower, a_state, a_now, &probe);
+            // R5: this stop's SHARE of the trip (its rows, needs, wishes) and what the trip purse has left; a restored stop (no order)
+            // re-plans in full on his live inventory and gold.
+            const int purseCap = r.tripPurse >= 0 ? std::max(0, r.tripPurse - r.tripSpent) : -1;
+            EconomyErrandExecute(a_follower, a_state, a_now, probe, r.order.get(), purseCap);
             if (probe.dispatched) {
                 r.phase = Phase::Trading;
                 r.dispatched = true;
@@ -1126,14 +1226,12 @@ namespace MFO::Logistics::Errand {
             const bool skipped = std::any_of(probe.verdicts.begin(), probe.verdicts.end(),
                                              [](const ErrandProbe::Verdict& v) { return v.skipped; });
             if (skipped) {   // nothing new to trade with him since the plan (the empty-trade memo): done, no harm
-                Finish(fid, "nothing to trade here any more (the empty-trade memo / nothing to buy or sell)", kFailCooldownSec);
-                return false;
+                return stopOver("nothing to trade here any more (the empty-trade memo / nothing to buy or sell)", true, kFailCooldownSec);
             }
             // Not skipped and not dispatched: the chest holds another follower's live order (the second one WAITS,
             // never parks), or the trade bridge is down. Hold the give pose and retry until the patience runs out.
             if (a_now - r.phaseAt > kDispatchPatience + kBeatPatience) {
-                Finish(fid, "the trade could not be dispatched (chest busy or the trade bridge is down)", kFailCooldownSec);
-                return false;
+                return stopOver("the trade could not be dispatched (chest busy or the trade bridge is down)", false, kFailCooldownSec);
             }
             Store(fid, r);
             return true;
@@ -1143,23 +1241,24 @@ namespace MFO::Logistics::Errand {
             TradeBridge::TradeOutcome out;
             if (!TradeBridge::HasLiveOrder(fid) && TradeBridge::TakeOutcome(fid, out)) {
                 if (out.aborted) {
-                    Finish(fid, "the trade aborted (Papyrus found no usable chest)", kFailCooldownSec);
-                    return false;
+                    r.dispatched = false;   // reported: nothing is in flight any more
+                    return stopOver("the trade aborted (Papyrus found no usable chest)", false, kFailCooldownSec);
                 }
                 spdlog::info("[errand] {:08X} '{}': trade REPORTED at '{}' -- sold {} for {}g, bought {} for {}g",
                              fid, r.followerName, r.vendorName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
+                r.tripSpent += std::max(0, out.spent);   // R5: the next stop's purse cap
+                r.dispatched = false;
                 r.bought = out.boughtCount > 0;
                 if (r.bought && idles.take) {
                     if (!beginBeat(Phase::Taking, idles.take, "take")) return false;
                     Store(fid, r);
                     return true;
                 }
-                Finish(fid, "trade done", Config::g_errandCooldownSec.load(), true);
-                return false;
+                return stopOver("trade done", true, Config::g_errandCooldownSec.load(), true);
             }
             if (Scheduler::ServiceClock() - r.dispatchedClk > kTradeWaitSec) {
-                Finish(fid, "the trade never reported (45 s)", kFailCooldownSec);
-                return false;
+                r.dispatched = false;   // VendorTrade reaps an order at 30 s: nothing is in flight after 45 s
+                return stopOver("the trade never reported (45 s)", false, kFailCooldownSec);
             }
             Store(fid, r);
             return true;
@@ -1174,14 +1273,12 @@ namespace MFO::Logistics::Errand {
                     spdlog::info("[errand] {:08X}: take idle PLAYED{} ({})", fid, rd.weak ? " (weak)" : "", rd.detail);
                 }
                 if (a_now - r.confirmedAt >= kTakeHold) {
-                    Finish(fid, "trade done", Config::g_errandCooldownSec.load(), true);
-                    return false;
+                    return stopOver("trade done", true, Config::g_errandCooldownSec.load(), true);
                 }
             } else if (rd.verdict == APMFBridge::ErrandIdleVerdict::Failed ||
                        (rd.verdict == APMFBridge::ErrandIdleVerdict::Waiting && patience)) {
                 spdlog::info("[errand] {:08X}: take beat skipped ({})", fid, rd.detail);   // the purchase is already made
-                Finish(fid, "trade done", Config::g_errandCooldownSec.load(), true);
-                return false;
+                return stopOver("trade done", true, Config::g_errandCooldownSec.load(), true);
             }
             Store(fid, r);
             return true;
@@ -1261,6 +1358,8 @@ namespace MFO::Logistics::Errand {
             st.faction = r.faction; st.chest = r.chest; st.town = r.town; st.vendorActor = r.vendor;
             st.destKind = r.destKind; st.destForm = r.destForm; st.destRad = r.destRad;
             st.order = r.order; st.lastPos = r.lastPos; st.lastCell = r.lastCell; st.startDays = r.startDays;
+            SyncCur(r);   // R5: the itinerary goes off screen with him
+            st.stops = r.stops; st.cur = r.cur; st.tripPurse = r.tripPurse; st.tripSpent = r.tripSpent;
             st.arrived = r.phase != Phase::Walking;
             st.tradeDispatched = r.dispatched;
             st.tradeDone = r.phase == Phase::Taking;

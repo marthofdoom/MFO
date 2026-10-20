@@ -58,6 +58,20 @@ namespace MFO::Logistics::Errand {
         SimOut, SimTrade, SimReturn, SimRejoin                // the OFF-SCREEN simulation (ErrandSim.cpp)
     };
     enum class SavedDest : std::uint8_t { VendorActor, Ref, Cell };
+    // R5 (ERND v2): one STOP of a multi-stop trip. Kind and state are persisted as string opcodes (#10, tables in
+    // Serialization.cpp): a later round APPENDS a kind (fence, spouse, smith, temple, inn, home), never renumbers one.
+    inline constexpr std::size_t kMaxTripStopsOnWire = 8;   // #11: the stop-count bound of an ERND v2 entry (writer and reader)
+    enum class SavedStopKind : std::uint8_t { Shop };
+    enum class SavedStopState : std::uint8_t { Pending, Active, Done, Skipped };
+    struct SavedStop {
+        SavedStopKind  kind = SavedStopKind::Shop;
+        RE::FormID     faction = 0, chest = 0, vendorActor = 0;
+        SavedDest      destKind = SavedDest::Cell;
+        RE::FormID     destForm = 0;
+        float          destRad = 0.0f;
+        SavedStopState state = SavedStopState::Pending;
+        double         tArrive = 0.0, tWorkEnd = 0.0;   // GAME DAYS of the simulation (0 = not reached yet / physical)
+    };
     struct Saved {
         static constexpr std::uint8_t kArrived    = 0x01;   // he had reached the shop / vendor
         static constexpr std::uint8_t kDispatched = 0x02;   // a trade was in flight at the save (it is NOT replayed)
@@ -76,6 +90,10 @@ namespace MFO::Logistics::Errand {
         RE::NiPoint3  lastPos{};
         float         startDays = 0.0f;
         double        tEnter = 0.0, tArrive = 0.0, tTradeEnd = 0.0, tReturn = 0.0;   // GAME DAYS (0 for a physical stage)
+        // R5 (ERND v2): the trip's itinerary. The fields above (faction ... destRad, tArrive, tTradeEnd) describe the CURRENT
+        // stop, stops[cur]; the writers keep them equal. A v1 entry loads as ONE stop (cur 0, Active) built from them.
+        std::vector<SavedStop> stops;
+        std::uint8_t           cur = 0;
     };
     // SaveCallback (main thread, pump paused): every live errand, physical and simulated, plus any restored entry
     // the pump has not adopted yet (a save right after a load must not lose it).
