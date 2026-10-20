@@ -2099,3 +2099,19 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 
 ### MFO-B408 (SEV-4, OPEN, logistics/ErrandSim.cpp MoveHold) -- town: MoveHold logs success when Harbinger's Repoint silently fails (raised against 8444346)
 "MoveHold logs success even when the Repoint silently fails in Harbinger. This is the same root as" MFO-B405 (Repoint is void in the ABI; the wrapper reports true).
+
+### MFO-B409 (SEV-4, OPEN, logistics/ErrandReopen.cpp Poll) -- town: the re-plan uses ORDERS recorded at the last plan, which can be stale (raised against feat/mfo-town-run2)
+"The recorded order of an hours-closed shop was built when the trip was planned. Its sell rows list items the earlier stops may since have sold, and its purse is the plan-time purse. On screen the execute re-reads live counts for the stop's share, so only the partition is stale; the off-screen replay (TRADE_SIM) sends the stored rows as they were. The empty-trade memo (SkipTrade) is also read at plan time. Accepted by the ruling 'decide from the needs recorded at the last plan and replay that order'; a refresh on the next loaded tick would remove it."
+
+### MFO-B410 (SEV-5, OPEN, logistics/ErrandReopen.cpp Poll) -- town: the hour gate reads at game-hour boundaries, so a shop opening mid-hour is seen up to an hour late (raised against feat/mfo-town-run2)
+"Poll compares floor(days*24) with the last read, so the first read after a record is the next whole game hour and a shop whose start hour is not an integer (VENV hours are integers) is unaffected, but a record made at 8:59 reads again at 9:00 and a record made at 9:01 not until 10:00. The ruling says at most once per game hour, so this is within it."
+
+### MFO-B411 (SEV-4, OPEN, logistics/ErrandRest.cpp PostTempleDoorRead) -- town: the temple door read needs the player OUTDOORS (raised against feat/mfo-town-run2)
+"TES::ForEachReference walks only the player's interior cell when the player is indoors, so the read reports 'indoors' and the planner defers (capped at kMagicMaxDefers, then plans without the temple). A follower who wants the temple while the player stays inside a building plans no temple until the player steps out. The inn is unaffected (its door is read from the follower's own cell)."
+
+### MFO-B412 (SEV-5, OPEN, logistics/ErrandSim.cpp Sweep) -- town: an off-roster loaded follower in a non-REST sim stage is simulated while loaded (raised against feat/mfo-town-run2)
+"The awayOffRoster fall-through lets a loaded, eligible, off-roster record run the whole timeline (OUT_SIM, TRADE_SIM, RET_SIM, PlaceReturn MoveTo) while his 3D is up. The roster drop it targets is a few seconds long; a follower that stays off the roster for a whole stage is not distinguished from one that is away."
+
+### MFO-B413 (SEV-5, OPEN, logistics/ErrandRest.cpp FindPlaces) -- town: the inn has no separate hours gate (raised against feat/mfo-town-run2)
+"The inn and the temple are gated only by their load door's lock (a night-locked door reads locked at that hour). There is no VENV-style opening-hours test; a place that is unlocked but 'closed' by script is walked to. The spec for F4 asked to apply 'the inn's LOCKED + hours gate': the inn has the lock gate only, which is what the temple now gets."
+
