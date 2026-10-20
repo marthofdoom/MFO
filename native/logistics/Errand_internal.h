@@ -203,6 +203,7 @@ namespace MFO::Logistics::Errand {
         // follower per town visit. FALSE for an unloaded follower (today's behaviour; logged) or when inn errands are off.
         bool MagicReadPending(RE::Actor* a_follower);
         bool TripDone(RE::FormID a_follower, RE::FormID a_townId);
+        void UnmarkTripDone(RE::FormID a_follower, const char* a_why);   // F3: a needed shop opened -- the visit's mark goes, a new trip starts
         void MarkTripDone(RE::FormID a_follower, RE::FormID a_townId, const char* a_why);
         // The synthetic food order's dispatch (the inn's physical give beat): VendorTrade of a_order at the innkeeper's chest.
         // Sent = on its way; Busy = the chest holds another follower's live order (retry); Nothing = nothing to buy (no purse / no chest).
@@ -216,8 +217,9 @@ namespace MFO::Logistics::Errand {
         StepOut Step(RE::Actor* a_follower, std::chrono::steady_clock::time_point a_now);
         // The errand ends / the stop ends: release the work claim and forget it. a_why is logged (the release reason of an inn stay).
         // a_tripOver: the stay / visit really ended (marks the trip done for this town visit); false = handed to the simulation.
-        // a_byCombat (F2): combat ended it -- the visit is NOT marked done (NoteCombat's combat-end edge lets a fresh plan run).
-        void End(RE::FormID a_follower, const char* a_why, bool a_tripOver, bool a_byCombat = false);
+        // a_noMark (F2 / F3): the end does NOT mark the visit done -- combat ended it (NoteCombat's combat-end edge lets a fresh plan run) or a needed
+        // shop opened and a new trip starts (ErrandReopen.cpp).
+        void End(RE::FormID a_follower, const char* a_why, bool a_tripOver, bool a_noMark = false);
         void ClearTransientState();   // revert / load (pump drained): every ledger, mark and work
         bool Working(RE::FormID a_follower);
         // The Board text: "Resting at X" / "Praying at X" ("" = no work).
@@ -229,6 +231,28 @@ namespace MFO::Logistics::Errand {
         void LogBlockedDoors(RE::Actor* a_follower, RE::FormID a_destCell, const std::string& a_label);
         // Sim: a temple visit ran off screen; the blessing is OWED (logged; paid only by a physical visit).
         void NoteOwed(RE::FormID a_follower, const std::string& a_followerName, const std::string& a_temple);
+    }
+
+    // ── F3 (marth 2026-10-20: ONE TRIP AT A TIME): the SHOP-OPENS re-plan -- logistics/ErrandReopen.cpp ───────────────────────────────────
+    // BuildCatalog drops a vendor faction that is closed for HOURS only (OpenAt false; never a fence / spouse / conditioned drop). The planner
+    // records those shops (candidates + the orders EconomyErrandPlan built for them NOW, while the follower was loaded) with the trip it commits:
+    // the WATCH. While the visit's mark stands or he is on his inn stay (on screen or REST_SIM), the watch is re-read at most once per game hour;
+    // on closed -> open the recorded candidates that opened go through Trip::Plan again (no inventory is read: the same recorded needs, so the
+    // loaded and the off-screen follower decide identically) and, if that yields a stop, the caller ends the stay (NO trip mark) and starts a
+    // new trip: those shops, the inn LAST. No stop = those factions leave the watch. Session-only (never saved). Own mutex (a leaf).
+    namespace Reopen {
+        struct Plan {
+            std::vector<Stop> stops;   // the opened shops in visit order, then the inn stop (state Pending, no order); stops.front() is Active
+            std::string       line;    // the plan line's body
+        };
+        // Planner (worker, TryStart), at the commit of a trip. a_closedCands / a_closedOrders = the hours-closed shops and their orders (empty = erase
+        // the watch). a_in = the plan's inputs; a_innStop = the committed trip's inn stop (null = the trip has none).
+        void Record(RE::FormID a_follower, RE::FormID a_town, std::vector<Trip::Cand>&& a_closedCands, std::vector<ErrandPlanned>&& a_closedOrders,
+                    const Trip::Inputs& a_in, const Stop* a_innStop);
+        // Worker. TRUE = a_out is a new trip. Hour-gated (once per game hour per follower). a_from (null = the recorded one) is where he is now.
+        // Takes Errand g_mx then Sim g_mx (Trip::ChestCrowd): the caller holds neither.
+        bool Poll(RE::FormID a_follower, RE::FormID a_town, const RE::NiPoint3* a_from, Plan& a_out);
+        void ClearAll();   // the player's town changed / revert / load
     }
 
     namespace Sim {
@@ -266,6 +290,7 @@ namespace MFO::Logistics::Errand {
         // Is a vendor ACTOR of this faction standing, loaded and awake, in the follower's (loaded) cell?
         bool  VendorPresentNear(RE::Actor* a_follower, RE::FormID a_faction);
         RE::FormID PlayerTownId();   // the BGSLocation id of the player's town, 0 = not in one
+        bool  OpenAtHour(const RE::TESFaction* a_fac, float a_hour);   // F3: the vendor faction's VENV hours (the catalog's OpenAt)
         const char* NameOf(const RE::Actor* a_actor);
         // bTownToasts: one informational HUD line (RE::DebugNotification, posted to the main thread). No-op while the toggle is OFF.
         void  Toast(const std::string& a_text);

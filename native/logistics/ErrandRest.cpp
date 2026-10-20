@@ -832,6 +832,7 @@ namespace MFO::Logistics::Errand::Rest {
         if (!g_tripDone.empty())
             spdlog::info("[errand] the player's town changed ({:08X} -> {:08X}): {} follower(s)' trip-done mark(s) cleared", g_marksTown, a_townId, g_tripDone.size());
         g_marksTown = a_townId;
+        Reopen::ClearAll();   // F3: the watch belongs to the town visit
         g_tripDone.clear();
         g_tripLogged.clear();
         g_lockLogged.clear();
@@ -879,6 +880,15 @@ namespace MFO::Logistics::Errand::Rest {
             spdlog::info("[errand] {:08X}: re-plan BLOCKED -- his trip for this visit to town {:08X} is done (one complete trip per town visit); no new errand until the player leaves town",
                          a_follower, a_townId);
         return true;
+    }
+    void UnmarkTripDone(RE::FormID a_follower, const char* a_why) {
+        bool had = false;
+        {
+            std::scoped_lock lk(g_mx);
+            had = g_tripDone.erase(a_follower) > 0;
+            g_tripLogged.erase(a_follower);
+        }
+        if (had) spdlog::info("[errand] {:08X}: trip-done mark CLEARED ({})", a_follower, a_why);
     }
     void MarkTripDone(RE::FormID a_follower, RE::FormID a_townId, const char* a_why) {
         {
@@ -957,7 +967,7 @@ namespace MFO::Logistics::Errand::Rest {
         return out;
     }
 
-    void End(RE::FormID a_follower, const char* a_why, bool a_tripOver, bool a_byCombat) {
+    void End(RE::FormID a_follower, const char* a_why, bool a_tripOver, bool a_noMark) {
         Work w;
         {
             std::scoped_lock lk(g_mx);
@@ -978,7 +988,7 @@ namespace MFO::Logistics::Errand::Rest {
             spdlog::info("[errand] {:08X} '{}': TEMPLE VISIT ENDS at '{}' after {} s -- {}", a_follower, w.followerName, w.name, secs, a_why);
         // F2 (marth 2026-10-20: ONE TRIP AT A TIME): a stay that combat ended is NOT a finished visit -- NoteCombat clears the marks when the fight is over
         // and a FRESH plan (current needs, inn last) runs. Every other end of the stay still marks the visit done.
-        if (a_tripOver && w.kind == StopKind::Inn && !a_byCombat) MarkTripDone(a_follower, w.town, "the inn stay ended");
+        if (a_tripOver && w.kind == StopKind::Inn && !a_noMark) MarkTripDone(a_follower, w.town, "the inn stay ended");
     }
 
     void ClearTransientState() {
@@ -994,6 +1004,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_innFacs.clear();
         g_marksTown = 0;
         g_wasCombat = false;
+        Reopen::ClearAll();
     }
 
     bool Working(RE::FormID a_follower) {
