@@ -341,23 +341,20 @@ namespace MFO::Actuation {
             }
             // 4a. THE SUBSTRATE ROAD (slice S3): the follower's own AI casts the summon with the animation; Harbinger
             //     holds the substrate and closes it on the fire. MAIN thread (FileSubstrateCast is main-safe for a
-            //     self recipient). Filed = Cast (the verdict's landing window then covers the charge); Skipped = a
-            //     no-cast this lap (Failed: the worker re-asks after the verdict ages out), NEVER the direct cast.
+            //     self recipient). Filed = Cast (the verdict's landing window then covers the charge); anything else
+            //     = Failed, a no-cast this lap (the worker re-asks after the verdict ages out), NEVER the direct cast.
+            //     FileSubstrateCast never answers NotTaken (that is SubstrateRoadFor's, decided on the worker).
             if (a_substrate) {
-                switch (FileSubstrateCast(f, sp, f, "ooc-summon")) {
-                case SubstrateTry::Filed:
-                    setVerdict(SummonVerdict::Cast);
-                    spdlog::info("[summon] {:08X} {} {} ({:08X}) rule {} ({}, target {}): road=substrate-claim, filed "
-                                 "(the follower's own AI casts it; summons listed {} + appearing {} of limit {}{})",
-                                 a_id, fname, name, a_spellID, a_rule, a_table, a_target, live, pending, limit,
-                                 noCap ? ", cap skipped by the engine flag" : "");
-                    return;
-                case SubstrateTry::Skipped:
+                if (FileSubstrateCast(f, sp, f, "ooc-summon") != SubstrateTry::Filed) {
                     setVerdict(SummonVerdict::Failed);
                     return;
-                case SubstrateTry::NotTaken:
-                    break;   // not returned by FileSubstrateCast; today's cast below
                 }
+                setVerdict(SummonVerdict::Cast);
+                spdlog::info("[summon] {:08X} {} {} ({:08X}) rule {} ({}, target {}): road=substrate-claim, filed "
+                             "(the follower's own AI casts it; summons listed {} + appearing {} of limit {}{})",
+                             a_id, fname, name, a_spellID, a_rule, a_table, a_target, live, pending, limit,
+                             noCap ? ", cap skipped by the engine flag" : "");
+                return;
             }
             auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
             auto* avo    = f->AsActorValueOwner();

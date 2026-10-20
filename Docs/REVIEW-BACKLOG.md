@@ -1872,3 +1872,18 @@ Opus tier-3 review of `feat/mfo-town-p2-s-rows` @ 527877c6. Verbatim: "Unguarded
 
 ### MFO-B325 (SEV-5, OPEN, Packages.cpp) -- town S: VR load noise from the refused alias reader (raised against 527877c6)
 Opus tier-3 review of `feat/mfo-town-p2-s-rows` @ 527877c6. Verbatim: "VR noise: each VR load now prints 7 'NOT swept' error lines in addition to the seat refusal; the VR loot/retreat sweeps were already no-ops before this change." Reasoning: log volume only on VR (no verified table there); since the review fix the lines read "occupancy unknown ... NOT swept (no marker or no native ForceRefTo)". MAP: Packages.cpp "ALIAS READER behind its self-check row" bullet.
+
+### MFO-B332 (SEV-4, OPEN, apmf/Substrate.cpp / cast/SubstrateRoad.cpp) -- S3: NOT OPENED error repeats for a standing refusal (raised against 733c20cc)
+Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-4 (b). Verbatim: "The NOT OPENED ERROR repeats every pacing window when Harbinger refuses for a standing reason (dialogue, scene, not high process); a summon (no pacing) re-files every time its verdict ages out." Reasoning: log volume and Harbinger churn only; each refusal is still a no-cast, never the direct road. Surfaced at edit time from: MAP.md section 2 "cast/SubstrateRoad.cpp + apmf/Substrate.cpp".
+
+### MFO-B333 (SEV-4, OPEN, cast/SubstrateRoad.cpp / cast/BuffRoad.cpp) -- S3: ChooseBuffRoad from the OOC table erases g_neverFired early (raised against 733c20cc)
+Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-4 (d). Verbatim: "ChooseBuffRoad called from the OOC table erases g_neverFired (BuffRoad.cpp:364) on the first one-service party-OOC flap tick, before the 2-tick debounce." Reasoning: a per-fight never-fired hold-off can be lifted one service early on a party-OOC flap with bSubstrateCasts ON. Surfaced at edit time from: MAP.md section 2 "cast/SubstrateRoad.cpp + apmf/Substrate.cpp".
+
+### MFO-B334 (SEV-4, OPEN, cross-branch: fix/mfo-riften-1019b + feat/mfo-substrate-s3) -- S3: AnchorOnlyLeak may fire falsely on a close (raised against 733c20cc)
+Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-4 (f). Verbatim: "Cross-branch: fix/mfo-riften-1019b's AnchorOnlyLeak ERROR may fire falsely on the frame between an S3 close (holder dropped) and the controller teardown. Watch in F2." Reasoning: a false ERROR line only; watch for it in the F2 field run. Surfaced at edit time from: MAP.md section 2 "cast/SubstrateRoad.cpp + apmf/Substrate.cpp".
+
+### MFO-B335 (SEV-5, OPEN, apmf/Substrate.cpp) -- S3: spdlog under g_subMx (raised against 733c20cc)
+Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-5. Verbatim: "spdlog is called under g_subMx." Reasoning: a leaf mutex held across a log write; cost only. Surfaced at edit time from: MAP.md section 2 "cast/SubstrateRoad.cpp + apmf/Substrate.cpp".
+
+### MFO-B336 (SEV-5, CLOSED in the review round on 733c20cc, cast/Summon.cpp) -- S3: the Summon NotTaken case (raised against 733c20cc)
+Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-5. Verbatim: "The Summon NotTaken case comment is correct, but nothing enforces it." Closed: the switch is gone; `SummonOnMain` treats anything but Filed as a Failed no-cast, so no NotTaken path exists to fall through to the direct cast. Surfaced at edit time from: MAP.md section 2 "cast/SubstrateRoad.cpp + apmf/Substrate.cpp".

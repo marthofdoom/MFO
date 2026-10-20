@@ -532,16 +532,17 @@ namespace MFO::Actuation {
     //   NotTaken  today's road, unchanged: the switch is OFF, Harbinger is absent / too old / reports the substrate
     //             unavailable (logged once per session), the caller is the combat table, or the spell is not one
     //             the claim road serves (a rate-limited [substrate] line names why).
-    //   Filed     the pair is filed: this lap's action. The cast is Harbinger's and the engine's from here.
-    //   Skipped   a TRANSPARENT no-cast this lap, NEVER the direct road: a pair already stands for him (the
-    //             PENDING latch), the player is sneaking (marth 2026-10-19 Q6), unaffordable, out of reach, the
-    //             spell's effect is still up or its pacing window is open, or Harbinger REFUSED the open (logged).
-    enum class SubstrateTry : std::uint8_t { NotTaken, Filed, Skipped };
+    //   Filed     the pair is filed: this lap's action. MFO equips nothing (Harbinger's substrate owns the equip).
+    //   Skipped   a TRANSPARENT no-cast for THIS RECIPIENT, never the direct road: out of reach, the pacing window
+    //             is open, or the spell's effect is still up on him. AUTO tries its next recipient.
+    //   Refused   a TRANSPARENT no-cast for EVERY recipient this lap, never the direct road: a pair already stands
+    //             for him (the PENDING latch), the player is sneaking (marth 2026-10-19 Q6), he cannot act, does not
+    //             know the spell, cannot afford it, or Harbinger REFUSED the open.
+    enum class SubstrateTry : std::uint8_t { NotTaken, Filed, Skipped, Refused };
     // WORKER only (ChooseBuffRoad's state is worker-serial). Does this cast take the substrate road? a_oocTable is
     // false for every combat-table caller (g_firingRule set): the combat table never files a substrate.
     bool SubstrateRoadFor(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient, bool a_oocTable);
-    // WORKER or MAIN. Files the pair after the per-cast gates. a_recipient other than the caster is WORKER only
-    // (the reach gate reads the Sightline cache); the main-thread caller (the summon) passes the caster.
+    // WORKER, or MAIN for a self recipient (the summon). Files the pair after the per-cast gates.
     SubstrateTry FileSubstrateCast(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,
                                    const char* a_site);
     // WORKER only: SubstrateRoadFor, then FileSubstrateCast. a_site is a string literal (it is kept in the log).

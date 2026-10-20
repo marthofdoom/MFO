@@ -30,10 +30,13 @@
 #include "APMFBridge.h"
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
+#include "Runtime.h"   // SEV-4 (c): the unavailable line names the runtime (1.7.104 has no substrate yet)
 
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <mutex>
+#include <tuple>
 #include <unordered_map>
 
 #include <spdlog/spdlog.h>
@@ -84,6 +87,8 @@ namespace MFO::APMFBridge {
 
         std::mutex                           g_subMx;
         std::unordered_map<RE::FormID, Pair> g_pairs;   // guarded by g_subMx
+        // (follower, spell, target) -> the last FIRE seen for a pair (SubstrateFiredSince). Guarded by g_subMx.
+        std::map<std::tuple<RE::FormID, RE::FormID, RE::FormID>, Clock::time_point> g_fires;
 
         std::atomic<bool> g_tooOldNoted{ false };
         std::atomic<bool> g_unavailableNoted{ false };
@@ -126,13 +131,22 @@ namespace MFO::APMFBridge {
         const auto* v27 = reinterpret_cast<const APMF_API::APMF_API_v27*>(api);
         if (!v27->IsSubstrateAvailable || !v27->IsSubstrateAvailable()) {
             // marth 2026-10-19 (SUBSTRATE-RULINGS Q4): "Shouldnt happen". The substrate must be available wherever
-            // Harbinger is. A loud bug, once per session, and today's road (the declared degrade, never silent).
-            if (!g_unavailableNoted.exchange(true))
-                spdlog::error("[substrate] THIS SHOULD NOT HAPPEN: bSubstrateCasts is ON and Harbinger (ABI v{}) is "
-                              "present, but IsSubstrateAvailable() is FALSE (APMF.log '[substrate] combat substrate "
-                              "NOT installed' names why: APMF.ini [CombatSubstrate] bCombatSubstrate, the runtime, a "
-                              "seat or an address row). Out-of-combat casts stay on today's direct road (unanimated) "
-                              "this session. Report it.", api->abiVersion);
+            // Harbinger is. A loud ERROR, once per session, and today's road (the declared degrade, never silent).
+            // Worded per runtime (review SEV-4 (c) on 733c20cc): on 1.7.104 Harbinger does not install it yet by its
+            // own design (missing 1.7.104 rows), so "should not happen" is reserved for 1.6.1170 / 1.5.97.
+            if (!g_unavailableNoted.exchange(true)) {
+                if (Runtime::IsVerified1_7_104())
+                    spdlog::error("[substrate] substrate unavailable on this runtime (Harbinger does not support it on "
+                                  "1.7.104 yet) -- casting on today's road (bSubstrateCasts is ON, Harbinger ABI v{}; "
+                                  "out-of-combat casts stay unanimated this session)", api->abiVersion);
+                else
+                    spdlog::error("[substrate] THIS SHOULD NOT HAPPEN: bSubstrateCasts is ON and Harbinger (ABI v{}) "
+                                  "is present on {}, but IsSubstrateAvailable() is FALSE (APMF.log '[substrate] "
+                                  "combat substrate NOT installed' names why: APMF.ini [CombatSubstrate] "
+                                  "bCombatSubstrate, a seat or an address row). Out-of-combat casts stay on today's "
+                                  "direct road (unanimated) this session. Report it.",
+                                  api->abiVersion, Runtime::BuildLabel());
+            }
             return SubstrateAvail::Unavailable;
         }
         return SubstrateAvail::Available;
@@ -201,9 +215,16 @@ namespace MFO::APMFBridge {
         if (pr.fired) return;
         if (a_spell != pr.spell && (pr.proxy == 0 || a_spell != pr.proxy)) return;
         pr.fired = true;
+        g_fires[{ a_follower, pr.spell, pr.target }] = Clock::now();
         spdlog::info("[substrate] {:08X} FIRED: {} ({:08X}) {} ms after the open{} road=substrate-claim",
                      a_follower, SpellName(pr.spell), a_spell, MsSince(pr.filed, Clock::now()),
                      pr.held ? "" : " (never seen held: the sweep missed the window)");
+    }
+
+    bool SubstrateFiredSince(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target, Clock::time_point a_since) {
+        std::scoped_lock lock(g_subMx);
+        const auto it = g_fires.find({ a_follower, a_spell, a_target });
+        return it != g_fires.end() && it->second >= a_since;
     }
 
     void ReleaseSubstrateCast(RE::FormID a_follower, const char* a_why) {
@@ -246,10 +267,17 @@ namespace MFO::APMFBridge {
                 spdlog::info("[substrate] {:08X} HELD: Harbinger holds the substrate, {} ms after the open "
                              "road=substrate-claim", fid, MsSince(pr.filed, now));
             }
-            if (st == APMF_API::kSubstrateState_Real && !pr.real) {
-                // A REAL FIGHT during the window: Harbinger drops the substrate and keeps the fight. The OOC cast is
-                // moot there and the combat table owns casting from now on, so the cast claim goes at once (no MFO
-                // claim of the out-of-combat table may stand beside the combat table's: the MFO-B173 class).
+            // A REAL FIGHT during the window: Harbinger drops the substrate and keeps the fight. The OOC cast is moot
+            // there and the combat table owns casting from now on, so the cast claim goes at once (no MFO claim of the
+            // out-of-combat table may stand beside the combat table's: the MFO-B173 class). kSubstrateState_Real lasts
+            // only until Harbinger's next poll drops the holder, so a 133 ms sample usually misses it (review F3 on
+            // 733c20cc): a follower IN COMBAT with no held substrate (APMFBridge::InCombat: IsInCombat() and not
+            // substrate-only; worker-safe, the reads every MFO combat gate makes) counts the same. The one frame
+            // between a normal close's StopCombat and the controller teardown can read this way too: then the claim
+            // just goes at once instead of after the grace (it fired or the substrate is gone; nothing left to cut).
+            auto* actor = RE::TESForm::LookupByID<RE::Actor>(fid);
+            const bool fighting = actor && st != APMF_API::kSubstrateState_Held && InCombat(actor);
+            if ((st == APMF_API::kSubstrateState_Real || fighting) && !pr.real) {
                 pr.real = true;
                 ReleasePairLocked(api, pr);
                 spdlog::info("[substrate] {:08X} CLOSED reason=real-combat (a real fight dropped the substrate; the "
@@ -305,5 +333,6 @@ namespace MFO::APMFBridge {
         const auto* api = SubApi();
         for (auto& [fid, pr] : g_pairs) ReleasePairLocked(api, pr);   // Harbinger wipes its own at kPreLoadGame: harmless
         g_pairs.clear();
+        g_fires.clear();
     }
 }

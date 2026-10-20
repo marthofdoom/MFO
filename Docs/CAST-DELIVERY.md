@@ -1525,11 +1525,24 @@ target-location heal stays direct), and a Buff or summon `ChooseBuffRoad` answer
 every seat / row / shape test passed). Anything else keeps today's road and a `[substrate] ... stays on today's direct road -- <why>`
 line says why (60 s per follower and spell).
 
-**The per-cast gates** (`FileSubstrateCast`), each a TRANSPARENT no-cast this lap, NEVER the direct road: a pair already stands for
-him (the PENDING latch: open in flight, held, or its close grace), the player is sneaking (ruling Q6, a `[substrate] ... OPEN
-refused: the player is sneaking` line every 10 s), he cannot act, magicka or the reserve floor, a heal out of reach
-(`HealInReach`), the pacing window per (follower, spell, recipient) (duration x 0.9, floor max(3 s, fCastCooldown), 300 s ceiling; none for a summon), or its
-effect still up on the recipient.
+**The per-cast gates** (`FileSubstrateCast`), each a TRANSPARENT no-cast this lap, NEVER the direct road. FOLLOWER-WIDE
+(`Refused`): a pair already stands for him (the PENDING latch: open in flight, held, or its close grace), the player is sneaking
+(ruling Q6, a `[substrate] ... OPEN refused: the player is sneaking` line every 10 s), he cannot act, does not know the spell,
+magicka or the reserve floor, Harbinger refused the open. PER RECIPIENT (`Skipped`, AUTO tries the next one): a heal out of reach
+(`HealInReach`), the pacing per (follower, spell, recipient), or the effect still up on the recipient. Pacing (review F4 on
+733c20cc): the short floor max(fCastCooldown, 3 s) always; the long window (duration x 0.9, 300 s ceiling) only once that pair
+FIRED (`APMFBridge::SubstrateFiredSince`), so a refused or never-fired open retries at the floor. None for a summon (SummonGate).
+
+**The latch covers EVERY cast op** (review F2 on 733c20cc): while a pair stands, the OOC table skips every cast rule and AUTO's
+concentration series returns at once, because the substrate's live controller would otherwise open the concentration claim
+branches. Those branches (`cast/DirectSelf.cpp` / `cast/DirectTarget.cpp`, ClaimOffenseCast for a concentration non-heal) are also
+gated on the combat table now (`g_firingRule != kNoRule`, the MFO-B173 rule): out of combat they take the direct stream, as with
+no controller.
+
+**MFO equips nothing on this road** (marth 2026-10-19: "Remember we are porting everything to harbinger, so having MFO do something
+will just need redoing later"). The claimed spell's equip is Harbinger's (a separate APMF round lets the engine's own AI equip it
+while a driving claim stands). `[substrate] <f> OPEN: spell in left hand = yes/no (left, right)` shows the field run which hand
+state the substrate opened on.
 
 **The ch.8b target convention** (as `BuffClaim` / `ComposedCast::Try`): 0 = self for a Self-delivery or placement spell; the caster's
 own FormID for a self cast of any other delivery (Harbinger's self-flip proxy); the recipient otherwise. `kCastFlag_OwnLineOfSight`
@@ -1552,13 +1565,15 @@ for a recipient that is not the caster.
 claim is gone, the cast claim is released at once if the fire was SEEN (the SpellSink) or the substrate was never held
 (no controller, so no charge), else after a 2.5 s grace (sized from the
 measured fire -> `TESSpellCastEvent` lag, 0.33..2.02 s), so MFO's release can never be what cuts a charge in flight. A REAL fight
-during the window (`kSubstrateState_Real`) releases the cast claim at once: the combat table owns casting from then on (no claim of
-the out-of-combat table may stand beside the combat table's: the MFO-B173 class).
+during the window releases the cast claim at once: the combat table owns casting from then on (no claim of the out-of-combat table
+may stand beside the combat table's: the MFO-B173 class). Real is `kSubstrateState_Real`, or (review F3: that state lasts only until
+Harbinger's next poll) the follower in combat with no held substrate (`APMFBridge::InCombat`).
 
 **Availability (ruling Q4: "shouldn't happen").** Switch OFF or Harbinger absent: today's road, nothing read. Harbinger older than
-ABI v27: one WARN per session, today's road. Harbinger v27 with `IsSubstrateAvailable()` false: one ERROR per session ("THIS SHOULD
-NOT HAPPEN"), today's road. That is the declared degrade, never silent. Once a cast takes the road, nothing falls back.
+ABI v27: one WARN per session, today's road. Harbinger v27 with `IsSubstrateAvailable()` false: one ERROR per session, today's
+road: "THIS SHOULD NOT HAPPEN" on 1.6.1170 / 1.5.97; on 1.7.104 "substrate unavailable on this runtime (Harbinger does not support
+it on 1.7.104 yet)" (review SEV-4 (c)). That is the declared degrade, never silent. Once a cast takes the road, nothing falls back.
 
 **Threading.** The OOC table and the sweep (`APMFBridge::Tick`) run on the AddTask job worker; the summon's file runs on the main
-thread. The pair table has its own leaf mutex (`g_subMx`, order g_mx -> g_subMx at `ClearTransientState`); the APMF calls under it are
+thread (a self recipient: no reach read). The cast side's maps clear on revert (`ResetSubstrateRoad`, from `ClearCastLocks`). The pair table has its own leaf mutex (`g_subMx`, order g_mx -> g_subMx at `ClearTransientState`); the APMF calls under it are
 enqueues or lock-free reads. No co-save change: Harbinger forgets every substrate on a load, and `ClearTransientState` forgets MFO's.

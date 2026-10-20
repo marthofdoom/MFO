@@ -2176,38 +2176,50 @@ write-up `Docs/CAST-DELIVERY.md` "COMBAT SUBSTRATE SLICE S3". Behind ONE INI-onl
 (`bSubstrateCasts`, MFO.ini [Debug], default 0). With it ON and Harbinger's substrate available (ABI >= 27 +
 `IsSubstrateAvailable`), an OUT-OF-COMBAT fire-and-forget heal / buff / summon files a ch.27 `kIntent_CombatSubstrate`
 claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kHealCastTtlMs`) and the follower's own AI casts it, animated.
-- `cast/SubstrateRoad.cpp` (203) = the CAST side, declared in `cast/Actuation.h` (`SubstrateTry`): `SubstrateRoadFor`
-  (`:73`, WORKER only: switch, availability, which spells = the claim roads' gates minus the controller test; Heal =
-  `ChooseHealRoad`'s gates mirrored, Buff / summon = `ChooseBuffRoad` (log-free) answering `Claim` or `DirectNoCombat`;
+- `cast/SubstrateRoad.cpp` (248) = the CAST side, declared in `cast/Actuation.h` (`SubstrateTry` NotTaken / Filed /
+  Skipped (this recipient) / Refused (every recipient this lap)): `SubstrateRoadFor` (`:82`, WORKER only: switch,
+  availability, which spells = the claim roads' gates minus the controller test; Heal = `ChooseHealRoad`'s gates mirrored
+  incl. its self-flip bar, Buff / summon = `ChooseBuffRoad` (log-free) answering `Claim` or `DirectNoCombat`;
   concentration = slice S5 and Offense = round R4 are NOT taken; a 60 s `[substrate] ... stays on today's direct road`
-  line names why), `FileSubstrateCast` (`:115`, worker or MAIN: the PENDING latch, the player sneaking (Q6), can-act,
-  magicka + reserve, heal reach, the pacing window, already-up, the ch.8b target convention, then the bridge),
-  `TrySubstrateCast` (`:198`, both). Its maps are under `g_roadMx` (leaf).
-- `apmf/Substrate.cpp` (309) = the claim PAIR and its state machine, declared in `apmf/APMFBridge.h`
-  (`SubstrateAvail`): `SubstrateAvailability` (`:116`, the once-per-session WARN (ABI < 27) / ERROR (v27 says
-  unavailable, "THIS SHOULD NOT HAPPEN", Q4)), `SubstrateCastPending` (`:141`, the latch), `OpenSubstrateCast`
-  (`:146`), `NoteSubstrateCastFired` (`:196`, from `Diagnostics.cpp`'s SpellSink task), `ReleaseSubstrateCast`
-  (`:209`, from `Followers::ReleaseHeldStateImpl`), `SweepSubstrateCasts` (`:219`, from `APMFBridge::Tick`
-  `apmf/Bridge.cpp:1025`, BEFORE g_mx), `ClearSubstrateCasts` (`:303`, from `ClearTransientState` `apmf/Bridge.cpp:1267`,
-  under g_mx). Own leaf mutex `g_subMx` (order g_mx -> g_subMx; never the reverse). Every transition logs once per pair
-  with `road=substrate-claim`: OPEN requested -> HELD -> CAST CLAIMED -> FIRED -> CLOSED reason=fired / cast-claim-ended
+  line names why), `FileSubstrateCast` (`:129`, worker, or MAIN for a self recipient: the PENDING latch, the player
+  sneaking (Q6), can-act, HasSpell, magicka + reserve, then per recipient heal reach, the two-window pacing (short floor
+  always, the duration window only once that pair FIRED), already-up, the ch.8b target convention, the bridge, and the
+  `OPEN: spell in left hand = yes/no` line), `ResetSubstrateRoad` (`:236`, from `ClearCastLocks` on revert),
+  `TrySubstrateCast` (`:243`). Its maps are under `g_roadMx` (leaf). **MFO equips nothing here** (marth 2026-10-19:
+  "Remember we are porting everything to harbinger"): the claimed spell's equip is Harbinger's.
+- `apmf/Substrate.cpp` (338) = the claim PAIR and its state machine, declared in `apmf/APMFBridge.h`
+  (`SubstrateAvail`): `SubstrateAvailability` (`:121`, the once-per-session WARN (ABI < 27) / ERROR (v27 says
+  unavailable: "THIS SHOULD NOT HAPPEN" on 1.6.1170 / 1.5.97, "not supported on 1.7.104 yet" there, Q4)),
+  `SubstrateCastPending` (`:155`, the latch), `OpenSubstrateCast` (`:160`), `NoteSubstrateCastFired` (`:210`, from
+  `Diagnostics.cpp`'s SpellSink task; records the fire for `SubstrateFiredSince` `:224`), `ReleaseSubstrateCast`
+  (`:230`, from `Followers::ReleaseHeldStateImpl`), `SweepSubstrateCasts` (`:240`, from `APMFBridge::Tick`
+  `apmf/Bridge.cpp:1025`, BEFORE g_mx; real combat = `kSubstrateState_Real` OR `InCombat` with no held substrate),
+  `ClearSubstrateCasts` (`:331`, from `ClearTransientState` `apmf/Bridge.cpp:1267`, under g_mx). Own leaf mutex
+  `g_subMx` (order g_mx -> g_subMx; never the reverse). Every transition logs once per pair with
+  `road=substrate-claim`: OPEN requested -> HELD -> CAST CLAIMED -> FIRED -> CLOSED reason=fired / cast-claim-ended
   / closed-unfired / not-opened / real-combat / released / timeout; ERRORs for OPEN REFUSED, NOT OPENED, timeout.
-- **Call sites (minimal):** `logistics/Service.cpp:1824` (the self and posted-immediate branches; the hostile-at-foe
-  branch and the concentration `CastTargetDirect` at `:1649` are NOT converted), `cast/Auto.cpp:996` (CastAuto's
-  beneficial fan becomes a one-recipient series on this road), `cast/Summon.cpp:456` (decided on the worker) + `:347`
-  (filed on the main thread inside `SummonOnMain`).
+- **Call sites (minimal):** `logistics/Service.cpp:1522` (the latch: NO cast rule runs while a pair stands, review F2)
+  and `:1833` (the self and posted-immediate branches; the hostile-at-foe branch and the concentration
+  `CastTargetDirect` are NOT converted), `cast/Auto.cpp:1002` (CastAuto's beneficial fan becomes a series in need
+  order, an unservable recipient passed over) + `:784` (the concentration series waits on the latch),
+  `cast/Summon.cpp:453` (decided on the worker) + `:348` (filed on the main thread inside `SummonOnMain`).
+  `cast/DirectSelf.cpp` / `cast/DirectTarget.cpp`: the concentration non-heal ClaimOffenseCast branch is combat-table
+  only (`g_firingRule != kNoRule`, review F2, defence in depth).
 - **What breaks:** (1) the switch OFF or Harbinger absent must stay byte-identical: every new branch returns before
-  reading anything else, and `SubstrateRoadFor` checks the switch FIRST; (2) a fallback to the direct road after a
-  refusal / NOT OPENED violates principle 7 and ruling Q4 (the only degrade is "unavailable", logged); (3) the combat
-  table must never file (`a_oocTable` = `g_firingRule == kNoRule`; the summon passes it captured on the worker,
-  `g_firingRule` is worker-serial); (4) `SubstrateRoadFor` on the main thread races `ChooseBuffRoad`'s worker-serial
-  maps; (5) dropping the latch lets the direct road (or a second pair) fire beside an open substrate; (6) releasing the
-  cast claim before the fire is SEEN or the 2.5 s grace can cut a charge (APMF-B93); (7) keeping it through a REAL fight
-  stands an OOC claim beside the combat table's (the MFO-B173 class); (8) a NEVER-live handle is not "gone" before
-  `kEquipAuthValidateAfter` (IsClaimLive reads the published snapshot only). No co-save: nothing here is saved.
-  **Backlog:** read MFO-B310..B315 (the substrate-not-combat review, MAP Scheduler entry) before editing: B310 (MFO's own
-  CheckStartCast soft deny still runs under a substrate controller, bounded by the 2-lap OOC teardown) can deny a
-  substrate cast in the first two OOC services after a fight.
+  reading anything else, and `SubstrateRoadFor` checks the switch FIRST (the Service / AUTO latch reads an always-empty
+  table then); (2) a fallback to the direct road after a refusal / NOT OPENED violates principle 7 and ruling Q4 (the
+  only degrade is "unavailable", logged); (3) the combat table must never file (`a_oocTable` = `g_firingRule == kNoRule`;
+  the summon passes it captured on the worker, `g_firingRule` is worker-serial); (4) `SubstrateRoadFor` on the main
+  thread races `ChooseBuffRoad`'s worker-serial maps; (5) dropping the latch (or narrowing it to the converted sites)
+  lets the direct road, a concentration claim or a second pair fire beside an open substrate (review F2); (6) releasing
+  the cast claim before the fire is SEEN or the 2.5 s grace can cut a charge (APMF-B93); (7) keeping it through a REAL
+  fight stands an OOC claim beside the combat table's (the MFO-B173 class); (8) a NEVER-live handle is not "gone"
+  before `kEquipAuthValidateAfter` (IsClaimLive reads the published snapshot only); (9) MFO performing the equip (or any
+  engine action Harbinger should own) here re-creates work the Harbinger port removes. No co-save: nothing here is saved.
+  **Backlog:** read MFO-B310..B315 (the substrate-not-combat review, MAP Scheduler entry) and MFO-B332..B336 (this
+  road's review on 733c20cc: NOT OPENED repeats, the g_neverFired early erase, the riften AnchorOnlyLeak false ERROR,
+  spdlog under g_subMx) before editing. B310 (MFO's own CheckStartCast soft deny still runs under a substrate
+  controller, bounded by the 2-lap OOC teardown) can deny a substrate cast in the first two OOC services after a fight.
 
 ### Scheduler.cpp / Scheduler.h — the tick / combat scan
 Round-robin one follower per 133 ms tick (`kTickInterval` `:33`), pumps packages
@@ -3137,7 +3149,7 @@ module. Module layout:
     blocked legs `~357-907`, the gambit dispatch loop `:978`, the OOC cast block `~1047-1437`
     — concentration direct-force `~1124`, FF fallback `~1408` — the gem reconcile `:1606`),
     **Slice S3 (2026-10-19):** the self and posted-immediate OOC cast branches ask `Actuation::TrySubstrateCast` first
-    (`:1824`, `bSubstrateCasts`; NotTaken = the branches below unchanged; see "cast/SubstrateRoad.cpp + apmf/Substrate.cpp").
+    (`:1833`; no cast rule at all while a pair stands, `:1522`; `bSubstrateCasts`; NotTaken = the branches below unchanged; see "cast/SubstrateRoad.cpp + apmf/Substrate.cpp").
     plus the DRINK path it shares with the public forwarder: `DrinkBest:62` (file-local, in
     the anonymous namespace as before, so it stays with its callers) and `DrinkPotion:152`.
     The one file over ~1500: `ServiceFollower` alone is 1462 lines and a function is never
@@ -6026,7 +6038,7 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     (`:976-982`, Harbinger ABI v26 `GetSubstrateState`, ClickUp 86e3pu939: a combat SUBSTRATE is not combat for
     MFO; any thread, lock-free in APMF; "no substrate" below v26)** / `MaybeWarnAbsence` (`:958`), the expiry sweep
     `Tick` (`:1016`; it sweeps the ch.27 substrate pairs first, `:1025`) and `ClearTransientState` (`:1216`; clears them, `:1267`).
-  - `apmf/Substrate.cpp` (309) = the OUT-OF-COMBAT SUBSTRATE CLIENT (slice S3, ch.27 + ch.8b, ABI v27): the claim pair
+  - `apmf/Substrate.cpp` (338) = the OUT-OF-COMBAT SUBSTRATE CLIENT (slice S3, ch.27 + ch.8b, ABI v27): the claim pair
     and its state machine. Full entry: "cast/SubstrateRoad.cpp + apmf/Substrate.cpp" in section 2 (before Scheduler).
   - `apmf/CastClaims.cpp` (538) = the kIntent_Cast claims: offense (`IsOwnedCastActive` `:47`,
     `ClaimOffenseCast` `:83`, `RefreshOwnedCastOnHand` `:215`, `ReleaseCastClaimOnHand` `:311`,

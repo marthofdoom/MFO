@@ -184,6 +184,10 @@ namespace MFO::Actuation {
             (selfKind == CasterConsent::SpellKind::Offense || APMFBridge::CastSeatsSupported()) &&
             a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration &&
             a_follower->GetActorRuntimeData().combatController &&
+            // COMBAT TABLE ONLY (slice S3 review F2 on 733c20cc, defence in depth; the heal road's MFO-B173 rule):
+            // out of combat a controller may be a Harbinger SUBSTRATE's, and an OOC claim here would stand beside
+            // the substrate pair's LEFT claim. Out of combat the stream below runs, as with no controller.
+            g_firingRule != kNoRule &&
             APMFBridge::Available() && Config::g_apmfCast.load() &&
             !Config::g_legacyCastHybrid.load()) {
             NoteArchetypeRoad(a_follower, a_spell, ArchRoad::ConcClaim);   // [archetype] probe (passive)

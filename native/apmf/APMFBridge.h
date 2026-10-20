@@ -137,6 +137,11 @@ namespace MFO::APMFBridge {
     // pair FIRED when it is the pair's spell or Harbinger's minted proxy. Never releases anything by itself:
     // Harbinger's own fire close decides when the substrate ends (APMF-B93: the close must not cut the charge).
     void NoteSubstrateCastFired(RE::FormID a_follower, RE::FormID a_spell);
+    // Did a pair for (a_follower, a_spell, a_target) -- a_target in the ch.8b convention above -- FIRE at or after
+    // a_since? The cast side's long pacing window applies only then (review F4 on 733c20cc). Session-scoped record,
+    // cleared with the pairs on load.
+    bool SubstrateFiredSince(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_target,
+                             std::chrono::steady_clock::time_point a_since);
     // Release the pair now (dismissal / MFO switched off for him). Idempotent.
     void ReleaseSubstrateCast(RE::FormID a_follower, const char* a_why);
 

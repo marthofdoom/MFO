@@ -568,6 +568,8 @@ namespace MFO::Actuation {
         // ResetBuffRoad: clears the road's session state (from ClearCastLocks).
         bool BuffUpTransparent(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient = nullptr);
         void ResetBuffRoad();
+        // cast/SubstrateRoad.cpp (slice S3): its pacing / log-dedup maps, on revert / load (ClearCastLocks).
+        void ResetSubstrateRoad();
         void ResetBuffFollower(RE::FormID a_follower);   // ClearCastLock(follower): combat end / dismiss
         // ANIMATED-HEAL CLAIM ROAD (animheal phase 2), defined in cast/Hands.cpp.
         // ReleaseOwnHealClaim: end THIS rule's heal claim on a_spell now (the claim
