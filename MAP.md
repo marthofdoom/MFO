@@ -4651,6 +4651,21 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
 - **apmf/ErrandClaims.cpp**: `ClaimErrandTravel` / `ReadErrandLeg` / `PlayErrandIdle` (first beat = ch.1 hold + ch.12 claim, later
   beats = `Repoint`) / `ReadErrandIdle` / `ReleaseErrand`; own mutex, never `g_mx`; nothing saved; `ClearErrandClaims` on revert
   (`Upkeep.cpp:751` <- `Errand::ClearTransientState`).
+- **HOLD (`fix/mfo-errand-hold`, 2026-10-20; pairs with Harbinger `feat/apmf-ch19-cell-hold` @be7d9ec; NO co-save / APMF_API.h change; marth: "mfo claims need to hold for the duration of the mfo event").**
+  A ch.19 CELL leg now ENDS Arrived when he is in the cell, even unloaded, and Harbinger HOLDS him (keeps its internal ch.9 offer) until MFO releases or re-points
+  the claim (FACETS ch.19 Key Concepts 11a/11b, INVARIANTS #3). MFO therefore: (1) does NOT release at the unloaded hand-off (`Errand.cpp` Sweep hand-off: `Smith::End(.., false)`,
+  `Rest::End(.., false)` keep the ch.9 work claim; `ReleaseErrand` only if `Sim::Has` is false after `Sim::Begin`); the simulation owns the standing claim and every
+  simulation end releases it (`ErrandSim.cpp` `Drop`, `PlaceReturn`, the leave-town / cap recalls, and the four `OnLoadedTick` give-up/DONE exits; a `ResumePhysical` success keeps it:
+  `Errand.cpp` ResumePhysical now `Repoint || Claim`). (2) `OfferErrandWork` (`apmf/ErrandWork.cpp`) releases the errand's ch.19 walk claim (`APMFBridge::ReleaseErrandTravel`,
+  `ErrandClaims.cpp`) right AFTER the work offer is filed: the held travel offer ties MFO's work offer at basis 200 and the earlier claim wins, so the work claim must be what
+  holds him (a later trip stop files a fresh walk claim: `NextStopOrFinish` Repoint-else-Claim). (3) Loud failures (`Errand.cpp` Walking): `kLeg_ActorGone` (dead / unresolvable now) ends the
+  stop with a WARN + `NoteWalkFailed`; a cell leg Arrived while he is LOADED in another cell, and a Resting stay (inn / temple) with him loaded outside its cell, WARN "went in and came back
+  out" and end the stop (no retry). (4) Locks: `ErrandRest.cpp` `FindPlaces` skips a load door (either side) with a lock level (`TESObjectREFR::GetLockLevel`, fork-verified) at planning,
+  one `[errand] ... SKIPPED at planning -- its load door ... is LOCKED` line per door per visit (generic, no per-town code; the data fallback `ResolveViaData` is not tried after a locked skip);
+  a BLOCKED cell leg logs the destination's load door(s) with both sides' lock level (`Rest::LogBlockedDoors`). Door OPEN STATE is not logged (no verified-address row for `GetOpenState`).
+  END PATHS (each releases): physical `Finish` (all ends: combat, wait, caps, left town, dismissed, dead, failure) -> `ReleaseErrand`; hand-off -> kept; sim `Drop` (dead, off, loaded-never-serviced,
+  dismissed, wait, left town, combat, cap, returned); `OnLoadedTick` exits; revert/load -> `ClearErrandClaims` (Harbinger drops on a load). WHAT BREAKS: a new simulation end that does not funnel through
+  `Drop` / `PlaceReturn` leaks a standing hold (he never rejoins); never move a release back into the hand-off.
 - **Config** (`Config.h` after `g_economyBuyTomes`): `bTownErrands` (MCM toggle, default ON, `out/MCM/Config/MFO/config.json`),
   INI-only `iErrandMinSellGold` 100, `iErrandMinPurse` 200, `fErrandSettleSec` 10, `fErrandCooldownSec` 120, `fErrandMaxGameMin` 120.
   `bTownToasts` (MCM toggle, default OFF, `Config.h` `g_townToasts`): one informational HUD toast ("X is trading with Y.") via `detail::Toast` / `detail::ToastTrading`
@@ -4819,6 +4834,7 @@ combat start is a SEPARATE combat behaviour, NOT built: it would go beside `Serv
   "Location" (uids 0, 9, 15) are resolved to the uid that has a value slot, and the resolved uid is LOGGED (`[pkg] errand work ... input 'Location' (uid N)`). **UNVERIFIED IN THE FIELD (P-PKG-LOC).** `Packages.cpp` is past 2500 lines (the cap is relaxed until the next major, memory 2500-cap-relaxed).
 - **Claim** `apmf/ErrandWork.cpp`: `APMFBridge::OfferErrandWork(follower, kind, ref, radius, why)` writes the slot record's run-time input, THEN files (or Repoints) ONE ch.9 `kIntent_OfferPackage` claim (own handle, own mutex, never `g_mx`); a failed guard files nothing and returns the reason.
   `ReleaseErrandWork` = claim first, slot after; `ReleaseErrand` (`ErrandClaims.cpp`) and `ClearErrandClaims` call it, so every errand end releases the work. Worker thread.
+  **2026-10-20 HOLD:** `OfferErrandWork` releases the errand's ch.19 walk claim (`ReleaseErrandTravel`) after the offer is filed (the held travel offer ties at basis 200 and wins as the earlier claim); see the HOLD bullet in R1a above.
 - **Planner** `Rest::Augment` (`ErrandRest.cpp:638`) <- `TryStart` (`Errand.cpp:1024`), after `Trip::Plan`: `[R8 SMITH STOP INSERTION POINT]` -> TEMPLE (when diseased or no blessing today and no visit today) -> INN (LAST). The inn and temple are the INTERIOR CELLS behind the town's load doors in his cell whose
   location `LocationTypes::IsInn/IsTemple` (`LocationTypes.h`, plus `InnOf/TempleOf`); the innkeeper = the vendor FACTION whose PLVD place sits in that inn (1.6.1170 only, as `BuildTownShops`), else the stop is REST ONLY. No shop work and no owed temple = no trip (the inn alone is never a trip).
   `kMaxShopStops` 4 -> 5 (5 shops + temple + R8 smith + inn = the 8 stops of the wire). Needs are the EXISTING gambit thresholds (`EconomyProbeImpl` addNeed: `have < conditionParam` -> buy `want - have`), i.e. "fully stocked" = up to each logistics gambit's own threshold; a need no open shop carries still logs `(no open shop carries 0x..)` in the TRIP PLAN line.

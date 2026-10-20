@@ -34,6 +34,7 @@
 #include "Papyrus.h"
 #include "Scheduler.h"
 #include "TradeBridge.h"
+#include "apmf/APMFBridge.h"
 
 #include <algorithm>
 #include <cmath>
@@ -287,6 +288,9 @@ namespace MFO::Logistics::Errand::Sim {
                 r = it->second;
                 g_sims.erase(it);
             }
+            // The errand event is over: the claim that held him through the simulation (the ch.19 cell hold or the ch.9 work claim,
+            // kept across the hand-off) goes now. Every simulation end funnels here, so no claim outlives its record.
+            APMFBridge::ReleaseErrand(a_fid);
             detail::Cooldown(a_fid, a_cooldownSec);
             spdlog::info("[errand] {:08X} '{}': {} (sim) at {} -- {} (vendor '{}')", a_fid, r.followerName,
                          a_complete ? "DONE" : "ENDED", StageName(r.stage), a_why, r.vendorName);
@@ -295,6 +299,7 @@ namespace MFO::Logistics::Errand::Sim {
         // Put him outside the door he went in by (toward where he stood before), or -- no door / the door ref is not in memory --
         // behind the player. A vanilla Papyrus MoveTo either way.
         void PlaceReturn(SimRec& r, RE::Actor* f, const char* a_why) {
+            APMFBridge::ReleaseErrand(r.follower);   // his hold ends BEFORE the move: a held package outranks his follow package outdoors (Rejoin would stall)
             auto* door = r.entryDoor ? RE::TESForm::LookupByID<RE::TESObjectREFR>(r.entryDoor) : nullptr;
             if (door && f) {
                 float dx = r.lastPos.x - door->GetPosition().x, dy = r.lastPos.y - door->GetPosition().y;
@@ -458,6 +463,7 @@ namespace MFO::Logistics::Errand::Sim {
             SyncCur(r);
             si.stops = r.stops; si.cur = r.cur; si.tripPurse = r.tripPurse; si.tripSpent = r.tripSpent;
             if (detail::ResumePhysical(a_follower, si)) return true;
+            APMFBridge::ReleaseErrand(fid);   // the resume failed / he is done: the claim that held him ends with the event
             detail::Cooldown(fid, kFailCooldownSec);
             spdlog::info("[errand] {:08X} '{}': loaded again during SMITH_SIM but the walk to the smithy could not be resumed -- he is with the player; DONE", fid, r.followerName);
             return false;
@@ -476,6 +482,7 @@ namespace MFO::Logistics::Errand::Sim {
                 SyncCur(r);
                 wi.stops = r.stops; wi.cur = r.cur; wi.tripPurse = r.tripPurse; wi.tripSpent = r.tripSpent;
                 if (detail::ResumePhysical(a_follower, wi)) return true;
+                APMFBridge::ReleaseErrand(fid);   // the resume failed / he is done: the claim that held him ends with the event
                 detail::Cooldown(fid, kFailCooldownSec);
                 spdlog::info("[errand] {:08X} '{}': loaded again at the {} but its work could not be resumed -- he is with the player; DONE", fid, r.followerName,
                              kind == StopKind::Inn ? "inn" : "temple");
@@ -494,11 +501,13 @@ namespace MFO::Logistics::Errand::Sim {
             SyncCur(r);
             ri.stops = r.stops; ri.cur = r.cur; ri.tripPurse = r.tripPurse; ri.tripSpent = r.tripSpent;   // R5
             if (detail::ResumePhysical(a_follower, ri)) return true;
+            APMFBridge::ReleaseErrand(fid);   // the resume failed / he is done: the claim that held him ends with the event
             detail::Cooldown(fid, kFailCooldownSec);
             spdlog::info("[errand] {:08X} '{}': loaded again at {} {} but the walk could not be resumed -- the trade is dropped",
                          fid, r.followerName, StageName(r.stage), atShop ? "in the shop" : "in the town (restored physical errand)");
             return false;
         }
+        APMFBridge::ReleaseErrand(fid);   // the resume failed / he is done: the claim that held him ends with the event
         ResolveNow(r, a_follower, days, atShop ? "loaded again in the shop" : "loaded again away from the shop");
         detail::Cooldown(fid, Config::g_errandCooldownSec.load());
         spdlog::info("[errand] {:08X} '{}': loaded again at {} ({}) -- he is with the player; DONE", fid, r.followerName,
@@ -760,6 +769,7 @@ namespace MFO::Logistics::Errand::Sim {
                 if (r.townLostSince.time_since_epoch().count() == 0) { r.townLostSince = now; Store(r); continue; }
                 if (now - r.townLostSince >= kLeftTownGrace) {   // PLAYER LEFT THE TOWN: finish his business, bring him back
                     ResolveNow(r, f, days, "the player left the town");
+                    APMFBridge::ReleaseErrand(fid);   // the hold ends before the recall move
                     detail::RecallToPlayer(fid, "the player left the town");
                     Drop(fid, "the player left the town -- recalled", kFailCooldownSec, false);
                     continue;
@@ -776,6 +786,7 @@ namespace MFO::Logistics::Errand::Sim {
             }
             if (r.stage != Stage::Rest && (days - r.startDays) * 1440.0 > Trip::CapGameMin(r.stops.size())) {   // R5: once per planned stop (R7: an inn stay has no cap)
                 ResolveNow(r, f, days, "fErrandMaxGameMin");
+                APMFBridge::ReleaseErrand(fid);   // the hold ends before the recall move
                 detail::RecallToPlayer(fid, "the errand cap");
                 Drop(fid, "older than the trip cap (fErrandMaxGameMin x stops) -- recalled", kFailCooldownSec, false);
                 continue;

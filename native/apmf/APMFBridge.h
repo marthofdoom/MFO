@@ -1698,6 +1698,10 @@ namespace MFO::APMFBridge {
     ErrandIdleReading ReadErrandIdle(RE::FormID a_follower);
     // End the beats only (idle, then hold); the walk claim stays. Idempotent.
     void ReleaseErrandIdle(RE::FormID a_follower);
+    // Release ONLY the ch.19 walk claim (a held cell leg keeps its package offer until released: Harbinger FACETS ch.19 Key Concept 11a).
+    // Called by OfferErrandWork right AFTER the work offer is filed, so the work claim is what holds him (the held travel offer ties it at
+    // basis 200 and the earlier claim wins the tie). Idle / hold and the record stay. Idempotent.
+    void ReleaseErrandTravel(RE::FormID a_follower);
     // Release this errand's idle, hold and walk (in that order). Idempotent.
     void ReleaseErrand(RE::FormID a_follower);
     // Revert / load (pump drained): release every errand claim and forget them.

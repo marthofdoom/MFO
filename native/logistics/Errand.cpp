@@ -908,8 +908,11 @@ namespace MFO::Logistics::Errand {
             // No vendor actor in HIS cell: he is not in the shop (he was handed off mid-walk and loaded again elsewhere), so
             // the walk to the shop's place simply resumes. No place either (a vendor actor was the destination): give up.
             if (!vendor && (a_info.destKind == DestKind::VendorActor || a_info.destForm == 0)) return false;
-            if (!APMFBridge::ClaimErrandTravel(fid, vendor ? vendor->GetFormID() : a_info.destForm,
-                                               vendor ? kVendorRadius : a_info.destRad)) return false;
+            // A claim that held him through the simulation (the ch.19 cell hold kept across the hand-off) is RE-POINTED to the vendor / place
+            // (ClaimErrandTravel on a standing claim of another destination would refuse); no standing claim = a fresh one.
+            const RE::FormID resumeDest = vendor ? vendor->GetFormID() : a_info.destForm;
+            const float      resumeRad  = vendor ? kVendorRadius : a_info.destRad;
+            if (!APMFBridge::RepointErrandTravel(fid, resumeDest, resumeRad) && !APMFBridge::ClaimErrandTravel(fid, resumeDest, resumeRad)) return false;
             const auto now = Clock::now();
             Rec r;
             r.phase = Phase::Walking;
@@ -1225,6 +1228,15 @@ namespace MFO::Logistics::Errand {
         }
         // R7: the inn stay / the temple prayer: the Rest module's steps (its own claims and clocks), not the shop beats below.
         if (r.phase == Phase::Resting) {
+            // Seen LOADED outside the inn / temple while the stay stands = he went in and came back out (the hold did not keep him; the Markarth
+            // field bug, 2026-10-20): loud, the stop ends, no retry. (The stay is an inn / temple cell by construction; a smithy may be an exterior ref.)
+            if (r.cur < r.stops.size() && !Rest::InStopCell(a_follower, r.stops[r.cur])) {
+                auto* oc = a_follower->GetParentCell();
+                spdlog::warn("[errand] {:08X} '{}': the stay at '{}' stands but he is LOADED in cell {:08X}, not in its cell {:08X} -- he went in and came back out. "
+                             "The stop is ended, no retry", fid, r.followerName, r.stops[r.cur].vendorName, oc ? oc->GetFormID() : 0u, r.stops[r.cur].destForm);
+                Rest::End(fid, "he left the inn / temple cell while the stay stood", true);   // the work claim + record end with the stop; one trip per visit
+                return stopOver("he left the inn / temple cell while the stay stood", false, kFailCooldownSec);
+            }
             const auto st = Rest::Step(a_follower, a_now);
             if (st.res == Rest::Result::Continue) { Store(fid, r); return true; }
             return stopOver(st.why, st.res == Rest::Result::Done, st.res == Rest::Result::Done ? Config::g_errandCooldownSec.load() : kFailCooldownSec);
@@ -1264,6 +1276,18 @@ namespace MFO::Logistics::Errand {
             if (!vendor) {   // walking to the shop's PLACE (a PLVD cell / ref): the leg ends Arrived in the shop, then to the vendor
                 APMFBridge::LootLegState pleg;
                 if (APMFBridge::ReadErrandLeg(fid, pleg) && pleg.ours) {
+                    if (pleg.state == APMF_API::kLeg_Arrived && r.destKind == DestKind::Cell && r.destForm) {
+                        // A CELL leg reads Arrived only while he is IN the cell (the hold, ch.19 Key Concept 11a). Seen LOADED in another cell
+                        // while the claim stands = he went in and came back out (the Markarth field bug, 2026-10-20): loud, the stop ends, no retry.
+                        auto* pc0 = a_follower->GetParentCell();
+                        if (pc0 && pc0->GetFormID() != r.destForm) {
+                            spdlog::warn("[errand] {:08X} '{}': ARRIVED at cell {:08X} ('{}') but he is LOADED in cell {:08X} -- he went in and came back out "
+                                         "(the hold did not keep him). The stop is ended, no retry", fid, r.followerName, r.destForm, r.vendorName, pc0->GetFormID());
+                            const auto bo = NoteWalkFailed(fid, r, a_now);
+                            return stopOver(std::format("he left the cell the walk arrived in (loaded in {:08X}; this shop backed off {} s)", pc0->GetFormID(), bo),
+                                            false, kFailCooldownSec);
+                        }
+                    }
                     if (pleg.state == APMF_API::kLeg_Arrived) {
                         // R7: an INN / TEMPLE stop. The temple has no vendor; the inn has the innkeeper only when a food order was planned and he
                         // stands there -- otherwise the stop is REST ONLY (logged) and the work begins at once.
@@ -1300,13 +1324,21 @@ namespace MFO::Logistics::Errand {
                         APMFBridge::RepointErrandTravel(fid, r.vendor, kVendorRadius);
                         spdlog::info("[errand] {:08X}: reached the shop; walking on to its vendor '{}' ({:08X})", fid, r.vendorName, r.vendor);
                     } else if (pleg.state == APMF_API::kLeg_Blocked) {
+                        if (r.destKind == DestKind::Cell) Rest::LogBlockedDoors(a_follower, r.destForm, r.vendorName);   // passive: the door(s), lock level of each side
                         { std::scoped_lock lk(g_mx); g_parked[r.faction] = a_now + kParkTime; }
                         return stopOver("the walk to the shop ended BLOCKED (a closed door?); shop parked", false, kFailCooldownSec);
                     } else if (pleg.state == APMF_API::kLeg_Failed) {
                         Finish(fid, "Harbinger could not start the leg (FAILED -- all travel slots busy? APMF.log says); queued", 6.0f);
                         return false;
                     } else if (pleg.state == APMF_API::kLeg_ActorGone) {
-                        // He went through a shop door / left the loaded area: the HAND-OFF to the simulation (Sweep), not a failure.
+                        // Since Harbinger's cell hold (ch.19 Key Concepts 11a/11b) an UNLOADED follower is no longer ActorGone (the hand-off to
+                        // the simulation is the Sweep's, off his unloaded 3D): ActorGone means dead or a reference that no longer resolves.
+                        // This tick runs only for a LOADED follower, so it is a real loss: never silent (marth: never mask a failure).
+                        spdlog::warn("[errand] {:08X} '{}': the walk to '{}' ended ACTOR-GONE while he is loaded and alive (Harbinger reports his reference "
+                                     "lost) -- the stop is ended, no retry", fid, r.followerName, r.vendorName);
+                        const auto bo = NoteWalkFailed(fid, r, a_now);
+                        return stopOver(std::format("the walk to the shop ended: {} (this shop backed off {} s)", LegName(pleg.state), bo), false,
+                                        kFailCooldownSec);
                     } else if (pleg.state > APMF_API::kLeg_Blocked && pleg.state <= APMF_API::kLeg_Released) {
                         WarnCombatDisagree(a_follower, pleg.state);
                         const auto bo = NoteWalkFailed(fid, r, a_now);
@@ -1344,7 +1376,11 @@ namespace MFO::Logistics::Errand {
                     Finish(fid, "Harbinger could not start the leg (FAILED -- all travel slots busy? APMF.log says); queued", 6.0f);
                     return false;
                 } else if (leg.state == APMF_API::kLeg_ActorGone) {
-                    // (the hand-off to the simulation is the Sweep's, not a failure)
+                    // See the place leg above: ActorGone is dead / unresolvable now (an unloaded follower is the Sweep's hand-off). Loud, no retry.
+                    spdlog::warn("[errand] {:08X} '{}': the walk to '{}' ended ACTOR-GONE while he is loaded and alive (Harbinger reports his reference "
+                                 "lost) -- the stop is ended, no retry", fid, r.followerName, r.vendorName);
+                    const auto bo = NoteWalkFailed(fid, r, a_now);
+                    return stopOver(std::format("the walk ended: {} (this vendor backed off {} s)", LegName(leg.state), bo), false, kFailCooldownSec);
                 } else if (leg.state > APMF_API::kLeg_Blocked && leg.state <= APMF_API::kLeg_Released) {
                     WarnCombatDisagree(a_follower, leg.state);
                     const auto bo = NoteWalkFailed(fid, r, a_now);
@@ -1608,10 +1644,13 @@ namespace MFO::Logistics::Errand {
                 r = it->second;
                 g_recs.erase(it);
             }
-            if (r.phase == Phase::Smithing) Smith::End(fid, "he unloaded -- handed to the simulation");   // R8: SMITH_SIM starts without a plan (Begin erased it): no second apply; a dispatched temper is still charged on his next load
+            // HOLD (marth 2026-10-20: "mfo claims need to hold for the duration of the mfo event"; Harbinger ch.19 Key Concept 11a/11b): the claim
+            // that holds him (the ch.19 cell hold, or the ch.9 work claim) is NOT released here. Harbinger keeps a claim through the unload
+            // (an unloaded actor is not gone); releasing would hand him straight back to his follow package, the field bug (Markarth
+            // 2026-10-20). The simulation owns the claim now and releases it when the errand event ends (ErrandSim.cpp Drop / OnLoadedTick).
+            if (r.phase == Phase::Smithing) Smith::End(fid, "he unloaded -- handed to the simulation", false);   // R8: SMITH_SIM starts without a plan (Begin erased it): no second apply; a dispatched temper is still charged on his next load; the work claim STANDS
             const bool wasResting = r.phase == Phase::Resting;
-            if (wasResting) Rest::End(fid, "he unloaded -- handed to the simulation", false);   // R7: the stay continues off screen (REST_SIM)
-            APMFBridge::ReleaseErrand(fid);   // Harbinger dropped the claims with the unload; this forgets our record of them
+            if (wasResting) Rest::End(fid, "he unloaded -- handed to the simulation", false);   // R7: the stay continues off screen (REST_SIM); the work claim STANDS
             SimStart st;
             st.follower = fid; st.followerName = r.followerName; st.vendorName = r.vendorName;
             st.faction = r.faction; st.chest = r.chest; st.town = r.town; st.vendorActor = r.vendor;
@@ -1623,6 +1662,11 @@ namespace MFO::Logistics::Errand {
             st.tradeDispatched = r.dispatched;
             st.tradeDone = r.phase == Phase::Taking || (wasResting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn);   // R7: an inn stay is past its trade
             Sim::Begin(std::move(st));
+            // Sim::Begin registers nothing when the actor does not resolve: no simulation record will ever release the standing claim.
+            if (!Sim::Has(fid)) {
+                spdlog::warn("[errand] {:08X} '{}': handed off but the simulation did not take him (actor does not resolve) -- claims released", fid, r.followerName);
+                APMFBridge::ReleaseErrand(fid);
+            }
         }
     }
 }

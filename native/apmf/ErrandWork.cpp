@@ -12,9 +12,12 @@
 //     NOTHING and the call returns false: the errand skips the stop, loudly (principle 7). One slot per concurrent follower
 //     (kErrandWorkSlots = 4): two followers never share a record; the slot is freed only AFTER the claim is released.
 //
-// ABI. Needs ABI >= 24 like every town errand (APMFBridge::ErrandSupported). The ch.19 walk claim of the same errand stays filed
-// (a leg that ends drops only its own internal offer, APMF_API.h "A LEG ENDS BUT THE CLAIM STANDS"); the work package is offered
-// after the leg Arrived, so the two never compete for the offer at one moment.
+// ABI. Needs ABI >= 24 like every town errand (APMFBridge::ErrandSupported). A ch.19 CELL leg that Arrived HOLDS: Harbinger keeps
+// its internal ch.9 offer (basis 200) until the client releases or re-points the claim (FACETS ch.19 Key Concept 11a), and that
+// held offer TIES this file's offer at kOwnBasis 200, where the EARLIER claim wins. So OfferErrandWork releases the errand's ch.19
+// walk claim (APMFBridge::ReleaseErrandTravel) right AFTER the work offer is filed: the work claim is what holds him from then
+// on. A ref leg (the temple's shrine) has no standing offer; releasing its claim at the Activate offer is harmless. A later stop
+// of the trip files a fresh walk claim (Errand.cpp NextStopOrFinish: Repoint, else Claim).
 //
 // THREADING. Worker (the service tick / the errand sweep) and the revert with the pump drained. Own mutex, never the bridge's
 // g_mx (this file never takes g_mx). APMF's RequestEx / Repoint / Release / IsClaimLive are safe from any thread (APMF_API.h).
@@ -98,7 +101,9 @@ namespace MFO::APMFBridge {
 
     const char* ErrandWorkName(ErrandWorkKind a_kind) { return KindName(a_kind); }
 
-    bool OfferErrandWork(RE::FormID a_follower, ErrandWorkKind a_kind, RE::TESObjectREFR* a_ref, float a_radius, std::string& a_why) {
+    // The offer proper (s_mx taken inside). OfferErrandWork releases the ch.19 walk claim AFTER this returns, so ErrandClaims' own
+    // mutex is never taken while s_mx is held.
+    static bool OfferLocked(RE::FormID a_follower, ErrandWorkKind a_kind, RE::TESObjectREFR* a_ref, float a_radius, std::string& a_why) {
         a_why.clear();
         auto* api = WorkApi();
         if (!api) { a_why = "Harbinger absent or older than ABI 24"; return false; }
@@ -154,6 +159,14 @@ namespace MFO::APMFBridge {
             spdlog::info("[errand-work] {:08X}: ch.9 OFFER {} -> package {:08X} (slot {}) at ref {:08X} radius {:.0f}{} handle {}", a_follower,
                          KindName(a_kind), p.form, slot, w.ref, a_radius, uid >= 0 ? std::format(", input uid {}", uid) : std::string{},
                          w.handle);
+        return true;
+    }
+
+    bool OfferErrandWork(RE::FormID a_follower, ErrandWorkKind a_kind, RE::TESObjectREFR* a_ref, float a_radius, std::string& a_why) {
+        if (!OfferLocked(a_follower, a_kind, a_ref, a_radius, a_why)) return false;
+        // The work offer is filed. A held ch.19 cell leg's internal offer ties it at basis 200 and wins as the earlier claim, so the
+        // walk claim goes NOW (idempotent; a re-offer finds nothing). FILE first, release second: he is never without a claim.
+        ReleaseErrandTravel(a_follower);
         return true;
     }
 

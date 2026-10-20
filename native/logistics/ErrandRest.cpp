@@ -156,6 +156,7 @@ namespace MFO::Logistics::Errand::Rest {
         std::unordered_set<RE::FormID>                   g_tripDone;   // followers whose trip ended this town visit
         std::unordered_set<RE::FormID>                   g_tripLogged; // ... for whom the re-plan block was already logged
         std::unordered_map<RE::FormID, int>              g_magicDefers;  // consecutive MagicReadPending defers per follower (cap kMagicMaxDefers)
+        std::unordered_set<RE::FormID>                   g_lockLogged;  // load doors whose LOCK was already logged (one skip line per door per town visit)
         std::unordered_set<RE::FormID>                   g_magicWaitLogged; // ... for whom "waiting for the blessing/disease read" was logged this visit
         RE::FormID                                       g_marksTown = 0;
         struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0, cell = 0; };   // cell: the interior cell of the faction's PLVD place (0 = unknown)
@@ -259,7 +260,31 @@ namespace MFO::Logistics::Errand::Rest {
             RE::FormID cell = 0, locId = 0;
             RE::NiPoint3 door{};
             std::string name;
+            bool lockedSkip = false;   // a LOCKED load door to this kind of place was skipped (the data fallback must not resolve around the lock)
         };
+        const char* LockWord(RE::LOCK_LEVEL a_l) {
+            switch (a_l) {
+                case RE::LOCK_LEVEL::kUnlocked:    return "unlocked";
+                case RE::LOCK_LEVEL::kVeryEasy:    return "very easy";
+                case RE::LOCK_LEVEL::kEasy:        return "easy";
+                case RE::LOCK_LEVEL::kAverage:     return "average";
+                case RE::LOCK_LEVEL::kHard:        return "hard";
+                case RE::LOCK_LEVEL::kVeryHard:    return "very hard";
+                case RE::LOCK_LEVEL::kRequiresKey: return "requires a key";
+                default:                           return "?";
+            }
+        }
+        // A load door is LOCKED when either side of the pair says so (REFR_LOCK via TESObjectREFR::GetLockLevel, the same read Lockpick.cpp
+        // uses). Fills the locked door's id and level. Generic: no per-town or per-door knowledge (a temple closed by a quest event reads
+        // locked the same way).
+        bool DoorLocked(RE::TESObjectREFR* a_door, RE::TESObjectREFR* a_linked, RE::FormID& a_id, RE::LOCK_LEVEL& a_lvl) {
+            for (auto* d : { a_door, a_linked }) {
+                if (!d) continue;
+                const auto l = d->GetLockLevel();
+                if (l != RE::LOCK_LEVEL::kUnlocked) { a_id = d->GetFormID(); a_lvl = l; return true; }
+            }
+            return false;
+        }
         void FindPlaces(RE::Actor* a_follower, const RE::BGSLocation* a_town, Place& a_inn, Place& a_temple) {
             auto* cell = a_follower ? a_follower->GetParentCell() : nullptr;
             if (!cell || !cell->IsAttached() || !a_town) return;
@@ -282,6 +307,19 @@ namespace MFO::Logistics::Errand::Rest {
                 const float dist = d->GetPosition().GetDistance(a_follower->GetPosition());
                 auto take = [&](Place& a_p, float& a_best, const char* a_fallback) {
                     if (dist >= a_best) return;
+                    RE::FormID lockedId = 0;
+                    RE::LOCK_LEVEL lvl = RE::LOCK_LEVEL::kUnlocked;
+                    if (DoorLocked(d, lp.get(), lockedId, lvl)) {
+                        a_p.lockedSkip = true;
+                        bool first = false;
+                        { std::scoped_lock lk(g_mx); first = g_lockLogged.insert(lockedId).second; }
+                        if (first) {
+                            const char* n = loc->GetName();
+                            spdlog::info("[errand] {:08X}: {} '{}' SKIPPED at planning -- its load door {:08X} is LOCKED (lock level {}: {}); a closed place is never walked to",
+                                         a_follower->GetFormID(), a_fallback, n && *n ? n : "?", lockedId, static_cast<int>(lvl), LockWord(lvl));
+                        }
+                        return;
+                    }
                     a_best = dist;
                     a_p.ok = true; a_p.cell = lc->GetFormID(); a_p.locId = loc->GetFormID(); a_p.door = d->GetPosition();
                     const char* n = loc->GetName();
@@ -715,9 +753,9 @@ namespace MFO::Logistics::Errand::Rest {
         FindPlaces(a_follower, a_town, inn, temple);
         {   // not reachable by a door in his own cell: resolve through the data (see ResolveViaData)
             const char* how = "";
-            if (!inn.ok && ResolveViaData(a_town, true, inn, how))
+            if (!inn.ok && !inn.lockedSkip && ResolveViaData(a_town, true, inn, how))
                 spdlog::info("[errand] {:08X}: inn '{}' (cell {:08X}) resolved through {} (no load door to it in his cell)", fid, inn.name, inn.cell, how);
-            if (!temple.ok && ResolveViaData(a_town, false, temple, how))
+            if (!temple.ok && !temple.lockedSkip && ResolveViaData(a_town, false, temple, how))
                 spdlog::info("[errand] {:08X}: temple '{}' (cell {:08X}) resolved through {} (no load door to it in his cell)", fid, temple.name, temple.cell, how);
         }
         std::string templeWhy;
@@ -795,6 +833,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_marksTown = a_townId;
         g_tripDone.clear();
         g_tripLogged.clear();
+        g_lockLogged.clear();
         g_magicWaitLogged.clear();
         g_magicDefers.clear();
     }
@@ -916,7 +955,9 @@ namespace MFO::Logistics::Errand::Rest {
             w = it->second;
             g_work.erase(it);
         }
-        APMFBridge::ReleaseErrandWork(a_follower);
+        // a_tripOver false = the HAND-OFF to the simulation: the ch.9 work claim STANDS (it holds the unloaded follower in the inn / temple;
+        // marth 2026-10-20 "mfo claims need to hold for the duration of the mfo event"). The sim's Drop / OnLoadedTick or Finish releases it.
+        if (a_tripOver) APMFBridge::ReleaseErrandWork(a_follower);
         if (w.kind == StopKind::Temple) APMFBridge::ReleaseErrandIdle(a_follower);
         const auto secs = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - w.began).count();
         if (w.kind == StopKind::Inn)
@@ -934,6 +975,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_templeTry.clear();
         g_tripDone.clear();
         g_tripLogged.clear();
+        g_lockLogged.clear();
         g_magicWaitLogged.clear();
         g_magicDefers.clear();
         g_innFacs.clear();
@@ -958,6 +1000,39 @@ namespace MFO::Logistics::Errand::Rest {
         if (a_stop.destKind == DestKind::Cell && a_stop.destForm && c->GetFormID() == a_stop.destForm) return true;
         const RE::BGSLocation* loc = c->GetLocation();
         return loc && (a_stop.kind == StopKind::Inn ? LocationTypes::IsInn(loc) : a_stop.kind == StopKind::Temple && LocationTypes::IsTemple(loc));
+    }
+
+    void LogBlockedDoors(RE::Actor* a_follower, RE::FormID a_destCell, const std::string& a_label) {
+        if (!a_follower || !a_destCell) return;
+        auto* cell = a_follower->GetParentCell();
+        if (!cell || !cell->IsAttached()) {
+            spdlog::info("[errand] {:08X}: BLOCKED walk to '{}' (cell {:08X}) -- no loaded cell around him to list its load doors", a_follower->GetFormID(), a_label, a_destCell);
+            return;
+        }
+        std::vector<RE::ObjectRefHandle> doors;
+        cell->ForEachReferenceInRange(a_follower->GetPosition(), kScan, [&](RE::TESObjectREFR* a_ref) {
+            if (doors.size() < 96 && a_ref->extraList.GetByType<RE::ExtraTeleport>()) doors.push_back(a_ref->GetHandle());
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+        int found = 0;
+        for (auto& h : doors) {
+            auto dp = h.get();
+            auto* d = dp.get();
+            auto* tele = d ? d->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+            if (!tele || !tele->teleportData) continue;
+            auto lp = tele->teleportData->linkedDoor.get();
+            auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
+            if (!lc || lc->GetFormID() != a_destCell) continue;
+            ++found;
+            const auto dl = d->GetLockLevel();
+            const auto ll = lp.get()->GetLockLevel();
+            spdlog::info("[errand] {:08X}: BLOCKED walk to '{}' (cell {:08X}) -- load door {:08X} {:.0f} u from him: lock level {} ({}), its linked door {:08X}: lock level {} ({})",
+                         a_follower->GetFormID(), a_label, a_destCell, d->GetFormID(), d->GetPosition().GetDistance(a_follower->GetPosition()),
+                         static_cast<int>(dl), LockWord(dl), lp.get()->GetFormID(), static_cast<int>(ll), LockWord(ll));
+        }
+        if (!found)
+            spdlog::info("[errand] {:08X}: BLOCKED walk to '{}' (cell {:08X}) -- no load door to it within {:.0f} u of him in cell {:08X} (the door is in another cell)",
+                         a_follower->GetFormID(), a_label, a_destCell, kScan, cell->GetFormID());
     }
 
     void NoteOwed(RE::FormID a_follower, const std::string& a_followerName, const std::string& a_temple) {

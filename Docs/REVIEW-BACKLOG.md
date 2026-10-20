@@ -2060,3 +2060,9 @@ Closing review of feat/mfo-torch-ch17: "widen the furnitureIdle gate to 1.5.97 (
 
 ### MFO-B395 (SEV-5, OPEN, logistics/Upkeep.cpp TorchRuleHolds) -- torch: full-table Evaluate per build (raised against 7fff38a)
 "When the torch rule fails, Evaluate keeps scanning the rest of the table on every build. Checking just the one rule would be cheaper."
+
+### MFO-B396 (SEV-5, OPEN, logistics/ErrandRest.cpp LogBlockedDoors) -- town: a BLOCKED cell leg does not log the door's open state (raised against fix/mfo-errand-hold)
+The brief asked for lock level AND open state. Only the lock level is logged: `BGSOpenCloseForm::GetOpenState` is an id-based engine call (fork RELOCATION_ID 14180/14288) with no `VerifiedAddresses.h` row. Needs a spec row + regenerated header + `SeatVerified()` guard first.
+
+### MFO-B397 (SEV-4, OPEN, logistics/ErrandRest.cpp ResolveViaData) -- town: the data-resolved inn / temple has no door, so its lock is never read (raised against fix/mfo-errand-hold)
+`FindPlaces` checks the load door pair's lock; `ResolveViaData` (cell from the vendor faction's PLVD place or the location's special refs) knows only the interior cell, so a locked temple reached only through the data road is still planned. The BLOCKED log (`Rest::LogBlockedDoors`) names the locked door after the first failed walk, and the walk backoff applies.
