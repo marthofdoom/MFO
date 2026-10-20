@@ -28,6 +28,7 @@
 // the revert with the pump drained. g_mx guards the table and is never held across a Papyrus / TradeBridge / Harbinger call.
 #include "PCH.h"
 #include "Errand_internal.h"
+#include "ErrandCounter.h"
 #include "Config.h"
 #include "Followers.h"
 #include "LocationTypes.h"
@@ -622,6 +623,7 @@ namespace MFO::Logistics::Errand::Sim {
             if (r.stage == Stage::Out && days >= r.tArrive) {
                 r.stage = Stage::Trade;
                 spdlog::info("[errand] {:08X} '{}': TRADE_SIM -- he has reached '{}' (off screen)", fid, r.followerName, r.vendorName);
+                Counter::NoteSimArrival(fid, r.followerName, r.vendorName, r.faction);   // R4: counter known/unknown; placement unavailable (no Harbinger facet)
                 if (!r.tradeAbandoned && r.order && !r.order->skipped) detail::ToastTrading(r.followerName, r.vendorName);   // not for a trade that will never run
             }
             if (r.stage == Stage::Trade) {

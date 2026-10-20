@@ -21,6 +21,7 @@
 // still exists).
 #include "PCH.h"
 #include "Errand_internal.h"
+#include "ErrandCounter.h"   // R4: the learned vendor map + the browsing hold
 #include "Runtime.h"         // IsVerified1_6_1170: the PLVD layout (faction vendorLocation) is verified on that build only
 #include "Logistics_internal.h"
 #include "Config.h"
@@ -61,6 +62,7 @@ namespace MFO::Logistics::Errand {
         constexpr auto  kPlanInterval   = std::chrono::seconds(6);
         constexpr auto  kQueueRetry     = std::chrono::seconds(6);
         constexpr auto  kTalkHold       = std::chrono::milliseconds(2500);   // the talk beat, once it reads Played
+        constexpr auto  kBrowseHold     = std::chrono::milliseconds(6000);   // R4: the browsing beat of a follower FOUND at the counter, once it reads Played
         constexpr auto  kGiveHold       = std::chrono::milliseconds(1500);   // the give beat, once it reads Played, before the trade dispatches
         constexpr auto  kTakeHold       = std::chrono::milliseconds(2500);
         constexpr auto  kBeatPatience   = std::chrono::seconds(8);           // a beat Harbinger has not judged by now is skipped (logged)
@@ -90,6 +92,7 @@ namespace MFO::Logistics::Errand {
         constexpr RE::FormID kIdleTalkFallback = 0x000E5190;   // DialogueNeutralExpressive
         constexpr RE::FormID kIdleGive         = 0x000B5E20;   // IdleGive (field-confirmed in the museum deposit)
         constexpr RE::FormID kIdleTake         = 0x000B5E1F;   // IdleTake
+        constexpr RE::FormID kIdleExamine      = 0x00075C3D;   // IdleExamine (R4 browsing; verified in Skyrim.esm with tools/esp_inspect.py, 2026-10-19)
 
         enum class Phase { Walking, Talking, Giving, Trading, Taking };
 
@@ -118,6 +121,7 @@ namespace MFO::Logistics::Errand {
             bool          talkFallbackUsed = false;
             bool          dispatched = false;
             bool          bought = false;
+            bool          browse = false;          // R4: found at the counter -- the arrival plays the browsing beat (runtime only, ends with the record; R5 LoadStop must reset it)
             bool          announced = false;       // bTownToasts: the "is trading with" line fired (not saved; a resume sets it from the sim stage)
             // R1b: what the SIMULATION needs if he goes off screen, and what a hand-off back to the physical errand needs.
             RE::FormID    faction = 0;                      // the vendor faction of the shop
@@ -339,6 +343,7 @@ namespace MFO::Logistics::Errand {
                 const auto& vv = fac->vendorData.vendorValues;
                 if (vv.buysStolen && !vv.buysNonStolen) { ++a_dropped; continue; }   // a fence
                 if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
+                Counter::Learn(v, fac->GetFormID(), a_now);   // R4: where this vendor actually stands (session-only map)
                 auto* chest = fac->vendorData.merchantContainer;
                 if (!chest || !chest->GetContainer()) continue;   // a malformed merchant link (see EconomyProbe)
                 // The same town as the player (a roadside vendor outside any town is not an errand destination).
@@ -465,7 +470,7 @@ namespace MFO::Logistics::Errand {
             return {};
         }
 
-        struct Idles { RE::FormID talk = 0, talkFallback = 0, give = 0, take = 0; };
+        struct Idles { RE::FormID talk = 0, talkFallback = 0, give = 0, take = 0, browse = 0; };
         const Idles& IdleIds() {
             static const Idles s = [] {
                 Idles i;
@@ -474,9 +479,9 @@ namespace MFO::Logistics::Errand {
                     auto* f = dh ? dh->LookupForm<RE::TESIdleForm>(a_raw & 0x00FFFFFF, "Skyrim.esm") : nullptr;
                     return f ? f->GetFormID() : 0u;
                 };
-                i.talk = id(kIdleTalk); i.talkFallback = id(kIdleTalkFallback); i.give = id(kIdleGive); i.take = id(kIdleTake);
-                spdlog::info("[errand] idle forms resolved: talk {:08X} (fallback {:08X}) give {:08X} take {:08X}",
-                             i.talk, i.talkFallback, i.give, i.take);
+                i.talk = id(kIdleTalk); i.talkFallback = id(kIdleTalkFallback); i.give = id(kIdleGive); i.take = id(kIdleTake); i.browse = id(kIdleExamine);
+                spdlog::info("[errand] idle forms resolved: talk {:08X} (fallback {:08X}) give {:08X} take {:08X} browse {:08X}",
+                             i.talk, i.talkFallback, i.give, i.take, i.browse);
                 return i;
             }();
             return s;
@@ -593,6 +598,7 @@ namespace MFO::Logistics::Errand {
             g_townSince = {};
         }
         Sim::ClearTransientState();
+        Counter::Clear();
         APMFBridge::ClearErrandClaims();
     }
 
@@ -735,6 +741,11 @@ namespace MFO::Logistics::Errand {
             r.startClk = r.lastTickClk = Scheduler::ServiceClock();
             r.startDays = a_info.startDays;
             r.lastPos = a_follower->GetPosition();
+            // R4: found at the counter. Only an errand that really arrived off screen (announced = the sim reached Trade) browses.
+            if (vendor) {
+                Counter::NoteResume(fid, r.followerName, a_follower, vendor.get(), r.faction);
+                r.browse = a_info.announced && IdleIds().browse != 0;
+            }
             {
                 std::scoped_lock lk(g_mx);
                 g_recs[fid] = r;
@@ -997,6 +1008,7 @@ namespace MFO::Logistics::Errand {
                 Finish(fid, std::format("Harbinger refused the {} idle at the call", a_name).c_str(), 600.0f);
                 return false;
             }
+            if (a_next != Phase::Talking) r.browse = false;   // R4: the browsing beat is a Talking beat
             r.phase = a_next;
             r.phaseAt = a_now;
             r.beatRequested = true;
@@ -1085,7 +1097,10 @@ namespace MFO::Logistics::Errand {
                          r.planPosSet ? std::format(", {:.0f} u in a straight line from where the errand began",
                                                     a_follower->GetPosition().GetDistance(r.planPos))
                                       : std::string{});
-            if (!idles.talk) {   // an old master without the dialogue idle: straight to the hand-over
+            if (idles.browse && r.browse) {   // R4: found at the counter -- browse first, then the hand-over
+                spdlog::info("[errand] {:08X}: browsing the counter of '{}' (IdleExamine, ch.12 + ch.1 hold)", fid, r.vendorName);
+                if (!beginBeat(Phase::Talking, idles.browse, "browse")) return false;
+            } else if (!idles.talk) {   // an old master without the dialogue idle: straight to the hand-over
                 if (!beginBeat(Phase::Giving, idles.give, "give")) return false;
             } else if (!beginBeat(Phase::Talking, idles.talk, "talk")) {
                 return false;
@@ -1097,16 +1112,18 @@ namespace MFO::Logistics::Errand {
         case Phase::Talking: {
             const auto rd = BeatReading(fid);
             const bool patience = a_now - r.phaseAt > kBeatPatience;
+            const bool browsing = r.browse;   // R4: this Talking beat is the browsing idle (longer hold, no talk fallback)
+            const auto talkHold = browsing ? kBrowseHold : kTalkHold;
             if (rd.verdict == APMFBridge::ErrandIdleVerdict::Played) {
                 if (r.confirmedAt.time_since_epoch().count() == 0) {
                     r.confirmedAt = a_now;
-                    spdlog::info("[errand] {:08X}: talk idle PLAYED{} ({})", fid, rd.weak ? " (weak)" : "", rd.detail);
+                    spdlog::info("[errand] {:08X}: {} idle PLAYED{} ({})", fid, browsing ? "browse" : "talk", rd.weak ? " (weak)" : "", rd.detail);
                 }
-                if (a_now - r.confirmedAt >= kTalkHold && beginBeat(Phase::Giving, idles.give, "give")) {
+                if (a_now - r.confirmedAt >= talkHold && beginBeat(Phase::Giving, idles.give, "give")) {
                     Store(fid, r);
                     return true;
                 }
-                if (a_now - r.confirmedAt >= kTalkHold) return false;   // beginBeat finished the errand
+                if (a_now - r.confirmedAt >= talkHold) return false;   // beginBeat finished the errand
             } else if (rd.verdict == APMFBridge::ErrandIdleVerdict::Failed && rd.unconfirmableWhy == APMF_API::kIdleUnconf_NoEntryEvents) {
                 // Dialogue idles raise no notify event, so Harbinger can say neither played nor failed. The idle IS running (the claim is
                 // live): hold the beat for its normal dwell, and do NOT try the fallback idle (it has the same problem).
@@ -1114,20 +1131,20 @@ namespace MFO::Logistics::Errand {
                     r.confirmedAt = a_now;
                     spdlog::info("[errand] {:08X}: talk idle requested -- unconfirmable (Dialogue idles raise no event) ({})", fid, rd.detail);
                 }
-                if (a_now - r.confirmedAt >= kTalkHold) {
+                if (a_now - r.confirmedAt >= talkHold) {
                     if (!beginBeat(Phase::Giving, idles.give, "give")) return false;
                 }
             } else if (rd.verdict == APMFBridge::ErrandIdleVerdict::Failed ||
                        (rd.verdict == APMFBridge::ErrandIdleVerdict::Waiting && patience)) {
                 // The dialogue idles may carry conditions that need a live conversation (design 4.2). One fallback idle,
                 // then skip the talk: the hand-over is the beat the trade needs.
-                if (!r.talkFallbackUsed && idles.talkFallback && idles.talkFallback != idles.talk) {
+                if (!browsing && !r.talkFallbackUsed && idles.talkFallback && idles.talkFallback != idles.talk) {
                     r.talkFallbackUsed = true;
                     spdlog::info("[errand] {:08X}: talk idle did not play ({}) -- trying the fallback idle {:08X}",
                                  fid, rd.detail, idles.talkFallback);
                     if (!beginBeat(Phase::Talking, idles.talkFallback, "talk fallback")) return false;
                 } else {
-                    spdlog::info("[errand] {:08X}: talk beat skipped ({}) -- hand-over next", fid, rd.detail);
+                    spdlog::info("[errand] {:08X}: {} beat skipped ({}) -- hand-over next", fid, browsing ? "browse" : "talk", rd.detail);
                     if (!beginBeat(Phase::Giving, idles.give, "give")) return false;
                 }
             }
