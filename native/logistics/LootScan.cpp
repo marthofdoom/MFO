@@ -6,6 +6,7 @@
 #include "GemRules.h"
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 #include "TeleportCompat.h"    // follower-teleport mod leash clamp (86e3ec824)
+#include "Errand.h"            // TOWN PHASE 2 R8: Errand::Smith (the smithing want list: loose materials, the always-on pass)
 
 namespace MFO::Logistics {
 
@@ -390,6 +391,14 @@ namespace MFO::Logistics {
                                     else if (GemRules::LooseNamedGemmed(ref, base))
                                         lootable = loose = true;
                                 }
+                                break;
+                            case Category::SmithMats:
+                                // TOWN PHASE 2 R8: a loose ingot / leather / strip lying around, iff it is on his CURRENT smithing want
+                                // list (ruling Q5; nothing else is a candidate). The same list the container take (LootSmithMaterials)
+                                // reads, plus its quest/catalog gate like the other special-item categories.
+                                if (Errand::Smith::Wanted(a_follower->GetFormID(), base->GetFormID()) > 0 &&
+                                    !LooseSpecialItemBlocked(ref, base->GetFormID()))
+                                    lootable = loose = true;
                                 break;
                             case Category::Museum:
                                 // LOTD (86e3f9pkg, marth: "people would see loose LoTD
@@ -955,7 +964,7 @@ namespace MFO::Logistics {
         bool StripCorpse(RE::Actor* a_follower, const FollowerState& a_state,
                          RE::TESObjectREFR* a_corpse, Clock::time_point a_now,
                          bool* a_leftWaiting) {
-            bool moved = false;
+            bool moved = false, stopped = false;
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const RE::NiPoint3 playerPos = pc ? pc->GetPosition() : a_follower->GetPosition();
             for (int start = 0; ; ) {
@@ -978,7 +987,7 @@ namespace MFO::Logistics {
                 else if (op == Vocab::kActLootIngredients)    cat = Category::Ingredients;
                 else if (op == Vocab::kActLootValuables)      cat = Category::Valuables;
                 else if (op == Vocab::kActLootMuseum)         cat = Category::Museum;   // LOTD (inert unless active)
-                else if (op == Vocab::kActWait) break;   // user's STOP gambit ends the sweep
+                else if (op == Vocab::kActWait) { stopped = true; break; }   // user's STOP gambit ends the sweep
                 else isLoot = false;
                 if (isLoot) {
                     // CLAIM-AND-RELEASE parity with the scan (#2): a free-tier
@@ -1008,6 +1017,11 @@ namespace MFO::Logistics {
                 }
                 start = choice.ruleIndex + 1;
             }
+            // TOWN PHASE 2 R8 (marth: "regardless of gambits a follower will loot ... whats needed for town errand smithing"): both take roads
+            // (the arm's-reach drain and the excursion arrival) come through here, and they only evaluate loot gambits, so the smithing
+            // materials have their own pass: free tier, only the forms still on his want list. A Wait rule (stopped) wins.
+            if (!stopped && Errand::Smith::WantsMaterials(a_follower))
+                while (LootHere(a_follower, a_corpse, Category::SmithMats, RE::ActorValue::kNone)) moved = true;
             return moved;
         }
 
@@ -1060,6 +1074,11 @@ namespace MFO::Logistics {
                 start = choice.ruleIndex + 1;   // skip non-loot / no-op, try next
             }
             }
+            // TOWN PHASE 2 R8: the smithing want list's materials ride the same leg boundaries, gambit or not (Service.cpp has the
+            // always-on pass for the idle tick). A Wait rule returned above.
+            if (Errand::Smith::WantsMaterials(a_follower) &&
+                LootNearby(a_follower, Category::SmithMats, a_now, RE::ActorValue::kNone, LootMode::kExcursion))
+                return true;
             return false;
         }
 }

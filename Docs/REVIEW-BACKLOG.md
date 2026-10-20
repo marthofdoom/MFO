@@ -1959,6 +1959,12 @@ Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "Restored or re-planned sto
 
 ### MFO-B363 (SEV-5, OPEN, logistics/Economy.cpp) -- town R6: ClassifyStolen does a second full GetInventory per scan (raised against f0635350)
 Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "ClassifyStolen does a second full GetInventory on every scan (Economy.cpp:929)."
+
+### MFO-B372 (SEV-4, OPEN, logistics/ErrandSmith.cpp) -- town R8: an enchanted worn piece is not tempered (raised against R8 authoring, own note)
+The vanilla temper recipe's condition is `EPTemperingItemIsEnchanted != 1 OR HasPerk(ArcaneBlacksmith)`. The item-context function reads the engine's tempering context, which MFO does not own, so `EvalConditions` answers an enchanted piece as Unknown and skips it (logged once per recipe). Evaluating the HasPerk branch alone needs a per-node `TESConditionItem::IsTrue` seat (a new verified-address row) or the engine's context. Tempering enchanted gear is a follow-up.
+
+### MFO-B373 (SEV-5, OPEN, logistics/ErrandSmith.cpp) -- town R8: the Smith stop carries the smithy shop's chest (raised against R8 authoring, own note)
+The ERND reader requires a non-zero faction and chest for a Pending stop, so the Smith stop stores the smithy shop's; `Trip::ChestCrowd` therefore counts a smith stop as "heading to that chest" and slightly over-penalises other followers' plans there. Filter `StopKind::Smith` out of both CrowdInto walks when the hook-up touches them.
 ### MFO-B349 (SEV-4, OPEN, native/Serialization.h) -- town R7: downgrade path (raised against bfc92b50)
 Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Downgrade path. The b68f0a8 reader drops an entry whose current stop is 'inn'/'temple'. A follower unloaded in the inn is then not recalled, so the Serialization.h comment 'simply with the player' overstates it." The comment's wording is FIXED in the same round (it now says a downgraded DLL does not bring him back); the behaviour stays. MAP.md: "Town phase 2 R7".
 
@@ -1988,6 +1994,39 @@ Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Bed choice. Find
 
 ### MFO-B358 (SEV-5, OPEN, Serialization.cpp) -- town R7: misleading reader log (raised against bfc92b50)
 Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Misleading reader log. The reader's 'shop gone' counter also counts a current temple or inn stop." MAP.md: "Town phase 2 R7".
+
+### MFO-B374 (SEV-5, OPEN, logistics/ErrandSmith.cpp) -- town R8: 21 vanilla temper recipes with a mixed condition group (raised against 06699bd8)
+Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "21 vanilla temper recipes mix a separate condition group with the item-context group and are skipped even when unenchanted. All 785 Requiem recipes evaluate correctly." (EvalConditions answers a group it cannot evaluate node by node as Unknown.) MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B375 (SEV-4, CLOSED in the R8 fix round, logistics/ErrandSmith.cpp) -- town R8: a perkless follower gets no tempering (raised against 06699bd8)
+Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "A perkless follower gets no tempering. EntryPointValue returns nullopt when perkData is null. R0-4 says use the seed and log 'perks not evaluated'." Fixed: BuildOnMain checks the perk data itself and uses the formula's delta, logging it. MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B376 (SEV-4, CLOSED in the R8 fix round, logistics/ErrandSmith.cpp) -- town R8: VerifyOnMain native RemoveItem without Is3DLoaded (raised against 06699bd8)
+Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "VerifyOnMain calls native f->RemoveItem without Is3DLoaded." Fixed: the ledger charges only while he is loaded. MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B377 (SEV-4, CLOSED in the R8 fix round, logistics/ErrandSmith.cpp) -- town R8: material purse cap per form (raised against 06699bd8)
+Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "The material purse cap is half the purse per form (TradeBridge.cpp:~303), up to about 87% across several materials." Fixed: one half-purse budget computed once. MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B378 (SEV-5, CLOSED in the R8 fix round, logistics/ErrandSmith.cpp) -- town R8: MAP still calls OfferWork a STUB (raised against 06699bd8)
+Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "MAP still calls OfferWork a 'STUB'." Fixed: MAP R8 text rewritten. MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B379 (SEV-5, CLOSED in the R8 fix round, logistics/ErrandSmith.cpp) -- town R8: stale BuildOnMain after ClearTransientState (raised against 06699bd8)
+Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "A BuildOnMain posted before ClearTransientState can restore a stale g_want after a load." Fixed: a generation counter. MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B380 (SEV-5, CLOSED in the R8 fix round, logistics/ErrandSmith.cpp) -- town R8: ARMO with slot mask 0 hits SKSE's weapon path (raised against 06699bd8)
+Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "An ARMO with slot mask 0 would hit SKSE's weapon path." Fixed: ReadWorn skips it. MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B381 (SEV-5, CLOSED in the R8 fix round, logistics/ErrandSmith.cpp) -- town R8: hand-off comment wrong (raised against 06699bd8)
+Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "The hand-off comment 'SMITH_SIM finishes it' is wrong, because Begin already erased g_plan." Fixed: comment rewritten. MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B382 (SEV-4, OPEN, logistics/ErrandSmith.cpp) -- town R8: a refused later removal leaves a part-paid line (raised against 623ed40c)
+Opus re-check of `feat/mfo-town-p2-r8-smith` @ 623ed40c. Verbatim: "If a later removal is refused at dispatch after an earlier one was accepted, he pays part of the cost and gets no temper (logged)." MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B383 (SEV-4, OPEN, logistics/ErrandSmith.cpp) -- town R8: the VM can quietly remove or buy fewer than asked (raised against 623ed40c)
+Opus re-check of `feat/mfo-town-p2-r8-smith` @ 623ed40c. Verbatim: "The VM can quietly remove fewer items than asked; the same on the buy side: MFO_Trade.psc adds qty to boughtCount without checking the actual move." MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B384 (SEV-4, OPEN, logistics/ErrandSmith.cpp) -- town R8: the ledger is cleared on load (raised against 623ed40c)
+Opus re-check of `feat/mfo-town-p2-r8-smith` @ 623ed40c. Verbatim: "The ledger is cleared on load, so a temper dispatched but not yet read back before a save becomes free after reloading." Also noted: "the whole-plan credit is strict in the safe direction (an unbought gear line skips the materials credit)." MAP.md: "R8 — smithing / tempering errands".
 
 ### MFO-B385 (SEV-4, OPEN, logistics/ErrandRest.cpp FindPlaces / ResolveViaData + Errand.cpp TryStart) -- town: a follower already inside the inn plans a trip to his own cell (raised against d69e4869)
 Opus review of `fix/mfo-town-counter-drop` @ d69e4869. Verbatim: "a follower already inside the inn: FindPlaces finds no inn door from inside, so ResolveViaData resolves the inn cell, and stops[0] becomes the cell he is standing in. How a ch.19 cell claim to the actor's own cell resolves is unverified. Watch for it in the field." MAP: R7 section.

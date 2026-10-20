@@ -798,6 +798,15 @@ namespace MFO::Config {
     //   (The design's H1(a) hold package, bErrandHoldPackage, is NOT built: it needs a new PACK record and the passive
     //     [errand-pos] drift line decides whether it is needed at all, principle 5.)
     inline std::atomic<int>   g_errandTradeGameMin{ 10 };
+    //   TOWN PHASE 2 R8 (smithing / tempering errands, INI-only; features ship ON):
+    //     bErrandSmith: a follower with a worn weapon/armor piece his Smithing can temper higher takes the materials and the
+    //       work into his town trip (a smith stop: sharpening wheel / armor table). 0 = no smithing errand, no material wishes.
+    //     iSmithWorkGameMin: game minutes the work takes at the station (off screen it is the SMITH_SIM stage's time cost).
+    //     bErrandSmithFurniture: 1 = offer the station's furniture animation through Harbinger (probe P-SMITH-1);
+    //       0 = do the work without it.
+    inline std::atomic<bool>  g_errandSmith{ true };
+    inline std::atomic<int>   g_smithWorkGameMin{ 20 };
+    inline std::atomic<bool>  g_errandSmithFurniture{ true };
     //   TOWN PHASE 2 R7 (inn + temple, all INI-only; logistics/ErrandRest.cpp):
     //   bErrandInn: the inn is the LAST stop of every trip (default ON). He buys a small food stock, eats a meal, and STAYS at
     //     the inn (resting, sitting, sleeping at night) until the player leaves town (marth 2026-10-19), or combat starts.

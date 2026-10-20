@@ -43,10 +43,17 @@ namespace MFO::TradeBridge {
             kWeaponMelee, kWeaponRanged, kArmor, kMageApparel, kSpellTome,
             kWeaponSilver,  // APPENDED (86e3p2gp9): the silver slot's restock, single best pick
             kAmmoSilver,    // APPENDED (86e3p2gp9, marth 2026-10-12): a ranged follower's silver ammo restock
-            kFood           // APPENDED (TOWN PHASE 2 R7): the inn's food stock -- quota-filled in PlanBuy's own FOOD pass, never by the supply loop
+            kFood,          // APPENDED (TOWN PHASE 2 R7): the inn's food stock -- quota-filled in PlanBuy's own FOOD pass, never by the supply loop
+            kSmithMaterial  // APPENDED (town phase 2 R8): a smithing/tempering material on BuyThresholds::smithMats (NOT a quota kind)
         };
         std::int32_t kind  = 0;
         std::int32_t quota = 0;
+    };
+
+    // One smithing material to acquire (town phase 2 R8): the base form and how many MORE he needs.
+    struct SmithMat {
+        RE::FormID    form = 0;
+        std::int32_t  qty  = 0;
     };
 
     // GEAR + TOME buy thresholds -- all computed on the WORKER (Logistics reuses
@@ -148,6 +155,12 @@ namespace MFO::TradeBridge {
         // (Logistics::IsSilverAmmo), up to Logistics::kSilverAmmoStock rounds.
         bool          wantSilverAmmo = false;
         bool          silverAmmoBolt = false;
+        // -- APPENDED 2026-10-19 (TOWN PHASE 2 R8, smithing errands; append-only) --
+        // The materials his planned tempers still need, by base form (the engine's own improve recipe components minus what he
+        // carries; logistics/ErrandSmith.cpp FillMaterials). PlanBuy buys each form it finds in the vendor's stock up to its
+        // qty, REGARDLESS of any gambit (marth: "regardless of gambits a follower will loot or buy whats needed for town errand
+        // smithing"), bounded by the purse (half of what is left, so he never goes broke on ingots). Empty = no smithing wish.
+        std::vector<SmithMat> smithMats;
         // -- APPENDED (TOWN PHASE 2 R7; append-only) -- the inn's FOOD order: stock lines that are FOOD worth stocking classify as kFood
         // (the needs vector carries the quota). Only logistics/ErrandRest.cpp sets it.
         bool          wantFood = false;
@@ -201,7 +214,9 @@ namespace MFO::TradeBridge {
     // TradeSignature hashes the first three; the chest's last-seen gold is folded in by
     // SkipTrade, so another follower's trade that changes the chest's gold is a change.
     std::uint64_t TradeSignature(std::int32_t a_purse, const std::vector<NeedCat>& a_needs,
-                                 const std::vector<SellRow>& a_sell);
+                                 const std::vector<SellRow>& a_sell, const std::vector<SmithMat>& a_mats = {});
+    // (R8: a_mats, the smithing materials wanted, is part of what is offered: a newly wanted ingot must not hit the memo of an
+    // earlier empty trade.)
     // Worker, before VendorTrade. True = do NOT dispatch (a_why says why, for the log):
     //  (a) the last result for this pair was empty and the signature is unchanged, until
     //      the vendor's restock -- iDaysToRespawnVendor game days (Skyrim.esm GMST
@@ -226,6 +241,9 @@ namespace MFO::TradeBridge {
         std::int32_t soldValue  = 0;
         std::int32_t boughtCount= 0;
         std::int32_t spent      = 0;
+        // R8: the smithing materials this trade ACTUALLY bought, by form. Papyrus reports only totals, so a line is credited only when
+        // the report shows EVERY planned unit was bought (boughtCount >= the plan's total); otherwise nothing is credited (never a guess).
+        std::vector<SmithMat> smithBought;
     };
     // The vendor chest's barter gold as the LAST report there read it (-1 = never reported). Worker.
     std::int32_t LastSeenChestGold(RE::FormID a_chest);

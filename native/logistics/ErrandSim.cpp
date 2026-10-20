@@ -134,6 +134,7 @@ namespace MFO::Logistics::Errand::Sim {
 
         // R7: how long the work of a stop takes off screen, game minutes: a temple visit iTempleGameMin, anything else iErrandTradeGameMin.
         double WorkDays(const std::vector<Stop>& a_stops, std::size_t a_cur) {
+            if (a_cur < a_stops.size() && a_stops[a_cur].kind == StopKind::Smith) return Smith::SimWorkDays();   // R8: iSmithWorkGameMin
             const bool temple = a_cur < a_stops.size() && a_stops[a_cur].kind == StopKind::Temple;
             return static_cast<double>(temple ? Config::g_templeGameMin.load() : Config::g_errandTradeGameMin.load()) / 1440.0;
         }
@@ -317,7 +318,7 @@ namespace MFO::Logistics::Errand::Sim {
         const std::string shop = (r.vendorName.empty() || r.vendorName == "?") ? std::string("the shop") : r.vendorName;
         switch (r.stage) {
             case Stage::Out:    return "Off-screen: walking to " + shop;
-            case Stage::Trade:  return CurKind(r) == StopKind::Temple ? "Praying at " + shop : "Off-screen: trading at " + shop;
+            case Stage::Trade:  return CurKind(r) == StopKind::Temple ? "Praying at " + shop : CurKind(r) == StopKind::Smith ? "Working at " + shop : "Off-screen: trading at " + shop;
             case Stage::Rest:   return "Resting at " + shop;   // the whole stay (marth 2026-10-19), physical and simulated alike
             case Stage::Return:
             case Stage::Rejoin: return "Heading back";
@@ -445,7 +446,24 @@ namespace MFO::Logistics::Errand::Sim {
         // R7: he is loaded AT the inn / temple of the current stop. The INN: he STAYS (the stay resumes on screen) -- entering the inn does
         // NOT make him rejoin (marth 2026-10-19) -- unless the food trade is still due, in which case the shop path below walks him to the
         // innkeeper first. The TEMPLE: the visit's work (the prayer) happens now, "applied when he loads".
-        if (inTown && r.cur < r.stops.size() && r.stops[r.cur].kind != StopKind::Shop && Rest::InStopCell(a_follower, r.stops[r.cur])) {
+        // R8: loaded again during SMITH_SIM, in the SAME session (a restored record has no plan): the trip goes on on screen -- he walks to the
+        // smithy's place and Smith::Begin reads a fresh want list there. After a reload (r.restored) it falls through to DONE, as every stop does.
+        if (inTown && !r.restored && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Smith &&
+            (r.stage == Stage::Out || r.stage == Stage::Trade)) {
+            ResumeInfo si;
+            si.follower = fid; si.followerName = r.followerName; si.vendorName = r.vendorName;
+            si.faction = r.faction; si.chest = r.chest; si.town = r.town; si.order = r.order; si.startDays = r.startDays;
+            si.destKind = r.destKind; si.destForm = r.destForm; si.destRad = r.destRad;
+            si.announced = false;
+            SyncCur(r);
+            si.stops = r.stops; si.cur = r.cur; si.tripPurse = r.tripPurse; si.tripSpent = r.tripSpent;
+            if (detail::ResumePhysical(a_follower, si)) return true;
+            detail::Cooldown(fid, kFailCooldownSec);
+            spdlog::info("[errand] {:08X} '{}': loaded again during SMITH_SIM but the walk to the smithy could not be resumed -- he is with the player; DONE", fid, r.followerName);
+            return false;
+        }
+        if (inTown && r.cur < r.stops.size() && r.stops[r.cur].kind != StopKind::Shop && r.stops[r.cur].kind != StopKind::Smith &&
+            Rest::InStopCell(a_follower, r.stops[r.cur])) {
             const StopKind kind = r.stops[r.cur].kind;
             const bool pendingTrade = kind == StopKind::Inn && tradeLeft && !r.dispatched && !r.reported && !r.tradeAbandoned && r.stage != Stage::Rest;
             const bool atWork = kind == StopKind::Inn ? !pendingTrade : (r.stage == Stage::Out || r.stage == Stage::Trade);
@@ -768,6 +786,7 @@ namespace MFO::Logistics::Errand::Sim {
                 r.stage = Stage::Trade;
                 spdlog::info("[errand] {:08X} '{}': TRADE_SIM -- he has reached '{}' (off screen)", fid, r.followerName, r.vendorName);
                 if (CurKind(r) == StopKind::Temple) detail::ToastPraying(r.followerName, r.vendorName);   // R7
+                else if (CurKind(r) == StopKind::Smith) detail::ToastSmithing(r.followerName, r.vendorName);   // R8: SMITH_SIM
                 else if (!r.tradeAbandoned && r.order && !r.order->skipped) detail::ToastTrading(r.followerName, r.vendorName, r.faction);   // not for a trade that will never run
             }
             if (r.stage == Stage::Trade) {
@@ -792,6 +811,7 @@ namespace MFO::Logistics::Errand::Sim {
                             spdlog::info("[errand] {:08X} '{}': trade REPORTED (loaded=no) -- sold {} for {}g, bought {} for {}g", fid,
                                          r.followerName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
                         r.tripSpent += std::max(0, out.spent);   // R5: the next stop's purse cap
+                        if (!out.smithBought.empty()) Smith::NoteBought(fid, out.smithBought);   // R8: what this trade really bought
                     } else if (clk - r.dispatchedClk > kTradeWaitClkSec) {
                         r.reported = true;
                         spdlog::warn("[errand] {:08X}: the replayed trade never reported ({:.0f} s) -- continuing", fid, kTradeWaitClkSec);
@@ -807,6 +827,9 @@ namespace MFO::Logistics::Errand::Sim {
                     spdlog::info("[errand] {:08X} '{}': REST_SIM -- he is resting at '{}' (off screen) until the player leaves town; no return leg", fid, r.followerName, r.vendorName);
                 } else if (days >= r.tTradeEnd && tradeSettled) {
                     if (CurKind(r) == StopKind::Temple) Rest::NoteOwed(fid, r.followerName, r.vendorName);   // R7: TEMPLE_SIM -- the blessing is OWED
+                    if (CurKind(r) == StopKind::Smith) {   // R8: SMITH_SIM -- the result is applied at the END of the stage (armor only; weapons wait)
+                        Smith::SimFinish(fid, r.followerName);
+                    }
                     // R5: the next stop of the trip (OUT_SIM again), else the walk back.
                     if (!AdvanceStop(r, days)) {
                         r.stage = Stage::Return;

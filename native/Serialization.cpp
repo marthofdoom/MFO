@@ -105,7 +105,7 @@ namespace MFO {
         using ErrStopKind  = Logistics::Errand::SavedStopKind;
         using ErrStopState = Logistics::Errand::SavedStopState;
         constexpr std::pair<ErrStopKind, const char*> kErrStopKindOps[] = {
-            { ErrStopKind::Shop, "shop" }, { ErrStopKind::Temple, "temple" }, { ErrStopKind::Inn, "inn" },   // R7 appended the last two (NO layout change)
+            { ErrStopKind::Shop, "shop" }, { ErrStopKind::Temple, "temple" }, { ErrStopKind::Inn, "inn" }, { ErrStopKind::Smith, "smith" },   // R7 appended the last two, R8 "smith" (NO layout change)
         };
         constexpr std::pair<ErrStopState, const char*> kErrStopStateOps[] = {
             { ErrStopState::Pending, "pending" }, { ErrStopState::Active, "active" },

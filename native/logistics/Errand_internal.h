@@ -32,6 +32,7 @@ namespace MFO::Logistics {
         std::int64_t  sellValue = 0;     // unit price x count over the rows THIS vendor accepts
         std::uint32_t needKinds = 0;     // bit n = a TradeBridge::NeedCat::Kind n supply need
         bool          wishGear = false, wishApparel = false, wishTome = false;
+        bool          wishMaterials = false;   // R8: BuyThresholds::smithMats is non-empty (his planned tempers need materials this stop may sell)
         int           purse = 0;
         std::int32_t  chestGold = -1;    // the chest's last-seen barter gold (-1 unknown)
         // the order (valid when !skipped)
@@ -65,7 +66,7 @@ namespace MFO::Logistics::Errand {
     // A trip is an ordered list of stops with ONE purse. Phase-1 errands are one-stop trips of kind Shop. The single-shop
     // fields of the records below (faction, chest, vendor, dest*, order) are the CURRENT stop's working copy, stops[cur]
     // (Errand.cpp / ErrandSim.cpp keep the two in step), so the phase-1 code paths keep their shape.
-    enum class StopKind : std::uint8_t { Shop, Temple, Inn };   // R7 appended Temple and Inn (the last stop); later rounds APPEND Fence, Spouse, Smith, Home
+    enum class StopKind : std::uint8_t { Shop, Temple, Inn, Smith };   // R7 appended Temple and Inn (the last stop), R8 Smith (the forge / sharpening wheel / armor table); later rounds APPEND Fence, Spouse, Home
     enum class StopState : std::uint8_t { Pending, Active, Done, Skipped };
     struct Stop {
         StopKind      kind = StopKind::Shop;
@@ -100,6 +101,8 @@ namespace MFO::Logistics::Errand {
             float         destRad = 0.0f;
             std::uint32_t needCarry = 0;      // bit n = this VEND carries the category of NeedCat::Kind n
             bool          carriesGear = false, carriesTome = false;   // the gear / apparel wish, the tome wish
+            bool          carriesMaterials = false;   // R8: the VEND trades ore / ingots, hides or animal parts (smithing materials)
+            bool          carriesForge = false;       // R8: a smithy: the VEND trades ore / ingots (its place has the forge furniture)
         };
         struct Inputs {
             RE::FormID    follower = 0;
@@ -288,4 +291,50 @@ namespace MFO::Logistics::ErrandShops {
     std::unordered_map<const RE::TESBoundObject*, Stolen> ClassifyStolen(RE::Actor* a_follower);
     void NoteMixed(RE::Actor* a_follower, const RE::TESBoundObject* a_obj);   // one [econ] line per base per session
     void Clear();                                                              // session reset (Errand::ClearTransientState)
+}
+
+// ── TOWN PHASE 2 R8: SMITHING / TEMPERING ERRANDS -- logistics/ErrandSmith.cpp ─────────────────────────────────────────────
+// The follower's own Smithing (his AV, unclamped) and tempering perks (kModTemperingHealth, entry point 76 with the item) decide
+// how far each WORN weapon / armor piece can be improved; the engine's own improve recipe (the temper COBJ) names the materials.
+// The planner (Augment) appends a Smith stop AFTER the shops and BEFORE R7's temple / inn; materials are bought on the shop stops
+// through BuyThresholds::smithMats (FillMaterials) whatever his gambits say; the physical stop (Begin / Step) finds a sharpening
+// wheel / armor table in the loaded cell, offers the station's animation through Harbinger (ch.9 Activate work package, R7's
+// apmf/ErrandWork.cpp -- stubbed behind OfferWork until it merges) and applies the temper: WornObject.SetItemHealthPercent, read
+// back natively, the materials removed only for the pieces that took. Off screen (SimFinish) only ARMOR is applied (a weapon needs
+// a process, R0-5/P-SMITH-W) and the rest waits for the next visit. Session-only: nothing here is saved (the ERND wire only
+// carries the string opcode "smith" for the stop's kind).
+// THREADING: Prepare / FillMaterials / Augment / Begin / Step / End / SimFinish run on the AddTask job worker (the planner and the
+// service tick, like Rest below); the want-list BUILD and the temper APPLY run on the MAIN thread (the entry point evaluates perk
+// conditions with no lock, and the actor must be loaded -- TradePerks.h). Own mutex (a leaf: never held across an engine, Harbinger,
+// Papyrus or TradeBridge call, never nested with Errand / Sim g_mx).
+namespace MFO::Logistics::Errand::Smith {
+    enum class Prep { Off, Ready, Pending };
+    // Planner gate (worker, TryStart, BEFORE EconomyErrandPlan). Ready = a want list younger than ~30 s exists (it may be empty);
+    // Pending = a main-thread build was queued, the caller returns and plans again on its next cadence; Off = smithing is off.
+    // a_smithyHere: some open shop of this town trades ore / ingots or weapons (materials are only wished for when it does).
+    Prep Prepare(RE::Actor* a_follower, bool a_smithyHere);
+    // EconomyProbeImpl (errand mode, worker): the materials he still has to BUY for his planned tempers -> BuyThresholds::smithMats.
+    // Cache read only.
+    void FillMaterials(RE::FormID a_follower, std::vector<TradeBridge::SmithMat>& a_out);
+    // Planner (worker, after Trip::Plan, BEFORE R7's Rest::Augment): appends the Smith stop to a_stops when he has an improvable
+    // piece AND (carries the materials OR a planned shop stop buys them). True = a Smith stop was appended (a_line gets its text).
+    bool Augment(RE::Actor* a_follower, const std::vector<Trip::Cand>& a_cands, std::vector<Stop>& a_stops, std::string& a_line);
+
+    enum class Result { Continue, Done, Failed };
+    struct StepOut { Result res = Result::Continue; std::string why; };
+    // The physical work. Begin: he is AT the stop (the smithy's place). False = cannot (logged); the stop is skipped.
+    bool Begin(RE::Actor* a_follower, const Stop& a_stop, const std::string& a_followerName, std::chrono::steady_clock::time_point a_now);
+    StepOut Step(RE::Actor* a_follower, std::chrono::steady_clock::time_point a_now);
+    // The errand ends / the stop ends: release the work claim and forget the work. Idempotent.
+    void End(RE::FormID a_follower, const char* a_why);
+    bool Working(RE::FormID a_follower);
+    std::string Describe(RE::FormID a_follower);   // "Working at X" ("" = no work). Any thread.
+    // Off screen: the game-day cost of the SMITH_SIM stage, and its end (worker). REAL stock only: the materials carried at the plan plus
+    // what the trades of this trip reported bought (NoteBought); a line is applied only when fully paid. Returns the one-line summary.
+    double SimWorkDays();
+    std::string SimFinish(RE::FormID a_follower, const std::string& a_followerName);
+    void ClearTransientState();   // revert / load (pump drained)
+    // A trade's report said these materials were bought (TradeOutcome::smithBought, physical or simulated): the off-screen stage's
+    // ledger of REAL stock (it never reads an unloaded inventory). Worker.
+    void NoteBought(RE::FormID a_follower, const std::vector<TradeBridge::SmithMat>& a_bought);
 }

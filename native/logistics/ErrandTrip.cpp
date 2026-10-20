@@ -51,6 +51,7 @@ namespace MFO::Logistics::Errand::Trip {
             std::int64_t         goldLeft = -1;   // the chest's last-seen gold not yet promised to a row (-1 unknown)
             bool                 chosen = false;
             bool                 gear = false, tome = false;   // the wish this stop carries in the trip
+            bool                 mats = false;                 // R8: the smithing-materials wish rides this stop
             std::uint32_t        needs = 0;                    // the need kinds this stop serves in the trip
         };
 
@@ -109,7 +110,7 @@ namespace MFO::Logistics::Errand::Trip {
 
     SavedStop ToSaved(const Stop& a_stop) {
         SavedStop s;
-        s.kind = a_stop.kind == StopKind::Inn ? SavedStopKind::Inn : a_stop.kind == StopKind::Temple ? SavedStopKind::Temple : SavedStopKind::Shop;
+        s.kind = a_stop.kind == StopKind::Inn ? SavedStopKind::Inn : a_stop.kind == StopKind::Temple ? SavedStopKind::Temple : a_stop.kind == StopKind::Smith ? SavedStopKind::Smith : SavedStopKind::Shop;
         s.faction = a_stop.faction; s.chest = a_stop.chest; s.vendorActor = a_stop.vendorActor;
         s.destKind = a_stop.destKind == DestKind::VendorActor ? SavedDest::VendorActor
                    : a_stop.destKind == DestKind::Ref         ? SavedDest::Ref : SavedDest::Cell;
@@ -123,7 +124,7 @@ namespace MFO::Logistics::Errand::Trip {
 
     Stop FromSaved(const SavedStop& a_saved) {
         Stop s;
-        s.kind = a_saved.kind == SavedStopKind::Inn ? StopKind::Inn : a_saved.kind == SavedStopKind::Temple ? StopKind::Temple : StopKind::Shop;
+        s.kind = a_saved.kind == SavedStopKind::Inn ? StopKind::Inn : a_saved.kind == SavedStopKind::Temple ? StopKind::Temple : a_saved.kind == SavedStopKind::Smith ? StopKind::Smith : StopKind::Shop;
         s.faction = a_saved.faction; s.chest = a_saved.chest; s.vendorActor = a_saved.vendorActor;
         s.destKind = a_saved.destKind == SavedDest::VendorActor ? DestKind::VendorActor
                    : a_saved.destKind == SavedDest::Ref         ? DestKind::Ref : DestKind::Cell;
@@ -169,12 +170,13 @@ namespace MFO::Logistics::Errand::Trip {
         // The follower-level facts (identical in every candidate's evaluation: his needs, his wishes, his purse).
         int purse = 0;
         std::uint32_t needKinds = 0;
-        bool wishGear = false, wishTome = false;
+        bool wishGear = false, wishTome = false, wishMats = false;
         for (const auto& u : use) {
             purse = std::max(purse, u.p->purse);
             needKinds |= u.p->needKinds;
             wishGear = wishGear || u.p->wishGear || u.p->wishApparel;
             wishTome = wishTome || u.p->wishTome;
+            wishMats = wishMats || u.p->wishMaterials;
         }
         const bool rich = purse >= a_in.minPurse;
 
@@ -271,18 +273,21 @@ namespace MFO::Logistics::Errand::Trip {
             if (!have && addNearest([&](int i) { return ((use[i].c->needCarry >> k) & 1u) != 0; }) < 0) unserved |= 1u << k;
         }
         // ── 3. WISHES: one stop each; a new stop only when the purse clears iErrandMinPurse ──
-        auto placeWish = [&](bool a_want, bool Cand::* a_carry, bool Use::* a_flag, int a_prefer) -> int {
+        auto placeWish = [&](bool a_want, bool Cand::* a_carry, bool Use::* a_flag, int a_prefer, bool a_needRich = true) -> int {
             if (!a_want) return -1;
             if (a_prefer >= 0 && use[a_prefer].c->*a_carry) { use[a_prefer].*a_flag = true; return a_prefer; }
             for (int i = 0; i < static_cast<int>(use.size()); ++i)
                 if (use[i].chosen && use[i].c->*a_carry) { use[i].*a_flag = true; return i; }
-            if (!rich) return -1;
+            if (a_needRich && !rich) return -1;
             const int i = addNearest([&](int j) { return use[j].c->*a_carry; });
             if (i >= 0) use[i].*a_flag = true;
             return i;
         };
         const int gearAt = placeWish(wishGear, &Cand::carriesGear, &Use::gear, -1);
         placeWish(wishTome, &Cand::carriesTome, &Use::tome, gearAt);
+        // R8: the smithing materials (his planned tempers' shortfall) are a NEED in spirit -- marth: bought "regardless of gambits" --
+        // so the extra stop is not held to the upgrade purse (PlanBuy still spends at most half of what is left on them).
+        placeWish(wishMats, &Cand::carriesMaterials, &Use::mats, gearAt, false);
 
         // Rows no chosen stop owns yet (their best payer is not visited, or alone it missed the sell reason): sold at the visited stop
         // that pays the most for them, if any accepts them -- he is there anyway (phase 1 sold every row the visited vendor accepts).
@@ -297,7 +302,7 @@ namespace MFO::Logistics::Errand::Trip {
             for (int tier = 0; tier < 2; ++tier) {
                 std::vector<int> left;
                 for (int i = 0; i < static_cast<int>(use.size()); ++i)
-                    if (use[i].chosen && ((use[i].gear || use[i].tome) ? 1 : 0) == tier) left.push_back(i);
+                    if (use[i].chosen && ((use[i].gear || use[i].tome || use[i].mats) ? 1 : 0) == tier) left.push_back(i);
                 while (!left.empty()) {
                     std::size_t bi = 0;
                     float bd = 0.0f;
@@ -338,14 +343,16 @@ namespace MFO::Logistics::Errand::Trip {
             pl->wishGear = base.wishGear && use[i].gear;
             pl->wishApparel = base.wishApparel && use[i].gear;
             pl->wishTome = base.wishTome && use[i].tome;
+            pl->wishMaterials = base.wishMaterials && use[i].mats;   // R8: the materials ride the ONE stop the planner gave them to
+            if (!pl->wishMaterials) pl->buy.smithMats.clear();
             pl->sellRows = static_cast<int>(pl->sell.size());
             pl->sellValue = 0;
             for (const auto& r : pl->sell) pl->sellValue += static_cast<std::int64_t>(r.value) * std::max<std::int32_t>(r.count, 0);
             pl->needKinds = 0;
             for (const auto& n : pl->needs) pl->needKinds |= 1u << n.kind;
-            if (pl->sell.empty() && pl->needs.empty() && !pl->buy.buyGear && !pl->buy.buyTomes) continue;   // no work: dropped
+            if (pl->sell.empty() && pl->needs.empty() && !pl->buy.buyGear && !pl->buy.buyTomes && !pl->wishMaterials) continue;   // no work: dropped
             if (pl->buy.ammoUpgrade) ammoPlaced = true;
-            pl->sig = TradeBridge::TradeSignature(pl->purse, pl->needs, pl->sell);   // the memo describes what THIS stop offers
+            pl->sig = TradeBridge::TradeSignature(pl->purse, pl->needs, pl->sell, pl->buy.smithMats);   // the memo describes what THIS stop offers
 
             const Cand& c = *use[i].c;
             Stop s;
@@ -360,6 +367,7 @@ namespace MFO::Logistics::Errand::Trip {
                                 a_out.empty() ? "" : " -> ", a_out.size() + 1, c.name, c.key, o.sellRows, o.sellValue, o.chestGold,
                                 o.needKinds, o.buy.buyGear, o.buy.buyTomes,
                                 use[i].crowd ? std::format(", crowd {} (-{:.0f}g)", use[i].crowd, kCrowdPenalty * use[i].crowd) : std::string{});
+            if (o.wishMaterials) body += std::format(" +smith materials ({} kind(s))", o.buy.smithMats.size());
             a_out.push_back(std::move(s));
         }
         if (a_out.empty()) return false;

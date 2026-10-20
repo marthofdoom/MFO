@@ -86,6 +86,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/ErrandSim.cpp
     logistics/ErrandTrip.cpp
     logistics/ErrandShops.cpp
+    logistics/ErrandSmith.cpp
     logistics/ErrandRest.cpp
     logistics/GemRules.cpp
     logistics/EquipAuthority.cpp
