@@ -1924,10 +1924,10 @@ Opus review @ 92c761cd. Verbatim: "the physical errand says 'Trading with X' and
 ### MFO-B342 (SEV-5, OPEN, Board_FieldKit.cpp:510) -- town R3: '- %s' separator
 Opus review @ 92c761cd. Verbatim: "the '- %s' separator uses a hyphen as a dash. It is carried over from the old draw. VOICE.md asks for a colon or parentheses, so '(with you)' would fit better. Optional."
 
-### MFO-B343 (SEV-4, OPEN, ErrandSim.cpp:357-375) -- town R4: the other browsing case is not built
-Opus review @ c2253ac3. Verbatim: "The design's other browsing case is not built: if the simulated trade has already run and it is before tTradeEnd, the errand resolves straight to DONE (ErrandSim.cpp:357-375). With no placement facet either, field criteria R4-1 and R4-3 cannot pass as written."
+### MFO-B343 (SEV-4, OPEN, ErrandSim.cpp:357-375) -- town R4: the other browsing case is not built (REWORDED 2026-10-19: browse-only; placement criteria removed)
+Opus review @ c2253ac3. Verbatim: "The design's other browsing case is not built: if the simulated trade has already run and it is before tTradeEnd, the errand resolves straight to DONE (ErrandSim.cpp:357-375). With no placement facet either, field criteria R4-1 and R4-3 cannot pass as written." Update (`fix/mfo-town-counter-drop`, marth 2026-10-19): the placement facet and its criteria are GONE; the sim-trade-already-ran case still resolves straight to DONE with no browse beat. MAP: "R4 / R4b" section.
 
-### MFO-B344 (SEV-5, OPEN, ErrandCounter.cpp Learn) -- town R4: "confirmed" is not "at the counter"
+### MFO-B344 (SEV-5, CLOSED (obsolete: counter learning and placement removed (marth 2026-10-19)), ErrandCounter.cpp Learn) -- town R4: "confirmed" is not "at the counter"
 Opus review @ c2253ac3. Verbatim: "'Confirmed' means stationary for ~6 s at any sandbox marker, not 'at the counter'. Fine while the map is log-only; the placement facet must not trust it blindly."
 
 ### MFO-B345 (SEV-5, OPEN, logistics/ErrandTrip.cpp) -- town R5: needs only at a carrier (raised against c32c8c1e)
@@ -1942,10 +1942,10 @@ Same review. Verbatim: "Errand.cpp:1045-1050: a later stop whose vendor is unloa
 ### MFO-B348 (SEV-5, OPEN, logistics/ErrandTrip.cpp) -- town R5: bestRow recomputed in the sort comparator (raised against c32c8c1e)
 Same review. Verbatim: "ErrandTrip.cpp:189-192: the stable_sort comparator recomputes bestRow (N log N x candidates x rows per plan on the worker); cache it if a plan ever stalls."
 
-### MFO-B370 (SEV-4, OPEN, apmf/Place.cpp) -- town R4b: a flags-0 RequestPlace is unguarded (raised against f2bfbc72)
+### MFO-B370 (SEV-4, CLOSED (obsolete: counter learning and placement removed (marth 2026-10-19)), apmf/Place.cpp) -- town R4b: a flags-0 RequestPlace is unguarded (raised against f2bfbc72)
 Opus review of `feat/mfo-town-p2-r4b-place` @ f2bfbc72. Verbatim: "the flags-0 RequestPlace used to raise the unsupported warning is safe today but fragile: if either gate changes, a flags-0 request means 'move whatever the player can see' with no guards; send the real flags or add a WarnPlaceUnsupported()." FIXED in the closing round (the flags-0 call is removed; the caller always sends the real flags and the wrapper warns once on ABI < 28). Kept for the record. MAP: "R4" What-breaks.
 
-### MFO-B371 (SEV-5, OPEN, logistics/ErrandCounter.cpp) -- town R4b: a multi-stop arrival overwrites the pending placement (raised against f2bfbc72)
+### MFO-B371 (SEV-5, CLOSED (obsolete: counter learning and placement removed (marth 2026-10-19)), logistics/ErrandCounter.cpp) -- town R4b: a multi-stop arrival overwrites the pending placement (raised against f2bfbc72)
 Same review. Verbatim: "a multi-stop arrival overwrites the pending entry; harmless in practice." MAP: "R4" What-breaks.
 
 ### MFO-B360 (SEV-4, OPEN, logistics/ErrandShops.cpp) -- town R6: gate subject/target pairing differs from the engine's (raised against f0635350)
@@ -2027,3 +2027,9 @@ Opus re-check of `feat/mfo-town-p2-r8-smith` @ 623ed40c. Verbatim: "The VM can q
 
 ### MFO-B384 (SEV-4, OPEN, logistics/ErrandSmith.cpp) -- town R8: the ledger is cleared on load (raised against 623ed40c)
 Opus re-check of `feat/mfo-town-p2-r8-smith` @ 623ed40c. Verbatim: "The ledger is cleared on load, so a temper dispatched but not yet read back before a save becomes free after reloading." Also noted: "the whole-plan credit is strict in the safe direction (an unbought gear line skips the materials credit)." MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B385 (SEV-4, OPEN, logistics/ErrandRest.cpp FindPlaces / ResolveViaData + Errand.cpp TryStart) -- town: a follower already inside the inn plans a trip to his own cell (raised against d69e4869)
+Opus review of `fix/mfo-town-counter-drop` @ d69e4869. Verbatim: "a follower already inside the inn: FindPlaces finds no inn door from inside, so ResolveViaData resolves the inn cell, and stops[0] becomes the cell he is standing in. How a ch.19 cell claim to the actor's own cell resolves is unverified. Watch for it in the field." MAP: R7 section.
+
+### MFO-B386 (SEV-4, OPEN, logistics/Errand.cpp Tick combat exit) -- town: combat during the inn-only walk re-plans the inn (raised against d69e4869)
+Same review. Verbatim: "combat-while-walking re-plans inn": an inn-only trip that ends on combat during the walk is not marked trip-done (deliberately left, the coordinator is asking marth), so after the combat cooldown he plans the inn trip again. MAP: R7 section.

@@ -28,7 +28,6 @@
 // the revert with the pump drained. g_mx guards the table and is never held across a Papyrus / TradeBridge / Harbinger call.
 #include "PCH.h"
 #include "Errand_internal.h"
-#include "ErrandCounter.h"
 #include "Config.h"
 #include "Followers.h"
 #include "LocationTypes.h"
@@ -288,7 +287,6 @@ namespace MFO::Logistics::Errand::Sim {
                 r = it->second;
                 g_sims.erase(it);
             }
-            Counter::PollPlacement(a_fid, r.followerName, true);   // R4b: log a finished outcome, forget a pending one
             detail::Cooldown(a_fid, a_cooldownSec);
             spdlog::info("[errand] {:08X} '{}': {} (sim) at {} -- {} (vendor '{}')", a_fid, r.followerName,
                          a_complete ? "DONE" : "ENDED", StageName(r.stage), a_why, r.vendorName);
@@ -420,7 +418,6 @@ namespace MFO::Logistics::Errand::Sim {
         // Not loaded = still the Sweep's (a stale tick of an unloaded follower must not resume or end anything).
         if (!a_follower->Is3DLoaded()) return true;
         const auto fid = a_follower->GetFormID();
-        Counter::PollPlacement(fid, std::string(a_follower->GetName() ? a_follower->GetName() : ""), true);   // R4b: loaded again -- the placement's outcome is logged or forgotten here
         SimRec r;
         {
             std::scoped_lock lk(g_mx);
@@ -788,12 +785,10 @@ namespace MFO::Logistics::Errand::Sim {
             if (r.stage == Stage::Out && days >= r.tArrive) {
                 r.stage = Stage::Trade;
                 spdlog::info("[errand] {:08X} '{}': TRADE_SIM -- he has reached '{}' (off screen)", fid, r.followerName, r.vendorName);
-                Counter::NoteSimArrival(fid, r.followerName, r.vendorName, r.faction);   // R4/R4b: counter known/unknown; a Harbinger placement beside the vendor (interior, confirmed counter)
                 if (CurKind(r) == StopKind::Temple) detail::ToastPraying(r.followerName, r.vendorName);   // R7
                 else if (CurKind(r) == StopKind::Smith) detail::ToastSmithing(r.followerName, r.vendorName);   // R8: SMITH_SIM
                 else if (!r.tradeAbandoned && r.order && !r.order->skipped) detail::ToastTrading(r.followerName, r.vendorName, r.faction);   // not for a trade that will never run
             }
-            Counter::PollPlacement(fid, r.followerName);   // R4b: the outcome of the placement, logged once
             if (r.stage == Stage::Trade) {
                 const double clk = Scheduler::ServiceClock();
                 if (!r.dispatched && !r.tradeAbandoned && !r.reported) {   // (R5: a stop that already traded -- handed off at TAKING -- never re-trades)

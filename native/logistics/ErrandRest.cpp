@@ -6,6 +6,11 @@
 //   THE TRIP (marth: ONE complete trip per town visit, ending at the inn). Augment() appends, after the R5 shop stops:
 //     [ R8 SMITH STOP: INSERTION POINT, below ]  ->  TEMPLE (when owed)  ->  INN (LAST of every trip).
 //   Once a trip ends no new errand is planned for that follower until the player leaves the town (TripDone / MarkTripDone).
+//   WORLD STATE IS PRIMARY (marth 2026-10-19, no co-save): what a follower still needs is derived from the world on every plan --
+//     inventory (arrows / potions / food / sellables), his active effects (a blessing = an effect whose MGEF carries MagicBlessing,
+//     a disease), so a fully stocked, blessed follower plans no SHOP or TEMPLE stop after a reload, only the INN-ONLY trip
+//     (marth 2026-10-19: he walks to the inn and stays; this overturns "the inn is never a trip alone"). The session-only TripDone mark
+//     ends that trip's re-plan for the visit; it is a SECONDARY guard for needs the visit could not satisfy (a vendor with no gold left).
 //
 //   INN. Found through the town's load doors (the interior CELL whose location IsInn, LocationTypes) and the vendor FACTION whose
 //     place sits in that location (the innkeeper, a normal shop stop: talk / give / trade / take beats, the order a small FOOD
@@ -85,6 +90,11 @@ namespace MFO::Logistics::Errand::Rest {
 
         constexpr RE::FormID kIdleKneelEnter = 0x000F11EE;   // IdleBlessingKneelEnter (verified in Skyrim.esm with tools/esp_inspect.py, 2026-10-19)
         constexpr RE::FormID kIdleKneelExit  = 0x000F11EF;   // IdleBlessingKneelExit
+        // The vanilla temple blessing's MGEFs (FortifyHealthFFSelf 000FB98D, FortifyMagickaRateFFSelf 000FB989, FortifySpeechcraftFFSelf
+        // 000FB993, FortifySneakFFSelf 0010E8AF, ...) all carry KYWD MagicBlessing; the LoreRim winner (Wintersun - Reqtificated.esp)
+        // overrides 000FB98D and keeps the keyword. Verified in Skyrim.esm and Wintersun with tools/esp_inspect.py, 2026-10-19.
+        constexpr RE::FormID kBlessingKeyword = 0x000FB98C;   // MagicBlessing
+        constexpr int kMagicMaxDefers = 5;   // MagicReadPending: ~5 plan cadences (6 s) = ~30 s, then WARN and plan without the temple decision
         constexpr float  kScan          = 4096.0f;   // the door / shrine / bed scan around the follower (one cell)
         constexpr float  kShrineRadius  = 110.0f;    // ch.19 arrival radius at the shrine (APMF clamps [50,512])
         constexpr float  kInnSandboxRad = 700.0f;    // the stay: around the anchor (the inn's entry door), i.e. the main room
@@ -112,8 +122,10 @@ namespace MFO::Logistics::Errand::Rest {
         struct MagicView {
             bool valid = false;
             bool diseased = false;
+            bool blessed = false;       // an active effect whose base MGEF carries the MagicBlessing keyword (kBlessingKeyword)
             int  effects = 0;
             std::string diseases;       // the disease spells' names, for the log
+            std::string blessings;      // the blessing effects' names, for the log
             Clock::time_point stamp{};
         };
 
@@ -140,10 +152,11 @@ namespace MFO::Logistics::Errand::Rest {
         std::mutex                                       g_mx;    // a LEAF (see the file header)
         std::unordered_map<RE::FormID, Work>             g_work;
         std::unordered_map<RE::FormID, MagicView>        g_magic;
-        std::unordered_map<RE::FormID, int>              g_blessDay;   // follower -> game day of the last observed blessing
-        std::unordered_map<RE::FormID, int>              g_templeTry;  // follower -> game day of the last temple visit (any outcome)
+        std::unordered_map<RE::FormID, int>              g_templeTry;  // follower -> game day of the last temple visit (any outcome): a short-term ANTI-THRASH only, NOT the blessing's truth (that is MagicView::blessed)
         std::unordered_set<RE::FormID>                   g_tripDone;   // followers whose trip ended this town visit
         std::unordered_set<RE::FormID>                   g_tripLogged; // ... for whom the re-plan block was already logged
+        std::unordered_map<RE::FormID, int>              g_magicDefers;  // consecutive MagicReadPending defers per follower (cap kMagicMaxDefers)
+        std::unordered_set<RE::FormID>                   g_magicWaitLogged; // ... for whom "waiting for the blessing/disease read" was logged this visit
         RE::FormID                                       g_marksTown = 0;
         struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0, cell = 0; };   // cell: the interior cell of the faction's PLVD place (0 = unknown)
         std::unordered_map<RE::FormID, std::vector<InnFac>> g_innFacs;  // town -> the innkeeper factions (immutable once built)
@@ -182,14 +195,24 @@ namespace MFO::Logistics::Errand::Rest {
         void PostMagicProbe(RE::FormID a_fid) {
             auto fn = [a_fid]() {
                 MagicView v;
-                v.valid = true;
                 v.stamp = Clock::now();
+                // valid only for a LOADED follower: an unloaded one has no readable list, which must not read as "no blessing"
                 if (auto* f = RE::TESForm::LookupByID<RE::Actor>(a_fid); f && f->Is3DLoaded()) {
+                    v.valid = true;
                     if (auto* mt = f->AsMagicTarget()) {
                         if (auto* list = mt->GetActiveEffectList()) {
                             for (auto* ae : *list) {
                                 if (!ae) continue;
                                 ++v.effects;
+                                if (!ae->flags.any(RE::ActiveEffect::Flag::kInactive, RE::ActiveEffect::Flag::kDispelled)) {
+                                    if (const auto* mgef = ae->GetBaseObject(); mgef && mgef->HasKeywordID(kBlessingKeyword)) {
+                                        v.blessed = true;
+                                        if (const char* n = mgef->GetName(); n && *n) {
+                                            if (!v.blessings.empty()) v.blessings += ", ";
+                                            v.blessings += n;
+                                        }
+                                    }
+                                }
                                 if (ae->spell && ae->spell->GetSpellType() == RE::MagicSystem::SpellType::kDisease) {
                                     v.diseased = true;
                                     if (const char* n = ae->spell->GetName(); n && *n) {
@@ -357,15 +380,19 @@ namespace MFO::Logistics::Errand::Rest {
         }
 
         // ── the temple's reason ──────────────────────────────────────────────────────────────────────────
-        // Q4: cure when diseased, bless when no blessing today, at most one visit per game day. "No blessing active" is read as "no
-        // observed blessing today" (the ledger below): the shrine's blessing is a spell MFO cannot name without the shrine script.
+        // Q4: cure when diseased, bless when he has no active blessing. The blessing is read from the WORLD STATE (marth 2026-10-19, no
+        // co-save): an active effect whose MGEF carries MagicBlessing (MagicView::blessed, filled on the main thread). An unread mirror
+        // (not posted yet, or he is not loaded) wants NOTHING: the next plan (6 s) reads it. g_templeTry stays only as a short-term
+        // anti-thrash (at most one temple visit per game day, session-only): a blessing that does not take (a shrine that ignores him)
+        // must not loop him back to the temple every plan.
         bool TempleWanted(RE::FormID a_fid, std::string& a_why) {
             const int today = GameDay();
             const auto m = MagicOf(a_fid);
             std::scoped_lock lk(g_mx);
             if (const auto it = g_templeTry.find(a_fid); it != g_templeTry.end() && it->second == today) return false;   // visited today
-            if (m.valid && m.diseased) { a_why = "diseased (" + m.diseases + ")"; return true; }
-            if (const auto it = g_blessDay.find(a_fid); it == g_blessDay.end() || it->second != today) { a_why = "no blessing today"; return true; }
+            if (!m.valid) return false;
+            if (m.diseased) { a_why = "diseased (" + m.diseases + ")"; return true; }
+            if (!m.blessed) { a_why = "no active blessing"; return true; }
             return false;
         }
 
@@ -650,16 +677,14 @@ namespace MFO::Logistics::Errand::Rest {
             case Stage::Activate: {
                 const auto m = MagicOf(fid);
                 const bool fresh = m.valid && m.stamp > w.stageAt + std::chrono::seconds(1);
-                const bool changed = fresh && (m.effects != w.before.effects || (w.before.diseased && !m.diseased));
+                const bool changed = fresh && (m.effects != w.before.effects || (w.before.diseased && !m.diseased) || (!w.before.blessed && m.blessed));
                 const bool timeout = a_now - w.stageAt > kActivateWait;
                 if (!changed && !timeout) { if (a_now - w.lastProbe >= std::chrono::seconds(1)) { w.lastProbe = a_now; PostMagicProbe(fid); } break; }
-                const int today = GameDay();
                 spdlog::info("[errand-temple] {:08X} '{}': P-TEMPLE-1 {} -- before: {} effect(s), diseased={}; after: {} effect(s), diseased={}{} (shrine {:08X})", fid,
                              w.followerName, changed ? "the shrine's activation CHANGED his active effects" : "NO observable change after 15 s (did OnActivate fire with him?)",
                              w.before.effects, w.before.diseased, m.valid ? m.effects : -1, m.valid && m.diseased,
                              m.diseases.empty() ? std::string{} : " [" + m.diseases + "]", w.shrine);
                 w.changed = changed;
-                if (changed) { std::scoped_lock lk(g_mx); g_blessDay[fid] = today; }
                 APMFBridge::ReleaseErrandWork(fid);
                 if (w.kneelPlayed) APMFBridge::PlayErrandIdle(fid, kIdleKneelExit, w.shrine);
                 w.stage = Stage::Exit;
@@ -697,7 +722,8 @@ namespace MFO::Logistics::Errand::Rest {
         }
         std::string templeWhy;
         const bool wantTemple = temple.ok && TempleWanted(fid, templeWhy);
-        if (!a_haveStops && !wantTemple) return false;   // no shop work and no temple reason: no trip (the inn alone is never a trip)
+        // marth 2026-10-19: with no shop work and no temple reason the trip is the INN ALONE (walk to the inn, then stay: sandbox / eat /
+        // sleep until the player leaves town or combat starts). A fully stocked follower in town goes to the inn; TripDone ends it.
         const bool wasEmpty = a_stops.empty();
         std::string add;
 
@@ -769,6 +795,32 @@ namespace MFO::Logistics::Errand::Rest {
         g_marksTown = a_townId;
         g_tripDone.clear();
         g_tripLogged.clear();
+        g_magicWaitLogged.clear();
+        g_magicDefers.clear();
+    }
+    bool MagicReadPending(RE::Actor* a_follower) {
+        if (!a_follower || !Config::g_errandInn.load()) return false;
+        const auto fid = a_follower->GetFormID();
+        const bool loaded = a_follower->Is3DLoaded();
+        const auto m = MagicOf(fid);
+        const bool fresh = m.valid && Clock::now() - m.stamp <= std::chrono::seconds(30);
+        if (fresh) { std::scoped_lock lk(g_mx); g_magicDefers.erase(fid); return false; }
+        bool first = false;
+        int defers = 0;
+        { std::scoped_lock lk(g_mx); first = g_magicWaitLogged.insert(fid).second; defers = ++g_magicDefers[fid]; }
+        if (loaded && defers > kMagicMaxDefers) {   // never stall silently: the main-thread read did not land in ~30 s
+            spdlog::warn("[errand] {:08X}: the blessing/disease read did not land after {} defers (~{} s) -- planning WITHOUT the temple decision (is the main-thread Post running?)",
+                         fid, defers - 1, (defers - 1) * 6);
+            { std::scoped_lock lk(g_mx); g_magicDefers[fid] = 0; }
+            return false;
+        }
+        if (!loaded) {   // an unloaded follower's list is not readable: today's behaviour (TempleWanted wants nothing without a read)
+            if (first) spdlog::info("[errand] {:08X}: not loaded -- no blessing/disease read possible, planning without the temple", fid);
+            return false;
+        }
+        if (first) spdlog::info("[errand] {:08X}: waiting for the blessing/disease read (main-thread active-effect mirror) before planning", fid);
+        PostMagicProbe(fid);
+        return true;
     }
     bool TripDone(RE::FormID a_follower, RE::FormID a_townId) {
         std::scoped_lock lk(g_mx);
@@ -879,10 +931,11 @@ namespace MFO::Logistics::Errand::Rest {
         std::scoped_lock lk(g_mx);
         g_work.clear();
         g_magic.clear();
-        g_blessDay.clear();
         g_templeTry.clear();
         g_tripDone.clear();
         g_tripLogged.clear();
+        g_magicWaitLogged.clear();
+        g_magicDefers.clear();
         g_innFacs.clear();
         g_marksTown = 0;
     }
