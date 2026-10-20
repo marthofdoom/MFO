@@ -104,7 +104,7 @@ namespace MFO {
         // R5 (ERND v2): the itinerary's opcodes. A later round APPENDS a stop kind (fence, spouse, smith, temple, inn, home).
         using ErrStopKind  = Logistics::Errand::SavedStopKind;
         using ErrStopState = Logistics::Errand::SavedStopState;
-        constexpr std::pair<ErrStopKind, const char*> kErrStopKindOps[] = { { ErrStopKind::Shop, "shop" } };
+        constexpr std::pair<ErrStopKind, const char*> kErrStopKindOps[] = { { ErrStopKind::Shop, "shop" }, { ErrStopKind::Smith, "smith" } };   // R8 appended the last (NO layout change)
         constexpr std::pair<ErrStopState, const char*> kErrStopStateOps[] = {
             { ErrStopState::Pending, "pending" }, { ErrStopState::Active, "active" },
             { ErrStopState::Done, "done" },       { ErrStopState::Skipped, "skipped" },

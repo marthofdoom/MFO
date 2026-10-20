@@ -128,6 +128,47 @@ namespace MFO::Papyrus {
         return ok;
     }
 
+    bool DispatchWornHealth(RE::Actor* a_actor, std::int32_t a_hand, std::int32_t a_slotMask, float a_value) {
+        if (!a_actor) { ++g_failures; return false; }
+        auto* vm = VM();
+        if (!vm) { ++g_failures; return false; }
+
+        // A STATIC call: WornObject is an SKSE global-function class, so there is no handle and no bound script.
+        // unique_ptr for the same MakeFunctionArguments leak noted above.
+        std::unique_ptr<RE::BSScript::IFunctionArguments> args{
+            RE::MakeFunctionArguments(std::move(a_actor), std::move(a_hand), std::move(a_slotMask), std::move(a_value)) };
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+
+        const bool ok = vm->DispatchStaticCall("WornObject", "SetItemHealthPercent", args.get(), callback);
+        if (ok) ++g_dispatches;
+        else    ++g_failures;
+        return ok;
+    }
+
+    bool DispatchRemoveItem(RE::TESObjectREFR* a_ref, RE::TESForm* a_item, std::int32_t a_count) {
+        if (!a_ref || !a_item || a_count <= 0) { ++g_failures; return false; }
+        auto* vm = VM();
+        if (!vm) { ++g_failures; return false; }
+
+        RE::VMHandle handle{};
+        if (!HandleFor(a_ref, handle)) { ++g_failures; return false; }
+
+        // The Form argument is packed with the item's CONCRETE form type (CommonLib packs a bare TESForm* as FormType::None, which
+        // names no VM class): smithing materials (ingots, ore, leather, strips) are MISC. Anything else is refused, not guessed.
+        auto* misc = a_item->As<RE::TESObjectMISC>();
+        if (!misc) { ++g_failures; return false; }
+        // akOtherContainer = None: the item is destroyed, not moved.
+        RE::TESObjectREFR* none = nullptr;
+        std::unique_ptr<RE::BSScript::IFunctionArguments> args{
+            RE::MakeFunctionArguments(std::move(misc), std::move(a_count), true, std::move(none)) };
+        RE::BSTSmartPointer<RE::BSScript::IStackCallbackFunctor> callback;
+
+        const bool ok = vm->DispatchMethodCall2(handle, "ObjectReference", "RemoveItem", args.get(), callback);
+        if (ok) ++g_dispatches;
+        else    ++g_failures;
+        return ok;
+    }
+
     bool DispatchTradeRun(RE::TESForm* a_quest, std::int32_t a_token) {
         if (!a_quest) { ++g_failures; return false; }
         auto* vm = VM();

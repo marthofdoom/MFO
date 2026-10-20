@@ -798,6 +798,15 @@ namespace MFO::Config {
     //   (The design's H1(a) hold package, bErrandHoldPackage, is NOT built: it needs a new PACK record and the passive
     //     [errand-pos] drift line decides whether it is needed at all, principle 5.)
     inline std::atomic<int>   g_errandTradeGameMin{ 10 };
+    //   TOWN PHASE 2 R8 (smithing / tempering errands, INI-only; features ship ON):
+    //     bErrandSmith: a follower with a worn weapon/armor piece his Smithing can temper higher takes the materials and the
+    //       work into his town trip (a smith stop: sharpening wheel / armor table). 0 = no smithing errand, no material wishes.
+    //     iSmithWorkGameMin: game minutes the work takes at the station (off screen it is the SMITH_SIM stage's time cost).
+    //     bErrandSmithFurniture: 1 = offer the station's furniture animation through Harbinger (probe P-SMITH-1);
+    //       0 = do the work without it.
+    inline std::atomic<bool>  g_errandSmith{ true };
+    inline std::atomic<int>   g_smithWorkGameMin{ 20 };
+    inline std::atomic<bool>  g_errandSmithFurniture{ true };
 
     // §HMS class-redistribution (v1.0.68). On level-up MFO measures the engine's
     // per-level Health/Magicka/Stamina award and re-grants it reshaped to the

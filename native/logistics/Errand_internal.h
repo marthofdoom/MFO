@@ -32,6 +32,7 @@ namespace MFO::Logistics {
         std::int64_t  sellValue = 0;     // unit price x count over the rows THIS vendor accepts
         std::uint32_t needKinds = 0;     // bit n = a TradeBridge::NeedCat::Kind n supply need
         bool          wishGear = false, wishApparel = false, wishTome = false;
+        bool          wishMaterials = false;   // R8: BuyThresholds::smithMats is non-empty (his planned tempers need materials this stop may sell)
         int           purse = 0;
         std::int32_t  chestGold = -1;    // the chest's last-seen barter gold (-1 unknown)
         // the order (valid when !skipped)
@@ -65,7 +66,7 @@ namespace MFO::Logistics::Errand {
     // A trip is an ordered list of stops with ONE purse. Phase-1 errands are one-stop trips of kind Shop. The single-shop
     // fields of the records below (faction, chest, vendor, dest*, order) are the CURRENT stop's working copy, stops[cur]
     // (Errand.cpp / ErrandSim.cpp keep the two in step), so the phase-1 code paths keep their shape.
-    enum class StopKind : std::uint8_t { Shop };   // later rounds APPEND Fence, Spouse, Smith, Temple, Inn (R7: the last stop), Home
+    enum class StopKind : std::uint8_t { Shop, Smith };   // R8 appended Smith (the forge / sharpening wheel / armor table); later rounds APPEND Temple, Inn (R7: the last stop), Home
     enum class StopState : std::uint8_t { Pending, Active, Done, Skipped };
     struct Stop {
         StopKind      kind = StopKind::Shop;
@@ -99,6 +100,8 @@ namespace MFO::Logistics::Errand {
             float         destRad = 0.0f;
             std::uint32_t needCarry = 0;      // bit n = this VEND carries the category of NeedCat::Kind n
             bool          carriesGear = false, carriesTome = false;   // the gear / apparel wish, the tome wish
+            bool          carriesMaterials = false;   // R8: the VEND trades ore / ingots, hides or animal parts (smithing materials)
+            bool          carriesForge = false;       // R8: a smithy: the VEND trades ore / ingots or weapons (its place has the forge furniture)
         };
         struct Inputs {
             RE::FormID    follower = 0;

@@ -73,6 +73,18 @@ namespace MFO::Papyrus {
     // Returns whether the call was DISPATCHED (async), not whether he moved.
     bool DispatchMoveTo(RE::TESObjectREFR* a_ref, RE::TESObjectREFR* a_target, float a_dx, float a_dy, float a_dz);
 
+    // WornObject.SetItemHealthPercent(akActor, aiHand, aiSlotMask, afHealthPercent) (SKSE 2.2.6, a global native reached by
+    // class name -- NO engine-address seat): sets the ExtraHealth of the WORN copy of a weapon (a_slotMask 0, a_hand 0 = left /
+    // 1 = right) or an armor piece (a_slotMask = a biped slot bit; a_hand ignored). a_value is the ABSOLUTE health multiplier
+    // (1.1 = Fine), not a percent (R0-5). Armor is pure inventory data (works on an unloaded actor); a weapon needs a process
+    // (probe P-SMITH-W). Returns whether the call was DISPATCHED (async), not whether the value took: the smith errand reads the
+    // ExtraHealth back before it spends a single material (logistics/ErrandSmith.cpp).
+    bool DispatchWornHealth(RE::Actor* a_actor, std::int32_t a_hand, std::int32_t a_slotMask, float a_value);
+
+    // ObjectReference.RemoveItem(akItem, aiCount, abSilent=true, akOtherContainer=None): the VM road for an inventory removal
+    // that must work on an UNLOADED follower (the house rule: no native inventory mutation off screen). Dispatched, async.
+    bool DispatchRemoveItem(RE::TESObjectREFR* a_ref, RE::TESForm* a_item, std::int32_t a_count);
+
     // How many dispatches this session, for the heartbeat (#53). A subsystem
     // whose correct behaviour is invisible must publish one.
     std::uint32_t Dispatches();

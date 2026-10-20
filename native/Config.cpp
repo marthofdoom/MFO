@@ -127,6 +127,9 @@ namespace MFO::Config {
             else if (a_key == "fErrandCooldownSec") { setF(g_errandCooldownSec, 0.0f, 3600.0f); return; }
             else if (a_key == "fErrandMaxGameMin")  { setF(g_errandMaxGameMin,  10.0f, 1440.0f); return; }
             else if (a_key == "iErrandTradeGameMin") { setI(g_errandTradeGameMin, 1, 240); return; }
+            else if (a_key == "bErrandSmith")       { setB(g_errandSmith); return; }                          // R8: smithing / tempering errands, default ON
+            else if (a_key == "iSmithWorkGameMin")  { setI(g_smithWorkGameMin, 1, 240); return; }            // R8: game minutes at the station
+            else if (a_key == "bErrandSmithFurniture") { setB(g_errandSmithFurniture); return; }            // R8: station animation via Harbinger (P-SMITH-1)
             else if (a_key == "bSubstrateCasts")    { setB(g_substrateCasts); return; }   // OOC casts on the ch.27 substrate (S3), INI-only, default OFF
 
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
@@ -410,6 +413,9 @@ namespace MFO::Config {
             g_errandCooldownSec  = 120.0f;
             g_errandMaxGameMin   = 120.0f;
             g_errandTradeGameMin = 10;
+            g_errandSmith        = true;    // R8 smithing / tempering errands -- ON (features ship on)
+            g_smithWorkGameMin   = 20;
+            g_errandSmithFurniture = true;
             g_hmsRedistribute    = true;    // §HMS class-redistribution master switch -- ON
             g_hmsSkewMaxFrac     = 0.20f;   // §HMS off-class skew ceiling -- 20% (INI stores percent)
             g_speechPricing      = true;    // #21 sell price follows the speech-scaled vanilla barter curve

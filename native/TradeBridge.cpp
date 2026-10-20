@@ -131,6 +131,10 @@ namespace MFO::TradeBridge {
             // thresholds in b were computed on the worker from the follower's OWN
             // inventory (Logistics reused its loot judge); native only maps a stock
             // form to a category here -- the beats-baseline test is in PlanBuy.
+            // ── SMITHING MATERIALS (town phase 2 R8): a form on the follower's smithing want list is a buy of its own,
+            // whatever gambits he has (PlanBuy's pass below). Pure id compare; the list is the worker-built smithMats.
+            for (const auto& m : b.smithMats)
+                if (m.form == id) return NeedCat::kSmithMaterial;
             if (b.buyGear) {
                 if (auto* weap = a_form->As<RE::TESObjectWEAP>()) {
                     // THE SILVER SLOT (86e3p2gp9): while he owns none, a silver melee weapon is that
@@ -282,6 +286,24 @@ namespace MFO::TradeBridge {
                     if (qty <= 0) continue;
                     plan[c.idx] += qty;
                     need->quota -= qty;
+                    o->budget   -= qty * c.value;
+                    o->buySpent += qty * c.value;
+                }
+            }
+
+            // ── SMITHING MATERIALS (town phase 2 R8, marth: "regardless of gambits a follower will ... buy whats needed for
+            //    town errand smithing"): each wanted form the vendor stocks, up to its qty, held to HALF of the purse that is
+            //    left (a trip never leaves him broke on ingots). Before the gear pass so the gear reserve sees what is left. ──
+            for (const auto& m : b.smithMats) {
+                int need = m.qty;
+                for (auto& c : cands) {
+                    if (need <= 0) break;
+                    if (c.kind != NeedCat::kSmithMaterial || c.f->GetFormID() != m.form) continue;
+                    int qty = std::min(need, c.avail - plan[c.idx]);
+                    qty = std::min<int>(qty, (o->budget / 2) / c.value);
+                    if (qty <= 0) continue;
+                    plan[c.idx] += qty;
+                    need        -= qty;
                     o->budget   -= qty * c.value;
                     o->buySpent += qty * c.value;
                 }

@@ -42,10 +42,17 @@ namespace MFO::TradeBridge {
             kPotHealth = 0, kPotStamina, kPotMagicka, kArrows, kBolts,
             kWeaponMelee, kWeaponRanged, kArmor, kMageApparel, kSpellTome,
             kWeaponSilver,  // APPENDED (86e3p2gp9): the silver slot's restock, single best pick
-            kAmmoSilver     // APPENDED (86e3p2gp9, marth 2026-10-12): a ranged follower's silver ammo restock
+            kAmmoSilver,    // APPENDED (86e3p2gp9, marth 2026-10-12): a ranged follower's silver ammo restock
+            kSmithMaterial  // APPENDED (town phase 2 R8): a smithing/tempering material on BuyThresholds::smithMats (NOT a quota kind)
         };
         std::int32_t kind  = 0;
         std::int32_t quota = 0;
+    };
+
+    // One smithing material to acquire (town phase 2 R8): the base form and how many MORE he needs.
+    struct SmithMat {
+        RE::FormID    form = 0;
+        std::int32_t  qty  = 0;
     };
 
     // GEAR + TOME buy thresholds -- all computed on the WORKER (Logistics reuses
@@ -147,6 +154,12 @@ namespace MFO::TradeBridge {
         // (Logistics::IsSilverAmmo), up to Logistics::kSilverAmmoStock rounds.
         bool          wantSilverAmmo = false;
         bool          silverAmmoBolt = false;
+        // -- APPENDED 2026-10-19 (TOWN PHASE 2 R8, smithing errands; append-only) --
+        // The materials his planned tempers still need, by base form (the engine's own improve recipe components minus what he
+        // carries; logistics/ErrandSmith.cpp FillMaterials). PlanBuy buys each form it finds in the vendor's stock up to its
+        // qty, REGARDLESS of any gambit (marth: "regardless of gambits a follower will loot or buy whats needed for town errand
+        // smithing"), bounded by the purse (half of what is left, so he never goes broke on ingots). Empty = no smithing wish.
+        std::vector<SmithMat> smithMats;
     };
 
     // THE rated-armor score, shared with Logistics::ArmorScore (loot / keep /
