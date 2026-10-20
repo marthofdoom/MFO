@@ -240,7 +240,7 @@ namespace MFO::Config {
     // entry), same as bApmfCast. No save state. See apmf/APMFBridge.h's block doc.
     inline std::atomic<bool>  g_apmfSpellAllowList{ true };
 
-    // LEGACY CAST HYBRID (MCM bLegacyCastHybrid). The owned cast model (above) is the
+    // LEGACY CAST HYBRID (bLegacyCastHybrid, INI-only: read from SKSE/Plugins/MFO.ini ONLY, no MCM control). The owned cast model (above) is the
     // DEFAULT. Turn this ON to force MFO's ORIGINAL AI-first-wait + force-on-miss
     // package hybrid instead (the pre-APMF behaviour, unanimated force via the cast
     // package). FROZEN KEY (INVARIANTS #37): its semantics never change -- a new

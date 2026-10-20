@@ -79,6 +79,15 @@ namespace MFO::Config {
             float f = 0.0f;
             int   i = 0;
 
+            // INI-ONLY legacy-cast keys (marth 2026-10-20): they have no MCM control, so a stale value
+            // left in MCM Helper's store (Data/MCM/Settings/MFO.ini) must never apply. Only the seed
+            // SKSE/Plugins/MFO.ini (read first in Read()) may set them.
+            if ((a_key == "bLegacyCastHybrid" || a_key == "bForceCastOnMiss") &&
+                std::string_view(a_src) != kSeedPath) {
+                spdlog::debug("[config] {}: ignoring {} (INI-only key, read from {} only)", a_src, a_key, kSeedPath);
+                return;
+            }
+
             auto setF = [&](std::atomic<float>& dst, float lo, float hi) {
                 if (!ParseFloat(a_val, f)) {
                     spdlog::warn("[config] {}: unparseable value for {} ('{}') -- keeping default",
