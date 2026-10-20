@@ -117,6 +117,9 @@ namespace MFO::Logistics::Errand::Smith {
             std::vector<char>        st;            // per line: 0 not issued, 1 issued, 2 took, 3 failed
             bool                     animated = false, entered = false, entryLogged = false, applyPosted = false;
             RE::FormID               station = 0;
+            bool                     searchPosted = false, searchDone = false;   // the station search runs on the MAIN thread (see StationSearchOnMain)
+            double                   searchClk = 0.0;
+            std::vector<RE::FormID>  wheelIds, tableIds;
             std::vector<RE::FormID>  stationIds;   // the matching stations near him, nearest first: an occupied / refused one is followed by the next
             std::size_t              stationIdx = 0;
             int                      took = 0, failed = 0;
@@ -515,6 +518,25 @@ namespace MFO::Logistics::Errand::Smith {
             return out;
         }
 
+        // The station search, on the MAIN thread: TES::ForEachReferenceInRange reads the worldspace, the grid cells and the sky cell while cells
+        // stream in, which on a job worker is the crash4 pattern (LootScan.cpp). The result (FormIDs, nearest first) is filed under g_mx for the
+        // next Step.
+        void StationSearchOnMain(RE::ActorHandle a_h, RE::FormID a_fid, bool a_wheel, bool a_table) {
+            auto fp = a_h.get();
+            auto* f = fp.get();
+            std::vector<RE::FormID> wheels, tables;
+            if (f && f->GetFormID() == a_fid && f->Is3DLoaded()) {
+                if (a_wheel) wheels = FindStations(f, kKwSharpeningWheel);
+                if (a_table) tables = FindStations(f, kKwArmorTable);
+            }
+            std::scoped_lock lk(g_mx);
+            if (const auto it = g_work.find(a_fid); it != g_work.end()) {
+                it->second.wheelIds = std::move(wheels);
+                it->second.tableIds = std::move(tables);
+                it->second.searchDone = true;
+            }
+        }
+
         // ── the temper APPLY / LEDGER (MAIN thread) ────────────────────────────────────────────────────────────────
         bool SameLine(const Line& a, const Line& b) { return a.item == b.item && a.weapon == b.weapon && a.hand == b.hand && a.slot == b.slot; }
 
@@ -779,8 +801,23 @@ namespace MFO::Logistics::Errand::Smith {
             }
             bool needWheel = false, needTable = false;
             for (const auto i : pay) (want.lines[i].weapon ? needWheel : needTable) = true;
-            const auto wheels = needWheel ? FindStations(a_follower, kKwSharpeningWheel) : std::vector<RE::FormID>{};
-            const auto tables = needTable ? FindStations(a_follower, kKwArmorTable) : std::vector<RE::FormID>{};
+            if (!wk.searchPosted) {   // MAIN-thread search (crash4 class on a worker); Step waits for its answer
+                wk.searchPosted = true;
+                wk.searchClk = now;
+                store();
+                MainThread::Post([h = a_follower->GetHandle(), fid, needWheel, needTable] { StationSearchOnMain(h, fid, needWheel, needTable); });
+                return out;
+            }
+            if (!wk.searchDone) {
+                if (now - wk.searchClk > kBuildWaitSec) {
+                    out.res = Result::Failed;
+                    out.why = "the station search never answered (main thread)";
+                    spdlog::warn("[smith] {:08X} '{}': {}", fid, wk.who, out.why);
+                }
+                return out;
+            }
+            const std::vector<RE::FormID>& wheels = wk.wheelIds;
+            const std::vector<RE::FormID>& tables = wk.tableIds;
             for (const auto i : pay) {
                 const Line& l = want.lines[i];
                 if (l.weapon ? wheels.empty() : tables.empty()) {

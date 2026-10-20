@@ -2018,3 +2018,12 @@ Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "An ARMO with s
 
 ### MFO-B381 (SEV-5, CLOSED in the R8 fix round, logistics/ErrandSmith.cpp) -- town R8: hand-off comment wrong (raised against 06699bd8)
 Opus review of `feat/mfo-town-p2-r8-smith` @ 06699bd8. Verbatim: "The hand-off comment 'SMITH_SIM finishes it' is wrong, because Begin already erased g_plan." Fixed: comment rewritten. MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B382 (SEV-4, OPEN, logistics/ErrandSmith.cpp) -- town R8: a refused later removal leaves a part-paid line (raised against 623ed40c)
+Opus re-check of `feat/mfo-town-p2-r8-smith` @ 623ed40c. Verbatim: "If a later removal is refused at dispatch after an earlier one was accepted, he pays part of the cost and gets no temper (logged)." MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B383 (SEV-4, OPEN, logistics/ErrandSmith.cpp) -- town R8: the VM can quietly remove or buy fewer than asked (raised against 623ed40c)
+Opus re-check of `feat/mfo-town-p2-r8-smith` @ 623ed40c. Verbatim: "The VM can quietly remove fewer items than asked; the same on the buy side: MFO_Trade.psc adds qty to boughtCount without checking the actual move." MAP.md: "R8 — smithing / tempering errands".
+
+### MFO-B384 (SEV-4, OPEN, logistics/ErrandSmith.cpp) -- town R8: the ledger is cleared on load (raised against 623ed40c)
+Opus re-check of `feat/mfo-town-p2-r8-smith` @ 623ed40c. Verbatim: "The ledger is cleared on load, so a temper dispatched but not yet read back before a save becomes free after reloading." Also noted: "the whole-plan credit is strict in the safe direction (an unbought gear line skips the materials credit)." MAP.md: "R8 — smithing / tempering errands".
