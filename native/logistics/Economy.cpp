@@ -419,6 +419,7 @@ namespace MFO::Logistics {
                 buy.armorHeavyBias = armorPref.heavyBias;
                 buy.armorLightBias = armorPref.lightBias;
                 buy.buyMageApparel = useMageApparel && !dolls;
+                buy.noHelmets      = !WearsHelmets(&a_state);   // 86e3phy41: no head piece is bought (errands too)
                 // Ranking (marth 2026-10-01): value-driven by default, with or without
                 // MEO (most expensive piece per slot). Only the strict toggle ranks
                 // school-enchant first.
@@ -723,6 +724,10 @@ namespace MFO::Logistics {
                             redundantInferior = true;
                     }
                 }
+                // 86e3phy41 "Wear helmets" OFF: a helmet he carries stays in the bag (the keep set holds every
+                // one), so a WORN helmet is not a redundant inferior either -- it is withheld from the
+                // declaration, not sold. Blacklisted apparel still force-sells below.
+                if (redundantInferior && IsHelmetPiece(armo) && !WearsHelmets(&a_state)) redundantInferior = false;
                 // THE WEAR JUDGE HAS THE LAST WORD ON A WORN PIECE (Cicero's helmet loop):
                 // bestBySlot is the KEEP set's ranking, a different judge from the armor
                 // choice's slate (per-biped-bit ArmorIsBetter + worn incumbency, or the mage
@@ -1265,6 +1270,19 @@ namespace MFO::Logistics {
         if (has(Slot::kFeet))   return 3;
         if (has(Slot::kShield)) return 4;
         return -1;
+    }
+
+    bool IsHelmetPiece(RE::TESObjectARMO* a_armo) {
+        // marth 2026-10-20: the vanilla type keywords, by editor ID (the HasKeywordString idiom MEOBridge
+        // uses on ARMO), so a mod's helmet that carries them counts and a circlet / wig / hair accessory
+        // (none of them carries either) does not.
+        return a_armo && (a_armo->HasKeywordString("ArmorHelmet") || a_armo->HasKeywordString("ClothingHead"));
+    }
+
+    bool WearsHelmets(const FollowerState* a_state) {
+        if (a_state && a_state->helmetOverride == 1) return true;
+        if (a_state && a_state->helmetOverride == 2) return false;
+        return Config::g_wearHelmets.load();
     }
 
     bool MageApparelBuyKey(RE::TESObjectARMO* a_armo, std::uint8_t a_top2Mask,

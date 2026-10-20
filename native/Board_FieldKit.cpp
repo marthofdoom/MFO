@@ -53,6 +53,15 @@ namespace MFO::Board {
     inline constexpr Str::K kClassKeys[4] = { Str::K::Gb_ClassAuto, Str::K::Gb_ClassMelee,
                                               Str::K::Gb_ClassRanged, Str::K::Gb_ClassMage };
     inline const char* ClassName(int i) { return Str::Get(kClassKeys[std::clamp(i, 0, 3)]); }
+    // 86e3phy41: FollowerState::helmetOverride (0 Default / 1 Wear / 2 Never). Default names what
+    // the MCM bWearHelmets currently says, so the button shows the effective choice.
+    inline const char* HelmName(int i) {
+        switch (std::clamp(i, 0, 2)) {
+        case 1:  return Str::Get(Str::K::Gb_HelmWear);
+        case 2:  return Str::Get(Str::K::Gb_HelmNever);
+        default: return Str::Get(Config::g_wearHelmets.load() ? Str::K::Gb_HelmDefaultOn : Str::K::Gb_HelmDefaultOff);
+        }
+    }
 
     // "50%" / "3" / "500u" -- a rule's value as the player reads it. Display text.
     inline std::string ValueText(ParamKind pk, float param) {
@@ -700,6 +709,14 @@ namespace MFO::Board {
                             if (Click::SmallButton(cl.c_str())) ImGui::OpenPopup("##class");
                         }
                         ImGui::SameLine();
+                        // 86e3phy41: the per-follower "Wear helmets" override trigger, the class
+                        // button's twin (a SmallButton that opens a listPopup: d-pad / [A] / [B]
+                        // navigate it exactly like the class picker). Popup drawn below.
+                        {
+                            std::string hl = Str::Fmt(Str::K::Gb_HelmBtn, { HelmName(who->helmetOverride) }) + "###helmbtn";
+                            if (Click::SmallButton(hl.c_str())) ImGui::OpenPopup("##helm");
+                        }
+                        ImGui::SameLine();
                         ImGui::BeginDisabled(party.size() < 2);
                         if (Click::SmallButton(">##nextf")) switchFollower(+1);
                         ImGui::EndDisabled();
@@ -784,6 +801,17 @@ namespace MFO::Board {
                                 [&](int k) { return ClassName(k); }, curClass,
                                 [&](int k) {
                                     QueueEdit({ EditKind::SetClassOverride, sel, selTable,
+                                                0u, (float)k });
+                                });
+                        }
+                        // 86e3phy41: the "Wear helmets" override popup (Default / Wear / Never),
+                        // per-FOLLOWER like the class popup above (keyed on `sel`).
+                        {
+                            const int curHelm = std::clamp<int>(who->helmetOverride, 0, 2);
+                            listPopup("##helm", Str::Get(Str::K::Gb_TitleHelm), 3,
+                                [&](int k) { return HelmName(k); }, curHelm,
+                                [&](int k) {
+                                    QueueEdit({ EditKind::SetHelmetOverride, sel, selTable,
                                                 0u, (float)k });
                                 });
                         }

@@ -424,7 +424,12 @@ namespace MFO {
             // right after combatClassOverride. Written unconditionally at the
             // current schema (v5); the READ is version-gated so pre-v5 saves
             // (which never wrote it) never try to consume the byte.
-            a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.mfoEnabled ? 1 : 0));
+            // (still v5, VALUE-SPACE only, ClickUp 86e3phy41): bits 1-2 carry the per-follower
+            // helmet override (0 Default / 1 Wear / 2 Never), ONLY while mfoEnabled is true. An
+            // older DLL reads `byte != 0`, so the enabled state it sees is unchanged; a disabled
+            // follower still writes 0 and his override is not kept (Serialization.h, FLWR notes).
+            const std::uint8_t helm = st.helmetOverride <= 2 ? st.helmetOverride : 0;
+            a_intfc->WriteRecordData(static_cast<std::uint8_t>(st.mfoEnabled ? (1u | (helm << 1)) : 0u));
 
             // Two tables, written in Table enum order (DESIGN.md 4.8).
             // The table COUNT is written explicitly so a future third table
@@ -710,7 +715,13 @@ namespace MFO {
                 if (version >= 5) {
                     std::uint8_t mfoEnabledByte = 1;
                     if (!a_intfc->ReadRecordData(mfoEnabledByte)) return;
+                    // Bit 0 = enabled; bits 1-2 = the helmet override (86e3phy41, value-space only).
+                    // Every record written before it holds 0 or 1 here and reads unchanged. A
+                    // stray value (bits 1-2 == 3, or bits 1-2 set without bit 0) is clamped to
+                    // Default (#11), and enabled stays `byte != 0`, exactly what an older DLL reads.
                     st.mfoEnabled = (mfoEnabledByte != 0);
+                    const std::uint8_t helm = static_cast<std::uint8_t>((mfoEnabledByte >> 1) & 3u);
+                    st.helmetOverride = ((mfoEnabledByte & 1u) != 0 && helm <= 2) ? helm : 0;
                 }
 
                 std::uint8_t tableCount = 0;

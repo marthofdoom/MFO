@@ -38,11 +38,12 @@ namespace MFO::Board {
                                          SetClassOverride,   // #65
                                          SetMfoEnabled,      // T#78 per-follower MFO switch
                                          RemoveFromRoster,   // 86e3eewaf: delete his MFO data (not following)
-                                         AddonAction };   // v1.1 Phase 6c: ONE generic
+                                         AddonAction,     // v1.1 Phase 6c: ONE generic
                                                             // add-on-verb carrier. The specific
                                                             // verb rides EditCmd::verbId (an
                                                             // add-on-agnostic int) — EditKind no
                                                             // longer enumerates progression verbs.
+                                         SetHelmetOverride };   // 86e3phy41: per-follower "Wear helmets" (0 Default / 1 Wear / 2 Never)
     // v1.1 Phase 6c: the verbs an EditKind::AddonAction can carry. The CARRIER
     // (EditKind/EditCmd) is add-on-agnostic; these ids + the dispatch in
     // ApplyEdits stay progression-shaped until Phase 7/9 routes verbs through

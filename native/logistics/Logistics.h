@@ -119,6 +119,17 @@ namespace MFO::Logistics {
     // buy a helmet/boots for bare slots even with a good chestpiece.
     int ArmorBuySlot(RE::TESObjectARMO* a_armo);
 
+    // "WEAR HELMETS" (ClickUp 86e3phy41, marth 2026-10-12). A HELMET is an ARMO carrying the keyword
+    // ArmorHelmet (rated helmets) or ClothingHead (hats, hoods) -- marth 2026-10-20. Circlets, wigs,
+    // hair-slot accessories and anything without those keywords are NOT helmets, whatever their slots.
+    bool IsHelmetPiece(RE::TESObjectARMO* a_armo);
+    // Does this follower wear head pieces? His board override (FollowerState::helmetOverride: 1 Wear,
+    // 2 Never) wins; 0 (Default) or no record = the MCM bWearHelmets. OFF gates loot, buy (town errands
+    // included), MFO's wear choice, and the ch.17 declaration (a helmet is never declared; MFO does not
+    // unequip one). Carried helmets stay in the bag (keep set + the sell loop's worn force-sell).
+    // Worker (reads the follower's state).
+    bool WearsHelmets(const FollowerState* a_state);
+
     // Rank a candidate vendor ARMO as mage apparel/jewelry. Returns false unless it
     // is buyable (rating-0 clothing/jewelry, not villain-coded unless a_allowVillain,
     // i.e. a necromancer follower). On true, fills a comparable (out_tier, out_metric)

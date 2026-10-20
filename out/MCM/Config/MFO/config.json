@@ -389,6 +389,16 @@
           }
         },
         {
+          "id": "bWearHelmets:General",
+          "text": "Wear helmets",
+          "type": "toggle",
+          "help": "ON (default): followers loot, buy and wear helmets, hats and hoods. OFF: followers do not loot or buy them (town errands included) and do not put one on, and the helmets they carry stay in their bag. Circlets are not helmets. Each follower can override this on the board (Gambits tab, Helmets button).",
+          "valueOptions": {
+            "sourceType": "ModSettingBool",
+            "defaultValue": 1
+          }
+        },
+        {
           "id": "bMageWearRobes:General",
           "text": "Mages wear robes + jewelry",
           "type": "toggle",
