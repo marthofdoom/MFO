@@ -21,7 +21,6 @@
 // still exists).
 #include "PCH.h"
 #include "Errand_internal.h"
-#include "ErrandCounter.h"   // R4: the learned vendor map + the browsing hold
 #include "Runtime.h"         // IsVerified1_6_1170: the PLVD layout (faction vendorLocation) is verified on that build only
 #include "Logistics_internal.h"
 #include "Config.h"
@@ -364,7 +363,6 @@ namespace MFO::Logistics::Errand {
                     }
                 }
                 if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
-                Counter::Learn(v, fac->GetFormID(), a_now);   // R4: where this vendor actually stands (session-only map)
                 auto* chest = fac->vendorData.merchantContainer;
                 if (!chest || !chest->GetContainer()) continue;   // a malformed merchant link (see EconomyProbe)
                 // The same town as the player (a roadside vendor outside any town is not an errand destination).
@@ -718,7 +716,6 @@ namespace MFO::Logistics::Errand {
         }
         Sim::ClearTransientState();
         Rest::ClearTransientState();   // R7
-        Counter::Clear();
         ErrandShops::Clear();   // R6
         APMFBridge::ClearErrandClaims();
     }
@@ -916,7 +913,6 @@ namespace MFO::Logistics::Errand {
             r.stops[r.cur].state = StopState::Active;
             // R4: found at the counter. Only an errand that really arrived off screen (announced = the sim reached Trade) browses.
             if (vendor) {
-                Counter::NoteResume(fid, r.followerName, a_follower, vendor.get(), r.faction);
                 r.browse = a_info.announced && IdleIds().browse != 0;
             }
             {
