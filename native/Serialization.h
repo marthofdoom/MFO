@@ -185,7 +185,7 @@ namespace MFO {
     //        unresolvable faction or chest also gives the trade up (the follower is still brought back).
     //        A save without the record loads with nothing staged.
     //   v2 - (TOWN PHASE 2 R5, multi-stop trips) every v1 field, in the v1 order, describing the CURRENT stop, then APPENDED:
-    //          u8  stopCount          1..8 (#11; 0 or more = the record is aborted)
+    //          u8  stopCount          1..8 (#11; 0 or more than 8 = the record is aborted)
     //          per stop, in visit order:
     //            str kind             opcode (#10): shop   (later rounds APPEND fence | spouse | smith | temple | inn | home)
     //            u32 faction, chest, vendorActor   as in v1 (0 = none; unresolvable -> 0)

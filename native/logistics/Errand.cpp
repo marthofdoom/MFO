@@ -1040,8 +1040,13 @@ namespace MFO::Logistics::Errand {
         };
         // r.vendor == 0: still walking to the shop's PLACE (a cell / a ref); the vendor actor is found on arrival.
         RE::Actor* vendor = r.vendor ? RE::TESForm::LookupByID<RE::Actor>(r.vendor) : nullptr;
-        if (r.vendor && (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || APMFBridge::InCombat(vendor)))
+        // R5: a LATER stop's vendor may be unloaded while he walks there (he is in the previous shop's interior with the player): the
+        // ch.19 leg decides that walk (an unreachable one ends DEST-GONE / STUCK and the stop is skipped). Phase 1 / the first stop: unchanged.
+        const bool walkingToLaterStop = r.cur > 0 && r.phase == Phase::Walking && vendor && !vendor->IsDead() && !vendor->IsDisabled();
+        if (r.vendor && !(walkingToLaterStop && !vendor->Is3DLoaded()) &&
+            (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || APMFBridge::InCombat(vendor)))
             return stopOver("the vendor is gone, dead, unloaded or in combat", false, kFailCooldownSec);
+        const bool vendorLoaded = vendor && vendor->Is3DLoaded();
         const Idles& idles = IdleIds();
         if (!idles.give) { Finish(fid, "IdleGive did not resolve", 600.0f); return false; }
         const float dist = vendor ? a_follower->GetPosition().GetDistance(vendor->GetPosition()) : 0.0f;
@@ -1101,7 +1106,7 @@ namespace MFO::Logistics::Errand {
                 } else if (leg.state == APMF_API::kLeg_Blocked) {
                     // BLOCKED within talking reach (same floor) is an arrival (the museum deposit's rule); a block that
                     // stopped short FAILS loudly and PARKS that vendor for a while (a static block stays closed).
-                    if (dist <= kBlockedReach && dz <= kSameFloorDz) {
+                    if (vendorLoaded && dist <= kBlockedReach && dz <= kSameFloorDz) {
                         arrived = true;
                         spdlog::info("[errand] {:08X}: walk to '{}' ended BLOCKED at {:.0f} u -- within talking reach, "
                                      "counted as ARRIVED", fid, r.vendorName, dist);
@@ -1127,8 +1132,8 @@ namespace MFO::Logistics::Errand {
                     return stopOver(std::format("the walk ended: {} (this vendor backed off {} s)", LegName(leg.state), bo), false, kFailCooldownSec);
                 }
             }
-            // Distance backstop: a leg read that is not ours yet, or a vendor who walked up to him.
-            if (!arrived && dist <= kArriveDist && dz <= kSameFloorDz) arrived = true;
+            // Distance backstop: a leg read that is not ours yet, or a vendor who walked up to him (a loaded vendor only: R5's later stop).
+            if (!arrived && vendorLoaded && dist <= kArriveDist && dz <= kSameFloorDz) arrived = true;
             if (!arrived) { Store(fid, r); return true; }
             if (!r.announced) {   // one-shot: the Walking phase leaves here for the talk / give beat (a resume that was announced skips it)
                 r.announced = true;

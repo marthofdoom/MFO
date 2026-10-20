@@ -4,7 +4,8 @@
 //   1. SELL PARTITION. Every sell object goes to the candidate that pays the most for it (unit price x count over the rows that
 //      vendor's VEND filter accepts, already priced by EconomyErrandPlan), capped by that chest's last-seen barter gold, minus
 //      the B300 convergence penalty (kCrowdPenalty per OTHER follower whose trip is heading to that chest). A candidate whose
-//      share does not clear the phase-1 sell reason (>= iErrandMinSellGold, or carry > 80 %) hands its rows to a stop that does.
+//      share does not clear the phase-1 sell reason (>= iErrandMinSellGold, or carry > 80 %) hands its rows to a stop that does;
+//      once every stop is chosen, a row no visited stop owns goes to the visited stop that pays the most for it.
 //   2. NEEDS (supply gambits) go to the FIRST stop in visit order whose VEND carries the category; a need no chosen stop
 //      carries adds the nearest (least crowded) candidate that does.
 //   3. WISHES (gear / apparel = BuyThresholds::buyGear, tomes = buyTomes) go to ONE stop each; an extra stop is added for a
@@ -277,6 +278,11 @@ namespace MFO::Logistics::Errand::Trip {
         };
         const int gearAt = placeWish(wishGear, &Cand::carriesGear, &Use::gear, -1);
         placeWish(wishTome, &Cand::carriesTome, &Use::tome, gearAt);
+
+        // Rows no chosen stop owns yet (their best payer is not visited, or alone it missed the sell reason): sold at the visited stop
+        // that pays the most for them, if any accepts them -- he is there anyway (phase 1 sold every row the visited vendor accepts).
+        for (auto& [o, w] : owner)
+            if (w < 0 || !use[w].chosen) w = pickFor(o, [&](int j) { return use[j].chosen; });
 
         // ── 4. ORDER: nearest-neighbour, the stops with no wish first ──
         std::vector<int> order;

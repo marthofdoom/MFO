@@ -55,7 +55,7 @@ real rules — see `Docs/INVARIANTS.md` "CITATION NAMESPACE".
 
 | Zone | Where | Why it ripples / what breaks |
 |---|---|---|
-| **Co-save (6 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v1` (`Serialization.h`). ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
+| **Co-save (6 records)** | `Serialization.cpp`, `Serialization.h`, `State.h`, `logistics/PlayerGiven.cpp`, `logistics/Errand.h` | FLWR `v5`, MSTK `v1`, PRGN `v8`, FWPN `v1`, PGIV `v1`, ERND `v2` (`Serialization.h`). ERND v1 (86e3t1mx7 town R2, 2026-10-19) is a NEW record (no existing layout touched): the town errands in progress, written only when one exists; layout and load rules in the co-save section below. **ERND v2 (town phase 2 R5, 2026-10-19) APPENDS the multi-stop itinerary to each v1 entry; the v1 reader is kept (a v1 entry loads as a one-stop trip); the writer writes v2 only.** PGIV v1 (86e3faccn, 2026-09-27) is a NEW record (no existing layout touched): the museum relics the player gave / put on a follower, `u32 followerCount; {u32 follower, u32 n, {u32 base, u8 bits}}` (bits 0x1 GIVEN, 0x2 EQUIPPED), a save without it loads empty. FLWR v5 (T#78) APPENDED `mfoEnabled` u8 after `combatClassOverride` (`if(version>=5)`); v1–v4 byte-identical, pre-v5 defaults `true`. Changing a field order/type/count, or bumping a version without a matching gated reader, **desyncs the byte stream and corrupts live saves**. A downgraded DLL destroys newer records (#12) — warned on-screen. PRGN v5 APPENDED the §HMS block (`if(a_version>=5)`); **v6 (§HMS Phase 3) DROPS `hmsTarget` (recomputed on load), ADDS a global `g_playerHmsTotalLast` f32 in the header + per-follower `hmsZeroAwardStreak` u8 + `hmsGrantRemainder` f32×3 + `hmsAwardAccum` f32 + flags bit 0x20 `fixedStat`.** v5 reader KEPT (reads+discards the old target, defaults the new fields); v1–v4 byte-identical. **v7 (2026-09-13, A′/B′) APPENDS per skill `autoPoints` f32 (after `manualPoints`) and per follower, after the HMS block, `autoLevelsGranted` u16 + `freeRespec` u8 + `strippedCount` u16 + stripped perk FormIDs u32×N (ResolveFormID'd) — NO per-session flag (`nativeHeld` is runtime-only, Fable F1).** v6 reader KEPT: `autoPoints` migrates as `max(0, points − manualPoints)` (today's APPLIED value, frozen — under-records cap-wasted auto points, REVIEW-BACKLOG MFO-B11; then rounded UP to a whole point, `ceil(x − 1e-3)` (`progression/Allocator.cpp:653`, MFO-B13 DRAINED 2026-10-01): v6 shares and manual points are whole, so only a cap-clamped skill with a FRACTIONAL natural carries a fraction, which the v7 hold-time floor would otherwise show one integer lower; read bytes unchanged), `autoLevelsGranted` = the loaded partition's auto levels (nothing pending, nothing re-split). **v8 (2026-09-23, §HMS player-rate parity) APPENDS per follower, after the v7 block, `hmsWithheld` f32 + `hmsParityCredit` f32.** v7 reader KEPT: both default 0, then the ONE-TIME retro `HmsRetroParity` (`progression/Hms.cpp:494`) scales each positive `hmsCumulative` pool by `iAVDhmsLevelUp/(iAVDhmsLevelUp+fNPCHealthLevelBonus)` and moves the excess into `hmsWithheld` (fixed-stat and grant-remainder records skipped); the next save is v8 so it never re-runs. **HMS-only records (2026-10-01, HMS is core, NO layout change, still v8):** `CoSaveSave` (`progression/Allocator.cpp:270`) now writes EVERY persistable `g_prog` record, including the HMS-only ones (`enrolled == false`, flags bit0 = 0) that core HMS keeps for every managed follower; same per-record byte layout, count includes them. Shipped v8 readers consume them byte-identically; an older DLL's poll and save skip a non-enrolled record, so a downgrade drops them on its next save (the follower re-ADOPTs after re-upgrading). |
 | **Serialized string/ordinal contracts** | `Vocabulary.h`, `State.h` | Gambit opcode **strings** are persisted verbatim (#10); `Subject` enum and `CombatStyle::Stance`/`combatClassOverride` ordinals are persisted as raw bytes. Renaming an opcode or renumbering an enum is a **schema migration, not an edit** — old saves silently misread. |
 | **`ResetAllState` teardown order** | `Serialization.cpp:711-784` | `StopPump()` MUST run first (`:717`) to drain the worker before any `clear()`; concurrent map insert+clear is UB. Every subsystem's `ClearTransientState`/`ClearAll`/`ReleaseAll` is ordered here. Reordering re-opens the load-screen-crash race. |
 | **Alias fills / evict marker** | `Packages.cpp` | Alias fills at static priority 60 are **serialized into the `.ess`** (`plugin.cpp:313-337`). Missing/reordered `ReleaseAll` on kPreLoadGame / post-load / revert latches actors permanently across all descendant saves. The evict marker must stay a non-actor XMarker (base `0x3B`) or the **furniture-ejection bug** re-breaks (player forced into a package alias). |
@@ -191,7 +191,7 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   empty. Cleared by `PlayerGiven::ClearRecord` in `ResetAllState` (`Serialization.cpp:735`, after
   `ProgAllocator::ClearAll`, well after `StopPump` `:706` and `MainThread::Clear`) and, belt and
   braces, at the top of `LoadCallback` (`:579`). Fifth independent record.
-- **`'ERND'` / `kErrandVersion=1`** (`Serialization.h:187-188`, ClickUp 86e3t1mx7 town R2, 2026-10-19) -- the town
+- **`'ERND'` / `kErrandVersion=2`** (`Serialization.h:187-203`, ClickUp 86e3t1mx7 town R2, 2026-10-19; v2 = town phase 2 R5) -- the town
   errands in progress (physical AND simulated), so a save mid-errand (the autosave on every load door) never strands a
   follower in a shop. Sixth independent record. Bytes owned by `Serialization.cpp` (`WriteErrandRecord:117` from
   `Logistics::Errand::SnapshotForSave` (`logistics/Errand.cpp:526`, + `Sim::SnapshotInto` `ErrandSim.cpp:352`), called last
@@ -208,6 +208,15 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   `Sim::StagePending`), never acted on in the callback; cleared by `Errand::ClearRestorePending` at the top of
   `LoadCallback` (`:768`) and in `ResetAllState` (`:942`, beside PGIV; `Logistics::ClearTransientState` -> `Errand::
   ClearTransientState` already dropped them). Load / resume rules: logistics/Errand.cpp "R2" below.
+  **v2 (R5, multi-stop trips)**: every v1 field in the v1 order (describing the CURRENT stop), then APPENDED `u8 stopCount (1..8);
+  per stop {str kind (shop), u32 faction, u32 chest, u32 vendorActor, str destKind, u32 destForm, f32 destRad, str state
+  (pending|active|done|skipped), f64 tArrive, f64 tWorkEnd}; u8 cur`. Writer `WriteErrandRecord` (`Serialization.cpp:126`) writes
+  v2 only; reader `ReadErrandRecord(a_version)` (`:195`) reads the v2 tail IN FULL right after the v1 fields (`:247`, before any
+  per-entry drop, so the stream stays aligned) and builds ONE stop from the head for a v1 entry (`:315`). A later stop with an
+  unknown opcode, or a pending one whose shop does not resolve, loads `skipped`; a bad current stop (opcode / `cur >= count`)
+  drops the entry. Version 0 is skipped (MFO-B309, `:961`); `ReadString` now rejects a partial length read (MFO-B309 F6).
+  `Errand.h` `SavedStop` / `Saved::stops/cur`; `kMaxTripStopsOnWire` = 8. An older (v1) DLL skips a v2 record whole (newer-than
+  guard) and destroys it on its next save (#12, warned).
 
 **ROSTER REMOVAL erases entries, never layout (ClickUp 86e3eewaf, 2026-10-12).** The Follower-tab
 "remove" deletes one follower's FLWR record (`g_followers`, worker), PRGN record (`g_prog`, main,
@@ -4626,7 +4635,7 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
 - **WHAT BREAKS if you change this:** `EconomyProbe`'s parameter list (Service.cpp, Errand.cpp); `ErrandProbe::Verdict` fields (the
   ranker); `TradeBridge::ReportTrade` (the outcome the Trading phase waits on); `kLeg_*` handling (a new end state = a new case in
   the Walking phase); the idle FormIDs (`Errand.cpp` constants, all verified in Skyrim.esm). **Not done on purpose (later):**
-  the H1(a) hold package, multi-stop itineraries. (The `ERND` co-save is R2, below.)
+  the H1(a) hold package. (The `ERND` co-save is R2, below; multi-stop itineraries are phase 2 R5, below.)
 
 #### R1b — the OFF-SCREEN half: `logistics/ErrandSim.cpp` + `Errand_internal.h` (ClickUp 86e3t1mx7; SAVED since R2)
 marth's rulings 2026-10-19: an unloaded errand is SIMULATED against the REAL merchant chest and gold (no movement, no animation outside the
@@ -4697,7 +4706,47 @@ a save made before the off-screen trade ran DROPS that trade (nothing moves unti
   an opcode (the writer would emit "", the reader drops the entry); acting on staged entries inside `LoadCallback` (the world, `Calendar` and the follower's
   3D are not there yet); replaying a dispatched-at-save trade (it can double-sell beside the resumed Papyrus stack); setting `dispatched` on a restored
   record (the resume would wait 45 s for a report that never comes). A NEW field = `kErrandVersion` 2 APPENDED at the end of each entry with an
-  `if (version >= 2)` read; keep the v1 reader forever (#12).
+  `if (version >= 2)` read; keep the v1 reader forever (#12). (R5 did exactly that: `kErrandVersion` 2, below.)
+
+#### Town phase 2 R5 — MULTI-STOP TRIPS: `logistics/ErrandTrip.cpp` (NEW) + the itinerary in `Errand.cpp` / `ErrandSim.cpp` (ERND v2, 2026-10-19)
+Design: `_evidence/2026-10-18-designs/TOWN-PHASE2-DESIGN.md` 1.b. A trip is an ordered list of `Stop`s (`Errand_internal.h:70`, kind `Shop`;
+later rounds APPEND kinds; R7 appends the Inn as the LAST stop) with ONE purse. Phase-1 errands are one-stop trips.
+- **Records**: `Rec` (`Errand.cpp`) and `SimRec` (`ErrandSim.cpp`), plus `SimStart` / `ResumeInfo`, carry `stops`, `cur`, `tripPurse` (gold at the plan,
+  -1 = none) and `tripSpent`. The phase-1 single-shop fields (faction, chest, vendor, vendorName, dest*, order; the sim's tArrive / tTradeEnd) are the
+  CURRENT stop's working copy: `SyncCur` writes them back into `stops[cur]` (both files) before every snapshot / hand-off / resume, `LoadStop`
+  (`Errand.cpp:585`) / `AdvanceStop` (`ErrandSim.cpp:156`) load the next stop into them.
+- **Planner** `Trip::Plan` (`ErrandTrip.cpp:144`) <- `TryStart` (`Errand.cpp:828`), worker, the follower loaded, after `EconomyErrandPlan`:
+  (1) each sell OBJECT goes to the usable candidate paying the most for it (rows x unit price, capped by that chest's last-seen gold, greedy),
+  minus the **MFO-B300 crowd penalty** (`kCrowdPenalty` 150 per OTHER follower whose trip is heading to that chest, `Trip::ChestCrowd`: Errand g_mx then
+  Sim g_mx, never nested); a candidate whose share misses the phase-1 sell reason hands its rows to one that clears it; at most `kMaxShopStops` (4)
+  sell stops; (2) each NEED kind goes to the first stop in visit order whose VEND carries it (a need no chosen stop carries adds the nearest, least
+  crowded carrier); (3) the gear / apparel wish (`buyGear`) and the tome wish (`buyTomes`) go to ONE stop each (a new stop only when the purse clears
+  `iErrandMinPurse`); the ammo swap-up rides the first stop that sells ammo; (4) order = nearest-neighbour from him, stops WITHOUT a wish first;
+  stops with no work dropped. Each stop gets its own `ErrandPlanned` share (sell rows, needs, buy flags, a fresh signature). ONE line:
+  `[errand] ... TRIP PLAN in '<town>': N stop(s): 1 '<shop>' (...) -> 2 ...` (crowd shown per stop).
+- **Purse**: every stop's trade is capped at `tripPurse - tripSpent` (physical: `EconomyErrandExecute`'s `a_purseCap`; off screen: `DispatchTrade`), so
+  PlanBuy's 50 % reserve applies to the TRIP purse. `tripSpent += outcome.spent` at each report.
+- **Physical stop**: the give beat runs `EconomyErrandExecute` (`Economy.cpp:1136`; `EconomyProbeImpl`'s new `a_share` / `a_purseCap`, filter at `:947` and
+  `:1041`): live counts and prices, but only this stop's objects / need kinds / wishes. A restored stop (no order) re-plans in full on live gold.
+- **Between stops (physical)** `NextStopOrFinish` (`Errand.cpp:603`, via Tick's `stopOver` lambda): the stop is `done` (trade done / nothing left) or
+  `skipped` (walk failed -> `NoteWalkFailed` first, BLOCKED, unattended, vendor gone, chest busy past patience, aborted, never reported). Next pending
+  stop: `ReleaseErrandIdle` (ch.12 + ch.1), `LoadStop`, then **ch.19 `RepointErrandTravel`** of the trip's own claim (a fresh `ClaimErrandTravel` only if
+  the Repoint has no claim to move); neither -> that stop is skipped too. MFO declares; Harbinger walks. The 240 s real-time cap is PER STOP
+  (`startClk` reset); `fErrandMaxGameMin` covers the trip. A failure while a trade is IN FLIGHT ends the whole trip. Last stop: `Finish` with the
+  phase-1 cooldown / complete flag (one-stop trips end exactly as before; a multi-stop trip that traded gets the errand cooldown).
+- **Between stops (off screen)** `AdvanceStop` (`ErrandSim.cpp:156`, from the TRADE_SIM settle at `:748`): OUT_SIM again with `tArrive = now +
+  walk(prev place, next place)` (`Trip::LegUnits`, a place with no position = 2000 u), `tReturn = tTradeEnd + walk(next place, his last loaded
+  position)`; `entryDoor` cleared (the return then recalls him behind the player). A stop with no order (restored) is skipped. A trade-done stop
+  (handed off at TAKING) never re-trades (`!r.reported` guard). Loaded again BETWEEN stops in the town (`betweenStops` `:419`) -> `ResumePhysical`
+  walks him on to the current stop.
+- **Toasts**: the existing `ToastTrading` sites fire per stop at that stop's start (`LoadStop` resets `announced`; TRADE_SIM entry per stop).
+  Informational only.
+- **Load**: a restored trip has no orders: unloaded past `kRestoreSettle` -> the current trade and EVERY later stop are dropped (`SkipRemaining`
+  `:194`), he walks back; loaded at the shop / in town -> the physical resume re-plans each remaining stop on screen.
+- **WHAT BREAKS if you change this:** the ERND v2 tail order or its opcodes (`shop`, the state strings); the head-is-`stops[cur]` rule (`SyncCur`
+  before every snapshot / hand-off); calling `NextStopOrFinish` without storing `r` after a TRUE return; a new walk-ending path that does not go
+  through `stopOver` (it would end the whole trip) or does not call `NoteWalkFailed`; holding Errand g_mx while calling `Sim::CrowdInto` (lock order).
+  Open findings: REVIEW-BACKLOG MFO-B300 (the convergence part is addressed here; the rest of B300 stays open).
 
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives
