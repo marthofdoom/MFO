@@ -4693,6 +4693,11 @@ an unloaded follower's inventory, so the order is built at PLAN time and replaye
   `ERND` record serialises these); `TradeBridge::TakeOutcome` (both the physical and the simulated trade wait on it); the lock order (Errand `g_mx` ->
   Sim `g_mx`, never the reverse; neither is held across a Papyrus / TradeBridge / Harbinger call).
 
+#### R4 — "found at the counter": `logistics/ErrandCounter.cpp/.h` (TOWN PHASE 2, ClickUp 86e3t1mx7; session-only, NO co-save change)
+- **Learned vendor map** `Counter::Learn` (called from `BuildCatalog` for every loaded, awake, open vendor, AddTask worker) -> `g_map` faction -> {vendor, cell, pos, yaw}; CONFIRMED only when two samples >= 2 s apart agree within 32 u (a walking vendor is not at his counter); a later disagreement restarts it (log "MOVED"). `Counter::Lookup`. Cleared by `Errand::ClearTransientState`; never saved.
+- **Browsing hold**: `detail::ResumePhysical` (a follower loaded again at a loaded vendor) calls `Counter::NoteResume` (log: counter known/unknown + distance) and `Counter::MarkBrowse`; on arrival `Errand::Tick` Walking plays `IdleExamine` (0x00075C3D) as a Talking-phase beat (`Idles::browse`, first beat = ch.1 hold + ch.12 claim through `ErrandClaims`), holds `kBrowseHold` 6 s, no talk fallback, then Giving. `Counter::EndBrowse` in `beginBeat` (next != Talking) and `Finish`.
+- **Placement NOT built**: Harbinger has no placement/teleport facet (kIntent 1..27); `Sim` TRADE_SIM entry only logs `Counter::NoteSimArrival` (counter known/unknown, "NOT placed"). WHAT BREAKS: a new Phase that follows Walking must keep the `Counter::Browsing` check at the arrival or the browse beat is skipped.
+
 #### R2 — the `ERND` co-save and the load recovery (ClickUp 86e3t1mx7, 2026-10-19; record layout in the co-save section above)
 marth's rulings: unloaded errands are simulated against real stock / gold; "if the player walks in then it picks up"; leaving town brings him back;
 a save made before the off-screen trade ran DROPS that trade (nothing moves until `RunTrade`, so there is nothing to refund).
