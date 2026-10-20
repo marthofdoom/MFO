@@ -1479,7 +1479,8 @@ PGID_VETERAN_MULT       = OWN_PROG | 0x806  # GLOB veteran catch-up multiplier (
 PGID_SKILL_CAP          = OWN_PROG | 0x807  # GLOB auto-scale base-AV ceiling
 PGID_DEV_CMD            = OWN_PROG | 0x808  # GLOB dev-harness verb selector (console: set MFOP_DevCmd to N)
 PGID_MANUAL_SKILL       = OWN_PROG | 0x809  # GLOB manual skill points / level (§16; default 2)
-# 0x80A-0x80F reserved: more economy knobs
+PGID_LEVELS_PER_CRAFT   = OWN_PROG | 0x80A  # GLOB crafting perk divisor (1 craft point / N levels; default 4; <=0 disables)
+# 0x80A = MFOP_LevelsPerCraftPerkPoint; 0x80B-0x80F reserved: more economy knobs
 PGID_SKILLS_MELEE       = OWN_PROG | 0x810  # FLST ordered AVIF skill priority per class
 PGID_SKILLS_RANGED      = OWN_PROG | 0x811
 PGID_SKILLS_MAGE        = OWN_PROG | 0x812
@@ -1621,6 +1622,7 @@ PROG_GLOBS = [
     (PGID_LEVELS_PER_PERK,"MFOP_LevelsPerPerkPoint",      2.0,   's'),
     (PGID_SKILL_PER_LEVEL,"MFOP_SkillPointsPerLevel",     5.0,   'f'),
     (PGID_MANUAL_SKILL,   "MFOP_ManualSkillPointsPerLevel",5.0,  's'),
+    (PGID_LEVELS_PER_CRAFT,"MFOP_LevelsPerCraftPerkPoint", 4.0,   's'),
     (PGID_SHARED_DIVISOR, "MFOP_SharedGrowthDivisor",     2.0,   'f'),
     (PGID_RESPEC_RAPPORT, "MFOP_RespecRapportCost",       500.0, 's'),
     (PGID_VETERAN_MULT,   "MFOP_VeteranCatchupMult",      1.0,   'f'),
@@ -1635,6 +1637,7 @@ PROG_GLOBS = [
 PROG_MANIFEST_ECONOMY = [
     PGID_LEVELS_PER_PERK, PGID_SKILL_PER_LEVEL, PGID_MANUAL_SKILL,
     PGID_SHARED_DIVISOR, PGID_RESPEC_RAPPORT, PGID_SKILL_CAP, PGID_DEV_CMD,
+    PGID_LEVELS_PER_CRAFT,
 ]
 
 PROG_PERK_LISTS = [
@@ -1923,6 +1926,11 @@ PROG_MCM_SLIDERS = [
     (PGID_SKILL_CAP, "Skill cap",
      "Ceiling the auto-scaler may raise a follower's base skill to.",
      50, 100, 5, 100),
+    (PGID_LEVELS_PER_CRAFT, "Levels per crafting perk point",
+     "Separate crafting perk stream (Smithing, Alchemy, Enchanting): one crafting "
+     "point every N levels, spent before the general pool. 0 disables the stream "
+     "(crafting perks then cost general points).",
+     0, 10, 1, 4),
 ]
 
 
@@ -1940,6 +1948,7 @@ PROG_MCM_KEYS = {
     PGID_SHARED_DIVISOR:  "iSharedGrowthDivisor",
     PGID_RESPEC_RAPPORT:  "iRespecRapportCost",
     PGID_SKILL_CAP:       "iSkillCap",
+    PGID_LEVELS_PER_CRAFT: "iLevelsPerCraftPerkPoint",
 }
 
 

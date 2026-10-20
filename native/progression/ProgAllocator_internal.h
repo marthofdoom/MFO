@@ -35,6 +35,10 @@ namespace MFO::ProgAllocator {
             // §17: perk cadence — 1 point per N follower levels, floor(level/N).
             // (was constexpr kLevelsPerPerkPoint; default 2 — marth 2026-08-13.)
             int   levelsPerPerkPoint    = 2;
+            // Separate CRAFTING perk stream (Smithing/Alchemy/Enchanting trees): 1 point
+            // per N follower levels, floor(level/N), spent before the general pool.
+            // <= 0 disables the stream. Derived like the general pool, NOT serialized.
+            int   levelsPerCraftPerkPoint = 4;
             // §6 auto-scale skill points per level (was 3 — marth 2026-08-17).
             float skillPointsPerLevel   = 2.0f;
             // §16 manual pool — flat points/level while the toggle is on (was
@@ -238,12 +242,40 @@ namespace MFO::ProgAllocator {
     // §17: THE perk-point authority — derived, never stored. Idempotent
     // across reloads and level-ups by construction; clamped at 0 so a
     // heavily pre-trained follower is simply "ahead", never negative.
-    inline int PerkPointsAvailable(const ProgState& a_st) {
-        const int earned = static_cast<int>(a_st.progressionLevel) /
-                           std::max(1, g_econ.levelsPerPerkPoint);
+    // Crafting stream: ranks held in a crafting-skill tree (Smithing, Alchemy,
+    // Enchanting, by actor value) — progression/Allocator.cpp (catalog lookup).
+    int CraftTreeRanks(const ProgState& a_st);
+    inline bool IsCraftSkill(RE::ActorValue a_av) {
+        return a_av == RE::ActorValue::kSmithing || a_av == RE::ActorValue::kAlchemy ||
+               a_av == RE::ActorValue::kEnchanting;
+    }
+    struct PerkPools {
+        int general = 0;   // general points left (what PerkPointsAvailable returns)
+        int craft   = 0;   // crafting points left (0 when the stream is disabled)
+    };
+    // Both pools, DERIVED (no stored state, no co-save field). Craft ranks consume the
+    // craft pool first and overflow into the general pool; other ranks use only the
+    // general pool. craftUsed = min(craftRanks, craftPool);
+    // general = floor(level/N) - (allRanks - craftUsed); craft = craftPool - craftUsed.
+    // levelsPerCraftPerkPoint <= 0 -> craftPool 0 -> exactly the old single-pool math.
+    inline PerkPools PerkPoolsOf(const ProgState& a_st) {
+        const int lvl       = static_cast<int>(a_st.progressionLevel);
+        const int craftDiv  = g_econ.levelsPerCraftPerkPoint;
+        const int craftPool = craftDiv > 0 ? lvl / craftDiv : 0;
+        const int craftUsed = craftPool > 0 ? std::min(CraftTreeRanks(a_st), craftPool) : 0;
+        const int earned    = lvl / std::max(1, g_econ.levelsPerPerkPoint);
         // native tree perks NO LONGER subtracted (marth 2026-08-13): a follower's
         // starting perks are their build, not a debt to earn back. available = earned - spent.
-        return std::max(0, earned - AllocatedRanks(a_st));
+        PerkPools p;
+        p.general = std::max(0, earned - (AllocatedRanks(a_st) - craftUsed));
+        p.craft   = craftPool - craftUsed;
+        return p;
+    }
+    inline int PerkPointsAvailable(const ProgState& a_st) {
+        return PerkPoolsOf(a_st).general;
+    }
+    inline int CraftPerkPointsAvailable(const ProgState& a_st) {
+        return PerkPoolsOf(a_st).craft;
     }
 
         // The catalog index (progression/Allocator.cpp):

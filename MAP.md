@@ -5375,7 +5375,7 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     `extern` session and board-view state, the small helpers the compiler inlines everywhere
     (`AvName` `:177`, `IsKnownSkillAv` `:187`, `NameOf` `:193`, `AllocatedRanks` `:200`,
     `FindAlloc` `:206`, `ManualAvail` `:216`, `PerkByID` `:224`, `IsActiveFollower` `:228`,
-    `PerkPointsAvailable` `:238` — whose public declaration in `progression/ProgAllocator.h:424`
+    `PerkPointsAvailable` `:238` (2026-10-20: now `PerkPoolsOf` in `ProgAllocator_internal.h` derives the general pool AND a separate crafting pool, `floor(level/levelsPerCraftPerkPoint)`; craft ranks (Smithing/Alchemy/Enchanting trees, `CraftTreeRanks` in `Allocator.cpp`) consume the craft pool first and overflow into the general pool; `GateNextRank` in `PerkGate.cpp` is the single spend gate; GLOB `MFOP_LevelsPerCraftPerkPoint` 0x80A; no co-save change) — whose public declaration in `progression/ProgAllocator.h:424`
     gained `inline`) as `inline`, and the declarations of the functions each file exports.
 - **SAVE-COMPAT — `CoSaveSave` / `CoSaveLoad` exact order** (grep the symbols; line
   numbers drift. Any field-order/type/version change corrupts live saves): header

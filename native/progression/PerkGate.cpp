@@ -367,7 +367,12 @@ namespace MFO::ProgAllocator {
                 a_whyNot = std::format("rank {} is not NPC-effective", have + 1);
                 return 0;
             }
-            if (PerkPointsAvailable(a_st) < 1) {
+            // Crafting stream: a crafting-skill rank may use a craft point OR a general
+            // point (overflow); any other rank needs a general point.
+            const auto pools = PerkPoolsOf(a_st);
+            const auto nodeRef = FindNode(a_node.perkFormID);
+            const bool craftNode = nodeRef.tree && IsCraftSkill(nodeRef.tree->av);
+            if (pools.general < 1 && !(craftNode && pools.craft >= 1)) {
                 a_whyNot = std::format("no perk points (earned {}, {} spent)",
                                        static_cast<int>(a_st.progressionLevel) /
                                            std::max(1, g_econ.levelsPerPerkPoint),

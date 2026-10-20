@@ -91,6 +91,19 @@
 					}
 				},
 				{
+					"id": "iLevelsPerCraftPerkPoint:Economy",
+					"text": "Levels per crafting perk point",
+					"type": "slider",
+					"help": "Separate crafting perk stream (Smithing, Alchemy, Enchanting): one crafting point every N levels, spent before the general pool. 0 disables the stream (crafting perks then cost general points).",
+					"valueOptions": {
+						"min": 0,
+						"max": 10,
+						"step": 1,
+						"sourceType": "ModSettingInt",
+						"defaultValue": 4
+					}
+				},
+				{
 					"id": "bCancelEngineAwards:Economy",
 					"text": "Cancel engine skill leveling",
 					"type": "toggle",
