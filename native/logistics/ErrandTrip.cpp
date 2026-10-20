@@ -110,7 +110,7 @@ namespace MFO::Logistics::Errand::Trip {
 
     SavedStop ToSaved(const Stop& a_stop) {
         SavedStop s;
-        s.kind = a_stop.kind == StopKind::Smith ? SavedStopKind::Smith : SavedStopKind::Shop;
+        s.kind = a_stop.kind == StopKind::Inn ? SavedStopKind::Inn : a_stop.kind == StopKind::Temple ? SavedStopKind::Temple : a_stop.kind == StopKind::Smith ? SavedStopKind::Smith : SavedStopKind::Shop;
         s.faction = a_stop.faction; s.chest = a_stop.chest; s.vendorActor = a_stop.vendorActor;
         s.destKind = a_stop.destKind == DestKind::VendorActor ? SavedDest::VendorActor
                    : a_stop.destKind == DestKind::Ref         ? SavedDest::Ref : SavedDest::Cell;
@@ -124,7 +124,7 @@ namespace MFO::Logistics::Errand::Trip {
 
     Stop FromSaved(const SavedStop& a_saved) {
         Stop s;
-        s.kind = a_saved.kind == SavedStopKind::Smith ? StopKind::Smith : StopKind::Shop;
+        s.kind = a_saved.kind == SavedStopKind::Inn ? StopKind::Inn : a_saved.kind == SavedStopKind::Temple ? StopKind::Temple : a_saved.kind == SavedStopKind::Smith ? StopKind::Smith : StopKind::Shop;
         s.faction = a_saved.faction; s.chest = a_saved.chest; s.vendorActor = a_saved.vendorActor;
         s.destKind = a_saved.destKind == SavedDest::VendorActor ? DestKind::VendorActor
                    : a_saved.destKind == SavedDest::Ref         ? DestKind::Ref : DestKind::Cell;

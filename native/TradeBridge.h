@@ -43,6 +43,7 @@ namespace MFO::TradeBridge {
             kWeaponMelee, kWeaponRanged, kArmor, kMageApparel, kSpellTome,
             kWeaponSilver,  // APPENDED (86e3p2gp9): the silver slot's restock, single best pick
             kAmmoSilver,    // APPENDED (86e3p2gp9, marth 2026-10-12): a ranged follower's silver ammo restock
+            kFood,          // APPENDED (TOWN PHASE 2 R7): the inn's food stock -- quota-filled in PlanBuy's own FOOD pass, never by the supply loop
             kSmithMaterial  // APPENDED (town phase 2 R8): a smithing/tempering material on BuyThresholds::smithMats (NOT a quota kind)
         };
         std::int32_t kind  = 0;
@@ -160,6 +161,9 @@ namespace MFO::TradeBridge {
         // qty, REGARDLESS of any gambit (marth: "regardless of gambits a follower will loot or buy whats needed for town errand
         // smithing"), bounded by the purse (half of what is left, so he never goes broke on ingots). Empty = no smithing wish.
         std::vector<SmithMat> smithMats;
+        // -- APPENDED (TOWN PHASE 2 R7; append-only) -- the inn's FOOD order: stock lines that are FOOD worth stocking classify as kFood
+        // (the needs vector carries the quota). Only logistics/ErrandRest.cpp sets it.
+        bool          wantFood = false;
     };
 
     // THE rated-armor score, shared with Logistics::ArmorScore (loot / keep /

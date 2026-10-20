@@ -807,6 +807,16 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_errandSmith{ true };
     inline std::atomic<int>   g_smithWorkGameMin{ 20 };
     inline std::atomic<bool>  g_errandSmithFurniture{ true };
+    //   TOWN PHASE 2 R7 (inn + temple, all INI-only; logistics/ErrandRest.cpp):
+    //   bErrandInn: the inn is the LAST stop of every trip (default ON). He buys a small food stock, eats a meal, and STAYS at
+    //     the inn (resting, sitting, sleeping at night) until the player leaves town (marth 2026-10-19), or combat starts.
+    //   iInnMeals: meals he eats at the inn (default 1). iInnFoodStock: foods he carries after the inn (default 3, bought at the
+    //     innkeeper; the combat-start eating is a separate behaviour, not built). iTempleGameMin: game minutes an OFF-SCREEN temple
+    //     visit takes (default 10).
+    inline std::atomic<bool>  g_errandInn{ true };
+    inline std::atomic<int>   g_innMeals{ 1 };
+    inline std::atomic<int>   g_innFoodStock{ 3 };
+    inline std::atomic<int>   g_templeGameMin{ 10 };
 
     // §HMS class-redistribution (v1.0.68). On level-up MFO measures the engine's
     // per-level Health/Magicka/Stamina award and re-grants it reshaped to the

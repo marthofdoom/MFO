@@ -711,6 +711,32 @@ namespace MFO::Packages {
             return true;
         }
 
+        // ── TOWN PHASE 2 R7: the errand WORK packages' run-time inputs ───────────────────────────────────────────────
+        // The vanilla Sandbox template (0001C254) names THREE inputs "Location" (uids 0, 9, 15) and only uid 0 has a data slot on an
+        // instance, while FindInput takes the FIRST name-map hit (design R0-11). This variant tries EVERY uid the instance map and
+        // then the template map declare under the name and returns the first one this instance has a value slot for, reporting the
+        // uid it resolved (the field log answers P-PKG-LOC's "FindInput's resolved uid" with it). No static-uid fallback: a miss
+        // declines loudly and nothing is written.
+        RE::IPackageData* FindInputAnyUid(RE::TESPackage* a_pkg, std::string_view a_name, int& a_uidOut) {
+            a_uidOut = -1;
+            auto* cpd = CustomData(a_pkg);
+            if (!cpd || !cpd->data.data || !cpd->data.uids) return nullptr;
+            RE::BGSPackageDataNameMap* maps[2] = { cpd->nameMap.get(), nullptr };
+            if (cpd->templateParent)
+                if (auto* tpl = CustomData(cpd->templateParent)) maps[1] = tpl->nameMap.get();
+            for (auto* m : maps) {
+                if (!m) continue;
+                for (const auto& nm : m->nameMap) {
+                    if (nm.name.empty() || a_name != std::string_view(nm.name.c_str())) continue;
+                    for (std::uint16_t i = 0; i < cpd->data.dataSize; ++i)
+                        if (cpd->data.uids[i] == nm.uid) { a_uidOut = nm.uid; return cpd->data.data[i]; }
+                }
+            }
+            spdlog::error("[pkg] errand work package {:08X}: no value slot for input '{}' under any uid the name maps declare for it",
+                          a_pkg ? a_pkg->GetFormID() : 0u, a_name);
+            return nullptr;
+        }
+
         constexpr float kAPMFTravelRadius = 128.0f;   // matches make_travel_package()'s slots
         constexpr float kAPMFRetreatRadius = 150.0f;  // matches make_retreat_package()'s legacy radius
 
@@ -2464,6 +2490,38 @@ namespace MFO::Packages {
         if (auto* actor = held->As<RE::Actor>())
             VerifyDetachedFrom(quest, actor, "retreat", "MFO_RetreatQuest", "dismissed");
     }
+
+    // ── TOWN PHASE 2 R7: run-time inputs of the errand work packages (public; apmf/ErrandWork.cpp is the caller) ────────
+    bool SetPackageLocation(RE::TESPackage* a_pkg, std::string_view a_input, RE::TESObjectREFR* a_ref, float a_radius, int& a_uidOut) {
+        a_uidOut = -1;
+        if (!a_pkg || !a_ref) return false;
+        auto* pd = FindInputAnyUid(a_pkg, a_input, a_uidOut);
+        if (!pd) return false;
+        auto* loc = ReadLocation(pd, a_input);
+        if (!loc) return false;
+        loc->locType        = RE::PackageLocation::Type::kNearReference;
+        loc->data.refHandle = a_ref->CreateRefHandle();
+        loc->rad            = static_cast<std::uint32_t>(std::clamp(a_radius, 0.0f, 4096.0f));
+        spdlog::info("[pkg] errand work {:08X}: input '{}' (uid {}) -> near reference {:08X} radius {:.0f}",
+                     a_pkg->GetFormID(), a_input, a_uidOut, a_ref->GetFormID(), a_radius);
+        return true;
+    }
+
+    bool SetPackageTargetRef(RE::TESPackage* a_pkg, std::string_view a_input, RE::TESObjectREFR* a_ref) {
+        if (!a_pkg || !a_ref) return false;
+        int uid = -1;
+        auto* pd = FindInputAnyUid(a_pkg, a_input, uid);
+        if (!pd) return false;
+        auto* t = ReadTarget(pd, a_input);
+        if (!t) return false;
+        t->targType      = kTargTypeRef;
+        t->target.handle = a_ref->CreateRefHandle();
+        t->value         = 0;
+        spdlog::info("[pkg] errand work {:08X}: input '{}' (uid {}) -> specific reference {:08X}", a_pkg->GetFormID(), a_input, uid,
+                     a_ref->GetFormID());
+        return true;
+    }
+
 
     Status Get() {
         Status s;

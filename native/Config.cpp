@@ -130,6 +130,10 @@ namespace MFO::Config {
             else if (a_key == "bErrandSmith")       { setB(g_errandSmith); return; }                          // R8: smithing / tempering errands, default ON
             else if (a_key == "iSmithWorkGameMin")  { setI(g_smithWorkGameMin, 1, 240); return; }            // R8: game minutes at the station
             else if (a_key == "bErrandSmithFurniture") { setB(g_errandSmithFurniture); return; }            // R8: station animation via Harbinger (P-SMITH-1)
+            else if (a_key == "bErrandInn")         { setB(g_errandInn);     return; }   // R7, default ON, INI-only
+            else if (a_key == "iInnMeals")          { setI(g_innMeals, 0, 5);      return; }
+            else if (a_key == "iInnFoodStock")      { setI(g_innFoodStock, 0, 20); return; }
+            else if (a_key == "iTempleGameMin")     { setI(g_templeGameMin, 1, 240); return; }
             else if (a_key == "bSubstrateCasts")    { setB(g_substrateCasts); return; }   // OOC casts on the ch.27 substrate (S3), INI-only, default OFF
 
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
@@ -416,6 +420,10 @@ namespace MFO::Config {
             g_errandSmith        = true;    // R8 smithing / tempering errands -- ON (features ship on)
             g_smithWorkGameMin   = 20;
             g_errandSmithFurniture = true;
+            g_errandInn          = true;    // R7 inn + temple errands -- ON (features ship on)
+            g_innMeals           = 1;
+            g_innFoodStock       = 3;
+            g_templeGameMin      = 10;
             g_hmsRedistribute    = true;    // §HMS class-redistribution master switch -- ON
             g_hmsSkewMaxFrac     = 0.20f;   // §HMS off-class skew ceiling -- 20% (INI stores percent)
             g_speechPricing      = true;    // #21 sell price follows the speech-scaled vanilla barter curve

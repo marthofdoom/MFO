@@ -66,7 +66,7 @@ namespace MFO::Logistics::Errand {
     // A trip is an ordered list of stops with ONE purse. Phase-1 errands are one-stop trips of kind Shop. The single-shop
     // fields of the records below (faction, chest, vendor, dest*, order) are the CURRENT stop's working copy, stops[cur]
     // (Errand.cpp / ErrandSim.cpp keep the two in step), so the phase-1 code paths keep their shape.
-    enum class StopKind : std::uint8_t { Shop, Smith };   // R8 appended Smith (the forge / sharpening wheel / armor table); later rounds APPEND Temple, Inn (R7: the last stop), Home
+    enum class StopKind : std::uint8_t { Shop, Temple, Inn, Smith };   // R7 appended Temple and Inn (the last stop), R8 Smith (the forge / sharpening wheel / armor table); later rounds APPEND Fence, Spouse, Home
     enum class StopState : std::uint8_t { Pending, Active, Done, Skipped };
     struct Stop {
         StopKind      kind = StopKind::Shop;
@@ -84,7 +84,8 @@ namespace MFO::Logistics::Errand {
     };
     // The bound on the wire (#11) and the planner's cap. R7 appends an Inn stop after the shops, so the shops leave room.
     inline constexpr std::size_t kMaxTripStops = kMaxTripStopsOnWire;
-    inline constexpr std::size_t kMaxShopStops = 4;
+    // R7 (marth: one trip covers EVERYTHING): 5 shops + the temple + R8's smith stop + the inn = the 8 stops of the ERND wire. R5 had 4.
+    inline constexpr std::size_t kMaxShopStops = 5;
 
     namespace Trip {
         // One candidate the planner may visit (Errand.cpp builds these from its catalog; the VEND reads stay there).
@@ -171,11 +172,50 @@ namespace MFO::Logistics::Errand {
         RE::FormID    destForm = 0;
         float         destRad = 0.0f;
         bool          announced = false;   // the "is trading with" toast already fired for this errand (sim Trade stage reached)
+        bool          work = false;        // R7: he is loaded AT the inn / temple of the current stop: start its work at once (no walk, no trade)
         // R5: the itinerary (the fields above are stops[cur]'s) and the trip purse.
         std::vector<Stop> stops;
         std::uint8_t  cur = 0;
         int           tripPurse = -1, tripSpent = 0;
     };
+
+    // ── TOWN PHASE 2 R7: the INN and TEMPLE stops -- logistics/ErrandRest.cpp ──────────────────────────────────────────
+    // The planner appends them (Augment: the temple when owed, the inn LAST), the physical errand runs their WORK (Begin / Step: the
+    // ch.9 work packages through apmf/ErrandWork.cpp, the ch.12 kneel idles), the simulation only waits (Errand::Sim). Own mutex (a
+    // leaf: never held across an engine, Harbinger, Papyrus or TradeBridge call, and never nested with Errand / Sim g_mx).
+    namespace Rest {
+        // Planner (worker, TryStart, the follower loaded). a_haveStops = Trip::Plan found shop work. Appends the temple stop (when he is
+        // diseased or not yet blessed today) and the inn stop (LAST of every trip) to a_stops; with NO shop work a trip exists only when
+        // the temple is owed (then it ends at the inn too). TRUE = a_stops describes a trip. a_line gets the text appended.
+        bool Augment(RE::Actor* a_follower, const FollowerState& a_state, std::chrono::steady_clock::time_point a_now,
+                     const RE::BGSLocation* a_town, bool a_haveStops, std::vector<Stop>& a_stops, std::string& a_line);
+        // ONE TRIP PER TOWN VISIT (marth 2026-10-19): once a follower's trip ends no new errand is planned for him until the player
+        // leaves the town. Session-only; NoteTown clears every mark when the player's town changes (TryStart calls it on every tick).
+        void NoteTown(RE::FormID a_townId);
+        bool TripDone(RE::FormID a_follower, RE::FormID a_townId);
+        void MarkTripDone(RE::FormID a_follower, RE::FormID a_townId, const char* a_why);
+        // The synthetic food order's dispatch (the inn's physical give beat): VendorTrade of a_order at the innkeeper's chest.
+        // Sent = on its way; Busy = the chest holds another follower's live order (retry); Nothing = nothing to buy (no purse / no chest).
+        enum class Dispatch { Sent, Busy, Nothing };
+        Dispatch DispatchOrder(RE::Actor* a_follower, RE::Actor* a_vendor, const ErrandPlanned& a_order, int a_purseCap);
+
+        // The physical work. Begin: he is AT the stop (the inn after the shop beats / the temple's cell). False = cannot (logged); the stop is skipped.
+        bool Begin(RE::Actor* a_follower, const Stop& a_stop, RE::FormID a_vendor, const std::string& a_followerName, RE::FormID a_town, std::chrono::steady_clock::time_point a_now);
+        enum class Result { Continue, Done, Failed };
+        struct StepOut { Result res = Result::Continue; std::string why; };
+        StepOut Step(RE::Actor* a_follower, std::chrono::steady_clock::time_point a_now);
+        // The errand ends / the stop ends: release the work claim and forget it. a_why is logged (the release reason of an inn stay).
+        // a_tripOver: the stay / visit really ended (marks the trip done for this town visit); false = handed to the simulation.
+        void End(RE::FormID a_follower, const char* a_why, bool a_tripOver);
+        void ClearTransientState();   // revert / load (pump drained): every ledger, mark and work
+        bool Working(RE::FormID a_follower);
+        // The Board text: "Resting at X" / "Praying at X" ("" = no work).
+        std::string Describe(RE::FormID a_follower);
+        // Is he standing in the cell of this inn / temple stop? (a loaded follower, for the simulation's pick-up)
+        bool InStopCell(RE::Actor* a_follower, const Stop& a_stop);
+        // Sim: a temple visit ran off screen; the blessing is OWED (logged; paid only by a physical visit).
+        void NoteOwed(RE::FormID a_follower, const std::string& a_followerName, const std::string& a_temple);
+    }
 
     namespace Sim {
         bool Has(RE::FormID a_follower);

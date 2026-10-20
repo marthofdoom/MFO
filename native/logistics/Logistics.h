@@ -53,6 +53,10 @@ namespace MFO::Logistics {
     // that restores 50 flat and one that restores 5/sec both order correctly.
     float PotionMagnitude(RE::AlchemyItem* a_potion);
 
+    // TOWN PHASE 2 R7 (logistics/ErrandRest.cpp): the worth of a FOOD item, judged from its real MGEF effects like a potion
+    // (R0-10): 0 = not worth stocking (not food, or any detrimental / hostile effect). Pure form reads, any thread (PlanBuy's VM thread).
+    float FoodWorth(const RE::AlchemyItem* a_food);
+
     // Derive the "low power" potion cutoff from the load order (the weakest restore
     // tier). Call once at kDataLoaded, after the data handler is ready. Feeds the
     // auto floor LootPotions uses when iMinPotionMag is 0. Logs the tier ladder.
