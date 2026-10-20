@@ -187,7 +187,9 @@ namespace MFO {
     //   v2 - (TOWN PHASE 2 R5, multi-stop trips) every v1 field, in the v1 order, describing the CURRENT stop, then APPENDED:
     //          u8  stopCount          1..8 (#11; 0 or more than 8 = the record is aborted)
     //          per stop, in visit order:
-    //            str kind             opcode (#10): shop   (later rounds APPEND fence | spouse | smith | temple | inn | home)
+    //            str kind             opcode (#10): shop | temple | inn   (R7 appended temple and inn as NEW STRING VALUES, no layout change; later
+    //                             rounds APPEND fence | spouse | smith | home). An older reader meets an unknown kind as a LATER stop -> that stop
+    //                             SKIPPED, or as the CURRENT stop -> the entry DROPPED (both logged). A DOWNGRADED DLL that drops the entry does NOT bring the follower back: one unloaded in the inn stays there (MFO-B349).
     //            u32 faction, chest, vendorActor   as in v1 (0 = none; unresolvable -> 0)
     //            str destKind         opcode: vendor_actor | ref | cell
     //            u32 destForm

@@ -108,6 +108,10 @@ MFO seed defaults. MCM Helper's Data/MCM/Settings/MFO.ini is read AFTER this and
 - **`fErrandCooldownSec`** (default `120`). Real seconds between one follower's errands.
 - **`fErrandMaxGameMin`** (default `120`). An errand older than this many GAME minutes ends and the follower rejoins.
 - **`iErrandTradeGameMin`** (default `10`). Game minutes an OFF-SCREEN errand spends at the vendor (the walk there and back is estimated from the distance and runs on the game clock too).
+- **`bErrandInn`** (default `1`). TOWN PHASE 2 (inn + temple). The inn is the LAST stop of every town trip: the follower buys a small food stock from the innkeeper, eats a meal, and STAYS at the inn (sitting, resting, sleeping at night when a bed he may use is free) until you leave the town, or combat starts. Before the inn he visits the town's temple when he is diseased or has not been blessed this game day. Needs `bTownErrands`. One trip per town visit: once it ends no new errand is planned for him until you leave town.
+- **`iInnMeals`** (default `1`). Meals he eats at the inn.
+- **`iInnFoodStock`** (default `3`). Food items he carries after the inn (bought at the innkeeper, best by value of the food's own effects).
+- **`iTempleGameMin`** (default `10`). Game minutes an OFF-SCREEN temple visit takes (the blessing is owed and paid when he is next loaded at the shrine).
 - **`bHmsRedistribute`** (default `1`). CLASS HMS ON LEVEL-UP (v1.0.68). bHmsRedistribute: 1 (default) = each level a follower's Health/Magicka/Stamina gain is reshaped to its class profile (mage -> Magicka, archer -> Stamina, warrior -> Health); total gain == vanilla, only the split changes. 0 = vanilla per-level HMS stands untouched.
 - **`fHmsSkewMax`** (default `20.0`). fHmsSkewMax: skew ceiling as a PERCENT of each level's HMS budget that may be pulled from the class-primary pool toward an off-class pool the follower actually exercises in battle (a battle-mage earning some Magicka). 0 disables.
 - **`bMageWearRobes`** (default `1`). MAGE DRESS-UP (loot + buy). bMageWearRobes: 1 (default) = a caster wears mage clothing/jewelry; 0 = a caster picks/buys real ARMOR by rating like any class.

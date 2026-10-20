@@ -98,6 +98,9 @@ namespace MFO::TradeBridge {
             const auto id = a_form->GetFormID();
             (void)id;
             if (auto* alc = a_form->As<RE::AlchemyItem>()) {
+                // TOWN PHASE 2 R7: the inn's FOOD order. Food is judged from its own effects (Logistics::FoodWorth, the potion judge's
+                // archetype split); only an order that asked for food ever sees this, every other trade classifies exactly as before.
+                if (b.wantFood && alc->IsFood()) return Logistics::FoodWorth(alc) > 0.0f ? NeedCat::kFood : -1;
                 // The SAME classifier the follower counts/drinks with (catalog-first,
                 // then the archetype heuristic) -- catalog-only left the vendor's
                 // health potions unclassified, so a follower that NEEDED potions (its
@@ -284,6 +287,34 @@ namespace MFO::TradeBridge {
                     need->quota -= qty;
                     o->budget   -= qty * c.value;
                     o->buySpent += qty * c.value;
+                }
+            }
+
+            // ── FOOD (TOWN PHASE 2 R7, the inn's stock): fill the kFood quota, best worth per gold first, never more than half the
+            //    purse. Only an order with wantFood has kFood candidates (ClassifyBuy). ──
+            if (b.wantFood) {
+                NeedCat* need = nullptr;
+                for (auto& n : o->needs) if (n.kind == NeedCat::kFood && n.quota > 0) { need = &n; break; }
+                if (need) {
+                    std::vector<Cand> foods;
+                    for (auto& c : cands) if (c.kind == NeedCat::kFood) foods.push_back(c);
+                    std::sort(foods.begin(), foods.end(), [](const Cand& a, const Cand& c2) {
+                        const float wa = Logistics::FoodWorth(a.f->As<RE::AlchemyItem>()) / static_cast<float>(a.value);
+                        const float wb = Logistics::FoodWorth(c2.f->As<RE::AlchemyItem>()) / static_cast<float>(c2.value);
+                        return wa != wb ? wa > wb : a.value < c2.value;
+                    });
+                    int foodLeft = o->budget / 2;   // R7 review: the cap is half the purse the FOOD pass started with, computed ONCE (not half of what is left per line)
+                    for (const auto& c : foods) {
+                        if (need->quota <= 0) break;
+                        int qty = std::min(c.avail, need->quota);
+                        qty = std::min(qty, foodLeft / c.value);
+                        if (qty <= 0) continue;
+                        foodLeft -= qty * c.value;
+                        plan[c.idx] += qty;
+                        need->quota -= qty;
+                        o->budget   -= qty * c.value;
+                        o->buySpent += qty * c.value;
+                    }
                 }
             }
 

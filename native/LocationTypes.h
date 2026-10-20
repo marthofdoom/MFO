@@ -117,4 +117,48 @@ namespace MFO::LocationTypes {
         return nullptr;
     }
 
+
+    // ── TOWN PHASE 2 R7: inn / temple (ClickUp 86e3t1mx7; design TOWN-PHASE2-DESIGN.md 1.g) ────────────────────────────
+    // A location that IS an inn / a temple: walking from the innermost location out, LocTypeInn (0001CB87) / LocTypeTemple
+    // (0001CD56) is met BEFORE a town-level tag (City / Town / Settlement) or a fight site (Clearable / Dungeon). So an inn's
+    // interior location (which carries the keyword itself) is an inn, while the town above it never is. Pure reads.
+    inline bool HasKeywordInChainBefore(const RE::BGSLocation* a_loc, RE::FormID a_kw) {
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        auto* want = dh ? dh->LookupForm<RE::BGSKeyword>(a_kw & 0x00FFFFFF, "Skyrim.esm") : nullptr;
+        if (!want) return false;
+        static const std::vector<const RE::BGSKeyword*> s_stop = [] {
+            std::vector<const RE::BGSKeyword*> v;
+            auto* d = RE::TESDataHandler::GetSingleton();
+            for (const RE::FormID id : { 0x00013168u, 0x00013166u, 0x00013167u, 0x000F5E80u, 0x000130DBu })   // City Town Settlement Clearable Dungeon
+                if (auto* k = d ? d->LookupForm<RE::BGSKeyword>(id, "Skyrim.esm") : nullptr) v.push_back(k);
+            return v;
+        }();
+        int guard = 0;
+        for (auto* loc = a_loc; loc && guard < 8; loc = loc->parentLoc, ++guard) {
+            if (loc->HasKeyword(want)) return true;
+            for (auto* k : s_stop) if (loc->HasKeyword(k)) return false;
+        }
+        return false;
+    }
+    inline bool IsInn(const RE::BGSLocation* a_loc)    { return HasKeywordInChainBefore(a_loc, 0x0001CB87); }   // LocTypeInn
+    inline bool IsTemple(const RE::BGSLocation* a_loc) { return HasKeywordInChainBefore(a_loc, 0x0001CD56); }   // LocTypeTemple
+
+    // The first inn / temple location under a town anchor (a_town == TownAnchor(...) of the player), or null. A scan of the
+    // Location form array (a few hundred forms), so callers cache per town. Names the place for logs and the Board; the
+    // errand's walk itself goes to the interior CELL found through the town's load doors (logistics/ErrandRest.cpp).
+    inline const RE::BGSLocation* InnOf(const RE::BGSLocation* a_town) {
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        if (!dh || !a_town) return nullptr;
+        for (auto* loc : dh->GetFormArray<RE::BGSLocation>())
+            if (loc && IsInn(loc) && TownAnchor(loc) == a_town) return loc;
+        return nullptr;
+    }
+    inline const RE::BGSLocation* TempleOf(const RE::BGSLocation* a_town) {
+        auto* dh = RE::TESDataHandler::GetSingleton();
+        if (!dh || !a_town) return nullptr;
+        for (auto* loc : dh->GetFormArray<RE::BGSLocation>())
+            if (loc && IsTemple(loc) && TownAnchor(loc) == a_town) return loc;
+        return nullptr;
+    }
+
 }

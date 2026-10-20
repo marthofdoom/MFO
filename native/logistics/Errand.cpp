@@ -94,7 +94,7 @@ namespace MFO::Logistics::Errand {
         constexpr RE::FormID kIdleTake         = 0x000B5E1F;   // IdleTake
         constexpr RE::FormID kIdleExamine      = 0x00075C3D;   // IdleExamine (R4 browsing; verified in Skyrim.esm with tools/esp_inspect.py, 2026-10-19)
 
-        enum class Phase { Walking, Talking, Giving, Trading, Taking };
+        enum class Phase { Walking, Talking, Giving, Trading, Taking, Resting };   // R7: Resting = the inn stay / the temple prayer (logistics/ErrandRest.cpp owns its steps)
 
         const char* PhaseName(Phase p) {
             switch (p) {
@@ -103,6 +103,7 @@ namespace MFO::Logistics::Errand {
                 case Phase::Giving:  return "GIVING";
                 case Phase::Trading: return "TRADING";
                 case Phase::Taking:  return "TAKING";
+                case Phase::Resting: return "RESTING";
             }
             return "?";
         }
@@ -540,7 +541,8 @@ namespace MFO::Logistics::Errand {
                 g_cool[a_fid] = Clock::now() + std::chrono::milliseconds(static_cast<long long>(a_cooldownSec * 1000.0f));
                 if (a_complete) g_backoff.erase(BackoffKey(a_fid, r.chest));   // a successful DONE at this target forgives it
             }
-            APMFBridge::ReleaseErrand(a_fid);   // idle, hold, walk (in that order)
+            if (r.phase == Phase::Resting) Rest::End(a_fid, a_why, true);   // R7: the stay's release reason is logged; the trip is done for this visit
+            APMFBridge::ReleaseErrand(a_fid);   // idle, hold, walk (in that order) -- and the ch.9 work claim
             // A shop-place walk has no vendor actor yet (r.vendor == 0): name the faction / destination instead.
             const std::string who = r.vendor ? std::format("vendor '{}' {:08X}", r.vendorName, r.vendor)
                                              : std::format("shop '{}' faction {:08X} dest {:08X}", r.vendorName, r.faction, r.destForm);
@@ -646,6 +648,7 @@ namespace MFO::Logistics::Errand {
                     const bool multi = r.stops.size() > 1;
                     const bool anyDone = std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.state == StopState::Done; });
                     if (multi && anyDone) cooldown = std::max(cooldown, Config::g_errandCooldownSec.load());   // the trip traded: the errand cooldown
+                    if (anyDone && Config::g_errandInn.load()) Rest::MarkTripDone(a_fid, r.town, "the trip ended");   // R7: one trip per town visit
                     Store(a_fid, r);
                     Finish(a_fid, multi ? std::format("{} (last of a {}-stop trip)", why, r.stops.size()).c_str() : why.c_str(), cooldown, complete);
                     return false;
@@ -681,15 +684,20 @@ namespace MFO::Logistics::Errand {
     }
 
     std::string Describe(RE::FormID a_follower) {
+        bool resting = false;
         {
             std::scoped_lock lk(g_mx);
             auto it = g_recs.find(a_follower);
             if (it != g_recs.end()) {
                 const Rec& r = it->second;
-                const std::string shop = (r.vendorName.empty() || r.vendorName == "?") ? std::string("the shop") : r.vendorName;
-                return r.phase == Phase::Walking ? "Walking to " + shop : "Trading with " + shop;
+                if (r.phase == Phase::Resting) resting = true;   // R7: "Resting at X" / "Praying at X" (the Rest table is read below, the lock released)
+                else {
+                    const std::string shop = (r.vendorName.empty() || r.vendorName == "?") ? std::string("the shop") : r.vendorName;
+                    return r.phase == Phase::Walking ? "Walking to " + shop : "Trading with " + shop;
+                }
             }
         }
+        if (resting) return Rest::Describe(a_follower);
         return Sim::Describe(a_follower);   // the table mutex is released: the two never nest
     }
 
@@ -709,6 +717,7 @@ namespace MFO::Logistics::Errand {
             g_townSince = {};
         }
         Sim::ClearTransientState();
+        Rest::ClearTransientState();   // R7
         Counter::Clear();
         ErrandShops::Clear();   // R6
         APMFBridge::ClearErrandClaims();
@@ -731,11 +740,13 @@ namespace MFO::Logistics::Errand {
                     case Phase::Talking:
                     case Phase::Giving:  s.stage = SavedStage::PhysAtVendor; break;
                     case Phase::Trading: s.stage = SavedStage::PhysTrading; break;
-                    case Phase::Taking:  s.stage = SavedStage::PhysTaking; break;
+                    case Phase::Taking:
+                    case Phase::Resting: s.stage = SavedStage::PhysTaking; break;   // R7: a stay / prayer is saved as the last beat (no new stage string)
                 }
                 if (r.phase != Phase::Walking) s.flags |= Saved::kArrived;
                 if (r.dispatched)              s.flags |= Saved::kDispatched;
-                if (r.phase == Phase::Taking)  s.flags |= Saved::kTradeDone;
+                if (r.phase == Phase::Taking || (r.phase == Phase::Resting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn))
+                    s.flags |= Saved::kTradeDone;   // (R7: an inn stay is past its trade; a temple prayer is not)
                 if (r.order && !r.order->skipped) s.flags |= Saved::kHadOrder;
                 s.town = r.town; s.faction = r.faction; s.chest = r.chest; s.vendorActor = r.vendor;
                 s.destKind = r.destKind == DestKind::VendorActor ? SavedDest::VendorActor
@@ -839,6 +850,35 @@ namespace MFO::Logistics::Errand {
 
         bool ResumePhysical(RE::Actor* a_follower, const ResumeInfo& a_info) {
             if (!a_follower || g_latched.load() || !APMFBridge::ErrandSupported()) return false;
+            // R7: he is loaded AT the inn / temple of the current stop: no walk, no trade -- the stop's work begins (the stay / the prayer).
+            if (a_info.work) {
+                if (a_info.cur >= a_info.stops.size()) return false;
+                const auto fid = a_follower->GetFormID();
+                const auto now = Clock::now();
+                Rec r;
+                r.town = a_info.town;
+                r.followerName = a_info.followerName;
+                r.stops = a_info.stops; r.cur = a_info.cur;
+                r.tripPurse = a_info.tripPurse; r.tripSpent = a_info.tripSpent;
+                r.faction = a_info.faction; r.chest = a_info.chest; r.vendorName = a_info.vendorName;
+                r.order = a_info.order;
+                r.destKind = a_info.destKind; r.destForm = a_info.destForm; r.destRad = a_info.destRad;
+                r.start = r.phaseAt = now;
+                r.startClk = r.lastTickClk = Scheduler::ServiceClock();
+                r.startDays = a_info.startDays;
+                r.lastPos = a_follower->GetPosition();
+                r.announced = true;
+                SyncCur(r);
+                r.stops[r.cur].state = StopState::Active;
+                if (!Rest::Begin(a_follower, r.stops[r.cur], 0, r.followerName, r.town, now)) return false;
+                r.phase = Phase::Resting;
+                {
+                    std::scoped_lock lk(g_mx);
+                    g_recs[fid] = r;
+                }
+                spdlog::info("[errand] {:08X} '{}': PICKS UP -- he is loaded again at '{}'; the stop's work resumes on screen", fid, r.followerName, r.vendorName);
+                return true;
+            }
             auto vendor = FindVendorActor(a_follower, a_info.faction);
             // R2: a physical errand restored from the save walks on to its vendor ACTOR even when the vendor is not in his cell (an
             // exterior stall one cell over), provided that actor is loaded and usable.
@@ -915,6 +955,8 @@ namespace MFO::Logistics::Errand {
         // The player's town + how long he has been in it (the settle clock). Tracked on every call.
         const RE::BGSLocation* playerTown = LocationTypes::TownAnchor(pc->GetCurrentLocation());
         Clock::time_point townSince{};
+        const RE::FormID tidNow = playerTown ? playerTown->GetFormID() : 0u;
+        Rest::NoteTown(tidNow);   // R7: the player's town changed (or he left town) -> every "trip done" mark is cleared (before any early return below)
         {
             std::scoped_lock lk(g_mx);
             const RE::FormID tid = playerTown ? playerTown->GetFormID() : 0u;
@@ -926,6 +968,7 @@ namespace MFO::Logistics::Errand {
             if (const auto it = g_nextPlan.find(fid); it != g_nextPlan.end() && a_now < it->second) return true;
         }
         if (!playerTown) return true;
+        if (Config::g_errandInn.load() && Rest::TripDone(fid, tidNow)) return true;   // R7: ONE trip per town visit (marth 2026-10-19)
         if (a_now - townSince < std::chrono::milliseconds(static_cast<long long>(Config::g_errandSettleSec.load() * 1000.0f)))
             return true;
 
@@ -1002,7 +1045,10 @@ namespace MFO::Logistics::Errand {
         tin.follower = fid; tin.from = a_follower->GetPosition(); tin.carry = carry; tin.minSell = minSell; tin.minPurse = minPurse;
         std::vector<Stop> stops;
         std::string tripLine;
-        if (!Trip::Plan(tcands, planned, tin, stops, tripLine)) {
+        // R7: the temple (when owed) and the INN (LAST) are appended to the shop stops; a trip with no shop work exists only for an owed temple.
+        bool havePlan = Trip::Plan(tcands, planned, tin, stops, tripLine);
+        havePlan = Rest::Augment(a_follower, a_state, a_now, playerTown, havePlan, stops, tripLine);
+        if (!havePlan) {
             {
                 std::scoped_lock lk(g_mx);
                 g_nextPlan[fid] = a_now + std::chrono::seconds(20);   // nothing to do here: the plan is a cell walk + an inventory walk, ask less often
@@ -1038,7 +1084,8 @@ namespace MFO::Logistics::Errand {
         r.town        = playerTown->GetFormID();
         r.followerName = NameOf(a_follower);
         r.stops = std::move(stops);
-        r.tripPurse = r.stops.front().order ? r.stops.front().order->purse : -1;
+        r.tripPurse = -1;   // R7: the first stop that carries an order sets the trip purse (a temple stop has none)
+        for (const auto& st : r.stops) if (st.order) { r.tripPurse = st.order->purse; break; }
         LoadStop(r, 0);
         r.lastPos = a_follower->GetPosition();
         r.planPos = r.lastPos; r.planPosSet = true;
@@ -1097,9 +1144,13 @@ namespace MFO::Logistics::Errand {
             Finish(fid, "told to wait", 60.0f);
             return false;
         }
-        if (a_healWants && a_healWants()) { Finish(fid, "yields to a heal", 15.0f); return false; }
-        if (Scheduler::ServiceClock() - r.startClk > kRealCapSec) { Finish(fid, "timed out (240 s real time)", 60.0f); return false; }
-        if (auto* cal = RE::Calendar::GetSingleton()) {
+        // R7 review: the INN STAY has exactly two exits (the player leaving town, combat; marth 2026-10-19): a heal request does not end it.
+        const bool innStay = r.phase == Phase::Resting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn;
+        if (!innStay && a_healWants && a_healWants()) { Finish(fid, "yields to a heal", 15.0f); return false; }
+        // R7: the INN STAY has no cap of its own (marth 2026-10-19: he stays until the player leaves town; combat and "told to wait" above and
+        // the Sweep's player-left-town end it). Every other phase, and the temple's prayer, keep both caps.
+        if (!innStay && Scheduler::ServiceClock() - r.startClk > kRealCapSec) { Finish(fid, "timed out (240 s real time)", 60.0f); return false; }
+        if (auto* cal = RE::Calendar::GetSingleton(); cal && !innStay) {
             const float minutes = (cal->GetDaysPassed() - r.startDays) * 24.0f * 60.0f;
             // R5: fErrandMaxGameMin is the allowance of ONE walk + trade (phase 1); a trip gets it once per PLANNED stop (Trip::CapGameMin).
             if (minutes > Trip::CapGameMin(r.stops.size())) {
@@ -1112,10 +1163,29 @@ namespace MFO::Logistics::Errand {
         // the whole trip (its outcome would land on the next stop's wait).
         auto stopOver = [&](const std::string& a_why, bool a_ok, float a_cooldown, bool a_complete = false) -> bool {
             if (!a_ok && r.dispatched && r.phase == Phase::Trading) { Finish(fid, a_why.c_str(), a_cooldown); return false; }
+            // R7: the INN stop's counter business (food) is over -- he is AT the inn, so he STAYS (rests / sits / sleeps) instead of leaving.
+            if (r.phase != Phase::Walking && r.phase != Phase::Resting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn) {
+                SyncCur(r);
+                if (Rest::Begin(a_follower, r.stops[r.cur], r.vendor, r.followerName, r.town, a_now)) {
+                    APMFBridge::ReleaseErrandIdle(fid);   // the counter's ch.12 beat + ch.1 hold end: the work packages need him free to move
+                    r.phase = Phase::Resting;
+                    r.phaseAt = a_now;
+                    r.dispatched = false;
+                    spdlog::info("[errand] {:08X} '{}': the inn's counter business is over ({}) -- he STAYS", fid, r.followerName, a_why);
+                    Store(fid, r);
+                    return true;
+                }
+            }
             if (!NextStopOrFinish(fid, r, a_now, a_why, a_ok, a_cooldown, a_complete)) return false;
             Store(fid, r);
             return true;
         };
+        // R7: the inn stay / the temple prayer: the Rest module's steps (its own claims and clocks), not the shop beats below.
+        if (r.phase == Phase::Resting) {
+            const auto st = Rest::Step(a_follower, a_now);
+            if (st.res == Rest::Result::Continue) { Store(fid, r); return true; }
+            return stopOver(st.why, st.res == Rest::Result::Done, st.res == Rest::Result::Done ? Config::g_errandCooldownSec.load() : kFailCooldownSec);
+        }
         // r.vendor == 0: still walking to the shop's PLACE (a cell / a ref); the vendor actor is found on arrival.
         RE::Actor* vendor = r.vendor ? RE::TESForm::LookupByID<RE::Actor>(r.vendor) : nullptr;
         // R5: a LATER stop's vendor may be unloaded while he walks there (he is in the previous shop's interior with the player): the
@@ -1152,7 +1222,24 @@ namespace MFO::Logistics::Errand {
                 APMFBridge::LootLegState pleg;
                 if (APMFBridge::ReadErrandLeg(fid, pleg) && pleg.ours) {
                     if (pleg.state == APMF_API::kLeg_Arrived) {
+                        // R7: an INN / TEMPLE stop. The temple has no vendor; the inn has the innkeeper only when a food order was planned and he
+                        // stands there -- otherwise the stop is REST ONLY (logged) and the work begins at once.
+                        const StopKind kind = r.cur < r.stops.size() ? r.stops[r.cur].kind : StopKind::Shop;
+                        auto beginWork = [&]() -> bool {
+                            SyncCur(r);
+                            if (!Rest::Begin(a_follower, r.stops[r.cur], 0, r.followerName, r.town, a_now))
+                                return stopOver("the stop's work could not begin", false, kFailCooldownSec);
+                            r.phase = Phase::Resting;
+                            r.phaseAt = a_now;
+                            Store(fid, r);
+                            return true;
+                        };
+                        if (kind == StopKind::Temple || (kind == StopKind::Inn && !r.order)) return beginWork();
                         auto va = FindVendorActor(a_follower, r.faction);
+                        if (!va && kind == StopKind::Inn) {
+                            spdlog::info("[errand] {:08X}: the inn has no innkeeper in his cell -- no food bought, the stop is rest only", fid);
+                            return beginWork();
+                        }
                         if (!va) return stopOver("the shop is unattended (no vendor actor in the loaded shop)", false, kFailCooldownSec);
                         r.vendor = va->GetFormID();
                         r.vendorName = NameOf(va.get());
@@ -1312,7 +1399,15 @@ namespace MFO::Logistics::Errand {
             // R5: this stop's SHARE of the trip (its rows, needs, wishes) and what the trip purse has left; a restored stop (no order)
             // re-plans in full on his live inventory and gold.
             const int purseCap = r.tripPurse >= 0 ? std::max(0, r.tripPurse - r.tripSpent) : -1;
-            EconomyErrandExecute(a_follower, a_state, a_now, probe, r.order.get(), purseCap);
+            if (r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn) {
+                // R7: the INN's counter business is its synthetic FOOD order (logistics/ErrandRest.cpp), not the economy probe's rows.
+                const auto dr = r.order ? Rest::DispatchOrder(a_follower, vendor, *r.order, purseCap) : Rest::Dispatch::Nothing;
+                if (dr == Rest::Dispatch::Nothing)
+                    return stopOver("nothing to buy at the inn (no purse / no chest / no order)", true, kFailCooldownSec);
+                probe.dispatched = dr == Rest::Dispatch::Sent;
+            } else {
+                EconomyErrandExecute(a_follower, a_state, a_now, probe, r.order.get(), purseCap);
+            }
             if (probe.dispatched) {
                 r.phase = Phase::Trading;
                 r.dispatched = true;
@@ -1383,6 +1478,9 @@ namespace MFO::Logistics::Errand {
             Store(fid, r);
             return true;
         }
+
+        case Phase::Resting:   // (handled above, before the vendor checks)
+            return true;
         }
         return true;
     }
@@ -1425,7 +1523,9 @@ namespace MFO::Logistics::Errand {
                     if (APMFBridge::InCombat(f) || (pc && pc->IsInCombat())) why = "combat -- he rejoins";   // substrate: not combat (v26)
                     else if (ids && std::find(ids->begin(), ids->end(), fid) == ids->end()) why = "no longer an active follower";
                     else if (clk - r.lastTickClk > kStallSec) why = "the follower is no longer serviced";
-                    else if (clk - r.startClk > kRealCapSec) why = "timed out (240 s real time)";
+                    else if (clk - r.startClk > kRealCapSec &&
+                             !(r.phase == Phase::Resting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn))   // R7: an inn stay has no cap
+                        why = "timed out (240 s real time)";
                     else if (!loading && pc && pc->Is3DLoaded()) {
                         // PLAYER LEAVES TOWN (marth 2026-10-18): a LOADED errand ends and his follow package walks him back.
                         // (An unloaded one is the simulation's: it resolves the errand and recalls him.)
@@ -1452,6 +1552,8 @@ namespace MFO::Logistics::Errand {
                 r = it->second;
                 g_recs.erase(it);
             }
+            const bool wasResting = r.phase == Phase::Resting;
+            if (wasResting) Rest::End(fid, "he unloaded -- handed to the simulation", false);   // R7: the stay continues off screen (REST_SIM)
             APMFBridge::ReleaseErrand(fid);   // Harbinger dropped the claims with the unload; this forgets our record of them
             SimStart st;
             st.follower = fid; st.followerName = r.followerName; st.vendorName = r.vendorName;
@@ -1462,7 +1564,7 @@ namespace MFO::Logistics::Errand {
             st.stops = r.stops; st.cur = r.cur; st.tripPurse = r.tripPurse; st.tripSpent = r.tripSpent;
             st.arrived = r.phase != Phase::Walking;
             st.tradeDispatched = r.dispatched;
-            st.tradeDone = r.phase == Phase::Taking;
+            st.tradeDone = r.phase == Phase::Taking || (wasResting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn);   // R7: an inn stay is past its trade
             Sim::Begin(std::move(st));
         }
     }
