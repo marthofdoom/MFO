@@ -2087,3 +2087,15 @@ Reviewer: the BLOCKED door log lists only load doors within kScan of the followe
 
 ### MFO-B404 (SEV-5, OPEN, logistics/Errand.cpp) -- town: Errand.cpp is 1672 lines (raised against dc0c334)
 Reviewer: past the ~1500 plan-a-split line. Split note only; a split is its own brief (CLAUDE.md).
+
+### MFO-B405 (SEV-4, OPEN, logistics/ErrandSim.cpp MoveHold) -- town: a ref-destination sim stop has no hold after arrival and fails quietly (raised against 8444346)
+Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded ref destination while its handle resolves, but "a ref leg ends at arrival and drops its offer (Key Concept 11a covers cell legs only). Once he arrives off-screen during TRADE_SIM, nothing holds him and the follow package walks him back toward the player." And if the vendor ref no longer resolves, ComposeLeg ends the held leg Failed, Repoint returns nothing, `RepointErrandTravel` still returns true and MoveHold logs "sim moved hold". Suggestion: for a ref destination, read the leg state on the next sim poll and WARN on Failed, DestGone or Arrived-at-ref. Risk low (vendors loaded at plan time, mostly persistent).
+
+### MFO-B406 (SEV-4, OPEN, apmf/ErrandClaims.cpp ~:160) -- town: a refused ClaimErrandTravel erases live ch.12/ch.1 handles without releasing them (raised against 8444346)
+"ClaimErrandTravel erases the whole s_claims entry when Harbinger refuses. That entry can still hold live ch.12 and ch.1 handles (the temple kneel claims now kept at hand-off, or a counter hand-off). They are dropped without being released, so the ch.1 MovementBlock leaks until a load." Only reachable when the travel claim is refused (bTravel=0, esl missing, VR -- an INI change mid-session). Fix: on refusal, reset only the travel fields.
+
+### MFO-B407 (SEV-4, OPEN, logistics/Errand.cpp ResumePhysical work path) -- town: temple work-path resume keeps the old ch.1/ch.12/Activate claims (raised against 8444346)
+"The temple work-path resume (ResumePhysical, a_info.work, then Rest::Begin Seek) does not release the kept ch.1, ch.12 or Activate work claims before walking to the shrine. He is usually still at the shrine, so the distance check passes as 'arrived' and the next Activate re-uses the existing claim. Mostly self-healing."
+
+### MFO-B408 (SEV-4, OPEN, logistics/ErrandSim.cpp MoveHold) -- town: MoveHold logs success when Harbinger's Repoint silently fails (raised against 8444346)
+"MoveHold logs success even when the Repoint silently fails in Harbinger. This is the same root as" MFO-B405 (Repoint is void in the ABI; the wrapper reports true).
