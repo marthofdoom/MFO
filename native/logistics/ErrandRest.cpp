@@ -8,8 +8,9 @@
 //   Once a trip ends no new errand is planned for that follower until the player leaves the town (TripDone / MarkTripDone).
 //   WORLD STATE IS PRIMARY (marth 2026-10-19, no co-save): what a follower still needs is derived from the world on every plan --
 //     inventory (arrows / potions / food / sellables), his active effects (a blessing = an effect whose MGEF carries MagicBlessing,
-//     a disease), so a fully stocked, blessed follower plans NO trip after a reload; the inn is never a trip alone. The session-only
-//     TripDone mark is a SECONDARY guard: it only stops a re-plan for needs the visit could not satisfy (a vendor with no gold left).
+//     a disease), so a fully stocked, blessed follower plans no SHOP or TEMPLE stop after a reload, only the INN-ONLY trip
+//     (marth 2026-10-19: he walks to the inn and stays; this overturns "the inn is never a trip alone"). The session-only TripDone mark
+//     ends that trip's re-plan for the visit; it is a SECONDARY guard for needs the visit could not satisfy (a vendor with no gold left).
 //
 //   INN. Found through the town's load doors (the interior CELL whose location IsInn, LocationTypes) and the vendor FACTION whose
 //     place sits in that location (the innkeeper, a normal shop stop: talk / give / trade / take beats, the order a small FOOD
@@ -718,7 +719,8 @@ namespace MFO::Logistics::Errand::Rest {
         }
         std::string templeWhy;
         const bool wantTemple = temple.ok && TempleWanted(fid, templeWhy);
-        if (!a_haveStops && !wantTemple) return false;   // no shop work and no temple reason: no trip (the inn alone is never a trip)
+        // marth 2026-10-19: with no shop work and no temple reason the trip is the INN ALONE (walk to the inn, then stay: sandbox / eat /
+        // sleep until the player leaves town or combat starts). A fully stocked follower in town goes to the inn; TripDone ends it.
         const bool wasEmpty = a_stops.empty();
         std::string add;
 

@@ -987,7 +987,9 @@ namespace MFO::Logistics::Errand {
 
         int dropped = 0;
         auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped);
-        if (cands.empty()) return true;
+        // R7 (marth 2026-10-19): no open shop is NOT "no errand" -- a follower with nothing to shop for still plans the INN-ONLY trip
+        // (Rest::Augment below), so the early return is only for inn errands switched off (MFO-B353).
+        if (cands.empty() && !Config::g_errandInn.load()) return true;
 
         // PLAN: the SAME code a trade uses evaluates every candidate -- loaded vendor actors AND faction-only shops -- and hands
         // back the ORDER for each, built now while the follower is loaded (the simulation replays it; MFO never reads an
@@ -996,7 +998,7 @@ namespace MFO::Logistics::Errand {
         shops.reserve(cands.size());
         for (auto& c : cands) shops.push_back(ErrandShop{ c.fac, c.handle });
         std::vector<ErrandPlanned> planned;
-        EconomyErrandPlan(a_follower, a_state, a_now, shops, planned);
+        if (!shops.empty()) EconomyErrandPlan(a_follower, a_state, a_now, shops, planned);
 
         const int minSell  = Config::g_errandMinSellGold.load();
         const int minPurse = Config::g_errandMinPurse.load();
