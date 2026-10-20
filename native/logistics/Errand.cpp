@@ -1024,10 +1024,17 @@ namespace MFO::Logistics::Errand {
             spdlog::warn("[errand] {:08X}: a watched shop opened but the town {:08X} does not resolve -- no new trip", a_follower->GetFormID(), a_townId);
             return false;
         }
-        spdlog::info("[errand] {:08X} '{}': a NEEDED SHOP OPENED -- a new trip of {} stop(s) (the inn last): {}", a_follower->GetFormID(), NameOf(a_follower),
-                     a_plan.stops.size(), a_plan.line);
         const std::size_t n = a_plan.stops.size();
-        return StartTrip(a_follower, town, a_now, std::move(a_plan.stops), a_plan.line, n);
+        const std::string line = a_plan.line;
+        std::vector<Stop> stops = a_plan.stops;   // (copy: a failed start leaves the plan, and the watch, intact for the retry)
+        if (!StartTrip(a_follower, town, a_now, std::move(stops), line, n)) {
+            Reopen::Retry(a_follower->GetFormID());
+            spdlog::warn("[errand] {:08X} '{}': a needed shop opened but the new trip could NOT start (queued at the ch.19 walk budget or the travel claim was refused) -- the shop stays in the watch, retried", a_follower->GetFormID(), NameOf(a_follower));
+            return false;
+        }
+        Reopen::Consume(a_follower->GetFormID(), a_plan);
+        spdlog::info("[errand] {:08X} '{}': a NEEDED SHOP OPENED -- new trip of {} stop(s) STARTED (the inn last): {}", a_follower->GetFormID(), NameOf(a_follower), n, line);
+        return true;
     }
 
     // ── public: the planner (the idle branch of ServiceFollower) ─────────────────────────────────────
@@ -1057,7 +1064,6 @@ namespace MFO::Logistics::Errand {
         Clock::time_point townSince{};
         const RE::FormID tidNow = playerTown ? playerTown->GetFormID() : 0u;
         Rest::NoteTown(tidNow);   // R7: the player's town changed (or he left town) -> every "trip done" mark is cleared (before any early return below)
-        Rest::NoteCombat(pc->IsInCombat());   // F2: the combat-end edge clears the marks (a FRESH plan runs after the combat cooldown); before any early return below
         {
             std::scoped_lock lk(g_mx);
             const RE::FormID tid = playerTown ? playerTown->GetFormID() : 0u;
@@ -1082,8 +1088,7 @@ namespace MFO::Logistics::Errand {
                 Reopen::Plan plan;
                 const auto from = a_follower->GetPosition();
                 if (Reopen::Poll(fid, tidNow, &from, plan)) {
-                    Rest::UnmarkTripDone(fid, "a needed shop opened");
-                    StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan));
+                    if (StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan))) Rest::UnmarkTripDone(fid, "a needed shop opened");   // a failed start keeps the mark (the watch retries)
                 }
             }
             return true;
@@ -1666,6 +1671,10 @@ namespace MFO::Logistics::Errand {
 
     // ── public: the owner-independent backstop ───────────────────────────────────────────────────────
     void Sweep() {
+        {   // F2: the combat-end edge clears the trip-done marks (a FRESH plan runs after the combat cooldown). Sampled HERE, every pump lap: TryStart never runs during party combat.
+            auto* pc0 = RE::PlayerCharacter::GetSingleton();
+            Rest::NoteCombat(pc0 && pc0->IsInCombat());
+        }
         Sim::Sweep();   // R1b: the off-screen errands (their own table; a lap of the game-time clock)
 
         std::vector<std::pair<RE::FormID, std::string>> ends;

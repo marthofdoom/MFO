@@ -26,8 +26,8 @@
 //
 // THREADING. Planner / Begin / Step / End: the AddTask job worker (the service tick, the pump's sweep), the follower loaded. Engine
 // reads that are not worker-safe (the active-effect list) run in a closure Posted to the true main thread and land in a leaf-mutex
-// mirror (MagicView). g_mx is a LEAF: never held across an engine, Harbinger, Papyrus or TradeBridge call, never nested with the
-// Errand or Sim g_mx. NOTHING HERE IS SAVED (the ERND record carries the stop kinds; the ledgers are session-only).
+// mirror (MagicView). g_mx is held across no engine, Harbinger, Papyrus or TradeBridge call and never nested with the
+// Errand or Sim g_mx; it IS taken inside Rest::NoteTown (which calls Reopen::ClearAll, a leaf of its own: Rest g_mx -> Reopen g_mx, never reversed). NOTHING HERE IS SAVED (the ERND record carries the stop kinds; the ledgers are session-only).
 #include "PCH.h"
 #include "Errand_internal.h"
 #include "Config.h"

@@ -248,14 +248,18 @@ namespace MFO::Logistics::Errand {
         struct Plan {
             std::vector<Stop> stops;   // the opened shops in visit order, then the inn stop (state Pending, no order); stops.front() is Active
             std::string       line;    // the plan line's body
+            std::vector<RE::FormID> keys;   // the opened shops' plan keys: Consume() takes them out of the watch once the trip really started
         };
         // Planner (worker, TryStart), at the commit of a trip. a_closedCands / a_closedOrders = the hours-closed shops and their orders (empty = erase
         // the watch). a_in = the plan's inputs; a_innStop = the committed trip's inn stop (null = the trip has none).
         void Record(RE::FormID a_follower, RE::FormID a_town, std::vector<Trip::Cand>&& a_closedCands, std::vector<ErrandPlanned>&& a_closedOrders,
                     const Trip::Inputs& a_in, const Stop* a_innStop);
-        // Worker. TRUE = a_out is a new trip. Hour-gated (once per game hour per follower). a_from (null = the recorded one) is where he is now.
+        // Worker. TRUE = a_out is a new trip (the opened shops stay in the watch until Consume; a "no stop" verdict drops them here). Hour-gated (once per game hour per follower). a_from (null = the recorded one) is where he is now.
         // Takes Errand g_mx then Sim g_mx (Trip::ChestCrowd): the caller holds neither.
         bool Poll(RE::FormID a_follower, RE::FormID a_town, const RE::NiPoint3* a_from, Plan& a_out);
+        // The trip started: the opened shops leave the watch. Not consumed on a failed start (queued at kMaxWalking / the ch.19 claim refused): Retry.
+        void Consume(RE::FormID a_follower, const Plan& a_plan);
+        void Retry(RE::FormID a_follower);   // the start failed: lift the once-per-game-hour gate so the next Poll tries again
         void ClearAll();   // the player's town changed / revert / load
     }
 

@@ -105,23 +105,25 @@ namespace MFO::Logistics::Errand::Reopen {
         std::vector<Stop> shops;
         std::string line;
         const bool ok = Trip::Plan(open, openOrders, in, shops, line);
-        {   // the opened factions are consumed either way (a stop = they are in the new trip; none = nothing to do there)
+        auto consume = [&](const std::vector<RE::FormID>& a_keys) {
             std::scoped_lock lk(g_mx);
-            if (const auto it = g_watch.find(a_follower); it != g_watch.end()) {
-                auto& cs = it->second.cands;
-                std::erase_if(cs, [&](const Trip::Cand& c) {
-                    return std::any_of(open.begin(), open.end(), [&](const Trip::Cand& o) { return o.key == c.key; });
-                });
-                std::erase_if(it->second.orders, [&](const ErrandPlanned& p) {
-                    return std::none_of(cs.begin(), cs.end(), [&](const Trip::Cand& c) { return c.key == p.vendorKey; });
-                });
-                if (cs.empty()) g_watch.erase(it);
-            }
-        }
+            const auto it = g_watch.find(a_follower);
+            if (it == g_watch.end()) return;
+            auto& cs = it->second.cands;
+            std::erase_if(cs, [&](const Trip::Cand& c) { return std::find(a_keys.begin(), a_keys.end(), c.key) != a_keys.end(); });
+            std::erase_if(it->second.orders, [&](const ErrandPlanned& p) {
+                return std::none_of(cs.begin(), cs.end(), [&](const Trip::Cand& c) { return c.key == p.vendorKey; });
+            });
+            if (cs.empty()) g_watch.erase(it);
+        };
+        std::vector<RE::FormID> keys;
+        for (const auto& c : open) keys.push_back(c.key);
         if (!ok || shops.empty()) {
+            consume(keys);   // no stop: nothing to do there, those factions leave the watch
             spdlog::info("[errand] {:08X}: the opened shop(s) {} yield NO stop over the recorded needs (nothing to sell / buy there) -- dropped from the watch, he stays", a_follower, names);
             return false;
         }
+        a_out.keys = keys;
         const std::size_t room = kMaxTripStops - (w.inn ? 1u : 0u);
         if (shops.size() > room) shops.resize(room);
         a_out.stops = std::move(shops);
@@ -135,6 +137,23 @@ namespace MFO::Logistics::Errand::Reopen {
         a_out.stops.front().state = StopState::Active;
         a_out.line = std::format("REOPEN {} | {}", names, line);
         return true;
+    }
+
+    void Consume(RE::FormID a_follower, const Plan& a_plan) {
+        std::scoped_lock lk(g_mx);
+        const auto it = g_watch.find(a_follower);
+        if (it == g_watch.end()) return;
+        auto& cs = it->second.cands;
+        std::erase_if(cs, [&](const Trip::Cand& c) { return std::find(a_plan.keys.begin(), a_plan.keys.end(), c.key) != a_plan.keys.end(); });
+        std::erase_if(it->second.orders, [&](const ErrandPlanned& p) {
+            return std::none_of(cs.begin(), cs.end(), [&](const Trip::Cand& c) { return c.key == p.vendorKey; });
+        });
+        if (cs.empty()) g_watch.erase(it);
+    }
+
+    void Retry(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mx);
+        if (const auto it = g_watch.find(a_follower); it != g_watch.end()) it->second.lastHour = -1;
     }
 
     void ClearAll() {

@@ -2115,3 +2115,15 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 ### MFO-B413 (SEV-5, OPEN, logistics/ErrandRest.cpp FindPlaces) -- town: the inn has no separate hours gate (raised against feat/mfo-town-run2)
 "The inn and the temple are gated only by their load door's lock (a night-locked door reads locked at that hour). There is no VENV-style opening-hours test; a place that is unlocked but 'closed' by script is walked to. The spec for F4 asked to apply 'the inn's LOCKED + hours gate': the inn has the lock gate only, which is what the temple now gets."
 
+
+### MFO-B414 (SEV-5, FIXED in the comment, logistics/ErrandRest.cpp:29) -- town: stale "leaf lock" comment (raised against 8aae97b)
+"leaf comment" (Opus review of feat/mfo-town-run2): the file header called g_mx a LEAF never nested, but Rest::NoteTown holds it while calling Reopen::ClearAll. The header comment now states the real order (Rest g_mx -> Reopen g_mx, never reversed).
+
+### MFO-B415 (SEV-5, OPEN, logistics/Errand.cpp BuildCatalog / ErrandReopen.cpp) -- town: a vendor whose quote is still pending (refreshPending) drops out of the watch with a misleading reason (raised against 8aae97b)
+"quote-pending closed shop" (Opus review of feat/mfo-town-run2): a closed shop whose plan-time quote/order was not ready leaves the watch with the 'yield NO stop' reason instead of being re-recorded.
+
+### MFO-B416 (SEV-5, OPEN, logistics/ErrandRest.cpp Augment) -- town: g_doorLogged is consumed by the first verdict so the success door line may never log (raised against 8aae97b)
+"door log" (Opus review of feat/mfo-town-run2): the once-per-visit g_doorLogged flag is eaten by an earlier 'could not be read' verdict, so the later 'entry door found' line never logs.
+
+### MFO-B417 (SEV-5, OPEN, logistics/ErrandReopen.cpp Poll) -- town: a reopened trip re-adds an inn stop that was Skipped in the first trip (raised against 8aae97b)
+"skipped inn re-appended" (Opus review of feat/mfo-town-run2): the recorded inn stop is appended to every reopened trip even when the first trip's inn stop ended Skipped (locked door / failure).

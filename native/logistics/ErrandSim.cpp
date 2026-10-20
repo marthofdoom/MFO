@@ -886,8 +886,11 @@ namespace MFO::Logistics::Errand::Sim {
             // end it like the player leaving town (finish his business, bring him back) instead of tripping the cap with a misleading line.
             const double jumpDays = r.lastDays > 0.0 ? days - r.lastDays : 0.0;
             r.lastDays = days;
-            if (r.stage != Stage::Rest && jumpDays > kClockJumpDays) {
-                spdlog::info("[errand] {:08X} '{}': the game clock jumped {:.1f} game h in one poll (fast travel / wait / sleep) -- treated as the player leaving town", fid, r.followerName, jumpDays * 24.0);
+            // marth: only the player LEAVING town ends the record; a plain Wait / sleep in town (waiting for shops to open is F3's case) lets the timeline go on.
+            // The clock jump counts only with a player world transition (fast travel / a load) inside the last poll or two.
+            const float sinceT = Followers::SecondsSinceTransition();
+            if (r.stage != Stage::Rest && jumpDays > kClockJumpDays && sinceT >= 0.0f && sinceT <= 3.0f) {
+                spdlog::info("[errand] {:08X} '{}': the game clock jumped {:.1f} game h in one poll WITH a player world transition (fast travel) -- treated as the player leaving town", fid, r.followerName, jumpDays * 24.0);
                 ResolveNow(r, f, days, "a game-clock jump");
                 APMFBridge::ReleaseErrand(fid);   // the hold ends before the recall move
                 detail::RecallToPlayer(fid, "a game-clock jump");
