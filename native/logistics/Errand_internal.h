@@ -265,13 +265,13 @@ namespace MFO::Logistics::Errand::Smith {
     enum class Prep { Off, Ready, Pending };
     // Planner gate (worker, TryStart, BEFORE EconomyErrandPlan). Ready = a want list younger than ~30 s exists (it may be empty);
     // Pending = a main-thread build was queued, the caller returns and plans again on its next cadence; Off = smithing is off.
-    Prep Prepare(RE::Actor* a_follower);
+    // a_smithyHere: some open shop of this town trades ore / ingots or weapons (materials are only wished for when it does).
+    Prep Prepare(RE::Actor* a_follower, bool a_smithyHere);
     // EconomyProbeImpl (errand mode, worker): the materials he still has to BUY for his planned tempers -> BuyThresholds::smithMats.
     // Cache read only.
     void FillMaterials(RE::FormID a_follower, std::vector<TradeBridge::SmithMat>& a_out);
     // Planner (worker, after Trip::Plan, BEFORE R7's Rest::Augment): appends the Smith stop to a_stops when he has an improvable
-    // piece AND (carries the materials OR a planned shop stop buys them). a_haveStops = Trip::Plan found shop work. True = a
-    // Smith stop was appended (a_line gets its text).
+    // piece AND (carries the materials OR a planned shop stop buys them). True = a Smith stop was appended (a_line gets its text).
     bool Augment(RE::Actor* a_follower, const std::vector<Trip::Cand>& a_cands, std::vector<Stop>& a_stops, std::string& a_line);
 
     enum class Result { Continue, Done, Failed };

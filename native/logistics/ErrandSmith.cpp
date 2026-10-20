@@ -103,6 +103,7 @@ namespace MFO::Logistics::Errand::Smith {
 
         struct Want {
             bool                     built = false, pending = false;
+            int                      smithy = -1;   // the town has a smithy (a shop trading ore / ingots or weapons): -1 not known yet, 0 no, 1 yes
             Clock::time_point        at{}, pendingSince{};
             std::string              note;          // why the list is empty (a refusal, no recipes, ...)
             float                    skill = 0.0f;
@@ -131,6 +132,7 @@ namespace MFO::Logistics::Errand::Smith {
         std::unordered_map<RE::FormID, Want>         g_want;
         std::unordered_map<RE::FormID, Work>         g_work;
         std::unordered_map<RE::FormID, Plan>         g_plan;
+        std::unordered_map<RE::FormID, std::string>  g_lastSummary;   // the want-list line last logged per follower: a rebuild that changes nothing is silent
 
         // MAIN-thread only: the temper recipe index and the once-per-recipe condition log.
         std::unordered_map<RE::FormID, std::vector<const RE::BGSConstructibleObject*>> g_recipes;   // created object -> recipes
@@ -352,6 +354,7 @@ namespace MFO::Logistics::Errand::Smith {
         // ── the want-list BUILD (MAIN thread) ─────────────────────────────────────────────────────────────────────
         void StoreWant(RE::FormID a_fid, Want&& a_w) {
             std::scoped_lock lk(g_mx);
+            a_w.smithy = g_want[a_fid].smithy;   // the planner's flag survives a rebuild
             a_w.built = true;
             a_w.pending = false;
             a_w.at = Clock::now();
@@ -383,6 +386,7 @@ namespace MFO::Logistics::Errand::Smith {
             const auto worn = ReadWorn(f);
             w.have = CountsOf(f);
             std::string notes;
+            std::vector<std::string> tlines;   // the P-SMITH-T lines, logged with the summary when the want list CHANGED
             bool refused = false;
             for (const auto& p : worn) {
                 const char* nm = NameOf(p.obj);
@@ -421,10 +425,10 @@ namespace MFO::Logistics::Errand::Smith {
                     return RE::BSContainer::ForEachResult::kContinue;
                 });
                 // P-SMITH-T: every number of the formula, for the field check.
-                spdlog::info("[smith] {:08X} P-SMITH-T '{}': Smithing {:.1f}, fHealthDataValue1 {:.3f} fHealthDataValue6 {:.3f} "
-                             "fSmithingConditionFactor {:.4f} -> raw {:.3f}, delta {:.4f} -> after EP 76 {:.4f} -> target {:.1f}; "
-                             "worn copy {:.2f}; recipe {:08X}", a_fid, nm, w.skill, hdv1, hdv6, factor, raw, delta0, delta1, target,
-                             p.health, chosen->GetFormID());
+                tlines.push_back(std::format("[smith] {:08X} P-SMITH-T '{}': Smithing {:.1f}, fHealthDataValue1 {:.3f} fHealthDataValue6 {:.3f} "
+                                             "fSmithingConditionFactor {:.4f} -> raw {:.3f}, delta {:.4f} -> after EP 76 {:.4f} -> target {:.1f}; "
+                                             "worn copy {:.2f}; recipe {:08X}", a_fid, nm, w.skill, hdv1, hdv6, factor, raw, delta0, delta1,
+                                             target, p.health, chosen->GetFormID()));
                 w.lines.push_back(std::move(l));
             }
             if (refused) {
@@ -440,10 +444,21 @@ namespace MFO::Logistics::Errand::Smith {
             w.buy = Shortfall(w.lines, w.have);
             std::string mats;
             for (const auto& m : w.buy) mats += std::format("{}{} x{}", mats.empty() ? "" : ", ", NameOf(RE::TESForm::LookupByID(m.form)), m.qty);
-            spdlog::info("[smith] {:08X} '{}': want list built -- Smithing {:.0f}, {} worn piece(s) read, {} improvable{}{}; to buy: {}",
-                         a_fid, f->GetName(), w.skill, worn.size(), w.lines.size(), refused ? " (REFUSED)" : "", notes,
-                         mats.empty() ? "nothing" : mats);
-            for (const auto& l : w.lines) spdlog::info("[smith] {:08X}   want {}", a_fid, LineText(l));
+            // A rebuild (every ~30 s at a plan, ~2 min in the field) that changes nothing is silent.
+            std::string summary = std::format("Smithing {:.0f}, {} worn piece(s) read, {} improvable{}{}; to buy: {}", w.skill, worn.size(),
+                                              w.lines.size(), refused ? " (REFUSED)" : "", notes, mats.empty() ? "nothing" : mats);
+            for (const auto& l : w.lines) summary += "\n   want " + LineText(l);
+            bool changed = true;
+            {
+                std::scoped_lock lk(g_mx);
+                auto& last = g_lastSummary[a_fid];
+                changed = last != summary;
+                if (changed) last = summary;
+            }
+            if (changed) {
+                for (const auto& t : tlines) spdlog::info("{}", t);
+                spdlog::info("[smith] {:08X} '{}': want list built -- {}", a_fid, f->GetName(), summary);
+            }
             StoreWant(a_fid, std::move(w));
         }
 
@@ -576,13 +591,14 @@ namespace MFO::Logistics::Errand::Smith {
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
     // public (Errand_internal.h / Errand.h)
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
-    Prep Prepare(RE::Actor* a_follower) {
+    Prep Prepare(RE::Actor* a_follower, bool a_smithyHere) {
         if (!kTripHooked || !a_follower || !Config::g_errandSmith.load() || !MainThread::IsInstalled()) return Prep::Off;
         const auto fid = a_follower->GetFormID();
         {
             std::scoped_lock lk(g_mx);
-            const auto it = g_want.find(fid);
-            if (it != g_want.end() && it->second.built && Clock::now() - it->second.at < kFresh) return Prep::Ready;
+            auto& w = g_want[fid];
+            w.smithy = a_smithyHere ? 1 : 0;
+            if (w.built && Clock::now() - w.at < kFresh) return Prep::Ready;
         }
         QueueBuild(a_follower);
         return Prep::Pending;
@@ -593,7 +609,8 @@ namespace MFO::Logistics::Errand::Smith {
         if (!kTripHooked || !Config::g_errandSmith.load()) return;
         std::scoped_lock lk(g_mx);
         const auto it = g_want.find(a_follower);
-        if (it != g_want.end() && it->second.built) a_out = it->second.buy;
+        // Only while the town he is in HAS a smithy: materials bought for a forge that is not there would sit in his pack.
+        if (it != g_want.end() && it->second.built && it->second.smithy == 1) a_out = it->second.buy;
     }
 
     bool Augment(RE::Actor* a_follower, const std::vector<Trip::Cand>& a_cands, std::vector<Stop>& a_stops, std::string& a_line) {
@@ -872,6 +889,7 @@ namespace MFO::Logistics::Errand::Smith {
         g_want.clear();
         g_work.clear();
         g_plan.clear();
+        g_lastSummary.clear();
     }
 
     // ── the loot side (Errand.h) ───────────────────────────────────────────────────────────────────────────────────
@@ -883,7 +901,7 @@ namespace MFO::Logistics::Errand::Smith {
             std::scoped_lock lk(g_mx);
             const auto it = g_want.find(fid);
             if (it != g_want.end() && it->second.built) {
-                want = !it->second.buy.empty();
+                want = !it->second.buy.empty() && it->second.smithy != 0;   // (0 = the last town he planned in had no smithy)
                 stale = Clock::now() - it->second.at >= kLootRefresh;
             }
         }

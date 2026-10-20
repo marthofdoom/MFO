@@ -955,7 +955,10 @@ namespace MFO::Logistics::Errand {
         if (cands.empty()) return true;
         // R8: the smithing want list is built on the MAIN thread (the tempering entry point); the plan reads it, so a missing or old
         // one is queued first and the plan is made on the next cadence. Off (smithing off / not hooked in this build) costs nothing.
-        if (Smith::Prepare(a_follower) == Smith::Prep::Pending) return true;
+        bool anySmithy = false;
+        for (const auto& c : cands)
+            if (ListTrades(c.fac, kKwOreIngot) || ListTrades(c.fac, kKwWeapon)) { anySmithy = true; break; }
+        if (Smith::Prepare(a_follower, anySmithy) == Smith::Prep::Pending) return true;
 
         // PLAN: the SAME code a trade uses evaluates every candidate -- loaded vendor actors AND faction-only shops -- and hands
         // back the ORDER for each, built now while the follower is loaded (the simulation replays it; MFO never reads an
