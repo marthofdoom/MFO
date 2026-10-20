@@ -97,7 +97,7 @@ namespace MFO::Logistics::Errand {
         constexpr RE::FormID kIdleTake         = 0x000B5E1F;   // IdleTake
         constexpr RE::FormID kIdleExamine      = 0x00075C3D;   // IdleExamine (R4 browsing; verified in Skyrim.esm with tools/esp_inspect.py, 2026-10-19)
 
-        enum class Phase { Walking, Talking, Giving, Trading, Taking, Resting };   // R7: Resting = the inn stay / the temple prayer (logistics/ErrandRest.cpp owns its steps)
+        enum class Phase { Walking, Talking, Giving, Trading, Taking, Resting, Smithing };   // R7: Resting = the inn stay / the temple prayer (logistics/ErrandRest.cpp owns its steps)
 
         const char* PhaseName(Phase p) {
             switch (p) {
@@ -107,6 +107,7 @@ namespace MFO::Logistics::Errand {
                 case Phase::Trading: return "TRADING";
                 case Phase::Taking:  return "TAKING";
                 case Phase::Resting: return "RESTING";
+                case Phase::Smithing: return "SMITHING";   // R8: the smith stop's work (logistics/ErrandSmith.cpp owns its steps)
             }
             return "?";
         }
@@ -544,6 +545,7 @@ namespace MFO::Logistics::Errand {
                 g_cool[a_fid] = Clock::now() + std::chrono::milliseconds(static_cast<long long>(a_cooldownSec * 1000.0f));
                 if (a_complete) g_backoff.erase(BackoffKey(a_fid, r.chest));   // a successful DONE at this target forgives it
             }
+            if (r.phase == Phase::Smithing) Smith::End(a_fid, a_why);   // R8: the work claim + the work record
             if (r.phase == Phase::Resting) Rest::End(a_fid, a_why, true);   // R7: the stay's release reason is logged; the trip is done for this visit
             APMFBridge::ReleaseErrand(a_fid);   // idle, hold, walk (in that order) -- and the ch.9 work claim
             // A shop-place walk has no vendor actor yet (r.vendor == 0): name the faction / destination instead.
@@ -687,19 +689,21 @@ namespace MFO::Logistics::Errand {
     }
 
     std::string Describe(RE::FormID a_follower) {
-        bool resting = false;
+        bool resting = false, smithing = false;
         {
             std::scoped_lock lk(g_mx);
             auto it = g_recs.find(a_follower);
             if (it != g_recs.end()) {
                 const Rec& r = it->second;
-                if (r.phase == Phase::Resting) resting = true;   // R7: "Resting at X" / "Praying at X" (the Rest table is read below, the lock released)
+                if (r.phase == Phase::Smithing) smithing = true;   // R8: "Working at X" (the Smith table is read below)
+                else if (r.phase == Phase::Resting) resting = true;   // R7: "Resting at X" / "Praying at X" (the Rest table is read below, the lock released)
                 else {
                     const std::string shop = (r.vendorName.empty() || r.vendorName == "?") ? std::string("the shop") : r.vendorName;
                     return r.phase == Phase::Walking ? "Walking to " + shop : "Trading with " + shop;
                 }
             }
         }
+        if (smithing) return Smith::Describe(a_follower);
         if (resting) return Rest::Describe(a_follower);
         return Sim::Describe(a_follower);   // the table mutex is released: the two never nest
     }
@@ -745,6 +749,7 @@ namespace MFO::Logistics::Errand {
                     case Phase::Giving:  s.stage = SavedStage::PhysAtVendor; break;
                     case Phase::Trading: s.stage = SavedStage::PhysTrading; break;
                     case Phase::Taking:
+                    case Phase::Smithing:   // R8: saved as the last beat; a restored smith stop is not resumed (its plan is session-only)
                     case Phase::Resting: s.stage = SavedStage::PhysTaking; break;   // R7: a stay / prayer is saved as the last beat (no new stage string)
                 }
                 if (r.phase != Phase::Walking) s.flags |= Saved::kArrived;
@@ -1059,6 +1064,9 @@ namespace MFO::Logistics::Errand {
         std::string tripLine;
         // R7: the temple (when owed) and the INN (LAST) are appended to the shop stops; a trip with no shop work exists only for an owed temple.
         bool havePlan = Trip::Plan(tcands, planned, tin, stops, tripLine);
+        // R8: the smith stop (his worn gear improved with the materials the shop stops buy) goes AFTER the shops and BEFORE the temple
+        // and the inn (marth: "ONE complete trip per town visit"); a smith-only trip is a trip.
+        if (Smith::Augment(a_follower, tcands, stops, tripLine)) havePlan = true;
         havePlan = Rest::Augment(a_follower, a_state, a_now, playerTown, havePlan, stops, tripLine);
         if (!havePlan) {
             {
@@ -1192,6 +1200,13 @@ namespace MFO::Logistics::Errand {
             Store(fid, r);
             return true;
         };
+        // R8: the smith stop's work: the Smith module's steps (its own clocks, the ch.9 station claim, the temper apply).
+        if (r.phase == Phase::Smithing) {
+            const auto st = Smith::Step(a_follower, a_now);
+            if (st.res == Smith::Result::Continue) { Store(fid, r); return true; }
+            Smith::End(fid, st.why.c_str());
+            return stopOver(st.why, st.res == Smith::Result::Done, st.res == Smith::Result::Done ? Config::g_errandCooldownSec.load() : kFailCooldownSec);
+        }
         // R7: the inn stay / the temple prayer: the Rest module's steps (its own claims and clocks), not the shop beats below.
         if (r.phase == Phase::Resting) {
             const auto st = Rest::Step(a_follower, a_now);
@@ -1246,6 +1261,16 @@ namespace MFO::Logistics::Errand {
                             Store(fid, r);
                             return true;
                         };
+                        if (kind == StopKind::Smith) {   // R8: the smithy's place: the work begins at once (no vendor, no counter business)
+                            SyncCur(r);
+                            if (!Smith::Begin(a_follower, r.stops[r.cur], r.followerName, a_now))
+                                return stopOver("the smithing work could not begin", false, kFailCooldownSec);
+                            APMFBridge::ReleaseErrandIdle(fid);
+                            r.phase = Phase::Smithing;
+                            r.phaseAt = a_now;
+                            Store(fid, r);
+                            return true;
+                        }
                         if (kind == StopKind::Temple || (kind == StopKind::Inn && !r.order)) return beginWork();
                         auto va = FindVendorActor(a_follower, r.faction);
                         if (!va && kind == StopKind::Inn) {
@@ -1491,6 +1516,7 @@ namespace MFO::Logistics::Errand {
             return true;
         }
 
+        case Phase::Smithing:  // R8 (handled above, before the vendor checks)
         case Phase::Resting:   // (handled above, before the vendor checks)
             return true;
         }
@@ -1564,6 +1590,7 @@ namespace MFO::Logistics::Errand {
                 r = it->second;
                 g_recs.erase(it);
             }
+            if (r.phase == Phase::Smithing) Smith::End(fid, "he unloaded -- handed to the simulation");   // R8: SMITH_SIM finishes it (armor only)
             const bool wasResting = r.phase == Phase::Resting;
             if (wasResting) Rest::End(fid, "he unloaded -- handed to the simulation", false);   // R7: the stay continues off screen (REST_SIM)
             APMFBridge::ReleaseErrand(fid);   // Harbinger dropped the claims with the unload; this forgets our record of them

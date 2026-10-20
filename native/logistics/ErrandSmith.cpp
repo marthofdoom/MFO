@@ -39,10 +39,8 @@
 // ONLY a piece that took has its materials consumed (RemoveItem); a piece that did not take costs nothing and says why (probe
 // P-SMITH-W for weapons). MFO never animates or moves him: the station animation is a Harbinger ch.9 offer (OfferWork).
 //
-// STAGING (kTripHooked). The module is complete, but the trip chain's hook points (Errand.cpp TryStart / Tick, ErrandSim.cpp) belong to
-// R7's marked insertion point and are made once R7 is merged. Until then kTripHooked is FALSE and the three entry points that would
-// make a follower BUY or LOOT materials (Prepare, FillMaterials, WantsMaterials) answer "off": a follower must not shop for
-// materials a trip can never use. Flipping it is part of the hook-up.
+// HOOKED INTO THE TRIP CHAIN (after R7): Errand.cpp TryStart calls Prepare before the plan and Augment before Rest::Augment (so the order
+// is shops -> smith -> temple -> inn); the Smithing phase runs Begin / Step / End; ErrandSim.cpp's TRADE_SIM stage ends in SimFinish.
 //
 // THREADING: see Errand_internal.h (Smith). One leaf mutex; the engine, Papyrus and TradeBridge are never called under it.
 #include "PCH.h"
@@ -69,9 +67,6 @@
 namespace MFO::Logistics::Errand::Smith {
 
     namespace {
-        // STAGING GATE, see the header comment. Flipped to true by the hook-up round (after R7 merges).
-        constexpr bool kTripHooked = false;
-
         constexpr RE::FormID kKwSharpeningWheel = 0x00088108;   // CraftingSmithingSharpeningWheel (weapon temper bench)
         constexpr RE::FormID kKwArmorTable      = 0x000ADB78;   // CraftingSmithingArmorTable (armor temper bench)
         constexpr float      kTemperStep        = 0.05f;        // health moves in tenths; less than a half step is no improvement
@@ -139,15 +134,14 @@ namespace MFO::Logistics::Errand::Smith {
         bool                                         g_recipesBuilt = false;
         std::unordered_set<RE::FormID>               g_condSaid;
 
-        // ── Harbinger work offer (STUB until R7's apmf/ErrandWork.cpp merges) ───────────────────────────────────────
-        // R7 HOOK-UP: replace the bodies with APMFBridge::OfferErrandWork(a_fid, APMFBridge::ErrandWorkKind::Activate, a_station, 150.0f, a_why),
-        // APMFBridge::ReleaseErrandWork(a_fid) and APMFBridge::ErrandWorkHeld(a_fid). MFO declares the work and its target;
-        // Harbinger's ch.9 hook hands the Activate package to the follower. MFO never animates or moves him.
-        bool OfferWork(RE::FormID, RE::TESObjectREFR*, std::string& a_why) {
-            a_why = "the ch.9 work-package API (apmf/ErrandWork.cpp, R7) is not merged in this build";
-            return false;
+        // ── Harbinger work offer (R7's apmf/ErrandWork.cpp) ──────────────────────────────────────────────────────────
+        // The ch.9 package-offer claim of the Activate work package, its Target written at the station furniture (the same call the
+        // temple's shrine uses, radius 0). MFO declares the work and its target; Harbinger's 0x49 hook hands the package to the
+        // follower. MFO never animates or moves him.
+        bool OfferWork(RE::FormID a_fid, RE::TESObjectREFR* a_station, std::string& a_why) {
+            return APMFBridge::OfferErrandWork(a_fid, APMFBridge::ErrandWorkKind::Activate, a_station, 0.0f, a_why);
         }
-        void ReleaseWork(RE::FormID) {}
+        void ReleaseWork(RE::FormID a_fid) { APMFBridge::ReleaseErrandWork(a_fid); }
 
         // ── small helpers ──────────────────────────────────────────────────────────────────────────────────────────
         const char* NameOf(const RE::TESForm* a_form) {
@@ -592,7 +586,7 @@ namespace MFO::Logistics::Errand::Smith {
     // public (Errand_internal.h / Errand.h)
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════
     Prep Prepare(RE::Actor* a_follower, bool a_smithyHere) {
-        if (!kTripHooked || !a_follower || !Config::g_errandSmith.load() || !MainThread::IsInstalled()) return Prep::Off;
+        if (!a_follower || !Config::g_errandSmith.load() || !MainThread::IsInstalled()) return Prep::Off;
         const auto fid = a_follower->GetFormID();
         {
             std::scoped_lock lk(g_mx);
@@ -606,7 +600,7 @@ namespace MFO::Logistics::Errand::Smith {
 
     void FillMaterials(RE::FormID a_follower, std::vector<TradeBridge::SmithMat>& a_out) {
         a_out.clear();
-        if (!kTripHooked || !Config::g_errandSmith.load()) return;
+        if (!Config::g_errandSmith.load()) return;
         std::scoped_lock lk(g_mx);
         const auto it = g_want.find(a_follower);
         // Only while the town he is in HAS a smithy: materials bought for a forge that is not there would sit in his pack.
@@ -657,9 +651,14 @@ namespace MFO::Logistics::Errand::Smith {
         Stop s;
         s.kind = StopKind::Smith;
         s.faction = pick->faction; s.chest = pick->chest; s.vendorActor = pick->actorId; s.vendorName = pick->name;
-        s.destKind = pick->kind; s.destForm = pick->destForm; s.destRad = pick->destRad;
+        // A smith stop walks to the smithy's PLACE, never to a vendor actor (it has no counter business): a loaded vendor actor is
+        // reached as a reference. The smithy's furniture is then found directly in his loaded cell (FindStations), not through any
+        // learned vendor position.
+        s.vendorActor = 0;
+        s.destKind = pick->kind == DestKind::VendorActor ? DestKind::Ref : pick->kind;
+        s.destForm = pick->destForm; s.destRad = pick->destRad;
         s.pos = pick->pos; s.havePos = pick->havePos;
-        s.state = StopState::Pending;
+        s.state = a_stops.empty() ? StopState::Active : StopState::Pending;   // (a smith-only trip: Rest::Augment's wasEmpty test no longer sees it empty)
         a_stops.push_back(std::move(s));
         {
             std::scoped_lock lk(g_mx);
@@ -679,6 +678,7 @@ namespace MFO::Logistics::Errand::Smith {
         wk.place = a_stop.vendorName.empty() ? "the forge" : a_stop.vendorName;
         {
             std::scoped_lock lk(g_mx);
+            g_plan.erase(fid);           // the physical work needs no plan snapshot; a hand-off to the simulation mid-work must not re-apply it
             g_want[fid].built = false;   // a FRESH build at the forge: the materials he bought on this trip are in his inventory now
             g_work[fid] = std::move(wk);
         }
@@ -894,7 +894,7 @@ namespace MFO::Logistics::Errand::Smith {
 
     // ── the loot side (Errand.h) ───────────────────────────────────────────────────────────────────────────────────
     bool WantsMaterials(RE::Actor* a_follower) {
-        if (!kTripHooked || !a_follower || !Config::g_errandSmith.load() || !Config::g_townErrands.load() || !MainThread::IsInstalled()) return false;
+        if (!a_follower || !Config::g_errandSmith.load() || !Config::g_townErrands.load() || !MainThread::IsInstalled()) return false;
         const auto fid = a_follower->GetFormID();
         bool want = false, stale = true;
         {
@@ -910,7 +910,6 @@ namespace MFO::Logistics::Errand::Smith {
     }
 
     std::int32_t Wanted(RE::FormID a_follower, RE::FormID a_form) {
-        if (!kTripHooked) return 0;
         std::scoped_lock lk(g_mx);
         const auto it = g_want.find(a_follower);
         if (it == g_want.end() || !it->second.built) return 0;
