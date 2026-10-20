@@ -306,7 +306,8 @@ namespace MFO::Logistics {
                 auto* r = a_ev->ref.get();
                 if (r && !IsContainerRef(r))
                     ReadmitOnGateEvent(r, GateLikeRef(r), a_ev->opened ? "door/gate OPENED near it"
-                                                                       : "door/gate CLOSED near it");
+                                                                       : "door/gate CLOSED near it",
+                                       [&] { auto* by = a_ev->activeRef.get(); return by && by->IsPlayerRef(); }());
                 return RE::BSEventNotifyControl::kContinue;
             }
             // A lever portcullis may animate without SetOpen (no open/close
@@ -319,7 +320,8 @@ namespace MFO::Logistics {
                 auto* r    = a_ev->objectActivated.get();
                 auto* base = r ? r->GetBaseObject() : nullptr;
                 if (base && (base->Is(RE::FormType::Activator) || base->Is(RE::FormType::Door)))
-                    ReadmitOnGateEvent(r, GateLikeRef(r), "lever/door ACTIVATED near it");   // batch L
+                    ReadmitOnGateEvent(r, GateLikeRef(r), "lever/door ACTIVATED near it",   // batch L
+                                       [&] { auto* by = a_ev->actionRef.get(); return by && by->IsPlayerRef(); }());
                 return RE::BSEventNotifyControl::kContinue;
             }
             // Fired PER REFERENCE: the gated item's own cell attached again (the

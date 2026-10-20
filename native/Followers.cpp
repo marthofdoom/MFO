@@ -100,6 +100,7 @@ namespace MFO::Followers {
         using Clock = std::chrono::steady_clock;
         Clock::time_point                             g_lastRefreshAt{};
         Clock::time_point                             g_transitionAt{};
+        std::atomic<long long>                        g_transitionNs{ 0 };   // worker-readable mirror of g_transitionAt (SecondsSinceTransition)
         const void*                                   g_lastPlaceKey = nullptr;
         RE::NiPoint3                                  g_lastPcPos{};
         bool                                          g_havePcPos = false;
@@ -255,7 +256,7 @@ namespace MFO::Followers {
         { std::scoped_lock lk(g_rosterMx); g_rosterDone.clear(); }
         g_missStreak.clear();
         g_transientDrop.clear();
-        g_lastRefreshAt = {}; g_transitionAt = {}; g_lastPlaceKey = nullptr; g_havePcPos = false;
+        g_lastRefreshAt = {}; g_transitionAt = {}; g_transitionNs.store(0, std::memory_order_relaxed); g_lastPlaceKey = nullptr; g_havePcPos = false;
         g_lastCombat.clear();
         g_stateSample.clear();   // [follower] state-line sample (position + time)
         g_activeIds.clear();
@@ -326,6 +327,12 @@ namespace MFO::Followers {
     bool IsTrackedFast(RE::FormID a_actorID) {
         std::lock_guard<std::mutex> lk(g_mx);
         return g_tracked.find(a_actorID) != g_tracked.end();
+    }
+
+    float SecondsSinceTransition() {
+        const long long ns = g_transitionNs.load(std::memory_order_relaxed);
+        if (ns == 0) return -1.0f;
+        return std::chrono::duration<float>(Clock::now() - Clock::time_point(Clock::duration(ns))).count();
     }
 
     std::shared_ptr<const std::vector<RE::FormID>> ActiveSnapshot() {
@@ -642,6 +649,7 @@ namespace MFO::Followers {
             if (g_havePcPos && pos.GetDistance(g_lastPcPos) > kTeleportJumpU) g_transitionAt = sweepNow;
             g_lastPcPos = pos; g_havePcPos = true;
         }
+        g_transitionNs.store(g_transitionAt.time_since_epoch().count(), std::memory_order_relaxed);
 
         // Previous set, taken from the ID list rather than by re-resolving --
         // a handle that momentarily fails to resolve must still count as a

@@ -156,6 +156,10 @@ namespace MFO::Followers {
     // the unlocked IsTracked walk for every off-worker caller. Membership only:
     // it cannot say WHICH handle, only that the id is currently tracked.
     bool IsTrackedFast(RE::FormID a_actorID);
+    // Seconds since the last world-transition mark Refresh keeps (LoadingMenu, worker gap, interior/worldspace
+    // change, player position jump; the claim-through-load marker); -1 = none seen this session. ANY thread
+    // (atomic mirror, republished every Refresh sweep).
+    float SecondsSinceTransition();
 
     // An immutable copy of the active FormID list, published atomically from
     // Refresh under g_mx. Off-worker readers (progression's main-thread poll,

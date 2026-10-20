@@ -118,6 +118,9 @@ namespace MFO::Logistics::Errand {
         // Where a stop's place is NOW (the vendor actor / the ref, else the planned position). False = unknown.
         bool PlacePos(const Stop& a_stop, RE::NiPoint3& a_out);
         const char* StateName(StopState a_s);
+        // The game-minute cap of a whole trip: fErrandMaxGameMin (the phase-1 allowance of one walk + trade) once per PLANNED stop
+        // (a_stops 0 or 1 = phase 1 exactly). The planned count, not the remaining one, so no stop transition ever extends it.
+        float CapGameMin(std::size_t a_stops);
         // "2/3 'Belethor'" for the log lines.
         std::string Label(const std::vector<Stop>& a_stops, std::size_t a_cur);
         // The ERND v2 itinerary <-> the runtime one.
@@ -173,6 +176,8 @@ namespace MFO::Logistics::Errand {
 
     namespace Sim {
         bool Has(RE::FormID a_follower);
+        // R3: the Board status of a simulated errand ("" = none). Any thread, copies under g_mx.
+        std::string Describe(RE::FormID a_follower);
         // Worker. Takes over an errand that just went off screen. Logs OUT_SIM / TRADE_SIM / RET_SIM transitions.
         void Begin(SimStart&& a_start);
         // The pump, every lap (called from Errand::Sweep): the game-time clock, the replayed trade, the return,
@@ -211,5 +216,11 @@ namespace MFO::Logistics::Errand {
         void  ToastTrading(const std::string& a_who, const std::string& a_shop);
         // R5 (B300): the physical trips' share of Trip::ChestCrowd. Takes Errand g_mx.
         void  CrowdInto(std::unordered_map<RE::FormID, int>& a_crowd, RE::FormID a_exclude);
+        // R3: STRINGS ONLY, no caller yet (the phase-2 rounds that add each errand kind call them at their own begin point).
+        // Informational: never a gold amount, never a failure (marth's ruling for town toasts).
+        void  ToastSmithing(const std::string& a_who, const std::string& a_place);   // "<who> is working at <place>."
+        void  ToastResting(const std::string& a_who, const std::string& a_inn);      // "<who> is resting at <inn>."
+        void  ToastPraying(const std::string& a_who, const std::string& a_temple);   // "<who> is praying at <temple>."
+        void  ToastFence(const std::string& a_who, const std::string& a_fence);      // "<who> is visiting <fence>."
     }
 }

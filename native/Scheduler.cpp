@@ -259,6 +259,7 @@ namespace MFO::Scheduler {
         // to facilitate actions"): the followers whose combat is a Harbinger substrate this lap. They are NOT party
         // combat. One line when a follower enters that state and one when he leaves it. Worker-only, like the rest.
         std::unordered_set<RE::FormID> g_substrateNoted;
+        std::unordered_set<RE::FormID> g_anchorLeakNoted;   // one ERROR per anchor-leak episode (worker thread only)
         // POST-FIGHT STALL PROBE (field 2026-09-29), PASSIVE: no behaviour reads it.
         // Followers stood 10-20 s after fights while the PLAYER stayed combat-
         // flagged (a Bandit Chief no follower engaged) and party combat was ON.
@@ -743,6 +744,7 @@ namespace MFO::Scheduler {
         g_partyCombat = false;        // party-combat substrate: no phantom OFF edge in the next world
         g_partyCombatNoted.clear();
         g_substrateNoted.clear();
+        g_anchorLeakNoted.clear();
         g_stallProbe.clear();                   // [stall-probe] samples are session state
         g_deadTgt.clear();                      // [deadtgt] windows are session state
         TauntProbe::Reset();                    // [taunt-probe] samples are session state
@@ -826,6 +828,7 @@ namespace MFO::Scheduler {
             int foes = 0;
             int substrate = 0;
             std::unordered_set<RE::FormID> substrateNow;
+            std::unordered_set<RE::FormID> leakNow;
             for (const auto& h : active) {
                 auto  ptr = h.get();          // HOLD the NiPointer across the group read
                 auto* a   = ptr.get();
@@ -867,10 +870,22 @@ namespace MFO::Scheduler {
                                          "until it closes or real combat starts", a->GetFormID());
                         continue;
                     }
+                    // A teammate whose ONLY target is Harbinger's anchor (a leak, not a fight): not party combat, no
+                    // combat table (APMFBridge::InCombat is false for him), no style (Targeting hook). Never masked:
+                    // one loud ERROR per episode.
+                    if (CombatSense::AnchorOnlyLeak(a)) {
+                        leakNow.insert(a->GetFormID());
+                        if (g_anchorLeakNoted.insert(a->GetFormID()).second)
+                            spdlog::error("[sched] {:08X} is in combat with ONLY Harbinger's substrate anchor -- a "
+                                          "Harbinger leak, not a fight; MFO stays out", a->GetFormID());
+                        continue;
+                    }
                     ++followersFighting;
                     foes = std::max(foes, CombatSense::FoeCount(a));
                 }
             }
+            for (auto it = g_anchorLeakNoted.begin(); it != g_anchorLeakNoted.end();)
+                it = leakNow.contains(*it) ? std::next(it) : g_anchorLeakNoted.erase(it);
             for (auto it = g_substrateNoted.begin(); it != g_substrateNoted.end();) {
                 if (substrateNow.contains(*it)) { ++it; continue; }
                 spdlog::info("[sched] {:08X} left the Harbinger combat substrate (closed, or real combat: his combat "
@@ -1151,6 +1166,12 @@ namespace MFO::Scheduler {
         }
 
         g_outOfCombatTicks.erase(id);   // T#76: party back in combat -> re-arm the debounce
+        // A teammate in combat with ONLY Harbinger's anchor (a leak, logged by the party-combat count) runs no combat
+        // table: no foes exist for it. Every other site still reads him as IN combat (raw), so no OOC work starts.
+        if (CombatSense::AnchorOnlyLeak(f)) {
+            g_lastTickMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            return;
+        }
         // POST-BATTLE SHED GATE: stamp "seen fighting" so Logistics only drops
         // off-role weapons once the PARTY has been stably out of combat for a
         // dwell -- never during a mid-fight IsInCombat() lull. Stamped on every

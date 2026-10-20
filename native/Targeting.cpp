@@ -1,6 +1,7 @@
 #include "PCH.h"
 #include "Runtime.h"   // SeatVerified(): the mit-3.7 F1 self-check gate
 #include "Targeting.h"
+#include "CombatSense.h"   // AnchorOnlyLeak: no style / redirect on a Harbinger anchor-only combat
 #include "Config.h"
 #include "CombatStyle.h"
 #include "Evaluator.h"   // Eval::HoldsBowOrStaff: the ch.20 pin's own-LoS flag
@@ -76,6 +77,8 @@ namespace MFO::Targeting {
                 // A Harbinger COMBAT SUBSTRATE (ABI v26, ClickUp 86e3pu939) is not combat for MFO: no combat-style
                 // ownership and no target redirect on it. One lock-free APMF read, only when MFO has style or a latch.
                 if (APMFBridge::SubstrateOnly(a_this->GetFormID())) return;
+                // A teammate fighting ONLY Harbinger's anchor (a leak) gets no combat style either (field 2026-10-19).
+                if (CombatSense::AnchorOnlyLeak(a_this)) return;
 
                 auto& rt = a_this->GetActorRuntimeData();
 

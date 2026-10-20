@@ -407,15 +407,27 @@ namespace MFO::Logistics {
         // record that names its gate re-admits on THAT ref only (wherever it is); a record
         // without one re-admits only on a gate-like ref (a_gateLike: a DOOR, or a lever-like
         // ACTIVATOR -- Sinks.cpp GateLikeRef) within kGateEventRadius, as ReadmitNear.
-        inline void ReadmitOnGateEvent(RE::TESObjectREFR* a_ref, bool a_gateLike, const char* a_why) {
+        // 2026-10-19 (field, Riften): an NPC using a DOOR near a gate re-admitted every gated item all day
+        // (Sven stayed trapped ~2 min). A record WITHOUT a named gate now re-admits only on the PLAYER's
+        // act (a_byPlayer), or a lever-like ACTIVATOR (not a plain DOOR); a record that names its gate
+        // still re-admits on that ref alone, whoever used it. The reason is appended to the logged line.
+        inline void ReadmitOnGateEvent(RE::TESObjectREFR* a_ref, bool a_gateLike, const char* a_why,
+                                       bool a_byPlayer) {
             if (!a_ref) return;
             const RE::FormID   id    = a_ref->GetFormID();
             const RE::FormID   space = SpaceKey(a_ref);
             const RE::NiPoint3 p     = a_ref->GetPosition();
+            auto*              base  = a_ref->GetBaseObject();
+            const bool         lever = a_gateLike && base && !base->Is(RE::FormType::Door);
             std::lock_guard lk(g_gateMx);
-            EraseGatesIf(a_why, id, [&](const GateRecord& g) {
+            const bool ownGate = std::any_of(g_gates.begin(), g_gates.end(),
+                                             [id](const GateRecord& g) { return g.gate == id; });
+            const std::string why = std::string(a_why) +
+                (a_byPlayer ? ", used by the PLAYER" : lever ? ", a lever-like activator"
+                                                    : ownGate ? ", the record's own gate ref" : "");
+            EraseGatesIf(why.c_str(), id, [&](const GateRecord& g) {
                 if (g.gate) return g.gate == id;
-                return a_gateLike && space && g.space == space &&
+                return a_gateLike && (a_byPlayer || lever) && space && g.space == space &&
                        (p.GetDistance(g.blockPos) <= kGateEventRadius ||
                         p.GetDistance(g.targetPos) <= kGateEventRadius);
             });

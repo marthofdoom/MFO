@@ -55,6 +55,10 @@ namespace MFO::APMFBridge {
             APMF_API::Handle hold   = APMF_API::kInvalidHandle;
             APMF_API::Handle idle   = APMF_API::kInvalidHandle;
             RE::FormID       dest   = 0;       // the vendor reference the leg walks to
+            // R5: the travel claim's liveness (the ClaimDead rule, as for the hold / idle): RepointErrandTravel must not "move" a claim
+            // Harbinger already ended (Repoint is void and would silently do nothing).
+            bool             travelEverLive = false;
+            std::chrono::steady_clock::time_point travelFiled{};
             // The leg-state seq read just BEFORE our RequestEx: a state still carrying it is the previous
             // leg's end, never ours (the loot M2 rule, apmf/Excursion.cpp NoteStaleSeqLocked).
             std::uint32_t    staleSeq = 0;
@@ -160,6 +164,8 @@ namespace MFO::APMFBridge {
         }
         c.travel = h;
         c.dest   = a_dest;
+        c.travelEverLive = false;
+        c.travelFiled = std::chrono::steady_clock::now();
         spdlog::info("[errand] {:08X}: walk CLAIMED (ch.19) -> {:08X} radius {:.0f} gait {} handle {}",
                      a_follower, a_dest, a_radius, gait, h);
         return true;
@@ -172,6 +178,14 @@ namespace MFO::APMFBridge {
         const auto it = s_claims.find(a_follower);
         if (it == s_claims.end() || it->second.travel == APMF_API::kInvalidHandle) return false;
         auto& c = it->second;
+        // R5 (review SEV-4): APMF's Repoint returns nothing, so a claim Harbinger already ended would be "re-pointed" into the void and the
+        // follower would stand still. A dead claim is forgotten here and FALSE returned: the caller files a fresh ClaimErrandTravel.
+        if (ClaimDead(api, c.travel, c.travelEverLive, c.travelFiled)) {
+            spdlog::info("[errand] {:08X}: the ch.19 walk claim (handle {}) is no longer live -- not re-pointing it (a fresh claim follows)",
+                         a_follower, c.travel);
+            c.travel = APMF_API::kInvalidHandle;
+            return false;
+        }
         APMF_API::APMF_TravelLegInfo pre{};
         pre.size = static_cast<std::uint32_t>(sizeof(APMF_API::APMF_TravelLegInfo));
         api->GetTravelLegState(a_follower, &pre);

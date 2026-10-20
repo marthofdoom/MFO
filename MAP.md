@@ -2262,7 +2262,15 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   expiry, heal-holds / heal-quiet), `Evaluator.cpp` (the fight-log dedupe). A dry-run substrate on a follower
   mid-errand does NOT abort the errand. Evaluator's combat-group reads (`combatController`) stay raw (mechanics). **The anchor is never a foe** (closing round of 5876057): `IsSubstrateAnchor` skips it in EngageOnSight's RunProbe
   scan, `cast/Auto.cpp` HostileAutoFoes, Evaluator PickFoe (both group loops) and CurrentTargetIfTrackable, and
-  `CombatSense` FoeCount / FoeLoad / ScanMeleeReach. **BACKLOG (read before editing CasterConsent / Scheduler substrate
+  `CombatSense` FoeCount / FoeLoad / ScanMeleeReach. **ANCHOR-ONLY LEAK (`fix/mfo-riften-1019b`, 2026-10-19, Sven):** a
+  TEAMMATE who IsInCombat, whose group lists the anchor and who has NO other live foe (a LOST foe still counts; a live substrate
+  holder never; `CombatSense::AnchorOnlyLeak`, same group read lock as FoeCount) is a Harbinger leak, not a fight. It is applied in
+  exactly THREE places: the `Scheduler.cpp` party-combat count (skipped, ONE ERROR per episode, `g_anchorLeakNoted`, worker), the
+  Scheduler's combat-table skip for him (the lap returns after the party-OOC branch), and the `Targeting.cpp` `UpdateCombatHook`
+  (no combat style / redirect). `APMFBridge::InCombat` is UNCHANGED: everywhere else (loot, OOC self-buff, errand, lockpick, LotD,
+  potion choice, ...) a leaked teammate reads as IN combat, so no OOC activity starts while engine combat is live (he has no Harbinger
+  deny, unlike a substrate holder). **What breaks:** a group read lock per combat tick in the Targeting hook while any style is owned;
+  a teammate fighting only a lost foe is a fight (not a leak). **BACKLOG (read before editing CasterConsent / Scheduler substrate
   walk / Lockpick / CombatSense):** REVIEW-BACKLOG MFO-B310..B315.
 - **PARTY COMBAT (2026-09-21, Deck/Fable — the Jesper freeze + the Cicero hold
   teardown; line numbers refreshed on `fix/mfo-field-batch-0921`).** `g_partyCombat`
@@ -3185,6 +3193,22 @@ module. Module layout:
   - `logistics/Logistics.h` (232) = the public API (unchanged, moved whole).
   - `logistics/Lockpick.cpp` (956, NEW LP-M1 2026-09-25, doors LP-M2 2026-09-26) = follower LOCKPICKING of chests: see the
     LOCKPICK entry below. Declared in `Logistics_internal.h` (`namespace Lockpick`, `:847`).
+  - `logistics/StuckAtOrigin.cpp` (NEW `fix/mfo-riften-1019b`, 2026-10-19) = **A FOLLOWER STUCK AT HIS OWN ORIGIN + THE DOOR RESCUE**:
+    DETECTOR: 3+ consecutive static-block (GATED) ends of DISTINCT targets within 300 u of the newest one (<= 90 s apart; any
+    pickup / teleport / emptied / actor-block / lockpick-door-leg end calls `StuckAtOriginResetRun`) -> `StuckAtOriginNoteBlock`
+    (worker, `Service.cpp` GATED branch, AFTER `Lockpick::DispatchGateDoor` declined) logs the ERROR `[loot] <id> is stuck himself
+    at ...`, the caller releases ch.19 (`Packages::LootTravelClear`), resets the intent, and an EPISODE opens: `LootNearby`
+    (`LootScan.cpp`, top) refuses new excursions (`StuckAtOriginCooldown`, a pure query) until he is > 300 u from the stuck point or
+    in another cell (no timer). `StuckAtOriginTick` (called at the top of `Logistics::ServiceFollower`, every service, independent
+    of loot rules) holds the evidence window, which STARTS AT DETECTION: >= 20 s, moved < 150 u, player > 800 u and not closing,
+    not in combat / talking / mounted / on an errand, no `Followers::SecondsSinceTransition()` inside the window. `NEAR-MISS`
+    lines log the values. THE RESCUE: once per episode, `MainThread::Post` -> `RescueOnMain` finds the nearest UNLOCKED LOAD door
+    (ExtraTeleport; `RE::TES::ForEachReferenceInRange`, main thread only) within 1500 u and calls `TESObjectREFR::ActivateRef(follower)`
+    (id 19369 SE / 19796 AE; verified-address row `StuckAtOrigin.TESObjectREFR.ActivateRef` + `SeatVerified` guard); the immediate
+    false return is the engine fade starting (proven by disassembly: Docs/ENGINE_NOTES, review log). 3 s later the worker logs
+    `RESCUED via door ...` or a loud `rescue did NOT move him`. **What breaks:** the suppression starves his looting while he
+    stays within 300 u of the point; the rescue moves a follower through a load door (he is a normal follower again, the engine
+    follow or a teleport mod brings him back); thresholds are tuned from `NEAR-MISS` lines. Backlog: MFO-B326..B326. No co-save.
   - `logistics/PickupSound.cpp` (NEW batch A 86e3haxqx, 2026-10-05) = **PICKUP SOUND AT THE FOLLOWER**, an
     ENGINE SEAT (tier A). A `write_call<5>` call-site trampoline (its OWN `SKSE::Trampoline`, never Board's:
     a second `AllocTrampoline` would release Board's block) on the `BuildSoundDataFromDescriptor` call inside
@@ -4220,7 +4244,8 @@ anonymous-namespace copy — that silently forks the instance).
     field 2026-09-26: the player opening a CHEST re-admitted five gates): NEVER a container's
     open/close; a record that names its gate (`GateRecord::gate`, set by `RecordGateRef` `:424`
     when LP-M2's door finder finds the locked door at the block) re-admits on THAT ref only; a
-    record without one re-admits only on a `GateLikeRef` (`Sinks.cpp:260`: a DOOR, or an ACTI
+    record without one re-admits only on a `GateLikeRef` AND (the PLAYER's act, or a lever-like ACTIVATOR; 2026-10-19 field,
+    Riften: an NPC using a plain DOOR no longer re-admits; the log line names the reason) (`Sinks.cpp:260`: a DOOR, or an ACTI
     with WerewolfCanActivate 00100769 / ActivatorLever 0006DEAD and no ExtraPrimitive -- the
     installed-ESM survey: every lever / chain / bar / button / portcullis / puzzle mechanism,
     no weapon rack, plaque or mannequin/trigger) within 2048 u of S or T; on the gated ref's own
@@ -4630,6 +4655,7 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
   (`Errand.cpp`, declared in `Errand_internal.h`; `RE::DebugNotification` posted with `MainThread::Post`, direct on VR). Sites: Walking phase
   right after `arrived` (physical) and `ErrandSim.cpp` TRADE_SIM stage entry. No toast for plan, result, failure or backoff. A future
   smithing errand kind would toast "X is working at Y." at its own begin point.
+  **R3 (86e3tambj, display only):** `Errand::Describe(fid)` (`Errand.cpp:565`, `Errand.h`) -> physical `Rec` under `g_mx`, else `Sim::Describe` (`ErrandSim.cpp:233`, under the sim `g_mx`; the two never nest); copies strings, reads no engine object, any thread; "" = no errand. Board: `FillTownInfo` (`Board.cpp:1551`, called for active rows `:1623` and retained rows `:1791` inside PublishSnapshot on the worker) fills `FollowerRow::location/withYou/errand` (`Board.h`); drawn in the Follower column (`Board_FieldKit.cpp:507`, plain text, no new focusable). New key `Fk_LocWithYou`. Toast strings for later kinds (`detail::ToastSmithing/Resting/Praying/Fence`, `Errand.cpp:666`) have NO caller yet. WHAT BREAKS: a new errand Phase/Stage needs a `Describe` arm or it reads as "Trading with". Open review items: MFO-B337, B339..B342 (Docs/REVIEW-BACKLOG.md).
   Open findings: Docs/REVIEW-BACKLOG.md MFO-B320 to B322 (toast edge cases). `Rec`/`ResumeInfo` `announced` stops a resumed errand toasting twice.
   The six keys parse in a chain of their own at the top of `Config.cpp` `Apply` (the main chain is near MSVC's nested-block limit).
 - **WHAT BREAKS if you change this:** `EconomyProbe`'s parameter list (Service.cpp, Errand.cpp); `ErrandProbe::Verdict` fields (the
@@ -4675,6 +4701,12 @@ an unloaded follower's inventory, so the order is built at PLAN time and replaye
 - **WHAT BREAKS if you change this:** `ErrandPlanned` / `ErrandShop` (Economy.cpp, Errand.cpp, ErrandSim.cpp); the `SimStart` / `ResumeInfo` seam (the R2
   `ERND` record serialises these); `TradeBridge::TakeOutcome` (both the physical and the simulated trade wait on it); the lock order (Errand `g_mx` ->
   Sim `g_mx`, never the reverse; neither is held across a Papyrus / TradeBridge / Harbinger call).
+
+#### R4 — "found at the counter": `logistics/ErrandCounter.cpp/.h` (TOWN PHASE 2, ClickUp 86e3t1mx7; session-only, NO co-save change)
+- **Learned vendor map** `Counter::Learn` (called from `BuildCatalog` for every loaded, awake, open vendor, AddTask worker) -> `g_map` faction -> {vendor, cell, pos, yaw}; CONFIRMED only when two samples of the SAME vendor actor >= 2 s apart agree within 32 u; a sample that disagrees with the confirmed spot (other actor, cell, a move) DROPS it (log "DROPPED") until a new pair agrees. `Counter::Lookup`. Cleared by `Errand::ClearTransientState`; never saved. "Confirmed" = stationary at any sandbox marker, not proven "at the counter" (MFO-B344).
+- **Browsing hold**: `detail::ResumePhysical` sets `Rec::browse` only when the vendor is in his cell AND `a_info.announced` (the sim reached Trade = he really arrived off screen); `Counter::NoteResume` logs counter known/unknown + distance. On arrival `Errand::Tick` Walking plays `IdleExamine` (0x00075C3D) as a Talking-phase beat (`Idles::browse`; first beat = ch.1 hold + ch.12 claim via `ErrandClaims`), holds `kBrowseHold` 6 s, no talk fallback, then Giving; `beginBeat` clears `r.browse` for any non-Talking next phase. The flag lives in `Rec` (runtime, not the ERND `Saved`), so it ends with the record on every path. IdleExamine's conditions are IsTorchOut==0 AND IsShieldOut==0: it fails loudly (and the beat skips to Giving) with a torch or shield out.
+- **Placement NOT built**: Harbinger has no placement/teleport facet (kIntent 1..27); `Sim` TRADE_SIM entry only logs `Counter::NoteSimArrival` (counter known/unknown, "NOT placed").
+- **WHAT BREAKS:** a new Phase that follows Walking must keep the `r.browse` check at the arrival or the browse beat is skipped. **R5 merge: `LoadStop` (the Rec built from a stop) MUST reset `Rec::browse` (default false), or a stale flag makes the next stop browse.** Open findings: REVIEW-BACKLOG MFO-B343, MFO-B344.
 
 #### R2 — the `ERND` co-save and the load recovery (ClickUp 86e3t1mx7, 2026-10-19; record layout in the co-save section above)
 marth's rulings: unloaded errands are simulated against real stock / gold; "if the player walks in then it picks up"; leaving town brings him back;
@@ -4746,7 +4778,12 @@ later rounds APPEND kinds; R7 appends the Inn as the LAST stop) with ONE purse. 
 - **WHAT BREAKS if you change this:** the ERND v2 tail order or its opcodes (`shop`, the state strings); the head-is-`stops[cur]` rule (`SyncCur`
   before every snapshot / hand-off); calling `NextStopOrFinish` without storing `r` after a TRUE return; a new walk-ending path that does not go
   through `stopOver` (it would end the whole trip) or does not call `NoteWalkFailed`; holding Errand g_mx while calling `Sim::CrowdInto` (lock order).
-  Open findings: REVIEW-BACKLOG MFO-B300 (the convergence part is addressed here; the rest of B300 stays open).
+  Open findings: REVIEW-BACKLOG MFO-B300 (the convergence part is addressed here; the rest of B300 stays open), MFO-B345 to B348 (R5 review @ c32c8c1e).
+- **Closing round (review @ c32c8c1e):** `RepointErrandTravel` (`apmf/ErrandClaims.cpp`) now checks the travel claim's liveness (`ClaimDead`
+  with `travelEverLive` / `travelFiled`, the hold / idle rule) and returns FALSE for a dead claim, so `NextStopOrFinish` files a fresh
+  `ClaimErrandTravel`; the game-minute cap is `Trip::CapGameMin` = `fErrandMaxGameMin` x PLANNED stops (one-stop = phase 1), at both the
+  physical (`Tick`) and the simulated (`Sim::Sweep`) cap sites; an earlier stop's late report is counted into `tripSpent` before the next
+  dispatch, and a "never reported" stop discards its outcome. `LoadStop` resets R4's `Rec::browse`.
 
 ### logistics/Lotd.cpp / Lotd.h — LOTD AWARENESS (Legacy of the Dragonborn; NOT serialized)
 **OPEN BACKLOG: `Docs/REVIEW-BACKLOG.md` MFO-B121 (the VM reads race Papyrus), MFO-B122 (alternatives

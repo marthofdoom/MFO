@@ -1790,8 +1790,9 @@ Opus re-review of `feat/mfo-town-r1a` @ e26db0d. Verbatim: "`kIdleEnd_Superseded
 ### MFO-B299 (SEV-4, OPEN, logistics/Errand.cpp / Service.cpp) -- town R1a: errand Tick gets healWants, not tripHealWants; GemRules Sale holds linger outside towns; TownAnchor static before kDataLoaded (raised against 2e1f5a2)
 Opus review of `feat/mfo-town-r1a` @ 2e1f5a2: (1) "`Tick` gets `healWants`, not the `tripHealWants` shape (`Service.cpp:408`). The rule loop never runs during an errand, so no heal is ever stamped" (out of combat in town, up to 240 s); (2) "GemRules Sale holds now linger outside towns. `ReleaseHoldsExcept(..., Sale, ...)` runs only inside `EconomyProbe`, which is now never called outside towns"; (3) "`TownAnchor` is a function-local static built from `TESDataHandler` on first call ... if anything ever calls it before kDataLoaded it caches an empty keyword set forever."
 
-### MFO-B300 (SEV-5, OPEN, logistics/Errand.cpp) -- town R1a: queue/plan churn, backstop slot under-count, vendor convergence, own-cell catalog, recall placement (raised against 2e1f5a2 / 0574a95)
+### MFO-B300 (SEV-5, PARTLY ADDRESSED, logistics/Errand.cpp) -- town R1a: queue/plan churn, backstop slot under-count, vendor convergence, own-cell catalog, recall placement (raised against 2e1f5a2 / 0574a95)
 Same reviews: a QUEUED follower re-plans (cell + inventory walk) and logs every 6 s; kLeg_Failed → Finish + retry ~7 s line churn while slots are full; a distance-backstop arrival leaves the ch.19 leg live (holds a slot) and CountWalking under-counts it; all followers rank vendors the same way and converge (others hold the give pose up to 33 s on the per-chest guard); the catalog walks only the follower's own cell (4096 u); recall MoveTo 250 u behind the player has no navmesh check; fast travel out of town triggers a redundant recall.
+- PARTLY ADDRESSED 2026-10-19 (town phase 2 R5, `feat/mfo-town-p2-r5-trips`): vendor convergence -- the trip planner (`logistics/ErrandTrip.cpp` `Trip::Plan`) charges a crowd penalty (150 gold-equivalent per OTHER follower whose trip is heading to that chest, `Trip::ChestCrowd`) in the sell partition and when it adds a stop. The other parts (queue/plan churn, backstop slot under-count, own-cell catalog, recall placement) stay OPEN.
 
 ### MFO-B301 (SEV-4, OPEN, TradeBridge.cpp / Economy.cpp) -- town R1b: empty-trade memo key mismatch when a faction-planned shop trades with a resolved vendor (raised against 393632c)
 Opus re-review of `feat/mfo-town-r1b` @ 393632c. Verbatim: "The shop is planned from outside (keyed by faction), but the trade then runs with a resolved vendor actor: picked up on screen through `EconomyProbe` kExecute, or replayed after a Repoint set `r.vendorActor`. The memo lands under the actor, and the next plan from outside looks up the faction key. Suggested fix: `SkipTrade` checks both keys, or `ReportTrade` files under both when `memoKey` differs from the actor."
@@ -1823,8 +1824,9 @@ Same reviews: an in-role catalog-excluded weapon (artifact, "keep but never wiel
 ### MFO-B308 (OPEN, Harbinger dependency) -- artifacts "keep but never wield" needs a per-item equip deny
 marth 2026-10-19: catalog-excluded non-quest off-role weapons: "Keep but never wield". Interim (392aba1): unequipped once per item per session, never sold; the engine may re-wield. Proper fix waits on Harbinger ClickUp 86e3t8w23 (ch.17 per-item DENY entry, ABI).
 
-### MFO-B309 (SEV-5, OPEN, Serialization.cpp) -- ERND: version 0 read as v1; ReadString accepts a 1-3 byte partial length read (raised against 3e9b659)
+### MFO-B309 (SEV-5, CLOSED, Serialization.cpp) -- ERND: version 0 read as v1; ReadString accepts a 1-3 byte partial length read (raised against 3e9b659)
 Opus tier-3 review of `feat/mfo-town-r2` @ 3e9b659. F4: "an ERND record with version 0 is parsed as v1. There is no lower-bound guard, the same as PGIV." F6 (pre-existing helper): "`ReadString` checks `!ReadRecordData(len)`, which accepts a 1-3 byte partial read. In ERND the following bound check or short read still catches it."
+- CLOSED 2026-10-19 (town phase 2 R5, `feat/mfo-town-p2-r5-trips`): F4 -- the ERND dispatcher skips a record with version < 1 (logged, nothing staged); F6 -- `ReadString` requires the full 4-byte length read (`ReadRecordData(len) != sizeof(len)` is a short read).
 
 ### MFO-B310 (SEV-4, OPEN, CasterConsent.cpp) -- substrate-not-combat review (raised against 5876057)
 Opus tier-3 review of `fix/mfo-substrate-not-combat` @ 5876057. Verbatim: "CasterConsent's two deny halves now disagree for a substrate holder. The hard deny at CasterConsent.cpp:1041 was converted to InCombat. Its comment justifies the gate as 'what CheckStartCast gets by construction', but that premise no longer holds. The soft CheckStartCast path at :657 (CtrlUnlatchedDeny), and the latched deny below it, still run under the substrate's live controller. So a holder with a leftover g_ctrl / g_want entry is soft-denied but no longer hard-backed. The window is short: the entries last at most until the 2-lap OOC teardown's CasterConsent::Clear. Either gate the soft half the same way or fix the comment." Reasoning: Deferred by the coordinator (closing round, SEV-4): the leftover entries live at most until the 2-lap OOC teardown clears them.
@@ -1892,3 +1894,50 @@ Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-5. Verbatim: "spdl
 
 ### MFO-B336 (SEV-5, CLOSED in the review round on 733c20cc, cast/Summon.cpp) -- S3: the Summon NotTaken case (raised against 733c20cc)
 Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-5. Verbatim: "The Summon NotTaken case comment is correct, but nothing enforces it." Closed: the switch is gone; `SummonOnMain` treats anything but Filed as a Failed no-cast, so no NotTaken path exists to fall through to the direct cast. Surfaced at edit time from: MAP.md section 2 "cast/SubstrateRoad.cpp + apmf/Substrate.cpp".
+### MFO-B326 (SEV-5, OPEN, apmf/Bridge.cpp) -- riften fixes: const_cast in InCombat (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "const_cast in InCombat is harmless (AnchorOnlyLeak only reads); it could take const RE::Actor*." Reasoning: read-only. NOTE: the round that followed (this branch's second head) removed the leak test from `InCombat` altogether (the SEV-3 narrowing), so the const_cast is gone; the finding is kept for `AnchorOnlyLeak` taking `RE::Actor*` where it could take a const one.
+
+### MFO-B327 (SEV-5, OPEN, logistics/LootTravel_internal.h) -- riften fixes: the gate-ref label is per call, not per record (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "ReadmitOnGateEvent's ', the record's own gate ref' label is set if ANY record names this ref, not per erased record. Log text only." Reasoning: the label is computed once before the erase; no behavioural effect.
+
+### MFO-B328 (SEV-5, OPEN, Targeting.cpp / CombatSense.h) -- riften fixes: group read lock per combat tick (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "The per-call group read lock now runs per combat tick in the Targeting hook while any style is owned, and calls APMF GetSubstrateState under the engine lock (the FoeCount pattern)." Reasoning: same exposure FoeCount already has; the SubstrateOnly call added to `AnchorOnlyLeak` in the follow-up round is lock-free on the APMF side.
+
+### MFO-B329 (SEV-5, OPEN, CombatStyle.cpp) -- riften fixes: a CSTY written before a leak began stays (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "A CSTY written before a leak began stays on the live controller until it dies." Reasoning: the Targeting hook stops re-asserting a style for a leaked teammate, it does not restore the engine-derived one; the controller's own teardown does.
+
+### MFO-B337 (SEV-4, OPEN, Board.cpp / Board.h) -- town R3: r.cell is dead after the location column
+Opus review of `feat/mfo-town-p2-r3-board` @ 92c761cd. Verbatim: "Board.cpp:1785-1790 and Board.h:64-66: r.cell is now dead. It is still computed with duplicate engine reads, and the cell field and its comment in Board.h remain, but nothing draws it any more. The replacement is not clean: delete the block and the field."
+
+### MFO-B338 (SEV-4, CLOSED 2026-10-19 at merge) -- town R3: '?' vendor fallback shows "Walking to ?"
+Opus review @ 92c761cd. Verbatim: "Errand.cpp:906 and ErrandSim.cpp:456: vendorName falls back to '?', not to an empty string... the 'the shop' fallback in Describe never fires. It should check for '?' as well as empty." Fixed inline at merge (both Describe sites treat '?' as empty).
+
+### MFO-B339 (SEV-4, OPEN, Errand.cpp / ErrandSim.cpp / Board) -- town R3: errand status strings bypass i18n
+Opus review @ 92c761cd. Verbatim: "the status strings are English literals, while the same tab keys its sibling states (Fk_StateLooting / Fk_StateTrading)... Fix: have Describe return a kind plus the shop name, and let the Board format it through {1} keys. The toast literals match the existing ToastTrading... so they can stay."
+
+### MFO-B340 (SEV-5, OPEN, Board.cpp:34-35) -- town R3: mangled include comment
+Opus review @ 92c761cd. Verbatim: "the include comment got mangled. The // IsLooting/IsTrading... comment for Logistics.h was appended to the Errand.h line."
+
+### MFO-B341 (SEV-5, OPEN, Errand.cpp / ErrandSim.cpp) -- town R3: "Trading with" vs "trading at"
+Opus review @ 92c761cd. Verbatim: "the physical errand says 'Trading with X' and the simulated one says 'Off-screen: trading at X'. Pick one preposition."
+
+### MFO-B342 (SEV-5, OPEN, Board_FieldKit.cpp:510) -- town R3: '- %s' separator
+Opus review @ 92c761cd. Verbatim: "the '- %s' separator uses a hyphen as a dash. It is carried over from the old draw. VOICE.md asks for a colon or parentheses, so '(with you)' would fit better. Optional."
+
+### MFO-B343 (SEV-4, OPEN, ErrandSim.cpp:357-375) -- town R4: the other browsing case is not built
+Opus review @ c2253ac3. Verbatim: "The design's other browsing case is not built: if the simulated trade has already run and it is before tTradeEnd, the errand resolves straight to DONE (ErrandSim.cpp:357-375). With no placement facet either, field criteria R4-1 and R4-3 cannot pass as written."
+
+### MFO-B344 (SEV-5, OPEN, ErrandCounter.cpp Learn) -- town R4: "confirmed" is not "at the counter"
+Opus review @ c2253ac3. Verbatim: "'Confirmed' means stationary for ~6 s at any sandbox marker, not 'at the counter'. Fine while the map is log-only; the placement facet must not trust it blindly."
+
+### MFO-B345 (SEV-5, OPEN, logistics/ErrandTrip.cpp) -- town R5: needs only at a carrier (raised against c32c8c1e)
+Opus tier-3 review of `feat/mfo-town-p2-r5-trips` @ c32c8c1e. Verbatim: "Needs not carried by a chosen stop's VEND are no longer bought there (phase 1 tried them at whichever vendor); a need with no carrier and no free stop slot goes unserved. Design-intended (1.b), little practical effect."
+
+### MFO-B346 (SEV-5, OPEN, logistics/ErrandSim.cpp) -- town R5: an aborted replay reads Done (raised against c32c8c1e)
+Same review. Verbatim: "ErrandSim.cpp:735-738: a replayed trade that ABORTED still sets reported, so AdvanceStop marks the stop Done instead of Skipped (log/state wording)."
+
+### MFO-B347 (SEV-5, OPEN, logistics/Errand.cpp) -- town R5: talk beat aimed at an unloaded later-stop vendor (raised against c32c8c1e)
+Same review. Verbatim: "Errand.cpp:1045-1050: a later stop whose vendor is unloaded but whose leg reads Arrived aims the talk beat at an unloaded vendor; the next tick's vendor gate skips the stop."
+
+### MFO-B348 (SEV-5, OPEN, logistics/ErrandTrip.cpp) -- town R5: bestRow recomputed in the sort comparator (raised against c32c8c1e)
+Same review. Verbatim: "ErrandTrip.cpp:189-192: the stable_sort comparator recomputes bestRow (N log N x candidates x rows per plan on the worker); cache it if a plan ever stalls."

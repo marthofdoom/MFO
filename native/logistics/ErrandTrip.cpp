@@ -21,6 +21,7 @@
 // Errand g_mx, then Sim g_mx, one after the other (never nested). The helpers below touch no shared state.
 #include "PCH.h"
 #include "Errand_internal.h"
+#include "Config.h"   // g_errandMaxGameMin: the trip cap (CapGameMin)
 
 #include <algorithm>
 #include <cmath>
@@ -73,6 +74,10 @@ namespace MFO::Logistics::Errand::Trip {
             case StopState::Skipped: return "skipped";
         }
         return "?";
+    }
+
+    float CapGameMin(std::size_t a_stops) {
+        return Config::g_errandMaxGameMin.load() * static_cast<float>(std::max<std::size_t>(1, a_stops));
     }
 
     int NextPending(const std::vector<Stop>& a_stops, std::size_t a_cur) {

@@ -28,6 +28,7 @@
 // the revert with the pump drained. g_mx guards the table and is never held across a Papyrus / TradeBridge / Harbinger call.
 #include "PCH.h"
 #include "Errand_internal.h"
+#include "ErrandCounter.h"
 #include "Config.h"
 #include "Followers.h"
 #include "LocationTypes.h"
@@ -300,6 +301,21 @@ namespace MFO::Logistics::Errand::Sim {
     }
 
     // ── public ──────────────────────────────────────────────────────────────────────────────────────
+    std::string Describe(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mx);
+        auto it = g_sims.find(a_follower);
+        if (it == g_sims.end()) return {};
+        const SimRec& r = it->second;
+        const std::string shop = (r.vendorName.empty() || r.vendorName == "?") ? std::string("the shop") : r.vendorName;
+        switch (r.stage) {
+            case Stage::Out:    return "Off-screen: walking to " + shop;
+            case Stage::Trade:  return "Off-screen: trading at " + shop;
+            case Stage::Return:
+            case Stage::Rejoin: return "Heading back";
+        }
+        return {};
+    }
+
     bool Has(RE::FormID a_follower) {
         std::scoped_lock lk(g_mx);
         if (g_sims.contains(a_follower)) return true;
@@ -702,10 +718,10 @@ namespace MFO::Logistics::Errand::Sim {
                 Drop(fid, "player combat -- he joins", kCombatCooldownSec, false);
                 continue;
             }
-            if ((days - r.startDays) * 1440.0 > Config::g_errandMaxGameMin.load()) {
+            if ((days - r.startDays) * 1440.0 > Trip::CapGameMin(r.stops.size())) {   // R5: once per planned stop
                 ResolveNow(r, f, days, "fErrandMaxGameMin");
                 detail::RecallToPlayer(fid, "the errand cap");
-                Drop(fid, "older than fErrandMaxGameMin -- recalled", kFailCooldownSec, false);
+                Drop(fid, "older than the trip cap (fErrandMaxGameMin x stops) -- recalled", kFailCooldownSec, false);
                 continue;
             }
 
@@ -713,6 +729,7 @@ namespace MFO::Logistics::Errand::Sim {
             if (r.stage == Stage::Out && days >= r.tArrive) {
                 r.stage = Stage::Trade;
                 spdlog::info("[errand] {:08X} '{}': TRADE_SIM -- he has reached '{}' (off screen)", fid, r.followerName, r.vendorName);
+                Counter::NoteSimArrival(fid, r.followerName, r.vendorName, r.faction);   // R4: counter known/unknown; placement unavailable (no Harbinger facet)
                 if (!r.tradeAbandoned && r.order && !r.order->skipped) detail::ToastTrading(r.followerName, r.vendorName);   // not for a trade that will never run
             }
             if (r.stage == Stage::Trade) {

@@ -85,6 +85,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/Errand.cpp
     logistics/ErrandSim.cpp
     logistics/ErrandTrip.cpp
+    logistics/ErrandCounter.cpp
     logistics/GemRules.cpp
     logistics/EquipAuthority.cpp
     logistics/LootTake.cpp
@@ -98,6 +99,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/SwapUp.cpp
     logistics/Silver.cpp
     logistics/Lockpick.cpp
+    logistics/StuckAtOrigin.cpp
     logistics/PickupSound.cpp
     logistics/TradePerks.cpp
     Loadout.cpp
