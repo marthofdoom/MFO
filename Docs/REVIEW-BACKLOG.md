@@ -2099,3 +2099,15 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 
 ### MFO-B408 (SEV-4, OPEN, logistics/ErrandSim.cpp MoveHold) -- town: MoveHold logs success when Harbinger's Repoint silently fails (raised against 8444346)
 "MoveHold logs success even when the Repoint silently fails in Harbinger. This is the same root as" MFO-B405 (Repoint is void in the ABI; the wrapper reports true).
+
+### MFO-B418 (SEV-4, OPEN, Board_Progression.cpp / progression/PerkGate.cpp:376) -- progression: board and refusal text show only the general perk pool (raised against 708c244)
+"The take dialog (Pg_PointsAvail, Board_Progression.cpp ~:1151) and tree header (Pg_TreePoints, ~:534) show only unspentPerk, so a crafting node with general 0 and craft 1 shows '0 points' beside an enabled Take. Pg_NoneToSpend (~:230) shows whenever general < 1 even with craft points to spend. Its 'spent' count and PerkGate.cpp:376's whyNot 'no perk points (earned X, Y spent)' use AllocatedRanks, which includes craft-funded ranks, so it can read 'earned 5, 6 spent'." Reviewer: wording only, no incorrect behaviour. Drain before the release cut (user-visible).
+
+### MFO-B419 (SEV-5, OPEN, progression/Harness.cpp:71) -- progression: dev status log and the auto-pick "no eligible perk" log print only the general pool (raised against 708c244)
+"Harness.cpp:71 and the auto-pick 'no eligible perk' log print only the general pool." Reviewer: dev-only diagnostics.
+
+### MFO-B420 (SEV-5, OPEN, progression AllocateNextEligible) -- progression: auto-allocator spends craft points only if the class weights a crafting skill (raised against 708c244)
+"AllocateNextEligible's only caller is the dev harness (Harness.cpp:162), so no production effect. It walks the class perk-priority list then class skill weights; craft points are spent only if a class weights Smithing/Alchemy/Enchanting or names a crafting perk. A future production auto-spend needs a crafting-tree pass." Reviewer: informational.
+
+### MFO-B421 (SEV-5, OPEN, progression PerkPoolsOf) -- progression: disabling the craft stream on a save that used it leaves the follower "ahead" (raised against 708c244)
+"Moving the slider 4 -> 0 on a save that used craft points drops general to 0 (clamped); nothing is stripped." Reviewer: by design, informational.
