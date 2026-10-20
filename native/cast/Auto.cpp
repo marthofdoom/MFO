@@ -779,6 +779,10 @@ namespace MFO::Actuation {
                 // full-restoration behaviour as passing 0.
                 const std::uint32_t stopPct =
                     static_cast<std::uint32_t>(std::clamp(ceiling, 0.0f, 1.0f) * 100.0f + 0.5f);
+                // SUBSTRATE PENDING LATCH (slice S3, review F2 on 733c20cc): out of combat, no concentration stream
+                // starts beside a standing substrate pair (its controller would open the concentration claim branch).
+                if (g_firingRule == kNoRule && APMFBridge::SubstrateCastPending(a_follower->GetFormID()))
+                    return { Result::NoOp, "auto conc-heal: a substrate cast is pending for this follower", true };
                 const auto r = (target == a_follower)
                                    ? CastSelfDirect(a_follower, spell, stopPct)
                                    : CastTargetDirect(a_follower, spell, target, stopPct);
@@ -973,6 +977,49 @@ namespace MFO::Actuation {
                          : outOfReach ? std::format("auto-cast: {} in need, none in the spell's reach", outOfReach)
                                       : std::string("auto-cast: nobody needs it"),
                          true };
+
+            // THE SUBSTRATE ROAD, OUT OF COMBAT (bSubstrateCasts, substrate round R3 = slice S3; cast/SubstrateRoad.cpp).
+            // A real cast is ONE cast at ONE recipient, so the beneficial fan becomes a series (the combat claim
+            // series' shape): the candidates are tried in NEED order -- a heal by lowest health fraction, anything
+            // else in the set's order (the party snapshot, then the player) -- and the first one the road can serve
+            // gets this lap's pair. A recipient out of reach or still paced is passed over (Skipped), so one
+            // unservable ally never starves the rest (review F4 on 733c20cc); a follower-wide no (Refused: the
+            // latch, sneaking, magicka, Prepare, Harbinger's refusal) ends the lap. The next lap, after the
+            // fCastCooldown pace, serves whoever still needs it. The jittered recast window is armed only when the set
+            // had one recipient left, so it never starves the rest. NotTaken for EVERY candidate = the fan below,
+            // unchanged; any other mix is a transparent no-cast, never the fan beside the road. Hostile (round R4)
+            // and concentration (slice S5) never ask; nor does the combat table (g_firingRule).
+            if (!hostile && !concentration && g_firingRule == kNoRule && Config::g_substrateCasts.load()) {
+                const bool healSet = kind == CasterConsent::SpellKind::Heal || SpellHealsHealth(spell);
+                std::vector<std::pair<float, RE::Actor*>> order;
+                for (const auto tgtID : targets)
+                    if (auto* a = RE::TESForm::LookupByID<RE::Actor>(tgtID))
+                        order.emplace_back(healSet ? Vocab::HealthPct(a) : 0.0f, a);
+                std::stable_sort(order.begin(), order.end(),
+                                 [](const auto& x, const auto& y) { return x.first < y.first; });
+                bool allNotTaken = !order.empty();
+                for (const auto& [hp, cand] : order) {
+                    const auto r = TrySubstrateCast(a_follower, spell, cand, /*a_oocTable=*/true, "ooc-auto");
+                    if (r == SubstrateTry::NotTaken) continue;
+                    allNotTaken = false;
+                    if (r == SubstrateTry::Skipped) continue;                 // this recipient only: try the next
+                    if (r == SubstrateTry::Refused)
+                        return { Result::NoOp, "auto: substrate cast not filed this lap (pending / sneaking / magicka / "
+                                               "Prepare / refused)", true };
+                    // Filed
+                    g_autoCast[id] = now;
+                    if (suppressible && targets.size() == 1)
+                        g_beneficialRecast[recastKey] = { now, JitteredRecastWindow(authoredDur) };
+                    spdlog::info("[cast] {:08X} {} AUTO BENEFICIAL {} ({:08X}) -> {:08X} -- substrate claim filed "
+                                 "(one of {} in need; road=substrate-claim)",
+                                 id, a_follower->GetName() ? a_follower->GetName() : "?",
+                                 spell->GetName() ? spell->GetName() : "?", a_spellID, cand->GetFormID(),
+                                 targets.size());
+                    return { Result::Fired, "auto: substrate claim filed" };
+                }
+                if (!allNotTaken)
+                    return { Result::NoOp, "auto: no recipient the substrate road can serve this lap (reach / pacing)", true };
+            }
 
             // THE DIRECT FAN IS THE UNANIMATED RESIDUE (substrate S1): every cast below is a CastSpellImmediate with no
             // hand animation. Combat table only (the helper is a no-op off it); one line per (follower, spell).

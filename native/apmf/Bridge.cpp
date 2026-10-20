@@ -1022,6 +1022,7 @@ namespace MFO::APMFBridge {
         SweepPursuitLeashes();
         SweepHealApproaches();
         SweepOffenseApproaches();
+        SweepSubstrateCasts();        // ch.27 OOC substrate casts (apmf/Substrate.cpp): own mutex, before g_mx
         const auto now = std::chrono::steady_clock::now();
         std::scoped_lock lock(g_mx);
         // ch.20 target pins: notice a pin Harbinger ended (IsClaimLive false) so the
@@ -1263,6 +1264,7 @@ namespace MFO::APMFBridge {
         ClearCastGuards();            // ch.25 cast guards: same (Harbinger never saves them)
         ClearTauntClaims();           // taunt idle + foe pins: same (own mutex, a leaf; Harbinger never saves them)
         ClearEquipPreferences();      // ch.26 equip preferences: same (own mutex; order g_mx -> g_prefMx, never the reverse)
+        ClearSubstrateCasts();        // ch.27 OOC substrate casts: same (own mutex; order g_mx -> g_subMx; Harbinger never saves a substrate)
         g_equipAuthRefused.clear();
         g_selectOverflow.clear();
         g_selectRefused.clear();

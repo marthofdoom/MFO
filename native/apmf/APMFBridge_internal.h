@@ -398,6 +398,10 @@ namespace MFO::APMFBridge {
         // ClearTransientState under g_mx (order g_mx -> table mutex; the tables never take g_mx).
         void SweepReentryDenies();
         void ClearReentryDenies();
+        // ch.27 substrate casts (apmf/Substrate.cpp, own mutex g_subMx): Tick() sweeps BEFORE g_mx;
+        // ClearTransientState clears under g_mx (order g_mx -> g_subMx; Substrate.cpp never takes g_mx).
+        void SweepSubstrateCasts();
+        void ClearSubstrateCasts();
         void ClearCastGuards();       // apmf/CastGuard.cpp: ch.25 guards, released at kPreLoadGame / revert
         void SweepPursuitLeashes();
         void ClearPursuitLeashes();

@@ -1513,6 +1513,15 @@ namespace MFO::Logistics {
                 //   * FIRE-AND-FORGET hostile at a FOE -> the animated package (CastAt),
                 //     with a DIRECT-FORCE fallback when the package §4.6-declines
                 //     (package-locked follower) so the cell still delivers.
+                // THE SUBSTRATE PENDING LATCH COVERS EVERY CAST OP (slice S3, review F2 on 733c20cc): while an
+                // out-of-combat substrate pair stands for him (open in flight, held, or its close grace), his live
+                // substrate controller would open the concentration claim branches (CastSelfDirect /
+                // CastTargetDirect) and a second LEFT claim would stand beside the pair's (the MFO-B173 class). No
+                // cast rule runs until the pair has closed; loot / drink / torch rules still do. Always false with
+                // bSubstrateCasts OFF (no pair is ever filed).
+                if (APMFBridge::SubstrateCastPending(id)) {
+                    start = choice.ruleIndex + 1; continue;
+                }
                 auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(choice.actionParam);
                 if (!sp || !a_follower->HasSpell(sp)) {
                     start = choice.ruleIndex + 1; continue;   // unknown spell -> next rule
@@ -1813,7 +1822,23 @@ namespace MFO::Logistics {
                     if (auto it = g_logiCastUntil.find(castKey); it != g_logiCastUntil.end() && now < it->second) {
                         start = choice.ruleIndex + 1; continue;   // within this spell's window
                     }
-                if (selfPkg) {
+                // THE SUBSTRATE ROAD (bSubstrateCasts, substrate round R3 = slice S3; cast/SubstrateRoad.cpp): the
+                // self and the immediate branches below file a Harbinger ch.27 substrate + a ch.8b claim instead, so
+                // the follower's own AI casts with the animation. NotTaken = today's branches below, unchanged (the
+                // switch OFF, Harbinger absent or the substrate unavailable, or a spell the claim road does not
+                // serve). Skipped = a transparent no-cast this lap, NEVER the direct road (a pair already stands,
+                // the player sneaks, paced, refused: cast/Actuation.h SubstrateTry). The hostile-at-foe branch is
+                // round R4 and never asks.
+                const auto subRoad = (selfPkg || immediate)
+                    ? Actuation::TrySubstrateCast(a_follower, sp, tgt, /*a_oocTable=*/true,
+                                                  selfPkg ? "ooc-self" : "ooc-immediate")
+                    : Actuation::SubstrateTry::NotTaken;
+                if (subRoad == Actuation::SubstrateTry::Skipped || subRoad == Actuation::SubstrateTry::Refused) {
+                    start = choice.ruleIndex + 1; continue;
+                }
+                if (subRoad == Actuation::SubstrateTry::Filed) {
+                    acted = true;   // the pair is filed (road=substrate-claim): this tick's action
+                } else if (selfPkg) {
                     // The UNIVERSAL DIRECT TRIGGER (SPEC-self-cast-forced).
                     // Actuation::CastSelfDirect applies the effect DIRECTLY
                     // (CastSpellImmediate, kInstant) + spends magicka -- NO equip,
@@ -1989,12 +2014,17 @@ namespace MFO::Logistics {
                     // mirrors the cast duration cap so a pathological effect duration
                     // can't open an unbounded window (which a stale FF-reused key
                     // would then carry into the next save).
-                    const float dur = std::clamp(
+                    // The substrate road (slice S3) takes only the 3 s floor here: its own pacing
+                    // (cast/SubstrateRoad.cpp) holds the duration window only once the pair FIRED, so a
+                    // refused or never-fired open is not held off for the buff's whole duration
+                    // (review F4 on 733c20cc).
+                    const float dur = subRoad == Actuation::SubstrateTry::Filed ? 3.0f : std::clamp(
                         ei ? static_cast<float>(ei->GetDuration()) * 0.9f : 3.0f, 3.0f, 300.0f);
                     g_logiCastUntil[castKey] = now + std::chrono::duration_cast<Clock::duration>(
                                                         std::chrono::duration<float>(dur));
                     const char* route =
-                          op == Vocab::kActCastPlayer                   ? "player (immediate)"
+                          subRoad == Actuation::SubstrateTry::Filed     ? "substrate-claim (animated)"
+                        : op == Vocab::kActCastPlayer                   ? "player (immediate)"
                         : (op == Vocab::kActCastTarget && immediate && !casterPick) ? "ally/player (immediate)"
                         : immediate                                     ? "self (immediate)"
                                                                         : "foe (package)";

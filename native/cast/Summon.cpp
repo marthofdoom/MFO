@@ -265,8 +265,11 @@ namespace MFO::Actuation {
     namespace {
 
         // MAIN THREAD. The whole decision + cast for one summon rule.
+        // a_substrate: the WORKER decided this summon takes the out-of-combat substrate road (SubstrateRoadFor,
+        // cast/SubstrateRoad.cpp: bSubstrateCasts ON, the out-of-combat table, Harbinger's substrate available, the
+        // buff claim road serves the summon). false = today's direct one-shot, unchanged.
         void SummonOnMain(RE::FormID a_id, RE::FormID a_spellID, int a_rule,
-                          const std::string& a_table, const std::string& a_target) {
+                          const std::string& a_table, const std::string& a_target, bool a_substrate) {
             auto* f  = RE::TESForm::LookupByID<RE::Actor>(a_id);
             auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spellID);
             if (!f || !sp) return;
@@ -334,6 +337,23 @@ namespace MFO::Actuation {
             if (const char* why = CannotActReason(f)) {
                 setVerdict(SummonVerdict::Failed);
                 NoteRefusedApply(a_id, "summon", why, a_spellID, a_id);
+                return;
+            }
+            // 4a. THE SUBSTRATE ROAD (slice S3): the follower's own AI casts the summon with the animation; Harbinger
+            //     holds the substrate and closes it on the fire. MAIN thread (FileSubstrateCast is main-safe for a
+            //     self recipient). Filed = Cast (the verdict's landing window then covers the charge); anything else
+            //     = Failed, a no-cast this lap (the worker re-asks after the verdict ages out), NEVER the direct cast.
+            //     FileSubstrateCast never answers NotTaken (that is SubstrateRoadFor's, decided on the worker).
+            if (a_substrate) {
+                if (FileSubstrateCast(f, sp, f, "ooc-summon") != SubstrateTry::Filed) {
+                    setVerdict(SummonVerdict::Failed);
+                    return;
+                }
+                setVerdict(SummonVerdict::Cast);
+                spdlog::info("[summon] {:08X} {} {} ({:08X}) rule {} ({}, target {}): road=substrate-claim, filed "
+                             "(the follower's own AI casts it; summons listed {} + appearing {} of limit {}{})",
+                             a_id, fname, name, a_spellID, a_rule, a_table, a_target, live, pending, limit,
+                             noCap ? ", cap skipped by the engine flag" : "");
                 return;
             }
             auto* caster = f->GetMagicCaster(RE::MagicSystem::CastingSource::kInstant);
@@ -428,9 +448,12 @@ namespace MFO::Actuation {
         // direct (the substrate, slice S3, is what gives the no-controller follower a controller) and the field
         // log names it (cast/Unanimated.cpp). Combat table only; the out-of-combat service is a no-op here.
         NoteUnanimatedRoadWhy(a_follower, "summon-oneshot", a_spell, nullptr);
+        // SUBSTRATE S3: decided HERE on the worker (ChooseBuffRoad is worker-serial), only for the out-of-combat
+        // table (g_firingRule == kNoRule); the main thread files the pair. false = today's road, unchanged.
+        const bool substrate = SubstrateRoadFor(a_follower, a_spell, a_follower, g_firingRule == kNoRule);
         MainThread::Post([id, spellID, a_rule, table = std::string(a_table ? a_table : "?"),
-                          target = std::string(a_target)] {
-            SummonOnMain(id, spellID, a_rule, table, target);
+                          target = std::string(a_target), substrate] {
+            SummonOnMain(id, spellID, a_rule, table, target, substrate);
         });
         // Optimistic and TRANSPARENT on purpose (see the threading note above):
         // the main thread decides and logs whether this cast.

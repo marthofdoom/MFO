@@ -1735,6 +1735,7 @@ namespace MFO::Actuation {
         g_unsightedCharge.clear();
         ResetBuffRoad();             // feat/mfo-remaining-cast-kinds: cast/BuffRoad.cpp
         ResetHealRoad();             // feat/mfo-perhand-heal: the per-hand heal records (cast/HealRoad.cpp)
+        ResetSubstrateRoad();        // slice S3: the substrate road's pacing + log dedup (cast/SubstrateRoad.cpp)
     }
 
 }
