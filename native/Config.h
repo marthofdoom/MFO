@@ -828,6 +828,10 @@ namespace MFO::Config {
     inline std::atomic<bool>          g_speechPricing{ true };
     inline std::atomic<bool>          g_merchantPerkBypass{ true };
     inline std::atomic<std::uint32_t> g_merchantPerkID{ 0x00058F7A };
+    //   iFencePerkID (town phase 2 R6, INI-only): the perk a follower must own before a town errand visits a FENCE (a vendor
+    //     faction that buys only stolen goods). Default 0x00058F79 = vanilla "fence" (Skyrim.esm). The fence's own conditions
+    //     (e.g. Tonilia: the Thieves Guild stage) must ALSO pass. Stolen goods sell ONLY to a fence. Hex ok.
+    inline std::atomic<std::uint32_t> g_fencePerkID{ 0x00058F79 };
 
     // #21 MAGE DRESS-UP toggles (govern the mage clothing/jewelry APPAREL path, in
     // BOTH loot and economy-buy). These are independent of the economy master --

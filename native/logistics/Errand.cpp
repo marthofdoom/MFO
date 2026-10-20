@@ -245,7 +245,8 @@ namespace MFO::Logistics::Errand {
         // builds the PackageLocation, InitItem's resolver (rva 0x49c630) then turns kInCell into a TESObjectCELL* in
         // data.object and kNearReference into a 32-bit ObjectRefHandle in data.refHandle. Other location types are skipped.
         // Verified on 1.6.1170 only (per-runtime rule): elsewhere the list is empty and shops are the loaded-vendor ones (R1a).
-        struct ShopStatic { RE::FormID faction = 0, chest = 0, place = 0; DestKind kind = DestKind::Cell; float rad = 0.0f; };
+        struct ShopStatic { RE::FormID faction = 0, chest = 0, place = 0; DestKind kind = DestKind::Cell; float rad = 0.0f;
+                            std::uint8_t cls = 0; };   // R6: 0 plain, 1 FENCE (perk + conditions gate), 2 CONDITIONED (a spouse-store candidate)
         std::unordered_map<RE::FormID, std::vector<ShopStatic>> g_townShops;   // town BGSLocation id -> shops; guarded by g_mx
 
         std::vector<ShopStatic> BuildTownShops(const RE::BGSLocation* a_town) {
@@ -257,14 +258,15 @@ namespace MFO::Logistics::Errand {
                 if (!fac || !fac->IsVendor() || !fac->OffersServices()) continue;
                 auto* chest = fac->vendorData.merchantContainer;
                 if (!chest || !chest->GetContainer()) continue;
-                if (fac->vendorData.vendorConditions && fac->vendorData.vendorConditions->head) continue;   // conditioned
-                const auto& vv = fac->vendorData.vendorValues;
-                if (vv.buysStolen && !vv.buysNonStolen) continue;                                         // a fence
+                // R6: a fence and a conditioned vendor are KEPT, tagged; BuildCatalog's gates (ErrandShops.cpp) decide per follower.
+                const bool conditioned = fac->vendorData.vendorConditions && fac->vendorData.vendorConditions->head;
+                const std::uint8_t cls = ErrandShops::IsFence(fac) ? 1 : conditioned ? 2 : 0;
                 auto* loc = fac->vendorData.vendorLocation;
                 if (!loc) continue;
                 ShopStatic sh;
                 sh.faction = fac->GetFormID();
                 sh.chest   = chest->GetFormID();
+                sh.cls     = cls;
                 const RE::BGSLocation* placeLoc = nullptr;
                 switch (loc->locType.get()) {
                 case RE::PackageLocation::Type::kInCell: {
@@ -334,6 +336,8 @@ namespace MFO::Logistics::Errand {
             };
             const float maxFromPlayer = Config::g_travelRadius.load();
             std::unordered_map<RE::FormID, bool> seenChest;
+            bool waiting = false;   // R6: a fence / spouse gate is still waiting for its main-thread condition answer
+            std::unordered_set<RE::FormID> gated;   // R6: factions a LOADED vendor already put through a gate this plan (the faction-only list does not re-ask)
             for (auto& h : living) {
                 if (out.size() >= kMaxCands) break;
                 auto  ptr = h.get();
@@ -345,11 +349,19 @@ namespace MFO::Logistics::Errand {
                     continue;   // a sleeper cannot be talked to
                 auto* fac = VendorFactionOf(v);
                 if (!fac) continue;
-                // Skip conditioned vendors and fences (marth 2026-10-18; Q10): their stock / availability depends on
-                // conditions that need the vendor and the player as subject / target, which MFO cannot evaluate.
-                if (fac->vendorData.vendorConditions && fac->vendorData.vendorConditions->head) { ++a_dropped; continue; }
-                const auto& vv = fac->vendorData.vendorValues;
-                if (vv.buysStolen && !vv.buysNonStolen) { ++a_dropped; continue; }   // a fence
+                // R6 (was: every conditioned vendor and every fence dropped, marth 2026-10-18 Q10): a FENCE needs the follower's fence
+                // perk AND its own conditions (Q1); a conditioned non-fence vendor is offered only as the SPOUSE's store. Every other
+                // conditioned vendor is still dropped. The gates are ErrandShops.cpp's (conditions are evaluated on the main thread).
+                {
+                    const bool conditioned = fac->vendorData.vendorConditions && fac->vendorData.vendorConditions->head;
+                    const bool fence = ErrandShops::IsFence(fac);
+                    if (fence || conditioned) {
+                        gated.insert(fac->GetFormID());
+                        const auto g = fence ? ErrandShops::FenceGate(a_follower, fac, h) : ErrandShops::SpouseGate(a_follower, fac, h);
+                        if (g == ErrandShops::Gate::Closed) { ++a_dropped; continue; }
+                        if (g == ErrandShops::Gate::Pending) { waiting = true; continue; }   // the main-thread evaluation is in flight: this plan is abandoned below
+                    }
+                }
                 if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
                 Counter::Learn(v, fac->GetFormID(), a_now);   // R4: where this vendor actually stands (session-only map)
                 auto* chest = fac->vendorData.merchantContainer;
@@ -421,6 +433,12 @@ namespace MFO::Logistics::Errand {
                     if (seenChest.contains(sh.chest)) continue;   // a loaded vendor already covers this chest
                     auto* fac = RE::TESForm::LookupByID<RE::TESFaction>(sh.faction);
                     if (!fac) continue;
+                    if (sh.cls != 0 && !gated.contains(sh.faction)) {   // R6: a fence / conditioned shop with no loaded vendor: subject = the player / the spouse
+                        const auto g = sh.cls == 1 ? ErrandShops::FenceGate(a_follower, fac, RE::ActorHandle{})
+                                                   : ErrandShops::SpouseGate(a_follower, fac, RE::ActorHandle{});
+                        if (g == ErrandShops::Gate::Closed) { ++a_dropped; continue; }
+                        if (g == ErrandShops::Gate::Pending) { waiting = true; continue; }
+                    } else if (sh.cls != 0) continue;   // its loaded vendor was gated above (and refused or was already listed)
                     if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
                     if (const auto it = parked.find(sh.faction); it != parked.end() && a_now < it->second) continue;
                     if (backedOff.contains(sh.chest)) { noteBackoff(sh.chest, fac->GetName()); continue; }
@@ -446,6 +464,12 @@ namespace MFO::Logistics::Errand {
                     c.pos = placePos; c.havePos = true;
                     out.push_back(c);
                 }
+            }
+            if (waiting) {   // never commit a trip that silently lacks the fence / spouse store: re-plan on the next cadence (6 s)
+                spdlog::info("[errand] {:08X}: plan waiting for a vendor-condition answer (fence / spouse gate) -- re-planning shortly",
+                             a_follower->GetFormID());
+                out.clear();
+                return out;
             }
             {
                 // The plan runs every 6 s: say it when this follower's skipped set CHANGES, not on every plan.
@@ -686,6 +710,7 @@ namespace MFO::Logistics::Errand {
         }
         Sim::ClearTransientState();
         Counter::Clear();
+        ErrandShops::Clear();   // R6
         APMFBridge::ClearErrandClaims();
     }
 
@@ -758,7 +783,8 @@ namespace MFO::Logistics::Errand {
             if (MainThread::IsInstalled()) MainThread::Post(fn);
             else                           fn();   // VR: the pump is a no-op, keep the direct path
         }
-        void ToastTrading(const std::string& a_who, const std::string& a_shop) {
+        void ToastTrading(const std::string& a_who, const std::string& a_shop, RE::FormID a_faction) {
+            if (a_faction && ErrandShops::IsFenceFaction(a_faction)) { ToastFence(a_who, a_shop); return; }   // R6: a fence visit reads differently
             Toast(std::format("{} is trading with {}.", a_who, a_shop));
         }
         // R3 strings table for the phase-2 kinds (no caller yet).
@@ -1190,7 +1216,7 @@ namespace MFO::Logistics::Errand {
             if (!arrived) { Store(fid, r); return true; }
             if (!r.announced) {   // one-shot: the Walking phase leaves here for the talk / give beat (a resume that was announced skips it)
                 r.announced = true;
-                detail::ToastTrading(r.followerName, r.vendorName);
+                detail::ToastTrading(r.followerName, r.vendorName, r.faction);
             }
             spdlog::info("[errand] {:08X} '{}': ARRIVED at '{}' ({:.0f} u) after {} s{} -- talk beat",
                          fid, r.followerName, r.vendorName, dist,

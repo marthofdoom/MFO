@@ -122,6 +122,7 @@ namespace MFO::Config {
             else if (a_key == "bTownToasts")        { setB(g_townToasts);    return; }   // default OFF; HUD lines for errand events
             else if (a_key == "iErrandMinSellGold") { setI(g_errandMinSellGold, 0, 100000);    return; }
             else if (a_key == "iErrandMinPurse")    { setI(g_errandMinPurse,    0, 1000000);   return; }
+            else if (a_key == "iFencePerkID")       { setU(g_fencePerkID);                 return; }   // R6: the follower's fence perk (default vanilla 0x00058F79)
             else if (a_key == "fErrandSettleSec")   { setF(g_errandSettleSec,   0.0f, 600.0f); return; }
             else if (a_key == "fErrandCooldownSec") { setF(g_errandCooldownSec, 0.0f, 3600.0f); return; }
             else if (a_key == "fErrandMaxGameMin")  { setF(g_errandMaxGameMin,  10.0f, 1440.0f); return; }
@@ -414,6 +415,7 @@ namespace MFO::Config {
             g_speechPricing      = true;    // #21 sell price follows the speech-scaled vanilla barter curve
             g_merchantPerkBypass = true;    // #21 merchant-perk holder sells outside the vendor filter
             g_merchantPerkID     = 0x00058F7A;  // vanilla Merchant / Ordinator Salesman (Skyrim.esm)
+            g_fencePerkID        = 0x00058F79;  // R6: vanilla "fence" perk (Skyrim.esm)
             g_mageWearRobes      = true;    // #21 mage clothing/jewelry dress-up -- ON (loot + buy)
             g_mageApparelStrictSchool = false;  // #21 strict top-2-school apparel filter -- OFF (value-driven default)
             g_meoAwareGems       = false;   // effect-aware gem optimization -- OFF (conservation still always runs)

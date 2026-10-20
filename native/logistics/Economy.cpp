@@ -660,6 +660,7 @@ namespace MFO::Logistics {
                 RE::BGSKeywordForm* kwf;
                 const char*         passTag;   // sdiag label once the vendor filter clears it
                 bool                minOne = false;   // ammo rows never price below 1g (as before R2)
+                ErrandShops::Stolen stolen = ErrandShops::Stolen::None;   // R6: filled below, once, from his copies' ExtraOwnership
             };
             std::vector<SellCandidate> sellCandidates;
             std::vector<GemRules::HoldKey> saleTouched;   // items the sale path checked this scan (GemRules holds)
@@ -921,6 +922,14 @@ namespace MFO::Logistics {
             // is a stable subset-select, so the filtered result stays sorted too.
             std::sort(sellCandidates.begin(), sellCandidates.end(),
                       [](const auto& a, const auto& b) { return a.price > b.price; });
+            // R6 THE STOLEN SPLIT (design 1.c): MFO_Trade.psc never checks the stolen flag and RemoveItem(form, n) cannot choose WHICH
+            // copy leaves, so a base form is classified by ALL its copies: none stolen -> a NORMAL row, every copy stolen -> a FENCE
+            // row, a mix -> sold nowhere. Stolen goods reach a fence ONLY, and a fence takes nothing else (the vendor loop below).
+            {
+                const auto stolenOf = ErrandShops::ClassifyStolen(a_follower);
+                for (auto& c : sellCandidates)
+                    if (const auto it = stolenOf.find(c.obj); it != stolenOf.end()) c.stolen = it->second;
+            }
 
             // BUY NEEDS: each supply gambit BELOW its threshold -> the category
             // + how many MORE to acquire. Papyrus enumerates the vendor's ACTUAL
@@ -1008,6 +1017,9 @@ namespace MFO::Logistics {
                 // CTDs on any thread (§0.37). The chest read moves to Papyrus.
                 auto* chest = fac->vendorData.merchantContainer;
                 if (!chest || !chest->GetContainer()) continue;
+                // R6: a fence is visited only on a town errand, where the catalog gates (fence perk + its own conditions) ran. The legacy
+                // proximity scan has no such gate and used to hand a fence every row: it skips fences now.
+                if (!a_errand && ErrandShops::IsFence(fac)) continue;
 
                 // VEND-FILTER PASS: the one thing that legitimately varies per
                 // vendor -- apply this vendor's buy/sell keyword list (and the
@@ -1029,7 +1041,11 @@ namespace MFO::Logistics {
                 }
                 std::vector<TradeBridge::SellRow> sell;
                 sell.reserve(sellCandidates.size());
+                const bool pureFence = ErrandShops::IsFence(fac);
                 for (auto& c : sellCandidates) {
+                    // R6: a fence takes only all-stolen bases; every other vendor takes only bases with no stolen copy; mixed -> nowhere.
+                    if (c.stolen == ErrandShops::Stolen::Mixed) { ErrandShops::NoteMixed(a_follower, c.obj); sdiag(c.obj, "mixed stolen/normal copies"); continue; }
+                    if (pureFence != (c.stolen == ErrandShops::Stolen::All)) { sdiag(c.obj, pureFence ? "not stolen (fence)" : "stolen (not a fence)"); continue; }
                     if (!sellAnything && !VendorTrades(vend, vv.notBuySell, c.kwf)) {
                         sdiag(c.obj, "vendor-filter"); continue;
                     }
