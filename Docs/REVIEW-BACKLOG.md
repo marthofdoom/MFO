@@ -1941,3 +1941,33 @@ Same review. Verbatim: "Errand.cpp:1045-1050: a later stop whose vendor is unloa
 
 ### MFO-B348 (SEV-5, OPEN, logistics/ErrandTrip.cpp) -- town R5: bestRow recomputed in the sort comparator (raised against c32c8c1e)
 Same review. Verbatim: "ErrandTrip.cpp:189-192: the stable_sort comparator recomputes bestRow (N log N x candidates x rows per plan on the worker); cache it if a plan ever stalls."
+
+### MFO-B349 (SEV-4, OPEN, native/Serialization.h) -- town R7: downgrade path (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Downgrade path. The b68f0a8 reader drops an entry whose current stop is 'inn'/'temple'. A follower unloaded in the inn is then not recalled, so the Serialization.h comment 'simply with the player' overstates it." The comment's wording is FIXED in the same round (it now says a downgraded DLL does not bring him back); the behaviour stays. MAP.md: "Town phase 2 R7".
+
+### MFO-B350 (SEV-4, OPEN, logistics/ErrandRest.cpp) -- town R7: NoteTown has no grace period (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "NoteTown has no grace period (ErrandRest.cpp:712). The Sweep waits 2 s; this does not. A brief null or dungeon location (the Ratway, an interior with no location) clears every mark." MAP.md: "Town phase 2 R7".
+
+### MFO-B351 (SEV-4, OPEN, apmf/ErrandWork.cpp) -- town R7: shared-slot window (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Shared-slot window. After ReleaseErrandWork frees a slot, another follower can rewrite that record while the first follower's AI may still run it until its next package evaluation." MAP.md: "Town phase 2 R7".
+
+### MFO-B352 (SEV-4, OPEN, logistics/Errand.cpp) -- town R7: staying follower keeps the chest counted busy (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "A staying follower keeps the innkeeper's chest counted as busy. Physical CrowdInto (Errand.cpp:789) counts it for the whole stay; the sim side excludes Rest." MAP.md: "Town phase 2 R7".
+
+### MFO-B353 (SEV-4, OPEN, logistics/Errand.cpp) -- town R7: no temple trip when no shop is open (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "No temple trip when no shop is open. TryStart returns early on an empty shop list (Errand.cpp:968), so a diseased follower at night gets no temple visit." MAP.md: "Town phase 2 R7".
+
+### MFO-B354 (SEV-4, OPEN, logistics/ErrandRest.cpp) -- town R7: innkeeper food order is 1.6.1170 only (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "The innkeeper food order runs on 1.6.1170 only. This matches the BuildTownShops precedent and does no harm. 1.7.104 is a supported runtime, so a per-runtime path belongs in the backlog." EXTENDED (marth/coordinator): the `ResolveViaData` fallback added in the fix round (innkeeper-faction place + location special refs) is also 1.6.1170-only. MAP.md: "Town phase 2 R7".
+
+### MFO-B355 (SEV-4, OPEN, logistics/ErrandRest.cpp) -- town R7: FoodWorth bypasses the Synthesis catalog (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "FoodWorth judges food at run time rather than through the Synthesis item catalog. That departs from the catalog-first rule." MAP.md: "Town phase 2 R7".
+
+### MFO-B356 (SEV-5, OPEN, logistics/ErrandRest.cpp) -- town R7: stale temple work entry (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Stale temple work entry. When a temple stop hands over to the inn, NextStopOrFinish never calls Rest::End, so the temple entry lingers. Its claims were already released at Exit, so it is harmless." MAP.md: "Town phase 2 R7".
+
+### MFO-B357 (SEV-5, OPEN, logistics/ErrandRest.cpp) -- town R7: bed choice (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Bed choice. FindBed's ownership filter does not bind the Sleep package's own bed choice within its 500-unit radius. Field check." MAP.md: "Town phase 2 R7".
+
+### MFO-B358 (SEV-5, OPEN, Serialization.cpp) -- town R7: misleading reader log (raised against bfc92b50)
+Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Misleading reader log. The reader's 'shop gone' counter also counts a current temple or inn stop." MAP.md: "Town phase 2 R7".
