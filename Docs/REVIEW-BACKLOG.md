@@ -1941,3 +1941,15 @@ Same review. Verbatim: "Errand.cpp:1045-1050: a later stop whose vendor is unloa
 
 ### MFO-B348 (SEV-5, OPEN, logistics/ErrandTrip.cpp) -- town R5: bestRow recomputed in the sort comparator (raised against c32c8c1e)
 Same review. Verbatim: "ErrandTrip.cpp:189-192: the stable_sort comparator recomputes bestRow (N log N x candidates x rows per plan on the worker); cache it if a plan ever stalls."
+
+### MFO-B360 (SEV-4, OPEN, logistics/ErrandShops.cpp) -- town R6: gate subject/target pairing differs from the engine's (raised against f0635350)
+Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "Actor::CalculateCurrentVendorFaction (AE id 37383 @0x14066C250) calls IsTrue(vendorConditions, vendor, vendor) at 0x14066C3C5. With the vendor unloaded, the subject is the player, so a negated subject check can wrongly pass. Suggested fix: use the vendor's persistent ref, from the R4 learned map."
+
+### MFO-B361 (SEV-4, OPEN, logistics/Errand.cpp) -- town R6: type-12 fence with an unloaded vendor not built (raised against f0635350)
+Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "The type-12 (near self) fence with an unloaded vendor (Niranye) is not built (Errand.cpp:286 default continue)."
+
+### MFO-B362 (SEV-5, OPEN, logistics/Errand.cpp) -- town R6: restored or re-planned stops are not re-gated (raised against f0635350)
+Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "Restored or re-planned stops are not re-gated (fence perk / conditions); the trade-time stolen split still applies."
+
+### MFO-B363 (SEV-5, OPEN, logistics/Economy.cpp) -- town R6: ClassifyStolen does a second full GetInventory per scan (raised against f0635350)
+Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "ClassifyStolen does a second full GetInventory on every scan (Economy.cpp:929)."

@@ -336,6 +336,7 @@ namespace MFO::Logistics::Errand {
             };
             const float maxFromPlayer = Config::g_travelRadius.load();
             std::unordered_map<RE::FormID, bool> seenChest;
+            bool waiting = false;   // R6: a fence / spouse gate is still waiting for its main-thread condition answer
             std::unordered_set<RE::FormID> gated;   // R6: factions a LOADED vendor already put through a gate this plan (the faction-only list does not re-ask)
             for (auto& h : living) {
                 if (out.size() >= kMaxCands) break;
@@ -358,7 +359,7 @@ namespace MFO::Logistics::Errand {
                         gated.insert(fac->GetFormID());
                         const auto g = fence ? ErrandShops::FenceGate(a_follower, fac, h) : ErrandShops::SpouseGate(a_follower, fac, h);
                         if (g == ErrandShops::Gate::Closed) { ++a_dropped; continue; }
-                        if (g == ErrandShops::Gate::Pending) continue;   // the main-thread evaluation is in flight: the next plan asks again
+                        if (g == ErrandShops::Gate::Pending) { waiting = true; continue; }   // the main-thread evaluation is in flight: this plan is abandoned below
                     }
                 }
                 if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
@@ -436,7 +437,7 @@ namespace MFO::Logistics::Errand {
                         const auto g = sh.cls == 1 ? ErrandShops::FenceGate(a_follower, fac, RE::ActorHandle{})
                                                    : ErrandShops::SpouseGate(a_follower, fac, RE::ActorHandle{});
                         if (g == ErrandShops::Gate::Closed) { ++a_dropped; continue; }
-                        if (g == ErrandShops::Gate::Pending) continue;
+                        if (g == ErrandShops::Gate::Pending) { waiting = true; continue; }
                     } else if (sh.cls != 0) continue;   // its loaded vendor was gated above (and refused or was already listed)
                     if (!OpenAt(fac, hour)) { ++a_dropped; continue; }
                     if (const auto it = parked.find(sh.faction); it != parked.end() && a_now < it->second) continue;
@@ -463,6 +464,12 @@ namespace MFO::Logistics::Errand {
                     c.pos = placePos; c.havePos = true;
                     out.push_back(c);
                 }
+            }
+            if (waiting) {   // never commit a trip that silently lacks the fence / spouse store: re-plan on the next cadence (6 s)
+                spdlog::info("[errand] {:08X}: plan waiting for a vendor-condition answer (fence / spouse gate) -- re-planning shortly",
+                             a_follower->GetFormID());
+                out.clear();
+                return out;
             }
             {
                 // The plan runs every 6 s: say it when this follower's skipped set CHANGES, not on every plan.

@@ -85,15 +85,14 @@ namespace MFO::Logistics::ErrandShops {
         }
 
         // MAIN THREAD. Evaluate the faction's vendorConditions and cache the answer.
-        void EvaluateOnMain(RE::FormID a_fac, RE::ActorHandle a_subject) {
-            RE::FormID subjectId = 0;
+        void EvaluateOnMain(RE::FormID a_fac, RE::ActorHandle a_subject, std::uint64_t a_key) {
             Entry e;
             e.at = Clock::now();
             auto* fac = RE::TESForm::LookupByID<RE::TESFaction>(a_fac);
             auto* pc  = RE::PlayerCharacter::GetSingleton();
             auto sp = a_subject.get();
             RE::TESObjectREFR* subject = pc;
-            if (sp.get()) { subject = sp.get(); subjectId = sp.get()->GetFormID(); }
+            if (sp.get()) subject = sp.get();
             if (!fac || !pc || !subject) {
                 e.refused = true; e.note = "faction / player / subject not resolvable";
             } else if (!fac->vendorData.vendorConditions || !fac->vendorData.vendorConditions->head) {
@@ -105,9 +104,9 @@ namespace MFO::Logistics::ErrandShops {
             } else {
                 e.refused = true; e.note = "TESCondition::IsTrue seat REFUSED (see the [trade] line)";
             }
-            std::scoped_lock lk(g_mx);
-            g_cond[Key(a_fac, subjectId)] = std::move(e);
-            g_pending.erase(Key(a_fac, subjectId));
+            std::scoped_lock lk(g_mx);   // the WORKER's key: a subject handle that went invalid must not strand it pending
+            g_cond[a_key] = std::move(e);
+            g_pending.erase(a_key);
         }
 
         // Any thread. Open / Closed from the cache, Pending while the first answer is being computed. a_why is the decision text.
@@ -124,7 +123,7 @@ namespace MFO::Logistics::ErrandShops {
                 if ((!have || now - e.at >= kRefresh) && MainThread::IsInstalled() && g_pending.insert(k).second) post = true;
             }
             if (post)
-                MainThread::Post([fid = a_fac->GetFormID(), subj = a_subject] { EvaluateOnMain(fid, subj); });
+                MainThread::Post([fid = a_fac->GetFormID(), subj = a_subject, k] { EvaluateOnMain(fid, subj, k); });
             if (!have) {
                 if (!MainThread::IsInstalled()) { a_why = "conditions cannot be evaluated (no main-thread road)"; return Gate::Closed; }
                 a_why = "conditions being evaluated on the main thread";
@@ -167,12 +166,23 @@ namespace MFO::Logistics::ErrandShops {
             return in;
         }
 
-        // An item is STOLEN when a copy carries an owner that is neither the follower's side (the follower, the player, a faction
-        // the follower belongs to, PlayerFaction) nor empty.
+        // An item is STOLEN when a copy carries an owner that is neither the follower's side nor empty. ExtraOwnership.owner is a
+        // BASE form (TESNPC or TESFaction, never a REFR): the engine's InventoryEntryData::IsOwnedBy_Impl (AE id 16020) compares it
+        // with the holder's BASE NPC and tests a faction owner by membership. So: the player's base NPC 0x7, the follower's TESNPC
+        // and its template chain, a faction he belongs to, PlayerFaction. A data-only read (no id-based call, so no seat row).
+        constexpr RE::FormID kPlayerBaseNpc = 0x00000007;
         bool StolenOwner(RE::TESForm* a_owner, RE::Actor* a_follower) {
             if (!a_owner) return false;
             const RE::FormID id = a_owner->GetFormID();
-            if (id == 0x14 || id == a_follower->GetFormID() || id == kPlayerFaction) return false;
+            if (id == kPlayerBaseNpc || id == kPlayerFaction) return false;
+            {
+                RE::TESForm* b = a_follower->GetActorBase();
+                for (int i = 0; b && i < 8; ++i) {   // the base NPC, then its template chain (a templated actor holds the root's ownership)
+                    if (b == a_owner) return false;
+                    auto* npc = b->As<RE::TESNPC>();
+                    b = npc ? npc->baseTemplateForm : nullptr;
+                }
+            }
             if (auto* f = a_owner->As<RE::TESFaction>()) return !InFaction(a_follower, f);
             return true;
         }
