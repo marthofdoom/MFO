@@ -134,7 +134,7 @@ namespace MFO::Config {
             else if (a_key == "iInnMeals")          { setI(g_innMeals, 0, 5);      return; }
             else if (a_key == "iInnFoodStock")      { setI(g_innFoodStock, 0, 20); return; }
             else if (a_key == "iTempleGameMin")     { setI(g_templeGameMin, 1, 240); return; }
-            else if (a_key == "bSubstrateCasts")    { setB(g_substrateCasts); return; }   // OOC casts on the ch.27 substrate (S3), INI-only, default OFF
+            else if (a_key == "bSubstrateCasts")    { setB(g_substrateCasts); return; }   // OOC casts on the ch.27 substrate (S3), INI-only, default ON (marth 2026-10-20: ships on with the town release)
 
             if      (a_key == "bAllowSummons")      setB(g_allowSummons);
             else if (a_key == "fRapportRate")       setF(g_rapportRate,       0.0f, 100.0f);
@@ -357,7 +357,7 @@ namespace MFO::Config {
             g_weighWeapons       = false;   // default OFF: MFO equips weapons directly (weighting is parked, batch D)
             g_warnNoApmf         = true;    // default = warn (corner toast) when APMF is absent
             g_healAnimPackage    = true;    // default ON (animheal phase 2): with Harbinger present and a combat controller a heal is cast ANIMATED by the follower's own AI (the ch.8b claim road); OFF = the kill switch, heals take the direct road (unanimated)
-            g_substrateCasts     = false;   // default OFF (S3): OOC casts stay on the direct road until the field run proves the substrate client
+            g_substrateCasts     = true;    // default ON (marth 2026-10-20): OOC casts ride the ch.27 substrate; Harbinger absent or older than ABI v27 = the direct road
             g_forcedCastTrigger  = 0;       // RESERVED ComposedCast trigger variant
             g_cfcBackoffMs       = 10000;   // ComposedCast degrade backoff (ms)
             g_castSource         = 3;
