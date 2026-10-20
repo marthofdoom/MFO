@@ -3115,7 +3115,7 @@ module. Module layout:
     at ...`, the caller releases ch.19 (`Packages::LootTravelClear`), resets the intent, and an EPISODE opens: `LootNearby`
     (`LootScan.cpp`, top) refuses new excursions (`StuckAtOriginCooldown`, a pure query) until he is > 300 u from the stuck point or
     in another cell (no timer). `StuckAtOriginTick` (called at the top of `Logistics::ServiceFollower`, every service, independent
-    of loot rules) holds the evidence window, which STARTS AT DETECTION: >= 20 s, moved < 150 u, player > 300 u and not closing,
+    of loot rules) holds the evidence window, which STARTS AT DETECTION: >= 20 s, moved < 150 u, player > 800 u and not closing,
     not in combat / talking / mounted / on an errand, no `Followers::SecondsSinceTransition()` inside the window. `NEAR-MISS`
     lines log the values. THE RESCUE: once per episode, `MainThread::Post` -> `RescueOnMain` finds the nearest UNLOCKED LOAD door
     (ExtraTeleport; `RE::TES::ForEachReferenceInRange`, main thread only) within 1500 u and calls `TESObjectREFR::ActivateRef(follower)`
@@ -3123,7 +3123,7 @@ module. Module layout:
     false return is the engine fade starting (proven by disassembly: Docs/ENGINE_NOTES, review log). 3 s later the worker logs
     `RESCUED via door ...` or a loud `rescue did NOT move him`. **What breaks:** the suppression starves his looting while he
     stays within 300 u of the point; the rescue moves a follower through a load door (he is a normal follower again, the engine
-    follow or a teleport mod brings him back); thresholds are tuned from `NEAR-MISS` lines. Backlog: MFO-B323..B326. No co-save.
+    follow or a teleport mod brings him back); thresholds are tuned from `NEAR-MISS` lines. Backlog: MFO-B326..B326. No co-save.
   - `logistics/PickupSound.cpp` (NEW batch A 86e3haxqx, 2026-10-05) = **PICKUP SOUND AT THE FOLLOWER**, an
     ENGINE SEAT (tier A). A `write_call<5>` call-site trampoline (its OWN `SKSE::Trampoline`, never Board's:
     a second `AllocTrampoline` would release Board's block) on the `BuildSoundDataFromDescriptor` call inside

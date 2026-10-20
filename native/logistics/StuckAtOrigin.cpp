@@ -21,7 +21,7 @@
 //     follower has long since walked off;
 //   * he moved less than kMovedMax (150 u, half the block radius, a few body lengths) from the detection point
 //     over that time (sampled each logistics service, ~1 s);
-//   * FOLLOW is a live order: the player is beyond follow distance (kPlayerNear, 300 u, also the "player can see
+//   * FOLLOW is a live order: the player is beyond follow distance (kPlayerNear, 800 u, also the "player can see
 //     him and may be doing it on purpose" bar) and is not closing it (his distance to the player did not fall by
 //     more than kClosingU, 100 u, since detection);
 //   * he is not in combat (raw IsInCombat: this covers the Harbinger anchor-only leak), not talking, not mounted,
@@ -61,7 +61,7 @@ namespace MFO::Logistics {
         constexpr int   kStuckTargets = 3;        // distinct targets
         constexpr float kStuckSecs    = 20.0f;
         constexpr float kMovedMax     = 150.0f;
-        constexpr float kPlayerNear   = 300.0f;
+        constexpr float kPlayerNear   = 800.0f;   // past any follow-package radius (review F1 of ff286d0: 300 u could sit inside a satisfied follow)
         constexpr float kClosingU     = 100.0f;
         constexpr float kDoorReach    = 1500.0f;
         constexpr auto  kVerifyAfter  = std::chrono::seconds(3);
