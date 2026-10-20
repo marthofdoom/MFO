@@ -2543,6 +2543,11 @@ Side finding (fixed in the follow-up commit): `logistics/Lockpick.cpp` PlayAtFol
 default flags 0x1A, which FORCES mode 2 (2D) whatever the MFO.esp SNDR's model says, so its SetPosition had no
 effect. It now builds with 0x11 (forced 3D), as Actor::PlayPickUpSound does.
 
+### 0.51 An NPC's ActivateRef on an unlocked LOAD door carries him through it (stuck-at-origin rescue, 2026-10-19, Opus review of fb883fe3: disassembly of 1.6.1170 and 1.5.97)
+
+`TESObjectDOOR::Activate` (vslot 0x37): 1.6.1170 0x14027DA50 (vtable 0x14179EDE8), 1.5.97 0x14022CB50. For a NON-player activator whose process is high, the first call sets fadeState kTeleportOut (4) through SetFade (1.6 0x1406EB4F0, 1.5 0x140658970) and RETURNS FALSE. About 1 s later the high-process fade update re-activates the door (1.6 0x1406EB82B when alpha reaches 0; 1.5 0x140658C2B / 0x140658CA7), `Activate` sees fadeState == 4, and the teleport path (1.6 0x14027DF92; 1.5 0x14022D079: set position + the cell change) moves the actor to the linked door. A non-high process teleports at once. There is NO distance check. Refused for a mounted or interacting actor (ExtraInteraction), a locked door without the key, or an actor with no process. Papyrus precedent: Adventurer's Start `DoorRef.Activate(npc)`. MFO call: `logistics/StuckAtOrigin.cpp` (`TESObjectREFR::ActivateRef` id 19369 SE / 19796 AE, a verified-address row). The author of this entry did not re-derive the disassembly; the addresses are the review's.
+
+
 ## 1. Actor control — Tier A primitives
 
 **Status: PROVEN (sibling).** Each has a working call site in shipped code.

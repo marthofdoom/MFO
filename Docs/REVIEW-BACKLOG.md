@@ -1892,3 +1892,14 @@ Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-5. Verbatim: "spdl
 
 ### MFO-B336 (SEV-5, CLOSED in the review round on 733c20cc, cast/Summon.cpp) -- S3: the Summon NotTaken case (raised against 733c20cc)
 Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-5. Verbatim: "The Summon NotTaken case comment is correct, but nothing enforces it." Closed: the switch is gone; `SummonOnMain` treats anything but Filed as a Failed no-cast, so no NotTaken path exists to fall through to the direct cast. Surfaced at edit time from: MAP.md section 2 "cast/SubstrateRoad.cpp + apmf/Substrate.cpp".
+### MFO-B326 (SEV-5, OPEN, apmf/Bridge.cpp) -- riften fixes: const_cast in InCombat (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "const_cast in InCombat is harmless (AnchorOnlyLeak only reads); it could take const RE::Actor*." Reasoning: read-only. NOTE: the round that followed (this branch's second head) removed the leak test from `InCombat` altogether (the SEV-3 narrowing), so the const_cast is gone; the finding is kept for `AnchorOnlyLeak` taking `RE::Actor*` where it could take a const one.
+
+### MFO-B327 (SEV-5, OPEN, logistics/LootTravel_internal.h) -- riften fixes: the gate-ref label is per call, not per record (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "ReadmitOnGateEvent's ', the record's own gate ref' label is set if ANY record names this ref, not per erased record. Log text only." Reasoning: the label is computed once before the erase; no behavioural effect.
+
+### MFO-B328 (SEV-5, OPEN, Targeting.cpp / CombatSense.h) -- riften fixes: group read lock per combat tick (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "The per-call group read lock now runs per combat tick in the Targeting hook while any style is owned, and calls APMF GetSubstrateState under the engine lock (the FoeCount pattern)." Reasoning: same exposure FoeCount already has; the SubstrateOnly call added to `AnchorOnlyLeak` in the follow-up round is lock-free on the APMF side.
+
+### MFO-B329 (SEV-5, OPEN, CombatStyle.cpp) -- riften fixes: a CSTY written before a leak began stays (raised against fb883fe3)
+Opus review of `fix/mfo-riften-1019b` @ fb883fe3. Verbatim: "A CSTY written before a leak began stays on the live controller until it dies." Reasoning: the Targeting hook stops re-asserting a style for a leaked teammate, it does not restore the engine-derived one; the controller's own teardown does.

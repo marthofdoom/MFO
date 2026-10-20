@@ -126,6 +126,8 @@ namespace MFO::Logistics::Errand {
             float         destRad = 0.0f;
             std::shared_ptr<const ErrandPlanned> order;     // the trade, built at PLAN time while he was loaded
             RE::NiPoint3  lastPos{};                        // the follower's last LOADED position / cell (sampled every tick and lap)
+            RE::NiPoint3  planPos{};                        // where he stood at PLAN (log only: the ARRIVED line's distance covered)
+            bool          planPosSet = false;
             RE::FormID    lastCell = 0;
             Clock::time_point unloadedSince{};              // first lap he read unloaded (the hand-off waits one more poll)
         };
@@ -882,6 +884,7 @@ namespace MFO::Logistics::Errand {
         r.destKind = best->kind; r.destForm = best->destForm; r.destRad = best->destRad;
         r.order = std::make_shared<const ErrandPlanned>(*bestPlan);
         r.lastPos = a_follower->GetPosition();
+        r.planPos = r.lastPos; r.planPosSet = true;
         if (auto* fc = a_follower->GetParentCell()) r.lastCell = fc->GetFormID();
         r.start = r.phaseAt = a_now;
         r.startClk = r.lastTickClk = Scheduler::ServiceClock();
@@ -890,8 +893,21 @@ namespace MFO::Logistics::Errand {
             std::scoped_lock lk(g_mx);
             g_recs[fid] = r;
         }
-        spdlog::info("[errand] {:08X} '{}' PLAN -> '{}' ({:08X}) in '{}', {:.0f} u from the player, walking to {} {:08X} | {} | {} candidate(s)",
-                     fid, r.followerName, r.vendorName, best->id, TownName(r.town), best->dist,
+        // His OWN distance to the destination (the from-player figure above says nothing about where HE stands; field
+        // 2026-10-19). A shop CELL has no position here (its door distance is measured from the player): "n/a".
+        std::string ownDist = "n/a (shop cell: no position)";
+        {
+            RE::NiPoint3 dp{};
+            bool         have = false;
+            if (best->kind == DestKind::VendorActor) {
+                if (auto* v = RE::TESForm::LookupByID<RE::Actor>(best->actorId)) { dp = v->GetPosition(); have = true; }
+            } else if (best->kind == DestKind::Ref) {
+                if (auto* rf = RE::TESForm::LookupByID<RE::TESObjectREFR>(best->destForm)) { dp = rf->GetPosition(); have = true; }
+            }
+            if (have) ownDist = std::format("{:.0f} u", a_follower->GetPosition().GetDistance(dp));
+        }
+        spdlog::info("[errand] {:08X} '{}' PLAN -> '{}' ({:08X}) in '{}', {:.0f} u from the player, {} from HIM, walking to {} {:08X} | {} | {} candidate(s)",
+                     fid, r.followerName, r.vendorName, best->id, TownName(r.town), best->dist, ownDist,
                      r.destKind == DestKind::VendorActor ? "the vendor" : r.destKind == DestKind::Ref ? "the shop ref" : "the shop cell",
                      r.destForm, bestWhy, cands.size());
         return true;
@@ -1037,9 +1053,12 @@ namespace MFO::Logistics::Errand {
                 r.announced = true;
                 detail::ToastTrading(r.followerName, r.vendorName);
             }
-            spdlog::info("[errand] {:08X} '{}': ARRIVED at '{}' ({:.0f} u) after {} s -- talk beat",
+            spdlog::info("[errand] {:08X} '{}': ARRIVED at '{}' ({:.0f} u) after {} s{} -- talk beat",
                          fid, r.followerName, r.vendorName, dist,
-                         std::chrono::duration_cast<std::chrono::seconds>(a_now - r.start).count());
+                         std::chrono::duration_cast<std::chrono::seconds>(a_now - r.start).count(),
+                         r.planPosSet ? std::format(", {:.0f} u in a straight line from where the errand began",
+                                                    a_follower->GetPosition().GetDistance(r.planPos))
+                                      : std::string{});
             if (!idles.talk) {   // an old master without the dialogue idle: straight to the hand-over
                 if (!beginBeat(Phase::Giving, idles.give, "give")) return false;
             } else if (!beginBeat(Phase::Talking, idles.talk, "talk")) {
