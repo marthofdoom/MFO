@@ -913,6 +913,10 @@ namespace MFO::Logistics::Errand {
             const RE::FormID resumeDest = vendor ? vendor->GetFormID() : a_info.destForm;
             const float      resumeRad  = vendor ? kVendorRadius : a_info.destRad;
             if (!APMFBridge::RepointErrandTravel(fid, resumeDest, resumeRad) && !APMFBridge::ClaimErrandTravel(fid, resumeDest, resumeRad)) return false;
+            // F2 (review of dc0c334): the new walk offer must be the OWNER. A ch.9 work claim / ch.12 idle / ch.1 hold that held him through the simulation
+            // (the previous stop's) would tie or outrank it as the earlier claim, so they go now that the walk claim is filed.
+            APMFBridge::ReleaseErrandWork(fid);
+            APMFBridge::ReleaseErrandIdle(fid);
             const auto now = Clock::now();
             Rec r;
             r.phase = Phase::Walking;

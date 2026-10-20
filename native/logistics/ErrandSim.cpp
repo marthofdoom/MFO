@@ -159,6 +159,30 @@ namespace MFO::Logistics::Errand::Sim {
             s.tArrive = r.tArrive; s.tWorkEnd = r.tTradeEnd;
         }
 
+        // F1 (review of dc0c334): the simulation changed stop, so the HOLD moves with it. Harbinger holds an UNLOADED actor on his ch.19 leg and decides
+        // arrival off screen from his parent cell (FACETS ch.19 Key Concept 11b), so the errand's walk claim is re-pointed to the NEW stop's destination
+        // (or filed if none stands: the previous stop's hold was a ch.9 work claim). Only AFTER the new claim is filed do the old stop's ch.9 work claim and
+        // ch.12 / ch.1 beats go (a held work offer would otherwise tie the new travel offer and win as the earlier claim). No placement / MoveTo.
+        // UNPROVEN in the field: whether an unloaded actor really walks between cells under the travel package. The line below is the evidence; and
+        // OnLoadedTick WARNs loudly when he loads somewhere else. A refused claim is loud and leaves the old hold standing (no mask, no retry).
+        void MoveHold(const SimRec& r) {
+            if (!r.destForm) {
+                spdlog::warn("[errand] {:08X} '{}': the simulation changed stop to '{}' but the stop has no destination -- the hold stays where it was", r.follower, r.followerName, r.vendorName);
+                return;
+            }
+            const bool ok = APMFBridge::RepointErrandTravel(r.follower, r.destForm, r.destRad) || APMFBridge::ClaimErrandTravel(r.follower, r.destForm, r.destRad);
+            if (!ok) {
+                spdlog::warn("[errand] {:08X} '{}': the simulation changed stop to '{}' but the walk claim to {:08X} could NOT be declared (Harbinger refused) -- the old hold stands",
+                             r.follower, r.followerName, r.vendorName, r.destForm);
+                return;
+            }
+            APMFBridge::ReleaseErrandWork(r.follower);
+            APMFBridge::ReleaseErrandIdle(r.follower);
+            auto* f = RE::TESForm::LookupByID<RE::Actor>(r.follower);
+            auto* pc = f ? f->GetParentCell() : nullptr;
+            spdlog::info("[errand] {:08X} '{}': sim moved hold to {:08X} ('{}'); actor parent cell now {:08X}", r.follower, r.followerName, r.destForm, r.vendorName, pc ? pc->GetFormID() : 0u);
+        }
+
         // R5: the current stop's business is settled off screen (traded, given up, or nothing to do). Move on to the next stop that
         // has an order (OUT_SIM again, tArrive = now + the walk between the two places; design 1.b) and return TRUE, or return FALSE
         // when none is left (the caller walks him back). A stop with no order (restored from a save: orders are never saved) is
@@ -195,6 +219,7 @@ namespace MFO::Logistics::Errand::Sim {
             s.tArrive = r.tArrive; s.tWorkEnd = r.tTradeEnd;
             r.entryDoor = 0;   // the door he went in by belongs to the first shop: the return places him behind the player instead
             r.stage = Stage::Out;
+            MoveHold(r);
             spdlog::info("[errand] {:08X} '{}': TRIP {} {} (sim) -- OUT_SIM to {}: walk {:.1f} game min, trade ends +{:.1f}, back +{:.1f} game min",
                          r.follower, r.followerName, was, prev.state == StopState::Done ? "DONE" : "SKIPPED", Trip::Label(r.stops, r.cur),
                          leg * 1440.0, (r.tTradeEnd - a_days) * 1440.0, (r.tReturn - a_days) * 1440.0);
@@ -440,6 +465,11 @@ namespace MFO::Logistics::Errand::Sim {
         const bool inTown = detail::PlayerTownId() == r.town;
         const bool atShop = inTown && (detail::VendorPresentNear(a_follower, r.faction) ||
                                        (r.destKind == DestKind::Cell && nowCell && nowCell->GetFormID() == r.destForm));
+        // The simulation says he is IN a cell stop's cell (TRADE_SIM / REST_SIM); loaded, he is somewhere else: the off-screen hold did not take him
+        // there (whether an unloaded actor walks between cells under the travel package is unproven). Loud, evidence only: no retry, no placement.
+        if ((r.stage == Stage::Trade || r.stage == Stage::Rest) && r.destKind == DestKind::Cell && r.destForm && nowCell && nowCell->GetFormID() != r.destForm)
+            spdlog::warn("[errand] {:08X} '{}': the simulation had him AT cell {:08X} ('{}', {}) but he loaded in cell {:08X} -- the off-screen hold did not take him there",
+                         fid, r.followerName, r.destForm, r.vendorName, StageName(r.stage), nowCell->GetFormID());
         // R2: a restored record has no order; it resumes on screen when it HAD one (the physical give beat re-plans the trade from
         // his live inventory), unless the unloaded restore decision already dropped the trade (tradeAbandoned).
         const bool tradeLeft = r.order ? !r.order->skipped : (r.restored && r.hadOrder);
@@ -780,7 +810,7 @@ namespace MFO::Logistics::Errand::Sim {
             if (pc->IsInCombat()) {   // he walks out of the shop and joins the fight
                 ResolveNow(r, f, days, "player combat");
                 PlaceReturn(r, f, "the player is in combat -- he walks out and joins");
-                if (Config::g_errandInn.load() && CurKind(r) == StopKind::Inn) Rest::MarkTripDone(fid, r.town, "REST_SIM ended by player combat");   // R7 review: one trip per visit, off screen too
+                if (Config::g_errandInn.load() && CurKind(r) == StopKind::Inn && r.stage == Stage::Rest) Rest::MarkTripDone(fid, r.town, "REST_SIM ended by player combat");   // R7 review: one trip per visit, off screen too; ONLY the stay (REST_SIM): combat during the OUT_SIM walk to the inn sends him back after the fight (marth)
                 Drop(fid, "player combat -- he joins", kCombatCooldownSec, false);
                 continue;
             }

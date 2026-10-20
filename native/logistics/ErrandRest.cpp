@@ -958,7 +958,7 @@ namespace MFO::Logistics::Errand::Rest {
         // a_tripOver false = the HAND-OFF to the simulation: the ch.9 work claim STANDS (it holds the unloaded follower in the inn / temple;
         // marth 2026-10-20 "mfo claims need to hold for the duration of the mfo event"). The sim's Drop / OnLoadedTick or Finish releases it.
         if (a_tripOver) APMFBridge::ReleaseErrandWork(a_follower);
-        if (w.kind == StopKind::Temple) APMFBridge::ReleaseErrandIdle(a_follower);
+        if (w.kind == StopKind::Temple && a_tripOver) APMFBridge::ReleaseErrandIdle(a_follower);   // hand-off: the kneel's ch.12 / ch.1 claims stand too (released by the sim: MoveHold / Drop / PlaceReturn)
         const auto secs = std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - w.began).count();
         if (w.kind == StopKind::Inn)
             spdlog::info("[errand] {:08X} '{}': INN STAY ENDS at '{}' after {} s -- released: {} ({}; meals eaten {})", a_follower, w.followerName, w.name, secs, a_why,
