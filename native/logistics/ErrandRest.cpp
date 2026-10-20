@@ -159,6 +159,17 @@ namespace MFO::Logistics::Errand::Rest {
         std::unordered_set<RE::FormID>                   g_lockLogged;  // load doors whose LOCK was already logged (one skip line per door per town visit)
         std::unordered_set<RE::FormID>                   g_magicWaitLogged; // ... for whom "waiting for the blessing/disease read" was logged this visit
         RE::FormID                                       g_marksTown = 0;
+        struct DoorRead {   // F4: the main-thread read of the load door(s) into a data-resolved temple's cell
+            bool        done = false, indoors = false, found = false;
+            RE::FormID  door = 0, lockedId = 0;
+            int         lockLevel = 0, scanned = 0;   // the lock level of the locked side (0 = unlocked), the load doors seen in the loaded exterior cells
+            RE::NiPoint3 pos{};
+            Clock::time_point stamp{};
+        };
+        std::unordered_map<RE::FormID, DoorRead>         g_doorRead;     // temple cell -> its door read; guarded by g_mx
+        std::unordered_set<RE::FormID>                   g_doorAsked;    // temple cells whose read was queued (one in flight)
+        std::unordered_map<RE::FormID, int>              g_doorDefers;   // follower -> consecutive PlacesPending defers (cap kMagicMaxDefers)
+        std::unordered_set<RE::FormID>                   g_doorLogged;   // temple cells whose planning verdict was logged this town visit
         bool                                             g_wasCombat = false;   // F2: the last player-combat state NoteCombat saw (the combat-end edge clears the marks)
         struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0, cell = 0; };   // cell: the interior cell of the faction's PLVD place (0 = unknown)
         std::unordered_map<RE::FormID, std::vector<InnFac>> g_innFacs;  // town -> the innkeeper factions (immutable once built)
@@ -433,6 +444,63 @@ namespace MFO::Logistics::Errand::Rest {
             if (m.diseased) { a_why = "diseased (" + m.diseases + ")"; return true; }
             if (!m.blessed) { a_why = "no active blessing"; return true; }
             return false;
+        }
+
+
+        // ── F4: the data-resolved temple's ENTRY DOOR ───────────────────────────────────────────────────────
+        // A temple resolved through the location's special refs (Falkreath / Markarth, field run 2) has no door in the follower's own cell, so
+        // FindPlaces never applied the LOCKED gate and the walk ended BLOCKED at a closed door. The door is a load door in one of the town's
+        // EXTERIOR cells whose linked door sits in the temple cell: read on the MAIN thread (TES::ForEachReference walks the loaded grid; the
+        // worker must not, LootScan.cpp crash4), cached per temple cell. The player indoors = no exterior grid to read: unknown, retried.
+        void PostTempleDoorRead(RE::FormID a_cell) {
+            { std::scoped_lock lk(g_mx); if (!g_doorAsked.insert(a_cell).second) return; }
+            auto fn = [a_cell]() {
+                DoorRead dr;
+                dr.done = true;
+                dr.stamp = Clock::now();
+                auto* tes = RE::TES::GetSingleton();
+                auto* pc = RE::PlayerCharacter::GetSingleton();
+                if (!tes || !pc) dr.indoors = true;   // nothing to read from: unknown
+                else if (tes->interiorCell) dr.indoors = true;
+                else {
+                    float bestD = 1.0e9f;
+                    tes->ForEachReference([&](RE::TESObjectREFR* a_ref) {
+                        auto* tele = a_ref ? a_ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+                        if (!tele || !tele->teleportData) return RE::BSContainer::ForEachResult::kContinue;
+                        ++dr.scanned;
+                        auto lp = tele->teleportData->linkedDoor.get();
+                        auto* linked = lp.get();
+                        auto* lc = linked ? linked->GetParentCell() : nullptr;
+                        if (!lc || lc->GetFormID() != a_cell) return RE::BSContainer::ForEachResult::kContinue;
+                        const float d = a_ref->GetPosition().GetDistance(pc->GetPosition());
+                        if (d >= bestD) return RE::BSContainer::ForEachResult::kContinue;
+                        bestD = d;
+                        dr.found = true;
+                        dr.door = a_ref->GetFormID();
+                        dr.pos = a_ref->GetPosition();
+                        dr.lockedId = 0; dr.lockLevel = 0;
+                        for (auto* side : { a_ref, static_cast<RE::TESObjectREFR*>(linked) }) {
+                            const auto l = side->GetLockLevel();
+                            if (l != RE::LOCK_LEVEL::kUnlocked) { dr.lockedId = side->GetFormID(); dr.lockLevel = static_cast<int>(l); break; }
+                        }
+                        return RE::BSContainer::ForEachResult::kContinue;
+                    });
+                }
+                std::scoped_lock lk(g_mx);
+                g_doorRead[a_cell] = dr;
+                g_doorAsked.erase(a_cell);
+            };
+            if (MainThread::IsInstalled()) MainThread::Post(fn);
+            else                           fn();
+        }
+        // The cached read for a temple cell: TRUE with a_out when a USABLE one exists (done, not indoors, younger than 5 real minutes).
+        bool TempleDoorRead(RE::FormID a_cell, DoorRead& a_out) {
+            std::scoped_lock lk(g_mx);
+            const auto it = g_doorRead.find(a_cell);
+            if (it == g_doorRead.end() || !it->second.done || it->second.indoors) return false;
+            if (Clock::now() - it->second.stamp > std::chrono::minutes(5)) return false;
+            a_out = it->second;
+            return true;
         }
 
         // ── the inn's food order ─────────────────────────────────────────────────────────────────────────
@@ -752,12 +820,37 @@ namespace MFO::Logistics::Errand::Rest {
         PostMagicProbe(fid);   // the NEXT plan (6 s) reads it: disease is a main-thread read
         Place inn, temple;
         FindPlaces(a_follower, a_town, inn, temple);
+        bool templeViaData = false;
         {   // not reachable by a door in his own cell: resolve through the data (see ResolveViaData)
             const char* how = "";
             if (!inn.ok && !inn.lockedSkip && ResolveViaData(a_town, true, inn, how))
                 spdlog::info("[errand] {:08X}: inn '{}' (cell {:08X}) resolved through {} (no load door to it in his cell)", fid, inn.name, inn.cell, how);
-            if (!temple.ok && !temple.lockedSkip && ResolveViaData(a_town, false, temple, how))
+            if (!temple.ok && !temple.lockedSkip && ResolveViaData(a_town, false, temple, how)) {
+                templeViaData = true;
                 spdlog::info("[errand] {:08X}: temple '{}' (cell {:08X}) resolved through {} (no load door to it in his cell)", fid, temple.name, temple.cell, how);
+            }
+        }
+        if (templeViaData) {   // F4: the entry door is read, and the inn's LOCKED gate applies to it; no door found = the temple is SKIPPED (never walked into BLOCKED)
+            DoorRead dr;
+            const bool have = TempleDoorRead(temple.cell, dr);
+            bool first = false;
+            { std::scoped_lock lk(g_mx); first = g_doorLogged.insert(temple.cell).second; }
+            if (!have) {
+                if (first) spdlog::info("[errand] {:08X}: temple '{}' SKIPPED at planning -- its entry door could not be read (the player is indoors / the main-thread read did not land); a temple with no verified door is never walked to", fid, temple.name);
+                temple.ok = false;
+            } else if (!dr.found) {
+                if (first) spdlog::info("[errand] {:08X}: temple '{}' SKIPPED at planning -- no load door to its cell {:08X} among the {} load door(s) of the loaded exterior cells; a temple with no verified door is never walked to",
+                                        fid, temple.name, temple.cell, dr.scanned);
+                temple.ok = false;
+            } else if (dr.lockedId) {
+                if (first) spdlog::info("[errand] {:08X}: temple '{}' SKIPPED at planning -- its load door {:08X} is LOCKED (lock level {}: {}); a closed place is never walked to",
+                                        fid, temple.name, dr.lockedId, dr.lockLevel, LockWord(static_cast<RE::LOCK_LEVEL>(dr.lockLevel)));
+                temple.ok = false;
+                temple.lockedSkip = true;
+            } else {
+                temple.door = dr.pos;
+                if (first) spdlog::info("[errand] {:08X}: temple '{}' entry door {:08X} found ({} load door(s) read, unlocked)", fid, temple.name, dr.door, dr.scanned);
+            }
         }
         std::string templeWhy;
         const bool wantTemple = temple.ok && TempleWanted(fid, templeWhy);
@@ -838,6 +931,32 @@ namespace MFO::Logistics::Errand::Rest {
         g_lockLogged.clear();
         g_magicWaitLogged.clear();
         g_magicDefers.clear();
+        g_doorLogged.clear();
+        g_doorDefers.clear();
+    }
+    bool PlacesPending(RE::Actor* a_follower, const RE::BGSLocation* a_town) {
+        if (!a_follower || !a_town || !Config::g_errandInn.load()) return false;
+        const auto fid = a_follower->GetFormID();
+        Place inn, temple;
+        FindPlaces(a_follower, a_town, inn, temple);
+        if (temple.ok || temple.lockedSkip) return false;   // a door in his own cell: FindPlaces' lock gate decided
+        const char* how = "";
+        if (!ResolveViaData(a_town, false, temple, how)) return false;
+        std::string why;
+        if (!TempleWanted(fid, why)) return false;           // only a follower who would go to the temple waits for its door
+        DoorRead dr;
+        if (TempleDoorRead(temple.cell, dr)) { std::scoped_lock lk(g_mx); g_doorDefers.erase(fid); return false; }
+        int defers = 0;
+        { std::scoped_lock lk(g_mx); defers = ++g_doorDefers[fid]; }
+        if (defers > kMagicMaxDefers) {   // never stall silently
+            spdlog::warn("[errand] {:08X}: the temple '{}' entry-door read did not land after {} defers (is the player indoors, or the main-thread Post stalled?) -- planning WITHOUT the temple",
+                         fid, temple.name, defers - 1);
+            { std::scoped_lock lk(g_mx); g_doorDefers[fid] = 0; }
+            return false;
+        }
+        if (defers == 1) spdlog::info("[errand] {:08X}: waiting for the temple '{}' entry-door read (main-thread read of the loaded exterior cells) before planning", fid, temple.name);
+        PostTempleDoorRead(temple.cell);
+        return true;
     }
     void NoteCombat(bool a_inCombat) {
         std::scoped_lock lk(g_mx);
@@ -1002,6 +1121,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_magicWaitLogged.clear();
         g_magicDefers.clear();
         g_innFacs.clear();
+        g_doorRead.clear(); g_doorAsked.clear(); g_doorDefers.clear(); g_doorLogged.clear();
         g_marksTown = 0;
         g_wasCombat = false;
         Reopen::ClearAll();

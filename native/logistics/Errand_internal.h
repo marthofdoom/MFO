@@ -202,6 +202,10 @@ namespace MFO::Logistics::Errand {
         // an inn-only trip planned before the read lands would skip the temple for the whole visit (one trip per visit). Logged once per
         // follower per town visit. FALSE for an unloaded follower (today's behaviour; logged) or when inn errands are off.
         bool MagicReadPending(RE::Actor* a_follower);
+        // F4: TRUE = a data-resolved temple's entry door (a load door in the town's EXTERIOR cells, not in his own cell) is being read on the main thread
+        // for a follower who would go to the temple: the plan must WAIT (like MagicReadPending; capped, then loud and planned without the temple). Augment
+        // applies the read (the inn's LOCKED gate; no door found = the temple is skipped with a log line, never walked into BLOCKED).
+        bool PlacesPending(RE::Actor* a_follower, const RE::BGSLocation* a_town);
         bool TripDone(RE::FormID a_follower, RE::FormID a_townId);
         void UnmarkTripDone(RE::FormID a_follower, const char* a_why);   // F3: a needed shop opened -- the visit's mark goes, a new trip starts
         void MarkTripDone(RE::FormID a_follower, RE::FormID a_townId, const char* a_why);

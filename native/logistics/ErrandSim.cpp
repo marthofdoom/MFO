@@ -229,6 +229,41 @@ namespace MFO::Logistics::Errand::Sim {
             return true;
         }
 
+        // F3 (marth 2026-10-20: ONE TRIP AT A TIME): a watched shop opened while he rests at the inn off screen (REST_SIM). The stay ends WITHOUT a trip mark and a
+        // NEW trip starts from the RECORDED plan (ErrandReopen.cpp Poll: the needs recorded at the last plan, no unloaded inventory read; the stored orders are
+        // replayed as the sim always does): the opened shops OUT_SIM, the inn LAST. The hold moves with the first new stop (MoveHold); the walk back is the
+        // first new stop's place to his last loaded position.
+        void Retrip(SimRec& r, Reopen::Plan& a_plan, double a_days) {
+            SyncCur(r);
+            const Stop prev = r.stops[r.cur];   // the inn stop he leaves
+            r.stops = std::move(a_plan.stops);
+            r.cur = 0;
+            auto& s = r.stops[0];
+            s.state = StopState::Active;
+            r.faction = s.faction; r.chest = s.chest; r.vendorActor = s.vendorActor; r.vendorName = s.vendorName;
+            r.destKind = s.destKind; r.destForm = s.destForm; r.destRad = s.destRad;
+            r.order = s.order;
+            r.dispatched = r.reported = r.tradeAbandoned = false;
+            r.hadOrder = true;
+            r.firstTryClk = -1.0;
+            r.tripPurse = -1; r.tripSpent = 0;
+            for (const auto& st : r.stops) if (st.order) { r.tripPurse = st.order->purse; break; }
+            r.startDays = static_cast<float>(a_days);
+            const double leg = WalkDays(Trip::LegUnits(prev, s));
+            RE::NiPoint3 np;
+            const double back = WalkDays(Trip::PlacePos(s, np) ? static_cast<double>(np.GetDistance(r.lastPos)) : kUnknownBackUnits);
+            r.tEnter = a_days;
+            r.tArrive = a_days + leg;
+            r.tTradeEnd = r.tArrive + WorkDays(r.stops, r.cur);
+            r.tReturn = r.tTradeEnd + back;
+            s.tArrive = r.tArrive; s.tWorkEnd = r.tTradeEnd;
+            r.entryDoor = 0;
+            r.stage = Stage::Out;
+            MoveHold(r);
+            spdlog::info("[errand] {:08X} '{}': REST_SIM ended -- a needed shop opened (NO trip mark); new trip of {} stop(s), OUT_SIM to {}: walk {:.1f} game min, trade ends +{:.1f}, back +{:.1f} game min | {}",
+                         r.follower, r.followerName, r.stops.size(), Trip::Label(r.stops, r.cur), leg * 1440.0, (r.tTradeEnd - a_days) * 1440.0, (r.tReturn - a_days) * 1440.0, a_plan.line);
+        }
+
         // R5: a restored trip whose current trade is DROPPED drops every later stop with it (none has an order).
         void SkipRemaining(SimRec& r) {
             for (std::size_t i = r.cur + 1; i < r.stops.size(); ++i)
@@ -838,6 +873,14 @@ namespace MFO::Logistics::Errand::Sim {
                 // F2 (marth 2026-10-20: ONE TRIP AT A TIME): combat ends the stay but NOT the visit -- no trip-done mark; Rest::NoteCombat clears the marks on the combat-end edge and a FRESH plan runs.
                 Drop(fid, "player combat -- he joins", kCombatCooldownSec, false);
                 continue;
+            }
+            if (r.stage == Stage::Rest && CurKind(r) == StopKind::Inn && Config::g_errandInn.load()) {   // F3: a watched shop opened
+                Reopen::Plan plan;
+                if (Reopen::Poll(fid, r.town, &r.lastPos, plan)) {
+                    Retrip(r, plan, days);
+                    Store(r);
+                    continue;
+                }
             }
             // F5: a teleport-sized game-clock jump (fast travel / wait / sleep) inside one poll is the player leaving, not the errand running long:
             // end it like the player leaving town (finish his business, bring him back) instead of tripping the cap with a misleading line.

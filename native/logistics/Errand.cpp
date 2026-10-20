@@ -1016,6 +1016,20 @@ namespace MFO::Logistics::Errand {
         return true;
     }
 
+    // F3 (marth 2026-10-20: ONE TRIP AT A TIME): a watched shop opened and the recorded needs yield a stop (ErrandReopen.cpp Poll). Start the new
+    // trip -- the opened shops, the inn LAST. The caller has ended whatever held the follower (the stay, the trip-done mark) WITHOUT a mark.
+    static bool StartReopenedTrip(RE::Actor* a_follower, RE::FormID a_townId, Clock::time_point a_now, Reopen::Plan&& a_plan) {
+        auto* town = RE::TESForm::LookupByID<RE::BGSLocation>(a_townId);
+        if (!town) {
+            spdlog::warn("[errand] {:08X}: a watched shop opened but the town {:08X} does not resolve -- no new trip", a_follower->GetFormID(), a_townId);
+            return false;
+        }
+        spdlog::info("[errand] {:08X} '{}': a NEEDED SHOP OPENED -- a new trip of {} stop(s) (the inn last): {}", a_follower->GetFormID(), NameOf(a_follower),
+                     a_plan.stops.size(), a_plan.line);
+        const std::size_t n = a_plan.stops.size();
+        return StartTrip(a_follower, town, a_now, std::move(a_plan.stops), a_plan.line, n);
+    }
+
     // ── public: the planner (the idle branch of ServiceFollower) ─────────────────────────────────────
     bool TryStart(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now) {
         if (!a_follower) return false;
@@ -1055,7 +1069,25 @@ namespace MFO::Logistics::Errand {
             if (const auto it = g_nextPlan.find(fid); it != g_nextPlan.end() && a_now < it->second) return true;
         }
         if (!playerTown) return true;
-        if (Config::g_errandInn.load() && Rest::TripDone(fid, tidNow)) return true;   // R7: ONE trip per town visit (marth 2026-10-19)
+        if (Config::g_errandInn.load() && Rest::TripDone(fid, tidNow)) {   // R7: ONE trip AT A TIME (marth 2026-10-19 / 2026-10-20)
+            // F3: new-session triggers are the player leaving town (NoteTown), the end of combat (NoteCombat) and a NEEDED SHOP OPENING (here).
+            auto* ui0 = RE::UI::GetSingleton();
+            auto* avo0 = a_follower->AsActorValueOwner();
+            const bool canPlan = !(ui0 && ui0->GameIsPaused()) && !APMFBridge::InCombat(a_follower) && !pc->IsInCombat() && !SlotOf(fid) &&
+                              !(avo0 && avo0->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) && !a_follower->IsOnMount() &&
+                              a_follower->AsActorState()->GetSitSleepState() == RE::SIT_SLEEP_STATE::kNormal && a_follower->Is3DLoaded() &&
+                              LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) == playerTown &&
+                              Forms::g_tradeQuest && Forms::g_tradeQuest->IsRunning();
+            if (canPlan) {
+                Reopen::Plan plan;
+                const auto from = a_follower->GetPosition();
+                if (Reopen::Poll(fid, tidNow, &from, plan)) {
+                    Rest::UnmarkTripDone(fid, "a needed shop opened");
+                    StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan));
+                }
+            }
+            return true;
+        }
         if (a_now - townSince < std::chrono::milliseconds(static_cast<long long>(Config::g_errandSettleSec.load() * 1000.0f)))
             return true;
 
@@ -1079,6 +1111,7 @@ namespace MFO::Logistics::Errand {
         // R7: the blessing / disease read decides the temple stop; an inn-only trip planned before it lands would skip the temple for the
         // whole visit (one trip per visit). Pending: the probe is posted, this plan is abandoned and re-run on the next cadence.
         if (Rest::MagicReadPending(a_follower)) return true;
+        if (Rest::PlacesPending(a_follower, playerTown)) return true;   // F4: the data-resolved temple's entry door (main-thread read)
 
         int dropped = 0;
         std::vector<Cand> closedCands;   // F3: dropped ONLY for their hours -> the shop watch
@@ -1279,6 +1312,17 @@ namespace MFO::Logistics::Errand {
                              "The stop is ended, no retry", fid, r.followerName, r.stops[r.cur].vendorName, oc ? oc->GetFormID() : 0u, r.stops[r.cur].destForm);
                 Rest::End(fid, "he left the inn / temple cell while the stay stood", true);   // the work claim + record end with the stop; one trip per visit
                 return stopOver("he left the inn / temple cell while the stay stood", false, kFailCooldownSec);
+            }
+            // F3: a watched shop opened while he stays at the inn: the stay ends WITHOUT a trip mark and a new trip starts (the opened shops, the inn last).
+            if (innStay) {
+                Reopen::Plan plan;
+                const auto from = a_follower->GetPosition();
+                if (Reopen::Poll(fid, r.town, &from, plan)) {
+                    const RE::FormID townId = r.town;
+                    Finish(fid, "a needed shop opened -- the stay ends, a new trip starts", 0.0f, false, true);
+                    StartReopenedTrip(a_follower, townId, a_now, std::move(plan));
+                    return true;
+                }
             }
             const auto st = Rest::Step(a_follower, a_now);
             if (st.res == Rest::Result::Continue) { Store(fid, r); return true; }
