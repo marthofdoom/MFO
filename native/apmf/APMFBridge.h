@@ -1702,6 +1702,18 @@ namespace MFO::APMFBridge {
     void ReleaseErrand(RE::FormID a_follower);
     // Revert / load (pump drained): release every errand claim and forget them.
     void ClearErrandClaims();
+    // ── TOWN ERRAND WORK (TOWN PHASE 2 R7: inn + temple) -- apmf/ErrandWork.cpp ───────────────────────────────────────
+    // The ch.9 package-offer claim of an errand's WORK (Forms.h MFO_ErrandActivate / Sandbox / Eat / Sleep, one record per kind
+    // per follower slot): the shrine Activate, the inn's Sandbox (sit / stay), the Eat meal, the Sleep bed. MFO declares the work and its
+    // target; Harbinger's 0x49 hook hands the package to the follower. Worker road; own mutex, never g_mx; nothing is saved.
+    enum class ErrandWorkKind { Activate, Sandbox, Eat, Sleep };
+    const char* ErrandWorkName(ErrandWorkKind a_kind);
+    // Write the slot record's run-time input (the Activate's Target / the Location of the others) at a_ref, THEN file (or Repoint) the
+    // claim. False = nothing was filed (a_why says why: layout guard declined, all four slots held, Harbinger refused ...).
+    bool OfferErrandWork(RE::FormID a_follower, ErrandWorkKind a_kind, RE::TESObjectREFR* a_ref, float a_radius, std::string& a_why);
+    bool ErrandWorkHeld(RE::FormID a_follower);       // a live (or just-filed) claim
+    void ReleaseErrandWork(RE::FormID a_follower);    // the claim, then the slot. Idempotent.
+    void ClearErrandWork();                           // revert / load (pump drained)
     // ── TAUNT (taunt slice S2, ClickUp 86e3g6duw, Docs/TAUNT-DESIGN.md) -- apmf/TauntClaims.cpp ──
     // The claims only; the decisions are native/Taunt.cpp's. Worker or main thread (own mutex, never g_mx). Nothing
     // is saved. TauntSupported: APMF present AND abiVersion >= 24 (GetIdleState; implies ch.12 idle v2, the pin, the entry,

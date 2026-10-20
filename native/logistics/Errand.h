@@ -66,7 +66,7 @@ namespace MFO::Logistics::Errand {
     // R5 (ERND v2): one STOP of a multi-stop trip. Kind and state are persisted as string opcodes (#10, tables in
     // Serialization.cpp): a later round APPENDS a kind (fence, spouse, smith, temple, inn, home), never renumbers one.
     inline constexpr std::size_t kMaxTripStopsOnWire = 8;   // #11: the stop-count bound of an ERND v2 entry (writer and reader)
-    enum class SavedStopKind : std::uint8_t { Shop };
+    enum class SavedStopKind : std::uint8_t { Shop, Temple, Inn };   // R7 appended "temple" and "inn" (opcode strings; the layout is unchanged)
     enum class SavedStopState : std::uint8_t { Pending, Active, Done, Skipped };
     struct SavedStop {
         SavedStopKind  kind = SavedStopKind::Shop;

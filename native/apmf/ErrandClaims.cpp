@@ -350,6 +350,7 @@ namespace MFO::APMFBridge {
     }
 
     void ReleaseErrand(RE::FormID a_follower) {
+        ReleaseErrandWork(a_follower);   // R7: the errand's ch.9 WORK claim (apmf/ErrandWork.cpp, its own mutex) goes with the rest
         auto* api = g_apmf.load(std::memory_order_relaxed);
         std::scoped_lock lock(s_mx);
         auto it = s_claims.find(a_follower);
@@ -359,6 +360,7 @@ namespace MFO::APMFBridge {
     }
 
     void ClearErrandClaims() {
+        ClearErrandWork();   // R7
         auto* api = g_apmf.load(std::memory_order_relaxed);
         std::scoped_lock lock(s_mx);
         for (auto& [id, c] : s_claims) ReleaseLocked(api, c);

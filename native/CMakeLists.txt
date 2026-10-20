@@ -86,6 +86,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     logistics/ErrandSim.cpp
     logistics/ErrandTrip.cpp
     logistics/ErrandCounter.cpp
+    logistics/ErrandRest.cpp
     logistics/GemRules.cpp
     logistics/EquipAuthority.cpp
     logistics/LootTake.cpp
@@ -130,6 +131,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     apmf/EquipPreference.cpp
     apmf/Deposit.cpp
     apmf/ErrandClaims.cpp
+    apmf/ErrandWork.cpp
     apmf/TauntClaims.cpp
     apmf/Los.cpp
     apmf/Substrate.cpp

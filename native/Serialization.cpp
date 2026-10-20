@@ -101,10 +101,12 @@ namespace MFO {
         constexpr std::pair<ErrDest, const char*> kErrDestOps[] = {
             { ErrDest::VendorActor, "vendor_actor" }, { ErrDest::Ref, "ref" }, { ErrDest::Cell, "cell" },
         };
-        // R5 (ERND v2): the itinerary's opcodes. A later round APPENDS a stop kind (fence, spouse, smith, temple, inn, home).
+        // R5 (ERND v2): the itinerary's opcodes. A later round APPENDS a stop kind (fence, spouse, smith, home; R7 appended temple and inn).
         using ErrStopKind  = Logistics::Errand::SavedStopKind;
         using ErrStopState = Logistics::Errand::SavedStopState;
-        constexpr std::pair<ErrStopKind, const char*> kErrStopKindOps[] = { { ErrStopKind::Shop, "shop" } };
+        constexpr std::pair<ErrStopKind, const char*> kErrStopKindOps[] = {
+            { ErrStopKind::Shop, "shop" }, { ErrStopKind::Temple, "temple" }, { ErrStopKind::Inn, "inn" },   // R7 appended the last two (NO layout change)
+        };
         constexpr std::pair<ErrStopState, const char*> kErrStopStateOps[] = {
             { ErrStopState::Pending, "pending" }, { ErrStopState::Active, "active" },
             { ErrStopState::Done, "done" },       { ErrStopState::Skipped, "skipped" },
@@ -340,7 +342,7 @@ namespace MFO {
                         st.destRad = std::isfinite(rs.rad) ? std::clamp(rs.rad, 0.0f, 4096.0f) : 0.0f;
                         st.tArrive = std::isfinite(rs.tArrive) && rs.tArrive >= 0.0 ? rs.tArrive : 0.0;
                         st.tWorkEnd = std::isfinite(rs.tWorkEnd) && rs.tWorkEnd >= 0.0 ? std::max(rs.tWorkEnd, st.tArrive) : st.tArrive;
-                        if (k != rawCur && (!opsOk || ((!facOk2 || !chestOk2) && st.state == ErrStopState::Pending))) {
+                        if (k != rawCur && (!opsOk || ((!facOk2 || !chestOk2) && st.kind == ErrStopKind::Shop && st.state == ErrStopState::Pending))) {   // R7: a temple / inn stop carries no shop
                             if (!opsOk) { st.kind = ErrStopKind::Shop; st.destKind = ErrDest::Cell; }
                             st.state = ErrStopState::Skipped;
                             ++stopsSkipped;

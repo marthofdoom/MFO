@@ -375,6 +375,16 @@ namespace MFO::Packages {
     // and nothing reclaims a dismissed follower.
     void RetreatEvictIf(RE::FormID a_id);
 
+    // ── TOWN PHASE 2 R7: the errand WORK packages (MFO_ErrandActivate/Sandbox/Eat/Sleep, Forms.h) ─────────────────────────
+    // Write a package's run-time input BEFORE the ch.9 claim (apmf/ErrandWork.cpp). Same guard discipline as every other
+    // package-memory write here: the input's reported TYPE NAME must be the modelled carrier or NOTHING is written and the
+    // call returns false (loudly). a_input is the TEMPLATE's own input name ("Target" on Activate, "Location" on Sandbox,
+    // "Eat Location", "Sleep Location"). The Sandbox's three "Location" names are resolved to the uid that has a value slot;
+    // a_uidOut reports it. UNVERIFIED IN THE FIELD (P-PKG-LOC): the same offset model as the loot-travel Location write.
+    // Worker thread (the writes land before the claim is filed).
+    bool SetPackageLocation(RE::TESPackage* a_pkg, std::string_view a_input, RE::TESObjectREFR* a_ref, float a_radius, int& a_uidOut);
+    bool SetPackageTargetRef(RE::TESPackage* a_pkg, std::string_view a_input, RE::TESObjectREFR* a_ref);
+
     // Session-scoped counters, cleared on revert like every sibling module.
     void ClearTransientState();
 
