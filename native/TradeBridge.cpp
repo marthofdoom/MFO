@@ -760,7 +760,7 @@ namespace MFO::TradeBridge {
     }
 
     std::uint64_t TradeSignature(std::int32_t a_purse, const std::vector<NeedCat>& a_needs,
-                                 const std::vector<SellRow>& a_sell) {
+                                 const std::vector<SellRow>& a_sell, const std::vector<SmithMat>& a_mats) {
         std::uint64_t h = 0xCBF29CE484222325ull;
         h = Mix(h, static_cast<std::uint32_t>(a_purse));
         h = Mix(h, a_needs.size());
@@ -773,6 +773,8 @@ namespace MFO::TradeBridge {
             h = Mix(h, (static_cast<std::uint64_t>(static_cast<std::uint32_t>(r.count)) << 32) |
                            static_cast<std::uint32_t>(r.value));
         }
+        for (const auto& m : a_mats)   // R8: empty for every pre-R8 caller, so their hashes are unchanged
+            h = Mix(h, (static_cast<std::uint64_t>(m.form) << 32) | static_cast<std::uint32_t>(m.qty));
         return h;
     }
 

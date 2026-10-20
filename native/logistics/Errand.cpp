@@ -88,6 +88,9 @@ namespace MFO::Logistics::Errand {
         constexpr RE::FormID kKwClothing  = 0x0008F95B;   // VendorItemClothing
         constexpr RE::FormID kKwArrow     = 0x000917E7;   // VendorItemArrow (bolts carry it too: there is no separate bolt keyword)
         constexpr RE::FormID kKwSpellTome = 0x000937A5;   // VendorItemSpellTome
+        constexpr RE::FormID kKwOreIngot  = 0x000914EC;   // VendorItemOreIngot (R8: ore and ingots, smithing materials; verified in Skyrim.esm)
+        constexpr RE::FormID kKwAnimalHide = 0x000914EA;  // VendorItemAnimalHide (R8: leather)
+        constexpr RE::FormID kKwAnimalPart = 0x000914EB;  // VendorItemAnimalPart (R8: leather strips)
         constexpr RE::FormID kIdleTalk         = 0x000F64DD;   // DialogueGenericTalking
         constexpr RE::FormID kIdleTalkFallback = 0x000E5190;   // DialogueNeutralExpressive
         constexpr RE::FormID kIdleGive         = 0x000B5E20;   // IdleGive (field-confirmed in the museum deposit)
@@ -711,6 +714,7 @@ namespace MFO::Logistics::Errand {
         Sim::ClearTransientState();
         Counter::Clear();
         ErrandShops::Clear();   // R6
+        Smith::ClearTransientState();   // R8
         APMFBridge::ClearErrandClaims();
     }
 
@@ -949,6 +953,9 @@ namespace MFO::Logistics::Errand {
         int dropped = 0;
         auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped);
         if (cands.empty()) return true;
+        // R8: the smithing want list is built on the MAIN thread (the tempering entry point); the plan reads it, so a missing or old
+        // one is queued first and the plan is made on the next cadence. Off (smithing off / not hooked in this build) costs nothing.
+        if (Smith::Prepare(a_follower) == Smith::Prep::Pending) return true;
 
         // PLAN: the SAME code a trade uses evaluates every candidate -- loaded vendor actors AND faction-only shops -- and hands
         // back the ORDER for each, built now while the follower is loaded (the simulation replays it; MFO never reads an
@@ -996,6 +1003,8 @@ namespace MFO::Logistics::Errand {
             t.carriesGear = (wantGear    && (ListTrades(c.fac, kKwWeapon) || ListTrades(c.fac, kKwArmor))) ||
                             (wantApparel && (ListTrades(c.fac, kKwClothing) || ListTrades(c.fac, kKwJewelry) || ListTrades(c.fac, kKwArmor)));
             t.carriesTome = ListTrades(c.fac, kKwSpellTome);
+            t.carriesMaterials = ListTrades(c.fac, kKwOreIngot) || ListTrades(c.fac, kKwAnimalHide) || ListTrades(c.fac, kKwAnimalPart);   // R8
+            t.carriesForge = ListTrades(c.fac, kKwOreIngot) || ListTrades(c.fac, kKwWeapon);                                              // R8: a smithy
             tcands.push_back(std::move(t));
         }
         Trip::Inputs tin;

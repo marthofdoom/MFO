@@ -16,6 +16,7 @@
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 #include "LocationTypes.h"     // LooseRefBarred: the civilised-place bar (86e3f9pkg)
 #include "Lotd.h"              // LooseRefBarred: the LOTD museum display-ref bar (86e3f9pkg)
+#include "Errand.h"            // TOWN PHASE 2 R8: Errand::Smith::Wanted / NoteTaken (the smithing want list)
 #include "Diagnostics.h"       // CurrentPumpEpoch: IsCoinModCoin's per-load rebuild (86e3f9pkg)
 
 namespace MFO::Logistics {
@@ -417,6 +418,33 @@ namespace MFO::Logistics {
             return moved;
         }
 
+        // TOWN PHASE 2 R8 (marth: "regardless of gambits a follower will loot or buy whats needed for town errand smithing";
+        // ruling Q5: only what is on his CURRENT smithing want list). Takes, from one corpse / container, the base forms the want
+        // list still lacks (Errand::Smith::Wanted), at most the shortfall, free tier like ingredients. Collect-then-transfer (#2) with
+        // the carry-weight gate of the other small-item categories. The list shrinks at once (NoteTaken), before its next build.
+        bool LootSmithMaterials(RE::Actor* a_follower, RE::TESObjectREFR* a_src, bool a_peek = false) {
+            struct Take { RE::TESBoundObject* obj; std::int32_t count; };
+            std::vector<Take> takes;
+            const auto fid = a_follower->GetFormID();
+            for (auto& [obj, data] : a_src->GetInventory()) {
+                if (!obj || data.first <= 0) continue;
+                const std::int32_t want = Errand::Smith::Wanted(fid, obj->GetFormID());
+                if (want <= 0) continue;
+                if (IsQuestObjectInstance(data.second.get())) continue;
+                if (a_peek) return true;
+                takes.push_back({ obj, std::min(data.first, want) });
+            }
+            if (a_peek) return false;
+            bool moved = false;
+            for (const auto& t : takes) {
+                if (!FitsCarryWeight(a_follower, t.obj->GetWeight() * t.count)) continue;
+                a_src->RemoveItem(t.obj, t.count, RE::ITEM_REMOVE_REASON::kStoreInContainer, nullptr, a_follower);
+                Errand::Smith::NoteTaken(fid, t.obj->GetFormID(), t.count);
+                moved = true;
+            }
+            return moved;
+        }
+
         // Is this item an alchemy ingredient? FormType-classified (never by
         // name, §4.8.2 pattern) -- IngredientItem is CommonLib's class for
         // INGR records.
@@ -785,7 +813,7 @@ namespace MFO::Logistics {
                           const RE::NiPoint3& a_playerPos, Clock::time_point a_now) {
             if (a_cat == Category::Arrows || a_cat == Category::Bolts ||
                 a_cat == Category::Potions || a_cat == Category::Lockpicks ||
-                a_cat == Category::Ingredients)
+                a_cat == Category::Ingredients || a_cat == Category::SmithMats)
                 return true;
 
             const RE::FormID   srcId  = a_src->GetFormID();
@@ -860,6 +888,7 @@ namespace MFO::Logistics {
             case Category::Ingredients: return LootIngredients(a_follower, a_ref);
             case Category::Valuables: return LootValuables(a_follower, a_ref);
             case Category::Museum:    return LootMuseum(a_follower, a_ref);   // LOTD, logistics/Lotd.cpp
+            case Category::SmithMats: return LootSmithMaterials(a_follower, a_ref);
             }
             return false;
         }
@@ -881,6 +910,7 @@ namespace MFO::Logistics {
             case Category::Ingredients: return LootIngredients(a_follower, a_ref, true);
             case Category::Valuables: return LootValuables(a_follower, a_ref, true);
             case Category::Museum:    return LootMuseum(a_follower, a_ref, true);
+            case Category::SmithMats: return LootSmithMaterials(a_follower, a_ref, true);
             }
             return false;
         }

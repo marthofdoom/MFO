@@ -109,4 +109,17 @@ namespace MFO::Logistics::Errand {
     void RestoreFromSave(std::vector<Saved>&& a_entries);
     // LoadCallback start (belt-and-braces beside the revert): forget staged entries.
     void ClearRestorePending();
+
+    // ── R8: the smithing WANT LIST, the loot side (logistics/ErrandSmith.cpp). Worker. Session-only. ──────────────────────
+    // marth: "regardless of gambits a follower will loot or buy whats needed for town errand smithing". A form is wanted only
+    // while it is on his CURRENT smithing want list (ruling Q5): the shortfall of the improve recipes' components over what he
+    // carries, as of the last want-list build.
+    namespace Smith {
+        // Does he want any smithing material right now? (Cheap: a cache read; queues a refresh when the list is old.)
+        bool WantsMaterials(RE::Actor* a_follower);
+        // How many MORE of this base form he wants (0 = not on the list).
+        std::int32_t Wanted(RE::FormID a_follower, RE::FormID a_form);
+        // He took a_count of a_form (a loot transfer): the list shrinks at once, before the next build.
+        void NoteTaken(RE::FormID a_follower, RE::FormID a_form, std::int32_t a_count);
+    }
 }

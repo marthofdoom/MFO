@@ -528,6 +528,9 @@ namespace MFO::Logistics {
             // worker from the follower's own inventory/skills/gambits, reused for
             // every candidate vendor this scan and passed opaque to PlanBuy.
             TradeBridge::BuyThresholds buy = BuildBuyThresholds(a_follower, a_state);   // R5: a trip stop's share narrows its wishes (below)
+            // TOWN PHASE 2 R8 (errand mode only): the smithing materials his planned tempers still need, whatever his gambits
+            // (marth: "regardless of gambits a follower will loot or buy whats needed for town errand smithing"). A cache read.
+            if (a_errand) Errand::Smith::FillMaterials(fid, buy.smithMats);
 
             // Build A: warm the follower's carried-gem cache on the MAIN thread for
             // the NEXT scan (GetActorGemsCarried is main-thread only; the sell loop
@@ -963,6 +966,7 @@ namespace MFO::Logistics {
                 buy.buyGear     = buy.buyGear && a_share->buy.buyGear;
                 buy.buyTomes    = buy.buyTomes && a_share->buy.buyTomes;
                 buy.ammoUpgrade = buy.ammoUpgrade && a_share->buy.ammoUpgrade;
+                if (!a_share->wishMaterials) buy.smithMats.clear();   // R8: the materials ride the ONE stop the planner gave them to
             }
             if (a_purseCap >= 0) purse = std::min(purse, a_purseCap);
 
@@ -1066,10 +1070,10 @@ namespace MFO::Logistics {
                 // gold) until the vendor restocks, and never when there is nothing to buy
                 // and no row that gold can pay for. A skip stamps NOTHING: no g_econTrade
                 // window, so the [T] glyph (IsTrading) stays dark; the next vendor is tried.
-                const std::uint64_t sig = TradeBridge::TradeSignature(purse, needs, sell);
+                const std::uint64_t sig = TradeBridge::TradeSignature(purse, needs, sell, buy.smithMats);
                 auto* cal = RE::Calendar::GetSingleton();
                 const float daysNow = cal ? cal->GetDaysPassed() : 0.0f;
-                const bool buyWishes = purse > 0 && (buy.buyGear || buy.buyMageApparel || buy.buyTomes);
+                const bool buyWishes = purse > 0 && (buy.buyGear || buy.buyMageApparel || buy.buyTomes || !buy.smithMats.empty());
                 if (std::string why; TradeBridge::SkipTrade(fid, vendorKey, chest->GetFormID(), sig, daysNow,
                                                             buyWishes, sell, needs, why)) {
                     if (!why.empty())
@@ -1100,6 +1104,7 @@ namespace MFO::Logistics {
                         pl.wishGear = purse > 0 && buy.buyGear;
                         pl.wishApparel = purse > 0 && buy.buyMageApparel;
                         pl.wishTome = purse > 0 && buy.buyTomes;
+                        pl.wishMaterials = purse > 0 && !buy.smithMats.empty();
                         pl.purse = purse;
                         pl.chestGold = TradeBridge::LastSeenChestGold(chest->GetFormID());
                         pl.sell = sell; pl.needs = needs; pl.buy = buy; pl.sig = sig; pl.daysNow = daysNow; pl.quote = quote;

@@ -2086,6 +2086,14 @@ namespace MFO::Logistics {
         }
         }   // end pass loop (no-dibs-first loot ordering)
 
+        // TOWN PHASE 2 R8 (marth: "regardless of gambits a follower will loot or buy whats needed for town errand smithing"): after every
+        // gambit rule found nothing to do, a follower whose smithing want list still lacks materials takes them (ruling Q5: only the
+        // forms on that list) -- a free-tier category with no gambit behind it. A Wait rule returned above, so a deliberate STOP wins.
+        if (!acted && Errand::Smith::WantsMaterials(a_follower)) {
+            acted = LootNearby(a_follower, Category::SmithMats, now);
+            if (acted) { fired = -1; label = "loot smithing materials (want list)"; MarkJustLooted(id, now); }
+        }
+
         if (acted) {
             g_idleCycles.erase(id);   // productive -> not idle
             spdlog::info("[logistics] {:08X} rule {} fired: {}", id, fired, label);

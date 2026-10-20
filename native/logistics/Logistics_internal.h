@@ -566,7 +566,8 @@ namespace MFO::Logistics {
         // frozen, new categories go at the end.
         enum class Category { Arrows, Bolts, Potions, Equipment, Gold, Jewelry, SoulGems, Lockpicks,
                                Ingredients, Valuables,
-                               Museum };   // LOTD (logistics/Lotd.cpp) -- Valuables-tier dibs
+                               Museum,     // LOTD (logistics/Lotd.cpp) -- Valuables-tier dibs
+                               SmithMats };   // TOWN PHASE 2 R8: the smithing want list's materials, whatever his gambits (Errand::Smith); free tier
 
         // Category label for the [loot] diagnostic. Naming the scanned category is
         // the ONLY way to read the composition line: "empty=36" is meaningless
@@ -585,6 +586,7 @@ namespace MFO::Logistics {
             case Category::Ingredients: return "ingredients";
             case Category::Valuables: return "valuables";
             case Category::Museum:    return "museum";
+            case Category::SmithMats: return "smithmats";
             default:                  return "?";
             }
         }
@@ -612,7 +614,7 @@ namespace MFO::Logistics {
         inline bool IsFreeTierCat(Category a_cat) {
             return a_cat == Category::Arrows || a_cat == Category::Bolts ||
                    a_cat == Category::Potions || a_cat == Category::Lockpicks ||
-                   a_cat == Category::Ingredients;
+                   a_cat == Category::Ingredients || a_cat == Category::SmithMats;
         }
 
         // Same ordering test at the OPCODE level, for the two gambit-table

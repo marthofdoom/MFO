@@ -6,6 +6,7 @@
 #include "GemRules.h"
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 #include "TeleportCompat.h"    // follower-teleport mod leash clamp (86e3ec824)
+#include "Errand.h"            // TOWN PHASE 2 R8: Errand::Smith (the smithing want list: loose materials, the always-on pass)
 
 namespace MFO::Logistics {
 
@@ -390,6 +391,14 @@ namespace MFO::Logistics {
                                     else if (GemRules::LooseNamedGemmed(ref, base))
                                         lootable = loose = true;
                                 }
+                                break;
+                            case Category::SmithMats:
+                                // TOWN PHASE 2 R8: a loose ingot / leather / strip lying around, iff it is on his CURRENT smithing want
+                                // list (ruling Q5; nothing else is a candidate). The same list the container take (LootSmithMaterials)
+                                // reads, plus its quest/catalog gate like the other special-item categories.
+                                if (Errand::Smith::Wanted(a_follower->GetFormID(), base->GetFormID()) > 0 &&
+                                    !LooseSpecialItemBlocked(ref, base->GetFormID()))
+                                    lootable = loose = true;
                                 break;
                             case Category::Museum:
                                 // LOTD (86e3f9pkg, marth: "people would see loose LoTD
@@ -1060,6 +1069,11 @@ namespace MFO::Logistics {
                 start = choice.ruleIndex + 1;   // skip non-loot / no-op, try next
             }
             }
+            // TOWN PHASE 2 R8: the smithing want list's materials ride the same leg boundaries, gambit or not (Service.cpp has the
+            // always-on pass for the idle tick). A Wait rule returned above.
+            if (Errand::Smith::WantsMaterials(a_follower) &&
+                LootNearby(a_follower, Category::SmithMats, a_now, RE::ActorValue::kNone, LootMode::kExcursion))
+                return true;
             return false;
         }
 }

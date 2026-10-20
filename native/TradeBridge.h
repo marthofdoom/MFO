@@ -210,7 +210,9 @@ namespace MFO::TradeBridge {
     // TradeSignature hashes the first three; the chest's last-seen gold is folded in by
     // SkipTrade, so another follower's trade that changes the chest's gold is a change.
     std::uint64_t TradeSignature(std::int32_t a_purse, const std::vector<NeedCat>& a_needs,
-                                 const std::vector<SellRow>& a_sell);
+                                 const std::vector<SellRow>& a_sell, const std::vector<SmithMat>& a_mats = {});
+    // (R8: a_mats, the smithing materials wanted, is part of what is offered: a newly wanted ingot must not hit the memo of an
+    // earlier empty trade.)
     // Worker, before VendorTrade. True = do NOT dispatch (a_why says why, for the log):
     //  (a) the last result for this pair was empty and the signature is unchanged, until
     //      the vendor's restock -- iDaysToRespawnVendor game days (Skyrim.esm GMST

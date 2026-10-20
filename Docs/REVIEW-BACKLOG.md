@@ -1959,3 +1959,9 @@ Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "Restored or re-planned sto
 
 ### MFO-B363 (SEV-5, OPEN, logistics/Economy.cpp) -- town R6: ClassifyStolen does a second full GetInventory per scan (raised against f0635350)
 Opus review of feat/mfo-town-p2-r6-fences. Verbatim: "ClassifyStolen does a second full GetInventory on every scan (Economy.cpp:929)."
+
+### MFO-B372 (SEV-4, OPEN, logistics/ErrandSmith.cpp) -- town R8: an enchanted worn piece is not tempered (raised against R8 authoring, own note)
+The vanilla temper recipe's condition is `EPTemperingItemIsEnchanted != 1 OR HasPerk(ArcaneBlacksmith)`. The item-context function reads the engine's tempering context, which MFO does not own, so `EvalConditions` answers an enchanted piece as Unknown and skips it (logged once per recipe). Evaluating the HasPerk branch alone needs a per-node `TESConditionItem::IsTrue` seat (a new verified-address row) or the engine's context. Tempering enchanted gear is a follow-up.
+
+### MFO-B373 (SEV-5, OPEN, logistics/ErrandSmith.cpp) -- town R8: the Smith stop carries the smithy shop's chest (raised against R8 authoring, own note)
+The ERND reader requires a non-zero faction and chest for a Pending stop, so the Smith stop stores the smithy shop's; `Trip::ChestCrowd` therefore counts a smith stop as "heading to that chest" and slightly over-penalises other followers' plans there. Filter `StopKind::Smith` out of both CrowdInto walks when the hook-up touches them.
