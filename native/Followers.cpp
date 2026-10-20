@@ -258,6 +258,7 @@ namespace MFO::Followers {
         g_missStreak.clear();
         g_transientDrop.clear();
         g_lastRefreshAt = {}; g_transitionAt = {}; g_transitionNs.store(0, std::memory_order_relaxed); g_lastPlaceKey = nullptr; g_havePcPos = false;
+        FollowerCatchUp::Reset();   // no pre-transition sample across a load
         g_lastCombat.clear();
         g_stateSample.clear();   // [follower] state-line sample (position + time)
         g_activeIds.clear();

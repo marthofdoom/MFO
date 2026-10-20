@@ -8,4 +8,7 @@ namespace MFO::FollowerCatchUp {
     // kPostLoadGame, where the settle delay makes it a no-op). Reads g_followers and Followers::SecondsSinceTransition.
     void Poll();
 
+    // Revert / load (Followers::ClearTransientState): drop the pre-transition sample so a save load moves nobody.
+    void Reset();
+
 }

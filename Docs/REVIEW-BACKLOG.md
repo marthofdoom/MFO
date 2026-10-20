@@ -2153,3 +2153,9 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 
 ### MFO-B426 (SEV-5, OPEN, out/MCM/Config/MFO/config.json Interface page) -- a "Debug" header still sits above the Fashionrim toggle on the Interface page (raised against 5a48803)
 "The Interface page still has a header titled 'Debug' above the Fashionrim toggle (bDollsMode). Now that a separate Debug page exists, this may confuse players." Pre-existing, outside the brief.
+
+### MFO-B430 (SEV-4, OPEN, native/FollowerCatchUp.cpp MoveOnMain) -- the 250 u MoveTo offset can land him inside geometry in interiors (raised against 8fe6952)
+"The catch-up uses the same ~250 u behind-the-player offset as Errand.cpp RecallToPlayer. In a small interior that point can be inside a wall or furniture. Same exposure as RecallToPlayer; watch in the field."
+
+### MFO-B431 (SEV-4, OPEN, native/FollowerCatchUp.cpp kSettleS) -- the 3 s settle is shorter than the engine's own carry (raised against 8fe6952)
+"Sven was measured absent for about 40 s after a load (Followers.cpp kLoadWindowS). A follower who is walking through the door himself therefore appears behind the player instead of at the door when the catch-up fires at 3 s."
