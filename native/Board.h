@@ -64,6 +64,12 @@ namespace MFO::Board {
         // Retained (inactive) rows only: the follower's current cell name, or its location
         // name when the cell is unnamed. Filled in PublishSnapshot, empty when unknown.
         std::string   cell;
+        // R3 (town): where he is and what his errand is doing, for EVERY row (active or retained). `location` = the cell
+        // name, else the location name, empty when unknown or when he is in the player's cell ("with you" is drawn then).
+        // `errand` = Errand::Describe, empty = no errand. Filled on the worker in PublishSnapshot.
+        std::string   location;
+        std::string   errand;
+        bool          withYou = false;
         std::uint8_t  combatSlots = 0;
         std::uint8_t  logisticsSlots = 0;
         std::uint8_t  combatRules = 0;

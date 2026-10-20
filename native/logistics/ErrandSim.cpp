@@ -230,6 +230,21 @@ namespace MFO::Logistics::Errand::Sim {
     }
 
     // ── public ──────────────────────────────────────────────────────────────────────────────────────
+    std::string Describe(RE::FormID a_follower) {
+        std::scoped_lock lk(g_mx);
+        auto it = g_sims.find(a_follower);
+        if (it == g_sims.end()) return {};
+        const SimRec& r = it->second;
+        const std::string shop = r.vendorName.empty() ? std::string("the shop") : r.vendorName;
+        switch (r.stage) {
+            case Stage::Out:    return "Off-screen: walking to " + shop;
+            case Stage::Trade:  return "Off-screen: trading at " + shop;
+            case Stage::Return:
+            case Stage::Rejoin: return "Heading back";
+        }
+        return {};
+    }
+
     bool Has(RE::FormID a_follower) {
         std::scoped_lock lk(g_mx);
         if (g_sims.contains(a_follower)) return true;

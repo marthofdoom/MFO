@@ -53,6 +53,7 @@ MFO_STR(Fk_StateCombat,     "In Combat", 0)
 MFO_STR(Fk_StateLooting,    "Looting", 0)
 MFO_STR(Fk_StateTrading,    "Trading", 0)
 MFO_STR(Fk_StateFollowing,  "following", 0)
+MFO_STR(Fk_LocWithYou,       "with you", 0)   // Followers tab: shown after his name when he is in your cell
 MFO_STR(Fk_TipVitalLine,    "{1} {2} / {3}", 3)   // one line of the vitals tooltip. {1}=H/M/S word, {2}=current, {3}=max
 MFO_STR(Fk_ColRoster,       "Roster", 0)   // column with the remove-from-roster button
 MFO_STR(Fk_Remove,          "remove", 0)   // the remove-from-roster button (arms the confirm below the table)

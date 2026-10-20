@@ -501,10 +501,15 @@ namespace MFO::Board {
                             if (r.active) ImGui::TextUnformatted(r.name.c_str());
                             else          ImGui::TextDisabled("%s", r.name.c_str());
                             if (ImGui::IsItemHovered()) ImGui::SetTooltip("%08X", r.id);
-                            if (!r.active && !r.cell.empty()) {
+                            // R3 (town): where he is ("with you" in the player's cell, else the cell / location name) and,
+                            // on an errand, what it is doing, on a second line. Plain text: no new focusable element, so
+                            // gamepad nav (row buttons, d-pad) is unchanged. Strings are snapshot copies (worker-filled).
+                            if (r.withYou || !r.location.empty()) {
                                 ImGui::SameLine();
-                                ImGui::TextDisabled("- %s", r.cell.c_str());
+                                ImGui::TextDisabled("- %s", r.withYou ? Str::Get(Str::K::Fk_LocWithYou) : r.location.c_str());
                             }
+                            if (!r.errand.empty())
+                                ImGui::TextDisabled("%s", r.errand.c_str());
 
                             ImGui::TableNextColumn();
                             if (!r.active) {

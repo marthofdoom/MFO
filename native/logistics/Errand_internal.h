@@ -88,6 +88,8 @@ namespace MFO::Logistics::Errand {
 
     namespace Sim {
         bool Has(RE::FormID a_follower);
+        // R3: the Board status of a simulated errand ("" = none). Any thread, copies under g_mx.
+        std::string Describe(RE::FormID a_follower);
         // Worker. Takes over an errand that just went off screen. Logs OUT_SIM / TRADE_SIM / RET_SIM transitions.
         void Begin(SimStart&& a_start);
         // The pump, every lap (called from Errand::Sweep): the game-time clock, the replayed trade, the return,
@@ -122,5 +124,11 @@ namespace MFO::Logistics::Errand {
         void  Toast(const std::string& a_text);
         // "<who> is trading with <shop>." via Toast, at the moment the trade begins (arrival, physical or simulated).
         void  ToastTrading(const std::string& a_who, const std::string& a_shop);
+        // R3: STRINGS ONLY, no caller yet (the phase-2 rounds that add each errand kind call them at their own begin point).
+        // Informational: never a gold amount, never a failure (marth's ruling for town toasts).
+        void  ToastSmithing(const std::string& a_who, const std::string& a_place);   // "<who> is working at <place>."
+        void  ToastResting(const std::string& a_who, const std::string& a_inn);      // "<who> is resting at <inn>."
+        void  ToastPraying(const std::string& a_who, const std::string& a_temple);   // "<who> is praying at <temple>."
+        void  ToastFence(const std::string& a_who, const std::string& a_fence);      // "<who> is visiting <fence>."
     }
 }
