@@ -526,6 +526,10 @@ namespace MFO::Logistics {
             std::uint8_t  mageTop2          = 0;
             bool          mageSchoolPrimary = true;
             bool          mageAllowVillain  = false;
+            // "WEAR HELMETS" OFF for this follower (ClickUp 86e3phy41; !WearsHelmets): the loot judge
+            // never takes a head piece (IsHelmetPiece), container or loose. Read ONLY by the two loot
+            // armor branches (LootEquipment / LooseEquipmentQualifies); the keep set ignores it.
+            bool          noHelmets         = false;
             // Best in-role MELEE weapon already carried, as a WeaponScore (attack
             // damage x the perk-style bias; == the integer damage when the
             // follower has no preferred kind). Every in-role candidate is

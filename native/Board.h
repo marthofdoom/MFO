@@ -61,6 +61,9 @@ namespace MFO::Board {
         // FollowerState::mfoEnabled for the Followers-tab first-column toggle.
         // ON by default; OFF means MFO leaves this follower entirely alone.
         bool          mfoEnabled = true;
+        // 86e3phy41: FollowerState::helmetOverride for the Gambits-tab "Helmets" button
+        // (0 = Default, the MCM bWearHelmets; 1 = Wear; 2 = Never).
+        std::uint8_t  helmetOverride = 0;
         // Retained (inactive) rows only: the follower's current cell name, or its location
         // name when the cell is unnamed. Filled in PublishSnapshot, empty when unknown.
         std::string   cell;

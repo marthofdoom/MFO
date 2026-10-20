@@ -105,6 +105,7 @@ namespace MFO::Logistics {
             // no-melee-role contract (mageMode) and still buys/learns tomes.
             ctx.useMageApparel = a_state && UsesMageClothing(*a_state, a_follower) &&
                                  Config::g_mageWearRobes.load();   // apparel follows the clothing mode (class by skill); mageMode stays for weapons/backup
+            ctx.noHelmets = !WearsHelmets(a_state);   // 86e3phy41: board override, else bWearHelmets
             // #21 UNIFIED mage-apparel ranking (loot side; shared with the buy side).
             // Value-primary unless bMageApparelStrictSchool is on (school-
             // enchant primary, marth 2026-10-01: robes by school only when asked); villain blacklist with a necromancer exception; all
@@ -214,6 +215,7 @@ namespace MFO::Logistics {
             if (auto* armo = a_obj->As<RE::TESObjectARMO>()) {
                 if (IsCreatureArmor(armo)) return false;
                 if (Config::g_dollsMode.load()) return false;   // #61 FASHIONRIM
+                if (ctx.noHelmets && IsHelmetPiece(armo)) return false;   // 86e3phy41 "Wear helmets" OFF
                 const bool isShield = (static_cast<std::uint32_t>(armo->GetSlotMask())
                     & static_cast<std::uint32_t>(RE::BGSBipedObjectForm::BipedObjectSlot::kShield)) != 0;
                 const bool shieldUseless = isShield && !(ctx.meleeTargetClass == WepClass::OneHand && !ctx.doRanged &&
@@ -339,6 +341,9 @@ namespace MFO::Logistics {
                     // loots or swaps a follower's armor; the player dresses them
                     // by hand. Weapons fall to the else-branch below, untouched.
                     if (Config::g_dollsMode.load()) continue;
+                    // 86e3phy41 "Wear helmets" OFF for him: no head piece is a candidate (plain-rated
+                    // or mage apparel). What he already carries is left alone.
+                    if (ctx.noHelmets && IsHelmetPiece(armo)) continue;
                     // A SHIELD needs a free off-hand: only a ONE-HAND melee role can
                     // use one. A 2H, ranged, or no-melee-role follower has no hand
                     // for it -- dead weight (marth: Farkas, a two-hander, picked up

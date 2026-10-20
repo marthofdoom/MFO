@@ -78,6 +78,12 @@ MFO_STR(Gb_ClassAuto,       "Auto", 0)
 MFO_STR(Gb_ClassMelee,      "Melee", 0)
 MFO_STR(Gb_ClassRanged,     "Ranged", 0)
 MFO_STR(Gb_ClassMage,       "Mage", 0)
+MFO_STR(Gb_HelmBtn,         "Helmets: {1}", 1)   // {1}=Default (on) / Default (off) / Wear / Never. The per-follower helmet button
+MFO_STR(Gb_TitleHelm,       "Wear helmets", 0)   // list title for the per-follower helmet override
+MFO_STR(Gb_HelmDefaultOn,   "Default (on)", 0)   // follows the MCM "Wear helmets" switch, which is on
+MFO_STR(Gb_HelmDefaultOff,  "Default (off)", 0)  // follows the MCM "Wear helmets" switch, which is off
+MFO_STR(Gb_HelmWear,        "Wear", 0)           // this follower always wears helmets
+MFO_STR(Gb_HelmNever,       "Never", 0)          // this follower never wears helmets
 MFO_STR(Gb_When,            "When (target / condition)", 0)   // column header and list title
 MFO_STR(Gb_Value,           "Value", 0)    // column header and list title
 MFO_STR(Gb_Do,              "Do (action)", 0)   // column header and list title

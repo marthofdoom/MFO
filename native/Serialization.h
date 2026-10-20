@@ -232,6 +232,14 @@ namespace MFO {
     //        Deliberately NOT a bump: an older DLL skips a newer-version FLWR whole.
     //        A round trip through an older DLL leaves Enemy/Self rules DISABLED (it saves them with
     //        flags 0); re-enabling one there runs it at the older DLL's player fallback (MFO-B236).
+    //   (still v5, 2026-10-20, VALUE-SPACE only, no layout change, ClickUp 86e3phy41): the
+    //        mfoEnabled u8 gains bits 1-2 = the per-follower helmet override (0 Default / 1 Wear /
+    //        2 Never), written ONLY while mfoEnabled is true, so the byte is 0 exactly when MFO
+    //        is off for him and an older DLL's `byte != 0` read sees the same enabled state.
+    //        Readers: enabled = byte != 0; override = bits 1-2 when bit 0 is set and <= 2, else 0.
+    //        Every earlier record holds 0 or 1 and reads unchanged. Cost: a follower saved with
+    //        MFO switched off for him loses his override (it reads back as Default). A round trip
+    //        through an older DLL drops every override (it writes 0/1).
     //
     // The v1 block was briefly deleted WITHOUT a bump, on the reasoning that no
     // save had ever held an MFO record. True at the time; it stopped being true

@@ -90,6 +90,12 @@ namespace MFO {
         // never wrote it, so it defaults true (this FollowerState{} default) --
         // every existing follower stays enabled.
         bool          mfoEnabled = true;
+        // ClickUp 86e3phy41 (marth 2026-10-12): the per-follower "Wear helmets" OVERRIDE.
+        // 0 = Default (inherit the MCM bWearHelmets), 1 = Wear, 2 = Never. Read through
+        // Logistics::WearsHelmets. NO co-save layout change: it rides bits 1-2 of the FLWR v5
+        // mfoEnabled byte, written only while mfoEnabled is true (Serialization.cpp, so an
+        // older DLL's `byte != 0` read is still exactly mfoEnabled). Clamped to [0,2] on load.
+        std::uint8_t  helmetOverride = 0;
         std::vector<Gambit> tables[static_cast<size_t>(Table::kCount)];
         std::vector<PackageOverride> overrides;
 

@@ -83,6 +83,10 @@ namespace MFO::TradeBridge {
         // judge is per-slot; buy must match). PlanBuy best-picks per slot.
         std::int32_t  armorBaseRat[5] = {};
         bool          buyMageApparel = false;// clothing/jewelry dress-up (caster + bMageWearRobes, not dolls mode)
+        // "Wear helmets" OFF for this follower (ClickUp 86e3phy41; Logistics::WearsHelmets false):
+        // PlanBuy skips every head piece (Logistics::IsHelmetPiece) in BOTH the rated-armor and the
+        // mage-apparel pass. Town errand buys plan through the same PlanBuy, so they are covered too.
+        bool          noHelmets = false;
         // Ranking (marth 2026-10-01): value-driven by default, with or without MEO.
         // schoolPrimary == true ONLY with bMageApparelStrictSchool: ranks by
         // school-enchant tier first; false ranks purely by gold value (most

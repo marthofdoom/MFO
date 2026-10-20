@@ -135,7 +135,11 @@ state (`g_followers`, `Gambit`, `FollowerState`).
   MFO-enabled, v1–v4 byte-identical.** Still v5 (2026-10-06, value space only): `subjectSelector`
   may hold Enemy=3 / Caster=4, and a gambit's `flags` byte gains bit 1 = "enabled, appended subject"
   (bit 0 written clear for those, so an older DLL loads them DISABLED); the reader is
-  `enabled = flags & 3`. Every earlier record holds 0/1 there.
+  `enabled = flags & 3`. Every earlier record holds 0/1 there. Still v5 (2026-10-20, value space only,
+  ClickUp 86e3phy41): the `mfoEnabled` byte gains bits 1-2 = `helmetOverride` (0 Default / 1 Wear /
+  2 Never), written ONLY while `mfoEnabled` (byte stays 0 when off, so an older DLL's `!= 0` read is
+  unchanged); reader: enabled = `byte != 0`, override = bits 1-2 when bit 0 set and <= 2, else 0. A
+  follower saved with MFO off for him, or a round trip through an older DLL, drops the override.
 - **`'MSTK'` / `kStockVersion=1`** (`Serialization.h:13`) — Logistics'
   per-follower stock-gear sets; second independent record, never touches FLWR.
   Write `Serialization.cpp:223-254`, read `ReadStockRecord` `:286-346`. Owner: `logistics/Upkeep.cpp` (the accessors).
@@ -269,6 +273,7 @@ re-reads the alias from the quest even when the module believes it holds nothing
 - `FollowerState` (`State.h:72`): `rapport`, `rank` (clamped [1,5]),
   `combatClassOverride` (v4; ordinals == `CombatStyle::Stance`),
   `mfoEnabled` (v5, T#78; the per-follower MFO master switch, default true),
+  `helmetOverride` (86e3phy41; rides `mfoEnabled`'s byte, see FLWR above),
   `tables[kCount]`, `overrides`.
 - `g_followers` (`State.h:126`) — **MAIN-THREAD-ONLY, takes no lock (#4).** Keyed
   on persistent FormID; dismissed followers stay. Off-thread access must snapshot.
@@ -3853,6 +3858,29 @@ module. Module layout:
   first attempt (rule 5b, keeping last-declared pieces) was removed in review F3: it re-dressed every
   player / script unequip. **What breaks:** declaring a best that overlaps another re-creates the
   two-items-for-one-slot displacement loop; letting the set depend on worn state re-creates the flip.
+- **"WEAR HELMETS" (ClickUp 86e3phy41, `feat/mfo-wear-helmets`, 2026-10-20).** ONE predicate pair in
+  `logistics/Economy.cpp` (beside `ArmorBuySlot`, declared in `Logistics.h`): `IsHelmetPiece(ar)` = the
+  ARMO carries keyword `ArmorHelmet` or `ClothingHead` (`HasKeywordString`, marth 2026-10-20: circlets,
+  wigs, hair accessories and unkeyworded pieces are NOT helmets), and `WearsHelmets(const FollowerState*)`
+  = the board override (`FollowerState::helmetOverride` 1 Wear / 2 Never) else `Config::g_wearHelmets`
+  (`bWearHelmets`). READERS (change one, check all): `LootEquipment.cpp` (`EquipmentContext::noHelmets`,
+  set in `BuildEquipmentContext`, read by the container AND loose armor branches only),
+  `Economy.cpp BuildBuyThresholds` -> `TradeBridge::BuyThresholds::noHelmets` -> `TradeBridge.cpp PlanBuy`
+  (rated AND mage-apparel loops; a STORED errand order keeps its plan-time value, MFO-B396),
+  `EquipAuthority.cpp` `MageBestPerSlot`, `ComputeOwnedGearPick` (rated), `ComputeOwnedGearSlate`
+  (candidate loop AND worn incumbency), `RefreshEquipDeclaration` (4b never records a helmet; rule 5
+  never declares a worn one and puts it in `withheldNow`, so `g_lastWithheld` keeps it from reading as
+  a player pick after the toggle flips back ON), `SwapUp.cpp ComputeKeepSet` (OFF: EVERY carried helmet
+  joins `keep.armor`, outside the `armorJudged` gate) and the `Economy.cpp` sell loop (OFF: a worn
+  helmet is never a `redundantInferior` force-sell). The head-slot block is the EXISTING scope: Armor
+  is always owned, so an undeclared helmet is an off-set equip the seat refuses. `APMF_API.h` has no
+  head category and was NOT changed. **MFO NEVER UNEQUIPS a worn helmet (marth 2026-10-20):** it stays
+  on, undeclared, until a separate tier-A Harbinger "strip these named items" facet lands and MFO adopts
+  it. What breaks: adding an MFO `UnequipObject` here; testing slot bits instead of the keywords; moving
+  the keep-set insert back inside `armorJudged` (carried helmets sell with bEconomyBuyGear off). Open:
+  MFO-B396, MFO-B397. Board: `EditKind::SetHelmetOverride` (`Board_internal.h`, appended), applied in
+  `Board.cpp ApplyEdits` (clamped [0,2]), `FollowerRow::helmetOverride`, the `###helmbtn` / `##helm`
+  picker in `Board_FieldKit.cpp` beside the class picker. Persistence: FLWR v5 value-space (co-save section).
 - **THE HEAD SLOT IS THREE BIPED BITS (2026-09-14, field fix; branch
   `fix/mfo-deck-0914-helmet-offhand-verdict-meo`).** FIELD (Deck log, Fable, ROOT
   CAUSE CONFIRMED): vanilla helmets (Imperial Light Helmet `00013EDB`, Elven Helmet
@@ -4651,7 +4679,7 @@ economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the 
 - **apmf/ErrandClaims.cpp**: `ClaimErrandTravel` / `ReadErrandLeg` / `PlayErrandIdle` (first beat = ch.1 hold + ch.12 claim, later
   beats = `Repoint`) / `ReadErrandIdle` / `ReleaseErrand`; own mutex, never `g_mx`; nothing saved; `ClearErrandClaims` on revert
   (`Upkeep.cpp:751` <- `Errand::ClearTransientState`).
-- **HOLD (`fix/mfo-errand-hold`, 2026-10-20; pairs with Harbinger `feat/apmf-ch19-cell-hold` @be7d9ec; NO co-save / APMF_API.h change; marth: "mfo claims need to hold for the duration of the mfo event").**
+- **HOLD (`fix/mfo-errand-hold`, 2026-10-20; pairs with Harbinger `feat/apmf-ch19-cell-hold` @bf7f065; NO co-save / APMF_API.h change; marth: "mfo claims need to hold for the duration of the mfo event").**
   A ch.19 CELL leg now ENDS Arrived when he is in the cell, even unloaded, and Harbinger HOLDS him (keeps its internal ch.9 offer) until MFO releases or re-points
   the claim (FACETS ch.19 Key Concepts 11a/11b, INVARIANTS #3). MFO therefore: (1) does NOT release at the unloaded hand-off (`Errand.cpp` Sweep hand-off: `Smith::End(.., false)`,
   `Rest::End(.., false)` keep the ch.9 work claim; `ReleaseErrand` only if `Sim::Has` is false after `Sim::Begin`); the simulation owns the standing claim and every

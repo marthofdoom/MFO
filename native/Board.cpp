@@ -1411,6 +1411,15 @@ namespace MFO::Board {
                 continue;
             }
 
+            // 86e3phy41: the per-follower "Wear helmets" override. A per-FOLLOWER edit like the two
+            // above (uid/table unused, keyed on c.fid), same worker as the tick's reads (#4). Absolute
+            // pick by index, clamped to [0,2] so a stray value never reaches the co-save byte. The
+            // loot / buy / declaration paths read it on their next pass; nothing is released here.
+            if (c.kind == EditKind::SetHelmetOverride) {
+                it->second.helmetOverride = static_cast<std::uint8_t>(std::clamp((int)(c.param + 0.5f), 0, 2));
+                continue;
+            }
+
             // Resolve by IDENTITY, not index (#31). A command whose rule is
             // gone -- deleted, reseeded -- is dropped, never misapplied.
             int i = -1;
@@ -1671,6 +1680,7 @@ namespace MFO::Board {
                 r.rank           = it->second.rank;
                 r.combatClassOverride = it->second.combatClassOverride;
                 r.mfoEnabled     = it->second.mfoEnabled;   // T#78
+                r.helmetOverride = it->second.helmetOverride;   // 86e3phy41
                 r.combatRules    = static_cast<std::uint8_t>(it->second.combat().size());
                 r.logisticsRules = static_cast<std::uint8_t>(it->second.logistics().size());
                 r.combatSlots    = SlotsForRank(it->second.rank, Table::Combat);
@@ -1796,6 +1806,7 @@ namespace MFO::Board {
             r.rank           = st.rank;
             r.combatClassOverride = st.combatClassOverride;
             r.mfoEnabled     = st.mfoEnabled;   // T#78
+            r.helmetOverride = st.helmetOverride;   // 86e3phy41
             r.combatRules    = static_cast<std::uint8_t>(st.combat().size());
             r.logisticsRules = static_cast<std::uint8_t>(st.logistics().size());
             r.combatSlots    = SlotsForRank(st.rank, Table::Combat);
