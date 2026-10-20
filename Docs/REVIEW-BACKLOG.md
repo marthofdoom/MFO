@@ -2138,3 +2138,18 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 
 ### MFO-B417 (SEV-5, OPEN, logistics/ErrandReopen.cpp Poll) -- town: a reopened trip re-adds an inn stop that was Skipped in the first trip (raised against 8aae97b)
 "skipped inn re-appended" (Opus review of feat/mfo-town-run2): the recorded inn stop is appended to every reopened trip even when the first trip's inn stop ended Skipped (locked door / failure).
+
+### MFO-B422 (SEV-4, OPEN, Docs/CAST-DELIVERY.md:111, Docs/INI-REFERENCE.md) -- MCM cleanup: docs still point users at the removed MCM bLegacyCastHybrid control (raised against 5a48803)
+"Docs/CAST-DELIVERY.md:111 still says 'turn on the MCM bLegacyCastHybrid'. That control no longer exists, and a value set in the MCM store is now ignored. Docs/INI-REFERENCE.md does not document bLegacyCastHybrid as an INI-only key either, so there is no documented way to turn on the legacy hybrid." Fix: point CAST-DELIVERY.md:111 at SKSE/Plugins/MFO.ini and add the key to INI-REFERENCE.md. Drain before the release cut.
+
+### MFO-B423 (SEV-5, OPEN, Docs/INI-REFERENCE.md:74, Docs/TEST_GUIDE.md:421) -- docs list the deleted bProfileRapport key (raised against 5a48803)
+"Docs/INI-REFERENCE.md:74 still lists bProfileRapport, and Docs/TEST_GUIDE.md:421 (step 27) tells testers to turn it on. Both were already dead on main."
+
+### MFO-B424 (SEV-5, OPEN, Docs/CAST-DELIVERY.md:1343) -- docs name the deleted Config::g_cfcBackoffMs (raised against 5a48803)
+"Docs/CAST-DELIVERY.md:1343 still names Config::g_cfcBackoffMs, which has now been deleted."
+
+### MFO-B425 (SEV-5, OPEN, MAP.md:2851, :4046) -- MAP line citations to Config.h/Config.cpp drifted (raised against 5a48803)
+"MAP.md:2851 -> Config.h:475 and MAP.md:4046 -> Config.h:586 have drifted by about 19 lines because of the removed block. The Config.cpp citations drift by about 5."
+
+### MFO-B426 (SEV-5, OPEN, out/MCM/Config/MFO/config.json Interface page) -- a "Debug" header still sits above the Fashionrim toggle on the Interface page (raised against 5a48803)
+"The Interface page still has a header titled 'Debug' above the Fashionrim toggle (bDollsMode). Now that a separate Debug page exists, this may confuse players." Pre-existing, outside the brief.
