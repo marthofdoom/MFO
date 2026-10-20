@@ -182,8 +182,9 @@ namespace MFO::Logistics::Errand {
     // leaf: never held across an engine, Harbinger, Papyrus or TradeBridge call, and never nested with Errand / Sim g_mx).
     namespace Rest {
         // Planner (worker, TryStart, the follower loaded). a_haveStops = Trip::Plan found shop work. Appends the temple stop (when he is
-        // diseased or not yet blessed today) and the inn stop (LAST of every trip) to a_stops; with NO shop work a trip exists only when
-        // the temple is owed (then it ends at the inn too). TRUE = a_stops describes a trip. a_line gets the text appended.
+        // diseased or has no ACTIVE blessing: an effect whose MGEF carries MagicBlessing, read from the world) and the inn stop (LAST of
+        // every trip) to a_stops; with NO shop work and no temple reason the trip is the INN ALONE (marth 2026-10-19). TRUE = a_stops
+        // describes a trip. a_line gets the text appended.
         bool Augment(RE::Actor* a_follower, const FollowerState& a_state, std::chrono::steady_clock::time_point a_now,
                      const RE::BGSLocation* a_town, bool a_haveStops, std::vector<Stop>& a_stops, std::string& a_line);
         // ONE TRIP PER TOWN VISIT (marth 2026-10-19): once a follower's trip ends no new errand is planned for him until the player

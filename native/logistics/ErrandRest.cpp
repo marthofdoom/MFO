@@ -94,6 +94,7 @@ namespace MFO::Logistics::Errand::Rest {
         // 000FB993, FortifySneakFFSelf 0010E8AF, ...) all carry KYWD MagicBlessing; the LoreRim winner (Wintersun - Reqtificated.esp)
         // overrides 000FB98D and keeps the keyword. Verified in Skyrim.esm and Wintersun with tools/esp_inspect.py, 2026-10-19.
         constexpr RE::FormID kBlessingKeyword = 0x000FB98C;   // MagicBlessing
+        constexpr int kMagicMaxDefers = 5;   // MagicReadPending: ~5 plan cadences (6 s) = ~30 s, then WARN and plan without the temple decision
         constexpr float  kScan          = 4096.0f;   // the door / shrine / bed scan around the follower (one cell)
         constexpr float  kShrineRadius  = 110.0f;    // ch.19 arrival radius at the shrine (APMF clamps [50,512])
         constexpr float  kInnSandboxRad = 700.0f;    // the stay: around the anchor (the inn's entry door), i.e. the main room
@@ -154,6 +155,7 @@ namespace MFO::Logistics::Errand::Rest {
         std::unordered_map<RE::FormID, int>              g_templeTry;  // follower -> game day of the last temple visit (any outcome): a short-term ANTI-THRASH only, NOT the blessing's truth (that is MagicView::blessed)
         std::unordered_set<RE::FormID>                   g_tripDone;   // followers whose trip ended this town visit
         std::unordered_set<RE::FormID>                   g_tripLogged; // ... for whom the re-plan block was already logged
+        std::unordered_map<RE::FormID, int>              g_magicDefers;  // consecutive MagicReadPending defers per follower (cap kMagicMaxDefers)
         std::unordered_set<RE::FormID>                   g_magicWaitLogged; // ... for whom "waiting for the blessing/disease read" was logged this visit
         RE::FormID                                       g_marksTown = 0;
         struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0, cell = 0; };   // cell: the interior cell of the faction's PLVD place (0 = unknown)
@@ -794,6 +796,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_tripDone.clear();
         g_tripLogged.clear();
         g_magicWaitLogged.clear();
+        g_magicDefers.clear();
     }
     bool MagicReadPending(RE::Actor* a_follower) {
         if (!a_follower || !Config::g_errandInn.load()) return false;
@@ -801,9 +804,16 @@ namespace MFO::Logistics::Errand::Rest {
         const bool loaded = a_follower->Is3DLoaded();
         const auto m = MagicOf(fid);
         const bool fresh = m.valid && Clock::now() - m.stamp <= std::chrono::seconds(30);
-        if (fresh) return false;
+        if (fresh) { std::scoped_lock lk(g_mx); g_magicDefers.erase(fid); return false; }
         bool first = false;
-        { std::scoped_lock lk(g_mx); first = g_magicWaitLogged.insert(fid).second; }
+        int defers = 0;
+        { std::scoped_lock lk(g_mx); first = g_magicWaitLogged.insert(fid).second; defers = ++g_magicDefers[fid]; }
+        if (loaded && defers > kMagicMaxDefers) {   // never stall silently: the main-thread read did not land in ~30 s
+            spdlog::warn("[errand] {:08X}: the blessing/disease read did not land after {} defers (~{} s) -- planning WITHOUT the temple decision (is the main-thread Post running?)",
+                         fid, defers - 1, (defers - 1) * 6);
+            { std::scoped_lock lk(g_mx); g_magicDefers[fid] = 0; }
+            return false;
+        }
         if (!loaded) {   // an unloaded follower's list is not readable: today's behaviour (TempleWanted wants nothing without a read)
             if (first) spdlog::info("[errand] {:08X}: not loaded -- no blessing/disease read possible, planning without the temple", fid);
             return false;
@@ -925,6 +935,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_tripDone.clear();
         g_tripLogged.clear();
         g_magicWaitLogged.clear();
+        g_magicDefers.clear();
         g_innFacs.clear();
         g_marksTown = 0;
     }

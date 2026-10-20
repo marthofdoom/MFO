@@ -1924,8 +1924,8 @@ Opus review @ 92c761cd. Verbatim: "the physical errand says 'Trading with X' and
 ### MFO-B342 (SEV-5, OPEN, Board_FieldKit.cpp:510) -- town R3: '- %s' separator
 Opus review @ 92c761cd. Verbatim: "the '- %s' separator uses a hyphen as a dash. It is carried over from the old draw. VOICE.md asks for a colon or parentheses, so '(with you)' would fit better. Optional."
 
-### MFO-B343 (SEV-4, CLOSED (obsolete: counter learning and placement removed (marth 2026-10-19)), ErrandSim.cpp:357-375) -- town R4: the other browsing case is not built
-Opus review @ c2253ac3. Verbatim: "The design's other browsing case is not built: if the simulated trade has already run and it is before tTradeEnd, the errand resolves straight to DONE (ErrandSim.cpp:357-375). With no placement facet either, field criteria R4-1 and R4-3 cannot pass as written."
+### MFO-B343 (SEV-4, OPEN, ErrandSim.cpp:357-375) -- town R4: the other browsing case is not built (REWORDED 2026-10-19: browse-only; placement criteria removed)
+Opus review @ c2253ac3. Verbatim: "The design's other browsing case is not built: if the simulated trade has already run and it is before tTradeEnd, the errand resolves straight to DONE (ErrandSim.cpp:357-375). With no placement facet either, field criteria R4-1 and R4-3 cannot pass as written." Update (`fix/mfo-town-counter-drop`, marth 2026-10-19): the placement facet and its criteria are GONE; the sim-trade-already-ran case still resolves straight to DONE with no browse beat. MAP: "R4 / R4b" section.
 
 ### MFO-B344 (SEV-5, CLOSED (obsolete: counter learning and placement removed (marth 2026-10-19)), ErrandCounter.cpp Learn) -- town R4: "confirmed" is not "at the counter"
 Opus review @ c2253ac3. Verbatim: "'Confirmed' means stationary for ~6 s at any sandbox marker, not 'at the counter'. Fine while the map is log-only; the placement facet must not trust it blindly."
@@ -1988,3 +1988,9 @@ Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Bed choice. Find
 
 ### MFO-B358 (SEV-5, OPEN, Serialization.cpp) -- town R7: misleading reader log (raised against bfc92b50)
 Opus review of `feat/mfo-town-p2-r7-inn` @ bfc92b50. Verbatim: "Misleading reader log. The reader's 'shop gone' counter also counts a current temple or inn stop." MAP.md: "Town phase 2 R7".
+
+### MFO-B385 (SEV-4, OPEN, logistics/ErrandRest.cpp FindPlaces / ResolveViaData + Errand.cpp TryStart) -- town: a follower already inside the inn plans a trip to his own cell (raised against d69e4869)
+Opus review of `fix/mfo-town-counter-drop` @ d69e4869. Verbatim: "a follower already inside the inn: FindPlaces finds no inn door from inside, so ResolveViaData resolves the inn cell, and stops[0] becomes the cell he is standing in. How a ch.19 cell claim to the actor's own cell resolves is unverified. Watch for it in the field." MAP: R7 section.
+
+### MFO-B386 (SEV-4, OPEN, logistics/Errand.cpp Tick combat exit) -- town: combat during the inn-only walk re-plans the inn (raised against d69e4869)
+Same review. Verbatim: "combat-while-walking re-plans inn": an inn-only trip that ends on combat during the walk is not marked trip-done (deliberately left, the coordinator is asking marth), so after the combat cooldown he plans the inn trip again. MAP: R7 section.

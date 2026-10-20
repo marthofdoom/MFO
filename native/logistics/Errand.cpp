@@ -540,6 +540,15 @@ namespace MFO::Logistics::Errand {
                 if (a_complete) g_backoff.erase(BackoffKey(a_fid, r.chest));   // a successful DONE at this target forgives it
             }
             if (r.phase == Phase::Resting) Rest::End(a_fid, a_why, true);   // R7: the stay's release reason is logged; the trip is done for this visit
+            else if (Config::g_errandInn.load() && a_cooldownSec != kCombatCooldownSec) {
+                // R7 review: an INN-ONLY trip that ends for any reason but combat (blocked / stuck / dest gone / the caps), or a trip whose
+                // INN stop ended Skipped, is done for this visit: the inn stop has no faction / chest, so no park or backoff stops a re-plan
+                // that walks him toward an unreachable inn every 45-60 s. Combat during the walk is left as it was (asked of marth).
+                const bool innOnly = r.stops.size() == 1 && r.stops[0].kind == StopKind::Inn;
+                const bool innSkipped = std::any_of(r.stops.begin(), r.stops.end(),
+                                                    [](const Stop& s) { return s.kind == StopKind::Inn && s.state == StopState::Skipped; });
+                if (innOnly || innSkipped) Rest::MarkTripDone(a_fid, r.town, innSkipped ? "the inn stop was skipped" : "the inn-only trip failed");
+            }
             APMFBridge::ReleaseErrand(a_fid);   // idle, hold, walk (in that order) -- and the ch.9 work claim
             // A shop-place walk has no vendor actor yet (r.vendor == 0): name the faction / destination instead.
             const std::string who = r.vendor ? std::format("vendor '{}' {:08X}", r.vendorName, r.vendor)
@@ -1047,7 +1056,8 @@ namespace MFO::Logistics::Errand {
         tin.follower = fid; tin.from = a_follower->GetPosition(); tin.carry = carry; tin.minSell = minSell; tin.minPurse = minPurse;
         std::vector<Stop> stops;
         std::string tripLine;
-        // R7: the temple (when owed) and the INN (LAST) are appended to the shop stops; a trip with no shop work exists only for an owed temple.
+        // R7: the temple (when diseased / without an active blessing) and the INN (LAST) are appended to the shop stops; with no shop work
+        // and no temple reason the trip is the INN ALONE (marth 2026-10-19).
         bool havePlan = Trip::Plan(tcands, planned, tin, stops, tripLine);
         havePlan = Rest::Augment(a_follower, a_state, a_now, playerTown, havePlan, stops, tripLine);
         if (!havePlan) {
@@ -1107,12 +1117,14 @@ namespace MFO::Logistics::Errand {
             bool         have = false;
             const Stop& first = r.stops.front();   // R5: the trip's first stop (the R4 line's `best`)
             if (first.destKind != DestKind::Cell) have = Trip::PlacePos(first, dp);
-            if (have) ownDist = std::format("{:.0f} u", a_follower->GetPosition().GetDistance(dp));
+            else if (first.havePos) { dp = first.pos; have = true; }   // an inn / temple / shop cell: the DOOR position the planner found
+            if (have) ownDist = std::format("{:.0f} u{}", a_follower->GetPosition().GetDistance(dp), first.destKind == DestKind::Cell ? " to its door" : "");
         }
+        const char* destWhat = r.destKind == DestKind::VendorActor ? "the vendor" : r.destKind == DestKind::Ref ? "the shop ref"
+                             : r.stops.front().kind == StopKind::Inn ? "the inn cell" : r.stops.front().kind == StopKind::Temple ? "the temple cell" : "the shop cell";
         spdlog::info("[errand] {:08X} '{}' TRIP PLAN in '{}': {} | walking to {} '{}' ({} from HIM): {} {:08X} | {} candidate(s)",
                      fid, r.followerName, TownName(r.town), tripLine, Trip::Label(r.stops, 0), r.vendorName, ownDist,
-                     r.destKind == DestKind::VendorActor ? "the vendor" : r.destKind == DestKind::Ref ? "the shop ref" : "the shop cell",
-                     r.destForm, cands.size());
+                     destWhat, r.destForm, cands.size());
         return true;
     }
 
