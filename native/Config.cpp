@@ -128,6 +128,7 @@ namespace MFO::Config {
             // TOWN ERRANDS (R1a): a chain of its own -- the main chain below is already long enough that one more
             // `else if` per key risks MSVC's nested-block limit (C1061).
             if      (a_key == "bTownErrands")       { setB(g_townErrands);   return; }   // default ON; OFF = the old proximity trade
+            else if (a_key == "bFollowerCatchUp")   { setB(g_followerCatchUp); return; }   // default ON; INI-only
             else if (a_key == "bTownToasts")        { setB(g_townToasts);    return; }   // default OFF; HUD lines for errand events
             else if (a_key == "iErrandMinSellGold") { setI(g_errandMinSellGold, 0, 100000);    return; }
             else if (a_key == "iErrandMinPurse")    { setI(g_errandMinPurse,    0, 1000000);   return; }
@@ -414,6 +415,7 @@ namespace MFO::Config {
             g_economyBuyGear     = true;    // #21 gear-buy sub-toggle -- ON, gated under bEconomy
             g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
             g_townErrands        = true;    // R1a town errands -- ON (features ship on)
+            g_followerCatchUp    = true;    // left-behind followers are moved to the player after a world transition -- ON
             g_townToasts         = false;   // errand HUD toasts -- OFF by default (marth 2026-10-19)
             g_errandMinSellGold  = 100;
             g_errandMinPurse     = 200;

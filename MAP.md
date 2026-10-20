@@ -8138,6 +8138,16 @@ concurrency question (distinct threads, mutual exclusion UNPROVEN).
   `Rapport.cpp:147`, `Diagnostics.cpp:253`. (Followers.h's per-symbol header comments
   predate the worker move — the DOMAIN is the serial worker/main pump, #4/#74.)
 
+### FollowerCatchUp.cpp / FollowerCatchUp.h -- left-behind followers (feat/mfo-follower-catchup, 2026-10-20; INI `bFollowerCatchUp`, default ON; NOT serialized)
+- `Poll()` is called at the END of `Followers::Refresh` (after `PublishActiveMirror`), so it runs on the Refresh domain (serial worker; once on
+  main at kPostLoadGame where the 3 s settle makes it a no-op). Trigger = `Followers::SecondsSinceTransition()` (`Followers.cpp` `g_transitionNs`):
+  judged only while 3 s <= since <= 60 s, once per follower per transition (a falling `since` = a new transition clears the per-transition sets).
+  Candidates are the `g_followers` RECORDS, not `g_active`, because a left-behind follower is unloaded and Refresh drops him from `g_active`.
+- Mover = `Papyrus::DispatchMoveTo(f, player, behind 250 u)` POSTED via `MainThread::Post` (the SAME vanilla MoveTo as `Errand.cpp RecallToPlayer`; that
+  function is `detail::` internal to logistics so the 5 lines are repeated, not shared).
+- Skips: not `IsEligibleFollower`, `!mfoEnabled`, `kWaitingForPlayer > 0`, `Logistics::Errand::Active` (physical + Sim + inn stay), `APMFBridge::InCombat`, menu / loading / paused (retry).
+- **What breaks:** (1) the errand-owned follower MUST stay skipped: ErrandSim RECALLs him on "player left the town" and a second mover would double-MoveTo; if `Errand::Active` stops covering a phase (e.g. a new rec table), this file moves him mid-errand. (2) It reads `g_followers` from `Refresh` (#4): never call `Poll` from another thread. (3) Anything that stamps `g_transitionAt` more often (a new marker signal) postpones the catch-up; the 60 s window bounds it. (4) The "arrived" test (same cell, or both outdoors same worldspace <= 4096 u) is shared in spirit with kTeleportJumpU in Followers.cpp.
+
 ### Rapport.cpp / Rapport.h
 Per-follower rapport/rank + death/combat sinks + the ally-combat quash.
 `RegisterSinks` (`:505`) ← `plugin.cpp:296` (LAST, after Config/Forms/Quirks resolve).
