@@ -103,6 +103,17 @@ namespace MFO::ProgAllocator {
             return {};
         }
 
+        // Crafting stream (PerkPoolsOf): ranks MFO has allocated in crafting-skill
+        // trees. An alloc whose node left the catalog counts as non-crafting.
+        int CraftTreeRanks(const ProgState& a_st) {
+            int total = 0;
+            for (const auto& p : a_st.perks) {
+                const auto ref = FindNode(p.nodePerkID);
+                if (ref.tree && IsCraftSkill(ref.tree->av)) total += p.rank;
+            }
+            return total;
+        }
+
         // ── ownership questions ─────────────────────────────────────────────
 
         // Does the follower own ANY rank of this node — through MFO's alloc,

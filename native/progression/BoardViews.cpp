@@ -310,6 +310,7 @@ namespace MFO::ProgAllocator {
             snap->respecRapportCost     = g_econ.respecRapportCost;
             snap->skillCap              = g_econ.skillCap;
             snap->levelsPerPerkPoint    = std::max(1, g_econ.levelsPerPerkPoint);
+            snap->levelsPerCraftPerkPoint = g_econ.levelsPerCraftPerkPoint;
             snap->manualSkillPtsPerLevel = g_econ.manualSkillPtsPerLevel;
             // §18.6: the declared classes, in declaration order — the board's
             // dynamic-N class prompt draws exactly these.
@@ -340,6 +341,7 @@ namespace MFO::ProgAllocator {
                     if (const auto* def = FindClassDef(st->clsId)) v.clsName = def->name;
                     v.level          = st->progressionLevel;
                     v.unspentPerk    = static_cast<float>(PerkPointsAvailable(*st));   // §17 derived
+                    v.unspentCraft   = static_cast<float>(CraftPerkPointsAvailable(*st));
                     v.nativeAtEnroll = st->nativeTreePerksAtEnroll;
                     v.allocatedRanks = static_cast<std::uint16_t>(
                         std::min(AllocatedRanks(*st), 0xFFFF));

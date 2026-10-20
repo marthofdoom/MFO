@@ -60,6 +60,7 @@ namespace MFO::Progression {
     };
     struct ManifestEconomy {
         int   levelsPerPerkPoint{ 0 };
+        int   levelsPerCraftPerkPoint{ 0 };
         float skillPointsPerLevel{ 0.f };
         int   manualSkillPointsPerLevel{ 0 };
         int   sharedGrowthDivisor{ 0 };

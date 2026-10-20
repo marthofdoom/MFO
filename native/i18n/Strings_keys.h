@@ -149,6 +149,7 @@ MFO_STR(Pg_CannotProgress, "{1} cannot progress: {2}.", 2)   // {1}=follower nam
 MFO_STR(Pg_NotEnrolledMsg, "{1} is not enrolled. Pick a class to begin -- no skills are touched until you do.", 1)   // {1}=follower name
 MFO_STR(Pg_ChooseBtn, "Choose class...", 0)
 MFO_STR(Pg_PerkPoints, "Perk points: {1}", 1)   // {1}=points to spend
+MFO_STR(Pg_CraftPoints, "Craft perks: {1}", 1)   // {1}=crafting points to spend (Smithing, Alchemy, Enchanting)
 MFO_STR(Pg_NoneToSpend, "None to spend: 1 point per {1} levels -- level {2} has earned {3}, and {4} are already spent.", 4)   // {1}=levels per point, {2}=level, {3}=points earned, {4}=points spent
 MFO_STR(Pg_PerPoint, "1 perk point per {1} levels. Pick a skill to open its tree.", 1)   // {1}=levels per point
 MFO_STR(Pg_Syncing, "syncing follower state...", 0)

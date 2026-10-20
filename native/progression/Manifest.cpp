@@ -38,11 +38,12 @@ namespace MFO::ProgAllocator {
         constexpr std::string_view kEconKnobSuffixes[] = {
             "_LevelsPerPerkPoint", "_ManualSkillPointsPerLevel", "_SkillPointsPerLevel",
             "_SharedGrowthDivisor", "_RespecRapportCost", "_SkillCap",
+            "_LevelsPerCraftPerkPoint",
         };
-        constexpr int kEconKnobCount = 6;
+        constexpr int kEconKnobCount = 7;
 
         // Assign ONE manifest GLOB to its g_econ field by editor-id SUFFIX and
-        // return its kEconKnobSuffixes index (0..5); 6 = the _DevCmd selector
+        // return its kEconKnobSuffixes index (0..6); 7 = the _DevCmd selector
         // (pointer stored, read LIVE); -1 = no economy/dev suffix matched.
         // Manual rate is tested BEFORE the auto rate so the longer id wins even
         // if a future suffix would otherwise be a tail of another. Same clamp
@@ -75,9 +76,14 @@ namespace MFO::ProgAllocator {
                 g_econ.skillCap = std::max(1.0f, a_glob->value);
                 return 5;
             }
+            if (EdidEndsWith(a_glob, "_LevelsPerCraftPerkPoint")) {
+                // <=0 disables the crafting perk stream (crafting ranks cost general points).
+                g_econ.levelsPerCraftPerkPoint = std::max(0, static_cast<int>(a_glob->value));
+                return 6;
+            }
             if (EdidEndsWith(a_glob, "_DevCmd")) {
                 g_devCmd = a_glob;   // pointer only — the ONE live-read knob
-                return 6;
+                return 7;
             }
             return -1;
         }
@@ -171,7 +177,9 @@ namespace MFO::ProgAllocator {
                         key.front() == '[' || key.front() == ';' || key.front() == '#') continue;
                     float v;
                     try { v = std::stof(valS); } catch (...) { continue; }
-                    if (KeyEndsWith(key, "LevelsPerPerkPoint"))
+                    if (KeyEndsWith(key, "LevelsPerCraftPerkPoint"))
+                        g_econ.levelsPerCraftPerkPoint = std::max(0, static_cast<int>(v));
+                    else if (KeyEndsWith(key, "LevelsPerPerkPoint"))
                         g_econ.levelsPerPerkPoint = std::max(1, static_cast<int>(v));
                     else if (KeyEndsWith(key, "ManualSkillPointsPerLevel"))
                         g_econ.manualSkillPtsPerLevel = std::max(0, static_cast<int>(v));
@@ -192,10 +200,11 @@ namespace MFO::ProgAllocator {
                     ++applied;
                 }
                 if (applied)
-                    spdlog::info("[prog] economy override from {}.ini: {} knob(s) — perk 1/{} lvl, "
+                    spdlog::info("[prog] economy override from {}.ini: {} knob(s) — perk 1/{} lvl (craft 1/{}), "
                                  "skill/lvl {:g}, manual/lvl {}, sharedDiv {}, respec {:g}, cap {:g}, "
                                  "cancelEngineAwards {}",
-                                 mod, applied, g_econ.levelsPerPerkPoint, g_econ.skillPointsPerLevel,
+                                 mod, applied, g_econ.levelsPerPerkPoint, g_econ.levelsPerCraftPerkPoint,
+                                 g_econ.skillPointsPerLevel,
                                  g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
                                  g_econ.respecRapportCost, g_econ.skillCap, g_econ.cancelEngineAwards);
             }
@@ -284,6 +293,7 @@ namespace MFO::ProgAllocator {
             man.displayName = addon.plugin;        // TODO(Phase 5): richer header carrier
             // Economy + allocation mirror the live g_econ (whatever it resolved to).
             man.economy.levelsPerPerkPoint        = g_econ.levelsPerPerkPoint;
+            man.economy.levelsPerCraftPerkPoint   = g_econ.levelsPerCraftPerkPoint;
             man.economy.skillPointsPerLevel       = g_econ.skillPointsPerLevel;
             man.economy.manualSkillPointsPerLevel = g_econ.manualSkillPtsPerLevel;
             man.economy.sharedGrowthDivisor       = g_econ.sharedGrowthDivisor;
@@ -445,10 +455,11 @@ namespace MFO::ProgAllocator {
         }
 
         g_ready = true;
-        spdlog::info("[prog] allocator ready: perk = 1 per {} level(s), skill/lvl {:g}, "
+        spdlog::info("[prog] allocator ready: perk = 1 per {} level(s) (craft 1 per {}), skill/lvl {:g}, "
                      "manual skill/lvl {}, sharedDiv {}, respec {:g} rapport, cap {:g}, "
                      "{} declared class(es), devCmd {}",
-                     g_econ.levelsPerPerkPoint, g_econ.skillPointsPerLevel,
+                     g_econ.levelsPerPerkPoint, g_econ.levelsPerCraftPerkPoint,
+                     g_econ.skillPointsPerLevel,
                      g_econ.manualSkillPtsPerLevel, g_econ.sharedGrowthDivisor,
                      g_econ.respecRapportCost, g_econ.skillCap, g_classes.size(),
                      g_devCmd ? "resolved" : "MISSING (harness cmds default to 0)");

@@ -157,9 +157,10 @@ namespace MFO::ProgAllocator {
             st.progressionLevel = pl;
             st.veteranConsumed = true;
             spdlog::info("[prog] {} level-matched to player level {} — {} perk point(s) "
-                         "available (§17: floor(level/{}) − {} spent)",
+                         "available (§17: floor(level/{}) − {} spent), {} craft point(s) (floor(level/{}))",
                          NameOf(a_actor), pl, PerkPointsAvailable(st),
-                         g_econ.levelsPerPerkPoint, AllocatedRanks(st));
+                         g_econ.levelsPerPerkPoint, AllocatedRanks(st),
+                         CraftPerkPointsAvailable(st), g_econ.levelsPerCraftPerkPoint);
         }
 
         const auto beforeName = std::string(ClsName(st.clsId));

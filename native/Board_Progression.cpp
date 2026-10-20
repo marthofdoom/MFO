@@ -219,6 +219,8 @@ namespace MFO::Board {
                             ImGui::PushFont(g_fontHead);
                             ImGui::TextColored(skin.accent, "%s", Str::Fmt(Str::K::Pg_PerkPoints, { Str::Arg::F(who->unspentPerk, 0) }).c_str());
                             ImGui::PopFont();
+                            if (prog.levelsPerCraftPerkPoint > 0)
+                                ImGui::TextColored(skin.accent, "%s", Str::Fmt(Str::K::Pg_CraftPoints, { Str::Arg::F(who->unspentCraft, 0) }).c_str());
                             // §17: the derived budget, spelled out so a zero
                             // is self-explaining, never "is it broken?".
                             // Cadence comes from the LIVE economy snapshot, not

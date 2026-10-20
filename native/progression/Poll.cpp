@@ -163,9 +163,11 @@ namespace MFO::ProgAllocator {
                         st.progressionLevel = static_cast<std::uint16_t>(st.progressionLevel + gain);
                         // §17: no grant — the derived pool follows the level.
                         spdlog::info("[prog] {:08X} level {} (+{}) — {} perk point(s) available "
-                                     "(floor(level/{}) − {} spent)",
+                                     "(floor(level/{}) − {} spent), {} craft point(s) "
+                                     "(floor(level/{}))",
                                      id, st.progressionLevel, gain, PerkPointsAvailable(st),
-                                     g_econ.levelsPerPerkPoint, AllocatedRanks(st));
+                                     g_econ.levelsPerPerkPoint, AllocatedRanks(st),
+                                     CraftPerkPointsAvailable(st), g_econ.levelsPerCraftPerkPoint);
                         if (actor && managed) RecomputeSkills(actor, st, /*log*/ true);
                         if (actor && managed) RecomputeHMS(actor, st, /*log*/ true);   // §HMS
                     }

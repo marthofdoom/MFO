@@ -110,6 +110,7 @@ PROG_REQUIRED = {
     0x807: ('GLOB', "MFOP_SkillCap",            ['EDID', 'FNAM', 'FLTV']),
     0x808: ('GLOB', "MFOP_DevCmd",              ['EDID', 'FNAM', 'FLTV']),
     0x809: ('GLOB', "MFOP_ManualSkillPointsPerLevel", ['EDID', 'FNAM', 'FLTV']),
+    0x80A: ('GLOB', "MFOP_LevelsPerCraftPerkPoint", ['EDID', 'FNAM', 'FLTV']),
     # Class skill lists carry entries (LNAM); the perk lists ship EMPTY on
     # purpose (xEdit extension point) so LNAM is not required there.
     0x810: ('FLST', "MFOP_ClassSkills_Melee",   ['EDID', 'LNAM']),
@@ -351,18 +352,18 @@ def audit_one(esp):
         # §18.6 Stage 3: the addon MANIFEST FLST must carry the economy GLOBs
         # the DLL reads off it — entry[0] self-declaration keyword, entry[1] the
         # board-tab label MESG (v1.1 Phase 6c), entry[2] the classes-list FLST,
-        # entries[3..] the 7 economy GLOBs (perk divisor, skill/lvl, manual/lvl,
-        # shared divisor, respec, cap, dev-cmd). A short manifest means the DLL
+        # entries[3..] the 8 economy GLOBs (perk divisor, skill/lvl, manual/lvl,
+        # shared divisor, respec, cap, dev-cmd, craft divisor). A short manifest means the DLL
         # falls back to DLL defaults for the missing knobs -- silent, so audit it.
         # v1.1 residual #3: entry[3] is now the entry-point VERDICTS sub-FLST.
-        MANIFEST_ENTRIES = 4 + 7
+        MANIFEST_ENTRIES = 4 + 8
         if 0x821 in by_local:
             n = by_local[0x821][1].get('#LNAM', 0)
             if n != MANIFEST_ENTRIES:
                 errors.append(f"FLST 0x821 MFOP_AddonManifest has {n} LNAM entr(ies), "
                               f"expected {MANIFEST_ENTRIES} (self-declaration keyword + "
                               f"board-tab label MESG + classes-list + verdicts-list + "
-                              f"7 economy GLOBs)")
+                              f"8 economy GLOBs)")
 
         # v1.1 residual #3: the entry-point VERDICTS sub-FLST (0x860) carries its
         # self-declaration keyword + 92 POSITIONAL verdict GLOBs. A short list

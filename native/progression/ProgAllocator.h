@@ -462,6 +462,9 @@ namespace MFO::ProgAllocator {
     // §17: the derived perk-point pool (see ProgState) — the ONE authority
     // every gate, log line and board view asks.
     inline int PerkPointsAvailable(const ProgState& a_st);
+    // The separate crafting stream's remaining points (Smithing/Alchemy/Enchanting
+    // trees spend these first; 0 when the stream is disabled). Also derived.
+    inline int CraftPerkPointsAvailable(const ProgState& a_st);
 
     // ── board views (component 3 — the Progression tab's read seam) ─────────
     // The tab draws on the RENDER thread; g_prog and every engine read here
@@ -499,6 +502,7 @@ namespace MFO::ProgAllocator {
         std::string   clsName;           // resolved display name ("" when none)
         std::uint16_t level{ 0 };
         float         unspentPerk{ 0.0f };    // §17 DERIVED pool (PerkPointsAvailable)
+        float         unspentCraft{ 0.0f };   // DERIVED crafting pool (CraftPerkPointsAvailable)
         std::uint16_t nativeAtEnroll{ 0 };    // §17: pre-trained tree ranks (the budget debit)
         std::uint16_t allocatedRanks{ 0 };    // §17: ranks MFO has spent
         bool          manualSkills{ false };  // §16 toggle state
@@ -513,6 +517,7 @@ namespace MFO::ProgAllocator {
         // Economy cadence, so the board self-describes from the LIVE values
         // instead of hardcoded literals (which drifted from the shipped 2/2).
         int   levelsPerPerkPoint{ 2 };     // §17 perk cadence: floor(level/N)
+        int   levelsPerCraftPerkPoint{ 4 };  // crafting stream cadence; <= 0 = stream off
         int   manualSkillPtsPerLevel{ 2 }; // §16 manual mode: pts banked per level
         // §18.6: the declared classes for the board's dynamic-N prompt.
         std::vector<std::pair<RE::FormID, std::string>> classes;
