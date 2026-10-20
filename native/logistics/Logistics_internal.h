@@ -932,6 +932,10 @@ namespace MFO::Logistics {
 
     // defined in logistics/Upkeep.cpp, called by ServiceFollower
     bool EquipTorch(RE::Actor* a_follower);
+    // standing torch declaration (feat/mfo-torch-ch17): read by RefreshEquipDeclaration (logistics/EquipAuthority.cpp)
+    RE::FormID TorchDeclaredFor(RE::Actor* a_follower, bool a_leftFree);   // the Light to declare, 0 = none; logs start/stop
+    void ForgetTorchRule(RE::FormID a_follower);
+    void ClearTorchRules();
     void HealExcludedWeapon(RE::Actor* a_follower);
     bool ShedOffRoleWeapon(RE::Actor* a_follower, const FollowerState& a_state);
     void MarkJustLooted(RE::FormID a_id, Clock::time_point a_now);

@@ -183,6 +183,65 @@ namespace MFO::Logistics {
 
     static std::unordered_set<RE::FormID> g_torchRefusedLogged;   // MFO-B134 once-per-streak latch (worker-serial)
 
+    // STANDING TORCH DECLARATION (feat/mfo-torch-ch17, marth 2026-10-20: "engine actions belong in Harbinger").
+    // With the equip authority supported the torch rule makes NO EquipObject: EquipTorch only STAMPS that the rule
+    // held (and which Light), and RefreshEquipDeclaration (EquipAuthority.cpp, same worker, the tail of the same
+    // service lap) declares that Light with Light|Left owned for as long as the stamp is fresh. Harbinger's equip
+    // pass puts it in hand and its torch seat keeps it there; with no stamp Light is unowned and the engine manages
+    // light normally. Worker-serial (both callers run on the logistics worker), no lock.
+    struct TorchRule {
+        RE::FormID                            light    = 0;
+        std::chrono::steady_clock::time_point stamp{};
+        bool                                  declared = false;   // the start line was logged; the stop line is owed
+    };
+    static std::unordered_map<RE::FormID, TorchRule> g_torchRule;
+    // The rule is re-stamped by every service lap that reaches it (~1 s, kLogisticsInterval). A lap an excursion,
+    // a combat or a higher rule's action skips does not re-stamp, so the window is 3 laps: a floor, not a guess
+    // (CLAUDE.md principle 9) -- a shorter one would drop a LIVE rule between laps.
+    static constexpr auto kTorchRuleTtl = std::chrono::seconds(3);
+
+    // The follower is seated, sleeping or in furniture: marth, "stowing while seated is fine" -- the engine's own
+    // updater unequips the torch there (RE: UpdateTorch branch A), and a declaration would fight it.
+    static const char* TorchSeatedReason(RE::Actor* a_follower) {
+        if (a_follower->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) return "seated or sleeping";
+        if (a_follower->GetOccupiedFurniture()) return "in furniture";
+        return nullptr;
+    }
+
+    // Called by RefreshEquipDeclaration on every build. Returns the Light to declare (0 = none) and logs ONE line
+    // per start / stop transition (not per tick). a_leftFree = no hold or cast owns the left hand this build.
+    RE::FormID TorchDeclaredFor(RE::Actor* a_follower, bool a_leftFree) {
+        const RE::FormID fid = a_follower->GetFormID();
+        const auto it = g_torchRule.find(fid);
+        if (it == g_torchRule.end()) return 0;
+        auto& r = it->second;
+        const char* stop = nullptr;
+        bool ended = false;
+        if (std::chrono::steady_clock::now() - r.stamp > kTorchRuleTtl) { stop = "rule ended"; ended = true; }
+        else if (const char* seated = TorchSeatedReason(a_follower)) stop = seated;
+        else if (!a_leftFree) stop = "left hand held by a hold or cast";
+        if (stop) {
+            if (r.declared)
+                spdlog::info("[equip-auth] {:08X}: torch declaration STOPPED ({}) -- Light released", fid, stop);
+            if (ended) g_torchRule.erase(it); else r.declared = false;
+            return 0;
+        }
+        if (!r.declared) {
+            r.declared = true;
+            spdlog::info("[equip-auth] {:08X}: torch declaration STARTED (rule holds) -- Light|Left owned, {:08X}",
+                         fid, r.light);
+        }
+        return r.light;
+    }
+    void ForgetTorchRule(RE::FormID a_follower) {
+        const auto it = g_torchRule.find(a_follower);
+        if (it == g_torchRule.end()) return;
+        if (it->second.declared)
+            spdlog::info("[equip-auth] {:08X}: torch declaration STOPPED (dismissed / reset)", a_follower);
+        g_torchRule.erase(it);
+    }
+    void ClearTorchRules() { g_torchRule.clear(); }
+
     // Equip a carriable torch the follower holds (moved here from combat, #35 --
     // torch is upkeep; pair with "In an interior"/"At night"). No-op if a light is
     // already in hand or none is carried. APMF equip authority (ABI v9): a torch
@@ -191,6 +250,35 @@ namespace MFO::Logistics {
     // verdict=deny` at APMF's seat, so it is skipped there (logged). Light itself
     // is never owned, so with no hold the torch goes on as without APMF.
     bool EquipTorch(RE::Actor* a_follower) {
+        // HARBINGER PRESENT (marth 2026-10-20): NO EquipObject from MFO -- the rule STAMPS a standing ch.17
+        // declaration (TorchDeclaredFor above). A REFUSED claim (supported, none standing) still means MFO stays
+        // out: no stamp, no direct equip, never a decline-fallback. Harbinger ABSENT: the legacy path below,
+        // unchanged.
+        if (APMFBridge::EquipAuthoritySupported()) {
+            const RE::FormID fid = a_follower->GetFormID();
+            if (!APMFBridge::IsEquipAuthorityClaimed(fid)) {
+                if (g_torchRefusedLogged.insert(fid).second)
+                    spdlog::info("[equip] {:08X}: torch skipped -- equip authority supported but no claim stands "
+                                 "(MFO stays out)", fid);
+                return false;
+            }
+            g_torchRefusedLogged.erase(fid);
+            RE::FormID light = 0;
+            if (auto* l = a_follower->GetEquippedObject(true); l && l->As<RE::TESObjectLIGH>())
+                light = l->GetFormID();
+            else
+                for (auto& [obj, data] : a_follower->GetInventory()) {
+                    if (!obj || data.first <= 0) continue;
+                    auto* lt = obj->As<RE::TESObjectLIGH>();
+                    if (lt && lt->CanBeCarried()) { light = lt->GetFormID(); break; }
+                }
+            if (light) {
+                auto& r = g_torchRule[fid];
+                r.light = light;
+                r.stamp = std::chrono::steady_clock::now();
+            }
+            return false;   // MFO acts on nothing; the declaration at this lap's tail carries the torch
+        }
         if (auto* l = a_follower->GetEquippedObject(true); l && l->As<RE::TESObjectLIGH>())
             return false;
         // MFO-B134: a REFUSED claim (supported channel, no claim standing) means MFO stays out.
@@ -625,6 +713,7 @@ namespace MFO::Logistics {
                                     // service after the load re-claims and re-declares from scratch
         g_lastCombatSeen.clear();   // post-battle shed dwell -- save-scoped, live-session only
         g_torchRefusedLogged.clear();   // MFO-B134 torch refusal latch -- re-log after a load
+        ClearTorchRules();              // standing torch declaration stamps -- live-session only
         g_shedFistsLogged.clear();  // the shed's logged fists verdict -- re-log after a load
         g_claim.clear();
         g_lastLootSource = 0;
@@ -687,6 +776,7 @@ namespace MFO::Logistics {
         // declares from scratch. Idempotent (no claim -> no-op, no log).
         APMFBridge::ReleaseEquipAuthority(a_id);
         ForgetEquipDeclaration(a_id);
+        ForgetTorchRule(a_id);
         APMFBridge::ReleaseEquipPreference(a_id, "dismissed / MFO off");   // ch.26 (weighting W1): same road
         Actuation::ForgetPlacements(a_id);   // ch.17 one-shot placements still waiting (cast/EquipWeigh.cpp)
         Lockpick::Abort(a_id, "dismissed");   // LP-M1: release his pick hold, if any
