@@ -285,19 +285,19 @@ namespace MFO::Logistics::Errand {
         // ObjectRefHandle in data.refHandle. Other location types are skipped. Disassembly-verified on 1.6.1170, 1.5.97 and
         // 1.7.104, each on its own addresses (PlvdPlaceVerified, Errand_internal.h; ENGINE_NOTES §0.52): any other build gets
         // an empty list and shops are the loaded-vendor ones (R1a).
-        // nearSelf: a 'near self' PLVD faction (type 12: no place in the record) placed through the town's unique NPCs (Rest::UniqueVendorsOf);
-        // `place` is then the vendor's own persistent ACTOR ref, wherever he stands now (BuildCatalog reads his current cell).
+        // chestAnchor (marth 2026-10-21: the store is where its merchant chest is; the vendor moves about): a faction whose PLVD gives no place
+        // (any other type, 'near self' included, or none) is placed by its merchant CHEST's parent cell -- the store cell, walked to like any shop
+        // cell; on arrival the vendor search finds wherever the vendor stands. A chest in an exterior cell is walked to as a ref.
         struct ShopStatic { RE::FormID faction = 0, chest = 0, place = 0; DestKind kind = DestKind::Cell; float rad = 0.0f;
                             std::uint8_t cls = 0;   // R6: 0 plain, 1 FENCE (perk + conditions gate), 2 CONDITIONED (a spouse-store candidate)
-                            bool nearSelf = false; };
+                            bool chestAnchor = false; };
         std::unordered_map<RE::FormID, std::vector<ShopStatic>> g_townShops;   // town BGSLocation id -> shops; guarded by g_mx
 
         std::vector<ShopStatic> BuildTownShops(const RE::BGSLocation* a_town) {
             std::vector<ShopStatic> out;
             auto* dh = RE::TESDataHandler::GetSingleton();
             if (!dh || !a_town) return out;
-            int seen = 0, nearSelf = 0;
-            std::optional<std::unordered_map<RE::FormID, Rest::UniqueVendor>> uniq;   // read on the first 'near self' faction (one walk per town)
+            int seen = 0, byChest = 0, byChestHere = 0;
             for (auto* fac : dh->GetFormArray<RE::TESFaction>()) {
                 if (!fac || !fac->IsVendor() || !fac->OffersServices()) continue;
                 auto* chest = fac->vendorData.merchantContainer;
@@ -306,47 +306,44 @@ namespace MFO::Logistics::Errand {
                 const bool conditioned = fac->vendorData.vendorConditions && fac->vendorData.vendorConditions->head;
                 const std::uint8_t cls = ErrandShops::IsFence(fac) ? 1 : conditioned ? 2 : 0;
                 auto* loc = fac->vendorData.vendorLocation;
-                if (!loc) continue;
                 ShopStatic sh;
                 sh.faction = fac->GetFormID();
                 sh.chest   = chest->GetFormID();
                 sh.cls     = cls;
                 const RE::BGSLocation* placeLoc = nullptr;
-                switch (loc->locType.get()) {
-                case RE::PackageLocation::Type::kInCell: {
+                const auto type = loc ? loc->locType.get() : RE::PackageLocation::Type::kNearSelf;   // no PLVD = no place in the record either
+                if (type == RE::PackageLocation::Type::kInCell) {
                     auto* cell = loc->data.object ? loc->data.object->As<RE::TESObjectCELL>() : nullptr;
                     if (!cell) continue;
                     sh.kind = DestKind::Cell; sh.place = cell->GetFormID(); placeLoc = cell->GetLocation();
-                    break;
-                }
-                case RE::PackageLocation::Type::kNearReference: {
+                } else if (type == RE::PackageLocation::Type::kNearReference) {
                     auto ref = loc->data.refHandle.get();
                     if (!ref) continue;
                     sh.kind = DestKind::Ref; sh.place = ref->GetFormID();
                     sh.rad = std::clamp(static_cast<float>(loc->rad), 50.0f, 512.0f);   // ch.19 clamps the same range
                     placeLoc = ref->GetEditorLocation();
                     if (!placeLoc) placeLoc = ref->GetCurrentLocation();
-                    break;
-                }
-                case RE::PackageLocation::Type::kNearSelf: {
-                    // No place in the record: the vendor IS the place. Found generically through the town tree's unique NPCs (LCUN): the placed
-                    // ref of a unique NPC who is a member of this faction, his editor location deciding the town (any town, any load order).
-                    if (!uniq) uniq = Rest::UniqueVendorsOf(a_town);   // empty on a build LcunVerified refuses (logged once)
-                    const auto it = uniq->find(fac->GetFormID());
-                    if (it == uniq->end()) continue;
-                    sh.kind = DestKind::Ref; sh.place = it->second.ref; sh.nearSelf = true;
-                    sh.rad = std::clamp(static_cast<float>(loc->rad), 50.0f, 512.0f);   // ch.19 clamps the same range
-                    placeLoc = RE::TESForm::LookupByID<RE::BGSLocation>(it->second.editorLoc);
-                    ++nearSelf;
-                    break;
-                }
-                default: continue;   // the other PLVD types are not shop PLACES (spouse stores, package-relative): skipped
+                } else {
+                    // THE MERCHANT CHEST (was: skipped -- the College's tome vendors and Farengar are 'near self'). The chest is a persistent ref
+                    // (VENC) whose parent cell is kept while the cell is unloaded (the same read ShopPlaceName and the temple door read make).
+                    auto* cc = chest->GetParentCell();
+                    if (!cc) continue;
+                    if (cc->IsInteriorCell()) {
+                        sh.kind = DestKind::Cell; sh.place = cc->GetFormID(); placeLoc = cc->GetLocation();
+                    } else {   // an exterior chest (a stall): the chest ref is the place
+                        sh.kind = DestKind::Ref; sh.place = chest->GetFormID(); sh.rad = 256.0f;
+                        placeLoc = chest->GetEditorLocation();
+                        if (!placeLoc) placeLoc = chest->GetCurrentLocation();
+                    }
+                    sh.chestAnchor = true;
+                    ++byChest;
                 }
                 ++seen;
-                if (placeLoc && LocationTypes::TownAnchor(placeLoc) == a_town) out.push_back(sh);
+                if (placeLoc && LocationTypes::TownAnchor(placeLoc) == a_town) { out.push_back(sh); if (sh.chestAnchor) ++byChestHere; }
             }
-            spdlog::info("[errand] shop catalog for '{}': {} of {} vendor faction(s) with a PLVD place sit in this town ({} 'near self' vendor(s) placed through the town's unique NPCs)",
-                         a_town->GetName() ? a_town->GetName() : "?", out.size(), seen, nearSelf);
+            spdlog::info("[errand] shop catalog for '{}': {} of {} vendor faction(s) with a place sit in this town ({} of them placed by their merchant chest's "
+                         "cell, of {} chest-placed faction(s) in the game: no place in the PLVD)",
+                         a_town->GetName() ? a_town->GetName() : "?", out.size(), seen, byChestHere, byChest);
             return out;
         }
 
@@ -524,18 +521,8 @@ namespace MFO::Logistics::Errand {
                     if (sh.kind == DestKind::Ref) {
                         auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(sh.place);
                         if (!ref) continue;
-                        // A 'near self' vendor is his own place and moves: when he stands in an INTERIOR other than the follower's cell, his
-                        // coordinates are that interior's, so the door into his CURRENT cell gives the distance (the walk still targets him).
-                        auto* rc = sh.nearSelf ? ref->GetParentCell() : nullptr;
-                        if (sh.nearSelf && !rc) continue;
-                        if (rc && rc->IsInteriorCell() && rc != cell) {
-                            const int r = interiorPlace(rc->GetFormID());
-                            if (r < 0) { doorWaiting = true; continue; }
-                            if (r == 0) { if (open) ++a_dropped; continue; }
-                        } else {
-                            placePos = ref->GetPosition();
-                            d = placePos.GetDistance(pc->GetPosition());
-                        }
+                        placePos = ref->GetPosition();
+                        d = placePos.GetDistance(pc->GetPosition());
                         if (d > maxFromPlayer) { if (open) ++a_dropped; continue; }
                     } else {
                         const int r = interiorPlace(sh.place);

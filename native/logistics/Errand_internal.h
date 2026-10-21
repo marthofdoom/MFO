@@ -45,7 +45,8 @@ namespace MFO::Logistics {
 
     // F4 (town run 3): a faction-only shop (no loaded vendor) usually has an EMPTY faction FULL name, so every log/toast/watch line said '?'.
     // Its name: the faction's own FULL, else its PLVD place (the way BuildTownShops reads it: kInCell = the cell's FULL; kNearReference = the
-    // ref's parent cell FULL, else the ref's display name). Empty string = nothing named it (callers keep their own "?").
+    // ref's parent cell FULL, else the ref's display name; any other type = the merchant chest's cell FULL). Empty string = nothing named it
+    // (callers keep their own "?").
     inline std::string ShopPlaceName(const RE::TESFaction* a_fac) {
         if (!a_fac) return {};
         if (const char* n = a_fac->GetName(); n && *n) return n;
@@ -65,7 +66,11 @@ namespace MFO::Logistics {
             if (const char* n = ref->GetDisplayFullName(); n && *n) return n;
             break;
         }
-        default: break;
+        default: {   // no place in the PLVD: BuildTownShops places the shop by its merchant chest's cell, so name that cell
+            auto* chest = a_fac->vendorData.merchantContainer;
+            if (auto* cc = chest ? chest->GetParentCell() : nullptr) if (const char* n = cc->GetName(); n && *n) return n;
+            break;
+        }
         }
         return {};
     }
@@ -305,11 +310,7 @@ namespace MFO::Logistics::Errand {
         // Sim: a temple visit ran off screen; the blessing is OWED (logged; paid only by a physical visit).
         void NoteOwed(RE::FormID a_follower, const std::string& a_followerName, const std::string& a_temple);
 
-        // The SHOP catalog's data reads (Errand.cpp BuildTownShops / BuildCatalog), beside the LCSR read they share the location layout proof with.
-        // UniqueVendorsOf: vendor FACTION -> the placed ref of a unique NPC of this town tree who is a member of it, from the locations' LCUN
-        // lists (ENGINE_NOTES §0.53; empty on a build LcunVerified refuses). Generic, cached per town. For the 'near self' PLVD factions.
-        struct UniqueVendor { RE::FormID ref = 0, npc = 0, editorLoc = 0; };
-        std::unordered_map<RE::FormID, UniqueVendor> UniqueVendorsOf(const RE::BGSLocation* a_town);
+        // The SHOP catalog's door read (Errand.cpp BuildCatalog), beside the temple door read it mirrors.
         // ShopDoorFor: the EXTERIOR load door nearest the player that leads into the interior cell a_cell, directly or through one interior
         // (two cells deep), read on the MAIN thread over the loaded grid and cached 5 real minutes. Found = a_pos is that door's position;
         // None = no such door (or the player is indoors); Pending = the read was posted, ask again on the next plan.
