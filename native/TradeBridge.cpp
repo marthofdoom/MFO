@@ -58,7 +58,10 @@ namespace MFO::TradeBridge {
         // signature let ANOTHER follower's trade at the same chest (which moves its gold)
         // reopen this follower's own empty memo, and he walked up to trade nothing again.
         struct EmptyMemo { std::uint64_t sig = 0; std::int32_t gold = -1; float day = 0.0f; bool logged = false; };
-        std::unordered_map<RE::FormID, std::int32_t>     g_chestGold;
+        // F1 (review of feat/mfo-missed-sells): each read carries the game day it was taken; a read older than the vendor restock interval is UNKNOWN
+        // (the restock refilled the chest, nothing here saw it), so SkipTrade's gold-based skip and LastSeenChestGold no longer trust it.
+        struct ChestRead { std::int32_t gold = 0; float day = 0.0f; bool staleLogged = false; };
+        std::unordered_map<RE::FormID, ChestRead>        g_chestGold;
         std::unordered_map<std::uint64_t, EmptyMemo>     g_emptyMemo;
         struct StaticSkip { std::uint64_t reason = 0; float day = 0.0f; };
         std::unordered_map<std::uint64_t, StaticSkip>    g_staticSkip;   // pair -> skip (b): the reason sig + the game day it began
@@ -693,7 +696,7 @@ namespace MFO::TradeBridge {
                 // MFO_Trade.psc reports the chest's gold read BEFORE the trade (:36); a real trade then moved
                 // soldValue OUT of the chest (:68) and spent INTO it (:107), both exactly the reported totals.
                 // Store what the chest holds NOW. A probe moves no gold (psc `if !probe`), so it keeps the read.
-                g_chestGold[o.chestId] = postTradeGold;
+                g_chestGold[o.chestId] = ChestRead{ postTradeGold, o.daysAt, false };
                 g_outcomes[o.followerId] = TradeOutcome{ false, a_soldCount, a_soldValue, a_boughtCount, a_spent };
                 if (!o.probeOnly) {   // MISSED SELLS: replay Papyrus's sell loop (budget = the chest's gold after the buy) to name the rows gold could not pay
                     std::int64_t budget = static_cast<std::int64_t>(a_vendorGold) + std::max(0, a_spent);
@@ -873,8 +876,14 @@ namespace MFO::TradeBridge {
         const float restock = RestockDays();
         std::scoped_lock lk(g_mtx);
         const auto gIt = g_chestGold.find(a_chest);
-        const bool goldKnown = gIt != g_chestGold.end();
-        const std::int32_t gold = goldKnown ? gIt->second : -1;
+        const bool staleGold = gIt != g_chestGold.end() && a_daysNow >= gIt->second.day + restock;
+        const bool goldKnown = gIt != g_chestGold.end() && !staleGold;
+        const std::int32_t gold = goldKnown ? gIt->second.gold : -1;
+        if (staleGold && !gIt->second.staleLogged && !a_buyWishes && a_needs.empty()) {
+            gIt->second.staleLogged = true;
+            spdlog::info("[econ] chest {:08X}: gold last seen {:.1f} game days ago ({}g) -- unknown after the vendor restock ({:.0f} days), so the trade is not skipped on it",
+                         a_chest, a_daysNow - gIt->second.day, gIt->second.gold, restock);
+        }
         const auto key = PairKey(a_follower, a_vendor);
         // (a) the last trade here was empty and nothing changed since.
         if (auto mIt = g_emptyMemo.find(key); mIt != g_emptyMemo.end()) {
@@ -936,7 +945,10 @@ namespace MFO::TradeBridge {
     std::int32_t LastSeenChestGold(RE::FormID a_chest) {
         std::scoped_lock lk(g_mtx);
         const auto it = g_chestGold.find(a_chest);
-        return it == g_chestGold.end() ? -1 : it->second;
+        if (it == g_chestGold.end()) return -1;
+        auto* cal = RE::Calendar::GetSingleton();
+        if (cal && cal->GetDaysPassed() >= it->second.day + RestockDays()) return -1;   // F1: older than a restock = unknown
+        return it->second.gold;
     }
 
     bool HasLiveOrder(RE::FormID a_follower) {

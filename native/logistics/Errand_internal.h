@@ -353,6 +353,8 @@ namespace MFO::Logistics::Errand {
                         const TradeBridge::TradeOutcome& a_out, const Stop* a_innStop);
         // MISSED SELLS (b): items that became sell candidates mid-trip and appear in NO stop's order. a_requeue = a failed start puts them back.
         void NoteLate(RE::FormID a_follower, RE::FormID a_town, const std::vector<RE::FormID>& a_forms, bool a_requeue = false);
+        // F3 (review): a late-sell trip started for these forms, so the gold entries must not send him back with rows he no longer holds.
+        void DropGoldForms(RE::FormID a_follower, const std::vector<RE::FormID>& a_forms);
         struct LateJob {
             std::vector<Trip::Cand> shops;   // the plan's OPEN shops
             std::vector<RE::FormID> forms;   // the late items

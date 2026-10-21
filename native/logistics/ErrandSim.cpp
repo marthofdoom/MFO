@@ -892,6 +892,7 @@ namespace MFO::Logistics::Errand::Sim {
                 Reopen::Plan plan;
                 if (Reopen::Poll(fid, r.town, &r.lastPos, plan)) {
                     Retrip(r, plan, days);
+                    Reopen::Consume(fid, plan);   // F2 (review): the opened / restocked shops leave the watch (Retrip moved the stops, plan.keys is intact)
                     Store(r);
                     continue;
                 }

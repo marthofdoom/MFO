@@ -2214,3 +2214,12 @@ marth R1 (always teleport, even in view) overrides Harbinger APMF-B149 ("MFO sho
 ### MFO-B447 (SEV-5, OPEN, TradeBridge.cpp ReportTrade comment; MFO_Trade.psc) -- stale psc line cites after the reorder; a form on both the sell list and buy plan could be sold back (no current planner path produces it) (raised against ed41d50)
 
 ### MFO-B448 (SEV-5, OPEN, Errand.cpp NotPlanning, against 6613442) -- "not planning -- player not in a town" / combat reasons repeat every 30 s per follower; a change-only option for steady-state reasons would cut log volume.
+
+### MFO-B449 (SEV-4, OPEN, TradeBridge.cpp ReportTrade sell replay, against 7f75f5b) -- missed sells: a coincidental totals match with equal unit prices can mis-file rows
+"sell-replay coincidental totals match with equal unit prices can mis-file rows (needs per-row Papyrus results; frozen ReportTrade signature)" (Opus review of feat/mfo-missed-sells, F5). The replay is accepted when its sold count and value equal the report; two rows with the same unit price can swap which one is called unsold.
+
+### MFO-B450 (SEV-4, OPEN, logistics/ErrandReopen.cpp Record, against 7f75f5b) -- missed sells: Record drops a gold entry whenever the new trip visits that faction
+"Record drops a gold entry whenever the new trip visits that faction even if that stop carries no unsold rows" (Opus review of feat/mfo-missed-sells, F6).
+
+### MFO-B451 (SEV-5, OPEN, Errand.cpp TryStart log / ErrandReopen.cpp Assemble, against 7f75f5b) -- missed sells: stale log line; the stop cap drops late forms
+"stale 'no hours-closed shop holds work for him -- no watch' log line (the Watch is now always stored), and Assemble's stop cap cuts trailing shops without re-queuing their late forms" (Opus review of feat/mfo-missed-sells, F7).

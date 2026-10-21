@@ -1135,6 +1135,7 @@ namespace MFO::Logistics::Errand {
             return false;
         }
         Reopen::Consume(a_follower->GetFormID(), a_plan);
+        if (!a_plan.lateForms.empty()) Reopen::DropGoldForms(a_follower->GetFormID(), a_plan.lateForms);   // F3 (review)
         spdlog::info("[errand] {:08X} '{}': a NEEDED SHOP OPENED -- new trip of {} stop(s) STARTED (the inn last): {}", a_follower->GetFormID(), NameOf(a_follower), n, line);
         return true;
     }

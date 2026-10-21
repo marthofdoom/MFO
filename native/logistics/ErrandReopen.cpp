@@ -195,6 +195,33 @@ namespace MFO::Logistics::Errand::Reopen {
                      a_follower, a_stop.vendorName, a_out.unsold.size(), value, rows, a_out.chestGoldNow, need, TradeBridge::VendorRestockDays());
     }
 
+    void DropGoldForms(RE::FormID a_follower, const std::vector<RE::FormID>& a_forms) {
+        std::size_t rows = 0, entries = 0;
+        {
+            std::scoped_lock lk(g_mx);
+            const auto it = g_watch.find(a_follower);
+            if (it == g_watch.end()) return;
+            for (auto& g : it->second.gold) {
+                auto& sell = g.order.sell;
+                const auto before = sell.size();
+                std::erase_if(sell, [&](const TradeBridge::SellRow& r) {
+                    return r.obj && std::find(a_forms.begin(), a_forms.end(), r.obj->GetFormID()) != a_forms.end();
+                });
+                rows += before - sell.size();
+                g.order.sellRows = static_cast<int>(sell.size());
+                g.order.sellValue = 0;
+                g.minUnit = INT32_MAX;
+                for (const auto& r : sell) {
+                    g.order.sellValue += static_cast<std::int64_t>(r.value) * std::max<std::int32_t>(r.count, 0);
+                    g.minUnit = std::min(g.minUnit, r.value);
+                }
+            }
+            entries = std::erase_if(it->second.gold, [](const Watch::Gold& g) { return g.order.sell.empty(); });
+        }
+        if (rows > 0)
+            spdlog::info("[errand] {:08X}: late-sell trip started -- {} unsold row(s) dropped from the gold watch ({} shop entr{} emptied)", a_follower, rows, entries, entries == 1 ? "y" : "ies");
+    }
+
     void NoteLate(RE::FormID a_follower, RE::FormID a_town, const std::vector<RE::FormID>& a_forms, bool a_requeue) {
         std::vector<RE::FormID> fresh;
         {
