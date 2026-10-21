@@ -107,14 +107,18 @@ namespace MFO::LocationTypes {
             }
             return v;
         }();
+        // D1 (marth 2026-10-20): the OUTERMOST City / Town / Settlement on the chain, not the innermost. Markarth's "Outskirts" interiors sit
+        // under SalviusFarmLocation (LocTypeSettlement) under MarkarthLocation (City): the innermost anchor made the Dormitory / temple "a
+        // farm", not Markarth. A fight site met BEFORE any town still means "not a town"; one met ABOVE a town just ends the walk.
+        const RE::BGSLocation* best = nullptr;
         int guard = 0;
         for (auto* loc = a_loc; loc && guard < 8; loc = loc->parentLoc, ++guard) {
             for (const auto& [kw, town] : s_kws)
-                if (!town && loc->HasKeyword(kw)) return nullptr;   // a fight site is innermost: not a town
+                if (!town && loc->HasKeyword(kw)) return best;   // best is null when the fight site is innermost: not a town
             for (const auto& [kw, town] : s_kws)
-                if (town && loc->HasKeyword(kw)) return loc;
+                if (town && loc->HasKeyword(kw)) { best = loc; break; }
         }
-        return nullptr;
+        return best;
     }
 
 
@@ -133,9 +137,20 @@ namespace MFO::LocationTypes {
                 if (auto* k = d ? d->LookupForm<RE::BGSKeyword>(id, "Skyrim.esm") : nullptr) v.push_back(k);
             return v;
         }();
+        // F6 (town run 3): a location's OWN keywords decide first. It inherits Inn / Temple from a parent ONLY when it carries no place-type
+        // keyword of its own (Inn, Temple, Store, House, Dwelling, Guild, PlayerHouse): a Store whose parent location is an Inn is a shop, not
+        // an inn (Markarth's WasteCollector / EEGoods were planned as "the inn").
+        static const std::vector<const RE::BGSKeyword*> s_place = [] {
+            std::vector<const RE::BGSKeyword*> v;
+            auto* d = RE::TESDataHandler::GetSingleton();
+            for (const RE::FormID id : { 0x0001CB87u, 0x0001CD56u, 0x0001CB86u, 0x0001CB85u, 0x000130DCu, 0x0001CD5Au, 0x000FC1A3u })   // Inn Temple Store House Dwelling Guild PlayerHouse
+                if (auto* k = d ? d->LookupForm<RE::BGSKeyword>(id, "Skyrim.esm") : nullptr) v.push_back(k);
+            return v;
+        }();
         int guard = 0;
         for (auto* loc = a_loc; loc && guard < 8; loc = loc->parentLoc, ++guard) {
             if (loc->HasKeyword(want)) return true;
+            for (auto* k : s_place) if (loc->HasKeyword(k)) return false;   // another kind of place: no inheritance across it
             for (auto* k : s_stop) if (loc->HasKeyword(k)) return false;
         }
         return false;
