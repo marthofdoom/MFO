@@ -1296,9 +1296,9 @@ knowing when logistics and casting interact.
 > The fork's `include/RE/T/TES.h` declares an AE-only `unk140` before `worldSpace` under
 > `#ifdef SKYRIM_SUPPORT_AE`, a macro nothing defines (the same dead macro as the CombatController note
 > above), so every build reads `TES::worldSpace` at **+0x140**. The engine keeps it at **+0x148 on 1.6.1170**
-> (all 30 callers of GetSkyCell 0x30B070 load `rcx` from `[reg+0x148]`, and TES::GetCell's grid fallback
-> 0x19E64D reads `[rbx+0x148]`) **and on 1.7.104** (31 callers of GetSkyCell 0x311640), and at **+0x140 on
-> 1.5.97** (callers of GetSkyCell 0x2B63B0). So on AE both CommonLib walks hand GetSkyCell (id 20095/20543,
+> (all 39 callers of GetSkyCell 0x30B070 load `rcx` from `[reg+0x148]`, and TES::GetCell's grid fallback
+> 0x19E64D reads `[rbx+0x148]`) **and on 1.7.104** (40 callers of GetSkyCell 0x311640), and at **+0x140 on
+> 1.5.97** (35 callers of GetSkyCell 0x2B63B0). So on AE both CommonLib walks hand GetSkyCell (id 20095/20543,
 > its first read is `[this+0xF8]` = `TESWorldSpace::skyCell` on all three builds) whatever sits at +0x140, and
 > fault whenever that word is non-zero. Verified unaffected members: `interiorCell` +0xC0 (TES::GetCell
 > 0x19E850 / 0x155090), `gridCells` +0x78, `GridArray::length` +0x10, `GridCellArray::cells` +0x18

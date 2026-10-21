@@ -343,8 +343,13 @@ namespace MFO::ProgAllocator {
                     v.unspentPerk    = static_cast<float>(PerkPointsAvailable(*st));   // §17 derived
                     v.unspentCraft   = static_cast<float>(CraftPerkPointsAvailable(*st));
                     v.nativeAtEnroll = st->nativeTreePerksAtEnroll;
-                    v.allocatedRanks = static_cast<std::uint16_t>(
-                        std::min(AllocatedRanks(*st), 0xFFFF));
+                    {   // MFO-B418: the general-paid ranks only (craft-paid ranks come out), the same split PerkPoolsOf / PerkGate use
+                        const int craftDiv  = g_econ.levelsPerCraftPerkPoint;
+                        const int craftPool = craftDiv > 0 ? static_cast<int>(st->progressionLevel) / craftDiv : 0;
+                        const int craftUsed = craftPool > 0 ? std::min(CraftTreeRanks(*st), craftPool) : 0;
+                        v.allocatedRanks = static_cast<std::uint16_t>(
+                            std::clamp(AllocatedRanks(*st) - craftUsed, 0, 0xFFFF));
+                    }
                     v.manualSkills   = st->manualSkills;           // §16
                     v.manualAvail    = ManualAvail(*st);
                     v.freeRespec     = st->freeRespec;             // one-time free respec pending

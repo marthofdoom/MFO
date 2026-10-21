@@ -8,6 +8,7 @@
 #include "TeleportCompat.h"    // follower-teleport mod leash clamp (86e3ec824)
 #include "Errand.h"            // TOWN PHASE 2 R8: Errand::Smith (the smithing want list: loose materials, the always-on pass)
 #include "Runtime.h"           // ForEachLoadedRef: the per-build TES::worldSpace offset
+#include <mutex>               // ForEachLoadedRef: the one-time unknown-build warning
 
 namespace MFO::Logistics {
 
@@ -1089,7 +1090,7 @@ namespace MFO::Logistics {
     //   TES::gridCells    +0x78, GridArray::length +0x10, GridCellArray::cells +0x18, slot = cells[x*length + y]:
     //                     the grid slot accessor 1.6.1170 0x221830, called from 0x19E640 on [rbx+0x78].
     //   TES::worldSpace   +0x140 on 1.5.97 (every caller of GetSkyCell 0x2B63B0 loads rcx from [reg+0x140]),
-    //                     +0x148 on 1.6.1170 (30 callers of GetSkyCell 0x30B070) and 1.7.104 (31 callers of 0x311640).
+    //                     +0x148 on 1.6.1170 (39 callers of GetSkyCell 0x30B070), 1.7.104 (40 callers of 0x311640); 1.5.97 has 35.
     //                     CommonLib's TES.h compiles +0x140 for every build, which is the defect this walk avoids.
     //   TESWorldSpace::skyCell +0xF8: GetSkyCell's first read on all three builds (`mov rdi,[rsi+0xF8]`).
     namespace {
@@ -1136,6 +1137,11 @@ namespace MFO::Logistics {
                     }
                 }
             }
+            static std::once_flag s_unknownBuildWarn;
+            if (!Runtime::IsVerified1_5_97() && !Runtime::IsVerified1_6_1170() && !Runtime::IsVerified1_7_104())
+                std::call_once(s_unknownBuildWarn, [] {
+                    spdlog::warn("[loot] ForEachLoadedRef: unknown runtime build, the worldspace sky cell is SKIPPED (no verified TES::worldSpace offset)");
+                });
             if (auto* ws = LoadedWorldSpace(tes))
                 if (auto* sky = ws->skyCell) walkCell(sky);
         }

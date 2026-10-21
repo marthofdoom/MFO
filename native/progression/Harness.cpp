@@ -64,12 +64,12 @@ namespace MFO::ProgAllocator {
             }
             auto& st = it->second;
             spdlog::info("[prog] status {} ({:08X}): class {} | progression level {} | "
-                         "{} perk point(s) available (§17: floor(lvl/{}) − {} spent) | "
+                         "{} perk point(s) available (§17: floor(lvl/{}) − {} spent), {} craft point(s) | "
                          "{} perk(s) allocated | {} | "
                          "sharedRemainder {} | level-matched {} | provenance PFF={}",
                          NameOf(a_actor), id, ClsName(st.clsId), st.progressionLevel,
                          PerkPointsAvailable(st), g_econ.levelsPerPerkPoint,
-                         AllocatedRanks(st), st.perks.size(),
+                         AllocatedRanks(st), CraftPerkPointsAvailable(st), st.perks.size(),
                          IsActiveFollower(id) ? "ACTIVE" : "benched",
                          st.sharedGrowthRemainder,
                          st.veteranConsumed ? "yes" : "pending",

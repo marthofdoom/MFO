@@ -418,7 +418,7 @@ state instead of a global sink. Decide on the number, not the vibe.
 
 | # | Step | Records |
 |---|---|---|
-| 27 | Play normally for **3 sessions of ~1 h** with one steady follower, `bProfileRapport` on | kills/hour, boss kills/hour, encounters/hour, **Rapport/hour** |
+| 27 | Play normally for **3 sessions of ~1 h** with one steady follower | kills/hour, boss kills/hour, encounters/hour, **Rapport/hour** |
 
 `BALANCE.md` §1.1 assumes ~45 Rapport/hour on vanilla-ish play and ~30 on a
 Requiem-class list. **The entire rank ladder rests on that estimate and it

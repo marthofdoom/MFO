@@ -108,7 +108,7 @@ real cast and DROPS that cost.
   and logs `[apmf] … APMF REFUSED …`. Nothing routes around APMF. The cast does not happen this
   tick, the rules BELOW it still run (transparent, not paralysis), and a refusal is a bug to fix in
   APMF rather than a condition to degrade through. Only the ABSENCE of the channel degrades:
-  turn on the MCM **bLegacyCastHybrid**, or run without
+  set **bLegacyCastHybrid=1** in `SKSE/Plugins/MFO.ini` (INI-only, no MCM control), or run without
   APMF, and CastOn uses the ORIGINAL AI-first-wait + force-on-miss package hybrid (byte-identical to
   pre-APMF — the only place the rooting package + `CastSpellImmediate` force live). No save/co-save
   state; claims auto-expire via `APMFBridge::Tick` and drop at kPreLoadGame. See MAP.md `APMFBridge`.
@@ -1340,8 +1340,8 @@ which aliases it) the `CastBounds::Arm` ceiling.
 > a `kIntent_Cast` claim" and `APMFBridge.cpp:346-397` performs no renew. A
 > renewing APMF that is never asked to renew changes nothing, so the 6 s gap is
 > still open. Do not restore the old wording until a newer APMF release ships AND
-> MFO heartbeats, and both have been field-verified. `Config::g_cfcBackoffMs` is now VESTIGIAL (the retired
-MFO-side drive's degrade backoff; the claim is a cheap create-or-refresh every
+> MFO heartbeats, and both have been field-verified. `Config::g_cfcBackoffMs` (the retired
+MFO-side drive's degrade backoff) has since been DELETED; the claim is a cheap create-or-refresh every
 tick with no backoff of its own — a CHANGE releases and re-requests rather than
 repointing, since `RequestCast` has no in-place re-point) — left declared/parsed
 since its INI key name is a frozen MCM-Helper identity.

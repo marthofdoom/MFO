@@ -373,10 +373,18 @@ namespace MFO::ProgAllocator {
             const auto nodeRef = FindNode(a_node.perkFormID);
             const bool craftNode = nodeRef.tree && IsCraftSkill(nodeRef.tree->av);
             if (pools.general < 1 && !(craftNode && pools.craft >= 1)) {
-                a_whyNot = std::format("no perk points (earned {}, {} spent)",
-                                       static_cast<int>(a_st.progressionLevel) /
-                                           std::max(1, g_econ.levelsPerPerkPoint),
-                                       AllocatedRanks(a_st));
+                // MFO-B418: per pool. General: earned = floor(level/N), spent = ranks it paid for
+                // (all ranks minus the ones the craft pool paid). Craft: only when the stream is on.
+                const int lvl         = static_cast<int>(a_st.progressionLevel);
+                const int earnedGen   = lvl / std::max(1, g_econ.levelsPerPerkPoint);
+                const int craftEarned = g_econ.levelsPerCraftPerkPoint > 0 ? lvl / g_econ.levelsPerCraftPerkPoint : 0;
+                const int craftSpent  = craftEarned > 0 ? std::min(CraftTreeRanks(a_st), craftEarned) : 0;
+                const int genSpent    = AllocatedRanks(a_st) - craftSpent;
+                if (craftEarned > 0)
+                    a_whyNot = std::format("no perk points (general: earned {}, {} spent; craft: earned {}, {} spent)",
+                                           earnedGen, genSpent, craftEarned, craftSpent);
+                else
+                    a_whyNot = std::format("no perk points (earned {}, {} spent)", earnedGen, genSpent);
                 return 0;
             }
             // §5.1 prereq: reachable iff root-reachable (empty parentPerkIDs

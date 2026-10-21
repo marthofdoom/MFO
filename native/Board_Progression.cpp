@@ -19,6 +19,14 @@
 
 namespace MFO::Board {
 
+    namespace {
+        // MFO-B418: the crafting stream pays Smithing / Alchemy / Enchanting ranks (same set as the allocator's IsCraftSkill).
+        bool IsCraftTreeAv(RE::ActorValue a_av) {
+            return a_av == RE::ActorValue::kSmithing || a_av == RE::ActorValue::kAlchemy ||
+                   a_av == RE::ActorValue::kEnchanting;
+        }
+    }
+
     void DrawProgressionTab(const Snapshot& snap, bool progActive,
                             ImGuiTabItemFlags tabSelFlags, ImGuiIO& io,
                             const MenuSkin& skin, bool r1Ready,
@@ -227,7 +235,9 @@ namespace MFO::Board {
                             // a literal — the shipped default is 2, and an MCM
                             // override changes it (a hardcoded "2" misinformed).
                             const int lpp = prog.levelsPerPerkPoint > 0 ? prog.levelsPerPerkPoint : 1;
-                            if (who->unspentPerk < 1.0f)
+                            // MFO-B418: "none to spend" only when NEITHER pool can pay.
+                            const bool craftPaysSome = prog.levelsPerCraftPerkPoint > 0 && who->unspentCraft >= 1.0f;
+                            if (who->unspentPerk < 1.0f && !craftPaysSome)
                                 ImGui::TextDisabled("%s", Str::Fmt(Str::K::Pg_NoneToSpend,
                                                     { lpp, (unsigned)who->level,
                                                       (unsigned)(who->level / lpp),
@@ -530,8 +540,12 @@ namespace MFO::Board {
                                 ImGui::PushFont(g_fontHead);
                                 ImGui::TextColored(skin.accent, "%s", tree.skillName.c_str());
                                 ImGui::SameLine();
-                                ImGui::TextColored(skin.accent, "  %s", Str::Fmt(Str::K::Pg_TreePoints,
-                                                   { Str::Arg::F(who->unspentPerk, 0) }).c_str());
+                                if (prog.levelsPerCraftPerkPoint > 0 && IsCraftTreeAv(tree.av))   // MFO-B418: a crafting tree also shows the craft pool
+                                    ImGui::TextColored(skin.accent, "  %s", Str::Fmt(Str::K::Pg_TreePointsCraft,
+                                                       { Str::Arg::F(who->unspentPerk, 0), Str::Arg::F(who->unspentCraft, 0) }).c_str());
+                                else
+                                    ImGui::TextColored(skin.accent, "  %s", Str::Fmt(Str::K::Pg_TreePoints,
+                                                       { Str::Arg::F(who->unspentPerk, 0) }).c_str());
                                 ImGui::PopFont();
                                 ImGui::SameLine();
                                 if (Click::SmallButton("-##zo")) s_zoom = std::max(0.5f, s_zoom - 0.15f);
@@ -1146,9 +1160,14 @@ namespace MFO::Board {
                                             ImGui::PopFont();
                                             // Field fix #1: the point budget is
                                             // visible IN the take dialog too.
-                                            ImGui::TextColored(skin.accent, "%s",
-                                                Str::Fmt(Str::K::Pg_PointsAvail,
-                                                         { Str::Arg::F(who->unspentPerk, 0) }).c_str());
+                                            if (prog.levelsPerCraftPerkPoint > 0 && IsCraftTreeAv(cat.skills[s_nodeTree].av))   // MFO-B418
+                                                ImGui::TextColored(skin.accent, "%s",
+                                                    Str::Fmt(Str::K::Pg_PointsAvailCraft,
+                                                             { Str::Arg::F(who->unspentPerk, 0), Str::Arg::F(who->unspentCraft, 0) }).c_str());
+                                            else
+                                                ImGui::TextColored(skin.accent, "%s",
+                                                    Str::Fmt(Str::K::Pg_PointsAvail,
+                                                             { Str::Arg::F(who->unspentPerk, 0) }).c_str());
                                             if (nd.verdict == Progression::Verdict::kMarginal)
                                                 ImGui::TextDisabled("%s", Str::Get(Str::K::Pg_Marginal));
                                             // P1: the owner-perspective text built for this follower
