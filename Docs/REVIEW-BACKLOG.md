@@ -2233,10 +2233,12 @@ marth R1 (always teleport, even in view) overrides Harbinger APMF-B149 ("MFO sho
 ### MFO-B454 (SEV-4, OPEN, logistics/ErrandRest.cpp ShopDoorFor, against d68446e) -- a None verdict is cached 5 min regardless of player movement; no defer cap / warn
 "None verdict cached 5 min regardless of player movement + no defer cap/warn" (Opus review of feat/mfo-college-vendors, F3). A shop whose door was not in the loaded grid when read stays out of the catalog for 5 real minutes even after the player walks next to it; the Pending path has no defer cap or WARN like PlacesPending's.
 
-### MFO-B455 (SEV-4, OPEN, logistics/Errand.cpp BuildTownShops chest anchor, against d68446e) -- College physical arrival often unattended by day
+### MFO-B455 (SEV-4, FIXED (part 1) on feat/mfo-college-vendors in the R-A/R-B commit after 72180d9, logistics/Errand.cpp BuildTownShops chest anchor, against d68446e) -- College physical arrival often unattended by day
+FIX (marth 2026-10-21, "1 now, 2 next week"): a chest-placed shop whose vendor is not found on arrival trades with the merchant chest like TRADE_SIM (`Errand.cpp` Tick Walking, `ChestPlacedFaction`), WARN "vendor not present -- traded with the merchant chest (chest-placed shop)". Part 2 (walking on to find the vendor) is next week's task.
 "College physical arrival often unattended by day (chest vs Hall of the Elements)" (Opus review of feat/mfo-college-vendors, F4). The College vendors' chests (the store cells) are in the Hall of Countenance / Hall of Attainment / Arcanaeum, while by day the vendors sandbox in the Hall of the Elements; the on-screen arrival then relies on the vendor search and the unattended-shop retries. The off-screen simulation needs no vendor.
 
-### MFO-B456 (SEV-4, OPEN, logistics/ErrandShops.cpp SpouseGate / R6 rule, against d68446e) -- any conditioned non-spouse vendor is dropped; needs a marth ruling
+### MFO-B456 (SEV-4, FIXED on feat/mfo-college-vendors in the R-A/R-B commit after 72180d9, logistics/ErrandShops.cpp SpouseGate / R6 rule, against d68446e) -- any conditioned non-spouse vendor is dropped; needs a marth ruling
+FIX (marth 2026-10-21, "Evaluate the conditions"): `SpouseGate` evaluates a non-spouse conditioned vendor's own conditions (`ConditionGate`, subject = the loaded vendor else the player) and opens it when they pass; the spouse's own store is unchanged.
 "R6 rule drops any conditioned non-spouse vendor (LoreRim CollegeEntry.esp drops Faralda), needs marth ruling" (Opus review of feat/mfo-college-vendors, F5). CollegeEntry.esp (Improved College Entry) adds two conditions to ServicesWinterholdCollegeFaralda, so R6 treats her as a spouse-store candidate and closes her.
 
 ### MFO-B457 (SEV-4, OPEN, logistics/Errand.cpp BuildTownShops chest anchor, against d68446e) -- chest anchor can route a fence via the Ratway; an exterior chest has no reachability check

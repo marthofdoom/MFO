@@ -219,10 +219,19 @@ namespace MFO::Logistics::ErrandShops {
         const auto spouse = SpouseHandle();
         auto sp = spouse.get();
         auto* spouseActor = sp.get();
-        if (!spouseActor) return Gate::Closed;   // the reason was said once per load
-        // A loaded vendor must BE the spouse (another conditioned vendor is not a spouse store).
-        if (auto vp = a_vendor.get(); vp.get() && vp.get() != spouseActor) return Gate::Closed;
-        if (!InFaction(spouseActor, a_fac)) return Gate::Closed;   // not his shop (the other 24 ServicesSpouse* factions): no line, it is the gate
+        // The SPOUSE's store: a spouse exists, he is a member, and a loaded vendor (if any) is the spouse. Anything else is an ordinary
+        // CONDITIONED vendor (marth 2026-10-21, F5: "Evaluate the conditions"; was: Closed): its own conditions decide, subject = the loaded
+        // vendor, else the player (ConditionGate, as the fence gate does). The other ServicesSpouse* factions' conditions name their own spouse
+        // NPC, so they stay closed by their data, not by a list.
+        const bool spouseShop = spouseActor && InFaction(spouseActor, a_fac) &&
+                                [&] { auto vp = a_vendor.get(); return !vp.get() || vp.get() == spouseActor; }();
+        if (!spouseShop) {
+            std::string why;
+            const Gate g = ConditionGate(a_fac, a_vendor, why);
+            Say(fid, a_fac->GetFormID(), std::format("conditioned vendor '{}' ({:08X}), not the spouse's store: {} -- {}", FacName(a_fac), a_fac->GetFormID(),
+                                                    g == Gate::Open ? "OPEN" : g == Gate::Pending ? "PENDING" : "CLOSED", why));
+            return g;
+        }
         std::string why;
         const Gate g = ConditionGate(a_fac, spouse, why);
         Say(fid, a_fac->GetFormID(), std::format("spouse store '{}' ({:08X}) of {:08X} '{}': {} -- {}", FacName(a_fac), a_fac->GetFormID(),

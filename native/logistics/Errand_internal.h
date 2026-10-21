@@ -447,6 +447,8 @@ namespace MFO::Logistics::ErrandShops {
     bool IsFenceFaction(RE::FormID a_fac);
     // Worker (BuildCatalog). a_vendor = the loaded vendor actor, empty for a faction-only shop. Both log ONE decision line.
     Gate FenceGate(RE::Actor* a_follower, const RE::TESFaction* a_fac, RE::ActorHandle a_vendor);
+    // SpouseGate: a conditioned NON-fence vendor. The spouse's own store (spouse a member, a loaded vendor is the spouse): its conditions with the
+    // spouse as subject. Any other (2026-10-21 F5): its conditions with the loaded vendor, else the player, as subject.
     Gate SpouseGate(RE::Actor* a_follower, const RE::TESFaction* a_fac, RE::ActorHandle a_vendor);
     // Worker (EconomyProbeImpl, once per scan): every base form in his inventory classified by its copies' ExtraOwnership.
     std::unordered_map<const RE::TESBoundObject*, Stolen> ClassifyStolen(RE::Actor* a_follower);

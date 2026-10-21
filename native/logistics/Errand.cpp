@@ -293,6 +293,17 @@ namespace MFO::Logistics::Errand {
                             bool chestAnchor = false; };
         std::unordered_map<RE::FormID, std::vector<ShopStatic>> g_townShops;   // town BGSLocation id -> shops; guarded by g_mx
 
+        // Is this vendor faction's shop placed by its merchant chest (BuildTownShops' rule: no PLVD, or a PLVD type that is neither kInCell
+        // nor kNearReference)? Recomputed from the faction (nothing saved), so a restored stop reads the same answer.
+        bool ChestPlacedFaction(RE::FormID a_fac) {
+            auto* fac = a_fac ? RE::TESForm::LookupByID<RE::TESFaction>(a_fac) : nullptr;
+            if (!fac || !PlvdPlaceVerified()) return false;
+            auto* loc = fac->vendorData.vendorLocation;
+            if (!loc) return true;
+            const auto t = loc->locType.get();
+            return t != RE::PackageLocation::Type::kInCell && t != RE::PackageLocation::Type::kNearReference;
+        }
+
         std::vector<ShopStatic> BuildTownShops(const RE::BGSLocation* a_town) {
             std::vector<ShopStatic> out;
             auto* dh = RE::TESDataHandler::GetSingleton();
@@ -410,8 +421,8 @@ namespace MFO::Logistics::Errand {
                 auto* fac = VendorFactionOf(v);
                 if (!fac) continue;
                 // R6 (was: every conditioned vendor and every fence dropped, marth 2026-10-18 Q10): a FENCE needs the follower's fence
-                // perk AND its own conditions (Q1); a conditioned non-fence vendor is offered only as the SPOUSE's store. Every other
-                // conditioned vendor is still dropped. The gates are ErrandShops.cpp's (conditions are evaluated on the main thread).
+                // perk AND its own conditions (Q1); a conditioned non-fence vendor is the SPOUSE's store when the spouse is a member, else
+                // (marth 2026-10-21 F5) its own conditions decide. The gates are ErrandShops.cpp's (conditions are evaluated on the main thread).
                 {
                     const bool conditioned = fac->vendorData.vendorConditions && fac->vendorData.vendorConditions->head;
                     const bool fence = ErrandShops::IsFence(fac);
@@ -1858,6 +1869,37 @@ namespace MFO::Logistics::Errand {
                             spdlog::info("[errand] {:08X}: the inn has no innkeeper in his cell -- no food bought, the stop is rest only", fid);
                             return beginWork();
                         }
+                        // marth 2026-10-21 (F4, "1 now"): a CHEST-PLACED shop (BuildTownShops' merchant-chest anchor) whose vendor is not here trades with
+                        // the merchant chest, exactly like the off-screen simulation's TRADE_SIM (ErrandSim.cpp DispatchTrade: TradeBridge::VendorTrade with
+                        // no vendor actor, the stored order, the trip purse cap). Every other shop keeps the unattended retries below.
+                        if (!va && kind == StopKind::Shop && r.order && !r.order->skipped && ChestPlacedFaction(r.faction)) {
+                            auto* chestRef = r.chest ? RE::TESForm::LookupByID<RE::TESObjectREFR>(r.chest) : nullptr;
+                            if (chestRef) {
+                                // R5: an EARLIER stop's late report is counted against the trip purse first (as the give beat does).
+                                if (TradeBridge::TradeOutcome late; r.cur > 0 && !TradeBridge::HasLiveOrder(fid) && TradeBridge::TakeOutcome(fid, late) &&
+                                                                    !late.aborted && late.spent > 0) {
+                                    r.tripSpent += late.spent;
+                                    if (!late.smithBought.empty()) Smith::NoteBought(fid, late.smithBought);
+                                    spdlog::info("[errand] {:08X}: a late report from an earlier stop spent {}g -- counted against the trip purse", fid, late.spent);
+                                }
+                                TradeBridge::DiscardOutcome(fid);
+                                const int purse = r.tripPurse >= 0 ? std::min(r.order->purse, std::max(0, r.tripPurse - r.tripSpent)) : r.order->purse;
+                                if (TradeBridge::VendorTrade(a_follower, nullptr, chestRef, r.order->sell, r.order->needs, purse, r.order->buy, r.order->sig,
+                                                             r.order->daysNow, r.order->vendorKey, &r.order->quote)) {
+                                    spdlog::warn("[errand] {:08X} '{}': shop '{}' (faction {:08X}): vendor not present -- traded with the merchant chest {:08X} "
+                                                 "(chest-placed shop): {} sell row(s), {} need(s), purse {}", fid, r.followerName, r.vendorName, r.faction, r.chest,
+                                                 r.order->sell.size(), r.order->needs.size(), purse);
+                                    r.phase = Phase::Trading;
+                                    r.dispatched = true;
+                                    r.dispatchedClk = Scheduler::ServiceClock();
+                                    r.phaseAt = a_now;
+                                    Store(fid, r);
+                                    return true;
+                                }
+                                spdlog::warn("[errand] {:08X} '{}': shop '{}': vendor not present and the merchant-chest trade could not be dispatched "
+                                             "(chest busy or the trade bridge is down) -- handled as an unattended shop", fid, r.followerName, r.vendorName);
+                            }
+                        }
                         if (!va) {   // run 4: an unattended shop is a blocked walk (he may be off duty / asleep / across a border): scan, wait, re-check, then retry-later
                             auto* cal0 = RE::Calendar::GetSingleton();
                             int seenN = 0; std::string seenList;
@@ -2114,7 +2156,7 @@ namespace MFO::Logistics::Errand {
                 }
                 r.dispatched = false;
                 r.bought = out.boughtCount > 0;
-                if (r.bought && idles.take) {
+                if (r.bought && idles.take && r.vendor) {   // a merchant-chest trade (no vendor actor) has no one to take from
                     if (!beginBeat(Phase::Taking, idles.take, "take")) return false;
                     Store(fid, r);
                     return true;
