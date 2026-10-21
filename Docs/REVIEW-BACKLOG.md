@@ -2100,7 +2100,7 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 ### MFO-B408 (SEV-4, OPEN, logistics/ErrandSim.cpp MoveHold) -- town: MoveHold logs success when Harbinger's Repoint silently fails (raised against 8444346)
 "MoveHold logs success even when the Repoint silently fails in Harbinger. This is the same root as" MFO-B405 (Repoint is void in the ABI; the wrapper reports true).
 
-### MFO-B418 (SEV-4, FIXED in 0502c1a, Board_Progression.cpp / progression/PerkGate.cpp:376) -- progression: board and refusal text show only the general perk pool (raised against 708c244)
+### MFO-B418 (SEV-4, FIXED in 0502c1a + 8525dec, Board_Progression.cpp / progression/PerkGate.cpp:376) -- progression: board and refusal text show only the general perk pool (raised against 708c244)
 "The take dialog (Pg_PointsAvail, Board_Progression.cpp ~:1151) and tree header (Pg_TreePoints, ~:534) show only unspentPerk, so a crafting node with general 0 and craft 1 shows '0 points' beside an enabled Take. Pg_NoneToSpend (~:230) shows whenever general < 1 even with craft points to spend. Its 'spent' count and PerkGate.cpp:376's whyNot 'no perk points (earned X, Y spent)' use AllocatedRanks, which includes craft-funded ranks, so it can read 'earned 5, 6 spent'." Reviewer: wording only, no incorrect behaviour. Drain before the release cut (user-visible).
 
 ### MFO-B419 (SEV-5, FIXED in 0502c1a, progression/Harness.cpp:71) -- progression: dev status log and the auto-pick "no eligible perk" log print only the general pool (raised against 708c244)
