@@ -45,7 +45,8 @@ namespace MFO::Logistics {
     };
     void EconomyErrandPlan(RE::Actor* a_follower, const FollowerState& a_state,
                            std::chrono::steady_clock::time_point a_now,
-                           const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out);
+                           const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out,
+                           int* a_deferred = nullptr);   // F1: count of shops dropped this pass for a pending price refresh
     // R5: the physical give beat of ONE STOP of a trip: EconomyProbe(kExecute) for a_probe.vendors, with the trip's PARTITION
     // applied. a_share (the stop's planned order, null = no partition: a restored stop re-plans in full) limits the sell rows
     // to the objects it lists, the needs to its kinds and the gear / tome wishes to its flags; a_purseCap (< 0 = none) caps

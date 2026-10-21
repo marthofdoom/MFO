@@ -1139,7 +1139,30 @@ namespace MFO::Logistics::Errand {
         for (auto& c : cands) shops.push_back(ErrandShop{ c.fac, c.handle });
         for (auto& c : closedCands) shops.push_back(ErrandShop{ c.fac, c.handle });   // F3: evaluated NOW (loaded) so the watch holds their orders
         std::vector<ErrandPlanned> planned;
-        if (!shops.empty()) EconomyErrandPlan(a_follower, a_state, a_now, shops, planned);
+        int deferredShops = 0;
+        if (!shops.empty()) EconomyErrandPlan(a_follower, a_state, a_now, shops, planned, &deferredShops);
+        // F1 (town run 3): a shop whose price quote is still being computed on the main thread was DROPPED from `planned` (no row at
+        // all), and the trip committed without its shop work. Wait ~1 s and re-plan (the refresh is already Posted), like
+        // MagicReadPending / PlacesPending; capped, then loud and planned with the Speech-only quote (Pricing says so on its own line).
+        {
+            static std::unordered_map<RE::FormID, int> s_priceDefers;   // consecutive defers per follower
+            if (deferredShops > 0) {
+                constexpr int kPriceMaxDefers = 8;   // ~1 s each: a main-thread refresh lands in ~10 ms, 8 s means the Post is stalled
+                int& n = s_priceDefers[fid];
+                if (++n <= kPriceMaxDefers) {
+                    if (n == 1)
+                        spdlog::info("[errand] {:08X} '{}': {} shop(s) wait for their price quote (main-thread refresh) -- re-planning in ~1 s", fid, NameOf(a_follower), deferredShops);
+                    std::scoped_lock lk(g_mx);
+                    g_nextPlan[fid] = a_now + std::chrono::seconds(1);
+                    return true;
+                }
+                spdlog::warn("[errand] {:08X} '{}': {} shop(s) still without a price quote after {} defers (is the main-thread Post running?) -- planning WITHOUT them",
+                             fid, NameOf(a_follower), deferredShops, n - 1);
+                n = 0;
+            } else {
+                s_priceDefers.erase(fid);
+            }
+        }
         std::vector<ErrandPlanned> closedPlanned;   // F3: the hours-closed shops' orders leave the open plan's list (their wishes are not this trip's)
         if (!closedCands.empty()) {
             const auto isClosedKey = [&](RE::FormID a_key) {

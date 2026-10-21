@@ -1046,9 +1046,13 @@ namespace MFO::Logistics {
                 // ONE quote per trade: while the follower is loaded and the first perk-adjusted value for this pair is
                 // still being computed on the main thread, DEFER this vendor one cycle instead of pricing the sell rows
                 // Speech-only (the refresh is already Posted; the next scan / plan finds the cache). Not a fallback:
-                // an UNLOADED follower or a vendor with no actor never defers and its line says Speech-only.
+                // an UNLOADED follower never defers and its line says Speech-only. A LOADED follower defers for EVERY
+                // shop, vendor actor or not (Pricing::Resolve keys the pair on the faction when no actor is loaded). In
+                // errand plan mode the deferral is COUNTED (ErrandProbe::deferred) and the planner (Errand.cpp TryStart)
+                // waits and re-plans, so a shop is never silently dropped from a committed trip (town run 3, 2026-10-20).
                 if (quote.refreshPending) {
                     if (!a_errand) g_econPair[pairKey] = a_now;   // undo this scan's 12 s pair cooldown: retry on the next scan
+                    else if (a_errand->mode == ErrandProbe::Mode::kPlan) ++a_errand->deferred;
                     continue;
                 }
                 std::vector<TradeBridge::SellRow> sell;
@@ -1155,10 +1159,11 @@ namespace MFO::Logistics {
         // TOWN ERRAND PLAN (logistics/Errand.cpp): evaluate every candidate -- loaded vendor actors AND faction-only shops
         // -- with the same code a trade uses and hand back one ErrandPlanned each, order included. Dispatches nothing.
         void EconomyErrandPlan(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now,
-                               const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out) {
+                               const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out, int* a_deferred) {
             ErrandProbe probe;
             probe.mode = ErrandProbe::Mode::kPlan;
             EconomyProbeImpl(a_follower, a_state, a_now, &probe, &a_shops, &a_out);
+            if (a_deferred) *a_deferred = probe.deferred;
         }
 
         // R5: one STOP of a trip, on screen (the give beat, logistics/Errand.cpp): the probe in execute mode with the stop's share.
