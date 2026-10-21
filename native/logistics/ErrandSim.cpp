@@ -326,7 +326,11 @@ namespace MFO::Logistics::Errand::Sim {
 
         // "Resolve to now" (design 2.4): if he had ARRIVED and the trade was not dispatched, dispatch it (he got there); else drop it.
         void ResolveNow(SimRec& r, RE::Actor* f, double a_days, const char* a_why) {
-            if (r.dispatched || r.tradeAbandoned || r.reported) return;
+            if (r.dispatched || r.tradeAbandoned || r.reported) {
+                spdlog::info("[errand] {:08X}: resolving to now ({}) -- nothing to resolve (already {})", r.follower, a_why,
+                             r.dispatched ? "dispatched" : r.tradeAbandoned ? "abandoned" : "reported");
+                return;
+            }
             if (!r.order && r.restored) {
                 spdlog::info("[errand] {:08X}: resolving to now ({}) -- restored from the save, whose order is never saved: the trade is "
                              "dropped", r.follower, a_why);
@@ -474,7 +478,7 @@ namespace MFO::Logistics::Errand::Sim {
         spdlog::info("[errand] {:08X} '{}': {} -> {} at '{}' (vendor actor {:08X}, chest {:08X}): walk estimate {:.1f} game min "
                      "({:.0f} u), arrive +{:.1f}, trade ends +{:.1f}, back +{:.1f} game min; entry door {:08X} ({}); order {}; "
                      "trade {}", r.follower, r.followerName, r.restored ? "RESTORED from the save (fresh walk estimate)" : "OFF SCREEN",
-                     StageName(r.stage), r.vendorName, r.vendorActor, r.chest, toMin(walk), dist,
+                     StageName(r.stage), (r.vendorName == "?" && !r.stops.empty()) ? Trip::Label(r.stops, r.cur) : r.vendorName, r.vendorActor, r.chest, toMin(walk), dist,
                      toMin(r.tArrive - now), toMin(r.tTradeEnd - now), toMin(r.tReturn - now), r.entryDoor,
                      r.entryDoor ? (confirmed ? "its destination is the cell he is in" : "nearest load door, destination unconfirmed") : "none found",
                      r.order && !r.order->skipped ? "stored" : (r.restored && r.hadOrder ? "not in the save (re-planned only on screen)" : "NONE"),
@@ -517,7 +521,10 @@ namespace MFO::Logistics::Errand::Sim {
             const float sinceT = Followers::SecondsSinceTransition();
             const bool playerMoved = sinceT >= 0.0f && r.enteredAt.time_since_epoch().count() != 0 &&
                                      sinceT <= std::chrono::duration<float>(Clock::now() - r.enteredAt).count();
-            if (playerMoved)
+            if (r.restored)
+                spdlog::warn("[errand] {:08X} '{}': the simulation had him AT cell {:08X} ('{}', {}) but he loaded in cell {:08X} -- this record was RESTORED from the save: the save load was the world transition; the engine placed him",
+                             fid, r.followerName, r.destForm, r.vendorName, StageName(r.stage), nowCell->GetFormID());
+            else if (playerMoved)
                 spdlog::warn("[errand] {:08X} '{}': the simulation had him AT cell {:08X} ('{}', {}) but he loaded in cell {:08X} -- the player made a world transition ({:.0f} s ago: a teleport / fast travel / load) after the hand-off; the engine brought him along",
                              fid, r.followerName, r.destForm, r.vendorName, StageName(r.stage), nowCell->GetFormID(), sinceT);
             else
@@ -593,9 +600,11 @@ namespace MFO::Logistics::Errand::Sim {
         }
         APMFBridge::ReleaseErrand(fid);   // the resume failed / he is done: the claim that held him ends with the event
         ResolveNow(r, a_follower, days, atShop ? "loaded again in the shop" : "loaded again away from the shop");
-        detail::Cooldown(fid, Config::g_errandCooldownSec.load());
-        spdlog::info("[errand] {:08X} '{}': loaded again at {} ({}) -- he is with the player; DONE", fid, r.followerName,
-                     StageName(r.stage), atShop ? "trade already done / in flight" : "away from the shop, resolved to now");
+        // Town run 6: a record RESTORED from the save that traded nothing this session gets NO cooldown (the save load is not an errand he ran).
+        const float cd = (r.restored && !r.reported && !r.dispatched) ? 0.0f : Config::g_errandCooldownSec.load();
+        if (cd > 0.0f) detail::Cooldown(fid, cd);
+        spdlog::info("[errand] {:08X} '{}': loaded again at {} ({}) -- he is with the player; DONE (next errand plan in {:.0f} s)", fid, r.followerName,
+                     StageName(r.stage), atShop ? "trade already done / in flight" : "away from the shop, resolved to now", cd);
         return false;
     }
 

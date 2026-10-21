@@ -1644,6 +1644,8 @@ namespace MFO::Board {
             // really running the travel package (not merely dispatched).
             r.looting   = Logistics::JustLooted(r.id) || Logistics::WalkingLootLeg(a);
             r.trading   = Logistics::IsTrading(r.id);
+            // Town run 6 (marth): on a town errand (physical or off-screen) the Looting and Trading slots both light.
+            if (Logistics::Errand::Active(r.id)) { r.looting = true; r.trading = true; }
 
             // ONE formula, shared with the evaluator. These bars are how the
             // player checks why a rule did or did not fire, so a HUD that

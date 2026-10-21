@@ -528,6 +528,9 @@ namespace MFO::Board {
                             } else if (r.inCombat) {
                                 // Same color code as the HUD [C][L][T] strip.
                                 ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.35f, 1.0f), "%s", Str::Get(Str::K::Fk_StateCombat));
+                            } else if (!r.errand.empty()) {
+                                // Town run 6: an errand lights both [L] and [T] on the HUD; this column names it Trading, not Looting.
+                                ImGui::TextColored(ImVec4(0.45f, 0.6f, 1.0f, 1.0f), "%s", Str::Get(Str::K::Fk_StateTrading));
                             } else if (r.looting) {
                                 ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1.0f), "%s", Str::Get(Str::K::Fk_StateLooting));
                             } else if (r.trading) {
