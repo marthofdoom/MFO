@@ -138,6 +138,10 @@ namespace MFO::Logistics::Errand {
         std::shared_ptr<const ErrandPlanned> order;   // this stop's SHARE of the trip (null after a load: never saved)
         double        tArrive = 0.0, tWorkEnd = 0.0;  // GAME DAYS, the simulation's (0 = not reached yet)
         StopState     state = StopState::Pending;
+        // Run 4 (marth 2026-10-20: routing must not be brittle): session-only, never saved. retryLater = this stop was SKIPPED for a failed walk
+        // and is on the retry-later list (the inn stage retries it); laterRetries = how many of those later retries it has had (max 3).
+        bool          retryLater = false;
+        std::uint8_t  laterRetries = 0;
     };
     // The bound on the wire (#11) and the planner's cap. R7 appends an Inn stop after the shops, so the shops leave room.
     inline constexpr std::size_t kMaxTripStops = kMaxTripStopsOnWire;
@@ -266,6 +270,9 @@ namespace MFO::Logistics::Errand {
         bool TripDone(RE::FormID a_follower, RE::FormID a_townId);
         void UnmarkTripDone(RE::FormID a_follower, const char* a_why);   // F3: a needed shop opened -- the visit's mark goes, a new trip starts
         void MarkTripDone(RE::FormID a_follower, RE::FormID a_townId, const char* a_why);
+        // Run 4 review F1: a trip that ended with its INN stop Skipped (unreachable inn). Bumps a per-(follower, visit) counter and backs the inn off
+        // (2 min, then 4); at 3 Augment omits the inn for the rest of the visit. NO trip-done mark. Cleared by NoteTown / ClearTransientState.
+        void NoteInnTripFailed(RE::FormID a_follower, std::chrono::steady_clock::time_point a_now);
         // The synthetic food order's dispatch (the inn's physical give beat): VendorTrade of a_order at the innkeeper's chest.
         // Sent = on its way; Busy = the chest holds another follower's live order (retry); Nothing = nothing to buy (no purse / no chest).
         enum class Dispatch { Sent, Busy, Nothing };

@@ -9,7 +9,7 @@
 // teleport jump; Followers::SecondsSinceTransition) has been quiet for kSettleS (the engine's own carry gets the
 // first chance), every roster follower who did NOT arrive with the player is put beside the player by the SAME
 // mechanism the town errand RECALL uses (logistics/Errand.cpp RecallToPlayer): the vanilla Papyrus
-// ObjectReference.MoveTo through Papyrus::DispatchMoveTo, ~250 u behind the player's heading. The move is POSTED to
+// ObjectReference.MoveTo through Papyrus::DispatchMoveTo, a short distance IN FRONT of the player's heading (run 4: behind put one on a gate). The move is POSTED to
 // the main thread and re-checks there. Only an UNLOADED follower is ever moved, and each follower is finished (moved,
 // seen arriving, or errand-owned) at most once per transition.
 //
@@ -18,8 +18,9 @@
 // place key changed or the player moved > kNearU from that sample, and only followers in the sampled loaded set are
 // judged. After a save load / revert there is no sample (Reset), so nobody is moved.
 //
-// "ARRIVED WITH THE PLAYER" = his 3D is loaded AND he is in the player's cell (interior or exterior), or both are
-// outdoors in the same worldspace within kNearU. Anything else is left behind.
+// "ARRIVED WITH THE PLAYER" = he is in the player's cell (interior or exterior), or both are outdoors in the same
+// worldspace within kNearU, EVEN IF his 3D is not loaded yet (run 4: the engine had already placed him; a second MoveTo
+// from the stale position dropped him on a gate). Anything else is left behind.
 //
 // NEVER MOVED: not an eligible teammate (dismissed, dead, disabled, summon-not-allowed), told to wait, MFO-toggled
 // off, in combat, a horse / mount or mounted, or holding a live errand (physical, off-screen Sim record, inn stay: Errand::Active). The errand
@@ -47,7 +48,7 @@ namespace MFO::FollowerCatchUp {
         constexpr float kSettleS = 3.0f;      // real seconds after the last transition mark before anyone is judged
         constexpr float kWindowS = 60.0f;     // stop judging this long after the transition (a later gap is a choice)
         constexpr float kNearU   = 4096.0f;   // same-worldspace "with the player" bar (= Followers' teleport jump)
-        constexpr float kBehindU = 250.0f;    // MoveTo offset behind the player's heading (RecallToPlayer's kBehind)
+        constexpr float kFrontU  = 200.0f;    // MoveTo offset IN FRONT of the player's heading (marth 2026-10-20; Errand RECALL's 250 u behind is separate)
 
         float                                  g_lastSince = -1.0f;   // detects a NEW transition (the value fell)
         std::unordered_set<RE::FormID>         g_done;                // finished this transition (moved, arrived, or owned by an errand)
@@ -73,9 +74,8 @@ namespace MFO::FollowerCatchUp {
             return (cell && cell->IsInteriorCell()) ? static_cast<const void*>(cell) : static_cast<const void*>(a_pc->GetWorldspace());
         }
 
-        // Loaded AND with the player: his 3D is up and he is in the player's cell, or both are outdoors in the same worldspace within kNearU.
+        // With the player: he is in the player's cell, or both are outdoors in the same worldspace within kNearU. His 3D need NOT be loaded.
         bool WithPlayer(RE::Actor* a, RE::PlayerCharacter* a_pc) {
-            if (!a->Is3DLoaded()) return false;
             auto* cell = a->GetParentCell();
             auto* pcell = a_pc->GetParentCell();
             if (!cell || !pcell) return false;
@@ -95,8 +95,9 @@ namespace MFO::FollowerCatchUp {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             if (!f || !pc || f->IsDead() || f->IsDisabled() || !pc->Is3DLoaded() || Menu()) return;
             if (f->Is3DLoaded()) return;   // only an UNLOADED follower is ever moved (RecallToPlayer's precedent): the engine has him now
+            if (WithPlayer(f, pc)) return; // the engine already placed him in the player's cell / near him (3D not up yet): do not move him again
             const float az = pc->GetAngleZ();
-            const float dx = -kBehindU * std::sin(az), dy = -kBehindU * std::cos(az);
+            const float dx = kFrontU * std::sin(az), dy = kFrontU * std::cos(az);
             const bool  ok = Papyrus::DispatchMoveTo(f, pc, dx, dy, 0.0f);
             spdlog::info("[catchup] {:08X} '{}' left behind after a world transition ({:.0f} s ago, {}) -- moved to the player "
                          "(+{:.0f},{:.0f}) {}", a_id, f->GetName() ? f->GetName() : "?", a_since, a_where, dx, dy,
@@ -160,10 +161,8 @@ namespace MFO::FollowerCatchUp {
                 continue;
             }
 
-            if (a->Is3DLoaded()) {   // loaded: the engine has him. With the player = finished; elsewhere loaded = not ours to move
-                if (WithPlayer(a, pc)) g_done.insert(id);
-                continue;
-            }
+            if (WithPlayer(a, pc)) { g_done.insert(id); continue; }   // with the player (3D loaded or not yet): the engine has him
+            if (a->Is3DLoaded()) continue;   // loaded elsewhere = not ours to move
             if (APMFBridge::InCombat(a)) { SkipOnce(id, kCombat, name, "he is in combat"); continue; }
 
             auto*             cell = a->GetParentCell();

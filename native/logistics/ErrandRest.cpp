@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cctype>
 #include <cmath>
 #include <format>
@@ -156,6 +157,9 @@ namespace MFO::Logistics::Errand::Rest {
         std::unordered_map<RE::FormID, int>              g_templeTry;  // follower -> game day of the last temple visit (any outcome): a short-term ANTI-THRASH only, NOT the blessing's truth (that is MagicView::blessed)
         std::unordered_set<RE::FormID>                   g_tripDone;   // followers whose trip ended this town visit
         std::unordered_set<RE::FormID>                   g_tripLogged; // ... for whom the re-plan block was already logged
+        std::unordered_map<RE::FormID, int>              g_innFailTrips;   // run 4 F1: trips this visit that ended with the inn stop Skipped (session-only)
+        std::unordered_map<RE::FormID, Clock::time_point> g_innNextTry;    // ... the earliest the inn is planned again
+        std::unordered_map<RE::FormID, Clock::time_point> g_innSuppLogged; // ... rate limit of the "omitted" line
         std::unordered_map<RE::FormID, int>              g_magicDefers;  // consecutive MagicReadPending defers per follower (cap kMagicMaxDefers)
         std::unordered_set<RE::FormID>                   g_lockLogged;  // load doors whose LOCK was already logged (one skip line per door per town visit)
         std::unordered_set<RE::FormID>                   g_magicWaitLogged; // ... for whom "waiting for the blessing/disease read" was logged this visit
@@ -458,6 +462,10 @@ namespace MFO::Logistics::Errand::Rest {
         // anti-thrash (at most one temple visit per game day, session-only): a blessing that does not take (a shrine that ignores him)
         // must not loop him back to the temple every plan.
         bool TempleWanted(RE::FormID a_fid, std::string& a_why) {
+            // marth 2026-10-20: NO temple stops until batch D (the faith feature). The code below stays, gated here.
+            static std::atomic<bool> s_offLogged{ false };
+            if (!s_offLogged.exchange(true)) spdlog::info("[errand] temple stops are off until the faith feature (batch D); TempleWanted returns false");
+            return false;
             const int today = GameDay();
             const auto m = MagicOf(a_fid);
             std::scoped_lock lk(g_mx);
@@ -859,12 +867,10 @@ namespace MFO::Logistics::Errand::Rest {
             bool first = false;
             { std::scoped_lock lk(g_mx); first = g_doorLogged.insert(temple.cell).second; }
             if (!have) {
-                if (first) spdlog::info("[errand] {:08X}: temple '{}' SKIPPED at planning -- its entry door could not be read (the player is indoors / the main-thread read did not land); a temple with no verified door is never walked to", fid, temple.name);
-                temple.ok = false;
+                if (first) spdlog::info("[errand] {:08X}: temple '{}' planned WITHOUT a door read -- its entry door could not be read (the player is indoors / the main-thread read did not land); only a LOCKED door skips a stop, the walk and its retries decide the rest", fid, temple.name);
             } else if (!dr.found) {
-                if (first) spdlog::info("[errand] {:08X}: temple '{}' SKIPPED at planning -- no load door to its cell {:08X} among the {} load door(s) of the loaded exterior cells; a temple with no verified door is never walked to",
+                if (first) spdlog::info("[errand] {:08X}: temple '{}' planned WITHOUT a door -- no load door to its cell {:08X} among the {} load door(s) of the loaded exterior cells; only a LOCKED door skips a stop, the walk and its retries decide the rest",
                                         fid, temple.name, temple.cell, dr.scanned);
-                temple.ok = false;
             } else if (dr.lockedId) {
                 if (first) spdlog::info("[errand] {:08X}: temple '{}' SKIPPED at planning -- its load door {:08X} is LOCKED (lock level {}: {}); a closed place is never walked to",
                                         fid, temple.name, dr.lockedId, dr.lockLevel, LockWord(static_cast<RE::LOCK_LEVEL>(dr.lockLevel)));
@@ -899,7 +905,48 @@ namespace MFO::Logistics::Errand::Rest {
         // 8 stops of the ERND wire (kMaxTripStops).
 
         // ── the INN: the LAST stop of every trip ───────────────────────────────────────────────────────────
-        if (inn.ok && a_stops.size() < kMaxTripStops) {
+        // Run 4: an inn stop REQUIRES an innkeeper faction of that inn (no rest-only inns: the stop is the innkeeper's food + stay).
+        const InnFac* innFac = nullptr;
+        std::vector<InnFac> innFacs;
+        if (inn.ok) {
+            innFacs = InnFactionsOf(a_town);
+            for (const auto& fac : innFacs) {
+                // The faction whose place sits in THIS inn's location; a town with a single innkeeper faction and a single inn matches
+                // even when the place resolves to a sub-location.
+                if (fac.locId != inn.locId && innFacs.size() != 1) continue;
+                innFac = &fac;
+                break;
+            }
+            if (!innFac) {
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextNoFac;
+                if (auto& nx = s_nextNoFac[fid]; nx.time_since_epoch().count() == 0 || a_now >= nx) {
+                    nx = a_now + std::chrono::seconds(120);
+                    spdlog::info("[errand] {:08X}: no inn stop -- '{}' has no innkeeper vendor faction ({} innkeeper faction(s) in the town); a rest-only inn is not a stop",
+                                 fid, inn.name, innFacs.size());
+                }
+            }
+        }
+        // Run 4 F1: an inn that failed its last trip(s) this visit is not planned again at once (2 min, then 4), and after 3 failed trips not at all.
+        bool innSuppressed = false;
+        if (inn.ok && innFac) {
+            int fails = 0; Clock::time_point nextTry{};
+            { std::scoped_lock lk(g_mx); if (const auto it = g_innFailTrips.find(fid); it != g_innFailTrips.end()) fails = it->second;
+              if (const auto it = g_innNextTry.find(fid); it != g_innNextTry.end()) nextTry = it->second; }
+            if (fails >= 3 || (fails > 0 && a_now < nextTry)) {
+                innSuppressed = true;
+                std::scoped_lock lk(g_mx);
+                auto& nx = g_innSuppLogged[fid];
+                if (nx.time_since_epoch().count() == 0 || a_now >= nx) {
+                    nx = a_now + std::chrono::seconds(120);
+                    if (fails >= 3)
+                        spdlog::warn("[errand] {:08X}: inn '{}' unreachable after {} trips this visit -- no inn stop until the player leaves town", fid, inn.name, fails);
+                    else
+                        spdlog::info("[errand] {:08X}: inn '{}' failed {} trip(s) this visit -- not planned again for {} s", fid, inn.name, fails,
+                                     std::chrono::duration_cast<std::chrono::seconds>(nextTry - a_now).count());
+                }
+            }
+        }
+        if (inn.ok && innFac && !innSuppressed && a_stops.size() < kMaxTripStops) {
             Stop s;
             s.kind = StopKind::Inn;
             s.vendorName = inn.name;
@@ -911,18 +958,11 @@ namespace MFO::Logistics::Errand::Rest {
             const int want = Config::g_innFoodStock.load();
             const int have = CountFood(a_follower, true);
             const int purse = GoldOf(a_follower);
+            s.faction = innFac->faction; s.chest = innFac->chest;
             if (want > have && purse > 0) {
-                const auto facs = InnFactionsOf(a_town);
-                for (const auto& fac : facs) {
-                    // The faction whose place sits in THIS inn's location; a town with a single innkeeper faction and a single inn matches
-                    // even when the place resolves to a sub-location.
-                    if (fac.locId != inn.locId && facs.size() != 1) continue;
-                    s.faction = fac.faction; s.chest = fac.chest;
-                    s.order = BuildFoodOrder(a_follower, fac, want - have, purse);
-                    food = std::format("food {}/{} worthy in stock, buys up to {}, purse {}", have, want, want - have, purse);
-                    break;
-                }
-                if (!s.order) food = std::format("no innkeeper faction for it ({} food of {}); rest only", have, want);
+                s.order = BuildFoodOrder(a_follower, *innFac, want - have, purse);
+                food = s.order ? std::format("food {}/{} worthy in stock, buys up to {}, purse {}", have, want, want - have, purse)
+                               : std::format("no food order could be built ({} food of {}); innkeeper stop, no purchase", have, want);
             } else {
                 food = std::format("food stock {}/{}{}", have, want, purse > 0 ? "" : ", no gold");
             }
@@ -949,6 +989,7 @@ namespace MFO::Logistics::Errand::Rest {
             spdlog::info("[errand] the player's town changed ({:08X} -> {:08X}): {} follower(s)' trip-done mark(s) cleared", g_marksTown, a_townId, g_tripDone.size());
         g_marksTown = a_townId;
         Reopen::ClearAll();   // F3: the watch belongs to the town visit
+        g_innFailTrips.clear(); g_innNextTry.clear(); g_innSuppLogged.clear();   // run 4 F1
         g_tripDone.clear();
         g_tripLogged.clear();
         g_lockLogged.clear();
@@ -1031,6 +1072,15 @@ namespace MFO::Logistics::Errand::Rest {
             g_tripLogged.erase(a_follower);
         }
         if (had) spdlog::info("[errand] {:08X}: trip-done mark CLEARED ({})", a_follower, a_why);
+    }
+    void NoteInnTripFailed(RE::FormID a_follower, Clock::time_point a_now) {
+        int n = 0;
+        {
+            std::scoped_lock lk(g_mx);
+            n = ++g_innFailTrips[a_follower];
+            g_innNextTry[a_follower] = a_now + std::chrono::minutes(n == 1 ? 2 : 4);
+        }
+        spdlog::info("[errand] {:08X}: the trip ended with its inn stop SKIPPED (failed inn trip {}/3 this visit); no trip-done mark", a_follower, n);
     }
     void MarkTripDone(RE::FormID a_follower, RE::FormID a_townId, const char* a_why) {
         {
@@ -1138,6 +1188,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_work.clear();
         g_magic.clear();
         g_templeTry.clear();
+        g_innFailTrips.clear(); g_innNextTry.clear(); g_innSuppLogged.clear();
         g_tripDone.clear();
         g_tripLogged.clear();
         g_lockLogged.clear();
@@ -1199,8 +1250,8 @@ namespace MFO::Logistics::Errand::Rest {
                          static_cast<int>(dl), LockWord(dl), lp.get()->GetFormID(), static_cast<int>(ll), LockWord(ll));
         }
         if (!found)
-            spdlog::info("[errand] {:08X}: BLOCKED walk to '{}' (cell {:08X}) -- no load door to it within {:.0f} u of him in cell {:08X} (the door is in another cell)",
-                         a_follower->GetFormID(), a_label, a_destCell, kScan, cell->GetFormID());
+            spdlog::info("[errand] {:08X}: BLOCKED walk to '{}' (cell {:08X}) -- this passive diagnostic scanned ONLY his own cell {:08X} (within {:.0f} u of him): no load door to it there; it did NOT look at other cells, so this says nothing about whether a door exists elsewhere",
+                         a_follower->GetFormID(), a_label, a_destCell, cell->GetFormID(), kScan);
     }
 
     void NoteOwed(RE::FormID a_follower, const std::string& a_followerName, const std::string& a_temple) {
