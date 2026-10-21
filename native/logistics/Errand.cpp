@@ -1143,7 +1143,7 @@ namespace MFO::Logistics::Errand {
         if (!shops.empty()) EconomyErrandPlan(a_follower, a_state, a_now, shops, planned, &deferredShops);
         // F1 (town run 3): a shop whose price quote is still being computed on the main thread was DROPPED from `planned` (no row at
         // all), and the trip committed without its shop work. Wait ~1 s and re-plan (the refresh is already Posted), like
-        // MagicReadPending / PlacesPending; capped, then loud and planned with the Speech-only quote (Pricing says so on its own line).
+        // MagicReadPending / PlacesPending; capped, then a loud WARN and the plan proceeds WITHOUT the pending shops (they have no row, so the trip lacks their work).
         {
             static std::unordered_map<RE::FormID, int> s_priceDefers;   // consecutive defers per follower
             if (deferredShops > 0) {

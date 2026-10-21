@@ -5,6 +5,7 @@
 // surface is logistics/Errand.h.
 #include "Errand.h"
 #include "TradeBridge.h"
+#include "Runtime.h"   // ShopPlaceName: IsVerified1_6_1170
 
 #include <memory>
 #include <string>
@@ -20,6 +21,7 @@ namespace MFO::Logistics {
         if (!a_fac) return {};
         if (const char* n = a_fac->GetName(); n && *n) return n;
         auto* loc = a_fac->vendorData.vendorLocation;
+        if (!Runtime::IsVerified1_6_1170()) return {};   // the PLVD union layout is verified on that build only (BuildTownShops / ErrandRest gate the same way)
         if (!loc) return {};
         switch (loc->locType.get()) {
         case RE::PackageLocation::Type::kInCell: {

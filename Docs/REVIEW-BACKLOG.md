@@ -2169,3 +2169,12 @@ Note (SEV-4, tracked as a fork task, not here): the mit-3.7 fork's TES.h guards 
 
 ### MFO-B431 (SEV-4, OPEN, native/FollowerCatchUp.cpp kSettleS) -- the 3 s settle is shorter than the engine's own carry (raised against 8fe6952)
 "Sven was measured absent for about 40 s after a load (Followers.cpp kLoadWindowS). A follower who is walking through the door himself therefore appears behind the player instead of at the door when the catch-up fires at 3 s."
+
+### MFO-B434 (SEV-5, OPEN, logistics/Errand.cpp TryStart `s_priceDefers`) -- never cleared on load / revert (raised against c83d197)
+"The F1 per-follower price-defer counter is a function-local static: it is erased only when a plan sees no deferral, not on load or revert. A stale count can shorten the next wait."
+
+### MFO-B435 (SEV-4, OPEN, LocationTypes.h InnOf, pre-existing data) -- vanilla jail locations carry LocTypeInn (raised against c83d197)
+"FalkreathBarracksJailLocation and RiftenHoneysideLocation carry LocTypeInn in vanilla, so InnOf may name the jail before Dead Man's Drink. Names only (logs/Board); the walk goes through the load-door search."
+
+### MFO-B436 (SEV-4, OPEN, informational, LocationTypes.h TownAnchor) -- outermost anchor widens "the town" (raised against c83d197)
+"With Lux Via-style nesting, Left Hand Mine and similar places now count as Markarth, so walking there does not end an errand as 'left town'."

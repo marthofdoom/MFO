@@ -82,9 +82,9 @@ namespace MFO::LocationTypes {
     }
 
 
-    // The TOWN a location sits in, or null: the innermost location on the parent chain that carries
-    // LocTypeCity / LocTypeTown / LocTypeSettlement, met BEFORE a fight site (Clearable / Dungeon) -- the
-    // same innermost-first walk as Classify, so a bandit mine inside a hold is never "a town" and a shop
+    // The TOWN a location sits in, or null: the OUTERMOST location on the parent chain (guard 8) that carries
+    // LocTypeCity / LocTypeTown / LocTypeSettlement (D1, town run 3), met BEFORE a fight site (Clearable / Dungeon) -- the
+    // same innermost-first fight-site test as Classify, so a bandit mine inside a hold is never "a town" and a shop
     // interior under Whiterun resolves to WhiterunLocation. Town errands (logistics/Errand.cpp, ClickUp
     // 86e3t1mx7) compare the anchor of the PLAYER's location with the anchor of the follower's. The
     // keywords are Skyrim.esm FormIDs resolved once, exactly as in Classify (a modlist that lacks one

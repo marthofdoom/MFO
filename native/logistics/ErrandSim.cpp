@@ -704,6 +704,11 @@ namespace MFO::Logistics::Errand::Sim {
                 else if (auto* fac = s.faction ? RE::TESForm::LookupByID<RE::TESFaction>(s.faction) : nullptr; fac && fac->GetName() && *fac->GetName())
                     vendorName = fac->GetName();
                 const bool done = (s.flags & Saved::kTradeDone) != 0;
+                // Town run 3 (D1): TownAnchor is the OUTERMOST town now, so a record saved with the old inner anchor id is re-anchored on
+                // adoption (the saved value stays when the lookup or the anchor fails). No co-save format change.
+                RE::FormID townId = s.town;
+                if (auto* tl = s.town ? RE::TESForm::LookupByID<RE::BGSLocation>(s.town) : nullptr)
+                    if (auto* anchor = LocationTypes::TownAnchor(tl)) townId = anchor->GetFormID();
                 // A trade IN FLIGHT at the save is the save's own: its Papyrus RunTrade stack resumes from the .ess and runs its
                 // token-free sell / buy loops. MFO must not trade again (on screen or off), so it is given up here and he walks back.
                 const bool inFlight = (s.flags & Saved::kDispatched) != 0 && !done;
@@ -714,7 +719,7 @@ namespace MFO::Logistics::Errand::Sim {
                 if (IsPhysical(s.stage) || s.tReturn <= 0.0) {
                     SimStart st;
                     st.follower = s.follower; st.followerName = detail::NameOf(f); st.vendorName = vendorName;
-                    st.faction = s.faction; st.chest = s.chest; st.town = s.town; st.vendorActor = s.vendorActor;
+                    st.faction = s.faction; st.chest = s.chest; st.town = townId; st.vendorActor = s.vendorActor;
                     st.destKind = ToDest(s.destKind); st.destForm = s.destForm; st.destRad = s.destRad;
                     st.lastPos = s.lastPos; st.lastCell = s.lastCell; st.startDays = s.startDays;
                     st.arrived = (s.flags & Saved::kArrived) != 0 || s.stage == SavedStage::SimTrade ||
@@ -730,7 +735,7 @@ namespace MFO::Logistics::Errand::Sim {
                 }
                 SimRec r;
                 r.follower = s.follower; r.followerName = detail::NameOf(f); r.vendorName = vendorName;
-                r.faction = s.faction; r.chest = s.chest; r.town = s.town; r.vendorActor = s.vendorActor;
+                r.faction = s.faction; r.chest = s.chest; r.town = townId; r.vendorActor = s.vendorActor;
                 r.destKind = ToDest(s.destKind); r.destForm = s.destForm; r.destRad = s.destRad;
                 r.lastPos = s.lastPos; r.lastCell = s.lastCell; r.entryDoor = s.entryDoor; r.startDays = s.startDays;
                 r.tEnter = s.tEnter; r.tArrive = s.tArrive; r.tTradeEnd = s.tTradeEnd; r.tReturn = s.tReturn;
