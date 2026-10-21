@@ -421,6 +421,9 @@ namespace MFO::Logistics::Errand::Rest {
                         }
                     }
                     if (!placeLoc || !LocationTypes::IsInn(placeLoc) || LocationTypes::TownAnchor(placeLoc) != a_town) continue;
+                    // v2.7.1 (run 6: Winterhold's Nelacar, a spell vendor placed in the Frozen Hearth, won over the innkeeper): an innkeeper's list
+                    // trades FOOD (vanilla VendorItemFood 0008CDEA / VendorItemFoodRaw 000A0E56, Skyrim.esm so the raw ids hold on every load order).
+                    if (!detail::FactionTradesKeyword(fac, 0x0008CDEAu) && !detail::FactionTradesKeyword(fac, 0x000A0E56u)) continue;
                     // the innermost inn location of the place (the one the interior cell reports)
                     const RE::BGSLocation* inner = placeLoc;
                     InnFac f;

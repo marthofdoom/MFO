@@ -533,7 +533,17 @@ namespace MFO::Logistics::Errand::Sim {
         }
         // R2: a restored record has no order; it resumes on screen when it HAD one (the physical give beat re-plans the trade from
         // his live inventory), unless the unloaded restore decision already dropped the trade (tradeAbandoned).
-        const bool tradeLeft = r.order ? !r.order->skipped : (r.restored && r.hadOrder);
+        bool tradeLeft = r.order ? !r.order->skipped : (r.restored && r.hadOrder);
+        // v2.7.1 (2c, run 6): loaded in the errand's town after the CURRENT stop's trade was dispatched / reported (a roster drop mid-trip, or a
+        // reload) with a LATER stop still pending: that stop is settled, so the trip advances to the next one and walks on screen (the
+        // betweenStops resume below), instead of ending as DONE with the later stop (the inn) never visited. No second trade: the settled
+        // stop's flags are cleared only by AdvanceStop, which marks it Done / Skipped first.
+        if (inTown && (r.dispatched || r.reported) && (r.stage == Stage::Out || r.stage == Stage::Trade) && r.cur < r.stops.size() &&
+            Trip::NextPending(r.stops, r.cur) >= 0 && AdvanceStop(r, days)) {
+            tradeLeft = r.order ? !r.order->skipped : (r.restored && r.hadOrder);
+            spdlog::info("[errand] {:08X} '{}': loaded again in town after the stop's trade was settled -- the trip goes on to {} on screen",
+                         fid, r.followerName, Trip::Label(r.stops, r.cur));
+        }
         // R2 (design 2.7, "if the player walks in then it picks up"): a PHYSICAL errand restored from the save with him loaded
         // resumes wherever he is in the errand's town (the walk to the shop / vendor goes on). The away-from-the-shop end stays for
         // a record that was SIMULATED (R1b: he reloaded near the player) and for a player who is no longer in the town.

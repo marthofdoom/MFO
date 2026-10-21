@@ -418,6 +418,7 @@ namespace MFO::Logistics::Errand {
         // Is a vendor ACTOR of this faction standing, loaded and awake, in the follower's (loaded) cell?
         bool  VendorPresentNear(RE::Actor* a_follower, RE::FormID a_faction);
         RE::FormID PlayerTownId();   // the BGSLocation id of the player's town, 0 = not in one
+        bool  FactionTradesKeyword(const RE::TESFaction* a_fac, RE::FormID a_kw);   // v2.7.1: does the faction's VEND list trade this vendor keyword (Errand.cpp ListTrades)
         bool  OpenAtHour(const RE::TESFaction* a_fac, float a_hour);   // F3: the vendor faction's VENV hours (the catalog's OpenAt)
         const char* NameOf(const RE::Actor* a_actor);
         // bTownToasts: one informational HUD line (RE::DebugNotification, posted to the main thread). No-op while the toggle is OFF.

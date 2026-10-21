@@ -1083,6 +1083,9 @@ namespace MFO::Logistics {
                     // R6: a fence takes only all-stolen bases; every other vendor takes only bases with no stolen copy; mixed -> nowhere.
                     if (c.stolen == ErrandShops::Stolen::Mixed) { ErrandShops::NoteMixed(a_follower, c.obj); sdiag(c.obj, "mixed stolen/normal copies"); continue; }
                     if (pureFence != (c.stolen == ErrandShops::Stolen::All)) { sdiag(c.obj, pureFence ? "not stolen (fence)" : "stolen (not a fence)"); continue; }
+                    // v2.7.1: an unnamed or zero-value object is never a sell row (a quest / script leftover the vendor cannot price).
+                    if (const char* nm = c.obj ? c.obj->GetName() : nullptr; !nm || !*nm) { sdiag(c.obj, "unnamed"); continue; }
+                    if (c.price <= 0) { sdiag(c.obj, "zero value"); continue; }
                     if (!sellAnything && !VendorTrades(vend, vv.notBuySell, c.kwf)) {
                         sdiag(c.obj, "vendor-filter"); continue;
                     }
