@@ -915,6 +915,9 @@ namespace MFO::Logistics {
         };
         std::vector<Verdict> verdicts;
         bool dispatched = false;                               // OUT (kExecute)
+        // OUT (kExecute with a share): the sell candidates (every follower-side guard cleared) that are NOT in the share's rows. The caller drops those another stop of
+        // the trip holds; the rest are LATE sells nobody plans (Reopen::NoteLate). Base FormIDs.
+        std::vector<RE::FormID> unplanned;
         int  deferred = 0;                                     // OUT (kPlan): vendors skipped this pass for a pending price refresh (F1: the planner must re-plan, not commit without them)
     };
     void EconomyProbe(RE::Actor* a_follower, const FollowerState& a_state,

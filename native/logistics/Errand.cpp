@@ -1130,11 +1130,64 @@ namespace MFO::Logistics::Errand {
         std::vector<Stop> stops = a_plan.stops;   // (copy: a failed start leaves the plan, and the watch, intact for the retry)
         if (!StartTrip(a_follower, town, a_now, std::move(stops), line, n)) {
             Reopen::Retry(a_follower->GetFormID());
+            if (!a_plan.lateForms.empty()) Reopen::NoteLate(a_follower->GetFormID(), a_townId, a_plan.lateForms, true);   // MISSED SELLS (b): the late items wait for the next try
             spdlog::warn("[errand] {:08X} '{}': a needed shop opened but the new trip could NOT start (queued at the ch.19 walk budget or the travel claim was refused) -- the shop stays in the watch, retried", a_follower->GetFormID(), NameOf(a_follower));
             return false;
         }
         Reopen::Consume(a_follower->GetFormID(), a_plan);
         spdlog::info("[errand] {:08X} '{}': a NEEDED SHOP OPENED -- new trip of {} stop(s) STARTED (the inn last): {}", a_follower->GetFormID(), NameOf(a_follower), n, line);
+        return true;
+    }
+
+    // MISSED SELLS (b), marth 2026-10-21: items that became sellable mid-trip and sit in no stop's order (Reopen::NoteLate). Loaded follower only: the
+    // OPEN shops the plan recorded are evaluated again with his CURRENT inventory (EconomyErrandPlan), the orders are cut to the late items, and the
+    // normal trip planner decides (minimum sell, payer choice, stop cap). TRUE = a_out is a new trip (the caller ends the stay / the mark and starts it).
+    static bool PlanLateSells(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now, RE::FormID a_townId, Reopen::Plan& a_out) {
+        const auto fid = a_follower->GetFormID();
+        Reopen::LateJob job;
+        if (!Reopen::TakeLate(fid, a_townId, a_now, job)) return false;
+        std::vector<ErrandShop> shops;
+        for (const auto& c : job.shops) {
+            auto* fac = RE::TESForm::LookupByID<RE::TESFaction>(c.faction);
+            if (!fac) continue;
+            RE::ActorHandle h;
+            if (auto* va = c.actorId ? RE::TESForm::LookupByID<RE::Actor>(c.actorId) : nullptr; va && va->Is3DLoaded()) h = va->GetHandle();
+            shops.push_back(ErrandShop{ fac, h });
+        }
+        std::vector<ErrandPlanned> planned;
+        int deferred = 0;
+        if (!shops.empty()) EconomyErrandPlan(a_follower, a_state, a_now, shops, planned, &deferred);
+        if (deferred > 0) {   // a price quote is still being computed on the main thread: try again (capped in TakeLate)
+            Reopen::NoteLate(fid, a_townId, job.forms, true);
+            spdlog::info("[errand] {:08X} '{}': LATE SELL re-plan waits for {} shop price quote(s)", fid, NameOf(a_follower), deferred);
+            return false;
+        }
+        std::string names;
+        for (const auto f : job.forms) {
+            auto* o = RE::TESForm::LookupByID<RE::TESBoundObject>(f);
+            names += std::format("{}'{}'", names.empty() ? "" : ", ", o && o->GetName() && *o->GetName() ? o->GetName() : "?");
+        }
+        for (auto& p : planned) {
+            if (p.skipped) continue;
+            std::erase_if(p.sell, [&](const TradeBridge::SellRow& r) {
+                return !r.obj || std::find(job.forms.begin(), job.forms.end(), r.obj->GetFormID()) == job.forms.end();
+            });
+            p.sellRows = static_cast<int>(p.sell.size());
+            p.sellValue = 0;
+            for (const auto& r : p.sell) p.sellValue += static_cast<std::int64_t>(r.value) * std::max<std::int32_t>(r.count, 0);
+            p.needKinds = 0; p.needs.clear();
+            p.wishGear = p.wishApparel = p.wishTome = p.wishMaterials = false;
+            p.buy = TradeBridge::BuyThresholds{};
+            p.purse = 0;
+            if (p.sell.empty()) p.skipped = true;
+        }
+        job.in.follower = fid;
+        job.in.from = a_follower->GetPosition();
+        if (!Reopen::PlanLate(job, planned, a_out)) {
+            spdlog::info("[errand] {:08X} '{}': LATE SELL re-plan dropped -- no open shop of the {} recorded buys {} (or not worth a stop)", fid, NameOf(a_follower), shops.size(), names);
+            return false;
+        }
+        spdlog::info("[errand] {:08X} '{}': LATE SELL re-plan -- {} stop(s) for {}", fid, NameOf(a_follower), a_out.stops.size(), names);
         return true;
     }
 
@@ -1209,8 +1262,8 @@ namespace MFO::Logistics::Errand {
             if (canPlan) {
                 Reopen::Plan plan;
                 const auto from = a_follower->GetPosition();
-                if (Reopen::Poll(fid, tidNow, &from, plan)) {
-                    if (StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan))) Rest::UnmarkTripDone(fid, "a needed shop opened");   // a failed start keeps the mark (the watch retries)
+                if (Reopen::Poll(fid, tidNow, &from, plan) || PlanLateSells(a_follower, a_state, a_now, tidNow, plan)) {
+                    if (StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan))) Rest::UnmarkTripDone(fid, "a needed shop opened / a missed sell");   // a failed start keeps the mark (the watch retries)
                 }
             } else {
                 NotPlanning(a_follower, a_now, "this visit's trip is done and the reopen watch cannot poll now (paused / combat / looting / waiting / mounted / sitting / not loaded / not in the player's town / no trade quest)");
@@ -1378,6 +1431,9 @@ namespace MFO::Logistics::Errand {
 
         std::optional<Stop> innStopForWatch;   // F3: the committed trip's inn stop is the re-planned trip's LAST stop
         if (!stops.empty() && stops.back().kind == StopKind::Inn) innStopForWatch = stops.back();
+        std::vector<Trip::Cand> openTCandsForWatch = tcands;   // MISSED SELLS (b): the late-sell re-plan evaluates these again
+        std::vector<RE::FormID> tripFactions;                  // MISSED SELLS (a): a gold-blocked shop this trip visits is covered by its own trade
+        for (const auto& st : stops) if (st.kind == StopKind::Shop) tripFactions.push_back(st.faction);
         if (!StartTrip(a_follower, playerTown, a_now, std::move(stops), tripLine, cands.size())) return true;
         // F2: one line per evaluated shop of the committed plan (open shops, then the hours-closed ones the watch holds): the work each
         // carried, or why it carried none. A shop dropped for a pending quote is not listed (F1 re-plans instead).
@@ -1414,7 +1470,8 @@ namespace MFO::Logistics::Errand {
                 spdlog::info("[errand] {:08X} '{}': no hours-closed shop holds work for him -- no watch", fid, NameOf(a_follower));
         }
         if (Config::g_errandInn.load())   // F3: the hours-closed shops (and their orders) ride the trip: the WATCH
-            Reopen::Record(fid, playerTown->GetFormID(), std::move(closedTCands), std::move(closedPlanned), tin, innStopForWatch ? &*innStopForWatch : nullptr);
+            Reopen::Record(fid, playerTown->GetFormID(), std::move(closedTCands), std::move(closedPlanned), tin, innStopForWatch ? &*innStopForWatch : nullptr,
+                           std::move(openTCandsForWatch), std::move(tripFactions));
         return true;
     }
 
@@ -1561,7 +1618,7 @@ namespace MFO::Logistics::Errand {
             if (innStay) {
                 Reopen::Plan plan;
                 const auto from = a_follower->GetPosition();
-                if (Reopen::Poll(fid, r.town, &from, plan)) {
+                if (Reopen::Poll(fid, r.town, &from, plan) || PlanLateSells(a_follower, a_state, a_now, r.town, plan)) {
                     const RE::FormID townId = r.town;
                     Finish(fid, "a needed shop opened -- the stay ends, a new trip starts", 0.0f, false, true);
                     StartReopenedTrip(a_follower, townId, a_now, std::move(plan));
@@ -1944,6 +2001,19 @@ namespace MFO::Logistics::Errand {
                 probe.dispatched = dr == Rest::Dispatch::Sent;
             } else {
                 EconomyErrandExecute(a_follower, a_state, a_now, probe, r.order.get(), purseCap);
+                if (!probe.unplanned.empty()) {   // MISSED SELLS (b): sellable now, in no OTHER stop's order either -> a late sell (this stop's share was cut out in the probe)
+                    std::vector<RE::FormID> late;
+                    for (const auto f : probe.unplanned) {
+                        bool handled = false;
+                        for (std::size_t i = 0; i < r.stops.size() && !handled; ++i) {
+                            if (i == r.cur) continue;
+                            const auto& o = r.stops[i].order;
+                            handled = o && std::any_of(o->sell.begin(), o->sell.end(), [&](const TradeBridge::SellRow& s) { return s.obj && s.obj->GetFormID() == f; });
+                        }
+                        if (!handled) late.push_back(f);
+                    }
+                    if (!late.empty()) Reopen::NoteLate(fid, r.town, late);
+                }
             }
             if (probe.dispatched) {
                 r.phase = Phase::Trading;
@@ -1979,6 +2049,14 @@ namespace MFO::Logistics::Errand {
                              fid, r.followerName, r.vendorName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
                 r.tripSpent += std::max(0, out.spent);   // R5: the next stop's purse cap
                 if (!out.smithBought.empty()) Smith::NoteBought(fid, out.smithBought);   // R8: real stock for a later hand-off
+                if (!out.unsold.empty() && r.cur < r.stops.size()) {   // MISSED SELLS (a): the vendor's gold ran out -- watch the shop, and offer the rows to the other open shops too (b)
+                    const Stop* innS = nullptr;
+                    for (const auto& st : r.stops) if (st.kind == StopKind::Inn) innS = &st;
+                    Reopen::NoteUnsold(fid, r.town, r.stops[r.cur], r.order.get(), out, innS);
+                    std::vector<RE::FormID> uf;
+                    for (const auto& row : out.unsold) if (row.obj) uf.push_back(row.obj->GetFormID());
+                    Reopen::NoteLate(fid, r.town, uf);
+                }
                 r.dispatched = false;
                 r.bought = out.boughtCount > 0;
                 if (r.bought && idles.take) {

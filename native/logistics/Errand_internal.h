@@ -8,6 +8,7 @@
 #include "Runtime.h"   // PlvdPlaceVerified: the exact-build gates
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -334,14 +335,34 @@ namespace MFO::Logistics::Errand {
             std::vector<Stop> stops;   // the opened shops in visit order, then the inn stop (state Pending, no order); stops.front() is Active
             std::string       line;    // the plan line's body
             std::vector<RE::FormID> keys;   // the opened shops' plan keys: Consume() takes them out of the watch once the trip really started
+            std::vector<RE::FormID> lateForms;   // a LATE-SELL plan: the freed items it serves (re-queued by StartReopenedTrip when the start fails)
         };
-        // Planner (worker, TryStart), at the commit of a trip. a_closedCands / a_closedOrders = the hours-closed shops and their orders (empty = erase
-        // the watch). a_in = the plan's inputs; a_innStop = the committed trip's inn stop (null = the trip has none).
+        // Planner (worker, TryStart), at the commit of a trip. a_closedCands / a_closedOrders = the hours-closed shops and their orders (may be empty).
+        // a_in = the plan's inputs; a_innStop = the committed trip's inn stop (null = the trip has none). MISSED SELLS (marth 2026-10-21): a_openCands = the
+        // OPEN shops of the plan (a late-sell re-plan evaluates them again), a_tripFactions = the factions the committed trip visits (a gold-blocked
+        // entry of a shop the new trip covers is dropped; the others survive the new commit).
         void Record(RE::FormID a_follower, RE::FormID a_town, std::vector<Trip::Cand>&& a_closedCands, std::vector<ErrandPlanned>&& a_closedOrders,
-                    const Trip::Inputs& a_in, const Stop* a_innStop);
+                    const Trip::Inputs& a_in, const Stop* a_innStop, std::vector<Trip::Cand>&& a_openCands, const std::vector<RE::FormID>& a_tripFactions);
         // Worker. TRUE = a_out is a new trip (the opened shops stay in the watch until Consume; a "no stop" verdict drops them here). Hour-gated (once per game hour per follower). a_from (null = the recorded one) is where he is now.
-        // Takes Errand g_mx then Sim g_mx (Trip::ChestCrowd): the caller holds neither.
+        // Also re-checks the GOLD WATCH (below) on the same hourly poll. Takes Errand g_mx then Sim g_mx (Trip::ChestCrowd): the caller holds neither.
         bool Poll(RE::FormID a_follower, RE::FormID a_town, const RE::NiPoint3* a_from, Plan& a_out);
+        // MISSED SELLS (a), marth 2026-10-21: a REPORTED trade whose offered sell rows the vendor's chest gold could not pay (TradeOutcome::unsold) files the
+        // shop + the unsold rows here (session-only). The hourly Poll plans a new trip for it once the chest's last-seen gold (TradeBridge::LastSeenChestGold, the
+        // planner's own safe read: a native chest read is forbidden, §0.37) covers a row or the vendor's restock interval has passed. a_innStop = the trip's inn stop.
+        void NoteUnsold(RE::FormID a_follower, RE::FormID a_town, const Stop& a_stop, const ErrandPlanned* a_order,
+                        const TradeBridge::TradeOutcome& a_out, const Stop* a_innStop);
+        // MISSED SELLS (b): items that became sell candidates mid-trip and appear in NO stop's order. a_requeue = a failed start puts them back.
+        void NoteLate(RE::FormID a_follower, RE::FormID a_town, const std::vector<RE::FormID>& a_forms, bool a_requeue = false);
+        struct LateJob {
+            std::vector<Trip::Cand> shops;   // the plan's OPEN shops
+            std::vector<RE::FormID> forms;   // the late items
+            Trip::Inputs            in;
+            std::optional<Stop>     inn;
+        };
+        // Worker, loaded follower only (the caller evaluates his inventory): TRUE = a job (the late items leave the watch; throttled to one per 5 s).
+        bool TakeLate(RE::FormID a_follower, RE::FormID a_town, std::chrono::steady_clock::time_point a_now, LateJob& a_out);
+        // The late items were evaluated against the open shops (a_evaluated: EconomyErrandPlan over a_job.shops, rows already cut to the late items).
+        bool PlanLate(const LateJob& a_job, const std::vector<ErrandPlanned>& a_evaluated, Plan& a_out);
         // The trip started: the opened shops leave the watch. Not consumed on a failed start (queued at kMaxWalking / the ch.19 claim refused): Retry.
         void Consume(RE::FormID a_follower, const Plan& a_plan);
         void Retry(RE::FormID a_follower);   // the start failed: lift the once-per-game-hour gate so the next Poll tries again

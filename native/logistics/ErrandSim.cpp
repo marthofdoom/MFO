@@ -950,6 +950,15 @@ namespace MFO::Logistics::Errand::Sim {
                                          r.followerName, out.soldCount, out.soldValue, out.boughtCount, out.spent);
                         r.tripSpent += std::max(0, out.spent);   // R5: the next stop's purse cap
                         if (!out.smithBought.empty()) Smith::NoteBought(fid, out.smithBought);   // R8: what this trade really bought
+                        if (!out.aborted && !out.unsold.empty()) {   // MISSED SELLS (a)/(b): the vendor's gold ran out -- watch the shop, offer the rows to the other open shops at the inn stage
+                            SyncCur(r);
+                            const Stop* innS = nullptr;
+                            for (const auto& st : r.stops) if (st.kind == StopKind::Inn) innS = &st;
+                            Reopen::NoteUnsold(fid, r.town, r.stops[r.cur], r.order.get(), out, innS);
+                            std::vector<RE::FormID> uf;
+                            for (const auto& row : out.unsold) if (row.obj) uf.push_back(row.obj->GetFormID());
+                            Reopen::NoteLate(fid, r.town, uf);
+                        }
                     } else if (clk - r.dispatchedClk > kTradeWaitClkSec) {
                         r.reported = true;
                         spdlog::warn("[errand] {:08X}: the replayed trade never reported ({:.0f} s) -- continuing", fid, kTradeWaitClkSec);

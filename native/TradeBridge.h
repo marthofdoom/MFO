@@ -248,7 +248,16 @@ namespace MFO::TradeBridge {
         // R8: the smithing materials this trade ACTUALLY bought, by form. Papyrus reports only totals, so a line is credited only when
         // the report shows EVERY planned unit was bought (boughtCount >= the plan's total); otherwise nothing is credited (never a guess).
         std::vector<SmithMat> smithBought;
+        // MISSED SELLS (marth 2026-10-21): the offered sell rows the vendor's chest gold could not pay for (count = the units left unsold). Filled only
+        // when a native replay of Papyrus's greedy sell loop over the order's rows reproduces the reported soldCount AND soldValue exactly (Papyrus
+        // reports totals, never rows); otherwise empty, never a guess. chestId / chestGoldNow (gold left after the trade) / day (dispatch game day) ride along.
+        std::vector<SellRow> unsold;
+        RE::FormID           chestId = 0;
+        std::int32_t         chestGoldNow = -1;
+        float                day = 0.0f;
     };
+    // iDaysToRespawnVendor (game days between a vendor's restocks, gold included), read by name; 2 if unreadable.
+    float VendorRestockDays();
     // The vendor chest's barter gold as the LAST report there read it (-1 = never reported). Worker.
     std::int32_t LastSeenChestGold(RE::FormID a_chest);
     bool HasLiveOrder(RE::FormID a_follower);

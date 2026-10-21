@@ -695,6 +695,24 @@ namespace MFO::TradeBridge {
                 // Store what the chest holds NOW. A probe moves no gold (psc `if !probe`), so it keeps the read.
                 g_chestGold[o.chestId] = postTradeGold;
                 g_outcomes[o.followerId] = TradeOutcome{ false, a_soldCount, a_soldValue, a_boughtCount, a_spent };
+                if (!o.probeOnly) {   // MISSED SELLS: replay Papyrus's sell loop (budget = the chest's gold after the buy) to name the rows gold could not pay
+                    std::int64_t budget = static_cast<std::int64_t>(a_vendorGold) + std::max(0, a_spent);
+                    std::int64_t repValue = 0, repCount = 0;
+                    std::vector<SellRow> rem;
+                    for (const auto& s : o.sell) {
+                        if (!s.obj || s.value <= 0 || s.count <= 0) continue;
+                        if (s.value > budget) { rem.push_back(s); continue; }
+                        const std::int64_t can = std::min<std::int64_t>(budget / s.value, s.count);
+                        budget -= can * s.value; repValue += can * s.value; repCount += can;
+                        if (can < s.count) { SellRow r = s; r.count = static_cast<std::int32_t>(s.count - can); rem.push_back(r); }
+                    }
+                    auto& oc = g_outcomes[o.followerId];
+                    oc.chestId = o.chestId; oc.chestGoldNow = postTradeGold; oc.day = o.daysAt;
+                    if (repValue == a_soldValue && repCount == a_soldCount) oc.unsold = std::move(rem);
+                    else if (!rem.empty())
+                        spdlog::info("[econ] token {}: {} offered row(s) went unsold but the replay of the sell loop (sold {} for {}g) does not match the report (sold {} for {}g) -- not attributed to the vendor's gold",
+                                     a_token, rem.size(), repCount, repValue, a_soldCount, a_soldValue);
+                }
                 if (!o.probeOnly && o.plannedTotal > 0 && a_boughtCount >= o.plannedTotal)
                     g_outcomes[o.followerId].smithBought = o.smithPlanned;   // R8: the whole plan ran, so its materials arrived
                 // The memo key: the vendor actor when it resolves, else the errand's own (the plan keyed SkipTrade by it).
@@ -912,6 +930,8 @@ namespace MFO::TradeBridge {
         }
         return false;
     }
+
+    float VendorRestockDays() { return RestockDays(); }
 
     std::int32_t LastSeenChestGold(RE::FormID a_chest) {
         std::scoped_lock lk(g_mtx);
