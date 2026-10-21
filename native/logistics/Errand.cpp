@@ -718,7 +718,7 @@ namespace MFO::Logistics::Errand {
             r.phase = Phase::Walking;
             r.vendor = s.destKind == DestKind::VendorActor ? s.destForm : 0u;
             r.chest = s.chest; r.faction = s.faction; r.vendorName = s.vendorName;
-            r.destKind = s.destKind; r.destForm = s.destForm; r.destRad = s.destRad;
+            r.destKind = s.destKind; r.destForm = s.destForm; r.destRad = s.destKind == DestKind::VendorActor ? kVendorRadius : s.destRad;   // town run 6: a reloaded vendor stop gets the current radius
             r.order = s.order;
             r.beatRequested = r.talkFallbackUsed = r.dispatched = r.bought = r.announced = false;
             r.browse = false;   // R4: the browsing beat belongs to the stop it was set for (R4 MAP WHAT BREAKS)
@@ -1833,8 +1833,8 @@ namespace MFO::Logistics::Errand {
             if (!arrived && vendorLoaded && dist <= kArriveDist && dz <= kSameFloorDz) {
                 arrived = true;
                 if (leg.ours && leg.state == APMF_API::kLeg_Walking)
-                    spdlog::info("[errand] {:08X} '{}': ARRIVED by MFO distance {:.0f}u > leg radius {:.0f}u, Harbinger leg still WALKING",
-                                 fid, r.followerName, dist, r.destRad);
+                    spdlog::info("[errand] {:08X} '{}': ARRIVED by MFO distance backstop ({:.0f} u <= {:.0f} u, dz {:.0f}) while the Harbinger leg still reads WALKING (leg radius {:.0f} u, {} ms in state)",
+                                 fid, r.followerName, dist, kArriveDist, dz, r.destRad, leg.msInState);
             }
             if (!arrived) { Store(fid, r); return true; }
             if (!r.announced) {   // one-shot: the Walking phase leaves here for the talk / give beat (a resume that was announced skips it)

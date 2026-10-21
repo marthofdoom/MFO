@@ -2212,3 +2212,5 @@ marth R1 (always teleport, even in view) overrides Harbinger APMF-B149 ("MFO sho
 ### MFO-B446 (SEV-5, OPEN, ErrandPlace.cpp:154) -- fallback places 90 u along the interior door's own heading; door mesh +Y into the room not verified (only when the landing point is >800 u from the linked door) (raised against ed41d50)
 
 ### MFO-B447 (SEV-5, OPEN, TradeBridge.cpp ReportTrade comment; MFO_Trade.psc) -- stale psc line cites after the reorder; a form on both the sell list and buy plan could be sold back (no current planner path produces it) (raised against ed41d50)
+
+### MFO-B448 (SEV-5, OPEN, Errand.cpp NotPlanning, against 6613442) -- "not planning -- player not in a town" / combat reasons repeat every 30 s per follower; a change-only option for steady-state reasons would cut log volume.
