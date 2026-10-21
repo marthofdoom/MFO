@@ -149,7 +149,13 @@ namespace MFO::LocationTypes {
         }();
         int guard = 0;
         for (auto* loc = a_loc; loc && guard < 8; loc = loc->parentLoc, ++guard) {
-            if (loc->HasKeyword(want)) return true;
+            if (loc->HasKeyword(want)) {
+                if (loc == a_loc) return true;   // its OWN keyword decides
+                // Run 4: INHERITED from a parent only when the parent's ONLY place-type keyword is the wanted one. A parent carrying
+                // several (Old Temple's parent was an all-keyword district) is a district, not the place: no inheritance across it.
+                for (auto* k : s_place) if (k != want && loc->HasKeyword(k)) return false;
+                return true;
+            }
             for (auto* k : s_place) if (loc->HasKeyword(k)) return false;   // another kind of place: no inheritance across it
             for (auto* k : s_stop) if (loc->HasKeyword(k)) return false;
         }
