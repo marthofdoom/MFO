@@ -516,7 +516,7 @@ namespace MFO::Logistics::Errand {
 
         // The vendor ACTOR of a faction standing in a LOADED cell: the physical half of a shop reached through its place
         // (design AT_VENDOR_PHYS). Collect-then-act; alive, loaded, not in combat, not a teammate, not asleep.
-        RE::NiPointer<RE::Actor> FindVendorActor(RE::Actor* a_near, RE::FormID a_faction) {
+        RE::NiPointer<RE::Actor> FindVendorActor(RE::Actor* a_near, RE::FormID a_faction, bool a_allCells = false) {
             auto* cell = a_near ? a_near->GetParentCell() : nullptr;
             if (!cell || !cell->IsAttached()) return {};
             std::vector<RE::ActorHandle> cands;
@@ -539,12 +539,15 @@ namespace MFO::Logistics::Errand {
             }
             // Run 4: not in his own cell. The main-thread scan of EVERY loaded cell (PostVendorScan, landed by an earlier unattended verdict)
             // may have found a vendor of that faction elsewhere (a stall across a cell border): reuse it while it is loaded and awake.
-            {
+            if (a_allCells) {   // opt-in: ONLY the unattended re-check (the other callers keep their own-cell meaning)
                 RE::FormID seen = 0;
                 { std::scoped_lock lk(g_mx); if (const auto it = g_vendorScan.find(a_faction); it != g_vendorScan.end()) seen = it->second.awakeLoaded; }
                 if (seen) {
-                    if (auto* sv = RE::TESForm::LookupByID<RE::Actor>(seen); sv && !sv->IsDead() && !sv->IsDisabled() && sv->Is3DLoaded() && !APMFBridge::InCombat(sv))
-                        return RE::NiPointer<RE::Actor>(sv);
+                    if (auto* sv = RE::TESForm::LookupByID<RE::Actor>(seen); sv && !sv->IsDead() && !sv->IsDisabled() && sv->Is3DLoaded() && !APMFBridge::InCombat(sv)) {
+                        const auto st = sv->AsActorState()->GetSitSleepState();
+                        if (st != RE::SIT_SLEEP_STATE::kIsSleeping && st != RE::SIT_SLEEP_STATE::kWantToSleep && st != RE::SIT_SLEEP_STATE::kWaitingForSleepAnim)
+                            return RE::NiPointer<RE::Actor>(sv);
+                    }
                 }
             }
             return {};
@@ -707,6 +710,13 @@ namespace MFO::Logistics::Errand {
             r.walkRetries = 0; r.retryWait = r.retryRepoint = r.stepOut = r.needStepOut = r.haveBlockPos = false; r.retryAt = {};   // run 4: the retries belong to the stop
         }
 
+        // Run 4 review F2: the inn stay's first retry-later attempt kLaterBaseSec in, doubling per attempt already made. Call wherever phase becomes Resting for an Inn stop.
+        void ArmLaterRetry(Rec& r, Clock::time_point a_now) {
+            int made = 0;
+            for (const auto& st : r.stops) if (st.retryLater) made = std::max<int>(made, st.laterRetries);
+            r.laterAt = a_now + std::chrono::seconds(kLaterBaseSec << std::min(made, 4));
+        }
+
         // R5: the CURRENT stop is over -- a_ok: its trade ran or there was nothing left to do (Done); else it failed (Skipped, the
         // design's "a failed stop is skipped, logged, and the trip moves on"). TRUE = the trip goes on: r describes the next stop,
         // its walk is declared (ch.19 Repoint of the trip's own claim; MFO declares, Harbinger walks), and the CALLER stores r.
@@ -729,6 +739,8 @@ namespace MFO::Logistics::Errand {
                     // Run 4: the visit is marked done only when the INN STAGE was reached (an inn stop Done), or the trip had no inn stop at all.
                     const bool innDone = std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.kind == StopKind::Inn && s.state == StopState::Done; });
                     const bool hasInn  = std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.kind == StopKind::Inn; });
+                    if (Config::g_errandInn.load() && std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.kind == StopKind::Inn && s.state == StopState::Skipped; }))
+                        Rest::NoteInnTripFailed(a_fid, a_now);   // run 4 F1: backs the inn off; no mark
                     if (anyDone && Config::g_errandInn.load() && (innDone || !hasInn)) Rest::MarkTripDone(a_fid, r.town, "the trip ended");   // R7: one trip per town visit
                     else if (Config::g_errandInn.load())
                         spdlog::info("[errand] {:08X}: the trip ended WITHOUT reaching the inn stage ({}) -- the visit is NOT marked done; a new trip may plan", a_fid, why);
@@ -795,6 +807,7 @@ namespace MFO::Logistics::Errand {
             g_cool.clear();
             g_nextPlan.clear();
             g_parked.clear();
+            g_vendorScan.clear();   // run 4
             g_backoff.clear();
             g_backoffLogged.clear();
             g_townShops.clear();
@@ -959,6 +972,7 @@ namespace MFO::Logistics::Errand {
                 r.stops[r.cur].state = StopState::Active;
                 if (!Rest::Begin(a_follower, r.stops[r.cur], 0, r.followerName, r.town, now)) return false;
                 r.phase = Phase::Resting;
+                if (r.stops[r.cur].kind == StopKind::Inn) ArmLaterRetry(r, now);   // run 4 F2
                 {
                     std::scoped_lock lk(g_mx);
                     g_recs[fid] = r;
@@ -1414,11 +1428,7 @@ namespace MFO::Logistics::Errand {
                     r.phaseAt = a_now;
                     r.dispatched = false;
                     spdlog::info("[errand] {:08X} '{}': the inn's counter business is over ({}) -- he STAYS", fid, r.followerName, a_why);
-                    {   // run 4: the skipped stops are retried from the inn stage; the first attempt kLaterBaseSec in, doubling per attempt already made
-                        int made = 0;
-                        for (const auto& st : r.stops) if (st.retryLater) made = std::max<int>(made, st.laterRetries);
-                        r.laterAt = a_now + std::chrono::seconds(kLaterBaseSec << std::min(made, 4));
-                    }
+                    ArmLaterRetry(r, a_now);   // run 4: the skipped stops are retried from the inn stage
                     Store(fid, r);
                     return true;
                 }
@@ -1499,6 +1509,7 @@ namespace MFO::Logistics::Errand {
                     LoadStop(r, i);
                     r.phaseAt = a_now;
                     r.startClk = r.lastTickClk = Scheduler::ServiceClock();
+                    if (auto* cal1 = RE::Calendar::GetSingleton()) r.startDays = cal1->GetDaysPassed();   // run 4 F3: the trip's game-min cap restarts with the retry
                     bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(fid, r.destForm, r.destRad);
                     if (!walk && r.destForm != 0) walk = APMFBridge::ClaimErrandTravel(fid, r.destForm, r.destRad);
                     if (!walk) return stopOver("the retry walk could not be declared", false, kFailCooldownSec);
@@ -1561,6 +1572,7 @@ namespace MFO::Logistics::Errand {
                     const char* how = "re-pointed";
                     bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(fid, r.destForm, r.destRad);
                     if (!walk && r.destForm != 0) { walk = APMFBridge::ClaimErrandTravel(fid, r.destForm, r.destRad); how = "claimed afresh"; }
+                    r.startClk = r.lastTickClk = Scheduler::ServiceClock();   // run 4 F3: the 240 s cap is per attempt
                     spdlog::info("[errand] {:08X} '{}': RETRY {}/{} -- walk to {:08X} '{}' {}", fid, r.followerName, r.walkRetries, kWalkRetries,
                                  r.destForm, r.vendorName, walk ? how : "could NOT be declared");
                     if (!walk) return giveUp("the retry walk could not be declared", kFailCooldownSec);
@@ -1595,6 +1607,7 @@ namespace MFO::Logistics::Errand {
                                 return stopOver("the stop's work could not begin", false, kFailCooldownSec);
                             r.phase = Phase::Resting;
                             r.phaseAt = a_now;
+                            if (r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn) ArmLaterRetry(r, a_now);   // run 4 F2
                             Store(fid, r);
                             return true;
                         };
@@ -1609,7 +1622,7 @@ namespace MFO::Logistics::Errand {
                             return true;
                         }
                         if (kind == StopKind::Temple || (kind == StopKind::Inn && !r.order)) return beginWork();
-                        auto va = FindVendorActor(a_follower, r.faction);
+                        auto va = FindVendorActor(a_follower, r.faction, true);   // run 4: the unattended re-check also reads the all-cell scan
                         if (!va && kind == StopKind::Inn) {
                             spdlog::info("[errand] {:08X}: the inn has no innkeeper in his cell -- no food bought, the stop is rest only", fid);
                             return beginWork();

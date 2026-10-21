@@ -157,6 +157,9 @@ namespace MFO::Logistics::Errand::Rest {
         std::unordered_map<RE::FormID, int>              g_templeTry;  // follower -> game day of the last temple visit (any outcome): a short-term ANTI-THRASH only, NOT the blessing's truth (that is MagicView::blessed)
         std::unordered_set<RE::FormID>                   g_tripDone;   // followers whose trip ended this town visit
         std::unordered_set<RE::FormID>                   g_tripLogged; // ... for whom the re-plan block was already logged
+        std::unordered_map<RE::FormID, int>              g_innFailTrips;   // run 4 F1: trips this visit that ended with the inn stop Skipped (session-only)
+        std::unordered_map<RE::FormID, Clock::time_point> g_innNextTry;    // ... the earliest the inn is planned again
+        std::unordered_map<RE::FormID, Clock::time_point> g_innSuppLogged; // ... rate limit of the "omitted" line
         std::unordered_map<RE::FormID, int>              g_magicDefers;  // consecutive MagicReadPending defers per follower (cap kMagicMaxDefers)
         std::unordered_set<RE::FormID>                   g_lockLogged;  // load doors whose LOCK was already logged (one skip line per door per town visit)
         std::unordered_set<RE::FormID>                   g_magicWaitLogged; // ... for whom "waiting for the blessing/disease read" was logged this visit
@@ -923,7 +926,27 @@ namespace MFO::Logistics::Errand::Rest {
                 }
             }
         }
-        if (inn.ok && innFac && a_stops.size() < kMaxTripStops) {
+        // Run 4 F1: an inn that failed its last trip(s) this visit is not planned again at once (2 min, then 4), and after 3 failed trips not at all.
+        bool innSuppressed = false;
+        if (inn.ok && innFac) {
+            int fails = 0; Clock::time_point nextTry{};
+            { std::scoped_lock lk(g_mx); if (const auto it = g_innFailTrips.find(fid); it != g_innFailTrips.end()) fails = it->second;
+              if (const auto it = g_innNextTry.find(fid); it != g_innNextTry.end()) nextTry = it->second; }
+            if (fails >= 3 || (fails > 0 && a_now < nextTry)) {
+                innSuppressed = true;
+                std::scoped_lock lk(g_mx);
+                auto& nx = g_innSuppLogged[fid];
+                if (nx.time_since_epoch().count() == 0 || a_now >= nx) {
+                    nx = a_now + std::chrono::seconds(120);
+                    if (fails >= 3)
+                        spdlog::warn("[errand] {:08X}: inn '{}' unreachable after {} trips this visit -- no inn stop until the player leaves town", fid, inn.name, fails);
+                    else
+                        spdlog::info("[errand] {:08X}: inn '{}' failed {} trip(s) this visit -- not planned again for {} s", fid, inn.name, fails,
+                                     std::chrono::duration_cast<std::chrono::seconds>(nextTry - a_now).count());
+                }
+            }
+        }
+        if (inn.ok && innFac && !innSuppressed && a_stops.size() < kMaxTripStops) {
             Stop s;
             s.kind = StopKind::Inn;
             s.vendorName = inn.name;
@@ -966,6 +989,7 @@ namespace MFO::Logistics::Errand::Rest {
             spdlog::info("[errand] the player's town changed ({:08X} -> {:08X}): {} follower(s)' trip-done mark(s) cleared", g_marksTown, a_townId, g_tripDone.size());
         g_marksTown = a_townId;
         Reopen::ClearAll();   // F3: the watch belongs to the town visit
+        g_innFailTrips.clear(); g_innNextTry.clear(); g_innSuppLogged.clear();   // run 4 F1
         g_tripDone.clear();
         g_tripLogged.clear();
         g_lockLogged.clear();
@@ -1048,6 +1072,15 @@ namespace MFO::Logistics::Errand::Rest {
             g_tripLogged.erase(a_follower);
         }
         if (had) spdlog::info("[errand] {:08X}: trip-done mark CLEARED ({})", a_follower, a_why);
+    }
+    void NoteInnTripFailed(RE::FormID a_follower, Clock::time_point a_now) {
+        int n = 0;
+        {
+            std::scoped_lock lk(g_mx);
+            n = ++g_innFailTrips[a_follower];
+            g_innNextTry[a_follower] = a_now + std::chrono::minutes(n == 1 ? 2 : 4);
+        }
+        spdlog::info("[errand] {:08X}: the trip ended with its inn stop SKIPPED (failed inn trip {}/3 this visit); no trip-done mark", a_follower, n);
     }
     void MarkTripDone(RE::FormID a_follower, RE::FormID a_townId, const char* a_why) {
         {
@@ -1155,6 +1188,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_work.clear();
         g_magic.clear();
         g_templeTry.clear();
+        g_innFailTrips.clear(); g_innNextTry.clear(); g_innSuppLogged.clear();
         g_tripDone.clear();
         g_tripLogged.clear();
         g_lockLogged.clear();

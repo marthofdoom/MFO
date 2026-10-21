@@ -2183,3 +2183,18 @@ Note (SEV-4, tracked as a fork task, not here): the mit-3.7 fork's TES.h guards 
 
 ### MFO-B436 (SEV-4, OPEN, informational, LocationTypes.h TownAnchor) -- outermost anchor widens "the town" (raised against c83d197)
 "With Lux Via-style nesting, Left Hand Mine and similar places now count as Markarth, so walking there does not end an errand as 'left town'."
+
+### MFO-B437 (SEV-4, OPEN, logistics/Errand.cpp Tick inn-stage retry) -- a failed retry declare loses the stop (raised against a658951)
+"The inn-stage retry block clears ls.retryLater before the walk is declared, so when the declare fails the stop is no longer on the retry-later list."
+
+### MFO-B438 (SEV-4, OPEN, logistics/ErrandRest.cpp Rest::End) -- log says 'the trip is over' on a noMark retry (raised against a658951)
+"Rest::End logs 'the trip is over' for a_tripOver=true even when the inn-stage retry ends the stay with noMark; the trip goes on."
+
+### MFO-B439 (SEV-5, OPEN, logistics/ErrandRest.cpp ~:861) -- stale comment (raised against a658951)
+"The F4 comment still says the temple is SKIPPED when no door is found or readable; since run 4 only a LOCKED door skips."
+
+### MFO-B440 (SEV-5, OPEN, logistics/ErrandSim.cpp RET_SIM mark) -- marks without anyDone (raised against a658951)
+"The RET_SIM MarkTripDone fires without the anyDone condition NextStopOrFinish uses."
+
+### MFO-B441 (SEV-4, OPEN, logistics/ErrandSim.cpp) -- off-screen trips never retry skipped stops from the inn (raised against a658951)
+"The inn-stage retry-later exists only in the on-screen Tick; an unloaded follower's REST_SIM never retries stops skipped for a failed walk."
