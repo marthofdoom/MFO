@@ -22,6 +22,7 @@
 #include "PCH.h"
 #include "Errand_internal.h"
 #include "Runtime.h"         // the exact-build gates (the PLVD place: PlvdPlaceVerified, Errand_internal.h)
+#include "Logistics.h"          // ForEachLoadedRef (run 4: the unattended-vendor scan of every loaded cell, on the main thread)
 #include "Logistics_internal.h"
 #include "Config.h"
 #include "Followers.h"
@@ -71,6 +72,14 @@ namespace MFO::Logistics::Errand {
         // pauses the world never ages an errand (Lotd::SweepTrip's rule).
         constexpr double kTradeWaitSec  = 45.0;   // dispatch -> ReportTrade (VendorTrade reaps an order at 30 s)
         constexpr double kRealCapSec    = 240.0;
+        // Run 4 (marth 2026-10-20: "routing is something that shouldnt be so rigid and brittle"): a blocked / failed walk RETRIES before it skips.
+        constexpr int    kWalkRetries   = 3;                                      // per stop, then the stop is skipped onto the retry-later list
+        constexpr int    kRetryBackoffS[kWalkRetries] = { 5, 15, 30 };            // real seconds before retry 1 / 2 / 3
+        constexpr float  kStepOutMoveU  = 100.0f;                                 // moved less than this since the last block: step out first
+        constexpr float  kStepOutRadius = 200.0f;                                 // the step-out walk's arrival radius around the player
+        constexpr int    kStepOutSec    = 8;                                      // how long the step-out walk runs before the retry
+        constexpr int    kLaterRetries  = 3;                                      // retry-later attempts per skipped stop, from the inn stage
+        constexpr int    kLaterBaseSec  = 60;                                     // inn stay -> first retry-later attempt; doubles per attempt
         constexpr double kStallSec      = 8.0;    // an errand whose follower is not being serviced
         constexpr auto  kLeftTownGrace  = std::chrono::seconds(2);
         constexpr auto  kHandoffPoll    = std::chrono::milliseconds(1000);   // unloaded this long (one more poll) before he is handed to the simulation
@@ -145,6 +154,12 @@ namespace MFO::Logistics::Errand {
             std::vector<Stop> stops;
             std::uint8_t  cur = 0;
             int           tripPurse = -1, tripSpent = 0;
+            // Run 4: the CURRENT stop's walk-retry state (session-only, reset by LoadStop). A failed walk waits retryAt (5/15/30 s), then
+            // re-points the same ch.19 claim; needStepOut = he did not move since the last block (first walk toward the player).
+            int           walkRetries = 0;
+            bool          retryWait = false, retryRepoint = false, stepOut = false, needStepOut = false, haveBlockPos = false;
+            Clock::time_point retryAt{}, laterAt{};   // laterAt: the inn stay's next retry-later attempt
+            RE::NiPoint3  lastBlockPos{};
         };
 
         std::mutex                                           g_mx;
@@ -157,6 +172,9 @@ namespace MFO::Logistics::Errand {
         struct WalkBackoff { Clock::time_point until{}; int fails = 0; };
         std::unordered_map<std::uint64_t, WalkBackoff>       g_backoff;
         std::unordered_map<RE::FormID, std::string>          g_backoffLogged;   // follower -> the skipped-chest set last logged (the skip line fires on a CHANGE only)
+        // Run 4: the main-thread scan of every loaded cell for one vendor faction (PostVendorScan); awakeLoaded = a member who is alive, enabled, loaded and awake.
+        struct VendorScan { float hour = -1.0f; int members = 0; RE::FormID awakeLoaded = 0; std::string summary; };
+        std::unordered_map<RE::FormID, VendorScan>           g_vendorScan;
         std::uint64_t BackoffKey(RE::FormID a_fid, RE::FormID a_chest) { return (static_cast<std::uint64_t>(a_fid) << 32) | a_chest; }
         RE::FormID                                           g_townId = 0;  // the town the player has been in ...
         Clock::time_point                                    g_townSince{}; // ... since this instant
@@ -519,7 +537,51 @@ namespace MFO::Logistics::Errand {
                 auto* fac = VendorFactionOf(v);
                 if (fac && fac->GetFormID() == a_faction) return p;
             }
+            // Run 4: not in his own cell. The main-thread scan of EVERY loaded cell (PostVendorScan, landed by an earlier unattended verdict)
+            // may have found a vendor of that faction elsewhere (a stall across a cell border): reuse it while it is loaded and awake.
+            {
+                RE::FormID seen = 0;
+                { std::scoped_lock lk(g_mx); if (const auto it = g_vendorScan.find(a_faction); it != g_vendorScan.end()) seen = it->second.awakeLoaded; }
+                if (seen) {
+                    if (auto* sv = RE::TESForm::LookupByID<RE::Actor>(seen); sv && !sv->IsDead() && !sv->IsDisabled() && sv->Is3DLoaded() && !APMFBridge::InCombat(sv))
+                        return RE::NiPointer<RE::Actor>(sv);
+                }
+            }
             return {};
+        }
+
+        // Run 4 item 6 (unattended shop): scan EVERY loaded cell for members of the vendor faction, on the MAIN thread (the grid is not safe to
+        // walk from the worker, LootScan.cpp crash4), and keep the verdict in g_vendorScan for FindVendorActor + the log line. Returns at once.
+        void PostVendorScan(RE::FormID a_faction) {
+            if (!a_faction || !MainThread::IsInstalled()) return;
+            MainThread::Post([a_faction]() {
+                VendorScan sc;
+                auto* cal = RE::Calendar::GetSingleton();
+                sc.hour = cal ? cal->GetHour() : -1.0f;
+                std::string list;
+                Logistics::ForEachLoadedRef([&](RE::TESObjectREFR* a_ref) {
+                    auto* a = a_ref ? a_ref->As<RE::Actor>() : nullptr;
+                    if (!a || a->IsPlayerRef() || a->IsPlayerTeammate()) return RE::BSContainer::ForEachResult::kContinue;
+                    auto* fac = VendorFactionOf(a);
+                    if (!fac || fac->GetFormID() != a_faction) return RE::BSContainer::ForEachResult::kContinue;
+                    ++sc.members;
+                    const bool asleep = [&] {
+                        const auto st = a->AsActorState()->GetSitSleepState();
+                        return st == RE::SIT_SLEEP_STATE::kIsSleeping || st == RE::SIT_SLEEP_STATE::kWantToSleep || st == RE::SIT_SLEEP_STATE::kWaitingForSleepAnim;
+                    }();
+                    auto* c = a->GetParentCell();
+                    if (sc.members <= 6)
+                        list += std::format("{}{} {:08X} '{}' cell {:08X} {}{}{}{}", list.empty() ? "" : "; ", "member", a->GetFormID(), NameOf(a), c ? c->GetFormID() : 0u,
+                                            a->Is3DLoaded() ? "loaded" : "3D-off", a->IsDead() ? ", dead" : "", a->IsDisabled() ? ", disabled" : "", asleep ? ", asleep" : "");
+                    if (!sc.awakeLoaded && !a->IsDead() && !a->IsDisabled() && a->Is3DLoaded() && !asleep) sc.awakeLoaded = a->GetFormID();
+                    return RE::BSContainer::ForEachResult::kContinue;
+                });
+                sc.summary = list;
+                spdlog::info("[errand] unattended-shop scan of every loaded cell for vendor faction {:08X} at game hour {:.1f}: {} member(s){}{}",
+                             a_faction, sc.hour, sc.members, list.empty() ? "" : " -- ", list);
+                std::scoped_lock lk(g_mx);
+                g_vendorScan[a_faction] = std::move(sc);
+            });
         }
 
         struct Idles { RE::FormID talk = 0, talkFallback = 0, give = 0, take = 0, browse = 0; };
@@ -553,16 +615,10 @@ namespace MFO::Logistics::Errand {
                 if (a_complete) g_backoff.erase(BackoffKey(a_fid, r.chest));   // a successful DONE at this target forgives it
             }
             if (r.phase == Phase::Smithing) Smith::End(a_fid, a_why);   // R8: the work claim + the work record
-            if (r.phase == Phase::Resting) Rest::End(a_fid, a_why, true, a_noMark || a_cooldownSec == kCombatCooldownSec);   // R7: the stay's release reason is logged; the trip is done for this visit
-            else if (Config::g_errandInn.load() && a_cooldownSec != kCombatCooldownSec) {
-                // R7 review: an INN-ONLY trip that ends for any reason but combat (blocked / stuck / dest gone / the caps), or a trip whose
-                // INN stop ended Skipped, is done for this visit: the inn stop has no faction / chest, so no park or backoff stops a re-plan
-                // that walks him toward an unreachable inn every 45-60 s. Combat during the walk is left as it was (asked of marth).
-                const bool innOnly = r.stops.size() == 1 && r.stops[0].kind == StopKind::Inn;
-                const bool innSkipped = std::any_of(r.stops.begin(), r.stops.end(),
-                                                    [](const Stop& s) { return s.kind == StopKind::Inn && s.state == StopState::Skipped; });
-                if (innOnly || innSkipped) Rest::MarkTripDone(a_fid, r.town, innSkipped ? "the inn stop was skipped" : "the inn-only trip failed");
-            }
+            if (r.phase == Phase::Resting) Rest::End(a_fid, a_why, true, a_noMark || a_cooldownSec == kCombatCooldownSec);   // R7: the stay's release reason is logged; the INN STAGE was reached, the trip is done for this visit
+            // Run 4 (marth 2026-10-20): a trip marks the visit done ONLY once it reached the inn stage (the Rest::End above, or NextStopOrFinish after an
+            // inn stop DONE). The R7-review marking of "inn stop skipped" / "inn-only trip failed" is gone: a trip that ended earlier (told to wait,
+            // failed walks) leaves the visit open, and the retry backoff (not a mark) now paces a re-plan.
             APMFBridge::ReleaseErrand(a_fid);   // idle, hold, walk (in that order) -- and the ch.9 work claim
             // A shop-place walk has no vendor actor yet (r.vendor == 0): name the faction / destination instead.
             const std::string who = r.vendor ? std::format("vendor '{}' {:08X}", r.vendorName, r.vendor)
@@ -648,6 +704,7 @@ namespace MFO::Logistics::Errand {
             r.beatRequested = r.talkFallbackUsed = r.dispatched = r.bought = r.announced = false;
             r.browse = false;   // R4: the browsing beat belongs to the stop it was set for (R4 MAP WHAT BREAKS)
             r.confirmedAt = {};
+            r.walkRetries = 0; r.retryWait = r.retryRepoint = r.stepOut = r.needStepOut = r.haveBlockPos = false; r.retryAt = {};   // run 4: the retries belong to the stop
         }
 
         // R5: the CURRENT stop is over -- a_ok: its trade ran or there was nothing left to do (Done); else it failed (Skipped, the
@@ -669,7 +726,12 @@ namespace MFO::Logistics::Errand {
                     const bool multi = r.stops.size() > 1;
                     const bool anyDone = std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.state == StopState::Done; });
                     if (multi && anyDone) cooldown = std::max(cooldown, Config::g_errandCooldownSec.load());   // the trip traded: the errand cooldown
-                    if (anyDone && Config::g_errandInn.load()) Rest::MarkTripDone(a_fid, r.town, "the trip ended");   // R7: one trip per town visit
+                    // Run 4: the visit is marked done only when the INN STAGE was reached (an inn stop Done), or the trip had no inn stop at all.
+                    const bool innDone = std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.kind == StopKind::Inn && s.state == StopState::Done; });
+                    const bool hasInn  = std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.kind == StopKind::Inn; });
+                    if (anyDone && Config::g_errandInn.load() && (innDone || !hasInn)) Rest::MarkTripDone(a_fid, r.town, "the trip ended");   // R7: one trip per town visit
+                    else if (Config::g_errandInn.load())
+                        spdlog::info("[errand] {:08X}: the trip ended WITHOUT reaching the inn stage ({}) -- the visit is NOT marked done; a new trip may plan", a_fid, why);
                     Store(a_fid, r);
                     Finish(a_fid, multi ? std::format("{} (last of a {}-stop trip)", why, r.stops.size()).c_str() : why.c_str(), cooldown, complete);
                     return false;
@@ -1352,6 +1414,11 @@ namespace MFO::Logistics::Errand {
                     r.phaseAt = a_now;
                     r.dispatched = false;
                     spdlog::info("[errand] {:08X} '{}': the inn's counter business is over ({}) -- he STAYS", fid, r.followerName, a_why);
+                    {   // run 4: the skipped stops are retried from the inn stage; the first attempt kLaterBaseSec in, doubling per attempt already made
+                        int made = 0;
+                        for (const auto& st : r.stops) if (st.retryLater) made = std::max<int>(made, st.laterRetries);
+                        r.laterAt = a_now + std::chrono::seconds(kLaterBaseSec << std::min(made, 4));
+                    }
                     Store(fid, r);
                     return true;
                 }
@@ -1359,6 +1426,31 @@ namespace MFO::Logistics::Errand {
             if (!NextStopOrFinish(fid, r, a_now, a_why, a_ok, a_cooldown, a_complete)) return false;
             Store(fid, r);
             return true;
+        };
+        // Run 4: a walk to the CURRENT stop failed (a_why). Under kWalkRetries it is RETRIED after 5/15/30 s: TRUE = a retry is scheduled (the
+        // caller returns true); FALSE = out of retries, the caller skips the stop (giveUp). a_repoint false = nothing to re-point (the shop was
+        // unattended while he stands in it): the retry just re-checks. A first block never steps out; a repeat block within kStepOutMoveU of the
+        // last one first walks him toward the player (kStepOutRadius), then re-points to the stop.
+        auto retryWalk = [&](const std::string& a_why, bool a_repoint) -> bool {
+            if (r.walkRetries >= kWalkRetries) return false;
+            const int secs = kRetryBackoffS[r.walkRetries];
+            ++r.walkRetries;
+            const auto here = a_follower->GetPosition();
+            r.needStepOut = a_repoint && r.haveBlockPos && here.GetDistance(r.lastBlockPos) < kStepOutMoveU;
+            r.lastBlockPos = here; r.haveBlockPos = true;
+            r.retryWait = true; r.retryRepoint = a_repoint; r.stepOut = false;
+            r.retryAt = a_now + std::chrono::seconds(secs);
+            spdlog::info("[errand] {:08X} '{}': {} -- RETRY {}/{} in {} s{} ({})", fid, r.followerName, a_why, r.walkRetries, kWalkRetries, secs,
+                         r.needStepOut ? ", after a step-out (he has not moved since the last block)" : "", Trip::Label(r.stops, r.cur));
+            Store(fid, r);
+            return true;
+        };
+        // Run 4: out of retries -- the stop goes onto the retry-later list (the inn stage retries it) and is skipped.
+        auto giveUp = [&](const std::string& a_why, float a_cooldown) -> bool {
+            if (r.cur < r.stops.size()) r.stops[r.cur].retryLater = true;
+            spdlog::warn("[errand] {:08X} '{}': {} -- {} retries spent, the stop is SKIPPED and kept on the retry-later list (the inn stage retries it)",
+                         fid, r.followerName, a_why, kWalkRetries);
+            return stopOver(a_why, false, a_cooldown);
         };
         // R8: the smith stop's work: the Smith module's steps (its own clocks, the ch.9 station claim, the temper apply).
         if (r.phase == Phase::Smithing) {
@@ -1388,6 +1480,32 @@ namespace MFO::Logistics::Errand {
                     StartReopenedTrip(a_follower, townId, a_now, std::move(plan));
                     return true;
                 }
+            }
+            // Run 4: from the INN STAGE the stops skipped for a failed walk are retried (up to kLaterRetries each, 60/120/240 s apart). The stay
+            // ends WITHOUT a trip mark, the stop is walked to again, and the inn comes back as the last stop (rest only, the food is bought).
+            if (innStay && a_now >= r.laterAt) {
+                for (std::size_t i = 0; i < r.stops.size(); ++i) {
+                    auto& ls = r.stops[i];
+                    if (!ls.retryLater || ls.laterRetries >= kLaterRetries || ls.state != StopState::Skipped) continue;
+                    ++ls.laterRetries; ls.retryLater = false;
+                    const std::size_t innIdx = r.cur;
+                    SyncCur(r);
+                    spdlog::info("[errand] {:08X} '{}': inn stage -- retrying the skipped stop {} (later retry {}/{}); the stay ends without a trip mark",
+                                 fid, r.followerName, Trip::Label(r.stops, i), ls.laterRetries, kLaterRetries);
+                    Rest::End(fid, "retrying a skipped stop from the inn stage", true, true);
+                    r.stops[innIdx].state = StopState::Pending;
+                    r.stops[innIdx].order.reset();   // the food is bought; the return is rest only
+                    APMFBridge::ReleaseErrandIdle(fid);
+                    LoadStop(r, i);
+                    r.phaseAt = a_now;
+                    r.startClk = r.lastTickClk = Scheduler::ServiceClock();
+                    bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(fid, r.destForm, r.destRad);
+                    if (!walk && r.destForm != 0) walk = APMFBridge::ClaimErrandTravel(fid, r.destForm, r.destRad);
+                    if (!walk) return stopOver("the retry walk could not be declared", false, kFailCooldownSec);
+                    Store(fid, r);
+                    return true;
+                }
+                r.laterAt = a_now + std::chrono::hours(24);   // nothing (left) to retry
             }
             const auto st = Rest::Step(a_follower, a_now);
             if (st.res == Rest::Result::Continue) { Store(fid, r); return true; }
@@ -1425,6 +1543,33 @@ namespace MFO::Logistics::Errand {
 
         switch (r.phase) {
         case Phase::Walking: {
+            if (r.retryWait) {   // run 4: a failed walk is waiting out its backoff; the leg state is NOT read meanwhile (a step-out leg ends Arrived at the player)
+                if (a_now < r.retryAt) { Store(fid, r); return true; }
+                if (r.retryRepoint && r.needStepOut && !r.stepOut) {
+                    const bool so = pc && (APMFBridge::RepointErrandTravel(fid, pc->GetFormID(), kStepOutRadius) ||
+                                           APMFBridge::ClaimErrandTravel(fid, pc->GetFormID(), kStepOutRadius));
+                    r.stepOut = true;
+                    r.retryAt = a_now + std::chrono::seconds(kStepOutSec);
+                    spdlog::info("[errand] {:08X} '{}': STEP-OUT before retry {}/{}: walking toward the player (radius {:.0f}, {} s) {}", fid, r.followerName,
+                                 r.walkRetries, kWalkRetries, kStepOutRadius, kStepOutSec, so ? "declared" : "could NOT be declared (retrying straight away)");
+                    if (!so) r.retryAt = a_now;
+                    Store(fid, r);
+                    return true;
+                }
+                r.retryWait = false; r.stepOut = false; r.needStepOut = false;
+                if (r.retryRepoint) {
+                    const char* how = "re-pointed";
+                    bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(fid, r.destForm, r.destRad);
+                    if (!walk && r.destForm != 0) { walk = APMFBridge::ClaimErrandTravel(fid, r.destForm, r.destRad); how = "claimed afresh"; }
+                    spdlog::info("[errand] {:08X} '{}': RETRY {}/{} -- walk to {:08X} '{}' {}", fid, r.followerName, r.walkRetries, kWalkRetries,
+                                 r.destForm, r.vendorName, walk ? how : "could NOT be declared");
+                    if (!walk) return giveUp("the retry walk could not be declared", kFailCooldownSec);
+                } else {
+                    spdlog::info("[errand] {:08X} '{}': RETRY {}/{} -- re-checking the shop's vendor", fid, r.followerName, r.walkRetries, kWalkRetries);
+                }
+                Store(fid, r);
+                return true;
+            }
             if (!vendor) {   // walking to the shop's PLACE (a PLVD cell / ref): the leg ends Arrived in the shop, then to the vendor
                 APMFBridge::LootLegState pleg;
                 if (APMFBridge::ReadErrandLeg(fid, pleg) && pleg.ours) {
@@ -1469,7 +1614,17 @@ namespace MFO::Logistics::Errand {
                             spdlog::info("[errand] {:08X}: the inn has no innkeeper in his cell -- no food bought, the stop is rest only", fid);
                             return beginWork();
                         }
-                        if (!va) return stopOver("the shop is unattended (no vendor actor in the loaded shop)", false, kFailCooldownSec);
+                        if (!va) {   // run 4: an unattended shop is a blocked walk (he may be off duty / asleep / across a border): scan, wait, re-check, then retry-later
+                            auto* cal0 = RE::Calendar::GetSingleton();
+                            int seenN = 0; std::string seenList;
+                            { std::scoped_lock lk(g_mx); if (const auto it = g_vendorScan.find(r.faction); it != g_vendorScan.end()) { seenN = it->second.members; seenList = it->second.summary; } }
+                            spdlog::info("[errand] {:08X} '{}': shop '{}' (faction {:08X}) UNATTENDED at game hour {:.1f}: no awake loaded vendor in his cell or the last all-cell scan "
+                                         "({} faction member(s) seen{}{})", fid, r.followerName, r.vendorName, r.faction, cal0 ? cal0->GetHour() : -1.0f, seenN,
+                                         seenList.empty() ? "" : ": ", seenList);
+                            PostVendorScan(r.faction);   // lands before the next re-check
+                            if (retryWalk("the shop is unattended (no vendor actor in the loaded shop)", false)) return true;
+                            return giveUp("the shop is unattended (no vendor actor in the loaded shop)", kFailCooldownSec);
+                        }
                         r.vendor = va->GetFormID();
                         r.vendorName = NameOf(va.get());
                         r.destKind = DestKind::VendorActor; r.destForm = r.vendor; r.destRad = kVendorRadius;
@@ -1477,8 +1632,9 @@ namespace MFO::Logistics::Errand {
                         spdlog::info("[errand] {:08X}: reached the shop; walking on to its vendor '{}' ({:08X})", fid, r.vendorName, r.vendor);
                     } else if (pleg.state == APMF_API::kLeg_Blocked) {
                         if (r.destKind == DestKind::Cell) Rest::LogBlockedDoors(a_follower, r.destForm, r.vendorName);   // passive: the door(s), lock level of each side
+                        if (retryWalk("the walk to the shop ended BLOCKED", true)) return true;   // run 4: retry before the stop is skipped and the shop parked
                         { std::scoped_lock lk(g_mx); g_parked[r.faction] = a_now + kParkTime; }
-                        return stopOver("the walk to the shop ended BLOCKED (a closed door?); shop parked", false, kFailCooldownSec);
+                        return giveUp("the walk to the shop ended BLOCKED (a closed door?); shop parked", kFailCooldownSec);
                     } else if (pleg.state == APMF_API::kLeg_Failed) {
                         Finish(fid, "Harbinger could not start the leg (FAILED -- all travel slots busy? APMF.log says); queued", 6.0f);
                         return false;
@@ -1493,9 +1649,9 @@ namespace MFO::Logistics::Errand {
                                         kFailCooldownSec);
                     } else if (pleg.state > APMF_API::kLeg_Blocked && pleg.state <= APMF_API::kLeg_Released) {
                         WarnCombatDisagree(a_follower, pleg.state);
+                        if (pleg.state != APMF_API::kLeg_CombatCancelled && retryWalk(std::format("the walk to the shop ended {}", LegName(pleg.state)), true)) return true;
                         const auto bo = NoteWalkFailed(fid, r, a_now);
-                        return stopOver(std::format("the walk to the shop ended: {} (this shop backed off {} s)", LegName(pleg.state), bo), false,
-                                        kFailCooldownSec);
+                        return giveUp(std::format("the walk to the shop ended: {} (this shop backed off {} s)", LegName(pleg.state), bo), kFailCooldownSec);
                     }
                 }
                 Store(fid, r);
@@ -1514,13 +1670,14 @@ namespace MFO::Logistics::Errand {
                         spdlog::info("[errand] {:08X}: walk to '{}' ended BLOCKED at {:.0f} u -- within talking reach, "
                                      "counted as ARRIVED", fid, r.vendorName, dist);
                     } else {
+                        if (retryWalk(std::format("the walk ended BLOCKED at {:.0f} u from the vendor (blocker kind {})", dist, leg.blockerKind), true)) return true;   // run 4
                         {
                             std::scoped_lock lk(g_mx);
                             g_parked[r.vendor] = a_now + kParkTime;
                         }
-                        return stopOver(std::format("the walk ended BLOCKED at {:.0f} u from the vendor (blocker kind {}); vendor parked for {} min",
-                                                    dist, leg.blockerKind, std::chrono::duration_cast<std::chrono::minutes>(kParkTime).count()),
-                                        false, kFailCooldownSec);
+                        return giveUp(std::format("the walk ended BLOCKED at {:.0f} u from the vendor (blocker kind {}); vendor parked for {} min",
+                                                  dist, leg.blockerKind, std::chrono::duration_cast<std::chrono::minutes>(kParkTime).count()),
+                                      kFailCooldownSec);
                     }
                 } else if (leg.state == APMF_API::kLeg_Failed) {
                     // The leg could not start: the usual cause is all 8 ch.19 package slots busy (loot + deposit + errands).
@@ -1535,8 +1692,9 @@ namespace MFO::Logistics::Errand {
                     return stopOver(std::format("the walk ended: {} (this vendor backed off {} s)", LegName(leg.state), bo), false, kFailCooldownSec);
                 } else if (leg.state > APMF_API::kLeg_Blocked && leg.state <= APMF_API::kLeg_Released) {
                     WarnCombatDisagree(a_follower, leg.state);
+                    if (leg.state != APMF_API::kLeg_CombatCancelled && retryWalk(std::format("the walk ended {}", LegName(leg.state)), true)) return true;   // run 4
                     const auto bo = NoteWalkFailed(fid, r, a_now);
-                    return stopOver(std::format("the walk ended: {} (this vendor backed off {} s)", LegName(leg.state), bo), false, kFailCooldownSec);
+                    return giveUp(std::format("the walk ended: {} (this vendor backed off {} s)", LegName(leg.state), bo), kFailCooldownSec);
                 }
             }
             // Distance backstop: a leg read that is not ours yet, or a vendor who walked up to him (a loaded vendor only: R5's later stop).

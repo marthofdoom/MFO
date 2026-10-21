@@ -138,6 +138,10 @@ namespace MFO::Logistics::Errand {
         std::shared_ptr<const ErrandPlanned> order;   // this stop's SHARE of the trip (null after a load: never saved)
         double        tArrive = 0.0, tWorkEnd = 0.0;  // GAME DAYS, the simulation's (0 = not reached yet)
         StopState     state = StopState::Pending;
+        // Run 4 (marth 2026-10-20: routing must not be brittle): session-only, never saved. retryLater = this stop was SKIPPED for a failed walk
+        // and is on the retry-later list (the inn stage retries it); laterRetries = how many of those later retries it has had (max 3).
+        bool          retryLater = false;
+        std::uint8_t  laterRetries = 0;
     };
     // The bound on the wire (#11) and the planner's cap. R7 appends an Inn stop after the shops, so the shops leave room.
     inline constexpr std::size_t kMaxTripStops = kMaxTripStopsOnWire;
