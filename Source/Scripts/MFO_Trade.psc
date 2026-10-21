@@ -37,46 +37,7 @@ Function RunTrade(int token)
     int vendorGold = chest.GetItemCount(gold001)
     bool probe = GetProbeOnly(token)
 
-    ; ── SELL: native pre-sorted highest-value first; cap at the chest's gold. ──
-    Form[] forms = GetSellForms(token)
-    Int[]  counts = GetSellCounts(token)
-    Int[]  values = GetSellValues(token)
-    int soldValue = 0
-    int soldCount = 0
-    int budget = vendorGold
-    int i = 0
-    int n = forms.Length
-    while i < n
-        Form f = forms[i]
-        int unit = values[i]
-        int have = counts[i]
-        if f && unit > 0 && have > 0 && unit <= budget
-            int canBuy = budget / unit
-            if canBuy > have
-                canBuy = have
-            endif
-            ; Clamp to what the follower ACTUALLY still has at execution time -- the
-            ; sell list was snapshotted frames ago and gear may have been equipped,
-            ; healed-evicted, or taken since (audit #5). Else AddItem would pay for
-            ; items RemoveItem can't deliver.
-            if !probe && canBuy > follower.GetItemCount(f)
-                canBuy = follower.GetItemCount(f)
-            endif
-            if canBuy > 0
-                if !probe
-                    follower.RemoveItem(f, canBuy, true, chest)
-                    follower.AddItem(gold001, unit * canBuy, true)
-                    chest.RemoveItem(gold001, unit * canBuy, true)
-                endif
-                soldValue += unit * canBuy
-                soldCount += canBuy
-                budget -= unit * canBuy
-            endif
-        endif
-        i += 1
-    endwhile
-
-    ; ── BUY: enumerate the vendor's ACTUAL stock, native plans it, execute. ──
+    ; ── BUY (runs FIRST, town run 5): enumerate the vendor's ACTUAL stock, native plans it, execute. ──
     int boughtCount = 0
     int spent = 0
     Form[] stock = PO3_SKSEFunctions.AddAllItemsToArray(chest, false, false, true)
@@ -114,6 +75,46 @@ Function RunTrade(int token)
             b += 1
         endwhile
     endif
+
+    ; ── SELL (runs AFTER the buy, town run 5): native pre-sorted highest-value first; capped at the chest's gold RE-READ now,
+    ;    so the gold the follower just paid for goods funds the sale (a vendor with 2 gold bought 152 g of food and then sold nothing). ──
+    Form[] forms = GetSellForms(token)
+    Int[]  counts = GetSellCounts(token)
+    Int[]  values = GetSellValues(token)
+    int soldValue = 0
+    int soldCount = 0
+    int budget = chest.GetItemCount(gold001)
+    int i = 0
+    int n = forms.Length
+    while i < n
+        Form f = forms[i]
+        int unit = values[i]
+        int have = counts[i]
+        if f && unit > 0 && have > 0 && unit <= budget
+            int canBuy = budget / unit
+            if canBuy > have
+                canBuy = have
+            endif
+            ; Clamp to what the follower ACTUALLY still has at execution time -- the
+            ; sell list was snapshotted frames ago and gear may have been equipped,
+            ; healed-evicted, or taken since (audit #5). Else AddItem would pay for
+            ; items RemoveItem can't deliver.
+            if !probe && canBuy > follower.GetItemCount(f)
+                canBuy = follower.GetItemCount(f)
+            endif
+            if canBuy > 0
+                if !probe
+                    follower.RemoveItem(f, canBuy, true, chest)
+                    follower.AddItem(gold001, unit * canBuy, true)
+                    chest.RemoveItem(gold001, unit * canBuy, true)
+                endif
+                soldValue += unit * canBuy
+                soldCount += canBuy
+                budget -= unit * canBuy
+            endif
+        endif
+        i += 1
+    endwhile
 
     ReportTrade(token, soldValue, soldCount, boughtCount, spent, vendorGold)
 EndFunction

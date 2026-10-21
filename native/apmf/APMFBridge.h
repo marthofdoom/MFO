@@ -1706,6 +1706,21 @@ namespace MFO::APMFBridge {
     void ReleaseErrand(RE::FormID a_follower);
     // Revert / load (pump drained): release every errand claim and forget them.
     void ClearErrandClaims();
+    // ── PLACE (Harbinger ABI v28 kIntent_Place; TOWN PHASE 2 R4b) -- apmf/Place.cpp ──
+    // ONE engine move of an UNLOADED actor beside a reference, done by Harbinger on the game thread; MFO declares the spot only.
+    // A one-shot, never a claim (no Release / heartbeat). ANY thread (RequestEx enqueues; GetPlaceState is a leaf-locked copy).
+    // PlaceSupported: APMF present AND abiVersion >= 28. RequestPlace: a_dest = the destination REFERENCE (the actor lands at its
+    // position + a_offset, WORLD axes), a_flags = APMF_API::PlaceFlags, a_yaw read only with kPlace_SetYaw; returns the handle, or 0
+    // (APMF absent = silent no-op; ABI < 28 = one warn; a refusal at the call is logged by Harbinger). ReadPlace: state is a
+    // APMF_API::PlaceState (0 Unknown, 1 Queued, 2 Placed, 3 Refused, 4 Failed), why a APMF_API::PlaceWhy; Unknown also for 0 / ABI < 28.
+    struct PlaceRead {
+        std::uint32_t state = 0, why = 0, blocker = 0;
+        RE::FormID    cell = 0;
+        RE::NiPoint3  pos{};
+    };
+    bool          PlaceSupported();
+    std::uint32_t RequestPlace(RE::FormID a_actor, RE::FormID a_dest, const RE::NiPoint3& a_offset, float a_yaw, std::uint32_t a_flags);
+    PlaceRead     ReadPlace(std::uint32_t a_handle);
     // ── TOWN ERRAND WORK (TOWN PHASE 2 R7: inn + temple) -- apmf/ErrandWork.cpp ───────────────────────────────────────
     // The ch.9 package-offer claim of an errand's WORK (Forms.h MFO_ErrandActivate / Sandbox / Eat / Sleep, one record per kind
     // per follower slot): the shrine Activate, the inn's Sandbox (sit / stay), the Eat meal, the Sleep bed. MFO declares the work and its

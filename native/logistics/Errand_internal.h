@@ -268,10 +268,14 @@ namespace MFO::Logistics::Errand {
         // applies the read (the inn's LOCKED gate; no door found = the temple is skipped with a log line, never walked into BLOCKED).
         bool PlacesPending(RE::Actor* a_follower, const RE::BGSLocation* a_town);
         bool TripDone(RE::FormID a_follower, RE::FormID a_townId);
+        // Run 5 (R3): TRUE = this town (BGSLocation id) has NO innkeeper vendor faction whose place is in one of its inns (the innkeeper catalog is empty, which
+        // is also what an unverified runtime reads). Such a town has no inn stop; the planner makes the LAST SHOP the trip's rest stage (Augment) and
+        // reaching it counts the trip. FALSE for a town with an innkeeper inn, or an id that is not a location.
+        bool TownHasNoInnkeeper(RE::FormID a_townId);
         void UnmarkTripDone(RE::FormID a_follower, const char* a_why);   // F3: a needed shop opened -- the visit's mark goes, a new trip starts
         void MarkTripDone(RE::FormID a_follower, RE::FormID a_townId, const char* a_why);
         // Run 4 review F1: a trip that ended with its INN stop Skipped (unreachable inn). Bumps a per-(follower, visit) counter and backs the inn off
-        // (2 min, then 4); at 3 Augment omits the inn for the rest of the visit. NO trip-done mark. Cleared by NoteTown / ClearTransientState.
+        // (2 min, then 4). Run 5 (R4): the inn is NEVER omitted for the visit any more (an unreachable inn is an error, the unstick places him). NO trip-done mark. Cleared by NoteTown / ClearTransientState.
         void NoteInnTripFailed(RE::FormID a_follower, std::chrono::steady_clock::time_point a_now);
         // The synthetic food order's dispatch (the inn's physical give beat): VendorTrade of a_order at the innkeeper's chest.
         // Sent = on its way; Busy = the chest holds another follower's live order (retry); Nothing = nothing to buy (no purse / no chest).
@@ -299,6 +303,23 @@ namespace MFO::Logistics::Errand {
         void LogBlockedDoors(RE::Actor* a_follower, RE::FormID a_destCell, const std::string& a_label);
         // Sim: a temple visit ran off screen; the blessing is OWED (logged; paid only by a physical visit).
         void NoteOwed(RE::FormID a_follower, const std::string& a_followerName, const std::string& a_temple);
+    }
+
+    // ── TOWN RUN 5 (marth 2026-10-20 R1 / R4): the UNSTICK -- logistics/ErrandPlace.cpp ─────────────────────────────────────────────
+    // "ALWAYS teleport a stuck follower to his destination, even in the player's view." A follower the walk retries cannot free (two BLOCKED ends
+    // within 100 u, the step-out leg Blocked or moved < kStepOutMoveU) is PLACED at his current stop by Harbinger's kIntent_Place (ABI v28, ONE
+    // engine move, apmf/Place.cpp): beside the ref (a vendor / a PLVD ref), or at the interior side of the cell stop's load door (the exterior
+    // door's DoorTeleportData position + rotation, else beside the linked door; else beside a loaded member of the stop's faction). MFO keeps the
+    // trip's ch.19 claim (Place never touches it). Own mutex (a leaf: never held across an engine or Harbinger call, never nested with Errand /
+    // Sim / Rest g_mx). Session-only, nothing saved. Begin and Poll run on the worker; the cell stop's door read runs on the MAIN thread.
+    namespace Unstick {
+        enum class State { Idle, Pending, Placed, Failed };
+        struct Result { State state = State::Idle; std::string text; };   // text: where / why (Failed: the reason, for the ERROR line)
+        // Declare the placement for a_stop (the CURRENT stop). TRUE = in flight (poll it); FALSE = nothing could be requested (a_err says why).
+        bool Begin(RE::FormID a_follower, const Stop& a_stop, std::string& a_err);
+        Result Poll(RE::FormID a_follower);   // Pending until Harbinger's game thread answered; Placed / Failed are returned ONCE then forgotten
+        void Clear(RE::FormID a_follower);
+        void ClearAll();                      // revert / load
     }
 
     // ── F3 (marth 2026-10-20: ONE TRIP AT A TIME): the SHOP-OPENS re-plan -- logistics/ErrandReopen.cpp ───────────────────────────────────

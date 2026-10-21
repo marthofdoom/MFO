@@ -78,6 +78,7 @@ namespace MFO::Logistics::Errand {
         constexpr float  kStepOutMoveU  = 100.0f;                                 // moved less than this since the last block: step out first
         constexpr float  kStepOutRadius = 200.0f;                                 // the step-out walk's arrival radius around the player
         constexpr int    kStepOutSec    = 8;                                      // how long the step-out walk runs before the retry
+        constexpr int    kPlaceTries    = 2;                                      // run 5 (R1): placements per stop (a repeat stuck after the first is the last)
         constexpr int    kLaterRetries  = 3;                                      // retry-later attempts per skipped stop, from the inn stage
         constexpr int    kLaterBaseSec  = 60;                                     // inn stay -> first retry-later attempt; doubles per attempt
         constexpr double kStallSec      = 8.0;    // an errand whose follower is not being serviced
@@ -160,6 +161,12 @@ namespace MFO::Logistics::Errand {
             bool          retryWait = false, retryRepoint = false, stepOut = false, needStepOut = false, haveBlockPos = false;
             Clock::time_point retryAt{}, laterAt{};   // laterAt: the inn stay's next retry-later attempt
             RE::NiPoint3  lastBlockPos{};
+            // Run 5 (R1 / R4): the UNSTICK. stepOutOk = the step-out walk was really declared (its result is read when its wait ends); stepOutFrom =
+            // where he stood when it was declared; placing = a Harbinger kIntent_Place is in flight (ErrandPlace.cpp); placeTries = placements made for
+            // this stop (cap kPlaceTries). Session-only, reset by LoadStop.
+            bool          stepOutOk = false, placing = false;
+            int           placeTries = 0;
+            RE::NiPoint3  stepOutFrom{};
         };
 
         std::mutex                                           g_mx;
@@ -623,6 +630,7 @@ namespace MFO::Logistics::Errand {
             // inn stop DONE). The R7-review marking of "inn stop skipped" / "inn-only trip failed" is gone: a trip that ended earlier (told to wait,
             // failed walks) leaves the visit open, and the retry backoff (not a mark) now paces a re-plan.
             APMFBridge::ReleaseErrand(a_fid);   // idle, hold, walk (in that order) -- and the ch.9 work claim
+            Unstick::Clear(a_fid);   // run 5: a placement still in flight is forgotten
             // A shop-place walk has no vendor actor yet (r.vendor == 0): name the faction / destination instead.
             const std::string who = r.vendor ? std::format("vendor '{}' {:08X}", r.vendorName, r.vendor)
                                              : std::format("shop '{}' faction {:08X} dest {:08X}", r.vendorName, r.faction, r.destForm);
@@ -708,6 +716,7 @@ namespace MFO::Logistics::Errand {
             r.browse = false;   // R4: the browsing beat belongs to the stop it was set for (R4 MAP WHAT BREAKS)
             r.confirmedAt = {};
             r.walkRetries = 0; r.retryWait = r.retryRepoint = r.stepOut = r.needStepOut = r.haveBlockPos = false; r.retryAt = {};   // run 4: the retries belong to the stop
+            r.stepOutOk = r.placing = false; r.placeTries = 0; r.stepOutFrom = {};   // run 5: so does the unstick
         }
 
         // Run 4 review F2: the inn stay's first retry-later attempt kLaterBaseSec in, doubling per attempt already made. Call wherever phase becomes Resting for an Inn stop.
@@ -741,7 +750,11 @@ namespace MFO::Logistics::Errand {
                     const bool hasInn  = std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.kind == StopKind::Inn; });
                     if (Config::g_errandInn.load() && std::any_of(r.stops.begin(), r.stops.end(), [](const Stop& s) { return s.kind == StopKind::Inn && s.state == StopState::Skipped; }))
                         Rest::NoteInnTripFailed(a_fid, a_now);   // run 4 F1: backs the inn off; no mark
-                    if (anyDone && Config::g_errandInn.load() && (innDone || !hasInn)) Rest::MarkTripDone(a_fid, r.town, "the trip ended");   // R7: one trip per town visit
+                    // Run 5 (R3): a trip with NO inn stop counts ONLY when the town truly has no innkeeper inn (then the last shop was its rest stage,
+                    // ErrandRest.cpp Augment, and the shops were visited). A town WITH an innkeeper inn whose stop was not planned or not reached
+                    // (an unreachable inn, a door inn without a keeper) is NOT a finished visit.
+                    const bool noInnTown = !hasInn && Rest::TownHasNoInnkeeper(r.town);
+                    if (anyDone && Config::g_errandInn.load() && (innDone || noInnTown)) Rest::MarkTripDone(a_fid, r.town, innDone ? "the trip ended" : "the trip ended; the town has no innkeeper inn");   // R7: one trip per town visit
                     else if (Config::g_errandInn.load())
                         spdlog::info("[errand] {:08X}: the trip ended WITHOUT reaching the inn stage ({}) -- the visit is NOT marked done; a new trip may plan", a_fid, why);
                     Store(a_fid, r);
@@ -816,6 +829,7 @@ namespace MFO::Logistics::Errand {
         }
         Sim::ClearTransientState();
         Rest::ClearTransientState();   // R7
+        Unstick::ClearAll();   // run 5
         ErrandShops::Clear();   // R6
         Smith::ClearTransientState();   // R8
         APMFBridge::ClearErrandClaims();
@@ -1437,12 +1451,41 @@ namespace MFO::Logistics::Errand {
             Store(fid, r);
             return true;
         };
+        // Run 5 (marth R1 "ALWAYS teleport a stuck follower to his destination, even in the player's view"; R4 "any real verified intentional cell being
+        // unreachable is an error"): declare Harbinger's kIntent_Place to the CURRENT stop (ErrandPlace.cpp). TRUE = a placement is in flight (the Walking phase
+        // polls it); FALSE = not attempted (he is in dialogue, or the stop's placements are spent) or it could not be declared (logged as an ERROR here, never
+        // a mask): the caller falls back to giveUp, whose inn-stop backoff paces the next try. The trip's ch.19 claim is kept (Place never touches it).
+        auto tryPlace = [&](const std::string& a_why) -> bool {
+            if (const auto* ast = a_follower->AsActorState(); ast && ast->actorState2.talkingToPlayer) return false;   // in dialogue is not stuck (combat already ended the errand above)
+            if (r.placeTries >= kPlaceTries || r.cur >= r.stops.size()) return false;
+            SyncCur(r);
+            const auto here = a_follower->GetPosition();
+            std::string err;
+            ++r.placeTries;
+            if (!Unstick::Begin(fid, r.stops[r.cur], err)) {
+                spdlog::error("[errand] {:08X} '{}': OBVIOUSLY STUCK ({}) at {:.0f},{:.0f},{:.0f} -> the placement could NOT be declared: {} -- the stop '{}' is unreachable",
+                              fid, r.followerName, a_why, here.x, here.y, here.z, err, Trip::Label(r.stops, r.cur));
+                return false;
+            }
+            r.placing = true;
+            r.retryWait = false; r.stepOut = false; r.stepOutOk = false; r.needStepOut = false;
+            spdlog::warn("[errand] {:08X} '{}': OBVIOUSLY STUCK ({}) at {:.0f},{:.0f},{:.0f} -> teleporting him to the stop {} via Harbinger Place (placement {}/{})",
+                         fid, r.followerName, a_why, here.x, here.y, here.z, Trip::Label(r.stops, r.cur), r.placeTries, kPlaceTries);
+            Store(fid, r);
+            return true;
+        };
         // Run 4: a walk to the CURRENT stop failed (a_why). Under kWalkRetries it is RETRIED after 5/15/30 s: TRUE = a retry is scheduled (the
         // caller returns true); FALSE = out of retries, the caller skips the stop (giveUp). a_repoint false = nothing to re-point (the shop was
         // unattended while he stands in it): the retry just re-checks. A first block never steps out; a repeat block within kStepOutMoveU of the
         // last one first walks him toward the player (kStepOutRadius), then re-points to the stop.
         auto retryWalk = [&](const std::string& a_why, bool a_repoint) -> bool {
-            if (r.walkRetries >= kWalkRetries) return false;
+            if (r.walkRetries >= kWalkRetries) {
+                // Run 5: the retries are spent. A walk that ended and left him where the last block did (or ANY walk to the inn: it is never dropped) is stuck.
+                const bool sameSpot = r.haveBlockPos && a_follower->GetPosition().GetDistance(r.lastBlockPos) < kStepOutMoveU;
+                const bool innStop = r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn;
+                if (a_repoint && (sameSpot || innStop) && tryPlace(std::format("{}; {} retries spent{}", a_why, kWalkRetries, sameSpot ? ", he has not moved since the last block" : ", the inn is never dropped"))) return true;
+                return false;
+            }
             const int secs = kRetryBackoffS[r.walkRetries];
             ++r.walkRetries;
             const auto here = a_follower->GetPosition();
@@ -1554,12 +1597,38 @@ namespace MFO::Logistics::Errand {
 
         switch (r.phase) {
         case Phase::Walking: {
+            if (r.placing) {   // run 5: a Harbinger Place is in flight; the leg is NOT read meanwhile (the move lands on Harbinger's game thread)
+                const auto pr = Unstick::Poll(fid);
+                if (pr.state == Unstick::State::Pending) { Store(fid, r); return true; }
+                r.placing = false;
+                if (pr.state != Unstick::State::Placed) {
+                    const std::string why = pr.state == Unstick::State::Idle ? "the placement record was lost" : pr.text;
+                    spdlog::error("[errand] {:08X} '{}': OBVIOUSLY STUCK -> teleport REFUSED / FAILED: {} -- the stop '{}' is UNREACHABLE and is not dropped silently; it is skipped, kept "
+                                  "on the retry-later list, and backed off", fid, r.followerName, why, Trip::Label(r.stops, r.cur));
+                    const auto bo = NoteWalkFailed(fid, r, a_now);
+                    return giveUp(std::format("the stuck-walk teleport failed ({}; this stop backed off {} s)", why, bo), kFailCooldownSec);
+                }
+                spdlog::warn("[errand] {:08X} '{}': OBVIOUSLY STUCK -> PLACED {} (placement {}/{}); the walk to the stop carries on from there", fid, r.followerName, pr.text,
+                             r.placeTries, kPlaceTries);
+                r.walkRetries = 0; r.retryWait = r.stepOut = r.stepOutOk = r.needStepOut = r.haveBlockPos = false; r.retryAt = {};
+                bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(fid, r.destForm, r.destRad);
+                if (!walk && r.destForm != 0) walk = APMFBridge::ClaimErrandTravel(fid, r.destForm, r.destRad);
+                r.startClk = r.lastTickClk = Scheduler::ServiceClock();   // the 240 s cap is per attempt (run 4 F3)
+                if (!walk) {
+                    spdlog::error("[errand] {:08X} '{}': after the placement the walk to {:08X} '{}' could NOT be re-declared (Harbinger refused the ch.19 Repoint and a new claim)",
+                                  fid, r.followerName, r.destForm, r.vendorName);
+                    return giveUp("the walk could not be re-declared after the placement", kFailCooldownSec);
+                }
+                Store(fid, r);
+                return true;
+            }
             if (r.retryWait) {   // run 4: a failed walk is waiting out its backoff; the leg state is NOT read meanwhile (a step-out leg ends Arrived at the player)
                 if (a_now < r.retryAt) { Store(fid, r); return true; }
                 if (r.retryRepoint && r.needStepOut && !r.stepOut) {
                     const bool so = pc && (APMFBridge::RepointErrandTravel(fid, pc->GetFormID(), kStepOutRadius) ||
                                            APMFBridge::ClaimErrandTravel(fid, pc->GetFormID(), kStepOutRadius));
                     r.stepOut = true;
+                    r.stepOutOk = so; r.stepOutFrom = a_follower->GetPosition();   // run 5: the step-out's result is read when its wait ends
                     r.retryAt = a_now + std::chrono::seconds(kStepOutSec);
                     spdlog::info("[errand] {:08X} '{}': STEP-OUT before retry {}/{}: walking toward the player (radius {:.0f}, {} s) {}", fid, r.followerName,
                                  r.walkRetries, kWalkRetries, kStepOutRadius, kStepOutSec, so ? "declared" : "could NOT be declared (retrying straight away)");
@@ -1567,7 +1636,20 @@ namespace MFO::Logistics::Errand {
                     Store(fid, r);
                     return true;
                 }
-                r.retryWait = false; r.stepOut = false; r.needStepOut = false;
+                // Run 5: the step-out walk's wait ended. Its leg ending Blocked, or him having moved < kStepOutMoveU (and not ARRIVED at the player) = stuck:
+                // two blocked ends at one spot and a step-out that did not free him. Placed at the stop (R1) instead of a fourth blind retry.
+                if (r.stepOut && r.stepOutOk) {
+                    APMFBridge::LootLegState sl;
+                    const bool read = APMFBridge::ReadErrandLeg(fid, sl) && sl.ours;
+                    const bool blockedLeg = read && sl.state == APMF_API::kLeg_Blocked;
+                    const bool arrivedLeg = read && sl.state == APMF_API::kLeg_Arrived;
+                    const float moved = a_follower->GetPosition().GetDistance(r.stepOutFrom);
+                    if (blockedLeg || (!arrivedLeg && moved < kStepOutMoveU)) {
+                        if (tryPlace(std::format("two blocked ends within {:.0f} u and the step-out walk {} (moved {:.0f} u in {} s)", kStepOutMoveU,
+                                                 blockedLeg ? "ended BLOCKED" : "did not free him", moved, kStepOutSec))) return true;
+                    }
+                }
+                r.retryWait = false; r.stepOut = false; r.stepOutOk = false; r.needStepOut = false;
                 if (r.retryRepoint) {
                     const char* how = "re-pointed";
                     bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(fid, r.destForm, r.destRad);
