@@ -304,6 +304,17 @@ namespace MFO::Logistics::Errand {
         void LogBlockedDoors(RE::Actor* a_follower, RE::FormID a_destCell, const std::string& a_label);
         // Sim: a temple visit ran off screen; the blessing is OWED (logged; paid only by a physical visit).
         void NoteOwed(RE::FormID a_follower, const std::string& a_followerName, const std::string& a_temple);
+
+        // The SHOP catalog's data reads (Errand.cpp BuildTownShops / BuildCatalog), beside the LCSR read they share the location layout proof with.
+        // UniqueVendorsOf: vendor FACTION -> the placed ref of a unique NPC of this town tree who is a member of it, from the locations' LCUN
+        // lists (ENGINE_NOTES §0.53; empty on a build LcunVerified refuses). Generic, cached per town. For the 'near self' PLVD factions.
+        struct UniqueVendor { RE::FormID ref = 0, npc = 0, editorLoc = 0; };
+        std::unordered_map<RE::FormID, UniqueVendor> UniqueVendorsOf(const RE::BGSLocation* a_town);
+        // ShopDoorFor: the EXTERIOR load door nearest the player that leads into the interior cell a_cell, directly or through one interior
+        // (two cells deep), read on the MAIN thread over the loaded grid and cached 5 real minutes. Found = a_pos is that door's position;
+        // None = no such door (or the player is indoors); Pending = the read was posted, ask again on the next plan.
+        enum class DoorAnswer { Found, None, Pending };
+        DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos);
     }
 
     // ── TOWN RUN 5 (marth 2026-10-20 R1 / R4): the UNSTICK -- logistics/ErrandPlace.cpp ─────────────────────────────────────────────

@@ -285,15 +285,19 @@ namespace MFO::Logistics::Errand {
         // ObjectRefHandle in data.refHandle. Other location types are skipped. Disassembly-verified on 1.6.1170, 1.5.97 and
         // 1.7.104, each on its own addresses (PlvdPlaceVerified, Errand_internal.h; ENGINE_NOTES §0.52): any other build gets
         // an empty list and shops are the loaded-vendor ones (R1a).
+        // nearSelf: a 'near self' PLVD faction (type 12: no place in the record) placed through the town's unique NPCs (Rest::UniqueVendorsOf);
+        // `place` is then the vendor's own persistent ACTOR ref, wherever he stands now (BuildCatalog reads his current cell).
         struct ShopStatic { RE::FormID faction = 0, chest = 0, place = 0; DestKind kind = DestKind::Cell; float rad = 0.0f;
-                            std::uint8_t cls = 0; };   // R6: 0 plain, 1 FENCE (perk + conditions gate), 2 CONDITIONED (a spouse-store candidate)
+                            std::uint8_t cls = 0;   // R6: 0 plain, 1 FENCE (perk + conditions gate), 2 CONDITIONED (a spouse-store candidate)
+                            bool nearSelf = false; };
         std::unordered_map<RE::FormID, std::vector<ShopStatic>> g_townShops;   // town BGSLocation id -> shops; guarded by g_mx
 
         std::vector<ShopStatic> BuildTownShops(const RE::BGSLocation* a_town) {
             std::vector<ShopStatic> out;
             auto* dh = RE::TESDataHandler::GetSingleton();
             if (!dh || !a_town) return out;
-            int seen = 0;
+            int seen = 0, nearSelf = 0;
+            std::optional<std::unordered_map<RE::FormID, Rest::UniqueVendor>> uniq;   // read on the first 'near self' faction (one walk per town)
             for (auto* fac : dh->GetFormArray<RE::TESFaction>()) {
                 if (!fac || !fac->IsVendor() || !fac->OffersServices()) continue;
                 auto* chest = fac->vendorData.merchantContainer;
@@ -324,22 +328,37 @@ namespace MFO::Logistics::Errand {
                     if (!placeLoc) placeLoc = ref->GetCurrentLocation();
                     break;
                 }
+                case RE::PackageLocation::Type::kNearSelf: {
+                    // No place in the record: the vendor IS the place. Found generically through the town tree's unique NPCs (LCUN): the placed
+                    // ref of a unique NPC who is a member of this faction, his editor location deciding the town (any town, any load order).
+                    if (!uniq) uniq = Rest::UniqueVendorsOf(a_town);   // empty on a build LcunVerified refuses (logged once)
+                    const auto it = uniq->find(fac->GetFormID());
+                    if (it == uniq->end()) continue;
+                    sh.kind = DestKind::Ref; sh.place = it->second.ref; sh.nearSelf = true;
+                    sh.rad = std::clamp(static_cast<float>(loc->rad), 50.0f, 512.0f);   // ch.19 clamps the same range
+                    placeLoc = RE::TESForm::LookupByID<RE::BGSLocation>(it->second.editorLoc);
+                    ++nearSelf;
+                    break;
+                }
                 default: continue;   // the other PLVD types are not shop PLACES (spouse stores, package-relative): skipped
                 }
                 ++seen;
                 if (placeLoc && LocationTypes::TownAnchor(placeLoc) == a_town) out.push_back(sh);
             }
-            spdlog::info("[errand] shop catalog for '{}': {} of {} vendor faction(s) with a PLVD place sit in this town",
-                         a_town->GetName() ? a_town->GetName() : "?", out.size(), seen);
+            spdlog::info("[errand] shop catalog for '{}': {} of {} vendor faction(s) with a PLVD place sit in this town ({} 'near self' vendor(s) placed through the town's unique NPCs)",
+                         a_town->GetName() ? a_town->GetName() : "?", out.size(), seen, nearSelf);
             return out;
         }
 
         // F3: a_closedOut (when given) also collects the shops dropped ONLY for their hours (OpenAt false; the fence / spouse / condition gates ran
         // BEFORE the hours test, so none of those is here) for the shop WATCH (ErrandReopen.cpp). a_dropped counts them as before.
+        // a_doorWait (when given) is set when the empty result means "an interior shop's entry-door read is in flight" (Rest::ShopDoorFor), so
+        // the caller abandons this plan instead of committing the INN-ONLY trip of a visit that has shops (one trip per visit).
         std::vector<Cand> BuildCatalog(RE::Actor* a_follower, const RE::BGSLocation* a_playerTown,
-                                       Clock::time_point a_now, int& a_dropped, std::vector<Cand>* a_closedOut = nullptr) {
+                                       Clock::time_point a_now, int& a_dropped, std::vector<Cand>* a_closedOut = nullptr, bool* a_doorWait = nullptr) {
             std::vector<Cand> out;
             a_dropped = 0;
+            if (a_doorWait) *a_doorWait = false;
             if (a_closedOut) a_closedOut->clear();
             auto* cell = a_follower->GetParentCell();
             auto* pc   = RE::PlayerCharacter::GetSingleton();
@@ -380,6 +399,7 @@ namespace MFO::Logistics::Errand {
             const float maxFromPlayer = Config::g_travelRadius.load();
             std::unordered_map<RE::FormID, bool> seenChest;
             bool waiting = false;   // R6: a fence / spouse gate is still waiting for its main-thread condition answer
+            bool doorWaiting = false;   // an interior shop's entry-door read (Rest::ShopDoorFor) was just posted to the main thread
             std::unordered_set<RE::FormID> gated;   // R6: factions a LOADED vendor already put through a gate this plan (the faction-only list does not re-ask)
             for (auto& h : living) {
                 if (out.size() >= kMaxCands) break;
@@ -488,17 +508,39 @@ namespace MFO::Logistics::Errand {
                     if (backedOff.contains(sh.chest)) { noteBackoff(sh.chest, fac->GetName()); continue; }
                     float d = 0.0f;
                     RE::NiPoint3 placePos{};
+                    // An INTERIOR place's distance + position: the nearest loaded load door into it in the follower's own cell, else (marth
+                    // 2026-10-21: "they check 2 cells deep ... just through doors") the main-thread read of the loaded EXTERIOR grid, one or two
+                    // cells deep (Rest::ShopDoorFor). Run 6: Belethor's and Arcadia's doors stand in the market cells NEXT to the follower's, so
+                    // the own-cell walk alone never saw them. Pending = the read was just posted: the plan waits (re-planned shortly).
+                    auto interiorPlace = [&](RE::FormID a_cell) -> int {   // 1 = d / placePos set, 0 = no door known, -1 = pending
+                        if (const auto it = cellDoorDist.find(a_cell); it != cellDoorDist.end()) { d = it->second; placePos = cellDoorPos[a_cell]; return 1; }
+                        RE::NiPoint3 dp{};
+                        switch (Rest::ShopDoorFor(a_cell, dp)) {
+                        case Rest::DoorAnswer::Found:   placePos = dp; d = dp.GetDistance(pc->GetPosition()); return 1;
+                        case Rest::DoorAnswer::Pending: return -1;
+                        default:                        return 0;
+                        }
+                    };
                     if (sh.kind == DestKind::Ref) {
                         auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(sh.place);
                         if (!ref) continue;
-                        placePos = ref->GetPosition();
-                        d = placePos.GetDistance(pc->GetPosition());
+                        // A 'near self' vendor is his own place and moves: when he stands in an INTERIOR other than the follower's cell, his
+                        // coordinates are that interior's, so the door into his CURRENT cell gives the distance (the walk still targets him).
+                        auto* rc = sh.nearSelf ? ref->GetParentCell() : nullptr;
+                        if (sh.nearSelf && !rc) continue;
+                        if (rc && rc->IsInteriorCell() && rc != cell) {
+                            const int r = interiorPlace(rc->GetFormID());
+                            if (r < 0) { doorWaiting = true; continue; }
+                            if (r == 0) { if (open) ++a_dropped; continue; }
+                        } else {
+                            placePos = ref->GetPosition();
+                            d = placePos.GetDistance(pc->GetPosition());
+                        }
                         if (d > maxFromPlayer) { if (open) ++a_dropped; continue; }
                     } else {
-                        const auto it = cellDoorDist.find(sh.place);
-                        if (it == cellDoorDist.end()) { if (open) ++a_dropped; continue; }
-                        d = it->second;
-                        placePos = cellDoorPos[sh.place];
+                        const int r = interiorPlace(sh.place);
+                        if (r < 0) { doorWaiting = true; continue; }
+                        if (r == 0) { if (open) ++a_dropped; continue; }
                         if (d > maxFromPlayer) { if (open) ++a_dropped; continue; }
                     }
                     seenChest[sh.chest] = true;
@@ -509,10 +551,13 @@ namespace MFO::Logistics::Errand {
                     (open ? out : *a_closedOut).push_back(c);
                 }
             }
-            if (waiting) {
-                if (a_closedOut) a_closedOut->clear();   // never commit a trip that silently lacks the fence / spouse store: re-plan on the next cadence (6 s)
-                spdlog::info("[errand] {:08X}: plan waiting for a vendor-condition answer (fence / spouse gate) -- re-planning shortly",
-                             a_follower->GetFormID());
+            if (waiting || doorWaiting) {
+                if (a_closedOut) a_closedOut->clear();   // never commit a trip that silently lacks the fence / spouse store / a shop whose door is being read: re-plan on the next cadence (6 s)
+                spdlog::info("[errand] {:08X}: plan waiting for {} -- re-planning shortly", a_follower->GetFormID(),
+                             waiting && doorWaiting ? "a vendor-condition answer (fence / spouse gate) and an interior shop's entry-door read"
+                             : waiting ? "a vendor-condition answer (fence / spouse gate)"
+                                       : "an interior shop's entry-door read (the loaded exterior grid, two cells deep)");
+                if (a_doorWait && doorWaiting) *a_doorWait = true;
                 out.clear();
                 return out;
             }
@@ -1260,6 +1305,16 @@ namespace MFO::Logistics::Errand {
                 NotPlanning(a_follower, a_now, "the College of Winterhold is closed to errands until the player has joined it (CollegeofWinterholdFaction)");
                 return true;
             }
+            // MAGE-ONLY (marth 2026-10-21: "a mage follower would prefer the college"): every College stop is a College vendor (the town IS the
+            // College tree, LocationTypes::TownAnchor), so a follower who is not a mage plans none here: an explicit Mage class pick, a caster
+            // (magic loadout + a cast gambit, IsCasterFollower) or a spell-tome wish (bEconomyBuyTomes + a cast gambit, BuildBuyThresholds).
+            // The tome gate globals (Economy.cpp UnlockCollegeTomes) still decide which tomes the vendors offer.
+            const bool mage = a_state.combatClassOverride == 3 || IsCasterFollower(a_state) ||
+                              (Config::g_economyBuyTomes.load() && HasCastGambit(a_state));
+            if (!mage) {
+                NotPlanning(a_follower, a_now, "the College of Winterhold's vendors serve mage followers only (no Mage class pick, no cast gambit, no spell-tome wish)");
+                return true;
+            }
         }
         if (Config::g_errandInn.load() && Rest::TripDone(fid, tidNow)) {   // R7: ONE trip AT A TIME (marth 2026-10-19 / 2026-10-20)
             // F3: new-session triggers are the player leaving town (NoteTown), the end of combat (NoteCombat) and a NEEDED SHOP OPENING (here).
@@ -1310,7 +1365,9 @@ namespace MFO::Logistics::Errand {
 
         int dropped = 0;
         std::vector<Cand> closedCands;   // F3: dropped ONLY for their hours -> the shop watch
-        auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped, Config::g_errandInn.load() ? &closedCands : nullptr);
+        bool doorWait = false;
+        auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped, Config::g_errandInn.load() ? &closedCands : nullptr, &doorWait);
+        if (doorWait) { NotPlanning(a_follower, a_now, "waiting for an interior shop's entry-door read"); return true; }   // re-planned on the next cadence
         // R7 (marth 2026-10-19): no open shop is NOT "no errand" -- a follower with nothing to shop for still plans the INN-ONLY trip
         // (Rest::Augment below), so the early return is only for inn errands switched off (MFO-B353).
         if (cands.empty() && !Config::g_errandInn.load()) return true;

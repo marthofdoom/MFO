@@ -178,6 +178,17 @@ namespace MFO::Logistics::Errand::Rest {
         bool                                             g_wasCombat = false;   // F2: the last player-combat state NoteCombat saw (the combat-end edge clears the marks)
         struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0, cell = 0; };   // cell: the interior cell of the faction's PLVD place (0 = unknown)
         std::unordered_map<RE::FormID, std::vector<InnFac>> g_innFacs;  // town -> the innkeeper factions (immutable once built)
+        std::unordered_map<RE::FormID, std::unordered_map<RE::FormID, UniqueVendor>> g_uniqueVendors;   // town -> vendor faction -> its unique vendor (immutable once built)
+        struct ShopDoorRead {   // the main-thread read of the entry door of an INTERIOR shop place (ShopDoorFor), up to two cells deep
+            bool        done = false, indoors = false, found = false;
+            RE::FormID  door = 0, via = 0;   // the EXTERIOR load door; via = the first interior it leads to (depth 2), 0 at depth 1
+            int         depth = 0, scanned = 0, hops = 0, hopRefs = 0;   // load doors seen in the loaded grid; first-hop interiors walked + their refs seen
+            RE::NiPoint3 pos{};
+            Clock::time_point stamp{};
+        };
+        std::unordered_map<RE::FormID, ShopDoorRead>     g_shopDoor;       // shop place cell -> its door read; guarded by g_mx
+        std::unordered_set<RE::FormID>                   g_shopDoorAsked;  // shop place cells whose read was queued (one in flight)
+        std::unordered_map<RE::FormID, std::string>      g_shopDoorLogged; // shop place cell -> the last verdict logged (a line only when it changes)
 
         int GameDay() {
             auto* cal = RE::Calendar::GetSingleton();
@@ -440,6 +451,34 @@ namespace MFO::Logistics::Errand::Rest {
             if (!noted.exchange(true))
                 spdlog::warn("[errand] the locations' special refs (LCSR) are NOT read on runtime {} (layout disassembly-verified on "
                              "1.6.1170, 1.5.97 and 1.7.104 only): the inn / temple data resolve uses the innkeeper factions only",
+                             REL::Module::get().version().string("."));
+            return false;
+        }
+
+        // The location's UNIQUE NPCs (LCUN; ENGINE_NOTES §0.53): BGSLocation::uniqueNPCs is the BSTArray at +0x88 (data +0x88, size +0x98), one
+        // 0x18-byte entry per NPC. BGSLocation::Load (vtable slot 6) handles LCUN / ACUN in one case (`sub eax,0x4D414E52` / `sub eax,0x113F4EF`
+        // / `cmp eax,0xB`): each 12-byte file entry becomes +0x00 the NPC form id, +0x08 the placed ref id, +0x10 the editor location id; +0x00
+        // is replaced by __RTDynamicCast(LookupByID(id), TESForm -> TESNPC), +0x08 is remapped to a runtime id, and the entry is appended to
+        // [loc+0x88] (stride 0x18). InitItemImpl (slot 0x13) then drops an entry whose NPC is null or deleted and turns +0x10 into the
+        // BGSLocation* (formType 0x68) or null. So +0x00 holds a TESNPC*, NOT the Actor* the fork's UniqueNPCData declares (principle 6):
+        // the code reads it through TESForm::As<TESNPC>, never as an Actor.
+        //   1.6.1170: Load 0x292D10 (LCUN case 0x293306, TESNPC cast 0x2934A8, append 0x293509), InitItemImpl 0x293EE0 (loop 0x294149, resolve 0x2941AE)
+        //   1.5.97:   Load 0x240FE0 (LCUN case 0x24177B, TESNPC cast 0x24190B, append 0x241938), InitItemImpl 0x2422D0 (loop 0x24252B, resolve 0x242598)
+        //   1.7.104:  Load 0x2984E0 (LCUN case 0x298AD6, TESNPC cast 0x298C78, append 0x298CD9), InitItemImpl 0x2996B0 (loop 0x299919, resolve 0x29997E)
+        // LoadGame / Revert (slots 0x0F / 0x12: 1.6.1170 0x296190 / 0x296380, 1.5.97 0x2444E0 / 0x244650, 1.7.104 0x29B960 / 0x29BB50) never
+        // address +0x88..+0x9F: the array is load-time data, read here without a lock.
+        // Any other build skips the read, logged once.
+        static_assert(offsetof(RE::BGSLocation, uniqueNPCs) == 0x88, "BGSLocation::uniqueNPCs moved: re-verify LcunVerified");
+        static_assert(sizeof(RE::UniqueNPCData) == 0x18, "UniqueNPCData size changed: re-verify LcunVerified");
+        static_assert(offsetof(RE::UniqueNPCData, actor) == 0x00, "UniqueNPCData NPC moved: re-verify LcunVerified");
+        static_assert(offsetof(RE::UniqueNPCData, refID) == 0x08, "UniqueNPCData refID moved: re-verify LcunVerified");
+        static_assert(offsetof(RE::UniqueNPCData, editorLoc) == 0x10, "UniqueNPCData editorLoc moved: re-verify LcunVerified");
+        bool LcunVerified() {
+            if (Runtime::IsVerified1_6_1170() || Runtime::IsVerified1_5_97() || Runtime::IsVerified1_7_104()) return true;
+            static std::atomic_bool noted{ false };
+            if (!noted.exchange(true))
+                spdlog::warn("[errand] the locations' unique NPCs (LCUN) are NOT read on runtime {} (layout disassembly-verified on "
+                             "1.6.1170, 1.5.97 and 1.7.104 only): vendor factions with no place of their own (PLVD 'near self') stay out of the shop catalog",
                              REL::Module::get().version().string("."));
             return false;
         }
@@ -1257,6 +1296,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_magicWaitLogged.clear();
         g_magicDefers.clear();
         g_innFacs.clear();
+        g_uniqueVendors.clear(); g_shopDoor.clear(); g_shopDoorAsked.clear(); g_shopDoorLogged.clear();
         g_doorRead.clear(); g_doorAsked.clear(); g_doorDefers.clear(); g_doorLogged.clear();
         g_marksTown = 0;
         g_wasCombat = false;
@@ -1321,5 +1361,142 @@ namespace MFO::Logistics::Errand::Rest {
         { std::scoped_lock lk(g_mx); g_templeTry[a_follower] = today; }
         spdlog::info("[errand] {:08X} '{}': TEMPLE_SIM -- the visit to '{}' ran off screen; the blessing / cure is OWED (the shrine ref is not persistent, so only a "
                      "physical visit pays it)", a_follower, a_followerName, a_temple);
+    }
+
+    // ── the town's UNIQUE vendors (vendor factions whose PLVD is 'near self': no place in the faction record) ──────────────────────────
+    // Every location of the town tree (LocationTypes::TownAnchor == a_town) lists its unique NPCs (LCUN: the NPC, his placed ref, his editor
+    // location; layout per runtime at LcunVerified). The placed ref is a persistent Actor: the vendor factions it is a member of (rank >= 0
+    // after its runtime faction changes, IsVendor && OffersServices) map to that ref. Generic: no NPC or faction is named here, so any load order
+    // that places its vendors through LCUN is read the same way. Worker-callable (load-time data + the actor's faction list, the reads
+    // VendorFactionOf makes on loaded actors); cached per town, immutable.
+    std::unordered_map<RE::FormID, UniqueVendor> UniqueVendorsOf(const RE::BGSLocation* a_town) {
+        if (!a_town || !LcunVerified()) return {};
+        {
+            std::scoped_lock lk(g_mx);
+            if (const auto it = g_uniqueVendors.find(a_town->GetFormID()); it != g_uniqueVendors.end()) return it->second;
+        }
+        std::unordered_map<RE::FormID, UniqueVendor> out;
+        int locs = 0, entries = 0, noRef = 0, baseMismatch = 0;
+        if (auto* dh = RE::TESDataHandler::GetSingleton()) {
+            for (auto* loc : dh->GetFormArray<RE::BGSLocation>()) {
+                if (!loc || loc->uniqueNPCs.empty() || LocationTypes::TownAnchor(loc) != a_town) continue;
+                ++locs;
+                for (const auto& e : loc->uniqueNPCs) {
+                    ++entries;
+                    // +0x00 holds the engine's TESNPC* (LcunVerified): read as the TESForm it is, never as the Actor the fork declares.
+                    const auto* npcForm = reinterpret_cast<const RE::TESForm*>(e.actor);
+                    const auto* npc = npcForm ? npcForm->As<RE::TESNPC>() : nullptr;
+                    auto* ref = e.refID ? RE::TESForm::LookupByID<RE::Actor>(e.refID) : nullptr;
+                    if (!npc || !ref) { ++noRef; continue; }
+                    if (static_cast<const RE::TESForm*>(ref->GetBaseObject()) != static_cast<const RE::TESForm*>(npc)) { ++baseMismatch; continue; }
+                    std::unordered_map<RE::TESFaction*, std::int8_t> ranks;   // the base list, then the runtime changes (a rank < 0 is a removal)
+                    ref->VisitFactions([&](RE::TESFaction* a_fac, std::int8_t a_rank) {
+                        if (a_fac) ranks[a_fac] = a_rank;
+                        return false;
+                    });
+                    const RE::FormID eloc = e.editorLoc ? e.editorLoc->GetFormID() : loc->GetFormID();
+                    for (const auto& [fac, rank] : ranks)
+                        if (rank >= 0 && fac->IsVendor() && fac->OffersServices())
+                            out.try_emplace(fac->GetFormID(), UniqueVendor{ ref->GetFormID(), npc->GetFormID(), eloc });   // the first unique member wins
+                }
+            }
+        }
+        spdlog::info("[errand] unique vendors of '{}': {} vendor faction(s) from {} unique-NPC entr(ies) in {} location(s) of the town "
+                     "({} without a placed ref, {} whose ref is not that NPC)",
+                     a_town->GetName() ? a_town->GetName() : "?", out.size(), entries, locs, noRef, baseMismatch);
+        std::scoped_lock lk(g_mx);
+        g_uniqueVendors[a_town->GetFormID()] = out;
+        return out;
+    }
+
+    // ── the entry door of an INTERIOR shop place, up to TWO cells deep (marth 2026-10-21: "they check 2 cells deep ... just through doors") ──
+    // MAIN THREAD (Logistics::ForEachLoadedRef walks the loaded grid; the worker must not, LootScan.cpp crash4). Depth 1: a load door in a
+    // loaded EXTERIOR cell whose linked door sits in the place cell. Depth 2: a load door into a first interior whose own load doors lead to the
+    // place cell (that first interior is walked through TESObjectCELL::ForEachReference; an UNLOADED interior lists only the references the
+    // engine keeps for it -- persistent load doors are expected there, NOT FIELD-PROVEN: the verdict line counts the refs seen so one run shows
+    // it). The nearest such exterior door to the player wins. The player indoors = no exterior grid: unknown.
+    static void PostShopDoorRead(RE::FormID a_cell) {
+        { std::scoped_lock lk(g_mx); if (!g_shopDoorAsked.insert(a_cell).second) return; }
+        auto fn = [a_cell]() {
+            ShopDoorRead dr;
+            dr.done = true;
+            dr.stamp = Clock::now();
+            auto* tes = RE::TES::GetSingleton();
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            if (!tes || !pc || tes->interiorCell) dr.indoors = true;
+            else {
+                const auto ppos = pc->GetPosition();
+                float bestD = 1.0e9f;
+                struct Hop { RE::TESObjectCELL* cell = nullptr; RE::FormID door = 0; RE::NiPoint3 pos{}; float d = 0.0f; };
+                std::unordered_map<RE::FormID, Hop> hops;   // first interior -> the nearest exterior door into it
+                ForEachLoadedRef([&](RE::TESObjectREFR* a_ref) {
+                    auto* tele = a_ref ? a_ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+                    if (!tele || !tele->teleportData) return RE::BSContainer::ForEachResult::kContinue;
+                    ++dr.scanned;
+                    auto lp = tele->teleportData->linkedDoor.get();
+                    auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
+                    if (!lc || !lc->IsInteriorCell()) return RE::BSContainer::ForEachResult::kContinue;
+                    const float d = a_ref->GetPosition().GetDistance(ppos);
+                    if (lc->GetFormID() == a_cell) {
+                        if (d < bestD) { bestD = d; dr.found = true; dr.depth = 1; dr.door = a_ref->GetFormID(); dr.via = 0; dr.pos = a_ref->GetPosition(); }
+                    } else if (auto [it, fresh] = hops.try_emplace(lc->GetFormID(), Hop{ lc, a_ref->GetFormID(), a_ref->GetPosition(), d }); !fresh && d < it->second.d) {
+                        it->second = Hop{ lc, a_ref->GetFormID(), a_ref->GetPosition(), d };
+                    }
+                    return RE::BSContainer::ForEachResult::kContinue;
+                });
+                if (!dr.found) {   // two deep (outside the grid walk: no cell lock is held while another cell is walked)
+                    for (const auto& [hid, h] : hops) {
+                        if (dr.hops >= 64) break;
+                        ++dr.hops;
+                        bool leads = false;
+                        h.cell->ForEachReference([&](RE::TESObjectREFR* a_ref) {
+                            ++dr.hopRefs;
+                            auto* tele = a_ref ? a_ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+                            if (!tele || !tele->teleportData) return RE::BSContainer::ForEachResult::kContinue;
+                            auto lp = tele->teleportData->linkedDoor.get();
+                            auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
+                            if (lc && lc->GetFormID() == a_cell) { leads = true; return RE::BSContainer::ForEachResult::kStop; }
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        });
+                        if (leads && h.d < bestD) { bestD = h.d; dr.found = true; dr.depth = 2; dr.door = h.door; dr.via = hid; dr.pos = h.pos; }
+                    }
+                }
+            }
+            const std::string verdict = dr.indoors ? std::string("the player is indoors: no exterior grid to read (unknown)")
+                : !dr.found ? std::format("NO load door in the loaded exterior grid leads to it within two cells ({} load door(s) seen, {} first-hop interior(s) "
+                                          "walked, {} reference(s) listed in them)", dr.scanned, dr.hops, dr.hopRefs)
+                : dr.depth == 1 ? std::format("entry door {:08X} in the loaded exterior grid", dr.door)
+                                : std::format("exterior door {:08X} -> interior {:08X} -> this cell (two deep; {} reference(s) listed in {} first-hop interior(s))",
+                                              dr.door, dr.via, dr.hopRefs, dr.hops);
+            bool say = false;
+            {
+                std::scoped_lock lk(g_mx);
+                g_shopDoor[a_cell] = dr;
+                g_shopDoorAsked.erase(a_cell);
+                auto& last = g_shopDoorLogged[a_cell];
+                if (last != verdict) { last = verdict; say = true; }
+            }
+            if (say) spdlog::info("[errand] shop place cell {:08X}: {}", a_cell, verdict);
+        };
+        if (MainThread::IsInstalled()) MainThread::Post(fn);
+        else                           fn();
+    }
+
+    DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos) {
+        if (!a_cell) return DoorAnswer::None;
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        auto* pcell = pc ? pc->GetParentCell() : nullptr;
+        if (!pcell || pcell->IsInteriorCell()) return DoorAnswer::None;   // the player indoors: no exterior grid to read from (the own-cell doors only)
+        {
+            std::scoped_lock lk(g_mx);
+            if (const auto it = g_shopDoor.find(a_cell); it != g_shopDoor.end() && it->second.done && !it->second.indoors &&
+                Clock::now() - it->second.stamp <= std::chrono::minutes(5)) {
+                if (!it->second.found) return DoorAnswer::None;
+                a_pos = it->second.pos;
+                return DoorAnswer::Found;
+            }
+        }
+        PostShopDoorRead(a_cell);   // none yet, stale, or read while the player was indoors
+        return DoorAnswer::Pending;
     }
 }
