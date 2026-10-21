@@ -1195,8 +1195,9 @@ namespace MFO::Logistics::Errand {
             t.key = c.id; t.actorId = c.actorId; t.faction = c.fac->GetFormID(); t.chest = c.chest;
             {
                 auto* vendor = c.handle.get().get();
-                const char* vn = vendor ? vendor->GetName() : c.fac->GetName();
-                t.name = vn && *vn ? vn : "?";
+                const char* vn = vendor ? vendor->GetName() : nullptr;
+                if (vn && *vn) t.name = vn;
+                else { t.name = ShopPlaceName(c.fac); if (t.name.empty()) t.name = "?"; }   // F4
             }
             t.dist = c.dist; t.pos = c.pos; t.havePos = c.havePos;
             t.kind = c.kind; t.destForm = c.destForm; t.destRad = c.destRad;

@@ -1022,7 +1022,8 @@ namespace MFO::Logistics {
                 auto* fac    = pv.fac;
                 // The pair key / SkipTrade / log identity: the vendor actor, or the FACTION for a shop whose vendor is not loaded.
                 const RE::FormID vendorKey = vendor ? vendor->GetFormID() : fac->GetFormID();
-                const char* vendorName = vendor && vendor->GetName() ? vendor->GetName() : (fac->GetName() ? fac->GetName() : "?");
+                const std::string shopPlaceName = vendor && vendor->GetName() ? std::string() : ShopPlaceName(fac);   // F4: a faction-only shop is named from its PLVD place
+                const char* vendorName = vendor && vendor->GetName() ? vendor->GetName() : (!shopPlaceName.empty() ? shopPlaceName.c_str() : "?");
 
                 // Per-(follower,vendor) log cooldown (60 s).
                 const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendorKey;
