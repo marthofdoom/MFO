@@ -38,6 +38,11 @@ namespace MFO::TradeBridge {
             // the report shows the whole plan was executed).
             std::vector<SmithMat> smithPlanned;
             std::int32_t         plannedTotal = 0;
+            // F5 (town run 3): SESSION-ONLY food diagnostic, reported on ReportTrade's [econ] line -- proves whether PlanBuy ran and what it saw of the
+            // chest's stock (no inn trade has ever bought food, and nothing logged why). Never saved, never read by any decision.
+            bool                 planBuyRan = false;
+            std::int32_t         stockLines = 0, stockLive = 0, stockExcluded = 0, stockClassified = 0, stockFoodCands = 0;
+            std::int32_t         foodQuota = 0, foodPlanned = 0;
         };
 
         std::mutex                                    g_mtx;
@@ -262,13 +267,18 @@ namespace MFO::TradeBridge {
             // Classify every stock line ONCE (supply + gear + tome kinds).
             struct Cand { std::size_t idx; std::int32_t kind, value, avail; RE::TESForm* f; };
             std::vector<Cand> cands;
+            o->planBuyRan = true;
+            o->stockLines = static_cast<std::int32_t>(a_forms.size());
             for (std::size_t i = 0; i < a_forms.size(); ++i) {
                 auto* f = a_forms[i];
                 const int avail = (i < a_counts.size()) ? a_counts[i] : 0;
                 if (!f || avail <= 0) continue;
-                if (Catalog::IsExcluded(f->GetFormID())) continue;
+                ++o->stockLive;
+                if (Catalog::IsExcluded(f->GetFormID())) { ++o->stockExcluded; continue; }
                 const int kind = ClassifyBuy(f, b);
                 if (kind < 0) continue;
+                ++o->stockClassified;
+                if (kind == NeedCat::kFood) ++o->stockFoodCands;
                 const int baseVal = BaseValue(f);
                 if (baseVal <= 0) continue;   // free/valueless stock isn't a real buy
                 const int val = std::max(1, static_cast<int>(Logistics::Pricing::Apply(baseVal, buyMult)));
@@ -324,6 +334,7 @@ namespace MFO::TradeBridge {
                 NeedCat* need = nullptr;
                 for (auto& n : o->needs) if (n.kind == NeedCat::kFood && n.quota > 0) { need = &n; break; }
                 if (need) {
+                    o->foodQuota = need->quota;
                     std::vector<Cand> foods;
                     for (auto& c : cands) if (c.kind == NeedCat::kFood) foods.push_back(c);
                     std::sort(foods.begin(), foods.end(), [](const Cand& a, const Cand& c2) {
@@ -338,6 +349,7 @@ namespace MFO::TradeBridge {
                         qty = std::min(qty, foodLeft / c.value);
                         if (qty <= 0) continue;
                         foodLeft -= qty * c.value;
+                        o->foodPlanned += qty;
                         plan[c.idx] += qty;
                         need->quota -= qty;
                         o->budget   -= qty * c.value;
@@ -717,6 +729,14 @@ namespace MFO::TradeBridge {
                          postTradeGold, verb, a_soldCount, a_soldValue, a_boughtCount, a_spent,
                          o.sell.size(), o.needs.size(), o.budget + o.buySpent,   // original purse
                          offered, o.buyPlan);
+            if (o.buy.wantFood || o.planBuyRan) {   // F5: the food diagnostic (session-only tallies)
+                if (!o.planBuyRan)
+                    spdlog::info("[econ] {:08X} stock: PlanBuy never called (chest listed 0 forms)", fol ? fol->GetFormID() : 0u);
+                else
+                    spdlog::info("[econ] {:08X} stock: PlanBuy ran -- {} line(s), {} live, {} excluded, {} classified, {} food cand(s); wantFood={}, food quota {}, food planned {}",
+                                 fol ? fol->GetFormID() : 0u, o.stockLines, o.stockLive, o.stockExcluded, o.stockClassified, o.stockFoodCands,
+                                 o.buy.wantFood, o.foodQuota, o.foodPlanned);
+            }
             // R2: ONE price line per trade -- the follower's Speech, the factors, the perk-adjusted values,
             // the clamps and the rounding. The quote was taken at dispatch (or plan time) and priced the sell
             // rows, PlanBuy's budget and every GetBuyPrice of this order.
