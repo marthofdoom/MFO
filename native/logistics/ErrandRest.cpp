@@ -278,6 +278,7 @@ namespace MFO::Logistics::Errand::Rest {
             RE::NiPoint3 door{};
             std::string name;
             bool lockedSkip = false;   // a LOCKED load door to this kind of place was skipped (the data fallback must not resolve around the lock)
+            std::string noKeeper;      // run 5 (R4): the nearest door inn SKIPPED because no innkeeper faction belongs to it (logged by Augment when it falls back to the data)
         };
         const char* LockWord(RE::LOCK_LEVEL a_l) {
             switch (a_l) {
@@ -302,6 +303,27 @@ namespace MFO::Logistics::Errand::Rest {
             }
             return false;
         }
+        std::vector<InnFac> InnFactionsOf(const RE::BGSLocation* a_town);   // defined below
+        // Run 5 (R4): is a_loc the inn location a_facLoc names, or its parent / child, below the town (the walk stops at the town anchor)? An innkeeper
+        // faction's PLVD place is often a sub-location of the door's inn location (or the reverse), so the exact id alone misses real innkeepers.
+        bool LocWithin(const RE::BGSLocation* a_loc, RE::FormID a_id, const RE::BGSLocation* a_town) {
+            int guard = 0;
+            for (auto* l = a_loc; l && l != a_town && guard < 8; l = l->parentLoc, ++guard)
+                if (l->GetFormID() == a_id) return true;
+            return false;
+        }
+        bool InnLocMatches(const InnFac& a_fac, const RE::BGSLocation* a_loc, RE::FormID a_cell, const RE::BGSLocation* a_town) {
+            if (a_fac.cell && a_fac.cell == a_cell) return true;
+            if (!a_loc) return false;
+            if (a_fac.locId == a_loc->GetFormID()) return true;
+            if (LocWithin(a_loc, a_fac.locId, a_town)) return true;                                              // the faction's place is the door inn's PARENT
+            auto* fl = RE::TESForm::LookupByID<RE::BGSLocation>(a_fac.locId);
+            return fl && LocWithin(fl, a_loc->GetFormID(), a_town);                                              // ... or its CHILD
+        }
+        const InnFac* MatchInnFac(const std::vector<InnFac>& a_facs, const RE::BGSLocation* a_loc, RE::FormID a_cell, const RE::BGSLocation* a_town) {
+            for (const auto& f : a_facs) if (InnLocMatches(f, a_loc, a_cell, a_town)) return &f;
+            return nullptr;
+        }
         void FindPlaces(RE::Actor* a_follower, const RE::BGSLocation* a_town, Place& a_inn, Place& a_temple) {
             auto* cell = a_follower ? a_follower->GetParentCell() : nullptr;
             if (!cell || !cell->IsAttached() || !a_town) return;
@@ -310,7 +332,8 @@ namespace MFO::Logistics::Errand::Rest {
                 if (doors.size() < 96 && a_ref->extraList.GetByType<RE::ExtraTeleport>()) doors.push_back(a_ref->GetHandle());
                 return RE::BSContainer::ForEachResult::kContinue;
             });
-            float innD = 1.0e9f, templeD = 1.0e9f;
+            float innD = 1.0e9f, templeD = 1.0e9f, noKeeperD = 1.0e9f;
+            const auto innFacs = InnFactionsOf(a_town);   // run 5 (R4): a door inn is settled on only when an innkeeper faction belongs to it
             for (auto& h : doors) {
                 auto dp = h.get();
                 auto* d = dp.get();
@@ -342,7 +365,13 @@ namespace MFO::Logistics::Errand::Rest {
                     const char* n = loc->GetName();
                     a_p.name = n && *n ? n : a_fallback;
                 };
-                if (LocationTypes::IsInn(loc))         take(a_inn, innD, "the inn");
+                if (LocationTypes::IsInn(loc)) {
+                    if (!MatchInnFac(innFacs, loc, lc->GetFormID(), a_town)) {   // no innkeeper here (a warehouse / cellar the keyword reached): not THE inn
+                        if (dist < noKeeperD) { noKeeperD = dist; const char* n = loc->GetName(); a_inn.noKeeper = n && *n ? n : "the inn"; }
+                        continue;
+                    }
+                    take(a_inn, innD, "the inn");
+                }
                 else if (LocationTypes::IsTemple(loc)) take(a_temple, templeD, "the temple");
             }
         }
@@ -854,8 +883,17 @@ namespace MFO::Logistics::Errand::Rest {
         bool templeViaData = false;
         {   // not reachable by a door in his own cell: resolve through the data (see ResolveViaData)
             const char* how = "";
-            if (!inn.ok && !inn.lockedSkip && ResolveViaData(a_town, true, inn, how))
+            const std::string noKeeper = inn.noKeeper;
+            if (!inn.ok && !inn.lockedSkip && ResolveViaData(a_town, true, inn, how)) {
                 spdlog::info("[errand] {:08X}: inn '{}' (cell {:08X}) resolved through {} (no load door to it in his cell)", fid, inn.name, inn.cell, how);
+                if (!noKeeper.empty()) {   // run 5 (R4): rate-limited like the other planning lines
+                    static std::unordered_map<RE::FormID, Clock::time_point> s_nextNoKeeper;
+                    if (auto& nx = s_nextNoKeeper[fid]; nx.time_since_epoch().count() == 0 || a_now >= nx) {
+                        nx = a_now + std::chrono::seconds(120);
+                        spdlog::info("[errand] {:08X}: door inn '{}' has no innkeeper -> using '{}'", fid, noKeeper, inn.name);
+                    }
+                }
+            }
             if (!temple.ok && !temple.lockedSkip && ResolveViaData(a_town, false, temple, how)) {
                 templeViaData = true;
                 spdlog::info("[errand] {:08X}: temple '{}' (cell {:08X}) resolved through {} (no load door to it in his cell)", fid, temple.name, temple.cell, how);
@@ -910,13 +948,10 @@ namespace MFO::Logistics::Errand::Rest {
         std::vector<InnFac> innFacs;
         if (inn.ok) {
             innFacs = InnFactionsOf(a_town);
-            for (const auto& fac : innFacs) {
-                // The faction whose place sits in THIS inn's location; a town with a single innkeeper faction and a single inn matches
-                // even when the place resolves to a sub-location.
-                if (fac.locId != inn.locId && innFacs.size() != 1) continue;
-                innFac = &fac;
-                break;
-            }
+            // Run 5 (R4): the faction whose place is THIS inn's interior cell or location, or a parent / child of that location (FindPlaces only
+            // settles on a door inn that has one; the data fallback resolves from a faction's own place). The old "a single faction matches any
+            // inn" shortcut is gone: it bound a warehouse to the innkeeper (marth 2026-10-20 field run, Auri).
+            innFac = MatchInnFac(innFacs, RE::TESForm::LookupByID<RE::BGSLocation>(inn.locId), inn.cell, a_town);
             if (!innFac) {
                 static std::unordered_map<RE::FormID, Clock::time_point> s_nextNoFac;
                 if (auto& nx = s_nextNoFac[fid]; nx.time_since_epoch().count() == 0 || a_now >= nx) {
@@ -926,26 +961,26 @@ namespace MFO::Logistics::Errand::Rest {
                 }
             }
         }
-        // Run 4 F1: an inn that failed its last trip(s) this visit is not planned again at once (2 min, then 4), and after 3 failed trips not at all.
+        // Run 4 F1: an inn that failed its last trip(s) this visit is not planned again at once (2 min, then 4). Run 5 (marth R4: "any real verified
+        // intentional cell being unreachable is an error"): the old "after 3 failed trips not at all" is GONE -- the inn is never dropped for the visit; the
+        // unstick (ErrandPlace.cpp) places a stuck walker and a placement that fails is an ERROR (Errand.cpp), then this backoff paces the next try.
         bool innSuppressed = false;
         if (inn.ok && innFac) {
             int fails = 0; Clock::time_point nextTry{};
             { std::scoped_lock lk(g_mx); if (const auto it = g_innFailTrips.find(fid); it != g_innFailTrips.end()) fails = it->second;
               if (const auto it = g_innNextTry.find(fid); it != g_innNextTry.end()) nextTry = it->second; }
-            if (fails >= 3 || (fails > 0 && a_now < nextTry)) {
+            if (fails > 0 && a_now < nextTry) {
                 innSuppressed = true;
                 std::scoped_lock lk(g_mx);
                 auto& nx = g_innSuppLogged[fid];
                 if (nx.time_since_epoch().count() == 0 || a_now >= nx) {
                     nx = a_now + std::chrono::seconds(120);
-                    if (fails >= 3)
-                        spdlog::warn("[errand] {:08X}: inn '{}' unreachable after {} trips this visit -- no inn stop until the player leaves town", fid, inn.name, fails);
-                    else
-                        spdlog::info("[errand] {:08X}: inn '{}' failed {} trip(s) this visit -- not planned again for {} s", fid, inn.name, fails,
+                    spdlog::info("[errand] {:08X}: inn '{}' failed {} trip(s) this visit -- not planned again for {} s", fid, inn.name, fails,
                                      std::chrono::duration_cast<std::chrono::seconds>(nextTry - a_now).count());
                 }
             }
         }
+        bool innPushed = false;
         if (inn.ok && innFac && !innSuppressed && a_stops.size() < kMaxTripStops) {
             Stop s;
             s.kind = StopKind::Inn;
@@ -967,6 +1002,7 @@ namespace MFO::Logistics::Errand::Rest {
                 food = std::format("food stock {}/{}{}", have, want, purse > 0 ? "" : ", no gold");
             }
             a_stops.push_back(std::move(s));
+            innPushed = true;
             add += std::format(" -> INN '{}' ({}; LAST stop, he stays until the player leaves town)", inn.name, food);
         } else if (!inn.ok) {
             static std::unordered_map<RE::FormID, Clock::time_point> s_nextLog;
@@ -974,6 +1010,28 @@ namespace MFO::Logistics::Errand::Rest {
                 nx = a_now + std::chrono::seconds(120);
                 spdlog::info("[errand] {:08X}: no inn stop -- no load door in his cell leads to an inn interior of '{}' (or the inn is not in this part of town)",
                              fid, a_town->GetName() ? a_town->GetName() : "?");
+            }
+        }
+        // Run 5 (marth R3): a town with NO innkeeper inn has no inn stage; "he hangs out in a shop" -- the LAST SHOP becomes the trip's rest stage. It is an
+        // Inn-kind stop on that shop's own cell (rest only: no order, so no counter business; the shop's faction / chest ride only because the ERND wire needs
+        // them), so the whole stay machinery (ch.9 sandbox, the player leaving town / combat as the only exits, the hand-off to the simulation) is the inn's.
+        // Reaching it counts the trip (NextStopOrFinish). A last shop that is a ref / vendor-actor stop has no cell to stay in: the trip simply ends there
+        // and reaching it counts (TownHasNoInnkeeper).
+        if (!innPushed && !a_stops.empty() && a_stops.size() < kMaxTripStops && InnFactionsOf(a_town).empty()) {
+            const Stop* last = nullptr;
+            for (const auto& st : a_stops) if (st.kind == StopKind::Shop) last = &st;
+            if (last && last->destKind == DestKind::Cell && last->destForm) {
+                Stop rs;
+                rs.kind = StopKind::Inn;
+                rs.faction = last->faction; rs.chest = last->chest;
+                rs.vendorName = last->vendorName;
+                rs.destKind = DestKind::Cell; rs.destForm = last->destForm; rs.destRad = 0.0f;
+                rs.pos = last->pos; rs.havePos = last->havePos;
+                rs.state = StopState::Pending;
+                add += std::format(" -> REST at the last shop '{}' (the town has no innkeeper inn; he hangs out there until the player leaves town)", rs.vendorName);
+                a_stops.push_back(std::move(rs));
+            } else if (last) {
+                add += std::format(" -> the town has no innkeeper inn and the last shop '{}' is not a cell: no rest stage, reaching it counts the trip", last->vendorName);
             }
         }
         if (wasEmpty && !a_stops.empty()) a_stops.front().state = StopState::Active;
@@ -1072,6 +1130,10 @@ namespace MFO::Logistics::Errand::Rest {
             g_tripLogged.erase(a_follower);
         }
         if (had) spdlog::info("[errand] {:08X}: trip-done mark CLEARED ({})", a_follower, a_why);
+    }
+    bool TownHasNoInnkeeper(RE::FormID a_townId) {
+        auto* loc = a_townId ? RE::TESForm::LookupByID<RE::BGSLocation>(a_townId) : nullptr;
+        return loc && InnFactionsOf(loc).empty();
     }
     void NoteInnTripFailed(RE::FormID a_follower, Clock::time_point a_now) {
         int n = 0;
