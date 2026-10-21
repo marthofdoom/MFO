@@ -2175,3 +2175,11 @@ Note (SEV-4, tracked as a fork task, not here): the mit-3.7 fork's TES.h guards 
 
 ### MFO-B433 (SEV-5, OPEN, logistics/LootScan.cpp WalkLoaded) -- the three-way runtime check repeats Runtime::IsVerifiedRuntime() (raised against 0502c1a)
 "LootScan's three-way IsVerified1_5_97 / 1_6_1170 / 1_7_104 check in the unknown-build warning repeats Runtime::IsVerifiedRuntime() (Runtime.h:70)."
+### MFO-B434 (SEV-5, OPEN, logistics/Errand.cpp TryStart `s_priceDefers`) -- never cleared on load / revert (raised against c83d197)
+"The F1 per-follower price-defer counter is a function-local static: it is erased only when a plan sees no deferral, not on load or revert. A stale count can shorten the next wait."
+
+### MFO-B435 (SEV-4, OPEN, LocationTypes.h InnOf, pre-existing data) -- vanilla jail locations carry LocTypeInn (raised against c83d197)
+"FalkreathBarracksJailLocation and RiftenHoneysideLocation carry LocTypeInn in vanilla, so InnOf may name the jail before Dead Man's Drink. Names only (logs/Board); the walk goes through the load-door search."
+
+### MFO-B436 (SEV-4, OPEN, informational, LocationTypes.h TownAnchor) -- outermost anchor widens "the town" (raised against c83d197)
+"With Lux Via-style nesting, Left Hand Mine and similar places now count as Markarth, so walking there does not end an errand as 'left town'."

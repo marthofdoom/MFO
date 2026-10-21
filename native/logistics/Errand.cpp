@@ -1139,7 +1139,30 @@ namespace MFO::Logistics::Errand {
         for (auto& c : cands) shops.push_back(ErrandShop{ c.fac, c.handle });
         for (auto& c : closedCands) shops.push_back(ErrandShop{ c.fac, c.handle });   // F3: evaluated NOW (loaded) so the watch holds their orders
         std::vector<ErrandPlanned> planned;
-        if (!shops.empty()) EconomyErrandPlan(a_follower, a_state, a_now, shops, planned);
+        int deferredShops = 0;
+        if (!shops.empty()) EconomyErrandPlan(a_follower, a_state, a_now, shops, planned, &deferredShops);
+        // F1 (town run 3): a shop whose price quote is still being computed on the main thread was DROPPED from `planned` (no row at
+        // all), and the trip committed without its shop work. Wait ~1 s and re-plan (the refresh is already Posted), like
+        // MagicReadPending / PlacesPending; capped, then a loud WARN and the plan proceeds WITHOUT the pending shops (they have no row, so the trip lacks their work).
+        {
+            static std::unordered_map<RE::FormID, int> s_priceDefers;   // consecutive defers per follower
+            if (deferredShops > 0) {
+                constexpr int kPriceMaxDefers = 8;   // ~1 s each: a main-thread refresh lands in ~10 ms, 8 s means the Post is stalled
+                int& n = s_priceDefers[fid];
+                if (++n <= kPriceMaxDefers) {
+                    if (n == 1)
+                        spdlog::info("[errand] {:08X} '{}': {} shop(s) wait for their price quote (main-thread refresh) -- re-planning in ~1 s", fid, NameOf(a_follower), deferredShops);
+                    std::scoped_lock lk(g_mx);
+                    g_nextPlan[fid] = a_now + std::chrono::seconds(1);
+                    return true;
+                }
+                spdlog::warn("[errand] {:08X} '{}': {} shop(s) still without a price quote after {} defers (is the main-thread Post running?) -- planning WITHOUT them",
+                             fid, NameOf(a_follower), deferredShops, n - 1);
+                n = 0;
+            } else {
+                s_priceDefers.erase(fid);
+            }
+        }
         std::vector<ErrandPlanned> closedPlanned;   // F3: the hours-closed shops' orders leave the open plan's list (their wishes are not this trip's)
         if (!closedCands.empty()) {
             const auto isClosedKey = [&](RE::FormID a_key) {
@@ -1172,8 +1195,9 @@ namespace MFO::Logistics::Errand {
             t.key = c.id; t.actorId = c.actorId; t.faction = c.fac->GetFormID(); t.chest = c.chest;
             {
                 auto* vendor = c.handle.get().get();
-                const char* vn = vendor ? vendor->GetName() : c.fac->GetName();
-                t.name = vn && *vn ? vn : "?";
+                const char* vn = vendor ? vendor->GetName() : nullptr;
+                if (vn && *vn) t.name = vn;
+                else { t.name = ShopPlaceName(c.fac); if (t.name.empty()) t.name = "?"; }   // F4
             }
             t.dist = c.dist; t.pos = c.pos; t.havePos = c.havePos;
             t.kind = c.kind; t.destForm = c.destForm; t.destRad = c.destRad;
@@ -1229,6 +1253,40 @@ namespace MFO::Logistics::Errand {
         std::optional<Stop> innStopForWatch;   // F3: the committed trip's inn stop is the re-planned trip's LAST stop
         if (!stops.empty() && stops.back().kind == StopKind::Inn) innStopForWatch = stops.back();
         if (!StartTrip(a_follower, playerTown, a_now, std::move(stops), tripLine, cands.size())) return true;
+        // F2: one line per evaluated shop of the committed plan (open shops, then the hours-closed ones the watch holds): the work each
+        // carried, or why it carried none. A shop dropped for a pending quote is not listed (F1 re-plans instead).
+        {
+            const auto logRows = [&](const std::vector<ErrandPlanned>& a_rows, const std::vector<Trip::Cand>& a_cands, const char* a_tag) {
+                for (const auto& v : a_rows) {
+                    const auto it = std::find_if(a_cands.begin(), a_cands.end(), [&](const Trip::Cand& t) { return t.key == v.vendorKey; });
+                    const char* nm = it != a_cands.end() && !it->name.empty() ? it->name.c_str() : "?";
+                    if (v.skipped)
+                        spdlog::info("[errand] {:08X} shop {} '{}' ({:08X}): SKIPPED (empty-trade memo / nothing to do)", fid, a_tag, nm, v.vendorKey);
+                    else
+                        spdlog::info("[errand] {:08X} shop {} '{}' ({:08X}): sell {} row(s)/{}g, needs mask {:#x}, wishes gear={} apparel={} tome={} mats={}, purse {}g",
+                                     fid, a_tag, nm, v.vendorKey, v.sellRows, v.sellValue, v.needKinds, v.wishGear, v.wishApparel, v.wishTome, v.wishMaterials, v.purse);
+                }
+            };
+            logRows(planned, tcands, "open");
+            logRows(closedPlanned, closedTCands, "closed");
+        }
+        // F3 (town run 3): the watch holds only a closed shop that has WORK for him: its row exists, was not skipped, and carries sell rows,
+        // a need its VEND carries, or a wish its VEND carries. Anything else would "open" into a trip with no stop (the 17:39 'yield NO stop').
+        if (!closedTCands.empty()) {
+            const auto hasWork = [&](const Trip::Cand& t) {
+                const auto it = std::find_if(closedPlanned.begin(), closedPlanned.end(), [&](const ErrandPlanned& p) { return p.vendorKey == t.key; });
+                if (it == closedPlanned.end() || it->skipped) return false;
+                return it->sellRows > 0 || (it->needKinds & t.needCarry) != 0 ||
+                       (it->wishGear && t.carriesGear) || (it->wishApparel && t.carriesGear) ||
+                       (it->wishTome && t.carriesTome) || (it->wishMaterials && t.carriesMaterials);
+            };
+            std::erase_if(closedTCands, [&](const Trip::Cand& t) { return !hasWork(t); });
+            std::erase_if(closedPlanned, [&](const ErrandPlanned& p) {
+                return std::none_of(closedTCands.begin(), closedTCands.end(), [&](const Trip::Cand& t) { return t.key == p.vendorKey; });
+            });
+            if (closedTCands.empty())
+                spdlog::info("[errand] {:08X} '{}': no hours-closed shop holds work for him -- no watch", fid, NameOf(a_follower));
+        }
         if (Config::g_errandInn.load())   // F3: the hours-closed shops (and their orders) ride the trip: the WATCH
             Reopen::Record(fid, playerTown->GetFormID(), std::move(closedTCands), std::move(closedPlanned), tin, innStopForWatch ? &*innStopForWatch : nullptr);
         return true;

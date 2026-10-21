@@ -14,6 +14,7 @@
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
 #include "Lotd.h"                // LOTD: never sell a relic the museum still needs
 #include "Errand_internal.h"      // town errands: ErrandShop / ErrandPlanned (the plan entry below)
+#include <format>
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
 #include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
@@ -941,6 +942,12 @@ namespace MFO::Logistics {
                 for (auto& c : sellCandidates)
                     if (const auto it = stolenOf.find(c.obj); it != stolenOf.end()) c.stolen = it->second;
             }
+            // F2: the candidates that PASSED every follower-side guard (the per-item exclusions above are the other half of the picture).
+            if (diag)
+                for (const auto& c : sellCandidates)
+                    spdlog::info("[sell] {:08X} '{}' -> CANDIDATE x{} ({}g base, {}{})", fid, c.obj && c.obj->GetName() ? c.obj->GetName() : "?",
+                                 c.count, c.price, c.passTag,
+                                 c.stolen == ErrandShops::Stolen::All ? ", stolen" : c.stolen == ErrandShops::Stolen::Mixed ? ", mixed stolen" : "");
 
             // BUY NEEDS: each supply gambit BELOW its threshold -> the category
             // + how many MORE to acquire. Papyrus enumerates the vendor's ACTUAL
@@ -962,6 +969,12 @@ namespace MFO::Logistics {
                 else if (c == Vocab::kCondSelfLowMagickaPotion) addNeed(TradeBridge::NeedCat::kPotMagicka, CountPotions(a_follower, RE::ActorValue::kMagicka), want);
                 else if (c == Vocab::kCondSelfOutOfArrows)      addNeed(TradeBridge::NeedCat::kArrows,     ArrowCount(a_follower),                             want);
                 else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
+            }
+
+            if (a_planOut) {   // F2: the follower's needs, once per plan (an empty vector means no supply rule is below its threshold)
+                std::string nl;
+                for (const auto& n : needs) nl += std::format("{}kind{}x{}", nl.empty() ? "" : ", ", n.kind, n.quota);
+                spdlog::info("[econ] {:08X} plan needs: {} | sell candidates {} | purse {}g", fid, nl.empty() ? "none" : nl, sellCandidates.size(), purse);
             }
 
             // R5 TRIP PARTITION (EconomyErrandExecute, a physical stop's give beat): this stop serves only its share of the trip --
@@ -1009,7 +1022,8 @@ namespace MFO::Logistics {
                 auto* fac    = pv.fac;
                 // The pair key / SkipTrade / log identity: the vendor actor, or the FACTION for a shop whose vendor is not loaded.
                 const RE::FormID vendorKey = vendor ? vendor->GetFormID() : fac->GetFormID();
-                const char* vendorName = vendor && vendor->GetName() ? vendor->GetName() : (fac->GetName() ? fac->GetName() : "?");
+                const std::string shopPlaceName = vendor && vendor->GetName() ? std::string() : ShopPlaceName(fac);   // F4: a faction-only shop is named from its PLVD place
+                const char* vendorName = vendor && vendor->GetName() ? vendor->GetName() : (!shopPlaceName.empty() ? shopPlaceName.c_str() : "?");
 
                 // Per-(follower,vendor) log cooldown (60 s).
                 const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendorKey;
@@ -1046,9 +1060,13 @@ namespace MFO::Logistics {
                 // ONE quote per trade: while the follower is loaded and the first perk-adjusted value for this pair is
                 // still being computed on the main thread, DEFER this vendor one cycle instead of pricing the sell rows
                 // Speech-only (the refresh is already Posted; the next scan / plan finds the cache). Not a fallback:
-                // an UNLOADED follower or a vendor with no actor never defers and its line says Speech-only.
+                // an UNLOADED follower never defers and its line says Speech-only. A LOADED follower defers for EVERY
+                // shop, vendor actor or not (Pricing::Resolve keys the pair on the faction when no actor is loaded). In
+                // errand plan mode the deferral is COUNTED (ErrandProbe::deferred) and the planner (Errand.cpp TryStart)
+                // waits and re-plans, so a shop is never silently dropped from a committed trip (town run 3, 2026-10-20).
                 if (quote.refreshPending) {
                     if (!a_errand) g_econPair[pairKey] = a_now;   // undo this scan's 12 s pair cooldown: retry on the next scan
+                    else if (a_errand->mode == ErrandProbe::Mode::kPlan) ++a_errand->deferred;
                     continue;
                 }
                 std::vector<TradeBridge::SellRow> sell;
@@ -1155,10 +1173,11 @@ namespace MFO::Logistics {
         // TOWN ERRAND PLAN (logistics/Errand.cpp): evaluate every candidate -- loaded vendor actors AND faction-only shops
         // -- with the same code a trade uses and hand back one ErrandPlanned each, order included. Dispatches nothing.
         void EconomyErrandPlan(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now,
-                               const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out) {
+                               const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out, int* a_deferred) {
             ErrandProbe probe;
             probe.mode = ErrandProbe::Mode::kPlan;
             EconomyProbeImpl(a_follower, a_state, a_now, &probe, &a_shops, &a_out);
+            if (a_deferred) *a_deferred = probe.deferred;
         }
 
         // R5: one STOP of a trip, on screen (the give beat, logistics/Errand.cpp): the probe in execute mode with the stop's share.

@@ -5,6 +5,7 @@
 // surface is logistics/Errand.h.
 #include "Errand.h"
 #include "TradeBridge.h"
+#include "Runtime.h"   // ShopPlaceName: IsVerified1_6_1170
 
 #include <memory>
 #include <string>
@@ -12,6 +13,33 @@
 #include <vector>
 
 namespace MFO::Logistics {
+
+    // F4 (town run 3): a faction-only shop (no loaded vendor) usually has an EMPTY faction FULL name, so every log/toast/watch line said '?'.
+    // Its name: the faction's own FULL, else its PLVD place (the way BuildTownShops reads it: kInCell = the cell's FULL; kNearReference = the
+    // ref's parent cell FULL, else the ref's display name). Empty string = nothing named it (callers keep their own "?").
+    inline std::string ShopPlaceName(const RE::TESFaction* a_fac) {
+        if (!a_fac) return {};
+        if (const char* n = a_fac->GetName(); n && *n) return n;
+        auto* loc = a_fac->vendorData.vendorLocation;
+        if (!Runtime::IsVerified1_6_1170()) return {};   // the PLVD union layout is verified on that build only (BuildTownShops / ErrandRest gate the same way)
+        if (!loc) return {};
+        switch (loc->locType.get()) {
+        case RE::PackageLocation::Type::kInCell: {
+            auto* cell = loc->data.object ? loc->data.object->As<RE::TESObjectCELL>() : nullptr;
+            if (const char* n = cell ? cell->GetName() : nullptr; n && *n) return n;
+            break;
+        }
+        case RE::PackageLocation::Type::kNearReference: {
+            auto ref = loc->data.refHandle.get();
+            if (!ref) break;
+            if (auto* pc = ref->GetParentCell()) if (const char* n = pc->GetName(); n && *n) return n;
+            if (const char* n = ref->GetDisplayFullName(); n && *n) return n;
+            break;
+        }
+        default: break;
+        }
+        return {};
+    }
 
     // ── the PLAN entry (defined in Economy.cpp beside EconomyProbe) ──────────────────────────────────────
     // One candidate shop: its vendor FACTION, and the vendor ACTOR when he is loaded (null = an interior shop
@@ -45,7 +73,8 @@ namespace MFO::Logistics {
     };
     void EconomyErrandPlan(RE::Actor* a_follower, const FollowerState& a_state,
                            std::chrono::steady_clock::time_point a_now,
-                           const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out);
+                           const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out,
+                           int* a_deferred = nullptr);   // F1: count of shops dropped this pass for a pending price refresh
     // R5: the physical give beat of ONE STOP of a trip: EconomyProbe(kExecute) for a_probe.vendors, with the trip's PARTITION
     // applied. a_share (the stop's planned order, null = no partition: a restored stop re-plans in full) limits the sell rows
     // to the objects it lists, the needs to its kinds and the gear / tome wishes to its flags; a_purseCap (< 0 = none) caps
