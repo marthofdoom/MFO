@@ -178,6 +178,16 @@ namespace MFO::Logistics::Errand::Rest {
         bool                                             g_wasCombat = false;   // F2: the last player-combat state NoteCombat saw (the combat-end edge clears the marks)
         struct InnFac { RE::FormID faction = 0, chest = 0, locId = 0, cell = 0; };   // cell: the interior cell of the faction's PLVD place (0 = unknown)
         std::unordered_map<RE::FormID, std::vector<InnFac>> g_innFacs;  // town -> the innkeeper factions (immutable once built)
+        struct ShopDoorRead {   // the main-thread read of the entry door of an INTERIOR shop place (ShopDoorFor), up to two cells deep
+            bool        done = false, indoors = false, found = false;
+            RE::FormID  door = 0, via = 0;   // the EXTERIOR load door; via = the first interior it leads to (depth 2), 0 at depth 1
+            int         depth = 0, scanned = 0, hops = 0, hopRefs = 0;   // load doors seen in the loaded grid; first-hop interiors walked + their refs seen
+            RE::NiPoint3 pos{};
+            Clock::time_point stamp{};
+        };
+        std::unordered_map<RE::FormID, ShopDoorRead>     g_shopDoor;       // shop place cell -> its door read; guarded by g_mx
+        std::unordered_set<RE::FormID>                   g_shopDoorAsked;  // shop place cells whose read was queued (one in flight)
+        std::unordered_map<RE::FormID, std::string>      g_shopDoorLogged; // shop place cell -> the last verdict logged (a line only when it changes)
 
         int GameDay() {
             auto* cal = RE::Calendar::GetSingleton();
@@ -550,8 +560,15 @@ namespace MFO::Logistics::Errand::Rest {
                 g_doorRead[a_cell] = dr;
                 g_doorAsked.erase(a_cell);
             };
+            // NEVER walk the grid off the main thread (LootScan.cpp crash4): no pump = no read. PlacesPending's defer cap then plans without the
+            // door (its WARN says so), the same as a read that never lands.
             if (MainThread::IsInstalled()) MainThread::Post(fn);
-            else                           fn();
+            else {
+                { std::scoped_lock lk(g_mx); g_doorAsked.erase(a_cell); }
+                static std::atomic_bool noted{ false };
+                if (!noted.exchange(true))
+                    spdlog::warn("[errand] the temple entry-door read needs the main-thread pump, which is not installed: no door is read (logged once)");
+            }
         }
         // The cached read for a temple cell: TRUE with a_out when a USABLE one exists (done, not indoors, younger than 5 real minutes).
         bool TempleDoorRead(RE::FormID a_cell, DoorRead& a_out) {
@@ -1257,6 +1274,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_magicWaitLogged.clear();
         g_magicDefers.clear();
         g_innFacs.clear();
+        g_shopDoor.clear(); g_shopDoorAsked.clear(); g_shopDoorLogged.clear();
         g_doorRead.clear(); g_doorAsked.clear(); g_doorDefers.clear(); g_doorLogged.clear();
         g_marksTown = 0;
         g_wasCombat = false;
@@ -1321,5 +1339,102 @@ namespace MFO::Logistics::Errand::Rest {
         { std::scoped_lock lk(g_mx); g_templeTry[a_follower] = today; }
         spdlog::info("[errand] {:08X} '{}': TEMPLE_SIM -- the visit to '{}' ran off screen; the blessing / cure is OWED (the shrine ref is not persistent, so only a "
                      "physical visit pays it)", a_follower, a_followerName, a_temple);
+    }
+
+    // ── the entry door of an INTERIOR shop place, up to TWO cells deep (marth 2026-10-21: "they check 2 cells deep ... just through doors") ──
+    // MAIN THREAD (Logistics::ForEachLoadedRef walks the loaded grid; the worker must not, LootScan.cpp crash4). Depth 1: a load door in a
+    // loaded EXTERIOR cell whose linked door sits in the place cell. Depth 2: a load door into a first interior whose own load doors lead to the
+    // place cell (that first interior is walked through TESObjectCELL::ForEachReference; an UNLOADED interior lists only the references the
+    // engine keeps for it -- persistent load doors are expected there, NOT FIELD-PROVEN: the verdict line counts the refs seen so one run shows
+    // it). The nearest such exterior door to the player wins. The player indoors = no exterior grid: unknown.
+    static void PostShopDoorRead(RE::FormID a_cell) {
+        { std::scoped_lock lk(g_mx); if (!g_shopDoorAsked.insert(a_cell).second) return; }
+        auto fn = [a_cell]() {
+            ShopDoorRead dr;
+            dr.done = true;
+            dr.stamp = Clock::now();
+            auto* tes = RE::TES::GetSingleton();
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            if (!tes || !pc || tes->interiorCell) dr.indoors = true;
+            else {
+                const auto ppos = pc->GetPosition();
+                float bestD = 1.0e9f;
+                struct Hop { RE::TESObjectCELL* cell = nullptr; RE::FormID door = 0; RE::NiPoint3 pos{}; float d = 0.0f; };
+                std::unordered_map<RE::FormID, Hop> hops;   // first interior -> the nearest exterior door into it
+                ForEachLoadedRef([&](RE::TESObjectREFR* a_ref) {
+                    auto* tele = a_ref ? a_ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+                    if (!tele || !tele->teleportData) return RE::BSContainer::ForEachResult::kContinue;
+                    ++dr.scanned;
+                    auto lp = tele->teleportData->linkedDoor.get();
+                    auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
+                    if (!lc || !lc->IsInteriorCell()) return RE::BSContainer::ForEachResult::kContinue;
+                    const float d = a_ref->GetPosition().GetDistance(ppos);
+                    if (lc->GetFormID() == a_cell) {
+                        if (d < bestD) { bestD = d; dr.found = true; dr.depth = 1; dr.door = a_ref->GetFormID(); dr.via = 0; dr.pos = a_ref->GetPosition(); }
+                    } else if (auto [it, fresh] = hops.try_emplace(lc->GetFormID(), Hop{ lc, a_ref->GetFormID(), a_ref->GetPosition(), d }); !fresh && d < it->second.d) {
+                        it->second = Hop{ lc, a_ref->GetFormID(), a_ref->GetPosition(), d };
+                    }
+                    return RE::BSContainer::ForEachResult::kContinue;
+                });
+                if (!dr.found) {   // two deep (outside the grid walk: no cell lock is held while another cell is walked)
+                    for (const auto& [hid, h] : hops) {
+                        if (dr.hops >= 64) break;
+                        ++dr.hops;
+                        bool leads = false;
+                        h.cell->ForEachReference([&](RE::TESObjectREFR* a_ref) {
+                            ++dr.hopRefs;
+                            auto* tele = a_ref ? a_ref->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+                            if (!tele || !tele->teleportData) return RE::BSContainer::ForEachResult::kContinue;
+                            auto lp = tele->teleportData->linkedDoor.get();
+                            auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
+                            if (lc && lc->GetFormID() == a_cell) { leads = true; return RE::BSContainer::ForEachResult::kStop; }
+                            return RE::BSContainer::ForEachResult::kContinue;
+                        });
+                        if (leads && h.d < bestD) { bestD = h.d; dr.found = true; dr.depth = 2; dr.door = h.door; dr.via = hid; dr.pos = h.pos; }
+                    }
+                }
+            }
+            const std::string verdict = dr.indoors ? std::string("the player is indoors: no exterior grid to read (unknown)")
+                : !dr.found ? std::format("NO load door in the loaded exterior grid leads to it within two cells ({} load door(s) seen, {} first-hop interior(s) "
+                                          "walked, {} reference(s) listed in them)", dr.scanned, dr.hops, dr.hopRefs)
+                : dr.depth == 1 ? std::format("entry door {:08X} in the loaded exterior grid", dr.door)
+                                : std::format("exterior door {:08X} -> interior {:08X} -> this cell (two deep; {} reference(s) listed in {} first-hop interior(s))",
+                                              dr.door, dr.via, dr.hopRefs, dr.hops);
+            bool say = false;
+            {
+                std::scoped_lock lk(g_mx);
+                g_shopDoor[a_cell] = dr;
+                g_shopDoorAsked.erase(a_cell);
+                auto& last = g_shopDoorLogged[a_cell];
+                if (last != verdict) { last = verdict; say = true; }
+            }
+            if (say) spdlog::info("[errand] shop place cell {:08X}: {}", a_cell, verdict);
+        };
+        MainThread::Post(fn);   // ShopDoorFor posts only when the pump is installed: this read never runs off the main thread (crash4)
+    }
+
+    DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos) {
+        if (!a_cell) return DoorAnswer::None;
+        if (!MainThread::IsInstalled()) {   // no pump = no grid read (never on the worker): the shop is known only through his own cell's doors
+            static std::atomic_bool noted{ false };
+            if (!noted.exchange(true))
+                spdlog::warn("[errand] the shop entry-door read needs the main-thread pump, which is not installed: interior shops are found through the "
+                             "follower's own cell only (logged once)");
+            return DoorAnswer::None;
+        }
+        auto* pc = RE::PlayerCharacter::GetSingleton();
+        auto* pcell = pc ? pc->GetParentCell() : nullptr;
+        if (!pcell || pcell->IsInteriorCell()) return DoorAnswer::None;   // the player indoors: no exterior grid to read from (the own-cell doors only)
+        {
+            std::scoped_lock lk(g_mx);
+            if (const auto it = g_shopDoor.find(a_cell); it != g_shopDoor.end() && it->second.done && !it->second.indoors &&
+                Clock::now() - it->second.stamp <= std::chrono::minutes(5)) {
+                if (!it->second.found) return DoorAnswer::None;
+                a_pos = it->second.pos;
+                return DoorAnswer::Found;
+            }
+        }
+        PostShopDoorRead(a_cell);   // none yet, stale, or read while the player was indoors
+        return DoorAnswer::Pending;
     }
 }

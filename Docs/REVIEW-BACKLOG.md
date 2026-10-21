@@ -2226,3 +2226,23 @@ marth R1 (always teleport, even in view) overrides Harbinger APMF-B149 ("MFO sho
 
 ### MFO-B452 (SEV-4, OPEN, logistics/ErrandReopen.cpp DropGoldForms) -- a late trip drops ALL its job.forms from the gold watch, incl. forms no stop of the late trip carries (raised against 6e97df7)
 "DropGoldForms drops every form in job.forms from the gold watch, including forms that no stop of the late trip actually carries (Trip::Plan placed only some, or the stop cap cut them; related to B451). Such a row loses its gold-watch retry at the original vendor; the item stays in inventory so the next normal trip can still pick it up."
+
+### MFO-B453 (SEV-4, OPEN, logistics/ErrandRest.cpp PostShopDoorRead, against d68446e) -- per-cell door reads each walk the grid + up to 64 interiors in one frame
+"per-cell door reads each walk the grid + up to 64 interiors in one frame every 5 min (batch them)" (Opus review of feat/mfo-college-vendors, F2). Every interior shop cell posts its own main-thread read; a town with many shop cells walks the loaded grid (and the first-hop interiors) once per cell in the same frame.
+
+### MFO-B454 (SEV-4, OPEN, logistics/ErrandRest.cpp ShopDoorFor, against d68446e) -- a None verdict is cached 5 min regardless of player movement; no defer cap / warn
+"None verdict cached 5 min regardless of player movement + no defer cap/warn" (Opus review of feat/mfo-college-vendors, F3). A shop whose door was not in the loaded grid when read stays out of the catalog for 5 real minutes even after the player walks next to it; the Pending path has no defer cap or WARN like PlacesPending's.
+
+### MFO-B455 (SEV-4, FIXED (part 1) on feat/mfo-college-vendors in the R-A/R-B commit after 72180d9, logistics/Errand.cpp BuildTownShops chest anchor, against d68446e) -- College physical arrival often unattended by day
+FIX (marth 2026-10-21, "1 now, 2 next week"): a chest-placed shop whose vendor is not found on arrival trades with the merchant chest like TRADE_SIM (`Errand.cpp` Tick Walking, `ChestPlacedFaction`), WARN "vendor not present -- traded with the merchant chest (chest-placed shop)". Part 2 (walking on to find the vendor) is next week's task.
+"College physical arrival often unattended by day (chest vs Hall of the Elements)" (Opus review of feat/mfo-college-vendors, F4). The College vendors' chests (the store cells) are in the Hall of Countenance / Hall of Attainment / Arcanaeum, while by day the vendors sandbox in the Hall of the Elements; the on-screen arrival then relies on the vendor search and the unattended-shop retries. The off-screen simulation needs no vendor.
+
+### MFO-B456 (SEV-4, FIXED on feat/mfo-college-vendors in the R-A/R-B commit after 72180d9, logistics/ErrandShops.cpp SpouseGate / R6 rule, against d68446e) -- any conditioned non-spouse vendor is dropped; needs a marth ruling
+FIX (marth 2026-10-21, "Evaluate the conditions"): `SpouseGate` evaluates a non-spouse conditioned vendor's own conditions (`ConditionGate`, subject = the loaded vendor else the player) and opens it when they pass; the spouse's own store is unchanged.
+"R6 rule drops any conditioned non-spouse vendor (LoreRim CollegeEntry.esp drops Faralda), needs marth ruling" (Opus review of feat/mfo-college-vendors, F5). CollegeEntry.esp (Improved College Entry) adds two conditions to ServicesWinterholdCollegeFaralda, so R6 treats her as a spouse-store candidate and closes her.
+
+### MFO-B457 (SEV-4, OPEN, logistics/Errand.cpp BuildTownShops chest anchor, against d68446e) -- chest anchor can route a fence via the Ratway; an exterior chest has no reachability check
+"chest anchor can route a fence via the Ratway / exterior chest has no reachability check" (Opus review of feat/mfo-college-vendors, F6). A chest-placed fence whose chest sits in a Ratway / guild interior is walked to like any shop cell; a chest in an exterior cell is a Ref stop with only the straight-line travel-radius test.
+
+### MFO-B458 (SEV-5, OPEN, logistics/Errand.cpp TryStart College mage gate, against d68446e) -- the tome-wish mage test counts any cast gambit
+"tome-wish mage gate counts any cast gambit" (Opus review of feat/mfo-college-vendors, F7). `g_economyBuyTomes && HasCastGambit` lets a melee follower with one utility cast gambit (a heal, a ward) into the College.

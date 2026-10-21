@@ -45,7 +45,8 @@ namespace MFO::Logistics {
 
     // F4 (town run 3): a faction-only shop (no loaded vendor) usually has an EMPTY faction FULL name, so every log/toast/watch line said '?'.
     // Its name: the faction's own FULL, else its PLVD place (the way BuildTownShops reads it: kInCell = the cell's FULL; kNearReference = the
-    // ref's parent cell FULL, else the ref's display name). Empty string = nothing named it (callers keep their own "?").
+    // ref's parent cell FULL, else the ref's display name; any other type = the merchant chest's cell FULL). Empty string = nothing named it
+    // (callers keep their own "?").
     inline std::string ShopPlaceName(const RE::TESFaction* a_fac) {
         if (!a_fac) return {};
         if (const char* n = a_fac->GetName(); n && *n) return n;
@@ -65,7 +66,11 @@ namespace MFO::Logistics {
             if (const char* n = ref->GetDisplayFullName(); n && *n) return n;
             break;
         }
-        default: break;
+        default: {   // no place in the PLVD: BuildTownShops places the shop by its merchant chest's cell, so name that cell
+            auto* chest = a_fac->vendorData.merchantContainer;
+            if (auto* cc = chest ? chest->GetParentCell() : nullptr) if (const char* n = cc->GetName(); n && *n) return n;
+            break;
+        }
         }
         return {};
     }
@@ -304,6 +309,13 @@ namespace MFO::Logistics::Errand {
         void LogBlockedDoors(RE::Actor* a_follower, RE::FormID a_destCell, const std::string& a_label);
         // Sim: a temple visit ran off screen; the blessing is OWED (logged; paid only by a physical visit).
         void NoteOwed(RE::FormID a_follower, const std::string& a_followerName, const std::string& a_temple);
+
+        // The SHOP catalog's door read (Errand.cpp BuildCatalog), beside the temple door read it mirrors.
+        // ShopDoorFor: the EXTERIOR load door nearest the player that leads into the interior cell a_cell, directly or through one interior
+        // (two cells deep), read on the MAIN thread over the loaded grid and cached 5 real minutes. Found = a_pos is that door's position;
+        // None = no such door (or the player is indoors); Pending = the read was posted, ask again on the next plan.
+        enum class DoorAnswer { Found, None, Pending };
+        DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos);
     }
 
     // ── TOWN RUN 5 (marth 2026-10-20 R1 / R4): the UNSTICK -- logistics/ErrandPlace.cpp ─────────────────────────────────────────────
@@ -435,6 +447,8 @@ namespace MFO::Logistics::ErrandShops {
     bool IsFenceFaction(RE::FormID a_fac);
     // Worker (BuildCatalog). a_vendor = the loaded vendor actor, empty for a faction-only shop. Both log ONE decision line.
     Gate FenceGate(RE::Actor* a_follower, const RE::TESFaction* a_fac, RE::ActorHandle a_vendor);
+    // SpouseGate: a conditioned NON-fence vendor. The spouse's own store (spouse a member, a loaded vendor is the spouse): its conditions with the
+    // spouse as subject. Any other (2026-10-21 F5): its conditions with the loaded vendor, else the player, as subject.
     Gate SpouseGate(RE::Actor* a_follower, const RE::TESFaction* a_fac, RE::ActorHandle a_vendor);
     // Worker (EconomyProbeImpl, once per scan): every base form in his inventory classified by its copies' ExtraOwnership.
     std::unordered_map<const RE::TESBoundObject*, Stolen> ClassifyStolen(RE::Actor* a_follower);

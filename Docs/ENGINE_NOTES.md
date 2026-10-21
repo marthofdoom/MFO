@@ -2586,6 +2586,24 @@ The town errands (`logistics/Errand.cpp` BuildTownShops, `logistics/ErrandRest.c
 
 CommonLib's structs compile to these same offsets (static_asserts beside each read), so the code keeps the struct reads and gates each one on the three exact builds (`PlvdPlaceVerified`, `LcsrRefsVerified`, `FurnitureIdleVerified`); any other build refuses the read and logs once. Re-confirmed the same day, unchanged: `cast/Summon.cpp`'s skip-cap read (`mov rax,[rip+g]; mov ecx,[rax+0x340]` at 1.6.1170 0x7178A1, 1.5.97 0x683DC1, 1.7.104 0x72A411) and `logistics/LootScan.cpp`'s TES offsets (see its comment block).
 
+### 0.53 Location unique NPCs (LCUN): one layout on 1.6.1170, 1.5.97 and 1.7.104, each proven on its own addresses (2026-10-21, disassembly of all three builds)
+
+**NOT read by any code** (kept as a proof): it was proven to place vendor factions whose PLVD is type 12 'near self' (no place in the record: the College tome vendors, Farengar) at their unique NPC's placed ref; marth chose the merchant chest's cell instead (the vendor moves about, the chest is fixed; `logistics/Errand.cpp` BuildTownShops), which needs no new layout. A future reader must add an exact-build gate and static_asserts beside the read. Found the way §0.52 found LCSR: BGSLocation vtables (RTTI) 0x17A3B58 / 0x155F2F8 / 0x181CFD8, slot 6 Load, slot 0x13 InitItemImpl. **Disassembly proof only, no 1.5.97 or 1.7.104 list is installed.**
+
+**Load.** One switch case serves `ACUN` and `LCUN` (`sub eax,0x4D414E52` = RNAM, then `sub eax,0x113F4EF` = ACUN, `cmp eax,0xB` = LCUN). It allocates `(size/12)*0x18` bytes and, per 12-byte file entry, writes dword 0 as a qword at +0x00, dword 1 at +0x08, dword 2 as a qword at +0x10. Then per entry: +0x00 (the NPC form id) is remapped and replaced by `__RTDynamicCast(LookupByID(id), TESForm, TESNPC)` (the `lea r9` / `lea r8` TypeDescriptors read `.?AVTESNPC@@` / `.?AVTESForm@@`); an entry with a null NPC is dropped; +0x08 (the placed ref id) is remapped to a runtime id; the 0x18 bytes are appended to the BSTArray at `[loc+0x88]` (size at `+0x98`).
+
+**InitItemImpl.** Walks `[loc+0x88]` with size `[loc+0x98]` and stride 0x18: removes an entry whose NPC is null or deleted (`formFlags` bit 5), and replaces +0x10 with `LookupByID(remapped id)` when its formType byte (`+0x1A`) is 0x68 (BGSLocation), else 0.
+
+| | 1.6.1170 | 1.5.97 | 1.7.104 |
+|---|---|---|---|
+| Load / LCUN case | 0x292D10 / 0x293306 | 0x240FE0 / 0x24177B | 0x2984E0 / 0x298AD6 |
+| TESNPC cast call | 0x2934A8 | 0x24190B | 0x298C78 |
+| append to +0x88 | 0x293509 (inline copy) | 0x241938 (`call 0x245A80`) | 0x298CD9 (inline copy) |
+| InitItemImpl / loop / location resolve | 0x293EE0 / 0x294149 / 0x2941AE | 0x2422D0 / 0x24252B / 0x242598 | 0x2996B0 / 0x299919 / 0x29997E |
+| LoadGame / Revert (no +0x88..+0x9F access) | 0x296190 / 0x296380 | 0x2444E0 / 0x244650 | 0x29B960 / 0x29BB50 |
+
+So an entry is `{ TESNPC* npc; FormID ref; u32 pad; BGSLocation* editorLoc; }`. **The fork's `RE::UniqueNPCData` declares +0x00 as `Actor*`: wrong type, right offset** (principle 6). A reader must take it as a `TESForm*` and `As<TESNPC>()`, never as an Actor. Vanilla data (Skyrim.esm, `tools/esp_inspect.py`): `WinterholdCollegeLocation` 00076F3A lists Drevis, Colette, Faralda, Phinis (refs in Hall of Countenance 0001380F, editor location the Dormitory 0001EB74), Tolfdir (Hall of Attainment 000CAB91) and Urag (Arcanaeum 00013810); `WhiterunLocation` lists Farengar (Dragonsreach).
+
 ## 1. Actor control — Tier A primitives
 
 **Status: PROVEN (sibling).** Each has a working call site in shipped code.
