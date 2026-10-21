@@ -560,8 +560,15 @@ namespace MFO::Logistics::Errand::Rest {
                 g_doorRead[a_cell] = dr;
                 g_doorAsked.erase(a_cell);
             };
+            // NEVER walk the grid off the main thread (LootScan.cpp crash4): no pump = no read. PlacesPending's defer cap then plans without the
+            // door (its WARN says so), the same as a read that never lands.
             if (MainThread::IsInstalled()) MainThread::Post(fn);
-            else                           fn();
+            else {
+                { std::scoped_lock lk(g_mx); g_doorAsked.erase(a_cell); }
+                static std::atomic_bool noted{ false };
+                if (!noted.exchange(true))
+                    spdlog::warn("[errand] the temple entry-door read needs the main-thread pump, which is not installed: no door is read (logged once)");
+            }
         }
         // The cached read for a temple cell: TRUE with a_out when a USABLE one exists (done, not indoors, younger than 5 real minutes).
         bool TempleDoorRead(RE::FormID a_cell, DoorRead& a_out) {
@@ -1403,12 +1410,18 @@ namespace MFO::Logistics::Errand::Rest {
             }
             if (say) spdlog::info("[errand] shop place cell {:08X}: {}", a_cell, verdict);
         };
-        if (MainThread::IsInstalled()) MainThread::Post(fn);
-        else                           fn();
+        MainThread::Post(fn);   // ShopDoorFor posts only when the pump is installed: this read never runs off the main thread (crash4)
     }
 
     DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos) {
         if (!a_cell) return DoorAnswer::None;
+        if (!MainThread::IsInstalled()) {   // no pump = no grid read (never on the worker): the shop is known only through his own cell's doors
+            static std::atomic_bool noted{ false };
+            if (!noted.exchange(true))
+                spdlog::warn("[errand] the shop entry-door read needs the main-thread pump, which is not installed: interior shops are found through the "
+                             "follower's own cell only (logged once)");
+            return DoorAnswer::None;
+        }
         auto* pc = RE::PlayerCharacter::GetSingleton();
         auto* pcell = pc ? pc->GetParentCell() : nullptr;
         if (!pcell || pcell->IsInteriorCell()) return DoorAnswer::None;   // the player indoors: no exterior grid to read from (the own-cell doors only)
