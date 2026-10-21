@@ -2100,10 +2100,10 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 ### MFO-B408 (SEV-4, OPEN, logistics/ErrandSim.cpp MoveHold) -- town: MoveHold logs success when Harbinger's Repoint silently fails (raised against 8444346)
 "MoveHold logs success even when the Repoint silently fails in Harbinger. This is the same root as" MFO-B405 (Repoint is void in the ABI; the wrapper reports true).
 
-### MFO-B418 (SEV-4, OPEN, Board_Progression.cpp / progression/PerkGate.cpp:376) -- progression: board and refusal text show only the general perk pool (raised against 708c244)
+### MFO-B418 (SEV-4, FIXED in 0502c1a, Board_Progression.cpp / progression/PerkGate.cpp:376) -- progression: board and refusal text show only the general perk pool (raised against 708c244)
 "The take dialog (Pg_PointsAvail, Board_Progression.cpp ~:1151) and tree header (Pg_TreePoints, ~:534) show only unspentPerk, so a crafting node with general 0 and craft 1 shows '0 points' beside an enabled Take. Pg_NoneToSpend (~:230) shows whenever general < 1 even with craft points to spend. Its 'spent' count and PerkGate.cpp:376's whyNot 'no perk points (earned X, Y spent)' use AllocatedRanks, which includes craft-funded ranks, so it can read 'earned 5, 6 spent'." Reviewer: wording only, no incorrect behaviour. Drain before the release cut (user-visible).
 
-### MFO-B419 (SEV-5, OPEN, progression/Harness.cpp:71) -- progression: dev status log and the auto-pick "no eligible perk" log print only the general pool (raised against 708c244)
+### MFO-B419 (SEV-5, FIXED in 0502c1a, progression/Harness.cpp:71) -- progression: dev status log and the auto-pick "no eligible perk" log print only the general pool (raised against 708c244)
 "Harness.cpp:71 and the auto-pick 'no eligible perk' log print only the general pool." Reviewer: dev-only diagnostics.
 
 ### MFO-B420 (SEV-5, OPEN, progression AllocateNextEligible) -- progression: auto-allocator spends craft points only if the class weights a crafting skill (raised against 708c244)
@@ -2139,28 +2139,28 @@ Round-2 closing review of feat/mfo-errand-hold: Harbinger accepts an unloaded re
 ### MFO-B417 (SEV-5, OPEN, logistics/ErrandReopen.cpp Poll) -- town: a reopened trip re-adds an inn stop that was Skipped in the first trip (raised against 8aae97b)
 "skipped inn re-appended" (Opus review of feat/mfo-town-run2): the recorded inn stop is appended to every reopened trip even when the first trip's inn stop ended Skipped (locked door / failure).
 
-### MFO-B422 (SEV-4, OPEN, Docs/CAST-DELIVERY.md:111, Docs/INI-REFERENCE.md) -- MCM cleanup: docs still point users at the removed MCM bLegacyCastHybrid control (raised against 5a48803)
+### MFO-B422 (SEV-4, FIXED in 0502c1a, Docs/CAST-DELIVERY.md:111, Docs/INI-REFERENCE.md) -- MCM cleanup: docs still point users at the removed MCM bLegacyCastHybrid control (raised against 5a48803)
 "Docs/CAST-DELIVERY.md:111 still says 'turn on the MCM bLegacyCastHybrid'. That control no longer exists, and a value set in the MCM store is now ignored. Docs/INI-REFERENCE.md does not document bLegacyCastHybrid as an INI-only key either, so there is no documented way to turn on the legacy hybrid." Fix: point CAST-DELIVERY.md:111 at SKSE/Plugins/MFO.ini and add the key to INI-REFERENCE.md. Drain before the release cut.
 
-### MFO-B423 (SEV-5, OPEN, Docs/INI-REFERENCE.md:74, Docs/TEST_GUIDE.md:421) -- docs list the deleted bProfileRapport key (raised against 5a48803)
+### MFO-B423 (SEV-5, FIXED in 0502c1a, Docs/INI-REFERENCE.md:74, Docs/TEST_GUIDE.md:421) -- docs list the deleted bProfileRapport key (raised against 5a48803)
 "Docs/INI-REFERENCE.md:74 still lists bProfileRapport, and Docs/TEST_GUIDE.md:421 (step 27) tells testers to turn it on. Both were already dead on main."
 
-### MFO-B424 (SEV-5, OPEN, Docs/CAST-DELIVERY.md:1343) -- docs name the deleted Config::g_cfcBackoffMs (raised against 5a48803)
+### MFO-B424 (SEV-5, FIXED in 0502c1a, Docs/CAST-DELIVERY.md:1343) -- docs name the deleted Config::g_cfcBackoffMs (raised against 5a48803)
 "Docs/CAST-DELIVERY.md:1343 still names Config::g_cfcBackoffMs, which has now been deleted."
 
-### MFO-B425 (SEV-5, OPEN, MAP.md:2851, :4046) -- MAP line citations to Config.h/Config.cpp drifted (raised against 5a48803)
+### MFO-B425 (SEV-5, FIXED in 0502c1a, MAP.md:2851, :4046) -- MAP line citations to Config.h/Config.cpp drifted (raised against 5a48803)
 "MAP.md:2851 -> Config.h:475 and MAP.md:4046 -> Config.h:586 have drifted by about 19 lines because of the removed block. The Config.cpp citations drift by about 5."
 
-### MFO-B426 (SEV-5, OPEN, out/MCM/Config/MFO/config.json Interface page) -- a "Debug" header still sits above the Fashionrim toggle on the Interface page (raised against 5a48803)
+### MFO-B426 (SEV-5, FIXED in 0502c1a, out/MCM/Config/MFO/config.json Interface page) -- a "Debug" header still sits above the Fashionrim toggle on the Interface page (raised against 5a48803)
 "The Interface page still has a header titled 'Debug' above the Fashionrim toggle (bDollsMode). Now that a separate Debug page exists, this may confuse players." Pre-existing, outside the brief.
 
-### MFO-B427 (SEV-5, OPEN, logistics/ErrandSmith.cpp:523) -- stale comment still names TES::ForEachReferenceInRange (raised against 75fadf7)
+### MFO-B427 (SEV-5, FIXED in 0502c1a, logistics/ErrandSmith.cpp:523) -- stale comment still names TES::ForEachReferenceInRange (raised against 75fadf7)
 "Stale comment at ErrandSmith.cpp:523, which still says 'TES::ForEachReferenceInRange reads the worldspace…'. It is a comment only."
 
-### MFO-B428 (SEV-5, OPEN, logistics/LootScan.cpp ForEachLoadedRef) -- unknown build skips the sky cell silently (raised against 75fadf7)
+### MFO-B428 (SEV-5, FIXED in 0502c1a, logistics/LootScan.cpp ForEachLoadedRef) -- unknown build skips the sky cell silently (raised against 75fadf7)
 "On an unknown build the sky cell is skipped with no log line. A one-time warning would be enough."
 
-### MFO-B429 (SEV-5, OPEN, LootScan.cpp comment, Docs/ENGINE_NOTES.md §0.30) -- imprecise GetSkyCell caller counts (raised against 75fadf7)
+### MFO-B429 (SEV-5, FIXED in 0502c1a, LootScan.cpp comment, Docs/ENGINE_NOTES.md §0.30) -- imprecise GetSkyCell caller counts (raised against 75fadf7)
 "The author's caller counts in the code comment and ENGINE_NOTES ('30/31 callers') are imprecise (reviewer counted 39/40/35). The conclusion holds."
 
 Note (SEV-4, tracked as a fork task, not here): the mit-3.7 fork's TES.h guards AE members with the never-defined SKYRIM_SUPPORT_AE (worldSpace, landBorderMode, sizeof assert; same class in UserEvents.h, InterfaceStrings.h, BGSSaveLoadManager.h). MFO avoids the TES walks by rule until the fork is corrected.
