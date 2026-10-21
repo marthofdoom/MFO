@@ -14,6 +14,7 @@
 #include "apmf/APMFBridge.h"   // feat/mfo-equip-authority: the ch.17 claim + SetEquipSet declaration
 #include "Lotd.h"                // LOTD: never sell a relic the museum still needs
 #include "Errand_internal.h"      // town errands: ErrandShop / ErrandPlanned (the plan entry below)
+#include <format>
 #include <algorithm>     // std::any_of / std::sort in the declaration builder
 #include <unordered_set> // g_playerPicks -- the player-dressed pieces per follower
 
@@ -941,6 +942,12 @@ namespace MFO::Logistics {
                 for (auto& c : sellCandidates)
                     if (const auto it = stolenOf.find(c.obj); it != stolenOf.end()) c.stolen = it->second;
             }
+            // F2: the candidates that PASSED every follower-side guard (the per-item exclusions above are the other half of the picture).
+            if (diag)
+                for (const auto& c : sellCandidates)
+                    spdlog::info("[sell] {:08X} '{}' -> CANDIDATE x{} ({}g base, {}{})", fid, c.obj && c.obj->GetName() ? c.obj->GetName() : "?",
+                                 c.count, c.price, c.passTag,
+                                 c.stolen == ErrandShops::Stolen::All ? ", stolen" : c.stolen == ErrandShops::Stolen::Mixed ? ", mixed stolen" : "");
 
             // BUY NEEDS: each supply gambit BELOW its threshold -> the category
             // + how many MORE to acquire. Papyrus enumerates the vendor's ACTUAL
@@ -962,6 +969,12 @@ namespace MFO::Logistics {
                 else if (c == Vocab::kCondSelfLowMagickaPotion) addNeed(TradeBridge::NeedCat::kPotMagicka, CountPotions(a_follower, RE::ActorValue::kMagicka), want);
                 else if (c == Vocab::kCondSelfOutOfArrows)      addNeed(TradeBridge::NeedCat::kArrows,     ArrowCount(a_follower),                             want);
                 else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
+            }
+
+            if (a_planOut) {   // F2: the follower's needs, once per plan (an empty vector means no supply rule is below its threshold)
+                std::string nl;
+                for (const auto& n : needs) nl += std::format("{}kind{}x{}", nl.empty() ? "" : ", ", n.kind, n.quota);
+                spdlog::info("[econ] {:08X} plan needs: {} | sell candidates {} | purse {}g", fid, nl.empty() ? "none" : nl, sellCandidates.size(), purse);
             }
 
             // R5 TRIP PARTITION (EconomyErrandExecute, a physical stop's give beat): this stop serves only its share of the trip --
