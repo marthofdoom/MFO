@@ -990,6 +990,13 @@ namespace MFO::Logistics {
                 if (!a_share->wishMaterials) buy.smithMats.clear();   // R8: the materials ride the ONE stop the planner gave them to
             }
             if (a_purseCap >= 0) purse = std::min(purse, a_purseCap);
+            // MISSED SELLS (b): a candidate this stop's share does not list is reported to the caller, which knows the rest of the trip (the vendor
+            // filter below is NOT applied: the item may be one this very vendor refuses, e.g. armor at a weapon seller, and still be sellable elsewhere).
+            if (a_share && a_errand)
+                for (const auto& c : sellCandidates)
+                    if (c.obj && c.count > 0 && c.stolen != ErrandShops::Stolen::Mixed &&
+                        std::none_of(a_share->sell.begin(), a_share->sell.end(), [&](const TradeBridge::SellRow& s) { return s.obj == c.obj; }))
+                        a_errand->unplanned.push_back(c.obj->GetFormID());
 
             // CANDIDATES: the loaded vendor actors above, plus (errand PLAN only) faction-only shops.
             struct ProbeVendor { RE::NiPointer<RE::Actor> keep; RE::Actor* vendor = nullptr; RE::TESFaction* fac = nullptr; };

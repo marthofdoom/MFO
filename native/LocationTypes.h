@@ -110,11 +110,20 @@ namespace MFO::LocationTypes {
         // D1 (marth 2026-10-20): the OUTERMOST City / Town / Settlement on the chain, not the innermost. Markarth's "Outskirts" interiors sit
         // under SalviusFarmLocation (LocTypeSettlement) under MarkarthLocation (City): the innermost anchor made the Dormitory / temple "a
         // farm", not Markarth. A fight site met BEFORE any town still means "not a town"; one met ABOVE a town just ends the walk.
+        // COLLEGE OF WINTERHOLD (marth 2026-10-21: "the college is unique, so it can be a standalone rule, its to make sure mages buy spells from those
+        // vendors"): Skyrim.esm WinterholdCollegeLocation 00076F3A is its OWN town. Its parent is WinterholdHoldLocation 0001676B (a sibling of
+        // WinterholdLocation 00018A51, NOT below it) and it carries no City / Town / Settlement keyword (Guild, Habitation), so the walk found no
+        // anchor for any College cell. Resolved by FormID once (absent in the modlist = no rule); the outermost walk ends AT it.
+        static const RE::BGSLocation* const s_college = [] {
+            auto* dh = RE::TESDataHandler::GetSingleton();
+            return dh ? dh->LookupForm<RE::BGSLocation>(0x00076F3A, "Skyrim.esm") : nullptr;
+        }();
         const RE::BGSLocation* best = nullptr;
         int guard = 0;
         for (auto* loc = a_loc; loc && guard < 8; loc = loc->parentLoc, ++guard) {
             for (const auto& [kw, town] : s_kws)
                 if (!town && loc->HasKeyword(kw)) return best;   // best is null when the fight site is innermost: not a town
+            if (s_college && loc == s_college) return loc;      // standalone: the College stops the walk and IS the town
             for (const auto& [kw, town] : s_kws)
                 if (town && loc->HasKeyword(kw)) { best = loc; break; }
         }
