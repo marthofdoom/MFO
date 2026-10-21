@@ -2198,3 +2198,17 @@ Note (SEV-4, tracked as a fork task, not here): the mit-3.7 fork's TES.h guards 
 
 ### MFO-B441 (SEV-4, OPEN, logistics/ErrandSim.cpp) -- off-screen trips never retry skipped stops from the inn (raised against a658951)
 "The inn-stage retry-later exists only in the on-screen Tick; an unloaded follower's REST_SIM never retries stops skipped for a failed walk."
+
+### MFO-B442 (SEV-4, OPEN, logistics/ErrandPlace.cpp:81-182, Errand.cpp LoadStop) -- town run 5: a late Place request can still teleport him after MFO gave up (raised against ed41d50)
+"Request / ResolveCellOnMain re-create a cleared job through g_jobs[a_fid] and call RequestPlace without first checking that the job still exists and is unrequested. A door-scan result that lands after Poll has timed out (15 s), or after stopOver/LoadStop moved to the next stop (they do not call Unstick::Clear), still teleports him to the old stop. Timeouts use steady_clock rather than Scheduler::ServiceClock()." Fix: find-and-check (!requested, same gen) under the lock before RequestPlace; ServiceClock timeouts; Unstick::Clear in LoadStop. ~one-frame window.
+
+### MFO-B443 (SEV-4, WATCH, ErrandPlace / Harbinger APMF-B149) -- first observation of a LOADED placement (raised against ed41d50)
+marth R1 (always teleport, even in view) overrides Harbinger APMF-B149 ("MFO should always pass OnlyIfUnloaded; the first field run should show a loaded placement before anyone relies on one"). Next town test: read the Harbinger [place] PLACED line with info WasLoaded, and any FAILED NotMoved with a few units of distance (1 u read-back tolerance false failure on a loaded character).
+
+### MFO-B444 (SEV-5, OPEN, Errand.cpp NextStopOrFinish noInnTown arm) -- a shop-only trip in a no-inn town counts on any Done stop even if the last shop was skipped (raised against ed41d50)
+
+### MFO-B445 (SEV-5, OPEN, Errand.cpp giveUp after placements) -- both placements spent logs a generic WARN; under R4 it should be an ERROR naming the placements ("placed 2/2, still stuck: UNREACHABLE") (raised against ed41d50)
+
+### MFO-B446 (SEV-5, OPEN, ErrandPlace.cpp:154) -- fallback places 90 u along the interior door's own heading; door mesh +Y into the room not verified (only when the landing point is >800 u from the linked door) (raised against ed41d50)
+
+### MFO-B447 (SEV-5, OPEN, TradeBridge.cpp ReportTrade comment; MFO_Trade.psc) -- stale psc line cites after the reorder; a form on both the sell list and buy plan could be sold back (no current planner path produces it) (raised against ed41d50)
