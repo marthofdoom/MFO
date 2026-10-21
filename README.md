@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.6.2** (see [`VERSION`](VERSION) and the
+**Status: v2.7.0** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -181,6 +181,24 @@ requirement across these mods, not an afterthought. Settings live in an
 leash and walk-to-loot.
 
 ---
+
+## What is new in 2.7.0
+
+- **Town errands.** Followers now run errands in town on their own. They plan a trip of several stops (shops, fences, spouse stores, the temple, smithing and the inn), walk it, trade across the counter, and stay at the inn until you leave town or a fight starts. Town errands are ON by default.
+- **Prices come from the follower.** A follower's own Speech and perks set what he pays and gets, with one quote per trade. The plan waits for the quotes before it starts.
+- **Shops opening and closing.** A shop that opens later re-plans the trip. A follower who finds a shop shut tries again later, and routing retries or retries from the inn. A trip only counts once it reaches the inn.
+- **Stuck followers get unstuck.** A follower who cannot reach his destination is teleported there through Harbinger's Place facet. A follower placed at a counter off screen stands across it.
+- **Missed sells.** A sell blocked because the vendor ran out of gold is planned again after the vendor restocks. Items freed during a trip get a buyer stop.
+- **College of Winterhold.** The College has its own town. Chest placed shops with no vendor present trade with the merchant chest, and conditioned vendors that are not spouses now check their own conditions. Shop and temple door reads never run off the main thread.
+- **Catch-up.** A follower left behind by a world transition (a door, fast travel) is moved to the player.
+- **Crafting perk pool.** Followers get a separate stream of crafting perk points (1 per 4 levels for Smithing, Alchemy and Enchanting). There is no save change.
+- **Errand claims hold.** The claims an errand makes are held for the whole event and released at every end.
+- **Wear helmets toggle.** A new setting, with a per follower override on the board.
+- **The torch is a standing declaration.** It is held only while the torch rule applies, never in combat, seated or asleep.
+- **MCM.** A Guide page comes first in the MFO MCM. Legacy cast controls are INI only and there is a new Debug page.
+- **1.5.97 and 1.7.104.** Three more engine reads are proven and enabled on both runtimes.
+- **Temple door crash fixed.** The temple door lock check no longer crashes.
+- **Release defaults.** Town errands are ON. Out of combat substrate casting is OFF (`bSubstrateCasts=0`). Town toasts are OFF. Harbinger v0.14.0 is recommended.
 
 ## What is new in 2.6.2
 
