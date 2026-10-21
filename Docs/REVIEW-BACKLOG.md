@@ -2169,3 +2169,9 @@ Note (SEV-4, tracked as a fork task, not here): the mit-3.7 fork's TES.h guards 
 
 ### MFO-B431 (SEV-4, OPEN, native/FollowerCatchUp.cpp kSettleS) -- the 3 s settle is shorter than the engine's own carry (raised against 8fe6952)
 "Sven was measured absent for about 40 s after a load (Followers.cpp kLoadWindowS). A follower who is walking through the door himself therefore appears behind the player instead of at the door when the catch-up fires at 3 s."
+
+### MFO-B432 (SEV-5, OPEN, Board_Progression.cpp IsCraftTreeAv / progression/ProgAllocator_internal.h IsCraftSkill) -- progression: the craft-skill set is duplicated (raised against 0502c1a)
+"IsCraftTreeAv duplicates the allocator's IsCraftSkill, so the two could drift. Expose one copy in the public ProgAllocator.h later."
+
+### MFO-B433 (SEV-5, OPEN, logistics/LootScan.cpp WalkLoaded) -- the three-way runtime check repeats Runtime::IsVerifiedRuntime() (raised against 0502c1a)
+"LootScan's three-way IsVerified1_5_97 / 1_6_1170 / 1_7_104 check in the unknown-build warning repeats Runtime::IsVerifiedRuntime() (Runtime.h:70)."
