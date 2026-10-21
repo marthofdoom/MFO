@@ -1250,6 +1250,16 @@ namespace MFO::Logistics::Errand {
             if (const auto it = g_nextPlan.find(fid); it != g_nextPlan.end() && a_now < it->second) return true;
         }
         if (!playerTown) { NotPlanning(a_follower, a_now, "the player is not in a town"); return true; }
+        // COLLEGE GATE (marth 2026-10-21: "quest gated so mage followers dont trespass"): the College of Winterhold is its own town
+        // (LocationTypes::TownAnchor); its stops are planned only once the PLAYER is in CollegeofWinterholdFaction (Skyrim.esm 0001F259).
+        // Either record absent = no College stops.
+        if (auto* dhC = RE::TESDataHandler::GetSingleton(); dhC && playerTown == dhC->LookupForm<RE::BGSLocation>(0x00076F3A, "Skyrim.esm")) {
+            auto* colFac = dhC->LookupForm<RE::TESFaction>(0x0001F259, "Skyrim.esm");
+            if (!colFac || !pc->IsInFaction(colFac)) {
+                NotPlanning(a_follower, a_now, "the College of Winterhold is closed to errands until the player has joined it (CollegeofWinterholdFaction)");
+                return true;
+            }
+        }
         if (Config::g_errandInn.load() && Rest::TripDone(fid, tidNow)) {   // R7: ONE trip AT A TIME (marth 2026-10-19 / 2026-10-20)
             // F3: new-session triggers are the player leaving town (NoteTown), the end of combat (NoteCombat) and a NEEDED SHOP OPENING (here).
             auto* ui0 = RE::UI::GetSingleton();
