@@ -170,6 +170,7 @@ MFO_STR(Pg_NoPooled, "no pooled points", 0)
 MFO_STR(Pg_AtCap, "at the skill cap", 0)
 MFO_STR(Pg_OpenTree, "Open perk tree", 0)
 MFO_STR(Pg_TreePoints, "--  {1} point(s)", 1)   // {1}=perk points to spend
+MFO_STR(Pg_TreePointsCraft, "--  {1} point(s), {2} craft point(s)", 2)   // {1}=perk points to spend, {2}=crafting points to spend (a crafting tree)
 MFO_STR(Pg_ShowMarginal, "Show marginal", 0)   // checkbox
 MFO_STR(Pg_TreeHint, "d-pad move  [A] node  [LB]/[RB] zoom  [Y] next tree  [View] marginal  [B]/Esc back", 0)
 MFO_STR(Pg_NothingUseful, "Nothing in this tree is useful to a follower -- [View] shows marginal perks.", 0)
@@ -178,6 +179,7 @@ MFO_STR(Pg_TipNative, "{1} -- granted by your load order", 1)   // {1}=perk
 MFO_STR(Pg_TipTake, "{1} -- [A] take rank {2} (1 point)", 2)   // {1}=perk, {2}=the rank you would take
 MFO_STR(Pg_TipLocked, "{1} -- locked: {2}", 2)   // {1}=perk, {2}=why (comes from the game data, may stay English)
 MFO_STR(Pg_PointsAvail, "{1} perk point(s) available", 1)   // {1}=points
+MFO_STR(Pg_PointsAvailCraft, "{1} perk point(s), {2} craft point(s) available", 2)   // {1}=perk points, {2}=crafting points (a crafting node)
 MFO_STR(Pg_Marginal, "marginal for followers", 0)
 MFO_STR(Pg_RankLine, "rank {1}: {2}{3}", 3)   // {1}=rank number, {2}=the skill requirement, {3}=empty or the owned note
 MFO_STR(Pg_NoSkillReq, "no skill requirement", 0)

@@ -270,9 +270,9 @@ namespace MFO::ProgAllocator {
                 }
             }
         }
-        spdlog::info("[prog] auto-pick {}: no eligible perk right now ({} point(s) available) — "
+        spdlog::info("[prog] auto-pick {}: no eligible perk right now ({} point(s) available, {} craft point(s)) — "
                      "gates (skill reqs / prereqs) block everything reachable",
-                     NameOf(a_actor), PerkPointsAvailable(st));
+                     NameOf(a_actor), PerkPointsAvailable(st), CraftPerkPointsAvailable(st));
         return false;
     }
 

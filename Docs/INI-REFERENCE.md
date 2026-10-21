@@ -71,7 +71,7 @@ MFO seed defaults. MCM Helper's Data/MCM/Settings/MFO.ini is read AFTER this and
 - **`bProgHarness`** (default `0`). PROGRESSION ALLOCATOR DEV HARNESS (addon component 2) -- DEV-ONLY, DEFAULT OFF. Needs MFO_Progression.esl enabled (the allocator is inert without it). When armed, the harness key runs ONE allocator verb on your current follower; pick the verb from the console first:  set MFOP_DevCmd to N 0=status  1=enroll  2=cycle class (Melee/Ranged/Mage)  3=dump auto-scaled skills  4=allocate next eligible perk (full gating)  5=respec (-500 rapport) 6=economy dump.  Everything reports under "[prog]" in MFO.log. Use a throwaway save: enrollment/class/perk state serializes into the co-save and the perk/skill writes on the follower are real.
 - **`iProgHarnessKey`** (default `40`). DIK code for the harness trigger key, in DECIMAL (the parser is base-10 only). 40 = DIK 0x28 = apostrophe, unbound in vanilla. 0 disables the trigger.
 - **`bEnableLogging`** (default `1`).
-- **`bProfileRapport`** (default `0`).
+- **`bLegacyCastHybrid`** (default `0`). INI-only: read from `SKSE/Plugins/MFO.ini` ONLY, there is no MCM control (a value in the MCM store is ignored). `1` makes casts use the ORIGINAL AI-first-grace + force-on-miss package hybrid even with Harbinger present; with Harbinger absent that path runs automatically. See `Docs/CAST-DELIVERY.md`.
 - **`bProfileEvaluator`** (default `0`).
 - **`bSeedTestData`** (default `0`). Writes synthetic gambits onto a player-keyed record. Only meaningful if you intend to SAVE with the mod active. Off = MFO leaves nothing behind at all.
 - **`bCasterHook`** (default `1`). The influence actuator: remove the AI's veto on casting a gambit spell so the follower casts it themselves, mobile. Installs a vfunc hook.

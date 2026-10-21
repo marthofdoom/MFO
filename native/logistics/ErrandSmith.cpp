@@ -520,7 +520,7 @@ namespace MFO::Logistics::Errand::Smith {
             return out;
         }
 
-        // The station search, on the MAIN thread: TES::ForEachReferenceInRange reads the worldspace, the grid cells and the sky cell while cells
+        // The station search, on the MAIN thread: ForEachLoadedRefInRange (LootScan.cpp) reads the worldspace, the grid cells and the sky cell while cells
         // stream in, which on a job worker is the crash4 pattern (LootScan.cpp). The result (FormIDs, nearest first) is filed under g_mx for the
         // next Step.
         void StationSearchOnMain(RE::ActorHandle a_h, RE::FormID a_fid, bool a_wheel, bool a_table) {

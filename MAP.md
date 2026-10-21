@@ -2666,15 +2666,15 @@ faster than its name, so the MCM offers three options in speed order named for w
 0 Walk = engine Walk, 1 Jog = engine FastWalk, 2 Run = engine Jog (default). Engine Run is not offered.
 Mapped at parse by `GaitEngineFromSetting` (`Config.cpp:62`); legacy stored values keep their LABEL, and a
 legacy 3 ("Fast walk") keeps its engine value and is patched 3 -> 1 in the MCM store by `EnsureMcmDefaults`
-(`Config.cpp:494`, at kInputLoaded, before MCM Helper reads it) as an IN-PLACE ONE-BYTE write (in|out, no
+(`Config.cpp:483`, at kInputLoaded, before MCM Helper reads it) as an IN-PLACE ONE-BYTE write (in|out, no
 truncation; only `[General]` `iTravelGait = 3`; BOM-aware offsets; each byte read back as `3` first). A failed
 patch logs `MCM self-heal FAILED` at error and leaves the `3`, which the parse maps the same. **Never** turn it
 back into a truncate-and-rewrite: a failed write there empties the user's whole MCM store. **What breaks:** feeding the
 INI value straight to the package or to APMF ch.19 (`apmf/Excursion.cpp`, `apmf/Deposit.cpp` read
 `g_travelGait` = engine byte) reintroduces the old labels; adding a 4th MCM option without a value map is
 impossible (MCM Helper enums have `options`/`shortNames` only, value = index). **PACK data is NOT
-serialized** — nothing outlives the session. Callers `Config.cpp:378`,
-`plugin.cpp:284` (needs the second call because the first `Read()` precedes
+serialized** — nothing outlives the session. Callers `Config.cpp:889`,
+`plugin.cpp:404` (needs the second call because the first `Read()` precedes
 `Forms::Resolve`, so the package is null). Writes MFO's own packages, not base NPCs.
 Covers ONLY the legacy travel packages (`g_travelPackage..3`), and the runtime write is still
 unproven in the field (86e3dh44v). The CH19 road carries the same setting as ch.19 speed bits
@@ -2848,7 +2848,7 @@ them clobbers unrelated engine vtables).
   already — `lvl<4` fast-outs before ever reaching `CastExempt`, so it was never
   part of the graduated path), and the `CheckCast` (0x0A) hook install (`:994`,
   stays installed — still needed for `ConcUnboundedDeny`'s hard bound and the
-  APMF-absent exact-cast degrade). `Config::g_castControl` (`Config.h:475`) keeps
+  APMF-absent exact-cast degrade). `Config::g_castControl` (`Config.h:568`) keeps
   its stored 0-4 range; 1-3 now behaves identically to 4 (only 0/off is distinct).
   MCM slider labels ("ignore heals" etc.) are now stale-until-revival cosmetic
   text, not touched (not a functional gap — see `Docs/MFO-CONVERSION-ROADMAP.md`
@@ -4043,7 +4043,7 @@ module. Module layout:
   loose `Gold001` ref for `Category::Valuables` the same as it always has for
   `Category::Gold`, AND a loose value-dense MISC ref (a dropped gem etc.) for
   `Category::Valuables`, gated by the same `IsValuableMisc` (`logistics/LootTake.cpp:364`,
-  value/weight ratio vs `Config::g_valuablesRatio` — `Config.h:586`) the
+  value/weight ratio vs `Config::g_valuablesRatio` — `Config.h:679`) the
   container take already uses — a loose ref qualifies iff a container holding
   it would have been looted. `act.loot_gold` is UNCHANGED, still a gold-only
   rule. Loose soul gems/jewelry/ingredients/equipment are still NOT
