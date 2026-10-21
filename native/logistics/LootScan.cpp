@@ -7,6 +7,7 @@
 #include "apmf/APMFBridge.h"   // ROAD 2 (A/B): ch.19 kIntent_Travel loot travel
 #include "TeleportCompat.h"    // follower-teleport mod leash clamp (86e3ec824)
 #include "Errand.h"            // TOWN PHASE 2 R8: Errand::Smith (the smithing want list: loose materials, the always-on pass)
+#include "LocationTypes.h"     // TOWN RUN 5 (R2): TownAnchor, the errand town that bars container excursions
 #include "Runtime.h"           // ForEachLoadedRef: the per-build TES::worldSpace offset
 #include <mutex>               // ForEachLoadedRef: the one-time unknown-build warning
 
@@ -190,6 +191,14 @@ namespace MFO::Logistics {
             // drops the corpse). Logged rate-limited below.
             int dRefs = 0, dLootable = 0, dOwned = 0, dOffLimits = 0, dLocked = 0, dNotYet = 0, dLeash = 0, dEmpty = 0;
 
+            // TOWN RUN 5 (marth R2): in an errand town (the player's location sits under a TownAnchor while town errands run) container-loot excursions are
+            // suppressed, EXCEPT LOTD museum loot (Category::Museum): a town's chests and barrels are other people's stock and the errand owns his time there.
+            // Corpses and loose items are unchanged. One INFO line per follower-scan that suppressed something, at most every 30 s.
+            const RE::BGSLocation* townBars = nullptr;
+            if (a_cat != Category::Museum && Config::g_townErrands.load() && APMFBridge::ErrandSupported() && pc)
+                townBars = LocationTypes::TownAnchor(pc->GetCurrentLocation());
+            int dTownBarred = 0;
+
             // The scanned cell set (see the crash4/RC#4 note above): follower's
             // cell always; player's and live travel-target's when attached and
             // distinct. All anchored to refs in hand -- never TES globals.
@@ -265,6 +274,7 @@ namespace MFO::Logistics {
                         lootable = actor->IsDead();
                     } else if (auto* base = ref->GetBaseObject()) {
                         lootable = base->Is(RE::FormType::Container);
+                        if (lootable && townBars) { lootable = false; ++dTownBarred; }   // run 5 R2: no container excursions in an errand town
                         // ACQUIRE PROBE (route 2b) WHITELIST: a loose world
                         // ref that HasLoot's matching category would have
                         // taken out of a container is a candidate too. It
@@ -605,6 +615,16 @@ namespace MFO::Logistics {
                                  CountPotions(a_follower, RE::ActorValue::kHealth),
                                  CountPotions(a_follower, RE::ActorValue::kStamina),
                                  CountPotions(a_follower, RE::ActorValue::kMagicka));
+                }
+            }
+            if (dTownBarred > 0 && townBars) {   // run 5 R2: one line per suppression decision, at most every 30 s per follower
+                static std::unordered_map<RE::FormID, Clock::time_point> s_nextTownBar;
+                auto& nxt = s_nextTownBar[a_follower->GetFormID()];
+                if (nxt.time_since_epoch().count() == 0 || a_now >= nxt) {
+                    nxt = a_now + std::chrono::seconds(30);
+                    const char* tn = townBars->GetName();
+                    spdlog::info("[loot] {:08X} cat={}: {} container(s) in range NOT looted -- container excursions are suppressed in an errand town ('{}'), except LOTD museum loot",
+                                 a_follower->GetFormID(), CatName(a_cat), dTownBarred, tn && *tn ? tn : "?");
                 }
             }
 
