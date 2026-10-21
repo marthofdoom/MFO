@@ -53,7 +53,7 @@ namespace MFO::Logistics::Errand {
         // ── constants (each sized from a real cadence, principle 9) ───────────────────────────────────
         // The service tick (kLogisticsInterval ~1 s) is the errand's step clock, so every wait below is a
         // handful of ticks. The Harbinger idle window (kIdleConfirmWindowMs 3 s) is judged by Harbinger, not here.
-        constexpr float kVendorRadius   = 110.0f;   // ch.19 arrival radius around the vendor (talking distance; APMF clamps [50,512])
+        constexpr float kVendorRadius   = 170.0f;   // ch.19 arrival radius around the vendor (= kArriveDist so both arrival tests agree, town run 6; APMF clamps [50,512])
         constexpr float kArriveDist     = 170.0f;   // distance backstop for an arrival the leg state has not reported yet
         constexpr float kBlockedReach   = 260.0f;   // a BLOCKED end this close to the vendor (same floor) is an arrival
         constexpr float kSameFloorDz    = 120.0f;
@@ -203,6 +203,14 @@ namespace MFO::Logistics::Errand {
                 case APMF_API::kLeg_Released:        return "RELEASED";
                 default:                             return "?";
             }
+        }
+        // Town run 6: the Harbinger leg state an errand re-point leaves behind (a live WALKING leg is re-pointed in place).
+        void LogRepointFrom(RE::FormID a_fid, const char* a_site) {
+            APMFBridge::LootLegState l;
+            if (APMFBridge::ReadErrandLeg(a_fid, l) && l.ours)
+                spdlog::info("[errand] {:08X}: {} -- re-pointing from Harbinger leg {} (dest {:08X}, {} ms in state)", a_fid, a_site, LegName(l.state), l.dest, l.msInState);
+            else
+                spdlog::info("[errand] {:08X}: {} -- re-pointing with no leg of ours standing", a_fid, a_site);
         }
 
         const char* NameOf(const RE::Actor* a) {
@@ -767,6 +775,7 @@ namespace MFO::Logistics::Errand {
                 r.phaseAt = a_now;
                 r.startClk = r.lastTickClk = Scheduler::ServiceClock();   // the 240 s real-time cap is per stop (fErrandMaxGameMin covers the trip)
                 const char* how = "re-pointed";
+                LogRepointFrom(a_fid, "errand re-point");
                 bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(a_fid, r.destForm, r.destRad);
                 if (!walk && r.destForm != 0) { walk = APMFBridge::ClaimErrandTravel(a_fid, r.destForm, r.destRad); how = "claimed afresh"; }
                 spdlog::info("[errand] {:08X} '{}': TRIP {} {} ({}) -- next {}: walk to {} {:08X} {}", a_fid, r.followerName, was,
@@ -1578,6 +1587,7 @@ namespace MFO::Logistics::Errand {
                     r.phaseAt = a_now;
                     r.startClk = r.lastTickClk = Scheduler::ServiceClock();
                     if (auto* cal1 = RE::Calendar::GetSingleton()) r.startDays = cal1->GetDaysPassed();   // run 4 F3: the trip's game-min cap restarts with the retry
+                    LogRepointFrom(fid, "errand re-point");
                     bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(fid, r.destForm, r.destRad);
                     if (!walk && r.destForm != 0) walk = APMFBridge::ClaimErrandTravel(fid, r.destForm, r.destRad);
                     if (!walk) return stopOver("the retry walk could not be declared", false, kFailCooldownSec);
@@ -1636,6 +1646,7 @@ namespace MFO::Logistics::Errand {
                 spdlog::warn("[errand] {:08X} '{}': OBVIOUSLY STUCK -> PLACED {} (placement {}/{}); the walk to the stop carries on from there", fid, r.followerName, pr.text,
                              r.placeTries, kPlaceTries);
                 r.walkRetries = 0; r.retryWait = r.stepOut = r.stepOutOk = r.needStepOut = r.haveBlockPos = false; r.retryAt = {};
+                LogRepointFrom(fid, "errand re-point");
                 bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(fid, r.destForm, r.destRad);
                 if (!walk && r.destForm != 0) walk = APMFBridge::ClaimErrandTravel(fid, r.destForm, r.destRad);
                 r.startClk = r.lastTickClk = Scheduler::ServiceClock();   // the 240 s cap is per attempt (run 4 F3)
@@ -1677,6 +1688,7 @@ namespace MFO::Logistics::Errand {
                 r.retryWait = false; r.stepOut = false; r.stepOutOk = false; r.needStepOut = false;
                 if (r.retryRepoint) {
                     const char* how = "re-pointed";
+                    LogRepointFrom(fid, "errand re-point");
                     bool walk = r.destForm != 0 && APMFBridge::RepointErrandTravel(fid, r.destForm, r.destRad);
                     if (!walk && r.destForm != 0) { walk = APMFBridge::ClaimErrandTravel(fid, r.destForm, r.destRad); how = "claimed afresh"; }
                     r.startClk = r.lastTickClk = Scheduler::ServiceClock();   // run 4 F3: the 240 s cap is per attempt
@@ -1818,7 +1830,12 @@ namespace MFO::Logistics::Errand {
                 }
             }
             // Distance backstop: a leg read that is not ours yet, or a vendor who walked up to him (a loaded vendor only: R5's later stop).
-            if (!arrived && vendorLoaded && dist <= kArriveDist && dz <= kSameFloorDz) arrived = true;
+            if (!arrived && vendorLoaded && dist <= kArriveDist && dz <= kSameFloorDz) {
+                arrived = true;
+                if (leg.ours && leg.state == APMF_API::kLeg_Walking)
+                    spdlog::info("[errand] {:08X} '{}': ARRIVED by MFO distance {:.0f}u > leg radius {:.0f}u, Harbinger leg still WALKING",
+                                 fid, r.followerName, dist, r.destRad);
+            }
             if (!arrived) { Store(fid, r); return true; }
             if (!r.announced) {   // one-shot: the Walking phase leaves here for the talk / give beat (a resume that was announced skips it)
                 r.announced = true;
