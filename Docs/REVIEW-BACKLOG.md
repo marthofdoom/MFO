@@ -2223,3 +2223,6 @@ marth R1 (always teleport, even in view) overrides Harbinger APMF-B149 ("MFO sho
 
 ### MFO-B451 (SEV-5, OPEN, Errand.cpp TryStart log / ErrandReopen.cpp Assemble, against 7f75f5b) -- missed sells: stale log line; the stop cap drops late forms
 "stale 'no hours-closed shop holds work for him -- no watch' log line (the Watch is now always stored), and Assemble's stop cap cuts trailing shops without re-queuing their late forms" (Opus review of feat/mfo-missed-sells, F7).
+
+### MFO-B452 (SEV-4, OPEN, logistics/ErrandReopen.cpp DropGoldForms) -- a late trip drops ALL its job.forms from the gold watch, incl. forms no stop of the late trip carries (raised against 6e97df7)
+"DropGoldForms drops every form in job.forms from the gold watch, including forms that no stop of the late trip actually carries (Trip::Plan placed only some, or the stop cap cut them; related to B451). Such a row loses its gold-watch retry at the original vendor; the item stays in inventory so the next normal trip can still pick it up."
