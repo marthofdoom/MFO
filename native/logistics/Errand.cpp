@@ -21,7 +21,7 @@
 // still exists).
 #include "PCH.h"
 #include "Errand_internal.h"
-#include "Runtime.h"         // IsVerified1_6_1170: the PLVD layout (faction vendorLocation) is verified on that build only
+#include "Runtime.h"         // the exact-build gates (the PLVD place: PlvdPlaceVerified, Errand_internal.h)
 #include "Logistics_internal.h"
 #include "Config.h"
 #include "Followers.h"
@@ -230,7 +230,8 @@ namespace MFO::Logistics::Errand {
         // ── the catalog (R1a: loaded vendor actors) ───────────────────────────────────────────────────
         // SEAM: `place` (the faction's PLVD cell / reference) is where an UNLOADED shop attaches in R1b. R1a does
         // not read it: PackageLocation::Data is a union of TESForm* and ObjectRefHandle and which member a
-        // faction's file-loaded PLVD fills is not verified, so R1a takes the place from the loaded vendor ACTOR.
+        // faction's file-loaded PLVD fills is a per-runtime fact (R1b reads it behind PlvdPlaceVerified), so R1a takes the place
+        // from the loaded vendor ACTOR.
         struct Cand {
             RE::ActorHandle  handle;            // empty = a shop whose vendor is not loaded (an interior)
             RE::FormID       id = 0;            // the plan key: the vendor ACTOR's FormID, or the FACTION's for a faction-only shop
@@ -246,10 +247,11 @@ namespace MFO::Logistics::Errand {
         };
 
         // R1b: the town's shops from the vendor FACTIONS (design 2.2), cached per town -- immutable once built. The place is the
-        // faction's PLVD vendorLocation, read the way 1.6.1170's loader leaves it (disassembled, 2026-10-19): TESFaction::Load
-        // builds the PackageLocation, InitItem's resolver (rva 0x49c630) then turns kInCell into a TESObjectCELL* in
-        // data.object and kNearReference into a 32-bit ObjectRefHandle in data.refHandle. Other location types are skipped.
-        // Verified on 1.6.1170 only (per-runtime rule): elsewhere the list is empty and shops are the loaded-vendor ones (R1a).
+        // faction's PLVD vendorLocation, read the way the engine's loader leaves it: TESFaction::Load builds the PackageLocation,
+        // InitItem's resolver then turns kInCell into a TESObjectCELL* in data.object and kNearReference into a 32-bit
+        // ObjectRefHandle in data.refHandle. Other location types are skipped. Disassembly-verified on 1.6.1170, 1.5.97 and
+        // 1.7.104, each on its own addresses (PlvdPlaceVerified, Errand_internal.h; ENGINE_NOTES §0.52): any other build gets
+        // an empty list and shops are the loaded-vendor ones (R1a).
         struct ShopStatic { RE::FormID faction = 0, chest = 0, place = 0; DestKind kind = DestKind::Cell; float rad = 0.0f;
                             std::uint8_t cls = 0; };   // R6: 0 plain, 1 FENCE (perk + conditions gate), 2 CONDITIONED (a spouse-store candidate)
         std::unordered_map<RE::FormID, std::vector<ShopStatic>> g_townShops;   // town BGSLocation id -> shops; guarded by g_mx
@@ -398,7 +400,7 @@ namespace MFO::Logistics::Errand {
             }
 
             // R1b: shops whose vendor is NOT loaded (an interior while the player is outside), from the faction catalog.
-            if (Runtime::IsVerified1_6_1170() && a_playerTown) {
+            if (a_playerTown && PlvdPlaceVerified()) {
                 // A shop that is a CELL has no position: its distance (and the travel-radius gate) is that of the nearest LOADED load
                 // door whose destination door sits in that cell. No such door in the follower's loaded cell = the shop is skipped
                 // (nothing to estimate the walk from, and no proof the player's area leads there).

@@ -203,13 +203,26 @@ namespace MFO::Logistics {
 
     // The engine's own torch updater (RE 1.6.1170 UpdateTorch 39948, branch A) UNEQUIPS the torch while the actor is
     // sitting / sleeping (sitSleepState), has an ExtraInteraction, or has a furnitureIdle: marth, "stowing while
-    // seated is fine", so a declaration there would fight it. furnitureIdle (MiddleHigh +0x228) was proven on
-    // 1.6.1170 ONLY: it is read there and nowhere else (1.5.97 / 1.7.104 keep the three other signals).
+    // seated is fine", so a declaration there would fight it. furnitureIdle is read per runtime (ENGINE_NOTES §0.52):
+    // the updater itself does `mov rax,[proc+8]` (AIProcess::middleHigh) then `cmp qword ptr [rax+0x228],0` on
+    //   1.6.1170: UpdateTorch 0x713A80 (the compare at 0x713AB9)   1.5.97: 0x6801D0 (0x680209)   1.7.104: 0x7265C0 (0x7265F9).
+    // Any other build keeps the three other signals.
+    static_assert(offsetof(RE::AIProcess, middleHigh) == 0x8, "AIProcess::middleHigh moved: re-verify TorchSeatedReason");
+    static_assert(offsetof(RE::MiddleHighProcessData, furnitureIdle) == 0x228, "furnitureIdle moved: re-verify TorchSeatedReason");
+    static bool FurnitureIdleVerified() {
+        if (Runtime::IsVerified1_6_1170() || Runtime::IsVerified1_5_97() || Runtime::IsVerified1_7_104()) return true;
+        static std::atomic_bool noted{ false };
+        if (!noted.exchange(true))
+            spdlog::warn("[equip-auth] torch: furnitureIdle is NOT read on runtime {} (verified on 1.6.1170, 1.5.97 and 1.7.104 only): "
+                         "the seated check uses sit/sleep state, furniture and interaction only",
+                         REL::Module::get().version().string("."));
+        return false;
+    }
     static const char* TorchSeatedReason(RE::Actor* a_follower) {
         if (a_follower->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) return "seated or sleeping";
         if (a_follower->GetOccupiedFurniture()) return "in furniture";
         if (a_follower->extraList.HasType(RE::ExtraDataType::kInteraction)) return "in an interaction";
-        if (Runtime::IsVerified1_6_1170()) {
+        if (FurnitureIdleVerified()) {
             auto* proc = a_follower->GetActorRuntimeData().currentProcess;
             if (proc && proc->middleHigh && proc->middleHigh->furnitureIdle) return "in a furniture idle";
         }

@@ -343,11 +343,12 @@ namespace MFO::Logistics::Errand::Rest {
             }
         }
 
-        // The innkeeper vendor factions of a town: the faction's PLVD place sits in an inn location of the town. Read the way 1.6.1170's
-        // loader leaves vendorLocation (Errand.cpp BuildTownShops; disassembly-verified, that build ONLY -- per-runtime rule): elsewhere the
-        // list is empty and the inn stop is rest-only. Cached per town (immutable).
+        // The innkeeper vendor factions of a town: the faction's PLVD place sits in an inn location of the town. Read the way the engine's
+        // loader leaves vendorLocation (Errand.cpp BuildTownShops; disassembly-verified on 1.6.1170, 1.5.97 and 1.7.104, each on its own
+        // addresses: PlvdPlaceVerified, Errand_internal.h): any other build gets an empty list and the inn stop is rest-only. Cached per
+        // town (immutable).
         std::vector<InnFac> InnFactionsOf(const RE::BGSLocation* a_town) {
-            if (!a_town || !Runtime::IsVerified1_6_1170()) return {};
+            if (!a_town || !PlvdPlaceVerified()) return {};
             {
                 std::scoped_lock lk(g_mx);
                 if (const auto it = g_innFacs.find(a_town->GetFormID()); it != g_innFacs.end()) return it->second;
@@ -390,16 +391,36 @@ namespace MFO::Logistics::Errand::Rest {
             return out;
         }
 
+        // (b)'s layout, per runtime (ENGINE_NOTES §0.52): BGSLocation::specialRefs is the BSTArray at +0x70 (data +0x70, size +0x80), one
+        // SpecialRefData per 0x18 bytes, UnloadedRefData::parentSpaceID at element +0x0C. BGSLocation::Load (vtable slot 6) takes the array
+        // as `lea rcx,[r12+0x70]` and, per LCSR element (stride 0x18), remaps the file form ids at element +0x0C and +0x08 before appending:
+        //   1.6.1170: Load 0x292D10 (array 0x292E41, remap 0x293D02)   1.5.97: Load 0x240FE0 (0x241102, 0x2420F0)
+        //   1.7.104:  Load 0x2984E0 (0x298611, 0x2994D2)
+        // Any other build skips (b), logged once.
+        static_assert(offsetof(RE::BGSLocation, specialRefs) == 0x70, "BGSLocation::specialRefs moved: re-verify LcsrRefsVerified");
+        static_assert(sizeof(RE::SpecialRefData) == 0x18, "SpecialRefData size changed: re-verify LcsrRefsVerified");
+        static_assert(offsetof(RE::SpecialRefData, refData) + offsetof(RE::UnloadedRefData, parentSpaceID) == 0x0C,
+                      "SpecialRefData parentSpaceID moved: re-verify LcsrRefsVerified");
+        bool LcsrRefsVerified() {
+            if (Runtime::IsVerified1_6_1170() || Runtime::IsVerified1_5_97() || Runtime::IsVerified1_7_104()) return true;
+            static std::atomic_bool noted{ false };
+            if (!noted.exchange(true))
+                spdlog::warn("[errand] the locations' special refs (LCSR) are NOT read on runtime {} (layout disassembly-verified on "
+                             "1.6.1170, 1.5.97 and 1.7.104 only): the inn / temple data resolve uses the innkeeper factions only",
+                             REL::Module::get().version().string("."));
+            return false;
+        }
+
         // R7 review SEV-3: the inn / temple are NOT only reachable through a load door in the follower's own cell (in an exterior town the
-        // door is often in another cell). Resolve the place from the DATA, the way BuildTownShops does and on the same gate (1.6.1170 only):
-        //   (a) the innkeeper vendor faction's PLVD place -> its interior cell (InnFactionsOf, fills InnFac::cell);
+        // door is often in another cell). Resolve the place from the DATA, the way BuildTownShops does, each read on its own per-runtime gate:
+        //   (a) the innkeeper vendor faction's PLVD place -> its interior cell (InnFactionsOf, fills InnFac::cell; PlvdPlaceVerified);
         //   (b) the location's own special refs (LCSR): UnloadedRefData::parentSpaceID is the cell the ref sits in; the first INTERIOR cell whose
-        //       location IsInn / IsTemple and sits in this town.
+        //       location IsInn / IsTemple and sits in this town (LcsrRefsVerified).
         // The cell is walked to by ch.19 exactly like a shop CELL; no door position is known (Stop::havePos false -> the planner's 2000 u street
         // estimate). UNVERIFIED IN THE FIELD: whether a given location lists a special ref inside its interior.
         bool ResolveViaData(const RE::BGSLocation* a_town, bool a_inn, Place& a_out, const char*& a_how) {
-            if (a_out.ok || !a_town || !Runtime::IsVerified1_6_1170()) return a_out.ok;
-            if (a_inn) {
+            if (a_out.ok || !a_town) return a_out.ok;
+            if (a_inn) {   // InnFactionsOf is empty on a build PlvdPlaceVerified refuses
                 for (const auto& f : InnFactionsOf(a_town)) {
                     auto* c = f.cell ? RE::TESForm::LookupByID<RE::TESObjectCELL>(f.cell) : nullptr;
                     const RE::BGSLocation* loc = c ? c->GetLocation() : nullptr;
@@ -412,7 +433,7 @@ namespace MFO::Logistics::Errand::Rest {
                 }
             }
             auto* dh = RE::TESDataHandler::GetSingleton();
-            if (!dh) return false;
+            if (!dh || !LcsrRefsVerified()) return false;
             for (auto* loc : dh->GetFormArray<RE::BGSLocation>()) {
                 if (!loc || !(a_inn ? LocationTypes::IsInn(loc) : LocationTypes::IsTemple(loc)) || LocationTypes::TownAnchor(loc) != a_town) continue;
                 for (const auto& sr : loc->specialRefs) {

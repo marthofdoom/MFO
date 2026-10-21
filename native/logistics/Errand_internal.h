@@ -5,7 +5,7 @@
 // surface is logistics/Errand.h.
 #include "Errand.h"
 #include "TradeBridge.h"
-#include "Runtime.h"   // ShopPlaceName: IsVerified1_6_1170
+#include "Runtime.h"   // PlvdPlaceVerified: the exact-build gates
 
 #include <memory>
 #include <string>
@@ -14,14 +14,42 @@
 
 namespace MFO::Logistics {
 
+    // ── the faction PLVD place (vendorLocation), per runtime (ENGINE_NOTES §0.52) ──────────────────────────────
+    // PackageLocation::Data is a union of TESForm* and a 32-bit ObjectRefHandle; WHICH member a file-loaded PLVD holds is set by the
+    // engine's loader, so it is read only on a build whose loader was disassembled (principle 11: each build on its own proof).
+    // On every build below: TESFaction::Load (vtable slot 6) allocates 0x18 bytes, the PackageLocation ctor writes the type byte at +0x08,
+    // the radius at +0x0C, the raw form id at +0x10, and the pointer is stored at faction+0xB8 (vendorData +0xA8, vendorLocation +0x10).
+    // TESFaction::InitItemImpl (slot 0x13) then passes [faction+0xB8] to the resolver, which turns kInCell into a
+    // dynamic_cast<TESObjectCELL*> in data.object (type stays 1) and kNearReference into a CreateRefHandle'd 32-bit handle in
+    // data.refHandle (type stays 0):
+    //   1.6.1170: Load 0x3AC9C0 (store 0x3ACDAB), ctor 0x49BE80, InitItemImpl 0x3AD2E0 (mov rcx,[rdi+0xB8] 0x3AD56E), resolver 0x49C630
+    //   1.5.97:   Load 0x354670 (store 0x354996), ctor 0x441160, InitItemImpl 0x354DE0 (mov rcx,[rdi+0xB8] 0x355067), resolver 0x441850
+    //   1.7.104:  Load 0x3B3A80 (store 0x3B3E6B), ctor 0x4A33A0, InitItemImpl 0x3B43A0 (mov rcx,[rdi+0xB8] 0x3B462E), resolver 0x4A3B50
+    // The three builds share the layout, and CommonLib's struct compiles to the same offsets (asserted below), so one read serves all
+    // three; any other build refuses the read (shops are then the loaded-vendor ones only), logged once.
+    static_assert(offsetof(RE::TESFaction, vendorData) == 0xA8, "TESFaction::vendorData moved: re-verify PlvdPlaceVerified");
+    static_assert(offsetof(RE::FACTION_VENDOR_DATA, vendorLocation) == 0x10, "vendorLocation moved: re-verify PlvdPlaceVerified");
+    static_assert(offsetof(RE::PackageLocation, locType) == 0x08, "PackageLocation::locType moved: re-verify PlvdPlaceVerified");
+    static_assert(offsetof(RE::PackageLocation, rad) == 0x0C, "PackageLocation::rad moved: re-verify PlvdPlaceVerified");
+    static_assert(offsetof(RE::PackageLocation, data) == 0x10, "PackageLocation::data moved: re-verify PlvdPlaceVerified");
+    inline bool PlvdPlaceVerified() {
+        if (Runtime::IsVerified1_6_1170() || Runtime::IsVerified1_5_97() || Runtime::IsVerified1_7_104()) return true;
+        static std::atomic_bool noted{ false };
+        if (!noted.exchange(true))
+            spdlog::warn("[errand] the vendor factions' PLVD place is NOT read on runtime {} (layout disassembly-verified on 1.6.1170, "
+                         "1.5.97 and 1.7.104 only): interior shops whose vendor is not loaded, and the inn/temple data resolve, are skipped",
+                         REL::Module::get().version().string("."));
+        return false;
+    }
+
     // F4 (town run 3): a faction-only shop (no loaded vendor) usually has an EMPTY faction FULL name, so every log/toast/watch line said '?'.
     // Its name: the faction's own FULL, else its PLVD place (the way BuildTownShops reads it: kInCell = the cell's FULL; kNearReference = the
     // ref's parent cell FULL, else the ref's display name). Empty string = nothing named it (callers keep their own "?").
     inline std::string ShopPlaceName(const RE::TESFaction* a_fac) {
         if (!a_fac) return {};
         if (const char* n = a_fac->GetName(); n && *n) return n;
+        if (!PlvdPlaceVerified()) return {};   // the PLVD union layout, per runtime (above)
         auto* loc = a_fac->vendorData.vendorLocation;
-        if (!Runtime::IsVerified1_6_1170()) return {};   // the PLVD union layout is verified on that build only (BuildTownShops / ErrandRest gate the same way)
         if (!loc) return {};
         switch (loc->locType.get()) {
         case RE::PackageLocation::Type::kInCell: {
