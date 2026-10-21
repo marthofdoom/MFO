@@ -1130,6 +1130,24 @@ namespace MFO::Logistics::Errand {
     }
 
     // ── public: the planner (the idle branch of ServiceFollower) ─────────────────────────────────────
+    // Town run 6 (never mask): ONE rate-limited line per follower for every silent "not planning" gate of TryStart: logged when the
+    // reason changes, else at most every 30 s.
+    static void NotPlanning(RE::Actor* a_follower, Clock::time_point a_now, const char* a_reason, float a_remainSec = -1.0f) {
+        static std::mutex s_mx;
+        static std::unordered_map<RE::FormID, std::pair<const char*, Clock::time_point>> s_last;
+        const auto fid = a_follower->GetFormID();
+        {
+            std::scoped_lock lk(s_mx);
+            auto& e = s_last[fid];
+            if (e.first == a_reason && a_now < e.second) return;
+            e = { a_reason, a_now + std::chrono::seconds(30) };
+        }
+        if (a_remainSec >= 0.0f)
+            spdlog::info("[errand] {:08X} '{}': not planning -- {} ({:.0f} s left)", fid, NameOf(a_follower), a_reason, a_remainSec);
+        else
+            spdlog::info("[errand] {:08X} '{}': not planning -- {}", fid, NameOf(a_follower), a_reason);
+    }
+
     bool TryStart(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now) {
         if (!a_follower) return false;
         // Legacy proximity trade stays when errands are off, or Harbinger lacks what an errand needs.
@@ -1145,11 +1163,11 @@ namespace MFO::Logistics::Errand {
         }
         // From here on errands OWN the economy: whatever happens below, the caller must not run the
         // instant trade (marth 2026-10-18: retired whenever Harbinger is present).
-        if (g_latched.load()) return true;
+        if (g_latched.load()) { NotPlanning(a_follower, a_now, "errands latched (a fatal error stopped them)"); return true; }
 
         const auto fid = a_follower->GetFormID();
         auto* pc = RE::PlayerCharacter::GetSingleton();
-        if (!pc || !pc->Is3DLoaded()) return true;
+        if (!pc || !pc->Is3DLoaded()) { NotPlanning(a_follower, a_now, "the player is not loaded"); return true; }
 
         // The player's town + how long he has been in it (the settle clock). Tracked on every call.
         const RE::BGSLocation* playerTown = LocationTypes::TownAnchor(pc->GetCurrentLocation());
@@ -1163,10 +1181,13 @@ namespace MFO::Logistics::Errand {
             townSince = g_townSince;
             if (g_recs.contains(fid)) return true;   // (Tick owns him)
             if (Sim::Has(fid)) return true;          // (the simulation owns him)
-            if (const auto it = g_cool.find(fid); it != g_cool.end() && a_now < it->second) return true;
+            if (const auto it = g_cool.find(fid); it != g_cool.end() && a_now < it->second) {
+                NotPlanning(a_follower, a_now, "errand cooldown", std::chrono::duration<float>(it->second - a_now).count());
+                return true;
+            }
             if (const auto it = g_nextPlan.find(fid); it != g_nextPlan.end() && a_now < it->second) return true;
         }
-        if (!playerTown) return true;
+        if (!playerTown) { NotPlanning(a_follower, a_now, "the player is not in a town"); return true; }
         if (Config::g_errandInn.load() && Rest::TripDone(fid, tidNow)) {   // R7: ONE trip AT A TIME (marth 2026-10-19 / 2026-10-20)
             // F3: new-session triggers are the player leaving town (NoteTown), the end of combat (NoteCombat) and a NEEDED SHOP OPENING (here).
             auto* ui0 = RE::UI::GetSingleton();
@@ -1182,23 +1203,27 @@ namespace MFO::Logistics::Errand {
                 if (Reopen::Poll(fid, tidNow, &from, plan)) {
                     if (StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan))) Rest::UnmarkTripDone(fid, "a needed shop opened");   // a failed start keeps the mark (the watch retries)
                 }
+            } else {
+                NotPlanning(a_follower, a_now, "this visit's trip is done and the reopen watch cannot poll now (paused / combat / looting / waiting / mounted / sitting / not loaded / not in the player's town / no trade quest)");
             }
             return true;
         }
-        if (a_now - townSince < std::chrono::milliseconds(static_cast<long long>(Config::g_errandSettleSec.load() * 1000.0f)))
+        if (a_now - townSince < std::chrono::milliseconds(static_cast<long long>(Config::g_errandSettleSec.load() * 1000.0f))) {
+            NotPlanning(a_follower, a_now, "settling in the town");
             return true;
+        }
 
         // A cheap gate set first; the plan below walks a cell and the follower's inventory.
         auto* ui = RE::UI::GetSingleton();
-        if (ui && ui->GameIsPaused()) return true;
-        if (APMFBridge::InCombat(a_follower) || pc->IsInCombat()) return true;   // a Harbinger substrate is not combat (v26)
-        if (SlotOf(fid)) return true;   // looting: loot and errand never overlap
+        if (ui && ui->GameIsPaused()) { NotPlanning(a_follower, a_now, "game paused"); return true; }
+        if (APMFBridge::InCombat(a_follower) || pc->IsInCombat()) { NotPlanning(a_follower, a_now, "combat"); return true; }   // a Harbinger substrate is not combat (v26)
+        if (SlotOf(fid)) { NotPlanning(a_follower, a_now, "he holds the looting slot"); return true; }   // looting: loot and errand never overlap
         auto* avo = a_follower->AsActorValueOwner();
-        if (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) return true;   // told to wait
-        if (a_follower->IsOnMount() || a_follower->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) return true;
-        if (!a_follower->Is3DLoaded()) return true;
-        if (LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) != playerTown) return true;   // he is not in the player's town
-        if (auto* q = Forms::g_tradeQuest; !q || !q->IsRunning()) return true;   // no trade bridge: nothing could be traded
+        if (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) { NotPlanning(a_follower, a_now, "told to wait"); return true; }   // told to wait
+        if (a_follower->IsOnMount() || a_follower->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal) { NotPlanning(a_follower, a_now, "mounted / sitting / sleeping"); return true; }
+        if (!a_follower->Is3DLoaded()) { NotPlanning(a_follower, a_now, "he is not loaded"); return true; }
+        if (LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) != playerTown) { NotPlanning(a_follower, a_now, "he is not in the player's town"); return true; }   // he is not in the player's town
+        if (auto* q = Forms::g_tradeQuest; !q || !q->IsRunning()) { NotPlanning(a_follower, a_now, "the trade quest is missing or not running"); return true; }   // no trade bridge: nothing could be traded
 
         {
             std::scoped_lock lk(g_mx);
@@ -1207,8 +1232,8 @@ namespace MFO::Logistics::Errand {
 
         // R7: the blessing / disease read decides the temple stop; an inn-only trip planned before it lands would skip the temple for the
         // whole visit (one trip per visit). Pending: the probe is posted, this plan is abandoned and re-run on the next cadence.
-        if (Rest::MagicReadPending(a_follower)) return true;
-        if (Rest::PlacesPending(a_follower, playerTown)) return true;   // F4: the data-resolved temple's entry door (main-thread read)
+        if (Rest::MagicReadPending(a_follower)) { NotPlanning(a_follower, a_now, "waiting for the blessing / disease read"); return true; }
+        if (Rest::PlacesPending(a_follower, playerTown)) { NotPlanning(a_follower, a_now, "waiting for the temple / inn door read"); return true; }   // F4: the data-resolved temple's entry door (main-thread read)
 
         int dropped = 0;
         std::vector<Cand> closedCands;   // F3: dropped ONLY for their hours -> the shop watch
