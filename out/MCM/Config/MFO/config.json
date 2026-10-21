@@ -5,6 +5,500 @@
   "cursorFillMode": "topToBottom",
   "pages": [
     {
+      "pageDisplayName": "Guide",
+      "cursorFillMode": "topToBottom",
+      "content": [
+        {
+          "text": "How to read this page",
+          "type": "header"
+        },
+        {
+          "text": "About this page",
+          "type": "text",
+          "help": "This page changes nothing. Highlight a line to read about that part of MFO in the box below. Each line says what the feature does, when it runs, what you control and where you control it. The tag on the right of a line names the MCM page or board screen that drives it.",
+          "valueOptions": {
+            "value": "Read only"
+          }
+        },
+        {
+          "text": "The board and gambits",
+          "type": "header"
+        },
+        {
+          "text": "Two tables",
+          "type": "text",
+          "help": "Every follower has two rule lists. The combat table runs while a fight is on. The logistics table runs the rest of the time (looting, drinking, restocking, waiting). They never mix, so a combat rule can't loot and a logistics rule can't attack. You write both on the Field Orders board.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "How a rule is chosen",
+          "type": "text",
+          "help": "A rule is a condition and an action. The follower reads the list from the top and the first rule that is true and can actually act fires. Then it stops for that tick, so a follower does one thing at a time. A rule that can't act (no such spell, not enough magicka, empty potion stack, target out of range) is skipped and the next rule gets its turn. A rule that is always true and always able to act, placed high, hides everything under it. Keep catch-alls such as Always and Foe: Nearest at the bottom.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "Field Orders board",
+          "type": "text",
+          "help": "Open it with the Field Orders power, or with a key you bind on the Interface page (unbound by default). It has a Followers roster and the Gambits editor. Each rule shows a plain-language summary. A rule that just fired flashes a green star, and hovering a rule shows the last reason it held, such as not enough magicka. Gamepad navigation works on every screen. The Board skin setting on the Interface page changes its look.",
+          "valueOptions": {
+            "value": "Board / Interface"
+          }
+        },
+        {
+          "text": "Combat HUD",
+          "type": "text",
+          "help": "A passive overlay that takes no input. It shows each follower's rank, rapport, live health, magicka, stamina and distance. Turn it on or off with Show combat HUD or its hotkey on the Interface page. The two margin sliders there move it away from other mods' HUDs.",
+          "valueOptions": {
+            "value": "Interface"
+          }
+        },
+        {
+          "text": "Conditions and targets",
+          "type": "text",
+          "help": "Conditions look at the follower, an ally, a foe or you. Many foe conditions also choose the target the action uses, for example Foe: Lowest HP or Foe: Weak to fire. A condition that finds nobody is simply false and the list falls through. Foe: Count at least only counts, it picks nobody, so pair it with Flee to player, Wait, an equip or a self cast. Vitals are percentages, so 40 percent works for any follower.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "Equip stance actions",
+          "type": "text",
+          "help": "Equip melee weapon and Equip ranged weapon set the follower's whole stance, not just the weapon in hand. If the follower already holds the right kind, the rule passes through and the rules below still run. Put a stance rule above an Attack rule. Attack alone leaves the weapon choice to the game.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "Class picker",
+          "type": "text",
+          "help": "On the board you can set a follower to Auto, Melee, Ranged or Mage. The pick is global and beats stance rules in the list. Auto changes nothing and is the safe choice for custom followers.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "Slots and rapport",
+          "type": "text",
+          "help": "Rule slots are earned through rapport, which grows when you fight beside that specific follower. It is never shared between followers and it survives dismissal. Rank I gives 3 combat and 4 logistics slots, rank III gives 7 and 6, rank V gives 12 and 8. Rapport speed and the boss and dragon bonuses are on the Gameplay page. Rapport buys slots, it does not change reaction time. Unlock all gambit slots on the Debug page opens every slot for testing.",
+          "valueOptions": {
+            "value": "Board / Gameplay"
+          }
+        },
+        {
+          "text": "Confidence leash",
+          "type": "text",
+          "help": "How far a follower ranges from you depends on how safe they feel. Healthy in an easy area, they range out to loot and fight. Hurt or outnumbered, they pull in. You never see a number, you see it in how they act. The Behaviour Layer page sets the shortest and longest leash. The leash also limits how far they chase foes and how far they walk to loot.",
+          "valueOptions": {
+            "value": "Behaviour Layer"
+          }
+        },
+        {
+          "text": "Reaction timing",
+          "type": "text",
+          "help": "Followers don't react on a metronome. A decision takes a human-sized delay with some spread, and each follower has their own quirks. Nothing here is a setting.",
+          "valueOptions": {
+            "value": "Automatic"
+          }
+        },
+        {
+          "text": "Combat roles and casting",
+          "type": "header"
+        },
+        {
+          "text": "Cast actions",
+          "type": "text",
+          "help": "Cast on self and Cast on target each take a specific spell. A cast at a target beyond the spell's range is skipped, so put a fallback under a long-range spell. Utility spells with no target, such as Magelight, fall through to you. Concentration spells (Flames, Healing Hands) are streamed in short bursts, and a hostile beam is cut the moment a teammate crosses the line of fire. Cast on player lives in the logistics table, for buffs and top-ups out of combat.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "Animated casts",
+          "type": "text",
+          "help": "In combat, casts go through the follower's own casting so you see the real hand animation. Heal gambits cast one at a time, lowest health first. Animated heals in combat on the Combat & Casting page turns the heal part off, which makes heals land instantly. Out of combat, heals still land instantly by default. All of this needs Harbinger.",
+          "valueOptions": {
+            "value": "Harbinger"
+          }
+        },
+        {
+          "text": "Animated casts out of combat",
+          "type": "text",
+          "help": "An out-of-combat heal, buff or summon can also play the real animation, through a combat substrate that Harbinger provides. It needs Harbinger and it is OFF by default. It has no MCM toggle. The switch is bSubstrateCasts in the Debug section of MFO.ini. When it is on, a cast is never made while you sneak, and a refused cast is skipped and logged, never sent down the instant path. Hostile out-of-combat casts and concentration spells are not part of it.",
+          "valueOptions": {
+            "value": "Harbinger / off"
+          }
+        },
+        {
+          "text": "Cast options",
+          "type": "text",
+          "help": "Equip spells to cast puts a gambit spell in the follower's hand so their own AI casts it. Influence casting lets a follower cast while moving and fighting (needs a restart). Cast control sets how hard MFO overrides the follower's own spell choice, from Off up to Exact spell. Commanded targeting lets attack gambits pick the foe (needs a restart). Magicka reserve is the share of magicka a gambit won't spend below.",
+          "valueOptions": {
+            "value": "Combat & Casting"
+          }
+        },
+        {
+          "text": "Taunt",
+          "type": "text",
+          "help": "The Taunt action plays a taunt animation. Once it has really played, nearby foes that are already fighting your party roll to be pulled onto the taunter. A higher level taunter has better odds. Foes that are pulled stay on him for the time set on the Behaviour Layer page. Pair it with the condition Foe: Targeting an ally. Needs Harbinger.",
+          "valueOptions": {
+            "value": "Board / Behaviour Layer"
+          }
+        },
+        {
+          "text": "Silver weapons",
+          "type": "text",
+          "help": "Switch to silver weapon, with the condition Foe targeted: Unholy, puts the best silver weapon in the main hand while the target is hurt more by silver. The main weapon returns 2 seconds after the target stops being Unholy. Archers use silver arrows or bolts the same way. A follower keeps and restocks silver for this.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "Retreat and engaging",
+          "type": "text",
+          "help": "Flee to player is a gambit action that sends a follower back to you. Auto-retreat when outmatched is the same idea made automatic. It is OFF by default while it is reworked. Engage enemies on sight is also OFF by default. When on, a follower who can see an enemy inside the leash starts the fight. It needs Harbinger, and it never starts fights in towns, inns or houses, or with guards and townsfolk. Both settings are on the Logistics page.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Gear and armor choice",
+          "type": "header"
+        },
+        {
+          "text": "Equip authority",
+          "type": "text",
+          "help": "With Harbinger installed, MFO tells Harbinger which gear each follower should wear, and Harbinger equips it and stops the game from putting other things on them. That is why a dual wielder stays dual wielding and an outfit is not re-applied. Harbinger equip authority on the Combat & Casting page turns it off, and then MFO equips gear itself. It does nothing without Harbinger.",
+          "valueOptions": {
+            "value": "Combat & Casting / Harbinger"
+          }
+        },
+        {
+          "text": "Weapons",
+          "type": "text",
+          "help": "A weapon upgrade is judged inside the follower's own weapon class. A two-hander takes a greatsword over a dagger and an archer doesn't swap to a mace. Out of combat a follower moves to the best weapon of the right class they own. They never replace a weapon you gave them, or a silver, gambit, bound or museum weapon.",
+          "valueOptions": {
+            "value": "Automatic"
+          }
+        },
+        {
+          "text": "Armor",
+          "type": "text",
+          "help": "Armor is judged by rating on each slot, within the armor class the follower can use. A light armor follower won't pick up plate. Wear helmets on the Logistics page covers helmets, hats and hoods. Circlets are not helmets. Each follower can override it on the board with the Helmets button on the Gambits tab.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Mages dress like mages",
+          "type": "text",
+          "help": "A follower with cast gambits wears clothing and jewelry (hat or circlet, robe, gloves, shoes, ring, amulet) instead of rated armor when Mages wear robes + jewelry is on. Magic loadout makes enchanted apparel that matches his most cast school beat raw armor rating, and Mage apparel: strict school match limits enchanted pieces to his two best schools. Mage backup keeps a melee sidearm for when magicka runs out, a dagger by default.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Dress followers yourself",
+          "type": "text",
+          "help": "Fashionrim (dress armor by hand) on the Interface page stops MFO looting, fitting and buying armor, so you dress followers yourself. Selling still works. Worn and socketed gear is never sold. Weapons are not affected.",
+          "valueOptions": {
+            "value": "Interface"
+          }
+        },
+        {
+          "text": "Looting",
+          "type": "header"
+        },
+        {
+          "text": "Loot rules",
+          "type": "text",
+          "help": "Looting is a logistics table action. The loot actions are: better equipment, gold, jewellery, potions (any or by type), arrows, bolts, soul gems, lockpicks, and museum items when Legacy of the Dragonborn awareness is on. Enable logistics on the Logistics page is the master switch. Loot scan sets how far a follower looks.",
+          "valueOptions": {
+            "value": "Board / Logistics"
+          }
+        },
+        {
+          "text": "Walking to loot",
+          "type": "text",
+          "help": "Followers path to loot and pick it up, they don't grab it from across the room. Walk-to-loot gait, ceiling, batch waiting and loot run length are on the Behaviour Layer page. They skip loot they can't reach on the navmesh. They never take owned goods, and they hold off completely while you sneak.",
+          "valueOptions": {
+            "value": "Behaviour Layer"
+          }
+        },
+        {
+          "text": "Your first dibs",
+          "type": "text",
+          "help": "Arrows and potions are taken at once. Gear and gold on a fresh corpse wait a few seconds for you, and the wait ends once you have taken from that source yourself. Valuables wait until you have had a fair chance to look at them. Followers never walk to loot inside the yield bubble around you. The Loot Priority page has every one of these timers.",
+          "valueOptions": {
+            "value": "Loot Priority"
+          }
+        },
+        {
+          "text": "Upgrades and swap up",
+          "type": "text",
+          "help": "One rule decides whether an item is an upgrade, and it is shared by looting and shopping. It judges weapons and armor within the follower's class and role. It also judges loose arrows and bolts, and the ammo a follower buys. Ignore weak potions on the Logistics page sets the smallest restore potion worth taking. At 0 it uses your load order's weakest restore tier.",
+          "valueOptions": {
+            "value": "Automatic"
+          }
+        },
+        {
+          "text": "Lockpicking",
+          "type": "text",
+          "help": "A follower picks locks he is skilled enough for. A Novice lock opens at any Lockpicking skill and an Expert lock only near mastery. Master locks and key-locked doors are out of reach. It works on chests and on locked doors on a loot route. It needs Harbinger and spends lockpicks.",
+          "valueOptions": {
+            "value": "Harbinger"
+          }
+        },
+        {
+          "text": "Player homes",
+          "type": "text",
+          "help": "Followers don't loot in your own home (any cell the game flags as a player house). Loot in player homes turns it on. Drinking and restocking are not affected either way.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Artifacts and socketed gear",
+          "type": "text",
+          "help": "Loot artifacts & sell socketed gear is ON by default. Followers loot artifacts and unique items and sell gem-socketed gear, taking the gems out first when MEO supports it. OFF protects both. A follower never strips a worn artifact off himself, and quest items stay protected either way.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Legacy of the Dragonborn",
+          "type": "text",
+          "help": "The toggle only appears when LOTD is installed, and it is OFF by default. When on, a follower knows what your museum still needs. He never sells a relic the museum needs. A follower with the Loot museum items gambit carries what he finds to a nearby Museum Shipments crate. Turning it on shows LOTD's own shipping intro once.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Logistics and economy",
+          "type": "header"
+        },
+        {
+          "text": "Selling",
+          "type": "text",
+          "help": "Follower economy (sell/buy) lets a follower sell his unworn junk at a merchant, highest value first and limited by the vendor's gold. Worn gear and gear he still wants to keep is not sold. With the toggle OFF it is a dry run and only logs what it would trade. Selling needs powerofthree's Papyrus Extender.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Buying gear",
+          "type": "text",
+          "help": "A follower buys supplies he is short on, based on what that vendor really stocks, from his own gold. With Economy: buy weapon/armor upgrades on he also buys one best affordable weapon, armor or mage apparel upgrade per visit, and only when it costs half his gold or less, so he keeps a reserve.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Buying tomes",
+          "type": "text",
+          "help": "A mage follower (one with a cast gambit) buys spell tomes for his two best schools that he doesn't know, then studies them. A mage always learns a tome you hand him, whatever this toggle says. The toggle only gates buying.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Potions and ammo",
+          "type": "text",
+          "help": "A restock rule such as Arrows below 10 sets the shortfall. With the economy on, the follower also buys that shortfall at a merchant. Potions and ammo are picked by what they do, read from your load order, so modded items work.",
+          "valueOptions": {
+            "value": "Board / Logistics"
+          }
+        },
+        {
+          "text": "Where trading happens",
+          "type": "text",
+          "help": "With town errands on (the default) and Harbinger installed, followers trade only on a walk to a shop in a city, town or settlement. Outside towns nobody trades. A sell trip starts when the sellable items are worth at least 100 gold, or when the follower carries more than 80 percent of his weight. So junk builds up between towns. With errands off, or without Harbinger, the old instant trade with any vendor near the follower is used.",
+          "valueOptions": {
+            "value": "Logistics / Harbinger"
+          }
+        },
+        {
+          "text": "Town errands",
+          "type": "header"
+        },
+        {
+          "text": "The trip",
+          "type": "text",
+          "help": "In a city, town or settlement, a follower with something to sell, restock or buy makes one trip. He walks to each open shop's merchant, plays the talk, hand-over and take animations, trades, and moves on. One trip covers every need. Economy: shop in town (walk to merchants) is the switch, and it needs Harbinger and the follower economy.",
+          "valueOptions": {
+            "value": "Logistics / Harbinger"
+          }
+        },
+        {
+          "text": "Temple",
+          "type": "text",
+          "help": "Before the inn, a follower who is diseased or not blessed today visits the temple. He kneels, then uses the shrine so its own script blesses or cures him. He tries this once per game day. A temple whose door is locked is skipped.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Inn last",
+          "type": "text",
+          "help": "The inn is always the last stop. He buys a small stock of food from the innkeeper, eats a meal and stays at the inn. He eats and relaxes, and sleeps at night in a bed that is unowned or yours. Walking into the inn does not make him rejoin you. The board shows Resting at the inn's name while he stays.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "When the stay ends",
+          "type": "text",
+          "help": "The stay ends when you leave town, when combat starts, or when you wait (a jump in the game clock ends the errand like leaving town). After combat in town ends, a fresh plan runs from his current needs and the inn is still last. After a trip finishes, no new errand is planned until you leave town.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Shops that open later",
+          "type": "text",
+          "help": "A shop that was closed when he planned is watched once per game hour while he rests. When it opens and there is work for him there, he leaves for a new trip to the shops that opened, with the inn last again.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Off-screen simulation",
+          "type": "text",
+          "help": "If you leave the area while a follower is on an errand, the shopping and the inn stay are simulated off screen. A blessing the temple would have given is owed to him. Off screen only armor gets tempered. Weapons wait until he is loaded. When the errand ends he is moved back beside you.",
+          "valueOptions": {
+            "value": "Automatic"
+          }
+        },
+        {
+          "text": "Errand toasts",
+          "type": "text",
+          "help": "Town errands are silent by default. Economy: town errand toasts shows one short line when a follower begins trading at a shop.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Smithing and tempering",
+          "type": "header"
+        },
+        {
+          "text": "Tempering errands",
+          "type": "text",
+          "help": "On a town trip a follower tempers his worn weapons and armor up to what his own Smithing and tempering perks allow. He buys the materials on the trip, picks up the ones he needs in the field, and works at the town's sharpening wheel for weapons or armor table for armor. The materials are used only after the new quality is confirmed. It is on by default and needs town errands. It is INI only: bErrandSmith, in MFO.ini.",
+          "valueOptions": {
+            "value": "Logistics / Harbinger"
+          }
+        },
+        {
+          "text": "Progression and classes",
+          "type": "header"
+        },
+        {
+          "text": "Perk points",
+          "type": "text",
+          "help": "Perk points are worked out from the follower's level, one point for every 2 levels by default. They are not stored, so refunds are automatic. You spend them on the perk tree on the board. Perks that only work for the player are marked as marginal, and the fighting-alone perks do nothing for a follower.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "Crafting perk pool",
+          "type": "text",
+          "help": "Crafting perks have their own pool. Followers earn one crafting point every 4 levels by default, for the Smithing, Alchemy and Enchanting trees. A crafting perk uses the crafting pool first and overflows into the general pool. Other perks only use the general pool. The board shows Craft perks with the number left.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "Class growth",
+          "type": "text",
+          "help": "Class HMS on level-up reshapes each level's Health, Magicka and Stamina gain to the follower's class. A mage banks it in Magicka, an archer in Stamina and a warrior in Health. The total matches vanilla. HMS off-class skew cap lets a share of the budget go to a pool the follower really uses in battle.",
+          "valueOptions": {
+            "value": "Gameplay"
+          }
+        },
+        {
+          "text": "Removing a follower",
+          "type": "text",
+          "help": "The Follower tab has a remove button with a confirm that works on a gamepad. It refuses while the follower is following you or is still a teammate. It takes back the perks, skills and health, magicka and stamina values MFO wrote, and erases MFO's data for that follower.",
+          "valueOptions": {
+            "value": "Board"
+          }
+        },
+        {
+          "text": "Staying with you",
+          "type": "header"
+        },
+        {
+          "text": "Follower catch-up",
+          "type": "text",
+          "help": "About 3 seconds after a fast travel, a load door or a teleport, a follower who didn't arrive with you is moved to your side. That covers a different cell, a different worldspace or more than 4096 units away outdoors. It never moves a follower you told to wait, a dismissed one, one in combat or one on a town errand. It is on by default and has no MCM toggle (bFollowerCatchUp in MFO.ini). A follower who walks through the door himself may show up behind you.",
+          "valueOptions": {
+            "value": "Automatic"
+          }
+        },
+        {
+          "text": "Gems (MEO)",
+          "type": "header"
+        },
+        {
+          "text": "Gem handling",
+          "type": "text",
+          "help": "Needs MEO, marth's Enchanting Overhaul. A follower never sells, drops or donates a socketed item. Gems come out first, and a gem he takes out is put back into his own worn gear, not left loose. MEO aware followers goes further. They know what each gem does, fill every empty socket with the best one (a mage prefers magicka and school gems) and swap up to a stronger gem. Followers never use Conduit gems.",
+          "valueOptions": {
+            "value": "Logistics"
+          }
+        },
+        {
+          "text": "Harbinger",
+          "type": "header"
+        },
+        {
+          "text": "What it is",
+          "type": "text",
+          "help": "Harbinger (APMF) is a separate mod that lets several mods drive the same follower without fighting over them. MFO sends a follower's casting, combat target, packages and gear through it. That is how a follower another mod keeps parked can still loot, cast and retreat.",
+          "valueOptions": {
+            "value": "Harbinger"
+          }
+        },
+        {
+          "text": "What needs it",
+          "type": "text",
+          "help": "With Harbinger present MFO uses it automatically. These need it: animated casts, equip authority, lockpicking, town errands, engage on sight and the taunt. Without Harbinger, or with one that is too old, MFO falls back to its older paths and says so in its log. Warn when Harbinger is missing on the Combat & Casting page shows a small reminder about every 10 minutes while it is absent.",
+          "valueOptions": {
+            "value": "Harbinger"
+          }
+        },
+        {
+          "text": "The Debug page",
+          "type": "header"
+        },
+        {
+          "text": "Debug page",
+          "type": "text",
+          "help": "Meant for testing and for the older path used without Harbinger. Re-assert combat style each tick is a diagnostic for stutter in combat. Unlock all gambit slots opens every slot on every follower. AI cast grace and Cast cooldown apply to the older cast path only. Leave all four alone unless you are testing.",
+          "valueOptions": {
+            "value": "Debug"
+          }
+        },
+        {
+          "text": "Where settings live",
+          "type": "header"
+        },
+        {
+          "text": "Settings map",
+          "type": "text",
+          "help": "Gameplay: rapport and class growth. Combat & Casting: casting, cast control, equip authority, animated heals. Logistics: looting, economy, town errands, gear wearing, gems, retreat and engage. Loot Priority: first dibs timers and valuables. Behaviour Layer: leash, walk to loot, taunt time. Interface: board skin, HUD, hotkeys, Fashionrim. Debug: testing switches.",
+          "valueOptions": {
+            "value": "All pages"
+          }
+        }
+      ]
+    },
+    {
       "pageDisplayName": "Gameplay",
       "cursorFillMode": "topToBottom",
       "content": [
