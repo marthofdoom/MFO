@@ -1089,6 +1089,9 @@ namespace MFO::Logistics {
     //   TES::interiorCell +0xC0: TES::GetCell reads [rcx+0xC0] first (1.6.1170 0x19E850, 1.5.97 0x155090).
     //   TES::gridCells    +0x78, GridArray::length +0x10, GridCellArray::cells +0x18, slot = cells[x*length + y]:
     //                     the grid slot accessor 1.6.1170 0x221830, called from 0x19E640 on [rbx+0x78].
+    //                     1.7.104 (2026-10-20): TES::GetCell 0x1A3C60 reads [rcx+0xC0] first; 0x1A3A4C loads [rbx+0x78] for the
+    //                     accessor 0x227120 (length +0x10, cells +0x18). TES::worldSpace re-counted the same day over the GetSkyCell
+    //                     callers whose base is the TES singleton: 13 at +0x148 on 1.6.1170, 10 at +0x140 on 1.5.97, 13 at +0x148 on 1.7.104.
     //   TES::worldSpace   +0x140 on 1.5.97 (every caller of GetSkyCell 0x2B63B0 loads rcx from [reg+0x140]),
     //                     +0x148 on 1.6.1170 (39 callers of GetSkyCell 0x30B070), 1.7.104 (40 callers of 0x311640); 1.5.97 has 35.
     //                     CommonLib's TES.h compiles +0x140 for every build, which is the defect this walk avoids.

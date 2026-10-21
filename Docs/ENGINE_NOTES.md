@@ -2565,6 +2565,26 @@ effect. It now builds with 0x11 (forced 3D), as Actor::PlayPickUpSound does.
 
 `TESObjectDOOR::Activate` (vslot 0x37): 1.6.1170 0x14027DA50 (vtable 0x14179EDE8), 1.5.97 0x14022CB50. For a NON-player activator whose process is high, the first call sets fadeState kTeleportOut (4) through SetFade (1.6 0x1406EB4F0, 1.5 0x140658970) and RETURNS FALSE. About 1 s later the high-process fade update re-activates the door (1.6 0x1406EB82B when alpha reaches 0; 1.5 0x140658C2B / 0x140658CA7), `Activate` sees fadeState == 4, and the teleport path (1.6 0x14027DF92; 1.5 0x14022D079: set position + the cell change) moves the actor to the linked door. A non-high process teleports at once. There is NO distance check. Refused for a mounted or interacting actor (ExtraInteraction), a locked door without the key, or an actor with no process. Papyrus precedent: Adventurer's Start `DoorRef.Activate(npc)`. MFO call: `logistics/StuckAtOrigin.cpp` (`TESObjectREFR::ActivateRef` id 19369 SE / 19796 AE, a verified-address row). The author of this entry did not re-derive the disassembly; the addresses are the review's.
 
+### 0.52 Faction PLVD place, location special refs (LCSR) and the torch updater's furnitureIdle: one layout on 1.6.1170, 1.5.97 and 1.7.104, each proven on its own addresses (2026-10-20, disassembly of all three builds)
+
+The town errands (`logistics/Errand.cpp` BuildTownShops, `logistics/ErrandRest.cpp` InnFactionsOf / ResolveViaData, `logistics/Errand_internal.h` ShopPlaceName) and the torch declaration (`logistics/Upkeep.cpp` TorchSeatedReason) used to read these on 1.6.1170 only. Each build below was disassembled from its own executable (`binaries/<ver>/SkyrimSE.unpacked.exe`, plain `SkyrimSE.exe` for 1.7.104); functions were located from RTTI vtables (TESFaction, BGSLocation, PackageLocation), not from Address Library files. **No 1.5.97 or 1.7.104 list is installed: this is disassembly proof only, not a field result.**
+
+**Faction PLVD (`TESFaction::vendorData.vendorLocation`, faction +0xB8).** TESFaction::Load (vtable slot 6) allocates 0x18 bytes, the PackageLocation ctor stores the type byte at +0x08, the radius at +0x0C and the raw form id at +0x10, and the pointer goes to faction+0xB8. TESFaction::InitItemImpl (slot 0x13) passes `[faction+0xB8]` to a resolver that turns type 1 (kInCell) into `dynamic_cast<TESObjectCELL*>(LookupByID(id))` in `data.object` and type 0 (kNearReference) into a 32-bit CreateRefHandle'd handle in `data.refHandle` (TypeDescriptors read from the `lea r9` targets).
+
+| | 1.6.1170 | 1.5.97 | 1.7.104 |
+|---|---|---|---|
+| TESFaction vtable | 0x17E1FC0 | 0x159D218 | 0x185BE90 |
+| Load / store to +0xB8 | 0x3AC9C0 / 0x3ACDAB | 0x354670 / 0x354996 | 0x3B3A80 / 0x3B3E6B |
+| PackageLocation ctor (vtable) | 0x49BE80 (0x185C1D0) | 0x441160 (0x16177E0) | 0x4A33A0 (0x18D6170) |
+| InitItemImpl / `mov rcx,[rdi+0xB8]` | 0x3AD2E0 / 0x3AD56E | 0x354DE0 / 0x355067 | 0x3B43A0 / 0x3B462E |
+| resolver | 0x49C630 | 0x441850 | 0x4A3B50 |
+| CreateRefHandle (kNearReference) | 0x23B780 | 0x1EE670 | 0x240F50 |
+
+**Location special refs (`BGSLocation::specialRefs`, LCSR).** BGSLocation::Load (vtable slot 6) takes the array as `lea rcx,[r12+0x70]` and, per LCSR element (stride 0x18: `lea rcx,[rsi+rsi*2]` / `lea rbx,[r12+rcx*8]`), remaps the file form ids at element +0x0C (`parentSpaceID`) and +0x08 (`refID`) before appending 0x18 bytes. Load: 1.6.1170 0x292D10 (array 0x292E41, remap 0x293D02), 1.5.97 0x240FE0 (0x241102, 0x2420F0), 1.7.104 0x2984E0 (0x298611, 0x2994D2); BGSLocation vtables 0x17A3B58 / 0x155F2F8 / 0x181CFD8. 1.6.1170's InitItemImpl 0x293EE0 walks `[loc+0x70]` data and `[loc+0x80]` size with the same stride.
+
+**The torch updater's furnitureIdle (`MiddleHighProcessData` +0x228).** The engine torch updater (AE id 39948) does `mov rax,[rbp+8]` (AIProcess::middleHigh) and `cmp qword ptr [rax+0x228],0` on all three: 1.6.1170 0x713A80 (compare 0x713AB9), 1.5.97 0x6801D0 (0x680209; found by the unique timer-block signature `f3 0f 10 88 ?? ?? 00 00 0f 57 c0 0f 2f c8 0f 83`), 1.7.104 0x7265C0 (0x7265F9; the fork idmap row and a unique head signature agree). leftHand +0x220 and the timer +0x2C4 match too.
+
+CommonLib's structs compile to these same offsets (static_asserts beside each read), so the code keeps the struct reads and gates each one on the three exact builds (`PlvdPlaceVerified`, `LcsrRefsVerified`, `FurnitureIdleVerified`); any other build refuses the read and logs once. Re-confirmed the same day, unchanged: `cast/Summon.cpp`'s skip-cap read (`mov rax,[rip+g]; mov ecx,[rax+0x340]` at 1.6.1170 0x7178A1, 1.5.97 0x683DC1, 1.7.104 0x72A411) and `logistics/LootScan.cpp`'s TES offsets (see its comment block).
 
 ## 1. Actor control — Tier A primitives
 
