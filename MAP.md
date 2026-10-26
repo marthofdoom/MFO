@@ -3608,11 +3608,13 @@ module. Module layout:
   `EquipAuthorityOwns` reading the `denied` half of the scope last SENT). **THE BUG
   IT FIXES (Cicero's shield, field 2026-09-22):** **EQUIP OFF IN HARBINGER (ABI v29, ClickUp 1dfcuabbh1e,
   2026-10-25):** `EconomyProbeImpl` reads `APMFBridge::EquipWeaponEnabled()` / `EquipArmorEnabled()` once per scan
-  (`logistics/Economy.cpp:592-603`); with a facet at 0 the `keepWeap` / `keepArmor` gates (`:851-862`) no longer
+  (`logistics/Economy.cpp:612-632`); with a facet at 0 the `keepWeap` / `keepArmor` gates (`:878-891`) no longer
   keep an UNWORN item of it (a weapon only when a DIFFERENT weapon of its `WeaponClassOf` class is held, so an
   archer's sheathed sword stays; a shield follows EquipWeapon). Worn items, `playerPick`, stock, gems, museum,
-  excluded are untouched. NOT gated (open question): the BUY side (`BuildBuyThresholds`) still buys an upgrade
-  the sell side then sells. The gate order is `count<=0 → stock
+  excluded are untouched. The BUY side is gated the same way (`BuildBuyThresholds`, `:453-480`): EquipWeapon at 0
+  -> no melee / off-hand / silver weapon / ranged weapon / shield buy; EquipArmor at 0 -> no `buyArmor` /
+  `buyMageApparel`; with a facet off and nothing gear-shaped left, `buyGear` (and so the gear wish) is cleared.
+  Ammo (swap-up, silver ammo) is untouched. The gate order is `count<=0 → stock
   → keepWeap → playerPick → keepArmor → forceSell | worn → gemHold → excluded →
   SELL`; `worn` is tested BEFORE `gemHold`, so **`gemHold` was never the blocker and
   `worn` always was**. For a denied category that read is permanently wrong: APMF's

@@ -449,6 +449,35 @@ namespace MFO::Logistics {
                         }
                     }
                 }
+
+                // EQUIP OFF IN HARBINGER (ABI v29, ClickUp 1dfcuabbh1e; the sell scan's block in EconomyProbeImpl):
+                // with MFO's EquipWeapon / EquipArmor priority at 0 he never buys an upgrade of that kind, which the
+                // sell scan would only sell again next visit. Ammo (the swap-up, silver ammo) is untouched. A shield
+                // follows EquipWeapon (it holds the left hand). APMFBridge logs once per change.
+                const bool buyWeaponOn = APMFBridge::EquipWeaponEnabled();
+                const bool buyArmorOn  = APMFBridge::EquipArmorEnabled();
+                if (!buyWeaponOn) {
+                    buy.meleeClass       = static_cast<std::int32_t>(WepClass::Other);   // 3 = no melee buy
+                    buy.wantOffHand      = false;
+                    buy.offHandBaseScore = 0.0f;
+                    buy.wantSilver       = false;
+                    buy.silverOneHand    = false;
+                    buy.doRanged         = false;   // PlanBuy's ranged weapon category only
+                    buy.armorBaseRat[4]   = static_cast<std::int32_t>(1.0e9f);   // no shield (the !usesShield saturation)
+                    buy.armorBaseScore[4] = 1.0e9f;
+                }
+                if (!buyArmorOn) {
+                    buy.buyArmor       = false;
+                    buy.buyMageApparel = false;
+                }
+                // When a facet is off and nothing gear-shaped is left (no weapon, armor, apparel or silver ammo buy):
+                // no gear wish either, so an errand plans no gear stop for him. buyMageApparel and silver ammo ride
+                // buyGear in PlanBuy. With both facets on this changes nothing.
+                const bool anyWeaponBuy = buy.meleeClass != static_cast<std::int32_t>(WepClass::Other) ||
+                                          buy.doRanged || buy.wantSilver || buy.wantOffHand;
+                if ((!buyWeaponOn || !buyArmorOn) && !anyWeaponBuy && !buy.buyArmor && !buy.buyMageApparel &&
+                    !buy.wantSilverAmmo)
+                    buy.buyGear = false;
             }
 
             // ── Feature B: tome buy (caster w/ a cast gambit; independent of
