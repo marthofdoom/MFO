@@ -175,6 +175,8 @@ namespace MFO::Logistics::Errand {
             RE::NiPoint3  placePos{};
             bool          havePlacePos = false;
             std::uint32_t needCarry = 0;      // bit n = this VEND carries the category of NeedCat::Kind n
+            std::uint32_t needStock = 0;      // MISSED BUY: bit n (a subset of needCarry) = there is EVIDENCE the shop stocks kind n (a VEND keyword only says what it BUYS):
+                                              // an apothecary-class VEND list for the potion kinds, or a last-seen stock of that kind at its chest. Arrows etc.: = needCarry.
             bool          carriesGear = false, carriesTome = false;   // the gear / apparel wish, the tome wish
             bool          carriesMaterials = false;   // R8: the VEND trades ore / ingots, hides or animal parts (smithing materials)
             bool          carriesForge = false;       // R8: a smithy: the VEND trades ore / ingots (its place has the forge furniture)
@@ -365,6 +367,10 @@ namespace MFO::Logistics::Errand {
         // WHO runs the shop and WHERE they are: the best living, enabled member (loaded + awake first, then loaded, then unloaded).
         // Pending = the index build was just posted to the main thread (re-plan shortly).
         Answer Locate(RE::FormID a_faction, Where& a_out);
+        // mfo-273 gate for ONE member of an OPEN shop (the same test Locate applies): would this member trade with the player now? Pending = the index
+        // build / a function-255 answer is in flight (re-plan shortly). Callers apply it to an OPEN shop only (a closed shop keeps its vendors).
+        enum class Offer { Yes, No, Pending };
+        Offer WouldTrade(RE::Actor* a_actor, RE::FormID a_faction);
         const char* AnswerName(Answer a_a);
         std::string Describe(const Where& a_w);
         // a_actor when it is a loaded, awake, living member of a_faction standing in a_near's cell (or both in the exterior grid), else null.
@@ -388,6 +394,7 @@ namespace MFO::Logistics::Errand {
             std::string       line;    // the plan line's body
             std::vector<RE::FormID> keys;   // the opened shops' plan keys: Consume() takes them out of the watch once the trip really started
             std::vector<RE::FormID> lateForms;   // a LATE-SELL plan: the freed items it serves (re-queued by StartReopenedTrip when the start fails)
+            std::vector<std::pair<std::int32_t, RE::FormID>> buyServed;   // a MISSED BUY plan: (need kind, shop key) pairs it re-plans; Consume() marks them tried
         };
         // Planner (worker, TryStart), at the commit of a trip. a_closedCands / a_closedOrders = the hours-closed shops and their orders (may be empty).
         // a_in = the plan's inputs; a_innStop = the committed trip's inn stop (null = the trip has none). MISSED SELLS (marth 2026-10-21): a_openCands = the
@@ -403,6 +410,12 @@ namespace MFO::Logistics::Errand {
         // planner's own safe read: a native chest read is forbidden, §0.37) covers a row or the vendor's restock interval has passed. a_innStop = the trip's inn stop.
         void NoteUnsold(RE::FormID a_follower, RE::FormID a_town, const Stop& a_stop, const ErrandPlanned* a_order,
                         const TradeBridge::TradeOutcome& a_out, const Stop* a_innStop);
+        // MISSED BUY (2026-10-26): a REPORTED shop trade (every non-aborted one) whose supply quota PlanBuy left unfilled for want of STOCK
+        // (TradeOutcome::unfilled) is logged "MISSED BUY <kind> <remaining>" and the remainder watched: the next Poll plans it to another OPEN
+        // candidate of the plan whose VEND carries the kind (stock-evidence ones first), within the visit (a_town), at most twice per commit, never
+        // the same shop twice for one kind. A kind the order asked for that came back filled leaves the watch. Same hourly Poll, no new poller.
+        void NoteUnfilled(RE::FormID a_follower, RE::FormID a_town, const Stop& a_stop, const ErrandPlanned* a_order,
+                          const TradeBridge::TradeOutcome& a_out);
         // MISSED SELLS (b): items that became sell candidates mid-trip and appear in NO stop's order. a_requeue = a failed start puts them back.
         void NoteLate(RE::FormID a_follower, RE::FormID a_town, const std::vector<RE::FormID>& a_forms, bool a_requeue = false);
         // F3 (review): a late-sell trip started for these forms, so the gold entries must not send him back with rows he no longer holds.

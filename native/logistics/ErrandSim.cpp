@@ -987,6 +987,10 @@ namespace MFO::Logistics::Errand::Sim {
                             for (const auto& row : out.unsold) if (row.obj) uf.push_back(row.obj->GetFormID());
                             Reopen::NoteLate(fid, r.town, uf);
                         }
+                        if (!out.aborted) {   // MISSED BUY: a supply quota the vendor's stock could not fill is re-planned to another open shop of the plan
+                            SyncCur(r);
+                            Reopen::NoteUnfilled(fid, r.town, r.stops[r.cur], r.order.get(), out);
+                        }
                     } else if (clk - r.dispatchedClk > kTradeWaitClkSec) {
                         r.reported = true;
                         spdlog::warn("[errand] {:08X}: the replayed trade never reported ({:.0f} s) -- continuing", fid, kTradeWaitClkSec);
