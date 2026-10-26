@@ -167,6 +167,8 @@ namespace MFO::Logistics::Errand {
             bool          stepOutOk = false, placing = false;
             int           placeTries = 0;
             RE::NiPoint3  stepOutFrom{};
+            // mfo-272: times this stop's walk was re-aimed at its vendor NPC's CURRENT spot (Vendors::Locate; cap kMaxRelocations). Session-only, reset by LoadStop.
+            int           relocations = 0;
         };
 
         std::mutex                                           g_mx;
@@ -182,6 +184,17 @@ namespace MFO::Logistics::Errand {
         // Run 4: the main-thread scan of every loaded cell for one vendor faction (PostVendorScan); awakeLoaded = a member who is alive, enabled, loaded and awake.
         struct VendorScan { float hour = -1.0f; int members = 0; RE::FormID awakeLoaded = 0; std::string summary; };
         std::unordered_map<RE::FormID, VendorScan>           g_vendorScan;
+        std::unordered_map<RE::FormID, std::string>          g_vendorNote;   // mfo-272: vendor faction -> the NPC-first verdict last logged (said on a CHANGE only)
+        // mfo-272: the catalog's NPC-first verdict for one shop, said when it CHANGES (the plan runs every 6 s per follower).
+        void NoteVendorOnce(RE::FormID a_faction, std::string a_text) {
+            {
+                std::scoped_lock lk(g_mx);
+                auto& last = g_vendorNote[a_faction];
+                if (last == a_text) return;
+                last = a_text;
+            }
+            spdlog::info("[errand] vendor (NPC-first): {}", a_text);
+        }
         std::uint64_t BackoffKey(RE::FormID a_fid, RE::FormID a_chest) { return (static_cast<std::uint64_t>(a_fid) << 32) | a_chest; }
         RE::FormID                                           g_townId = 0;  // the town the player has been in ...
         Clock::time_point                                    g_townSince{}; // ... since this instant
@@ -407,6 +420,7 @@ namespace MFO::Logistics::Errand {
             std::unordered_map<RE::FormID, bool> seenChest;
             bool waiting = false;   // R6: a fence / spouse gate is still waiting for its main-thread condition answer
             bool doorWaiting = false;   // an interior shop's entry-door read (Rest::ShopDoorFor) was just posted to the main thread
+            bool vendorWaiting = false;   // mfo-272: the vendor index (Vendors::Locate) is being built on the main thread
             std::unordered_set<RE::FormID> gated;   // R6: factions a LOADED vendor already put through a gate this plan (the faction-only list does not re-ask)
             for (auto& h : living) {
                 if (out.size() >= kMaxCands) break;
@@ -528,26 +542,60 @@ namespace MFO::Logistics::Errand {
                         default:                        return 0;
                         }
                     };
-                    if (sh.kind == DestKind::Ref) {
-                        auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(sh.place);
-                        if (!ref) continue;
-                        placePos = ref->GetPosition();
-                        d = placePos.GetDistance(pc->GetPosition());
-                        // An INTERIOR ref has no comparable position: reach it through its cell's door like a Cell shop.
-                        if (auto* rc = ref->GetParentCell(); rc && rc->IsInteriorCell()) {
-                            const int ir = interiorPlace(rc->GetFormID());
-                            if (ir < 0) { doorWaiting = true; continue; }
-                            if (ir == 0) { if (open) ++a_dropped; continue; }
-                        }
-                    } else {
-                        const int r = interiorPlace(sh.place);
-                        if (r < 0) { doorWaiting = true; continue; }
-                        if (r == 0) { if (open) ++a_dropped; continue; }
+                    // mfo-272 NPC-FIRST (marth 2026-10-25: "who runs this shop, is the shop open, where is that NPC"): the walk goes to the shop's
+                    // VENDOR wherever the engine has them now, never to the PLVD place / merchant chest (the place keeps only the shop's town
+                    // membership above; the chest is still what the trade moves goods through). No living, enabled member = no shop.
+                    Vendors::Where vw;
+                    const auto va = Vendors::Locate(sh.faction, vw);
+                    if (va == Vendors::Answer::Pending) { vendorWaiting = true; continue; }
+                    if (va != Vendors::Answer::Located) {
+                        NoteVendorOnce(sh.faction, std::format("shop '{}' (faction {:08X}) is NOT a candidate: {} (members {}, dead {}, disabled {}, no cell {})",
+                                                               ShopPlaceName(fac), sh.faction, Vendors::AnswerName(va), vw.members, vw.dead, vw.disabled, vw.noCell));
+                        if (open) ++a_dropped;
+                        continue;
                     }
+                    if (vw.town != a_playerTown) {
+                        NoteVendorOnce(sh.faction, std::format("shop '{}' (faction {:08X}) is NOT a candidate this plan: its vendor {} is not in this town",
+                                                               ShopPlaceName(fac), sh.faction, Vendors::Describe(vw)));
+                        if (open) ++a_dropped;
+                        continue;
+                    }
+                    if (vw.asleep) {
+                        NoteVendorOnce(sh.faction, std::format("shop '{}' (faction {:08X}) is NOT a candidate this plan: its vendor {} is asleep",
+                                                               ShopPlaceName(fac), sh.faction, Vendors::Describe(vw)));
+                        if (open) ++a_dropped;
+                        continue;
+                    }
+                    DestKind vkind = DestKind::VendorActor;
+                    RE::FormID vdest = vw.actor;
+                    float vrad = kVendorRadius;
+                    const bool sameSpace = vw.loaded && (vw.cell == cell->GetFormID() || (!vw.interior && !cell->IsInteriorCell()));
+                    if (sameSpace) {   // loaded where he is (or both in the exterior grid): walk straight to the vendor
+                        placePos = vw.pos;
+                        d = placePos.GetDistance(pc->GetPosition());
+                    } else if (vw.interior && !APMFBridge::ErrandCrossCellsSupported()) {
+                        // ANOTHER cell, an interior: the two-leg road the current Harbinger supports -- a CELL leg into the vendor's cell (the
+                        // engine paths through the load doors natively; arrival = parent-cell identity), then a ref leg to the vendor inside it.
+                        vkind = DestKind::Cell; vdest = vw.cell; vrad = 0.0f;
+                        const int ir = interiorPlace(vw.cell);
+                        if (ir < 0) { doorWaiting = true; continue; }
+                        if (ir == 0) { if (open) ++a_dropped; continue; }
+                    } else {
+                        // An UNLOADED exterior vendor (an unloaded exterior actor may report its worldspace's persistent cell, which no cell leg
+                        // can arrive in), or any vendor once Harbinger carries kTravel_CrossCells: a REF leg to the vendor actor himself (ch.19
+                        // does not require a loaded destination). Arrival by distance; the vendor is then confirmed loaded and walked to.
+                        vkind = DestKind::Ref;
+                        placePos = vw.pos;
+                        d = placePos.GetDistance(pc->GetPosition());
+                    }
+                    NoteVendorOnce(sh.faction, std::format("shop '{}' (faction {:08X}): run by {} -> walk to {} {:08X}", ShopPlaceName(fac), sh.faction,
+                                                           Vendors::Describe(vw), vkind == DestKind::Cell ? "the vendor's CELL" : vkind == DestKind::Ref ? "the vendor (ref leg)" : "the vendor",
+                                                           vdest));
                     seenChest[sh.chest] = true;
                     Cand c;
                     c.id = sh.faction; c.fac = fac; c.chest = sh.chest; c.dist = d;
-                    c.kind = sh.kind; c.destForm = sh.place; c.destRad = sh.rad;
+                    c.actorId = vw.actor;   // the vendor NPC (the stop's vendorActor: confirmed in person on arrival); the plan key stays the faction
+                    c.kind = vkind; c.destForm = vdest; c.destRad = vrad;
                     c.pos = placePos; c.havePos = true;
                     (open ? catalogOpen : *a_closedOut).push_back(c);
                 }
@@ -555,13 +603,15 @@ namespace MFO::Logistics::Errand {
                 std::stable_sort(catalogOpen.begin(), catalogOpen.end(), [](const Cand& a, const Cand& b) { return a.dist < b.dist; });
                 for (auto& c : catalogOpen) { if (out.size() >= kMaxCands) break; out.push_back(c); }
             }
-            if (waiting || doorWaiting) {
+            if (waiting || doorWaiting || vendorWaiting) {
                 if (a_closedOut) a_closedOut->clear();   // never commit a trip that silently lacks the fence / spouse store / a shop whose door is being read: re-plan on the next cadence (6 s)
-                spdlog::info("[errand] {:08X}: plan waiting for {} -- re-planning shortly", a_follower->GetFormID(),
+                spdlog::info("[errand] {:08X}: plan waiting for {}{} -- re-planning shortly", a_follower->GetFormID(),
                              waiting && doorWaiting ? "a vendor-condition answer (fence / spouse gate) and an interior shop's entry-door read"
                              : waiting ? "a vendor-condition answer (fence / spouse gate)"
-                                       : "an interior shop's entry-door read (the loaded exterior grid, two cells deep)");
-                if (a_doorWait && doorWaiting) *a_doorWait = true;
+                             : doorWaiting ? "an interior shop's entry-door read (the loaded exterior grid, two cells deep)"
+                                           : "the vendor index (who runs each shop and where they are; built once per load on the main thread)",
+                             vendorWaiting && (waiting || doorWaiting) ? " and the vendor index" : "");
+                if (a_doorWait && (doorWaiting || vendorWaiting)) *a_doorWait = true;   // mfo-272: a plan without its located vendors is never committed
                 out.clear();
                 return out;
             }
@@ -598,8 +648,7 @@ namespace MFO::Logistics::Errand {
                 if (!v || !v->Is3DLoaded() || APMFBridge::InCombat(v)) continue;
                 if (const auto st = v->AsActorState()->GetSitSleepState(); st == RE::SIT_SLEEP_STATE::kIsSleeping ||
                     st == RE::SIT_SLEEP_STATE::kWantToSleep || st == RE::SIT_SLEEP_STATE::kWaitingForSleepAnim) continue;
-                auto* fac = VendorFactionOf(v);
-                if (fac && fac->GetFormID() == a_faction) return p;
+                if (Vendors::IsMember(v, a_faction)) return p;   // mfo-272: MEMBERSHIP (an actor in two vendor factions runs both shops), not the first vendor faction
             }
             // Run 4: not in his own cell. The main-thread scan of EVERY loaded cell (PostVendorScan, landed by an earlier unattended verdict)
             // may have found a vendor of that faction elsewhere (a stall across a cell border): reuse it while it is loaded and awake.
@@ -629,8 +678,7 @@ namespace MFO::Logistics::Errand {
                 Logistics::ForEachLoadedRef([&](RE::TESObjectREFR* a_ref) {
                     auto* a = a_ref ? a_ref->As<RE::Actor>() : nullptr;
                     if (!a || a->IsPlayerRef() || a->IsPlayerTeammate()) return RE::BSContainer::ForEachResult::kContinue;
-                    auto* fac = VendorFactionOf(a);
-                    if (!fac || fac->GetFormID() != a_faction) return RE::BSContainer::ForEachResult::kContinue;
+                    if (!Vendors::IsMember(a, a_faction)) return RE::BSContainer::ForEachResult::kContinue;   // mfo-272: membership, not the FIRST vendor faction
                     ++sc.members;
                     const bool asleep = [&] {
                         const auto st = a->AsActorState()->GetSitSleepState();
@@ -774,6 +822,7 @@ namespace MFO::Logistics::Errand {
             r.confirmedAt = {};
             r.walkRetries = 0; r.retryWait = r.retryRepoint = r.stepOut = r.needStepOut = r.haveBlockPos = false; r.retryAt = {};   // run 4: the retries belong to the stop
             r.stepOutOk = r.placing = false; r.placeTries = 0; r.stepOutFrom = {};   // run 5: so does the unstick
+            r.relocations = 0;   // mfo-272: and the vendor re-aims
         }
 
         // Run 4 review F2: the inn stay's first retry-later attempt kLaterBaseSec in, doubling per attempt already made. Call wherever phase becomes Resting for an Inn stop.
@@ -879,6 +928,7 @@ namespace MFO::Logistics::Errand {
             g_nextPlan.clear();
             g_parked.clear();
             g_vendorScan.clear();   // run 4
+            g_vendorNote.clear();   // mfo-272
             g_backoff.clear();
             g_backoffLogged.clear();
             g_townShops.clear();
@@ -888,6 +938,7 @@ namespace MFO::Logistics::Errand {
         Sim::ClearTransientState();
         Rest::ClearTransientState();   // R7
         Unstick::ClearAll();   // run 5
+        Vendors::ClearAll();   // mfo-272
         ErrandShops::Clear();   // R6
         Smith::ClearTransientState();   // R8
         APMFBridge::ClearErrandClaims();
@@ -1372,7 +1423,7 @@ namespace MFO::Logistics::Errand {
         std::vector<Cand> closedCands;   // F3: dropped ONLY for their hours -> the shop watch
         bool doorWait = false;
         auto cands = BuildCatalog(a_follower, playerTown, a_now, dropped, Config::g_errandInn.load() ? &closedCands : nullptr, &doorWait);
-        if (doorWait) { NotPlanning(a_follower, a_now, "waiting for an interior shop's entry-door read"); return true; }   // re-planned on the next cadence
+        if (doorWait) { NotPlanning(a_follower, a_now, "waiting for an interior shop's entry-door read or the vendor index"); return true; }   // re-planned on the next cadence
         // R7 (marth 2026-10-19): no open shop is NOT "no errand" -- a follower with nothing to shop for still plans the INN-ONLY trip
         // (Rest::Augment below), so the early return is only for inn errands switched off (MFO-B353).
         if (cands.empty() && !Config::g_errandInn.load()) return true;
@@ -1644,10 +1695,19 @@ namespace MFO::Logistics::Errand {
         // last one first walks him toward the player (kStepOutRadius), then re-points to the stop.
         auto retryWalk = [&](const std::string& a_why, bool a_repoint) -> bool {
             if (r.walkRetries >= kWalkRetries) {
-                // Run 5: the retries are spent. A walk that ended and left him where the last block did (or ANY walk to the inn: it is never dropped) is stuck.
-                const bool sameSpot = r.haveBlockPos && a_follower->GetPosition().GetDistance(r.lastBlockPos) < kStepOutMoveU;
-                const bool innStop = r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn;
-                if (a_repoint && (sameSpot || innStop) && tryPlace(std::format("{}; {} retries spent{}", a_why, kWalkRetries, sameSpot ? ", he has not moved since the last block" : ", the inn is never dropped"))) return true;
+                // mfo-272 (marth: "an obviously stuck follower is ALWAYS teleported to the destination"): the retries are spent, so the walk to this
+                // stop is stuck, shop and inn alike, WHEREVER he now stands. Run 5 placed him only when he stood within kStepOutMoveU of the last block
+                // (or for the inn), and the 2026-10-25 Winterhold field run showed why that was brittle: Auri's BLOCKED ends were each a few hundred
+                // units apart (the engine's Movement Blocked package shuffled her between them), so the "same spot" test never held and 'Birna
+                // Services' was SKIPPED with no placement at all. Only a refused / failed placement skips the stop now (its ERROR line, then giveUp).
+                if (a_repoint) {
+                    const bool sameSpot = r.haveBlockPos && a_follower->GetPosition().GetDistance(r.lastBlockPos) < kStepOutMoveU;
+                    if (tryPlace(std::format("{}; {} retries spent ({})", a_why, kWalkRetries,
+                                             sameSpot ? "he has not moved since the last block" : "he moved between the blocks but never got there"))) return true;
+                    if (r.placeTries >= kPlaceTries)
+                        spdlog::error("[errand] {:08X} '{}': {} -- {} retries spent and this stop's {} placement(s) are spent too: it is skipped", fid,
+                                      r.followerName, a_why, kWalkRetries, kPlaceTries);
+                }
                 return false;
             }
             const int secs = kRetryBackoffS[r.walkRetries];

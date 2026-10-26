@@ -335,6 +335,35 @@ namespace MFO::Logistics::Errand {
         void ClearAll();                      // revert / load
     }
 
+    // ── mfo-272 (marth 2026-10-25: "who runs this shop, is the shop open, where is that NPC"): the SHOP'S VENDOR, NPC-FIRST --
+    // logistics/ErrandVendors.cpp. A catalog shop's walk goes to its vendor NPC wherever the engine has them now (loaded or not), never to
+    // the PLVD place / merchant chest (context only). The vendor-faction -> actor index is built once per load on the MAIN thread from the
+    // all-forms map; Locate / IsMember / LoadedVendor run on the worker. Own mutex (a leaf). Session-only, nothing saved.
+    namespace Vendors {
+        enum class Answer { Located, Pending, NoMembers, AllGone, NoCell };
+        struct Where {
+            RE::FormID   actor = 0;
+            std::string  name;
+            bool         loaded = false, asleep = false;
+            RE::FormID   cell = 0;                  // the actor's parent cell now (an unloaded exterior actor may report its worldspace's persistent cell)
+            bool         interior = false;
+            RE::NiPoint3 pos{};
+            const RE::BGSLocation* town = nullptr;  // LocationTypes::TownAnchor of where the actor is now
+            int          members = 0, dead = 0, disabled = 0, noCell = 0;
+        };
+        // Membership by the final rank (the base NPC's faction list, then the runtime changes): an actor in several vendor factions is a
+        // member of EACH (Errand.cpp VendorFactionOf returns only the first; Adrianne's forge faction is her second).
+        bool IsMember(RE::Actor* a_actor, RE::FormID a_faction);
+        // WHO runs the shop and WHERE they are: the best living, enabled member (loaded + awake first, then loaded, then unloaded).
+        // Pending = the index build was just posted to the main thread (re-plan shortly).
+        Answer Locate(RE::FormID a_faction, Where& a_out);
+        const char* AnswerName(Answer a_a);
+        std::string Describe(const Where& a_w);
+        // a_actor when it is a loaded, awake, living member of a_faction standing in a_near's cell (or both in the exterior grid), else null.
+        RE::NiPointer<RE::Actor> LoadedVendor(RE::FormID a_actor, RE::FormID a_faction, RE::Actor* a_near);
+        void ClearAll();   // revert / load
+    }
+
     // ── F3 (marth 2026-10-20: ONE TRIP AT A TIME): the SHOP-OPENS re-plan -- logistics/ErrandReopen.cpp ───────────────────────────────────
     // BuildCatalog drops a vendor faction that is closed for HOURS only (OpenAt false; never a fence / spouse / conditioned drop). The planner
     // records those shops (candidates + the orders EconomyErrandPlan built for them NOW, while the follower was loaded) with the trip it commits:
