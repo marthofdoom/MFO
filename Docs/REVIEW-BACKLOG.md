@@ -2317,3 +2317,18 @@ The sets are built at the index build. If a quest alias grants JobMerchantFactio
 
 ### MFO-B480 (SEV-4, OPEN, logistics/Errand.cpp relocate ~1916 and ErrandVendors.cpp Locate, against ad85581, Opus re-review of fix/mfo-273) -- Pending falls to stopOver with no retry, and one unknown verdict hides a Located member
 `relocate` returning false on `Pending` falls to the stop-over path with no retry. `Locate` also returns `Pending` when any loaded member's verdict is unknown even if another member is already Located.
+
+### MFO-B481 (SEV-4, OPEN, logistics/ErrandReopen.cpp Poll MISSED BUY, against f1953f8, Opus review of fix/mfo-missed-buy) -- a missed-buy candidate already in `open` is skipped
+Poll skips any missed-buy candidate already in `open` (reopened / gold-watch shop) instead of adding the missed kind to that shop's order; the kind goes to a farther shop or is dropped.
+
+### MFO-B482 (SEV-5, OPEN, logistics/ErrandReopen.cpp NoteUnfilled, against f1953f8, Opus review of fix/mfo-missed-buy) -- wrong reason logged with bErrandInn off
+With bErrandInn off, NoteUnfilled says "a trip restored from the save"; the real reason is the inn setting is off so no watch was recorded.
+
+### MFO-B483 (SEV-5, OPEN, logistics/ErrandReopen.cpp Poll MISSED BUY, against f1953f8, Opus review of fix/mfo-missed-buy) -- the missed-buy order keeps the template's sig
+The missed-buy order keeps the template's sig, so its empty-trade memo is keyed by another shop's signature.
+
+### MFO-B484 (SEV-5, OPEN, logistics/ErrandTrip.cpp Plan step 2, against f1953f8, Opus review of fix/mfo-missed-buy) -- the "NO stock evidence" line is unthrottled
+ErrandTrip.cpp "need kind N has NO stock evidence" repeats on every re-plan, unthrottled.
+
+### MFO-B485 (SEV-5 info, OPEN, logistics/Errand.cpp, against f1953f8, Opus review of fix/mfo-missed-buy) -- file size
+logistics/Errand.cpp is 2583 lines, split due (cap relaxed until next major).

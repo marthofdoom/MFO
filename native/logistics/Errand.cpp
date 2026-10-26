@@ -282,18 +282,20 @@ namespace MFO::Logistics::Errand {
         bool ApothecaryClass(const RE::TESFaction* a_fac, bool& a_known) {
             a_known = false;
             auto* vend = a_fac ? a_fac->vendorData.vendorSellBuyList : nullptr;
-            if (!vend || a_fac->vendorData.vendorValues.notBuySell) return false;
+            if (a_fac && a_fac->vendorData.vendorValues.notBuySell) { a_known = true; return false; }   // an inverted list = "buys everything but": judged, NOT apothecary (never "unknown", review F1)
+            if (!vend) return false;
             int total = 0, alchemy = 0;
             bool hasPotion = false;
             for (auto* f : vend->forms) {
                 if (!f) continue;
                 ++total;
                 if (f->GetFormID() == kKwPotion) { hasPotion = true; ++alchemy; a_known = true; continue; }
+                if (f->GetFormID() == 0x0008CDEAu || f->GetFormID() == 0x000A0E56u) { ++alchemy; a_known = true; continue; }   // VendorItemFood / VendorItemFoodRaw (Skyrim.esm, as ErrandRest.cpp)
                 const char* ed = f->GetFormEditorID();
                 if (!ed || !*ed) continue;
                 a_known = true;
                 const std::string_view e{ ed };
-                if (e == "VendorItemPoison" || e == "VendorItemIngredient" || e == "VendorItemFood" || e == "VendorItemFoodRaw") ++alchemy;
+                if (e == "VendorItemPoison" || e == "VendorItemIngredient") ++alchemy;
             }
             return hasPotion && total > 0 && alchemy * 2 >= total;
         }
