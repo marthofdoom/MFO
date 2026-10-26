@@ -2281,3 +2281,9 @@ With EquipArmor at 0 and EquipWeapon on, `buy.buyArmor = false` also stops shiel
 
 ### MFO-B467 (SEV-5, OPEN, logistics/Errand.cpp tryPlace / retryWalk, against a19762b, Opus review of fix/mfo-272) -- a stuck walk in dialogue is skipped without an ERROR
 "tryPlace returns false in dialogue -> stop skipped without ERROR (re-arm one retry)". Reviewer's reasoning: `tryPlace` treats dialogue as "not stuck" and returns false with no line, so a spent-retries walk while he talks to the player falls to giveUp; re-arm one retry instead.
+
+### MFO-B468 (SEV-5, OPEN, logistics/ErrandVendors.cpp Locate) -- NoMembers re-arm fires when all indexed members were skipped as unloaded temporaries (raised against 996c445)
+"The NoMembers re-arm also fires when the index has members for the faction but F4 skipped them all as unloaded temporary actors. A rebuild cannot fix that case: a pointless rebuild plus a ~6 s plan wait every minute." Fix: re-arm only when ids is empty.
+
+### MFO-B469 (SEV-5, OPEN, logistics/Errand.cpp ~553) -- vendor-located shops wait on the place-door read only the smith stop needs (raised against 996c445)
+"A vendor-located shop now waits on its place-door read even though only the smith stop uses the place. Bounded (5 min cache). Could be skipped when the shop is not a smithy candidate."
