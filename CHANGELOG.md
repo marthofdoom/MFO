@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.7.1 -- Town errands fixes
+
+- **Town shops are no longer cut off by the travel radius.** A shop in the town the player stands in is planned even when its door is far from the player. The shops are ordered nearest first before the plan limit is applied.
+- **Potions and food are bought again.** They read as worth nothing, so the buy plan dropped every potion and meal. They now use their game value.
+- **Followers reach the shop after being placed.** A stuck follower is placed inside the walk radius, and a follower standing close to the shop counts as arrived. A follower who loads in town after a finished stop continues to the next stop, such as the inn, instead of ending the trip.
+- **Only real innkeepers count.** A vendor placed in an inn, such as a spell vendor, is no longer taken for the innkeeper. The inn's vendor must trade food.
+- **No empty sell rows.** Items with no name or no value are no longer offered for sale.
+
 ## v2.7.0 -- Town errands
 
 - **Town errands.** Followers now run errands in town on their own. They plan a trip of several stops (shops, fences, spouse stores, the temple, smithing and the inn), walk it, trade across the counter, and stay at the inn until you leave town or a fight starts. Town errands are ON by default.
