@@ -758,8 +758,8 @@ namespace MFO::Config {
     // (ch.19 + ch.12 idle v2 + GetIdleState, ABI >= 24) present the follower no longer trades INSTANTLY
     // with any vendor near him: when the player is in a City / Town / Settlement and he has a reason
     // (junk to sell, a supply need, an affordable upgrade) he WALKS to an open shop's vendor, plays the
-    // talk / give / take idles, trades, and rejoins. Harbinger absent = the old proximity trade, unchanged.
-    //   bTownErrands: master switch for the above (default ON). OFF = the old proximity trade.
+    // talk / give / take idles, trades, and rejoins. Harbinger absent = no trade, unless bProximityTrading = 1 (INI-only, off by default) brings back the old proximity trade.
+    //   bTownErrands: master switch for the above (default ON). OFF = no trade, unless bProximityTrading = 1 (INI-only, off by default) brings back the old proximity trade.
     //   iErrandMinSellGold: the sellable rows a candidate vendor accepts must be worth at least this
     //     much (capped by that chest's last-seen gold) for a SELL errand. INI-only.
     //   iErrandMinPurse: the purse needed for an UPGRADE errand (gear / apparel / tome wishes). INI-only.

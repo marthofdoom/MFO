@@ -315,7 +315,7 @@
         {
           "text": "Where trading happens",
           "type": "text",
-          "help": "With town errands on (the default) and Harbinger installed, followers trade only on a walk to a shop in a city, town or settlement. Outside towns nobody trades. A sell trip starts when the sellable items are worth at least 100 gold, or when the follower carries more than 80 percent of his weight. So junk builds up between towns. With errands off, or without Harbinger, the old instant trade with any vendor near the follower is used.",
+          "help": "With town errands on (the default) and Harbinger installed, followers trade only on a walk to a shop in a city, town or settlement. Outside towns nobody trades. A sell trip starts when the sellable items are worth at least 100 gold, or when the follower carries more than 80 percent of his weight. So junk builds up between towns. With errands off, or without Harbinger, followers do not trade at all, unless the INI-only switch bProximityTrading is set to 1 (off by default), which brings back the old instant trade with any vendor near the follower.",
           "valueOptions": {
             "value": "Logistics / Harbinger"
           }
@@ -810,7 +810,7 @@
           "id": "bTownErrands:General",
           "text": "Economy: shop in town (walk to merchants)",
           "type": "toggle",
-          "help": "ON (default): with Harbinger installed and the follower economy on, followers no longer trade instantly with any vendor near them. When you are in a city, town or settlement and a follower has something to sell, a supply to restock or an affordable upgrade, he walks to an open shop's merchant, plays the talk, hand-over and take animations, trades and rejoins you. Needs Harbinger (APMF). OFF: the old instant trade with any vendor near the follower.",
+          "help": "ON (default): with Harbinger installed and the follower economy on, followers no longer trade instantly with any vendor near them. When you are in a city, town or settlement and a follower has something to sell, a supply to restock or an affordable upgrade, he walks to an open shop's merchant, plays the talk, hand-over and take animations, trades and rejoins you. Needs Harbinger (APMF). OFF: followers do not trade, unless the INI-only switch bProximityTrading is set to 1 (off by default), which brings back the old instant trade with any vendor near the follower.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": 1

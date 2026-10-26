@@ -4671,7 +4671,7 @@ Design: `_evidence/2026-10-18-designs/TOWN-DESIGN.md` (R1a = this; R1b = off-scr
 both LATER rounds). With Harbinger ABI >= 24 (`APMFBridge::ErrandSupported`, ch.19 + ch.12 v2 + `GetIdleState`) and
 `bTownErrands` ON (default) the instant proximity trade is RETIRED: `EconomyProbe` is no longer called from the idle branch
 (`Service.cpp:2163`, `if (... && !Errand::TryStart(...)) EconomyProbe(...)`; `TryStart` returns TRUE whenever errands own the
-economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the old trade, unchanged.
+economy, false = legacy). Harbinger absent / too old / `bTownErrands` OFF = the old trade runs only when `bProximityTrading` = 1 (INI-only, default 0, gate at `Service.cpp:2233`), else no trade.
 - **Planner** `Errand::TryStart` (`Errand.cpp:573`) <- the idle branch of `ServiceFollower`. Gates: player in a City / Town /
   Settlement (`LocationTypes::TownAnchor`, `LocationTypes.h:92`: OUTERMOST City/Town/Settlement since town run 3, none when a Clearable/Dungeon comes first) for
   >= `fErrandSettleSec`; no combat (his or the player's), no menu pause, not looting (`SlotOf`), not waiting (AV 95), not mounted,

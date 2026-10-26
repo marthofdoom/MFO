@@ -2311,3 +2311,9 @@ After a load bumps the generation, the dropped evaluation still erases the actor
 
 ### MFO-B478 (SEV-5, OPEN, logistics/ErrandVendors.cpp Locate, against ec5e235, Opus review of fix/mfo-273) -- the NotOffering log carries no count of failing members
 The "NOT a candidate: no member would trade" line does not say how many members failed which gate.
+
+### MFO-B479 (SEV-4, OPEN, logistics/ErrandVendors.cpp s_jmActors / s_jmShops, against ad85581, Opus re-review of fix/mfo-273) -- the JobMerchant sets are stale until the next town change
+The sets are built at the index build. If a quest alias grants JobMerchantFaction rank 0 mid-session, they stay stale until the index is rebuilt (the player's town changes).
+
+### MFO-B480 (SEV-4, OPEN, logistics/Errand.cpp relocate ~1916 and ErrandVendors.cpp Locate, against ad85581, Opus re-review of fix/mfo-273) -- Pending falls to stopOver with no retry, and one unknown verdict hides a Located member
+`relocate` returning false on `Pending` falls to the stop-over path with no retry. `Locate` also returns `Pending` when any loaded member's verdict is unknown even if another member is already Located.

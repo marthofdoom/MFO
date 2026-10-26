@@ -12,7 +12,7 @@
 // PLAYER is in a City / Town / Settlement and the follower has a reason, he WALKS to an open shop's vendor
 // (ch.19), plays talk / give / take idles AT him (ch.1 hold + ch.12 v2, the Deposit pattern), trades through
 // the unchanged TradeBridge::VendorTrade, and rejoins (every claim released; his follow package walks him
-// back). Harbinger absent (or bTownErrands off) = the legacy proximity trade, unchanged.
+// back). Harbinger absent (or bTownErrands off) = the legacy proximity trade runs only when bProximityTrading = 1 (INI-only, off by default).
 //
 // R1a SCOPE: the vendor is a LOADED actor (exterior stalls, the forge, or the player inside the shop). The
 // catalog reads each candidate's vendor FACTION (hours, fence flag, conditions, VEND list, chest) but takes the
@@ -34,7 +34,7 @@ namespace MFO::Logistics::Errand {
 
     // The idle branch of ServiceFollower, in place of EconomyProbe. TRUE = errands own the economy for this
     // follower (the caller must NOT run the legacy proximity trade); false = legacy applies (bTownErrands
-    // off, or Harbinger absent / too old).
+    // off, or Harbinger absent / too old) and then runs only when bProximityTrading = 1 (INI-only, off by default).
     bool TryStart(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now);
     // Top of the logistics tick: drive this follower's errand. TRUE = the errand owns this tick.
     bool Tick(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now,
