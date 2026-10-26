@@ -2261,3 +2261,9 @@ FIX (marth 2026-10-21, "Evaluate the conditions"): `SpouseGate` evaluates a non-
 
 ### MFO-B463 (SEV-5, OPEN, logistics/Errand.cpp R-A arrival trade, against 14789a2) -- on-screen merchant-chest trade plays no give or take idle
 "The on-screen merchant-chest trade plays no give or take idle; items just move. That matches marth's 'F4 part 1' ruling, but it conflicts with the standing rule that every action is animated. Address it in part 2." (Opus review of feat/mfo-college-vendors at 14789a2, relayed by the release driver).
+
+### MFO-B464 -- v2.7.1 review SEV-4/5 (raised against a455cb0, Opus review)
+- **SEV-4:** 2c fall-through cooldown reads `r.reported`/`r.dispatched` after `AdvanceStop` cleared them, so a restored record that traded gets a 0 s cooldown (ErrandSim.cpp final DONE branch).
+- **SEV-4:** `InnFactionsOf` food filter drops a modded inn whose innkeeper list uses a custom food keyword (town then rests at the last shop). Log the filtered faction.
+- **SEV-5:** the catalog cap moved after the loop, so fence/spouse gates and `ShopDoorFor` posts run for shops the cap would have cut.
+- **SEV-5:** `clamp(0.5*destRad, 20, 90)` also moves vendor-actor placements to 85 u, and a radius-50 ref to 25 u (could land inside counter collision).

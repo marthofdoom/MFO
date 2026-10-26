@@ -1085,7 +1085,7 @@ namespace MFO::Logistics {
                     if (pureFence != (c.stolen == ErrandShops::Stolen::All)) { sdiag(c.obj, pureFence ? "not stolen (fence)" : "stolen (not a fence)"); continue; }
                     // v2.7.1: an unnamed or zero-value object is never a sell row (a quest / script leftover the vendor cannot price).
                     if (const char* nm = c.obj ? c.obj->GetName() : nullptr; !nm || !*nm) { sdiag(c.obj, "unnamed"); continue; }
-                    if (c.price <= 0) { sdiag(c.obj, "zero value"); continue; }
+                    if (c.price <= 0 && !c.minOne) { sdiag(c.obj, "zero value"); continue; }
                     if (!sellAnything && !VendorTrades(vend, vv.notBuySell, c.kwf)) {
                         sdiag(c.obj, "vendor-filter"); continue;
                     }

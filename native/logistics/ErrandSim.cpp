@@ -538,10 +538,13 @@ namespace MFO::Logistics::Errand::Sim {
         // reload) with a LATER stop still pending: that stop is settled, so the trip advances to the next one and walks on screen (the
         // betweenStops resume below), instead of ending as DONE with the later stop (the inn) never visited. No second trade: the settled
         // stop's flags are cleared only by AdvanceStop, which marks it Done / Skipped first.
+        bool advanced2c = false;
         if (inTown && (r.dispatched || r.reported) && (r.stage == Stage::Out || r.stage == Stage::Trade) && r.cur < r.stops.size() &&
+            (r.reported || !TradeBridge::HasLiveOrder(fid)) &&   // a trade still in flight must not overlap the next stop's order
             Trip::NextPending(r.stops, r.cur) >= 0 && AdvanceStop(r, days)) {
+            advanced2c = true;
             tradeLeft = r.order ? !r.order->skipped : (r.restored && r.hadOrder);
-            spdlog::info("[errand] {:08X} '{}': loaded again in town after the stop's trade was settled -- the trip goes on to {} on screen",
+            spdlog::info("[errand] {:08X} '{}': loaded again in town after the stop's trade was settled -- the trip advanced to {} (walking on screen)",
                          fid, r.followerName, Trip::Label(r.stops, r.cur));
         }
         // R2 (design 2.7, "if the player walks in then it picks up"): a PHYSICAL errand restored from the save with him loaded
@@ -592,7 +595,7 @@ namespace MFO::Logistics::Errand::Sim {
         }
         const bool betweenStops = inTown && r.cur > 0 && r.stage == Stage::Out;
         const bool resumeHere = atShop || (r.restoredPhysical && inTown) || betweenStops;
-        if (resumeHere && !r.dispatched && !r.reported && !r.tradeAbandoned && tradeLeft &&
+        if (resumeHere && !r.dispatched && !r.reported && !r.tradeAbandoned && (tradeLeft || (advanced2c && CurKind(r) != StopKind::Shop)) &&
             (r.stage == Stage::Out || r.stage == Stage::Trade)) {
             ResumeInfo ri;
             ri.follower = fid; ri.followerName = r.followerName; ri.vendorName = r.vendorName;

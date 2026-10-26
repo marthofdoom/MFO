@@ -533,6 +533,12 @@ namespace MFO::Logistics::Errand {
                         if (!ref) continue;
                         placePos = ref->GetPosition();
                         d = placePos.GetDistance(pc->GetPosition());
+                        // An INTERIOR ref has no comparable position: reach it through its cell's door like a Cell shop.
+                        if (auto* rc = ref->GetParentCell(); rc && rc->IsInteriorCell()) {
+                            const int ir = interiorPlace(rc->GetFormID());
+                            if (ir < 0) { doorWaiting = true; continue; }
+                            if (ir == 0) { if (open) ++a_dropped; continue; }
+                        }
                     } else {
                         const int r = interiorPlace(sh.place);
                         if (r < 0) { doorWaiting = true; continue; }
@@ -1844,7 +1850,9 @@ namespace MFO::Logistics::Errand {
                     // still reads WALKING (mirrors the vendor backstop below), so a placement that lands just outside the leg radius cannot stand 120 s.
                     bool refNear = false;
                     if (pleg.state == APMF_API::kLeg_Walking && r.destKind == DestKind::Ref && r.destForm) {
-                        if (auto* dref = RE::TESForm::LookupByID<RE::TESObjectREFR>(r.destForm); dref && dref->GetParentCell() == a_follower->GetParentCell()) {
+                        if (auto* dref = RE::TESForm::LookupByID<RE::TESObjectREFR>(r.destForm); dref && dref->GetParentCell() && a_follower->GetParentCell() &&
+                            (dref->GetParentCell() == a_follower->GetParentCell() ||
+                             (!dref->GetParentCell()->IsInteriorCell() && !a_follower->GetParentCell()->IsInteriorCell()))) {
                             const auto fp = a_follower->GetPosition(), dp = dref->GetPosition();
                             refNear = fp.GetDistance(dp) <= kArriveDist && std::abs(fp.z - dp.z) <= kSameFloorDz;
                             if (refNear) spdlog::info("[errand] {:08X} '{}': ARRIVED at the shop place {:08X} by MFO distance backstop while the leg still reads WALKING",
