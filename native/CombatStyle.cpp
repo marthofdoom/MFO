@@ -36,6 +36,7 @@ namespace MFO::CombatStyle {
             // feat/mfo-substrate-followup (review F1): an OOC substrate cast pair's OWN ownership of the cast
             // stance, separate from `stance` (the combat table's). Applied only by the substrate-only ApplyTick.
             bool                   substrateCast  = false;
+            std::uint64_t          substrateSeq   = 0;   // the owning pair's seq (stale-call guard, see the header)
             // Review F2: a real fight took the substrate controller while our cast style stood on it -- the next
             // ApplyTick on `cc` writes `saved` back. Cancelled by any Want / WantSubstrateCast.
             bool                   restorePending = false;
@@ -192,18 +193,23 @@ namespace MFO::CombatStyle {
         DropTableStanceLocked(it);
     }
 
-    void WantSubstrateCast(RE::FormID a_follower) {
+    void WantSubstrateCast(RE::FormID a_follower, std::uint64_t a_seq) {
         std::lock_guard<std::mutex> lk(g_mx);
+        if (const auto it = g_owned.find(a_follower);
+            it != g_owned.end() && it->second.substrateCast && a_seq < it->second.substrateSeq)
+            return;   // a late Want for an ENDED pair: a newer pair owns the bit
         auto& o = g_owned[a_follower];   // a new entry has stance None: the table's stance is never touched here
         o.substrateCast  = true;
+        o.substrateSeq   = a_seq;
         o.restorePending = false;
         g_count.store(g_owned.size(), std::memory_order_relaxed);
     }
 
-    void ClearSubstrateCast(RE::FormID a_follower, bool a_restore) {
+    void ClearSubstrateCast(RE::FormID a_follower, std::uint64_t a_seq, bool a_restore) {
         std::lock_guard<std::mutex> lk(g_mx);
         const auto it = g_owned.find(a_follower);
-        if (it == g_owned.end() || !it->second.substrateCast) return;
+        // Not the stored seq = a late Clear for an ended pair after a newer pair's Want: the bit is not ours.
+        if (it == g_owned.end() || !it->second.substrateCast || it->second.substrateSeq != a_seq) return;
         auto& o = it->second;
         o.substrateCast = false;
         // Restore only what WE left standing: our cast style is the last write on a controller, and no table stance

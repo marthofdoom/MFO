@@ -71,14 +71,20 @@ namespace MFO::CombatStyle {
     // ignores the table stance); its real-combat call ignores the bit. Locked
     // map writes, no controller touched: worker / main thread, NEVER under
     // apmf's g_subMx (this takes CombatStyle's own mutex).
-    void WantSubstrateCast(RE::FormID a_follower);
-    // Drops ONLY the bit; the entry is erased iff no combat-table stance remains.
+    //
+    // a_seq (re-review of 9bdd6fa): the PAIR's own sequence number (apmf/Substrate.cpp, a monotonic counter
+    // stamped at open). Opens run on the worker AND the main thread (a self recipient, SummonOnMain), and every
+    // CombatStyle call is deferred outside g_subMx, so a late call for an ENDED pair can land after a NEWER
+    // pair's Want: an older seq never overwrites a newer one, and a Clear whose seq is not the stored one is a
+    // no-op.
+    void WantSubstrateCast(RE::FormID a_follower, std::uint64_t a_seq);
+    // Drops ONLY the bit (iff a_seq is the stored one); the entry is erased iff no combat-table stance remains.
     // a_restore (review F2, the reason=real-combat close): when the bit's cast
     // style is what stands on the controller and no table stance owns it, arm a
     // restore -- the next ApplyTick on THAT controller writes the saved engine
     // style back (a table Want / WantSubstrateCast arriving first cancels it; a
     // different controller drops it, the old style died with the old one).
-    void ClearSubstrateCast(RE::FormID a_follower, bool a_restore = false);
+    void ClearSubstrateCast(RE::FormID a_follower, std::uint64_t a_seq, bool a_restore = false);
 
     // T#76: release the stance ownership IFF it is currently an EQUIP ORDER. The
     // equip-gambit stance clamp's duration is now tied to the gambit's CONDITION

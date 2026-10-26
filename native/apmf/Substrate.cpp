@@ -86,6 +86,7 @@ namespace MFO::APMFBridge {
             Clock::time_point closedAt{};        // when the substrate claim was seen gone (closing)
             double            filedClk = -1.0;   // Scheduler::ServiceClock at the first sweep that saw the pair (-1 = not yet)
             bool              styleWanted = false;   // the cast stance was Want()ed for this pair (Clear on its end)
+            std::uint64_t     seq = 0;               // this pair's CombatStyle ownership token (g_pairSeq at open)
             bool subEverLive = false;
             bool held        = false;
             bool claimed     = false;
@@ -101,6 +102,10 @@ namespace MFO::APMFBridge {
         std::map<std::tuple<RE::FormID, RE::FormID, RE::FormID>, Clock::time_point> g_fires;
 
         std::atomic<bool> g_tooOldNoted{ false };
+        // Re-review of 9bdd6fa: monotonic pair sequence. Opens run on the worker AND the main thread, and every
+        // CombatStyle call is deferred outside g_subMx, so each pair's Want / Clear carries its own seq and CombatStyle
+        // ignores a call for an ended pair (CombatStyle.h WantSubstrateCast). Never 0 for a real pair.
+        std::atomic<std::uint64_t> g_pairSeq{ 0 };
         std::atomic<bool> g_unavailableNoted{ false };
 
         const APMF_API::APMF_API_v27* SubApi() {
@@ -126,9 +131,9 @@ namespace MFO::APMFBridge {
         // CSTY dies with the substrate controller), with a restore of the saved engine style on reason=real-combat
         // (the real fight keeps that controller, review F2). Both take CombatStyle's own mutex, so they run OUTSIDE
         // g_subMx. Returns true iff the bit was set.
-        bool WantCastStyle(RE::FormID a_follower) {
+        bool WantCastStyle(RE::FormID a_follower, std::uint64_t a_seq) {
             if (Config::g_castControl.load() <= 0 || !Forms::g_castStyle) return false;
-            CombatStyle::WantSubstrateCast(a_follower);
+            CombatStyle::WantSubstrateCast(a_follower, a_seq);
             return true;
         }
 
@@ -225,21 +230,25 @@ namespace MFO::APMFBridge {
         Pair pr;
         pr.sub = sub; pr.cast = cast; pr.spell = a_spell; pr.target = a_target; pr.site = site;
         pr.filed = Clock::now();
+        pr.seq   = g_pairSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+        const std::uint64_t seq = pr.seq;
         g_pairs[a_follower] = pr;
         spdlog::info("[substrate] {:08X} OPEN requested: {} ({:08X}) at {:08X}, left hand, site {} (substrate handle "
                      "{}, cast handle {}) road=substrate-claim", a_follower, SpellName(a_spell), a_spell, a_target,
                      site, sub, cast);
         lock.unlock();   // CombatStyle takes its own mutex: never under g_subMx
-        const bool styled = WantCastStyle(a_follower);
+        const bool styled = WantCastStyle(a_follower, seq);
         bool gone = false;
         {
             std::scoped_lock relock(g_subMx);
-            if (const auto it = g_pairs.find(a_follower); it != g_pairs.end()) it->second.styleWanted = styled;
-            else gone = true;   // a sweep (worker) ended the pair in the unlocked gap: its Clear missed our Want
+            // Only OUR pair: a sweep may have ended it in the unlocked gap and another thread opened a newer one.
+            if (const auto it = g_pairs.find(a_follower); it != g_pairs.end() && it->second.seq == seq)
+                it->second.styleWanted = styled;
+            else gone = true;   // ended in the gap: its end skipped the Clear (styleWanted was still false)
         }
         // Why it ended is unknown here (a real fight among the reasons), so ask for the restore: it arms only if our
         // cast style is what stands on a controller, and a different controller next tick just drops it.
-        if (styled && gone) CombatStyle::ClearSubstrateCast(a_follower, true);
+        if (styled && gone) CombatStyle::ClearSubstrateCast(a_follower, seq, true);
         spdlog::info("[substrate] {:08X} WINDOW: combat style {}, backstop {:.1f} s of unpaused game time (tree-start "
                      "floor {:.1f} s + cast TTL {} ms + 2.5 s margin), cast claim ttl {} ms road=substrate-claim",
                      a_follower,
@@ -271,6 +280,7 @@ namespace MFO::APMFBridge {
 
     void ReleaseSubstrateCast(RE::FormID a_follower, const char* a_why) {
         bool styled = false;
+        std::uint64_t seq = 0;
         {
             std::scoped_lock lock(g_subMx);
             const auto it = g_pairs.find(a_follower);
@@ -279,15 +289,16 @@ namespace MFO::APMFBridge {
             spdlog::info("[substrate] {:08X} CLOSED reason=released ({}) after {} ms road=substrate-claim", a_follower,
                          a_why ? a_why : "?", MsSince(it->second.filed, Clock::now()));
             styled = it->second.styleWanted;
+            seq    = it->second.seq;
             g_pairs.erase(it);
         }
-        if (styled) CombatStyle::ClearSubstrateCast(a_follower);   // the pair's cast stance ends with it
+        if (styled) CombatStyle::ClearSubstrateCast(a_follower, seq);   // the pair's cast stance ends with it
     }
 
     void SweepSubstrateCasts() {
         // CombatStyle work collected under g_subMx, applied after it (CombatStyle has its own mutex).
-        std::vector<RE::FormID> styleClear;     // normal ends: drop the pair's bit
-        std::vector<RE::FormID> styleRestore;   // reason=real-combat: drop the bit AND restore the saved style (F2)
+        std::vector<std::pair<RE::FormID, std::uint64_t>> styleClear;     // normal ends: drop the pair's bit
+        std::vector<std::pair<RE::FormID, std::uint64_t>> styleRestore;   // reason=real-combat: AND restore (F2)
         {
         std::scoped_lock lock(g_subMx);
         if (g_pairs.empty()) return;
@@ -298,7 +309,7 @@ namespace MFO::APMFBridge {
             const RE::FormID fid = it->first;
             auto& pr = it->second;
             if (!api) {   // Harbinger gone mid-session (cannot happen in practice): nothing to ask, forget the pair
-                if (pr.styleWanted) styleClear.push_back(fid);
+                if (pr.styleWanted) styleClear.emplace_back(fid, pr.seq);
                 it = g_pairs.erase(it);
                 continue;
             }
@@ -340,7 +351,7 @@ namespace MFO::APMFBridge {
                              "road=substrate-claim", fid,
                              pr.styleWanted ? "; the cast stance ends and the saved engine style is restored" : "",
                              MsSince(pr.filed, now), pr.fired ? ", fired" : ", not fired");
-                if (pr.styleWanted) styleRestore.push_back(fid);   // review F2: the real fight keeps this controller
+                if (pr.styleWanted) styleRestore.emplace_back(fid, pr.seq);   // review F2: the real fight keeps this controller
                 it = g_pairs.erase(it);
                 continue;
             }
@@ -370,7 +381,7 @@ namespace MFO::APMFBridge {
                              "road=substrate-claim", fid, pr.closeReason ? pr.closeReason : "?",
                              MsSince(pr.filed, now), SpellName(pr.spell), pr.spell, pr.target, pr.site,
                              pr.held ? ", was held" : "", pr.claimed ? ", was claimed" : "");
-                if (pr.styleWanted) styleClear.push_back(fid);
+                if (pr.styleWanted) styleClear.emplace_back(fid, pr.seq);
                 it = g_pairs.erase(it);
                 continue;
             }
@@ -381,15 +392,15 @@ namespace MFO::APMFBridge {
                               "saw it close -- both claims released ({} ({:08X}) at {:08X}, {}) "
                               "road=substrate-claim", fid, unpausedAge, MsSince(pr.filed, now), kBackstopSec,
                               SpellName(pr.spell), pr.spell, pr.target, pr.site);
-                if (pr.styleWanted) styleClear.push_back(fid);
+                if (pr.styleWanted) styleClear.emplace_back(fid, pr.seq);
                 it = g_pairs.erase(it);
                 continue;
             }
             ++it;
         }
         }   // g_subMx
-        for (const RE::FormID fid : styleClear) CombatStyle::ClearSubstrateCast(fid);          // ends with the pair
-        for (const RE::FormID fid : styleRestore) CombatStyle::ClearSubstrateCast(fid, true);   // F2: and restore
+        for (const auto& [fid, seq] : styleClear) CombatStyle::ClearSubstrateCast(fid, seq);          // ends with the pair
+        for (const auto& [fid, seq] : styleRestore) CombatStyle::ClearSubstrateCast(fid, seq, true);   // F2: and restore
     }
 
     void ClearSubstrateCasts() {
