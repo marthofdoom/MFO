@@ -120,7 +120,7 @@ namespace MFO::APMFBridge {
         std::uint32_t TravelFlags(const APMF_API::APMF_API_v24* a_api) {
             const int gait = std::clamp(Config::g_travelGait.load(), 0, 3);
             std::uint32_t f = APMF_API::kTravel_SpeedSet | ((static_cast<std::uint32_t>(gait) << 3) & APMF_API::kTravel_SpeedMask);
-            if (kCrossCellsAbi != 0 && a_api->abiVersion >= kCrossCellsAbi) f |= kTravelCrossCellsPending;
+            if constexpr (kCrossCellsAbi != 0) { if (a_api->abiVersion >= kCrossCellsAbi) f |= kTravelCrossCellsPending; }
             return f;
         }
 
@@ -354,7 +354,7 @@ namespace MFO::APMFBridge {
 
     bool ErrandCrossCellsSupported() {
         auto* api = ErrandApi();
-        return api && kCrossCellsAbi != 0 && api->abiVersion >= kCrossCellsAbi;
+        if constexpr (kCrossCellsAbi == 0) { (void)api; return false; } else { return api && api->abiVersion >= kCrossCellsAbi; }
     }
 
     bool HoldErrand(RE::FormID a_follower) {

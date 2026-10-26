@@ -1729,6 +1729,70 @@ namespace MFO::Logistics::Errand {
                          fid, r.followerName, a_why, kWalkRetries);
             return stopOver(a_why, false, a_cooldown);
         };
+        // mfo-272 NPC-FIRST (marth 2026-10-25: "locating the NPC and navigating to them, if the shop is supposed to be open they will have the
+        // dialogue"): the shop's vendor is not where this walk ended (or he left the loaded area). Locate him NOW (Vendors::Locate: wherever the
+        // engine has him, loaded or not) and re-aim the SAME ch.19 claim at him: straight at the vendor when he is loaded where the follower is
+        // (or both in the exterior grid), else a CELL leg into his interior (the engine paths the load doors natively; the ref leg to him follows
+        // on arrival), else a REF leg to the vendor actor. TRUE = re-aimed (the walk goes on); FALSE = not located / not reachable / the cap is
+        // spent (said here; the caller's unattended retries decide). Never a chest trade (marth: the chest stays the chest-placed rule only).
+        auto relocate = [&](const char* a_why) -> bool {
+            constexpr int kMaxRelocations = 3;
+            if (r.cur >= r.stops.size() || r.stops[r.cur].kind != StopKind::Shop) return false;
+            if (r.relocations >= kMaxRelocations) {
+                spdlog::warn("[errand] {:08X} '{}': {} -- the vendor of '{}' was already re-located {} time(s); no further re-aim", fid, r.followerName, a_why,
+                             Trip::Label(r.stops, r.cur), kMaxRelocations);
+                return false;
+            }
+            Vendors::Where w;
+            const auto ans = Vendors::Locate(r.faction, w);
+            if (ans != Vendors::Answer::Located) {
+                spdlog::warn("[errand] {:08X} '{}': {} -- the vendor of '{}' (faction {:08X}) could NOT be located: {} (members {}, dead {}, disabled {})", fid,
+                             r.followerName, a_why, Trip::Label(r.stops, r.cur), r.faction, Vendors::AnswerName(ans), w.members, w.dead, w.disabled);
+                return false;
+            }
+            auto* townLoc = r.town ? RE::TESForm::LookupByID<RE::BGSLocation>(r.town) : nullptr;
+            if (w.asleep || (townLoc && w.town != townLoc)) {
+                spdlog::warn("[errand] {:08X} '{}': {} -- the vendor of '{}' is {} ({})", fid, r.followerName, a_why, Trip::Label(r.stops, r.cur),
+                             w.asleep ? "ASLEEP" : "NOT IN THIS TOWN", Vendors::Describe(w));
+                return false;
+            }
+            auto* fc = a_follower->GetParentCell();
+            if (!fc) return false;
+            DestKind k = DestKind::VendorActor;
+            RE::FormID dest = w.actor;
+            float rad = kVendorRadius;
+            if (w.loaded && (w.cell == fc->GetFormID() || (!w.interior && !fc->IsInteriorCell()))) {
+                // straight to him
+            } else if (w.interior && !APMFBridge::ErrandCrossCellsSupported()) {
+                if (w.cell == fc->GetFormID()) return false;   // he is in the vendor's cell and the vendor is not loaded there: nothing to re-aim
+                k = DestKind::Cell; dest = w.cell; rad = 0.0f;
+            } else {
+                k = DestKind::Ref;
+            }
+            if (k == r.destKind && dest == r.destForm) return false;   // already walking there: re-aiming at the same spot is no new route
+            ++r.relocations;
+            APMFBridge::ReleaseErrandIdle(fid);   // a stand-still hold filed for an unattended wait must not pin the walk
+            r.destKind = k; r.destForm = dest; r.destRad = rad;
+            r.vendor = k == DestKind::VendorActor ? dest : 0u;
+            r.vendorName = w.name;
+            r.stops[r.cur].vendorActor = w.actor;
+            r.retryWait = r.stepOut = r.stepOutOk = r.needStepOut = false; r.retryAt = {};
+            LogRepointFrom(fid, "errand re-point");
+            bool walk = APMFBridge::RepointErrandTravel(fid, dest, rad);
+            if (!walk) walk = APMFBridge::ClaimErrandTravel(fid, dest, rad);
+            r.startClk = r.lastTickClk = Scheduler::ServiceClock();   // the 240 s cap is per attempt (run 4 F3)
+            if (!walk) {
+                spdlog::error("[errand] {:08X} '{}': VENDOR LOCATED ({}) but the walk to {:08X} could NOT be declared (Harbinger refused the ch.19 Repoint and a new claim)",
+                              fid, r.followerName, Vendors::Describe(w), dest);
+                return false;
+            }
+            SyncCur(r);
+            spdlog::warn("[errand] {:08X} '{}': {} -- VENDOR LOCATED: {} -> walking to {} {:08X} (re-aim {}/{}, stop {})", fid, r.followerName, a_why,
+                         Vendors::Describe(w), k == DestKind::Cell ? "his CELL" : k == DestKind::Ref ? "him (ref leg)" : "him", dest, r.relocations, kMaxRelocations,
+                         Trip::Label(r.stops, r.cur));
+            Store(fid, r);
+            return true;
+        };
         // R8: the smith stop's work: the Smith module's steps (its own clocks, the ch.9 station claim, the temper apply).
         if (r.phase == Phase::Smithing) {
             const auto st = Smith::Step(a_follower, a_now);
@@ -1795,6 +1859,11 @@ namespace MFO::Logistics::Errand {
         // R5: a LATER stop's vendor may be unloaded while he walks there (he is in the previous shop's interior with the player): the
         // ch.19 leg decides that walk (an unreachable one ends DEST-GONE / STUCK and the stop is skipped). Phase 1 / the first stop: unchanged.
         const bool walkingToLaterStop = r.cur > 0 && r.phase == Phase::Walking && vendor && !vendor->IsDead() && !vendor->IsDisabled();
+        // mfo-272: the vendor walked out of the loaded area while he walks to him (into his back room, home, a neighbouring cell): he is
+        // LOCATED again and the walk re-aimed at where he is now, instead of the stop failing as "gone".
+        if (r.vendor && r.phase == Phase::Walking && !walkingToLaterStop && vendor && !vendor->IsDead() && !vendor->IsDisabled() && !vendor->Is3DLoaded() &&
+            relocate("the vendor left the loaded area during the walk"))
+            return true;
         if (r.vendor && !(walkingToLaterStop && !vendor->Is3DLoaded()) &&
             (!vendor || vendor->IsDead() || vendor->IsDisabled() || !vendor->Is3DLoaded() || APMFBridge::InCombat(vendor)))
             return stopOver("the vendor is gone, dead, unloaded or in combat", false, kFailCooldownSec);
@@ -1944,7 +2013,14 @@ namespace MFO::Logistics::Errand {
                             return true;
                         }
                         if (kind == StopKind::Temple || (kind == StopKind::Inn && !r.order)) return beginWork();
-                        auto va = FindVendorActor(a_follower, r.faction, true);   // run 4: the unattended re-check also reads the all-cell scan
+                        // mfo-272: the vendor NPC the plan located (the stop's vendorActor) first, when he stands loaded and awake where the walk
+                        // ended; then any member of the faction here (FindVendorActor, membership-based since mfo-272).
+                        RE::NiPointer<RE::Actor> va;
+                        if (kind == StopKind::Shop && r.cur < r.stops.size() && r.stops[r.cur].vendorActor)
+                            va = Vendors::LoadedVendor(r.stops[r.cur].vendorActor, r.faction, a_follower);
+                        if (!va) va = FindVendorActor(a_follower, r.faction, true);   // run 4: the unattended re-check also reads the all-cell scan
+                        // mfo-272 NPC-FIRST: no vendor where the walk ended -> where IS he now? Re-aim the walk at him (relocate says why not).
+                        if (!va && kind == StopKind::Shop && relocate("no vendor where the walk to the shop ended")) return true;
                         if (!va && kind == StopKind::Inn) {
                             spdlog::info("[errand] {:08X}: the inn has no innkeeper in his cell -- no food bought, the stop is rest only", fid);
                             return beginWork();
@@ -1988,12 +2064,18 @@ namespace MFO::Logistics::Errand {
                                          "({} faction member(s) seen{}{})", fid, r.followerName, r.vendorName, r.faction, cal0 ? cal0->GetHour() : -1.0f, seenN,
                                          seenList.empty() ? "" : ": ", seenList);
                             PostVendorScan(r.faction);   // lands before the next re-check
+                            // mfo-272 (marth: "claims hold for the duration of the mfo event"): a REF leg's arrival ENDS the leg and Harbinger drops its
+                            // ch.9 offer, so his framework's own package came back for the whole wait (2026-10-25: Sven's SFF sandbox FE391803 ran for
+                            // the 54 s of 'Warmaidens' re-checks). The ch.1 hold keeps him standing at the stop until the walk re-aims or the stop ends.
+                            APMFBridge::HoldErrand(fid);
                             if (retryWalk("the shop is unattended (no vendor actor in the loaded shop)", false)) return true;
                             return giveUp("the shop is unattended (no vendor actor in the loaded shop)", kFailCooldownSec);
                         }
                         r.vendor = va->GetFormID();
                         r.vendorName = NameOf(va.get());
                         r.destKind = DestKind::VendorActor; r.destForm = r.vendor; r.destRad = kVendorRadius;
+                        if (r.cur < r.stops.size()) r.stops[r.cur].vendorActor = r.vendor;
+                        APMFBridge::ReleaseErrandIdle(fid);   // mfo-272: an unattended wait's ch.1 hold must not pin the walk on to the vendor (no-op without one)
                         APMFBridge::RepointErrandTravel(fid, r.vendor, kVendorRadius);
                         spdlog::info("[errand] {:08X}: reached the shop; walking on to its vendor '{}' ({:08X})", fid, r.vendorName, r.vendor);
                     } else if (pleg.state == APMF_API::kLeg_Blocked) {
