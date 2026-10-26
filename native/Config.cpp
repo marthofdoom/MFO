@@ -128,6 +128,7 @@ namespace MFO::Config {
             // TOWN ERRANDS (R1a): a chain of its own -- the main chain below is already long enough that one more
             // `else if` per key risks MSVC's nested-block limit (C1061).
             if      (a_key == "bTownErrands")       { setB(g_townErrands);   return; }   // default ON; OFF = the old proximity trade
+            else if (a_key == "bProximityTrading")  { setB(g_proximityTrading); return; }   // default OFF; INI-only
             else if (a_key == "bFollowerCatchUp")   { setB(g_followerCatchUp); return; }   // default ON; INI-only
             else if (a_key == "bTownToasts")        { setB(g_townToasts);    return; }   // default OFF; HUD lines for errand events
             else if (a_key == "iErrandMinSellGold") { setI(g_errandMinSellGold, 0, 100000);    return; }
@@ -282,6 +283,13 @@ namespace MFO::Config {
                 else
                     g_travelGait.store(GaitEngineFromSetting(std::clamp(i, 0, 3)));
             }
+            else if (a_key == "iErrandGait") {   // mfo-273: the town-errand walk gait, same scale + mapping as iTravelGait
+                if (!ParseInt(a_val, i))
+                    spdlog::warn("[config] {}: unparseable value for {} ('{}') -- keeping default",
+                                 a_src, a_key, a_val);
+                else
+                    g_errandGait.store(GaitEngineFromSetting(std::clamp(i, 0, 3)));
+            }
             else if (a_key == "fLeashMin")          setF(g_leashMin,       64.0f, 8192.0f);
             else if (a_key == "fLeashMax")          setF(g_leashMax,       64.0f, 8192.0f);
             else if (a_key == "fHealApproachRadius") setF(g_healApproachRadius, 64.0f, 2048.0f);
@@ -416,6 +424,7 @@ namespace MFO::Config {
             g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
             g_townErrands        = true;    // R1a town errands -- ON (features ship on)
             g_followerCatchUp    = true;    // left-behind followers are moved to the player after a world transition -- ON
+            g_proximityTrading   = false;   // the pre-town proximity trade -- OFF (marth 2026-10-26), INI-only
             g_townToasts         = false;   // errand HUD toasts -- OFF by default (marth 2026-10-19)
             g_errandMinSellGold  = 100;
             g_errandMinPurse     = 200;
@@ -454,6 +463,7 @@ namespace MFO::Config {
             g_excursionMax       = 60.0f;
             g_navmeshGate        = 300.0f;
             g_travelGait         = GaitEngineFromSetting(2);   // MCM "Run" = engine Jog (1), see GaitEngineFromSetting
+            g_errandGait         = GaitEngineFromSetting(2);   // mfo-273: the town-errand walk gait, same default as the loot walk
             g_leashMin           = 512.0f;
             g_leashMax           = 4000.0f;
             g_healApproachRadius = 384.0f;
@@ -521,7 +531,7 @@ namespace MFO::Config {
             { "bMeoAwareGems", "0" },
             { "bMagicLoadout", "1" },          { "bMageDaggersOnly", "1" },
             { "bBeastHeadFix", "1" },
-            { "bRapportToasts", "1" },         { "iTravelGait", "2" },
+            { "bRapportToasts", "1" },         { "iTravelGait", "2" },    { "iErrandGait", "2" },
             { "iMinPotionMag", "0" },
             { "fTravelRadius", "4096.000000" },{ "fBatchLinger", "1.500000" },
             { "fLooseAcquireDist", "300.000000" },
@@ -879,6 +889,8 @@ namespace MFO::Config {
         ReadFile(kMCMPath);    // MCM Helper's store wins
 
         spdlog::set_level(g_enableLogging ? spdlog::level::info : spdlog::level::warn);
+        spdlog::info("[config] bProximityTrading = {} (the pre-town proximity trade: a follower trading with a vendor he merely stands near; town errands are unaffected)",
+                     g_proximityTrading.load() ? 1 : 0);
 
         // Config -> engine-record derived state, refreshed by EVERY read so the
         // MCM-close re-read (Diagnostics' MenuSink) applies it live without each

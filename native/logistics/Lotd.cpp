@@ -1176,7 +1176,7 @@ namespace MFO::Lotd {
             case APMF_API::kLeg_Blocked:         return "BLOCKED";
             case APMF_API::kLeg_CombatCancelled: return "combat";
             case APMF_API::kLeg_DestGone:        return "crate gone";
-            case APMF_API::kLeg_StuckTimeout:    return "stuck (2 min)";
+            case APMF_API::kLeg_StuckTimeout:    return "stuck";
             case APMF_API::kLeg_ActorGone:       return "follower gone";
             case APMF_API::kLeg_Failed:          return "FAILED";
             case APMF_API::kLeg_Released:        return "released";

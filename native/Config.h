@@ -758,8 +758,8 @@ namespace MFO::Config {
     // (ch.19 + ch.12 idle v2 + GetIdleState, ABI >= 24) present the follower no longer trades INSTANTLY
     // with any vendor near him: when the player is in a City / Town / Settlement and he has a reason
     // (junk to sell, a supply need, an affordable upgrade) he WALKS to an open shop's vendor, plays the
-    // talk / give / take idles, trades, and rejoins. Harbinger absent = the old proximity trade, unchanged.
-    //   bTownErrands: master switch for the above (default ON). OFF = the old proximity trade.
+    // talk / give / take idles, trades, and rejoins. Harbinger absent = no trade, unless bProximityTrading = 1 (INI-only, off by default) brings back the old proximity trade.
+    //   bTownErrands: master switch for the above (default ON). OFF = no trade, unless bProximityTrading = 1 (INI-only, off by default) brings back the old proximity trade.
     //   iErrandMinSellGold: the sellable rows a candidate vendor accepts must be worth at least this
     //     much (capped by that chest's last-seen gold) for a SELL errand. INI-only.
     //   iErrandMinPurse: the purse needed for an UPGRADE errand (gear / apparel / tome wishes). INI-only.
@@ -767,6 +767,10 @@ namespace MFO::Config {
     //   fErrandCooldownSec: real seconds between one follower's errands. INI-only.
     //   fErrandMaxGameMin: an errand older than this many GAME minutes ends (REJOIN). INI-only.
     inline std::atomic<bool>  g_townErrands{ true };
+    //   bProximityTrading (INI-only, no MCM control; marth 2026-10-26 "Proximity Trading stays as an ini switch", default OFF): the PRE-TOWN
+    //   proximity trade -- a follower trading because he happens to stand near a vendor (Service.cpp's idle branch calling EconomyProbe when the
+    //   errand planner declined). Gates ONLY that call; town errand trades are unchanged and still follow bEconomy / bTownErrands.
+    inline std::atomic<bool>  g_proximityTrading{ false };
     //   bFollowerCatchUp: a follower the engine left behind on a world transition (fast travel / load door) is moved to the
     //     player ~3 s after it (FollowerCatchUp.cpp). Default ON; INI-only.
     inline std::atomic<bool>  g_followerCatchUp{ true };
@@ -997,6 +1001,11 @@ namespace MFO::Config {
     // Default: MCM "Run" (stored 2) = engine Jog (1). Engine Run is no longer
     // reachable from the MCM.
     inline std::atomic<int>   g_travelGait{ 1 };   // engine Jog = MCM "Run" (the default)
+    // mfo-273 (marth 2026-10-26: "town walking speed, separate from regular looting"): the TOWN ERRAND walk gait, iErrandGait. Same MCM option scale
+    // (0=Walk 1=Jog 2=Run) and the same GaitEngineFromSetting mapping as iTravelGait; this atomic is the ENGINE byte too. Read by the errand ch.19
+    // claims (apmf/ErrandClaims.cpp TravelFlags) ONLY; looting keeps g_travelGait. Default = the loot default (MCM "Run" = engine Jog) so nothing
+    // changes until it is set.
+    inline std::atomic<int>   g_errandGait{ 1 };
 
     // NAVMESH GATE (units). Before dispatching a walk, MFO checks the nearest
     // navmesh vertex to the loot ref; if it's farther than this, the ref is

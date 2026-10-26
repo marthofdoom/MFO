@@ -766,10 +766,13 @@ namespace APMF_API {
     // APPEND-ONLY: never renumber a value.
     //
     // A LEG ENDS BUT THE CLAIM STANDS. APMF never releases a client's kIntent_Travel
-    // claim. When a leg ends (arrival, combat, blocked, ...) APMF drops only its own
-    // internal package offer and the claim stays live (IsClaimLive stays true) and does
-    // nothing until the client Repoints or Releases it. Read this state to learn WHY
-    // the actor stopped walking, instead of mistaking an ended leg for a package theft.
+    // claim. When a leg ends (arrival at a plain reference, combat, destination gone, ...)
+    // APMF drops only its own internal package offer and the claim stays live (IsClaimLive
+    // stays true) and does nothing until the client Repoints or Releases it. Since
+    // 2026-10-26 a BLOCKED or STUCK end KEEPS the offer while the claim stands (the actor
+    // is not handed back to his own package); a Repoint starts a new leg, a Release hands
+    // him back. Read this state to learn WHY the actor stopped walking, instead of
+    // mistaking an ended leg for a package theft.
     enum TravelLegState : std::uint32_t {
         kLeg_None            = 0,   // APMF holds no ch.19 state for this actor (never claimed since the
                                     //   last load, or ch.19 is not installed)
@@ -785,7 +788,9 @@ namespace APMF_API {
         kLeg_CombatCancelled = 5,   // the actor entered combat
         kLeg_DestGone        = 6,   // the destination was deleted, disabled, died during travel, or (a
                                     //   cell) no longer resolves
-        kLeg_StuckTimeout    = 7,   // the 2-minute safety net elapsed with none of the above
+        kLeg_StuckTimeout    = 7,   // the 2-minute safety net elapsed with none of the above, OR (since
+                                    //   2026-10-26) the engine ended a reference leg's walk outside the
+                                    //   radius and a restart was spent or futile (about 1 s after it)
         kLeg_ActorGone       = 8,   // the actor unloaded, died, or lost its 3D
         kLeg_Failed          = 9,   // the leg could not start or be re-pointed (a destination that is not
                                     //   a reference or a cell, a zero form or a bad point on a Repoint, all

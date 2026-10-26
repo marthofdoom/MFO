@@ -442,9 +442,21 @@ namespace MFO::Logistics::Errand::Sim {
         double dist = 0.0;
         RE::NiPoint3 destPos = r.lastPos;
         bool havePos = false;
-        if (r.destKind == DestKind::VendorActor) {
-            if (auto* v = RE::TESForm::LookupByID<RE::Actor>(r.destForm)) { destPos = v->GetPosition(); havePos = true; }
-        } else if (r.destKind == DestKind::Ref) {
+        // mfo-273 item C (the Sven field log: "est 30.5 game-min" from a 27494 u line between an exterior position and an interior vendor):
+        // a distance is measured ONLY inside one space. He is ALREADY THERE when his parent cell is the stop's / the vendor's cell; when the
+        // destination is in another space (an interior vs an exterior, or two worldspaces) no line exists, the entry-door branch below
+        // (door + kInteriorWalk) is the estimate.
+        RE::TESObjectCELL* destCell = nullptr;
+        if (r.destKind == DestKind::Cell) {
+            if (auto* c = RE::TESForm::LookupByID<RE::TESObjectCELL>(r.destForm)) destCell = c;
+        } else if (auto* d = RE::TESForm::LookupByID<RE::TESObjectREFR>(r.destForm)) {
+            destCell = d->GetParentCell();
+        }
+        auto* here = f->GetParentCell();
+        const bool alreadyThere = here && destCell && here == destCell;
+        const bool sameSpace = alreadyThere || (here && destCell && !here->IsInteriorCell() && !destCell->IsInteriorCell() &&
+                                                 f->GetWorldspace() == destCell->GetRuntimeData().worldSpace);
+        if (sameSpace && r.destKind != DestKind::Cell) {
             if (auto* d = RE::TESForm::LookupByID<RE::TESObjectREFR>(r.destForm)) { destPos = d->GetPosition(); havePos = true; }
         }
         if (havePos) {
@@ -456,7 +468,9 @@ namespace MFO::Logistics::Errand::Sim {
         const double walk = WalkDays(dist);
         const double now = GameDays();
         r.tEnter = now;
-        r.tArrive = a_start.arrived ? now : now + walk;
+        if (alreadyThere && !a_start.arrived)
+            spdlog::info("[errand] {:08X} '{}': already in the destination's cell {:08X} -- arrived (no walk estimate)", r.follower, r.followerName, here->GetFormID());
+        r.tArrive = (a_start.arrived || alreadyThere) ? now : now + walk;
         r.tTradeEnd = r.tArrive + WorkDays(r.stops, r.cur);
         r.tReturn = r.tTradeEnd + walk;
         r.stage = r.reported ? Stage::Return : (now >= r.tArrive ? Stage::Trade : Stage::Out);
