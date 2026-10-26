@@ -43,6 +43,11 @@ namespace MFO::TradeBridge {
             bool                 planBuyRan = false;
             std::int32_t         stockLines = 0, stockLive = 0, stockExcluded = 0, stockClassified = 0, stockFoodCands = 0;
             std::int32_t         foodQuota = 0, foodPlanned = 0;
+            // MISSED BUY (2026-10-26): PlanBuy's classified stock LINES by NeedCat kind (0..4 = the supply kinds, others pooled in [5]) and the potion
+            // lines the IGNORE-LOW-POWER floor dropped. Session-only: logged, and filed per chest as the stock evidence (g_chestStock).
+            std::int32_t         kindLines[6] = {};
+            std::int32_t         floorDropped = 0;
+            bool                 poorKind[5] = {};   // a supply line of this kind was skipped / clipped for lack of purse: a quota left over is the PURSE's, not the stock's
         };
 
         std::mutex                                    g_mtx;
@@ -62,6 +67,10 @@ namespace MFO::TradeBridge {
         // (the restock refilled the chest, nothing here saw it), so SkipTrade's gold-based skip and LastSeenChestGold no longer trust it.
         struct ChestRead { std::int32_t gold = 0; float day = 0.0f; bool staleLogged = false; };
         std::unordered_map<RE::FormID, ChestRead>        g_chestGold;
+        // MISSED BUY: each vendor chest's supply stock as the LAST PlanBuy there classified it (stock LINES per kind 0..4), with the game day.
+        // Positive evidence for Trip::Plan (a chest that showed a magicka potion once stocks them); older than a restock = unknown.
+        struct StockRead { std::int32_t lines[5] = {}; float day = 0.0f; };
+        std::unordered_map<RE::FormID, StockRead>        g_chestStock;
         std::unordered_map<std::uint64_t, EmptyMemo>     g_emptyMemo;
         struct StaticSkip { std::uint64_t reason = 0; float day = 0.0f; };
         std::unordered_map<std::uint64_t, StaticSkip>    g_staticSkip;   // pair -> skip (b): the reason sig + the game day it began
@@ -108,7 +117,7 @@ namespace MFO::TradeBridge {
         // Which buy category is this stock form, if any? -1 = not a supply the
         // gambits ask for. Classification is catalog-first (the Synthesis patcher
         // read the real records), so it needs a current mfo_items.json.
-        std::int32_t ClassifyBuy(RE::TESForm* a_form, const BuyThresholds& b) {
+        std::int32_t ClassifyBuy(RE::TESForm* a_form, const BuyThresholds& b, bool* a_floorDropped = nullptr) {
             if (!a_form) return -1;
             const auto id = a_form->GetFormID();
             (void)id;
@@ -128,8 +137,10 @@ namespace MFO::TradeBridge {
                 // potions, so buying them would contradict the rule. Same floor.
                 if (const float f = Logistics::PotionLootFloor();
                     f > 0.0f && Logistics::PotionMagnitude(alc) > 0.0f &&
-                    Logistics::PotionMagnitude(alc) < f)
+                    Logistics::PotionMagnitude(alc) < f) {
+                    if (a_floorDropped) *a_floorDropped = true;
                     return -1;
+                }
                 switch (rv) {
                     case RE::ActorValue::kHealth:  return NeedCat::kPotHealth;
                     case RE::ActorValue::kStamina: return NeedCat::kPotStamina;
@@ -281,9 +292,12 @@ namespace MFO::TradeBridge {
                 if (!f || avail <= 0) continue;
                 ++o->stockLive;
                 if (Catalog::IsExcluded(f->GetFormID())) { ++o->stockExcluded; continue; }
-                const int kind = ClassifyBuy(f, b);
+                bool floorDropped = false;
+                const int kind = ClassifyBuy(f, b, &floorDropped);
+                if (floorDropped) ++o->floorDropped;
                 if (kind < 0) continue;
                 ++o->stockClassified;
+                ++o->kindLines[kind >= 0 && kind <= NeedCat::kBolts ? kind : 5];
                 if (kind == NeedCat::kFood) ++o->stockFoodCands;
                 const int baseVal = BaseValue(f);
                 if (baseVal <= 0) continue;   // free/valueless stock isn't a real buy
@@ -299,13 +313,13 @@ namespace MFO::TradeBridge {
                 std::sort(sup.begin(), sup.end(),
                           [](const Cand& a, const Cand& b) { return a.value > b.value; });
                 for (const auto& c : sup) {
-                    if (o->budget < c.value) continue;   // can't afford even one
                     NeedCat* need = nullptr;
                     for (auto& n : o->needs) if (n.kind == c.kind && n.quota > 0) { need = &n; break; }
+                    if (o->budget < c.value) { if (need && c.kind >= 0 && c.kind < 5) o->poorKind[c.kind] = true; continue; }   // can't afford even one
                     if (!need) continue;
                     int qty = c.avail;
                     if (qty > need->quota)         qty = need->quota;
-                    if (qty > o->budget / c.value) qty = o->budget / c.value;
+                    if (qty > o->budget / c.value) { qty = o->budget / c.value; if (c.kind >= 0 && c.kind < 5) o->poorKind[c.kind] = true; }
                     if (qty <= 0) continue;
                     plan[c.idx] += qty;
                     need->quota -= qty;
@@ -701,6 +715,17 @@ namespace MFO::TradeBridge {
                 // Store what the chest holds NOW. A probe moves no gold (psc `if !probe`), so it keeps the read.
                 g_chestGold[o.chestId] = ChestRead{ postTradeGold, o.daysAt, false };
                 g_outcomes[o.followerId] = TradeOutcome{ false, a_soldCount, a_soldValue, a_boughtCount, a_spent };
+                if (o.planBuyRan) {   // MISSED BUY: file what this chest's stock showed (positive evidence for the next trip plan)
+                    StockRead sr;
+                    for (int k = 0; k < 5; ++k) sr.lines[k] = o.kindLines[k];
+                    sr.day = o.daysAt;
+                    g_chestStock[o.chestId] = sr;
+                }
+                if (!o.probeOnly) {   // MISSED BUY: the supply quota PlanBuy left unfilled for want of STOCK (not of purse); a real trade only
+                    for (const auto& n : o.needs)
+                        if (n.kind >= 0 && n.kind <= NeedCat::kBolts && n.quota > 0 && !o.poorKind[n.kind])
+                            g_outcomes[o.followerId].unfilled.push_back(n);
+                }
                 if (!o.probeOnly) {   // MISSED SELLS: replay Papyrus's sell loop (budget = the chest's gold after the buy) to name the rows gold could not pay
                     std::int64_t budget = static_cast<std::int64_t>(a_vendorGold) + std::max(0, a_spent);
                     std::int64_t repValue = 0, repCount = 0;
@@ -753,6 +778,10 @@ namespace MFO::TradeBridge {
                          postTradeGold, verb, a_soldCount, a_soldValue, a_boughtCount, a_spent,
                          o.sell.size(), o.needs.size(), o.budget + o.buySpent,   // original purse
                          offered, o.buyPlan);
+            if (o.planBuyRan)   // MISSED BUY (diagnosis): what PlanBuy classified, by kind, and what the potion floor dropped
+                spdlog::info("[econ] {:08X} stock classified: health {} / stamina {} / magicka {} / arrows {} / bolts {} / other {} line(s); {} potion line(s) dropped by the low-power floor ({:.0f})",
+                             fol ? fol->GetFormID() : 0u, o.kindLines[0], o.kindLines[1], o.kindLines[2], o.kindLines[3], o.kindLines[4], o.kindLines[5],
+                             o.floorDropped, Logistics::PotionLootFloor());
             if (o.buy.wantFood || o.planBuyRan) {   // F5: the food diagnostic (session-only tallies)
                 if (!o.planBuyRan)
                     spdlog::info("[econ] {:08X} stock: PlanBuy never called (chest listed 0 forms)", fol ? fol->GetFormID() : 0u);
@@ -954,6 +983,16 @@ namespace MFO::TradeBridge {
         return it->second.gold;
     }
 
+    std::int32_t LastSeenStockLines(RE::FormID a_chest, std::int32_t a_kind) {
+        if (a_kind < 0 || a_kind > 4) return -1;
+        std::scoped_lock lk(g_mtx);
+        const auto it = g_chestStock.find(a_chest);
+        if (it == g_chestStock.end()) return -1;
+        auto* cal = RE::Calendar::GetSingleton();
+        if (cal && cal->GetDaysPassed() >= it->second.day + RestockDays()) return -1;   // older than a restock = unknown
+        return it->second.lines[a_kind];
+    }
+
     bool HasLiveOrder(RE::FormID a_follower) {
         std::scoped_lock lk(g_mtx);
         for (const auto& [tok, o] : g_orders)
@@ -980,6 +1019,7 @@ namespace MFO::TradeBridge {
         g_orders.clear();
         g_outcomes.clear();
         g_chestGold.clear();
+        g_chestStock.clear();
         g_emptyMemo.clear();
         g_staticSkip.clear();
         Logistics::Pricing::Clear();   // R2: the price cache is session-only

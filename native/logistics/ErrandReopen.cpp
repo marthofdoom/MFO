@@ -19,6 +19,10 @@
 //     the shop + the unsold rows; Poll re-checks the chest's gold through TradeBridge::LastSeenChestGold (the planner's own safe read; a native chest read
 //     is forbidden, ENGINE_NOTES 0.37, so a player's own sale to that vendor is invisible here) and, when it covers a row or the vendor's restock interval
 //     (iDaysToRespawnVendor) has passed, plans the shop again through the same path as a reopened one.
+//   * MISSED BUY (2026-10-26): a reported trade whose supply quota the vendor's STOCK could not fill (Auri's magicka potions at Ri'saad: a VEND
+//     keyword says what a vendor BUYS, not what it sells). NoteUnfilled logs "MISSED BUY <kind> <remaining>" and files the remainder + a template of the
+//     stop's order; Poll plans it to the next OPEN candidate of the plan whose VEND carries the kind (stock-evidence ones first, the nearest), never the
+//     same shop twice for a kind, at most kMaxBuyReplans times per commit, as an ordinary REOPEN-style trip (the inn last). No new poller.
 //   * LATE (b): a sell candidate that appeared mid-trip and is in NO stop's order (a gem hold released after the plan). NoteLate files it; at the inn stage /
 //     the trip-done mark the caller evaluates the recorded OPEN shops again (TakeLate / PlanLate) for a shop whose VEND buys it. On-screen only: the
 //     evaluation reads his inventory, which MFO never does for an unloaded follower.
@@ -60,6 +64,12 @@ namespace MFO::Logistics::Errand::Reopen {
                 float         day = 0.0f;        // the game day of that trade
             };
             std::vector<Gold>          gold;
+            // MISSED BUY: the remainder still wanted per supply kind (quota = units), a template of the last missing stop's order (purse, quote, ids),
+            // the (kind, shop key) pairs already tried, and the re-plans spent this commit.
+            std::vector<TradeBridge::NeedCat>                 missed;
+            ErrandPlanned                                     missedTmpl;
+            std::vector<std::pair<std::int32_t, RE::FormID>>  tried;
+            int                                               buyReplans = 0;
             // MISSED SELLS (b): the plan's OPEN shops (re-evaluated for a late item) and the late items.
             std::vector<Trip::Cand>    openShops;
             std::vector<RE::FormID>    late;
@@ -67,6 +77,17 @@ namespace MFO::Logistics::Errand::Reopen {
             int                        lateTries = 0;
             std::chrono::steady_clock::time_point lateNext{};
         };
+        constexpr int kMaxBuyReplans = 2;   // MISSED BUY re-plans per commit (a third shop for one miss is a second trip too many in one visit)
+        const char* BuyKindName(std::int32_t a_k) {
+            switch (a_k) {
+                case TradeBridge::NeedCat::kPotHealth:  return "health potion";
+                case TradeBridge::NeedCat::kPotStamina: return "stamina potion";
+                case TradeBridge::NeedCat::kPotMagicka: return "magicka potion";
+                case TradeBridge::NeedCat::kArrows:     return "arrows";
+                case TradeBridge::NeedCat::kBolts:      return "bolts";
+            }
+            return "supply";
+        }
         std::mutex                                g_mx;
         std::unordered_map<RE::FormID, Watch>     g_watch;   // follower -> watch; guarded by g_mx
 
@@ -195,6 +216,43 @@ namespace MFO::Logistics::Errand::Reopen {
                      a_follower, a_stop.vendorName, a_out.unsold.size(), value, rows, a_out.chestGoldNow, need, TradeBridge::VendorRestockDays());
     }
 
+    void NoteUnfilled(RE::FormID a_follower, RE::FormID a_town, const Stop& a_stop, const ErrandPlanned* a_order,
+                      const TradeBridge::TradeOutcome& a_out) {
+        if (a_out.aborted || a_stop.kind != StopKind::Shop || !a_town || !a_order) return;
+        const RE::FormID key = a_order->vendorKey ? a_order->vendorKey : (a_stop.vendorActor ? a_stop.vendorActor : a_stop.faction);
+        std::string said;
+        {
+            std::scoped_lock lk(g_mx);
+            const auto it = g_watch.find(a_follower);
+            if (it == g_watch.end() || it->second.town != a_town) {
+                for (const auto& n : a_out.unfilled)
+                    said += std::format("{}{} {}", said.empty() ? "" : ", ", BuyKindName(n.kind), n.quota);
+                if (said.empty()) return;
+                spdlog::info("[errand] {:08X}: MISSED BUY at '{}': {} -- not re-planned (no recorded plan for this town visit: a trip restored from the save)", a_follower, a_stop.vendorName, said);
+                return;
+            }
+            auto& w = it->second;
+            // A kind this order asked for that did not come back unfilled is settled (filled, or the purse's): it leaves the watch.
+            for (const auto& n : a_order->needs) {
+                if (n.kind < 0 || n.kind > TradeBridge::NeedCat::kBolts) continue;
+                const bool open = std::any_of(a_out.unfilled.begin(), a_out.unfilled.end(), [&](const TradeBridge::NeedCat& u) { return u.kind == n.kind; });
+                if (!open) std::erase_if(w.missed, [&](const TradeBridge::NeedCat& m) { return m.kind == n.kind; });
+            }
+            for (const auto& n : a_out.unfilled) {
+                if (n.kind < 0 || n.kind > TradeBridge::NeedCat::kBolts || n.quota <= 0) continue;
+                said += std::format("{}{} {}", said.empty() ? "" : ", ", BuyKindName(n.kind), n.quota);
+                std::erase_if(w.missed, [&](const TradeBridge::NeedCat& m) { return m.kind == n.kind; });
+                w.missed.push_back(n);
+                if (std::find(w.tried.begin(), w.tried.end(), std::pair<std::int32_t, RE::FormID>{ n.kind, key }) == w.tried.end()) w.tried.emplace_back(n.kind, key);
+            }
+            if (said.empty()) return;
+            w.missedTmpl = *a_order;
+            w.lastHour = -1;   // the next Poll runs now (the hourly throttle is for closed shops)
+        }
+        spdlog::info("[errand] {:08X}: MISSED BUY at '{}': {} still wanted -- its stock could not fill the quota; the remainder is re-planned to another open shop whose VEND carries it (this visit, at most {} re-plan(s))",
+                     a_follower, a_stop.vendorName, said, kMaxBuyReplans);
+    }
+
     void DropGoldForms(RE::FormID a_follower, const std::vector<RE::FormID>& a_forms) {
         std::size_t rows = 0, entries = 0;
         {
@@ -320,9 +378,65 @@ namespace MFO::Logistics::Errand::Reopen {
                                 : std::format("{:.1f} game days since the blocked trade, past the vendor restock ({:.0f})", days - g.day, TradeBridge::VendorRestockDays()),
                          g.order.sellRows, g.order.sellValue);
         }
-        if (open.empty()) return false;
+        // MISSED BUY: the unfilled remainder goes to the nearest OPEN candidate of the plan that carries the kind, never one already tried for it;
+        // candidates showing stock evidence come before VEND-keyword-only ones. A candidate already in `open` keeps the order it has.
+        std::vector<std::pair<std::int32_t, RE::FormID>> buyServed;
+        bool buyTried = false;
+        if (!w.missed.empty() && w.buyReplans < kMaxBuyReplans && !w.openShops.empty()) {
+            buyTried = true;
+            std::unordered_map<RE::FormID, std::vector<TradeBridge::NeedCat>> byShop;   // candidate key -> the kinds it takes
+            for (const auto& m : w.missed) {
+                if (m.kind < 0 || m.kind > 31) continue;
+                const Trip::Cand* best = nullptr;
+                bool bestStock = false;
+                float bestD = 0.0f;
+                for (const auto& c : w.openShops) {
+                    if (!((c.needCarry >> m.kind) & 1u)) continue;
+                    if (std::find(w.tried.begin(), w.tried.end(), std::pair<std::int32_t, RE::FormID>{ m.kind, c.key }) != w.tried.end()) continue;
+                    if (std::any_of(open.begin(), open.end(), [&](const Trip::Cand& o) { return o.key == c.key; })) continue;
+                    auto* fac = RE::TESForm::LookupByID<RE::TESFaction>(c.faction);
+                    if (!fac || !detail::OpenAtHour(fac, hour)) continue;
+                    const bool stock = ((c.needStock >> m.kind) & 1u) != 0;
+                    const float d = c.havePos ? w.in.from.GetDistance(c.pos) : c.dist;
+                    if (!best || (stock && !bestStock) || (stock == bestStock && d < bestD)) { best = &c; bestStock = stock; bestD = d; }
+                }
+                if (best) byShop[best->key].push_back(m);
+            }
+            for (const auto& c : w.openShops) {
+                const auto it = byShop.find(c.key);
+                if (it == byShop.end()) continue;
+                ErrandPlanned o = w.missedTmpl;
+                o.vendorKey = c.key; o.faction = c.faction; o.chest = c.chest;
+                o.skipped = false;
+                o.sell.clear(); o.sellRows = 0; o.sellValue = 0;
+                o.chestGold = -1;
+                o.wishGear = o.wishApparel = o.wishTome = o.wishMaterials = false;
+                o.buy = TradeBridge::BuyThresholds{};
+                o.needs = it->second;
+                o.needKinds = 0;
+                for (const auto& n : o.needs) { o.needKinds |= 1u << n.kind; buyServed.emplace_back(n.kind, c.key); }
+                open.push_back(c);
+                openOrders.push_back(std::move(o));
+                names += (names.empty() ? "'" : ", '") + c.name + "'";
+                std::string kinds;
+                for (const auto& n : it->second) kinds += std::format("{}{} {}", kinds.empty() ? "" : ", ", BuyKindName(n.kind), n.quota);
+                spdlog::info("[errand] {:08X}: MISSED BUY ready -- '{}' ({}) is open and its VEND carries it: planning a trip for {}", a_follower, c.name, c.key, kinds);
+            }
+        }
+        if (open.empty()) {
+            if (buyTried && buyServed.empty()) {   // nobody left to re-plan to: stop asking every hour
+                std::string kinds;
+                for (const auto& n : w.missed) kinds += std::format("{}{} {}", kinds.empty() ? "" : ", ", BuyKindName(n.kind), n.quota);
+                {
+                    std::scoped_lock lk(g_mx);
+                    if (const auto it = g_watch.find(a_follower); it != g_watch.end()) it->second.missed.clear();
+                }
+                spdlog::info("[errand] {:08X}: MISSED BUY {} dropped -- no other OPEN shop of this plan carries it (or every one was tried)", a_follower, kinds);
+            }
+            return false;
+        }
         spdlog::info("[errand] {:08X}: shop(s) OPEN now (hour {:.1f}): {} -- {}, re-planning over the recorded needs", a_follower, hour, names,
-                     hoursOpened ? "closed -> open" : "gold watch");
+                     hoursOpened ? "closed -> open" : !buyServed.empty() && w.gold.empty() ? "missed buy" : "gold watch");
 
         Trip::Inputs in = w.in;
         in.follower = a_follower;
@@ -335,14 +449,18 @@ namespace MFO::Logistics::Errand::Reopen {
         if (!ok || shops.empty()) {
             {
                 std::scoped_lock lk(g_mx);
-                if (const auto it = g_watch.find(a_follower); it != g_watch.end()) EraseKeys(it->second, keys);   // no stop: nothing to do there, those shops leave the watch
+                if (const auto it = g_watch.find(a_follower); it != g_watch.end()) {
+                    EraseKeys(it->second, keys);   // no stop: nothing to do there, those shops leave the watch
+                    if (!buyServed.empty()) it->second.missed.clear();   // MISSED BUY: the planner found nothing to buy there either (purse / floor): stop asking
+                }
             }
             spdlog::info("[errand] {:08X}: the opened shop(s) {} yield NO stop over the recorded needs (nothing to sell / buy there) -- dropped from the watch, he stays", a_follower, names);
             return false;
         }
         a_out.keys = keys;
+        a_out.buyServed = std::move(buyServed);
         Assemble(std::move(shops), w.inn, a_out);
-        a_out.line = std::format("{} {} | {}", hoursOpened ? "REOPEN" : "GOLD", names, line);
+        a_out.line = std::format("{} {} | {}", hoursOpened ? "REOPEN" : !a_out.buyServed.empty() && w.gold.empty() ? "MISSED-BUY" : "GOLD", names, line);
         return true;
     }
 
@@ -351,6 +469,13 @@ namespace MFO::Logistics::Errand::Reopen {
         const auto it = g_watch.find(a_follower);
         if (it == g_watch.end()) return;
         EraseKeys(it->second, a_plan.keys);
+        if (!a_plan.buyServed.empty()) {   // MISSED BUY: the trip started -- those (kind, shop) pairs are spent, the kinds leave the watch until a trade reports them unfilled again
+            ++it->second.buyReplans;
+            for (const auto& p : a_plan.buyServed) {
+                if (std::find(it->second.tried.begin(), it->second.tried.end(), p) == it->second.tried.end()) it->second.tried.push_back(p);
+                std::erase_if(it->second.missed, [&](const TradeBridge::NeedCat& m) { return m.kind == p.first; });
+            }
+        }
     }
 
     void Retry(RE::FormID a_follower) {

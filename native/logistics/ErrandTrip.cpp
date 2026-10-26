@@ -6,8 +6,10 @@
 //      the B300 convergence penalty (kCrowdPenalty per OTHER follower whose trip is heading to that chest). A candidate whose
 //      share does not clear the phase-1 sell reason (>= iErrandMinSellGold, or carry > 80 %) hands its rows to a stop that does;
 //      once every stop is chosen, a row no visited stop owns goes to the visited stop that pays the most for it.
-//   2. NEEDS (supply gambits) go to the FIRST stop in visit order whose VEND carries the category; a need no chosen stop
-//      carries adds the nearest (least crowded) candidate that does.
+//   2. NEEDS (supply gambits) go to the FIRST stop in visit order that carries the category WITH EVIDENCE OF STOCK (Cand::needStock: a
+//      VEND keyword only says what a vendor BUYS, so for the potion kinds that is an apothecary-class list or a last-seen stock of the
+//      kind at that chest); a need no chosen stop covers adds the nearest (least crowded) candidate that does. When NO candidate shows
+//      evidence the VEND keyword alone decides, as before, and the MISSED BUY watch (ErrandReopen.cpp) re-plans a miss.
 //   3. WISHES (gear / apparel = BuyThresholds::buyGear, tomes = buyTomes) go to ONE stop each; an extra stop is added for a
 //      wish only when the purse clears iErrandMinPurse (the phase-1 wish reason).
 //   4. ORDER: nearest-neighbour from the follower, stops WITHOUT a wish first, then the wish stops ("needs first, then wishes":
@@ -269,8 +271,18 @@ namespace MFO::Logistics::Errand::Trip {
         std::uint32_t unserved = 0;
         for (int k = 0; k < 32; ++k) {
             if (!((needKinds >> k) & 1u)) continue;
-            const bool have = std::any_of(use.begin(), use.end(), [&](const Use& u) { return u.chosen && ((u.c->needCarry >> k) & 1u); });
-            if (!have && addNearest([&](int i) { return ((use[i].c->needCarry >> k) & 1u) != 0; }) < 0) unserved |= 1u << k;
+            const auto stocks = [&](int i) { return ((use[i].c->needStock >> k) & 1u) != 0; };
+            const auto carries = [&](int i) { return ((use[i].c->needCarry >> k) & 1u) != 0; };
+            bool have = false;
+            for (int i = 0; i < static_cast<int>(use.size()) && !have; ++i) have = use[i].chosen && stocks(i);
+            if (!have) have = addNearest(stocks) >= 0;
+            if (!have) {   // no candidate shows stock evidence for this kind: the VEND keyword alone decides (unproven)
+                for (int i = 0; i < static_cast<int>(use.size()) && !have; ++i) have = use[i].chosen && carries(i);
+                if (!have) have = addNearest(carries) >= 0;
+                if (!have) unserved |= 1u << k;
+                else if (k <= 2) spdlog::info("[errand] {:08X}: need kind {} has NO stock evidence at any usable candidate (no apothecary-class list, no last-seen stock) -- a VEND keyword is the only claim; a miss re-plans (MISSED BUY)",
+                                              a_in.follower, k);
+            }
         }
         // ── 3. WISHES: one stop each; a new stop only when the purse clears iErrandMinPurse ──
         auto placeWish = [&](bool a_want, bool Cand::* a_carry, bool Use::* a_flag, int a_prefer, bool a_needRich = true) -> int {
@@ -322,8 +334,12 @@ namespace MFO::Logistics::Errand::Trip {
         // Needs to the FIRST stop in visit order that carries them.
         for (int k = 0; k < 32; ++k) {
             if (!((needKinds >> k) & 1u) || ((unserved >> k) & 1u)) continue;
+            bool placed = false;
             for (const int i : order)
-                if ((use[i].c->needCarry >> k) & 1u) { use[i].needs |= 1u << k; break; }
+                if ((use[i].c->needStock >> k) & 1u) { use[i].needs |= 1u << k; placed = true; break; }
+            if (!placed)
+                for (const int i : order)
+                    if ((use[i].c->needCarry >> k) & 1u) { use[i].needs |= 1u << k; break; }
         }
 
         // ── 5. the stops, each with its SHARE of the order ──
@@ -371,10 +387,13 @@ namespace MFO::Logistics::Errand::Trip {
             a_out.push_back(std::move(s));
         }
         if (a_out.empty()) return false;
+        std::string candMasks;   // MISSED BUY (diagnosis): what each usable candidate's VEND carries and where there is stock evidence
+        for (const auto& u : use)
+            candMasks += std::format("{}'{}' carry={:#x} stock={:#x}", candMasks.empty() ? "" : ", ", u.c->name, u.c->needCarry, u.c->needStock);
         a_line = std::format("{} stop(s): {} | purse {} (trip), carry {:.0f}%, needs {:#x}{}, wishes gear={} tome={} (rich={}) | {} usable "
-                             "candidate(s)", a_out.size(), body, purse, a_in.carry * 100.0f, needKinds,
+                             "candidate(s) [{}]", a_out.size(), body, purse, a_in.carry * 100.0f, needKinds,
                              unserved ? std::format(" (no open shop carries {:#x})", unserved) : std::string{}, wishGear, wishTome,
-                             rich, use.size());
+                             rich, use.size(), candMasks);
         return true;
     }
 }

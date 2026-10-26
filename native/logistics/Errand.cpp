@@ -273,6 +273,33 @@ namespace MFO::Logistics::Errand {
             return notBuySell ? !match : match;
         }
 
+        // MISSED BUY (2026-10-26): is this shop an APOTHECARY-class vendor, from engine data at runtime? A VEND list names what a vendor BUYS, so
+        // "VendorItemPotion in the list" says nothing about stock (Ri'saad's and Belethor's lists carry it; neither stocked a qualifying potion).
+        // Apothecary class = a plain (non-inverted) VEND list that carries VendorItemPotion and whose keywords are at least half alchemy goods
+        // (potion, poison, ingredient, food: matched by the keyword's editor id, VendorItemPotion by its verified FormID). Out-param a_known
+        // false = no keyword in the list has a readable editor id (stripped by the runtime): the class cannot be judged, the caller keeps the
+        // pre-fix behaviour (the VEND keyword alone) rather than refusing every shop.
+        bool ApothecaryClass(const RE::TESFaction* a_fac, bool& a_known) {
+            a_known = false;
+            auto* vend = a_fac ? a_fac->vendorData.vendorSellBuyList : nullptr;
+            if (a_fac && a_fac->vendorData.vendorValues.notBuySell) { a_known = true; return false; }   // an inverted list = "buys everything but": judged, NOT apothecary (never "unknown", review F1)
+            if (!vend) return false;
+            int total = 0, alchemy = 0;
+            bool hasPotion = false;
+            for (auto* f : vend->forms) {
+                if (!f) continue;
+                ++total;
+                if (f->GetFormID() == kKwPotion) { hasPotion = true; ++alchemy; a_known = true; continue; }
+                if (f->GetFormID() == 0x0008CDEAu || f->GetFormID() == 0x000A0E56u) { ++alchemy; a_known = true; continue; }   // VendorItemFood / VendorItemFoodRaw (Skyrim.esm, as ErrandRest.cpp)
+                const char* ed = f->GetFormEditorID();
+                if (!ed || !*ed) continue;
+                a_known = true;
+                const std::string_view e{ ed };
+                if (e == "VendorItemPoison" || e == "VendorItemIngredient") ++alchemy;
+            }
+            return hasPotion && total > 0 && alchemy * 2 >= total;
+        }
+
         // ── the catalog (R1a: loaded vendor actors) ───────────────────────────────────────────────────
         // SEAM: `place` (the faction's PLVD cell / reference) is where an UNLOADED shop attaches in R1b. R1a does
         // not read it: PackageLocation::Data is a union of TESForm* and ObjectRefHandle and which member a
@@ -464,6 +491,14 @@ namespace MFO::Logistics::Errand {
                 if (const auto it = parked.find(v->GetFormID()); it != parked.end() && a_now < it->second) continue;
                 if (backedOff.contains(chest->GetFormID())) { noteBackoff(chest->GetFormID(), v->GetName()); continue; }
                 if (seenChest.contains(chest->GetFormID())) continue;   // one actor per chest is enough
+                // MISSED BUY fix (2026-10-26, the Ahlam hole): a LOADED vendor of an OPEN shop goes through the SAME "would trade now" gate the located
+                // (unloaded) path uses (Vendors::Locate: shop-relative JobMerchantFaction + GetOffersServicesNow). It runs BEFORE the chest is marked seen, so a
+                // refused stand-in does not hide the real vendor of the same chest behind it. A closed shop is not gated (it only feeds the reopen watch).
+                if (open) {
+                    const auto offer = Vendors::WouldTrade(v, fac->GetFormID());
+                    if (offer == Vendors::Offer::Pending) { vendorWaiting = true; continue; }
+                    if (offer == Vendors::Offer::No) { ++a_dropped; continue; }
+                }
                 seenChest[chest->GetFormID()] = true;
                 Cand c;
                 c.handle = h;
@@ -1558,6 +1593,16 @@ namespace MFO::Logistics::Errand {
                 const RE::FormID kw = (k <= 2) ? kKwPotion : (k == 3 || k == 4 || k == 11) ? kKwArrow : (k == 10) ? kKwWeapon : 0u;
                 if (kw && ListTrades(c.fac, kw)) t.needCarry |= 1u << k;
             }
+            {   // MISSED BUY: the potion kinds are covered only on EVIDENCE of stock (apothecary class, or this chest's last PlanBuy showed that kind)
+                bool known = false;
+                const bool apoth = ApothecaryClass(c.fac, known);
+                for (int k = 0; k <= 4; ++k) {
+                    if (!((t.needCarry >> k) & 1u)) continue;
+                    const bool potionKind = k <= 2;
+                    if (!potionKind || apoth || !known || TradeBridge::LastSeenStockLines(c.chest, k) > 0) t.needStock |= 1u << k;
+                }
+                for (int k = 5; k < 12; ++k) if ((t.needCarry >> k) & 1u) t.needStock |= 1u << k;
+            }
             t.carriesGear = (a_gear    && (ListTrades(c.fac, kKwWeapon) || ListTrades(c.fac, kKwArmor))) ||
                             (a_apparel && (ListTrades(c.fac, kKwClothing) || ListTrades(c.fac, kKwJewelry) || ListTrades(c.fac, kKwArmor)));
             t.carriesTome = ListTrades(c.fac, kKwSpellTome);
@@ -1619,8 +1664,9 @@ namespace MFO::Logistics::Errand {
                     if (v.skipped)
                         spdlog::info("[errand] {:08X} shop {} '{}' ({:08X}): SKIPPED (empty-trade memo / nothing to do)", fid, a_tag, nm, v.vendorKey);
                     else
-                        spdlog::info("[errand] {:08X} shop {} '{}' ({:08X}): sell {} row(s)/{}g, needs mask {:#x}, wishes gear={} apparel={} tome={} mats={}, purse {}g",
-                                     fid, a_tag, nm, v.vendorKey, v.sellRows, v.sellValue, v.needKinds, v.wishGear, v.wishApparel, v.wishTome, v.wishMaterials, v.purse);
+                        spdlog::info("[errand] {:08X} shop {} '{}' ({:08X}): sell {} row(s)/{}g, needs mask {:#x}, carry mask {:#x}, stock-evidence mask {:#x}, wishes gear={} apparel={} tome={} mats={}, purse {}g",
+                                     fid, a_tag, nm, v.vendorKey, v.sellRows, v.sellValue, v.needKinds, it != a_cands.end() ? it->needCarry : 0u,
+                                     it != a_cands.end() ? it->needStock : 0u, v.wishGear, v.wishApparel, v.wishTome, v.wishMaterials, v.purse);
                 }
             };
             logRows(planned, tcands, "open");
@@ -2374,6 +2420,9 @@ namespace MFO::Logistics::Errand {
                     std::vector<RE::FormID> uf;
                     for (const auto& row : out.unsold) if (row.obj) uf.push_back(row.obj->GetFormID());
                     Reopen::NoteLate(fid, r.town, uf);
+                }
+                if (r.cur < r.stops.size()) {   // MISSED BUY: a supply quota the vendor's stock could not fill is re-planned to another open shop of the plan
+                    Reopen::NoteUnfilled(fid, r.town, r.stops[r.cur], r.order.get(), out);
                 }
                 r.dispatched = false;
                 r.bought = out.boughtCount > 0;

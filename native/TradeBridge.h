@@ -252,6 +252,9 @@ namespace MFO::TradeBridge {
         // when a native replay of Papyrus's greedy sell loop over the order's rows reproduces the reported soldCount AND soldValue exactly (Papyrus
         // reports totals, never rows); otherwise empty, never a guess. chestId / chestGoldNow (gold left after the trade) / day (dispatch game day) ride along.
         std::vector<SellRow> unsold;
+        // MISSED BUY (2026-10-26): the supply needs (NeedCat kinds 0..4, quota = units still wanted) that PlanBuy left unfilled for want of STOCK at this
+        // vendor (a quota the purse cut short is not listed). Filled for a real (non-probe) trade only; empty = every quota was met or purse-limited.
+        std::vector<NeedCat> unfilled;
         RE::FormID           chestId = 0;
         std::int32_t         chestGoldNow = -1;
         float                day = 0.0f;
@@ -260,6 +263,8 @@ namespace MFO::TradeBridge {
     float VendorRestockDays();
     // The vendor chest's barter gold as the LAST report there read it (-1 = never reported). Worker.
     std::int32_t LastSeenChestGold(RE::FormID a_chest);
+    // MISSED BUY: stock LINES of NeedCat kind a_kind (0..4) the last PlanBuy at this chest classified (-1 = never seen / older than a restock). Worker.
+    std::int32_t LastSeenStockLines(RE::FormID a_chest, std::int32_t a_kind);
     bool HasLiveOrder(RE::FormID a_follower);
     bool TakeOutcome(RE::FormID a_follower, TradeOutcome& a_out);
     void DiscardOutcome(RE::FormID a_follower);

@@ -142,6 +142,24 @@ namespace MFO::Logistics::Errand::Vendors {
             return v.refused || !v.offers ? Counts::No : Counts::Yes;
         }
 
+        // WORKER. THE mfo-273 GATE for ONE member of an OPEN shop (callers apply it to an open shop only): (a) the shop-relative JobMerchantFaction test,
+        // then (b) function 255 for a LOADED member, (c) hours only for an unloaded one. Shared by Locate and the loaded-actor catalog
+        // (Errand.cpp BuildCatalog, via WouldTrade), so the two paths cannot disagree on who counts (the Ahlam case, 2026-10-26 13:03).
+        Counts MemberCounts(RE::FormID a_id, RE::FormID a_faction, bool a_loaded) {
+            bool jm = true;
+            {
+                std::scoped_lock lk(s_mx);
+                if (s_jmShops.contains(a_faction)) jm = s_jmActors.contains(a_id);
+            }
+            if (!jm) {
+                SayVerdict(a_id, "the shop's vendors hold JobMerchantFaction and this member does not -> no vendor dialogue, does NOT count");
+                return Counts::No;
+            }
+            if (a_loaded) return LoadedCounts(a_id);
+            SayVerdict(a_id, "UNLOADED member: the shop is open (hours only off screen) -> counts");
+            return Counts::Yes;
+        }
+
         bool Asleep(RE::Actor* a) {
             const auto* st = a->AsActorState();
             if (!st) return false;
@@ -230,6 +248,17 @@ namespace MFO::Logistics::Errand::Vendors {
         return rank && *rank >= 0;
     }
 
+    Offer WouldTrade(RE::Actor* a_actor, RE::FormID a_faction) {
+        if (!a_actor || !a_faction) return Offer::No;
+        if (!EnsureIndex()) return Offer::Pending;   // the JobMerchant sets come from the index build
+        switch (MemberCounts(a_actor->GetFormID(), a_faction, a_actor->Is3DLoaded())) {
+            case Counts::Yes:     return Offer::Yes;
+            case Counts::Pending: return Offer::Pending;
+            case Counts::No:      break;
+        }
+        return Offer::No;
+    }
+
     const char* AnswerName(Answer a_a) {
         switch (a_a) {
         case Answer::Located:   return "located";
@@ -254,8 +283,6 @@ namespace MFO::Logistics::Errand::Vendors {
         auto* shopFac = RE::TESForm::LookupByID<RE::TESFaction>(a_faction);
         auto* cal = RE::Calendar::GetSingleton();
         const bool gate = shopFac && cal && detail::OpenAtHour(shopFac, cal->GetHour());
-        bool shopHasJm = false;
-        if (gate) { std::scoped_lock lk(s_mx); shopHasJm = s_jmShops.contains(a_faction); }
         // Best first: loaded and awake, then loaded asleep, then unloaded (the shop's people wherever the engine has them now).
         int bestRank = -1;
         int pendingVerdicts = 0;
@@ -274,20 +301,9 @@ namespace MFO::Logistics::Errand::Vendors {
             const bool loaded = a->Is3DLoaded();
             // mfo-273: would this member trade with the player now? (open shops only; see the file header)
             if (gate) {
-                bool jm = true;
-                if (shopHasJm) { std::scoped_lock lk(s_mx); jm = s_jmActors.contains(id); }
-                if (!jm) {
-                    ++a_out.notOffering;
-                    SayVerdict(id, "the shop's vendors hold JobMerchantFaction and this member does not -> no vendor dialogue, does NOT count");
-                    continue;
-                }
-                if (loaded) {
-                    const auto c = LoadedCounts(id);
-                    if (c == Counts::Pending) { ++pendingVerdicts; continue; }
-                    if (c == Counts::No) { ++a_out.notOffering; continue; }
-                } else {
-                    SayVerdict(id, "UNLOADED member: the shop is open (hours only off screen) -> counts");
-                }
+                const auto c = MemberCounts(id, a_faction, loaded);
+                if (c == Counts::Pending) { ++pendingVerdicts; continue; }
+                if (c == Counts::No) { ++a_out.notOffering; continue; }
             }
             const bool asleep = loaded && Asleep(a);
             const int rank = loaded ? (asleep ? 1 : 2) : 0;
