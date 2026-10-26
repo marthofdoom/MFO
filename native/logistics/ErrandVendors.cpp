@@ -142,6 +142,24 @@ namespace MFO::Logistics::Errand::Vendors {
             return v.refused || !v.offers ? Counts::No : Counts::Yes;
         }
 
+        bool Asleep(RE::Actor* a) {
+            const auto* st = a->AsActorState();
+            if (!st) return false;
+            const auto s = st->GetSitSleepState();
+            return s == RE::SIT_SLEEP_STATE::kIsSleeping || s == RE::SIT_SLEEP_STATE::kWantToSleep || s == RE::SIT_SLEEP_STATE::kWaitingForSleepAnim;
+        }
+
+        // The vendor factions this actor is a member of (final rank >= 0).
+        void VendorMemberships(RE::Actor* a, std::vector<RE::FormID>& a_out) {
+            std::unordered_map<RE::FormID, std::int8_t> rank;
+            a->VisitFactions([&](RE::TESFaction* f, std::int8_t r) {
+                if (f && f->IsVendor()) rank[f->GetFormID()] = r;   // base first, then the runtime changes: the later entry wins
+                return false;
+            });
+            for (const auto& [f, r] : rank)
+                if (r >= 0) a_out.push_back(f);
+        }
+
         // MAIN THREAD. Collect the actor ids under the all-forms read lock (a type test only), then read each outside it.
         void BuildIndex(std::uint32_t a_gen) {
             const auto t0 = std::chrono::steady_clock::now();
