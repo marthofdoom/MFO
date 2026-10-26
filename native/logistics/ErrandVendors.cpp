@@ -19,18 +19,20 @@
 // the vendor of faction X" test that compared VendorFactionOf(a) == X found 0 members of the forge shop (the 2026-10-25 Sven field log).
 //
 // mfo-273 (marth 2026-10-26, the Ahlam field case: a vanilla REPLACEMENT vendor of Arcadia's shop was picked while Arcadia lived): "a vendor counts
-// only if they would trade with the player now / they will have the dialogue". A member counts only when the vanilla vendor dialogue's gate would pass
-// for it: GetInFaction(JobMerchantFaction) rank >= 0 (a static data read; Ahlam holds rank -1 there) AND GetOffersServicesNow (condition function 255,
-// subject = the member, target = the player). DISASSEMBLY (1.6.1170, condition fn 0x1403310a0 -> 0x67e270): function 255 is TRUE iff the Actor is
-// a Character whose vendorFaction (+0x168, recomputed by Actor::CalculateVendorFaction 0x66b650 on a timer: it tests each faction's VENV hours and
-// vendorConditions) has a non-null VEND list. It is hour- and condition-aware but it works from the actor's own cached state, and an UNLOADED
-// actor's answer is not trusted here, so:
-//   LOADED member   -> function 255 evaluated on the MAIN thread through the verified TradePerks::ConditionTrue seat, cached per member (kVerdictTtl,
-//                      refreshed by a posted evaluation; a stale answer is served while the refresh is in flight), a verdict CHANGE is logged.
-//   UNLOADED member (a persistent ref) -> the static equivalent: its parent cell is the faction's PLVD place (kInCell: that cell; kNearReference: the
-//                      ref's cell; no place: the merchant chest's cell) AND the hour is inside the faction's VENV hours. Logged on change too.
-// Members that fail are skipped. No member passing = Answer::NotOffering (the shop is closed for this plan; the next plan asks again). Never the
-// nearest loaded member.
+// only if they would trade with the player now / they will have the dialogue". Applied ONLY while the shop is OPEN (VENV hours): "who is the vendor"
+// stays independent of "is he trading now", so a closed shop still reaches the reopen watch. For an open shop a member counts when:
+//   (a) SHOP-RELATIVE JobMerchantFaction (Skyrim.esm 00051596): every vanilla merchant is rank -1 in its base record; rank 0 is granted at runtime
+//       (e.g. the DialogueWhiterun quest's alias faction list, ALFC) to the town's merchants. So rank >= 0 is required ONLY when at least one member of
+//       the shop faction (dead ones included) holds it; vendors that never get it (Dawnguard, Enthir, Urag, quartermasters, modded ones) are not
+//       dropped. The sets are computed on the MAIN thread at the index build (BuildIndex: s_jmActors / s_jmShops), read by the worker under s_mx.
+//   (b) LOADED: condition function 255 GetOffersServicesNow evaluated on the MAIN thread through the verified TradePerks::ConditionTrue seat
+//       (EvaluateOnMain; subject = the member, target = the player), cached per member (kVerdictTtl; a stale answer is served while a posted
+//       refresh is in flight; a verdict CHANGE is logged). DISASSEMBLY (1.6.1170, condition fn 0x1403310a0 -> 0x67e270): TRUE iff the Actor
+//       (form type 0x3E) has a vendorFaction (+0x168, recomputed by Actor::CalculateVendorFaction 0x66b650 with each faction's VENV hours and
+//       vendorConditions) whose VEND list is non-null.
+//   (c) UNLOADED (a persistent ref): function 255 is not trusted off screen, so hours only: the shop being open IS the verdict.
+// Members that fail are skipped. No member passing an OPEN shop = Answer::NotOffering (not a candidate this plan; the next plan asks again).
+// Never the nearest loaded member.
 //
 // Threading: Locate / IsMember / LoadedVendor run on the AddTask worker (the planner) and read actors the way the planner already does
 // (LookupByID, parent cell, position, VisitFactions). The index build runs on the main thread. Own mutex (a leaf: never held across an
@@ -65,12 +67,14 @@ namespace MFO::Logistics::Errand::Vendors {
         constexpr auto kRebuildMinSec = std::chrono::seconds(60);
 
         // mfo-273: the vendor-dialogue gate. JobMerchantFaction (Skyrim.esm 00051596) is what the vanilla OfferServicesTopic INFO tests with
-        // GetInFaction beside GetOffersServicesNow (diag-v272: Ahlam holds it at rank -1, Arcadia at rank 0).
+        // GetInFaction beside GetOffersServicesNow (diag-v272: base record rank -1 for every vanilla merchant; the town's dialogue quest alias grants rank 0 at runtime).
         constexpr RE::FormID kJobMerchantFaction = 0x00051596;
         constexpr auto kVerdictTtl = std::chrono::seconds(15);   // a member's offering state moves with the hour / a quest stage; plans run every few seconds
         struct Verdict { bool offers = false; bool refused = false; bool known = false; std::chrono::steady_clock::time_point at{}; };
         std::unordered_map<RE::FormID, Verdict>                   s_verdict;     // loaded member actor -> function 255 answer (guarded by s_mx)
         std::unordered_set<RE::FormID>                            s_verdictPending;
+        std::unordered_set<RE::FormID>                            s_jmActors;    // index build (main thread): actors holding JobMerchantFaction rank >= 0
+        std::unordered_set<RE::FormID>                            s_jmShops;     // ...and the vendor factions with at least one such member (dead included)
         std::unordered_map<RE::FormID, std::string>               s_verdictSaid; // actor -> the last logged verdict text (a CHANGE is logged)
 
         void SayVerdict(RE::FormID a_actor, const std::string& a_text) {
@@ -138,56 +142,6 @@ namespace MFO::Logistics::Errand::Vendors {
             return v.refused || !v.offers ? Counts::No : Counts::Yes;
         }
 
-        // WORKER (data reads). The static equivalent for an UNLOADED persistent member: standing at the faction's PLVD place AND inside the VENV hours.
-        bool UnloadedCounts(RE::TESObjectCELL* a_cell, const RE::TESFaction* a_fac, std::string& a_note) {
-            auto* cal = RE::Calendar::GetSingleton();
-            if (!a_fac || !cal) { a_note = "no faction / calendar"; return false; }
-            const float hour = cal->GetHour();
-            if (!detail::OpenAtHour(a_fac, hour)) { a_note = std::format("outside the VENV hours at {:.1f}", hour); return false; }
-            const RE::TESObjectCELL* place = nullptr;
-            if (PlvdPlaceVerified()) {
-                if (auto* loc = a_fac->vendorData.vendorLocation) {
-                    switch (loc->locType.get()) {
-                    case RE::PackageLocation::Type::kInCell:
-                        place = loc->data.object ? loc->data.object->As<RE::TESObjectCELL>() : nullptr;
-                        break;
-                    case RE::PackageLocation::Type::kNearReference: {
-                        auto ref = loc->data.refHandle.get();
-                        place = ref ? ref->GetParentCell() : nullptr;
-                        break;
-                    }
-                    default: break;
-                    }
-                }
-            }
-            if (!place) {
-                auto* chest = a_fac->vendorData.merchantContainer;
-                place = chest ? chest->GetParentCell() : nullptr;
-            }
-            if (!place) { a_note = "the faction names no place to stand at (hours only)"; return true; }
-            if (place != a_cell) { a_note = std::format("not at the shop's place (cell {:08X}, he is in {:08X})", place->GetFormID(), a_cell->GetFormID()); return false; }
-            a_note = "at the shop's place, inside the VENV hours";
-            return true;
-        }
-
-        bool Asleep(RE::Actor* a) {
-            const auto* st = a->AsActorState();
-            if (!st) return false;
-            const auto s = st->GetSitSleepState();
-            return s == RE::SIT_SLEEP_STATE::kIsSleeping || s == RE::SIT_SLEEP_STATE::kWantToSleep || s == RE::SIT_SLEEP_STATE::kWaitingForSleepAnim;
-        }
-
-        // The vendor factions this actor is a member of (final rank >= 0).
-        void VendorMemberships(RE::Actor* a, std::vector<RE::FormID>& a_out) {
-            std::unordered_map<RE::FormID, std::int8_t> rank;
-            a->VisitFactions([&](RE::TESFaction* f, std::int8_t r) {
-                if (f && f->IsVendor()) rank[f->GetFormID()] = r;   // base first, then the runtime changes: the later entry wins
-                return false;
-            });
-            for (const auto& [f, r] : rank)
-                if (r >= 0) a_out.push_back(f);
-        }
-
         // MAIN THREAD. Collect the actor ids under the all-forms read lock (a type test only), then read each outside it.
         void BuildIndex(std::uint32_t a_gen) {
             const auto t0 = std::chrono::steady_clock::now();
@@ -203,6 +157,7 @@ namespace MFO::Logistics::Errand::Vendors {
             std::unordered_map<RE::FormID, std::vector<RE::FormID>> idx;
             std::size_t vendors = 0;
             std::vector<RE::FormID> facs;
+            std::unordered_set<RE::FormID> jmActors, jmShops;
             for (const auto id : actors) {
                 auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
                 if (!a || a->IsPlayerRef() || a->IsDeleted()) continue;
@@ -210,12 +165,16 @@ namespace MFO::Logistics::Errand::Vendors {
                 VendorMemberships(a, facs);
                 if (facs.empty()) continue;
                 ++vendors;
-                for (const auto f : facs) idx[f].push_back(id);
+                const bool jm = IsMember(a, kJobMerchantFaction);   // mfo-273: shop-relative gate input (dead members included)
+                if (jm) jmActors.insert(id);
+                for (const auto f : facs) { idx[f].push_back(id); if (jm) jmShops.insert(f); }
             }
             const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
             std::scoped_lock lk(s_mx);
             if (a_gen != s_gen) return;   // a load / revert ran meanwhile: this index describes the previous session
             s_index = std::move(idx);
+            s_jmActors = std::move(jmActors);
+            s_jmShops = std::move(jmShops);
             s_state = IndexState::Built;
             s_builtAt = std::chrono::steady_clock::now();
             spdlog::info("[errand] vendor index built (main thread, {} ms): {} actor(s) in memory, {} of them vendors, {} vendor faction(s) with a member",
@@ -256,7 +215,7 @@ namespace MFO::Logistics::Errand::Vendors {
     const char* AnswerName(Answer a_a) {
         switch (a_a) {
         case Answer::Located:   return "located";
-        case Answer::Pending:   return "the vendor index is being built";
+        case Answer::Pending:   return "the vendor index or a vendor's trading verdict is being built";
         case Answer::NoMembers: return "the faction has no member actor in memory";
         case Answer::AllGone:   return "every member is dead or disabled";
         case Answer::NoCell:    return "no living member has a parent cell to walk to";
@@ -273,6 +232,12 @@ namespace MFO::Logistics::Errand::Vendors {
             std::scoped_lock lk(s_mx);
             if (const auto it = s_index.find(a_faction); it != s_index.end()) ids = it->second;
         }
+        // mfo-273: the offering gate applies to an OPEN shop only (a closed shop keeps its vendors, for the reopen watch).
+        auto* shopFac = RE::TESForm::LookupByID<RE::TESFaction>(a_faction);
+        auto* cal = RE::Calendar::GetSingleton();
+        const bool gate = shopFac && cal && detail::OpenAtHour(shopFac, cal->GetHour());
+        bool shopHasJm = false;
+        if (gate) { std::scoped_lock lk(s_mx); shopHasJm = s_jmShops.contains(a_faction); }
         // Best first: loaded and awake, then loaded asleep, then unloaded (the shop's people wherever the engine has them now).
         int bestRank = -1;
         int pendingVerdicts = 0;
@@ -289,21 +254,22 @@ namespace MFO::Logistics::Errand::Vendors {
             auto* cell = a->GetParentCell();
             if (!cell) { ++a_out.noCell; continue; }
             const bool loaded = a->Is3DLoaded();
-            // mfo-273: would this member trade with the player now? (the vendor dialogue's gate; see the file header)
-            if (!IsMember(a, kJobMerchantFaction)) {
-                ++a_out.notOffering;
-                SayVerdict(id, "not a member (rank >= 0) of JobMerchantFaction -> has no vendor dialogue, does NOT count");
-                continue;
-            }
-            if (loaded) {
-                const auto c = LoadedCounts(id);
-                if (c == Counts::Pending) { ++pendingVerdicts; continue; }
-                if (c == Counts::No) { ++a_out.notOffering; continue; }
-            } else {
-                std::string why;
-                const bool ok = UnloadedCounts(cell, RE::TESForm::LookupByID<RE::TESFaction>(a_faction), why);
-                SayVerdict(id, std::format("UNLOADED member (static check): {} -> {}", why, ok ? "counts" : "does NOT count"));
-                if (!ok) { ++a_out.notOffering; continue; }
+            // mfo-273: would this member trade with the player now? (open shops only; see the file header)
+            if (gate) {
+                bool jm = true;
+                if (shopHasJm) { std::scoped_lock lk(s_mx); jm = s_jmActors.contains(id); }
+                if (!jm) {
+                    ++a_out.notOffering;
+                    SayVerdict(id, "the shop's vendors hold JobMerchantFaction and this member does not -> no vendor dialogue, does NOT count");
+                    continue;
+                }
+                if (loaded) {
+                    const auto c = LoadedCounts(id);
+                    if (c == Counts::Pending) { ++pendingVerdicts; continue; }
+                    if (c == Counts::No) { ++a_out.notOffering; continue; }
+                } else {
+                    SayVerdict(id, "UNLOADED member: the shop is open (hours only off screen) -> counts");
+                }
             }
             const bool asleep = loaded && Asleep(a);
             const int rank = loaded ? (asleep ? 1 : 2) : 0;
@@ -375,6 +341,8 @@ namespace MFO::Logistics::Errand::Vendors {
         s_verdict.clear();
         s_verdictPending.clear();
         s_verdictSaid.clear();
+        s_jmActors.clear();
+        s_jmShops.clear();
         s_state = IndexState::Unbuilt;
         ++s_gen;
     }

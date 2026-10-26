@@ -1795,6 +1795,7 @@ namespace MFO::Logistics::Errand {
             }
             Vendors::Where w;
             const auto ans = Vendors::Locate(r.faction, w);
+            if (ans == Vendors::Answer::Pending) return false;   // mfo-273: the index / a trading verdict is in flight, not "not located"; the caller's retries ask again
             if (ans != Vendors::Answer::Located) {
                 spdlog::warn("[errand] {:08X} '{}': {} -- the vendor of '{}' (faction {:08X}) could NOT be located: {} (members {}, dead {}, disabled {})", fid,
                              r.followerName, a_why, Trip::Label(r.stops, r.cur), r.faction, Vendors::AnswerName(ans), w.members, w.dead, w.disabled);

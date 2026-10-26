@@ -2299,3 +2299,15 @@ A restore armed by a reason=real-combat close (including the one frame between a
 
 ### MFO-B474 (SEV-5, OPEN, apmf/Substrate.cpp OpenSubstrateCast open-gap branch, against 9bdd6fa, Opus tier-3 re-review of feat/mfo-substrate-followup) -- the open-gap branch arms a restore without knowing the close reason
 When a sweep ends the pair in the unlocked gap between the open and its `WantSubstrateCast`, the open's `gone` branch calls `ClearSubstrateCast(..., seq, true)` without knowing why the pair ended. On a normal close the armed restore lingers and is dropped on the next controller (the MFO-B472 shape). Graded benign; a fix would carry the close reason out of the sweep.
+
+### MFO-B475 (SEV-4, OPEN, logistics/ErrandVendors.cpp, against ec5e235, Opus review of fix/mfo-273) -- a refused ConditionTrue seat drops a loaded member but an unloaded one counts by hours
+The seat-refused case is inconsistent: `LoadedCounts` answers No (member dropped) while an unloaded member passes on hours. Graded: only on an unsupported build, where the seat refuses loudly anyway.
+
+### MFO-B476 (SEV-4, OPEN, logistics/ErrandSim.cpp Sim::Begin alreadyThere, against ec5e235, Opus review of fix/mfo-273) -- a persistent-cell false positive
+`alreadyThere` (parent cell identity) can be a false positive when an unloaded exterior vendor reports the worldspace's persistent cell and the follower is in it.
+
+### MFO-B477 (SEV-5, OPEN, logistics/ErrandVendors.cpp EvaluateOnMain, against ec5e235, Opus review of fix/mfo-273) -- a stale-generation evaluation erases pending and can cause one extra post
+After a load bumps the generation, the dropped evaluation still erases the actor from `s_verdictPending`, so the next call may post one extra evaluation.
+
+### MFO-B478 (SEV-5, OPEN, logistics/ErrandVendors.cpp Locate, against ec5e235, Opus review of fix/mfo-273) -- the NotOffering log carries no count of failing members
+The "NOT a candidate: no member would trade" line does not say how many members failed which gate.
