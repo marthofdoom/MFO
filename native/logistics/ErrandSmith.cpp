@@ -736,9 +736,19 @@ namespace MFO::Logistics::Errand::Smith {
         // reached as a reference. The smithy's furniture is then found directly in his loaded cell (FindStations), not through any
         // learned vendor position.
         s.vendorActor = 0;
-        s.destKind = pick->kind == DestKind::VendorActor ? DestKind::Ref : pick->kind;
-        s.destForm = pick->destForm; s.destRad = pick->destRad;
-        s.pos = pick->pos; s.havePos = pick->havePos;
+        // mfo-272 review F2: since mfo-272 a catalog candidate's destination is its VENDOR NPC (wherever he is), so the smithy's place is read
+        // from the candidate's PLACE fields. A candidate with no place known (a Reopen-rebuilt one, or a place whose door was never found) keeps
+        // its destination, as before mfo-272 (logged).
+        if (pick->placeForm) {
+            s.destKind = pick->placeKind == DestKind::VendorActor ? DestKind::Ref : pick->placeKind;
+            s.destForm = pick->placeForm; s.destRad = pick->placeRad;
+            s.pos = pick->havePlacePos ? pick->placePos : pick->pos; s.havePos = pick->havePlacePos || pick->havePos;
+        } else {
+            spdlog::info("[smith] {:08X} '{}': smithy '{}' has no place known -- the smith stop walks to the shop's destination {:08X}", fid, who, pick->name, pick->destForm);
+            s.destKind = pick->kind == DestKind::VendorActor ? DestKind::Ref : pick->kind;
+            s.destForm = pick->destForm; s.destRad = pick->destRad;
+            s.pos = pick->pos; s.havePos = pick->havePos;
+        }
         s.state = a_stops.empty() ? StopState::Active : StopState::Pending;   // (a smith-only trip: Rest::Augment's wasEmpty test no longer sees it empty)
         a_stops.push_back(std::move(s));
         {

@@ -1718,6 +1718,13 @@ namespace MFO::APMFBridge {
     void ReleaseErrand(RE::FormID a_follower);
     // Revert / load (pump drained): release every errand claim and forget them.
     void ClearErrandClaims();
+    // mfo-272 (marth 2026-10-25 "claims hold for the duration of the mfo event"): file the errand's ch.1 hold (kIntent_MovementBlock) NOW,
+    // without an idle, so he stands at the stop while it waits (the unattended-shop re-checks). The beats reuse the same hold; ReleaseErrandIdle
+    // (every re-point / next stop / Finish) ends it. True = a hold stands. Worker road, idempotent.
+    bool HoldErrand(RE::FormID a_follower);
+    // mfo-272: does the installed Harbinger carry ch.19's kTravel_CrossCells (the paired Harbinger follow-up)? False until it ships
+    // (ErrandClaims.cpp kCrossCellsAbi). True = every errand walk is declared with the flag and a ref leg may target a vendor in another cell.
+    bool ErrandCrossCellsSupported();
     // ── PLACE (Harbinger ABI v28 kIntent_Place; TOWN PHASE 2 R4b) -- apmf/Place.cpp ──
     // ONE engine move of an UNLOADED actor beside a reference, done by Harbinger on the game thread; MFO declares the spot only.
     // A one-shot, never a claim (no Release / heartbeat). ANY thread (RequestEx enqueues; GetPlaceState is a leaf-locked copy).

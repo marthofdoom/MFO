@@ -92,6 +92,38 @@ namespace MFO::APMFBridge {
             return a_everLive || std::chrono::steady_clock::now() - a_filed > kPublishGrace;
         }
 
+        // s_mx HELD. The ch.1 hold (kIntent_MovementBlock, no param), filed once and re-filed when Harbinger ended it. A refusal is logged
+        // (a_without names what then runs without the stand-still). True = a hold handle stands.
+        bool FileHoldLocked(const APMF_API::APMF_API_v24* a_api, RE::FormID a_follower, ErrandClaims& c, const char* a_without) {
+            if (ClaimDead(a_api, c.hold, c.holdEverLive, c.holdFiled)) {
+                spdlog::info("[errand] {:08X}: the ch.1 hold ended (Harbinger released it) -- filing a fresh one", a_follower);
+                c.hold = APMF_API::kInvalidHandle;
+            }
+            if (c.hold == APMF_API::kInvalidHandle) {
+                APMF_API::APMF_Param hp{};
+                c.holdEverLive = false;
+                c.holdFiled = std::chrono::steady_clock::now();
+                c.hold = a_api->RequestEx(a_follower, APMF_API::kIntent_MovementBlock, kOwnBasis, &hp);
+                if (c.hold == APMF_API::kInvalidHandle)
+                    spdlog::warn("[errand] {:08X}: ch.1 hold REFUSED by Harbinger -- {} (APMF.log names the reason)", a_follower, a_without);
+            }
+            return c.hold != APMF_API::kInvalidHandle;
+        }
+
+        // mfo-272: the ch.19 kTravel_CrossCells flag (paired Harbinger follow-up; marth 2026-10-25 "Moveto using harbinger will have a flag
+        // for cell crossing"). NOT IN ANY SHIPPED APMF_API.h yet, so it is NOT declared there (the header mirrors APMF's copy byte for byte):
+        // the bit and the ABI that will carry it are held HERE, and kCrossCellsAbi = 0 keeps the flag OFF until Harbinger ships it. When it
+        // does: add the enum value to APMF_API.h by mirroring Harbinger's header, set kCrossCellsAbi to that ABI, delete these two constants.
+        constexpr std::uint32_t kTravelCrossCellsPending = 1u << 5;   // the next free kTravel_ bit after the gait field (bits 0-4 are taken)
+        constexpr std::uint32_t kCrossCellsAbi           = 0;         // 0 = no Harbinger carries the flag yet
+
+        std::uint32_t TravelFlags(const APMF_API::APMF_API_v24* a_api) {
+            const int gait = std::clamp(Config::g_travelGait.load(), 0, 3);
+            std::uint32_t f = APMF_API::kTravel_SpeedSet | ((static_cast<std::uint32_t>(gait) << 3) & APMF_API::kTravel_SpeedMask);
+            if constexpr (kCrossCellsAbi != 0) { if (a_api->abiVersion >= kCrossCellsAbi) f |= kTravelCrossCellsPending; }
+            return f;
+        }
+
         void ReleaseLocked(const APMF_API::APMF_API_v2* a_api, ErrandClaims& a_c) {
             // Idle first (its guarded reset runs only if the idle is still HELD), then the hold, then the walk.
             for (auto* h : { &a_c.idle, &a_c.hold, &a_c.travel }) {
@@ -153,8 +185,7 @@ namespace MFO::APMFBridge {
         p.form = a_dest;           // the vendor reference (loaded -- Errand.cpp checked)
         p.fval = a_radius;         // APMF clamps to [50,512]
         const int gait = std::clamp(Config::g_travelGait.load(), 0, 3);
-        p.ival = static_cast<std::int32_t>(APMF_API::kTravel_SpeedSet |
-                                           ((static_cast<std::uint32_t>(gait) << 3) & APMF_API::kTravel_SpeedMask));
+        p.ival = static_cast<std::int32_t>(TravelFlags(api));   // the gait, plus kTravel_CrossCells once Harbinger carries it (mfo-272)
         const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_Travel, kOwnBasis, &p);
         if (h == APMF_API::kInvalidHandle) {
             spdlog::warn("[errand] {:08X}: the walk to {:08X} was REFUSED by Harbinger (radius {:.0f}) -- APMF.log "
@@ -194,9 +225,7 @@ namespace MFO::APMFBridge {
         APMF_API::APMF_Param p{};
         p.form = a_dest;
         p.fval = a_radius;
-        const int gait = std::clamp(Config::g_travelGait.load(), 0, 3);
-        p.ival = static_cast<std::int32_t>(APMF_API::kTravel_SpeedSet |
-                                           ((static_cast<std::uint32_t>(gait) << 3) & APMF_API::kTravel_SpeedMask));
+        p.ival = static_cast<std::int32_t>(TravelFlags(api));   // the gait, plus kTravel_CrossCells once Harbinger carries it (mfo-272)
         api->Repoint(c.travel, &p);
         c.dest = a_dest;
         spdlog::info("[errand] {:08X}: walk RE-POINTED (ch.19) -> {:08X} radius {:.0f} handle {}", a_follower, a_dest, a_radius, c.travel);
@@ -240,19 +269,7 @@ namespace MFO::APMFBridge {
 
         // HOLD STILL for the beats (ch.1, no param), once. A refusal is logged and the idle still plays: the
         // hold is what keeps the follow package from walking him off the counter mid-animation, not what plays it.
-        if (ClaimDead(api, c.hold, c.holdEverLive, c.holdFiled)) {
-            spdlog::info("[errand] {:08X}: the ch.1 hold ended (Harbinger released it) -- filing a fresh one", a_follower);
-            c.hold = APMF_API::kInvalidHandle;
-        }
-        if (c.hold == APMF_API::kInvalidHandle) {
-            APMF_API::APMF_Param hp{};
-            c.holdEverLive = false;
-            c.holdFiled = std::chrono::steady_clock::now();
-            c.hold = api->RequestEx(a_follower, APMF_API::kIntent_MovementBlock, kOwnBasis, &hp);
-            if (c.hold == APMF_API::kInvalidHandle)
-                spdlog::warn("[errand] {:08X}: ch.1 hold REFUSED by Harbinger -- the idles play without a "
-                             "stand-still (APMF.log names the reason)", a_follower);
-        }
+        FileHoldLocked(api, a_follower, c, "the idles play without a stand-still");
 
         APMF_API::APMF_Param p{};
         p.form   = a_idle;     // the IDLE record (an older APMF would ignore it -- gated above)
@@ -333,6 +350,22 @@ namespace MFO::APMFBridge {
             out.verdict = V::Waiting;  // Pending or Accepted: Harbinger judges the window, MFO does not time it
         }
         return out;
+    }
+
+    bool ErrandCrossCellsSupported() {
+        auto* api = ErrandApi();
+        if constexpr (kCrossCellsAbi == 0) { (void)api; return false; } else { return api && api->abiVersion >= kCrossCellsAbi; }
+    }
+
+    bool HoldErrand(RE::FormID a_follower) {
+        auto* api = ErrandApi();
+        if (!api || a_follower == 0) return false;
+        std::scoped_lock lock(s_mx);
+        auto& c = s_claims[a_follower];
+        const bool had = c.hold != APMF_API::kInvalidHandle;
+        const bool held = FileHoldLocked(api, a_follower, c, "he is not held at the stop while it waits");
+        if (held && !had) spdlog::info("[errand] {:08X}: ch.1 hold FILED (handle {}) -- he stands at the stop for the whole wait", a_follower, c.hold);
+        return held;
     }
 
     void ReleaseErrandIdle(RE::FormID a_follower) {
