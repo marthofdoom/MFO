@@ -2191,7 +2191,7 @@ Plan: `_evidence/2026-10-18-designs/SUBSTRATE-TO-OOC-PLAN.md` round R3; rulings 
 write-up `Docs/CAST-DELIVERY.md` "COMBAT SUBSTRATE SLICE S3". Behind ONE INI-only switch `Config::g_substrateCasts`
 (`bSubstrateCasts`, MFO.ini [Debug], default 0). With it ON and Harbinger's substrate available (ABI >= 27 +
 `IsSubstrateAvailable`), an OUT-OF-COMBAT fire-and-forget heal / buff / summon files a ch.27 `kIntent_CombatSubstrate`
-claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kHealCastTtlMs`) and the follower's own AI casts it, animated.
+claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kCastMaxTtlMs` 15 s) and the follower's own AI casts it, animated.
 - `cast/SubstrateRoad.cpp` (248) = the CAST side, declared in `cast/Actuation.h` (`SubstrateTry` NotTaken / Filed /
   Skipped (this recipient) / Refused (every recipient this lap)): `SubstrateRoadFor` (`:82`, WORKER only: switch,
   availability, which spells = the claim roads' gates minus the controller test; Heal = `ChooseHealRoad`'s gates mirrored
@@ -2232,6 +2232,14 @@ claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kHealCastTtlMs`) and t
   fight stands an OOC claim beside the combat table's (the MFO-B173 class); (8) a NEVER-live handle is not "gone"
   before `kEquipAuthValidateAfter` (IsClaimLive reads the published snapshot only); (9) MFO performing the equip (or any
   engine action Harbinger should own) here re-creates work the Harbinger port removes. No co-save: nothing here is saved.
+  **Follow-up (`feat/mfo-substrate-followup`, 2026-10-25; NOT field-run):** (10) the backstop `kBackstopSec` (27.5 s =
+  10 tree-start floor + 15 cast TTL + 2.5) is UNPAUSED game time (`Scheduler::ServiceClock`, anchored at the pair's
+  first sweep, worker-only): do not return it to wall-clock or below Harbinger's tree-start + TTL window; (11) the pair
+  Wants `CombatStyle::Stance::Cast` (iCastControl > 0, `WantCastStyle`) at open and Clears it when the pair ends (every
+  end except real-combat, where the combat table owns stances); `Targeting.cpp`'s UpdateCombat hook now lets
+  `ApplyTick` run on a SubstrateOnly actor (the target redirect still does not), and the Scheduler's party-OOC
+  `CombatStyle::Clear` is skipped while `SubstrateCastPending` (else it erases the stance every OOC lap). CombatStyle
+  calls are made OUTSIDE `g_subMx`. The `WINDOW:` log line names the style and the budget. `bSubstrateCasts` stays 0.
   **Backlog:** read MFO-B310..B315 (the substrate-not-combat review, MAP Scheduler entry) and MFO-B332..B336 (this
   road's review on 733c20cc: NOT OPENED repeats, the g_neverFired early erase, the riften AnchorOnlyLeak false ERROR,
   spdlog under g_subMx) before editing. B310 (MFO's own CheckStartCast soft deny still runs under a substrate

@@ -76,7 +76,14 @@ namespace MFO::Targeting {
                 if (!a_this) return;
                 // A Harbinger COMBAT SUBSTRATE (ABI v26, ClickUp 86e3pu939) is not combat for MFO: no combat-style
                 // ownership and no target redirect on it. One lock-free APMF read, only when MFO has style or a latch.
-                if (APMFBridge::SubstrateOnly(a_this->GetFormID())) return;
+                // EXCEPTION (feat/mfo-substrate-followup): an OOC substrate CAST pair owns the cast stance on the
+                // substrate controller (apmf/Substrate.cpp Wants Stance::Cast, Clears it when the pair ends), because
+                // the engine's cast score is the style's magicScoreMult x ...; without a style every spell scored 0.
+                // ApplyTick no-ops for an actor with no owned stance, and nothing else Wants out of combat.
+                if (APMFBridge::SubstrateOnly(a_this->GetFormID())) {
+                    if (anyStyle) CombatStyle::ApplyTick(a_this, a_this->GetActorRuntimeData().combatController);
+                    return;
+                }
                 // A teammate fighting ONLY Harbinger's anchor (a leak) gets no combat style either (field 2026-10-19).
                 if (CombatSense::AnchorOnlyLeak(a_this)) return;
 

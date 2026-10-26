@@ -1095,7 +1095,9 @@ namespace MFO::Scheduler {
                 // already reverted when the per-combat controller was destroyed;
                 // this drops the stale bookkeeping so the next fight re-baselines.
                 // Idempotent out of combat (uncontended erase-miss when unowned).
-                CombatStyle::Clear(id);
+                // NOT while an OOC substrate pair stands: its cast stance (apmf/Substrate.cpp) is owned by the pair
+                // and cleared when it ends, and this teardown runs every party-OOC lap.
+                if (!APMFBridge::SubstrateCastPending(id)) CombatStyle::Clear(id);
                 g_partyCombatNoted.erase(id);  // party combat: re-arm the once-per-fight note
                 g_stallProbe.erase(id);        // [stall-probe]: the party fight is over
                 DeadTgtEnd(id, "combat over", 0);   // [deadtgt]: closes an open window

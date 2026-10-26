@@ -31,6 +31,10 @@
 #include "APMFBridge_internal.h"
 #include "APMF_API.h"
 #include "Runtime.h"   // SEV-4 (c): the unavailable line names the runtime (1.7.104 has no substrate yet)
+#include "CombatStyle.h"   // the cast stance (MFO_CastStyle) held while the pair's cast claim stands
+#include "Config.h"        // g_castControl: the same master gate the real-fight cast stance honours
+#include "Forms.h"         // g_castStyle (the style form the stance writes)
+#include "Scheduler.h"     // ServiceClock(): the UNPAUSED clock the backstop runs on
 
 #include <atomic>
 #include <chrono>
@@ -38,6 +42,7 @@
 #include <mutex>
 #include <tuple>
 #include <unordered_map>
+#include <vector>
 
 #include <spdlog/spdlog.h>
 
@@ -59,13 +64,16 @@ namespace MFO::APMFBridge {
         // not add a second cut: once the substrate is gone the cast claim is kept until the fire is SEEN (the
         // SpellSink) or this grace passes, then released. Sized from the measured claim fire -> TESSpellCastEvent
         // lag (FIRED -> MFO [cast] line 0.33..2.02 s, APMFBridge.h kHoldLastSeenCapMs's note): 2.5 s clears 2.02 s.
-        // Bounded either way: the cast claim's own TTL (kHealCastTtlMs) ends it on Harbinger's side.
+        // Bounded either way: the cast claim's own TTL (kCastMaxTtlMs) ends it on Harbinger's side.
         constexpr auto kCloseGrace = std::chrono::milliseconds(2500);
 
-        // MFO's backstop for a pair Harbinger never closed: the substrate TTL is clamped to 15 s on Harbinger's
-        // side (FACETS Table 27a), so 17 s never cuts a substrate Harbinger still owns. Logged as an ERROR: a pair
-        // living this long means a close MFO did not see (never a silent release).
-        constexpr auto kBackstop = std::chrono::seconds(17);
+        // MFO's backstop for a pair Harbinger never closed, in UNPAUSED game seconds (Scheduler::ServiceClock: a menu
+        // or a pause never ages it). Harbinger times the substrate from TREE START (floor 10 s) and the cast claim
+        // then lives its TTL (kCastMaxTtlMs, 15 s) plus the close-grace margin: 10 + 15 + 2.5 = 27.5 s, so the
+        // backstop never cuts a pair Harbinger still owns. Logged as an ERROR: a pair living this long means a close
+        // MFO did not see (never a silent release).
+        constexpr double kBackstopTreeStartSec = 10.0;
+        constexpr double kBackstopSec = kBackstopTreeStartSec + APMF_API::kCastMaxTtlMs / 1000.0 + 2.5;
 
         struct Pair {
             APMF_API::Handle sub  = APMF_API::kInvalidHandle;
@@ -76,6 +84,8 @@ namespace MFO::APMFBridge {
             const char*      site   = "?";        // a string literal from the caller (cast/SubstrateRoad.cpp)
             Clock::time_point filed{};
             Clock::time_point closedAt{};        // when the substrate claim was seen gone (closing)
+            double            filedClk = -1.0;   // Scheduler::ServiceClock at the first sweep that saw the pair (-1 = not yet)
+            bool              styleWanted = false;   // the cast stance was Want()ed for this pair (Clear on its end)
             bool subEverLive = false;
             bool held        = false;
             bool claimed     = false;
@@ -106,6 +116,17 @@ namespace MFO::APMFBridge {
         const char* SpellName(RE::FormID a_spell) {
             auto* sp = RE::TESForm::LookupByID<RE::SpellItem>(a_spell);
             return sp && sp->GetName() && *sp->GetName() ? sp->GetName() : "?";
+        }
+
+        // The cast stance held while a pair stands: the SAME Stance::Cast (MFO_CastStyle) a cast gambit owns in a real
+        // fight, behind the SAME master gate (iCastControl > 0). The engine's cast score is the combat style's
+        // magicScoreMult x ..., and with no style applied every spell scored 0 under the substrate. Restored the way
+        // the real-fight path restores it: CombatStyle::Clear (the live CSTY dies with the controller). Both calls
+        // take CombatStyle's own mutex, so they run OUTSIDE g_subMx. Returns true iff a Want was made.
+        bool WantCastStyle(RE::FormID a_follower) {
+            if (Config::g_castControl.load() <= 0 || !Forms::g_castStyle) return false;
+            CombatStyle::Want(a_follower, CombatStyle::Stance::Cast);
+            return true;
         }
 
         // Release both handles of a pair. Caller holds g_subMx.
@@ -165,7 +186,7 @@ namespace MFO::APMFBridge {
         // Harbinger's own line of sight for a recipient that is not the caster (asked outside the lock: a lock-free
         // probe, apmf/Los.cpp).
         const bool ownLos = a_target != 0 && a_target != a_follower && LosSupported();
-        std::scoped_lock lock(g_subMx);
+        std::unique_lock lock(g_subMx);
         if (g_pairs.find(a_follower) != g_pairs.end()) return false;   // the latch (the caller asked first; a race)
 
         // 1. THE SUBSTRATE, filed first ("file it beside your kIntent_Cast claim", FACETS Example 29). fval 0 =
@@ -188,7 +209,8 @@ namespace MFO::APMFBridge {
         req.target = a_target;
         req.flags  = APMF_API::kCastFlag_LeftHand;
         if (ownLos) req.flags |= APMF_API::kCastFlag_OwnLineOfSight;
-        req.ttlMs  = kHealCastTtlMs;
+        req.ttlMs  = APMF_API::kCastMaxTtlMs;   // 15 s: Harbinger times the substrate window from tree start, so the
+                                                //  6 s heal TTL could lapse before the cast; the clamp is the ceiling
         const APMF_API::Handle cast = api->RequestCast(a_follower, kOwnBasis, &req);
         if (cast == APMF_API::kInvalidHandle) {
             api->Release(sub);
@@ -204,6 +226,21 @@ namespace MFO::APMFBridge {
         spdlog::info("[substrate] {:08X} OPEN requested: {} ({:08X}) at {:08X}, left hand, site {} (substrate handle "
                      "{}, cast handle {}) road=substrate-claim", a_follower, SpellName(a_spell), a_spell, a_target,
                      site, sub, cast);
+        lock.unlock();   // CombatStyle takes its own mutex: never under g_subMx
+        const bool styled = WantCastStyle(a_follower);
+        bool gone = false;
+        {
+            std::scoped_lock relock(g_subMx);
+            if (const auto it = g_pairs.find(a_follower); it != g_pairs.end()) it->second.styleWanted = styled;
+            else gone = true;   // a sweep (worker) ended the pair in the unlocked gap: its Clear missed our Want
+        }
+        if (styled && gone) CombatStyle::Clear(a_follower);
+        spdlog::info("[substrate] {:08X} WINDOW: combat style {}, backstop {:.1f} s of unpaused game time (tree-start "
+                     "floor {:.1f} s + cast TTL {} ms + 2.5 s margin), cast claim ttl {} ms road=substrate-claim",
+                     a_follower,
+                     styled ? "MFO_CastStyle applied (cast stance, as a cast gambit in a real fight)"
+                            : "NOT applied (iCastControl is 0 or MFO_CastStyle is missing)",
+                     kBackstopSec, kBackstopTreeStartSec, APMF_API::kCastMaxTtlMs, APMF_API::kCastMaxTtlMs);
         return true;
     }
 
@@ -228,28 +265,40 @@ namespace MFO::APMFBridge {
     }
 
     void ReleaseSubstrateCast(RE::FormID a_follower, const char* a_why) {
-        std::scoped_lock lock(g_subMx);
-        const auto it = g_pairs.find(a_follower);
-        if (it == g_pairs.end()) return;
-        ReleasePairLocked(SubApi(), it->second);
-        spdlog::info("[substrate] {:08X} CLOSED reason=released ({}) after {} ms road=substrate-claim", a_follower,
-                     a_why ? a_why : "?", MsSince(it->second.filed, Clock::now()));
-        g_pairs.erase(it);
+        bool styled = false;
+        {
+            std::scoped_lock lock(g_subMx);
+            const auto it = g_pairs.find(a_follower);
+            if (it == g_pairs.end()) return;
+            ReleasePairLocked(SubApi(), it->second);
+            spdlog::info("[substrate] {:08X} CLOSED reason=released ({}) after {} ms road=substrate-claim", a_follower,
+                         a_why ? a_why : "?", MsSince(it->second.filed, Clock::now()));
+            styled = it->second.styleWanted;
+            g_pairs.erase(it);
+        }
+        if (styled) CombatStyle::Clear(a_follower);   // the cast stance ends with the pair
     }
 
     void SweepSubstrateCasts() {
+        // CombatStyle work collected under g_subMx, applied after it (CombatStyle has its own mutex).
+        std::vector<RE::FormID> styleClear;
+        {
         std::scoped_lock lock(g_subMx);
         if (g_pairs.empty()) return;
         const auto* api = SubApi();
         const auto  now = Clock::now();
+        const double clk = Scheduler::ServiceClock();   // worker (the pump body): the thread that advances it
         for (auto it = g_pairs.begin(); it != g_pairs.end();) {
             const RE::FormID fid = it->first;
             auto& pr = it->second;
             if (!api) {   // Harbinger gone mid-session (cannot happen in practice): nothing to ask, forget the pair
+                if (pr.styleWanted) styleClear.push_back(fid);
                 it = g_pairs.erase(it);
                 continue;
             }
             const auto age = now - pr.filed;
+            if (pr.filedClk < 0.0) pr.filedClk = clk;   // anchored at the first sweep (the open may be on the main thread)
+            const double unpausedAge = clk - pr.filedClk;
             const bool subLive  = pr.sub  != APMF_API::kInvalidHandle && api->IsClaimLive(pr.sub);
             const bool castLive = pr.cast != APMF_API::kInvalidHandle && api->IsClaimLive(pr.cast);
             if (subLive) pr.subEverLive = true;
@@ -312,20 +361,25 @@ namespace MFO::APMFBridge {
                              "road=substrate-claim", fid, pr.closeReason ? pr.closeReason : "?",
                              MsSince(pr.filed, now), SpellName(pr.spell), pr.spell, pr.target, pr.site,
                              pr.held ? ", was held" : "", pr.claimed ? ", was claimed" : "");
+                if (pr.styleWanted) styleClear.push_back(fid);
                 it = g_pairs.erase(it);
                 continue;
             }
-            if (age >= kBackstop) {
+            if (unpausedAge >= kBackstopSec) {
                 ReleasePairLocked(api, pr);
-                spdlog::error("[substrate] {:08X} CLOSED reason=timeout: the pair stood {} ms (past Harbinger's 15 s "
-                              "TTL clamp) and MFO never saw it close -- both claims released ({} ({:08X}) at {:08X}, "
-                              "{}) road=substrate-claim", fid, MsSince(pr.filed, now), SpellName(pr.spell), pr.spell,
-                              pr.target, pr.site);
+                spdlog::error("[substrate] {:08X} CLOSED reason=timeout: the pair stood {:.1f} s of unpaused game time "
+                              "({} ms wall; backstop {:.1f} s = tree-start floor + cast TTL + margin) and MFO never "
+                              "saw it close -- both claims released ({} ({:08X}) at {:08X}, {}) "
+                              "road=substrate-claim", fid, unpausedAge, MsSince(pr.filed, now), kBackstopSec,
+                              SpellName(pr.spell), pr.spell, pr.target, pr.site);
+                if (pr.styleWanted) styleClear.push_back(fid);
                 it = g_pairs.erase(it);
                 continue;
             }
             ++it;
         }
+        }   // g_subMx
+        for (const RE::FormID fid : styleClear) CombatStyle::Clear(fid);   // the cast stance ends with the pair
     }
 
     void ClearSubstrateCasts() {
