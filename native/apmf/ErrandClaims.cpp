@@ -110,17 +110,14 @@ namespace MFO::APMFBridge {
             return c.hold != APMF_API::kInvalidHandle;
         }
 
-        // mfo-272: the ch.19 kTravel_CrossCells flag (paired Harbinger follow-up; marth 2026-10-25 "Moveto using harbinger will have a flag
-        // for cell crossing"). NOT IN ANY SHIPPED APMF_API.h yet, so it is NOT declared there (the header mirrors APMF's copy byte for byte):
-        // the bit and the ABI that will carry it are held HERE, and kCrossCellsAbi = 0 keeps the flag OFF until Harbinger ships it. When it
-        // does: add the enum value to APMF_API.h by mirroring Harbinger's header, set kCrossCellsAbi to that ABI, delete these two constants.
-        constexpr std::uint32_t kTravelCrossCellsPending = 1u << 5;   // the next free kTravel_ bit after the gait field (bits 0-4 are taken)
-        constexpr std::uint32_t kCrossCellsAbi           = 0;         // 0 = no Harbinger carries the flag yet
+        // mfo-272: the ch.19 kTravel_CrossCells flag (marth 2026-10-25 "Moveto using harbinger will have a flag for cell crossing"),
+        // shipped by Harbinger in ABI v30: a ref leg paths load doors natively, arrives by cell + radius and holds.
+        constexpr std::uint32_t kCrossCellsAbi = 30;
 
         std::uint32_t TravelFlags(const APMF_API::APMF_API_v24* a_api) {
             const int gait = std::clamp(Config::g_travelGait.load(), 0, 3);
             std::uint32_t f = APMF_API::kTravel_SpeedSet | ((static_cast<std::uint32_t>(gait) << 3) & APMF_API::kTravel_SpeedMask);
-            if constexpr (kCrossCellsAbi != 0) { if (a_api->abiVersion >= kCrossCellsAbi) f |= kTravelCrossCellsPending; }
+            if constexpr (kCrossCellsAbi != 0) { if (a_api->abiVersion >= kCrossCellsAbi) f |= APMF_API::kTravel_CrossCells; }
             return f;
         }
 

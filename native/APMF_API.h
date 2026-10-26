@@ -89,10 +89,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v29, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v30, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 29;
+    inline constexpr std::uint32_t kABIVersion = 30;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -746,6 +746,19 @@ namespace APMF_API {
                                         //   running package keeps the speed it started with until the
                                         //   package next starts. APMF logs that case. Release and
                                         //   re-request to change gait mid-walk.
+
+        kTravel_CrossCells = 1u << 5,   // ABI v30. A REFERENCE destination (an actor or any object ref, not a
+                                        //   cell, not kTravel_ToPosition) that may be in ANOTHER cell. The
+                                        //   package still names the ref's handle, so the engine paths through
+                                        //   load doors and follows a moving actor. ARRIVAL = in the
+                                        //   destination's current parent cell (interior) or the same worldspace
+                                        //   (exterior) AND within the radius; a destination unloaded outdoors
+                                        //   (only its worldspace's persistent cell known) is waited for. On
+                                        //   arrival the leg HOLDS like a cell leg (kLeg_Arrived, the offer
+                                        //   stays until you Repoint or Release). Without it: unchanged.
+                                        //   Gate on abiVersion >= 30: an older APMF ignores the bit (distance
+                                        //   arrival, no hold).
+                                        //   See Docs/APMF_API-REFERENCE.md#abi-v30-travel-cross-cells
     };
 
     // ── Travel LEG STATE (ABI v12, APMF_API_v12::GetTravelLegState) ──────────────
@@ -2699,6 +2712,9 @@ namespace APMF_API {
         // the next frame). A throw inside returns kFacetPriorityUnknown.
         std::int32_t (*GetClientFacetPriority)(std::uint32_t facet);
     };
+
+    // ABI v30 (kTravel_CrossCells, a TravelFlags bit read through the EXISTING RequestEx / Repoint) adds NO slot:
+    // the interface object stays an APMF_API_v29 and `abiVersion` reports 30.
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up
