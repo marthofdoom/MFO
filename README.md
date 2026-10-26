@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.7.0** (see [`VERSION`](VERSION) and the
+**Status: v2.7.2** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -181,6 +181,14 @@ requirement across these mods, not an afterthought. Settings live in an
 leash and walk-to-loot.
 
 ---
+
+## What is new in 2.7.2
+
+- **Needs Harbinger v0.15.0 (ABI v30) for the cross cell walks.** MFO works with an older Harbinger, without them.
+- **Town errands walk to the vendor.** Shops are planned from the person who runs them, whether they are open and where they are now. A vendor in several factions is found, a stuck walk is always placed, and the follower is held while he waits for a vendor.
+- **Gear Harbinger will not let a follower equip is sold, not bought.** Set EquipWeapon or EquipArmor to 0 for MFO on the Harbinger page.
+- **Substrate casts stay OFF by default** (`bSubstrateCasts=0`) until the field test.
+- **Progression Add-On v1.1.5** goes with this release. It carries the crafting perk pool setting.
 
 ## What is new in 2.7.0
 

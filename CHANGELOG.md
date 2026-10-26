@@ -5,6 +5,17 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.7.2 -- Town errands, vendors and walking
+
+- **Shops are planned from the person who runs them.** MFO now asks who runs a shop, whether it is open and where that person is right now, and the follower walks to the vendor himself. A vendor who moves is found again on arrival and when he leaves.
+- **A vendor in more than one faction is found.** A vendor who belongs to several vendor factions, such as Adrianne at the Warmaidens, now counts as a member of each of them. Before, only the first one counted and the shop looked empty.
+- **A stuck walk is always placed.** When a walk to a stop is blocked and retried, the follower is now placed at the stop every time, not only when he stood still between blocks. A smith stop is placed too.
+- **The hold is kept while a follower waits for a vendor.** The claim that holds him is kept while the retries run, so his follow package no longer takes him back out.
+- **Followers walk through doors to the vendor (Harbinger ABI v30).** MFO now sets `kTravel_CrossCells` on the walk to a vendor, so Harbinger walks the follower through doors the game's own way. This needs Harbinger v0.15.0. With an older Harbinger the walks work as before, without the cross cell walk.
+- **Gear a follower may not equip is sold, and not bought (Harbinger ABI v29).** If you set EquipWeapon or EquipArmor to 0 for MFO on the Harbinger page, a looted upgrade in that category is marked for selling. The shop no longer buys melee weapons, off hand items, silver weapons, ranged weapons or shields when EquipWeapon is 0, and no armor or mage apparel when EquipArmor is 0. Ammo is untouched. Older Harbinger versions behave as before.
+- **The out of combat substrate cast got its own stance.** While the substrate pair stands, the follower takes the cast combat style through its own bit, and a real fight restores the style the engine had. The backstop counts 27.5 seconds of unpaused game time, and the cast claim lasts 15 seconds. Substrate casts stay OFF by default (`bSubstrateCasts=0`) until the field test. Needs Harbinger v0.15.0 to work.
+- **Progression Add-On v1.1.5 goes with this release.** It carries the crafting perk pool setting, "Levels per crafting perk point" (`iLevelsPerCraftPerkPoint`, default 4, 0 disables). Install the new add-on file beside MFO.
+
 ## v2.7.1 -- Town errands fixes
 
 - **Town shops are no longer cut off by the travel radius.** A shop in the town the player stands in is planned even when its door is far from the player. The shops are ordered nearest first before the plan limit is applied.

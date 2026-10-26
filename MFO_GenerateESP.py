@@ -1465,7 +1465,7 @@ OWN_PROG = 0x01000000                  # ESL own-form prefix: 1 master (Skyrim.e
 # marth 2026-10-01). The value is a float32 GLOB, so a dotted x.y.z cannot be stored; nothing in
 # the DLL gates on it. Bump by hand with the add-on (no machine-readable add-on version exists;
 # VERSION is MFO's own, 2.x).
-PROG_VERSION_STAMP = 1.104
+PROG_VERSION_STAMP = 1.105
 
 PGID_VERSION            = OWN_PROG | 0x800  # GLOB detection anchor + version stamp
 PGID_RESERVED           = OWN_PROG | 0x801  # GLOB spare future gate (design §10)
