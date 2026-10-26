@@ -2273,7 +2273,7 @@ FIX (marth 2026-10-21, "Evaluate the conditions"): `SpouseGate` evaluates a non-
 
 ### MFO-B465 (SEV-5, OPEN, logistics/Economy.cpp BuildBuyThresholds equip-off buy gate, raised against cc1dc1f, Opus tier-3 review) -- EquipArmor 0 also stops shield buys
 With EquipArmor at 0 and EquipWeapon on, `buy.buyArmor = false` also stops shield buys, although a shield ranks on EquipWeapon (the sell side follows EquipWeapon for a shield). Asymmetric with the sell scan; harmless (no shield is bought, none is sold while kept).
-### MFO-B465 (SEV-4, OPEN, logistics/ErrandVendors.cpp BuildIndex, against a19762b, Opus review of fix/mfo-272) -- vendor index main-thread cost unmeasured
+### MFO-B470 (SEV-4, OPEN, logistics/ErrandVendors.cpp BuildIndex, against a19762b, Opus review of fix/mfo-272) -- vendor index main-thread cost unmeasured
 "BuildIndex main-thread cost unmeasured (read 'vendor index built ... N ms'; if > ~30 ms move to kPostLoadGame)". Reviewer's reasoning: the build walks the whole all-forms map on the main thread once per load (and again per town change / NoMembers rebuild after review F1); its cost on a large list is not known until the field line is read.
 
 ### MFO-B466 (SEV-4, OPEN, logistics/Errand.cpp BuildCatalog + Reopen / later stops, against a19762b, Opus review of fix/mfo-272) -- destinations frozen at plan time
