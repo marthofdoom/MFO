@@ -2267,3 +2267,6 @@ FIX (marth 2026-10-21, "Evaluate the conditions"): `SpouseGate` evaluates a non-
 - **SEV-4:** `InnFactionsOf` food filter drops a modded inn whose innkeeper list uses a custom food keyword (town then rests at the last shop). Log the filtered faction.
 - **SEV-5:** the catalog cap moved after the loop, so fence/spouse gates and `ShopDoorFor` posts run for shops the cap would have cut.
 - **SEV-5:** `clamp(0.5*destRad, 20, 90)` also moves vendor-actor placements to 85 u, and a radius-50 ref to 25 u (could land inside counter collision).
+- **SEV-4 (MFO-B464, re-review of 53f902b):** `refNear` compares no worldspace (a city child worldspace shares Tamriel's coordinates): add `GetWorldspace()` equality.
+- **SEV-4 (MFO-B464):** a 2c advance past a stop whose trade finished but whose outcome was not yet taken (dispatched, not reported, no live order) marks it Skipped and nothing takes the outcome before a rest-only inn or temple: tripSpent and NoteUnsold / NoteLate are lost.
+- **SEV-4 (MFO-B464):** a rest-only inn resumed on screen whose innkeeper is loaded in his cell walks to the innkeeper and runs the vendor path with no order.
