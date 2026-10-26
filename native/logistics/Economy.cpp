@@ -449,6 +449,35 @@ namespace MFO::Logistics {
                         }
                     }
                 }
+
+                // EQUIP OFF IN HARBINGER (ABI v29, ClickUp 1dfcuabbh1e; the sell scan's block in EconomyProbeImpl):
+                // with MFO's EquipWeapon / EquipArmor priority at 0 he never buys an upgrade of that kind, which the
+                // sell scan would only sell again next visit. Ammo (the swap-up, silver ammo) is untouched. A shield
+                // follows EquipWeapon (it holds the left hand). APMFBridge logs once per change.
+                const bool buyWeaponOn = APMFBridge::EquipWeaponEnabled();
+                const bool buyArmorOn  = APMFBridge::EquipArmorEnabled();
+                if (!buyWeaponOn) {
+                    buy.meleeClass       = static_cast<std::int32_t>(WepClass::Other);   // 3 = no melee buy
+                    buy.wantOffHand      = false;
+                    buy.offHandBaseScore = 0.0f;
+                    buy.wantSilver       = false;
+                    buy.silverOneHand    = false;
+                    buy.doRanged         = false;   // PlanBuy's ranged weapon category only
+                    buy.armorBaseRat[4]   = static_cast<std::int32_t>(1.0e9f);   // no shield (the !usesShield saturation)
+                    buy.armorBaseScore[4] = 1.0e9f;
+                }
+                if (!buyArmorOn) {
+                    buy.buyArmor       = false;
+                    buy.buyMageApparel = false;
+                }
+                // When a facet is off and nothing gear-shaped is left (no weapon, armor, apparel or silver ammo buy):
+                // no gear wish either, so an errand plans no gear stop for him. buyMageApparel and silver ammo ride
+                // buyGear in PlanBuy. With both facets on this changes nothing.
+                const bool anyWeaponBuy = buy.meleeClass != static_cast<std::int32_t>(WepClass::Other) ||
+                                          buy.doRanged || buy.wantSilver || buy.wantOffHand;
+                if ((!buyWeaponOn || !buyArmorOn) && !anyWeaponBuy && !buy.buyArmor && !buy.buyMageApparel &&
+                    !buy.wantSilverAmmo)
+                    buy.buyGear = false;
             }
 
             // ── Feature B: tome buy (caster w/ a cast gambit; independent of
@@ -579,6 +608,28 @@ namespace MFO::Logistics {
             const auto&        keepWeapons = keep.weapons;
             const auto&        keepArmor   = keep.armor;
             const auto&        bestBySlot  = keep.bestBySlot;
+
+            // EQUIP OFF IN HARBINGER (ABI v29, ClickUp 1dfcuabbh1e). marth 2026-10-25: "Weapon, or outfit
+            // equipping being disabled(0) in harbinger, also informs MFO so that better equipment that is looted
+            // is still green for selling." With MFO's EquipWeapon / EquipArmor priority at 0 none of its equip
+            // claims win on that facet, so an unworn upgrade the keep set would hold for him is never put on: it
+            // SELLS instead. Read once per scan (APMFBridge, one log line per change). A worn item is untouched
+            // (the `worn` gate below still keeps it). WEAPONS stay narrower: only an unworn weapon of the SAME
+            // class as one he is holding is an upgrade; his other-class weapon (an archer's sheathed sword, a
+            // fighter's spare bow) is his loadout, which the engine still switches between, and stays kept. A
+            // shield ranks on EquipWeapon (Harbinger's FacetForEquipCats: it holds the left hand).
+            const bool equipWeaponOn = APMFBridge::EquipWeaponEnabled();
+            const bool equipArmorOn  = APMFBridge::EquipArmorEnabled();
+            RE::TESObjectWEAP* heldWeap[2] = { nullptr, nullptr };   // right, left
+            if (!equipWeaponOn)
+                for (int hand = 0; hand < 2; ++hand)
+                    if (auto* eq = a_follower->GetEquippedObject(hand == 1)) heldWeap[hand] = eq->As<RE::TESObjectWEAP>();
+            auto upgradesHeld = [&](RE::TESObjectWEAP* a_w) {
+                for (auto* hw : heldWeap)
+                    if (hw && hw != a_w && WeaponClassOf(hw->GetWeaponType()) == WeaponClassOf(a_w->GetWeaponType()))
+                        return true;
+                return false;
+            };
 
             int purse = 0;
             // GEM HANDLING (marth: NEVER HOARD -- ungem-then-sell where possible,
@@ -824,9 +875,22 @@ namespace MFO::Logistics {
                 const bool offRoleLauncher = weap && WeaponClassOf(weap->GetWeaponType()) == WepClass::Ranged &&
                     (!keepRoles.doRanged || (mageModeB24 && !wantsRangedGambit) ||
                      !RangedInFamily(weap, keepRoles.wantCrossbow));
-                if (weap && keepWeapons.count(obj) && !offRoleLauncher) { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
+                const bool unworn = !(data.second && data.second->IsWorn());
+                // Harbinger EquipWeapon / EquipArmor = 0 for MFO (block above): an unworn upgrade is not kept.
+                const bool weapCannotEquip = weap && !equipWeaponOn && unworn && upgradesHeld(weap);
+                // Review F2: with "Wear helmets" OFF every helmet he CARRIES stays in the bag (86e3phy41, marth 10-12).
+                const bool armoCannotEquip = armo && unworn && !(armo->IsShield() ? equipWeaponOn : equipArmorOn) &&
+                                             !(IsHelmetPiece(armo) && !WearsHelmets(&a_state));
+                if (weap && keepWeapons.count(obj) && !offRoleLauncher) {
+                    if (!weapCannotEquip) { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
+                    sdiag(obj, "keepWeap bypassed: Harbinger EquipWeapon is 0 for MFO, an unworn upgrade sells");
+                }
                 if (armo && IsPlayerPick(fid, obj->GetFormID())) { sdiag(obj, "playerPick"); continue; }   // the player put it on him: keep, never sell (round 3)
-                if (armo && keepArmor.count(obj) && !forceSell) { sdiag(obj, "keepArmor"); continue; }   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
+                if (armo && keepArmor.count(obj) && !forceSell) {   // #21 best-in-slot (a worn redundant/blacklisted piece bypasses -> sells)
+                    if (!armoCannotEquip) { sdiag(obj, "keepArmor"); continue; }
+                    sdiag(obj, armo->IsShield() ? "keepArmor bypassed: Harbinger EquipWeapon is 0 for MFO, an unworn shield sells"
+                                                : "keepArmor bypassed: Harbinger EquipArmor is 0 for MFO, an unworn upgrade sells");
+                }
                 RE::BGSKeywordForm* kwf = weap
                     ? static_cast<RE::BGSKeywordForm*>(weap)
                     : static_cast<RE::BGSKeywordForm*>(armo);

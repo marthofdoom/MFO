@@ -949,6 +949,18 @@ namespace MFO::APMFBridge {
     // its minimum APMF are unchanged.
     bool EquipInstanceSupported();
 
+    // Any thread. CAN MFO EQUIP THIS CATEGORY (ABI v29, ClickUp 1dfcuabbh1e)? FALSE only when Harbinger is
+    // connected, is ABI >= 29, and MFO's own priority on that facet (GetClientFacetPriority: the Harbinger
+    // page's slider / APMF_Sources.ini, `[EquipWeapon]` or `[EquipArmor]` `MFO.dll=0`) is 0 = OFF, so none of
+    // MFO's equip claims win there. TRUE otherwise: Harbinger absent (MFO's own legacy equips), a Harbinger
+    // older than v29 (no query: behave as before, logged once), or a priority above 0. marth 2026-10-25: "Weapon,
+    // or outfit equipping being disabled(0) in harbinger, also informs MFO so that better equipment that is
+    // looted is still green for selling" -- the sell scan (logistics/Economy.cpp) stops KEEPING an unworn upgrade
+    // of a category MFO cannot equip. EquipWeapon = weapons, shields, torches, ammo; EquipArmor = armor.
+    // Logs `[equip-auth] Harbinger EquipWeapon priority for MFO is now OFF/on` once per change.
+    bool EquipWeaponEnabled();
+    bool EquipArmorEnabled();
+
     // Worker-safe. Ensure a_follower holds the STANDING kIntent_EquipAuthority
     // claim (param.ival = kEquipAuth_None: scripts/console pass, unequips pass,
     // observe-only is APMF's own INI decision this cycle). Idempotent: a live claim

@@ -2270,3 +2270,6 @@ FIX (marth 2026-10-21, "Evaluate the conditions"): `SpouseGate` evaluates a non-
 - **SEV-4 (MFO-B464, re-review of 53f902b):** `refNear` compares no worldspace (a city child worldspace shares Tamriel's coordinates): add `GetWorldspace()` equality.
 - **SEV-4 (MFO-B464):** a 2c advance past a stop whose trade finished but whose outcome was not yet taken (dispatched, not reported, no live order) marks it Skipped and nothing takes the outcome before a rest-only inn or temple: tripSpent and NoteUnsold / NoteLate are lost.
 - **SEV-4 (MFO-B464):** a rest-only inn resumed on screen whose innkeeper is loaded in his cell walks to the innkeeper and runs the vendor path with no order.
+
+### MFO-B465 (SEV-5, OPEN, logistics/Economy.cpp BuildBuyThresholds equip-off buy gate, raised against cc1dc1f, Opus tier-3 review) -- EquipArmor 0 also stops shield buys
+With EquipArmor at 0 and EquipWeapon on, `buy.buyArmor = false` also stops shield buys, although a shield ranks on EquipWeapon (the sell side follows EquipWeapon for a shield). Asymmetric with the sell scan; harmless (no shield is bought, none is sold while kept).
