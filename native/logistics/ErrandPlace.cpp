@@ -21,6 +21,7 @@
 #include "apmf/APMFBridge.h"
 #include "APMF_API.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <format>
@@ -205,7 +206,9 @@ namespace MFO::Logistics::Errand::Unstick {
         }
         auto* ref = a_stop.destForm ? RE::TESForm::LookupByID<RE::TESObjectREFR>(a_stop.destForm) : nullptr;
         if (!ref) { Clear(a_follower); a_err = std::format("the stop's destination reference {:08X} does not resolve", a_stop.destForm); return false; }
-        Request(a_follower, a_stop.destForm, Front(ref, kFrontU), 0.0f, 0u,
+        // v2.7.1: inside the leg's own arrival radius (run 6: placed 90 u from a ref whose leg radius was 50 stood 120 s until the stuck timeout).
+        const float frontU = a_stop.destRad > 0.0f ? std::clamp(0.5f * a_stop.destRad, 20.0f, kFrontU) : kFrontU;
+        Request(a_follower, a_stop.destForm, Front(ref, frontU), 0.0f, 0u,
                 std::format("beside the {} {:08X} ('{}')", a_stop.destKind == DestKind::VendorActor ? "vendor" : "shop ref", a_stop.destForm, a_stop.vendorName), gen);
         return true;   // a refusal at the call is parked by Request and read by the next Poll
     }

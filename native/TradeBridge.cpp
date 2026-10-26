@@ -99,7 +99,10 @@ namespace MFO::TradeBridge {
 
         int BaseValue(RE::TESForm* a_form) {
             auto* vf = a_form ? a_form->As<RE::TESValueForm>() : nullptr;
-            return vf ? vf->value : 0;
+            if (vf) return vf->value;
+            // v2.7.1: an AlchemyItem (potion / food) has no TESValueForm, so every potion and meal read 0 and PlanBuy dropped them all.
+            // GetGoldValue is the engine's own read (same call the potion judge and loot scan make).
+            return a_form ? std::max<std::int32_t>(a_form->GetGoldValue(), 0) : 0;
         }
 
         // Which buy category is this stock form, if any? -1 = not a supply the

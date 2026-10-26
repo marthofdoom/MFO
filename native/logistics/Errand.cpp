@@ -404,7 +404,6 @@ namespace MFO::Logistics::Errand {
                 if (!backoffSkipped.empty()) backoffSkipped += ", ";
                 backoffSkipped += std::format("'{}' (chest {:08X})", a_name && *a_name ? a_name : "?", a_chest);
             };
-            const float maxFromPlayer = Config::g_travelRadius.load();
             std::unordered_map<RE::FormID, bool> seenChest;
             bool waiting = false;   // R6: a fence / spouse gate is still waiting for its main-thread condition answer
             bool doorWaiting = false;   // an interior shop's entry-door read (Rest::ShopDoorFor) was just posted to the main thread
@@ -441,7 +440,7 @@ namespace MFO::Logistics::Errand {
                 const auto* vTown = LocationTypes::TownAnchor(v->GetCurrentLocation());
                 if (!vTown || vTown != a_playerTown) { if (open) ++a_dropped; continue; }
                 const float dPlayer = v->GetPosition().GetDistance(pc->GetPosition());
-                if (dPlayer > maxFromPlayer) { if (open) ++a_dropped; continue; }
+                // v2.7.1: no travel-radius gate on a TOWN shop (run 6: Arcadia / Belethor lay beyond fTravelRadius yet are in town). The town test above is the gate.
                 if (const auto it = parked.find(v->GetFormID()); it != parked.end() && a_now < it->second) continue;
                 if (backedOff.contains(chest->GetFormID())) { noteBackoff(chest->GetFormID(), v->GetName()); continue; }
                 if (seenChest.contains(chest->GetFormID())) continue;   // one actor per chest is enough
@@ -488,6 +487,7 @@ namespace MFO::Logistics::Errand {
                         }
                     }
                 }
+                std::vector<Cand> catalogOpen;
                 std::vector<ShopStatic> shops;
                 bool have = false;
                 {
@@ -500,7 +500,6 @@ namespace MFO::Logistics::Errand {
                     g_townShops[a_playerTown->GetFormID()] = shops;
                 }
                 for (const auto& sh : shops) {
-                    if (out.size() >= kMaxCands) break;
                     if (seenChest.contains(sh.chest)) continue;   // a loaded vendor already covers this chest
                     auto* fac = RE::TESForm::LookupByID<RE::TESFaction>(sh.faction);
                     if (!fac) continue;
@@ -534,20 +533,27 @@ namespace MFO::Logistics::Errand {
                         if (!ref) continue;
                         placePos = ref->GetPosition();
                         d = placePos.GetDistance(pc->GetPosition());
-                        if (d > maxFromPlayer) { if (open) ++a_dropped; continue; }
+                        // An INTERIOR ref has no comparable position: reach it through its cell's door like a Cell shop.
+                        if (auto* rc = ref->GetParentCell(); rc && rc->IsInteriorCell()) {
+                            const int ir = interiorPlace(rc->GetFormID());
+                            if (ir < 0) { doorWaiting = true; continue; }
+                            if (ir == 0) { if (open) ++a_dropped; continue; }
+                        }
                     } else {
                         const int r = interiorPlace(sh.place);
                         if (r < 0) { doorWaiting = true; continue; }
                         if (r == 0) { if (open) ++a_dropped; continue; }
-                        if (d > maxFromPlayer) { if (open) ++a_dropped; continue; }
                     }
                     seenChest[sh.chest] = true;
                     Cand c;
                     c.id = sh.faction; c.fac = fac; c.chest = sh.chest; c.dist = d;
                     c.kind = sh.kind; c.destForm = sh.place; c.destRad = sh.rad;
                     c.pos = placePos; c.havePos = true;
-                    (open ? out : *a_closedOut).push_back(c);
+                    (open ? catalogOpen : *a_closedOut).push_back(c);
                 }
+                // v2.7.1: nearest first, THEN the cap (the radius gate used to thin this list; without it a big town would fill the cap in catalog order)
+                std::stable_sort(catalogOpen.begin(), catalogOpen.end(), [](const Cand& a, const Cand& b) { return a.dist < b.dist; });
+                for (auto& c : catalogOpen) { if (out.size() >= kMaxCands) break; out.push_back(c); }
             }
             if (waiting || doorWaiting) {
                 if (a_closedOut) a_closedOut->clear();   // never commit a trip that silently lacks the fence / spouse store / a shop whose door is being read: re-plan on the next cadence (6 s)
@@ -944,6 +950,7 @@ namespace MFO::Logistics::Errand {
             return ui && ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME);
         }
         bool OpenAtHour(const RE::TESFaction* a_fac, float a_hour) { return a_fac && OpenAt(a_fac, a_hour); }
+        bool FactionTradesKeyword(const RE::TESFaction* a_fac, RE::FormID a_kw) { return a_fac && ListTrades(a_fac, a_kw); }
         RE::FormID PlayerTownId() {
             auto* pc = RE::PlayerCharacter::GetSingleton();
             const RE::BGSLocation* here = pc ? LocationTypes::TownAnchor(pc->GetCurrentLocation()) : nullptr;
@@ -1839,7 +1846,20 @@ namespace MFO::Logistics::Errand {
                                             false, kFailCooldownSec);
                         }
                     }
-                    if (pleg.state == APMF_API::kLeg_Arrived) {
+                    // v2.7.1 (2b, run 6): a REF place-walk that stands within talking reach on the same floor is an arrival even while the leg
+                    // still reads WALKING (mirrors the vendor backstop below), so a placement that lands just outside the leg radius cannot stand 120 s.
+                    bool refNear = false;
+                    if (pleg.state == APMF_API::kLeg_Walking && r.destKind == DestKind::Ref && r.destForm) {
+                        if (auto* dref = RE::TESForm::LookupByID<RE::TESObjectREFR>(r.destForm); dref && dref->GetParentCell() && a_follower->GetParentCell() &&
+                            (dref->GetParentCell() == a_follower->GetParentCell() ||
+                             (!dref->GetParentCell()->IsInteriorCell() && !a_follower->GetParentCell()->IsInteriorCell()))) {
+                            const auto fp = a_follower->GetPosition(), dp = dref->GetPosition();
+                            refNear = fp.GetDistance(dp) <= kArriveDist && std::abs(fp.z - dp.z) <= kSameFloorDz;
+                            if (refNear) spdlog::info("[errand] {:08X} '{}': ARRIVED at the shop place {:08X} by MFO distance backstop while the leg still reads WALKING",
+                                                      fid, r.followerName, r.destForm);
+                        }
+                    }
+                    if (pleg.state == APMF_API::kLeg_Arrived || refNear) {
                         // R7: an INN / TEMPLE stop. The temple has no vendor; the inn has the innkeeper only when a food order was planned and he
                         // stands there -- otherwise the stop is REST ONLY (logged) and the work begins at once.
                         const StopKind kind = r.cur < r.stops.size() ? r.stops[r.cur].kind : StopKind::Shop;
