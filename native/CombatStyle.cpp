@@ -33,6 +33,13 @@ namespace MFO::CombatStyle {
             RE::TESCombatStyle*    saved    = nullptr;        // engine-derived style this fight
             std::uint32_t          rederives = 0;             // engine re-derived under us, times
             bool                   equipOrder = false;        // T#75: stance came from an EQUIP gambit
+            // feat/mfo-substrate-followup (review F1): an OOC substrate cast pair's OWN ownership of the cast
+            // stance, separate from `stance` (the combat table's). Applied only by the substrate-only ApplyTick.
+            bool                   substrateCast  = false;
+            std::uint64_t          substrateSeq   = 0;   // the owning pair's seq (stale-call guard, see the header)
+            // Review F2: a real fight took the substrate controller while our cast style stood on it -- the next
+            // ApplyTick on `cc` writes `saved` back. Cancelled by any Want / WantSubstrateCast.
+            bool                   restorePending = false;
         };
 
         // Written by Want/Clear (worker) AND ApplyTick (combat thread), so a
@@ -53,6 +60,21 @@ namespace MFO::CombatStyle {
             for (const auto& [fid, o] : g_owned)
                 if (o.equipOrder) ++n;
             g_equipOrders.store(n, std::memory_order_relaxed);
+        }
+
+        // Drop the COMBAT-TABLE stance of an entry (g_mx held). The entry itself survives while the substrate pair
+        // owns its bit or a restore is pending; cc/saved/applied are kept so the substrate path does not re-baseline
+        // against its own MFO style.
+        void DropTableStanceLocked(std::unordered_map<RE::FormID, Owned>::iterator a_it) {
+            auto& o = a_it->second;
+            if (o.substrateCast || o.restorePending) {
+                o.stance     = Stance::None;
+                o.equipOrder = false;
+            } else {
+                g_owned.erase(a_it);
+            }
+            g_count.store(g_owned.size(), std::memory_order_relaxed);
+            RecountEquipOrders();
         }
 
         // HARBINGER CLIENT MODE (fix/mfo-gates-client-only, 2026-10-11). Set ONCE at
@@ -127,6 +149,7 @@ namespace MFO::CombatStyle {
         // is a handoff, not a re-baseline.
         auto& o = g_owned[a_follower];
         o.stance = a_stance;
+        o.restorePending = false;   // review F2: the combat table owns the controller now -- no restore over it
         // T#75: only a WEAPON stance can be an equip order, and a later Want
         // that is not one (a cast latch flipping the stance to Cast, the class
         // override) RELEASES the hold -- the flag always tracks the most
@@ -142,9 +165,7 @@ namespace MFO::CombatStyle {
             std::lock_guard<std::mutex> lk(g_mx);
             if (const auto it = g_owned.find(a_follower); it != g_owned.end()) {
                 wasOrder = it->second.equipOrder;
-                g_owned.erase(it);
-                g_count.store(g_owned.size(), std::memory_order_relaxed);
-                RecountEquipOrders();
+                DropTableStanceLocked(it);   // the substrate bit / a pending restore survive (review F1)
             }
         }
         // Client mode: the order's ch.15 claim ends with it (combat end, death,
@@ -169,9 +190,41 @@ namespace MFO::CombatStyle {
         // true->false lifecycle.
         auto it = g_owned.find(a_follower);
         if (it == g_owned.end() || !it->second.equipOrder) return;
-        g_owned.erase(it);
+        DropTableStanceLocked(it);
+    }
+
+    void WantSubstrateCast(RE::FormID a_follower, std::uint64_t a_seq) {
+        std::lock_guard<std::mutex> lk(g_mx);
+        if (const auto it = g_owned.find(a_follower);
+            it != g_owned.end() && it->second.substrateCast && a_seq < it->second.substrateSeq)
+            return;   // a late Want for an ENDED pair: a newer pair owns the bit
+        auto& o = g_owned[a_follower];   // a new entry has stance None: the table's stance is never touched here
+        o.substrateCast  = true;
+        o.substrateSeq   = a_seq;
+        o.restorePending = false;
         g_count.store(g_owned.size(), std::memory_order_relaxed);
-        RecountEquipOrders();
+    }
+
+    void ClearSubstrateCast(RE::FormID a_follower, std::uint64_t a_seq, bool a_restore) {
+        std::lock_guard<std::mutex> lk(g_mx);
+        const auto it = g_owned.find(a_follower);
+        // Not the stored seq = a late Clear for an ended pair after a newer pair's Want: the bit is not ours.
+        if (it == g_owned.end() || !it->second.substrateCast || it->second.substrateSeq != a_seq) return;
+        auto& o = it->second;
+        o.substrateCast = false;
+        // Restore only what WE left standing: our cast style is the last write on a controller, and no table stance
+        // owns that controller (a table stance hands off from Cast on its own next tick).
+        if (a_restore && o.stance == Stance::None && o.cc && o.applied == Stance::Cast) {
+            o.restorePending = true;
+            spdlog::info("[wstyle] {:08X}: substrate cast stance ENDED by a real fight -- restore of the saved "
+                         "engine style {:08X} armed for the next combat tick on that controller",
+                         a_follower, o.saved ? o.saved->GetFormID() : 0);
+            return;
+        }
+        if (o.stance == Stance::None && !o.restorePending) {
+            g_owned.erase(it);
+            g_count.store(g_owned.size(), std::memory_order_relaxed);
+        }
     }
 
     bool HoldsEquipOrder(RE::FormID a_follower) {
@@ -213,7 +266,7 @@ namespace MFO::CombatStyle {
                          "equipment claim made, so its t2a denies spell/staff re-arms (client mode)", id, weap);
     }
 
-    void ApplyTick(RE::Actor* a_actor, RE::CombatController* a_cc) {
+    void ApplyTick(RE::Actor* a_actor, RE::CombatController* a_cc, bool a_substrateOnly) {
         if (!a_actor || !a_cc) return;
 
         // The P1 cast-style probe (CasterConsent, bProbeCastStyle -- dev-only,
@@ -231,8 +284,36 @@ namespace MFO::CombatStyle {
         if (it == g_owned.end()) return;
         auto& o = it->second;
 
-        RE::TESCombatStyle* target = StyleFor(o.stance);
-        if (!target) return;   // form missing -> stance disabled, silent per the "one feature" rule
+        // Review F2: a real fight took the substrate controller while our cast style stood on it. Write the engine's
+        // own style back on THAT controller (identity compare only; `saved` is a form, never freed), then drop the
+        // entry if nothing else owns it. Any other controller: the old one is gone and its style with it.
+        if (o.restorePending) {
+            o.restorePending = false;
+            if (o.cc == a_cc && o.saved) {
+                a_cc->combatStyle = o.saved;
+                o.applied = Stance::None;
+                spdlog::info("[wstyle] {:08X} {}: substrate cast stance over -- engine combat style {:08X} RESTORED "
+                             "on the controller the real fight kept", fid, a_actor->GetName() ? a_actor->GetName() : "?",
+                             o.saved->GetFormID());
+            } else {
+                spdlog::info("[wstyle] {:08X}: substrate cast style restore DROPPED ({})", fid,
+                             o.cc != a_cc ? "a different controller: the substrate one is gone, its style with it"
+                                          : "no saved engine style to write back");
+            }
+            if (o.stance == Stance::None && !o.substrateCast) {
+                g_owned.erase(it);
+                g_count.store(g_owned.size(), std::memory_order_relaxed);
+                RecountEquipOrders();
+            }
+            return;
+        }
+
+        // Review F1: the two owners never mix. A substrate controller gets the substrate pair's cast stance iff its
+        // bit is set (a combat-table stance, stale or live, is ignored there); a real fight gets the table's stance
+        // only (the bit is ignored; its Cast write hands off or is restored when the pair closes).
+        const Stance want = a_substrateOnly ? (o.substrateCast ? Stance::Cast : Stance::None) : o.stance;
+        RE::TESCombatStyle* target = StyleFor(want);
+        if (!target) return;   // no owner on this path, or form missing -> stance disabled, silent per the "one feature" rule
 
         // A DIFFERENT controller than we last swapped means the fight that swap
         // lived in is over -- its controller (and our swap) died with it, and
@@ -244,12 +325,12 @@ namespace MFO::CombatStyle {
             o.cc        = a_cc;
             o.saved     = a_cc->combatStyle;
             o.rederives = 0;
-            o.applied   = o.stance;
+            o.applied   = want;
             a_cc->combatStyle = target;
             spdlog::info("[wstyle] {:08X} {}: combat style OWNED {:08X} -> {:08X} ({} stance)",
                          fid, a_actor->GetName() ? a_actor->GetName() : "?",
                          o.saved ? o.saved->GetFormID() : 0,
-                         target->GetFormID(), Name(o.stance));
+                         target->GetFormID(), Name(want));
             return;
         }
 
@@ -259,11 +340,11 @@ namespace MFO::CombatStyle {
         //  * the engine RE-DERIVED the style under us mid-combat -- re-assert so
         //    the follower stays in the gambit's stance (the cast probe proved
         //    the engine does this; count it).
-        if (o.applied != o.stance) {
+        if (o.applied != want) {
             a_cc->combatStyle = target;
-            o.applied = o.stance;
+            o.applied = want;
             spdlog::info("[wstyle] {:08X}: stance HANDOFF -> {:08X} ({})",
-                         fid, target->GetFormID(), Name(o.stance));
+                         fid, target->GetFormID(), Name(want));
         } else if (a_cc->combatStyle != target) {
             // The engine re-derived the base style under us mid-combat (the cast
             // probe proved it does). COUNT it regardless of the toggle below --
@@ -293,7 +374,7 @@ namespace MFO::CombatStyle {
             if (o.rederives == 1)
                 spdlog::info("[wstyle] {:08X}: engine RE-DERIVED the style under the swap "
                              "-- re-asserting {} ({}) each tick (silenced after first)",
-                             fid, target->GetFormID(), Name(o.stance));
+                             fid, target->GetFormID(), Name(want));
         }
     }
 
