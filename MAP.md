@@ -3606,7 +3606,13 @@ module. Module layout:
   reason: `deniedWorn` — a WORN item whose APMF equip CATEGORY our OWN declaration
   DENIES** (`APMFBridge::EquipAuthorityDenies(fid, kEquipCat_Shield)`, the mirror of
   `EquipAuthorityOwns` reading the `denied` half of the scope last SENT). **THE BUG
-  IT FIXES (Cicero's shield, field 2026-09-22):** the gate order is `count<=0 → stock
+  IT FIXES (Cicero's shield, field 2026-09-22):** **EQUIP OFF IN HARBINGER (ABI v29, ClickUp 1dfcuabbh1e,
+  2026-10-25):** `EconomyProbeImpl` reads `APMFBridge::EquipWeaponEnabled()` / `EquipArmorEnabled()` once per scan
+  (`logistics/Economy.cpp:592-603`); with a facet at 0 the `keepWeap` / `keepArmor` gates (`:851-862`) no longer
+  keep an UNWORN item of it (a weapon only when a DIFFERENT weapon of its `WeaponClassOf` class is held, so an
+  archer's sheathed sword stays; a shield follows EquipWeapon). Worn items, `playerPick`, stock, gems, museum,
+  excluded are untouched. NOT gated (open question): the BUY side (`BuildBuyThresholds`) still buys an upgrade
+  the sell side then sells. The gate order is `count<=0 → stock
   → keepWeap → playerPick → keepArmor → forceSell | worn → gemHold → excluded →
   SELL`; `worn` is tested BEFORE `gemHold`, so **`gemHold` was never the blocker and
   `worn` always was**. For a denied category that read is permanently wrong: APMF's
@@ -6232,6 +6238,12 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
   - `apmf/Equip.cpp` (274) = equipment: the ch.15 weapon-order claim (`ClaimEquipment` `:37`,
     `WeaponHandActive` `:65`) and the ch.17 authority (`EquipAuthoritySupported` `:89`,
     `ClaimEquipAuthority` `:111`, `DeclareEquipScope` `:196`, `DeclareEquipSet` `:246`).
+    **`EquipWeaponEnabled` / `EquipArmorEnabled` (`:149-150`, helper `EquipFacetEnabled` `:121`; Harbinger ABI v29
+    `GetClientFacetPriority`, ClickUp 1dfcuabbh1e, 2026-10-25):** FALSE only when Harbinger is v29+ and MFO's own
+    priority on `kFacet_EquipWeapon` / `kFacet_EquipArmor` is 0 (the Harbinger page / `APMF_Sources.ini`). Absent
+    Harbinger or one older than v29 (logged once) -> true, as before. Any thread; one `[equip-auth] Harbinger <facet>
+    priority for MFO is N (on/OFF)` line per change. The call must be made from MFO.dll's own code: Harbinger names
+    the caller by the slot's return address. Consumer: the sell scan (`logistics/Economy.cpp`, below).
   - `apmf/Los.cpp` (~110) = Harbinger line of sight + awareness (ABI v18): `LosSupported` / `LosOf` (GetLineOfSight,
     any thread) / `SenseOf` (SenseActor, main thread only); consumers `Sightline.cpp` (Basis::Own), `EngageOnSight.cpp`.
   - `apmf/TauntClaims.cpp` (~225) = the taunt claims (taunt S2): the taunter's ch.1 + ch.12 v2 idle and the FOE-keyed ch.20 pin (+ ch.21

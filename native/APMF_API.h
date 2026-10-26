@@ -89,10 +89,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v28, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v29, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 28;
+    inline constexpr std::uint32_t kABIVersion = 29;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -2658,6 +2658,46 @@ namespace APMF_API {
         // `out->size` covers the v28 layout, fills `*out`. Read-only; ANY THREAD (a copy under APMF's own leaf
         // lock, no game call). A throw inside returns kPlaceState_Unknown and writes nothing.
         std::uint32_t (*GetPlaceState)(Handle handle, APMF_PlaceStateInfo* out);
+    };
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v29: CLIENT FACET PRIORITY (the Harbinger page / APMF_Sources.ini)
+    // ═════════════════════════════════════════════════════════════════════════════
+    // What priority does the CALLING client have on a facet? The player sets it per (source, facet) on the
+    // Harbinger SKSE Menu page or in Data/SKSE/Plugins/APMF_Sources.ini, 0..100, and 0 = OFF: a claim of that
+    // client never wins on that facet, so Harbinger enforces none of it there. A client reads it to know what
+    // it cannot do (marth 2026-10-25: Equip at 0 means the follower will not wear an upgrade, so the client
+    // can treat it as sellable). The CALLER is the client DLL that makes the call, named the same way a claim
+    // names its client (the calling module, `_ReturnAddress()`): a client can only read its OWN priorities.
+    // See Docs/APMF_API-REFERENCE.md#abi-v29-client-facet-priority
+    //
+    // The facets, numbered as the Harbinger page and APMF_Sources.ini sections. APPEND-ONLY: never renumber.
+    enum ClientFacet : std::uint32_t {
+        kFacet_Target       = 0,  // [Target]       ch.6 / ch.20: which actor an NPC fights
+        kFacet_Detection    = 1,  // [Detection]    the detection value
+        kFacet_Package      = 2,  // [Package]      ch.9 / ch.19: the running AI package
+        kFacet_EquipWeapon  = 3,  // [EquipWeapon]  weapons, shields, torches, ammo
+        kFacet_CombatAction = 4,  // [CombatAction] ch.7 / ch.23: the combat behaviour tree leaves
+        kFacet_Cast         = 5,  // [Cast]         ch.8: cast choice and execution
+        kFacet_Combat       = 6,  // [Combat]       ch.21 / 22 / 24: entry, re-entry, approach
+        kFacet_Core         = 7,  // [Core]         the spine seats
+        kFacet_ActorValue   = 8,  // [ActorValue]   gait / disposition actor values
+        kFacet_EquipArmor   = 9,  // [EquipArmor]   armor-only items
+    };
+    inline constexpr std::int32_t kFacetPriorityUnknown = -1;   // GetClientFacetPriority: not a facet this APMF knows
+
+    // The v29 interface: APMF_API_v28's members verbatim (prefix EXTENSION), then ONE appended slot.
+    // BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 29` (INVARIANTS #14b); an older
+    // APMF has no query (the client cannot tell, and behaves as if its priority were not 0).
+    struct APMF_API_v29 : APMF_API_v28 {
+        // The calling client's priority on `facet` (a ClientFacet), 0..100; 0 = OFF. A client that has not
+        // filed a claim yet gets the priority its first claim will rank at (APMF_Sources.ini's value for it,
+        // else its [Defaults] client value, 50 out of the box). kFacetPriorityUnknown for a facet value this
+        // APMF does not know.
+        // Read-only, ANY THREAD (atomic loads and a module-cache lookup under a leaf lock, no game call, no
+        // registration). A player change on the page is seen once Harbinger applies it (its main-thread pump,
+        // the next frame). A throw inside returns kFacetPriorityUnknown.
+        std::int32_t (*GetClientFacetPriority)(std::uint32_t facet);
     };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the

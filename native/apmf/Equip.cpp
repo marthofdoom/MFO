@@ -113,6 +113,42 @@ namespace MFO::APMFBridge {
         return api && api->abiVersion >= 25;
     }
 
+    // ABI v29 (ClickUp 1dfcuabbh1e): MFO's own Harbinger priority on an Equip facet. The call is made from
+    // MFO.dll's code, so Harbinger attributes it to MFO exactly as it attributes MFO's claims (by the slot's
+    // return address). One log line per state change per facet (s_last: -1 unknown, 0 off, 1 on).
+    namespace {
+        constexpr std::uint32_t kFacetPrioMinAbi = 29;
+        bool EquipFacetEnabled(std::uint32_t a_facet, const char* a_name, std::atomic<int>& a_last) {
+            auto* api = g_apmf.load(std::memory_order_relaxed);
+            if (!api) return true;   // Harbinger absent: MFO's own legacy equips
+            if (api->abiVersion < kFacetPrioMinAbi) {
+                static std::atomic<bool> s_warnedOld{ false };
+                if (!s_warnedOld.exchange(true))
+                    spdlog::info("[equip-auth] Harbinger ABI v{} has no GetClientFacetPriority (need >= {}) -- MFO "
+                                 "cannot see an EquipWeapon / EquipArmor priority of 0, so the sell scan keeps "
+                                 "upgrades as before (update Harbinger).",
+                                 api->abiVersion, kFacetPrioMinAbi);
+                return true;
+            }
+            const auto* v29 = reinterpret_cast<const APMF_API::APMF_API_v29*>(api);
+            if (!v29->GetClientFacetPriority) return true;
+            const std::int32_t prio = v29->GetClientFacetPriority(a_facet);
+            const bool on = prio != 0;   // kFacetPriorityUnknown (-1) is not "off"
+            const int  now = on ? 1 : 0;
+            if (a_last.exchange(now, std::memory_order_relaxed) != now)
+                spdlog::info("[equip-auth] Harbinger {} priority for MFO is {} ({}): {}.", a_name, prio,
+                             on ? "on" : "OFF",
+                             on ? "the sell scan keeps an unworn upgrade MFO would equip"
+                                : "MFO's equip claims never win there, so an unworn upgrade of that kind is SOLD");
+            return on;
+        }
+        std::atomic<int> s_lastWeapon{ -1 };
+        std::atomic<int> s_lastArmor{ -1 };
+    }
+
+    bool EquipWeaponEnabled() { return EquipFacetEnabled(APMF_API::kFacet_EquipWeapon, "EquipWeapon", s_lastWeapon); }
+    bool EquipArmorEnabled()  { return EquipFacetEnabled(APMF_API::kFacet_EquipArmor, "EquipArmor", s_lastArmor); }
+
     bool ClaimEquipAuthority(RE::FormID a_follower, bool* a_outFresh) {
         if (a_outFresh) *a_outFresh = false;
         auto* api = g_apmf.load(std::memory_order_relaxed);
