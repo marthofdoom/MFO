@@ -2518,6 +2518,10 @@ namespace MFO::Logistics::Errand {
             SyncCur(r);   // R5: the itinerary goes off screen with him
             st.stops = r.stops; st.cur = r.cur; st.tripPurse = r.tripPurse; st.tripSpent = r.tripSpent;
             st.arrived = r.phase != Phase::Walking;
+            if (!st.arrived) {   // mfo-273 item C: Harbinger's own verdict on the walk (its leg ARRIVED) counts as arrived too
+                APMFBridge::LootLegState sl;
+                if (APMFBridge::ReadErrandLeg(fid, sl) && sl.ours && sl.state == APMF_API::kLeg_Arrived) st.arrived = true;
+            }
             st.tradeDispatched = r.dispatched;
             st.tradeDone = r.phase == Phase::Taking || (wasResting && r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Inn);   // R7: an inn stay is past its trade
             Sim::Begin(std::move(st));

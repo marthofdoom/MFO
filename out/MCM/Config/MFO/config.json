@@ -827,6 +827,21 @@
           }
         },
         {
+          "id": "iErrandGait:General",
+          "text": "Economy: town errand walking speed",
+          "type": "enum",
+          "help": "How fast followers walk to a shop on a town errand. Walk, Jog or Run, slowest to fastest. Separate from the loot walk setting. Default Run.",
+          "valueOptions": {
+            "sourceType": "ModSettingInt",
+            "options": [
+              "Walk",
+              "Jog",
+              "Run"
+            ],
+            "defaultValue": 2
+          }
+        },
+        {
           "id": "bWearHelmets:General",
           "text": "Wear helmets",
           "type": "toggle",

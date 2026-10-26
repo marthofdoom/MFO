@@ -348,7 +348,7 @@ namespace MFO::Logistics::Errand {
     // the PLVD place / merchant chest (context only). The vendor-faction -> actor index is built once per load on the MAIN thread from the
     // all-forms map; Locate / IsMember / LoadedVendor run on the worker. Own mutex (a leaf). Session-only, nothing saved.
     namespace Vendors {
-        enum class Answer { Located, Pending, NoMembers, AllGone, NoCell };
+        enum class Answer { Located, Pending, NoMembers, AllGone, NoCell, NotOffering };
         struct Where {
             RE::FormID   actor = 0;
             std::string  name;
@@ -357,7 +357,7 @@ namespace MFO::Logistics::Errand {
             bool         interior = false;
             RE::NiPoint3 pos{};
             const RE::BGSLocation* town = nullptr;  // LocationTypes::TownAnchor of where the actor is now
-            int          members = 0, dead = 0, disabled = 0, noCell = 0;
+            int          members = 0, dead = 0, disabled = 0, noCell = 0, notOffering = 0;   // mfo-273: notOffering = members that would not trade with the player now
         };
         // Membership by the final rank (the base NPC's faction list, then the runtime changes): an actor in several vendor factions is a
         // member of EACH (Errand.cpp VendorFactionOf returns only the first; Adrianne's forge faction is her second).

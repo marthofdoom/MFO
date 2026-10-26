@@ -115,7 +115,7 @@ namespace MFO::APMFBridge {
         constexpr std::uint32_t kCrossCellsAbi = 30;
 
         std::uint32_t TravelFlags(const APMF_API::APMF_API_v24* a_api) {
-            const int gait = std::clamp(Config::g_travelGait.load(), 0, 3);
+            const int gait = std::clamp(Config::g_errandGait.load(), 0, 3);   // mfo-273: the town-errand gait (iErrandGait), not the loot one
             std::uint32_t f = APMF_API::kTravel_SpeedSet | ((static_cast<std::uint32_t>(gait) << 3) & APMF_API::kTravel_SpeedMask);
             if constexpr (kCrossCellsAbi != 0) { if (a_api->abiVersion >= kCrossCellsAbi) f |= APMF_API::kTravel_CrossCells; }
             return f;
@@ -181,7 +181,7 @@ namespace MFO::APMFBridge {
         APMF_API::APMF_Param p{};
         p.form = a_dest;           // the vendor reference (loaded -- Errand.cpp checked)
         p.fval = a_radius;         // APMF clamps to [50,512]
-        const int gait = std::clamp(Config::g_travelGait.load(), 0, 3);
+        const int gait = std::clamp(Config::g_errandGait.load(), 0, 3);
         p.ival = static_cast<std::int32_t>(TravelFlags(api));   // the gait, plus kTravel_CrossCells once Harbinger carries it (mfo-272)
         const APMF_API::Handle h = api->RequestEx(a_follower, APMF_API::kIntent_Travel, kOwnBasis, &p);
         if (h == APMF_API::kInvalidHandle) {

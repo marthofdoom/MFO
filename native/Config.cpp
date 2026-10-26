@@ -282,6 +282,13 @@ namespace MFO::Config {
                 else
                     g_travelGait.store(GaitEngineFromSetting(std::clamp(i, 0, 3)));
             }
+            else if (a_key == "iErrandGait") {   // mfo-273: the town-errand walk gait, same scale + mapping as iTravelGait
+                if (!ParseInt(a_val, i))
+                    spdlog::warn("[config] {}: unparseable value for {} ('{}') -- keeping default",
+                                 a_src, a_key, a_val);
+                else
+                    g_errandGait.store(GaitEngineFromSetting(std::clamp(i, 0, 3)));
+            }
             else if (a_key == "fLeashMin")          setF(g_leashMin,       64.0f, 8192.0f);
             else if (a_key == "fLeashMax")          setF(g_leashMax,       64.0f, 8192.0f);
             else if (a_key == "fHealApproachRadius") setF(g_healApproachRadius, 64.0f, 2048.0f);
@@ -454,6 +461,7 @@ namespace MFO::Config {
             g_excursionMax       = 60.0f;
             g_navmeshGate        = 300.0f;
             g_travelGait         = GaitEngineFromSetting(2);   // MCM "Run" = engine Jog (1), see GaitEngineFromSetting
+            g_errandGait         = GaitEngineFromSetting(2);   // mfo-273: the town-errand walk gait, same default as the loot walk
             g_leashMin           = 512.0f;
             g_leashMax           = 4000.0f;
             g_healApproachRadius = 384.0f;
@@ -521,7 +529,7 @@ namespace MFO::Config {
             { "bMeoAwareGems", "0" },
             { "bMagicLoadout", "1" },          { "bMageDaggersOnly", "1" },
             { "bBeastHeadFix", "1" },
-            { "bRapportToasts", "1" },         { "iTravelGait", "2" },
+            { "bRapportToasts", "1" },         { "iTravelGait", "2" },    { "iErrandGait", "2" },
             { "iMinPotionMag", "0" },
             { "fTravelRadius", "4096.000000" },{ "fBatchLinger", "1.500000" },
             { "fLooseAcquireDist", "300.000000" },

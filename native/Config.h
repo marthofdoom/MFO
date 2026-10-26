@@ -997,6 +997,11 @@ namespace MFO::Config {
     // Default: MCM "Run" (stored 2) = engine Jog (1). Engine Run is no longer
     // reachable from the MCM.
     inline std::atomic<int>   g_travelGait{ 1 };   // engine Jog = MCM "Run" (the default)
+    // mfo-273 (marth 2026-10-26: "town walking speed, separate from regular looting"): the TOWN ERRAND walk gait, iErrandGait. Same MCM option scale
+    // (0=Walk 1=Jog 2=Run) and the same GaitEngineFromSetting mapping as iTravelGait; this atomic is the ENGINE byte too. Read by the errand ch.19
+    // claims (apmf/ErrandClaims.cpp TravelFlags) ONLY; looting keeps g_travelGait. Default = the loot default (MCM "Run" = engine Jog) so nothing
+    // changes until it is set.
+    inline std::atomic<int>   g_errandGait{ 1 };
 
     // NAVMESH GATE (units). Before dispatching a walk, MFO checks the nearest
     // navmesh vertex to the loot ref; if it's farther than this, the ref is
