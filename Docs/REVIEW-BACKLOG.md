@@ -2287,3 +2287,6 @@ With EquipArmor at 0 and EquipWeapon on, `buy.buyArmor = false` also stops shiel
 
 ### MFO-B469 (SEV-5, OPEN, logistics/Errand.cpp ~553) -- vendor-located shops wait on the place-door read only the smith stop needs (raised against 996c445)
 "A vendor-located shop now waits on its place-door read even though only the smith stop uses the place. Bounded (5 min cache). Could be skipped when the shop is not a smithy candidate."
+
+### MFO-B471 (SEV-5, OPEN, apmf/Substrate.cpp SweepSubstrateCasts backstop, against 43906e5, Opus tier-3 review of feat/mfo-substrate-followup, finding F4) -- the backstop has no wall-clock cap
+"F4 SEV-5 backstop no wall cap (ok)". Reviewer's reasoning: `kBackstopSec` (27.5 s) runs on `Scheduler::ServiceClock` (unpaused game time) so a menu or a pause never ages a pair; the cost is that a pair whose clock stops advancing (a long pause, a stalled pump) is never cut by wall time. Graded acceptable: Harbinger's own TTLs bound both claims on its side, and the pair is released by the normal close path once the clock moves.

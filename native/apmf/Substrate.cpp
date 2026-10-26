@@ -120,12 +120,15 @@ namespace MFO::APMFBridge {
 
         // The cast stance held while a pair stands: the SAME Stance::Cast (MFO_CastStyle) a cast gambit owns in a real
         // fight, behind the SAME master gate (iCastControl > 0). The engine's cast score is the combat style's
-        // magicScoreMult x ..., and with no style applied every spell scored 0 under the substrate. Restored the way
-        // the real-fight path restores it: CombatStyle::Clear (the live CSTY dies with the controller). Both calls
-        // take CombatStyle's own mutex, so they run OUTSIDE g_subMx. Returns true iff a Want was made.
+        // magicScoreMult x ..., and with no style applied every spell scored 0 under the substrate. Held through the
+        // pair's OWN bit (CombatStyle::WantSubstrateCast, review F1), never the combat table's stance, so neither
+        // owner overwrites the other. Ended by CombatStyle::ClearSubstrateCast: plain on a normal close (the live
+        // CSTY dies with the substrate controller), with a restore of the saved engine style on reason=real-combat
+        // (the real fight keeps that controller, review F2). Both take CombatStyle's own mutex, so they run OUTSIDE
+        // g_subMx. Returns true iff the bit was set.
         bool WantCastStyle(RE::FormID a_follower) {
             if (Config::g_castControl.load() <= 0 || !Forms::g_castStyle) return false;
-            CombatStyle::Want(a_follower, CombatStyle::Stance::Cast);
+            CombatStyle::WantSubstrateCast(a_follower);
             return true;
         }
 
@@ -234,7 +237,9 @@ namespace MFO::APMFBridge {
             if (const auto it = g_pairs.find(a_follower); it != g_pairs.end()) it->second.styleWanted = styled;
             else gone = true;   // a sweep (worker) ended the pair in the unlocked gap: its Clear missed our Want
         }
-        if (styled && gone) CombatStyle::Clear(a_follower);
+        // Why it ended is unknown here (a real fight among the reasons), so ask for the restore: it arms only if our
+        // cast style is what stands on a controller, and a different controller next tick just drops it.
+        if (styled && gone) CombatStyle::ClearSubstrateCast(a_follower, true);
         spdlog::info("[substrate] {:08X} WINDOW: combat style {}, backstop {:.1f} s of unpaused game time (tree-start "
                      "floor {:.1f} s + cast TTL {} ms + 2.5 s margin), cast claim ttl {} ms road=substrate-claim",
                      a_follower,
@@ -276,12 +281,13 @@ namespace MFO::APMFBridge {
             styled = it->second.styleWanted;
             g_pairs.erase(it);
         }
-        if (styled) CombatStyle::Clear(a_follower);   // the cast stance ends with the pair
+        if (styled) CombatStyle::ClearSubstrateCast(a_follower);   // the pair's cast stance ends with it
     }
 
     void SweepSubstrateCasts() {
         // CombatStyle work collected under g_subMx, applied after it (CombatStyle has its own mutex).
-        std::vector<RE::FormID> styleClear;
+        std::vector<RE::FormID> styleClear;     // normal ends: drop the pair's bit
+        std::vector<RE::FormID> styleRestore;   // reason=real-combat: drop the bit AND restore the saved style (F2)
         {
         std::scoped_lock lock(g_subMx);
         if (g_pairs.empty()) return;
@@ -330,8 +336,11 @@ namespace MFO::APMFBridge {
                 pr.real = true;
                 ReleasePairLocked(api, pr);
                 spdlog::info("[substrate] {:08X} CLOSED reason=real-combat (a real fight dropped the substrate; the "
-                             "cast claim is released, the combat table owns casting) after {} ms{} "
-                             "road=substrate-claim", fid, MsSince(pr.filed, now), pr.fired ? ", fired" : ", not fired");
+                             "cast claim is released, the combat table owns casting{}) after {} ms{} "
+                             "road=substrate-claim", fid,
+                             pr.styleWanted ? "; the cast stance ends and the saved engine style is restored" : "",
+                             MsSince(pr.filed, now), pr.fired ? ", fired" : ", not fired");
+                if (pr.styleWanted) styleRestore.push_back(fid);   // review F2: the real fight keeps this controller
                 it = g_pairs.erase(it);
                 continue;
             }
@@ -379,7 +388,8 @@ namespace MFO::APMFBridge {
             ++it;
         }
         }   // g_subMx
-        for (const RE::FormID fid : styleClear) CombatStyle::Clear(fid);   // the cast stance ends with the pair
+        for (const RE::FormID fid : styleClear) CombatStyle::ClearSubstrateCast(fid);          // ends with the pair
+        for (const RE::FormID fid : styleRestore) CombatStyle::ClearSubstrateCast(fid, true);   // F2: and restore
     }
 
     void ClearSubstrateCasts() {

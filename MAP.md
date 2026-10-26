@@ -2235,11 +2235,16 @@ claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kCastMaxTtlMs` 15 s) a
   **Follow-up (`feat/mfo-substrate-followup`, 2026-10-25; NOT field-run):** (10) the backstop `kBackstopSec` (27.5 s =
   10 tree-start floor + 15 cast TTL + 2.5) is UNPAUSED game time (`Scheduler::ServiceClock`, anchored at the pair's
   first sweep, worker-only): do not return it to wall-clock or below Harbinger's tree-start + TTL window; (11) the pair
-  Wants `CombatStyle::Stance::Cast` (iCastControl > 0, `WantCastStyle`) at open and Clears it when the pair ends (every
-  end except real-combat, where the combat table owns stances); `Targeting.cpp`'s UpdateCombat hook now lets
-  `ApplyTick` run on a SubstrateOnly actor (the target redirect still does not), and the Scheduler's party-OOC
-  `CombatStyle::Clear` is skipped while `SubstrateCastPending` (else it erases the stance every OOC lap). CombatStyle
-  calls are made OUTSIDE `g_subMx`. The `WINDOW:` log line names the style and the budget. `bSubstrateCasts` stays 0.
+  owns the cast stance through its OWN CombatStyle bit (review F1 on 43906e5): `WantCastStyle` (`:129`, iCastControl > 0)
+  calls `CombatStyle::WantSubstrateCast` at open; every end calls `CombatStyle::ClearSubstrateCast` (`:242,284,391`), and
+  the reason=real-combat close calls it with `a_restore` (`:343,392`, review F2: the real fight keeps the substrate
+  controller, so the saved engine style is written back on its next tick). NEVER route the pair through
+  `CombatStyle::Want` / `Clear` again: the combat table's `stance` and the pair's bit must not share a slot (a stale or
+  party-combat table stance otherwise lands on the substrate controller, and the pair's Clear erases the table's).
+  `Targeting.cpp:87` calls `ApplyTick(..., true)` on a SubstrateOnly actor (bit only; the target redirect still does
+  not run), and the Scheduler's party-OOC `CombatStyle::Clear` (`Scheduler.cpp:1101`) runs unconditionally again:
+  Clear drops only the table stance. CombatStyle calls are made OUTSIDE `g_subMx`. The `WINDOW:` log line names the
+  style and the budget. `bSubstrateCasts` stays 0. Backlog MFO-B471 (backstop has no wall-clock cap).
   **Backlog:** read MFO-B310..B315 (the substrate-not-combat review, MAP Scheduler entry) and MFO-B332..B336 (this
   road's review on 733c20cc: NOT OPENED repeats, the g_neverFired early erase, the riften AnchorOnlyLeak false ERROR,
   spdlog under g_subMx) before editing. B310 (MFO's own CheckStartCast soft deny still runs under a substrate
@@ -2950,6 +2955,15 @@ the AI can't re-arm magic over a forced weapon.
   `CombatInventoryItem::item==0x10` (`:250`). The 30-vtable list deliberately
   EXCLUDES weapon/potion/scroll/shout (`:376`) — widening it denies combat drinking
   (v1.0.32 lesson).
+- **TWO OWNERS per entry (feat/mfo-substrate-followup, 2026-10-25):** `Owned.stance` (+ `equipOrder`) is the COMBAT
+  TABLE's; `Owned.substrateCast` is the OOC substrate pair's (`WantSubstrateCast` `:195` / `ClearSubstrateCast`
+  `:203`, from `apmf/Substrate.cpp` only); `Owned.restorePending` (review F2) writes `saved` back on the next
+  `ApplyTick` with `o.cc == a_cc` (`:263`), cancelled by any `Want` / `WantSubstrateCast`, dropped on a different
+  controller. `ApplyTick(a_substrateOnly=true)` applies Cast iff the bit is set and ignores `stance`; the real-fight call
+  ignores the bit. `Clear` / `ReleaseEquipOrder` go through `DropTableStanceLocked` (`:67`): they drop the table stance
+  and erase the entry only when neither the bit nor a restore stands. What breaks: an entry may now exist with
+  `stance == None` (do not assume entry => table stance); making `Clear` erase the bit puts the substrate cast back at
+  score 0 every party-OOC lap; letting the substrate path read `stance` re-opens review F1.
 - `Want` (`:76`) → `Scheduler.cpp:378,380,612`; `Clear`/`ClearAll` →
   `Followers.cpp:285`, `Serialization.cpp:599`. Only a WEAPON stance can be an
   equip order (`:92`); class-override (#65) + magicka-dry fallback deliberately do
