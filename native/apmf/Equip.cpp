@@ -121,6 +121,9 @@ namespace MFO::APMFBridge {
         bool EquipFacetEnabled(std::uint32_t a_facet, const char* a_name, std::atomic<int>& a_last) {
             auto* api = g_apmf.load(std::memory_order_relaxed);
             if (!api) return true;   // Harbinger absent: MFO's own legacy equips
+            // Review F1: no equip authority (toggle off, or a Harbinger below v9): MFO equips directly, files no
+            // equip claim, and a priority of 0 does not stop those equips.
+            if (!EquipAuthoritySupported()) return true;
             if (api->abiVersion < kFacetPrioMinAbi) {
                 static std::atomic<bool> s_warnedOld{ false };
                 if (!s_warnedOld.exchange(true))

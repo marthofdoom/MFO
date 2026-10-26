@@ -878,7 +878,9 @@ namespace MFO::Logistics {
                 const bool unworn = !(data.second && data.second->IsWorn());
                 // Harbinger EquipWeapon / EquipArmor = 0 for MFO (block above): an unworn upgrade is not kept.
                 const bool weapCannotEquip = weap && !equipWeaponOn && unworn && upgradesHeld(weap);
-                const bool armoCannotEquip = armo && unworn && !(armo->IsShield() ? equipWeaponOn : equipArmorOn);
+                // Review F2: with "Wear helmets" OFF every helmet he CARRIES stays in the bag (86e3phy41, marth 10-12).
+                const bool armoCannotEquip = armo && unworn && !(armo->IsShield() ? equipWeaponOn : equipArmorOn) &&
+                                             !(IsHelmetPiece(armo) && !WearsHelmets(&a_state));
                 if (weap && keepWeapons.count(obj) && !offRoleLauncher) {
                     if (!weapCannotEquip) { sdiag(obj, "keepWeap"); continue; }     // loadout weapon, not junk
                     sdiag(obj, "keepWeap bypassed: Harbinger EquipWeapon is 0 for MFO, an unworn upgrade sells");
