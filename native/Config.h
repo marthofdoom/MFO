@@ -767,6 +767,10 @@ namespace MFO::Config {
     //   fErrandCooldownSec: real seconds between one follower's errands. INI-only.
     //   fErrandMaxGameMin: an errand older than this many GAME minutes ends (REJOIN). INI-only.
     inline std::atomic<bool>  g_townErrands{ true };
+    //   bProximityTrading (INI-only, no MCM control; marth 2026-10-26 "Proximity Trading stays as an ini switch", default OFF): the PRE-TOWN
+    //   proximity trade -- a follower trading because he happens to stand near a vendor (Service.cpp's idle branch calling EconomyProbe when the
+    //   errand planner declined). Gates ONLY that call; town errand trades are unchanged and still follow bEconomy / bTownErrands.
+    inline std::atomic<bool>  g_proximityTrading{ false };
     //   bFollowerCatchUp: a follower the engine left behind on a world transition (fast travel / load door) is moved to the
     //     player ~3 s after it (FollowerCatchUp.cpp). Default ON; INI-only.
     inline std::atomic<bool>  g_followerCatchUp{ true };

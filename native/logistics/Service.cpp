@@ -2230,7 +2230,8 @@ namespace MFO::Logistics {
             GemRules::PumpProbes(a_follower);   // looted-gear gem probes: keep or put back once the strip landed
             // TOWN ERRANDS (Harbinger ABI >= 24): the planner owns the economy; the instant proximity trade runs
             // ONLY when errands are off or Harbinger is absent / too old (TryStart returns false then).
-            if (Config::g_economy.load() && Po3Present() && !Errand::TryStart(a_follower, a_state, now))
+            // bProximityTrading (INI-only, default OFF) gates ONLY the instant proximity trade below; the errand planner (TryStart) is unchanged.
+            if (Config::g_economy.load() && Po3Present() && !Errand::TryStart(a_follower, a_state, now) && Config::g_proximityTrading.load())
                 EconomyProbe(a_follower, a_state, now);
         }
     }

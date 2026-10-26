@@ -128,6 +128,7 @@ namespace MFO::Config {
             // TOWN ERRANDS (R1a): a chain of its own -- the main chain below is already long enough that one more
             // `else if` per key risks MSVC's nested-block limit (C1061).
             if      (a_key == "bTownErrands")       { setB(g_townErrands);   return; }   // default ON; OFF = the old proximity trade
+            else if (a_key == "bProximityTrading")  { setB(g_proximityTrading); return; }   // default OFF; INI-only
             else if (a_key == "bFollowerCatchUp")   { setB(g_followerCatchUp); return; }   // default ON; INI-only
             else if (a_key == "bTownToasts")        { setB(g_townToasts);    return; }   // default OFF; HUD lines for errand events
             else if (a_key == "iErrandMinSellGold") { setI(g_errandMinSellGold, 0, 100000);    return; }
@@ -423,6 +424,7 @@ namespace MFO::Config {
             g_economyBuyTomes    = true;    // #21 tome-buy sub-toggle -- ON, gated under bEconomy
             g_townErrands        = true;    // R1a town errands -- ON (features ship on)
             g_followerCatchUp    = true;    // left-behind followers are moved to the player after a world transition -- ON
+            g_proximityTrading   = false;   // the pre-town proximity trade -- OFF (marth 2026-10-26), INI-only
             g_townToasts         = false;   // errand HUD toasts -- OFF by default (marth 2026-10-19)
             g_errandMinSellGold  = 100;
             g_errandMinPurse     = 200;
@@ -887,6 +889,8 @@ namespace MFO::Config {
         ReadFile(kMCMPath);    // MCM Helper's store wins
 
         spdlog::set_level(g_enableLogging ? spdlog::level::info : spdlog::level::warn);
+        spdlog::info("[config] bProximityTrading = {} (the pre-town proximity trade: a follower trading with a vendor he merely stands near; town errands are unaffected)",
+                     g_proximityTrading.load() ? 1 : 0);
 
         // Config -> engine-record derived state, refreshed by EVERY read so the
         // MCM-close re-read (Diagnostics' MenuSink) applies it live without each
