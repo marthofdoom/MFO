@@ -20,7 +20,7 @@
 //
 // Threading: Locate / IsMember / LoadedVendor run on the AddTask worker (the planner) and read actors the way the planner already does
 // (LookupByID, parent cell, position, VisitFactions). The index build runs on the main thread. Own mutex (a leaf: never held across an
-// engine call, never nested with Errand g_mx).
+// engine call; Invalidate is taken under Errand g_mx at the town change, and nothing here ever takes Errand g_mx).
 
 #include "PCH.h"
 #include "Errand_internal.h"
@@ -45,6 +45,8 @@ namespace MFO::Logistics::Errand::Vendors {
         IndexState                                                s_state = IndexState::Unbuilt;
         std::uint32_t                                             s_gen = 0;   // bumped by ClearAll: a build that lands after a load is dropped
         std::unordered_map<RE::FormID, std::vector<RE::FormID>>  s_index;     // vendor faction -> member actor refs
+        std::chrono::steady_clock::time_point                     s_builtAt{};  // review F1: when the standing index was built (the NoMembers rebuild pacing)
+        constexpr auto kRebuildMinSec = std::chrono::seconds(60);
 
         bool Asleep(RE::Actor* a) {
             const auto* st = a->AsActorState();
@@ -93,6 +95,7 @@ namespace MFO::Logistics::Errand::Vendors {
             if (a_gen != s_gen) return;   // a load / revert ran meanwhile: this index describes the previous session
             s_index = std::move(idx);
             s_state = IndexState::Built;
+            s_builtAt = std::chrono::steady_clock::now();
             spdlog::info("[errand] vendor index built (main thread, {} ms): {} actor(s) in memory, {} of them vendors, {} vendor faction(s) with a member",
                          ms, actors.size(), vendors, s_index.size());
         }
@@ -152,6 +155,9 @@ namespace MFO::Logistics::Errand::Vendors {
         for (const auto id : ids) {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(id);
             if (!a || a->IsDeleted() || a->IsPlayerTeammate()) continue;
+            // review F4: an unloaded TEMPORARY actor may be torn down with its cell at any moment; only a loaded one or a PERSISTENT ref
+            // (which stays in memory with its cell unloaded) is read from the worker.
+            if (!a->Is3DLoaded() && !a->IsPersistent()) continue;
             if (!IsMember(a, a_faction)) continue;   // removed from the faction since the index was built
             ++a_out.members;
             if (a->IsDead()) { ++a_out.dead; continue; }
@@ -176,7 +182,21 @@ namespace MFO::Logistics::Errand::Vendors {
             a_out.town = LocationTypes::TownAnchor(loc);
         }
         if (a_out.actor) return Answer::Located;
-        if (a_out.members == 0) return Answer::NoMembers;
+        if (a_out.members == 0) {
+            // review F1: nobody of this faction in the snapshot. A vendor may have come into memory since the build (a temporary actor in a
+            // cell loaded later): re-arm a rebuild, at most once per kRebuildMinSec (the caller walks to the shop's place meanwhile).
+            bool rearm = false;
+            {
+                std::scoped_lock lk(s_mx);
+                if (s_state == IndexState::Built && std::chrono::steady_clock::now() - s_builtAt >= kRebuildMinSec) {
+                    s_state = IndexState::Unbuilt;
+                    ++s_gen;
+                    rearm = true;
+                }
+            }
+            if (rearm) spdlog::info("[errand] vendor index: faction {:08X} has no member in it -- rebuild re-armed (at most once per {} s)", a_faction, kRebuildMinSec.count());
+            return Answer::NoMembers;
+        }
         if (a_out.dead + a_out.disabled == a_out.members) return Answer::AllGone;
         return Answer::NoCell;
     }
@@ -195,6 +215,16 @@ namespace MFO::Logistics::Errand::Vendors {
         return std::format("'{}' ({:08X}) {} in cell {:08X} ({}) at {:.0f},{:.0f},{:.0f}; members {}, dead {}, disabled {}", a_w.name, a_w.actor,
                            a_w.loaded ? (a_w.asleep ? "LOADED, asleep" : "LOADED") : "UNLOADED", a_w.cell, a_w.interior ? "interior" : "exterior",
                            a_w.pos.x, a_w.pos.y, a_w.pos.z, a_w.members, a_w.dead, a_w.disabled);
+    }
+
+    void Invalidate(const char* a_why) {
+        {
+            std::scoped_lock lk(s_mx);
+            if (s_state == IndexState::Unbuilt) return;
+            s_state = IndexState::Unbuilt;   // a build in flight lands into the old generation and is dropped
+            ++s_gen;
+        }
+        spdlog::info("[errand] vendor index invalidated ({}) -- rebuilt on the next plan", a_why);
     }
 
     void ClearAll() {

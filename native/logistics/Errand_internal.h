@@ -166,6 +166,14 @@ namespace MFO::Logistics::Errand {
             DestKind      kind = DestKind::Cell;
             RE::FormID    destForm = 0;
             float         destRad = 0.0f;
+            // mfo-272 review F2: the shop's PLACE (the pre-272 destination: the PLVD cell / ref, the chest anchor, or a loaded vendor as a ref). The
+            // walk goes to the vendor NPC (kind / destForm); the SMITH stop goes to the smithy's place (ErrandSmith.cpp). placeForm 0 = no place known.
+            // Runtime only, never saved.
+            DestKind      placeKind = DestKind::Cell;
+            RE::FormID    placeForm = 0;
+            float         placeRad = 0.0f;
+            RE::NiPoint3  placePos{};
+            bool          havePlacePos = false;
             std::uint32_t needCarry = 0;      // bit n = this VEND carries the category of NeedCat::Kind n
             bool          carriesGear = false, carriesTome = false;   // the gear / apparel wish, the tome wish
             bool          carriesMaterials = false;   // R8: the VEND trades ore / ingots, hides or animal parts (smithing materials)
@@ -361,6 +369,9 @@ namespace MFO::Logistics::Errand {
         std::string Describe(const Where& a_w);
         // a_actor when it is a loaded, awake, living member of a_faction standing in a_near's cell (or both in the exterior grid), else null.
         RE::NiPointer<RE::Actor> LoadedVendor(RE::FormID a_actor, RE::FormID a_faction, RE::Actor* a_near);
+        // review F1: the index is a snapshot. Invalidate = rebuilt on the next Locate (the player's town changed). A NoMembers answer also
+        // re-arms a rebuild, at most once per kRebuildMinSec, so a vendor that came into memory later is found.
+        void Invalidate(const char* a_why);
         void ClearAll();   // revert / load
     }
 

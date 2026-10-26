@@ -290,6 +290,12 @@ namespace MFO::Logistics::Errand {
             float            destRad = 0.0f;
             RE::NiPoint3     pos{};             // R5: where the place is (the vendor / the ref / a cell's nearest loaded door), for the trip order
             bool             havePos = false;
+            // mfo-272 review F2: the shop PLACE (Trip::Cand::placeKind ..., the smith stop's destination). placeForm 0 = none known.
+            DestKind         placeKind = DestKind::Cell;
+            RE::FormID       placeForm = 0;
+            float            placeRad = 0.0f;
+            RE::NiPoint3     placePos{};
+            bool             havePlacePos = false;
         };
 
         // R1b: the town's shops from the vendor FACTIONS (design 2.2), cached per town -- immutable once built. The place is the
@@ -470,6 +476,7 @@ namespace MFO::Logistics::Errand {
                 c.destForm = c.id;
                 c.destRad = kVendorRadius;
                 c.pos = v->GetPosition(); c.havePos = true;
+                c.placeKind = DestKind::VendorActor; c.placeForm = c.id; c.placeRad = kVendorRadius; c.placePos = c.pos; c.havePlacePos = true;   // review F2: a loaded vendor is his own place (the smith stop reaches him as a ref, as before mfo-272)
                 (open ? out : *a_closedOut).push_back(c);
             }
 
@@ -542,28 +549,66 @@ namespace MFO::Logistics::Errand {
                         default:                        return 0;
                         }
                     };
+                    // The shop's PLACE (the pre-272 destination: the PLVD ref / cell, or the merchant chest's cell), kept as context (review F2):
+                    // the SMITH stop walks to it, and so does a shop whose vendor is not in memory (review F1b). 1 = known, 0 = none, -1 = door read pending.
+                    int placeOk = 1;
+                    RE::NiPoint3 ppos{};
+                    float pd = 0.0f;
+                    if (sh.kind == DestKind::Ref) {
+                        if (auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(sh.place); !ref) {
+                            placeOk = 0;
+                        } else {
+                            ppos = ref->GetPosition();
+                            pd = ppos.GetDistance(pc->GetPosition());
+                            // An INTERIOR ref has no comparable position: reach it through its cell's door like a Cell shop.
+                            if (auto* rc = ref->GetParentCell(); rc && rc->IsInteriorCell()) {
+                                placeOk = interiorPlace(rc->GetFormID());
+                                if (placeOk == 1) { ppos = placePos; pd = d; }
+                            }
+                        }
+                    } else {
+                        placeOk = interiorPlace(sh.place);
+                        if (placeOk == 1) { ppos = placePos; pd = d; }
+                    }
+                    if (placeOk < 0) { doorWaiting = true; continue; }
                     // mfo-272 NPC-FIRST (marth 2026-10-25: "who runs this shop, is the shop open, where is that NPC"): the walk goes to the shop's
-                    // VENDOR wherever the engine has them now, never to the PLVD place / merchant chest (the place keeps only the shop's town
-                    // membership above; the chest is still what the trade moves goods through). No living, enabled member = no shop.
+                    // VENDOR wherever the engine has them now (the place keeps the shop's town membership and the smith stop; the chest is still what
+                    // the trade moves goods through). Every member dead or disabled = no shop.
                     Vendors::Where vw;
                     const auto va = Vendors::Locate(sh.faction, vw);
                     if (va == Vendors::Answer::Pending) { vendorWaiting = true; continue; }
+                    Cand c;
+                    c.id = sh.faction; c.fac = fac; c.chest = sh.chest;
+                    if (placeOk == 1) { c.placeKind = sh.kind; c.placeForm = sh.place; c.placeRad = sh.rad; c.placePos = ppos; c.havePlacePos = true; }
+                    if (va == Vendors::Answer::NoMembers) {
+                        // review F1b (decided): NoMembers = nobody of the faction in MEMORY (a temporary vendor whose cell is not loaded), not a dead
+                        // one -- the pre-272 walk to the shop's place, the vendor confirmed in person on arrival (the NPC-first relocate applies there).
+                        if (placeOk != 1) { if (open) ++a_dropped; continue; }
+                        NoteVendorOnce(sh.faction, std::format("shop '{}' (faction {:08X}): no member in memory -> walk to its PLACE {:08X}, the vendor is found on arrival",
+                                                               ShopPlaceName(fac), sh.faction, sh.place));
+                        seenChest[sh.chest] = true;
+                        c.dist = pd; c.kind = sh.kind; c.destForm = sh.place; c.destRad = sh.rad;
+                        c.pos = ppos; c.havePos = true;
+                        (open ? catalogOpen : *a_closedOut).push_back(c);
+                        continue;
+                    }
                     if (va != Vendors::Answer::Located) {
                         NoteVendorOnce(sh.faction, std::format("shop '{}' (faction {:08X}) is NOT a candidate: {} (members {}, dead {}, disabled {}, no cell {})",
                                                                ShopPlaceName(fac), sh.faction, Vendors::AnswerName(va), vw.members, vw.dead, vw.disabled, vw.noCell));
                         if (open) ++a_dropped;
                         continue;
                     }
-                    if (vw.town != a_playerTown) {
+                    // review F3: "away" / "asleep" drop an OPEN shop only; a closed shop still reaches the reopen watch (a_closedOut).
+                    if (open && vw.town != a_playerTown) {
                         NoteVendorOnce(sh.faction, std::format("shop '{}' (faction {:08X}) is NOT a candidate this plan: its vendor {} is not in this town",
                                                                ShopPlaceName(fac), sh.faction, Vendors::Describe(vw)));
-                        if (open) ++a_dropped;
+                        ++a_dropped;
                         continue;
                     }
-                    if (vw.asleep) {
+                    if (open && vw.asleep) {
                         NoteVendorOnce(sh.faction, std::format("shop '{}' (faction {:08X}) is NOT a candidate this plan: its vendor {} is asleep",
                                                                ShopPlaceName(fac), sh.faction, Vendors::Describe(vw)));
-                        if (open) ++a_dropped;
+                        ++a_dropped;
                         continue;
                     }
                     DestKind vkind = DestKind::VendorActor;
@@ -592,8 +637,7 @@ namespace MFO::Logistics::Errand {
                                                            Vendors::Describe(vw), vkind == DestKind::Cell ? "the vendor's CELL" : vkind == DestKind::Ref ? "the vendor (ref leg)" : "the vendor",
                                                            vdest));
                     seenChest[sh.chest] = true;
-                    Cand c;
-                    c.id = sh.faction; c.fac = fac; c.chest = sh.chest; c.dist = d;
+                    c.dist = d;
                     c.actorId = vw.actor;   // the vendor NPC (the stop's vendorActor: confirmed in person on arrival); the plan key stays the faction
                     c.kind = vkind; c.destForm = vdest; c.destRad = vrad;
                     c.pos = placePos; c.havePos = true;
@@ -1341,7 +1385,12 @@ namespace MFO::Logistics::Errand {
         {
             std::scoped_lock lk(g_mx);
             const RE::FormID tid = playerTown ? playerTown->GetFormID() : 0u;
-            if (tid != g_townId) { g_townId = tid; g_townSince = a_now; }
+            if (tid != g_townId) {
+                g_townId = tid; g_townSince = a_now;
+                // mfo-272 review F1: the vendor index is a snapshot -- a new town is planned from a fresh one. (Vendors' mutex is a LEAF: taken
+                // here under Errand g_mx, never the other way round; Invalidate makes no engine call.)
+                if (tid) Vendors::Invalidate("the player's town changed");
+            }
             townSince = g_townSince;
             if (g_recs.contains(fid)) return true;   // (Tick owns him)
             if (Sim::Has(fid)) return true;          // (the simulation owns him)
@@ -1504,6 +1553,7 @@ namespace MFO::Logistics::Errand {
             }
             t.dist = c.dist; t.pos = c.pos; t.havePos = c.havePos;
             t.kind = c.kind; t.destForm = c.destForm; t.destRad = c.destRad;
+            t.placeKind = c.placeKind; t.placeForm = c.placeForm; t.placeRad = c.placeRad; t.placePos = c.placePos; t.havePlacePos = c.havePlacePos;   // review F2
             for (int k = 0; k < 12; ++k) {
                 const RE::FormID kw = (k <= 2) ? kKwPotion : (k == 3 || k == 4 || k == 11) ? kKwArrow : (k == 10) ? kKwWeapon : 0u;
                 if (kw && ListTrades(c.fac, kw)) t.needCarry |= 1u << k;
@@ -2076,8 +2126,16 @@ namespace MFO::Logistics::Errand {
                         r.destKind = DestKind::VendorActor; r.destForm = r.vendor; r.destRad = kVendorRadius;
                         if (r.cur < r.stops.size()) r.stops[r.cur].vendorActor = r.vendor;
                         APMFBridge::ReleaseErrandIdle(fid);   // mfo-272: an unattended wait's ch.1 hold must not pin the walk on to the vendor (no-op without one)
-                        APMFBridge::RepointErrandTravel(fid, r.vendor, kVendorRadius);
-                        spdlog::info("[errand] {:08X}: reached the shop; walking on to its vendor '{}' ({:08X})", fid, r.vendorName, r.vendor);
+                        // review F8: the same Repoint-else-fresh-claim road relocate uses (a claim Harbinger ended cannot be re-pointed).
+                        const char* how = "re-pointed";
+                        bool walkOn = APMFBridge::RepointErrandTravel(fid, r.vendor, kVendorRadius);
+                        if (!walkOn) { walkOn = APMFBridge::ClaimErrandTravel(fid, r.vendor, kVendorRadius); how = "claimed afresh"; }
+                        if (!walkOn) {
+                            spdlog::error("[errand] {:08X} '{}': found the vendor '{}' ({:08X}) but the walk on to him could NOT be declared (Harbinger refused the ch.19 "
+                                          "Repoint and a new claim)", fid, r.followerName, r.vendorName, r.vendor);
+                            return giveUp("the walk on to the vendor could not be declared", kFailCooldownSec);
+                        }
+                        spdlog::info("[errand] {:08X}: found the shop's vendor '{}' ({:08X}) -- walking on to him (walk {})", fid, r.vendorName, r.vendor, how);
                     } else if (pleg.state == APMF_API::kLeg_Blocked) {
                         if (r.destKind == DestKind::Cell) Rest::LogBlockedDoors(a_follower, r.destForm, r.vendorName);   // passive: the door(s), lock level of each side
                         if (retryWalk("the walk to the shop ended BLOCKED", true)) return true;   // run 4: retry before the stop is skipped and the shop parked

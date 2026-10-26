@@ -2270,3 +2270,12 @@ FIX (marth 2026-10-21, "Evaluate the conditions"): `SpouseGate` evaluates a non-
 - **SEV-4 (MFO-B464, re-review of 53f902b):** `refNear` compares no worldspace (a city child worldspace shares Tamriel's coordinates): add `GetWorldspace()` equality.
 - **SEV-4 (MFO-B464):** a 2c advance past a stop whose trade finished but whose outcome was not yet taken (dispatched, not reported, no live order) marks it Skipped and nothing takes the outcome before a rest-only inn or temple: tripSpent and NoteUnsold / NoteLate are lost.
 - **SEV-4 (MFO-B464):** a rest-only inn resumed on screen whose innkeeper is loaded in his cell walks to the innkeeper and runs the vendor path with no order.
+
+### MFO-B465 (SEV-4, OPEN, logistics/ErrandVendors.cpp BuildIndex, against a19762b, Opus review of fix/mfo-272) -- vendor index main-thread cost unmeasured
+"BuildIndex main-thread cost unmeasured (read 'vendor index built ... N ms'; if > ~30 ms move to kPostLoadGame)". Reviewer's reasoning: the build walks the whole all-forms map on the main thread once per load (and again per town change / NoMembers rebuild after review F1); its cost on a large list is not known until the field line is read.
+
+### MFO-B466 (SEV-4, OPEN, logistics/Errand.cpp BuildCatalog + Reopen / later stops, against a19762b, Opus review of fix/mfo-272) -- destinations frozen at plan time
+"destinations frozen at plan time (relocate re-aims <= 3)". Reviewer's reasoning: a stop's vendor destination is located at PLAN time; a reopen-watch re-plan or a later stop walks to where the vendor was then, and only `relocate` (cap 3 per stop) corrects it on arrival.
+
+### MFO-B467 (SEV-5, OPEN, logistics/Errand.cpp tryPlace / retryWalk, against a19762b, Opus review of fix/mfo-272) -- a stuck walk in dialogue is skipped without an ERROR
+"tryPlace returns false in dialogue -> stop skipped without ERROR (re-arm one retry)". Reviewer's reasoning: `tryPlace` treats dialogue as "not stuck" and returns false with no line, so a spent-retries walk while he talks to the player falls to giveUp; re-arm one retry instead.
