@@ -89,10 +89,10 @@ namespace RE {
 
 namespace APMF_API {
 
-    // ABI history (v10..v30, what each added and how an older APMF degrades). Gate every use on abiVersion >=
+    // ABI history (v10..v31, what each added and how an older APMF degrades). Gate every use on abiVersion >=
     // N.
     // History: Docs/APMF_API-HISTORY.md#abi-history
-    inline constexpr std::uint32_t kABIVersion = 30;
+    inline constexpr std::uint32_t kABIVersion = 31;
 
     // The exported query function's undecorated name and pointer type.
     // const APMF_API_v1* APMF_GetInterface(std::uint32_t abiVersion);
@@ -2720,6 +2720,47 @@ namespace APMF_API {
 
     // ABI v30 (kTravel_CrossCells, a TravelFlags bit read through the EXISTING RequestEx / Repoint) adds NO slot:
     // the interface object stays an APMF_API_v29 and `abiVersion` reports 30.
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ABI v31: CLAIM END REASON (ch.20 kIntent_TargetPin, ch.21 kIntent_CombatEntry)
+    // ═════════════════════════════════════════════════════════════════════════════
+    // Why did Harbinger end a claim? A client that sees IsClaimLive go false reads this to tell an engagement
+    // Harbinger dropped as NOT ENGAGED (out of the engage range, or no path progress: the actor's combat is
+    // ended too, marth 2026-10-27, so the client gives that target up) from one the engine ended or refused.
+    // Only the ch.20 and ch.21 claims Harbinger ends ITSELF get a reason. A claim the client released, one an
+    // unload or a load dropped, and every other intent read kClaimEnd_None. A save load or a new game drops
+    // every record. Not saved. APPEND-ONLY: never renumber.
+    // See Docs/APMF_API-REFERENCE.md#abi-v31-claim-end-reason
+    enum ClaimEndReason : std::uint32_t {
+        kClaimEnd_None           = 0,   // no record: still live, released by its client, dropped by an unload or a
+                                        //   load, not a ch.20 / ch.21 claim, or not a handle this APMF issued
+        kClaimEnd_NotEngaged     = 1,   // held engagement: the target is beyond the ch.21 engage range (param.fval)
+                                        //   and not attacking the party. The actor's combat is ended (ranked)
+        kClaimEnd_NoPathProgress = 2,   // held engagement: 20 s of world time with no path progress toward the
+                                        //   target outside reach. Counts as NOT ENGAGED: the combat is ended (ranked)
+        kClaimEnd_ArrivedIdle    = 3,   // held engagement: 20 s within reach with no attack or cast on the target
+        kClaimEnd_CombatEnded    = 4,   // ch.21: the engine ended the actor's fight
+        kClaimEnd_EntryRefused   = 5,   // ch.21: Actor::StartCombat returned false (the engine refused the entry)
+        kClaimEnd_NotAttempted   = 6,   // ch.21: no engine call, the actor or the target cannot be used (form 0, the
+                                        //   actor itself, not an actor, not loaded, dead, no AI process)
+        kClaimEnd_OwnerDead      = 7,   // the claim's actor died
+        kClaimEnd_TargetDead     = 8,   // the target died
+        kClaimEnd_TargetGone     = 9,   // the target is disabled, unloaded or no longer resolves
+        kClaimEnd_TargetLost     = 10,  // ch.20, only with [EngagementHold] bEngagementHold=0 or no knowledge seats:
+                                        //   the engine lost the target
+        kClaimEnd_NotATarget     = 11,  // ch.20: the target left the actor's combat group targets after it was one
+    };
+
+    // The v31 interface: APMF_API_v29's members verbatim (prefix EXTENSION; v30 added no slot), then ONE
+    // appended slot. BYTE-SHARED with MFO: mirror it byte-identically. Gate on `abiVersion >= 31` (INVARIANTS
+    // #14b); an older APMF has no query (IsClaimLive going false is all it says).
+    struct APMF_API_v31 : APMF_API_v29 {
+        // Why Harbinger ended `handle`'s claim (see ClaimEndReason). Read-only; ANY THREAD (a copy under APMF's
+        // own leaf lock, no game call). The reason is recorded on the game thread in the same step that queues
+        // the claim's release, so it can be readable a frame before IsClaimLive goes false. A throw inside
+        // returns kClaimEnd_None.
+        std::uint32_t (*GetClaimEndReason)(Handle handle);
+    };
 
     // Function-pointer type for GetProcAddress(kGetInterfaceExport). Returns the
     // base type; a client that asked for ABI >= N checks p->abiVersion and casts up

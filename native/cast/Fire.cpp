@@ -46,6 +46,19 @@ namespace MFO::Actuation {
 
     }
 
+    namespace {
+        // The NoOp text for a Suppressed pin (Targeting::CommandOutcome::Suppressed). Two causes: the foe
+        // was GIVEN UP after a not-engaged end (Harbinger ABI v31, apmf/CombatEntry.cpp; it lifts on state,
+        // not when the gambit picks another foe), or its pin ended without ever going live.
+        const char* SuppressedText(RE::Actor* a_follower, RE::ActorHandle a_target) {
+            const auto ptr = a_target.get();
+            if (a_follower && ptr && APMFBridge::EngageGivenUp(a_follower->GetFormID(), ptr->GetFormID()))
+                return "target given up (Harbinger ended its engagement as not engaged); engaged again when it "
+                       "moves, turns on the party or the party closes in";
+            return "target pin ended by Harbinger; not re-pinned until the gambit picks another foe";
+        }
+    }
+
     // THE "ENEMY" TARGET (marth 2026-10-06: "that enemy must be the highest gambits target"; the
     // TARGET picker's "Enemy (gambit target)"). The foe MFO's own targeting gambits commanded:
     // Targeting::Current, the Harbinger ch.20 pin (pin route) or the latch (degrade), which the
@@ -274,7 +287,7 @@ namespace MFO::Actuation {
             // on its next pass -- an alternation D3's opacity exists to prevent.
             const auto cmd = Targeting::CommandEx(a_follower->GetFormID(), a_choice.target);
             if (cmd == Targeting::CommandOutcome::Suppressed) {
-                return { Result::NoOp, "target pin ended by Harbinger; not re-pinned until the gambit picks another foe" };
+                return { Result::NoOp, SuppressedText(a_follower, a_choice.target) };
             }
             if (cmd != Targeting::CommandOutcome::Changed) {
                 return { Result::NoOp, "already on that target" };
@@ -460,7 +473,7 @@ namespace MFO::Actuation {
                 // closing on this foe on our order -- an honest NoOp (opaque, like Attack).
                 const auto cmd = Targeting::CommandEx(a_follower->GetFormID(), a_choice.target);
                 if (cmd == Targeting::CommandOutcome::Suppressed)
-                    return { Result::NoOp, "target pin ended by Harbinger; not re-pinned until the gambit picks another foe" };
+                    return { Result::NoOp, SuppressedText(a_follower, a_choice.target) };
                 if (cmd == Targeting::CommandOutcome::Unavailable)
                     return { Result::FailedOther, "target command unavailable", true };
                 return { Result::Fired, std::format("closing to melee on {}", foeName) };

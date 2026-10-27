@@ -222,12 +222,17 @@ namespace MFO::APMFBridge {
                 // floor of unpaused sweeps (APMF may simply not have drained yet).
                 if (GamePaused() || p.unpausedSweeps < kPinNeverLiveSweeps) return false;
             }
+            // ABI v31 (marth 2026-10-27): why it ended, read before the Release. kClaimEnd_None below v31.
+            const std::uint32_t why = ClaimEndReasonOf(api, p.handle);
             spdlog::info("[target-pin] {:08X}: pin on {:08X} ENDED (h={}, {}; Harbinger ends a pin when the "
                          "target is dead, disabled, unloaded or unresolvable, is no longer a combat target "
                          "(it was one), or the follower dies, or a held-engagement end fires -- "
                          "APMF's '[ch.20] pin ended' line names it). The engine picks until MFO's gambit "
-                         "chooses a foe again.",
-                         follower, p.target, p.handle, p.everLive ? "was live" : "never seen live");
+                         "chooses a foe again. End reason: {}.",
+                         follower, p.target, p.handle, p.everLive ? "was live" : "never seen live",
+                         ClaimEndReasonName(why));
+            // A NOT ENGAGED end gives the target up NOW, on whatever lap noticed it (PinTarget then refuses it).
+            if (IsNotEngagedEnd(why)) RecordEngageGiveUp(follower, p.target, why, "ch.20 pin", 0.0f);
             // ALWAYS Release before dropping the handle: a no-op on a claim Harbinger
             // already released, and it FIFO-cancels one still pending in APMF's queue,
             // so a false "never live" judgement can never leave an ORPHAN claim that
@@ -255,9 +260,25 @@ namespace MFO::APMFBridge {
 
         std::scoped_lock lock(g_mx);
         auto it = g_pins.find(a_follower);
+        const bool ended = it != g_pins.end() && PinEndedLocked(api, a_follower, it->second);
+        // THE NOT-ENGAGED GIVE-UP (ABI v31, marth 2026-10-27). Asked AFTER this follower's pin was judged, so
+        // an end noticed by this very call is already recorded. A given-up target is never pinned, whether it
+        // is the ended pin's own foe (this replaces the no-loop re-pin below for that end) or a new choice;
+        // any other pin he holds is left as it stands. The registry lifts on state, checked inside
+        // EngageGivenUp (its leaf mutex under g_mx; actor reads on this worker, as RecordEngageGiveUp's).
+        // Below ABI 31 the registry is always empty.
+        {
+            bool first = false;
+            if (EngageGivenUp(a_follower, a_target, &first)) {
+                if (first)
+                    spdlog::info("[target-pin] {:08X}: the gambit chose {:08X}, which is given up (Harbinger ended "
+                                 "its engagement as not engaged). Not pinned. Logged once per give-up.",
+                                 a_follower, a_target);
+                return PinResult::Suppressed;
+            }
+        }
         if (it != g_pins.end()) {
             auto& p = it->second;
-            const bool ended = PinEndedLocked(api, a_follower, p);
             if (p.target == a_target) {
                 if (!ended) return PinResult::Unchanged;
                 // THE NO-LOOP RULE. The gambit re-chose the foe of an ENDED pin. MFO's foe

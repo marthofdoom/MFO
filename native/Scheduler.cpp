@@ -292,11 +292,18 @@ namespace MFO::Scheduler {
             RE::NiPointer<RE::Actor> tgt;
             if (pc) tgt = pc->GetActorRuntimeData().currentCombatTarget.get();
             const float dPlayer = pc ? pos.GetDistance(pc->GetPosition()) : -1.0f;
+            // His own down state (field 2026-10-27: stall windows that fell inside a bleedout read as a stall).
+            // The life-state member, a plain load, the same read Actuation::CannotActReason makes on this worker.
+            const char* down = "no";
+            if (const auto* st = a_f->AsActorState()) {
+                if (st->GetLifeState() == RE::ACTOR_LIFE_STATE::kBleedout) down = "bleedout";
+                else if (st->GetLifeState() == RE::ACTOR_LIFE_STATE::kEssentialDown) down = "essential down";
+            }
             spdlog::info("[stall-probe] {:08X} '{}': party combat ON, own combat OFF -- moved {:.0f} u in {:.1f}s "
-                         "({:.0f} u/s) dPlayer={:.0f} pkg={:08X} proc={} | player inCombat={} target={:08X} '{}'{}",
+                         "({:.0f} u/s) dPlayer={:.0f} pkg={:08X} proc={} down={} | player inCombat={} target={:08X} '{}'{}",
                          a_id, a_f->GetName() ? a_f->GetName() : "?", moved, dt, moved / dt, dPlayer,
                          pkg ? pkg->GetFormID() : 0u,
-                         pkg ? static_cast<int>(pkg->packData.packType.underlying()) : -1,
+                         pkg ? static_cast<int>(pkg->packData.packType.underlying()) : -1, down,
                          pc && pc->IsInCombat() ? 1 : 0, tgt ? tgt->GetFormID() : 0u,
                          tgt && tgt->GetName() ? tgt->GetName() : "",
                          tgt ? (tgt->IsDead() ? " (dead)" : "") : "");
