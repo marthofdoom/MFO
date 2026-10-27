@@ -5,6 +5,25 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.7.3 -- Animated casts out of combat by default, and town trips that find their stock
+
+Needs Harbinger v0.15.1.
+
+- **Out of combat animated casts are ON by default.** A heal, buff or summon cast out of combat now plays the real hand animation through Harbinger's combat substrate. `bSubstrateCasts` is now 1. This needs Harbinger v0.15.1. Without it, or with the setting at 0, casts use the old road.
+- **A failed cast no longer locks the spell out.** A substrate cast no longer starts the follower wide recast wait when it is filed. The follower whose cast did not fire goes first on the next lap, so the missed target is served before the others.
+- **A refused cast says why.** Every refused cast now logs its reason.
+- **A shop counts only if its vendor would trade now.** MFO asks the game whether the vendor offers services at this moment, and uses the shop relative merchant job. A vendor who is loaded is judged the same way. A walk is never measured across two spaces.
+- **Potions need stock evidence.** A shop is a buy stop for potions, food or other supplies only when it is an apothecary or has been seen with stock. A chest seen with nothing in it is not stock. A need with no stockist is carried to the next town.
+- **Potions are capped at half the trip purse.** All potion kinds share one half purse budget, and the materials pass takes half of what is left.
+- **Shops without stock are still used for selling.** They are skipped for buying only.
+- **Blacksmiths and archery shops sell ammo.** They rank above a shop that only has a vendor claim for arrow and bolt buy stops.
+- **An unmet need is queued again during the trip.** When gold allows, a need that was missed at one shop is put on another stop of the same trip.
+- **The need is checked again live.** A follower who is still missing potions after a trip starts again. A need that no shop in town could fill is carried to the next town.
+- **One shop naming rule.** A shop is named by its place, then its chest cell, then "<vendor>'s stall", then its faction.
+- **Off screen trips run in real seconds.** Trade, temple and smith time off screen is now timed in real seconds with `fErrandTradeRealSec`, `fTempleRealSec` and `fSmithWorkRealSec`. The old game minute keys are ignored.
+- **Town walk speed.** `iErrandGait` sets the gait of the town walk.
+- **The old proximity trade is INI only and OFF.** The trade done by standing near a vendor before town now runs only with `bProximityTrading=1` in `MFO.ini`. It has no MCM entry.
+
 ## v2.7.2 -- Town errands, vendors and walking
 
 - **Shops are planned from the person who runs them.** MFO now asks who runs a shop, whether it is open and where that person is right now, and the follower walks to the vendor himself. A vendor who moves is found again on arrival and when he leaves.

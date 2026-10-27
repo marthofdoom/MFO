@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.7.2** (see [`VERSION`](VERSION) and the
+**Status: v2.7.3** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -182,6 +182,13 @@ leash and walk-to-loot.
 
 ---
 
+## What is new in 2.7.3
+
+- **Needs Harbinger v0.15.1.** The out of combat animated casts need it. Town errands work with an older Harbinger.
+- **Out of combat animated casts are ON by default** (`bSubstrateCasts=1`). A failed cast no longer locks the spell out and the missed target goes first.
+- **Town errands find their stock.** A shop counts only if its vendor would trade now. Potions need stock evidence and are capped at half the trip purse. Shops without stock are still used for selling. Blacksmiths and archery shops sell ammo. An unmet need is queued again in the trip, checked again live and carried to the next town.
+- **Off screen trips run in real seconds** (`fErrandTradeRealSec`, `fTempleRealSec`, `fSmithWorkRealSec`), the town walk has a gait (`iErrandGait`), and the old proximity trade is INI only and OFF (`bProximityTrading`).
+
 ## What is new in 2.7.2
 
 - **Needs Harbinger v0.15.0 (ABI v30) for the cross cell walks.** MFO works with an older Harbinger, without them.
@@ -206,7 +213,7 @@ leash and walk-to-loot.
 - **MCM.** A Guide page comes first in the MFO MCM. Legacy cast controls are INI only and there is a new Debug page.
 - **1.5.97 and 1.7.104.** Three more engine reads are proven and enabled on both runtimes.
 - **Temple door crash fixed.** The temple door lock check no longer crashes.
-- **Release defaults.** Town errands are ON. Out of combat substrate casting is OFF (`bSubstrateCasts=0`). Town toasts are OFF. Harbinger v0.14.0 is recommended.
+- **Release defaults.** Town errands are ON. Out of combat substrate casting is ON (`bSubstrateCasts=1`, needs Harbinger v0.15.1). Town toasts are OFF. Harbinger v0.15.1 is recommended.
 
 ## What is new in 2.6.2
 
