@@ -2186,7 +2186,7 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   MFO-B76 (hostile-flagged summon skips the LoS gate), MFO-B77 (Serana's Reanimate spells
   still fan out; CLOSED 2026-10-06, superseded by ClickUp 86e3dmtr1), MFO-B84 (Reanimate on the old roads; its liveness read looks at the caster; CLOSED 2026-10-06, superseded by ClickUp 86e3dmtr1), MFO-B85 (HMS no longer credits summons), MFO-B86 (a logistics summon never counts as the tick's action), MFO-B87 (liveness edge cases + the 1 s trust window).
 
-### cast/SubstrateRoad.cpp + apmf/Substrate.cpp — THE OUT-OF-COMBAT SUBSTRATE ROAD (slice S3, feat/mfo-substrate-s3, 2026-10-19; NOT field-run)
+### cast/SubstrateRoad.cpp + apmf/Substrate.cpp — THE OUT-OF-COMBAT SUBSTRATE ROAD (slice S3, feat/mfo-substrate-s3, 2026-10-19; NOT field-run) -- open review findings: MFO-B490..B493
 Plan: `_evidence/2026-10-18-designs/SUBSTRATE-TO-OOC-PLAN.md` round R3; rulings `SUBSTRATE-RULINGS.md` Q4 / Q6 / Q7; canonical
 write-up `Docs/CAST-DELIVERY.md` "COMBAT SUBSTRATE SLICE S3". Behind ONE INI-only switch `Config::g_substrateCasts`
 (`bSubstrateCasts`, MFO.ini [Debug], default 0). With it ON and Harbinger's substrate available (ABI >= 27 +
