@@ -232,7 +232,7 @@ namespace MFO::APMFBridge {
                          follower, p.target, p.handle, p.everLive ? "was live" : "never seen live",
                          ClaimEndReasonName(why));
             // A NOT ENGAGED end gives the target up NOW, on whatever lap noticed it (PinTarget then refuses it).
-            if (IsNotEngagedEnd(why)) RecordEngageGiveUp(follower, p.target, why, "ch.20 pin");
+            if (IsNotEngagedEnd(why)) RecordEngageGiveUp(follower, p.target, why, "ch.20 pin", 0.0f);
             // ALWAYS Release before dropping the handle: a no-op on a claim Harbinger
             // already released, and it FIFO-cancels one still pending in APMF's queue,
             // so a false "never live" judgement can never leave an ORPHAN claim that

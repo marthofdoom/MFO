@@ -20,7 +20,10 @@
 // party's combat state: the pin table does not re-pin it and engage-on-sight does not enter it. The give-up
 // lifts on STATE only, never on a timer ("no waiting ever"): the target moved materially from where it was
 // given up, or it BECOMES hostile to the party or starts fighting a party member (a rising edge, so a target
-// still facing him when it was given up does not lift it at once). The registry lives here, beside the
+// still facing him when it was given up does not lift it at once), or on the party side (review F2 of
+// fbe8d72) he closed on it by 512u or more, or, for a range drop, he is back inside the engage range. A
+// range drop and a no-path end both give the target up (marth 2026-10-27), and the follower may still
+// chase past the leash to engage (marth 2026-10-12). The registry lives here, beside the
 // entry table, because both tables feed it. Below ABI 31 nothing is recorded: today's rules hold (the
 // documented degrade, said once per session by ClaimEndReasonOf).
 #include "APMFBridge.h"
@@ -57,6 +60,7 @@ namespace MFO::APMFBridge {
             bool             everLive = false;     // seen IsClaimLive at least once
             bool             ended    = false;     // Harbinger ended it (IsClaimLive went false)
             std::uint32_t    endReason = APMF_API::kClaimEnd_None;   // ABI v31, read when the end is noticed
+            float            engageRange = 0.0f;   // the fval this entry was filed with (0 = none)
         };
         std::unordered_map<RE::FormID, CombatEntryClaim> g_entries;   // guarded by g_mx
 
@@ -93,7 +97,7 @@ namespace MFO::APMFBridge {
                          "it does not ask again for this target while it stays a candidate. End reason: {}.",
                          follower, e.target, e.handle, e.everLive ? "was live" : "never seen live",
                          ClaimEndReasonName(e.endReason));
-            if (IsNotEngagedEnd(e.endReason)) RecordEngageGiveUp(follower, e.target, e.endReason, "ch.21 entry");
+            if (IsNotEngagedEnd(e.endReason)) RecordEngageGiveUp(follower, e.target, e.endReason, "ch.21 entry", e.engageRange);
             // ALWAYS Release before dropping the handle: a no-op on a claim Harbinger already
             // released, and it FIFO-cancels one still pending, so a false "never live"
             // judgement can never leave an orphan claim.
@@ -171,6 +175,7 @@ namespace MFO::APMFBridge {
         CombatEntryClaim e{};
         e.handle = h;
         e.target = a_target;
+        e.engageRange = prm.fval;   // the range sent (0 = none): a range-drop give-up lifts back inside it
         g_entries.emplace(a_follower, e);
         if (a_outHandle) *a_outHandle = h;
         return EntryResult::Filed;
@@ -216,6 +221,11 @@ namespace MFO::APMFBridge {
             bool          fighting = false;   // fighting the party, as last seen (its rising edge lifts)
             bool          hostile  = false;   // hostile to the player or him, as last seen (its rising edge lifts)
             bool          asked    = false;   // a caller that logs its refusal was told "given up" already
+            // THE PARTY SIDE (review F2 of fbe8d72): his distance to it when it was given up (< 0 = not known),
+            // and the ch.21 engage range (fval) of the engagement that ended (0 = none / a pin). He CLOSING
+            // the gap is a new situation too. A follower pacing at a constant distance under a ledge is not.
+            float         dist     = -1.0f;
+            float         range    = 0.0f;
         };
         std::mutex                                          g_giveUpMx;   // LEAF
         std::unordered_map<RE::FormID, std::vector<GiveUp>> g_giveUps;    // follower -> records, g_giveUpMx
@@ -252,12 +262,26 @@ namespace MFO::APMFBridge {
                 a_why = fmt::format("it moved {:.0f}u from where it was given up", moved);
                 return Verdict::Lift;
             }
+            auto* f = RE::TESForm::LookupByID<RE::Actor>(a_follower);
+            // THE PARTY SIDE (review F2): he closed on it by kGiveUpMoveU or more since it was given up, or, for
+            // a range drop (kClaimEnd_NotEngaged), he is back inside the engage range that dropped it.
+            if (f && a_g.dist >= 0.0f) {
+                const float d = f->GetPosition().GetDistance(t->GetPosition());
+                if (a_g.dist - d >= kGiveUpMoveU) {
+                    a_why = fmt::format("he closed from {:.0f}u to {:.0f}u", a_g.dist, d);
+                    return Verdict::Lift;
+                }
+                if (a_g.reason == APMF_API::kClaimEnd_NotEngaged && a_g.range > 0.0f && d <= a_g.range) {
+                    a_why = fmt::format("he is back inside the {:.0f}u engage range ({:.0f}u)", a_g.range, d);
+                    return Verdict::Lift;
+                }
+            }
             const bool fighting = FightingPartyNow(t);
             if (fighting && !a_g.fighting) {
                 a_why = "it started fighting the party";
                 return Verdict::Lift;
             }
-            const bool hostile = HostileToPartyNow(t, RE::TESForm::LookupByID<RE::Actor>(a_follower));
+            const bool hostile = HostileToPartyNow(t, f);
             if (hostile && !a_g.hostile) {
                 a_why = "it turned hostile to the party";
                 return Verdict::Lift;
@@ -317,7 +341,9 @@ namespace MFO::APMFBridge {
                              api->abiVersion, kEndReasonMinAbi);
             return APMF_API::kClaimEnd_None;
         }
-        return reinterpret_cast<const APMF_API::APMF_API_v31*>(api)->GetClaimEndReason(h);
+        // A null slot (a broken interface) reads as no record, like SubstrateStateOf's guard (review F6).
+        const auto* v31 = reinterpret_cast<const APMF_API::APMF_API_v31*>(api);
+        return v31->GetClaimEndReason ? v31->GetClaimEndReason(h) : APMF_API::kClaimEnd_None;
     }
 
     bool ClaimEndReasonOffered() {
@@ -347,7 +373,8 @@ namespace MFO::APMFBridge {
         }
     }
 
-    void RecordEngageGiveUp(RE::FormID follower, RE::FormID target, std::uint32_t reason, const char* road) {
+    void RecordEngageGiveUp(RE::FormID follower, RE::FormID target, std::uint32_t reason, const char* road,
+                            float range) {
         if (follower == 0 || target == 0) return;
         auto* t = RE::TESForm::LookupByID<RE::Actor>(target);
         if (!t || t->IsDead() || t->IsDisabled()) return;   // nothing left to give up
@@ -358,18 +385,29 @@ namespace MFO::APMFBridge {
         g.reason   = reason;
         g.fighting = FightingPartyNow(t);
         g.hostile  = HostileToPartyNow(t, f);
+        g.dist     = f ? f->GetPosition().GetDistance(g.pos) : -1.0f;
+        g.range    = range > 0.0f ? range : 0.0f;
         {
             std::scoped_lock lk(g_giveUpMx);
             auto& v = g_giveUps[follower];
-            // The pin and the entry end in the same Harbinger step: the first record stands.
-            if (std::any_of(v.begin(), v.end(), [&](const GiveUp& o) { return o.target == target; })) return;
+            // The pin and the entry end in the same Harbinger step: the first record stands, except that the
+            // entry's engage range fills in a record the pin made first (a pin carries no range).
+            if (const auto it = std::find_if(v.begin(), v.end(), [&](const GiveUp& o) { return o.target == target; });
+                it != v.end()) {
+                if (it->range <= 0.0f && g.range > 0.0f) it->range = g.range;
+                return;
+            }
             if (v.size() >= kGiveUpMaxPerFollower) v.erase(v.begin());
             v.push_back(g);
         }
-        spdlog::info("[engage-give-up] {} ({:08X}): gives up {} ({:08X}) now. Harbinger ended the {} as {}. "
-                     "It is engaged again only when it moves more than {:.0f}u from here, turns hostile to the "
-                     "party or starts fighting a party member.",
-                     GiveUpName(f), follower, GiveUpName(t), target, road, ClaimEndReasonName(reason), kGiveUpMoveU);
+        spdlog::info("[engage-give-up] {} ({:08X}): gives up {} ({:08X}) at {:.0f}u now. Harbinger ended the {} as {}. "
+                     "It is engaged again only when it moves more than {:.0f}u from here, he closes on it by that "
+                     "much{}, it turns hostile to the party or it starts fighting a party member.",
+                     GiveUpName(f), follower, GiveUpName(t), target, g.dist, road, ClaimEndReasonName(reason),
+                     kGiveUpMoveU,
+                     (reason == APMF_API::kClaimEnd_NotEngaged && g.range > 0.0f)
+                         ? fmt::format(" or comes back inside the {:.0f}u engage range", g.range)
+                         : std::string());
     }
 
     void ClearEngageGiveUps() {

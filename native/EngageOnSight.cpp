@@ -616,8 +616,8 @@ namespace MFO::EngageOnSight {
                 const bool pinCleared = note.pinned == et && ReleaseOwnPin(note, a_id);
                 APMFBridge::ForgetCombatEntry(a_id);
                 if (notEngaged)
-                    spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} ended, {}. Given up until it moves "
-                                 "or turns on the party{}",
+                    spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} ended, {}. Given up until it moves, "
+                                 "he closes in, or it turns on the party{}",
                                  NameOf(a_f), a_id, et, APMFBridge::ClaimEndReasonName(endWhy),
                                  pinCleared ? ", its pin released" : "");
                 else

@@ -2449,3 +2449,6 @@ While the player's Update is not running (a paused menu), a worker that keeps ev
 
 ### MFO-B527 (SEV-4, OPEN, tools/splitcheck, raised by the F3 CommonLib proof round 2026-10-27) -- splitcheck tool gaps
 (1) splitcheck.py:1833 `A.names_at.get(ra, ()) | B.names_at.get(rb, ())` ORs a set with a tuple and crashes in _data_diff. (2) A changed library source-path string is only treated as harmless when unnamed (_unnamed_equal / PATHLIT). When MSVC names the string after its contents (??_C@ symbols), a vcpkg build-folder change shows as FAIL and must be classified by hand.
+
+### MFO-B528 (SEV-5, OPEN, apmf/CombatEntry.cpp, against fbe8d72, Opus review of fix/mfo-nopath-giveup) -- give-up falling edge seen only on a poll
+"A falling edge is only recorded when something asks (the engage-on-sight out-of-combat lap, or PinTarget when the gambit picks that foe). A disengage and re-engage with no poll in between misses the lift."

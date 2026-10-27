@@ -49,9 +49,12 @@
 // With Harbinger ABI >= 31 the end REASON is read instead of guessed (marth 2026-10-27): a NOT
 // ENGAGED end (past the engage range, or no path progress) is given up by the APMF bridge the
 // moment the sweep notices it, on any lap, and lifts on state only (the target moves more than
-// 512u from where it was given up, turns hostile to the party or starts fighting a party member:
-// APMFBridge::EngageGivenUp). The ch.20 pin is not re-pinned on it either. Every other end keeps
-// the rule above. Below ABI 31 the old range-drop guess stays (a range drop is not given up).
+// 512u from where it was given up, he closes on it by 512u, he is back inside the engage range of
+// a range drop, or it turns hostile to the party or starts fighting a party member:
+// APMFBridge::EngageGivenUp). A range drop and a no-path end both give the target up (marth
+// 2026-10-27), and he may still chase past the leash to engage (marth 2026-10-12). The ch.20 pin
+// is not re-pinned on it and the in-combat foe pickers skip it. Every other end keeps the rule
+// above. Below ABI 31 the old range-drop guess stays (a range drop is not given up there).
 // Giants and mammoths (the skip list) are never engaged proactively on ANY branch, hostile or
 // not, only when they are already fighting the party.
 //

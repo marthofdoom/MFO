@@ -1,6 +1,8 @@
 #include "PCH.h"
 #include <chrono>          // brawl-gate log throttle (#34)
 #include <unordered_map>   // brawl-gate log throttle (#34)
+#include <algorithm>       // std::find over the not-engaged give-ups (PickFoe)
+#include <vector>
 #include "Evaluator.h"
 #include "Vocabulary.h"
 #include "logistics/Logistics.h"   // supply-condition reads (counts of potions / arrows)
@@ -419,6 +421,15 @@ namespace MFO::Eval {
                 RE::FormID et = 0;
                 if (APMFBridge::CombatEntryStateOf(a_self->GetFormID(), &et) == APMFBridge::EntryState::Standing) entryFoeID = et;
             }
+            // NOT-ENGAGED GIVE-UPS (Harbinger ABI v31, marth 2026-10-27): a foe Harbinger dropped as not engaged
+            // (past the engage range, or no path progress) is given up for this follower until its state changes
+            // (apmf/CombatEntry.cpp). It is not a candidate here, so no rule chooses it and gets a Suppressed pin
+            // (an opaque NoOp that would block every lower rule each pass). Read ONCE, BEFORE the group lock:
+            // EngageGiveUpsOf runs the lift check (actor reads) and takes the bridge's leaf mutex. Empty below ABI 31.
+            const std::vector<RE::FormID> givenUp = APMFBridge::EngageGiveUpsOf(a_self->GetFormID());
+            const auto isGivenUp = [&givenUp](RE::FormID a_fid) {
+                return std::find(givenUp.begin(), givenUp.end(), a_fid) != givenUp.end();
+            };
             RE::FormID waivedFoe = 0;   // the foe the waiver kept this pass (logged once per transition, after the lock)
             // The reach gate's own height read, once and before the lock (pure reads).
             const float selfHeight = a_reachGate ? CombatSense::BodyHeight(a_self) : 0.0f;
@@ -447,6 +458,7 @@ namespace MFO::Eval {
                         auto* foe = ptr.get();
                         if (!foe || foe == a_self) continue;
                         if (APMFBridge::IsSubstrateAnchor(foe->GetFormID())) continue;   // never a foe (v26)
+                        if (isGivenUp(foe->GetFormID())) continue;   // given up (ABI v31): not a cluster member either
                         if (foe->IsDead() || foe->IsDisabled()) continue;
                         if (t.flags.any(RE::CombatTarget::Flags::kTargetLost)) continue;
                         raw.push_back({ t.targetHandle, foe->GetPosition() });
@@ -475,6 +487,7 @@ namespace MFO::Eval {
                     auto* foe = ptr.get();
                     if (!foe || foe == a_self) continue;
                     if (APMFBridge::IsSubstrateAnchor(foe->GetFormID())) continue;   // Harbinger's anchor is never a foe (v26)
+                    if (isGivenUp(foe->GetFormID())) continue;   // given up after a not-engaged end (ABI v31, above)
                     if (foe->IsDead() || foe->IsDisabled()) continue;
 
                     // The engine has lost track of this one -- fled, hidden,

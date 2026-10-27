@@ -549,7 +549,8 @@ namespace MFO::APMFBridge {
     // noticed (on any lap, in or out of party combat): PinTarget returns Suppressed for it and
     // engage-on-sight does not enter it. It lifts on STATE only, never on a timer: the target moved more
     // than kGiveUpMoveU (512u, apmf/CombatEntry.cpp) from where it was given up, or it BECOMES hostile to the party / starts fighting a
-    // party member (a rising edge against its state when given up). A dead, disabled or unresolvable target
+    // party member (a rising edge against its state when given up), or he closed on it by kGiveUpMoveU or
+    // more since, or (a range drop) he is back inside the engage range that dropped it. A dead, disabled or unresolvable target
     // is dropped. Not saved, cleared on a load. Below ABI 31 nothing is recorded (today's rules hold).
     // True when the live APMF reports ABI >= 31 (GetClaimEndReason exists).
     bool ClaimEndReasonOffered();

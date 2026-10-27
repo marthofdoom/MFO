@@ -400,7 +400,8 @@ namespace MFO::APMFBridge {
         // mutex g_giveUpMx, so it is called with g_mx HELD (order g_mx -> g_giveUpMx; the registry never
         // takes g_mx). ClearEngageGiveUps: ClearTransientState's teardown (a load / revert).
         std::uint32_t ClaimEndReasonOf(const APMF_API::APMF_API_v2* api, APMF_API::Handle h);
-        void RecordEngageGiveUp(RE::FormID follower, RE::FormID target, std::uint32_t reason, const char* road);
+        void RecordEngageGiveUp(RE::FormID follower, RE::FormID target, std::uint32_t reason, const char* road,
+                                float range);   // range = the ch.21 engage range (fval), 0 for a pin
         void ClearEngageGiveUps();
         // ch.22 re-entry deny table (apmf/ReentryDeny.cpp) and ch.23 pursuit leash table
         // (apmf/PursuitLeash.cpp): each has its OWN mutex. The sweeps are called by Tick()

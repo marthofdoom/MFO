@@ -2562,7 +2562,8 @@ not editable); `bEngageOnSight` (default OFF) is its only control. Contract, thr
 rule in the header. Called only from the Scheduler hook above.
 - **fix/mfo-nopath-giveup (marth 2026-10-27):** with Harbinger ABI >= 31 `Service` (`:597`) reads the entry's END
   REASON (`CombatEntryStateOf(.., &endWhy)`, branch `:609`) instead of guessing a range drop: a NOT ENGAGED / NO PATH
-  PROGRESS end is NOT put in `givenUp` (the bridge already gave it up at the moment the sweep noticed it, lifts on
+  PROGRESS end (both give the target up, marth 2026-10-27; he may still chase past the leash to engage, marth
+  2026-10-12) is NOT put in `givenUp` (the bridge already gave it up at the moment the sweep noticed it, lifts on
   state only: `apmf/CombatEntry.cpp` "ABI v31" below), every other end joins `givenUp` as before. The range-drop guess
   below is the ABI-30 branch only. `PostProbe` (`:573`) adds `APMFBridge::EngageGiveUpsOf` to the probe's skip list
   (`:586`), the engage step checks `EngageGivenUp` again, `Forget` (`:814`) calls `ForgetEngageGiveUps`. `IsEnemy`
@@ -6398,19 +6399,26 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     mutex `g_giveUpMx` (order g_mx -> g_giveUpMx; it never takes g_mx). `EngageGivenUp` (`:380`) / `EngageGiveUpsOf`
     (`:397`) run the LIFT check on a copy without the leaf lock (`Judge` `:247`): lift when the target moved more than
     `kGiveUpMoveU` 512u from where it was given up, or on a RISING edge of `FightingPartyNow` (its currentCombatTarget is
-    the player or a teammate) or of hostility to the player / him (`IsHostileToActor`); dead / disabled / unresolvable =
-    dropped. No timer anywhere (marth: "no waiting ever"). One `[engage-give-up]` line per give-up, lift and drop.
+    the player or a teammate) or of hostility to the player / him (`IsHostileToActor`), or on the PARTY side (review F2
+    of fbe8d72): his distance to it fell by 512u or more from the one recorded at give-up, or, for `kClaimEnd_NotEngaged`,
+    he is back inside the entry's engage range (`CombatEntryClaim::engageRange` = the fval sent; a pin records range 0 and
+    the entry's record fills it in). A follower pacing at a constant distance under a ledge stays given up. Dead /
+    disabled / unresolvable = dropped. No timer anywhere (marth: "no waiting ever"). A range drop and a no-path end
+    both give the target up (marth 2026-10-27), and the follower may still chase past the leash to engage (marth
+    2026-10-12). `ClaimEndReasonOf` treats a null `GetClaimEndReason` slot as no record (review F6). One `[engage-give-up]` line per give-up, lift and drop.
     `ForgetEngageGiveUps` (`:415`, from `EngageOnSight::Forget`), `ClearEngageGiveUps` (`:375`, from `ClearTransientState`
     `Bridge.cpp:1260`). Consumers: `PinTarget` (`Excursion.cpp:272`, after the pin is judged, so an end noticed by that
     call is already recorded) returns `Suppressed` for a given-up target, own foe or a new choice (logged once per
-    give-up), BEFORE the no-loop re-pin; engage-on-sight's probe skips them (`PostProbe` `EngageOnSight.cpp:586`) and
+    give-up), BEFORE the no-loop re-pin; the in-combat foe scan (`Evaluator.cpp` PickFoe, review F1) reads
+    `EngageGiveUpsOf` once BEFORE the combat-group lock and skips them in the cluster pre-pass and the main scan, so no
+    rule chooses one (a chosen given-up foe would be an opaque Suppressed NoOp in `cast/Fire.cpp`, whose text now has a
+    give-up variant, `SuppressedText`); engage-on-sight's probe skips them (`PostProbe` `EngageOnSight.cpp:586`) and
     `Service` checks again before filing. **What breaks:** reading the reason after the handle is dropped (the record is
     keyed by handle); a lift on time; lifting on the plain "is fighting the party" state instead of its rising edge (the
     unreachable cat still targets the follower when it is given up: an immediate re-engage, the old loop); calling an
     engine read with `g_giveUpMx` held; reading `GetClaimEndReason` without the `abiVersion >= 31` gate (a v30 struct
-    has no slot). Known, out of this branch's files: the in-combat foe pickers (`Evaluator.cpp`) still choose a given-up
-    foe, so a rule that keeps choosing it gets `Suppressed` (Fire.cpp's opaque NoOp, its text still says "until the
-    gambit picks another foe").
+    has no slot); calling `EngageGiveUpsOf` inside the combat-group lock (it makes actor reads and takes the leaf
+    mutex). Open deferred finding: `Docs/REVIEW-BACKLOG.md` MFO-B528 (a falling edge is recorded only when something asks).
   - `apmf/ReentryDeny.cpp` (235, NEW, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5v9) = the
     **ch.22 COMBAT RE-ENTRY DENY** table (ABI v15 `kIntent_CombatReentryDeny`), the retreat's half of
     Harbinger's recipe "StopCombat once + deny re-entry". File-local `g_denies` under its OWN
