@@ -137,7 +137,8 @@ namespace MFO::Config {
             else if (a_key == "fErrandSettleSec")   { setF(g_errandSettleSec,   0.0f, 600.0f); return; }
             else if (a_key == "fErrandCooldownSec") { setF(g_errandCooldownSec, 0.0f, 3600.0f); return; }
             else if (a_key == "fErrandMaxGameMin")  { setF(g_errandMaxGameMin,  10.0f, 1440.0f); return; }
-            else if (a_key == "iErrandTradeGameMin") { setI(g_errandTradeGameMin, 1, 240); return; }
+            else if (a_key == "iErrandTradeGameMin") { setI(g_errandTradeGameMin, 1, 240); return; }   // legacy: read, no longer used
+            else if (a_key == "fErrandTradeRealSec") { setF(g_errandTradeRealSec, 1.0f, 120.0f); return; }
             else if (a_key == "bErrandSmith")       { setB(g_errandSmith); return; }                          // R8: smithing / tempering errands, default ON
             else if (a_key == "iSmithWorkGameMin")  { setI(g_smithWorkGameMin, 1, 240); return; }            // R8: game minutes at the station
             else if (a_key == "bErrandSmithFurniture") { setB(g_errandSmithFurniture); return; }            // R8: station animation via Harbinger (P-SMITH-1)
@@ -432,6 +433,7 @@ namespace MFO::Config {
             g_errandCooldownSec  = 120.0f;
             g_errandMaxGameMin   = 120.0f;
             g_errandTradeGameMin = 10;
+            g_errandTradeRealSec = 8.0f;
             g_errandSmith        = true;    // R8 smithing / tempering errands -- ON (features ship on)
             g_smithWorkGameMin   = 20;
             g_errandSmithFurniture = true;

@@ -782,11 +782,14 @@ namespace MFO::Config {
     inline std::atomic<float> g_errandSettleSec{ 10.0f };
     inline std::atomic<float> g_errandCooldownSec{ 120.0f };
     inline std::atomic<float> g_errandMaxGameMin{ 120.0f };
-    //   iErrandTradeGameMin (R1b, INI-only): game minutes an OFF-SCREEN (simulated) errand spends at the vendor; the walk
-    //     there and back is estimated from the distance (150 u/s x the timescale), and all of it runs on the game clock.
+    //   fErrandTradeRealSec (2026-10-26, INI-only): REAL seconds an OFF-SCREEN (simulated) errand spends at the vendor, scaled by the live
+    //     timescale onto the game clock (default 8, about the on-screen give beat + trade); the walk there and back is distance / 150 u/s in real
+    //     seconds with a ~2 s real floor, scaled the same way. iErrandTradeGameMin (R1b) is still READ (so an old INI parses) but no longer used:
+    //     a flat game-minute cost made a 500 u walk 4x and a trade ~8x slower than the same errand on screen at the stock timescale.
     //   (The design's H1(a) hold package, bErrandHoldPackage, is NOT built: it needs a new PACK record and the passive
     //     [errand-pos] drift line decides whether it is needed at all, principle 5.)
-    inline std::atomic<int>   g_errandTradeGameMin{ 10 };
+    inline std::atomic<int>   g_errandTradeGameMin{ 10 };   // legacy key, read and ignored (see fErrandTradeRealSec)
+    inline std::atomic<float> g_errandTradeRealSec{ 8.0f };
     //   TOWN PHASE 2 R8 (smithing / tempering errands, INI-only; features ship ON):
     //     bErrandSmith: a follower with a worn weapon/armor piece his Smithing can temper higher takes the materials and the
     //       work into his town trip (a smith stop: sharpening wheel / armor table). 0 = no smithing errand, no material wishes.

@@ -1443,6 +1443,12 @@ namespace MFO::Logistics::Errand {
             LocationTypes::TownAnchor(pc->GetCurrentLocation()) != town || LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) != town ||
             !Forms::g_tradeQuest || !Forms::g_tradeQuest->IsRunning())
             return false;   // (the same gates a plan has; the next call asks again)
+        // COLLEGE GATE (as TryStart's): the College of Winterhold's vendors serve a mage follower once the PLAYER has joined it.
+        if (auto* dhC = RE::TESDataHandler::GetSingleton(); dhC && town == dhC->LookupForm<RE::BGSLocation>(0x00076F3A, "Skyrim.esm")) {
+            auto* colFac = dhC->LookupForm<RE::TESFaction>(0x0001F259, "Skyrim.esm");
+            const bool mage = a_state.combatClassOverride == 3 || IsCasterFollower(a_state) || (Config::g_economyBuyTomes.load() && HasCastGambit(a_state));
+            if (!colFac || !pc->IsInFaction(colFac) || !mage) { later(0, true); return false; }
+        }
         std::vector<TradeBridge::NeedCat> needs;
         int gold = 0;
         EconomyLiveSupplyNeeds(a_follower, a_state, needs, gold);
@@ -1538,8 +1544,15 @@ namespace MFO::Logistics::Errand {
         std::size_t usable = 0;
         for (auto& p : planned) {
             if (p.skipped) continue;
+            // A shop's identity differs by who named it: the vendor actor (a loaded-vendor stop), the faction (a located shop) -- tried under either is tried.
+            const Cand* cd = nullptr;
+            for (const auto& c : cands) if (c.id == p.vendorKey) { cd = &c; break; }
+            const auto triedHere = [&](std::int32_t k) {
+                return Reopen::IsTried(fid, a_townId, k, p.vendorKey) || (cd && ((cd->actorId && Reopen::IsTried(fid, a_townId, k, cd->actorId)) ||
+                                                                                 Reopen::IsTried(fid, a_townId, k, cd->fac->GetFormID())));
+            };
             std::erase_if(p.needs, [&](const TradeBridge::NeedCat& n) {
-                return n.kind < 0 || n.kind > TradeBridge::NeedCat::kBolts || !wantKind(n.kind) || Reopen::IsTried(fid, a_townId, n.kind, p.vendorKey);
+                return n.kind < 0 || n.kind > TradeBridge::NeedCat::kBolts || !wantKind(n.kind) || triedHere(n.kind);
             });
             p.needKinds = 0;
             for (const auto& n : p.needs) p.needKinds |= 1u << n.kind;
@@ -1578,7 +1591,11 @@ namespace MFO::Logistics::Errand {
         stops.front().state = StopState::Active;
         for (const auto& st : stops)
             if (st.kind == StopKind::Shop && st.order)
-                for (const auto& n : st.order->needs) Reopen::NoteTried(fid, a_townId, n.kind, st.order->vendorKey);
+                for (const auto& n : st.order->needs) {   // (under every identity the shop answers to: the plan key, its faction, its vendor actor)
+                    Reopen::NoteTried(fid, a_townId, n.kind, st.order->vendorKey);
+                    if (st.faction) Reopen::NoteTried(fid, a_townId, n.kind, st.faction);
+                    if (st.vendorActor) Reopen::NoteTried(fid, a_townId, n.kind, st.vendorActor);
+                }
         a_out.stops = std::move(stops);
         a_out.line = std::format("LIVE-NEED | {}", line);
         {

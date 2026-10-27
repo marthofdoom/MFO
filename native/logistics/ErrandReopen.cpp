@@ -263,7 +263,11 @@ namespace MFO::Logistics::Errand::Reopen {
             if (it == g_watch.end() || it->second.town != a_town) {
                 for (const auto& n : a_out.unfilled) {
                     said += std::format("{}{} {}", said.empty() ? "" : ", ", BuyKindName(n.kind), n.quota);
-                    if (n.kind >= 0 && n.kind <= TradeBridge::NeedCat::kBolts && n.quota > 0) AddLiveTried(a_follower, a_town, n.kind, key);   // the live re-check never asks this shop again this visit
+                    if (n.kind >= 0 && n.kind <= TradeBridge::NeedCat::kBolts && n.quota > 0) {   // the live re-check never asks this shop again this visit (under every identity it answers to)
+                        AddLiveTried(a_follower, a_town, n.kind, key);
+                        if (a_stop.faction) AddLiveTried(a_follower, a_town, n.kind, a_stop.faction);
+                        if (a_stop.vendorActor) AddLiveTried(a_follower, a_town, n.kind, a_stop.vendorActor);
+                    }
                 }
                 if (said.empty()) return;
                 spdlog::info("[errand] {:08X}: MISSED BUY at '{}': {} -- not re-planned (no recorded plan for this town visit: a trip restored from the save)", a_follower, a_stop.vendorName, said);

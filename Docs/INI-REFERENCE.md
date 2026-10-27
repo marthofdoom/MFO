@@ -110,7 +110,8 @@ MFO seed defaults. MCM Helper's Data/MCM/Settings/MFO.ini is read AFTER this and
 - **`fErrandSettleSec`** (default `10`). Seconds you must have been in the town before anyone goes shopping.
 - **`fErrandCooldownSec`** (default `120`). Real seconds between one follower's errands.
 - **`fErrandMaxGameMin`** (default `120`). An errand older than this many GAME minutes ends and the follower rejoins.
-- **`iErrandTradeGameMin`** (default `10`). Game minutes an OFF-SCREEN errand spends at the vendor (the walk there and back is estimated from the distance and runs on the game clock too).
+- **`fErrandTradeRealSec`** (default `8`, 1-120). REAL seconds an OFF-SCREEN errand spends at the vendor, scaled by the live timescale onto the game clock (about the on-screen trade). The walk there and back is distance / 150 u/s in real seconds (floor about 2 s), scaled the same way.
+- **`iErrandTradeGameMin`** (legacy). Still read so an old INI parses, no longer used (replaced by `fErrandTradeRealSec`).
 - **`bErrandSmith`** (default `1`). SMITHING ERRANDS (town phase 2 R8). A follower whose worn weapon or armor piece his Smithing (plus his tempering perks) can improve takes it into his town trip: he buys the improve recipe's materials at a smith or general shop regardless of his gambits, then does the work at the town's sharpening wheel (weapons) or armor table (armor). The result is the engine's own temper formula. `0` = no smithing errand and no material wishes.
 - **`iSmithWorkGameMin`** (default `20`). Game minutes the smithing work takes at the station (off screen: the time cost of the simulated stage).
 - **`bErrandSmithFurniture`** (default `1`). `1` = ask Harbinger to play the station's furniture animation while he works; `0` = work without it. If Harbinger refuses or the furniture is not entered, the work still happens and the log says so.
