@@ -479,7 +479,8 @@ namespace MFO::APMFBridge {
     enum class PinResult {
         Pinned,       // a NEW pin was filed (first pin, a changed target, or a re-pin)
         Unchanged,    // already pinned (or pending) on this target: not an action
-        Suppressed,   // an ended pin that never went live, on this same target: not re-pinned
+        Suppressed,   // an ended pin that never went live, on this same target: not re-pinned; or (ABI v31)
+                      // a target given up after a NOT ENGAGED end (EngageGivenUp below): not pinned
         Invalid,      // no follower / no target / self-target: nothing filed
         SeatAbsent,   // APMF absent, ABI < 13, or a synchronous refusal (= ch.20 seat not
                       // installed -- the only synchronous refusal MFO's valid params can hit)
@@ -534,8 +535,36 @@ namespace MFO::APMFBridge {
     // drops a not-actively-hostile target beyond it and ends the follower's combat. 0 = none.
     EntryResult RequestCombatEntry(RE::FormID a_follower, RE::FormID a_target, std::uint32_t* a_outHandle,
                                    float a_engageRange = 0.0f);
-    // The follower's entry state; *a_outTarget (may be null) = the entry's target.
-    EntryState CombatEntryStateOf(RE::FormID a_follower, RE::FormID* a_outTarget);
+    // The follower's entry state; *a_outTarget (may be null) = the entry's target. *a_outEndReason (may be
+    // null) = the APMF_API::ClaimEndReason read when the end was noticed (kClaimEnd_None while standing, and
+    // always below ABI 31).
+    EntryState CombatEntryStateOf(RE::FormID a_follower, RE::FormID* a_outTarget,
+                                  std::uint32_t* a_outEndReason = nullptr);
+
+    // ── ABI v31 CLAIM END REASON + THE NOT-ENGAGED GIVE-UP (apmf/CombatEntry.cpp, marth 2026-10-27) ──
+    // Harbinger ends a held engagement (a ch.20 pin or a ch.21 entry) as NOT ENGAGED when the target is past
+    // the engage range and not attacking the party (kClaimEnd_NotEngaged) or after 20 s with no path progress
+    // (kClaimEnd_NoPathProgress, which counts as not engaged). It also ends the follower's combat. MFO then
+    // GIVES THAT TARGET UP for that follower, recorded by the pin / entry sweep at the moment the end is
+    // noticed (on any lap, in or out of party combat): PinTarget returns Suppressed for it and
+    // engage-on-sight does not enter it. It lifts on STATE only, never on a timer: the target moved more
+    // than kGiveUpMoveU (512u, apmf/CombatEntry.cpp) from where it was given up, or it BECOMES hostile to the party / starts fighting a
+    // party member (a rising edge against its state when given up). A dead, disabled or unresolvable target
+    // is dropped. Not saved, cleared on a load. Below ABI 31 nothing is recorded (today's rules hold).
+    // True when the live APMF reports ABI >= 31 (GetClaimEndReason exists).
+    bool ClaimEndReasonOffered();
+    // kClaimEnd_NotEngaged or kClaimEnd_NoPathProgress.
+    bool IsNotEngagedEnd(std::uint32_t a_reason);
+    // Short log text for an APMF_API::ClaimEndReason ("no path progress", "none (no record)" ...).
+    const char* ClaimEndReasonName(std::uint32_t a_reason);
+    // Is a_target given up for a_follower? Evaluates the lift first (state reads: worker or main thread)
+    // and logs a lift. *a_firstAsk (may be null) is true the first time a caller is told "given up" for
+    // this record, so a caller can log its refusal once.
+    bool EngageGivenUp(RE::FormID a_follower, RE::FormID a_target, bool* a_firstAsk = nullptr);
+    // Every target given up for a_follower, after the lift check (engage-on-sight's probe skips them).
+    std::vector<RE::FormID> EngageGiveUpsOf(RE::FormID a_follower);
+    // Forget a_follower's give-ups (dismissal / MFO off). No-op when none.
+    void ForgetEngageGiveUps(RE::FormID a_follower);
     // Release (if still standing) and forget this follower's entry. No-op when none.
     // Release STOPS NOTHING (Harbinger's contract): the fight is the engine's.
     void ForgetCombatEntry(RE::FormID a_follower);

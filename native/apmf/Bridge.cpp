@@ -1257,6 +1257,7 @@ namespace MFO::APMFBridge {
         g_owned.clear();
         ClearTargetPinsLocked();   // ch.20 pins: APMF drops them at its own kPreLoadGame; stale Release is a no-op
         ClearCombatEntriesLocked();   // ch.21 entries: same (never saved on APMF's side either)
+        ClearEngageGiveUps();         // v31 not-engaged give-ups: not saved, a load drops Harbinger's end records too
         ClearReentryDenies();         // ch.22 retreat denies: same (Harbinger never saves them)
         ClearPursuitLeashes();        // ch.23 leashes: same
         ClearHealApproaches();        // ch.24 held-heal approaches: same

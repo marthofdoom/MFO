@@ -392,6 +392,16 @@ namespace MFO::APMFBridge {
         // ClearCombatEntriesLocked: ClearTransientState's teardown. Both need g_mx HELD.
         void SweepCombatEntriesLocked(const APMF_API::APMF_API_v2* api);
         void ClearCombatEntriesLocked();
+        // ABI v31 claim end reason + the not-engaged give-up registry (apmf/CombatEntry.cpp, marth 2026-10-27).
+        // ClaimEndReasonOf: GetClaimEndReason(h) when the live APMF is ABI >= 31, else kClaimEnd_None (the
+        // documented degrade, said once per session). Any thread, takes no MFO lock.
+        // RecordEngageGiveUp: the pin / entry sweep saw a NOT ENGAGED end. It reads the target's position and
+        // party state NOW and records the give-up, one line per event. Takes only the registry's own LEAF
+        // mutex g_giveUpMx, so it is called with g_mx HELD (order g_mx -> g_giveUpMx; the registry never
+        // takes g_mx). ClearEngageGiveUps: ClearTransientState's teardown (a load / revert).
+        std::uint32_t ClaimEndReasonOf(const APMF_API::APMF_API_v2* api, APMF_API::Handle h);
+        void RecordEngageGiveUp(RE::FormID follower, RE::FormID target, std::uint32_t reason, const char* road);
+        void ClearEngageGiveUps();
         // ch.22 re-entry deny table (apmf/ReentryDeny.cpp) and ch.23 pursuit leash table
         // (apmf/PursuitLeash.cpp): each has its OWN mutex. The sweeps are called by Tick()
         // BEFORE it takes g_mx (the deny sweep posts the retreat's StopCombat); the clears by

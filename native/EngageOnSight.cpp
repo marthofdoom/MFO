@@ -353,7 +353,8 @@ namespace MFO::EngageOnSight {
         // marked"), or the engine's IsHostileToActor says it is hostile to the player OR to him, or
         // it is TERRITORIAL. Never engaged proactively unless FightingParty: a Confidence-0
         // (Cowardly) creature and any crime-faction actor (guards, townsfolk); the Config skip list
-        // (giant, mammoth, carriage driver, ferryman, servant ...) bars only the TERRITORIAL term. a_why names the
+        // (giant, mammoth, carriage driver, ferryman, servant ...) bars every branch, the engine's
+        // hostility included (marth 2026-10-27; it barred only the territorial term before). a_why names the
         // skip reason for the log (static text, never owned).
         bool IsEnemy(RE::Actor* a, RE::Actor* a_self, RE::Actor* a_pc, const char*& a_why) {
             if (a->IsCommandedActor()) {
@@ -377,13 +378,14 @@ namespace MFO::EngageOnSight {
             }
             if (FightingParty(a)) return true;   // fighting the party: counts, whatever else it is
             if (ConfidenceOf(a) <= 0.0f) { a_why = "cowardly"; return false; }
-            // The skip list applies ONLY to the territorial term: anything the game already judges
-            // hostile (aggressive giant bosses, Aggression-2 bandit wolves, ...) is engaged.
+            // The skip list bars EVERY proactive branch (marth 2026-10-27, his 10-12 ruling "giants: never
+            // proactively"): a giant or mammoth the engine already judges hostile (Gornak, field 2026-10-27)
+            // is not engaged either. One that is fighting the party still counts (FightingParty above).
+            if (IsNonCombatant(a)) { a_why = "skip list (giant / mammoth / carriage / ferry / servant ...): never engaged proactively"; return false; }
             if (a->IsHostileToActor(a_pc) || a->IsHostileToActor(a_self)) {
                 if (a->GetCrimeFaction()) { a_why = "crime faction"; return false; }
                 return true;
             }
-            if (IsNonCombatant(a)) { a_why = "not hostile (engine: no); territorial barred: skip list (giant / mammoth / carriage / ferry / servant ...)"; return false; }
             if (!IsTerritorial(a, a_self, a_pc)) { a_why = "not hostile (engine: no; territorial: no)"; return false; }
             if (a->GetCrimeFaction()) { a_why = "crime faction"; return false; }
             return true;
@@ -579,6 +581,10 @@ namespace MFO::EngageOnSight {
             std::vector<RE::FormID> givenUp;
             givenUp.reserve(a_note.givenUp.size());
             for (const auto& [fid, s] : a_note.givenUp) givenUp.push_back(fid);
+            // ABI v31: the targets given up after a NOT ENGAGED end (the bridge's registry, lift checked
+            // now, on this worker) are skipped exactly like this gambit's own. Empty below ABI 31.
+            for (const RE::FormID fid : APMFBridge::EngageGiveUpsOf(a_id))
+                if (!a_note.givenUp.contains(fid)) givenUp.push_back(fid);
             // Capture by value: FormIDs and numbers only (the frame re-resolves).
             const float range = Config::g_engageOnSightRange.load();   // read now (the MCM may change it)
             MainThread::Post([a_id, seq, gen, a_leash, range, goneRadius, givenUp = std::move(givenUp)]() {
@@ -596,10 +602,31 @@ namespace MFO::EngageOnSight {
         // 1) HIS ENTRY, if he holds one. Runs whatever the gates say, so an entry the
         //    Harbinger sweep ended is always recorded as given up.
         {
-            RE::FormID et = 0;
-            const auto st = APMFBridge::CombatEntryStateOf(a_id, &et);
+            RE::FormID    et     = 0;
+            std::uint32_t endWhy = APMF_API::kClaimEnd_None;
+            const auto st = APMFBridge::CombatEntryStateOf(a_id, &et, &endWhy);
             if (st == APMFBridge::EntryState::Standing) return true;   // pending: his lap, no logistics
-            if (st == APMFBridge::EntryState::Ended) {
+            if (st == APMFBridge::EntryState::Ended && APMFBridge::ClaimEndReasonOffered()) {
+                // ABI >= 31 (marth 2026-10-27): Harbinger SAYS why it ended the entry, so nothing is guessed.
+                // A NOT ENGAGED end (past the range, or no path progress) was given up by the bridge sweep the
+                // moment it was noticed (APMFBridge::EngageGivenUp, lifts on state only), so it is NOT put in
+                // this gambit's own given-up set. Every other end keeps today's rule: given up until GONE.
+                const bool notEngaged = APMFBridge::IsNotEngagedEnd(endWhy);
+                if (!notEngaged) note.givenUp[et] = note.postedSeq;
+                const bool pinCleared = note.pinned == et && ReleaseOwnPin(note, a_id);
+                APMFBridge::ForgetCombatEntry(a_id);
+                if (notEngaged)
+                    spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} ended, {}. Given up until it moves "
+                                 "or turns on the party{}",
+                                 NameOf(a_f), a_id, et, APMFBridge::ClaimEndReasonName(endWhy),
+                                 pinCleared ? ", its pin released" : "");
+                else
+                    spdlog::info("[engage-on-sight] {} ({:08X}): entry on {:08X} is over ({}). Target given up until "
+                                 "it dies, unloads, stops being hostile or is past fLeashMax from you{}",
+                                 NameOf(a_f), a_id, et, APMFBridge::ClaimEndReasonName(endWhy),
+                                 pinCleared ? ", its pin released" : "");
+            } else if (st == APMFBridge::EntryState::Ended) {
+                // THE ABI-30 PATH (Harbinger 0.15.1 and older: no GetClaimEndReason), unchanged.
                 // A RANGE DROP is not a give-up (marth 2026-10-12, no waiting): Harbinger ended the
                 // entry because the target is beyond fval and not hostile to the party. It cannot be
                 // read through the API, so detect it here: the target is alive, still an enemy by
@@ -709,7 +736,8 @@ namespace MFO::EngageOnSight {
                            now, fmt::format(" -- {} skipped", r.civilSkipped));
                 else
                     Status(note, a_f, a_id, "armed: watching for a visible enemy inside the leash", now);
-            } else if (!note.givenUp.contains(r.chosen)) {
+            } else if (!note.givenUp.contains(r.chosen) && !APMFBridge::EngageGivenUp(a_id, r.chosen)) {
+                // (EngageGivenUp: a not-engaged give-up recorded after this probe was posted, ABI v31.)
                 // The confidence gate on the IN-COMBAT estimate (review of 1c50696): the Of()
                 // he would read once fighting as many foes as the probe counted, against the
                 // engage bar (the retreat floor + 0.15) -- so he never starts a fight he would
@@ -785,6 +813,7 @@ namespace MFO::EngageOnSight {
 
     void Forget(RE::FormID a_id) {
         APMFBridge::ForgetCombatEntry(a_id);
+        APMFBridge::ForgetEngageGiveUps(a_id);   // ABI v31 not-engaged give-ups (also the pin table's)
         g_notes.erase(a_id);
         g_waitHeld.erase(a_id);   // g_seq is NOT reset: a probe still in flight stays older than any new post
         std::lock_guard lk(g_probeMx);
