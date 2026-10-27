@@ -39,7 +39,7 @@ namespace MFO::SelfStatus {
             for (auto* ae : *list) {
                 if (!ae || !ae->spell) continue;
                 if (ae->flags.any(RE::ActiveEffect::Flag::kInactive, RE::ActiveEffect::Flag::kDispelled)) continue;
-                if (ae->spell->GetSpellType() == RE::MagicSystem::SpellType::kPoison) return true;
+                if (ae->spell->IsPoison()) return true;   // NOT GetSpellType(): AlchemyItem returns kAlchemy for it (vfunc 0x53)
             }
             return false;
         }
@@ -47,7 +47,8 @@ namespace MFO::SelfStatus {
         void PostRefresh(RE::FormID a_fid) {
             MainThread::Post([a_fid]() {
                 bool poisoned = false;
-                // A LOADED follower only: an unloaded one has no readable list, and that must not read as "cured".
+                // A LOADED actor only: an unloaded one has no readable list, so it is recorded NOT poisoned (the
+                // fail-closed answer), never a claim that he was cured.
                 if (auto* f = RE::TESForm::LookupByID<RE::Actor>(a_fid); f && f->Is3DLoaded())
                     poisoned = ReadPoisoned(f);
                 std::scoped_lock lk(g_mx);
@@ -58,6 +59,11 @@ namespace MFO::SelfStatus {
             });
         }
 
+    }
+
+    void Clear() {
+        std::scoped_lock lk(g_mx);
+        g_cache.clear();
     }
 
     bool Poisoned(RE::Actor* a_actor) {

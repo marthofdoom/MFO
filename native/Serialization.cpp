@@ -18,6 +18,7 @@
 #include "TradeBridge.h"
 #include "MEOBridge.h"
 #include "MainThread.h"
+#include "SelfStatus.h"   // ResetAllState: drop the poisoned-state mirror
 #include "Probe.h"
 #include "Board.h"
 #include "progression/ProgAllocator.h"
@@ -1044,6 +1045,7 @@ namespace MFO {
         // would re-resolve against the NEXT session's (reused) handle table. Safe
         // now that StopPump halted the worker that feeds the queue (audit).
         MainThread::Clear();
+        SelfStatus::Clear();   // the poisoned-state mirror (gambit conditions): a pre-load answer must not survive the load
         g_followers.clear();
         // ARCHITECTURE §7: revert zeroes EVERYTHING save-scoped. The active
         // handle list is save-scoped too -- handle slots get reused, so a

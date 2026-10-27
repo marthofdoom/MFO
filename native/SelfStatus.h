@@ -13,12 +13,18 @@
 // condition is never true there (a documented degrade, not a worker-side list walk). No co-save, no
 // ResetAllState hook: the trust window ages a pre-load entry out by itself.
 //
-// POISONED = a live (not dispelled, not inactive) ActiveEffect whose source spell is a POISON (SpellType kPoison:
-// an alchemy poison, a poisoned weapon's hit). That is the set the engine's own cure-poison effect removes: the fork's
-// CureEffect carries the spellType it cures (RE/C/CureEffect.h:22).
+// POISONED = a live (not dispelled, not inactive) ActiveEffect whose source spell answers MagicItem::IsPoison()
+// (vfunc 0x61: for an AlchemyItem the poison flag, flags bit 17; an alchemy poison, a poisoned weapon's hit).
+// NOT GetSpellType(): AlchemyItem::GetSpellType (vfunc 0x53) always returns kAlchemy, never kPoison.
+// Works for ANY actor (the key is the FormID): the follower himself (cond.self_poisoned) and an ally or the
+// player (cond.ally_poisoned).
 namespace MFO::SelfStatus {
 
     // True when the mirror says a_actor carries a live poison. Worker-safe (a mutex-guarded map read).
     [[nodiscard]] bool Poisoned(RE::Actor* a_actor);
+
+    // Drop the whole mirror. ResetAllState (load / revert), after StopPump, beside MainThread::Clear: a pre-load
+    // answer must not outlive the load (handles and FormIDs are re-resolved against the next session).
+    void Clear();
 
 }

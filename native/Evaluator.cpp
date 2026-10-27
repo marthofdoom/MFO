@@ -38,8 +38,7 @@ namespace MFO::Eval {
                    a_op == Vocab::kCondFoeMultipleWithin || a_op == Vocab::kCondFoeIsUnholy ||
                    a_op == Vocab::kCondFoeAttackingAlly ||
                    a_op == Vocab::kCondFoeIsDragonFlying || a_op == Vocab::kCondFoeIsDragonLanded ||
-                   a_op == Vocab::kCondFoeIsDaedra || a_op == Vocab::kCondFoeIsWerewolf ||
-                   a_op == Vocab::kCondFoeIsSummoned;
+                   a_op == Vocab::kCondFoeIsDaedra || a_op == Vocab::kCondFoeIsSummoned;
         }
 
         // Weak to an element = its resist actor-value is negative (a race trait
@@ -50,7 +49,9 @@ namespace MFO::Eval {
         }
         // The ALLY selector chooses a teammate target the same way.
         bool IsAllySelector(const std::string& a_op) {
-            return a_op == Vocab::kCondAllyHpBelow;
+            return a_op == Vocab::kCondAllyHpBelow || a_op == Vocab::kCondAllyDowned ||
+                   a_op == Vocab::kCondAllyParalysed || a_op == Vocab::kCondAllyPoisoned ||
+                   a_op == Vocab::kCondAllyUnderwater;
         }
 
         // Does this foe's current combat target resolve to a_who?
@@ -107,44 +108,29 @@ namespace MFO::Eval {
             return RaceHasKeyword(a_foe, "ActorTypeDwarven") && !RaceHasKeyword(a_foe, "ActorTypeUndead") &&
                    !RaceHasKeyword(a_foe, "ActorTypeGhost") && !RaceHasKeyword(a_foe, "DLC2AshSpawnKeyword");
         }
-        // Is the foe a WEREWOLF (or werebear) in beast form? Reads the foe's current RACE against the two vanilla
-        // beast-form races: Skyrim.esm WerewolfBeastRace 0x000CDD84 (the base-game plugin is always load index 0) and
-        // Dragonborn.esm DLC2WerebearBeastRace (local 0x01E17B, resolved once by plugin name; 0 when Dragonborn is not
-        // loaded). Both ids measured off the vanilla plugins (tools/esp_inspect.py, 2026-10-27). A load order's own
-        // beast races are not known here (no list-specific data); they simply do not match.
-        bool FoeIsWerewolf(RE::Actor* a_foe) {
-            static const RE::FormID s_bear = [] {
-                auto* dh = RE::TESDataHandler::GetSingleton();
-                return dh ? dh->LookupFormID(0x01E17B, "Dragonborn.esm") : RE::FormID{ 0 };
-            }();
-            auto* race = a_foe ? a_foe->GetRace() : nullptr;
-            if (!race) return false;
-            const RE::FormID id = race->GetFormID();
-            return id == 0x000CDD84 || (s_bear != 0 && id == s_bear);
-        }
         // Is the foe SUMMONED? The engine's own summoned-creature mark (AIProcess middleHigh, Actor::IsSummoned: a
         // conjured creature) OR the commanded-actor bool flag (Actor::IsCommandedActor: conjured and REANIMATED
         // actors, the set Banish / Dispel Undead act on). Plain member reads, no engine call.
         bool FoeIsSummoned(RE::Actor* a_foe) {
             return a_foe && (a_foe->IsSummoned() || a_foe->IsCommandedActor());
         }
-        // cond.self_underwater: the water surface is above the follower's HEAD. The engine's own water read
-        // (TESObjectREFR::GetWaterHeight: the loaded ref's relevantWaterHeight, else the cell's exterior water;
-        // member reads only, -infinity when there is no water) against his origin plus his body height
+        // cond.self_underwater / cond.ally_underwater: the water surface is above the actor's HEAD. The engine's own
+        // water read (TESObjectREFR::GetWaterHeight: the loaded ref's relevantWaterHeight, else the cell's exterior
+        // water; member reads only, -infinity when there is no water) against his origin plus his body height
         // (CombatSense::BodyHeight: field reads only, worker-safe). Swimming with the head out is NOT underwater.
-        bool SelfUnderwater(RE::Actor* a_self) {
-            if (!a_self) return false;
-            return a_self->GetWaterHeight() > a_self->GetPositionZ() + CombatSense::BodyHeight(a_self);
+        bool ActorUnderwater(RE::Actor* a_actor) {
+            if (!a_actor) return false;
+            return a_actor->GetWaterHeight() > a_actor->GetPositionZ() + CombatSense::BodyHeight(a_actor);
         }
-        // cond.self_downed: bleedout or essential-down (ActorState::IsBleedingOut, the read the can-act fix uses).
-        bool SelfDowned(RE::Actor* a_self) {
-            const auto* st = a_self ? a_self->AsActorState() : nullptr;
+        // cond.ally_downed: bleedout or essential-down (ActorState::IsBleedingOut, the read the can-act fix uses).
+        bool ActorDowned(RE::Actor* a_actor) {
+            const auto* st = a_actor ? a_actor->AsActorState() : nullptr;
             return st && st->IsBleedingOut();
         }
-        // cond.self_paralysed: the Paralysis actor value is up. Every vanilla Paralysis-archetype magic effect
+        // cond.ally_paralysed: the Paralysis actor value is up. Every vanilla Paralysis-archetype magic effect
         // (19 in Skyrim.esm) writes actor value 53 (kParalysis), measured with tools/esp_inspect.py, 2026-10-27.
-        bool SelfParalysed(RE::Actor* a_self) {
-            auto* avo = a_self ? a_self->AsActorValueOwner() : nullptr;
+        bool ActorParalysed(RE::Actor* a_actor) {
+            auto* avo = a_actor ? a_actor->AsActorValueOwner() : nullptr;
             return avo && avo->GetActorValue(RE::ActorValue::kParalysis) > 0.0f;
         }
         // Is the foe's combat AI in its flee state? Reads the foe's OWN
@@ -583,8 +569,6 @@ namespace MFO::Eval {
                         if (!RaceHasKeyword(foe, "ActorTypeDragon") || CombatSense::IsAirborne(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeIsDaedra) {
                         if (!RaceHasKeyword(foe, "ActorTypeDaedra")) continue;
-                    } else if (a_op == Vocab::kCondFoeIsWerewolf) {
-                        if (!FoeIsWerewolf(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeIsSummoned) {
                         if (!FoeIsSummoned(foe)) continue;
                     } else if (a_op == Vocab::kCondFoeIsMechanical) {
@@ -776,6 +760,39 @@ namespace MFO::Eval {
             return best;
         }
 
+        // The ALLY STATE selectors (cond.ally_downed / _paralysed / _poisoned / _underwater, marth 2026-10-27): the
+        // NEAREST teammate in the state, within the shared radius, and that ally becomes the target. The candidate set
+        // is PickAlly's exactly: the maintained g_active list (not the follower himself, not dead or disabled) PLUS the
+        // PLAYER. No HP threshold, no heal-reach filter (a rule that needs reach is the action's job, as with every
+        // non-heal ally cast). Poisoned reads the SelfStatus mirror (any actor, main-thread refresh); the other three
+        // are plain member reads.
+        RE::ActorHandle PickAllyState(RE::Actor* a_self, RE::Actor* a_player, const std::string& a_op) {
+            RE::ActorHandle best;
+            if (!a_self) return best;
+            const auto selfPos = a_self->GetPosition();
+            const float radius = Config::g_sharedRadius.load();
+            float nearest = (std::numeric_limits<float>::max)();
+            auto consider = [&](RE::Actor* ally) {
+                if (!ally || ally == a_self) return;
+                if (ally->IsDead() || ally->IsDisabled()) return;
+                const float d = selfPos.GetDistance(ally->GetPosition());
+                if (d > radius || d >= nearest) return;
+                bool in = false;
+                if      (a_op == Vocab::kCondAllyDowned)     in = ActorDowned(ally);
+                else if (a_op == Vocab::kCondAllyParalysed)  in = ActorParalysed(ally);
+                else if (a_op == Vocab::kCondAllyPoisoned)   in = SelfStatus::Poisoned(ally);
+                else if (a_op == Vocab::kCondAllyUnderwater) in = ActorUnderwater(ally);
+                if (!in) return;
+                nearest = d; best = ally->GetHandle();
+            };
+            for (const auto& h : Followers::g_active) {
+                auto ptr = h.get();   // HOLD the NiPointer (Targeting rule)
+                consider(ptr.get());
+            }
+            consider(a_player);   // the player is an ally candidate too, as in PickAlly
+            return best;
+        }
+
         // Evaluate ONE condition. Pure read. a_self is the follower; a_player
         // is the player, passed in rather than fetched so this stays a pure
         // function of its inputs (and so the caller controls whose state is
@@ -810,10 +827,8 @@ namespace MFO::Eval {
             if (op == Vocab::kCondDark) return IsDark(a_self);
 
             // SITUATIONAL STATE gates (ClickUp 86e3g81x0): reads of the follower (or the player), no target.
-            if (op == Vocab::kCondSelfUnderwater) return SelfUnderwater(a_self);
+            if (op == Vocab::kCondSelfUnderwater) return ActorUnderwater(a_self);
             if (op == Vocab::kCondSelfPoisoned)   return SelfStatus::Poisoned(a_self);   // main-thread mirror (SelfStatus.h)
-            if (op == Vocab::kCondSelfParalysed)  return SelfParalysed(a_self);
-            if (op == Vocab::kCondSelfDowned)     return SelfDowned(a_self);
             if (op == Vocab::kCondPlayerSneaking) return a_player && a_player->IsSneaking();
 
             // Foe-COUNT gate -- reads the group, picks no target.
@@ -918,7 +933,9 @@ namespace MFO::Eval {
                         sp && Actuation::HealsHealth(sp))
                         healSpell = sp;
                 }
-                chosen = PickAlly(a_follower, player, g.conditionParam, healSpell);
+                chosen = g.conditionOpcode == Vocab::kCondAllyHpBelow
+                             ? PickAlly(a_follower, player, g.conditionParam, healSpell)
+                             : PickAllyState(a_follower, player, g.conditionOpcode);
                 if (!chosen) continue;
                 // An ally selector names a wounded teammate/PLAYER as the target.
                 // Attack/PowerAttack force-write the combat target with no

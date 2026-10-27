@@ -2425,3 +2425,12 @@ A 2H-class follower whose perks lead on left-hand weapons gets allowDual = true.
 
 ### MFO-B519 (SEV-5, OPEN, docs/comments + cost, against bdf6ae9, Opus review of fix/mfo-dualwield-gate) -- stale comments, per-tick inventory scan
 (1) logistics/Logistics_internal.h:281-285 still says offHand is "DETECTED AND LOGGED ONLY" and that "MFO_MeleeStyle does not" allow dual wielding (pre-existing). (2) MAP.md:4911 says "NEXT_OBJECT_ID is now 0x916" (now 0x917). (3) MFO_GenerateESP.py:121 comment "(0x916 since R7 ..." next to value 0x917 reads confusingly. (4) HEDR numRecords hard-coded to 100 (MFO_GenerateESP.py:294, pre-existing). (5) One GetInventory() scan per follower per combat tick at the Want sites; caching roles per tick is optional.
+
+### MFO-B520 (SEV-4, OPEN, SelfStatus.cpp, against af12ebc, Opus review of feat/mfo-gambit-conditions-1027) -- poisoned mirror lags a cure
+After a Cure Poison lands, the mirror can still say poisoned for up to about 1 s plus a frame (kRefreshSec).
+
+### MFO-B521 (SEV-5, OPEN, CHANGELOG.md, against af12ebc, Opus review of feat/mfo-gambit-conditions-1027) -- Unreleased header
+The '## Unreleased' header needs renaming to the version at the release cut.
+
+### MFO-B522 (SEV-5, OPEN, Evaluator.cpp FoeIsSummoned, against af12ebc, Opus review of feat/mfo-gambit-conditions-1027) -- IsSummoned per-runtime offset, near redundant
+FoeIsSummoned's IsSummoned() reads middleHigh->summonedCreature (+0x31C) with no per-runtime check (the offset looks stable on all three runtimes) and is nearly redundant with IsCommandedActor().
