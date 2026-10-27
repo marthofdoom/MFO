@@ -990,6 +990,8 @@ namespace MFO::Logistics::Errand::Sim {
                         if (!out.aborted) {   // MISSED BUY: a supply quota the vendor's stock could not fill is re-planned to another open shop of the plan
                             SyncCur(r);
                             Reopen::NoteUnfilled(fid, r.town, r.stops[r.cur], r.order.get(), out);
+                            if (!out.unfilled.empty())   // IN-TRIP RE-QUEUE: fold / insert a stop into this trip NOW (AdvanceStop walks it), not at the inn
+                                Reopen::Requeue(fid, r.town, r.stops, r.cur, r.tripPurse >= 0 ? std::max(0, r.tripPurse - r.tripSpent) : -1, r.lastPos);
                         }
                     } else if (clk - r.dispatchedClk > kTradeWaitClkSec) {
                         r.reported = true;

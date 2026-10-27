@@ -71,6 +71,9 @@ namespace MFO::TradeBridge {
         // Positive evidence for Trip::Plan (a chest that showed a magicka potion once stocks them); older than a restock = unknown.
         struct StockRead { std::int32_t lines[5] = {}; float day = 0.0f; };
         std::unordered_map<RE::FormID, StockRead>        g_chestStock;
+        // IN-TRIP RE-QUEUE (2026-10-26): the cheapest unit price (after the follower's buy multiplier) PlanBuy saw for each supply kind 0..4 in ANY chest
+        // this session (-1 = never seen). The gold the next shop must be able to spend for a re-queue to be worth a stop. Session-only; guarded by g_mtx.
+        std::int32_t                                     g_minUnitSeen[5] = { -1, -1, -1, -1, -1 };
         std::unordered_map<std::uint64_t, EmptyMemo>     g_emptyMemo;
         struct StaticSkip { std::uint64_t reason = 0; float day = 0.0f; };
         std::unordered_map<std::uint64_t, StaticSkip>    g_staticSkip;   // pair -> skip (b): the reason sig + the game day it began
@@ -303,6 +306,7 @@ namespace MFO::TradeBridge {
                 if (baseVal <= 0) continue;   // free/valueless stock isn't a real buy
                 const int val = std::max(1, static_cast<int>(Logistics::Pricing::Apply(baseVal, buyMult)));
                 cands.push_back(Cand{ i, kind, val, avail, f });
+                if (kind >= 0 && kind <= NeedCat::kBolts && (g_minUnitSeen[kind] < 0 || val < g_minUnitSeen[kind])) g_minUnitSeen[kind] = val;
             }
 
             // ── SUPPLY (potions/ammo): fill each below-threshold quota, best
@@ -758,6 +762,13 @@ namespace MFO::TradeBridge {
             }
             auto* fol = o.follower.get().get();
             auto* ven = o.vendor.get().get();
+            // The shop's name (marth 2026-10-26: one name everywhere): the merchant chest's INTERIOR cell FULL (the place), else the vendor NPC, else '?'.
+            // (This runs on the VM thread: no vendor-index lookup here, so no "<vendor>'s stall" step.)
+            std::string venLabel;
+            if (auto* chestRef = RE::TESForm::LookupByID<RE::TESObjectREFR>(o.chestId))
+                if (auto* cc = chestRef->GetParentCell(); cc && cc->IsInteriorCell())
+                    if (const char* cn = cc->GetName(); cn && *cn) venLabel = cn;
+            if (venLabel.empty()) venLabel = ven && ven->GetName() && *ven->GetName() ? ven->GetName() : "?";
             const char* verb = o.probeOnly ? "WOULD" : "did";
             // Name the SELL rows offered (native's list; Papyrus sells them in this
             // order until the chest's gold runs out -- the counts say how far it got)
@@ -774,7 +785,7 @@ namespace MFO::TradeBridge {
                          "(sell n={}, needs={}, purse={}) | offered [{}] | bought plan [{}]",
                          fol ? fol->GetFormID() : 0u,
                          fol && fol->GetName() ? fol->GetName() : "?",
-                         ven && ven->GetName() ? ven->GetName() : "?",
+                         venLabel.c_str(),
                          postTradeGold, verb, a_soldCount, a_soldValue, a_boughtCount, a_spent,
                          o.sell.size(), o.needs.size(), o.budget + o.buySpent,   // original purse
                          offered, o.buyPlan);
@@ -983,6 +994,12 @@ namespace MFO::TradeBridge {
         return it->second.gold;
     }
 
+    std::int32_t MinSeenUnitPrice(std::int32_t a_kind) {
+        if (a_kind < 0 || a_kind > 4) return -1;
+        std::scoped_lock lk(g_mtx);
+        return g_minUnitSeen[a_kind];
+    }
+
     std::int32_t LastSeenStockLines(RE::FormID a_chest, std::int32_t a_kind) {
         if (a_kind < 0 || a_kind > 4) return -1;
         std::scoped_lock lk(g_mtx);
@@ -1020,6 +1037,7 @@ namespace MFO::TradeBridge {
         g_outcomes.clear();
         g_chestGold.clear();
         g_chestStock.clear();
+        for (auto& m : g_minUnitSeen) m = -1;
         g_emptyMemo.clear();
         g_staticSkip.clear();
         Logistics::Pricing::Clear();   // R2: the price cache is session-only

@@ -47,9 +47,10 @@ namespace MFO::Logistics {
     // Its name: the faction's own FULL, else its PLVD place (the way BuildTownShops reads it: kInCell = the cell's FULL; kNearReference = the
     // ref's parent cell FULL, else the ref's display name; any other type = the merchant chest's cell FULL). Empty string = nothing named it
     // (callers keep their own "?").
-    inline std::string ShopPlaceName(const RE::TESFaction* a_fac) {
+    // FIELD (2026-10-26): the shop's PLACE reads like a shop name ("Arcadia's Cauldron"); a vendor faction's own FULL is often a generic guild name
+    // ("Alchemist Vendor"), so the faction FULL is the LAST resort (ShopPlaceName below, ShopDisplayName for the whole priority).
+    inline std::string ShopPlaceCellName(const RE::TESFaction* a_fac) {
         if (!a_fac) return {};
-        if (const char* n = a_fac->GetName(); n && *n) return n;
         if (!PlvdPlaceVerified()) return {};   // the PLVD union layout, per runtime (above)
         auto* loc = a_fac->vendorData.vendorLocation;
         if (!loc) return {};
@@ -72,8 +73,21 @@ namespace MFO::Logistics {
             break;
         }
         }
+        // The PLVD place named nothing (or its type is the chest's): the merchant chest's cell FULL.
+        auto* chest2 = a_fac->vendorData.merchantContainer;
+        if (auto* cc2 = chest2 ? chest2->GetParentCell() : nullptr) if (const char* n2 = cc2->GetName(); n2 && *n2) return n2;
         return {};
     }
+    // The place name, else the faction's own FULL (callers that know no vendor). Empty = nothing named it.
+    inline std::string ShopPlaceName(const RE::TESFaction* a_fac) {
+        if (auto n = ShopPlaceCellName(a_fac); !n.empty()) return n;
+        if (const char* f = a_fac ? a_fac->GetName() : nullptr; f && *f) return f;
+        return {};
+    }
+    // THE ONE SHOP NAME (marth 2026-10-26, every log / toast / watch / stop label): PLVD place cell FULL -> the merchant chest's interior cell FULL ->
+    // "<vendor NPC>'s stall" (a_vendorActor when it resolves, else the NPC-first index: Vendors::Locate, which answers unloaded too; WORKER threads only) ->
+    // the faction's FULL -> "" (callers print '?' only then). Defined in ErrandVendors.cpp.
+    std::string ShopDisplayName(const RE::TESFaction* a_fac, RE::FormID a_vendorActor);
 
     // ── the PLAN entry (defined in Economy.cpp beside EconomyProbe) ──────────────────────────────────────
     // One candidate shop: its vendor FACTION, and the vendor ACTOR when he is loaded (null = an interior shop
@@ -109,6 +123,8 @@ namespace MFO::Logistics {
                            std::chrono::steady_clock::time_point a_now,
                            const std::vector<ErrandShop>& a_shops, std::vector<ErrandPlanned>& a_out,
                            int* a_deferred = nullptr);   // F1: count of shops dropped this pass for a pending price refresh
+    // LIVE NEED RE-CHECK (2026-10-26): the follower's supply kinds below their gambit thresholds NOW (quota = how many more) and his live gold. Loaded follower only.
+    void EconomyLiveSupplyNeeds(RE::Actor* a_follower, const FollowerState& a_state, std::vector<TradeBridge::NeedCat>& a_out, int& a_gold);
     // R5: the physical give beat of ONE STOP of a trip: EconomyProbe(kExecute) for a_probe.vendors, with the trip's PARTITION
     // applied. a_share (the stop's planned order, null = no partition: a restored stop re-plans in full) limits the sell rows
     // to the objects it lists, the needs to its kinds and the gear / tome wishes to its flags; a_purseCap (< 0 = none) caps
@@ -416,6 +432,22 @@ namespace MFO::Logistics::Errand {
         // the same shop twice for one kind. A kind the order asked for that came back filled leaves the watch. Same hourly Poll, no new poller.
         void NoteUnfilled(RE::FormID a_follower, RE::FormID a_town, const Stop& a_stop, const ErrandPlanned* a_order,
                           const TradeBridge::TradeOutcome& a_out);
+        // IN-TRIP RE-QUEUE (2026-10-26, marth: "a follower should requeue when a need isnt met and the gold is available"): called right after NoteUnfilled
+        // at a REPORTED trade (on screen and off). When the trip purse left (a_purseLeft, -1 = unknown) covers the cheapest unit PlanBuy has seen for a missed
+        // kind (TradeBridge::MinSeenUnitPrice, else iErrandMinPurse), each missed kind is FOLDED into a still-pending shop stop whose VEND carries it
+        // (stock-evidence ones first), else the best open untried candidate of the plan is INSERTED into a_stops before the first later non-shop stop (the
+        // inn). Mutates a_stops in place (the caller owns them and stores the record); never depends on bErrandInn. Loop guard = the per-visit (kind, shop)
+        // tried set. Returns the number of kinds re-queued. Takes no lock of the caller's (Trip::Plan -> ChestCrowd takes Errand g_mx, then Sim g_mx).
+        int Requeue(RE::FormID a_follower, RE::FormID a_town, std::vector<Stop>& a_stops, std::size_t a_cur, int a_purseLeft, const RE::NiPoint3& a_from);
+        // CARRIED NEED (2026-10-26): the player's town changed (Rest::NoteTown): the supply kinds still unmet move into a per-follower SESSION-ONLY list, then
+        // the watch is cleared. ApplyCarried (TryStart, after the plan's orders exist) forces them into the next town's plan: a kind no live order already
+        // asks for goes to the candidate carrying it (stock evidence first, the nearest). The list is consumed. ClearAll (revert / load) drops it unused.
+        void CarryAndClear();
+        // LIVE NEED RE-CHECK (Errand.cpp PlanLiveNeeds): the per-VISIT (kind, shop key) loop guard. IsTried also reads the watch's own tried set; NoteTried adds a
+        // pair (kept apart from any watch: a restored trip has none). A shop whose trade came back unfilled (NoteUnfilled, with or without a watch) is tried.
+        bool IsTried(RE::FormID a_follower, RE::FormID a_town, std::int32_t a_kind, RE::FormID a_key);
+        void NoteTried(RE::FormID a_follower, RE::FormID a_town, std::int32_t a_kind, RE::FormID a_key);
+        int  ApplyCarried(RE::FormID a_follower, const std::vector<Trip::Cand>& a_cands, std::vector<ErrandPlanned>& a_planned);
         // MISSED SELLS (b): items that became sell candidates mid-trip and appear in NO stop's order. a_requeue = a failed start puts them back.
         void NoteLate(RE::FormID a_follower, RE::FormID a_town, const std::vector<RE::FormID>& a_forms, bool a_requeue = false);
         // F3 (review): a late-sell trip started for these forms, so the gold entries must not send him back with rows he no longer holds.

@@ -1093,8 +1093,8 @@ namespace MFO::Logistics {
                 auto* fac    = pv.fac;
                 // The pair key / SkipTrade / log identity: the vendor actor, or the FACTION for a shop whose vendor is not loaded.
                 const RE::FormID vendorKey = vendor ? vendor->GetFormID() : fac->GetFormID();
-                const std::string shopPlaceName = vendor && vendor->GetName() ? std::string() : ShopPlaceName(fac);   // F4: a faction-only shop is named from its PLVD place
-                const char* vendorName = vendor && vendor->GetName() ? vendor->GetName() : (!shopPlaceName.empty() ? shopPlaceName.c_str() : "?");
+                const std::string shopPlaceName = ShopDisplayName(fac, vendor ? vendor->GetFormID() : 0u);   // the one shop name: place -> chest cell -> "<vendor>'s stall" -> faction FULL
+                const char* vendorName = !shopPlaceName.empty() ? shopPlaceName.c_str() : (vendor && vendor->GetName() ? vendor->GetName() : "?");
 
                 // Per-(follower,vendor) log cooldown (60 s).
                 const auto pairKey = (static_cast<std::uint64_t>(fid) << 32) | vendorKey;
@@ -1252,6 +1252,30 @@ namespace MFO::Logistics {
             probe.mode = ErrandProbe::Mode::kPlan;
             EconomyProbeImpl(a_follower, a_state, a_now, &probe, &a_shops, &a_out);
             if (a_deferred) *a_deferred = probe.deferred;
+        }
+
+        // LIVE NEED RE-CHECK (2026-10-26, logistics/Errand.cpp PlanLiveNeeds): the SAME supply rule EconomyProbeImpl's BUY NEEDS block applies (each enabled
+        // supply gambit below its threshold -> the kind + how many MORE), read from his live inventory, plus his live gold (Gold001 summed from
+        // GetInventory, as the probe's purse). Reads nothing else; the follower must be LOADED (the caller checks).
+        void EconomyLiveSupplyNeeds(RE::Actor* a_follower, const FollowerState& a_state, std::vector<TradeBridge::NeedCat>& a_out, int& a_gold) {
+            a_out.clear();
+            a_gold = 0;
+            if (!a_follower) return;
+            for (auto& [obj, data] : a_follower->GetInventory())
+                if (obj && data.first > 0 && obj->GetFormID() == 0x0000000F) a_gold += static_cast<int>(data.first);
+            const auto addNeed = [&](TradeBridge::NeedCat::Kind a_kind, int have, int want) {
+                if (have < want) a_out.push_back({ static_cast<std::int32_t>(a_kind), static_cast<std::int32_t>(want - have) });
+            };
+            for (const auto& g : a_state.logistics()) {
+                if (!g.enabled) continue;
+                const auto& c    = g.conditionOpcode;
+                const int   want = static_cast<int>(g.conditionParam);
+                if      (c == Vocab::kCondSelfLowHealthPotion)  addNeed(TradeBridge::NeedCat::kPotHealth,  CountPotions(a_follower, RE::ActorValue::kHealth),  want);
+                else if (c == Vocab::kCondSelfLowStaminaPotion) addNeed(TradeBridge::NeedCat::kPotStamina, CountPotions(a_follower, RE::ActorValue::kStamina), want);
+                else if (c == Vocab::kCondSelfLowMagickaPotion) addNeed(TradeBridge::NeedCat::kPotMagicka, CountPotions(a_follower, RE::ActorValue::kMagicka), want);
+                else if (c == Vocab::kCondSelfOutOfArrows)      addNeed(TradeBridge::NeedCat::kArrows,     ArrowCount(a_follower),                             want);
+                else if (c == Vocab::kCondSelfOutOfBolts)       addNeed(TradeBridge::NeedCat::kBolts,      BoltCount(a_follower),                              want);
+            }
         }
 
         // R5: one STOP of a trip, on screen (the give beat, logistics/Errand.cpp): the probe in execute mode with the stop's share.

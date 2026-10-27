@@ -135,9 +135,9 @@ namespace MFO::Logistics::Errand::Trip {
                 : a_saved.state == SavedStopState::Active  ? StopState::Active
                 : a_saved.state == SavedStopState::Done    ? StopState::Done : StopState::Skipped;
         s.tArrive = a_saved.tArrive; s.tWorkEnd = a_saved.tWorkEnd;
-        if (auto* va = s.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(s.vendorActor) : nullptr) s.vendorName = detail::NameOf(va);
-        else if (auto* fac = s.faction ? RE::TESForm::LookupByID<RE::TESFaction>(s.faction) : nullptr; fac && !ShopPlaceName(fac).empty())
-            s.vendorName = ShopPlaceName(fac);   // F4: the faction's FULL, else its PLVD place
+        if (auto* fac = s.faction ? RE::TESForm::LookupByID<RE::TESFaction>(s.faction) : nullptr; fac && !ShopDisplayName(fac, s.vendorActor).empty())
+            s.vendorName = ShopDisplayName(fac, s.vendorActor);   // the one shop name (place -> chest cell -> "<vendor>'s stall" -> faction FULL)
+        else if (auto* va = s.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(s.vendorActor) : nullptr) s.vendorName = detail::NameOf(va);
         else s.vendorName = "?";
         return s;
     }
