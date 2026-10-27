@@ -2434,3 +2434,18 @@ The '## Unreleased' header needs renaming to the version at the release cut.
 
 ### MFO-B522 (SEV-5, OPEN, Evaluator.cpp FoeIsSummoned, against af12ebc, Opus review of feat/mfo-gambit-conditions-1027) -- IsSummoned per-runtime offset, near redundant
 FoeIsSummoned's IsSummoned() reads middleHigh->summonedCreature (+0x31C) with no per-runtime check (the offset looks stable on all three runtimes) and is nearly redundant with IsCommandedActor().
+
+### MFO-B523 (SEV-4, OPEN, Evaluator.cpp Evaluate ally branch + cast/Fire.cpp kActCastTarget, against 65b31fe, Opus review of feat/mfo-gambit-conditions-1027) -- hostile spell can be cast at an ally
+A hostile spell can be cast at an ally. The issue already existed for Ally: HP below and is now widened to four more selectors. Take a rule like "Ally: Paralysed / Downed / Poisoned -> Cast at target" with a destruction spell and TARGET = Auto or Ally. The selector sets a_choice.target, which turns off autoPick. ResolveCastTarget then returns the ally (or the player), and CastOn has no check that the spell's nature suits the recipient. The only hostility check is CastOn.cpp:406, which covers self-delivered buffs. Since Auto means "pick by the spell's nature", Auto with a detrimental or hostile spell on an ally selector should be a transparent NoOp. Reviewer: the player has to author the rule, so SEV-4.
+
+### MFO-B524 (SEV-4, OPEN, Evaluator.cpp PickAllyState, against 65b31fe, Opus review of feat/mfo-gambit-conditions-1027) -- no line-of-sight filter
+No heal reach / line-of-sight filter, none of the a_healSpell filtering PickAlly got in the review-C2 fix. Because it picks the nearest ally, distance reach is self-consistent. The remaining gap is line of sight: an occluded nearest downed ally shadows a visible farther one for "Ally: Downed -> heal". Minor.
+
+### MFO-B525 (SEV-5, OPEN, SelfStatus.h header comment + MAP.md, against 65b31fe, Opus review of feat/mfo-gambit-conditions-1027) -- stale comment, missing backlog cross-reference
+(1) SelfStatus.h still says "No co-save, no ResetAllState hook: the trust window ages a pre-load entry out by itself", which contradicts Clear() and the call at Serialization.cpp:1048. (2) MAP.md's gambit-conditions entry does not cross-reference MFO-B520..B525 (rule 9).
+
+### MFO-B526 (SEV-5, OPEN note, SelfStatus.cpp, against 65b31fe, Opus review of feat/mfo-gambit-conditions-1027) -- refresh closures queue during a paused menu
+While the player's Update is not running (a paused menu), a worker that keeps evaluating queues one refresh closure per actor every 3 s (kAskRetrySec). Drained on resume, growth negligible.
+
+### MFO-B527 (SEV-4, OPEN, tools/splitcheck, raised by the F3 CommonLib proof round 2026-10-27) -- splitcheck tool gaps
+(1) splitcheck.py:1833 `A.names_at.get(ra, ()) | B.names_at.get(rb, ())` ORs a set with a tuple and crashes in _data_diff. (2) A changed library source-path string is only treated as harmless when unnamed (_unnamed_equal / PATHLIT). When MSVC names the string after its contents (??_C@ symbols), a vcpkg build-folder change shows as FAIL and must be classified by hand.
