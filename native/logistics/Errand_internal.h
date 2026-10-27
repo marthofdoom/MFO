@@ -195,6 +195,8 @@ namespace MFO::Logistics::Errand {
                                               // an apothecary-class VEND list for the potion kinds, or a last-seen stock of that kind at its chest. A chest last SEEN with 0 lines
                                               // of the kind is NOT stock even for an apothecary. Ammo with no reading yet: = needCarry (no apothecary-class analog). A buy need
                                               // is placed ONLY on stock (potion cap / stock-only round, marth 2026-10-26); needCarry alone only decides SELLING.
+            bool          armsClass = false;  // AMMO STOCK CLASS (marth 2026-10-26): the vendor is a blacksmith (JobBlacksmithFaction) or its plain VEND list is arms-dominated and carries arrows:
+                                              // arrows / bolts are assumed stocked (needStock bits 3, 4 when needCarry has them); rank in StockRank. Runtime only, never saved.
             bool          carriesGear = false, carriesTome = false;   // the gear / apparel wish, the tome wish
             bool          carriesMaterials = false;   // R8: the VEND trades ore / ingots, hides or animal parts (smithing materials)
             bool          carriesForge = false;       // R8: a smithy: the VEND trades ore / ingots (its place has the forge furniture)
@@ -214,6 +216,9 @@ namespace MFO::Logistics::Errand {
         // (TradeBridge::LastSeenStockLines): a reading of 0 lines = NO stock (a stored candidate predates the visit's trades); > 0 = stock. The one rule every
         // buy-stop decision (Plan, Requeue, Poll's MISSED BUY, ApplyCarried) uses.
         bool StockNow(const Cand& a_c, std::int32_t a_kind);
+        // How good is the stock evidence (0 = none / vetoed, per StockNow). Ammo kinds only: 3 = the chest's last-seen stock shows lines, 2 = arms class (blacksmith / archery
+        // shop), 1 = the VEND keyword claim alone (fallback). Every other kind: 1 when StockNow. Trip::Plan prefers the higher rank for an ammo need.
+        int  StockRank(const Cand& a_c, std::int32_t a_kind);
         // The next Pending stop after a_cur, or -1.
         int  NextPending(const std::vector<Stop>& a_stops, std::size_t a_cur);
         // Straight-line units between two stops' places (a place with no known position: a fixed street-walk estimate).
