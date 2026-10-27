@@ -545,6 +545,9 @@ namespace MFO::Actuation {
     // WORKER, or MAIN for a self recipient (the summon). Files the pair after the per-cast gates.
     SubstrateTry FileSubstrateCast(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,
                                    const char* a_site);
+    // WORKER only: did the last substrate pair filed for (follower, spell, recipient) close without Harbinger's pair
+    // firing? False when none was filed. AUTO tries such a recipient first on the next lap.
+    bool SubstrateLastWindowUnfired(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_recipient);
     // WORKER only: SubstrateRoadFor, then FileSubstrateCast. a_site is a string literal (it is kept in the log).
     SubstrateTry TrySubstrateCast(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,
                                   bool a_oocTable, const char* a_site);

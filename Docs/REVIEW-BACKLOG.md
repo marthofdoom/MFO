@@ -2333,17 +2333,28 @@ ErrandTrip.cpp "need kind N has NO stock evidence" repeats on every re-plan, unt
 ### MFO-B485 (SEV-5 info, OPEN, logistics/Errand.cpp, against f1953f8, Opus review of fix/mfo-missed-buy) -- file size
 logistics/Errand.cpp is 2583 lines, split due (cap relaxed until next major).
 
-### MFO-B486 (SEV-4, OPEN, logistics/Errand.cpp PlanLiveNeeds, against fix/mfo-errand-requeue) -- interior shops with a vendor in another cell are skipped when Harbinger lacks cross-cell travel
+### MFO-B494 (SEV-4, OPEN, logistics/Errand.cpp PlanLiveNeeds, against fix/mfo-errand-requeue) -- interior shops with a vendor in another cell are skipped when Harbinger lacks cross-cell travel
 The town-wide index builder has no entry-door read (that is BuildCatalog's cell walk), so with `APMFBridge::ErrandCrossCellsSupported()` false an interior-vendor shop is not a candidate of a LIVE NEED RE-CHECK (the log counts them).
 
-### MFO-B487 (SEV-5, OPEN, logistics/TradeBridge.cpp, against fix/mfo-errand-requeue) -- the cheapest-unit floor is session-wide, not per vendor
+### MFO-B495 (SEV-5, OPEN, logistics/TradeBridge.cpp, against fix/mfo-errand-requeue) -- the cheapest-unit floor is session-wide, not per vendor
 `MinSeenUnitPrice` is the cheapest unit PlanBuy classified for a kind in any chest this session (-1 = never, then `iErrandMinPurse`); a kind no chest has stocked yet gates on the minimum purse.
 
-### MFO-B488 (SEV-5, OPEN, logistics/ErrandReopen.cpp CarryAndClear/ApplyCarried, against fix/mfo-errand-requeue) -- a carried need builds its order from the previous town's template
+### MFO-B496 (SEV-5, OPEN, logistics/ErrandReopen.cpp CarryAndClear/ApplyCarried, against fix/mfo-errand-requeue) -- a carried need builds its order from the previous town's template
 A skipped order at the chosen shop is rebuilt from the carried `missedTmpl` (its quote and ids belong to another vendor, as in Poll's MISSED BUY plan; sig is not reset, cf. MFO-B483).
 
-### MFO-B489 (SEV-5, OPEN, logistics/ErrandSim.cpp, against fix/mfo-errand-requeue) -- `iTempleGameMin` / `iSmithWorkGameMin` still game minutes
+### MFO-B497 (SEV-5, OPEN, logistics/ErrandSim.cpp, against fix/mfo-errand-requeue) -- `iTempleGameMin` / `iSmithWorkGameMin` still game minutes
 Only the shop/inn work and the walk were moved to real seconds x timescale; the temple and smith stage costs have no measured on-screen counterpart yet.
 
-### MFO-B490 (SEV-5 info, OPEN, logistics/Errand.cpp, against fix/mfo-errand-requeue) -- file size
+### MFO-B498 (SEV-5 info, OPEN, logistics/Errand.cpp, against fix/mfo-errand-requeue) -- file size
 logistics/Errand.cpp grew by the live-need planner (2812 lines, from 2585); split due (cap relaxed until next major).
+### MFO-B490 (SEV-4, OPEN, cast/SubstrateRoad.cpp LongPaceSecs / FileSubstrateCast, against 1b8e551, Opus review of fix/mfo-substrate-recast) -- pacing-window hole for multi-effect buffs
+`LongPaceSecs` and `FileSubstrateCast`'s already-up check use the costliest effect's duration. The old `g_beneficialRecast` arm used `AuthoredDuration`, the longest duration across all effects. So a spell whose costliest effect is instant or short, with a long secondary effect, gets only the 3 s floor after it fires. Gate 1 that remains is `ShouldApplyTo`'s active-effect scan, which matches on `ae->spell == a_spell`. When Harbinger's self-flip proxy delivers the spell (a non-Self buff cast on the caster), the proxy is the effect's spell, so the scan misses. Gate 2 checks the costliest MGEF, which is gone. The result would be a recast about every 3 s after a fire. The case is narrow, and the same hole already exists for multi-recipient sets and in Service.cpp. Suggested fix, as its own round: make `LongPaceSecs` use the longest duration across effects.
+
+### MFO-B491 (SEV-4, OPEN, cast/Auto.cpp OOC order + SubstrateRoad.cpp SubstrateLastWindowUnfired, against 1b8e551, Opus review of fix/mfo-substrate-recast) -- first-in-line recipient can end the lap
+`SubstrateLastWindowUnfired` is also true for a recipient whose open Harbinger REFUSED (`g_subPace` is written even when `!filed`). That recipient goes first, and if Harbinger refuses it again, the follower-wide Refused ends the lap. Other recipients still get served on laps where it sits in its short window, so this is alternation, not starvation. The shape existed before, it is just more consistent now.
+
+### MFO-B492 (SEV-5, OPEN, MAP.md SubstrateRoad entry, against 1b8e551, Opus review of fix/mfo-substrate-recast) -- stale line refs
+MAP.md line references are stale. `FileSubstrateCast (:129)` is now about :147, `TrySubstrateCast (:243)` about :292, and the "(248)" file size about 300.
+
+### MFO-B493 (SEV-5, OPEN, cast/SubstrateRoad.cpp check 7, against 1b8e551, Opus review of fix/mfo-substrate-recast) -- double log on Harbinger refusal
+A check-7 refusal now logs an info line on top of `OpenSubstrateCast`'s own ERROR. Harmless.
