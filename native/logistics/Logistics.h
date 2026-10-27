@@ -335,6 +335,7 @@ namespace MFO::Logistics {
     struct CombatWeaponStyle {
         std::uint16_t preferKinds = 0;
         std::uint8_t  offHand     = 0;
+        bool          melee       = false;   // the follower has a melee role (roles.melee != Other)
     };
     // Rounds carried per ammo family (mirror of the internal AmmoOwned; For() picks the family by the
     // weapon's own record, the same test the internal one runs).

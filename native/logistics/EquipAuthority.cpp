@@ -311,7 +311,7 @@ namespace MFO::Logistics {
 
         CombatWeaponStyle CombatStyleFor(RE::Actor* a_follower, const FollowerState& a_state) {
             const WeaponRoles r = ComputeWeaponRoles(a_follower, a_state);
-            return { r.preferKinds, r.offHand };
+            return { r.preferKinds, r.offHand, r.melee != WepClass::Other };
         }
 
         int CombatAmmo::For(const RE::TESObjectWEAP* a_w) const { return RangedUsesBolts(a_w) ? bolts : arrows; }

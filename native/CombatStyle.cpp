@@ -52,6 +52,11 @@ namespace MFO::CombatStyle {
         std::unordered_map<RE::FormID, Owned> g_owned;
         std::atomic<std::size_t> g_count{ 0 };
 
+        // DUAL-WIELD GATE (SetDualGate): followers whose perks do not vote dual wield. Value = the controller we
+        // last logged a swap on (identity ONLY, never dereferenced) so the log fires once per fight. Under g_mx.
+        std::unordered_map<RE::FormID, RE::CombatController*> g_gated;
+        std::atomic<std::size_t> g_gatedCount{ 0 };
+
         // T#75: how many owned stances are EQUIP ORDERS. Relaxed-atomic mirror
         // so the equip-gate thunk's fast-out never takes g_mx while no order
         // is live -- the same shape as g_count / CasterConsent's g_wantCount.
@@ -140,6 +145,16 @@ namespace MFO::CombatStyle {
 
     bool        AnyActive()  { return g_count.load(std::memory_order_relaxed) != 0; }
     std::size_t OwnedCount() { return g_count.load(std::memory_order_relaxed); }
+    bool        AnyGated()   { return g_gatedCount.load(std::memory_order_relaxed) != 0; }
+
+    void SetDualGate(RE::FormID a_follower, bool a_gate) {
+        std::lock_guard<std::mutex> lk(g_mx);
+        if (a_gate) g_gated.try_emplace(a_follower, nullptr);
+        else        g_gated.erase(a_follower);
+        g_gatedCount.store(g_gated.size(), std::memory_order_relaxed);
+    }
+
+    void ClearDualGate(RE::FormID a_follower) { SetDualGate(a_follower, false); }
 
     void Want(RE::FormID a_follower, Stance a_stance, bool a_equipOrder, bool a_allowDual) {
         if (a_stance == Stance::None) return;
@@ -286,7 +301,25 @@ namespace MFO::CombatStyle {
 
         std::lock_guard<std::mutex> lk(g_mx);
         auto it = g_owned.find(fid);
-        if (it == g_owned.end()) return;
+        if (it == g_owned.end()) {
+            // No owned stance: the dual-wield gate. Composition, not substitution: only a controller whose style
+            // ALLOWS dual wielding is touched, and only for a follower the scheduler found perk-ineligible.
+            if (a_substrateOnly) return;
+            const auto gt = g_gated.find(fid);
+            if (gt == g_gated.end() || !Forms::g_meleeSingleStyle) return;
+            auto* cs = a_cc->combatStyle;
+            if (!cs || cs == Forms::g_meleeSingleStyle ||
+                !cs->flags.any(RE::TESCombatStyle::FLAG::kAllowDualWielding)) return;
+            a_cc->combatStyle = Forms::g_meleeSingleStyle;
+            if (gt->second != a_cc) {
+                gt->second = a_cc;
+                spdlog::info("[wstyle] {:08X} {}: dual-wield GATE -- style {:08X} allows dual wielding but his perks "
+                             "do not vote it; MFO_MeleeSingleStyle {:08X} written (re-asserted silently)",
+                             fid, a_actor->GetName() ? a_actor->GetName() : "?", cs->GetFormID(),
+                             Forms::g_meleeSingleStyle->GetFormID());
+            }
+            return;
+        }
         auto& o = it->second;
 
         // Review F2: a real fight took the substrate controller while our cast style stood on it. Write the engine's

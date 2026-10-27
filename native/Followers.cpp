@@ -459,7 +459,7 @@ namespace MFO::Followers {
         // The weapon-stance ownership -- an entry left behind keeps every
         // combatant paying the ApplyTick lookup and could re-swap a style we no
         // longer own. Idempotent erase-miss when unowned.
-        if (!a_movementOnly) CombatStyle::Clear(id);
+        if (!a_movementOnly) { CombatStyle::Clear(id); CombatStyle::ClearDualGate(id); }
         // The T#76 equip force-hold: its prevent-removal LOCK is on the
         // ActorEquipManager, not the controller, so a follower left force-held
         // stays stuck with the weapon, unable to cast. Resolve the actor (the

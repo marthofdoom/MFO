@@ -1900,6 +1900,12 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   the new twin `MFO_MeleeSingleStyle` `0x916` (DATA 1). Decided at the `CombatStyle::Want` call sites
   in `Scheduler.cpp` (`a_allowDual`), applied in `CombatStyle::ApplyTick` (`Owned::dual/appliedDual`;
   a flip is a HANDOFF). `Forms::g_meleeSingleStyle`; `NEXT_OBJECT_ID` is now `0x917`.
+  **GATE FOR EVERYONE MANAGED (`fix/mfo-dualwield-gate-all`, marth 2026-10-27 "perks only"):** the scheduler
+  registers every in-combat follower with a melee role and `offHand != 2` via `CombatStyle::SetDualGate`
+  (`Scheduler.cpp`, before the empty-table early-out; off when `bWeaponStyleControl` is off);
+  `ApplyTick`, for a gated follower with NO owned stance, writes `MFO_MeleeSingleStyle` iff the live
+  controller's style has `kAllowDualWielding` (flag read, never a clone). Hook fast path:
+  `AnyActive() || AnyGated()` (`Targeting.cpp`). Dismissal: `ClearDualGate` (`Followers.cpp`).
   **SHED INTERACTION (traced 2026-09-14, no fight):** `ShedOffRoleWeapon` (`logistics/Upkeep.cpp:288`)
   never reads the ledger — it does not need to, by ORDERING: the equip gambit fires only in
   `Scheduler.cpp`'s party-combat branch, the party-OOC branch calls `ReleaseForcedWeapon`

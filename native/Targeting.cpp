@@ -66,7 +66,7 @@ namespace MFO::Targeting {
                 // target redirect. Style must run even when no target is latched
                 // (an archer given a melee gambit has no target override), so it
                 // gets its own lock-free gate alongside the targeting one.
-                const bool anyStyle  = CombatStyle::AnyActive();
+                const bool anyStyle  = CombatStyle::AnyActive() || CombatStyle::AnyGated();
                 // Pin route: the target write is RETIRED (g_pinRoute above). The latch
                 // map is also empty on that route, so this is belt and braces -- and it
                 // keeps the fast path when only CombatStyle is active.

@@ -1520,6 +1520,20 @@ namespace MFO::Scheduler {
         if (Packages::IsRetreating(id)) APMFBridge::ReleasePursuitLeash(id, "retreat started");
         else                            ServiceLeashWithReachHold(f, id);
 
+        // DUAL-WIELD GATE FOR EVERY MANAGED FOLLOWER (marth 2026-10-27, "perks only"): a follower with a melee role
+        // whose perks do not vote dual wield must not run a style that allows it, owned stance or not (Auto class,
+        // no equip gambit). Registered here every in-combat service (before the empty-table early-out); ApplyTick
+        // swaps MFO_MeleeSingleStyle only onto a controller whose style carries kAllowDualWielding. A pure
+        // caster/archer role (no melee role) is left alone; an owned stance decides its own style (Want a_allowDual).
+        {
+            bool gate = false;
+            if (Config::g_weaponStyleControl.load() && f->IsInCombat()) {
+                const auto st = Logistics::CombatStyleFor(f, it->second);
+                gate = st.melee && st.offHand != 2;
+            }
+            CombatStyle::SetDualGate(id, gate);
+        }
+
         if (it->second.combat().empty()) {
             // #65: no combat gambits, but a class override is still a valid STYLE
             // pick -- apply it (same master-toggle gating as the main stance path

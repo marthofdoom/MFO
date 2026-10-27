@@ -124,6 +124,16 @@ namespace MFO::CombatStyle {
     // Lock-free fast-path gate for the hook: true iff any follower currently
     // owns a stance. Keeps the common no-op combat tick off the mutex.
     bool AnyActive();
+
+    // DUAL-WIELD GATE FOR EVERYONE MANAGED (marth 2026-10-27: "gate everyone managed", "perks only"). A follower
+    // with a melee role whose perks do NOT vote dual wield is registered here (a_gate=true, every combat tick, by
+    // the scheduler, worker); a_gate=false drops him. ApplyTick then, for a gated follower with NO owned stance,
+    // swaps MFO_MeleeSingleStyle onto his live controller iff the style the engine derived (or a leftover
+    // MFO_MeleeStyle) carries kAllowDualWielding. A style without the flag is never touched. No-op while
+    // bWeaponStyleControl is off (the scheduler then registers nobody).
+    void SetDualGate(RE::FormID a_follower, bool a_gate);
+    void ClearDualGate(RE::FormID a_follower);   // dismissal / revert
+    bool AnyGated();                              // lock-free mirror, for the UpdateCombat hook's fast path
     std::size_t OwnedCount();   // diagnostics
 
     // ── THE EQUIP GATE (T#75) ─────────────────────────────────────────────────
