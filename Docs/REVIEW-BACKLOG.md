@@ -2318,10 +2318,10 @@ The sets are built at the index build. If a quest alias grants JobMerchantFactio
 ### MFO-B480 (SEV-4, OPEN, logistics/Errand.cpp relocate ~1916 and ErrandVendors.cpp Locate, against ad85581, Opus re-review of fix/mfo-273) -- Pending falls to stopOver with no retry, and one unknown verdict hides a Located member
 `relocate` returning false on `Pending` falls to the stop-over path with no retry. `Locate` also returns `Pending` when any loaded member's verdict is unknown even if another member is already Located.
 
-### MFO-B481 (SEV-4, OPEN, logistics/ErrandReopen.cpp Poll MISSED BUY, against f1953f8, Opus review of fix/mfo-missed-buy) -- a missed-buy candidate already in `open` is skipped
+### MFO-B481 (SEV-4, PARTLY SUPERSEDED by fix/mfo-errand-requeue: the in-trip `Reopen::Requeue` folds a missed kind into an already-pending stop; the hourly Poll path is unchanged, logistics/ErrandReopen.cpp Poll MISSED BUY, against f1953f8, Opus review of fix/mfo-missed-buy) -- a missed-buy candidate already in `open` is skipped
 Poll skips any missed-buy candidate already in `open` (reopened / gold-watch shop) instead of adding the missed kind to that shop's order; the kind goes to a farther shop or is dropped.
 
-### MFO-B482 (SEV-5, OPEN, logistics/ErrandReopen.cpp NoteUnfilled, against f1953f8, Opus review of fix/mfo-missed-buy) -- wrong reason logged with bErrandInn off
+### MFO-B482 (SEV-5, OPEN (the no-watch line now also records the shop in the live tried set), logistics/ErrandReopen.cpp NoteUnfilled, against f1953f8, Opus review of fix/mfo-missed-buy) -- wrong reason logged with bErrandInn off
 With bErrandInn off, NoteUnfilled says "a trip restored from the save"; the real reason is the inn setting is off so no watch was recorded.
 
 ### MFO-B483 (SEV-5, OPEN, logistics/ErrandReopen.cpp Poll MISSED BUY, against f1953f8, Opus review of fix/mfo-missed-buy) -- the missed-buy order keeps the template's sig
@@ -2332,3 +2332,18 @@ ErrandTrip.cpp "need kind N has NO stock evidence" repeats on every re-plan, unt
 
 ### MFO-B485 (SEV-5 info, OPEN, logistics/Errand.cpp, against f1953f8, Opus review of fix/mfo-missed-buy) -- file size
 logistics/Errand.cpp is 2583 lines, split due (cap relaxed until next major).
+
+### MFO-B486 (SEV-4, OPEN, logistics/Errand.cpp PlanLiveNeeds, against fix/mfo-errand-requeue) -- interior shops with a vendor in another cell are skipped when Harbinger lacks cross-cell travel
+The town-wide index builder has no entry-door read (that is BuildCatalog's cell walk), so with `APMFBridge::ErrandCrossCellsSupported()` false an interior-vendor shop is not a candidate of a LIVE NEED RE-CHECK (the log counts them).
+
+### MFO-B487 (SEV-5, OPEN, logistics/TradeBridge.cpp, against fix/mfo-errand-requeue) -- the cheapest-unit floor is session-wide, not per vendor
+`MinSeenUnitPrice` is the cheapest unit PlanBuy classified for a kind in any chest this session (-1 = never, then `iErrandMinPurse`); a kind no chest has stocked yet gates on the minimum purse.
+
+### MFO-B488 (SEV-5, OPEN, logistics/ErrandReopen.cpp CarryAndClear/ApplyCarried, against fix/mfo-errand-requeue) -- a carried need builds its order from the previous town's template
+A skipped order at the chosen shop is rebuilt from the carried `missedTmpl` (its quote and ids belong to another vendor, as in Poll's MISSED BUY plan; sig is not reset, cf. MFO-B483).
+
+### MFO-B489 (SEV-5, OPEN, logistics/ErrandSim.cpp, against fix/mfo-errand-requeue) -- `iTempleGameMin` / `iSmithWorkGameMin` still game minutes
+Only the shop/inn work and the walk were moved to real seconds x timescale; the temple and smith stage costs have no measured on-screen counterpart yet.
+
+### MFO-B490 (SEV-5 info, OPEN, logistics/Errand.cpp, against fix/mfo-errand-requeue) -- file size
+logistics/Errand.cpp grew by the live-need planner (2812 lines, from 2585); split due (cap relaxed until next major).
