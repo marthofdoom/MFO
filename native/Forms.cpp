@@ -88,6 +88,7 @@ namespace MFO::Forms {
         // swap on a null target and says nothing else, per "one feature, one
         // named line".
         g_meleeStyle  = Look<RE::TESCombatStyle>(kMeleeStyle,  "MFO_MeleeStyle");
+        g_meleeSingleStyle = Look<RE::TESCombatStyle>(kMeleeSingleStyle, "MFO_MeleeSingleStyle");
         g_rangedStyle = Look<RE::TESCombatStyle>(kRangedStyle, "MFO_RangedStyle");
         g_castStyle   = g_probeCastStyle;   // Cast stance reuses the pure-mage CSTY (0x832)
 

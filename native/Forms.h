@@ -60,6 +60,10 @@ namespace MFO::Forms {
     // hand, so the engine stops re-drawing the weapon MFO didn't pick.
     inline constexpr RE::FormID kMeleeStyle       = 0x833;
     inline constexpr RE::FormID kRangedStyle      = 0x834;
+    // Dual-wield gate (marth 2026-10-27, "perk/class gated"): 0x833 carries DATA 1|4 (kAllowDualWielding) and is
+    // written only for a follower whose perks vote dual wield; this twin (DATA 1, same scoring/CSCR) is the melee
+    // stance for everyone else. Appended at 0x916 (0x833 keeps its id and meaning; frozen contract).
+    inline constexpr RE::FormID kMeleeSingleStyle = 0x916;
     // FORCED SELF-CAST (Docs/SPEC-self-cast-forced.md): the dedicated no-QNAM
     // targType-6 self package, delivered by MFO_CommandQuest's own alias 2.
     // §0.22 proved probe 6's t6+no-QNAM self-cast casts cleanly (REVOKED #67);
@@ -218,7 +222,8 @@ namespace MFO::Forms {
     // Stance-ownership CSTYs. Resolved at kDataLoaded (main thread) so the
     // combat-thread apply only ever READS settled pointers. A miss disables
     // that one stance with a named log line -- never a crash.
-    inline RE::TESCombatStyle* g_meleeStyle  = nullptr;
+    inline RE::TESCombatStyle* g_meleeStyle  = nullptr;         // 0x833, DATA 1|4: dual-wield-allowed melee
+    inline RE::TESCombatStyle* g_meleeSingleStyle = nullptr;    // 0x916, DATA 1: the default melee stance
     inline RE::TESCombatStyle* g_rangedStyle = nullptr;
     // The Cast stance's pure-mage style. Reuses the existing MFO_CastStyle CSTY
     // (0x832) -- magic-dominant, melee/ranged starved -- the same record the P1

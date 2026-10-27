@@ -1893,10 +1893,13 @@ Cast{Self,Player,Target}→`CastOn` / Equip{Ranged,Melee} / Flee→`Packages::Re
   `MFO_GenerateESP.py:1124`, `_csty_record` gained `data_flags` `:1043`) — `out/MFO.esp`
   regenerated, exactly ONE byte changed (offset 6743, `0x01→0x05`), FormIDs unmoved. Census of all
   145 Skyrim.esm CSTY records: 22 carry DATA bit 2, 7 of them with NO record-header bit 19, so DATA
-  is the word the engine honours. **EXPOSURE, OPEN DECISION FOR MARTH (`Docs/STATUS.md`):** the
-  flag is GLOBAL to every follower forced melee — an UNPERKED follower carrying two one-handers may
-  be dual-wielded by its OWN AI (`EquipGateThunk` denies spells/staves only); not deny-complete; a
-  per-follower CSTY needs `Forms.h` + `CombatStyle.cpp`.
+  is the word the engine honours. **EXPOSURE CLOSED (marth 2026-10-27, "perk/class gated",
+  `fix/mfo-dualwield-gate`):** `0x833` is written ONLY for a follower whose perks vote dual wield
+  (`Logistics::CombatStyleFor(...).offHand == 2`, `logistics/Gear.cpp` ComputeWeaponRoles, the same
+  predicate that fills the left hand in `cast/Equip.cpp`); every other forced-melee follower gets
+  the new twin `MFO_MeleeSingleStyle` `0x916` (DATA 1). Decided at the `CombatStyle::Want` call sites
+  in `Scheduler.cpp` (`a_allowDual`), applied in `CombatStyle::ApplyTick` (`Owned::dual/appliedDual`;
+  a flip is a HANDOFF). `Forms::g_meleeSingleStyle`; `NEXT_OBJECT_ID` is now `0x917`.
   **SHED INTERACTION (traced 2026-09-14, no fight):** `ShedOffRoleWeapon` (`logistics/Upkeep.cpp:288`)
   never reads the ledger — it does not need to, by ORDERING: the equip gambit fires only in
   `Scheduler.cpp`'s party-combat branch, the party-OOC branch calls `ReleaseForcedWeapon`

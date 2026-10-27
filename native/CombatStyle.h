@@ -51,7 +51,12 @@ namespace MFO::CombatStyle {
     // PICKS, not weapon orders, and must not mute the AI's own magic. A later
     // Want with a_equipOrder=false (a cast latch flipping the stance) releases
     // the hold; Clear releases it with the stance.
-    void Want(RE::FormID a_follower, Stance a_stance, bool a_equipOrder = false);
+    //
+    // a_allowDual (dual-wield gate, marth 2026-10-27 "perk/class gated"): only meaningful for Stance::Melee.
+    // true = the follower's perks vote dual wield, so the melee stance writes MFO_MeleeStyle (kAllowDualWielding);
+    // false (default) writes MFO_MeleeSingleStyle, which does not allow it. Stored with the desire; a flip is a
+    // style handoff in ApplyTick.
+    void Want(RE::FormID a_follower, Stance a_stance, bool a_equipOrder = false, bool a_allowDual = false);
 
     // Drop this follower's stance ownership -- combat end / dismissal / revert.
     // The live CSTY already reverted when the per-combat controller was

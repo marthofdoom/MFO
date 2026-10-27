@@ -72,6 +72,7 @@ REQUIRED = {
     # (the weapon-scoring axis) is each record's whole point.
     0x833: ('CSTY', "MFO_MeleeStyle",       ['EDID', 'CSGD']),
     0x834: ('CSTY', "MFO_RangedStyle",      ['EDID', 'CSGD']),
+    0x916: ('CSTY', "MFO_MeleeSingleStyle", ['EDID', 'CSGD']),   # MeleeStyle twin, DATA 1 (no dual wield)
     # LOTD awareness: the detected flag the DLL writes and the MCM hiddenToggle reads.
     0x903: ('GLOB', "MFO_LOTDDetected",     ['EDID', 'FNAM', 'FLTV']),
     # Positional lockpick sounds: SNDR copies the DLL plays at the follower (Lockpick.cpp).
