@@ -161,6 +161,28 @@ namespace MFO::Vocab {
     // member other than this follower: the player, a player teammate, or a summon one of them commands.
     // APPENDED; frozen serialization string (#10), saved as a string like every opcode.
     inline constexpr const char* kCondFoeAttackingAlly   = "cond.foe_attacking_ally";
+    // "Foe: Dragon flying" / "Foe: Dragon landed" (ClickUp 86e3g4vdr, marth 2026-09-29: a split of Foe: Dragon).
+    // FOE SELECTORS in kCondFoeIsDragon's shape: the nearest foe whose race carries ActorTypeDragon AND whose
+    // FLY_STATE is airborne (TakeOff / Cruising / Hovering / Action) for "flying", or is not airborne (None,
+    // Perching, Landing: CombatSense::IsAirborne) for "landed". cond.foe_is_dragon keeps its meaning (any dragon).
+    // APPENDED; frozen serialization strings (#10), saved as strings like every opcode.
+    inline constexpr const char* kCondFoeIsDragonFlying  = "cond.foe_is_dragon_flying";
+    inline constexpr const char* kCondFoeIsDragonLanded  = "cond.foe_is_dragon_landed";
+    // FOE TYPE selectors (ClickUp 86e3g81x0, marth 2026-09-29), kCondFoeIsUndead's shape (nearest foe of the type),
+    // APPENDED, frozen strings (#10): Daedra = race keyword ActorTypeDaedra; Werewolf = a werewolf (or werebear)
+    // beast-form race; Summoned = a conjured or reanimated creature (Banish / Dispel targets). Evaluator.cpp.
+    inline constexpr const char* kCondFoeIsDaedra        = "cond.foe_is_daedra";
+    inline constexpr const char* kCondFoeIsWerewolf      = "cond.foe_is_werewolf";
+    inline constexpr const char* kCondFoeIsSummoned      = "cond.foe_is_summoned";
+    // SITUATIONAL STATE gates (ClickUp 86e3g81x0), no param, no target (kCondDark's shape), APPENDED, frozen
+    // strings (#10). Self = the follower the rule belongs to. Underwater: the water surface is above his head
+    // (Waterbreathing). Poisoned: a live poison-type effect is on him (Cure Poison). Paralysed: his Paralysis actor
+    // value is up. Downed: bleedout / essential-down life state. Player sneaking: the player's own sneak state.
+    inline constexpr const char* kCondSelfUnderwater     = "cond.self_underwater";
+    inline constexpr const char* kCondSelfPoisoned       = "cond.self_poisoned";
+    inline constexpr const char* kCondSelfParalysed      = "cond.self_paralysed";
+    inline constexpr const char* kCondSelfDowned         = "cond.self_downed";
+    inline constexpr const char* kCondPlayerSneaking     = "cond.player_sneaking";
     // ALLY SELECTOR -- the lowest-HP teammate under `param` pct; chooses that
     // ally as the target (for Cast at ally / Heal Other). Walks the maintained
     // teammate list, not a world sweep.

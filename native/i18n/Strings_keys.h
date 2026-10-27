@@ -219,6 +219,11 @@ MFO_STR(Cond_FoeAttackingMeMelee, "Foe: Targeting me (melee)", 0)
 MFO_STR(Cond_FoeAttackingMeRanged, "Foe: Targeting me (ranged)", 0)
 MFO_STR(Cond_FoeIsUndead, "Foe: Undead", 0)
 MFO_STR(Cond_FoeIsDragon, "Foe: Dragon", 0)
+MFO_STR(Cond_FoeIsDragonFlying, "Foe: Dragon flying", 0)   // a dragon that is in the air (taking off, cruising, hovering)
+MFO_STR(Cond_FoeIsDragonLanded, "Foe: Dragon landed", 0)   // a dragon that is on the ground (or perched, or coming down to land)
+MFO_STR(Cond_FoeIsDaedra, "Foe: Daedra", 0)   // Banish, Expel
+MFO_STR(Cond_FoeIsWerewolf, "Foe: Werewolf", 0)   // a werewolf or werebear in beast form (silver)
+MFO_STR(Cond_FoeIsSummoned, "Foe: Summoned", 0)   // a conjured or reanimated creature (Banish, Dispel)
 MFO_STR(Cond_FoeIsMechanical, "Foe: Mechanical", 0)
 MFO_STR(Cond_FoeIsUnholy, "Foe targeted: Unholy", 0)   // the foe the follower is fighting is one the load order's silver weapons hurt more (undead, werewolves, vampires, ...)
 MFO_STR(Cond_FoeAttackingAlly, "Foe: Targeting an ally", 0)   // the nearest foe whose target is the player, a teammate or a summon they command, but not this follower
@@ -245,6 +250,11 @@ MFO_STR(Cond_SelfOutOfBolts, "Bolts below", 0)
 MFO_STR(Cond_IsInterior, "In an interior", 0)
 MFO_STR(Cond_IsNight, "At night", 0)
 MFO_STR(Cond_Dark, "In the dark", 0)
+MFO_STR(Cond_SelfUnderwater, "Self: Underwater", 0)   // the water is over the follower's head (Waterbreathing)
+MFO_STR(Cond_SelfPoisoned, "Self: Poisoned", 0)   // a poison is working on the follower (Cure Poison)
+MFO_STR(Cond_SelfParalysed, "Self: Paralysed", 0)   // the follower is paralysed
+MFO_STR(Cond_SelfDowned, "Self: Downed", 0)   // the follower is bleeding out or down
+MFO_STR(Cond_PlayerSneaking, "Player: Sneaking", 0)   // the player is sneaking (Muffle, Invisibility)
 MFO_STR(Cond_SelfCarryWeightAbove, "Self: Carry weight above", 0)
 
 // == Gambit actions ("Do ...") ==

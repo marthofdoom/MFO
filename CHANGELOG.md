@@ -5,6 +5,12 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **Foe: Dragon flying and Foe: Dragon landed.** Two new conditions, listed under Foe: Dragon, which still means any dragon. Flying is a dragon in the air (taking off, cruising or hovering). Landed is a dragon on the ground, perched on a word wall, or coming down to land. Use them to hold a melee follower back while a dragon circles and send him in when it lands, or to keep casters and archers busy while it flies.
+- **New foe conditions: Daedra, Werewolf and Summoned.** Foe: Daedra picks a Daedra (for Banish and Expel). Foe: Werewolf picks a werewolf or werebear in beast form. Foe: Summoned picks a conjured or raised creature (for Banish and Dispel). Vampires already count as Foe: Undead.
+- **New state conditions.** Self: Underwater is true when the water is over the follower's head (for Waterbreathing). Self: Poisoned is true while a poison is working on him (for Cure Poison). Self: Paralysed and Self: Downed (bleeding out) are there too, and so is Player: Sneaking (for Muffle or Invisibility). They are in the Combat and the Logistics lists.
+
 ## v2.7.3 -- Animated casts out of combat by default, and town trips that find their stock
 
 Needs Harbinger v0.15.1.
