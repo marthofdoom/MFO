@@ -100,6 +100,7 @@ namespace MFO::Logistics::Errand {
         constexpr RE::FormID kKwSpellTome = 0x000937A5;   // VendorItemSpellTome
         constexpr RE::FormID kKwOreIngot  = 0x000914EC;   // VendorItemOreIngot (R8: ore and ingots, smithing materials; verified in Skyrim.esm)
         constexpr RE::FormID kKwAnimalHide = 0x000914EA;  // VendorItemAnimalHide (R8: leather)
+        constexpr RE::FormID kFacBlacksmith = 0x0005091D;  // JobBlacksmithFaction (AMMO STOCK CLASS; verified with tools/esp_inspect.py on Skyrim.esm, 2026-10-26)
         constexpr RE::FormID kKwAnimalPart = 0x000914EB;  // VendorItemAnimalPart (R8: leather strips)
         constexpr RE::FormID kIdleTalk         = 0x000F64DD;   // DialogueGenericTalking
         constexpr RE::FormID kIdleTalkFallback = 0x000E5190;   // DialogueNeutralExpressive
@@ -301,6 +302,29 @@ namespace MFO::Logistics::Errand {
                 if (e == "VendorItemPoison" || e == "VendorItemIngredient") ++alchemy;
             }
             return hasPotion && total > 0 && alchemy * 2 >= total;
+        }
+
+        // AMMO STOCK CLASS (marth 2026-10-26: "Assume a blacksmith sells arrows. There are archery specific shops too. But a regular blacksmith almost always does"):
+        // is this shop an ARMS-class vendor, from engine data at runtime? (a) the vendor NPC is in vanilla JobBlacksmithFaction (0005091D); or (b) a plain (non-inverted)
+        // VEND list carries VendorItemArrow and at least half its keywords are arms (VendorItemWeapon / VendorItemArmor / VendorItemArrow: vanilla VendorItemsBlacksmith is
+        // 3 of 6, VendorItemsFletcher 3 of 4, no editor ids needed). A general store lists arrows among many other goods and fails (b). a_actor may be null (unloaded vendor).
+        bool ArmsClass(const RE::TESFaction* a_fac, RE::Actor* a_actor) {
+            if (a_actor) {
+                auto* job = RE::TESForm::LookupByID<RE::TESFaction>(kFacBlacksmith);
+                if (job && a_actor->IsInFaction(job)) return true;
+            }
+            auto* vend = a_fac ? a_fac->vendorData.vendorSellBuyList : nullptr;
+            if (!vend || a_fac->vendorData.vendorValues.notBuySell) return false;
+            int total = 0, arms = 0;
+            bool hasArrow = false;
+            for (auto* f : vend->forms) {
+                if (!f) continue;
+                ++total;
+                const auto id = f->GetFormID();
+                if (id == kKwArrow) { hasArrow = true; ++arms; }
+                else if (id == kKwWeapon || id == kKwArmor) ++arms;
+            }
+            return hasArrow && total > 0 && arms * 2 >= total;
         }
 
         // ── the catalog (R1a: loaded vendor actors) ───────────────────────────────────────────────────
@@ -1400,9 +1424,14 @@ namespace MFO::Logistics::Errand {
         }
         {   // STOCK-ONLY (marth 2026-10-26): the potion kinds are bought only on EVIDENCE of stock (apothecary class, or this chest's last PlanBuy showed that
             // kind); a chest last SEEN with 0 lines of the kind is no stock even for an apothecary list. No "VEND keyword is the only claim" fallback (an
-            // unjudgeable list cannot carry the potion keyword, so none is lost). Ammo has no apothecary-class analog: it keeps the VEND claim until a reading exists.
+            // unjudgeable list cannot carry the potion keyword, so none is lost). Ammo: needStock keeps the VEND claim until a reading exists, ranked below the arms class (t.armsClass, ArmsClass above; Trip::StockRank).
             bool known = false;
             const bool apoth = ApothecaryClass(c.fac, known);
+            {   // AMMO STOCK CLASS (marth 2026-10-26): a blacksmith / archery shop is assumed to sell arrows and bolts (rank: last-seen stock > arms class > VEND claim, Trip::StockRank)
+                auto* vendor = c.handle.get().get();
+                if (!vendor && c.actorId) vendor = RE::TESForm::LookupByID<RE::Actor>(c.actorId);
+                t.armsClass = ArmsClass(c.fac, vendor);
+            }
             for (int k = 0; k <= 4; ++k) {
                 if (!((t.needCarry >> k) & 1u)) continue;
                 const bool potionKind = k <= 2;
@@ -1908,9 +1937,9 @@ namespace MFO::Logistics::Errand {
                     if (v.skipped)
                         spdlog::info("[errand] {:08X} shop {} '{}' ({:08X}): SKIPPED (empty-trade memo / nothing to do)", fid, a_tag, nm, v.vendorKey);
                     else
-                        spdlog::info("[errand] {:08X} shop {} '{}' ({:08X}): sell {} row(s)/{}g, needs mask {:#x}, carry mask {:#x}, stock-evidence mask {:#x}, wishes gear={} apparel={} tome={} mats={}, purse {}g",
+                        spdlog::info("[errand] {:08X} shop {} '{}' ({:08X}): sell {} row(s)/{}g, needs mask {:#x}, carry mask {:#x}, stock-evidence mask {:#x}{}, wishes gear={} apparel={} tome={} mats={}, purse {}g",
                                      fid, a_tag, nm, v.vendorKey, v.sellRows, v.sellValue, v.needKinds, it != a_cands.end() ? it->needCarry : 0u,
-                                     it != a_cands.end() ? it->needStock : 0u, v.wishGear, v.wishApparel, v.wishTome, v.wishMaterials, v.purse);
+                                     it != a_cands.end() ? it->needStock : 0u, it != a_cands.end() && it->armsClass ? " (arms class)" : "", v.wishGear, v.wishApparel, v.wishTome, v.wishMaterials, v.purse);
                 }
             };
             logRows(planned, tcands, "open");

@@ -50,6 +50,13 @@ namespace MFO::Logistics::Errand::Trip {
         return ((a_c.needStock >> a_kind) & 1u) != 0;
     }
 
+    int StockRank(const Cand& a_c, std::int32_t a_kind) {
+        if (!StockNow(a_c, a_kind)) return 0;
+        if (a_kind != TradeBridge::NeedCat::kArrows && a_kind != TradeBridge::NeedCat::kBolts) return 1;
+        if (a_c.chest && TradeBridge::LastSeenStockLines(a_c.chest, a_kind) > 0) return 3;
+        return a_c.armsClass ? 2 : 1;
+    }
+
     namespace {
         // B300: what one OTHER follower already heading to a chest costs that chest in the plan, in gold-equivalent (the same
         // scale as the phase-1 ranker's need / wish weights, 250 / 150). Two followers at one chest wait on the per-chest
@@ -286,9 +293,14 @@ namespace MFO::Logistics::Errand::Trip {
             if (!((needKinds >> k) & 1u)) continue;
             const auto stocks = [&](int i) { return StockNow(*use[i].c, k); };
             const auto carries = [&](int i) { return ((use[i].c->needCarry >> k) & 1u) != 0; };
+            // AMMO RANK (marth 2026-10-26): last-seen stock > arms class (blacksmith / archery shop) > VEND claim alone. An already chosen stop satisfies the need at
+            // rank >= min(best usable rank, 2); else the best-ranked usable candidate is added (nearest within its rank). Non-ammo kinds are all rank 1: unchanged.
+            int bestRank = 0;
+            for (int i = 0; i < static_cast<int>(use.size()); ++i) bestRank = std::max(bestRank, StockRank(*use[i].c, k));
+            const int needRank = std::min(bestRank, 2);
             bool have = false;
-            for (int i = 0; i < static_cast<int>(use.size()) && !have; ++i) have = use[i].chosen && stocks(i);
-            if (!have) have = addNearest(stocks) >= 0;
+            for (int i = 0; i < static_cast<int>(use.size()) && !have; ++i) have = use[i].chosen && StockRank(*use[i].c, k) >= needRank && stocks(i);
+            if (!have && bestRank > 0) have = addNearest([&](int i) { return StockRank(*use[i].c, k) == bestRank; }) >= 0;
             if (!have) {   // no candidate shows stock evidence for this kind: NO buy stop is added for it (stock-only)
                 for (int i = 0; i < static_cast<int>(use.size()) && !have; ++i) have = use[i].chosen && carries(i);   // a planned SELL stop may try it for free
                 if (have) {
@@ -359,8 +371,10 @@ namespace MFO::Logistics::Errand::Trip {
         for (int k = 0; k < 32; ++k) {
             if (!((needKinds >> k) & 1u) || ((unserved >> k) & 1u)) continue;
             bool placed = false;
+            int rk = 0;   // ammo: the best-ranked CHOSEN stop (arms class before a bare VEND claim); other kinds: rank 1 everywhere
+            for (const int i : order) rk = std::max(rk, std::min(StockRank(*use[i].c, k), 2));
             for (const int i : order)
-                if (StockNow(*use[i].c, k)) { use[i].needs |= 1u << k; placed = true; break; }
+                if (rk > 0 && StockNow(*use[i].c, k) && std::min(StockRank(*use[i].c, k), 2) >= rk) { use[i].needs |= 1u << k; placed = true; break; }
             if (!placed)
                 for (const int i : order)
                     if ((use[i].c->needCarry >> k) & 1u) { use[i].needs |= 1u << k; break; }
@@ -413,7 +427,7 @@ namespace MFO::Logistics::Errand::Trip {
         if (a_out.empty()) return false;
         std::string candMasks;   // MISSED BUY (diagnosis): what each usable candidate's VEND carries and where there is stock evidence
         for (const auto& u : use)
-            candMasks += std::format("{}'{}' carry={:#x} stock={:#x}", candMasks.empty() ? "" : ", ", u.c->name, u.c->needCarry, u.c->needStock);
+            candMasks += std::format("{}'{}' carry={:#x} stock={:#x}{}", candMasks.empty() ? "" : ", ", u.c->name, u.c->needCarry, u.c->needStock, u.c->armsClass ? " arms" : "");
         a_line = std::format("{} stop(s): {} | purse {} (trip), carry {:.0f}%, needs {:#x}{}, wishes gear={} tome={} (rich={}) | {} usable "
                              "candidate(s) [{}]", a_out.size(), body, purse, a_in.carry * 100.0f, needKinds,
                              unserved ? std::format(" (no open shop carries {:#x})", unserved) : std::string{}, wishGear, wishTome,
