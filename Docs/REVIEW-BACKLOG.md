@@ -2378,3 +2378,6 @@ N back-to-back trips are possible.
 
 ### MFO-B505 (SEV-5 bundle, OPEN, against c9a0dda, Opus review of fix/mfo-errand-requeue) -- closing notes
 ShopPlaceName is dead code; EconomyLiveSupplyNeeds duplicates the BUY NEEDS rule (Economy.cpp:1016-1036); the PlanLiveNeeds log prints kind0 not BuyKindName; s_gate is not cleared on revert; the StartReopenedTrip failure line wording is wrong for LIVE NEED trips; the backoff first step is 24 s, not 12 s; the NoteUnfilled watch path records only the key (a multi-member faction may retry once).
+
+### MFO-B506 (SEV-4, OPEN, logistics/Errand.cpp g_coolDone, against e8b27e7, coordinator read of the fix/mfo-errand-requeue review round) -- completion cooldown recognised by value
+`Finish` and `detail::Cooldown` mark a cooldown as the completion one when `a_cooldownSec == Config::g_errandCooldownSec`, so a failure cooldown that happens to equal `fErrandCooldownSec` (user-configured) is treated as completion and the live need re-check bypasses it. Pass an explicit completion flag instead of comparing seconds.
