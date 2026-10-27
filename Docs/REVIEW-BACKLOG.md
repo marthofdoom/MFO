@@ -2452,3 +2452,9 @@ While the player's Update is not running (a paused menu), a worker that keeps ev
 
 ### MFO-B528 (SEV-5, OPEN, apmf/CombatEntry.cpp, against fbe8d72, Opus review of fix/mfo-nopath-giveup) -- give-up falling edge seen only on a poll
 "A falling edge is only recorded when something asks (the engage-on-sight out-of-combat lap, or PinTarget when the gambit picks that foe). A disengage and re-engage with no poll in between misses the lift."
+
+### MFO-B529 (SEV-5, OPEN, apmf/CombatEntry.cpp Judge party-side lift, against 624ccd8, author's least-sure spot on fix/mfo-nopath-giveup) -- raw distance across worldspaces
+The party-side lift compares raw coordinates with no same-cell or same-worldspace check, so a follower moved to another worldspace could read as having closed in and lift a give-up early.
+
+### MFO-B530 (SEV-5, OPEN, EngageOnSight.cpp ABI-30 path comment, against 624ccd8, coordinator) -- comment misattributes a ruling
+The ABI-30 comment "A RANGE DROP is not a give-up (marth 2026-10-12...)" misreads 10-12. marth 2026-10-27: the 10-12 ruling was that a follower stuck at the leash edge COULD chase (leash = distance from the player), not that distant foes should not be dropped (drop = distance from the follower). Reword the comment.
