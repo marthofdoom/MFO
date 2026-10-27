@@ -2416,3 +2416,12 @@ StockNow with lines>0 still requires needCarry (ErrandTrip.cpp:48); loses a shop
 
 ### MFO-B514 (SEV-5, OPEN, ErrandTrip.cpp:296, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- free-try log text inaccurate
 Free-try log text at ErrandTrip.cpp:296 ("already planned for selling") is inaccurate when the stop was added for another kind's stock.
+
+### MFO-B517 (SEV-4, OPEN, CombatStyle.cpp ApplyTick, against bdf6ae9, Opus review of fix/mfo-dualwield-gate) -- stale ESP keeps 0x833 on a flip to non-dual
+If a follower already owns 0x833 on the live controller and flips to non-dual, the early return happens before the HANDOFF. 0x833 then stays on that controller for the rest of the fight. This only happens with a stale ESP (g_meleeSingleStyle null; the load-time MISSING error is loud).
+
+### MFO-B518 (SEV-4, OPEN by design, logistics/Gear.cpp offHand vote, against bdf6ae9, Opus review of fix/mfo-dualwield-gate) -- 2H-class follower with left-hand perk lead gets the dual style
+A 2H-class follower whose perks lead on left-hand weapons gets allowDual = true. The vote ignores the 1H/2H class, as the Equip fill does, so MFO_MeleeStyle could let the engine AI swap to two carried one-handers. Consistent with the ruling's literal "perks support it".
+
+### MFO-B519 (SEV-5, OPEN, docs/comments + cost, against bdf6ae9, Opus review of fix/mfo-dualwield-gate) -- stale comments, per-tick inventory scan
+(1) logistics/Logistics_internal.h:281-285 still says offHand is "DETECTED AND LOGGED ONLY" and that "MFO_MeleeStyle does not" allow dual wielding (pre-existing). (2) MAP.md:4911 says "NEXT_OBJECT_ID is now 0x916" (now 0x917). (3) MFO_GenerateESP.py:121 comment "(0x916 since R7 ..." next to value 0x917 reads confusingly. (4) HEDR numRecords hard-coded to 100 (MFO_GenerateESP.py:294, pre-existing). (5) One GetInventory() scan per follower per combat tick at the Want sites; caching roles per tick is optional.
