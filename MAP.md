@@ -2200,7 +2200,7 @@ claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kCastMaxTtlMs` 15 s) a
   line names why), `FileSubstrateCast` (`:129`, worker, or MAIN for a self recipient: the PENDING latch, the player
   sneaking (Q6), can-act, HasSpell, magicka + reserve, then per recipient heal reach, the two-window pacing (short floor
   always, the duration window only once that pair FIRED), already-up, the ch.8b target convention, the bridge, and the
-  `OPEN: spell in left hand = yes/no` line), `ResetSubstrateRoad` (`:236`, from `ClearCastLocks` on revert),
+  `OPEN: spell in left hand = yes/no` line), `ResetSubstrateRoad` (from `ClearCastLocks` on revert), `SubstrateLastWindowUnfired` (AUTO orders a recipient whose last pair closed unfired FIRST; AUTO no longer arms `g_beneficialRecast` on this road, `g_subPace` alone paces it), `NoteRefused` (10 s reason line per follower/spell/check on every follower-wide Refused),
   `TrySubstrateCast` (`:243`). Its maps are under `g_roadMx` (leaf). **MFO equips nothing here** (marth 2026-10-19:
   "Remember we are porting everything to harbinger"): the claimed spell's equip is Harbinger's.
 - `apmf/Substrate.cpp` (338) = the claim PAIR and its state machine, declared in `apmf/APMFBridge.h`
