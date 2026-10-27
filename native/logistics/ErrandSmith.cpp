@@ -862,9 +862,9 @@ namespace MFO::Logistics::Errand::Smith {
             if (auto* cal = RE::Calendar::GetSingleton()) wk.startDays = cal->GetDaysPassed();
             wk.workClk = now;
             wk.ph = Work::Ph::Working;
-            spdlog::info("[smith] {:08X} '{}': working at '{}' ({}{}) -- {} piece(s), {} game min", fid, wk.who, wk.place,
+            spdlog::info("[smith] {:08X} '{}': working at '{}' ({}{}) -- {} piece(s), {:.0f} s real", fid, wk.who, wk.place,
                          wk.stationName.empty() ? "no station" : wk.stationName, wk.animated ? ", animated" : "", wk.lines.size(),
-                         Config::g_smithWorkGameMin.load());
+                         Config::g_smithWorkRealSec.load());
             store();
             return out;
         }
@@ -903,7 +903,7 @@ namespace MFO::Logistics::Errand::Smith {
             bool over = now - wk.workClk >= kRealCapSec;
             if (!over)
                 if (auto* cal = RE::Calendar::GetSingleton())
-                    over = (cal->GetDaysPassed() - wk.startDays) * 24.0f * 60.0f >= static_cast<float>(Config::g_smithWorkGameMin.load());
+                    over = (cal->GetDaysPassed() - wk.startDays) * 86400.0f / std::max(1.0f, cal->GetTimescale()) >= Config::g_smithWorkRealSec.load();   // real seconds on the game clock
             if (!over) { store(); return out; }
             ReleaseWork(fid);
             wk.ph = Work::Ph::Applying;
@@ -969,7 +969,11 @@ namespace MFO::Logistics::Errand::Smith {
         return std::format("Working at {}", it->second.place);
     }
 
-    double SimWorkDays() { return static_cast<double>(Config::g_smithWorkGameMin.load()) / (24.0 * 60.0); }
+    double SimWorkDays() {
+        auto* cal = RE::Calendar::GetSingleton();
+        const double ts = cal ? static_cast<double>(cal->GetTimescale()) : 20.0;   // game seconds per real second
+        return static_cast<double>(Config::g_smithWorkRealSec.load()) * ts / 86400.0;   // fSmithWorkRealSec
+    }
 
     std::string SimFinish(RE::FormID a_follower, const std::string& a_followerName) {
         Plan plan;

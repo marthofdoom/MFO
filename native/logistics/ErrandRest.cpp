@@ -1066,7 +1066,7 @@ namespace MFO::Logistics::Errand::Rest {
         if (!g_tripDone.empty())
             spdlog::info("[errand] the player's town changed ({:08X} -> {:08X}): {} follower(s)' trip-done mark(s) cleared", g_marksTown, a_townId, g_tripDone.size());
         g_marksTown = a_townId;
-        Reopen::ClearAll();   // F3: the watch belongs to the town visit
+        Reopen::CarryAndClear();   // F3: the watch belongs to the town visit; what it still lacked is CARRIED to the next town's plan
         g_innFailTrips.clear(); g_innNextTry.clear(); g_innSuppLogged.clear();   // run 4 F1
         g_tripDone.clear();
         g_tripLogged.clear();

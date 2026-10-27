@@ -265,6 +265,9 @@ namespace MFO::TradeBridge {
     std::int32_t LastSeenChestGold(RE::FormID a_chest);
     // MISSED BUY: stock LINES of NeedCat kind a_kind (0..4) the last PlanBuy at this chest classified (-1 = never seen / older than a restock). Worker.
     std::int32_t LastSeenStockLines(RE::FormID a_chest, std::int32_t a_kind);
+    // IN-TRIP RE-QUEUE: the cheapest unit price (the follower's buy multiplier applied) PlanBuy classified for supply kind a_kind (0..4) in any chest this
+    // session; -1 = never seen. A re-queue needs a purse of at least this. Worker.
+    std::int32_t MinSeenUnitPrice(std::int32_t a_kind);
     bool HasLiveOrder(RE::FormID a_follower);
     bool TakeOutcome(RE::FormID a_follower, TradeOutcome& a_out);
     void DiscardOutcome(RE::FormID a_follower);

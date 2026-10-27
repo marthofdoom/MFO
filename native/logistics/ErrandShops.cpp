@@ -72,9 +72,9 @@ namespace MFO::Logistics::ErrandShops {
             spdlog::info("[errand] {:08X}: {}", a_follower, a_text);
         }
 
-        const char* FacName(const RE::TESFaction* a_fac) {
-            const char* n = a_fac ? a_fac->GetName() : nullptr;
-            return n && *n ? n : "?";
+        std::string FacName(const RE::TESFaction* a_fac) {
+            auto n = ShopDisplayName(a_fac, 0);   // the one shop name: place -> chest cell -> "<vendor>'s stall" -> faction FULL
+            return n.empty() ? std::string("?") : n;
         }
 
         bool HasPerk(RE::Actor* a_actor, RE::FormID a_perk) {

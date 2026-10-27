@@ -381,3 +381,21 @@ namespace MFO::Logistics::Errand::Vendors {
         ++s_gen;
     }
 }
+
+namespace MFO::Logistics {
+
+    std::string ShopDisplayName(const RE::TESFaction* a_fac, RE::FormID a_vendorActor) {
+        if (!a_fac) return {};
+        if (auto n = ShopPlaceCellName(a_fac); !n.empty()) return n;   // the place cell, then the chest's cell
+        std::string who;
+        if (a_vendorActor)
+            if (auto* va = RE::TESForm::LookupByID<RE::Actor>(a_vendorActor)) if (const char* nm = va->GetName(); nm && *nm) who = nm;
+        if (who.empty()) {
+            Errand::Vendors::Where w;
+            if (Errand::Vendors::Locate(a_fac->GetFormID(), w) == Errand::Vendors::Answer::Located && !w.name.empty()) who = w.name;   // works for an unloaded vendor
+        }
+        if (!who.empty()) return who + "'s stall";
+        if (const char* f = a_fac->GetName(); f && *f) return f;
+        return {};
+    }
+}

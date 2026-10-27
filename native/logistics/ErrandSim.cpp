@@ -52,7 +52,7 @@ namespace MFO::Logistics::Errand::Sim {
         using Clock = std::chrono::steady_clock;
 
         constexpr double kWalkSpeed        = 150.0;    // u per real second (a walking follower; the design's estimate)
-        constexpr double kMinWalkGameMin   = 2.0;      // the walk is never shorter than this, game minutes
+        constexpr double kMinWalkRealSec   = 2.0;      // the walk is never shorter than this, REAL seconds (scaled by the live timescale; was a flat 2 game minutes)
         constexpr double kInteriorWalk     = 500.0;    // u from the door to the counter when the shop is a cell (its size is unknown)
         constexpr float  kEntryDoorReach   = 400.0f;   // a load door within this of his last loaded position is the one he used
         constexpr float  kReturnOffset     = 120.0f;   // u from the door, toward where he went in
@@ -132,15 +132,20 @@ namespace MFO::Logistics::Errand::Sim {
         double WalkDays(double a_units) {
             auto* cal = RE::Calendar::GetSingleton();
             const double ts = cal ? static_cast<double>(cal->GetTimescale()) : 20.0;   // game seconds per real second
-            const double realSec = a_units / kWalkSpeed;
-            return std::max(kMinWalkGameMin / 1440.0, realSec * ts / 86400.0);
+            const double realSec = std::max(kMinWalkRealSec, a_units / kWalkSpeed);   // the on-screen pace: distance / 150 u/s, never under ~2 s
+            return realSec * ts / 86400.0;
         }
 
-        // R7: how long the work of a stop takes off screen, game minutes: a temple visit iTempleGameMin, anything else iErrandTradeGameMin.
+        // R7: how long the work of a stop takes off screen: a temple visit iTempleGameMin (game minutes), a smith stop iSmithWorkGameMin, anything else
+        // fErrandTradeRealSec REAL seconds x the live timescale (2026-10-26: the old flat iErrandTradeGameMin = 10 was ~64 s real at the stock timescale
+        // against ~7.5 s of the same trade on screen).
         double WorkDays(const std::vector<Stop>& a_stops, std::size_t a_cur) {
             if (a_cur < a_stops.size() && a_stops[a_cur].kind == StopKind::Smith) return Smith::SimWorkDays();   // R8: iSmithWorkGameMin
             const bool temple = a_cur < a_stops.size() && a_stops[a_cur].kind == StopKind::Temple;
-            return static_cast<double>(temple ? Config::g_templeGameMin.load() : Config::g_errandTradeGameMin.load()) / 1440.0;
+            auto* cal = RE::Calendar::GetSingleton();
+            const double ts = cal ? static_cast<double>(cal->GetTimescale()) : 20.0;   // game seconds per real second
+            if (temple) return static_cast<double>(Config::g_templeRealSec.load()) * ts / 86400.0;   // fTempleRealSec
+            return static_cast<double>(Config::g_errandTradeRealSec.load()) * ts / 86400.0;
         }
         StopKind CurKind(const SimRec& r) { return r.cur < r.stops.size() ? r.stops[r.cur].kind : StopKind::Shop; }
 
@@ -736,9 +741,9 @@ namespace MFO::Logistics::Errand::Sim {
                     continue;
                 }
                 std::string vendorName = "?";
-                if (auto* va = s.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(s.vendorActor) : nullptr) vendorName = detail::NameOf(va);
-                else if (auto* fac = s.faction ? RE::TESForm::LookupByID<RE::TESFaction>(s.faction) : nullptr; fac && fac->GetName() && *fac->GetName())
-                    vendorName = fac->GetName();
+                if (auto shopName = ShopDisplayName(s.faction ? RE::TESForm::LookupByID<RE::TESFaction>(s.faction) : nullptr, s.vendorActor); !shopName.empty())
+                    vendorName = shopName;   // the one shop name (place -> chest cell -> "<vendor>'s stall" -> faction FULL)
+                else if (auto* va = s.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(s.vendorActor) : nullptr) vendorName = detail::NameOf(va);
                 const bool done = (s.flags & Saved::kTradeDone) != 0;
                 // Town run 3 (D1): TownAnchor is the OUTERMOST town now, so a record saved with the old inner anchor id is re-anchored on
                 // adoption (the saved value stays when the lookup or the anchor fails). No co-save format change.
@@ -990,6 +995,8 @@ namespace MFO::Logistics::Errand::Sim {
                         if (!out.aborted) {   // MISSED BUY: a supply quota the vendor's stock could not fill is re-planned to another open shop of the plan
                             SyncCur(r);
                             Reopen::NoteUnfilled(fid, r.town, r.stops[r.cur], r.order.get(), out);
+                            if (!out.unfilled.empty())   // IN-TRIP RE-QUEUE: fold / insert a stop into this trip NOW (AdvanceStop walks it), not at the inn
+                                Reopen::Requeue(fid, r.town, r.stops, r.cur, r.tripPurse >= 0 ? std::max(0, r.tripPurse - r.tripSpent) : -1, r.lastPos);
                         }
                     } else if (clk - r.dispatchedClk > kTradeWaitClkSec) {
                         r.reported = true;
