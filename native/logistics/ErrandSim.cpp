@@ -142,9 +142,9 @@ namespace MFO::Logistics::Errand::Sim {
         double WorkDays(const std::vector<Stop>& a_stops, std::size_t a_cur) {
             if (a_cur < a_stops.size() && a_stops[a_cur].kind == StopKind::Smith) return Smith::SimWorkDays();   // R8: iSmithWorkGameMin
             const bool temple = a_cur < a_stops.size() && a_stops[a_cur].kind == StopKind::Temple;
-            if (temple) return static_cast<double>(Config::g_templeGameMin.load()) / 1440.0;
             auto* cal = RE::Calendar::GetSingleton();
             const double ts = cal ? static_cast<double>(cal->GetTimescale()) : 20.0;   // game seconds per real second
+            if (temple) return static_cast<double>(Config::g_templeRealSec.load()) * ts / 86400.0;   // fTempleRealSec
             return static_cast<double>(Config::g_errandTradeRealSec.load()) * ts / 86400.0;
         }
         StopKind CurKind(const SimRec& r) { return r.cur < r.stops.size() ? r.stops[r.cur].kind : StopKind::Shop; }
@@ -741,9 +741,9 @@ namespace MFO::Logistics::Errand::Sim {
                     continue;
                 }
                 std::string vendorName = "?";
-                if (auto* va = s.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(s.vendorActor) : nullptr) vendorName = detail::NameOf(va);
-                else if (auto* fac = s.faction ? RE::TESForm::LookupByID<RE::TESFaction>(s.faction) : nullptr; fac && fac->GetName() && *fac->GetName())
-                    vendorName = fac->GetName();
+                if (auto shopName = ShopDisplayName(s.faction ? RE::TESForm::LookupByID<RE::TESFaction>(s.faction) : nullptr, s.vendorActor); !shopName.empty())
+                    vendorName = shopName;   // the one shop name (place -> chest cell -> "<vendor>'s stall" -> faction FULL)
+                else if (auto* va = s.vendorActor ? RE::TESForm::LookupByID<RE::Actor>(s.vendorActor) : nullptr) vendorName = detail::NameOf(va);
                 const bool done = (s.flags & Saved::kTradeDone) != 0;
                 // Town run 3 (D1): TownAnchor is the OUTERMOST town now, so a record saved with the old inner anchor id is re-anchored on
                 // adoption (the saved value stays when the lookup or the anchor fails). No co-save format change.

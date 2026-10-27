@@ -2342,7 +2342,7 @@ The town-wide index builder has no entry-door read (that is BuildCatalog's cell 
 ### MFO-B496 (SEV-5, OPEN, logistics/ErrandReopen.cpp CarryAndClear/ApplyCarried, against fix/mfo-errand-requeue) -- a carried need builds its order from the previous town's template
 A skipped order at the chosen shop is rebuilt from the carried `missedTmpl` (its quote and ids belong to another vendor, as in Poll's MISSED BUY plan; sig is not reset, cf. MFO-B483).
 
-### MFO-B497 (SEV-5, OPEN, logistics/ErrandSim.cpp, against fix/mfo-errand-requeue) -- `iTempleGameMin` / `iSmithWorkGameMin` still game minutes
+### MFO-B497 (SEV-5, RESOLVED in the review round: fTempleRealSec 12 / fSmithWorkRealSec 60, old keys read and ignored, logistics/ErrandSim.cpp, against fix/mfo-errand-requeue) -- `iTempleGameMin` / `iSmithWorkGameMin` were game minutes
 Only the shop/inn work and the walk were moved to real seconds x timescale; the temple and smith stage costs have no measured on-screen counterpart yet.
 
 ### MFO-B498 (SEV-5 info, OPEN, logistics/Errand.cpp, against fix/mfo-errand-requeue) -- file size
@@ -2358,3 +2358,23 @@ MAP.md line references are stale. `FileSubstrateCast (:129)` is now about :147, 
 
 ### MFO-B493 (SEV-5, OPEN, cast/SubstrateRoad.cpp check 7, against 1b8e551, Opus review of fix/mfo-substrate-recast) -- double log on Harbinger refusal
 A check-7 refusal now logs an info line on top of `OpenSubstrateCast`'s own ERROR. Harmless.
+
+### MFO-B499 (SEV-4, OPEN, Errand_internal.h ShopPlaceCellName ~74-77 + TradeBridge VM label, against c9a0dda, Opus review of fix/mfo-errand-requeue) -- no interior check on the chest-cell name step
+A hidden holding cell could lend its name to the shop (no IsInteriorCell test on the merchant chest's cell).
+
+### MFO-B500 (SEV-4, OPEN, ErrandReopen.cpp ~664-672, against c9a0dda, Opus review of fix/mfo-errand-requeue) -- stale sig after a fold
+BuyOrderFor and ApplyCarried the same; recompute with TradeBridge::TradeSignature.
+
+### MFO-B501 (SEV-4, OPEN, ErrandSim Requeue call, against c9a0dda, Opus review of fix/mfo-errand-requeue) -- sim Requeue sorts by r.lastPos
+It should use r.stops[r.cur].pos.
+
+### MFO-B502 (SEV-4, OPEN, ErrandReopen.cpp Requeue, against c9a0dda, Opus review of fix/mfo-errand-requeue) -- a Requeue-placed stop later skipped loses its kind
+The kind is erased from w.missed and never lands in unmet.
+
+### MFO-B503 (SEV-4, OPEN, Errand.cpp TryStart cooldown site, against c9a0dda, Opus review of fix/mfo-errand-requeue) -- the cooldown site skips TryStart's settle gate (fErrandSettleSec)
+
+### MFO-B504 (SEV-4, OPEN, Errand.cpp PlanLiveNeeds, against c9a0dda, Opus review of fix/mfo-errand-requeue) -- one live re-check trip covers one shop per kind
+N back-to-back trips are possible.
+
+### MFO-B505 (SEV-5 bundle, OPEN, against c9a0dda, Opus review of fix/mfo-errand-requeue) -- closing notes
+ShopPlaceName is dead code; EconomyLiveSupplyNeeds duplicates the BUY NEEDS rule (Economy.cpp:1016-1036); the PlanLiveNeeds log prints kind0 not BuyKindName; s_gate is not cleared on revert; the StartReopenedTrip failure line wording is wrong for LIVE NEED trips; the backoff first step is 24 s, not 12 s; the NoteUnfilled watch path records only the key (a multi-member faction may retry once).

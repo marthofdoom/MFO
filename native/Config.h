@@ -797,7 +797,10 @@ namespace MFO::Config {
     //     bErrandSmithFurniture: 1 = offer the station's furniture animation through Harbinger (probe P-SMITH-1);
     //       0 = do the work without it.
     inline std::atomic<bool>  g_errandSmith{ true };
-    inline std::atomic<int>   g_smithWorkGameMin{ 20 };
+    inline std::atomic<int>   g_smithWorkGameMin{ 20 };   // legacy key, read and ignored (see fSmithWorkRealSec)
+    //     fSmithWorkRealSec (2026-10-26, INI-only): REAL seconds the smithing work takes at the station (on screen and as the SMITH_SIM stage), scaled by the
+    //       live timescale off screen. Default 60 = what the old 20 game minutes took at the stock timescale (20), so the on-screen pace is unchanged.
+    inline std::atomic<float> g_smithWorkRealSec{ 60.0f };
     inline std::atomic<bool>  g_errandSmithFurniture{ true };
     //   TOWN PHASE 2 R7 (inn + temple, all INI-only; logistics/ErrandRest.cpp):
     //   bErrandInn: the inn is the LAST stop of every trip (default ON). He buys a small food stock, eats a meal, and STAYS at
@@ -808,7 +811,10 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_errandInn{ true };
     inline std::atomic<int>   g_innMeals{ 1 };
     inline std::atomic<int>   g_innFoodStock{ 3 };
-    inline std::atomic<int>   g_templeGameMin{ 10 };
+    inline std::atomic<int>   g_templeGameMin{ 10 };   // legacy key, read and ignored (see fTempleRealSec)
+    //     fTempleRealSec (2026-10-26, INI-only): REAL seconds an OFF-SCREEN temple visit takes (TEMPLE_SIM), scaled by the live timescale. Default 12: the
+    //       on-screen prayer is a walk, a ~2.5 s kneel hold and the shrine activation, about this long; no on-screen clock exists to measure it against.
+    inline std::atomic<float> g_templeRealSec{ 12.0f };
 
     // §HMS class-redistribution (v1.0.68). On level-up MFO measures the engine's
     // per-level Health/Magicka/Stamina award and re-grants it reshaped to the

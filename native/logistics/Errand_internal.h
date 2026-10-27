@@ -410,6 +410,7 @@ namespace MFO::Logistics::Errand {
             std::string       line;    // the plan line's body
             std::vector<RE::FormID> keys;   // the opened shops' plan keys: Consume() takes them out of the watch once the trip really started
             std::vector<RE::FormID> lateForms;   // a LATE-SELL plan: the freed items it serves (re-queued by StartReopenedTrip when the start fails)
+            std::vector<std::pair<std::int32_t, RE::FormID>> liveTried;   // a LIVE NEED plan: (need kind, shop identity) pairs; StartReopenedTrip marks them tried (Reopen::NoteTried) once the trip STARTED
             std::vector<std::pair<std::int32_t, RE::FormID>> buyServed;   // a MISSED BUY plan: (need kind, shop key) pairs it re-plans; Consume() marks them tried
         };
         // Planner (worker, TryStart), at the commit of a trip. a_closedCands / a_closedOrders = the hours-closed shops and their orders (may be empty).
@@ -447,7 +448,9 @@ namespace MFO::Logistics::Errand {
         // pair (kept apart from any watch: a restored trip has none). A shop whose trade came back unfilled (NoteUnfilled, with or without a watch) is tried.
         bool IsTried(RE::FormID a_follower, RE::FormID a_town, std::int32_t a_kind, RE::FormID a_key);
         void NoteTried(RE::FormID a_follower, RE::FormID a_town, std::int32_t a_kind, RE::FormID a_key);
-        int  ApplyCarried(RE::FormID a_follower, const std::vector<Trip::Cand>& a_cands, std::vector<ErrandPlanned>& a_planned);
+        // a_liveNeeds = his LIVE unmet supply kinds (EconomyLiveSupplyNeeds): a carried kind that is no longer below its threshold is dropped, one that is still
+        // unmet uses the LIVE quota (never the stale carried one).
+        int  ApplyCarried(RE::FormID a_follower, const std::vector<Trip::Cand>& a_cands, std::vector<ErrandPlanned>& a_planned, const std::vector<TradeBridge::NeedCat>& a_liveNeeds);
         // MISSED SELLS (b): items that became sell candidates mid-trip and appear in NO stop's order. a_requeue = a failed start puts them back.
         void NoteLate(RE::FormID a_follower, RE::FormID a_town, const std::vector<RE::FormID>& a_forms, bool a_requeue = false);
         // F3 (review): a late-sell trip started for these forms, so the gold entries must not send him back with rows he no longer holds.

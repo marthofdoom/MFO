@@ -560,7 +560,7 @@ namespace MFO::Logistics::Errand::Reopen {
             spdlog::info("[errand] {:08X}: CARRIED NEED -- the town visit ended with {} still unmet; the next town's plan treats it as a forced need (stock-evidence shops first)", fid, txt);
     }
 
-    int ApplyCarried(RE::FormID a_follower, const std::vector<Trip::Cand>& a_cands, std::vector<ErrandPlanned>& a_planned) {
+    int ApplyCarried(RE::FormID a_follower, const std::vector<Trip::Cand>& a_cands, std::vector<ErrandPlanned>& a_planned, const std::vector<TradeBridge::NeedCat>& a_liveNeeds) {
         Carried c;
         {
             std::scoped_lock lk(g_mx);
@@ -573,7 +573,13 @@ namespace MFO::Logistics::Errand::Reopen {
         int purse = c.tmpl.purse;
         for (const auto& p : a_planned) if (!p.skipped && p.purse > 0) { purse = p.purse; break; }   // the live purse beats the stale template's
         c.tmpl.purse = purse;
-        for (const auto& n : c.needs) {
+        for (const auto& cn : c.needs) {
+            const auto lp = std::find_if(a_liveNeeds.begin(), a_liveNeeds.end(), [&](const TradeBridge::NeedCat& l) { return l.kind == cn.kind && l.quota > 0; });
+            if (lp == a_liveNeeds.end()) {   // his live threshold is met now: nothing to force (and no stale quota to buy)
+                spdlog::info("[errand] {:08X}: carried need {} {} dropped -- his live count no longer shows it unmet", a_follower, BuyKindName(cn.kind), cn.quota);
+                continue;
+            }
+            const TradeBridge::NeedCat n = *lp;   // the LIVE quota
             const bool live = std::any_of(a_planned.begin(), a_planned.end(), [&](const ErrandPlanned& p) {
                 return !p.skipped && std::any_of(p.needs.begin(), p.needs.end(), [&](const TradeBridge::NeedCat& m) { return m.kind == n.kind && m.quota > 0; });
             });

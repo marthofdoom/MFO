@@ -174,6 +174,9 @@ namespace MFO::Logistics::Errand {
         std::mutex                                           g_mx;
         std::unordered_map<RE::FormID, Rec>                  g_recs;
         std::unordered_map<RE::FormID, Clock::time_point>    g_cool;        // follower -> next errand allowed
+        // LIVE NEED RE-CHECK: followers whose g_cool entry is the COMPLETION cooldown (a finished trip / fErrandCooldownSec), the only one the re-check
+        // may bypass. A FAILURE cooldown (combat, heal yield, told to wait, timeout, refusals, walk-budget queue) stands. Guarded by g_mx.
+        std::unordered_set<RE::FormID>                       g_coolDone;
         std::unordered_map<RE::FormID, Clock::time_point>    g_nextPlan;    // follower -> next plan evaluation
         std::unordered_map<RE::FormID, Clock::time_point>    g_parked;      // vendor actor -> parked until (a static-blocked walk)
         // (follower, shop chest) -> backoff after a FAILED WALK (session-scoped, not saved; cleared in ClearTransientState). The chest keys
@@ -806,6 +809,7 @@ namespace MFO::Logistics::Errand {
                 r = it->second;
                 g_recs.erase(it);
                 g_cool[a_fid] = Clock::now() + std::chrono::milliseconds(static_cast<long long>(a_cooldownSec * 1000.0f));
+                if (a_complete || a_cooldownSec == Config::g_errandCooldownSec.load()) g_coolDone.insert(a_fid); else g_coolDone.erase(a_fid);
                 if (a_complete) g_backoff.erase(BackoffKey(a_fid, r.chest));   // a successful DONE at this target forgives it
             }
             if (r.phase == Phase::Smithing) Smith::End(a_fid, a_why);   // R8: the work claim + the work record
@@ -1074,6 +1078,7 @@ namespace MFO::Logistics::Errand {
         void Cooldown(RE::FormID a_follower, float a_seconds) {
             std::scoped_lock lk(g_mx);
             g_cool[a_follower] = Clock::now() + std::chrono::milliseconds(static_cast<long long>(a_seconds * 1000.0f));
+            if (a_seconds == Config::g_errandCooldownSec.load()) g_coolDone.insert(a_follower); else g_coolDone.erase(a_follower);   // the completion cooldown (live-need re-check may bypass it)
         }
         bool InLoadingMenu() {
             auto* ui = RE::UI::GetSingleton();
@@ -1214,7 +1219,10 @@ namespace MFO::Logistics::Errand {
             r.town = a_info.town;
             r.faction = a_info.faction;
             r.followerName = a_info.followerName;
-            r.vendorName = vendor ? NameOf(vendor.get()) : a_info.vendorName;
+            {   // the one shop name (place -> chest cell -> "<vendor>'s stall" -> faction FULL), else the vendor / the record's own
+                auto shopName = ShopDisplayName(RE::TESForm::LookupByID<RE::TESFaction>(a_info.faction), r.vendor);
+                r.vendorName = !shopName.empty() ? shopName : (vendor ? NameOf(vendor.get()) : a_info.vendorName);
+            }
             r.order = a_info.order;
             r.announced = a_info.announced;
             r.stops = a_info.stops; r.cur = a_info.cur;   // R5: the trip goes on from the CURRENT stop
@@ -1315,6 +1323,7 @@ namespace MFO::Logistics::Errand {
             return false;
         }
         Reopen::Consume(a_follower->GetFormID(), a_plan);
+        for (const auto& p : a_plan.liveTried) Reopen::NoteTried(a_follower->GetFormID(), a_townId, p.first, p.second);   // LIVE NEED RE-CHECK: tried only once the trip really started
         if (!a_plan.lateForms.empty()) Reopen::DropGoldForms(a_follower->GetFormID(), a_plan.lateForms);   // F3 (review)
         spdlog::info("[errand] {:08X} '{}': {} -- new trip of {} stop(s) STARTED (the inn last when he stayed at one): {}", a_follower->GetFormID(), NameOf(a_follower), a_what, n, line);
         return true;
@@ -1415,7 +1424,7 @@ namespace MFO::Logistics::Errand {
     // are TryStart's cooldown and trip-done branches and the on-screen inn stay. The loop guard is the per-VISIT (kind, shop) tried set (Reopen::IsTried /
     // NoteTried), and a check that finds nothing backs off (12 s doubling to 5 min) until the town changes. a_inn (the stay's inn stop) rides last.
     static bool PlanLiveNeeds(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now, RE::FormID a_townId, const char* a_site,
-                              const Stop* a_inn, Reopen::Plan& a_out) {
+                              const Stop* a_inn, bool a_atInn, Reopen::Plan& a_out) {
         const auto fid = a_follower->GetFormID();
         if (!a_townId || !Config::g_logistics.load() || !Config::g_townErrands.load() || !Config::g_economy.load()) return false;
         struct Gate { RE::FormID town = 0; int fails = 0; Clock::time_point next{}; bool goldLogged = false; };
@@ -1438,8 +1447,8 @@ namespace MFO::Logistics::Errand {
         auto* ui = RE::UI::GetSingleton();
         auto* avo = a_follower->AsActorValueOwner();
         if (!pc || !pc->Is3DLoaded() || !town || !a_follower->Is3DLoaded() || (ui && ui->GameIsPaused()) || APMFBridge::InCombat(a_follower) || pc->IsInCombat() ||
-            SlotOf(fid) || (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) || a_follower->IsOnMount() ||
-            a_follower->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal ||
+            SlotOf(fid) || (avo && avo->GetActorValue(RE::ActorValue::kWaitingForPlayer) > 0.0f) ||
+            (!a_atInn && (a_follower->IsOnMount() || a_follower->AsActorState()->GetSitSleepState() != RE::SIT_SLEEP_STATE::kNormal)) ||   // (at the inn he sits / sleeps most of the stay)
             LocationTypes::TownAnchor(pc->GetCurrentLocation()) != town || LocationTypes::TownAnchor(a_follower->GetCurrentLocation()) != town ||
             !Forms::g_tradeQuest || !Forms::g_tradeQuest->IsRunning())
             return false;   // (the same gates a plan has; the next call asks again)
@@ -1589,12 +1598,12 @@ namespace MFO::Logistics::Errand {
         }
         for (auto& st : stops) st.state = StopState::Pending;
         stops.front().state = StopState::Active;
-        for (const auto& st : stops)
+        for (const auto& st : stops)   // the (kind, shop) pairs this trip asks for, under every identity the shop answers to; StartReopenedTrip marks them tried once the trip STARTED
             if (st.kind == StopKind::Shop && st.order)
-                for (const auto& n : st.order->needs) {   // (under every identity the shop answers to: the plan key, its faction, its vendor actor)
-                    Reopen::NoteTried(fid, a_townId, n.kind, st.order->vendorKey);
-                    if (st.faction) Reopen::NoteTried(fid, a_townId, n.kind, st.faction);
-                    if (st.vendorActor) Reopen::NoteTried(fid, a_townId, n.kind, st.vendorActor);
+                for (const auto& n : st.order->needs) {
+                    a_out.liveTried.emplace_back(n.kind, st.order->vendorKey);
+                    if (st.faction) a_out.liveTried.emplace_back(n.kind, st.faction);
+                    if (st.vendorActor) a_out.liveTried.emplace_back(n.kind, st.vendorActor);
                 }
         a_out.stops = std::move(stops);
         a_out.line = std::format("LIVE-NEED | {}", line);
@@ -1651,7 +1660,7 @@ namespace MFO::Logistics::Errand {
         // The player's town + how long he has been in it (the settle clock). Tracked on every call.
         const RE::BGSLocation* playerTown = LocationTypes::TownAnchor(pc->GetCurrentLocation());
         Clock::time_point townSince{};
-        bool cooling = false;
+        bool cooling = false, coolIsDone = false;
         float coolLeft = 0.0f;
         const RE::FormID tidNow = playerTown ? playerTown->GetFormID() : 0u;
         Rest::NoteTown(tidNow);   // R7: the player's town changed (or he left town) -> every "trip done" mark is cleared (before any early return below)
@@ -1670,11 +1679,12 @@ namespace MFO::Logistics::Errand {
             if (const auto it = g_cool.find(fid); it != g_cool.end() && a_now < it->second) {
                 coolLeft = std::chrono::duration<float>(it->second - a_now).count();
                 cooling = true;
+                coolIsDone = g_coolDone.contains(fid);
             } else if (const auto it2 = g_nextPlan.find(fid); it2 != g_nextPlan.end() && a_now < it2->second) return true;
         }
         if (cooling) {   // LIVE NEED RE-CHECK bypasses the cooldown (Auri, restored trip): a need still unmet with the gold in hand starts a fresh trip
             Reopen::Plan plan;
-            if (playerTown && PlanLiveNeeds(a_follower, a_state, a_now, tidNow, "errand cooldown", nullptr, plan)) {
+            if (playerTown && coolIsDone && PlanLiveNeeds(a_follower, a_state, a_now, tidNow, "errand cooldown", nullptr, false, plan)) {   // (a FAILURE cooldown stands)
                 StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan), "LIVE NEED RE-CHECK");
                 return true;
             }
@@ -1716,7 +1726,7 @@ namespace MFO::Logistics::Errand {
                 const auto from = a_follower->GetPosition();
                 if (Reopen::Poll(fid, tidNow, &from, plan) || PlanLateSells(a_follower, a_state, a_now, tidNow, plan)) {
                     if (StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan))) Rest::UnmarkTripDone(fid, "a needed shop opened / a missed sell");   // a failed start keeps the mark (the watch retries)
-                } else if (PlanLiveNeeds(a_follower, a_state, a_now, tidNow, "trip done", nullptr, plan)) {   // a need still unmet with the gold in hand: a fresh trip (the mark stands)
+                } else if (PlanLiveNeeds(a_follower, a_state, a_now, tidNow, "trip done", nullptr, false, plan)) {   // a need still unmet with the gold in hand: a fresh trip (the mark stands)
                     StartReopenedTrip(a_follower, tidNow, a_now, std::move(plan), "LIVE NEED RE-CHECK");
                 }
             } else {
@@ -1835,7 +1845,12 @@ namespace MFO::Logistics::Errand {
             for (const auto& v : closedPlanned) { closedGear = closedGear || v.wishGear; closedApparel = closedApparel || v.wishApparel; }
             for (const auto& c : closedCands) closedTCands.push_back(makeTripCand(c, closedGear, closedApparel));
         }
-        Reopen::ApplyCarried(fid, tcands, planned);   // CARRIED NEED: what the last town left unmet is a forced need of this plan (stock-evidence shops first)
+        {
+            std::vector<TradeBridge::NeedCat> liveNeeds;
+            int liveGold = 0;
+            EconomyLiveSupplyNeeds(a_follower, a_state, liveNeeds, liveGold);
+            Reopen::ApplyCarried(fid, tcands, planned, liveNeeds);
+        }   // CARRIED NEED: what the last town left unmet is a forced need of this plan (stock-evidence shops first)
         Trip::Inputs tin;
         tin.follower = fid; tin.from = a_follower->GetPosition(); tin.carry = carry; tin.minSell = minSell; tin.minPurse = minPurse;
         std::vector<Stop> stops;
@@ -2137,7 +2152,7 @@ namespace MFO::Logistics::Errand {
                 }
                 // LIVE NEED RE-CHECK: a need still unmet with the gold in hand ends the stay (no mark) and starts a fresh trip, the inn last again.
                 const Stop innCopy = r.stops[r.cur];
-                if (PlanLiveNeeds(a_follower, a_state, a_now, r.town, "inn stay", &innCopy, plan)) {
+                if (PlanLiveNeeds(a_follower, a_state, a_now, r.town, "inn stay", &innCopy, true, plan)) {
                     const RE::FormID townId = r.town;
                     Finish(fid, "a need is still unmet -- the stay ends, a fresh trip starts", 0.0f, false, true);
                     StartReopenedTrip(a_follower, townId, a_now, std::move(plan), "LIVE NEED RE-CHECK");
