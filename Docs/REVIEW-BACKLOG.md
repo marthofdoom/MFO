@@ -2393,3 +2393,18 @@ Ammo kinds (3, 4) have no apothecary-class analog, so `needStock` for them is st
 
 ### MFO-B484 / MFO-B504 status note (1b29b7d, fix/mfo-potion-cap-stock)
 B484: the "NO stock evidence" line in Plan step 2 is reworded (no buy trip; carried) and now fires only for a need with neither a stock stop nor a planned sell stop to try it at; still logged on every re-plan, so still open as a throttling item. B504: narrowed, not closed; with stock-only, a live re-check trip is built only over shops with stock evidence, so the "one shop per kind" limit now costs a trip only where there is stock.
+
+### MFO-B510 (SEV-4, OPEN, MFO_Trade.psc:42-50 + ErrandTrip.cpp StockNow:47, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- pre-existing 128-line truncation now a veto
+MFO_Trade.psc:42-50 fills stockCounts = new int[128]; lines past 127 get count 0; a large modded apothecary chest can file a 0 potion reading, which under this branch vetoes the shop for a restock window (StockNow:47). Root fix: size the counts array to m, or file -1 when truncated (separate Papyrus change).
+
+### MFO-B511 (SEV-5, OPEN, TradeBridge.cpp:156-158, :303, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- silver ammo is not counted as arrows/bolts
+wantSilverAmmo classifies silver arrows/bolts as kAmmoSilver (kindLines[5]) not kArrows/kBolts (TradeBridge.cpp:156-158, :303); a silver-only shop files arrows=0 and is vetoed for other followers until restock.
+
+### MFO-B512 (SEV-5, OPEN, Errand.cpp PlanLiveNeeds:1582-1585, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- a no-stock kind is carried only when no trip is made
+PlanLiveNeeds (Errand.cpp:1582-1585) files NoteUnserved only when usable==0; a no-stock kind dropped while other kinds made a trip is not carried (forced status lost).
+
+### MFO-B513 (SEV-5, OPEN, ErrandTrip.cpp:48, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- StockNow with lines>0 still requires needCarry
+StockNow with lines>0 still requires needCarry (ErrandTrip.cpp:48); loses a shop with potions in stock but no VendorItemPotion keyword.
+
+### MFO-B514 (SEV-5, OPEN, ErrandTrip.cpp:296, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- free-try log text inaccurate
+Free-try log text at ErrandTrip.cpp:296 ("already planned for selling") is inaccurate when the stop was added for another kind's stock.

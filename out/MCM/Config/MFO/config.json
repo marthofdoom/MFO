@@ -119,7 +119,7 @@
         {
           "text": "Animated casts",
           "type": "text",
-          "help": "In combat, casts go through the follower's own casting so you see the real hand animation. Heal gambits cast one at a time, lowest health first. Animated heals in combat on the Combat & Casting page turns the heal part off, which makes heals land instantly. Out of combat, heals still land instantly by default. All of this needs Harbinger.",
+          "help": "In combat, casts go through the follower's own casting so you see the real hand animation. Heal gambits cast one at a time, lowest health first. Animated heals in combat on the Combat & Casting page turns the heal part off, which makes heals land instantly. Out of combat, heals, buffs and summons are also animated by default (Harbinger substrate; INI switch bSubstrateCasts). All of this needs Harbinger.",
           "valueOptions": {
             "value": "Harbinger"
           }
@@ -129,7 +129,7 @@
           "type": "text",
           "help": "An out-of-combat heal, buff or summon can also play the real animation, through a combat substrate that Harbinger provides. It needs Harbinger and it is ON by default. It has no MCM toggle. The switch is bSubstrateCasts in the Debug section of MFO.ini (set it to 0 to turn it off). When it is on, a cast is never made while you sneak, and a refused cast is skipped and logged, never sent down the instant path. Hostile out-of-combat casts and concentration spells are not part of it.",
           "valueOptions": {
-            "value": "Harbinger / off"
+            "value": "Harbinger"
           }
         },
         {
@@ -700,7 +700,7 @@
           "id": "bHealAnimPackage:General",
           "text": "Animated heals in combat",
           "type": "toggle",
-          "help": "ON (default): in combat, heal gambits are cast by the follower with the real hand animation, one cast at a time, lowest health first. Out of combat heals still land instantly. OFF: every heal lands instantly, no animation. Requires Harbinger.",
+          "help": "ON (default): in combat, heal gambits are cast by the follower with the real hand animation, one cast at a time, lowest health first. Out of combat they are animated too unless bSubstrateCasts is 0 in MFO.ini. OFF: every heal lands instantly, no animation. Requires Harbinger.",
           "valueOptions": {
             "sourceType": "ModSettingBool",
             "defaultValue": 1
