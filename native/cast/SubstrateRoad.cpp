@@ -27,6 +27,8 @@
 #include "apmf/APMFBridge.h"    // the claim pair (apmf/Substrate.cpp), HealCastClaimSupported
 
 #include <algorithm>
+#include <format>
+#include <string>
 #include <chrono>
 #include <map>
 #include <mutex>
@@ -50,6 +52,8 @@ namespace MFO::Actuation {
         std::unordered_map<std::uint64_t, RoadClock::time_point> g_directNoted;
         // follower -> the last "player sneaking" line. Guarded by g_roadMx.
         std::unordered_map<RE::FormID, RoadClock::time_point> g_sneakNoted;
+        // (follower, spell, which check) -> the last "OPEN refused" reason line. Guarded by g_roadMx.
+        std::map<std::tuple<RE::FormID, RE::FormID, int>, RoadClock::time_point> g_refuseNoted;
 
         std::uint64_t Key(RE::FormID a_f, RE::FormID a_s) { return (static_cast<std::uint64_t>(a_f) << 32) | a_s; }
 
@@ -65,6 +69,20 @@ namespace MFO::Actuation {
             }
             spdlog::info("[substrate] {:08X} {} ({:08X}): stays on today's direct road (unanimated) -- {}",
                          a_f->GetFormID(), a_s->GetName() ? a_s->GetName() : "?", a_s->GetFormID(), a_why);
+        }
+
+        // Rate-limited (10 s per follower, spell, check) reason line for a follower-wide Refused: the check that said no
+        // and its values. Silent refusals hid a 21 s gap in the field (2026-10-26d). Takes the already-formatted detail.
+        void NoteRefused(RE::FormID a_f, RE::SpellItem* a_s, int a_check, const std::string& a_detail) {
+            const auto now = RoadClock::now();
+            {
+                std::scoped_lock lock(g_roadMx);
+                auto& t = g_refuseNoted[{ a_f, a_s->GetFormID(), a_check }];
+                if (t != RoadClock::time_point{} && now - t < std::chrono::seconds(10)) return;
+                t = now;
+            }
+            spdlog::info("[substrate] {:08X} OPEN refused this lap: {} -- {} ({:08X}) road=substrate-claim",
+                         a_f, a_detail, a_s->GetName() ? a_s->GetName() : "?", a_s->GetFormID());
         }
 
         // The pacing windows. SHORT: fCastCooldown, at least 3 s (a refused or never-fired open is not re-filed every
@@ -139,7 +157,10 @@ namespace MFO::Actuation {
         // ── FOLLOWER-WIDE gates (Refused: nothing for ANY recipient this lap) ──
         // 1. THE PENDING LATCH: one pair per follower. Its open is in flight (next frame, entry one frame later), it
         //    is held, or its close grace runs: the direct road must not fire beside it, and nor may a second pair.
-        if (APMFBridge::SubstrateCastPending(fid)) return SubstrateTry::Refused;
+        if (APMFBridge::SubstrateCastPending(fid)) {
+            NoteRefused(fid, a_spell, 1, std::format("a substrate pair already stands for him (pending latch, site {})", site));
+            return SubstrateTry::Refused;
+        }
 
         // 2. THE PLAYER SNEAKING (marth 2026-10-19 Q6: "refuse the open while the player sneaks"). Not cast this lap.
         if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && pc->IsSneaking()) {
@@ -160,17 +181,30 @@ namespace MFO::Actuation {
         // 3. CAN HE ACT (fix/mfo-can-act; plain member loads), DOES HE KNOW IT (INVARIANTS #20, the competence gate, asked
         //    here so no recipient is tried), and COMPETENCE (§5.3, CastSelfDirect's gate: the real cost and the
         //    reserve floor). The engine's own cast spends the magicka on this road.
-        if (CannotActReason(a_follower)) return SubstrateTry::Refused;
-        if (!a_follower->HasSpell(a_spell)) return SubstrateTry::Refused;
+        if (const char* cant = CannotActReason(a_follower)) {
+            NoteRefused(fid, a_spell, 3, std::format("he cannot act ({})", cant));
+            return SubstrateTry::Refused;
+        }
+        if (!a_follower->HasSpell(a_spell)) {
+            NoteRefused(fid, a_spell, 4, "he does not know the spell (HasSpell false)");
+            return SubstrateTry::Refused;
+        }
         if (auto* avo = a_follower->AsActorValueOwner()) {
             const float cost = a_spell->CalculateMagickaCost(a_follower);
             const float have = avo->GetActorValue(RE::ActorValue::kMagicka);
-            if (cost > have) return SubstrateTry::Refused;
+            if (cost > have) {
+                NoteRefused(fid, a_spell, 5, std::format("magicka {:.0f} is below the cost {:.0f}", have, cost));
+                return SubstrateTry::Refused;
+            }
             const float reserve = Config::g_magickaReserve.load();
             if (reserve > 0.0f) {
                 const float mx = avo->GetPermanentActorValue(RE::ActorValue::kMagicka) +
                     a_follower->GetActorValueModifier(RE::ACTOR_VALUE_MODIFIER::kTemporary, RE::ActorValue::kMagicka);
-                if (mx > 0.0f && (have - cost) < reserve * mx) return SubstrateTry::Refused;
+                if (mx > 0.0f && (have - cost) < reserve * mx) {
+                    NoteRefused(fid, a_spell, 6, std::format("magicka {:.0f} - cost {:.0f} would breach the reserve floor "
+                                                              "{:.0f} ({:.2f} x max {:.0f})", have, cost, reserve * mx, reserve, mx));
+                    return SubstrateTry::Refused;
+                }
             }
         }
 
@@ -230,7 +264,20 @@ namespace MFO::Actuation {
                     it = now - it->second.filed > std::chrono::seconds(310) ? g_subPace.erase(it) : std::next(it);
             g_subPace[{ fid, spellID, rid }] = Pace{ now, LongPaceSecs(a_spell), target };
         }
+        if (!filed)
+            NoteRefused(fid, a_spell, 7, std::format("Harbinger refused the open (site {}, target {:08X})", site, target));
         return filed ? SubstrateTry::Filed : SubstrateTry::Refused;   // refused: logged as an ERROR, no direct road
+    }
+
+    bool SubstrateLastWindowUnfired(RE::FormID a_follower, RE::FormID a_spell, RE::FormID a_recipient) {
+        Pace pace{};
+        {
+            std::scoped_lock lock(g_roadMx);
+            const auto it = g_subPace.find({ a_follower, a_spell, a_recipient });
+            if (it == g_subPace.end()) return false;
+            pace = it->second;
+        }
+        return !APMFBridge::SubstrateFiredSince(a_follower, a_spell, pace.target, pace.filed);
     }
 
     void ResetSubstrateRoad() {
@@ -238,6 +285,7 @@ namespace MFO::Actuation {
         g_subPace.clear();
         g_directNoted.clear();
         g_sneakNoted.clear();
+        g_refuseNoted.clear();
     }
 
     SubstrateTry TrySubstrateCast(RE::Actor* a_follower, RE::SpellItem* a_spell, RE::Actor* a_recipient,

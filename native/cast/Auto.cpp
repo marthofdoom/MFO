@@ -985,8 +985,8 @@ namespace MFO::Actuation {
             // gets this lap's pair. A recipient out of reach or still paced is passed over (Skipped), so one
             // unservable ally never starves the rest (review F4 on 733c20cc); a follower-wide no (Refused: the
             // latch, sneaking, magicka, Prepare, Harbinger's refusal) ends the lap. The next lap, after the
-            // fCastCooldown pace, serves whoever still needs it. The jittered recast window is armed only when the set
-            // had one recipient left, so it never starves the rest. NotTaken for EVERY candidate = the fan below,
+            // fCastCooldown pace, serves whoever still needs it. The jittered recast window is NOT armed on this road (g_subPace
+            // paces it per recipient and fire-aware). NotTaken for EVERY candidate = the fan below,
             // unchanged; any other mix is a transparent no-cast, never the fan beside the road. Hostile (round R4)
             // and concentration (slice S5) never ask; nor does the combat table (g_firingRule).
             if (!hostile && !concentration && g_firingRule == kNoRule && Config::g_substrateCasts.load()) {
@@ -994,7 +994,9 @@ namespace MFO::Actuation {
                 std::vector<std::pair<float, RE::Actor*>> order;
                 for (const auto tgtID : targets)
                     if (auto* a = RE::TESForm::LookupByID<RE::Actor>(tgtID))
-                        order.emplace_back(healSet ? Vocab::HealthPct(a) : 0.0f, a);
+                        order.emplace_back(healSet ? Vocab::HealthPct(a)
+                                           // a non-heal recipient whose last window closed UNFIRED goes first
+                                           : SubstrateLastWindowUnfired(id, a_spellID, tgtID) ? -1.0f : 0.0f, a);
                 std::stable_sort(order.begin(), order.end(),
                                  [](const auto& x, const auto& y) { return x.first < y.first; });
                 bool allNotTaken = !order.empty();
@@ -1008,8 +1010,8 @@ namespace MFO::Actuation {
                                                "Prepare / refused)", true };
                     // Filed
                     g_autoCast[id] = now;
-                    if (suppressible && targets.size() == 1)
-                        g_beneficialRecast[recastKey] = { now, JitteredRecastWindow(authoredDur) };
+                    // No g_beneficialRecast here: a filed pair may close UNFIRED, and a follower+spell window would then
+                    // starve the recipient a whole lap. The per-recipient, fire-aware g_subPace paces this road.
                     spdlog::info("[cast] {:08X} {} AUTO BENEFICIAL {} ({:08X}) -> {:08X} -- substrate claim filed "
                                  "(one of {} in need; road=substrate-claim)",
                                  id, a_follower->GetName() ? a_follower->GetName() : "?",
