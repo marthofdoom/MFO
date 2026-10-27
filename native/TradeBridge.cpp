@@ -316,20 +316,42 @@ namespace MFO::TradeBridge {
                 for (auto& c : cands) if (c.kind <= NeedCat::kBolts) sup.push_back(c);
                 std::sort(sup.begin(), sup.end(),
                           [](const Cand& a, const Cand& b) { return a.value > b.value; });
+                // POTION CAP (marth 2026-10-26: "cap at half"; field: Auri spent 1092g of 1193g on five magicka potions at ~3.9x): ALL the potion
+                // kinds (health / stamina / magicka) share ONE budget of HALF the purse this pass started with, computed once (as R7 food and R8
+                // materials do). Ammo is not capped. The materials pass below then takes half of what is LEFT, so potions + materials never
+                // exceed the purse (at most 1/2 + 1/4 of it). A clip marks poorKind (the leftover quota is the purse's) and is logged per kind.
+                const int purseStart = o->budget;
+                int potLeft = o->budget / 2;
+                bool potClipped[3] = {};
                 for (const auto& c : sup) {
                     NeedCat* need = nullptr;
                     for (auto& n : o->needs) if (n.kind == c.kind && n.quota > 0) { need = &n; break; }
-                    if (o->budget < c.value) { if (need && c.kind >= 0 && c.kind < 5) o->poorKind[c.kind] = true; continue; }   // can't afford even one
+                    const bool potion = c.kind >= 0 && c.kind <= NeedCat::kPotMagicka;
+                    const int  avail  = potion ? std::min(o->budget, potLeft) : o->budget;   // what this line may spend
+                    if (avail < c.value) {   // can't afford even one (within the cap)
+                        if (need && c.kind >= 0 && c.kind < 5) o->poorKind[c.kind] = true;
+                        if (need && potion && o->budget >= c.value) potClipped[c.kind] = true;
+                        continue;
+                    }
                     if (!need) continue;
                     int qty = c.avail;
                     if (qty > need->quota)         qty = need->quota;
-                    if (qty > o->budget / c.value) { qty = o->budget / c.value; if (c.kind >= 0 && c.kind < 5) o->poorKind[c.kind] = true; }
+                    if (qty > avail / c.value) {
+                        qty = avail / c.value;
+                        if (c.kind >= 0 && c.kind < 5) o->poorKind[c.kind] = true;
+                        if (potion && avail < o->budget) potClipped[c.kind] = true;
+                    }
                     if (qty <= 0) continue;
                     plan[c.idx] += qty;
                     need->quota -= qty;
                     o->budget   -= qty * c.value;
                     o->buySpent += qty * c.value;
+                    if (potion) potLeft -= qty * c.value;
                 }
+                for (int k = 0; k < 3; ++k)
+                    if (potClipped[k])
+                        spdlog::info("[trade] {:08X}: potion cap -- kind {} clipped to half the trip purse (cap {}g of {}g, {}g left of the cap)",
+                                     o->followerId, k, purseStart / 2, purseStart, potLeft);
             }
 
             // ── SMITHING MATERIALS (town phase 2 R8, marth: "regardless of gambits a follower will ... buy whats needed for
@@ -806,10 +828,10 @@ namespace MFO::TradeBridge {
             // rows, PlanBuy's budget and every GetBuyPrice of this order.
             if (o.quoted)
                 spdlog::info("[econ] {:08X} price @ '{}': {}", fol ? fol->GetFormID() : 0u,
-                             ven && ven->GetName() ? ven->GetName() : "?", Logistics::Pricing::Describe(o.quote));
+                             venLabel.c_str(), Logistics::Pricing::Describe(o.quote));   // the SAME shop name as the econ line above (was the vendor's raw name: "?" for a shop with no loaded vendor)
             else
                 spdlog::info("[econ] {:08X} price @ '{}': no quote was attached to this order and no buy plan ran", fol ? fol->GetFormID() : 0u,
-                             ven && ven->GetName() ? ven->GetName() : "?");
+                             venLabel.c_str());
         }
 
     }

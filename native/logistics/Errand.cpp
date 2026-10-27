@@ -280,8 +280,8 @@ namespace MFO::Logistics::Errand {
         // "VendorItemPotion in the list" says nothing about stock (Ri'saad's and Belethor's lists carry it; neither stocked a qualifying potion).
         // Apothecary class = a plain (non-inverted) VEND list that carries VendorItemPotion and whose keywords are at least half alchemy goods
         // (potion, poison, ingredient, food: matched by the keyword's editor id, VendorItemPotion by its verified FormID). Out-param a_known
-        // false = no keyword in the list has a readable editor id (stripped by the runtime): the class cannot be judged, the caller keeps the
-        // pre-fix behaviour (the VEND keyword alone) rather than refusing every shop.
+        // false = no keyword in the list has a readable editor id (stripped by the runtime): the class cannot be judged; since 2026-10-26 (stock-only) the caller no longer
+        // falls back to the VEND keyword (a list without VendorItemPotion carries no potion keyword anyway, so nothing is lost).
         bool ApothecaryClass(const RE::TESFaction* a_fac, bool& a_known) {
             a_known = false;
             auto* vend = a_fac ? a_fac->vendorData.vendorSellBuyList : nullptr;
@@ -1398,13 +1398,16 @@ namespace MFO::Logistics::Errand {
             const RE::FormID kw = (k <= 2) ? kKwPotion : (k == 3 || k == 4 || k == 11) ? kKwArrow : (k == 10) ? kKwWeapon : 0u;
             if (kw && ListTrades(c.fac, kw)) t.needCarry |= 1u << k;
         }
-        {   // MISSED BUY: the potion kinds are covered only on EVIDENCE of stock (apothecary class, or this chest's last PlanBuy showed that kind)
+        {   // STOCK-ONLY (marth 2026-10-26): the potion kinds are bought only on EVIDENCE of stock (apothecary class, or this chest's last PlanBuy showed that
+            // kind); a chest last SEEN with 0 lines of the kind is no stock even for an apothecary list. No "VEND keyword is the only claim" fallback (an
+            // unjudgeable list cannot carry the potion keyword, so none is lost). Ammo has no apothecary-class analog: it keeps the VEND claim until a reading exists.
             bool known = false;
             const bool apoth = ApothecaryClass(c.fac, known);
             for (int k = 0; k <= 4; ++k) {
                 if (!((t.needCarry >> k) & 1u)) continue;
                 const bool potionKind = k <= 2;
-                if (!potionKind || apoth || !known || TradeBridge::LastSeenStockLines(c.chest, k) > 0) t.needStock |= 1u << k;
+                const std::int32_t lines = TradeBridge::LastSeenStockLines(c.chest, k);   // -1 unknown / stale
+                if (lines > 0 || (lines < 0 && (!potionKind || apoth))) t.needStock |= 1u << k;
             }
             for (int k = 5; k < 12; ++k) if ((t.needCarry >> k) & 1u) t.needStock |= 1u << k;
         }
@@ -1551,6 +1554,8 @@ namespace MFO::Logistics::Errand {
         if (deferred > 0) { later(1, false); return false; }   // a price quote is being computed on the main thread
         const auto wantKind = [&](std::int32_t k) { return std::any_of(needs.begin(), needs.end(), [&](const TradeBridge::NeedCat& n) { return n.kind == k; }); };
         std::size_t usable = 0;
+        int noStock = 0;   // (need, shop) pairs dropped for want of stock evidence
+        std::optional<ErrandPlanned> tmplOrd;
         for (auto& p : planned) {
             if (p.skipped) continue;
             // A shop's identity differs by who named it: the vendor actor (a loaded-vendor stop), the faction (a located shop) -- tried under either is tried.
@@ -1560,8 +1565,13 @@ namespace MFO::Logistics::Errand {
                 return Reopen::IsTried(fid, a_townId, k, p.vendorKey) || (cd && ((cd->actorId && Reopen::IsTried(fid, a_townId, k, cd->actorId)) ||
                                                                                  Reopen::IsTried(fid, a_townId, k, cd->fac->GetFormID())));
             };
+            if (!tmplOrd && !p.needs.empty()) tmplOrd = p;   // (the template a carried need is filed with; copied before the needs are trimmed)
+            const Trip::Cand stockCand = cd ? MakeTripCand(*cd, false, false) : Trip::Cand{};
             std::erase_if(p.needs, [&](const TradeBridge::NeedCat& n) {
-                return n.kind < 0 || n.kind > TradeBridge::NeedCat::kBolts || !wantKind(n.kind) || triedHere(n.kind);
+                // STOCK-ONLY (marth 2026-10-26): a shop is a buy stop for a need only with stock evidence (apothecary class / last-seen stock), never on its VEND keyword alone
+                if (n.kind < 0 || n.kind > TradeBridge::NeedCat::kBolts || !wantKind(n.kind) || triedHere(n.kind)) return true;
+                if (cd && !Trip::StockNow(stockCand, n.kind)) { ++noStock; return true; }
+                return false;
             });
             p.needKinds = 0;
             for (const auto& n : p.needs) p.needKinds |= 1u << n.kind;
@@ -1571,8 +1581,10 @@ namespace MFO::Logistics::Errand {
             if (p.needs.empty()) p.skipped = true; else ++usable;
         }
         if (usable == 0) {
-            spdlog::info("[errand] {:08X} '{}': LIVE NEED RE-CHECK ({}) -- still missing {} with {}g, but every open shop of the town-wide index was already tried for it this visit (or has nothing for it)",
-                         fid, NameOf(a_follower), a_site, want, gold);
+            if (noStock > 0 && tmplOrd)   // no stockist left in the town: no buy trip; the need waits in the carried list for the next town
+                for (const auto& n : needs) Reopen::NoteUnserved(fid, n, *tmplOrd);
+            spdlog::info("[errand] {:08X} '{}': LIVE NEED RE-CHECK ({}) -- still missing {} with {}g, but no open shop of the town-wide index is left that shows stock of it ({} shop/need pair(s) without stock evidence; the rest already tried this visit): no buy trip{}",
+                         fid, NameOf(a_follower), a_site, want, gold, noStock, noStock > 0 && tmplOrd ? ", carried to the next town" : "");
             later(0, true);
             return false;
         }

@@ -96,6 +96,9 @@ namespace MFO::Logistics::Errand::Reopen {
         // an order at a shop that evaluated as 'skipped'). SESSION-ONLY like the watch: nothing here is saved; guarded by g_mx.
         struct Carried { std::vector<TradeBridge::NeedCat> needs; ErrandPlanned tmpl; };
         std::unordered_map<RE::FormID, Carried>   g_carried;
+        // STOCK-ONLY BUY NEEDS (2026-10-26): needs Trip::Plan found NO stockist for in the town (NoteUnserved). Moved to g_carried when the player leaves the town
+        // (CarryAndClear). Session-only; guarded by g_mx.
+        std::unordered_map<RE::FormID, Carried>   g_unserved;
         // LIVE NEED RE-CHECK: the per-VISIT (kind, shop key) pairs a follower already tried, kept apart from any watch (a restored trip has none). town = the visit.
         struct LiveTried { RE::FormID town = 0; std::vector<std::pair<std::int32_t, RE::FormID>> pairs; };
         std::unordered_map<RE::FormID, LiveTried> g_liveTried;
@@ -270,7 +273,7 @@ namespace MFO::Logistics::Errand::Reopen {
                     }
                 }
                 if (said.empty()) return;
-                spdlog::info("[errand] {:08X}: MISSED BUY at '{}': {} -- not re-planned (no recorded plan for this town visit: a trip restored from the save)", a_follower, a_stop.vendorName, said);
+                spdlog::info("[errand] {:08X}: MISSED BUY at '{}': {} -- not re-planned by the watch (no recorded plan for this town visit: a trip restored from the save, or a LIVE NEED trip -- the live re-check handles it, never asking this shop again this visit)", a_follower, a_stop.vendorName, said);
                 return;
             }
             auto& w = it->second;
@@ -420,8 +423,8 @@ namespace MFO::Logistics::Errand::Reopen {
                                 : std::format("{:.1f} game days since the blocked trade, past the vendor restock ({:.0f})", days - g.day, TradeBridge::VendorRestockDays()),
                          g.order.sellRows, g.order.sellValue);
         }
-        // MISSED BUY: the unfilled remainder goes to the nearest OPEN candidate of the plan that carries the kind, never one already tried for it;
-        // candidates showing stock evidence come before VEND-keyword-only ones. A candidate already in `open` keeps the order it has.
+        // MISSED BUY: the unfilled remainder goes to the nearest OPEN candidate of the plan that shows STOCK EVIDENCE for the kind (Trip::StockNow; a VEND
+        // keyword alone is not a claim, marth 2026-10-26), never one already tried for it. A candidate already in `open` keeps the order it has.
         std::vector<std::pair<std::int32_t, RE::FormID>> buyServed;
         bool buyTried = false;
         if (!w.missed.empty() && w.buyReplans < kMaxBuyReplans && !w.openShops.empty()) {
@@ -430,17 +433,15 @@ namespace MFO::Logistics::Errand::Reopen {
             for (const auto& m : w.missed) {
                 if (m.kind < 0 || m.kind > 31) continue;
                 const Trip::Cand* best = nullptr;
-                bool bestStock = false;
                 float bestD = 0.0f;
                 for (const auto& c : w.openShops) {
-                    if (!((c.needCarry >> m.kind) & 1u)) continue;
+                    if (!Trip::StockNow(c, m.kind)) continue;
                     if (std::find(w.tried.begin(), w.tried.end(), std::pair<std::int32_t, RE::FormID>{ m.kind, c.key }) != w.tried.end()) continue;
                     if (std::any_of(open.begin(), open.end(), [&](const Trip::Cand& o) { return o.key == c.key; })) continue;
                     auto* fac = RE::TESForm::LookupByID<RE::TESFaction>(c.faction);
                     if (!fac || !detail::OpenAtHour(fac, hour)) continue;
-                    const bool stock = ((c.needStock >> m.kind) & 1u) != 0;
                     const float d = c.havePos ? w.in.from.GetDistance(c.pos) : c.dist;
-                    if (!best || (stock && !bestStock) || (stock == bestStock && d < bestD)) { best = &c; bestStock = stock; bestD = d; }
+                    if (!best || d < bestD) { best = &c; bestD = d; }
                 }
                 if (best) byShop[best->key].push_back(m);
             }
@@ -462,7 +463,7 @@ namespace MFO::Logistics::Errand::Reopen {
                 names += (names.empty() ? "'" : ", '") + c.name + "'";
                 std::string kinds;
                 for (const auto& n : it->second) kinds += std::format("{}{} {}", kinds.empty() ? "" : ", ", BuyKindName(n.kind), n.quota);
-                spdlog::info("[errand] {:08X}: MISSED BUY ready -- '{}' ({}) is open and its VEND carries it: planning a trip for {}", a_follower, c.name, c.key, kinds);
+                spdlog::info("[errand] {:08X}: MISSED BUY ready -- '{}' ({}) is open and shows stock of it: planning a trip for {}", a_follower, c.name, c.key, kinds);
             }
         }
         if (open.empty()) {
@@ -476,7 +477,7 @@ namespace MFO::Logistics::Errand::Reopen {
                         it->second.missed.clear();
                     }
                 }
-                spdlog::info("[errand] {:08X}: MISSED BUY {} dropped -- no other OPEN shop of this plan carries it (or every one was tried)", a_follower, kinds);
+                spdlog::info("[errand] {:08X}: MISSED BUY {} dropped -- no other OPEN shop of this plan shows stock of it (or every one was tried); carried to the next town", a_follower, kinds);
             }
             return false;
         }
@@ -535,7 +536,16 @@ namespace MFO::Logistics::Errand::Reopen {
         std::scoped_lock lk(g_mx);
         g_watch.clear();
         g_carried.clear();
+        g_unserved.clear();
         g_liveTried.clear();
+    }
+
+    void NoteUnserved(RE::FormID a_follower, const TradeBridge::NeedCat& a_need, const ErrandPlanned& a_tmpl) {
+        if (a_need.kind < 0 || a_need.kind > TradeBridge::NeedCat::kBolts || a_need.quota <= 0) return;
+        std::scoped_lock lk(g_mx);
+        auto& u = g_unserved[a_follower];
+        MergeKind(u.needs, a_need);
+        u.tmpl = a_tmpl;
     }
 
     void CarryAndClear() {
@@ -553,6 +563,17 @@ namespace MFO::Logistics::Errand::Reopen {
                 c.tmpl = w.missedTmpl;
                 said.emplace_back(fid, txt);
             }
+            for (auto& [fid, u] : g_unserved) {   // STOCK-ONLY: needs no shop of the town stocked
+                std::vector<TradeBridge::NeedCat> left = u.needs;
+                std::erase_if(left, [](const TradeBridge::NeedCat& n) { return n.quota <= 0 || n.kind < 0 || n.kind > TradeBridge::NeedCat::kBolts; });
+                if (left.empty()) continue;
+                auto& c = g_carried[fid];
+                std::string txt;
+                for (const auto& n : left) { MergeKind(c.needs, n); txt += std::format("{}{} {}", txt.empty() ? "" : ", ", BuyKindName(n.kind), n.quota); }
+                if (c.tmpl.vendorKey == 0 && c.tmpl.purse == 0) c.tmpl = u.tmpl;
+                said.emplace_back(fid, txt);
+            }
+            g_unserved.clear();
             g_watch.clear();
             g_liveTried.clear();   // the tried set belongs to the visit
         }
@@ -585,14 +606,18 @@ namespace MFO::Logistics::Errand::Reopen {
             });
             if (live) { spdlog::info("[errand] {:08X}: carried need {} {} is already a live need of this plan", a_follower, BuyKindName(n.kind), n.quota); continue; }
             const Trip::Cand* best = nullptr;
-            bool bestStock = false;
             for (const auto& cd : a_cands) {
-                if (!((cd.needCarry >> n.kind) & 1u)) continue;
-                const bool stock = ((cd.needStock >> n.kind) & 1u) != 0;
-                if (!best || (stock && !bestStock) || (stock == bestStock && cd.dist < best->dist)) { best = &cd; bestStock = stock; }
+                if (!Trip::StockNow(cd, n.kind)) continue;   // stock evidence only (a VEND keyword alone is not a claim)
+                if (!best || cd.dist < best->dist) best = &cd;
             }
-            if (!best) {
-                spdlog::info("[errand] {:08X}: carried need {} {} dropped -- no open shop of this town carries it", a_follower, BuyKindName(n.kind), n.quota);
+            if (!best) {   // no stockist in this town either: keep it for the next one (never dropped while his live count still shows it unmet)
+                {
+                    std::scoped_lock lk(g_mx);
+                    auto& u = g_unserved[a_follower];
+                    MergeKind(u.needs, n);
+                    u.tmpl = c.tmpl;
+                }
+                spdlog::info("[errand] {:08X}: carried need {} {} -- no open shop of this town shows stock of it: no buy trip, carried on to the next town", a_follower, BuyKindName(n.kind), n.quota);
                 continue;
             }
             ErrandPlanned o;
@@ -606,7 +631,7 @@ namespace MFO::Logistics::Errand::Reopen {
             }
             if (ex != a_planned.end()) *ex = std::move(o); else a_planned.push_back(std::move(o));
             ++applied;
-            spdlog::info("[errand] {:08X}: carried need {} {} FORCED into the plan at '{}' ({})", a_follower, BuyKindName(n.kind), n.quota, best->name, bestStock ? "stock evidence" : "VEND keyword only");
+            spdlog::info("[errand] {:08X}: carried need {} {} FORCED into the plan at '{}' (stock evidence)", a_follower, BuyKindName(n.kind), n.quota, best->name);
         }
         return applied;
     }
@@ -660,17 +685,15 @@ namespace MFO::Logistics::Errand::Reopen {
         int requeued = 0;
         for (const auto& m : w.missed) {
             if (m.kind < 0 || m.kind > TradeBridge::NeedCat::kBolts || m.quota <= 0) continue;
-            // (a) FOLD: a still-pending stop of this trip whose shop carries the kind and has not been tried for it. Stock-evidence stops first, then trip order.
+            // (a) FOLD: a still-pending stop of this trip whose shop SHOWS STOCK of the kind (a VEND keyword alone is not a claim) and has not been tried for it. Trip order.
             int foldAt = -1;
-            bool foldStock = false;
             for (std::size_t i = a_cur + 1; i < a_stops.size(); ++i) {
                 const Stop& st = a_stops[i];
                 if (st.kind != StopKind::Shop || st.state != StopState::Pending || !st.order) continue;
                 const RE::FormID key = key_of(st);
                 const Trip::Cand* c = cand_for(key, st.faction);
-                if (!c || !((c->needCarry >> m.kind) & 1u) || is_tried(m.kind, key) || !open_now(*c)) continue;
-                const bool stock = ((c->needStock >> m.kind) & 1u) != 0;
-                if (foldAt < 0 || (stock && !foldStock)) { foldAt = static_cast<int>(i); foldStock = stock; }
+                if (!c || !Trip::StockNow(*c, m.kind) || is_tried(m.kind, key) || !open_now(*c)) continue;
+                if (foldAt < 0) foldAt = static_cast<int>(i);
             }
             if (foldAt >= 0) {
                 Stop& st = a_stops[static_cast<std::size_t>(foldAt)];
@@ -688,11 +711,11 @@ namespace MFO::Logistics::Errand::Reopen {
                 triedNew.emplace_back(m.kind, key);
                 placed.push_back(m.kind);
                 ++requeued;
-                spdlog::info("[errand] {:08X}: IN-TRIP RE-QUEUE {} {} -> folded into the pending {} (its VEND carries it{}; trip purse left {}g >= the cheapest unit {}g)",
-                             a_follower, BuyKindName(m.kind), m.quota, Trip::Label(a_stops, static_cast<std::size_t>(foldAt)), foldStock ? ", stock evidence" : "", a_purseLeft, minUnit);
+                spdlog::info("[errand] {:08X}: IN-TRIP RE-QUEUE {} {} -> folded into the pending {} (stock evidence; trip purse left {}g >= the cheapest unit {}g)",
+                             a_follower, BuyKindName(m.kind), m.quota, Trip::Label(a_stops, static_cast<std::size_t>(foldAt)), a_purseLeft, minUnit);
                 continue;
             }
-            // (b) INSERT: the best open untried candidate of the plan that is in no stop of this trip yet, before the first non-shop stop (the inn).
+            // (b) INSERT: the best open untried candidate of the plan WITH STOCK EVIDENCE that is in no stop of this trip yet, before the first non-shop stop (the inn).
             std::size_t shopStops = 0;
             for (const auto& st : a_stops) if (st.kind == StopKind::Shop) ++shopStops;
             if (a_stops.size() >= kMaxTripStops || shopStops >= kMaxShopStops) {
@@ -701,13 +724,11 @@ namespace MFO::Logistics::Errand::Reopen {
             }
             std::vector<const Trip::Cand*> order;
             for (const auto& c : w.openShops) {
-                if (!((c.needCarry >> m.kind) & 1u) || is_tried(m.kind, c.key) || !open_now(c)) continue;
+                if (!Trip::StockNow(c, m.kind) || is_tried(m.kind, c.key) || !open_now(c)) continue;
                 if (std::any_of(a_stops.begin(), a_stops.end(), [&](const Stop& st) { return st.kind == StopKind::Shop && (key_of(st) == c.key || st.faction == c.faction); })) continue;
                 order.push_back(&c);
             }
             std::stable_sort(order.begin(), order.end(), [&](const Trip::Cand* a, const Trip::Cand* b) {
-                const bool sa = ((a->needStock >> m.kind) & 1u) != 0, sb = ((b->needStock >> m.kind) & 1u) != 0;
-                if (sa != sb) return sa;
                 const float da = a->havePos ? a_from.GetDistance(a->pos) : a->dist, db = b->havePos ? a_from.GetDistance(b->pos) : b->dist;
                 return da < db;
             });
@@ -733,13 +754,13 @@ namespace MFO::Logistics::Errand::Reopen {
                 placed.push_back(m.kind);
                 ++requeued;
                 done = true;
-                spdlog::info("[errand] {:08X}: IN-TRIP RE-QUEUE {} {} -> INSERTED {} (open, its VEND carries it{}; {}; trip purse left {}g >= the cheapest unit {}g)",
-                             a_follower, BuyKindName(m.kind), m.quota, Trip::Label(a_stops, at), ((c->needStock >> m.kind) & 1u) ? ", stock evidence" : "",
+                spdlog::info("[errand] {:08X}: IN-TRIP RE-QUEUE {} {} -> INSERTED {} (open, stock evidence; {}; trip purse left {}g >= the cheapest unit {}g)",
+                             a_follower, BuyKindName(m.kind), m.quota, Trip::Label(a_stops, at),
                              at + 1 < a_stops.size() ? "before the later stops (the inn last)" : "at the end of the trip", a_purseLeft, minUnit);
                 break;
             }
             if (!done)
-                spdlog::info("[errand] {:08X}: IN-TRIP RE-QUEUE {} {} -- no other OPEN shop of this plan carries it that was not tried (left for the hourly watch / the carry)", a_follower, BuyKindName(m.kind), m.quota);
+                spdlog::info("[errand] {:08X}: IN-TRIP RE-QUEUE {} {} -- no other OPEN shop of this plan shows stock of it that was not tried (left for the carry to the next town)", a_follower, BuyKindName(m.kind), m.quota);
         }
         if (requeued > 0 || !triedNew.empty()) {
             std::scoped_lock lk(g_mx);

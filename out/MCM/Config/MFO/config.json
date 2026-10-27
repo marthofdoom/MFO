@@ -127,7 +127,7 @@
         {
           "text": "Animated casts out of combat",
           "type": "text",
-          "help": "An out-of-combat heal, buff or summon can also play the real animation, through a combat substrate that Harbinger provides. It needs Harbinger and it is OFF by default. It has no MCM toggle. The switch is bSubstrateCasts in the Debug section of MFO.ini. When it is on, a cast is never made while you sneak, and a refused cast is skipped and logged, never sent down the instant path. Hostile out-of-combat casts and concentration spells are not part of it.",
+          "help": "An out-of-combat heal, buff or summon can also play the real animation, through a combat substrate that Harbinger provides. It needs Harbinger and it is ON by default. It has no MCM toggle. The switch is bSubstrateCasts in the Debug section of MFO.ini (set it to 0 to turn it off). When it is on, a cast is never made while you sneak, and a refused cast is skipped and logged, never sent down the instant path. Hostile out-of-combat casts and concentration spells are not part of it.",
           "valueOptions": {
             "value": "Harbinger / off"
           }

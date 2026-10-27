@@ -6,10 +6,13 @@
 //      the B300 convergence penalty (kCrowdPenalty per OTHER follower whose trip is heading to that chest). A candidate whose
 //      share does not clear the phase-1 sell reason (>= iErrandMinSellGold, or carry > 80 %) hands its rows to a stop that does;
 //      once every stop is chosen, a row no visited stop owns goes to the visited stop that pays the most for it.
-//   2. NEEDS (supply gambits) go to the FIRST stop in visit order that carries the category WITH EVIDENCE OF STOCK (Cand::needStock: a
-//      VEND keyword only says what a vendor BUYS, so for the potion kinds that is an apothecary-class list or a last-seen stock of the
-//      kind at that chest); a need no chosen stop covers adds the nearest (least crowded) candidate that does. When NO candidate shows
-//      evidence the VEND keyword alone decides, as before, and the MISSED BUY watch (ErrandReopen.cpp) re-plans a miss.
+//   2. NEEDS (supply gambits) go to the FIRST stop in visit order that carries the category WITH EVIDENCE OF STOCK (StockNow / Cand::needStock:
+//      a VEND keyword only says what a vendor BUYS, so for the potion kinds that is an apothecary-class list or a last-seen stock of the
+//      kind at that chest; a chest last seen with 0 lines of it is NOT stock); a need no chosen stop covers adds the nearest (least crowded)
+//      candidate that does. STOCK-ONLY (marth 2026-10-26: "skip stores with no stock of whats needed, but consider stores for selling only"):
+//      a shop with no stock evidence is never ADDED as a stop for a buy need. If a SELL stop is already chosen and its VEND carries the kind,
+//      the need rides it for free (a try, no extra stop). With neither, the need is UNSERVED: no buy trip, and Reopen::NoteUnserved files it
+//      for the next town's carry. The MISSED BUY watch (ErrandReopen.cpp) re-plans a miss, again only to stock-evidence shops.
 //   3. WISHES (gear / apparel = BuyThresholds::buyGear, tomes = buyTomes) go to ONE stop each; an extra stop is added for a
 //      wish only when the purse clears iErrandMinPurse (the phase-1 wish reason).
 //   4. ORDER: nearest-neighbour from the follower, stops WITHOUT a wish first, then the wish stops ("needs first, then wishes":
@@ -36,6 +39,16 @@
 #include <spdlog/spdlog.h>
 
 namespace MFO::Logistics::Errand::Trip {
+
+    bool StockNow(const Cand& a_c, std::int32_t a_kind) {
+        if (a_kind < 0 || a_kind > 31) return false;
+        if (a_kind <= TradeBridge::NeedCat::kBolts && a_c.chest) {
+            const std::int32_t lines = TradeBridge::LastSeenStockLines(a_c.chest, a_kind);
+            if (lines == 0) return false;   // seen this visit with nothing of the kind: never a buy stop for it again (even an apothecary-class list)
+            if (lines > 0) return ((a_c.needCarry >> a_kind) & 1u) != 0;
+        }
+        return ((a_c.needStock >> a_kind) & 1u) != 0;
+    }
 
     namespace {
         // B300: what one OTHER follower already heading to a chest costs that chest in the plan, in gold-equivalent (the same
@@ -271,17 +284,28 @@ namespace MFO::Logistics::Errand::Trip {
         std::uint32_t unserved = 0;
         for (int k = 0; k < 32; ++k) {
             if (!((needKinds >> k) & 1u)) continue;
-            const auto stocks = [&](int i) { return ((use[i].c->needStock >> k) & 1u) != 0; };
+            const auto stocks = [&](int i) { return StockNow(*use[i].c, k); };
             const auto carries = [&](int i) { return ((use[i].c->needCarry >> k) & 1u) != 0; };
             bool have = false;
             for (int i = 0; i < static_cast<int>(use.size()) && !have; ++i) have = use[i].chosen && stocks(i);
             if (!have) have = addNearest(stocks) >= 0;
-            if (!have) {   // no candidate shows stock evidence for this kind: the VEND keyword alone decides (unproven)
-                for (int i = 0; i < static_cast<int>(use.size()) && !have; ++i) have = use[i].chosen && carries(i);
-                if (!have) have = addNearest(carries) >= 0;
-                if (!have) unserved |= 1u << k;
-                else if (k <= 2) spdlog::info("[errand] {:08X}: need kind {} has NO stock evidence at any usable candidate (no apothecary-class list, no last-seen stock) -- a VEND keyword is the only claim; a miss re-plans (MISSED BUY)",
-                                              a_in.follower, k);
+            if (!have) {   // no candidate shows stock evidence for this kind: NO buy stop is added for it (stock-only)
+                for (int i = 0; i < static_cast<int>(use.size()) && !have; ++i) have = use[i].chosen && carries(i);   // a planned SELL stop may try it for free
+                if (have) {
+                    spdlog::info("[errand] {:08X}: need kind {} has NO stock evidence at any usable candidate -- tried for free at a stop already planned for selling (no extra stop)", a_in.follower, k);
+                } else {
+                    unserved |= 1u << k;
+                    TradeBridge::NeedCat nc{ k, 0 };
+                    const ErrandPlanned* tmpl = nullptr;
+                    for (const auto& p : a_planned)
+                        for (const auto& n : p.needs)
+                            if (n.kind == k && n.quota > 0) { nc.quota = std::max(nc.quota, n.quota); if (!tmpl) tmpl = &p; }
+                    if (tmpl && k <= TradeBridge::NeedCat::kBolts) {
+                        Reopen::NoteUnserved(a_in.follower, nc, *tmpl);
+                        spdlog::info("[errand] {:08X}: need kind {} {} has NO stock evidence at any usable candidate (no apothecary-class list, no last-seen stock) -- no buy trip; carried to the next town",
+                                     a_in.follower, k, nc.quota);
+                    }
+                }
             }
         }
         // ── 3. WISHES: one stop each; a new stop only when the purse clears iErrandMinPurse ──
@@ -336,7 +360,7 @@ namespace MFO::Logistics::Errand::Trip {
             if (!((needKinds >> k) & 1u) || ((unserved >> k) & 1u)) continue;
             bool placed = false;
             for (const int i : order)
-                if ((use[i].c->needStock >> k) & 1u) { use[i].needs |= 1u << k; placed = true; break; }
+                if (StockNow(*use[i].c, k)) { use[i].needs |= 1u << k; placed = true; break; }
             if (!placed)
                 for (const int i : order)
                     if ((use[i].c->needCarry >> k) & 1u) { use[i].needs |= 1u << k; break; }
