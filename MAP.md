@@ -2334,9 +2334,10 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
   group, `Evaluator.cpp:176`) and is logged once per fight `[sched] <id>: party
   combat, own combat=0 -- combat table live` (`:574`, latch `g_partyCombatNoted`,
   erased in the party-OOC branch). **`[stall-probe]` (PASSIVE, `fix/mfo-field-0929`, `StallProbe`
-  `Scheduler.cpp:261`, called at `:1049`):** while party combat is ON and the follower's own combat is OFF,
+  `Scheduler.cpp:279`):** while party combat is ON and the follower's own combat is OFF,
   one line per follower per 2 s: distance moved and u/s (position deltas), dPlayer, running
-  package + `packData.packType`, and the player's combat flag + `currentCombatTarget` (handle resolve). Engine
+  package + `packData.packType`, `down=` his own life state (bleedout / essential down / no; a plain
+  `GetLifeState` load, fix/mfo-nopath-giveup 2026-10-27), and the player's combat flag + `currentCombatTarget` (handle resolve). Engine
   reads on the worker: `GetCurrentPackage`, the player's `currentCombatTarget` handle, `IsInCombat` (same worker
   precedents as `Scheduler.cpp:429` / Targeting); no engine writes.
   **`[deadtgt]` (PASSIVE, `diag/mfo-dead-target`, ClickUp 86e3eb078, `DeadTgtService` `Scheduler.cpp` ~:290, called right after `StallProbe`; closed by `DeadTgtEnd` in the party-OOC teardown, cleared on revert):** per follower with OWN combat on whose engine `currentCombatTarget` (worker read, same as the quash backstop) is not alive (`CannotActReason` down states + `IsDead`; knockdown/paralysis excluded): one line at first sighting, then <=1/s, plus a closing line with total ms. Shows MFO latched (`Targeting::Current`), ch.6 intended (`APMFBridge::GetCombatTargetClaim`, new read-only getter, `apmf/Excursion.cpp`), pinned, and non-idle `magicCasters[]` slots. Grep `[deadtgt]`. Changes no behaviour; one caveat: its `Targeting::Current` read can, on the pin route, be the call that detects an ended Harbinger pin and releases it (up to one pump before `SweepTargetPinsLocked` would). Windows are also closed when the follower goes down/disabled or is switched off.
@@ -2559,6 +2560,15 @@ it does not, owns suppression + retreat/loot teardown. Runs on the AddTask worke
 MFO's adoption of Harbinger ch.21 (ClickUp 86e3errnu). Not a Gambit record (not in the board list,
 not editable); `bEngageOnSight` (default OFF) is its only control. Contract, threads and the no-loop
 rule in the header. Called only from the Scheduler hook above.
+- **fix/mfo-nopath-giveup (marth 2026-10-27):** with Harbinger ABI >= 31 `Service` (`:597`) reads the entry's END
+  REASON (`CombatEntryStateOf(.., &endWhy)`, branch `:609`) instead of guessing a range drop: a NOT ENGAGED / NO PATH
+  PROGRESS end is NOT put in `givenUp` (the bridge already gave it up at the moment the sweep noticed it, lifts on
+  state only: `apmf/CombatEntry.cpp` "ABI v31" below), every other end joins `givenUp` as before. The range-drop guess
+  below is the ABI-30 branch only. `PostProbe` (`:573`) adds `APMFBridge::EngageGiveUpsOf` to the probe's skip list
+  (`:586`), the engage step checks `EngageGivenUp` again, `Forget` (`:814`) calls `ForgetEngageGiveUps`. `IsEnemy`
+  (`:359`): the skip list (`IsNonCombatant`, giants / mammoths ...) now bars EVERY branch including the engine's
+  `IsHostileToActor` (`:384`, before it); `FightingParty` still admits one that is fighting the party. Line numbers in
+  the older bullets below are pre-branch.
 - `Service` (`:392`, WORKER) in order: (1) his ch.21 entry (`APMFBridge::CombatEntryStateOf`):
   Standing -> return true (pending); Ended (`:403`) -> the target joins `givenUp`, the pin this
   gambit filed (`Note::pinned`) is released via `ReleaseOwnPin` (`:155`) only if Targeting still
@@ -2590,7 +2600,7 @@ rule in the header. Called only from the Scheduler hook above.
   2026-09-26; logged in the ENGAGE line), and `IsEnemy` (`:229`): not commanded
   by the player or a teammate, nor by a crime-faction commander unless it or the commander is
   fighting the party (`FightingParty` `:189`); not restrained / bleeding out / on an IgnoreCombat package;
-  **ENEMY = GAME'S HOSTILITY + TERRITORIAL** (marth 2026-10-12; replaces the Aggression gate; field: LoreRim/Requiem sets skeevers, wolves and bears to Aggression 0, territorial by aggro radius, and LoreRim's faction data names almost no enemies, so a faction-Enemy-only test a40e2c3 was BLOCKED): `IsEnemy` -- `FightingParty` OR `IsHostileToActor(player)` OR `IsHostileToActor(him)` OR `IsTerritorial` (Aggression AV 0 + `TESNPC::aiData.aggroRadiusBehaviour` + non-zero `aggroRadius[kWarnAndAttack|kAttack]` + `ReactionOf` NOT Ally/Friend to EITHER the player or him; `ReactionOf` = data-only stand-in for the engine's one-direction GetFactionReaction: rank<0 factions skipped, no entry = Neutral, Ally/Friend overrides Enemy; relationship ranks NOT modelled, `BGSRelationship::GetRelationship` is an unverified id call). Never engaged proactively unless `FightingParty`: Confidence 0 (`ConfidenceOf`), any crime-faction actor, and -- for the TERRITORIAL term ONLY, never for an actor the engine already judges hostile -- `IsNonCombatant` (factions / races from `Config::g_engageOnSightSkip` = INI `sEngageOnSightSkip`, `Plugin|0xLOCALID` or EditorID, resolved once in `SkipSetOnce`; default giants, mammoths, carriage drivers, ferry, servants, merchants, generic-crime townsfolk, prisoners, Blackreach servants), any crime-faction actor. Every skip is logged per actor (`NoteSkip`: FormID, reason, aggression, confidence), one line per actor per 30 s, map capped at 512. The ENGAGE line still carries the target's aggression and "(unaggressive, but fighting the party: counts)". `IsEnemy` and its helpers run on the main thread (RunProbe) OR the worker (Service's range-drop test), so they must touch no main-thread-only state; `NoteSkip` stays main-thread only and Service must never call it. Open review findings: Docs/REVIEW-BACKLOG.md MFO-B251, MFO-B258..B261.
+  **ENEMY = GAME'S HOSTILITY + TERRITORIAL** (marth 2026-10-12; replaces the Aggression gate; field: LoreRim/Requiem sets skeevers, wolves and bears to Aggression 0, territorial by aggro radius, and LoreRim's faction data names almost no enemies, so a faction-Enemy-only test a40e2c3 was BLOCKED): `IsEnemy` -- `FightingParty` OR `IsHostileToActor(player)` OR `IsHostileToActor(him)` OR `IsTerritorial` (Aggression AV 0 + `TESNPC::aiData.aggroRadiusBehaviour` + non-zero `aggroRadius[kWarnAndAttack|kAttack]` + `ReactionOf` NOT Ally/Friend to EITHER the player or him; `ReactionOf` = data-only stand-in for the engine's one-direction GetFactionReaction: rank<0 factions skipped, no entry = Neutral, Ally/Friend overrides Enemy; relationship ranks NOT modelled, `BGSRelationship::GetRelationship` is an unverified id call). Never engaged proactively unless `FightingParty`: Confidence 0 (`ConfidenceOf`), any crime-faction actor, and (since 2026-10-27 on EVERY branch, the engine's hostility included; before that the TERRITORIAL term only) `IsNonCombatant` (factions / races from `Config::g_engageOnSightSkip` = INI `sEngageOnSightSkip`, `Plugin|0xLOCALID` or EditorID, resolved once in `SkipSetOnce`; default giants, mammoths, carriage drivers, ferry, servants, merchants, generic-crime townsfolk, prisoners, Blackreach servants), any crime-faction actor. Every skip is logged per actor (`NoteSkip`: FormID, reason, aggression, confidence), one line per actor per 30 s, map capped at 512. The ENGAGE line still carries the target's aggression and "(unaggressive, but fighting the party: counts)". `IsEnemy` and its helpers run on the main thread (RunProbe) OR the worker (Service's range-drop test), so they must touch no main-thread-only state; `NoteSkip` stays main-thread only and Service must never call it. Open review findings: Docs/REVIEW-BACKLOG.md MFO-B251, MFO-B258..B261.
   Engage-on-sight ONLY: the in-combat target pickers (`Evaluator.cpp`) are deliberately untouched
   (marth's call);
   Enemy by faction to the player OR to him (hostile to him alone counts: CONFIRMED by
@@ -6330,6 +6340,9 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     re-chooses an ended pin's foe it is re-pinned only if that pin had gone LIVE (the selector
     skips dead / disabled / lost / 3D-unloaded foes, so being re-chosen = trackable again); an
     ended pin that never went live is `Suppressed` until the gambit chooses a DIFFERENT foe.
+    ABI >= 31 (fix/mfo-nopath-giveup): a pin Harbinger ended as NOT ENGAGED / NO PATH PROGRESS is NOT re-pinned
+    whatever everLive says: `PinEndedLocked` (`:212`) records the give-up and `PinTarget` (`:252`) asks
+    `EngageGivenUp` (`:272`) first and returns `Suppressed` (details under `apmf/CombatEntry.cpp` below).
     `ReleaseTargetPin` (`:296`), `ReleaseAllTargetPins` (`:307`), `PinnedTarget` (`:312`, empty
     once ended — feeds `Targeting::Current`, so the retarget hesitation does not stall on a dead
     pin), `TargetPinCount` (`:322`, the Diagnostics targeting line), `SweepTargetPinsLocked`
@@ -6371,7 +6384,33 @@ log line if APMF is absent/old — MFO then runs the legacy cast hybrid, byte-id
     only no-re-ask rule and the pin's no-loop rule is unchanged, except: (R3-1) `Service` starts an engagement only
     within `kStartRangeMargin` (0.9) x `r.range` while sending the full range as `fval`; a ch.21 end where the target
     is alive, still `IsEnemy` and beyond `Note::engageRange` is a RANGE DROP and is NOT added to `givenUp` (logged once). A pin may now end with "no longer a combat target (it was one)",
-    not only lost/dead; nothing in MFO relies on the old set.
+    not only lost/dead; nothing in MFO relies on the old set. (That range-drop guess is now the ABI-30 path only, below.)
+    **ABI v31 CLAIM END REASON + THE NOT-ENGAGED GIVE-UP (fix/mfo-nopath-giveup, marth 2026-10-27; field: Auri re-pinned
+    a Sabre Cat she could not path to 47 ms after Harbinger's no-path watchdog ended the hold).** `APMF_API.h` mirrored
+    from Harbinger ce1614b (`APMF_API_v31 : APMF_API_v29` + `GetClaimEndReason`). `ClaimEndReasonOf` (`:307`, internal)
+    reads it only when the live APMF is ABI >= 31, else `kClaimEnd_None` and one "[engage-give-up] ... older than 31" line
+    per session (THE DOCUMENTED DEGRADE: 0.15.1 / ABI 30 keeps today's rules). `EntryEndedLocked` and the pin table's
+    `PinEndedLocked` read the reason BEFORE their Release, print it in their ENDED line, keep it (`CombatEntryClaim::endReason`,
+    out through `CombatEntryStateOf`'s new optional `a_outEndReason`), and on `kClaimEnd_NotEngaged` / `kClaimEnd_NoPathProgress`
+    (`IsNotEngagedEnd`) call `RecordEngageGiveUp` (`:350`): the target is GIVEN UP for that follower at the moment the
+    sweep notices the end, on ANY lap (the old record ran only on engage-on-sight's party-OOC laps). The registry
+    (`g_giveUps`, follower -> up to 16 records {target, position, reason, fighting / hostile as last seen}) has its OWN LEAF
+    mutex `g_giveUpMx` (order g_mx -> g_giveUpMx; it never takes g_mx). `EngageGivenUp` (`:380`) / `EngageGiveUpsOf`
+    (`:397`) run the LIFT check on a copy without the leaf lock (`Judge` `:247`): lift when the target moved more than
+    `kGiveUpMoveU` 512u from where it was given up, or on a RISING edge of `FightingPartyNow` (its currentCombatTarget is
+    the player or a teammate) or of hostility to the player / him (`IsHostileToActor`); dead / disabled / unresolvable =
+    dropped. No timer anywhere (marth: "no waiting ever"). One `[engage-give-up]` line per give-up, lift and drop.
+    `ForgetEngageGiveUps` (`:415`, from `EngageOnSight::Forget`), `ClearEngageGiveUps` (`:375`, from `ClearTransientState`
+    `Bridge.cpp:1260`). Consumers: `PinTarget` (`Excursion.cpp:272`, after the pin is judged, so an end noticed by that
+    call is already recorded) returns `Suppressed` for a given-up target, own foe or a new choice (logged once per
+    give-up), BEFORE the no-loop re-pin; engage-on-sight's probe skips them (`PostProbe` `EngageOnSight.cpp:586`) and
+    `Service` checks again before filing. **What breaks:** reading the reason after the handle is dropped (the record is
+    keyed by handle); a lift on time; lifting on the plain "is fighting the party" state instead of its rising edge (the
+    unreachable cat still targets the follower when it is given up: an immediate re-engage, the old loop); calling an
+    engine read with `g_giveUpMx` held; reading `GetClaimEndReason` without the `abiVersion >= 31` gate (a v30 struct
+    has no slot). Known, out of this branch's files: the in-combat foe pickers (`Evaluator.cpp`) still choose a given-up
+    foe, so a rule that keeps choosing it gets `Suppressed` (Fire.cpp's opaque NoOp, its text still says "until the
+    gambit picks another foe").
   - `apmf/ReentryDeny.cpp` (235, NEW, feat/mfo-reentry-leash 2026-09-25, ClickUp 86e3ex5v9) = the
     **ch.22 COMBAT RE-ENTRY DENY** table (ABI v15 `kIntent_CombatReentryDeny`), the retreat's half of
     Harbinger's recipe "StopCombat once + deny re-entry". File-local `g_denies` under its OWN
