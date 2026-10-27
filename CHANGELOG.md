@@ -10,10 +10,10 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 Needs Harbinger v0.15.1.
 
 - **Out of combat animated casts are ON by default.** A heal, buff or summon cast out of combat now plays the real hand animation through Harbinger's combat substrate. `bSubstrateCasts` is now 1. This needs Harbinger v0.15.1. Without it, or with the setting at 0, casts use the old road.
-- **A failed cast no longer locks the spell out.** A substrate cast no longer starts the follower wide recast wait when it is filed. The follower whose cast did not fire goes first on the next lap, so the missed target is served before the others.
+- **A failed cast no longer locks the spell out.** A substrate cast no longer starts the follower wide recast wait when it is filed. A target whose cast did not fire goes first on the next lap, so the missed target is served before the others.
 - **A refused cast says why.** Every refused cast now logs its reason.
 - **A shop counts only if its vendor would trade now.** MFO asks the game whether the vendor offers services at this moment, and uses the shop relative merchant job. A vendor who is loaded is judged the same way. A walk is never measured across two spaces.
-- **Potions need stock evidence.** A shop is a buy stop for potions, food or other supplies only when it is an apothecary or has been seen with stock. A chest seen with nothing in it is not stock. A need with no stockist is carried to the next town.
+- **Potions need stock evidence.** A shop is a buy stop for potions only when it is an apothecary or has been seen with stock. A chest seen with nothing in it is not stock. A need with no stockist is carried to the next town.
 - **Potions are capped at half the trip purse.** All potion kinds share one half purse budget, and the materials pass takes half of what is left.
 - **Shops without stock are still used for selling.** They are skipped for buying only.
 - **Blacksmiths and archery shops sell ammo.** They rank above a shop that only has a vendor claim for arrow and bolt buy stops.
