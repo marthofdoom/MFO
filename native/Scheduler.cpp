@@ -1531,7 +1531,8 @@ namespace MFO::Scheduler {
                 if (forced == CombatStyle::Stance::Cast) {
                     if (Config::g_castControl.load() > 0) CombatStyle::Want(id, forced);
                 } else if (Config::g_weaponStyleControl.load()) {
-                    CombatStyle::Want(id, forced);
+                    CombatStyle::Want(id, forced, false,
+                                      forced == CombatStyle::Stance::Melee && Logistics::CombatStyleFor(f, it->second).offHand == 2);
                 }
             }
             serviceOwnOoc(/*castFacetHeld=*/false);   // no combat rules -> no cast rule can hold the facet -> the OOC road runs
@@ -1974,8 +1975,15 @@ namespace MFO::Scheduler {
                 }
             }
         }
-        if (stance != CombatStyle::Stance::None)
-            CombatStyle::Want(id, stance, stanceIsEquipOrder);
+        if (stance != CombatStyle::Stance::None) {
+            // DUAL-WIELD GATE (marth 2026-10-27, perk/class gated): the melee stance allows the engine AI to dual
+            // wield (MFO_MeleeStyle, kAllowDualWielding) ONLY for a follower whose perks vote dual wield -- the same
+            // offHand == 2 predicate that fills his left hand (cast/Equip.cpp). Everyone else gets the single-weapon
+            // twin, so an unperked follower carrying two one-handers is not AI-dual-wielded.
+            const bool allowDual = stance == CombatStyle::Stance::Melee &&
+                                   Logistics::CombatStyleFor(f, it->second).offHand == 2;
+            CombatStyle::Want(id, stance, stanceIsEquipOrder, allowDual);
+        }
 
         // T#76: EQUIP FORCE-HOLD / STANCE-CLAMP LIFECYCLE (gambit TRUE -> FALSE).
         // While the equip gambit's condition held this tick, `equipHeld` names

@@ -63,6 +63,8 @@ FID_CAST_STYLE      = OWN | 0x832  # P1 PROBE: caster-forward CSTY the DLL swaps
 FID_MELEE_STYLE     = OWN | 0x833  # melee-dominant CSTY: swapped in when act.equip_melee
                                    # wins the hand so the AI stops re-drawing the bow (v1.0.33)
 FID_RANGED_STYLE    = OWN | 0x834  # ranged-dominant CSTY: swapped in for act.equip_ranged
+FID_MELEE_SINGLE_STYLE = OWN | 0x916  # MFO_MeleeStyle's twin WITHOUT kAllowDualWielding: the melee stance of every
+                                   # follower whose perks do not vote dual wield (dual-wield gate, 2026-10-27)
 # FORCED SELF-CAST (Docs/SPEC-self-cast-forced.md): the dedicated no-QNAM
 # targType-6 self package, delivered by the command quest's own alias 2. §0.22
 # proved probe 6's t6+no-QNAM self-cast CASTS cleanly (and REVOKED #67); the
@@ -116,14 +118,14 @@ FID_ERRAND_SANDBOX_0  = OWN | 0x90A   # 0x90A-0x90D
 FID_ERRAND_EAT_0      = OWN | 0x90E   # 0x90E-0x911
 FID_ERRAND_SLEEP_0    = OWN | 0x912   # 0x912-0x915
 ERRAND_WORK_SLOTS     = 4
-NEXT_OBJECT_ID     = 0x916         # first never-used local id (0x916 since R7: the sixteen work packages are always emitted;
+NEXT_OBJECT_ID     = 0x917         # first never-used local id (0x916 since R7: the sixteen work packages are always emitted;
                                    # was 0x904. 0x836-0x839 = APMF loot-travel packages,
                                    # 0x83A = APMF retreat package, 0x83B/0x83C = retired (see above),
                                    # 0x900-0x902 = P7 travel packages, 0x903 = MFO_LOTDDetected)
                                    # 0x904/0x905 are CLAIMED by the lockpick SNDRs (Forms.h) but only
                                    # emitted once LOCKPICK_SNDR_PENDING is complete; main() then writes
                                    # NEXT_OBJECT_ID_WITH_SNDR into the header.
-NEXT_OBJECT_ID_WITH_SNDR = 0x916
+NEXT_OBJECT_ID_WITH_SNDR = 0x917
 
 # Vanilla refs
 FREF_EQUP_VOICE = 0x00025BEE       # EQUP "Voice" — required ETYP on a lesser power
@@ -1264,6 +1266,12 @@ def make_csty():
     CSCR_RANGED = bytes.fromhex('6666e63e6666263fcdcc4c3ecdcc4c3e')  # csHumanMissile   0003BE1D: circle 0.45 / fallback 0.65
     cast   = _csty_record("MFO_CastStyle",   FID_CAST_STYLE,
                           (1.0, 0.5, 1.0, 0.1, 10.0, 0.2, 1.0, 0.1, 1.0, 0.2), CSCR_MAGE)
+    # DUAL-WIELD GATE (marth 2026-10-27, "perk/class gated"): the paragraph below
+    # described the 2026-09-13 global exposure. It is closed: MFO_MeleeStyle (0x833,
+    # DATA 1|4) is now swapped in ONLY for a follower whose perks vote dual wield
+    # (Scheduler.cpp -> CombatStyle::Want a_allowDual); every other forced-melee
+    # follower gets MFO_MeleeSingleStyle (0x916), byte-identical to the melee style
+    # except DATA = 1 (dueling only).
     # MFO_MeleeStyle DATA = dueling | ALLOW DUAL WIELDING (1 | 4 = 5, the exact
     # word csThalmorMeleeDual / csAlikrBerserker carry). 2026-09-13, weapon style
     # by perks: the engine dual-wields an NPC only under a style that allows it,
@@ -1280,9 +1288,11 @@ def make_csty():
     melee  = _csty_record("MFO_MeleeStyle",  FID_MELEE_STYLE,
                           (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0), CSCR_MELEE,
                           data_flags=1 | 4)
+    single = _csty_record("MFO_MeleeSingleStyle", FID_MELEE_SINGLE_STYLE,
+                          (1.0, 0.5, 1.0, 10.0, 0.1, 0.1, 1.0, 0.1, 0.1, 0.0), CSCR_MELEE)
     ranged = _csty_record("MFO_RangedStyle", FID_RANGED_STYLE,
                           (1.0, 0.5, 1.0, 0.1, 0.1, 10.0, 1.0, 0.1, 0.1, 0.5), CSCR_RANGED)
-    return group('CSTY', cast + melee + ranged)
+    return group('CSTY', cast + melee + ranged + single)
 
 
 # ── SNDR: positional lockpick sounds ────────────────────────────────────────
@@ -2139,6 +2149,7 @@ def main():
     print(f"  CSTY  0x{FID_CAST_STYLE & 0xFFF:03X}        MFO_CastStyle (P1 probe: caster-forward, bProbeCastStyle-gated)")
     print(f"  CSTY  0x{FID_MELEE_STYLE & 0xFFF:03X}        MFO_MeleeStyle (equip_melee stance -- default ON)")
     print(f"  CSTY  0x{FID_RANGED_STYLE & 0xFFF:03X}        MFO_RangedStyle (equip_ranged stance -- default ON)")
+    print(f"  CSTY  0x{FID_MELEE_SINGLE_STYLE & 0xFFF:03X}        MFO_MeleeSingleStyle (melee stance without kAllowDualWielding)")
     if sndr:
         for fid, spec in sorted(LOCKPICK_SNDR_PENDING.items()):
             print(f"  SNDR  0x{fid & 0xFFF:03X}        {spec['edid']} (copy of {spec['source']}, "

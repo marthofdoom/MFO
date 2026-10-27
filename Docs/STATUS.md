@@ -1368,14 +1368,7 @@ Read it as history and this block as current.
   weapon. **KNOWN GAP (open, other agent's files):** the economy keep buckets keep
   ONE 1H form, so a DIFFERENT second one-hander SELLS at the next vendor, and loot
   never FETCHES a second one-hander — the left hand only pairs what the pack already
-  holds. **⚠ OPEN DECISION FOR MARTH — the CSTY `kAllowDualWielding` EXPOSURE, NOT
-  decided, NOT implemented:** the flag is GLOBAL to every follower MFO forces into
-  melee. An UNPERKED follower who happens to carry two one-handers may be dual-wielded
-  by its OWN AI (MFO's `EquipGateThunk` denies spells and staves only). This is not
-  deny-complete. A per-follower CSTY (allow-dual only for `offHand == 2` followers)
-  would need `Forms.h` + `CombatStyle.cpp`, outside this branch's boundary. The
-  economy sells the spare at the next vendor today, which narrows the window but is
-  not a deny. marth decides: accept the exposure, or scope a per-follower CSTY brief.
+  holds. **CSTY `kAllowDualWielding` EXPOSURE: CLOSED (marth 2026-10-27, "perk/class gated", branch `fix/mfo-dualwield-gate`, awaiting field):** `MFO_MeleeStyle` (`0x833`) is applied only to a follower whose perks vote dual wield (`offHand == 2`); every other forced-melee follower gets `MFO_MeleeSingleStyle` (`0x916`, DATA 1). Look for `[wstyle] ... single-weapon` vs `dual-wield allowed (perks)` in the OWNED/HANDOFF lines.
 - **Branch `feat/mfo-shed-fists-rule` (off `feat/mfo-progression-strict-points-perk-style`
   `4a62688`, no version bump) — pushed, CI status in the branch's own run, NOT merged,
   NOT deployed, awaiting its tier-3 Fable review.** The LoreRim 2026-09-12 shed bug:
