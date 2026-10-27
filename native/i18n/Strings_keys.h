@@ -91,6 +91,8 @@ MFO_STR(Gb_Spell,           "Spell", 0)    // column header and list title
 MFO_STR(Gb_Target,          "Target", 0)   // column header and list title
 MFO_STR(Gb_ColOn,           "On", 0)
 MFO_STR(Gb_TitleFoe,        "Foe:", 0)           // the submenu row and its title
+MFO_STR(Gb_TitleSelf,       "Self:", 0)          // the Self: submenu row and its title (the follower's own conditions)
+MFO_STR(Gb_TitleAlly,       "Ally:", 0)          // the Ally: submenu row and its title (a teammate's conditions)
 MFO_STR(Gb_TitleLootPotions,"Loot potions:", 0)  // the submenu row and its title
 MFO_STR(Gb_TitleLootMisc,   "Loot misc:", 0)     // the submenu row and its title
 MFO_STR(Gb_WhenRow,         "When {1}", 1)   // {1}=the condition label
@@ -219,6 +221,10 @@ MFO_STR(Cond_FoeAttackingMeMelee, "Foe: Targeting me (melee)", 0)
 MFO_STR(Cond_FoeAttackingMeRanged, "Foe: Targeting me (ranged)", 0)
 MFO_STR(Cond_FoeIsUndead, "Foe: Undead", 0)
 MFO_STR(Cond_FoeIsDragon, "Foe: Dragon", 0)
+MFO_STR(Cond_FoeIsDragonFlying, "Foe: Dragon flying", 0)   // a dragon that is in the air (taking off, cruising, hovering)
+MFO_STR(Cond_FoeIsDragonLanded, "Foe: Dragon landed", 0)   // a dragon that is on the ground (or perched, or coming down to land)
+MFO_STR(Cond_FoeIsDaedra, "Foe: Daedra", 0)   // Banish, Expel
+MFO_STR(Cond_FoeIsSummoned, "Foe: Summoned", 0)   // a conjured or reanimated creature (Banish, Dispel)
 MFO_STR(Cond_FoeIsMechanical, "Foe: Mechanical", 0)
 MFO_STR(Cond_FoeIsUnholy, "Foe targeted: Unholy", 0)   // the foe the follower is fighting is one the load order's silver weapons hurt more (undead, werewolves, vampires, ...)
 MFO_STR(Cond_FoeAttackingAlly, "Foe: Targeting an ally", 0)   // the nearest foe whose target is the player, a teammate or a summon they command, but not this follower
@@ -245,6 +251,13 @@ MFO_STR(Cond_SelfOutOfBolts, "Bolts below", 0)
 MFO_STR(Cond_IsInterior, "In an interior", 0)
 MFO_STR(Cond_IsNight, "At night", 0)
 MFO_STR(Cond_Dark, "In the dark", 0)
+MFO_STR(Cond_SelfUnderwater, "Self: Underwater", 0)   // the water is over the follower's head (Waterbreathing)
+MFO_STR(Cond_SelfPoisoned, "Self: Poisoned", 0)   // a poison is working on the follower (Cure Poison)
+MFO_STR(Cond_AllyDowned, "Ally: Downed", 0)   // the nearest ally who is bleeding out or down (a revive or heal target)
+MFO_STR(Cond_AllyParalysed, "Ally: Paralysed", 0)   // the nearest paralysed ally
+MFO_STR(Cond_AllyPoisoned, "Ally: Poisoned", 0)   // the nearest poisoned ally (Cure Poison)
+MFO_STR(Cond_AllyUnderwater, "Ally: Underwater", 0)   // the nearest ally with the water over his head (Waterbreathing)
+MFO_STR(Cond_PlayerSneaking, "Player: Sneaking", 0)   // the player is sneaking (Muffle, Invisibility)
 MFO_STR(Cond_SelfCarryWeightAbove, "Self: Carry weight above", 0)
 
 // == Gambit actions ("Do ...") ==

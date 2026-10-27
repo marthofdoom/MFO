@@ -198,8 +198,8 @@ namespace MFO::Actuation {
         g_firingRule = a_choice.ruleIndex;
         // Only an ALLY selector's param is an ally-HP threshold. Every other
         // condition's param means something else entirely, so it must never be
-        // read as one -- Evaluator.cpp's IsAllySelector is this exact test, and
-        // kCondAllyHpBelow is its only member today.
+        // read as one -- kCondAllyHpBelow is the only ally selector that carries a
+        // threshold (the ally STATE selectors, cond.ally_downed and kin, take no param).
         g_firingAllyThreshold = (a_choice.conditionOpcode == Vocab::kCondAllyHpBelow)
                                     ? a_choice.conditionParam
                                     : -1.0f;

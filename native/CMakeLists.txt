@@ -53,6 +53,7 @@ add_commonlibsse_plugin(${PROJECT_NAME} SOURCES
     progression/Hms.cpp
     progression/Manifest.cpp
     Evaluator.cpp
+    SelfStatus.cpp
     cast/Fire.cpp
     cast/Roads.cpp
     cast/CastOn.cpp

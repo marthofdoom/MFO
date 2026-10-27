@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **Foe: Dragon flying and Foe: Dragon landed.** Two new conditions, listed under Foe: Dragon, which still means any dragon. Flying is a dragon in the air (taking off, cruising or hovering). Landed is a dragon on the ground, perched on a word wall, or coming down to land. Use them to hold a melee follower back while a dragon circles and send him in when it lands, or to keep casters and archers busy while it flies.
+- **New foe conditions: Daedra and Summoned.** Foe: Daedra picks a Daedra (for Banish and Expel). Foe: Summoned picks a conjured or raised creature (for Banish and Dispel). Vampires already count as Foe: Undead.
+- **New state conditions.** Self: Underwater is true when the water is over the follower's head (for Waterbreathing). Self: Poisoned is true while a poison is working on him (for Cure Poison). Player: Sneaking is there too (for Muffle or Invisibility). They are in the Combat and the Logistics lists.
+- **New Ally conditions: Downed, Paralysed, Poisoned and Underwater.** The nearest ally in that state becomes the target of the rule, and the player counts as an ally. A downed or paralysed follower cannot act, so those two are Ally only.
+- **Self: and Ally: open as their own lists.** In the When list, Self: and Ally: now open a menu of their conditions, the same way Foe: does. Self: holds the follower's own conditions (HP, Magicka, Stamina, supplies, carry weight, Underwater, Poisoned). Ally: holds HP below and the new ally states.
+
 ## v2.7.3 -- Animated casts out of combat by default, and town trips that find their stock
 
 Needs Harbinger v0.15.1.

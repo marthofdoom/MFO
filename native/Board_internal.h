@@ -186,6 +186,10 @@ namespace MFO::Board {
         { Vocab::kCondFoeAttackingMeRanged, Str::K::Cond_FoeAttackingMeRanged, ParamKind::None },
         { Vocab::kCondFoeIsUndead, Str::K::Cond_FoeIsUndead,        ParamKind::None    },
         { Vocab::kCondFoeIsDragon, Str::K::Cond_FoeIsDragon,        ParamKind::None    },
+        { Vocab::kCondFoeIsDragonFlying, Str::K::Cond_FoeIsDragonFlying, ParamKind::None },
+        { Vocab::kCondFoeIsDragonLanded, Str::K::Cond_FoeIsDragonLanded, ParamKind::None },
+        { Vocab::kCondFoeIsDaedra, Str::K::Cond_FoeIsDaedra,        ParamKind::None    },
+        { Vocab::kCondFoeIsSummoned, Str::K::Cond_FoeIsSummoned,      ParamKind::None    },
         { Vocab::kCondFoeIsMechanical, Str::K::Cond_FoeIsMechanical,   ParamKind::None    },
         { Vocab::kCondFoeIsUnholy, Str::K::Cond_FoeIsUnholy,        ParamKind::None    },
         { Vocab::kCondFoeIsCaster, Str::K::Cond_FoeIsCaster, ParamKind::None    },
@@ -217,6 +221,13 @@ namespace MFO::Board {
         { Vocab::kCondIsInterior, Str::K::Cond_IsInterior,       ParamKind::None    },
         { Vocab::kCondIsNight, Str::K::Cond_IsNight,             ParamKind::None    },
         { Vocab::kCondDark, Str::K::Cond_Dark,                 ParamKind::None    },
+        { Vocab::kCondSelfUnderwater, Str::K::Cond_SelfUnderwater, ParamKind::None    },
+        { Vocab::kCondSelfPoisoned, Str::K::Cond_SelfPoisoned,     ParamKind::None    },
+        { Vocab::kCondAllyDowned, Str::K::Cond_AllyDowned,         ParamKind::None    },
+        { Vocab::kCondAllyParalysed, Str::K::Cond_AllyParalysed,   ParamKind::None    },
+        { Vocab::kCondAllyPoisoned, Str::K::Cond_AllyPoisoned,     ParamKind::None    },
+        { Vocab::kCondAllyUnderwater, Str::K::Cond_AllyUnderwater, ParamKind::None    },
+        { Vocab::kCondPlayerSneaking, Str::K::Cond_PlayerSneaking, ParamKind::None    },
     };
     inline constexpr VocabEntry kActsCombat[] = {
         { Vocab::kActWait, Str::K::Act_Wait },
@@ -255,6 +266,13 @@ namespace MFO::Board {
         { Vocab::kCondIsInterior, Str::K::Cond_IsInterior,        ParamKind::None    },
         { Vocab::kCondIsNight, Str::K::Cond_IsNight,              ParamKind::None    },
         { Vocab::kCondDark, Str::K::Cond_Dark,                  ParamKind::None    },
+        { Vocab::kCondSelfUnderwater, Str::K::Cond_SelfUnderwater, ParamKind::None    },
+        { Vocab::kCondSelfPoisoned, Str::K::Cond_SelfPoisoned,     ParamKind::None    },
+        { Vocab::kCondAllyDowned, Str::K::Cond_AllyDowned,         ParamKind::None    },
+        { Vocab::kCondAllyParalysed, Str::K::Cond_AllyParalysed,   ParamKind::None    },
+        { Vocab::kCondAllyPoisoned, Str::K::Cond_AllyPoisoned,     ParamKind::None    },
+        { Vocab::kCondAllyUnderwater, Str::K::Cond_AllyUnderwater, ParamKind::None    },
+        { Vocab::kCondPlayerSneaking, Str::K::Cond_PlayerSneaking, ParamKind::None    },
     };
     inline constexpr VocabEntry kActsLogi[] = {
         { Vocab::kActDrinkHealthPotion, Str::K::Act_DrinkHealthPotion },
