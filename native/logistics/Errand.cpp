@@ -307,7 +307,7 @@ namespace MFO::Logistics::Errand {
         // AMMO STOCK CLASS (marth 2026-10-26: "Assume a blacksmith sells arrows. There are archery specific shops too. But a regular blacksmith almost always does"):
         // is this shop an ARMS-class vendor, from engine data at runtime? (a) the vendor NPC is in vanilla JobBlacksmithFaction (0005091D); or (b) a plain (non-inverted)
         // VEND list carries VendorItemArrow and at least half its keywords are arms (VendorItemWeapon / VendorItemArmor / VendorItemArrow: vanilla VendorItemsBlacksmith is
-        // 3 of 6, VendorItemsFletcher 3 of 4, no editor ids needed). A general store lists arrows among many other goods and fails (b). a_actor may be null (unloaded vendor).
+        // 3 of 6, VendorItemsFletcher 3 of 4, no editor ids needed). A general store lists arrows among many other goods and fails (b). a_actor may be null (LookupByID returns persistent refs even unloaded; only a non-persistent ref in an unloaded cell is null).
         bool ArmsClass(const RE::TESFaction* a_fac, RE::Actor* a_actor) {
             if (a_actor) {
                 auto* job = RE::TESForm::LookupByID<RE::TESFaction>(kFacBlacksmith);
@@ -1431,6 +1431,10 @@ namespace MFO::Logistics::Errand {
                 auto* vendor = c.handle.get().get();
                 if (!vendor && c.actorId) vendor = RE::TESForm::LookupByID<RE::Actor>(c.actorId);
                 t.armsClass = ArmsClass(c.fac, vendor);
+                // an arms-class shop is assumed to STOCK ammo even when its VEND list lacks the arrow keyword; needCarry is NOT set (it decides SELLING, and this vendor would not buy arrows).
+                // A last-seen 0 reading still vetoes (StockNow).
+                if (t.armsClass)
+                    for (int k = 3; k <= 4; ++k) if (TradeBridge::LastSeenStockLines(c.chest, k) != 0) t.needStock |= 1u << k;
             }
             for (int k = 0; k <= 4; ++k) {
                 if (!((t.needCarry >> k) & 1u)) continue;

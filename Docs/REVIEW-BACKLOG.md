@@ -2390,6 +2390,12 @@ Ammo kinds (3, 4) have no apothecary-class analog, so `needStock` for them is st
 
 **UPDATE (fix/mfo-ammo-stock-class, 2026-10-26, marth: "Assume a blacksmith sells arrows. There are archery specific shops too. But a regular blacksmith almost always does"):** ammo now has an ARMS CLASS (`ArmsClass`, `Errand.cpp`: vendor NPC in JobBlacksmithFaction 0005091D, or a plain VEND list carrying VendorItemArrow with >= half Weapon/Armor/Arrow keywords). `Trip::StockRank` orders ammo evidence last-seen stock (3) > arms class (2) > VEND claim alone (1); `Trip::Plan` picks the best-ranked usable candidate. The VEND-only claim remains as the fallback (so the general-store case in this finding is demoted, not removed); a last-seen 0 reading still vetoes. Still OPEN: whether to drop the VEND-only fallback entirely.
 
+### MFO-B515 (SEV-5, OPEN, ErrandTrip.cpp:303-306, against f0f2ce0, Opus review of fix/mfo-ammo-stock-class) -- cap-full free-try log text inaccurate
+Cap-full + only chosen stocking stop is rank 1 -> fallback covers via carries(i) but logs "NO stock evidence at any usable candidate" (false; log only).
+
+### MFO-B516 (SEV-5, OPEN, ErrandTrip.cpp:394-395, against f0f2ce0, Opus review of fix/mfo-ammo-stock-class) -- ammoUpgrade ignores rank
+ammoUpgrade rides the first stop with needCarry arrows ignoring rank (swap-up may land on a VEND-only general store while the need goes to the blacksmith).
+
 ### MFO-B509 (SEV-5, OPEN, logistics/ErrandReopen.cpp g_unserved, against 1b29b7d) -- unserved needs are keyed by follower only
 `NoteUnserved` files a need per follower with the last template; `CarryAndClear` moves it to the carried list when the town changes. If a plan in the same town later serves the kind, the stale entry is dropped at the next town by `ApplyCarried`'s live-count check (not before), and a Poll replan can file the same kind again (idempotent MergeKind, no extra log).
 

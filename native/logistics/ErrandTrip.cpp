@@ -45,7 +45,10 @@ namespace MFO::Logistics::Errand::Trip {
         if (a_kind <= TradeBridge::NeedCat::kBolts && a_c.chest) {
             const std::int32_t lines = TradeBridge::LastSeenStockLines(a_c.chest, a_kind);
             if (lines == 0) return false;   // seen this visit with nothing of the kind: never a buy stop for it again (even an apothecary-class list)
-            if (lines > 0) return ((a_c.needCarry >> a_kind) & 1u) != 0;
+            if (lines > 0) {   // real stock seen; an ARMS-class ammo shop needs no keyword (a smith whose VEND lacks VendorItemArrow is not vetoed after the first visit)
+                if ((a_kind == TradeBridge::NeedCat::kArrows || a_kind == TradeBridge::NeedCat::kBolts) && a_c.armsClass) return true;
+                return ((a_c.needCarry >> a_kind) & 1u) != 0;
+            }
         }
         return ((a_c.needStock >> a_kind) & 1u) != 0;
     }
