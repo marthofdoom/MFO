@@ -2381,3 +2381,30 @@ ShopPlaceName is dead code; EconomyLiveSupplyNeeds duplicates the BUY NEEDS rule
 
 ### MFO-B506 (SEV-4, OPEN, logistics/Errand.cpp g_coolDone, against e8b27e7, coordinator read of the fix/mfo-errand-requeue review round) -- completion cooldown recognised by value
 `Finish` and `detail::Cooldown` mark a cooldown as the completion one when `a_cooldownSec == Config::g_errandCooldownSec`, so a failure cooldown that happens to equal `fErrandCooldownSec` (user-configured) is treated as completion and the live need re-check bypasses it. Pass an explicit completion flag instead of comparing seconds.
+
+### MFO-B507 (SEV-4, OPEN, TradeBridge.cpp PlanBuy POTION CAP, against 1b29b7d, author note of fix/mfo-potion-cap-stock) -- the potion cap is per order, not per trip
+The cap is half of the budget the order's supply pass starts with (the trip purse left, since the order carries it), computed once per PlanBuy call. A multi-stop trip can therefore still spend 1/2 at the first stop, 1/2 of the rest at the next (3/4 over two stops). Matches how R7 food / R8 materials cap (per pass), so it is not a regression, but a per-TRIP potion ceiling would need the trip's original purse on the order.
+
+### MFO-B508 (SEV-5, OPEN, logistics/ErrandTrip.cpp StockNow, against 1b29b7d) -- ammo keeps the VEND claim until a stock reading exists
+Ammo kinds (3, 4) have no apothecary-class analog, so `needStock` for them is still `needCarry` while the chest has no fresh reading; only a reading of 0 lines removes it. A general store whose VEND lists arrows but which stocks none can therefore still be one buy stop per visit for ammo (the zero reading then ends it). Decide whether ammo should be stock-only with a "smith/general class" rule.
+
+### MFO-B509 (SEV-5, OPEN, logistics/ErrandReopen.cpp g_unserved, against 1b29b7d) -- unserved needs are keyed by follower only
+`NoteUnserved` files a need per follower with the last template; `CarryAndClear` moves it to the carried list when the town changes. If a plan in the same town later serves the kind, the stale entry is dropped at the next town by `ApplyCarried`'s live-count check (not before), and a Poll replan can file the same kind again (idempotent MergeKind, no extra log).
+
+### MFO-B484 / MFO-B504 status note (1b29b7d, fix/mfo-potion-cap-stock)
+B484: the "NO stock evidence" line in Plan step 2 is reworded (no buy trip; carried) and now fires only for a need with neither a stock stop nor a planned sell stop to try it at; still logged on every re-plan, so still open as a throttling item. B504: narrowed, not closed; with stock-only, a live re-check trip is built only over shops with stock evidence, so the "one shop per kind" limit now costs a trip only where there is stock.
+
+### MFO-B510 (SEV-4, OPEN, MFO_Trade.psc:42-50 + ErrandTrip.cpp StockNow:47, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- pre-existing 128-line truncation now a veto
+MFO_Trade.psc:42-50 fills stockCounts = new int[128]; lines past 127 get count 0; a large modded apothecary chest can file a 0 potion reading, which under this branch vetoes the shop for a restock window (StockNow:47). Root fix: size the counts array to m, or file -1 when truncated (separate Papyrus change).
+
+### MFO-B511 (SEV-5, OPEN, TradeBridge.cpp:156-158, :303, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- silver ammo is not counted as arrows/bolts
+wantSilverAmmo classifies silver arrows/bolts as kAmmoSilver (kindLines[5]) not kArrows/kBolts (TradeBridge.cpp:156-158, :303); a silver-only shop files arrows=0 and is vetoed for other followers until restock.
+
+### MFO-B512 (SEV-5, OPEN, Errand.cpp PlanLiveNeeds:1582-1585, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- a no-stock kind is carried only when no trip is made
+PlanLiveNeeds (Errand.cpp:1582-1585) files NoteUnserved only when usable==0; a no-stock kind dropped while other kinds made a trip is not carried (forced status lost).
+
+### MFO-B513 (SEV-5, OPEN, ErrandTrip.cpp:48, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- StockNow with lines>0 still requires needCarry
+StockNow with lines>0 still requires needCarry (ErrandTrip.cpp:48); loses a shop with potions in stock but no VendorItemPotion keyword.
+
+### MFO-B514 (SEV-5, OPEN, ErrandTrip.cpp:296, against 1b29b7d, Opus review of fix/mfo-potion-cap-stock) -- free-try log text inaccurate
+Free-try log text at ErrandTrip.cpp:296 ("already planned for selling") is inaccurate when the stop was added for another kind's stock.

@@ -423,13 +423,13 @@ namespace MFO::Config {
     inline std::atomic<bool>  g_healAnimPackage{ true };
 
     // OUT-OF-COMBAT CASTS ON HARBINGER'S COMBAT SUBSTRATE (INI-only bSubstrateCasts, substrate round R3 = slice
-    // S3, plan _evidence/2026-10-18-designs/SUBSTRATE-TO-OOC-PLAN.md). Default OFF until the field run proves it
-    // (plan L8). ON = with Harbinger at ABI >= 27 reporting IsSubstrateAvailable(), the out-of-combat table files a
+    // S3, plan _evidence/2026-10-18-designs/SUBSTRATE-TO-OOC-PLAN.md). Default ON since 2026-10-26 (marth: "once it works, its certainly on"; the field run proved fired casts)
+    // (was OFF until plan L8). ON = with Harbinger at ABI >= 27 reporting IsSubstrateAvailable(), the out-of-combat table files a
     // ch.27 combat substrate plus a ch.8b cast claim for an OOC heal / buff / summon (fire-and-forget only), so the
     // follower's own AI casts it with the real animation (cast/SubstrateRoad.cpp, apmf/Substrate.cpp). OFF, or
     // Harbinger absent = today's direct road, byte for byte. Harbinger present but the substrate unavailable = a loud
     // once-per-session error and today's road (marth 2026-10-19 Q4: "shouldn't happen"). Not in the MCM.
-    inline std::atomic<bool>  g_substrateCasts{ false };
+    inline std::atomic<bool>  g_substrateCasts{ true };
 
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc

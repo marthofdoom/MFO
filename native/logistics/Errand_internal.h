@@ -192,7 +192,9 @@ namespace MFO::Logistics::Errand {
             bool          havePlacePos = false;
             std::uint32_t needCarry = 0;      // bit n = this VEND carries the category of NeedCat::Kind n
             std::uint32_t needStock = 0;      // MISSED BUY: bit n (a subset of needCarry) = there is EVIDENCE the shop stocks kind n (a VEND keyword only says what it BUYS):
-                                              // an apothecary-class VEND list for the potion kinds, or a last-seen stock of that kind at its chest. Arrows etc.: = needCarry.
+                                              // an apothecary-class VEND list for the potion kinds, or a last-seen stock of that kind at its chest. A chest last SEEN with 0 lines
+                                              // of the kind is NOT stock even for an apothecary. Ammo with no reading yet: = needCarry (no apothecary-class analog). A buy need
+                                              // is placed ONLY on stock (potion cap / stock-only round, marth 2026-10-26); needCarry alone only decides SELLING.
             bool          carriesGear = false, carriesTome = false;   // the gear / apparel wish, the tome wish
             bool          carriesMaterials = false;   // R8: the VEND trades ore / ingots, hides or animal parts (smithing materials)
             bool          carriesForge = false;       // R8: a smithy: the VEND trades ore / ingots (its place has the forge furniture)
@@ -208,6 +210,10 @@ namespace MFO::Logistics::Errand {
         // stop has work.
         bool Plan(const std::vector<Cand>& a_cands, const std::vector<ErrandPlanned>& a_planned, const Inputs& a_in,
                   std::vector<Stop>& a_out, std::string& a_line);
+        // Is there stock evidence for supply kind a_kind at this candidate NOW? The candidate's needStock bit, refreshed by the chest's last-seen stock
+        // (TradeBridge::LastSeenStockLines): a reading of 0 lines = NO stock (a stored candidate predates the visit's trades); > 0 = stock. The one rule every
+        // buy-stop decision (Plan, Requeue, Poll's MISSED BUY, ApplyCarried) uses.
+        bool StockNow(const Cand& a_c, std::int32_t a_kind);
         // The next Pending stop after a_cur, or -1.
         int  NextPending(const std::vector<Stop>& a_stops, std::size_t a_cur);
         // Straight-line units between two stops' places (a place with no known position: a fixed street-walk estimate).
@@ -444,6 +450,10 @@ namespace MFO::Logistics::Errand {
         // the watch is cleared. ApplyCarried (TryStart, after the plan's orders exist) forces them into the next town's plan: a kind no live order already
         // asks for goes to the candidate carrying it (stock evidence first, the nearest). The list is consumed. ClearAll (revert / load) drops it unused.
         void CarryAndClear();
+        // STOCK-ONLY BUY NEEDS (marth 2026-10-26: "skip stores with no stock of whats needed"): Trip::Plan found NO candidate of the town with stock evidence for this
+        // need (and no already-planned sell stop to try it at for free), so no buy trip is made. The need (a_need: kind + quota; a_tmpl: an order for the ids / purse)
+        // is filed per follower, SESSION-ONLY; CarryAndClear moves it to the carried-need list for the next town. Idempotent per kind. Takes only Reopen's own lock.
+        void NoteUnserved(RE::FormID a_follower, const TradeBridge::NeedCat& a_need, const ErrandPlanned& a_tmpl);
         // LIVE NEED RE-CHECK (Errand.cpp PlanLiveNeeds): the per-VISIT (kind, shop key) loop guard. IsTried also reads the watch's own tried set; NoteTried adds a
         // pair (kept apart from any watch: a restored trip has none). A shop whose trade came back unfilled (NoteUnfilled, with or without a watch) is tried.
         bool IsTried(RE::FormID a_follower, RE::FormID a_town, std::int32_t a_kind, RE::FormID a_key);

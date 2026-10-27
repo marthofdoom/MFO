@@ -1498,7 +1498,7 @@ row, aimed Light, a target-location self cast. Out of combat nothing logs here (
 
 marth's goal (plan `_evidence/2026-10-18-designs/SUBSTRATE-TO-OOC-PLAN.md`, round R3): followers cast heals, buffs and summons out
 of combat with the real cast animation. Substrate combat is not combat for any client. The legacy direct cast is used only when
-Harbinger is absent. **Behind ONE INI-only switch, `bSubstrateCasts` (MFO.ini, default 0) until the field run (plan L8) proves it.
+Harbinger is absent. **Behind ONE INI-only switch, `bSubstrateCasts` (MFO.ini, default 1 since 2026-10-26: the field run proved fired casts; 0 = kill switch).
 NOT field-run yet.**
 
 **What it is.** Every ch.8b seat is a vfunc of a `CombatMagicCaster`, which only exists under a `CombatController`. Harbinger's
