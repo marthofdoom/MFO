@@ -9,6 +9,7 @@
             "kind": "git",
             "repository": "https://github.com/marthofdoom/vcpkg-registry",
             "baseline": "1ab2a701f2a2fff2006b733bb6612ac102e82e5e",
+            "reference": "port/commonlibsse-ng-21-idtable-rev4",
             "packages": [
                 "commonlibsse-ng"
             ]
