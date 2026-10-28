@@ -4,7 +4,7 @@
 //
 // ONLY the cases ChooseBuffRoad (cast/BuffRoad.cpp) decides from the SPELL RECORD alone, through the
 // SAME helper it calls (BuffAimedLightWhy):
-//   * aimed / targeted Light (Magelight; Self Light stays).
+//   * aimed / location Light (Magelight; Self and TargetActor Light stay).
 // An ambiguous row (several effects mapping to different caster rows) is NOT hidden any more (marth
 // 2026-10-06 agreed to show the Flame / Frost / Lightning Cloaks again): it still takes the direct road
 // at cast time (ChooseBuffRoad's direct answer), the picker just lists it.

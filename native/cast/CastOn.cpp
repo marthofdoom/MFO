@@ -390,6 +390,12 @@ namespace MFO::Actuation {
                     g_unsightedCharge.erase(blk);
                 }
             }
+            // A PURE-SCRIPT OFFENSE CLAIM THAT NEVER FIRED was released (the bound in the in-flight refresh below):
+            // held off for the rest of the fight, transparent, so the rules below run. Never a direct cast.
+            if (offenseSpell)
+                if (const auto nf = g_scriptOffenseNeverFired.find(id);
+                    nf != g_scriptOffenseNeverFired.end() && nf->second.count(a_spellID))
+                    return { Result::FailedOther, "pure-Script offense claim never fired this fight: held off", true };
             // P1 (field 2026-10-01): a higher-ranked heal claim that is PENDING (not yet
             // fired) owns the lap's other hand too. Transparent, so rules below still run.
             if (offenseSpell && HealPendingHoldsOffense(a_follower, g_firingRule, a_spellID))
@@ -576,6 +582,59 @@ namespace MFO::Actuation {
                         return { Result::FailedOther,
                                  "offense cast released: charged for the never-observed window on an unsighted foe",
                                  true };
+                    }
+                }
+                // A PURE-SCRIPT OFFENSE CLAIM THAT NEVER FIRES is bounded (Arcane Pull: Harbinger may refuse the
+                // explained-zero lift, D5 may outrank it, or APMF.dll may be old, and the claim would hold its hand for as
+                // long as the rule wins). BuffRoad's never-fired release shape (cast/BuffRoad.cpp, the NEVER FIRED block of
+                // BuffRefreshGate, g_neverFired): the claim's lock stamp older than kHealClaimNeverObservedCapMs, no fire
+                // observed since the stamp on any planned hand, nothing charging or casting. Released ONCE with a WARN and
+                // the (follower, spell) held off for this fight (g_scriptOffenseNeverFired). It marks a failure, never a
+                // masked one: no direct fallback. Only the pure Script row (not rowApprox) is bounded; every other
+                // offense claim keeps its own bounds.
+                if (offenseSpell && a_target && (handPlan.left || handPlan.right)) {
+                    const auto arch = ClassifyArchetype(spell);
+                    if (arch.row == EngineRow::Script && !arch.rowApprox) {
+                        const std::size_t hands[2] = { kHandLeft, kHandRight };
+                        const bool        planned[2] = { handPlan.left, handPlan.right };
+                        bool              stale = true;
+                        long long         oldestMs = 0;
+                        for (int i = 0; i < 2 && stale; ++i) {
+                            if (!planned[i]) continue;
+                            const std::size_t h = hands[i];
+                            const auto stamp = CastLockClaimStamp(id, h, a_spellID);
+                            if (stamp == std::chrono::steady_clock::time_point{}) { stale = false; break; }
+                            const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - stamp);
+                            if (ageMs < std::chrono::milliseconds(APMFBridge::kHealClaimNeverObservedCapMs) ||
+                                ComposedCast::ObservedFiring(id, h == kHandLeft ? APMFBridge::kApmfHandLeft
+                                                                                : APMFBridge::kApmfHandRight,
+                                                             a_spellID,
+                                                             static_cast<std::uint32_t>(ageMs.count() + 1)) ||
+                                CastInFlightOnHand(a_follower, h, a_spellID, CastProxyOnHand(id, h))) {
+                                stale = false;
+                                break;
+                            }
+                            oldestMs = std::max<long long>(oldestMs, ageMs.count());
+                        }
+                        if (stale) {
+                            spdlog::warn("[cast] {:08X} pure-Script offense cast {:08X} \"{}\" at {:08X} NEVER FIRED: "
+                                         "claimed {} ms ago, nothing charging -- claim RELEASED and the spell held off "
+                                         "this fight (no direct fallback; Harbinger refused the explained-zero lift, "
+                                         "or APMF.dll lacks it: see its [ctcensus] verdict; rule {})",
+                                         id, a_spellID, spell->GetName() ? spell->GetName() : "?", a_target->GetFormID(),
+                                         oldestMs, g_firingRule);
+                            g_scriptOffenseNeverFired[id].insert(a_spellID);
+                            APMFBridge::ReleaseCastClaimOnHand(id, claimHand);   // a dual claim is one handle
+                            for (int i = 0; i < 2; ++i) {
+                                if (!planned[i]) continue;
+                                ClearCastLockHand(id, hands[i]);
+                                ComposedCast::ClearWatchHand(id, i == 0 ? APMFBridge::kApmfHandLeft
+                                                                        : APMFBridge::kApmfHandRight);
+                            }
+                            return { Result::FailedOther,
+                                     "pure-Script offense claim never fired: released, held off this fight", true };
+                        }
                     }
                 }
                 // A BUFF CLAIM's refresh (cast/BuffRoad.cpp; self, at an ally / the player, a summon): ends the
@@ -971,11 +1030,6 @@ namespace MFO::Actuation {
             auto composed = ComposedCast::TryResult::NotApplicable;
 
             if (Config::g_equipToCast.load()) {
-                if (ownedCast && OffenseClaimHasNoRow(a_follower, spell)) {
-                    // NO CASTER ROW (2026-10-27: Arcane Pull, a pure Script archetype, 18 claims and 0 builds): the claim
-                    // can never build, so none is filed. Transparent, like a refused claim: the rules below still run.
-                    return { Result::FailedSkill, "no caster row serves this spell (a cast claim could never build)", true };
-                }
                 if (ownedCast) {
                     // HAND POLICY (integration/2026-09-06, PER-HAND feat/per-hand-cast-
                     // slots 2026-09-06): `handPlan` was already resolved by the per-hand
@@ -1715,6 +1769,7 @@ namespace MFO::Actuation {
         g_lastInFlightLog.erase(a_follower);   // F9: the in-flight twin of g_lastLockLog
         g_lastApmfRefusal.erase(a_follower);
         ResetBuffFollower(a_follower);   // feat/mfo-remaining-cast-kinds: the never-fired hold-off ends with the fight
+        g_scriptOffenseNeverFired.erase(a_follower);   // the pure-Script offense claim's twin hold-off
         // F3-7: Actuation_Direct.cpp keeps an IDENTICAL refusal-log twin in its own
         // anon namespace; drop that follower's entries here too so the two maps
         // really do share a release point instead of only claiming to.
@@ -1738,6 +1793,7 @@ namespace MFO::Actuation {
         g_healRepairLog.clear();
         g_healHoldLog.clear();
         g_unsightedCharge.clear();
+        g_scriptOffenseNeverFired.clear();
         ResetBuffRoad();             // feat/mfo-remaining-cast-kinds: cast/BuffRoad.cpp
         ResetHealRoad();             // feat/mfo-perhand-heal: the per-hand heal records (cast/HealRoad.cpp)
         ResetSubstrateRoad();        // slice S3: the substrate road's pacing + log dedup (cast/SubstrateRoad.cpp)

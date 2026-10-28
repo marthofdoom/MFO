@@ -741,11 +741,14 @@ per concern:
   snap-to-navmesh, and a PREDICTED engine caster row mirrored from Harbinger `Docs/STATUS.md:135-161` (each
   `kRows` entry cites its line); `NoteArchetypeRoad` = the once-per-(follower, spell, road) `[archetype]`
   INFO + one WARN per (follower, spell) for a claim road meeting predicted `none` (ledger `g_noted`/`g_warned`
-  behind `g_noteMx`, cleared by `ResetArchetypeLog` from `ClearSelfCasts`); `OffenseClaimHasNoRow` (2026-10-27) = true
-  when the predicted row is the pure Script row and not `rowApprox` (NoRow does not count: MFO-B531), one `[cast]` INFO per (follower, spell) (`g_noRowRefused`); `CastOn.cpp`'s
-  owned-offense branch returns a transparent FailedSkill on it BEFORE any claim (Arcane Pull: 18 claims, 0 builds);
-  `ChooseBuffRoad` also keeps a Light cast at another recipient direct (Candlelight on the player: Harbinger's flip makes
-  it an aimed Light); `CastBreadcrumb` = the flushed
+  behind `g_noteMx`, cleared by `ResetArchetypeLog` from `ClearSelfCasts`); the 2026-10-27 interim gates are REMOVED
+  (2026-10-28, paired with Harbinger `feat/apmf-explained-zero-lift`, which lifts an exact-0.0 score that comes from the claimed spell's
+  own data). There is no `OffenseClaimHasNoRow` any more, so a pure Script row (Arcane Pull) files its claim like any other.
+  `CastOn.cpp`'s owned-offense refresh bounds that one case: no fire since the claim stamp after `kHealClaimNeverObservedCapMs`
+  releases the claim, WARNs and holds the spell off for the fight (`g_scriptOffenseNeverFired`, the twin of BuffRoad's `g_neverFired`).
+  `ChooseBuffRoad` no longer keeps a Light cast at another recipient direct (Candlelight on the player takes the claim road,
+  the flip proxy is TargetActor, which Harbinger's Light seat serves), and `BuffAimedLightWhy` now refuses only kAimed / kTargetLocation Light.
+  `CastBreadcrumb` = the flushed
   `[cast-call]` line before every `CastSpellImmediate`; `DescribeArchetype` = the `[cfc]` enrichment
   (`ComposedCast.cpp` NO-observed-cast warn). `cast/SummonProbe.cpp` = `ProbeSummonLanding`, the
   self-reposting MAIN-thread `[summon-probe]` (offset, height, bearing, controller ground state at "appeared"
