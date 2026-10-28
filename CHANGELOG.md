@@ -17,7 +17,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 - **The stall log shows when a follower is down.** The `[stall-probe]` line now says whether he is in bleedout or essential down.
 - **No more out of combat casts filed during your fight.** While you are in combat, a follower who is not in his own fight no longer files an animated out of combat cast that Harbinger always refuses. The same goes for a follower who is not loaded or not in high process, one in a scene, and any cast while the dialogue menu is open. Each one now says why in an `[info]` line instead of an `[error]`, and no cast stance, proxy or claim is made for it.
 - **Candlelight on an ally casts again.** A Light spell cast at someone else, such as Candlelight on you, goes back to the direct cast. Harbinger's animated road never served it.
-- **No cast claims for spells with no usable caster row.** A hostile spell the engine can only score as a pure Script or no caster, such as Cicero's Arcane Pull, no longer gets cast claims that could never build. It says so once per follower and spell.
+- **No cast claims for a pure Script spell.** A hostile spell the engine scores only as a pure Script caster, such as Cicero's Arcane Pull, no longer gets cast claims that could never build. It says so once per follower and spell.
 
 ## v2.7.3 -- Animated casts out of combat by default, and town trips that find their stock
 

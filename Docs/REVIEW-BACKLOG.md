@@ -2459,3 +2459,6 @@ The party-side lift compares raw coordinates with no same-cell or same-worldspac
 
 ### MFO-B530 (SEV-5, OPEN, EngageOnSight.cpp ABI-30 path comment, against 624ccd8, coordinator) -- comment misattributes a ruling
 The ABI-30 comment "A RANGE DROP is not a give-up (marth 2026-10-12...)" misreads 10-12. marth 2026-10-27: the 10-12 ruling was that a follower stuck at the leash edge COULD chase (leash = distance from the player), not that distant foes should not be dropped (drop = distance from the follower). Reword the comment.
+
+### MFO-B531 (SEV-4, OPEN, cast/Archetype.cpp, against bea32e9, Opus review of fix/mfo-cast-gates-1027) -- kRows lacks four ValueModifier-family archetypes
+Verbatim: "kRows has no rows for Absorb, DualValueModifier, AccumulateMagnitude and PeakValueModifier, so the archetype prediction reads predicted=none for spells the engine keys to a ValueModifier row (Close Greater Wounds keyed Restore natively). Alias those four to the ValueModifier rows in Archetype.cpp, then a NoRow claim gate becomes possible." Reasoning: the D3 claim gate (OffenseClaimHasNoRow) therefore refuses only a pure Script row, not NoRow. Surfaced at edit time from: MAP.md cast/Archetype.cpp.

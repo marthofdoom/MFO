@@ -742,7 +742,7 @@ per concern:
   `kRows` entry cites its line); `NoteArchetypeRoad` = the once-per-(follower, spell, road) `[archetype]`
   INFO + one WARN per (follower, spell) for a claim road meeting predicted `none` (ledger `g_noted`/`g_warned`
   behind `g_noteMx`, cleared by `ResetArchetypeLog` from `ClearSelfCasts`); `OffenseClaimHasNoRow` (2026-10-27) = true
-  when the predicted row is NoRow or Script, one `[cast]` INFO per (follower, spell) (`g_noRowRefused`); `CastOn.cpp`'s
+  when the predicted row is the pure Script row and not `rowApprox` (NoRow does not count: MFO-B531), one `[cast]` INFO per (follower, spell) (`g_noRowRefused`); `CastOn.cpp`'s
   owned-offense branch returns a transparent FailedSkill on it BEFORE any claim (Arcane Pull: 18 claims, 0 builds);
   `ChooseBuffRoad` also keeps a Light cast at another recipient direct (Candlelight on the player: Harbinger's flip makes
   it an aimed Light); `CastBreadcrumb` = the flushed
