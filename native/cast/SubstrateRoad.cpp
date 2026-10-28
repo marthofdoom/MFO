@@ -178,6 +178,27 @@ namespace MFO::Actuation {
             return SubstrateTry::Refused;
         }
 
+        // 2b. THE PRECONDITIONS HARBINGER'S OPEN REFUSES BY RULE (80 refusals in one 2026-10-27 session, each one applying
+        //     the cast stance, minting a proxy and filing a ch.8b claim before the no). Asked here, at the source, so a
+        //     request Harbinger always refuses is never filed: the player is in real combat (no substrate), he is not
+        //     loaded / not high process, he is in a scene, the dialogue menu is open. Cheap plain reads only. Not cast
+        //     this lap, never the direct road. What is left as an [error] now is unexpected.
+        {
+            const char* pre = nullptr;
+            auto* pc   = RE::PlayerCharacter::GetSingleton();
+            auto* proc = a_follower->GetActorRuntimeData().currentProcess;
+            if (pc && pc->IsInCombat())                   pre = "the player is in combat (real combat: Harbinger opens no substrate)";
+            else if (!a_follower->Is3DLoaded())           pre = "he is not loaded";
+            else if (!proc || !proc->InHighProcess())     pre = "he is not in high process";
+            else if (a_follower->GetCurrentScene())       pre = "he is in a scene";
+            else if (auto* ui = RE::UI::GetSingleton(); ui && ui->IsMenuOpen(RE::DialogueMenu::MENU_NAME))
+                                                          pre = "the dialogue menu is open";
+            if (pre) {
+                NoteRefused(fid, a_spell, 8, std::format("{} (site {})", pre, site));
+                return SubstrateTry::Refused;
+            }
+        }
+
         // 3. CAN HE ACT (fix/mfo-can-act; plain member loads), DOES HE KNOW IT (INVARIANTS #20, the competence gate, asked
         //    here so no recipient is tried), and COMPETENCE (§5.3, CastSelfDirect's gate: the real cost and the
         //    reserve floor). The engine's own cast spends the magicka on this road.

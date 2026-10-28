@@ -792,6 +792,10 @@ namespace MFO::Actuation {
     // One-time [archetype] INFO per (follower, spell, road) per session, plus ONE WARN per (follower,
     // spell) when a claim road meets a predicted NoRow. Call at the road decision. Leaf mutex only.
     void NoteArchetypeRoad(RE::Actor* a_follower, RE::SpellItem* a_spell, ArchRoad a_road);
+    // True when the spell's predicted engine caster row is NoRow or the pure Script row (a Script-only / no-row hostile
+    // spell: Arcane Pull scores 0.000), so a kIntent_Cast claim for it can never build. One [cast] INFO per (follower, spell) per session. Unknown is
+    // NOT a no-row (it still files). Leaf mutex only; any thread.
+    bool OffenseClaimHasNoRow(RE::Actor* a_follower, RE::SpellItem* a_spell);
     // Flushed [cast-call] breadcrumb IMMEDIATELY before a CastSpellImmediate, so a hard freeze's
     // last log line names the call. Form ids only on the target (no engine name read).
     void CastBreadcrumb(const char* a_road, RE::Actor* a_caster, RE::SpellItem* a_spell,
