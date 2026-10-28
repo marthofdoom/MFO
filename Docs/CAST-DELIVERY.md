@@ -1468,7 +1468,7 @@ spell (Muffle, fortify / resist, Night Eye, Detect Life, cures, Courage; Harbing
 (Candlelight), and a buff at an ally / the player (claim target = the recipient; AUTO's beneficial fan is a series, lowest HP
 first, one recipient per lap via CastOn). Out of combat, below ABI 19, aimed Light, a `rowApprox` row, a self cast of a non-Self
 spell: the direct road, one `[buff]` line naming why. A claim that never fires is released once (WARN) and held off per fight, never the
-direct road. Hostile rowless spells at a foe (Calm / Fear / Frenzy) already take the owned-offense claim. A pure Script row (Arcane Pull) files its claim like any other: its 0.000 score comes from the spell's own data, and Harbinger lifts that explained zero. A Light cast at another recipient (Candlelight on the player) takes the claim road too, and only a kAimed or kTargetLocation Light stays direct. See MAP.md `cast/BuffRoad.cpp`.
+direct road. Hostile rowless spells at a foe (Calm / Fear / Frenzy) already take the owned-offense claim. A pure Script row (Arcane Pull) files its claim like any other: its 0.000 score comes from the spell's own data, and Harbinger lifts that explained zero. If it never fires, `CastOn` releases it after the never-observed window and holds it off for the fight, with a WARN. A Light cast at another recipient (Candlelight on the player) takes the claim road too, and only a kAimed or kTargetLocation Light stays direct. See MAP.md `cast/BuffRoad.cpp`.
 
 
 ## COMBAT SUBSTRATE SLICE S1: THE REMAINING IN-COMBAT DIRECT ROADS (feat/mfo-animated-combat-casts, 2026-10-13)
