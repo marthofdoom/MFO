@@ -309,7 +309,6 @@ namespace MFO::Actuation {
         std::unordered_set<std::uint64_t> g_noted;        // (follower, spell, road)
         std::unordered_set<std::uint64_t> g_warned;       // (follower, spell)
         std::unordered_set<std::uint64_t> g_settled;      // (follower, spell, road): claim INFO done, row known
-        std::unordered_set<std::uint64_t> g_noRowRefused; // (follower, spell): the no-caster-row refusal line was said
 
         const char* RoadName(ArchRoad r) {
             switch (r) {
@@ -458,34 +457,9 @@ namespace MFO::Actuation {
         if (auto* lg = spdlog::default_logger_raw()) lg->flush();
     }
 
-    bool OffenseClaimHasNoRow(RE::Actor* a_follower, RE::SpellItem* a_spell) {
-        if (!a_follower || !a_spell) return false;
-        const auto a = ClassifyArchetype(a_spell);
-        // Only the PURE Script row: it scores a hostile spell 0.000 in the AI's own pick (2026-10-27 [aicastseats]: Arcane
-        // Pull, class CombatMagicCasterScript), so it is never selected. NoRow is NOT refused (kRows lacks Absorb /
-        // DualValueModifier / AccumulateMagnitude / PeakValueModifier, so predicted=none is not proof: MFO-B531), Unknown is
-        // a question, and a rowApprox Script (a mixed spell: the engine may build another row) still files.
-        if (a.row != EngineRow::Script || a.rowApprox) return false;
-        const auto fid = a_follower->GetFormID();
-        const auto sid = a_spell->GetFormID();
-        bool say = false;
-        {
-            std::lock_guard lk(g_noteMx);
-            say = g_noRowRefused.insert((static_cast<std::uint64_t>(fid) << 32) | sid).second;
-        }
-        if (say)
-            spdlog::info("[cast] {:08X} {} will not file a cast claim for \"{}\" ({:08X}): its caster row is the pure "
-                         "Script row ({}), which never scores a hostile spell, so the claim could never build (shape={})",
-                         fid, a_follower->GetName() ? a_follower->GetName() : "?",
-                         a_spell->GetName() ? a_spell->GetName() : "?", sid,
-                         a.rowWhy.empty() ? EngineRowName(a.row) : a.rowWhy, ShapeName(a.shape));
-        return true;
-    }
-
     void ResetArchetypeLog() {
         {
             std::lock_guard lk(g_noteMx);
-            g_noRowRefused.clear();
             g_noted.clear();
             g_warned.clear();
             g_settled.clear();
