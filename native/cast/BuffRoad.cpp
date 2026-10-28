@@ -31,7 +31,7 @@
 //     has no effect to read, so its claim ends once a fire is observed (one cast per claim).
 //   * LIGHT: a kSelf Candlelight now rides the claim (Harbinger's 0x06 also requires "not already
 //     applied", which bounds the 55-light spam of 2026-08-19). Aimed / targeted Light (Magelight) and any
-//     ambiguous (rowApprox) row stay direct.
+//     ambiguous (rowApprox) row with a Restore / Offensive / unknown candidate stay direct.
 //   * A BUFF AT AN ALLY OR THE PLAYER (a_recipient): claim target = the recipient (ClaimOffenseCast), the
 //     delivery-flip proxy + seat 0 key the row and 0x0A / 0x0D aim at the recipient. One claim at a time on
 //     the LEFT hand; AUTO's beneficial fan (cast/Auto.cpp) is a SERIES, lowest HP first, each recipient
@@ -244,10 +244,19 @@ namespace MFO::Actuation {
                !BuffPlacementSpell(a_spell);
     }
 
+    // A mixed row (several effects mapping to different rows, the classifier then picks the costliest) is refused only
+    // when one of its candidate rows is an UNBOUNDED caster type: Restore or Offensive have no "already on target"
+    // bound in Harbinger, so a wrong caster could re-cast (the 55-light spam shape). Every other candidate row is
+    // bounded by Harbinger keyed on the SPELL (target-checked Light, Script, Armor, Cloak, Ward, Invisibility;
+    // caster-checked Summon, BoundItem), so which caster the engine builds no longer matters (Requiem Candlelight:
+    // Script + Light + Light, field 2026-10-28). An effect whose row is Unknown could be anything: refused too.
     const char* BuffAmbiguousRowWhy(const SpellArchetype& a_arch) {
         if (!a_arch.rowApprox) return nullptr;
-        return "an ambiguous row (several effects map to different caster rows: "
-               "the engine may build a different caster than the one judged)";
+        const auto bit = [](EngineRow r) { return 1u << static_cast<std::uint32_t>(r); };
+        if (a_arch.rowMask & (bit(EngineRow::Restore) | bit(EngineRow::Offensive) | bit(EngineRow::Unknown)))
+            return "an ambiguous row with an unbounded candidate (Restore / Offensive / unknown: Harbinger has no "
+                   "already-on-target bound for them, so a wrong caster could re-cast)";
+        return nullptr;
     }
 
     const char* BuffAimedLightWhy(RE::SpellItem* a_spell, const SpellArchetype& a_arch) {
