@@ -1696,7 +1696,7 @@ PROG_CLASSES = [
 # referenced by the verdicts sub-FLST. Values reproduce the shipped table exactly
 # (the board's perk-effectiveness display is unchanged). Combat/defense = E;
 # lockpick/craft/commerce/player-UI = D, except the three the town features read
-# (8 ModBuyPrices, 62 ModSellPrices, 76 ModTemperingHealth = E, add-on 1.1.6); the named marginal set (+ unproven-on-
+# (8 ModBuyPrices, 60 ModSellPrices, 76 ModTemperingHealth = E, add-on 1.1.6); the named marginal set (+ unproven-on-
 # NPC calls) = M (flagged, never silently killed, so over-filtering stays
 # diagnosable). The engine enum NAMES stay a general fact in the DLL; only these
 # verdicts moved. Editor-ids are informational (the DLL reads them by ORDER).

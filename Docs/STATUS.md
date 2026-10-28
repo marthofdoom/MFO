@@ -10,7 +10,7 @@
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
 
-- **2026-10-28 `fix/addon-craft-verdicts` (NOT merged, add-on data only, no DLL, co-save or ABI change):** Progression Add-On 1.1.6 (stamp 1.106) flips entry points 8 ModBuyPrices, 62 ModSellPrices and 76 ModTemperingHealth from D to E in `PROG_ENTRYPOINT_VERDICTS`, because town pricing and the smith errand read them, so the Progression tab lists Smithing and Speech perks. Alchemy and Enchanting stay D. Layout unchanged (92 verdict GLOBs, same form ids, ESL same size).
+- **2026-10-28 `fix/addon-craft-verdicts` (NOT merged, add-on data only, no DLL, co-save or ABI change):** Progression Add-On 1.1.6 (stamp 1.106) flips entry points 8 ModBuyPrices, 60 ModSellPrices and 76 ModTemperingHealth from D to E in `PROG_ENTRYPOINT_VERDICTS`, because town pricing and the smith errand read them, so the Progression tab lists Smithing and Speech perks. Alchemy and Enchanting stay D. Layout unchanged (92 verdict GLOBs, same form ids, ESL same size).
 
 - **2026-10-28 `fix/mfo-buff-mixed-row-bounded` (NOT merged, no co-save or ABI change):** a mixed-row buff (Requiem Candlelight: Script + Light + Light) went direct and unanimated because any rowApprox row was refused. `BuffAmbiguousRowWhy` now allows a mixed row only when every candidate row is in the allow-list Light, Script, Armor, Cloak, Ward, Invisibility, Summon, BoundItem (Harbinger bounds those on the spell). Anything else stays direct. New `SpellArchetype::rowMask`. NEEDS FIELD: Candlelight cast by a follower animated.
 
