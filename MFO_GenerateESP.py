@@ -1475,7 +1475,7 @@ OWN_PROG = 0x01000000                  # ESL own-form prefix: 1 master (Skyrim.e
 # marth 2026-10-01). The value is a float32 GLOB, so a dotted x.y.z cannot be stored; nothing in
 # the DLL gates on it. Bump by hand with the add-on (no machine-readable add-on version exists;
 # VERSION is MFO's own, 2.x).
-PROG_VERSION_STAMP = 1.105
+PROG_VERSION_STAMP = 1.106
 
 PGID_VERSION            = OWN_PROG | 0x800  # GLOB detection anchor + version stamp
 PGID_RESERVED           = OWN_PROG | 0x801  # GLOB spare future gate (design §10)
@@ -1695,7 +1695,8 @@ PROG_CLASSES = [
 # Emitted as 92 POSITIONAL GLOBs (value 0/1/2) in PGID_VERDICTS_GLOB_BASE order,
 # referenced by the verdicts sub-FLST. Values reproduce the shipped table exactly
 # (the board's perk-effectiveness display is unchanged). Combat/defense = E;
-# lockpick/craft/commerce/player-UI = D; the named marginal set (+ unproven-on-
+# lockpick/craft/commerce/player-UI = D, except the three the town features read
+# (8 ModBuyPrices, 62 ModSellPrices, 76 ModTemperingHealth = E, add-on 1.1.6); the named marginal set (+ unproven-on-
 # NPC calls) = M (flagged, never silently killed, so over-filtering stays
 # diagnosable). The engine enum NAMES stay a general fact in the DLL; only these
 # verdicts moved. Editor-ids are informational (the DLL reads them by ORDER).
@@ -1704,7 +1705,7 @@ PROG_ENTRYPOINT_VERDICTS = [
     "CalculateWeaponDamage E", "CalculateMyCriticalHitChance E",
     "CalculateMyCriticalHitDamage E", "CalculateMineExplodeChance D",
     "AdjustLimbDamage E", "AdjustBookSkillPoints D", "ModRecoveredHealth E",
-    "GetShouldAttack M", "ModBuyPrices D", "AddLeveledListOnDeath D",
+    "GetShouldAttack M", "ModBuyPrices E", "AddLeveledListOnDeath D",
     "GetMaxCarryWeight M", "ModAddictionChance D", "ModAddictionDuration D",
     "ModPositiveChemDuration D", "Activate D", "IgnoreRunningDuringDetection E",
     "IgnoreBrokenLock D", "ModEnemyCriticalHitChance E", "ModSneakAttackMult E",
@@ -1722,13 +1723,13 @@ PROG_ENTRYPOINT_VERDICTS = [
     "ApplyCombatHitSpell E", "ApplyBashingSpell E", "ApplyReanimateSpell E",
     "SetBooleanGraphVariable M", "ModSpellCastingSoundEvent D",
     "ModPickpocketChance D", "ModDetectionSneakSkill E", "ModFallingDamage E",
-    "ModLockpickSweetSpot D", "ModSellPrices D", "CanPickpocketEquippedItem D",
+    "ModLockpickSweetSpot D", "ModSellPrices E", "CanPickpocketEquippedItem D",
     "ModLockpickLevelAllowed D", "SetLockpickStartingArc D", "SetProgressionPicking D",
     "MakeLockpicksUnbreakable D", "ModAlchemyEffectiveness D", "ApplyWeaponSwingSpell E",
     "ModCommandedActorLimit M", "ApplySneakingSpell E", "ModPlayerMagicSlowdown D",
     "ModWardMagickaAbsorptionPct E", "ModInitialIngredientEffectsLearned D",
     "PurifyAlchemyIngredients D", "FilterActivation D", "CanDualCastSpell M",
-    "ModTemperingHealth D", "ModEnchantmentPower D", "ModSoulPctCapturedToWeapon D",
+    "ModTemperingHealth E", "ModEnchantmentPower D", "ModSoulPctCapturedToWeapon D",
     "ModSoulGemEnchanting D", "ModNumberAppliedEnchantmentsAllowed D",
     "SetActivateLabel D", "ModShoutOK D", "ModPoisonDoseCount D",
     "ShouldApplyPlacedItem M", "ModArmorRating E", "ModLockpickingCrimeChance D",
