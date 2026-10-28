@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **Progression Add-On v1.1.6: Smithing and Speech perks can be picked.** The perks that change what the town smith and the shops read (tempering strength, buying and selling prices) were marked as having no effect on a follower, so the Progression tab hid them. They are now listed. Alchemy and Enchanting perks stay hidden until a town errand uses them. Install the new add-on file beside MFO.
 - **Foe: Dragon flying and Foe: Dragon landed.** Two new conditions, listed under Foe: Dragon, which still means any dragon. Flying is a dragon in the air (taking off, cruising or hovering). Landed is a dragon on the ground, perched on a word wall, or coming down to land. Use them to hold a melee follower back while a dragon circles and send him in when it lands, or to keep casters and archers busy while it flies.
 - **New foe conditions: Daedra and Summoned.** Foe: Daedra picks a Daedra (for Banish and Expel). Foe: Summoned picks a conjured or raised creature (for Banish and Dispel). Vampires already count as Foe: Undead.
 - **New state conditions.** Self: Underwater is true when the water is over the follower's head (for Waterbreathing). Self: Poisoned is true while a poison is working on him (for Cure Poison). Player: Sneaking is there too (for Muffle or Invisibility). They are in the Combat and the Logistics lists.
