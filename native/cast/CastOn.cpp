@@ -578,6 +578,45 @@ namespace MFO::Actuation {
                                  true };
                     }
                 }
+                // AN INSTANT OFFENSE SPELL leaves no active effect for Harbinger's "already applied" bound to see
+                // (Arcane Pull, a pure Script row with a zero-duration effect: with the explained-zero lift it would re-cast
+                // every engine cycle for the claim's life). Same rule as BuffRoad's instant release ("one cast per claim",
+                // cast/BuffRoad.cpp BuffRefreshGate): once a fire is observed SINCE THIS CLAIM (the lock's stamp), the claim
+                // is released; the rule re-claims next lap if it still wins.
+                if (offenseSpell && a_target && (handPlan.left || handPlan.right) &&
+                    spell->GetCastingType() != RE::MagicSystem::CastingType::kConcentration) {
+                    bool instantSpell = true;
+                    for (auto* eff : spell->effects)
+                        if (eff && eff->effectItem.duration > 0) { instantSpell = false; break; }
+                    if (instantSpell) {
+                        const std::size_t hands[2] = { kHandLeft, kHandRight };
+                        const bool        planned[2] = { handPlan.left, handPlan.right };
+                        bool              fired = false;
+                        for (int i = 0; i < 2 && !fired; ++i) {
+                            if (!planned[i]) continue;
+                            const auto stamp = CastLockClaimStamp(id, hands[i], a_spellID);
+                            if (stamp == std::chrono::steady_clock::time_point{}) continue;
+                            const auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::steady_clock::now() - stamp);
+                            fired = ComposedCast::ObservedFiring(id, i == 0 ? APMFBridge::kApmfHandLeft
+                                                                            : APMFBridge::kApmfHandRight,
+                                                                 a_spellID,
+                                                                 static_cast<std::uint32_t>(ageMs.count() + 1));
+                        }
+                        if (fired) {
+                            spdlog::info("[cast] {:08X} instant offense cast {:08X} at {:08X} fired -- claim released "
+                                         "(one cast per claim; rule {})", id, a_spellID, a_target->GetFormID(), g_firingRule);
+                            APMFBridge::ReleaseCastClaimOnHand(id, claimHand);   // a dual claim is one handle
+                            for (int i = 0; i < 2; ++i) {
+                                if (!planned[i]) continue;
+                                ClearCastLockHand(id, hands[i]);
+                                ComposedCast::ClearWatchHand(id, i == 0 ? APMFBridge::kApmfHandLeft
+                                                                        : APMFBridge::kApmfHandRight);
+                            }
+                            return { Result::NoOp, "instant offense cast fired: claim released", true };
+                        }
+                    }
+                }
                 // A BUFF CLAIM's refresh (cast/BuffRoad.cpp; self, at an ally / the player, a summon): ends the
                 // claim once a fire-and-forget buff is up on its recipient, and bounds a concentration ward's
                 // stream (release + re-stream past the drawn cap). buffRecip is null for a self buff.
