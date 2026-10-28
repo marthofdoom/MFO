@@ -330,6 +330,17 @@ namespace MFO::Actuation {
         if (!placement) {
             if (const char* why = BuffAimedLightWhy(a_spell, arch))
                 return say(BuffRoad::DirectNoSeat, why);
+            // A Self Light cast at SOMEONE ELSE: Harbinger's delivery flip turns it into an aimed Light, which it does not
+            // serve (2026-10-27 Candlelight at the player: "the selection held no spell for the claimed hand"). Direct fan.
+            if (other) {
+                bool anyLight = arch.shape == SpellShape::Light || arch.row == EngineRow::Light;
+                for (auto* eff : a_spell->effects)
+                    if (eff && eff->baseEffect && eff->baseEffect->data.archetype == RE::EffectArchetype::kLight)
+                        anyLight = true;
+                if (anyLight)
+                    return say(BuffRoad::DirectNoSeat, "a Light cast at another recipient: Harbinger's delivery flip makes "
+                                                       "it an aimed Light, which it does not serve");
+            }
             // A self cast of a non-Self buff is claimed with the caster's own FormID as the target (see
             // ExplicitSelfBuff); Aimed / Touch / TargetActor drive Harbinger's self-flip proxy. Only a
             // kTargetLocation (non-placement, rune-shaped) spell stays direct.

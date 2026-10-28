@@ -1880,7 +1880,8 @@ Opus review of `feat/mfo-town-p2-r2-prices` @ a11fa74c. Verbatim: "Pricing.cpp:1
 
 ### MFO-B331 (SEV-5, CLOSED 2026-10-19 in the R2 closing round, MAP.md) -- town R2: stale RegisterFuncs line number in MAP (raised against a11fa74c)
 Opus review of `feat/mfo-town-p2-r2-prices` @ a11fa74c. Verbatim: "MAP.md cites TradeBridge.cpp:365-376 for RegisterFuncs; the real location is ~:662-675 (stale before this change)." Reasoning: doc only; FIXED in the R2 closing round (now `:661-676`). MAP: TradeBridge section and the script-ABI table row.
-### MFO-B332 (SEV-4, OPEN, apmf/Substrate.cpp / cast/SubstrateRoad.cpp) -- S3: NOT OPENED error repeats for a standing refusal (raised against 733c20cc)
+### MFO-B332 (SEV-4, CLOSED on fix/mfo-cast-gates-1027, apmf/Substrate.cpp / cast/SubstrateRoad.cpp) -- S3: NOT OPENED error repeats for a standing refusal (raised against 733c20cc)
+CLOSED 2026-10-27: `FileSubstrateCast` gate 2b now refuses at the source what Harbinger refuses by rule (player in combat, not loaded, not high process, in a scene, dialogue open) with a rate-limited `[info]` line, so those requests are never filed (80 refusals in the 2026-10-27d session).
 Opus tier-3 review of `feat/mfo-substrate-s3` @ 733c20cc, SEV-4 (b). Verbatim: "The NOT OPENED ERROR repeats every pacing window when Harbinger refuses for a standing reason (dialogue, scene, not high process); a summon (no pacing) re-files every time its verdict ages out." Reasoning: log volume and Harbinger churn only; each refusal is still a no-cast, never the direct road. Surfaced at edit time from: MAP.md section 2 "cast/SubstrateRoad.cpp + apmf/Substrate.cpp".
 
 ### MFO-B333 (SEV-4, OPEN, cast/SubstrateRoad.cpp / cast/BuffRoad.cpp) -- S3: ChooseBuffRoad from the OOC table erases g_neverFired early (raised against 733c20cc)
@@ -2458,3 +2459,6 @@ The party-side lift compares raw coordinates with no same-cell or same-worldspac
 
 ### MFO-B530 (SEV-5, OPEN, EngageOnSight.cpp ABI-30 path comment, against 624ccd8, coordinator) -- comment misattributes a ruling
 The ABI-30 comment "A RANGE DROP is not a give-up (marth 2026-10-12...)" misreads 10-12. marth 2026-10-27: the 10-12 ruling was that a follower stuck at the leash edge COULD chase (leash = distance from the player), not that distant foes should not be dropped (drop = distance from the follower). Reword the comment.
+
+### MFO-B531 (SEV-4, OPEN, cast/Archetype.cpp, against bea32e9, Opus review of fix/mfo-cast-gates-1027) -- kRows lacks four ValueModifier-family archetypes
+Verbatim: "kRows has no rows for Absorb, DualValueModifier, AccumulateMagnitude and PeakValueModifier, so the archetype prediction reads predicted=none for spells the engine keys to a ValueModifier row (Close Greater Wounds keyed Restore natively). Alias those four to the ValueModifier rows in Archetype.cpp, then a NoRow claim gate becomes possible." Reasoning: the D3 claim gate (OffenseClaimHasNoRow) therefore refuses only a pure Script row, not NoRow. Surfaced at edit time from: MAP.md cast/Archetype.cpp.

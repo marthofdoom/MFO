@@ -741,7 +741,11 @@ per concern:
   snap-to-navmesh, and a PREDICTED engine caster row mirrored from Harbinger `Docs/STATUS.md:135-161` (each
   `kRows` entry cites its line); `NoteArchetypeRoad` = the once-per-(follower, spell, road) `[archetype]`
   INFO + one WARN per (follower, spell) for a claim road meeting predicted `none` (ledger `g_noted`/`g_warned`
-  behind `g_noteMx`, cleared by `ResetArchetypeLog` from `ClearSelfCasts`); `CastBreadcrumb` = the flushed
+  behind `g_noteMx`, cleared by `ResetArchetypeLog` from `ClearSelfCasts`); `OffenseClaimHasNoRow` (2026-10-27) = true
+  when the predicted row is the pure Script row and not `rowApprox` (NoRow does not count: MFO-B531), one `[cast]` INFO per (follower, spell) (`g_noRowRefused`); `CastOn.cpp`'s
+  owned-offense branch returns a transparent FailedSkill on it BEFORE any claim (Arcane Pull: 18 claims, 0 builds);
+  `ChooseBuffRoad` also keeps a Light cast at another recipient direct (Candlelight on the player: Harbinger's flip makes
+  it an aimed Light); `CastBreadcrumb` = the flushed
   `[cast-call]` line before every `CastSpellImmediate`; `DescribeArchetype` = the `[cfc]` enrichment
   (`ComposedCast.cpp` NO-observed-cast warn). `cast/SummonProbe.cpp` = `ProbeSummonLanding`, the
   self-reposting MAIN-thread `[summon-probe]` (offset, height, bearing, controller ground state at "appeared"
@@ -2201,7 +2205,7 @@ claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kCastMaxTtlMs` 15 s) a
   incl. its self-flip bar, Buff / summon = `ChooseBuffRoad` (log-free) answering `Claim` or `DirectNoCombat`;
   concentration = slice S5 and Offense = round R4 are NOT taken; a 60 s `[substrate] ... stays on today's direct road`
   line names why), `FileSubstrateCast` (`:129`, worker, or MAIN for a self recipient: the PENDING latch, the player
-  sneaking (Q6), can-act, HasSpell, magicka + reserve, then per recipient heal reach, the two-window pacing (short floor
+  sneaking (Q6), gate 2b (2026-10-27, closes MFO-B332: the player in combat, he is not loaded / not high process, in a scene, or the dialogue menu is open: what Harbinger's open refuses by rule, said at check 8 of `NoteRefused`), can-act, HasSpell, magicka + reserve, then per recipient heal reach, the two-window pacing (short floor
   always, the duration window only once that pair FIRED), already-up, the ch.8b target convention, the bridge, and the
   `OPEN: spell in left hand = yes/no` line), `ResetSubstrateRoad` (from `ClearCastLocks` on revert), `SubstrateLastWindowUnfired` (AUTO orders a recipient whose last pair closed unfired FIRST; AUTO no longer arms `g_beneficialRecast` on this road, `g_subPace` alone paces it), `NoteRefused` (10 s reason line per follower/spell/check on every follower-wide Refused),
   `TrySubstrateCast` (`:243`). Its maps are under `g_roadMx` (leaf). **MFO equips nothing here** (marth 2026-10-19:

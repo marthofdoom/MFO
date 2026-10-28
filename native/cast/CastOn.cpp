@@ -971,6 +971,11 @@ namespace MFO::Actuation {
             auto composed = ComposedCast::TryResult::NotApplicable;
 
             if (Config::g_equipToCast.load()) {
+                if (ownedCast && OffenseClaimHasNoRow(a_follower, spell)) {
+                    // NO CASTER ROW (2026-10-27: Arcane Pull, a pure Script archetype, 18 claims and 0 builds): the claim
+                    // can never build, so none is filed. Transparent, like a refused claim: the rules below still run.
+                    return { Result::FailedSkill, "no caster row serves this spell (a cast claim could never build)", true };
+                }
                 if (ownedCast) {
                     // HAND POLICY (integration/2026-09-06, PER-HAND feat/per-hand-cast-
                     // slots 2026-09-06): `handPlan` was already resolved by the per-hand
