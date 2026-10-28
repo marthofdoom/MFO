@@ -251,6 +251,7 @@ namespace MFO::Actuation {
             std::vector<EngineRow> casters;
             bool anyUnknown = false;
             for (auto r : rows) {
+                o.rowMask |= 1u << static_cast<std::uint32_t>(r);
                 if (r == EngineRow::Unknown) { anyUnknown = true; continue; }
                 if (r == EngineRow::NoRow) continue;
                 if (std::find(casters.begin(), casters.end(), r) == casters.end()) casters.push_back(r);

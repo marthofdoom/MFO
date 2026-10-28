@@ -747,6 +747,7 @@ namespace MFO::Actuation {
         bool         seat0        = false;   // classified with self forced to 1 (APMF seat 0 on a heal claim)
         bool         rowApprox    = false;   // several effects with different rows: costliest effect chosen
         std::string  rowWhy;                 // why NoRow / Unknown / approx (empty when exact)
+        std::uint32_t rowMask     = 0;       // bit (1 << EngineRow) of every effect's row, Unknown and NoRow included
         bool         restoration  = false;   // IsRestorationSpell, unchanged
         bool         anyHostile   = false;   // any effect kHostile
         bool         twoHanded    = false;   // SpellItem::IsTwoHanded (equip slot flag 1)

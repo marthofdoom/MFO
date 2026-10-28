@@ -786,7 +786,7 @@ per concern:
 - `cast/SpellSupport.cpp` (feat/mfo-hide-unsupported-spells 2026-10-06) = `CastRoadUnsupported(SpellItem*, const char** reason)` (public,
   `cast/Actuation.h`): the board's spell-picker filter. True only for the STATIC (record-only) direct fallbacks of `ChooseBuffRoad`, via the SAME
   helpers it calls (`BuffAmbiguousRowWhy` / `BuffAimedLightWhy` / `BuffSelfRuneWhy` / `ExplicitSelfBuff`, now exported from `cast/BuffRoad.cpp`):
-  aimed Light (Magelight) ONLY (the ambiguous-row case was removed post-2.2.0: Flame / Frost / Lightning Cloak show again). Buff kind only; a target-location buff is NOT hidden (only its SELF cast goes direct; at an ally it claims); hostile runes are NOT hidden (CastOn `ownedCast`
+  aimed Light (Magelight) ONLY (the ambiguous-row case was removed post-2.2.0: Flame / Frost / Lightning Cloak show again; `BuffAmbiguousRowWhy` now takes an ALLOW-LIST: a mixed row claims only when `SpellArchetype::rowMask` is a subset of {Light, Script, Armor, Cloak, Ward, Invisibility, Summon, BoundItem}, anything else stays direct, 2026-10-28). Buff kind only; a target-location buff is NOT hidden (only its SELF cast goes direct; at an ally it claims); hostile runes are NOT hidden (CastOn `ownedCast`
   has no delivery filter). WHAT BREAKS: changing a `ChooseBuffRoad` static case without changing its helper desyncs nothing (it calls them), but
   adding a NEW static case there must also go through a shared helper + this predicate, or the picker keeps offering the spell. Board.cpp
   (`SpellList` in PublishSnapshot) hides these, logs `[spell-support] hidden from picker` once per spell, and keeps one a rule already names,
