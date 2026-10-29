@@ -5,6 +5,14 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## v2.7.5 -- Followers use the vanilla Smithing tree
+
+Needs Harbinger v0.15.2 (ABI v31), as v2.7.4 did.
+
+- **Followers use the vanilla Smithing tree on every list.** MFO now reads the Smithing tree from Skyrim.esm for followers, with the vanilla skill levels and prerequisites. Lists such as Requiem and LoreRim lock their Smithing perks behind books, and that lock no longer stops a follower from taking them.
+- **A follower's own Smithing perks are kept.** The Smithing perks a follower starts with are no longer stripped.
+- **Saves that were already stripped get them back.** On load, MFO puts back the vanilla Smithing perks an earlier version took away. The save format does not change.
+
 ## v2.7.4 -- Animated Candlelight, new conditions and giving up targets that cannot be reached
 
 Needs Harbinger v0.15.2 (ABI v31). The give up of unreachable targets and the animated Candlelight need it. Everything else works with an older Harbinger.
