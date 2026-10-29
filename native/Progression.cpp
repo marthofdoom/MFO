@@ -1019,6 +1019,7 @@ namespace MFO::Progression {
             for (const auto& sk : kSkills) {
                 SkillTree tree;
                 BuildSkill(avl->GetActorValue(sk.av), sk.av, sk.name, tree);
+                if (sk.av == RE::ActorValue::kSmithing) ApplyVanillaSmithing(tree);   // progression/VanillaSmithing.cpp
 
                 g_catalog.totalRanks     += tree.totalRanks;
                 g_catalog.effectiveRanks += tree.effectiveRanks;

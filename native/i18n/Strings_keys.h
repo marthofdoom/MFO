@@ -191,6 +191,10 @@ MFO_STR(Pg_FullyAlloc, "Fully allocated ({1}/{2}).", 2)   // {1}=ranks owned, {2
 MFO_STR(Pg_Take, "Take rank {1}  (1 perk point)", 1)   // {1}=the rank you take
 MFO_STR(Pg_LockedMsg, "Locked: {1}", 1)   // {1}=why (comes from the game data, may stay English)
 MFO_STR(Pg_LockedPlain, "Locked.", 0)
+MFO_STR(Pg_VanReq, "vanilla Smithing tree: needs {1}", 1)   // {1}=what is missing, built from Pg_VanSkill / Pg_VanAnd / Pg_VanOr
+MFO_STR(Pg_VanSkill, "{1} (have {2})", 2)   // {1}=the skill requirement such as "Smithing 50", {2}=the follower's current skill
+MFO_STR(Pg_VanAnd, "{1} and {2}", 2)   // joins the missing skill and the missing perk
+MFO_STR(Pg_VanOr, "{1} or {2}", 2)   // joins alternative prerequisite perks (either one is enough)
 MFO_STR(Pg_SyncingShort, "syncing...", 0)
 MFO_STR(Pg_CloseHint, "[B]/Esc close", 0)
 MFO_STR(Pg_Respec, "Respec", 0)   // button

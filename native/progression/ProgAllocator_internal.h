@@ -301,6 +301,10 @@ namespace MFO::ProgAllocator {
         int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base);
         int StripNativePerks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
         int RestoreNativePerksImpl(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
+        // progression/VanillaSmithing.cpp: the vanilla Smithing gate + the fix-forward sweep.
+        bool VanillaGateOk(RE::Actor* a_actor, RE::TESNPC* a_base, const ProgState& a_st,
+                           const Progression::PerkNodeView& a_node, std::string& a_whyNot);
+        int RestoreStrippedVanillaSmithing(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
         int GateNextRank(RE::Actor* a_actor, RE::TESNPC* a_base,
                          ProgState& a_st, const Progression::PerkNodeView& a_node,
                          std::string& a_whyNot);

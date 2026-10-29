@@ -323,6 +323,10 @@ namespace MFO::Progression {
         std::vector<RE::FormID>    condPrereqPerkIDs;
         std::vector<RankView>      ranks;
         Verdict       verdict{ Verdict::kEffective };   // best rank's verdict
+        // progression/VanillaSmithing.cpp: a Skyrim.esm Smithing perk whose edges + skill threshold
+        // were replaced by the vanilla ones at build; GateNextRank then uses the vanilla gate and
+        // never evaluates the list's perkConditions for it.
+        bool          vanillaGate{ false };
     };
 
     // A perk the filter removed — kept so the [prog] dump can explain every
@@ -377,6 +381,11 @@ namespace MFO::Progression {
         int ownerDemotedRanks{ 0 };
         int aloneGateRanks{ 0 };
     };
+
+    // progression/VanillaSmithing.cpp: the vanilla Skyrim.esm Smithing tree for followers.
+    // ApplyVanillaSmithing runs at catalog build on the Smithing tree (load time, before the freeze).
+    void ApplyVanillaSmithing(SkillTree& a_tree);
+    bool IsVanillaSmithingPerk(RE::FormID a_perk);
 
     // ── API ─────────────────────────────────────────────────────────────────
 
