@@ -2465,3 +2465,9 @@ Verbatim: "kRows has no rows for Absorb, DualValueModifier, AccumulateMagnitude 
 
 ### MFO-B532 (SEV-4, OPEN, cast/BuffRoad.cpp BuffAimedLightWhy, against dbbf60a, Opus review of fix/mfo-candlelight-adopt-lift) -- kTouch Light at another recipient now takes a claim that never fires
 Verbatim: "a kTouch Light cast at someone else now takes the claim road, Harbinger's Light 0x06 refuses non-Self non-TargetActor, so that claim never fires (bounded by BuffRoad's never-fired release; Touch Light is essentially absent from real data). Fix: add kTouch to the direct set." Reasoning: the narrowing of BuffAimedLightWhy to kAimed / kTargetLocation (2026-10-28) leaves kTouch on the claim road, where Harbinger's Light seat refuses it. Bounded by the never-fired release, and no real spell has this shape. Surfaced at edit time from: MAP.md cast/BuffRoad.cpp.
+
+### MFO-B533 (SEV-4, OPEN, progression/VanillaSmithing.cpp parent edges, against d7a790b, Opus review of feat/vanilla-smithing) -- a filtered vanilla parent becomes no requirement
+Reviewer: "A filtered vanilla parent becomes \"no requirement\". The catalog's second pass instead bridges to that parent's kept ancestors. For example, if Orcish were filtered, Ebony would need only 80 skill rather than Dwarven." Reasoning: unlikely in practice, since vanilla Smithing perks are kept. The false comment was corrected in f802943.
+
+### MFO-B534 (SEV-4, OPEN, progression/PerkGate.cpp sweep, against d7a790b) -- a perk both stripped and bought keeps costing a point
+Reviewer: "If a perk was recorded as stripped and the player then also bought it through MFO, RestoreNativePerksImpl skips it because it is already on the base. That part is safe: no double add. But the follower keeps paying a point for a perk that is now meant to be native and free, and a respec removes it for good. Edge case."

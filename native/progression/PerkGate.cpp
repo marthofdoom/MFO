@@ -253,10 +253,21 @@ namespace MFO::ProgAllocator {
         // highest rank form present counts that many ranks (rank K implies
         // 1..K, each of which would have cost a point). Perks outside the
         // trees (racial, quest, passives) are invisible here on purpose.
-        int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base) {
+        int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
             int total = 0;
             for (const auto& tree : Progression::Get().skills) {
                 for (const auto& node : tree.nodes) {
+                    // A native vanilla Smithing perk is kept and free (no debit). A rank MFO itself
+                    // allocated on such a node still counts: AllocatedRanks subtracts it below.
+                    if (tree.av == RE::ActorValue::kSmithing && node.vanillaGate) {
+                        auto* al = FindAlloc(a_st, node.perkFormID);
+                        if (al && al->rank >= 1 && al->rank <= node.ranks.size()) {
+                            auto* mine = PerkByID(node.ranks[al->rank - 1].perkFormID);
+                            if (mine && (a_base->GetPerkIndex(mine).has_value() || a_actor->HasPerk(mine)))
+                                total += al->rank;
+                        }
+                        continue;
+                    }
                     for (int r = static_cast<int>(node.ranks.size()); r >= 1; --r) {
                         auto* perk = PerkByID(node.ranks[static_cast<std::size_t>(r - 1)].perkFormID);
                         if (perk && (a_base->GetPerkIndex(perk).has_value() || a_actor->HasPerk(perk))) {
@@ -274,8 +285,10 @@ namespace MFO::ProgAllocator {
         // Non-catalog untouched; an ACTOR-only rank is logged + left. MAIN THREAD.
         int StripNativePerks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
             int stripped = 0;
+            RestoreStrippedVanillaSmithing(a_actor, a_base, a_st);   // fix-forward for saves stripped by an earlier build
             for (const auto& tree : Progression::Get().skills) {
                 for (const auto& node : tree.nodes) {
+                    if (tree.av == RE::ActorValue::kSmithing && node.vanillaGate) continue;   // native vanilla Smithing perks are kept
                     auto* alloc = FindAlloc(a_st, node.perkFormID);
                     const RE::FormID mfoForm = (alloc && alloc->rank >= 1 && alloc->rank <= node.ranks.size())
                         ? node.ranks[alloc->rank - 1].perkFormID : 0;
@@ -304,7 +317,7 @@ namespace MFO::ProgAllocator {
             a_st.nativeHeld = true;
             // §17 debit = tree ranks STILL natively held (unstrippable), never MFO's.
             a_st.nativeTreePerksAtEnroll = static_cast<std::uint16_t>(
-                std::clamp(CountNativeTreeRanks(a_actor, a_base) - AllocatedRanks(a_st), 0, 0xFFFF));
+                std::clamp(CountNativeTreeRanks(a_actor, a_base, a_st) - AllocatedRanks(a_st), 0, 0xFFFF));
             return stripped;
         }
         // The safe-removal restore (public RestoreNativePerks): every recorded
@@ -393,7 +406,10 @@ namespace MFO::ProgAllocator {
             // parentPerkIDs holds the bridged KEPT ancestors — allocatable
             // prereqs, the vanilla any-line rule. The perk's own conditions
             // (§5.2 below) stay the final authority on top.
-            if (have == 0 && !a_node.parentPerkIDs.empty()) {
+            // A vanilla Smithing node (progression/VanillaSmithing.cpp) gates here on the vanilla
+            // skill + prerequisite instead, and skips the list's perkConditions at §5.2.
+            if (a_node.vanillaGate && !VanillaGateOk(a_actor, a_base, a_st, a_node, a_whyNot)) return 0;
+            if (have == 0 && !a_node.vanillaGate && !a_node.parentPerkIDs.empty()) {
                 bool anyParent = false;
                 for (const auto pid : a_node.parentPerkIDs)
                     if (OwnsAnyRank(a_actor, a_base, a_st, pid)) { anyParent = true; break; }
@@ -411,7 +427,8 @@ namespace MFO::ProgAllocator {
                 a_whyNot = std::format("rank form {:08X} did not resolve", rank.perkFormID);
                 return 0;
             }
-            const CondEval ce = EvalPerkConditions(a_actor, a_base, rankForm, a_st.progressionLevel);
+            const CondEval ce = a_node.vanillaGate ? CondEval::kPass
+                                    : EvalPerkConditions(a_actor, a_base, rankForm, a_st.progressionLevel);
             const bool condPass = (ce == CondEval::kFallback)
                                       ? rankForm->perkConditions.IsTrue(a_actor, a_actor)
                                       : (ce == CondEval::kPass);

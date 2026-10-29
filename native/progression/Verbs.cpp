@@ -117,7 +117,7 @@ namespace MFO::ProgAllocator {
         // ONCE, before MFO ever grants anything, so the derived pool can never
         // double-pay a pre-trained follower.
         st.nativeTreePerksAtEnroll =
-            static_cast<std::uint16_t>(std::min(CountNativeTreeRanks(a_actor, base), 0xFFFF));
+            static_cast<std::uint16_t>(std::min(CountNativeTreeRanks(a_actor, base, st), 0xFFFF));
 
         spdlog::info("[prog] ENROLLED {} ({:08X}) — unique base {:08X}, PotentialFollowerFaction={}, "
                      "baseline {} skill(s) captured, {} native tree rank(s) STRIPPED (recorded), {} "
