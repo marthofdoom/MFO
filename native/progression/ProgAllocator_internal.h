@@ -298,7 +298,7 @@ namespace MFO::ProgAllocator {
         int UndoSkills(RE::Actor* a_actor, ProgState& a_st);
 
         // Perks (progression/PerkGate.cpp):
-        int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base);
+        int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
         int StripNativePerks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
         int RestoreNativePerksImpl(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st);
         // progression/VanillaSmithing.cpp: the vanilla Smithing gate + the fix-forward sweep.

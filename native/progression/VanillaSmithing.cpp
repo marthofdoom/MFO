@@ -83,8 +83,8 @@ namespace MFO::Progression {
                     node.condPrereqPerkIDs.push_back(pid);
                     break;
                 }
-                // A vanilla parent absent from the catalog (filtered) cannot be held by a follower:
-                // it is simply not required, the same bridging rule the catalog applies everywhere.
+                // A vanilla parent absent from the catalog (filtered) is simply not required here
+                // (it is NOT bridged to its own parents; deferred, REVIEW-BACKLOG).
             }
             auto& rank = node.ranks[0];
             if (v->level > 0.0f) {
@@ -99,6 +99,15 @@ namespace MFO::Progression {
             node.vanillaGate = true;
             ++applied;
         }
+        std::string missing;
+        std::size_t inCatalog = 0;
+        for (const auto& v : kVanilla) {
+            bool in = false;
+            for (const auto& n : a_tree.nodes) if (n.perkFormID == v.perk) { in = true; break; }
+            if (in) ++inCatalog; else missing += std::format(" {:08X}", v.perk);
+        }
+        spdlog::info("[prog] vanilla Smithing tree: {}/{} in catalog (missing from the catalog:{})",
+                     inCatalog, std::size(kVanilla), missing.empty() ? " none" : missing);
         spdlog::info("[prog] vanilla Smithing tree: {}/{} Skyrim.esm perk(s) now gate on the vanilla "
                      "edges + skill thresholds for followers (list conditions not evaluated); "
                      "left on the list's own rules:{}", applied, std::size(kVanilla),
@@ -149,8 +158,17 @@ namespace MFO::ProgAllocator {
     // MAIN THREAD (called from StripNativePerks).
     int RestoreStrippedVanillaSmithing(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
         std::vector<RE::FormID> vanilla, others;
+        // Decide by the catalog node's vanillaGate (the same key the strip and the debit use), so a
+        // table perk the list left unflagged (multirank) is never restored here and stripped again.
+        auto flagged = [](RE::FormID a_fid) {
+            for (const auto& tree : Progression::Get().skills)
+                if (tree.av == RE::ActorValue::kSmithing)
+                    for (const auto& n : tree.nodes)
+                        if (n.perkFormID == a_fid) return n.vanillaGate;
+            return false;
+        };
         for (const auto fid : a_st.strippedPerks)
-            (Progression::IsVanillaSmithingPerk(fid) ? vanilla : others).push_back(fid);
+            (flagged(fid) ? vanilla : others).push_back(fid);
         if (vanilla.empty()) return 0;
         const bool heldBefore = a_st.nativeHeld;
         a_st.strippedPerks = std::move(vanilla);

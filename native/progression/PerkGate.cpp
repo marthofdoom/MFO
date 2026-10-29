@@ -253,11 +253,21 @@ namespace MFO::ProgAllocator {
         // highest rank form present counts that many ranks (rank K implies
         // 1..K, each of which would have cost a point). Perks outside the
         // trees (racial, quest, passives) are invisible here on purpose.
-        int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base) {
+        int CountNativeTreeRanks(RE::Actor* a_actor, RE::TESNPC* a_base, ProgState& a_st) {
             int total = 0;
             for (const auto& tree : Progression::Get().skills) {
                 for (const auto& node : tree.nodes) {
-                    if (tree.av == RE::ActorValue::kSmithing && node.vanillaGate) continue;   // kept native, free (never stripped)
+                    // A native vanilla Smithing perk is kept and free (no debit). A rank MFO itself
+                    // allocated on such a node still counts: AllocatedRanks subtracts it below.
+                    if (tree.av == RE::ActorValue::kSmithing && node.vanillaGate) {
+                        auto* al = FindAlloc(a_st, node.perkFormID);
+                        if (al && al->rank >= 1 && al->rank <= node.ranks.size()) {
+                            auto* mine = PerkByID(node.ranks[al->rank - 1].perkFormID);
+                            if (mine && (a_base->GetPerkIndex(mine).has_value() || a_actor->HasPerk(mine)))
+                                total += al->rank;
+                        }
+                        continue;
+                    }
                     for (int r = static_cast<int>(node.ranks.size()); r >= 1; --r) {
                         auto* perk = PerkByID(node.ranks[static_cast<std::size_t>(r - 1)].perkFormID);
                         if (perk && (a_base->GetPerkIndex(perk).has_value() || a_actor->HasPerk(perk))) {
@@ -307,7 +317,7 @@ namespace MFO::ProgAllocator {
             a_st.nativeHeld = true;
             // §17 debit = tree ranks STILL natively held (unstrippable), never MFO's.
             a_st.nativeTreePerksAtEnroll = static_cast<std::uint16_t>(
-                std::clamp(CountNativeTreeRanks(a_actor, a_base) - AllocatedRanks(a_st), 0, 0xFFFF));
+                std::clamp(CountNativeTreeRanks(a_actor, a_base, a_st) - AllocatedRanks(a_st), 0, 0xFFFF));
             return stripped;
         }
         // The safe-removal restore (public RestoreNativePerks): every recorded
