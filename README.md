@@ -5,7 +5,7 @@ lists of **Gambits** — `[Condition] -> [Action]` rules, first match wins —
 authored live, in game, per follower. Final Fantasy XII's gambit system
 rebuilt on the engine's own actor primitives.
 
-**Status: v2.7.3** (see [`VERSION`](VERSION) and the
+**Status: v2.7.4** (see [`VERSION`](VERSION) and the
 [GitHub releases](https://github.com/marthofdoom/MFO/releases); the exact point
 release is in `VERSION`). As of 2.0.0 MFO runs on **[Harbinger (APMF)](https://github.com/marthofdoom/APMF)**,
 a required control-layer framework of mine that lets several mods drive the same
@@ -182,6 +182,14 @@ leash and walk-to-loot.
 
 ---
 
+## What is new in 2.7.4
+
+- **Needs Harbinger v0.15.2 (ABI v31).** Animated Candlelight and the give up of unreachable targets need it. Everything else works with an older Harbinger.
+- **Candlelight and the other Light spells cast animated,** on you or on an ally, in lit towns and outside combat, including Requiem's Candlelight. A buff with a mix of Script and Light effects takes the animated road too.
+- **New conditions.** Foe: Dragon flying and landed, Foe: Daedra and Summoned, Self: Underwater and Poisoned, Player: Sneaking, and Ally: Downed, Paralysed, Poisoned and Underwater. Self: and Ally: open as their own lists in the When menu.
+- **A follower gives up a target that cannot be reached** and the other rules keep working. Engage on sight never starts a fight with giants or mammoths.
+- **Progression Add-On v1.1.6.** Smithing and Speech perks can be picked on the Progression tab. Install the new add-on file beside MFO.
+
 ## What is new in 2.7.3
 
 - **Needs Harbinger v0.15.1.** The out of combat animated casts need it. Town errands work with an older Harbinger.
@@ -213,7 +221,7 @@ leash and walk-to-loot.
 - **MCM.** A Guide page comes first in the MFO MCM. Legacy cast controls are INI only and there is a new Debug page.
 - **1.5.97 and 1.7.104.** Three more engine reads are proven and enabled on both runtimes.
 - **Temple door crash fixed.** The temple door lock check no longer crashes.
-- **Release defaults.** Town errands are ON. Out of combat substrate casting is ON (`bSubstrateCasts=1`, needs Harbinger v0.15.1). Town toasts are OFF. Harbinger v0.15.1 is recommended.
+- **Release defaults.** Town errands are ON. Out of combat substrate casting is ON (`bSubstrateCasts=1`, needs Harbinger v0.15.1). Town toasts are OFF. Harbinger v0.15.2 is recommended.
 
 ## What is new in 2.6.2
 
