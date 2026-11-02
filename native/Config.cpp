@@ -263,6 +263,7 @@ namespace MFO::Config {
             else if (a_key == "bMeoAwareGems")      setB(g_meoAwareGems);
             else if (a_key == "bAutoRetreat")       setB(g_autoRetreat);
             else if (a_key == "bEngageOnSight")     setB(g_engageOnSight);          // default OFF
+            else if (a_key == "bJoinPartyFights")   setB(g_joinPartyFights);          // default ON
             else if (a_key == "bEngageOnSightSneaking") setB(g_engageOnSightSneaking);   // default OFF
             else if (a_key == "fEngageOnSightRange") setF(g_engageOnSightRange, 500.0f, 4000.0f);   // match the MCM slider
             else if (a_key == "sEngageOnSightSkip") {
@@ -463,6 +464,7 @@ namespace MFO::Config {
             g_meoAwareGems       = false;   // effect-aware gem optimization -- OFF (conservation still always runs)
             g_autoRetreat        = false;   // OFF while retreat is reworked (marth 2026-10-06; ClickUp 86e3m5feu)
             g_engageOnSight      = false;   // hidden OOC gambit "nearest visible enemy" -- OFF by default
+            g_joinPartyFights    = true;    // join a fight the party is in (not the on-sight road) -- ON
             g_engageOnSightSneaking = false;   // ...and not while the player sneaks, unless asked
             g_engageOnSightRange = 2000.0f;   // reaction distance from the follower
             g_magicLoadout       = true;
@@ -531,6 +533,7 @@ namespace MFO::Config {
             { "bLootSpecialItems", "1" },      { "bLootLOTD", "0" },
             { "bEconomy", "1" },               { "bAutoRetreat", "0" },
             { "bEngageOnSight", "0" },         { "bEngageOnSightSneaking", "0" },
+            { "bJoinPartyFights", "1" },
             { "fEngageOnSightRange", "2000.000000" },
             { "bEconomyBuyGear", "1" },        { "bEconomyBuyTomes", "1" },
             { "bTownErrands", "1" },           { "bTownToasts", "0" },

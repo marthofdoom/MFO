@@ -919,6 +919,10 @@ namespace MFO::Config {
     // whether or not g_autoRetreat is on (marth 2026-10-11: run it without retreat; it used to need it, as a follower who starts a fight could break it
     // off). EngageOnSight.cpp. bEngageOnSight (default OFF).
     inline std::atomic<bool>  g_engageOnSight{ false };
+    // JOIN PARTY FIGHTS (ClickUp 1dfcuabc4du, marth 2026-11-01): while the PARTY is in combat and a follower is not,
+    // he joins the nearest foe that is fighting the party, and a stale far entry / pin is re-pointed
+    // (EngageOnSight::ServiceInFight). NOT gated by bEngageOnSight (the player is in combat first). bJoinPartyFights (default ON).
+    inline std::atomic<bool>  g_joinPartyFights{ true };
     // Whether the gambit also fires while the PLAYER is sneaking (marth's open
     // question -- default NOT: a sneaking player is choosing not to fight yet).
     // bEngageOnSightSneaking (default OFF).

@@ -2504,3 +2504,12 @@ Reviewer: "A benched follower above the cap keeps his total until he returns, an
 
 ### MFO-B545 (SEV-5, OPEN, progression/Hms.cpp, against 8ce9ca8..711d406) -- fractional base AVs, the unreadable path hides the capped line, an older build floors stats back up
 Reviewer: "The fixed-stat cut writes fractional base AVs, while the grant path writes whole points." "The \"unreadable\" error path sets hmsCapLogged, which hides that session's \"adopted total capped\" line." "older builds put the baseline floor back, so stats rise ... This is a stat change only, with no format or co-save corruption."
+
+### MFO-B546 (SEV-4, OPEN, cast/Fire.cpp s_notInCombatSince, against 8ed3d9f, Opus review of feat/mfo-engage-fights) -- the not-in-combat timer is never cleared on Forget or ResetAllState
+Reviewer: "s_notInCombatSince is never cleared on Forget or ResetAllState. An entry left over from an earlier flap can skip the 1 s debounce, though it is mostly masked because a new fight's first command is Changed."
+
+### MFO-B547 (SEV-4, OPEN, EngageOnSight.cpp, against 8ed3d9f) -- an entry filed before ToldToWait or the Wait rule turns on is not released by that gate (pre-existing)
+Reviewer: "an entry filed before ToldToWait or the Wait rule turns on is not released by that gate. That predates this branch."
+
+### MFO-B548 (SEV-4, OPEN, cast/Fire.cpp transparent NoOp, against 6a6bd24) -- a stale pinned X can still trade places with a live Y once per debounce period
+Author: "a stale X can still trade places with a live Y once per debounce period, until the stale-entry release or Harbinger drops X. I did not close it." Note for marth (reviewer SEV-5): a retreating follower (RetreatPhase not None) is not pulled into the party fight, since engaging mid-retreat would undo the retreat.

@@ -61,6 +61,7 @@ namespace MFO::APMFBridge {
             bool             ended    = false;     // Harbinger ended it (IsClaimLive went false)
             std::uint32_t    endReason = APMF_API::kClaimEnd_None;   // ABI v31, read when the end is noticed
             float            engageRange = 0.0f;   // the fval this entry was filed with (0 = none)
+            bool             inFight  = false;     // filed by the in-fight road (bJoinPartyFights), not engage-on-sight
         };
         std::unordered_map<RE::FormID, CombatEntryClaim> g_entries;   // guarded by g_mx
 
@@ -113,11 +114,22 @@ namespace MFO::APMFBridge {
         if (g_entries.empty() || !api || api->abiVersion < kEntryMinAbi) return;
         // KILL SWITCH: bEngageOnSight flipped OFF mid-session forgets every entry.
         // Release STOPS NOTHING (Harbinger's contract), so a fight already begun goes on.
-        if (!Config::g_engageOnSight.load()) {
-            spdlog::info("[engage-on-sight] bEngageOnSight off -- releasing {} entry claim(s) "
-                         "(no fight is stopped)", g_entries.size());
-            ClearCombatEntriesLocked();
-            return;
+        // Entries filed by the in-fight road are keyed on bJoinPartyFights instead: with bEngageOnSight=0 and
+        // bJoinPartyFights=1 they stand until Harbinger ends them or the stale rule releases them.
+        {
+            const bool onSight = Config::g_engageOnSight.load();
+            const bool join    = Config::g_joinPartyFights.load();
+            std::size_t released = 0;
+            for (auto it = g_entries.begin(); it != g_entries.end();) {
+                if (it->second.inFight ? join : onSight) { ++it; continue; }
+                if (it->second.handle != APMF_API::kInvalidHandle) api->Release(it->second.handle);
+                it = g_entries.erase(it);
+                ++released;
+            }
+            if (released)
+                spdlog::info("[engage-on-sight] {} off -- released {} entry claim(s) (no fight is stopped)",
+                             onSight ? "bJoinPartyFights" : "bEngageOnSight", released);
+            if (g_entries.empty()) return;
         }
         const bool paused = EntryGamePaused();
         for (auto& [fid, e] : g_entries) {
@@ -140,7 +152,7 @@ namespace MFO::APMFBridge {
     }
 
     EntryResult RequestCombatEntry(RE::FormID a_follower, RE::FormID a_target, std::uint32_t* a_outHandle,
-                                   float a_engageRange) {
+                                   float a_engageRange, bool a_inFight) {
         if (a_outHandle) *a_outHandle = APMF_API::kInvalidHandle;
         auto* api = g_apmf.load(std::memory_order_relaxed);
         if (!api || api->abiVersion < kEntryMinAbi || g_entrySeatRefused.load(std::memory_order_relaxed))
@@ -175,6 +187,7 @@ namespace MFO::APMFBridge {
         CombatEntryClaim e{};
         e.handle = h;
         e.target = a_target;
+        e.inFight = a_inFight;
         e.engageRange = prm.fval;   // the range sent (0 = none): a range-drop give-up lifts back inside it
         g_entries.emplace(a_follower, e);
         if (a_outHandle) *a_outHandle = h;
