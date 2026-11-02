@@ -5,6 +5,10 @@ reaches the game.
 
 Newest first. Header form is `## vX.Y.Z -- Title`.
 
+## Unreleased
+
+- **The follower menu shows the gold each follower carries while you are in a town.** It sits under the follower's name on the Followers tab and counts the gold coins and any modded coin items, the same count the town trips use.
+
 ## v2.7.5 -- Followers use the vanilla Smithing tree
 
 Needs Harbinger v0.15.2 (ABI v31), as v2.7.4 did.

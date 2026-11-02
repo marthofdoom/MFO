@@ -1622,6 +1622,7 @@ namespace MFO::Board {
         // (Followers::ActiveSnapshot) instead of the raw g_active handle vector,
         // matching the discipline every other off-serial reader now follows.
         auto activeIds = Followers::ActiveSnapshot();
+        const bool inTown = Config::g_townErrands.load() && Logistics::Errand::PlayerInTown();   // follower gold shows only in a town
         for (RE::FormID fid : *activeIds) {
             auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
             if (!a) continue;
@@ -1630,6 +1631,7 @@ namespace MFO::Board {
             r.name      = a->GetName() ? a->GetName() : "?";   // null-guard like every sibling
             r.active    = true;
             FillTownInfo(r, a, player);
+            if (inTown) r.gold = Logistics::CoinCount(a);   // worker read; the render thread sees only the int
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
             r.inCombat  = APMFBridge::InCombat(a);   // the HUD's combat glyph: a Harbinger substrate is not combat (v26)

@@ -528,6 +528,9 @@ namespace MFO::Board {
                             }
                             if (!r.errand.empty())
                                 ImGui::TextDisabled("%s", r.errand.c_str());
+                            // Town: the gold he carries, plain text (no new focusable element, gamepad nav unchanged).
+                            if (r.gold >= 0)
+                                ImGui::TextDisabled("%s", Str::Fmt(Str::K::Fk_Gold, { r.gold }).c_str());
 
                             ImGui::TableNextColumn();
                             if (!r.active) {
