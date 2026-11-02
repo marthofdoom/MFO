@@ -354,8 +354,13 @@ namespace MFO::Logistics::Errand {
         // ShopDoorFor: the EXTERIOR load door nearest the player that leads into the interior cell a_cell, directly or through one interior
         // (two cells deep), read on the MAIN thread over the loaded grid and cached 5 real minutes. Found = a_pos is that door's position;
         // None = no such door (or the player is indoors); Pending = the read was posted, ask again on the next plan.
-        enum class DoorAnswer { Found, None, Pending };
-        DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos);
+        // Locked (closed-shop fix) = the door was found but every route into the place is LOCKED: a_pos is still set, a_lockedId / a_lockLevel say which side.
+        enum class DoorAnswer { Found, None, Pending, Locked };
+        DoorAnswer ShopDoorFor(RE::FormID a_cell, RE::NiPoint3& a_pos, RE::FormID* a_lockedId = nullptr, int* a_lockLevel = nullptr);
+        // A walk to a shop's place ended BLOCKED: a fresh main-thread re-read of its entry door's lock. Pending = ask again next tick; Unknown = no read possible.
+        enum class LockAnswer { Locked, Open, Pending, Unknown };
+        LockAnswer ShopDoorLockedNow(RE::FormID a_cell, RE::FormID& a_lockedId, int& a_lockLevel);
+        const char* LockWordOf(int a_level);   // the lock-level word for a log line ("average", "requires a key" ...)
     }
 
     // ── TOWN RUN 5 (marth 2026-10-20 R1 / R4): the UNSTICK -- logistics/ErrandPlace.cpp ─────────────────────────────────────────────
