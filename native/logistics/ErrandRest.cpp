@@ -1520,4 +1520,26 @@ namespace MFO::Logistics::Errand::Rest {
         }
         return anyLocked && !anyOpen;   // a second, open door to the same cell keeps the shop open
     }
+
+    bool TownWalkBarredByLock(RE::Actor* a_follower, RE::TESObjectREFR* a_dest, const char* a_what) {
+        static std::mutex                        s_mx;
+        static std::unordered_set<std::uint64_t> s_logged;   // (follower, dest cell) logged this visit; cleared on the first ask outside a town
+        if (!PlayerInTown()) { std::scoped_lock lk(s_mx); s_logged.clear(); return false; }
+        auto* destCell = a_dest ? a_dest->GetParentCell() : nullptr;
+        auto* ownCell  = a_follower ? a_follower->GetParentCell() : nullptr;
+        if (!destCell || !ownCell || destCell == ownCell || !destCell->IsInteriorCell()) return false;
+        RE::FormID lockedId = 0;
+        int lockLevel = 0;
+        if (!FollowerSideDoorLocked(a_follower, destCell->GetFormID(), lockedId, lockLevel)) return false;
+        bool first = false;
+        {
+            std::scoped_lock lk(s_mx);
+            first = s_logged.insert((static_cast<std::uint64_t>(a_follower->GetFormID()) << 32) | destCell->GetFormID()).second;
+        }
+        if (first)
+            spdlog::info("[town-walk] {:08X}: {} {:08X} not declared: every door into its interior cell {:08X} is locked (door {:08X}, {}) and "
+                         "a town trespass would be the player's bounty (marth 2026-11-02: no locked door in town)",
+                         a_follower->GetFormID(), a_what, a_dest->GetFormID(), destCell->GetFormID(), lockedId, LockWordOf(lockLevel));
+        return true;
+    }
 }

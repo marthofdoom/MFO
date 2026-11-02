@@ -48,7 +48,14 @@ namespace MFO::Logistics::Errand {
     bool Active(RE::FormID a_follower);
     // Is the PLAYER in a City / Town / Settlement now (the same test the errands use)? The board shows follower gold while true.
     bool PlayerInTown();
-    namespace Rest { int FollowerGold(RE::Actor* a_actor); }   // Gold001 only (the purse the errands spend); defined in ErrandRest.cpp
+    namespace Rest {
+        int FollowerGold(RE::Actor* a_actor);   // Gold001 only (the purse the errands spend); defined in ErrandRest.cpp
+        // marth 2026-11-02 blanket ruling (never a locked door in town) for the NON-errand walks (loot legs, the LOTD deposit leg): TRUE = do NOT
+        // declare a walk of a_follower to a_dest, because the player is in an errand town, a_dest stands in an INTERIOR cell other than the follower's
+        // own, and every load door into that cell that the follower can see in his own cell is locked. Logs once per visit per follower and cell.
+        // Worker thread (the same own-cell scan as FollowerSideDoorLocked). FALSE for an exterior dest, the same cell, or no door seen.
+        bool TownWalkBarredByLock(RE::Actor* a_follower, RE::TESObjectREFR* a_dest, const char* a_what);
+    }
     // R3: a short status of this follower's errand for the Board ("Walking to X", "Trading with X", "Off-screen: trading at X",
     // "Heading back"), physical or simulated. EMPTY = no errand. Any thread: it copies under the table mutexes (physical, then
     // simulated, never nested) and reads no engine object.
