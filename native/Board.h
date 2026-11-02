@@ -73,7 +73,7 @@ namespace MFO::Board {
         std::string   location;
         std::string   errand;
         bool          withYou = false;
-        // ClickUp 1dfcuabbua0: the gold (Gold001 + coin items, Logistics::CoinCount over GetInventoryCounts, never GetGoldAmount)
+        // ClickUp 1dfcuabbua0: the gold (Gold001 only, Errand::Rest::FollowerGold over GetInventory, never GetGoldAmount)
         // an ACTIVE follower carries, read on the worker in PublishSnapshot while the player is in a town. -1 = not shown.
         std::int32_t  gold = -1;
         std::uint8_t  combatSlots = 0;

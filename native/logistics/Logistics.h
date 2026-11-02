@@ -193,9 +193,6 @@ namespace MFO::Logistics {
     //     town-update trade/errand excursions to come.
     bool IsLooting(RE::FormID a_id);
     bool JustLooted(RE::FormID a_id);
-    // ClickUp 1dfcuabbua0: Gold001 + coin items in the follower's inventory (GetInventoryCounts, never the CTD-prone GetGoldAmount). Defined in
-    // logistics/LootTake.cpp (also declared in Logistics_internal.h). Worker-domain read; the board calls it from PublishSnapshot.
-    std::int32_t CoinCount(RE::Actor* a_actor);
     bool WalkingLootLeg(RE::Actor* a_follower);
     bool IsTrading(RE::FormID a_id);
 

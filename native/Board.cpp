@@ -1631,7 +1631,7 @@ namespace MFO::Board {
             r.name      = a->GetName() ? a->GetName() : "?";   // null-guard like every sibling
             r.active    = true;
             FillTownInfo(r, a, player);
-            if (inTown) r.gold = Logistics::CoinCount(a);   // worker read; the render thread sees only the int
+            if (inTown) r.gold = Logistics::Errand::Rest::FollowerGold(a);   // worker read; the render thread sees only the int
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
             r.inCombat  = APMFBridge::InCombat(a);   // the HUD's combat glyph: a Harbinger substrate is not combat (v26)

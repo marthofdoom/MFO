@@ -8,7 +8,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 ## Unreleased
 
 - **Player conditions in the gambit list open as a popout.** "Player: HP below" and "Player: Sneaking" now sit under one "Player:" row, the same as the Self: and Ally: rows. The conditions and your saved gambits do not change.
-- **The follower menu shows the gold each follower carries while you are in a town.** It sits under the follower's name on the Followers tab and counts the gold coins and any modded coin items, the same count the town trips use.
+- **The follower menu shows the gold each follower carries while you are in a town.** It sits under the follower's name on the Followers tab and counts the gold coins, the same purse the town trips spend.
 
 ## v2.7.5 -- Followers use the vanilla Smithing tree
 
