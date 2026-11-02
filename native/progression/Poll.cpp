@@ -14,6 +14,7 @@
 #include "Board.h"
 #include "Config.h"
 #include "Followers.h"
+#include "logistics/Errand.h"   // Errand::Active: a follower on a town errand is in the party for leveling
 #include "Rapport.h"
 #include "MainThread.h"
 #include "Serialization.h"
@@ -135,7 +136,15 @@ namespace MFO::ProgAllocator {
                 const bool prog = g_ready && st.enrolled;
 
                 if (prog && st.clsId != 0) {
-                    const bool active = IsActiveFollower(id);
+                    // IN THE PARTY for leveling (ClickUp 1dfcuabc4dq, marth "Errand = in party"):
+                    // on the roster, OR away on a town errand (the errand drops him off the
+                    // roster while he trades / rests off screen), OR held through a transient
+                    // roster drop. Only a real bench takes the banked branch below. Both probes
+                    // lock their own leaf mutex and return (any thread, nothing held here).
+                    const bool tracked       = IsActiveFollower(id);
+                    const bool onErrand      = !tracked && Logistics::Errand::Active(id);
+                    const bool transientHeld = !tracked && !onErrand && Followers::IsTransientDropFast(id);
+                    const bool active        = tracked || onErrand || transientHeld;
                     const int  lag    = std::max(0, static_cast<int>(pl) - static_cast<int>(st.progressionLevel));
                     int gain = 0;
                     if (!g_econ.sharedGrowthEnabled) {
@@ -164,10 +173,14 @@ namespace MFO::ProgAllocator {
                         // §17: no grant — the derived pool follows the level.
                         spdlog::info("[prog] {:08X} level {} (+{}) — {} perk point(s) available "
                                      "(floor(level/{}) − {} spent), {} craft point(s) "
-                                     "(floor(level/{}))",
+                                     "(floor(level/{})){}",
                                      id, st.progressionLevel, gain, PerkPointsAvailable(st),
                                      g_econ.levelsPerPerkPoint, AllocatedRanks(st),
-                                     CraftPerkPointsAvailable(st), g_econ.levelsPerCraftPerkPoint);
+                                     CraftPerkPointsAvailable(st), g_econ.levelsPerCraftPerkPoint,
+                                     onErrand        ? " [in the party: away on a town errand]"
+                                     : transientHeld ? " [in the party: held through a transient roster drop]"
+                                     : !active       ? " [benched: banked at the Shared Growth rate]"
+                                                     : "");
                         if (actor && managed) RecomputeSkills(actor, st, /*log*/ true);
                         if (actor && managed) RecomputeHMS(actor, st, /*log*/ true);   // §HMS
                     }

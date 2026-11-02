@@ -7,6 +7,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 ## Unreleased
 
+- **A follower away on a town errand keeps leveling with you.** Leveling up while a follower was off trading or resting in town used to count that follower as benched, so the level was banked at the Shared Growth rate and often missed. A follower on an errand, or briefly out of sight after a load or a door, now counts as in the party. Levels already missed this way are not given back yet.
 - **Follower perk requirements are checked more truthfully.** A perk that needs another perk the follower can never own, such as Stunning Precision, now counts the matching perk in the tree. Exclusions such as "must not have rank 1" no longer let a follower with rank 2 through. One unusual requirement no longer makes the whole perk fall back to the game, only that one requirement does. Perks that need an item in the inventory are no longer offered to followers.
 - **Player conditions in the gambit list open as a popout.** "Player: HP below" and "Player: Sneaking" now sit under one "Player:" row, the same as the Self: and Ally: rows. The conditions and your saved gambits do not change.
 - **The follower menu shows the gold each follower carries while you are in a town.** It sits under the follower's name on the Followers tab and counts the gold coins, the same purse the town trips spend.

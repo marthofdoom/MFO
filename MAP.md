@@ -5437,8 +5437,19 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
     the floor guarantee UndoSkills relies on.
   - (2026-10-04) `HoldUnledgeredSkills` (`progression/SkillScale.cpp`, end of file, declared in `ProgAllocator_internal.h`) holds every baselined skill WITHOUT a ledger entry at its enrollment baseline (engine auto-calc drift cancel), via a throwaway entry through `ReconcileSkill`. Called from `Poll.cpp` drift watch right after `RecomputeSkills`. Gated by `cancelEngineAwards`; baseline <= 0 skipped. No co-save change.
   - (2026-10-01) `Poll.cpp` `DumpLedgerOnce` (READ-ONLY `[prog] ledger` dump, once per load per follower, keyed on `g_pollGen`) is called at the end of `PollWork`'s per-follower body; it writes nothing.
-  - `progression/Poll.cpp` (224) = the level poll: `Unmanaged` (`:35`), `PollWork` (`:43`),
-    `PollTick` (`:200`, also drives the board-view refresh).
+  - `progression/Poll.cpp` (313) = the level poll: `Unmanaged` (`:37`), `PollWork` (`:72`),
+    `PollTick` (`:285`, also drives the board-view refresh).
+  - (2026-11-01, ClickUp 1dfcuabc4dq, marth "Errand = in party") **IN THE PARTY for leveling**
+    (`Poll.cpp:144-147`): Shared Growth's ACTIVE branch (`min(d, lag)`) is taken when the follower is
+    tracked (`IsTrackedFast`) OR on a town errand (`Logistics::Errand::Active`, both its locks are leaves,
+    any thread) OR held through a transient roster drop (`Followers::IsTransientDropFast`, `Followers.cpp:340`,
+    the `g_mx` mirror of `g_transientDrop` republished by `PublishActiveMirror` `:172`). Field cause: an
+    errand drops the follower off the roster (TRADE_SIM / REST_SIM off screen), so a player level-up then
+    took the BENCHED branch and banked the level at the divisor, silently, and the active branch never
+    refunds a lag. **What breaks:** reading `g_transientDrop` off the worker (use the mirror); calling
+    `Errand::Active` while holding any lock; widening "in party" to every untracked teammate (that refunds
+    a real bench, which Shared Growth forbids). EXISTING gaps in saves are NOT refunded (no record tells an
+    errand gap from a bench gap); no co-save change.
   - `progression/Harness.cpp` (176) = the dev harness: `ClsName` (`:24`), `PickFollower` (`:35`),
     `HarnessStatus` (`:55`), `HarnessSkillDump` (`:85`), `HarnessEconomyDump` (`:105`),
     `OnHarnessHotkey` (`:121`).
