@@ -671,11 +671,13 @@ namespace MFO::Logistics::Errand::Rest {
             });
             RE::FormID best = 0;
             float bestD = 1.0e9f;
+            auto* cellOwner = cell->GetOwner();   // GetOwner on a furniture ref skips the cell fallback: an unowned bed in an owned room is that owner's
             for (auto& h : cands) {
                 auto rp = h.get();
                 auto* r = rp.get();
                 if (!r) continue;
                 auto* owner = r->GetOwner();
+                if (!owner) owner = cellOwner;
                 if (owner && owner->GetFormID() != 0x00000007u && owner->GetFormID() != 0x00000014u) continue;   // someone else's bed
                 const float d = r->GetPosition().GetDistance(a_follower->GetPosition());
                 if (d < bestD) { bestD = d; best = r->GetFormID(); }
