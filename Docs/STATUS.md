@@ -6,9 +6,11 @@
 > change the workflow. A stale status doc is worse than none — if you touch the
 > project and don't touch this, you've left the next session a trap.
 >
-> **Last updated:** 2026-10-29 UTC (delta block only; the body below is 2026-09-07).
+> **Last updated:** 2026-11-01 UTC (delta block only; the body below is 2026-09-07).
 
 ## ▶ DELTA SINCE THIS DOC WAS LAST REWRITTEN (2026-09-09)
+
+- **2026-11-01 `feat/mfo-hms-fix` (ClickUp 1dfcuabc4dv "HMS seems to strong, Auri is a solid case to investigate"; NOT merged; NO co-save or ABI change, PRGN stays v8; tier A):** three systemic HMS rules, marth 2026-11-01. (A) an ENROLLED follower's HMS keys on the enrolled class (`HmsProfileFor`), everyone else on the resolved combat class as before. (B) an attack with a spell or staff in the acting hand is Magicka use, and a battle is judged at its end by the pool fired most (tie to the class primary). (C) a follower's held H/M/S total is capped at the player's base total, swept on load and trimmed on each award, the cut added to withheld for a leveling follower; INI `bHmsCapToPlayerTotal` default 1. Worked example Auri (483139C8, Mage enrolled, played as Ranged): H541 M127 S408 = 1076 -> H246 M127 S177 = 550 on load, next award all to Magicka. MAP §HMS ADOPTED-TOTAL CAP.
 
 - **2026-11-01 `fix/town-substrate-gate` (FLAGGED WORKAROUND, marth 2026-11-01 "Yes, gate in towns", ClickUp 1dfcuabc4dn town panic; NOT merged; NO co-save or ABI change):** while the player is in a town MFO does not request the out-of-combat cast substrate (Harbinger ch.27). The gate is at the source, `SubstrateRoadFor` (`cast/SubstrateRoad.cpp`), and uses the errands' own town test (`LocationTypes::TownAnchor` of the player's location). The cast then takes the direct road (instant, no hand animation), the same road as `bSubstrateCasts=0`. One rate-limited `[substrate] ... stays on today's direct road` line names the town gate. INI-only switch `bSubstrateBlockedInTowns` (default 1). TEMPORARY: remove the key and the gate when the Harbinger town panic fix lands. Backlog MFO-B537. NOT field-tested.
 

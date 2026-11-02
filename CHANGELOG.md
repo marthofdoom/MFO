@@ -8,6 +8,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 ## Unreleased
 
 - **Player conditions in the gambit list open as a popout.** "Player: HP below" and "Player: Sneaking" now sit under one "Player:" row, the same as the Self: and Ally: rows. The conditions and your saved gambits do not change.
+- **Follower Health, Magicka and Stamina follow the class you picked.** A follower enrolled in a class now grows toward that class's shape, so a follower enrolled as a mage gets a mage's Magicka even while fighting with a bow. Attacks made with a spell or a staff in hand count as Magicka use, and when a fight uses several pools the one used most decides it. A follower's Health, Magicka and Stamina total is now capped at your own. A follower already above it is brought down when the save loads, from the pools furthest over the class shape. `bHmsCapToPlayerTotal = 0` in MFO.ini turns the cap off.
 - **The follower menu shows the gold each follower carries while you are in a town.** It sits under the follower's name on the Followers tab and counts the gold coins, the same purse the town trips spend.
 
 ## v2.7.5 -- Followers use the vanilla Smithing tree
