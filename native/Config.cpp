@@ -204,7 +204,9 @@ namespace MFO::Config {
             else if (a_key == "bTaunt")             setB(g_taunt);            // taunt master switch, INI-only, default OFF (86e3pyjk2)
             else if (a_key == "bTauntProbe")        setB(g_tauntProbe);       // taunt S0 passive probes, INI-only, default OFF
             else if (a_key == "bWeighWeapons")      setB(g_weighWeapons);     // EXPERIMENTAL weapon weighting (ch.26 + ch.17 placements), INI-only, default OFF (batch D)
-            else if (a_key == "bWarnNoApmf")        setB(g_warnNoApmf);       // corner-toast reminder when APMF is absent, default ON
+            // The key chain is split in two here: MSVC stops at ~128 nested else-ifs (C1061). Keys are unique, so a
+            // second chain behaves exactly like one long chain (a key matches one branch, unknown keys still fall through).
+            if (a_key == "bWarnNoApmf")        setB(g_warnNoApmf);       // corner-toast reminder when APMF is absent, default ON
             else if (a_key == "bHealAnimPackage")   setB(g_healAnimPackage);  // animated heals in combat (the ComposedCast claim road), default ON, KILL SWITCH; inert without Harbinger (key name frozen)
             else if (a_key == "bCasterHook")        setB(g_casterHook);
             else if (a_key == "iCasterMode")        setI(g_casterMode, 0, 1);
