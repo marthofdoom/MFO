@@ -54,6 +54,7 @@ MFO_STR(Fk_StateLooting,    "Looting", 0)
 MFO_STR(Fk_StateTrading,    "Trading", 0)
 MFO_STR(Fk_StateFollowing,  "following", 0)
 MFO_STR(Fk_LocWithYou,       "with you", 0)   // Followers tab: shown after his name when he is in your cell
+MFO_STR(Fk_Gold,             "{1} gold", 1)   // Followers tab: under his name while you are in a town. {1}=the gold he carries
 MFO_STR(Fk_TipVitalLine,    "{1} {2} / {3}", 3)   // one line of the vitals tooltip. {1}=H/M/S word, {2}=current, {3}=max
 MFO_STR(Fk_ColRoster,       "Roster", 0)   // column with the remove-from-roster button
 MFO_STR(Fk_Remove,          "remove", 0)   // the remove-from-roster button (arms the confirm below the table)
@@ -92,6 +93,7 @@ MFO_STR(Gb_Target,          "Target", 0)   // column header and list title
 MFO_STR(Gb_ColOn,           "On", 0)
 MFO_STR(Gb_TitleFoe,        "Foe:", 0)           // the submenu row and its title
 MFO_STR(Gb_TitleSelf,       "Self:", 0)          // the Self: submenu row and its title (the follower's own conditions)
+MFO_STR(Gb_TitlePlayer,     "Player:", 0)        // the Player: submenu row and its title (the player's conditions)
 MFO_STR(Gb_TitleAlly,       "Ally:", 0)          // the Ally: submenu row and its title (a teammate's conditions)
 MFO_STR(Gb_TitleLootPotions,"Loot potions:", 0)  // the submenu row and its title
 MFO_STR(Gb_TitleLootMisc,   "Loot misc:", 0)     // the submenu row and its title

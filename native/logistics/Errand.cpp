@@ -1005,6 +1005,8 @@ namespace MFO::Logistics::Errand {
         return Sim::Has(a_follower);
     }
 
+    bool PlayerInTown() { return detail::PlayerTownId() != 0; }
+
     std::string Describe(RE::FormID a_follower) {
         bool resting = false, smithing = false;
         {

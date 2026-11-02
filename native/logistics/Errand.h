@@ -46,6 +46,9 @@ namespace MFO::Logistics::Errand {
     void End(RE::FormID a_follower, const char* a_why);
     // Is this follower on an errand? (board / logging)
     bool Active(RE::FormID a_follower);
+    // Is the PLAYER in a City / Town / Settlement now (the same test the errands use)? The board shows follower gold while true.
+    bool PlayerInTown();
+    namespace Rest { int FollowerGold(RE::Actor* a_actor); }   // Gold001 only (the purse the errands spend); defined in ErrandRest.cpp
     // R3: a short status of this follower's errand for the Board ("Walking to X", "Trading with X", "Off-screen: trading at X",
     // "Heading back"), physical or simulated. EMPTY = no errand. Any thread: it copies under the table mutexes (physical, then
     // simulated, never nested) and reads no engine object.

@@ -891,6 +891,9 @@ namespace MFO::Logistics::Errand::Rest {
         }
     }
 
+    // Public: the Gold001-only purse (GoldOf), for the board's town gold line. Worker-domain read.
+    int FollowerGold(RE::Actor* a_actor) { return a_actor ? GoldOf(a_actor) : 0; }
+
     // ── public: the planner ─────────────────────────────────────────────────────────────────────────────
     bool Augment(RE::Actor* a_follower, const FollowerState& a_state, Clock::time_point a_now, const RE::BGSLocation* a_town, bool a_haveStops,
                  std::vector<Stop>& a_stops, std::string& a_line) {
