@@ -2127,6 +2127,40 @@ namespace MFO::Logistics::Errand {
                          fid, r.followerName, a_why, kWalkRetries);
             return stopOver(a_why, false, a_cooldown);
         };
+        // Closed-door ruling (marth 2026-11-02: "a follower NEVER uses a LOCKED door in a city/town"): called when a walk to the current stop ENDS
+        // BLOCKED. Re-reads the stop's entry door lock on the main thread (Rest::ShopDoorLockedNow). 0 = not locked / unknown (the retries decide
+        // as before), 1 = the read is pending (the caller stores and asks again next tick), 2 = LOCKED: the stop is closed for this visit and was
+        // ended here (faction parked, NO retry into the door); the caller returns true.
+        auto closedDoorGate = [&](const char* a_what) -> int {
+            if (r.cur >= r.stops.size()) return 0;
+            const auto& st = r.stops[r.cur];
+            RE::FormID placeCell = 0;
+            const auto cellOf = [&](DestKind a_k, RE::FormID a_f) -> RE::FormID {
+                if (!a_f) return 0;
+                if (a_k == DestKind::Cell) return a_f;
+                auto* ref = RE::TESForm::LookupByID<RE::TESObjectREFR>(a_f);
+                auto* c = ref ? ref->GetParentCell() : nullptr;
+                return c && c->IsInteriorCell() ? c->GetFormID() : 0;
+            };
+            if (st.kind == StopKind::Shop) {   // the shop's PLACE from the town catalog (the stop's own dest is the vendor actor, who may stand unloaded)
+                std::scoped_lock lk(g_mx);
+                for (const auto& [tid, shops] : g_townShops)
+                    for (const auto& sh : shops)
+                        if (sh.faction == r.faction) { placeCell = cellOf(sh.kind, sh.place); break; }
+            } else {
+                placeCell = cellOf(st.destKind, st.destForm);
+            }
+            if (!placeCell) return 0;
+            RE::FormID lockedDoor = 0;
+            int lockedLevel = 0;
+            const auto la = Rest::ShopDoorLockedNow(placeCell, lockedDoor, lockedLevel);
+            if (la == Rest::LockAnswer::Pending) return 1;
+            if (la != Rest::LockAnswer::Locked) return 0;
+            { std::scoped_lock lk(g_mx); g_parked[r.faction] = a_now + kParkTime; }
+            stopOver(std::format("{}: closed '{}': entry door {:08X} locked ({}); no retry into a locked door", a_what, r.vendorName, lockedDoor,
+                                 Rest::LockWordOf(lockedLevel)), false, kFailCooldownSec);
+            return 2;
+        };
         // mfo-272 NPC-FIRST (marth 2026-10-25: "locating the NPC and navigating to them, if the shop is supposed to be open they will have the
         // dialogue"): the shop's vendor is not where this walk ended (or he left the loaded area). Locate him NOW (Vendors::Locate: wherever the
         // engine has him, loaded or not) and re-aim the SAME ch.19 claim at him: straight at the vendor when he is loaded where the follower is
@@ -2495,27 +2529,8 @@ namespace MFO::Logistics::Errand {
                         spdlog::info("[errand] {:08X}: found the shop's vendor '{}' ({:08X}) -- walking on to him (walk {})", fid, r.vendorName, r.vendor, how);
                     } else if (pleg.state == APMF_API::kLeg_Blocked) {
                         if (r.destKind == DestKind::Cell) Rest::LogBlockedDoors(a_follower, r.destForm, r.vendorName);   // passive: the door(s), lock level of each side
-                        // Closed-shop fix: a walk blocked at an INTERIOR shop's entry door that is LOCKED now is a closed shop for this visit, never retried
-                        // into the same door. The lock is re-read on the main thread (Pending = ask again next tick; Unknown = the retries decide as before).
-                        if (r.cur < r.stops.size() && r.stops[r.cur].kind == StopKind::Shop) {
-                            RE::FormID placeCell = 0;
-                            const auto& st = r.stops[r.cur];
-                            if (st.placeKind == DestKind::Cell) placeCell = st.placeForm;
-                            else if (auto* pref = st.placeForm ? RE::TESForm::LookupByID<RE::TESObjectREFR>(st.placeForm) : nullptr; pref) {
-                                if (auto* pc2 = pref->GetParentCell(); pc2 && pc2->IsInteriorCell()) placeCell = pc2->GetFormID();
-                            }
-                            RE::FormID lockedDoor = 0;
-                            int lockedLevel = 0;
-                            if (placeCell) {
-                                const auto la = Rest::ShopDoorLockedNow(placeCell, lockedDoor, lockedLevel);
-                                if (la == Rest::LockAnswer::Pending) { Store(fid, r); return true; }
-                                if (la == Rest::LockAnswer::Locked) {
-                                    { std::scoped_lock lk(g_mx); g_parked[r.faction] = a_now + kParkTime; }
-                                    return stopOver(std::format("the walk to the shop ended BLOCKED: shop closed '{}': entry door {:08X} locked ({}); no retry into a locked door",
-                                                                r.vendorName, lockedDoor, Rest::LockWordOf(lockedLevel)), false, kFailCooldownSec);
-                                }
-                            }
-                        }
+                        // Closed-door ruling (marth 2026-11-02): never retry into a LOCKED door in town. The lock is re-read on the main thread.
+                        if (const int cd = closedDoorGate("the walk to the shop ended BLOCKED"); cd == 1) { Store(fid, r); return true; } else if (cd == 2) return true;
                         if (retryWalk("the walk to the shop ended BLOCKED", true)) return true;   // run 4: retry before the stop is skipped and the shop parked
                         { std::scoped_lock lk(g_mx); g_parked[r.faction] = a_now + kParkTime; }
                         return giveUp("the walk to the shop ended BLOCKED (a closed door?); shop parked", kFailCooldownSec);
@@ -2554,6 +2569,7 @@ namespace MFO::Logistics::Errand {
                         spdlog::info("[errand] {:08X}: walk to '{}' ended BLOCKED at {:.0f} u -- within talking reach, "
                                      "counted as ARRIVED", fid, r.vendorName, dist);
                     } else {
+                        if (const int cd = closedDoorGate("the walk ended BLOCKED short of the vendor"); cd == 1) { Store(fid, r); return true; } else if (cd == 2) return true;
                         if (retryWalk(std::format("the walk ended BLOCKED at {:.0f} u from the vendor (blocker kind {})", dist, leg.blockerKind), true)) return true;   // run 4
                         {
                             std::scoped_lock lk(g_mx);
