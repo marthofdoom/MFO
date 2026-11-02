@@ -717,10 +717,6 @@ namespace MFO::Board {
                         ImGui::PopFont();
                         ImGui::SameLine();
                         ImGui::TextDisabled("%s", Str::Fmt(Str::K::Gb_Rank, { who->rank }).c_str());
-                        if (!who->active) {
-                            ImGui::SameLine();
-                            ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_AwayNote));
-                        }
                         ImGui::SameLine();
                         // #65: per-follower combat-class OVERRIDE trigger. Auto
                         // (0) is the default and reads as "no override" -- the

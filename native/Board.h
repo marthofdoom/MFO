@@ -89,7 +89,7 @@ namespace MFO::Board {
         bool          stillFollower = false;
         // ClickUp 1dfcuabc4dr: a RETAINED row that is off the roster only because he is away in town mode: an errand runs
         // (physical or off-screen). The board keeps
-        // listing him (State "On an errand" / "Away"); he is unloaded or elsewhere, so no vitals, no gold, no gambit editing.
+        // listing him (State "On an errand" / "Away") with full gambit editing; he is unloaded, so no vitals, no gold.
         bool          away = false;
         bool          commanded = false;
         bool          inCombat = false;

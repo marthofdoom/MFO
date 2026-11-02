@@ -1663,11 +1663,11 @@ namespace MFO::Board {
                 else if (auto* loc = a->GetCurrentLocation(); loc && loc->GetName() && *loc->GetName()) r.cell = loc->GetName();
             }
             if (isActive && inTown) r.gold = Logistics::Errand::Rest::FollowerGold(a);   // worker read; the render thread sees only the int
+            r.meleeInRight = Taunt::MeleeInRightHand(a);   // the picker offers act.taunt only while true (null process = false, safe unloaded)
             if (isActive) {
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
             r.inCombat  = APMFBridge::InCombat(a);   // the HUD's combat glyph: a Harbinger substrate is not combat (v26)
-            r.meleeInRight = Taunt::MeleeInRightHand(a);   // the picker offers act.taunt only while true
             // Activity glyphs (worker-domain reads; this drain IS the worker, #4).
             // r.looting reads JustLooted, NOT IsLooting: IsLooting is a travel-
             // slot proxy (true the whole walk-there, even on an arrival that
@@ -1782,8 +1782,7 @@ namespace MFO::Board {
                 // "Name (spellbook)"; teaching consumes the book. Read-only here
                 // (a snapshot); the actual AddSpell + book consume runs in
                 // ApplyEdits on the main thread.
-                // Away: no teachables (AddSpell on an unloaded actor is not done; they return when he is back).
-                if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && isActive) {
+                if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc) {
                     for (auto& [obj, data] : pc->GetInventory()) {
                         if (!obj || data.first <= 0) continue;
                         auto* book = obj->As<RE::TESObjectBOOK>();
