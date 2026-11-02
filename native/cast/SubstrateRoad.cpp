@@ -25,6 +25,7 @@
 #include "Actuation_internal.h"
 #include "Runtime.h"            // CastPathsVerified(): the ONE exact-version gate the cast paths share
 #include "apmf/APMFBridge.h"    // the claim pair (apmf/Substrate.cpp), HealCastClaimSupported
+#include "LocationTypes.h"      // TownAnchor: the errands' own town test (town-panic workaround)
 
 #include <algorithm>
 #include <format>
@@ -105,7 +106,18 @@ namespace MFO::Actuation {
 
         const bool other = a_recipient && a_recipient != a_follower;
         const char* why = nullptr;
-        if (!Runtime::CastPathsVerified()) {
+        // TEMPORARY WORKAROUND (marth 2026-11-01, ClickUp 1dfcuabc4dn, "Yes, gate in towns"): the substrate is not
+        // requested while the player is in a town, until Harbinger's town-wide panic fix lands. The cast takes the
+        // direct road (this function's false), the same road as the switch OFF / Harbinger refusing. Same town test
+        // as the errands (Errand.cpp PlayerTownId). Logged by NoteDirect (never masked). Remove with the INI key.
+        if (Config::g_substrateBlockedInTowns.load()) {
+            auto* pc = RE::PlayerCharacter::GetSingleton();
+            if (pc && LocationTypes::TownAnchor(pc->GetCurrentLocation()))
+                why = "the player is in a town and bSubstrateBlockedInTowns is ON (temporary workaround for the town panic, ClickUp 1dfcuabc4dn)";
+        }
+        if (why) {
+            // fall through to the shared log + direct road below
+        } else if (!Runtime::CastPathsVerified()) {
             why = "the cast roads are verified on 1.6.1170 / 1.5.97 / 1.7.104 only";
         } else if (a_spell->GetCastingType() == RE::MagicSystem::CastingType::kConcentration) {
             why = "a concentration spell (its substrate road is slice S5)";
