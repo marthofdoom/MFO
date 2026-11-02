@@ -485,7 +485,8 @@ namespace MFO::Board {
                             FitW(110.0f, { Str::Get(Str::K::Fk_ColState), Str::Get(Str::K::Fk_StateRetained),
                                            Str::Get(Str::K::Fk_StateSummon), Str::Get(Str::K::Fk_StateCombat),
                                            Str::Get(Str::K::Fk_StateLooting), Str::Get(Str::K::Fk_StateTrading),
-                                           Str::Get(Str::K::Fk_StateFollowing) }));
+                                           Str::Get(Str::K::Fk_StateFollowing), Str::Get(Str::K::Fk_StateErrand),
+                                           Str::Get(Str::K::Fk_StateAway) }));
                         ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColRapport), ImGuiTableColumnFlags_WidthFixed,
                             FitW(90.0f, { Str::Get(Str::K::Fk_ColRapport) }));
                         ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColRank), ImGuiTableColumnFlags_WidthFixed,
@@ -538,7 +539,8 @@ namespace MFO::Board {
 
                             ImGui::TableNextColumn();
                             if (!r.active) {
-                                ImGui::TextDisabled("%s", Str::Get(Str::K::Fk_StateRetained));
+                                ImGui::TextDisabled("%s", Str::Get(r.away ? (r.errand.empty() ? Str::K::Fk_StateAway : Str::K::Fk_StateErrand)
+                                                                          : Str::K::Fk_StateRetained));
                             } else if (r.commanded) {
                                 ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "%s", Str::Get(Str::K::Fk_StateSummon));
                             } else if (r.inCombat) {
@@ -669,6 +671,16 @@ namespace MFO::Board {
                     // screen < > cycle through this.
                     std::vector<RE::FormID> party;
                     for (const auto& r : snap.rows) if (r.active) party.push_back(r.id);
+
+                    // Town mode: followers away on an errand stay visible here as plain text. They are NOT selectable
+                    // (unloaded: no spell list or allies in the row), so nav focus never lands on a row that cannot act.
+                    {
+                        std::string awayNames;
+                        for (const auto& r : snap.rows)
+                            if (!r.active && r.away) { if (!awayNames.empty()) awayNames += ", "; awayNames += r.name; }
+                        if (!awayNames.empty())
+                            ImGui::TextDisabled("%s", Str::Fmt(Str::K::Gb_AwayList, { awayNames }).c_str());
+                    }
 
                     const FollowerRow* who = nullptr;
                     for (const auto& r : snap.rows) if (r.active && r.id == sel) { who = &r; break; }

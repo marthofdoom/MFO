@@ -261,11 +261,19 @@ namespace MFO::Board {
                 // so a multibyte (e.g. Japanese) name misaligned the strip.
                 float nameColW = 0.0f;
                 for (const auto& r : snap.rows)
-                    if (r.active) nameColW = std::max(nameColW, ImGui::CalcTextSize(r.name.c_str()).x);
+                    if (r.active || r.away) nameColW = std::max(nameColW, ImGui::CalcTextSize(r.name.c_str()).x);
                 for (const auto& r : snap.rows) {
-                    if (!r.active) continue;
+                    if (!r.active && !r.away) continue;
                     ++shown;
                     const float nameX = ImGui::GetCursorPosX();
+                    if (!r.active) {
+                        // Town mode: away on an errand. Name + state only (he is unloaded: no bars, no distance).
+                        ImGui::TextDisabled("%s", r.name.c_str());
+                        ImGui::SameLine();
+                        ImGui::SetCursorPosX(nameX + nameColW + ImGui::GetStyle().ItemSpacing.x);
+                        ImGui::TextDisabled("%s", r.errand.empty() ? Str::Get(Str::K::Fk_StateAway) : r.errand.c_str());
+                        continue;
+                    }
                     ImGui::TextUnformatted(r.name.c_str());
                     ImGui::SameLine();
                     ImGui::SetCursorPosX(nameX + nameColW + ImGui::GetStyle().ItemSpacing.x);
@@ -1803,6 +1811,7 @@ namespace MFO::Board {
                         r.cell = loc->GetName();
                     }
                     FillTownInfo(r, a, player);
+                    r.away = !r.errand.empty() || (inTown && r.stillFollower);   // town mode: keep him listed (no inventory / 3D read here)
                 }
             }
             r.active         = false;
