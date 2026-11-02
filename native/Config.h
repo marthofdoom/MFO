@@ -430,6 +430,9 @@ namespace MFO::Config {
     // Harbinger absent = today's direct road, byte for byte. Harbinger present but the substrate unavailable = a loud
     // once-per-session error and today's road (marth 2026-10-19 Q4: "shouldn't happen"). Not in the MCM.
     inline std::atomic<bool>  g_substrateCasts{ true };
+    // TEMPORARY WORKAROUND (marth 2026-11-01, ClickUp 1dfcuabc4dn): while the player is in a town no OOC substrate is
+    // requested (casts take the direct road). Remove with the Harbinger town panic fix. INI-only.
+    inline std::atomic<bool>  g_substrateBlockedInTowns{ true };
 
     // INFLUENCE actuator (§0.28). Hook CheckStartCast so the follower's own
     // combat AI casts the gambit spell while staying mobile. Installs a vfunc

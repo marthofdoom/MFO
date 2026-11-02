@@ -2477,3 +2477,6 @@ Reviewer: "for a stall vendor like Adrianne, the step after the near-ref is the 
 
 ### MFO-B536 (SEV-5, OPEN, logistics/Errand_internal.h ShopPlaceCellName, against 5c41f7f) -- a named non-actor near-ref no longer names the shop
 Reviewer: "a non-actor near-ref that has a sensible name (a named activator or marker) no longer contributes its name. That is acceptable under the brief."
+
+### MFO-B537 (FLAGGED WORKAROUND, OPEN, cast/SubstrateRoad.cpp SubstrateRoadFor, marth ruling 2026-11-01, ClickUp 1dfcuabc4dn) -- the substrate is not requested while the player is in a town
+Ruling, verbatim: "Yes, gate in towns". Reasoning: the town wide panic has no located cause in MFO or Harbinger logs, so until the Harbinger fix lands MFO keeps the out-of-combat substrate (ch.27) shut in towns and the cast takes the direct road. This is a workaround, not a solution (CLAUDE.md principle 10). REMOVE `bSubstrateBlockedInTowns` (Config.h, Config.cpp, MFO.ini, INI-REFERENCE) and the gate in `SubstrateRoadFor` when the Harbinger fix is merged. Surfaced at edit time from MAP.md section 2 "cast/SubstrateRoad.cpp + apmf/Substrate.cpp".

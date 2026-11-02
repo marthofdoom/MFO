@@ -2203,7 +2203,7 @@ write-up `Docs/CAST-DELIVERY.md` "COMBAT SUBSTRATE SLICE S3". Behind ONE INI-onl
 `IsSubstrateAvailable`), an OUT-OF-COMBAT fire-and-forget heal / buff / summon files a ch.27 `kIntent_CombatSubstrate`
 claim BESIDE a ch.8b cast claim (LEFT hand, `kOwnBasis`, `kCastMaxTtlMs` 15 s) and the follower's own AI casts it, animated.
 - `cast/SubstrateRoad.cpp` (248) = the CAST side, declared in `cast/Actuation.h` (`SubstrateTry` NotTaken / Filed /
-  Skipped (this recipient) / Refused (every recipient this lap)): `SubstrateRoadFor` (`:82`, WORKER only: switch,
+  Skipped (this recipient) / Refused (every recipient this lap)): `SubstrateRoadFor` (`:82`, WORKER only: switch, then the TEMP town gate `bSubstrateBlockedInTowns` (MFO-B537, remove with the Harbinger town panic fix),
   availability, which spells = the claim roads' gates minus the controller test; Heal = `ChooseHealRoad`'s gates mirrored
   incl. its self-flip bar, Buff / summon = `ChooseBuffRoad` (log-free) answering `Claim` or `DirectNoCombat`;
   concentration = slice S5 and Offense = round R4 are NOT taken; a 60 s `[substrate] ... stays on today's direct road`
