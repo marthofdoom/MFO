@@ -670,21 +670,11 @@ namespace MFO::Board {
                     // The active party, in snapshot order -- L1/R1 and the on
                     // screen < > cycle through this.
                     std::vector<RE::FormID> party;
-                    for (const auto& r : snap.rows) if (r.active) party.push_back(r.id);
-
-                    // Town mode: followers away on an errand stay visible here as plain text. They are NOT selectable
-                    // (unloaded: no spell list or allies in the row), so nav focus never lands on a row that cannot act.
-                    {
-                        std::string awayNames;
-                        for (const auto& r : snap.rows)
-                            if (!r.active && r.away) { if (!awayNames.empty()) awayNames += ", "; awayNames += r.name; }
-                        if (!awayNames.empty())
-                            ImGui::TextDisabled("%s", Str::Fmt(Str::K::Gb_AwayList, { awayNames }).c_str());
-                    }
+                    for (const auto& r : snap.rows) if (r.active || r.away) party.push_back(r.id);
 
                     const FollowerRow* who = nullptr;
-                    for (const auto& r : snap.rows) if (r.active && r.id == sel) { who = &r; break; }
-                    if (!who) for (const auto& r : snap.rows) if (r.active) { who = &r; sel = r.id; break; }
+                    for (const auto& r : snap.rows) if ((r.active || r.away) && r.id == sel) { who = &r; break; }
+                    if (!who) for (const auto& r : snap.rows) if (r.active || r.away) { who = &r; sel = r.id; break; }
 
                     if (!who) {
                         ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_NoFollower));
@@ -727,6 +717,10 @@ namespace MFO::Board {
                         ImGui::PopFont();
                         ImGui::SameLine();
                         ImGui::TextDisabled("%s", Str::Fmt(Str::K::Gb_Rank, { who->rank }).c_str());
+                        if (!who->active) {
+                            ImGui::SameLine();
+                            ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_AwayNote));
+                        }
                         ImGui::SameLine();
                         // #65: per-follower combat-class OVERRIDE trigger. Auto
                         // (0) is the default and reads as "no override" -- the

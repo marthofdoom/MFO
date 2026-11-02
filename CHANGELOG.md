@@ -8,7 +8,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 ## Unreleased
 
 - **Player conditions in the gambit list open as a popout.** "Player: HP below" and "Player: Sneaking" now sit under one "Player:" row, the same as the Self: and Ally: rows. The conditions and your saved gambits do not change.
-- **Followers stay on the board while they are away in town mode.** A follower on a town trip, or off the roster in a town, used to drop out of the HUD list and the Gambits tab. They now stay listed with "On an errand" or "Away", and the Followers tab shows the trip under their name. You cannot edit the gambits of someone who is away.
+- **Followers stay on the board while they are away in town mode.** A follower on a town trip, or off the roster in a town, used to drop out of the HUD list and the Gambits tab. They now stay listed with "On an errand" or "Away", and the Followers tab shows the trip under their name. Their gambits stay fully editable while they are away. Only teaching a spellbook waits until they are back.
 - **The follower menu shows the gold each follower carries while you are in a town.** It sits under the follower's name on the Followers tab and counts the gold coins, the same purse the town trips spend.
 
 ## v2.7.5 -- Followers use the vanilla Smithing tree

@@ -1631,15 +1631,40 @@ namespace MFO::Board {
         // matching the discipline every other off-serial reader now follows.
         auto activeIds = Followers::ActiveSnapshot();
         const bool inTown = Config::g_townErrands.load() && Logistics::Errand::PlayerInTown();   // follower gold shows only in a town
-        for (RE::FormID fid : *activeIds) {
+        // Town mode (ClickUp 1dfcuabc4dr): a follower who is AWAY (off the roster with an errand running, or still an eligible
+        // follower while the player is in a town) is built through this SAME loop so his gambit editor is complete. He is not
+        // active: no vitals, gold, glyphs, distance or taunt gate, and no inventory / 3D read (the loop below reads none of
+        // those for him). What it does read is MFO's own record and the actor's spell list / actor values.
+        std::vector<RE::FormID> loopIds(activeIds->begin(), activeIds->end());
+        const std::size_t activeCount = loopIds.size();
+        std::unordered_set<RE::FormID> awaySet;
+        for (const auto& [id, st] : g_followers) {
+            if (Followers::IsTrackedFast(id)) continue;
+            auto* af = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!af) continue;
+            if (!Logistics::Errand::Describe(id).empty() || (inTown && Followers::IsEligibleFollower(af))) {
+                loopIds.push_back(id);
+                awaySet.insert(id);
+            }
+        }
+        for (std::size_t li = 0; li < loopIds.size(); ++li) {
+            const RE::FormID fid = loopIds[li];
+            const bool isActive = li < activeCount;
             auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
             if (!a) continue;
             FollowerRow r;
             r.id        = a->GetFormID();
             r.name      = a->GetName() ? a->GetName() : "?";   // null-guard like every sibling
-            r.active    = true;
+            r.active    = isActive;
             FillTownInfo(r, a, player);
-            if (inTown) r.gold = Logistics::Errand::Rest::FollowerGold(a);   // worker read; the render thread sees only the int
+            if (!isActive) {
+                r.away = true;
+                r.stillFollower = Followers::IsEligibleFollower(a);
+                if (auto* c = a->GetParentCell(); c && c->GetName() && *c->GetName()) r.cell = c->GetName();
+                else if (auto* loc = a->GetCurrentLocation(); loc && loc->GetName() && *loc->GetName()) r.cell = loc->GetName();
+            }
+            if (isActive && inTown) r.gold = Logistics::Errand::Rest::FollowerGold(a);   // worker read; the render thread sees only the int
+            if (isActive) {
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
             r.inCombat  = APMFBridge::InCombat(a);   // the HUD's combat glyph: a Harbinger substrate is not combat (v26)
@@ -1676,6 +1701,8 @@ namespace MFO::Board {
                 r.distance   = a->GetPosition().GetDistance(player->GetPosition());
                 r.playerName = player->GetName() ? player->GetName() : Str::Get(Str::K::Gb_SubjPlayer);
             }
+            }
+            if (player && !isActive) r.playerName = player->GetName() ? player->GetName() : Str::Get(Str::K::Gb_SubjPlayer);
             // #68: the cast-target picker's follower list -- every OTHER
             // active teammate by name (never this row's own actor). Same
             // roster ActiveSnapshot feeds the outer loop.
@@ -1756,7 +1783,8 @@ namespace MFO::Board {
                 // "Name (spellbook)"; teaching consumes the book. Read-only here
                 // (a snapshot); the actual AddSpell + book consume runs in
                 // ApplyEdits on the main thread.
-                if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
+                // Away: no teachables (AddSpell on an unloaded actor is not done; they return when he is back).
+                if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc && isActive) {
                     for (auto& [obj, data] : pc->GetInventory()) {
                         if (!obj || data.first <= 0) continue;
                         auto* book = obj->As<RE::TESObjectBOOK>();
@@ -1794,6 +1822,7 @@ namespace MFO::Board {
         // membership goes through the Wave-1 any-thread mirror (IsTrackedFast).
         for (const auto& [id, st] : g_followers) {
             if (Followers::IsTrackedFast(id)) continue;
+            if (awaySet.count(id)) continue;   // already built above with the full editor data
             FollowerRow r;
             r.id      = id;
             r.name    = std::format("{:08X}", id);
@@ -1811,7 +1840,6 @@ namespace MFO::Board {
                         r.cell = loc->GetName();
                     }
                     FillTownInfo(r, a, player);
-                    r.away = !r.errand.empty() || (inTown && r.stillFollower);   // town mode: keep him listed (no inventory / 3D read here)
                 }
             }
             r.active         = false;

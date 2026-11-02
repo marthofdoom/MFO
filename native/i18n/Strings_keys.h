@@ -55,7 +55,7 @@ MFO_STR(Fk_StateTrading,    "Trading", 0)
 MFO_STR(Fk_StateFollowing,  "following", 0)
 MFO_STR(Fk_StateErrand,     "On an errand", 0)   // State column / HUD: off the roster in town mode with an errand running (detail line under his name)
 MFO_STR(Fk_StateAway,       "Away", 0)   // State column / HUD: off the roster in town mode, nothing more known
-MFO_STR(Gb_AwayList,        "Away, not editable now: {1}", 1)   // Gambits tab: followers off the roster in town mode. {1}=their names, comma separated
+MFO_STR(Gb_AwayNote,        "(away: spellbook teaching returns when he is back)", 0)   // Gambits tab, under the name of a follower who is away in town mode
 MFO_STR(Fk_LocWithYou,       "with you", 0)   // Followers tab: shown after his name when he is in your cell
 MFO_STR(Fk_Gold,             "{1} gold", 1)   // Followers tab: under his name while you are in a town. {1}=the gold he carries
 MFO_STR(Fk_TipVitalLine,    "{1} {2} / {3}", 3)   // one line of the vitals tooltip. {1}=H/M/S word, {2}=current, {3}=max
