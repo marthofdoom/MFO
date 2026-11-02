@@ -5739,7 +5739,9 @@ and skill AVs onto real actors, runs the level poll, owns 'PRGN'.
   backfill gate is now `playerTotal >= baseline + cumulative` (identical when cumulative >= 0)
   so a capped fixed-stat follower is granted exactly P - held total. A pool at or
   under its floor is untouched; if the floors cannot absorb it, the total stays above and the log
-  says so. Not fixed-stat → the cut is ADDED to `hmsWithheld` (keeps `Σ target + W == engine
+  says so. Round 3: `UndoHms` FIRST raises every negative-cumulative pool by exactly that amount and
+  takes it out of W, on BOTH roads, so removal from MFO always gives the cut back; and the cap adds
+  to W only with real engine history (`hmsAwardAccum > 0` or W > 0). Not fixed-stat → the cut is ADDED to `hmsWithheld` (keeps `Σ target + W == engine
   total`, so the engine's next re-slam does not re-measure it). Logs: `[hms] adopted total capped:
   <name> <old> -> <new> (player <p>)` once per follower per session (runtime `hmsCapLogged`,
   `ProgAllocator.h:353`), `[hms] <id> award trimmed to the player's total` on later awards, a

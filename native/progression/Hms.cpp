@@ -574,9 +574,15 @@ namespace MFO::ProgAllocator {
             // vanilla value, and target = baseline + cumulative may now sit BELOW the
             // baseline. PRGN layout and version are UNCHANGED: the cap is expressed in
             // hmsCumulative / hmsWithheld. For a follower the engine
-            // still levels (not fixedStat) the cut is added to hmsWithheld, which keeps
+            // still levels the cut is added to hmsWithheld, which keeps
             // the W invariant (sum of targets + W == the engine's own total), so the
             // engine's next absolute re-slam does not re-measure the cut as an award.
+            // "Still levels" = not fixedStat AND real engine-award history (an award
+            // tallied in hmsAwardAccum, or W already > 0) (review round 3): a fresh
+            // recruit is not judged fixed-stat for two player levels, and a W from the
+            // cap alone would send UndoHms down its "engine history" road. A leveling
+            // follower with no history yet self-heals: its next re-slam re-measures the
+            // cut, parity withholds it, and the cap trims the applied part into W.
             // INI bHmsCapToPlayerTotal (default ON).
             if (Config::g_hmsCapToPlayerTotal.load()) {
                 constexpr float kHmsCapPoolFloor = 50.0f;   // sane per-pool floor
@@ -600,6 +606,8 @@ namespace MFO::ProgAllocator {
                         O += over[p];
                     }
                     const float take = std::min(excess, O);
+                    const bool capToW = !a_st.fixedStat &&
+                                        (a_st.hmsAwardAccum > 0.0f || a_st.hmsWithheld > 0.0f);
                     float removed = 0.0f;
                     if (take > 0.0f && O > 0.0f) {
                         for (int p = 0; p < 3; ++p) {
@@ -608,7 +616,7 @@ namespace MFO::ProgAllocator {
                             a_st.hmsCumulative[p] -= r;   // may go negative; baseline untouched
                             removed += r;
                         }
-                        if (!a_st.fixedStat) a_st.hmsWithheld += removed;   // keep the W invariant
+                        if (capToW) a_st.hmsWithheld += removed;   // keep the W invariant
                     }
                     diagCapTrim = removed;
                     const float after = tot - removed;
@@ -627,7 +635,7 @@ namespace MFO::ProgAllocator {
                                      id, removed, over[0], over[1], over[2],
                                      a_st.hmsBaseline[0], a_st.hmsBaseline[1], a_st.hmsBaseline[2],
                                      a_st.hmsCumulative[0], a_st.hmsCumulative[1], a_st.hmsCumulative[2],
-                                     a_st.fixedStat ? "" : ", added to withheld",
+                                     capToW ? ", added to withheld" : "",
                                      (after > pTot + 0.5f) ? " | ABOVE the cap: every pool is at its floor" : "");
                     a_st.hmsCapLogged = true;
                 }
@@ -806,6 +814,33 @@ namespace MFO::ProgAllocator {
                                       a_st.hmsGrantRemainder[2] != 0.0f;
             float cur[3];
             for (int p = 0; p < 3; ++p) cur[p] = Followers::GetFollowerHMS(a_actor, p);
+            // THE ADOPTED-TOTAL CAP'S CUT IS ALWAYS GIVEN BACK (ClickUp 1dfcuabc4dv review
+            // round 3, marth: removal from MFO restores vanilla). The cap stores its cut as a
+            // NEGATIVE cumulative, so before either road below every pool with a negative
+            // cumulative is raised by exactly that amount and the same amount comes out of
+            // hmsWithheld (where the cap may have put it), whatever the fixed-stat judgment
+            // says. Cumulative is then 0 on those pools, so the roads below see what they saw
+            // before the cap existed. Raising a base never lowers current health. A pool
+            // somebody else changed since MFO's last hold is left and logged, like below.
+            for (int p = 0; p < 3; ++p) {
+                if (!(a_st.hmsCumulative[p] < 0.0f)) continue;
+                const float amt = -a_st.hmsCumulative[p];
+                if (cur[p] != a_st.hmsHeld[p]) {
+                    spdlog::warn("[roster] {:08X} HMS pool {} cap cut {:.1f} NOT GIVEN BACK: base {:.0f} is not "
+                                 "what MFO last held ({:.0f}); something else changed it since, MFO leaves it",
+                                 id, p, amt, cur[p], a_st.hmsHeld[p]);
+                    continue;
+                }
+                const float v = cur[p] + amt;
+                Followers::SetFollowerHMS(a_actor, p, v);
+                spdlog::info("[roster] {:08X} HMS pool {}: base {:.0f} -> {:.0f} (the adopted-total cap's cut "
+                             "{:.1f} given back)", id, p, cur[p], v, amt);
+                cur[p] = v;
+                a_st.hmsHeld[p]       = v;
+                a_st.hmsTarget[p]     = v;
+                a_st.hmsCumulative[p] = 0.0f;
+                a_st.hmsWithheld      = std::max(0.0f, a_st.hmsWithheld - amt);
+            }
             // hmsWithheld > 0 = the ENGINE awarded this follower levels at some point (only an
             // engine award is ever withheld). A fixed-stat follower WITH that history (he levelled,
             // then stopped, e.g. at his level cap) holds engine awards and MFO grants mixed in one
