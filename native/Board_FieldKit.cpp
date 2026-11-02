@@ -92,6 +92,10 @@ namespace MFO::Board {
     bool IsAllyCond(const char* op) {
         return op && std::strncmp(op, "cond.ally_", 10) == 0;
     }
+    // Player: collapses the same way (ClickUp 1dfcuabbudj): "cond.player_*" is every player-state condition (HP, Sneaking).
+    bool IsPlayerCond(const char* op) {
+        return op && std::strncmp(op, "cond.player_", 12) == 0;
+    }
     bool IsPotionLootAct(const char* op) {
         return op && (!std::strcmp(op, Vocab::kActLootPotions)      ||
                       !std::strcmp(op, Vocab::kActLootHealthPotion) ||
@@ -839,11 +843,12 @@ namespace MFO::Board {
                         // that group opens onto. Empty when the current table has
                         // no members of that group (e.g. combat's actTab has no
                         // loot actions) -- the group row is simply never added.
-                        std::vector<int> condTopIdx;      // indices into condTab; -1 = "Foe:" row, -2 = "Self:", -3 = "Ally:"
+                        std::vector<int> condTopIdx;      // indices into condTab; -1 = "Foe:" row, -2 = "Self:", -3 = "Ally:", -4 = "Player:"
                         std::vector<int> condFoeIdx;       // condTab indices shown in the Foe: submenu
                         std::vector<int> condSelfIdx;      // condTab indices shown in the Self: submenu
                         std::vector<int> condAllyIdx;      // condTab indices shown in the Ally: submenu
-                        int condFoeSlot = -1, condSelfSlot = -1, condAllySlot = -1;
+                        std::vector<int> condPlayerIdx;    // condTab indices shown in the Player: submenu
+                        int condFoeSlot = -1, condSelfSlot = -1, condAllySlot = -1, condPlayerSlot = -1;
                         for (int k = 0; k < condN; ++k) {
                             const char* cop = condTab[k].op;
                             if (IsFoeCond(cop)) {
@@ -858,6 +863,10 @@ namespace MFO::Board {
                                 if (condAllySlot < 0) { condAllySlot = (int)condTopIdx.size();
                                                          condTopIdx.push_back(-3); }
                                 condAllyIdx.push_back(k);
+                            } else if (IsPlayerCond(cop)) {
+                                if (condPlayerSlot < 0) { condPlayerSlot = (int)condTopIdx.size();
+                                                           condTopIdx.push_back(-4); }
+                                condPlayerIdx.push_back(k);
                             } else {
                                 condTopIdx.push_back(k);
                             }
@@ -971,29 +980,32 @@ namespace MFO::Board {
                                     track();
                                     if (rv.lastFired) { ImGui::SameLine();
                                         ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.4f, 1), "*"); }
-                                    // Foe: / Self: / Ally: conditions each collapse to one nested-popup
-                                    // row (condTopIdx + the three group vectors, built once above the
+                                    // Foe: / Self: / Ally: / Player: conditions each collapse to one nested-popup
+                                    // row (condTopIdx + the four group vectors, built once above the
                                     // row loop) so the flat list stays short.
                                     const bool curIsFoeCond  = IsFoeCond(rv.condOp.c_str());
                                     const bool curIsSelfCond = IsSelfCond(rv.condOp.c_str());
                                     const bool curIsAllyCond = IsAllyCond(rv.condOp.c_str());
+                                    const bool curIsPlayerCond = IsPlayerCond(rv.condOp.c_str());
                                     int curC = 0;
                                     for (int t = 0; t < (int)condTopIdx.size(); ++t) {
                                         if (condTopIdx[t] == -1) { if (curIsFoeCond)  { curC = t; break; } }
                                         else if (condTopIdx[t] == -2) { if (curIsSelfCond) { curC = t; break; } }
                                         else if (condTopIdx[t] == -3) { if (curIsAllyCond) { curC = t; break; } }
+                                        else if (condTopIdx[t] == -4) { if (curIsPlayerCond) { curC = t; break; } }
                                         else if (rv.condOp == condTab[condTopIdx[t]].op) { curC = t; break; }
                                     }
                                     // Defer the child-popup open to THIS (row) scope: OpenPopup
                                     // and the ##condfoe / ##condself / ##condally BeginPopup must hash
                                     // against the SAME ID stack. Calling OpenPopup inside the ##cond
                                     // popup's onPick mismatches the ID -> an invisible, input-blocking popup.
-                                    int openGroup = 0;   // 1 foe, 2 self, 3 ally
+                                    int openGroup = 0;   // 1 foe, 2 self, 3 ally, 4 player
                                     listPopup("##cond", Str::Get(Str::K::Gb_When),
                                         (int)condTopIdx.size(),
                                         [&](int t) { return condTopIdx[t] == -1 ? Str::Get(Str::K::Gb_TitleFoe)
                                                           : condTopIdx[t] == -2 ? Str::Get(Str::K::Gb_TitleSelf)
                                                           : condTopIdx[t] == -3 ? Str::Get(Str::K::Gb_TitleAlly)
+                                                          : condTopIdx[t] == -4 ? Str::Get(Str::K::Gb_TitlePlayer)
                                                           : condTab[condTopIdx[t]].label(); },
                                         curC,
                                         [&](int t) {
@@ -1004,6 +1016,7 @@ namespace MFO::Board {
                                     if (openGroup == 1) ImGui::OpenPopup("##condfoe");
                                     if (openGroup == 2) ImGui::OpenPopup("##condself");
                                     if (openGroup == 3) ImGui::OpenPopup("##condally");
+                                    if (openGroup == 4) ImGui::OpenPopup("##condplayer");
                                     // One child list per group: pad (d-pad / [A] / [B]) and mouse behave exactly like
                                     // the Foe: list, since all three go through listPopup.
                                     auto groupPopup = [&](const char* pid, Str::K title, int slot,
@@ -1022,6 +1035,7 @@ namespace MFO::Board {
                                     groupPopup("##condfoe",  Str::K::Gb_TitleFoe,  condFoeSlot,  condFoeIdx);
                                     groupPopup("##condself", Str::K::Gb_TitleSelf, condSelfSlot, condSelfIdx);
                                     groupPopup("##condally", Str::K::Gb_TitleAlly, condAllySlot, condAllyIdx);
+                                    groupPopup("##condplayer", Str::K::Gb_TitlePlayer, condPlayerSlot, condPlayerIdx);
                                 }
 
                                 // VALUE -- opens a preset list matched to what the

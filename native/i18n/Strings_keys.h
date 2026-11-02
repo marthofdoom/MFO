@@ -93,6 +93,7 @@ MFO_STR(Gb_Target,          "Target", 0)   // column header and list title
 MFO_STR(Gb_ColOn,           "On", 0)
 MFO_STR(Gb_TitleFoe,        "Foe:", 0)           // the submenu row and its title
 MFO_STR(Gb_TitleSelf,       "Self:", 0)          // the Self: submenu row and its title (the follower's own conditions)
+MFO_STR(Gb_TitlePlayer,     "Player:", 0)        // the Player: submenu row and its title (the player's conditions)
 MFO_STR(Gb_TitleAlly,       "Ally:", 0)          // the Ally: submenu row and its title (a teammate's conditions)
 MFO_STR(Gb_TitleLootPotions,"Loot potions:", 0)  // the submenu row and its title
 MFO_STR(Gb_TitleLootMisc,   "Loot misc:", 0)     // the submenu row and its title
