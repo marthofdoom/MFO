@@ -261,11 +261,19 @@ namespace MFO::Board {
                 // so a multibyte (e.g. Japanese) name misaligned the strip.
                 float nameColW = 0.0f;
                 for (const auto& r : snap.rows)
-                    if (r.active) nameColW = std::max(nameColW, ImGui::CalcTextSize(r.name.c_str()).x);
+                    if (r.active || r.away) nameColW = std::max(nameColW, ImGui::CalcTextSize(r.name.c_str()).x);
                 for (const auto& r : snap.rows) {
-                    if (!r.active) continue;
+                    if (!r.active && !r.away) continue;
                     ++shown;
                     const float nameX = ImGui::GetCursorPosX();
+                    if (!r.active) {
+                        // Town mode: away on an errand. Name + state only (he is unloaded: no bars, no distance).
+                        ImGui::TextDisabled("%s", r.name.c_str());
+                        ImGui::SameLine();
+                        ImGui::SetCursorPosX(nameX + nameColW + ImGui::GetStyle().ItemSpacing.x);
+                        ImGui::TextDisabled("%s", r.errand.empty() ? Str::Get(Str::K::Fk_StateAway) : r.errand.c_str());
+                        continue;
+                    }
                     ImGui::TextUnformatted(r.name.c_str());
                     ImGui::SameLine();
                     ImGui::SetCursorPosX(nameX + nameColW + ImGui::GetStyle().ItemSpacing.x);
@@ -1623,19 +1631,43 @@ namespace MFO::Board {
         // matching the discipline every other off-serial reader now follows.
         auto activeIds = Followers::ActiveSnapshot();
         const bool inTown = Config::g_townErrands.load() && Logistics::Errand::PlayerInTown();   // follower gold shows only in a town
-        for (RE::FormID fid : *activeIds) {
+        // Town mode (ClickUp 1dfcuabc4dr): a follower who is AWAY (off the roster with a town errand running) is built through this SAME loop so his gambit editor is complete. He is not
+        // active: no vitals, gold, glyphs, distance or taunt gate, and no inventory / 3D read (the loop below reads none of
+        // those for him). What it does read is MFO's own record and the actor's spell list / actor values.
+        std::vector<RE::FormID> loopIds(activeIds->begin(), activeIds->end());
+        const std::size_t activeCount = loopIds.size();
+        std::unordered_set<RE::FormID> awaySet;
+        for (const auto& [id, st] : g_followers) {
+            if (Followers::IsTrackedFast(id)) continue;
+            auto* af = RE::TESForm::LookupByID<RE::Actor>(id);
+            if (!af) continue;
+            if (!Logistics::Errand::Describe(id).empty()) {   // away = out on a town errand only (marth); a waiting / dismissed one stays a retained row
+                loopIds.push_back(id);
+                awaySet.insert(id);
+            }
+        }
+        for (std::size_t li = 0; li < loopIds.size(); ++li) {
+            const RE::FormID fid = loopIds[li];
+            const bool isActive = li < activeCount;
             auto* a = RE::TESForm::LookupByID<RE::Actor>(fid);
             if (!a) continue;
             FollowerRow r;
             r.id        = a->GetFormID();
             r.name      = a->GetName() ? a->GetName() : "?";   // null-guard like every sibling
-            r.active    = true;
+            r.active    = isActive;
             FillTownInfo(r, a, player);
-            if (inTown) r.gold = Logistics::Errand::Rest::FollowerGold(a);   // worker read; the render thread sees only the int
+            if (!isActive) {
+                r.away = true;
+                r.stillFollower = Followers::IsEligibleFollower(a);
+                if (auto* c = a->GetParentCell(); c && c->GetName() && *c->GetName()) r.cell = c->GetName();
+                else if (auto* loc = a->GetCurrentLocation(); loc && loc->GetName() && *loc->GetName()) r.cell = loc->GetName();
+            }
+            if (isActive && inTown) r.gold = Logistics::Errand::Rest::FollowerGold(a);   // worker read; the render thread sees only the int
+            r.meleeInRight = Taunt::MeleeInRightHand(a);   // the picker offers act.taunt only while true (null process = false, safe unloaded)
+            if (isActive) {
             r.teammate  = a->IsPlayerTeammate();
             r.commanded = a->IsCommandedActor();
             r.inCombat  = APMFBridge::InCombat(a);   // the HUD's combat glyph: a Harbinger substrate is not combat (v26)
-            r.meleeInRight = Taunt::MeleeInRightHand(a);   // the picker offers act.taunt only while true
             // Activity glyphs (worker-domain reads; this drain IS the worker, #4).
             // r.looting reads JustLooted, NOT IsLooting: IsLooting is a travel-
             // slot proxy (true the whole walk-there, even on an arrival that
@@ -1668,6 +1700,8 @@ namespace MFO::Board {
                 r.distance   = a->GetPosition().GetDistance(player->GetPosition());
                 r.playerName = player->GetName() ? player->GetName() : Str::Get(Str::K::Gb_SubjPlayer);
             }
+            }
+            if (player && !isActive) r.playerName = player->GetName() ? player->GetName() : Str::Get(Str::K::Gb_SubjPlayer);
             // #68: the cast-target picker's follower list -- every OTHER
             // active teammate by name (never this row's own actor). Same
             // roster ActiveSnapshot feeds the outer loop.
@@ -1748,7 +1782,7 @@ namespace MFO::Board {
                 // "Name (spellbook)"; teaching consumes the book. Read-only here
                 // (a snapshot); the actual AddSpell + book consume runs in
                 // ApplyEdits on the main thread.
-                if (auto* pc = RE::PlayerCharacter::GetSingleton()) {
+                if (auto* pc = RE::PlayerCharacter::GetSingleton(); pc) {
                     for (auto& [obj, data] : pc->GetInventory()) {
                         if (!obj || data.first <= 0) continue;
                         auto* book = obj->As<RE::TESObjectBOOK>();
@@ -1786,6 +1820,7 @@ namespace MFO::Board {
         // membership goes through the Wave-1 any-thread mirror (IsTrackedFast).
         for (const auto& [id, st] : g_followers) {
             if (Followers::IsTrackedFast(id)) continue;
+            if (awaySet.count(id)) continue;   // already built above with the full editor data
             FollowerRow r;
             r.id      = id;
             r.name    = std::format("{:08X}", id);

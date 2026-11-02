@@ -2486,3 +2486,6 @@ Reviewer: "NameOf returns \"<unnamed>\" and never \"\", so both !nm.empty() guar
 
 ### MFO-B539 (SEV-5, OPEN, Progression.cpp / PerkGate.cpp twins + world-progress, against debea50) -- first twin wins silently, no Pass 2b edge to the twin, the (f) subject swap changes no result
 Reviewer: "When several in-tree candidates share a name and conditions, the first one wins with no log line." "Pass 2b draws no graph edge to the twin." "The (f) subject swap does nothing. All seven functions read quest, global or player-stat state whatever the subject."
+
+### MFO-B540 (SEV-5, OPEN, Board.cpp away rows, against 7e9c613, Opus review of feat/mfo-town-ui) -- a just-dismissed follower can show Away until Errand::Sweep runs
+Reviewer: "after a dismissal Describe can stay non-empty until Errand::Sweep runs, so the row can show away for that short gap."

@@ -485,7 +485,8 @@ namespace MFO::Board {
                             FitW(110.0f, { Str::Get(Str::K::Fk_ColState), Str::Get(Str::K::Fk_StateRetained),
                                            Str::Get(Str::K::Fk_StateSummon), Str::Get(Str::K::Fk_StateCombat),
                                            Str::Get(Str::K::Fk_StateLooting), Str::Get(Str::K::Fk_StateTrading),
-                                           Str::Get(Str::K::Fk_StateFollowing) }));
+                                           Str::Get(Str::K::Fk_StateFollowing), Str::Get(Str::K::Fk_StateErrand),
+                                           Str::Get(Str::K::Fk_StateAway) }));
                         ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColRapport), ImGuiTableColumnFlags_WidthFixed,
                             FitW(90.0f, { Str::Get(Str::K::Fk_ColRapport) }));
                         ImGui::TableSetupColumn(Str::Get(Str::K::Fk_ColRank), ImGuiTableColumnFlags_WidthFixed,
@@ -538,7 +539,8 @@ namespace MFO::Board {
 
                             ImGui::TableNextColumn();
                             if (!r.active) {
-                                ImGui::TextDisabled("%s", Str::Get(Str::K::Fk_StateRetained));
+                                ImGui::TextDisabled("%s", Str::Get(r.away ? (r.errand.empty() ? Str::K::Fk_StateAway : Str::K::Fk_StateErrand)
+                                                                          : Str::K::Fk_StateRetained));
                             } else if (r.commanded) {
                                 ImGui::TextColored(ImVec4(0.6f, 0.6f, 1.0f, 1.0f), "%s", Str::Get(Str::K::Fk_StateSummon));
                             } else if (r.inCombat) {
@@ -668,11 +670,11 @@ namespace MFO::Board {
                     // The active party, in snapshot order -- L1/R1 and the on
                     // screen < > cycle through this.
                     std::vector<RE::FormID> party;
-                    for (const auto& r : snap.rows) if (r.active) party.push_back(r.id);
+                    for (const auto& r : snap.rows) if (r.active || r.away) party.push_back(r.id);
 
                     const FollowerRow* who = nullptr;
-                    for (const auto& r : snap.rows) if (r.active && r.id == sel) { who = &r; break; }
-                    if (!who) for (const auto& r : snap.rows) if (r.active) { who = &r; sel = r.id; break; }
+                    for (const auto& r : snap.rows) if ((r.active || r.away) && r.id == sel) { who = &r; break; }
+                    if (!who) for (const auto& r : snap.rows) if (r.active || r.away) { who = &r; sel = r.id; break; }
 
                     if (!who) {
                         ImGui::TextDisabled("%s", Str::Get(Str::K::Gb_NoFollower));

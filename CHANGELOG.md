@@ -9,6 +9,7 @@ Newest first. Header form is `## vX.Y.Z -- Title`.
 
 - **Follower perk requirements are checked more truthfully.** A perk that needs another perk the follower can never own, such as Stunning Precision, now counts the matching perk in the tree. Exclusions such as "must not have rank 1" no longer let a follower with rank 2 through. One unusual requirement no longer makes the whole perk fall back to the game, only that one requirement does. Perks that need an item in the inventory are no longer offered to followers.
 - **Player conditions in the gambit list open as a popout.** "Player: HP below" and "Player: Sneaking" now sit under one "Player:" row, the same as the Self: and Ally: rows. The conditions and your saved gambits do not change.
+- **Followers stay on the board while they are away in town mode.** A follower out on a town trip used to drop out of the HUD list and the Gambits tab. They now stay listed with "On an errand" or "Away", and the Followers tab shows the trip under their name. Their gambits stay fully editable while they are away.
 - **The follower menu shows the gold each follower carries while you are in a town.** It sits under the follower's name on the Followers tab and counts the gold coins, the same purse the town trips spend.
 
 ## v2.7.5 -- Followers use the vanilla Smithing tree
