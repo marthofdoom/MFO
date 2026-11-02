@@ -785,6 +785,8 @@ namespace MFO::Logistics {
                                          a_follower->GetFormID(), rid);
                         continue;
                     }
+                    // TOWN DOOR RULE (marth 2026-11-02): no walk into an interior cell whose doors are all locked (the trespass is the player's bounty).
+                    if (Errand::Rest::TownWalkBarredByLock(a_follower, ref, "loot target")) { MarkTravelFailed(rid, a_now); continue; }
                     // ROAD CHOICE, LEG BOUNDARY (A/B). A leg in flight FINISHES ON THE
                     // ROAD IT STARTED: the decision is the live ch.19 leg itself
                     // (APMF-side truth, one record per slot), never the switch, so a
@@ -853,6 +855,8 @@ namespace MFO::Logistics {
                                          a_follower->GetFormID(), rid);
                         continue;
                     }
+                    // TOWN DOOR RULE (marth 2026-11-02): see the leg-boundary note above.
+                    if (Errand::Rest::TownWalkBarredByLock(a_follower, ref, "loot target")) { MarkTravelFailed(rid, a_now); continue; }
                     // ROAD CHOICE, EXCURSION START (A/B). The switch is read ONCE,
                     // here, at the only edge that starts an excursion; everything after
                     // follows the road that took. ROAD 2 claims ch.19 kIntent_Travel

@@ -26,6 +26,7 @@
 #include "PCH.h"
 #include "Logistics.h"
 #include "Logistics_internal.h"
+#include "Errand.h"           // town door rule: Errand::Rest::TownWalkBarredByLock
 #include "GemRules.h"   // LootNearby, Category, SlotIndexOf, FitsCarryWeight, IsStockGear, ...
 #include "Lotd.h"
 #include "Config.h"
@@ -1520,6 +1521,12 @@ namespace MFO::Lotd {
             return false;
         }
         const RE::FormID crateId = crate->GetFormID();
+        // TOWN DOOR RULE (marth 2026-11-02): no deposit walk into an interior cell whose doors are all locked.
+        if (Logistics::Errand::Rest::TownWalkBarredByLock(a_follower, crate, "deposit crate")) {
+            std::scoped_lock lock(g_tripMx);
+            g_followerCooldown[fid] = a_now + kCooldownFail;
+            return false;
+        }
         // The callbacks run OUTSIDE g_tripMx: ending the excursion goes through the loot
         // road (Packages::LootTravelClear), which must never nest under this lock.
         if (a_gate.healWants && a_gate.healWants()) {
