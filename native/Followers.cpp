@@ -156,6 +156,7 @@ namespace MFO::Followers {
         std::mutex                                       g_mx;
         std::unordered_set<RE::FormID>                   g_tracked;   // FormID membership mirror
         std::unordered_set<RE::FormID>                   g_mfoOff;    // T#78 mfoEnabled==false mirror
+        std::unordered_set<RE::FormID>                   g_transientMirror;   // g_transientDrop's keys (IsTransientDropFast)
         // The RESOLVED class (1/2/3, Logistics::ResolveBaseClass) per follower, for
         // the base HMS split on the progression poll's TRUE main thread (#74: never
         // the live map). Holds every record with a picked class, plus every ACTIVE
@@ -195,6 +196,11 @@ namespace MFO::Followers {
             g_mfoOff.clear();
             for (const auto& [id, st] : g_followers)
                 if (!st.mfoEnabled) g_mfoOff.insert(id);
+            // The transient-drop set, mirrored for the progression poll (ClickUp 1dfcuabc4dq:
+            // a follower held through a transient drop is still in the party for leveling).
+            // g_transientDrop is the worker's own map, read here on that same domain.
+            g_transientMirror.clear();
+            for (const auto& kv : g_transientDrop) g_transientMirror.insert(kv.first);
         }
 
         FactionQuirk g_dismissedFactions[] = {
@@ -329,6 +335,11 @@ namespace MFO::Followers {
     bool IsTrackedFast(RE::FormID a_actorID) {
         std::lock_guard<std::mutex> lk(g_mx);
         return g_tracked.find(a_actorID) != g_tracked.end();
+    }
+
+    bool IsTransientDropFast(RE::FormID a_actorID) {
+        std::lock_guard<std::mutex> lk(g_mx);
+        return g_transientMirror.find(a_actorID) != g_transientMirror.end();
     }
 
     float SecondsSinceTransition() {

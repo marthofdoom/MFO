@@ -156,6 +156,11 @@ namespace MFO::Followers {
     // the unlocked IsTracked walk for every off-worker caller. Membership only:
     // it cannot say WHICH handle, only that the id is currently tracked.
     bool IsTrackedFast(RE::FormID a_actorID);
+    // Off-worker probe, ANY thread (same g_mx mirror as IsTrackedFast): is this follower in a
+    // TRANSIENT roster drop right now (missed a sweep shortly after a world transition, his claim
+    // held for kTransientHoldS while the engine brings him along)? The progression poll counts him
+    // as in the party for leveling (ClickUp 1dfcuabc4dq). Cleared when he re-joins or the hold ends.
+    bool IsTransientDropFast(RE::FormID a_actorID);
     // Seconds since the last world-transition mark Refresh keeps (LoadingMenu, worker gap, interior/worldspace
     // change, player position jump; the claim-through-load marker); -1 = none seen this session. ANY thread
     // (atomic mirror, republished every Refresh sweep).

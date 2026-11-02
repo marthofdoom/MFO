@@ -2489,3 +2489,9 @@ Reviewer: "When several in-tree candidates share a name and conditions, the firs
 
 ### MFO-B540 (SEV-5, OPEN, Board.cpp away rows, against 7e9c613, Opus review of feat/mfo-town-ui) -- a just-dismissed follower can show Away until Errand::Sweep runs
 Reviewer: "after a dismissal Describe can stay non-empty until Errand::Sweep runs, so the row can show away for that short gap."
+
+### MFO-B541 (SEV-4, OPEN, progression/Poll.cpp:144-146, against 3569203, Opus review of feat/mfo-leveling-errand-in-party) -- the two-probe party read can race a roster publish
+Reviewer: "Poll.cpp:144-146 reads IsTrackedFast and IsTransientDropFast under two separate g_mx acquisitions ... the poll then sees tracked=false from the old mirror and transient=false from the new one, so a level-up in that one tick is banked as benched. It needs a level-up on the same tick, so it is rare. Fix: one combined IsInPartyFast that reads both sets under a single lock."
+
+### MFO-B542 (SEV-4, OPEN, progression/Poll.cpp, against 3569203) -- the gap between an errand ending and the roster re-adding still reads as benched
+Reviewer: "Between Sim/Errand dropping the record and the next Refresh re-adding him, he reads as benched. The cost is real when it hits: the active branch then gives min(d, lag) with d=0, so the bench-rate loss is never refunded. It needs a level-up inside about one Refresh period." Also SEV-5: "an Auto-class errand follower is not in g_resolvedClass ... so RecomputeHMS returns at \"noclass\". He gets the level but no HMS on that level-up, the same as a benched follower did before."
