@@ -617,13 +617,14 @@ namespace MFO::Logistics::Errand {
                     int lockedLevel = 0;
                     auto interiorPlace = [&](RE::FormID a_cell) -> int {   // 1 = d / placePos set, 0 = no door known, -1 = pending, -2 = every door into it is LOCKED (closed)
                         if (const auto it = cellDoorDist.find(a_cell); it != cellDoorDist.end()) { d = it->second; placePos = cellDoorPos[a_cell]; return 1; }
-                        if (const auto it = cellDoorLocked.find(a_cell); it != cellDoorLocked.end()) { lockedDoor = it->second.first; lockedLevel = it->second.second; return -2; }
                         RE::NiPoint3 dp{};
-                        switch (Rest::ShopDoorFor(a_cell, dp, &lockedDoor, &lockedLevel)) {
+                        switch (Rest::ShopDoorFor(a_cell, dp, &lockedDoor, &lockedLevel)) {   // the exterior read may find an UNLOCKED route the own cell's locked door hides
                         case Rest::DoorAnswer::Found:   placePos = dp; d = dp.GetDistance(pc->GetPosition()); return 1;
                         case Rest::DoorAnswer::Pending: return -1;
                         case Rest::DoorAnswer::Locked:  return -2;
-                        default:                        return 0;
+                        default:
+                            if (const auto it = cellDoorLocked.find(a_cell); it != cellDoorLocked.end()) { lockedDoor = it->second.first; lockedLevel = it->second.second; return -2; }   // the only known door is locked
+                            return 0;
                         }
                     };
                     // A shop whose entry door is LOCKED is closed for planning (never a stop), said once per verdict.
@@ -2092,7 +2093,10 @@ namespace MFO::Logistics::Errand {
             int lockedLevel = 0;
             const auto la = Rest::ShopDoorLockedNow(placeCell, lockedDoor, lockedLevel);
             if (la == Rest::LockAnswer::Pending) return 1;
-            if (la != Rest::LockAnswer::Locked) return 0;
+            if (la != Rest::LockAnswer::Locked) {
+                // No exterior verdict (Unknown: the player is indoors, no pump, no door found): the follower-side read of his own cell's doors decides.
+                if (la != Rest::LockAnswer::Unknown || !Rest::FollowerSideDoorLocked(a_follower, placeCell, lockedDoor, lockedLevel)) return 0;
+            }
             { std::scoped_lock lk(g_mx); g_parked[r.faction] = a_now + kParkTime; }
             stopOver(std::format("{}: closed '{}': entry door {:08X} locked ({}); no retry into a locked door", a_what, r.vendorName, lockedDoor,
                                  Rest::LockWordOf(lockedLevel)), false, kFailCooldownSec);

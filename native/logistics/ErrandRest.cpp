@@ -187,7 +187,7 @@ namespace MFO::Logistics::Errand::Rest {
             RE::NiPoint3 pos{};
             Clock::time_point stamp{};
         };
-        std::unordered_set<RE::FormID>                   g_shopDoorRecheck;   // shop place cells whose BLOCKED-time lock re-read was requested (ShopDoorLockedNow); guarded by g_mx
+        std::unordered_map<RE::FormID, Clock::time_point> g_shopDoorRecheck;   // shop place cell -> when its BLOCKED-time lock re-read was requested (ShopDoorLockedNow); guarded by g_mx
         std::unordered_map<RE::FormID, ShopDoorRead>     g_shopDoor;       // shop place cell -> its door read; guarded by g_mx
         std::unordered_set<RE::FormID>                   g_shopDoorAsked;  // shop place cells whose read was queued (one in flight)
         std::unordered_map<RE::FormID, std::string>      g_shopDoorLogged; // shop place cell -> the last verdict logged (a line only when it changes)
@@ -1285,7 +1285,7 @@ namespace MFO::Logistics::Errand::Rest {
         g_magicWaitLogged.clear();
         g_magicDefers.clear();
         g_innFacs.clear();
-        g_shopDoor.clear(); g_shopDoorAsked.clear(); g_shopDoorLogged.clear();
+        g_shopDoor.clear(); g_shopDoorAsked.clear(); g_shopDoorLogged.clear(); g_shopDoorRecheck.clear();
         g_doorRead.clear(); g_doorAsked.clear(); g_doorDefers.clear(); g_doorLogged.clear();
         g_marksTown = 0;
         g_wasCombat = false;
@@ -1467,25 +1467,57 @@ namespace MFO::Logistics::Errand::Rest {
     }
     const char* LockWordOf(int a_level) { return LockWord(static_cast<RE::LOCK_LEVEL>(a_level)); }
 
-    // A walk to a shop's place ended BLOCKED: is the entry door locked NOW? The cached read is the plan-time one (unlocked, or the shop was not
-    // planned), so the first ask drops it and posts a fresh main-thread read (Pending); the next asks return its verdict. Unknown = no pump, the
-    // player is indoors, or no door was found (the caller's retries decide, as before).
+    // A walk to a shop's place ended BLOCKED: is the entry door locked NOW? The cached read is the plan-time one, so a request older than
+    // kRecheckFresh drops it and posts a fresh main-thread read (Pending). Asks inside the window get the SAME verdict (it is not consumed: the
+    // BLOCKED branch and tryPlace both ask in one tick). Unknown = no pump, the player is indoors, or no door was found.
     LockAnswer ShopDoorLockedNow(RE::FormID a_cell, RE::FormID& a_lockedId, int& a_lockLevel) {
         if (!a_cell || !MainThread::IsInstalled()) return LockAnswer::Unknown;
+        constexpr auto kRecheckFresh = std::chrono::seconds(30);
+        const auto now = Clock::now();
+        bool post = false;
         {
             std::scoped_lock lk(g_mx);
-            if (g_shopDoorRecheck.insert(a_cell).second) {
+            const auto rq = g_shopDoorRecheck.find(a_cell);
+            if (rq == g_shopDoorRecheck.end() || now - rq->second > kRecheckFresh) {
+                g_shopDoorRecheck[a_cell] = now;
                 g_shopDoor.erase(a_cell);
-            } else if (const auto it = g_shopDoor.find(a_cell); it != g_shopDoor.end() && it->second.done) {
-                g_shopDoorRecheck.erase(a_cell);
+                post = true;
+            } else if (const auto it = g_shopDoor.find(a_cell); it != g_shopDoor.end() && it->second.done && it->second.stamp >= rq->second) {
                 if (it->second.indoors || !it->second.found) return LockAnswer::Unknown;
                 if (it->second.lockedId) { a_lockedId = it->second.lockedId; a_lockLevel = it->second.lockLevel; return LockAnswer::Locked; }
                 return LockAnswer::Open;
-            } else {
-                return LockAnswer::Pending;   // the read is still in flight
+            } else if (it == g_shopDoor.end()) {
+                post = true;   // no read in the cache: PostShopDoorRead's asked-guard keeps one in flight
             }
         }
-        PostShopDoorRead(a_cell);
+        if (post) PostShopDoorRead(a_cell);
         return LockAnswer::Pending;
+    }
+
+    // Follower-side fallback (the player is indoors, so the exterior grid read cannot run): the lock on each side of the load doors to a_destCell
+    // in the FOLLOWER's own loaded cell, read on the worker exactly as LogBlockedDoors does. TRUE = such doors exist and all are locked (id + level out).
+    bool FollowerSideDoorLocked(RE::Actor* a_follower, RE::FormID a_destCell, RE::FormID& a_lockedId, int& a_lockLevel) {
+        auto* cell = a_follower ? a_follower->GetParentCell() : nullptr;
+        if (!cell || !cell->IsAttached() || !a_destCell) return false;
+        std::vector<RE::ObjectRefHandle> doors;
+        cell->ForEachReferenceInRange(a_follower->GetPosition(), kScan, [&](RE::TESObjectREFR* a_ref) {
+            if (doors.size() < 96 && a_ref->extraList.GetByType<RE::ExtraTeleport>()) doors.push_back(a_ref->GetHandle());
+            return RE::BSContainer::ForEachResult::kContinue;
+        });
+        bool anyOpen = false, anyLocked = false;
+        for (auto& h : doors) {
+            auto dp = h.get();
+            auto* d = dp.get();
+            auto* tele = d ? d->extraList.GetByType<RE::ExtraTeleport>() : nullptr;
+            if (!tele || !tele->teleportData) continue;
+            auto lp = tele->teleportData->linkedDoor.get();
+            auto* lc = lp.get() ? lp.get()->GetParentCell() : nullptr;
+            if (!lc || lc->GetFormID() != a_destCell) continue;
+            RE::FormID lid = 0;
+            RE::LOCK_LEVEL lvl = RE::LOCK_LEVEL::kUnlocked;
+            if (DoorLocked(d, lp.get(), lid, lvl)) { if (!anyLocked) { a_lockedId = lid; a_lockLevel = static_cast<int>(lvl); } anyLocked = true; }
+            else anyOpen = true;
+        }
+        return anyLocked && !anyOpen;   // a second, open door to the same cell keeps the shop open
     }
 }
