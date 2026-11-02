@@ -360,7 +360,7 @@ namespace MFO::Logistics::Errand {
         // A walk to a shop's place ended BLOCKED: a fresh main-thread re-read of its entry door's lock. Pending = ask again next tick; Unknown = no read possible.
         enum class LockAnswer { Locked, Open, Pending, Unknown };
         LockAnswer ShopDoorLockedNow(RE::FormID a_cell, RE::FormID& a_lockedId, int& a_lockLevel);
-        bool FollowerSideDoorLocked(RE::Actor* a_follower, RE::FormID a_destCell, RE::FormID& a_lockedId, int& a_lockLevel);   // worker-side lock read of the follower's own-cell doors into a_destCell (the fallback when the exterior read is Unknown)
+        bool FollowerSideDoorLocked(RE::Actor* a_follower, RE::FormID a_destCell, RE::FormID& a_lockedId, int& a_lockLevel, bool* a_pending = nullptr);   // worker-side lock read of the follower's own-cell doors into a_destCell (the fallback when the exterior read is Unknown). a_pending non-null: with no own-cell door to a_destCell it also consults the cached exterior read (ShopDoorFor) and sets *a_pending while that read is posted
         const char* LockWordOf(int a_level);   // the lock-level word for a log line ("average", "requires a key" ...)
     }
 
